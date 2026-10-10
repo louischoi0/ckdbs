@@ -56,7 +56,7 @@ does not.
 
 ## 1. Why a delta verb, when `SET` exists
 
-`[source-read]` **At `2b41d31`, a delta could not be written in one
+**(BJ)** `[source-read]` **At `2b41d31`, a delta could not be written in one
 statement; BJ (written, not opened) is the order that makes it writable.**
 `UPDATE`'s grammar was `SET <col> = <val>` (`manual/sql/sql.md:536`) and
 an `Assignment` carried an `AstValue` — a literal or a parameter, not an
@@ -68,7 +68,7 @@ pattern — the second client computes from a value the first has already
 changed, and the `UPDATE`'s fresh snapshot sees that commit and overwrites
 it — and the engine's only defence is the write conflict, which fires only
 inside one statement's window between its snapshot and its write
-(`docs/spec/txn.md:677-691`). The client's retry cannot be triggered by a
+(`docs/spec/txn.md:677-691` at `080cd55`). The client's retry cannot be triggered by a
 conflict the engine never raises.
 
 **(BJ)** `[design]` Once BJ is built, `SET balance = balance - 100` is one
@@ -76,17 +76,18 @@ statement that reads the row under the borrow and writes it, so the
 round-trip and the lost update go with it, by BJ-R2's before-image rule
 and without any verb. **What this note's case rests on after BJ** is
 therefore not the one-statement read-modify-write, which `SET` then has
-too, but the four rows below that an overwrite cannot give: the log
-carrying a delta (§4), the inverse being defined, the commutative intent
-being in the statement, and a future ledger tier (§6). The first row
-(*one round trip*) and the second (*the conflict becomes a wait*) are
+too, but the three rows below that an overwrite cannot give: the log
+carrying a delta (§4), the inverse being defined, and the commutative
+intent being in the statement, which is what a future ledger tier (§6)
+would read. The first row (*one round trip*), the second (*the conflict
+becomes a wait*) and the last (*a row bound is one predicate away*) are
 shared with BJ's `SET` and no longer distinguish `INC`. R1 binds BJ as it
 binds this note: an expression `SET` is an ordinary overwrite and is never
-converted to `INC`, so the two spellings stay two statements with two log
-records (§7, last row).
+converted to `INC`, so the two spellings stay two statements, with two log
+records if O5 takes the delta record (§7, last row).
 
 `[design]` So `INC` is not sugar over an existing expression. It is the
-engine's **first server-side read-modify-write** *(before BJ)*, and what
+engine's **first server-side read-modify-write** **(BJ: before BJ)**, and what
 it buys follows from that:
 
 | gain | why |
@@ -232,9 +233,8 @@ note changes neither.
   max-merge, string append, and the rest of the CRDT catalogue.
 - `SET col = <expression>`. **(BJ)** Expressions in `SET` are not this
   note's: `workorder-bj-expression-update.md` owns them, and this note
-  opens nothing there. R1 stands in both directions: an expression `SET`
-  is never turned into an `INC`, and an `INC` is never a `SET` in
-  disguise.
+  opens nothing there. R1 stands as ruled: an expression `SET` is never
+  turned into an `INC`.
 - A performance claim. The lock path is the `UPDATE` path; nothing is
   faster and nothing is measured (§8, O7).
 
@@ -243,8 +243,9 @@ note changes neither.
 `[design]`
 
 - **Hot-row concurrency is unchanged.** The 4–6% AT-S13 refuses under
-  spread, and whatever remains of it once AX turns the cross-core refusal
-  into a wait, is this note's inheritance, not its cure. The cure is the
+  spread, and whatever remains of it now that AX has turned the cross-core
+  refusal into a wait (**BJ**: AX-S1 is built), is this note's inheritance,
+  not its cure. The cure is the
   ledger §6 defers.
 - **`INC` is not faster than `SET`.** Same borrow, same wait, one extra
   addition. The manual states it in the verb's own section.
@@ -274,7 +275,7 @@ are not repeated here.
 | # | question | CLA's proposal |
 |---|---|---|
 | O1 | Verb spelling | **`INC col BY v` / `DEC col BY v`** inside `UPDATE`, so the statement class, the `WHERE` production and the pk refusal are `UPDATE`'s. Not a new top-level statement |
-| O2 | Admissible types | **`int64`, `DECIMAL`, `DECIMAL128`**; everything else `Unsupported` with the type and the byte. No implicit widening: the delta takes the column's type |
+| O2 | Admissible types | **`int64`, `DECIMAL`, `DECIMAL128`**; everything else `Unsupported` with the type and the byte. No implicit widening: the delta takes the column's type. **(BJ)** BJ-Q2 (a), if marked, admits widening within a family for an expression `SET`; O2 would then diverge from it, and the two are reconciled when the second is marked |
 | O3 | Mixing `SET` and `INC` in one statement | **Refused in v1**, `Unsupported` at the second verb's byte. Two statements in one transaction cost nothing this cannot |
 | O4 | `INC` on a `NULL` value | **Leave `NULL`, do not count the row as updated**, and say so in the manual. The alternative — treat `NULL` as zero — is a silent coercion the type system elsewhere refuses |
 | O5 | Log record | **A `kHeapDelta` type** (§4). The overwrite record is correct and would do; the delta record is the one that says what the statement said, and is smaller on wide rows |

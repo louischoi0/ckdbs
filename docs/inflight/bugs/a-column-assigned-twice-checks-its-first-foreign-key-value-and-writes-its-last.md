@@ -33,6 +33,16 @@ The check resolves and passes parent 1; the write stores `p = 2`.
 A **quiet wrong answer**: a child row pointing at an absent parent, with no
 error, past a constraint the engine otherwise enforces on every core.
 
+Two more costs, found by BJ-S0's review at `080cd555`:
+
+- **The reverse order is a false refusal.** `SET p = 2, p = 1` with parent 2
+  absent is refused on 2, though the value written is 1, which exists.
+- **The D9(a) fence is skipped when both parents exist.** The `S` hold is
+  taken on the first value's parent (`command_dispatcher.cpp:3510-3514`),
+  never on the parent actually written, so a parent `DELETE` that finishes
+  its reverse walk before the child's write lands is not fenced by an `S` on
+  that row.
+
 ## The fix
 
 One compile-time check in `CompileAssignments`: a column named twice is

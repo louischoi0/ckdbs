@@ -1,8 +1,7 @@
 # Work order BJ — expressions in `UPDATE ... SET`: a value computed from the row it replaces
 
 Written 2026-10-10 on `worktree-bj-expression-update` from `080cd55`
-(`git describe` not computed: the session's clone is shallow and does not
-reach `v2.7.0`). It follows the operator's words of 2026-10-10, recorded in
+(`v2.7.0-723-g080cd555`). It follows the operator's words of 2026-10-10, recorded in
 English (`raft-marks-2026-10-10.md` §1-§2):
 
 - **W0:** *"kdbs has to support expression update now."*
@@ -23,9 +22,16 @@ English (`raft-marks-2026-10-10.md` §1-§2):
 E1-E8 are the item numbers CLA's proposal of the same session used; the
 words answer them one for one.
 
-**Written, not opened.** W1-W8 are the operator's decisions and stand here
-as BJ-R1..R8. What they leave open is in §4, every BJ-Q item unmarked,
-BJ-Q0 included, so no stage is startable.
+**Written 2026-10-10, opened the same day on a standing go-ahead.** W1-W8
+are the operator's decisions and stand here as BJ-R1..R8. What they leave
+open is in §4. BJ-Q0..Q12 were unmarked when the order was written; the
+operator then gave the standing word *"go ahead until achieving milestone,
+I will follow CLA proposal if decision needed"* (the
+`go-ahead-achieving-milestone` skill, 2026-10-10), and CLA's proposals were
+adopted under it. **Each is recorded in §4's mark column as adopted on that
+word, never as the operator's own per-item mark** (`raft-marks-2026-10-10.md`
+§3), and the two items whose proposals the review revised (BJ-Q6, BJ-Q10) and
+the one CLA revised on adoption (BJ-Q2) say so in place.
 
 **Claim tags:**
 - `[source-read]` with `path:line` at `080cd55`;
@@ -143,7 +149,7 @@ Read, not run.
 ### 1.1 The grammar and the lexer
 
 - `[source-read]` **The SET list.** `ParseUpdate` (`src/parser/parser.cpp:2141-2188`)
-  loops `ParseIdent`, `'='`, `ParseValue`, `','` (`:2150-2172`). There is
+  loops `ParseIdent`, `'='`, `ParseValue`, `','` (`:2151-2175`). There is
   no duplicate-target check here or in `CompileAssignments`
   (`src/exec/step_compiler.cpp:1355-1382`), and the apply loop assigns in
   list order (`src/server/command_dispatcher.cpp:7803-7810`), so
@@ -217,9 +223,9 @@ Read, not run.
   pk `Unsupported`), then `CompileWhere`, before any page is touched
   (`command_dispatcher.cpp:7442-7531`).
 - `[source-read]` **Per row**, inside the walk's callback `apply`
-  (`:7630-7990`): classify the version (`:7647-7649`); copy the payload out
+  (`:7630-8028`): classify the version (`:7647-7649`); copy the payload out
   of the page (`:7663`); decode only the WHERE's columns and test it
-  (`:7676-7686`); decode the whole row and resolve its spills
+  (`:7678-7686`); decode the whole row and resolve its spills
   (`:7694-7696`); take the tuple borrow and run first-updater-wins
   (`:7704-7770`); the forward foreign-key check (`:7780-7784`); keep
   `previous` when a Cabin, an index or an assertion needs it (`:7797-7801`);
@@ -271,7 +277,7 @@ to one row has always been invisible. `SET v = v + 1` is not. Three facts
 keep a row single-written today; BJ makes each load-bearing:
 
 - `[source-read]` **No Halloween problem.** An UPDATE overwrites in place
-  and never migrates a tuple (`command_dispatcher.cpp:7886-7899`,
+  and never migrates a tuple (`command_dispatcher.cpp:7887-7900`,
   invariant 13), and the pk is not a SET target (K2), so the walk, which
   advances in key order on a btree, never meets a row it already wrote.
 - `[source-read]` **A park resumes past what it wrote.** `WalkCursor`
@@ -363,8 +369,8 @@ BJ-Q7's.
   that scales a decimal is scale 0**: in `price * 2` over `DECIMAL(10,2)`
   the `2` is an integer, the product keeps scale 2, and BJ-Q3 has nothing
   to narrow; the reference dialect does the same. **A bare literal SET
-  value keeps today's per-row gate** (BJ-Q3 (c)), so it is the one
-  literal not coerced at compile.
+  value keeps today's per-row gate** (BJ-Q3 (c), **conditional on its
+  mark**), so it is the one literal not coerced at compile.
 - **Results**, `[design]`, each to be checked against BJ-Q1's dialect at
   BJ-S3: integer arithmetic is checked (`OutOfRange` on overflow, never a
   wrap); integer `/` truncates toward zero and `%` takes the dividend's
@@ -394,8 +400,8 @@ admitted.
 - Each new operator token gets its own `ShapeTag`. A column reference and
   a function name already hash by folded text; a literal is `kValue` and
   `NULL` keeps `kNull`, as today (§1.2).
-- **No stored `pattern_id` moves**, by BJ-Q9's lexing rule and §1.2's
-  argument, so `kFingerprintVersion` does not move. If BJ-S2's corpus
+- **No stored `pattern_id` moves**, by BJ-Q9 (a)'s lexing rule
+  (**conditional on its mark**; (c) would bump) and §1.2's argument, so `kFingerprintVersion` does not move. If BJ-S2's corpus
   check finds a stored hash that does move, the stage stops for a ruling
   rather than bumping.
 
@@ -431,14 +437,14 @@ is (the AS9 resolution).
 | stage | what | done when | size |
 |---|---|---|---|
 | BJ-S0 | **The order** | This file, its review, `raft-marks-2026-10-10.md`'s sections, `index.md`'s row, CN-7 revised (BJ-R8) | S |
-| BJ-S1 | **Red first, and the census** | Cells red for: a duplicate SET target (BJ-R2); `SET a = b, b = a` once BJ-S4 can parse it, pending until then; BJ-R9's three paths with a write that counts its applications (a test seam), so a second application is visible. The census: every reader of `Assignment::val` (the fk hoist is one), every caller of `CompileAssignments`, and every spec sentence of §1.6 | S |
-| BJ-S2 | **Lexer, AST, parser, fingerprint** (BJ-R1 family 1, BJ-R6) | The operator tokens and BJ-Q9's minus rule; an expression node in the AST, `Assignment` holding one; precedence and associativity per the reference dialect; the fingerprint corpus re-run, no stored hash moved; a statement with a family-2..5 form refused `NotImplemented` at its byte | M |
+| BJ-S1 | **Red first, and the census** | Cells red for: a duplicate SET target (BJ-R2); `SET a = b, b = a`, parsed from BJ-S2 and pending until BJ-S4 can run it; BJ-R9's three paths with a write that counts its applications (a test seam), so a second application is visible. The census: every reader of `Assignment::val` (the fk hoist is one), every caller of `CompileAssignments`, and every spec sentence of §1.6 | S |
+| BJ-S2 | **Lexer, AST, parser, fingerprint** (BJ-R1 family 1, BJ-R6) | The operator tokens and BJ-Q9's minus rule; an expression node in the AST, `Assignment` holding one; precedence and associativity per the reference dialect; the fingerprint corpus re-run, no stored hash moved; a statement with a family-2..5 form refused `NotImplemented` at its byte; **a statement with a parsed family-1 expression is refused `NotImplemented` at execution until BJ-S4**, because the fk hoist and the apply loop read `Assignment::val` directly and a half-built evaluator must never write a row | M |
 | BJ-S3 | **Typing at compile** (BJ-R3, BJ-R4) | A typed expression tree resolved against the relation's schema; the rules of BJ-R3 as a table in `types.md`; every refusal at compile with both types and the byte; literal coercion through the existing routine | M |
 | BJ-S4 | **Evaluation and the write** (BJ-R2, BJ-R5, BJ-R9, BJ-R10) | The evaluator over a decoded row, typed by `type_val`; `UpdateInner` evaluates every assignment against the before-image, then writes; BJ-Q10's fk path; BJ-S1's cells green; cells for overflow, division by zero, NULL, `NOT NULL`, the swap, a varchar overflow, and an expression over a spilled value; the two-core rig: two autocommit `READ COMMITTED` sessions `SET v = v + 1 WHERE id = k` N times each, the final value 2N plus nothing lost, each refusal counted and retried by the driver (a parked multi-row walk resumes under its old view, so a refusal there is the contract, not a loss); the equal-index-sort-keys bug named where `v` is a covered index column, since a counter updated ~600 times reaches it (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`) | M |
-| BJ-S5 | **Families 2 and 3**: conditional, null-handling, boolean values, `CAST` | Each form's cells, NULL included; `CAST`'s admitted pairs and its rounding per BJ-Q3 | M |
+| BJ-S5 | **Families 2 and 3**: conditional, null-handling, boolean values, `CAST` | Each form's cells, NULL included; `CAST`'s admitted pairs and its rounding per BJ-Q3; BJ-Q7's `SET (a, b) = (x, y)` | M |
 | BJ-S6 | **Family 4**: scalar functions and time arithmetic | BJ-Q5's list, BJ-Q4's time forms, each function's purity in `functions.hpp`; `NOW()` one value per statement, carried across a park as today (`StatementContext`) | M |
-| BJ-S7 | **Family 5**: the scalar subquery | Evaluated under the statement's snapshot; more than one row refused; no row is NULL; a correlated one re-evaluated per row; BJ-Q6's restriction on the relation being updated | M |
-| BJ-S8 | **The close** (the clone deepened to `v2.7.0` first, so `git describe` names A and B) | §5's measurement; the text of §1.6 restated (`parser-v2.md` I10 for the SET position only, `types.md` §3.2 and TY8, `foreign-keys.md` §2a, `sql.md`'s UPDATE, `client-manual.md`, `CLAUDE.md`'s row); `known-gaps.md` for what BJ leaves (§0's list) | S |
+| BJ-S7 | **Family 5**: the scalar subquery | An uncorrelated one evaluated once before the walk, under the statement's snapshot; more than one row refused; no row is NULL; every correlated one refused `NotImplemented` (BJ-Q6, revised) | M |
+| BJ-S8 | **The close** | §5's measurement; the text of §1.6 restated (`parser-v2.md` I10 for the SET position only, `types.md` §3.2 and TY8, `foreign-keys.md` §2a, `sql.md`'s UPDATE, `client-manual.md`, `CLAUDE.md`'s row); `known-gaps.md` for what BJ leaves (§0's list) | S |
 
 **Order.** S1..S8 in sequence. S4 starts only after BA's code from
 `worktree-ba-open-marks` is on `main`, because both change
@@ -450,19 +456,19 @@ BJ-S4 share the evaluator; whichever comes first builds it (header).
 
 | item | question | kind | CLA's proposal | mark |
 |---|---|---|---|---|
-| BJ-Q0 | **Open BJ**, with BJ-S0..S8 and BJ-R1..R10 as written | process | Yes ||
-| BJ-Q1 | **The reference dialect** W1's "general commercial DB" means, for every rule BJ does not state itself | scope | **PostgreSQL 18**, the engine's comparison floor (BA) and the one whose source the tree already cites; its operator precedence, its function names and its error conditions, restricted to the engine's types. Where it converts implicitly, W3 wins and BJ refuses ||
-| BJ-Q2 | **What "one type" is under W3** for two members of one family: (a) the family is one type - `int32 + int64` is admitted and widens to `int64`, `DECIMAL(10,2) + DECIMAL(18,2)` is one scale; (b) the exact type - every width or precision difference needs a `CAST` | design | **(a) for width and precision within a family, never across families or scales.** A width difference loses no value and every commercial engine admits it; a scale difference changes what the digits mean, which TY6 already refuses. (b) makes `SET small = small + 1` over an `int32` column depend on the literal's typing alone and `SET a = a + b` over mixed widths unwritable without a cast. **Ask: is widening within a family an implicit conversion under W3?** ||
-| BJ-Q3 | **Decimal results and rounding.** (a) A result whose scale differs from its target's is refused, and `ROUND(x, s)` or `CAST` is how to narrow it, rounding half away from zero (PostgreSQL's `numeric`); `/` yields the dividend's scale plus the reference dialect's extra digits, then must be narrowed explicitly. (b) as (a), rounding half-even, the rule `AVG` uses (`aggregate.md` §3.4). (c) Separately: a bare literal SET keeps today's per-row gate (TY7) rather than becoming a compile-time refusal | design, **[quiet-wrong] if a narrowing were implicit** | **(a), and (c) yes.** (a) follows BJ-Q1's dialect for an explicit narrowing and keeps every implicit one refused; the engine's `AVG` rule is a statement about an aggregate's own answer, not about a conversion the client wrote. (c) keeps `UPDATE ... SET int_col = 'abc'` matching nothing answering `UPDATED 0`, as it does today, so no client sees a new refusal from BJ ||
-| BJ-Q4 | **Time arithmetic**, against TY8: (a) `DATE ± int` (days) → `DATE`, `DATE - DATE` → `int32` days, `NOW()` and `CURRENT_DATE` in a SET value; no `TIMESTAMP` arithmetic, since there is no `INTERVAL` type (TY1); (b) none in BJ, TY8 stands | scope | **(a).** It is what the reference dialect offers over the types the engine has; TY8's reason - *"a value function imports an evaluation-time question"* - is answered by AP-S4's statement instant, which a SET reuses. `TIMESTAMP` arithmetic waits for an `INTERVAL` type, which is its own decision ||
-| BJ-Q5 | **The function list for BJ-S6** | scope | The reference dialect's numeric (`ABS`, `ROUND`, `TRUNC`, `MOD`, `SIGN`, `CEIL`, `FLOOR`) and string (`UPPER`, `LOWER`, `LENGTH`, `SUBSTRING`, `TRIM`, `LTRIM`, `RTRIM`, `POSITION`, `REPLACE`, `LPAD`, `RPAD`, `CONCAT`) functions over the engine's types, plus BJ-Q4's. Anything else is refused by name as an unknown function, as AP-S4 refuses one today ||
-| BJ-Q6 | **A scalar subquery reading the relation being updated** | design, **[quiet-wrong]** | `[source-read]` A view always sees its own transaction's writes (`include/kds/txn/read_view.hpp:75-77`), and there is no per-statement command id, so a subquery evaluated per row would see the rows this statement already wrote - a wrong answer the standard forbids. **So: an uncorrelated subquery is evaluated once, before the walk, and its value used for every row; a correlated subquery over the target relation is refused `NotImplemented`** until a statement-level visibility exists, which would be its own order. The cell is `SET v = v + (SELECT SUM(v) FROM t)` over N rows, every row raised by the pre-statement sum ||
-| BJ-Q7 | **Forms outside a value expression**: `DEFAULT` as a SET value, `SET (a, b) = (x, y)`, `UPDATE ... FROM` | scope | **`SET (a, b) = (x, y)` in BJ-S5** (standard SQL, and BJ-R2 already gives it its meaning); **`DEFAULT` refused** until column defaults exist (no `DEFAULT` clause in the DDL today); **`UPDATE ... FROM` refused**, not a value expression and not standard SQL, its own order if wanted ||
-| BJ-Q8 | **Other positions** - `INSERT ... VALUES`, the select list | scope | **Out of BJ**, each its own order on the same grammar (§0). `parser-v2.md` I10 keeps its refusals there ||
-| BJ-Q9 | **The minus.** (a) The lexer keeps fusing `-` before a digit into a signed literal, as today, and lexes any other `-` as the operator; the parser, in binary-operator position, reads a signed literal as minus and its magnitude. (b) The lexer decides by the previous token's type. (c) Every `-` is a token, and `kFingerprintVersion` moves | design | **(a).** Every statement that parses today keeps its tokens, so no stored `pattern_id` moves. Its cost is that one meaning has two spellings with two shapes: `v -1` hashes as identifier, value and `v - 1` as identifier, minus, value - two patterns, one answer, no correctness question; the manual says to write the space. (b) breaks `x BETWEEN -5 AND -1`, `LIMIT -1` and a `THEN -1`, because `AND`, `LIMIT` and `THEN` are identifiers to the lexer (§1.1); (c) is a format bump for no gain. Cells pin `BETWEEN -5 AND -1`, `v -1` = `v - 1` in value, `v--1` as a comment, and `? - 1` ||
-| BJ-Q10 | **A foreign-key column assigned by an expression** | design, **[quiet-wrong]** | **A constant expression - no column reference, no `NOW()`, no subquery - is folded at compile and keeps the hoist; any other resolves its parent per row, from the computed value in the new row** (never from the unevaluated assignment), through `ResolveForeignKeyParents` and the same `S` hold (D9(a)). `[source-read]` That is a descent inside the write scope, which AH-R1's comment forbids except for the self-referencing arm (`command_dispatcher.cpp:3576-3601`, AY-Q3), and BJ takes the same exception. Its stated cost: a busy parent met after rows were written is refused, not waited for, because the trail test drops the blocker (§1.5), and inside `BEGIN` that poisons the transaction. Cells: a child whose computed parent is absent is refused; a busy parent on the second row is refused ||
-| BJ-Q11 | **The measurement** (§5), at BJ's close | process | As written ||
-| BJ-Q12 | **The duplicate-target defect ahead of BJ** (§1.1): refuse a column assigned twice in `CompileAssignments` now, as a fix of its own, or with BJ-S4 | sequencing, **[quiet-wrong] while open** | **Now, as its own fix.** It is a live fk bypass at `080cd55`, the fix is one compile-time check with a byte, and it changes no statement that means anything: a client that names a column twice gets a refusal instead of an unchecked parent ||
+| BJ-Q0 | **Open BJ**, with BJ-S0..S8 and BJ-R1..R10 as written | process | Yes | **Adopted** on the operator's standing go-ahead of 2026-10-10 (go-ahead-achieving-milestone): BJ opens |
+| BJ-Q1 | **The reference dialect** W1's "general commercial DB" means, for every rule BJ does not state itself | scope | **PostgreSQL 18**, the engine's comparison floor (BA) and the one whose source the tree already cites; its operator precedence, its function names and its error conditions, restricted to the engine's types. Where it converts implicitly, W3 wins and BJ refuses | **Adopted** (standing go-ahead 2026-10-10): PostgreSQL 18 |
+| BJ-Q2 | **What "one type" is under W3** for two members of one family: (a) the family is one type - `int32 + int64` is admitted and widens to `int64`, `DECIMAL(10,2) + DECIMAL(18,2)` is one scale; (b) the exact type - every width or precision difference needs a `CAST` | design | **(a) for width and precision within a family, never across families or scales.** A width difference loses no value and every commercial engine admits it; a scale difference changes what the digits mean, which TY6 already refuses. (b) makes `SET small = small + 1` over an `int32` column depend on the literal's typing alone and `SET a = a + b` over mixed widths unwritable without a cast. **Ask: is widening within a family an implicit conversion under W3?** | **Adopted, revised** (standing go-ahead 2026-10-10): **(b), the exact type**, not CLA's (a). W3 reads *no implicit conversion*, and a width or precision widening is one by its letter; (a) cannot be taken back once clients rely on it, (b) can be relaxed later with no wrong answer. A literal still takes its operand's type, so `SET small = small + 1` needs no cast. Reconsidered if the operator reads W3 as admitting widening |
+| BJ-Q3 | **Decimal results and rounding.** (a) A result whose scale differs from its target's is refused, and `ROUND(x, s)` or `CAST` is how to narrow it, rounding half away from zero (PostgreSQL's `numeric`); `/` yields the dividend's scale plus the reference dialect's extra digits, then must be narrowed explicitly. (b) as (a), rounding half-even, the rule `AVG` uses (`aggregate.md` §3.4). (c) Separately: a bare literal SET keeps today's per-row gate (TY7) rather than becoming a compile-time refusal | design, **[quiet-wrong] if a narrowing were implicit** | **(a), and (c) yes.** (a) follows BJ-Q1's dialect for an explicit narrowing and keeps every implicit one refused; the engine's `AVG` rule is a statement about an aggregate's own answer, not about a conversion the client wrote. (c) keeps `UPDATE ... SET int_col = 'abc'` matching nothing answering `UPDATED 0`, as it does today, so no client sees a new refusal from BJ | **Adopted** (standing go-ahead 2026-10-10): (a) and (c) yes; premise re-read at `080cd55`, TY7's per-row gate is unchanged |
+| BJ-Q4 | **Time arithmetic**, against TY8: (a) `DATE ± int` (days) → `DATE`, `DATE - DATE` → `int32` days, `NOW()` and `CURRENT_DATE` in a SET value; no `TIMESTAMP` arithmetic, since there is no `INTERVAL` type (TY1); (b) none in BJ, TY8 stands | scope | **(a).** It is what the reference dialect offers over the types the engine has; TY8's reason - *"a value function imports an evaluation-time question"* - is answered by AP-S4's statement instant, which a SET reuses. `TIMESTAMP` arithmetic waits for an `INTERVAL` type, which is its own decision. **(Added by BJ-S0's review.)** `CURRENT_DATE` takes no parentheses, so in a SET value it cannot be told from a column of that name by context: **a column of the target relation with that name wins, so the function is unreachable in a SET value for a relation that has such a column** - the manual says so; `NOW()` has parentheses and has no such case | **Adopted** (standing go-ahead 2026-10-10): (a) |
+| BJ-Q5 | **The function list for BJ-S6** | scope | The reference dialect's numeric (`ABS`, `ROUND`, `TRUNC`, `MOD`, `SIGN`, `CEIL`, `FLOOR`) and string (`UPPER`, `LOWER`, `LENGTH`, `SUBSTRING`, `TRIM`, `LTRIM`, `RTRIM`, `POSITION`, `REPLACE`, `LPAD`, `RPAD`, `CONCAT`) functions over the engine's types, plus BJ-Q4's. Anything else is refused by name as an unknown function, as AP-S4 refuses one today | **Adopted** (standing go-ahead 2026-10-10): as listed |
+| BJ-Q6 | **A scalar subquery in a SET value** | design, **[quiet-wrong]** | `[source-read]` A view always sees its own transaction's writes (`include/kds/txn/read_view.hpp:75-77`), and there is no per-statement command id, so a subquery evaluated per row would see the rows this statement already wrote - a wrong answer the standard forbids. **(Revised by BJ-S0's review.)** A per-row sub-chain also walks its relation shared under the write walk's exclusive leaf, which over *another* relation is the page-latch cycle of `docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md` (two reactors hang, no wrong answer). **So: an uncorrelated subquery, over any relation, is evaluated once before the walk (that bug's fix (c)) and its value used for every row; every correlated subquery is refused `NotImplemented` at its byte**, whichever relation it reads, until a statement-level visibility and that bug's fix exist, each its own order. **Stated difference:** a WHERE-position subquery today is re-run per row and sees the statement's earlier rows (that bug's fix (c) note); a SET-position one sees the pre-statement state, and the manual says so. The cell is `SET v = v + (SELECT SUM(v) FROM t)` over N rows, every row raised by the pre-statement sum | **Adopted as revised** (standing go-ahead 2026-10-10); premise re-read at `080cd55`, `read_view.hpp:75-77` unchanged |
+| BJ-Q7 | **Forms outside a value expression**: `DEFAULT` as a SET value, `SET (a, b) = (x, y)`, `UPDATE ... FROM` | scope | **`SET (a, b) = (x, y)` in BJ-S5** (standard SQL, and BJ-R2 already gives it its meaning); **`DEFAULT` refused** until column defaults exist (no `DEFAULT` clause in the DDL today); **`UPDATE ... FROM` refused**, not a value expression and not standard SQL, its own order if wanted | **Adopted** (standing go-ahead 2026-10-10) |
+| BJ-Q8 | **Other positions** - `INSERT ... VALUES`, the select list | scope | **Out of BJ**, each its own order on the same grammar (§0). `parser-v2.md` I10 keeps its refusals there | **Adopted** (standing go-ahead 2026-10-10) |
+| BJ-Q9 | **The minus.** (a) The lexer keeps fusing `-` before a digit into a signed literal, as today, and lexes any other `-` as the operator; the parser, in binary-operator position, reads a signed literal as minus and its magnitude. (b) The lexer decides by the previous token's type. (c) Every `-` is a token, and `kFingerprintVersion` moves | design | **(a).** Every statement that parses today keeps its tokens, so no stored `pattern_id` moves. Its cost is that one meaning has two spellings with two shapes: `v -1` hashes as identifier, value and `v - 1` as identifier, minus, value - two patterns, one answer, no correctness question; the manual says to write the space. (b) breaks `x BETWEEN -5 AND -1`, `LIMIT -1` and a `THEN -1`, because `AND`, `LIMIT` and `THEN` are identifiers to the lexer (§1.1); (c) is a format bump for no gain. Cells pin `BETWEEN -5 AND -1`, `v -1` = `v - 1` in value, `v--1` as a comment, and `? - 1`. **(Added by BJ-S0's review.)** The rule covers a signed decimal literal (`v -1.5` reads as minus and `1.5`) and a magnitude above `INT64_MAX` (`v -9223372036854775808` is read from the digits, never from the fused value, so `INT64_MIN`'s magnitude survives) | **Adopted** (standing go-ahead 2026-10-10): (a) |
+| BJ-Q10 | **A foreign-key column assigned by an expression** | design, **[quiet-wrong]** | **(Revised by BJ-S0's review.)** `[source-read]` The first proposal resolved the parent per row inside the write scope, on the strength of AH-R1's self-referencing exception (`command_dispatcher.cpp:3576-3601`, AY-Q3). That exception has no working precedent: a self-referencing foreign key cannot be declared (`ASelfReferencingForeignKeyCannotBeDeclared`, `tests/foreign_key_test.cpp`), so the arm is unreachable. And the descent is a hang: the walk holds its child leaf exclusive across the per-row work, a parent descent takes parent leaves shared, and a parent `DELETE` holds a parent leaf exclusive while its reverse walk reads the child - the page-latch cycle of `docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`, whose wait is an unbounded spin, so two reactors hang with no subquery involved. **So: a constant expression - no column reference, no `NOW()`, no subquery - is folded at compile and keeps the hoist; any other expression assigned to a foreign-key column is refused `NotImplemented` at its byte** until that bug's fix (b), a try-shared descent that refuses retryable instead of spinning, exists. A refusal is the truthful state; per-row resolution is its own order after the fix. Cells: a non-constant expression into an fk column is refused at compile; a constant one is checked against its folded value | **Adopted as revised** (standing go-ahead 2026-10-10); premise re-read at `080cd55`, the self-referencing arm is unreachable and the page-latch cycle bug is open |
+| BJ-Q11 | **The measurement** (§5), at BJ's close | process | As written | **Adopted** (standing go-ahead 2026-10-10) |
+| BJ-Q12 | **The duplicate-target defect ahead of BJ** (§1.1): refuse a column assigned twice in `CompileAssignments` now, as a fix of its own, or with BJ-S4 | sequencing, **[quiet-wrong] while open** | **Now, as its own fix.** It is a live fk bypass at `080cd55`, the fix is one compile-time check with a byte, and it changes no statement that means anything: a client that names a column twice gets a refusal instead of an unchecked parent | **Adopted** (standing go-ahead 2026-10-10): the fix lands first, as BJ-S1's opening commit; premise re-read at `080cd55`, the defect is real |
 
 ## 5. Measurement
 
@@ -518,3 +524,50 @@ Written on `worktree-bj-expression-update` from `080cd55`. No file under
 
 **Declined:** stating the rules once instead of in §0, §2 and §4 - the
 house shape every order takes, as BG-S0's review also declined.
+
+### BJ-S0 — the `critics-developer` review of `fdad71e4`, applied
+
+On `worktree-bj-expression-update` at `fdad71e4`, a review of the committed
+order against `080cd555` checked about 40 citations and found four line
+drifts (corrected: `parser.cpp:2151-2175`, `command_dispatcher.cpp:7630-8028`,
+`:7678-7686`, `:7887-7900`), a false premise (the clone is not shallow:
+`git describe` reads `v2.7.0-723-g080cd555`, so the header and BJ-S8 no
+longer say it must be deepened), and a Korean quotation in the marks file
+(translated; every document is English). **Applied:**
+- **BJ-Q10 revised, high.** Per-row parent resolution inside the walk is the
+  page-latch cycle of `a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`,
+  and the self-referencing arm it cited as precedent is unreachable. A
+  non-constant expression into a foreign-key column is now refused
+  `NotImplemented`; a constant one keeps the hoist.
+- **BJ-Q6 and BJ-S7 revised, high.** A correlated subquery over another
+  relation closes the same cycle, so every correlated subquery is refused;
+  an uncorrelated one is evaluated once before the walk. The SET-position
+  and WHERE-position visibility difference is stated.
+- **BJ-S2's done condition**: a parsed family-1 expression is refused
+  `NotImplemented` at execution until BJ-S4, since the hoist and the apply
+  loop read `Assignment::val` directly.
+- **BJ-R3's literal rule and BJ-R6's hash rule** say they are conditional on
+  BJ-Q3 (c) and BJ-Q9 (a).
+- **`CURRENT_DATE`** without parentheses: a column of that name wins
+  (BJ-Q4). **BJ-S5** names `SET (a, b) = (x, y)`. **BJ-Q9** covers a signed
+  decimal and a magnitude above `INT64_MAX`.
+- **The bug entry** gains two costs (the reverse order's false refusal and
+  the skipped `S` fence). **CN-7** drops a row from its "what remains" list,
+  conditions the two-log-records sentence on O5, narrows R1's reading to what
+  was ratified, marks its (BJ) insertions, fixes the stale AX sentence of
+  §7, and notes O2's divergence from BJ-Q2.
+
+**Rejected:** none; every finding was applied. The review's note that local
+`main` lags `origin/main` by 32 commits is a fact about the checkout, not a
+change to the order.
+
+### BJ-S0 — the adoption of BJ-Q0..Q12
+
+On the standing go-ahead of 2026-10-10, thirteen items adopted at once:
+BJ-Q0 opens BJ. `[quiet-wrong]` items first: **BJ-Q3** (a)/(c), **BJ-Q6**
+as revised, **BJ-Q10** as revised and **BJ-Q12** (the fix first), each with
+its premise re-read at `080cd555` (the mark column says what was read).
+**BJ-Q2 is adopted revised, (b) not (a)**: the one adoption that departs
+from CLA's written proposal, because (a) is an implicit conversion by W3's
+letter and cannot be taken back. The operator's reading of W3 would
+reverse it. The rest follow the proposals as written.
