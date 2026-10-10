@@ -131,6 +131,27 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
                                   val.param_name() + "' has no bound value to store");
     }
 
+    // **A literal past int64 wrapped in the lexer, so `int_val` is not its
+    // value: stored, it would be another number** (BJ-S3's review) - the
+    // epoch day or flag it wrapped to. Refused once, ahead of the switch, for
+    // every type that reads `int_val` as the stored value; a uint64 reads the
+    // digits, and the other types refuse an integer by kind below.
+    if (parser::IntLiteralWrapped(val)) {
+        switch (col.type_val) {
+            case kTypeValInt8:
+            case kTypeValInt16:
+            case kTypeValInt32:
+            case kTypeValInt64:
+            case kTypeValBool:
+            case kTypeValDate:
+            case kTypeValTimestamp:
+                return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                          " does not fit column '" + NameOf() + "'");
+            default:
+                break;
+        }
+    }
+
     switch (col.type_val) {
         case kTypeValInt8:
         case kTypeValInt16:
@@ -138,12 +159,6 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
         case kTypeValInt64: {
             if (val.type != parser::ValueType::kInt) {
                 return Status::InvalidArgument("column '" + NameOf() + "' expects an integer");
-            }
-            // A literal past int64 wrapped in the lexer, so `int_val` is not
-            // its value: stored, it would be another number (BJ-S3's review).
-            if (parser::IntLiteralWrapped(val)) {
-                return Status::OutOfRange("integer literal " + val.raw_int_text +
-                                          " does not fit column '" + NameOf() + "'");
             }
             int width = IntWidthFor(col.type_val);
             if (!FitsSigned(val.int_val, width)) {
@@ -280,12 +295,6 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
                 if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
                 days = parsed.value();
             } else if (val.type == parser::ValueType::kInt) {
-                // A literal past int64 wrapped in the lexer, so `int_val` is
-                // not its value: stored, it would be another day.
-                if (parser::IntLiteralWrapped(val)) {
-                    return Status::OutOfRange("column '" + NameOf() + "' integer literal " +
-                                              val.raw_int_text + " is outside int64");
-                }
                 if (val.int_val < kMinEpochDay || val.int_val > kMaxEpochDay) {
                     return Status::OutOfRange("column '" + NameOf() +
                                               "' date is outside the supported range");
@@ -306,10 +315,6 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
                 if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
                 micros = parsed.value();
             } else if (val.type == parser::ValueType::kInt) {
-                if (parser::IntLiteralWrapped(val)) {
-                    return Status::OutOfRange("column '" + NameOf() + "' integer literal " +
-                                              val.raw_int_text + " is outside int64");
-                }
                 if (val.int_val < kMinEpochMicros || val.int_val > kMaxEpochMicros) {
                     return Status::OutOfRange("column '" + NameOf() +
                                               "' timestamp is outside the supported range");

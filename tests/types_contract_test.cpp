@@ -456,21 +456,42 @@ TEST(TypesContract, AWrappedIntegerLiteralIsNotStoredAsADateOrATimestamp) {
     Instance db;
     ASSERT_EQ(db.Run("CREATE TABLE t (id int64, d date, ts timestamp) BTREE").substr(0, 7),
               "CREATED");
-    // 2^64 + 1 wraps to 1: epoch day 1, or one microsecond past the epoch.
+    // 2^64 + 1 wraps to 1: epoch day 1, or one microsecond past the epoch;
+    // -(2^64 + 1) wraps to -1, a day before it.
     for (const char* sql : {"INSERT INTO t VALUES (18446744073709551617, '2000-01-01 00:00:00')",
-                            "INSERT INTO t VALUES ('2000-01-01', 18446744073709551617)"}) {
+                            "INSERT INTO t VALUES ('2000-01-01', 18446744073709551617)",
+                            "INSERT INTO t VALUES (-18446744073709551617, '2000-01-01 00:00:00')"}) {
         const std::string out = db.Run(sql);
         EXPECT_EQ(out.substr(0, 3), "ERR") << sql << " -> " << out;
-        EXPECT_NE(out.find("outside int64"), std::string::npos) << sql << " -> " << out;
+        EXPECT_NE(out.find("does not fit column"), std::string::npos) << sql << " -> " << out;
     }
     ASSERT_EQ(db.Run("INSERT INTO t VALUES ('2000-01-01', '2000-01-01 00:00:00')").substr(0, 8),
               "INSERTED");
-    const std::string update1 = db.Run("UPDATE t SET d = 18446744073709551617 WHERE d = '2000-01-01'");
-    EXPECT_EQ(update1.substr(0, 3), "ERR") << update1;
-    const std::string update2 = db.Run("UPDATE t SET ts = 18446744073709551617 WHERE d = '2000-01-01'");
-    EXPECT_EQ(update2.substr(0, 3), "ERR") << update2;
+    for (const char* sql :
+         {"UPDATE t SET d = 18446744073709551617 WHERE d = '2000-01-01'",
+          "UPDATE t SET ts = 18446744073709551617 WHERE d = '2000-01-01'"}) {
+        const std::string out = db.Run(sql);
+        EXPECT_EQ(out.substr(0, 3), "ERR") << sql << " -> " << out;
+        EXPECT_NE(out.find("does not fit column"), std::string::npos) << sql << " -> " << out;
+    }
     // Only the one good row exists, as written.
     EXPECT_EQ(db.Run("SELECT d, ts FROM t"), "d,ts\\n2000-01-01,2000-01-01 00:00:00");
+}
+
+TEST(TypesContract, AWrappedIntegerLiteralIsNotStoredAsABool) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, f bool) BTREE").substr(0, 7), "CREATED");
+    // 2^64 + 1 wraps to 1 and 2^64 to 0, the two values a bool holds.
+    for (const char* sql : {"INSERT INTO b VALUES (18446744073709551617)",
+                            "INSERT INTO b VALUES (18446744073709551616)"}) {
+        const std::string out = db.Run(sql);
+        EXPECT_EQ(out.substr(0, 3), "ERR") << sql << " -> " << out;
+        EXPECT_NE(out.find("does not fit column"), std::string::npos) << sql << " -> " << out;
+    }
+    ASSERT_EQ(db.Run("INSERT INTO b VALUES (0)").substr(0, 8), "INSERTED");
+    const std::string out = db.Run("UPDATE b SET f = 18446744073709551617 WHERE f = 0");
+    EXPECT_EQ(out.substr(0, 3), "ERR") << out;
+    EXPECT_EQ(db.Run("SELECT f FROM b"), "f\\n0");
 }
 
 }  // namespace
