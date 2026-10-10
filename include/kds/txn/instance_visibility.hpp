@@ -141,11 +141,15 @@ class WakeRegistry;
 // best-effort one (`sched/waker_table.hpp`), a skipped kick costing one idle
 // block.
 //
-// **Another session's commit is not covered.** A commit acknowledged to
-// another session before this statement began stays invisible to it for up
-// to one sync - the remainder BA-Q3 (c) names, snapshots that carry their
-// in-flight set, which is its own order
-// (`docs/inflight/bugs/a-strict-commits-marker-caps-every-cores-snapshot-across-its-sync.md`).
+// **Another session's commit is covered the same way.** The bound a
+// statement waits for is the higher of its session's last commit and
+// `CommitCeiling()` as the statement begins, which every commit acknowledged
+// to any session before it is at or below. With no marker held below the
+// ceiling the two are equal and nothing waits; a marker held below it - a
+// `strict` commit in its sync, with a later commit published meanwhile -
+// makes the statement wait the rest of that sync, as the committing session's
+// own does. The alternative, snapshots that carry their in-flight set
+// (BA-Q3 (c)), would remove the wait and is a redesign of `txn.md` §4.
 //
 // ---- Reclamation, and the two windows it must not outrun -----------------
 //

@@ -1115,7 +1115,18 @@ void CommandDispatcher::FinishDeferredCommits() {
 
 wal::Lsn CommandDispatcher::UncoveredCommit(Session* session) {
     Session& bound_session = session != nullptr ? *session : autocommit_session_;
-    const wal::Lsn bound = bound_session.acknowledged_commit_lsn();
+    // No manager, no markers, and nothing to wait for.
+    if (txn_ == nullptr) return wal::kNoLsn;
+    // **The bound is the higher of the session's own last commit and the
+    // highest commit published on the instance now.** The second is what a
+    // statement "sees everything committed before it began" (`txn.md`'s level
+    // table) means across sessions: a commit acknowledged to another session
+    // before this statement began is at or below the published ceiling, and a
+    // marker still held below it - a `strict` commit in its sync - would cap
+    // this statement's snapshot beneath it. With no marker below the
+    // ceiling the two are equal and this is two loads.
+    const wal::Lsn bound = std::max<wal::Lsn>(bound_session.acknowledged_commit_lsn(),
+                                              txn_->PublishedCommitCeiling());
     if (bound == wal::kNoLsn || txn_->CeilingCovers(bound)) {
         bound_session.set_acknowledged_commit_lsn(wal::kNoLsn);
         return wal::kNoLsn;
