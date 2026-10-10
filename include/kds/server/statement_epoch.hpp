@@ -20,10 +20,17 @@
 // and published after, a statement could read the old word, be seen idle,
 // and bind from its stale memo after the free.
 //
-// **One slot per core is enough** (BF-S1's Census B): every statement head
-// is `DispatchAndStage`, which is synchronous, and the executor cannot park,
-// so a core runs one statement's binding at a time; the one page id held
-// across a park, a mid-walk write's cursor, is fenced by its relation `IX`.
+// **One slot per core, carrying the lowest word the core holds** (BF-S1's
+// Census B, amended at BA-S15 per BA-Q11). Every statement head is
+// `DispatchAndStage`, which is synchronous, so a core enters one
+// statement's binding at a time; but since BA-S15 a `SELECT`'s walk runs on
+// after its head returns and yields between slices, so several statements
+// of one core can hold memos at once. Each one `Hold`s the word it
+// revalidated against for its walk's life, and the slot publishes the
+// minimum of the running statement's word and every held one - a drop is
+// reclaimed only once every statement anywhere that could have bound it is
+// gone. The one page id held across a park, a mid-walk write's cursor, is
+// fenced by its relation `IX`.
 // The KWP load endpoint, the one reader outside `DispatchAndStage`, takes the
 // same slot around its handlers. The Cabin optimizer's tick, which BF-R9
 // also names, takes none: it runs on core 0's reactor, synchronously, as
@@ -33,10 +40,12 @@
 // **Threading.** A slot's one writer is its core; any thread reads it. The
 // slots are the instance's, owned by `Expeditor`, sized to the core count.
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <vector>
 
 namespace kds::server {
 
@@ -57,10 +66,35 @@ public:
         std::atomic_thread_fence(std::memory_order_seq_cst);
     }
     void Publish(std::uint32_t core, std::uint64_t word) noexcept {
-        slots_[core].word.store(word, std::memory_order_release);
+        slots_[core].running = word;
+        Republish(core);
     }
     void Leave(std::uint32_t core) noexcept {
-        slots_[core].word.store(kIdle, std::memory_order_release);
+        slots_[core].running = kIdle;
+        Republish(core);
+    }
+
+    // **A statement whose walk outlives its head** (BA-S15) keeps the word
+    // it revalidated against held until its walk ends. Taken while the
+    // statement's head still publishes that word, so the slot never shows a
+    // value above it in between. The core's own thread only.
+    void Hold(std::uint32_t core, std::uint64_t word) {
+        auto& held = slots_[core].held;
+        const auto it = std::lower_bound(held.begin(), held.end(), word,
+                                         [](const Held& h, std::uint64_t w) { return h.word < w; });
+        if (it != held.end() && it->word == word) {
+            ++it->count;
+        } else {
+            held.insert(it, Held{word, 1});
+        }
+        Republish(core);
+    }
+    void Release(std::uint32_t core, std::uint64_t word) noexcept {
+        auto& held = slots_[core].held;
+        const auto it = std::find_if(held.begin(), held.end(),
+                                     [word](const Held& h) { return h.word == word; });
+        if (it != held.end() && --it->count == 0) held.erase(it);
+        Republish(core);
     }
 
     // Whether every statement running now revalidated at or after `word`.
@@ -73,10 +107,29 @@ public:
     }
 
 private:
+    struct Held {
+        std::uint64_t word;
+        std::uint32_t count;
+    };
     // A cache line each: one core's publish does not bounce another's slot.
     struct alignas(64) Slot {
         std::atomic<std::uint64_t> word{kIdle};
+        // The core's own bookkeeping, written and read by its thread alone:
+        // the running statement's word, and every word a walk holds.
+        // Ascending by word, one entry per distinct word. A core's words
+        // only grow, so a hold in practice appends or counts into the last
+        // entry, and the vector keeps its capacity - no allocation per
+        // statement. The insert stays sorted anyway: the published minimum
+        // is a safety bound, and it must not rest on that ordering.
+        std::uint64_t running = kIdle;
+        std::vector<Held> held;
     };
+    void Republish(std::uint32_t core) noexcept {
+        const Slot& slot = slots_[core];
+        std::uint64_t word = slot.running;
+        if (!slot.held.empty() && slot.held.front().word < word) word = slot.held.front().word;
+        slots_[core].word.store(word, std::memory_order_release);
+    }
     std::uint32_t cores_;
     std::unique_ptr<Slot[]> slots_;
 };

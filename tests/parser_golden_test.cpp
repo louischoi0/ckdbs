@@ -88,6 +88,8 @@ std::string_view StatusCodeName(StatusCode code) {
         // it - which is exactly the movement this file is here to make
         // deliberate rather than silent.
         case StatusCode::kNotImplemented: return "NotImplemented";
+        // A walk's, never a parse's (BA-S15).
+        case StatusCode::kCancelled: return "Cancelled";
     }
     return "<unknown>";
 }

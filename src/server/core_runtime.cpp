@@ -42,6 +42,12 @@ CoreRuntime::~CoreRuntime() {
     // one.
     const CurrentCoreGuard as_this_core(core_id());
     listener_.reset();
+    // **Queued statements go while what they borrow is still here**
+    // (BA-S15): `scheduler_` is declared above every borrower and so
+    // destroyed after them, and a `SELECT` between slices - or any statement
+    // parked on a wait - holds a frame whose destructors reach the
+    // dispatcher, the catalog and the transaction manager.
+    scheduler_->DiscardTasks();
     // **The WAL gate slot goes back before `wal_` does** (BA-S1): the shared
     // store outlives this runtime. Only this runtime's own gate is cleared.
     if (owned_store_ == nullptr && store_ != nullptr && wal_ != nullptr) {

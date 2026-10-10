@@ -1403,6 +1403,9 @@ struct Expeditor::ServeRuntime {
     std::optional<TlsContext> tls_context;
     std::optional<FileCredentialStore> credentials;
 #endif
+    // §10's registry, before the listeners so it outlives every session
+    // registered in it (BA-S15).
+    CancelRegistry cancels;
     std::optional<TcpServer> listener;
     std::optional<TcpServer> text_listener;
     std::optional<KwpLoadServer> kwp_listener;
@@ -1618,9 +1621,9 @@ Status Expeditor::Start() {
     // salts already come from (`server/scram.cpp`).
     //
     // Without OpenSSL there is no unguessable source in this build, and the
-    // fallback counter is honest about it: `kServerCapabilities` does not
-    // offer `CANCEL` either way (handshake.hpp), so nothing depends on the
-    // value being a secret today.
+    // fallback counter is honest about it: with no source installed the
+    // listener withholds `CANCEL` (BA-S15), because a cancel key is the
+    // whole of a cancel's authorization (§10).
     client_setup.identity = [] {
         std::uint64_t v = 0;
         if (RAND_bytes(reinterpret_cast<unsigned char*>(&v), sizeof(v)) != 1) {
@@ -1628,6 +1631,7 @@ Status Expeditor::Start() {
         }
         return v;
     };
+    client_setup.cancels = &live.cancels;
 #endif
     listener.value().Configure(client_setup);
 

@@ -1,5 +1,7 @@
 #include "kds/catalog/catalog_cache.hpp"
 
+#include <algorithm>
+
 #include <utility>
 
 // Concurrency: core-local, no internal synchronization (rules.md #3). See
@@ -125,9 +127,39 @@ void CatalogCache::UpdateDescPage(Oid rel_oid, PageId root) noexcept {
     it->second.desc_page_id = root;
 }
 
+std::uint64_t CatalogCache::Pin() {
+    if (!pins_.empty() && pins_.back().generation == generation_) {
+        ++pins_.back().count;
+    } else {
+        pins_.push_back(Pins{generation_, 1});
+    }
+    return generation_;
+}
+
+void CatalogCache::Unpin(std::uint64_t generation) noexcept {
+    const auto pin = std::find_if(pins_.begin(), pins_.end(),
+                                  [generation](const Pins& p) { return p.generation == generation; });
+    if (pin == pins_.end() || --pin->count != 0) return;
+    pins_.erase(pin);
+    // Its retired maps, if an `Invalidate` retired them, go with the last
+    // walk that bound them.
+    const auto retired =
+        std::find_if(graveyard_.begin(), graveyard_.end(),
+                     [generation](const Generation& g) { return g.generation == generation; });
+    if (retired != graveyard_.end()) graveyard_.erase(retired);
+}
+
 void CatalogCache::Invalidate() noexcept {
     // types_ is deliberately kept: sys.types is written only by Bootstrap()
     // (see catalog_cache.hpp's table of what is cacheable).
+    if (!pins_.empty() && pins_.back().generation == generation_) {
+        // A walk between slices holds pointers into these (BA-S15): retire
+        // them whole, element addresses intact, instead of freeing them.
+        graveyard_.push_back(Generation{generation_, std::move(table_access_),
+                                        std::move(name_to_oid_), std::move(table_list_),
+                                        std::move(patterns_)});
+    }
+    ++generation_;
     table_access_.clear();
     name_to_oid_.clear();
     table_list_.reset();

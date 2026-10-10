@@ -251,6 +251,23 @@ public:
     // The schema word this core's cache was last revalidated against, and
     // the instance's word now (BF-R9's two readings); 0 with no word.
     std::uint64_t cache_built_at() const noexcept { return cache_built_at_; }
+
+    // **The memo held for a walk that outlives its statement's head**
+    // (BA-S15, `CatalogCache::Pin`): while one is alive, nothing that frees
+    // the memo - a later head's `Revalidate`, a DDL's version bump,
+    // `DropCache` - frees an entry the walk bound.
+    class MemoPin {
+    public:
+        explicit MemoPin(Catalog& catalog)
+            : catalog_(catalog), generation_(catalog.cache_.Pin()) {}
+        ~MemoPin() { catalog_.cache_.Unpin(generation_); }
+        MemoPin(const MemoPin&) = delete;
+        MemoPin& operator=(const MemoPin&) = delete;
+
+    private:
+        Catalog& catalog_;
+        std::uint64_t generation_;
+    };
     std::uint64_t schema_word_now() const noexcept {
         return schema_word_ == nullptr ? 0 : schema_word_->load(std::memory_order_acquire);
     }
@@ -1197,6 +1214,7 @@ public:
     std::uint64_t catalog_version() const noexcept { return catalog_version_; }
 
     const CatalogCache::Stats& cache_stats() const noexcept { return cache_.stats(); }
+    std::size_t cache_retired_generations() const noexcept { return cache_.retired_generations(); }
 
 private:
     // ---- The delete-mark count, and the one seam it is reached through -

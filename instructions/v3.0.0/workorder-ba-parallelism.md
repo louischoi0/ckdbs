@@ -2128,3 +2128,130 @@ Each differs in what it re-runs on, and one helper would need a mode for
 each.
 
 Overhead not measured; measured at the milestone's close.
+
+### BA-S15 - the walk-boundary yield and `C_CANCEL`, built 2026-10-10
+
+On `worktree-ba-open-marks` from `6aa76ec7` (BA-R12, BA-Q11). Exempt from
+the census (BA-Q1). The design is CLA's proposal, adopted under the
+go-ahead.
+
+**The walk yields.**
+- A `SELECT`'s outermost walk yields every `exec::SlicePolicy::pages_per_slice`
+  (64) pages, at the bottom of its page loop: no pin, no span
+  (`step_vm.cpp`, `ExecuteAsync`).
+- The structural-refusal note is cleared after each resume, so the note a
+  walk ends with is its own (BA-S14 reads it).
+- 64 was not re-measured. BA-Q11 asked for it "re-measured in the stage";
+  it is read at BA-S17's A/B instead.
+
+**`server::SelectRun` owns the statement.**
+- It owns everything a `SELECT` reads: view and lease, parse, AST,
+  borrow, chain, sinks, quota, and a scratch set (trail collector, replay
+  index, output sort, counters) borrowed from a per-dispatcher pool.
+- The pool replaces the members `trail_scratch_`, `replay_scratch_`,
+  `sorter_` and `exec_stats_`.
+- The plain path hands the run on in `DispatchOutcome::select_run` only
+  under `DispatchAsync` (`may_park_`), untraced, with an outermost step
+  that walks. A pk descent, a traced statement and every synchronous
+  caller run it inline.
+- `AwaitStatementWaits` completes the run at its tail, so every dispatch
+  `DispatchAsync` makes is followed by it.
+- While handed on, the run holds:
+  - this core's statement epoch at the word its head revalidated against;
+    the slot publishes the lowest of the running and the held words,
+    which is BA-Q11's amendment;
+  - a pin on the catalog memo (`Catalog::MemoPin`). `Invalidate` retires
+    a pinned generation whole rather than freeing it, and pins are counted
+    per generation.
+- **Members made statement-local** (§1.10):
+  - the BA-S14 poison flag rides the outcome (`poison_withheld`);
+  - a deferred `strict` commit carries the `DispatchAsync` call that
+    staged it, so a statement parks on its own entry and never on
+    another statement's.
+- The log line for a handed-on `SELECT` is written when its walk ends.
+
+**`C_CANCEL` has a handler** (`protocol.md` §3, §10).
+- `StatusCode::kCancelled` maps to the wire's existing `CANCELLED`
+  category.
+- `CancelRegistry` is one latched map for the instance.
+- A KWP session registers at accept on a listener that has both an
+  identity source and the registry, and only that listener offers
+  `CANCEL`. The session unregisters at close and at `Detach`.
+- A cancel connection's first frame is matched and closed unanswered.
+- The session's flag (`Session::cancel_flag`) is taken at the slice
+  boundary, before and after the yield, and ends the walk `Cancelled`
+  with the transaction failed. Otherwise it is taken at the next frame.
+- A connection closing mid-statement sets its own flag.
+
+**Teardown.** `~CoreRuntime` discards its scheduler's queued tasks before
+the dispatcher, catalog and transaction manager they borrow are destroyed
+(`Scheduler::DiscardTasks`).
+
+**Text:**
+- `sched.md` §3: the yield, what it holds, and the 256-lease cap per core
+  that a 257th suspended walk meets as `OutOfSpace`.
+- `protocol.md` §3 and §10.
+- `client-manual.md`.
+- The stale comments in `statement_epoch.hpp`, `txn/manager.hpp`,
+  `budget.hpp`, `status.hpp`, `handshake.hpp`, `tcp_server.hpp` and
+  `step_vm.cpp`.
+
+**Cells** (`tests/walk_slice_rig_test.cpp`, `kwp_session_test.cpp`):
+- a point read on a long walk's core is answered inside the walk;
+- a schema-word move during a suspension retires, and does not free, the
+  memo the walk bound; the core's epoch stays at the walk's word, and
+  both are given back when the walk ends;
+- a split of leaves behind, at and ahead of the walk, made inside its
+  suspension, leaves it missing and repeating nothing;
+- a cancel ends the walk and fails its transaction;
+- a walk of less than one slice never sees a cancel;
+- a core torn down with a walk queued;
+- the epoch hold, the per-generation pin, the registry, and a cancel
+  connection hit, miss and absent registry.
+
+**Not met in this stage:**
+- **"A root growth on another core"** is exercised as a schema-word move
+  on the walk's own core, a DDL. Both move the same word through the same
+  `Revalidate`.
+- **The teardown cell kills its mutant only under AddressSanitizer.** With
+  `DiscardTasks` removed, a local `-fsanitize=address` build of
+  `kds_tests` reports a heap-use-after-free in `~MemoPin`, and the fixed
+  tree runs clean. Plain Debug passes the mutant, because nothing reuses
+  the freed memory. The tree has no sanitizer build; the harness's
+  `alloc_counter.cpp` needs `alloc_dealloc_mismatch=0`.
+- No cell runs a `strict` commit beside a suspended walk. The fix is
+  covered by reading only.
+- No end-to-end `C_CANCEL` through `TcpServer`.
+- An index walk and a join's inner walk do not yield.
+
+**The review** (`critics-developer`), applied by CLA:
+- C1: a peer torn down with a walk queued was a use-after-free. Fixed by
+  `DiscardTasks`. It was latent before for any parked statement.
+- C2: `deferred_at_entry` adopted other statements' `strict` commits.
+  Fixed by the statement number.
+- C3: the pin graveyard was unbounded under overlapping walks. Fixed by
+  per-generation pins.
+- C4: the reader-lease cap became reachable. Stated in `sched.md`.
+- C5: registry registration and unregistration were asymmetric. Fixed by
+  `Connection::cancel_registered`.
+- Cuts:
+  - a pk descent runs inline;
+  - `sorter_` and `exec_stats_` deleted;
+  - one completion site;
+  - `MemoPin`'s null test gone;
+  - a `CurrentCoreGuard` around the recording;
+  - the stale comments.
+
+**Not applied:**
+- **`SetSelectRunStart`, kept.** Removing it means moving `SelectRun` and
+  `StarDescription` above `DispatchAndStage`, a large move for one
+  assignment.
+- **`StatementEpochs::Hold`'s sorted insert, kept.** An append would be
+  unsound the day a word arrives out of order, because the published
+  minimum would then be wrong. The comment was the part to fix.
+- **`select_run` as a `unique_ptr`, not tried.** It would make
+  `DispatchOutcome` move-only, and every caller that copies one would need
+  checking. The shared handle costs no more than one allocation, which the
+  run already pays.
+
+Overhead not measured; measured at the milestone's close.

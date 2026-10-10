@@ -145,6 +145,7 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
       durability_(other.durability_),
       keepalive_s_(other.keepalive_s_),
       identity_source_(std::move(other.identity_source_)),
+      cancels_(other.cancels_),
       next_identity_(other.next_identity_),
       server_info_(std::move(other.server_info_)),
       stop_handler_(std::move(other.stop_handler_)),
@@ -177,6 +178,7 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         durability_ = other.durability_;
         keepalive_s_ = other.keepalive_s_;
         identity_source_ = std::move(other.identity_source_);
+        cancels_ = other.cancels_;
         next_identity_ = other.next_identity_;
         server_info_ = std::move(other.server_info_);
         stop_handler_ = std::move(other.stop_handler_);
@@ -275,7 +277,16 @@ void TcpServer::Detach() noexcept {
         scheduler_ = nullptr;
         dispatcher_ = nullptr;
     }
+    // Every session leaves the registry with its connection, including one
+    // whose statement was still in flight and so never reached `CloseClient`.
+    for (auto& [fd, conn] : clients_) UnregisterCancel(conn);
     clients_.clear();
+}
+
+void TcpServer::UnregisterCancel(Connection& conn) {
+    if (!conn.cancel_registered) return;
+    cancels_->Unregister(conn.kwp->session_id());
+    conn.cancel_registered = false;
 }
 
 void TcpServer::OnListenerReadable() {
@@ -349,11 +360,28 @@ void TcpServer::AdoptConnection(int client_fd) {
         wire::HandshakeConfig config;
         config.server_info = server_info_;
         config.tls_active = conn.channel != nullptr;
-        config.capabilities = wire::kServerCapabilities;
+        // **`CANCEL` is offered where a cancel can be authorized** (§10,
+        // BA-S15): a registry to match in and an identity source whose keys
+        // are secrets. The default counter's are not.
+        const bool cancellable = cancels_ != nullptr && identity_source_;
+        config.capabilities = wire::kServerCapabilities |
+                              (cancellable ? static_cast<std::uint64_t>(wire::Capability::kCancel)
+                                           : std::uint64_t{0});
         // The reactor's clock, which is what the idle sweep above runs on:
         // a session built without one stamps no portal and expires none.
         conn.kwp.emplace(conn.session, config, durability_, &scheduler_->clock());
         conn.kwp->set_identity(NextIdentity(), NextIdentity());
+        // A source that failed answers 0, which is no secret: such a
+        // session is offered the bit and is simply never matched. The
+        // registry is still this connection's to match a `C_CANCEL` in.
+        if (cancellable) {
+            conn.kwp->set_cancel_registry(cancels_);
+            if (conn.kwp->session_id() != 0 && conn.kwp->cancel_key() != 0) {
+                cancels_->Register(conn.kwp->session_id(), conn.kwp->cancel_key(),
+                                   conn.session.cancel_flag());
+                conn.cancel_registered = true;
+            }
+        }
         // The gate moves into the protocol session: a KWP connection's
         // exchange runs in `C_AUTH` frames, not in lines, and `auth.hpp`'s
         // gate is the same object either way ("only this line framing is
@@ -832,13 +860,15 @@ void TcpServer::CloseClient(int client_fd) {
     // this connection's buffer, so destroying it now would pull both out
     // from under a task that is still on a ready queue.
     //
-    // Marked instead, and torn down by OnStatementComplete. Cancelling
-    // the statement would be better and needs cancellation the engine
-    // does not have; waiting for it is bounded by the statement's own
-    // row-touch budget (exec/budget.hpp), which is what stops a hung
-    // client from pinning a connection forever.
+    // Marked instead, and torn down by OnStatementComplete. **The
+    // statement is asked to stop** (BA-S15): a `SELECT`'s walk sees the
+    // flag at its next slice boundary, and nothing else observes it - a
+    // write may park on a lock or a commit, but runs to its end - bounded
+    // by the statement's own row-touch budget (exec/budget.hpp), which is
+    // what stops a hung client from pinning a connection forever.
     if (conn.in_flight) {
         conn.closing = true;
+        conn.session.RequestCancel();
         return;
     }
 
@@ -869,6 +899,7 @@ void TcpServer::CloseClient(int client_fd) {
             (void)::send(client_fd, conn.outbox.data(), conn.outbox.size(), MSG_NOSIGNAL);
         }
     }
+    UnregisterCancel(conn);
     clients_.erase(it);
     if (logging(LogLevel::kDebug)) {
         log_->Debug("client", "closed fd=" + std::to_string(client_fd) +

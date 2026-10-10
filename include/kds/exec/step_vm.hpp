@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <optional>
 #include <vector>
@@ -315,10 +316,33 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
                const txn::Snapshot* snapshot = nullptr, bool indexes = true,
                PositionSink* position = nullptr);
 
-// **Nothing in the executor parks since AT-S10.** `ExecuteAsync` and its
-// page-boundary `resume_gate` were the remote step producer's, which
-// parked a walk for batch credit, and its `parent` frame was a consuming
-// stage's upstream row; the step server was the only caller of either.
+// **A statement's walk yields every `pages_per_slice` pages** (BA-S15,
+// BA-R12): the outermost walk, at the bottom of its page loop - its one
+// place with no pin and no span - gives its core back with `sched::Yield`
+// and continues on a later turn, so a long walk no longer holds every other
+// session on its core until it ends (`sched.md` §3). Only the statement's
+// own driver passes a policy: `Execute` above passes none and runs to the
+// end as before, and a yield under the synchronous driver is resumed inline
+// anyway. The pages counted are the outermost walk's, which bounds a scan;
+// a nested-loop join's inner work under one outer page is not sliced.
+//
+// **The boundary is where a cancel is observed** (docs/spec/protocol.md §10):
+// `cancel`, when set, is the session's flag, taken there - before the yield
+// and again after it - and a taken flag ends the walk `Cancelled`.
+struct SlicePolicy {
+    std::uint32_t pages_per_slice = 64;
+    std::atomic<bool>* cancel = nullptr;
+};
+
+// The statement's chain as a coroutine its caller awaits - `Execute`'s body,
+// yielding per `slice`. Everything the chain reads must outlive the
+// coroutine: the caller owns the chain, the sink, the stats, the trail, the
+// replay and the snapshot across every suspension.
+sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
+                         const StepChain& chain, const RowSink& sink, ExecStats* stats,
+                         const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
+                         stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
+                         PositionSink* position, const SlicePolicy& slice);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row.

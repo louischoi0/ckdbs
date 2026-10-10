@@ -280,9 +280,10 @@ hold on the debug port too (Appendix A gives the text spellings).
   the data back**. It is not a `TXN_CONFLICT` and never carries
   `retryable = 1`.
 - **A connection that drops mid-statement may find the statement applied.**
-  That is the contract, not an edge case: there is no cancellation in this
-  engine, so a statement already running runs to completion whatever
-  happens to the connection.
+  That is the contract, not an edge case: a drop, like `C_CANCEL`
+  (`protocol.md` §10), stops only a `SELECT` walking more than one slice of
+  pages; a write already running runs to completion whatever happens to the
+  connection.
 - **`UNSUPPORTED` and `NOT_IMPLEMENTED` are two different answers to "will
   this ever work?"** Both mean the statement was understood and declined,
   both carry the byte position of what was declined, and neither is

@@ -60,6 +60,10 @@
 
 namespace kds::server {
 
+// `SelectRun`'s, defined beside it below: `DispatchAndStage` stamps the head's
+// start on a walk it hands on, so the walk's log line times the statement.
+void SetSelectRunStart(SelectRun& run, sched::MonoTimeNs started_ns) noexcept;
+
 namespace {
 
 std::string_view Trim(std::string_view s) {
@@ -421,7 +425,7 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
                                         std::to_string(block.trx_id) +
                                         " decided, and is running it again");
             }
-            const MayParkScope parking(*this, /*allowed=*/true);
+            const MayParkScope parking(*this, /*allowed=*/true, out->statement);
             *out = DispatchAndStage(line, session);
         }
         // However the wait ended - granted, victim, or the net - this
@@ -547,6 +551,13 @@ sched::Coro CommandDispatcher::AwaitStatementWaits(std::string_view line, Sessio
         }
         break;
     }
+    // ---- BA-S15: a `SELECT`'s walk runs here, sliced --------------------
+    //
+    // After the waits, which re-run a statement whole and so may replace a
+    // head's reply - a reply carrying a walk carries no wait - and before
+    // anything after a dispatch reads the outcome: every dispatch
+    // `DispatchAsync` makes is followed by this function.
+    if (out->select_run != nullptr) co_await CompleteSelect(line, out);
     co_return Status::OK();
 }
 
@@ -671,7 +682,7 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     // never waits and so never queues behind this asker. The re-run asks
     // again and parks again if it must, and the statement's one deadline is
     // what bounds the sequence rather than each turn of it.
-    const MayParkScope parking(*this, /*allowed=*/true);
+    const MayParkScope parking(*this, /*allowed=*/true, out->statement);
     *out = DispatchAndStage(line, session);
     co_return Status::OK();
 }
@@ -682,7 +693,11 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // is parked on below even if a re-run's outcome no longer names it: an
     // entry nobody parks on would hold its marker, and so cap every
     // snapshot on the instance, until some other statement's park ran it.
-    const std::size_t deferred_at_entry = deferred_commits_.size();
+    // Found by this call's number, not by the queue's length: another
+    // statement of this core stages its own inside this one's parks and
+    // walk (BA-S15), and this statement must not wait out that one's sync.
+    const std::uint64_t statement = ++last_statement_;
+    out->statement = statement;
     // Every statement runs on the core its session is on (AT-S9). What
     // suspends here is a statement's own wait - a lock, a blocking writer,
     // the group commit - never a stage on another core.
@@ -717,7 +732,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         // inside a loop and beside a `co_await`, which is that day
         // arriving; the guard makes the property structural rather than
         // reviewed.
-        const MayParkScope parking(*this, /*allowed=*/true);
+        const MayParkScope parking(*this, /*allowed=*/true, statement);
         *out = DispatchAndStage(line, session);
     }
 
@@ -756,15 +771,16 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         Contention::Add(Tally::kStructuralReruns);
         co_await sched::Yield{};
         {
-            const MayParkScope parking(*this, /*allowed=*/true);
+            const MayParkScope parking(*this, /*allowed=*/true, statement);
             *out = DispatchAndStage(line, session);
         }
         co_await AwaitStatementWaits(line, session, out, &statement_deadline_ns);
     }
     // The poison `EndWrite` withheld for a re-run is owed by whatever ends
     // the re-runs as a refusal - the deadline, or a last run whose outcome
-    // is no longer the structural refusal.
-    if (structural_poison_withheld_) (session != nullptr ? *session : autocommit_session_).Poison();
+    // is no longer the structural refusal. Read off the outcome, not the
+    // member: another statement of this core may have run since (BA-S15).
+    if (out->poison_withheld) (session != nullptr ? *session : autocommit_session_).Poison();
 
     // ---- BH: a `PURGE` waits out a key it may not free yet (PU4, PU5) ----
     //
@@ -786,7 +802,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
             };
             co_await sched::WaitUntil{&cleared};
             {
-                const MayParkScope parking(*this, /*allowed=*/true);
+                const MayParkScope parking(*this, /*allowed=*/true, statement);
                 *out = DispatchAndStage(line, session);
             }
             // A re-run is a whole statement and can meet what any statement
@@ -824,8 +840,13 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // went at AT-S9 with the fan-in and the two-step pipeline, the last two
     // routes that opened a stage.
 
-    if (out->pending_lsn == wal::kNoLsn && deferred_commits_.size() > deferred_at_entry) {
-        out->pending_lsn = deferred_commits_.back().lsn;
+    if (out->pending_lsn == wal::kNoLsn) {
+        for (auto it = deferred_commits_.rbegin(); it != deferred_commits_.rend(); ++it) {
+            if (it->statement == statement) {
+                out->pending_lsn = it->lsn;
+                break;
+            }
+        }
     }
     if (out->pending_lsn != wal::kNoLsn) {
         // **The group commit.** Parking here rather than syncing inside the
@@ -1016,8 +1037,22 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     lock_wait_.reset();
     blocking_writer_ = 0;
     blocked_pk_ = 0;
+    outcome.poison_withheld = structural_poison_withheld_;
+    outcome.statement = parking_statement_;
 
-    if (log_ == nullptr) return outcome;
+    // A `SELECT` whose walk has not run yet is logged when it ends
+    // (`CompleteSelect`), with this head's start.
+    if (outcome.select_run != nullptr) {
+        SetSelectRunStart(*outcome.select_run, started_ns);
+        return outcome;
+    }
+    LogStatement(line, outcome, started_ns);
+    return outcome;
+}
+
+void CommandDispatcher::LogStatement(std::string_view line, const DispatchOutcome& outcome,
+                                     sched::MonoTimeNs started_ns) const {
+    if (log_ == nullptr) return;
 
     // A failed command reports at Warn and a successful one at Debug, so
     // the level has to be decided *before* the enabled() test - gating the
@@ -1025,7 +1060,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // above it, which is exactly the threshold an operator runs at.
     const bool failed = outcome.response.rfind("ERR ", 0) == 0;
     const LogLevel level = failed ? LogLevel::kWarn : LogLevel::kDebug;
-    if (!log_->enabled(level)) return outcome;
+    if (!log_->enabled(level)) return;
 
     // The reply is summarized, not echoed: a SELECT response carries every
     // matching row, and a log that reproduces result sets is a log that
@@ -1038,7 +1073,6 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
         msg += " in " + std::to_string((NowNs() - started_ns) / 1000) + "us";
     }
     log_->Log(level, "query", msg);
-    return outcome;
 }
 
 // ---- The durability wait (docs/spec/wal.md D2) --------------------------------
@@ -1059,7 +1093,7 @@ bool CommandDispatcher::DefersCommit(std::uint64_t txn_id) const {
 
 void CommandDispatcher::DeferCommit(txn::Transaction* txn, wal::Lsn lsn) {
     pending_commit_lsn_ = lsn;
-    deferred_commits_.push_back({lsn, txn});
+    deferred_commits_.push_back({lsn, txn, parking_statement_});
 }
 
 void CommandDispatcher::FinishDeferredCommits() {
@@ -4818,6 +4852,222 @@ StarDescription DescribeStar(std::span<const catalog::SysColumnRow> columns) {
 
 }  // namespace
 
+// ---- BA-S15: a `SELECT` whose walk outlives its head ------------------------
+//
+// **Everything a plain `SELECT`'s walk reads, owned in one place**, so the
+// walk can run after `HandleSelect` returns and yield its core between
+// slices (BA-R12, `sched.md` §3). The head builds one for every `SELECT`
+// and fills it as it parses, compiles and describes; the analyze, the fold
+// and a catalog view finish inside the head and drop it there. The plain
+// path hands it on in `DispatchOutcome::select_run` when the statement may
+// park - `DispatchAsync`, which awaits `Execute` - and runs it inline
+// otherwise.
+//
+// What it holds across a suspension, and why each is safe to hold: the read
+// view and its lease (statement-scoped, no page); the read borrow (the
+// relation `IS` a `DROP TABLE` waits for); the parse and the chain, whose
+// tokens are views into the statement text `DispatchAsync`'s caller keeps
+// alive; a scratch set borrowed from the dispatcher's pool; and, once handed
+// on, this core's statement epoch held at the word the head revalidated
+// against and a pin on the catalog memo - so neither a later head's
+// revalidation nor a drop's reclaim frees what the chain points into.
+class SelectRun {
+public:
+    SelectRun(CommandDispatcher& d, Session& session) : d_(d), session_(session) {
+        slice_.cancel = session.cancel_flag().get();
+        if (d_.select_scratch_pool_.empty()) {
+            scratch_ = std::make_unique<CommandDispatcher::SelectScratch>();
+        } else {
+            scratch_ = std::move(d_.select_scratch_pool_.back());
+            d_.select_scratch_pool_.pop_back();
+        }
+    }
+    ~SelectRun() {
+        if (epoch_held_) d_.epochs_->Release(d_.core_id_, epoch_word_);
+        d_.select_scratch_pool_.push_back(std::move(scratch_));
+    }
+    SelectRun(const SelectRun&) = delete;
+    SelectRun& operator=(const SelectRun&) = delete;
+
+    CommandDispatcher::SelectScratch& scratch() noexcept { return *scratch_; }
+
+    // Taken by the head as it hands the walk on, while it still publishes
+    // the word it revalidated against.
+    void HoldAcrossSuspension() {
+        if (d_.epochs_ != nullptr) {
+            epoch_word_ = d_.catalog_.cache_built_at();
+            d_.epochs_->Hold(d_.core_id_, epoch_word_);
+            epoch_held_ = true;
+        }
+        memo_pin_.emplace(d_.catalog_);
+    }
+
+    // The walk, yielding every `slice.pages_per_slice` pages, then the
+    // sorted drain and the recording; the reply is written over `*out`.
+    sched::Coro Execute(DispatchOutcome* out);
+
+    // `Execute` driven to its end on this thread, for a caller that cannot
+    // park: a yield is resumed at once.
+    DispatchOutcome RunInline();
+
+    // The head's state, filled by `HandleSelect` in order.
+    std::optional<txn::LeasedSnapshot> snapshot;
+    std::optional<parser::Parser> parser;
+    std::optional<parser::Statement> statement;
+    std::optional<ReadBorrow> borrow;
+    std::optional<exec::StepChain> chain;
+    TextResultSink text_sink;
+    ResultSink* sink = nullptr;
+    std::optional<StatementIdentity> identity;
+    exec::TrailCollector* trail = nullptr;
+    const exec::TrailReplay* replay = nullptr;
+    std::optional<exec::EmissionQuota> quota;
+    StarDescription star;
+    std::span<const exec::ColumnRef> projection;
+    std::span<const std::uint32_t> types;
+    sched::MonoTimeNs started_ns = 0;
+
+private:
+    DispatchOutcome Finish(const Status& ran);
+
+    CommandDispatcher& d_;
+    // The statement's session, which outlives it: a connection is torn
+    // down only once its statement has ended (`TcpServer::CloseClient`).
+    Session& session_;
+    // Released after the public members above, which point into the memo
+    // and dereference nothing of it as they go.
+    std::optional<catalog::Catalog::MemoPin> memo_pin_;
+    std::unique_ptr<CommandDispatcher::SelectScratch> scratch_;
+    std::uint64_t epoch_word_ = 0;
+    bool epoch_held_ = false;
+    std::string row_scratch_;
+    Status encode_error_ = Status::OK();
+    exec::SlicePolicy slice_;
+};
+
+void SetSelectRunStart(SelectRun& run, sched::MonoTimeNs started_ns) noexcept {
+    run.started_ns = started_ns;
+}
+
+sched::Coro SelectRun::Execute(DispatchOutcome* out) {
+    CommandDispatcher::SelectScratch& scratch = *scratch_;
+    // Encoding one row of the reply. Shared by the two paths below so the
+    // sorted and unsorted replies are formatted by one routine - the bug
+    // this shape avoids is a sorted statement rendering a DATE as an epoch
+    // day because a second formatter forgot `projection_types`.
+    auto render = [this](const exec::ChainFrame& frame, std::string& into) {
+        // A failure is remembered rather than thrown: the sort path calls
+        // this from a place that has already decided to keep the row, and
+        // the walk's own sink is the only caller that can end the
+        // statement. Checked at both, so an encode failure fails the
+        // statement rather than emitting a row the sink refused.
+        Status s = sink->EncodeProjectedRow(projection, types, frame, into);
+        if (!s.ok() && encode_error_.ok()) encode_error_ = std::move(s);
+    };
+    // Named, not a temporary: the walk holds it across every suspension.
+    const exec::RowSink visit =
+        [this, &scratch, render](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
+        if (scratch.sorter.active()) {
+            // **Ask before rendering.** The sort cannot skip or stop -
+            // the quota runs after the order exists - but under a
+            // `LIMIT` most rows are beaten by the heap's worst retained
+            // row and will never be seen, and rendering them is what
+            // made top-N bound memory without bounding work.
+            auto admitted = scratch.sorter.Admit(frame);
+            if (!admitted.ok()) return admitted.status();
+            if (admitted.value()) {
+                render(frame, row_scratch_);
+                if (!encode_error_.ok()) return encode_error_;
+                scratch.sorter.Take(row_scratch_);
+            }
+            return storage::VisitControl::kContinue;
+        }
+        const exec::QuotaVerdict verdict = quota->Note();
+        if (verdict == exec::QuotaVerdict::kStop) return storage::VisitControl::kStop;
+        if (verdict == exec::QuotaVerdict::kSkip) return storage::VisitControl::kContinue;
+        render(frame, row_scratch_);
+        if (!encode_error_.ok()) return encode_error_;
+        if (Status s = sink->Emit(row_scratch_); !s.ok()) return s;
+        return verdict == exec::QuotaVerdict::kEmitThenStop ? storage::VisitControl::kStop
+                                                            : storage::VisitControl::kContinue;
+    };
+    const Status ran = co_await exec::ExecuteAsync(
+        d_.catalog_, d_.page_store_, *chain, visit, &scratch.stats, d_.budget_, trail, replay,
+        d_.cabins_, &snapshot->snap, d_.indexes_enabled_, &*borrow, slice_);
+    const std::uint64_t statement = out->statement;
+    *out = Finish(ran);
+    out->statement = statement;
+    co_return Status::OK();
+}
+
+DispatchOutcome SelectRun::RunInline() {
+    DispatchOutcome out;
+    sched::Coro walk = Execute(&out);
+    while (!walk.done()) {
+        // Nothing beneath parks - the walk only yields - so a refused
+        // resume is a defect, answered rather than spun on.
+        if (!walk.TryResumeDeepest()) {
+            const Status parked = Status::InvalidArgument(
+                "a SELECT's walk parked on a wait under a synchronous dispatch");
+            return {ErrorReply(parked), false, 0, parked};
+        }
+    }
+    return out;
+}
+
+DispatchOutcome SelectRun::Finish(const Status& ran) {
+    // The recording below writes catalog and Waystone pages, outside the
+    // head's guard: as this dispatcher's core, as `DispatchAndStage` runs.
+    const CurrentCoreGuard as_this_core(d_.core_id_);
+    if (!ran.ok()) {
+        // A cancelled statement leaves its transaction failed (§10's
+        // "post-cancel session state = failed-txn rules"), whatever a
+        // read's other refusals do.
+        if (ran.code() == StatusCode::kCancelled) session_.Poison();
+        // **No trail on the failure path.** A statement that errored part
+        // way through touched some tuples and then stopped; a trail
+        // describing that is a trail describing a state no reader should
+        // ever be pointed at (workplan P10).
+        return {ErrorReply(ran), false, 0, ran};
+    }
+    CommandDispatcher::SelectScratch& scratch = *scratch_;
+
+    // The order exists only now, so the quota is applied here rather than
+    // in the sink - and it is the same quota object, so `LIMIT n OFFSET m`
+    // still means rows [m, m+n) of the reply the unlimited statement gives.
+    // What changed is which reply that is: the sorted one.
+    if (scratch.sorter.active()) {
+        scratch.sorter.Finish();
+        Status drained = Status::OK();
+        exec::DrainSorted(*quota, scratch.sorter.rows(), [&](const exec::OutputSort::Row& row) {
+            if (!drained.ok()) return;
+            drained = sink->Emit(row.text);
+        });
+        if (!drained.ok()) return {ErrorReply(drained), false, 0, drained};
+    }
+
+    d_.RecordExecution(identity, trail, *chain, scratch.stats);
+
+    if (d_.logging(LogLevel::kTrace)) {
+        d_.log_->Trace("query", "chain of " + std::to_string(chain->steps.size()) +
+                                    " step(s), class " +
+                                    std::to_string(static_cast<int>(chain->klass)));
+    }
+    return {text_sink.Take(), false};
+}
+
+sched::Coro CommandDispatcher::CompleteSelect(std::string_view line, DispatchOutcome* out) {
+    // Owned by this frame for the walk's life: `*out` is overwritten by the
+    // reply, and a core torn down with the walk queued destroys this frame -
+    // and the walk's beneath it - before the run they read
+    // (`CoreRuntime`'s `DiscardTasks`). A connection closed mid-walk is not
+    // torn down until the statement ends (`TcpServer::CloseClient`).
+    const std::shared_ptr<SelectRun> run = std::move(out->select_run);
+    co_await run->Execute(out);
+    LogStatement(line, *out, run->started_ns);
+    co_return Status::OK();
+}
+
 DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope) {
     // H6 step 2: the parse leg. One of `observability.md` §10's three
     // request-level spans, and the cheapest to attribute wrongly - a
@@ -6717,7 +6967,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     ResultSink& sink, TextResultSink& text_sink, const exec::StepChain& chain,
     exec::TrailCollector* trail, const exec::TrailReplay* replay,
     const std::optional<StatementIdentity>& identity, const txn::Snapshot& snapshot,
-    exec::PositionSink& borrow) {
+    exec::PositionSink& borrow, exec::ExecStats& stats) {
     if (Status s = aggregator_.Reset(*chain.aggregate, chain.column_names, aggregate_limits_);
         !s.ok()) {
         return {ErrorReply(s), false, 0, s};
@@ -6734,14 +6984,14 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     // client, and a `RowSink` answers `StatusOr<VisitControl>`, so a
     // non-ok status ends the walk and propagates out of Execute. That is
     // the same path a decode error already takes.
-    exec_stats_.steps.clear();
+    stats.steps.clear();
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
             if (Status s = aggregator_.Accumulate(frame); !s.ok()) return s;
             return storage::VisitControl::kContinue;
         },
-        &exec_stats_, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_,
+        &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_,
         &borrow);
     if (!ran.ok()) {
         // **No trail on the failure path**, exactly as the unaggregated
@@ -6767,7 +7017,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     // Recorded after a *complete* execution, and unconditionally - the fold
     // is downstream of all three, so an aggregated statement records the
     // trail, the access shape and the signals its unaggregated twin would.
-    RecordExecution(identity, trail, chain, exec_stats_);
+    RecordExecution(identity, trail, chain, stats);
     return {text_sink.Take(), false};
 }
 
@@ -6784,7 +7034,8 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
                                               const exec::TrailReplay* replay,
                                               const std::optional<StatementIdentity>& identity,
                                               const txn::Snapshot& snapshot,
-                                              exec::PositionSink& borrow) {
+                                              exec::PositionSink& borrow,
+                                              exec::OutputSort& sorter) {
     exec::ExecStats stats;
     std::uint64_t rows = 0;
 
@@ -6825,20 +7076,20 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     // is cheaper than the real one, and it is the same respect in which it
     // was already cheaper before a sort existed.
     exec::EmissionQuota quota(chain);
-    sorter_.Reset(chain, sort_max_rows_);
+    sorter.Reset(chain, sort_max_rows_);
     std::string analyze_scratch;
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
-            if (sorter_.active()) {
-                auto admitted = sorter_.Admit(frame);
+            if (sorter.active()) {
+                auto admitted = sorter.Admit(frame);
                 if (!admitted.ok()) return admitted.status();
                 // Admitted rows are taken with empty text, which is the one
                 // respect in which this run is cheaper than the real one -
                 // and the same respect in which it already was. What matters
                 // is that the same rows are *admitted*, so `sorted=` and
                 // `rows=` describe the run that would have happened.
-                if (admitted.value()) sorter_.Take(analyze_scratch);
+                if (admitted.value()) sorter.Take(analyze_scratch);
                 return storage::VisitControl::kContinue;
             }
             const exec::QuotaVerdict verdict = quota.Note();
@@ -6860,9 +7111,9 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     // `rows=` counts what the client would have been sent, so on the sorted
     // path the quota runs where the real path runs it: after the order
     // exists.
-    if (sorter_.active()) {
-        sorter_.Finish();
-        exec::DrainSorted(quota, sorter_.rows(), [&](const exec::OutputSort::Row&) { ++rows; });
+    if (sorter.active()) {
+        sorter.Finish();
+        exec::DrainSorted(quota, sorter.rows(), [&](const exec::OutputSort::Row&) { ++rows; });
     }
     RecordExecution(identity, trail, chain, stats);
 
@@ -6884,8 +7135,8 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     // than what arrived (OB5) - the number that says what the sort cost in
     // memory. `examined=` beside it says what the walk cost, and the two
     // differing by orders of magnitude is the top-N heap doing its job.
-    if (sorter_.active()) {
-        os << " sorted=" << sorter_.rows().size();
+    if (sorter.active()) {
+        os << " sorted=" << sorter.rows().size();
     }
 
     // The statement's own pattern_id, and the fetch_id its trail is keyed
@@ -6918,6 +7169,10 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // The statement boundary. Under READ COMMITTED this is where a new read
     // view is taken - so two SELECTs in one transaction can see different
     // data, which is the level's entire definition.
+    //
+    // **Everything the statement reads lives on its run** (BA-S15), which
+    // the plain path hands on so its walk can outlive this function.
+    const auto run = std::make_shared<SelectRun>(*this, session);
     auto snapshot = SnapshotFor(session);
     // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse (a spent
     // transaction-id lease on a peer did, until AT-S10b), and the wire's
@@ -6926,6 +7181,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // so the same refusal carried the bit on one verb and lost it on
     // the other (the SS2 review's cut 2).
     if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
+    run->snapshot.emplace(std::move(snapshot.value()));
+    const txn::Snapshot& snap = run->snapshot->snap;
 
     // An explicit Parser rather than the free `Parse()`, so the statement's
     // fingerprint can be taken **from the parse itself** (parser.hpp). It
@@ -6933,7 +7190,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // measured at ~13% of a point join's latency, three times what the
     // recording it was for actually cost, and the whole of replay's B+ tree
     // regression (bench/results-waystone-v2.md).
-    parser::Parser parser(line);
+    parser::Parser& parser = run->parser.emplace(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
@@ -6941,7 +7198,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     if (!std::holds_alternative<parser::SelectStmt>(parsed.value())) {
         return {"ERR expected a SELECT statement", false};
     }
-    auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+    auto& stmt = std::get<parser::SelectStmt>(run->statement.emplace(std::move(parsed.value())));
 
     // No guards here any more. V05, V06 and V07 each added a refusal
     // because the single-relation scan below would have answered their
@@ -7036,7 +7293,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // Opened before the compile, which declares into it at every bind
     // (`step_compiler.hpp`'s `declare`; AT-R1). Lives to the end of the
     // statement, which is the end of this function.
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
+    ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_);
     auto chain = exec::Compile(catalog_, stmt,
                                resolve_view.has_value() ? &*resolve_view : nullptr, &borrow);
     if (!chain.ok()) {
@@ -7078,15 +7335,16 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // rendering otherwise. Built here, above every fork below, because the
     // fold, the sorted drain and the plain walk all emit through it - and
     // it *is* the reply buffer, so there is no second one.
-    TextResultSink text_sink;
+    TextResultSink& text_sink = run->text_sink;
     ResultSink& sink = session.result_sink() != nullptr
                            ? *session.result_sink()
                            : static_cast<ResultSink&>(text_sink);
+    run->sink = &sink;
 
     // Resolved once, outside the row loop: the projection reads the frame
     // by index, and `SELECT *` means every column of the one step - which
     // the grammar admits only for a single relation (V06).
-    const exec::StepChain& compiled = chain.value();
+    const exec::StepChain& compiled = run->chain.emplace(std::move(chain.value()));
 
     // ---- Waystone: the instance, taken from the parse -------------------
     //
@@ -7108,7 +7366,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // its values into the key (AP-Q5).
     const bool trailable = compiled.determinism != exec::DeterminismClass::kD2;
 
-    std::optional<StatementIdentity> identity;
+    std::optional<StatementIdentity>& identity = run->identity;
     // The optimizer's S1 widens this beyond Waystone's shape guard, and the
     // difference is the point: a *scan-only* statement is exactly the shape
     // whose decayed frequency the cabin optimizer's CREATE decision prices
@@ -7127,11 +7385,12 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // The trail a previous execution of this instance recorded. Read once,
     // indexed once, consulted per keyed step.
     //
-    // The index is a dispatcher member, reused rather than rebuilt: it is
-    // the only allocation on the replay path, and one malloc per SELECT for
+    // The index is pooled scratch, reused rather than rebuilt: it is the
+    // only allocation on the replay path, and one malloc per SELECT for
     // what is usually one or two entries is the same cost the collector
     // already had to be hoisted to avoid.
-    replay_scratch_.Clear();
+    exec::TrailReplay& replay_scratch = run->scratch().replay;
+    replay_scratch.Clear();
     const exec::TrailReplay* replay_ptr = nullptr;
     if (replay_enabled_ && trailable && identity.has_value()) {
         // Served from the catalog cache, so a pattern nobody has recorded
@@ -7145,8 +7404,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
             // the statement descends, exactly as it did before there were
             // trails at all (invariant 8).
             if (entries.ok() && !entries.value().empty()) {
-                replay_scratch_.Build(compiled, entries.value());
-                if (!replay_scratch_.empty()) replay_ptr = &replay_scratch_;
+                replay_scratch.Build(compiled, entries.value());
+                if (!replay_scratch.empty()) replay_ptr = &replay_scratch;
             }
         }
     }
@@ -7157,12 +7416,15 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // for a whole trail (253 x 32 bytes), so building one per SELECT is an
     // 8 KB malloc on the read path - which measured as most of an 18%
     // regression on a point join before this was hoisted onto the
-    // dispatcher. Clear() keeps the reservation.
+    // dispatcher; it is pooled scratch since BA-S15. Clear() keeps the
+    // reservation.
     exec::TrailCollector* trail = nullptr;
     if (recorder_ != nullptr && trailable && identity.has_value()) {
-        trail_scratch_.Clear();
-        trail = &trail_scratch_;
+        run->scratch().trail.Clear();
+        trail = &run->scratch().trail;
     }
+    run->trail = trail;
+    run->replay = replay_ptr;
 
     // ANALYZE runs everything above, deliberately. Its whole contract is
     // that the run it describes is the run that actually happened - same
@@ -7170,7 +7432,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // replay would report descents a real execution does not perform, which
     // is the one thing it must not do.
     if (analyze) {
-        return RunAnalyze(compiled, trail, replay_ptr, identity, snapshot.value().snap, borrow);
+        return RunAnalyze(compiled, trail, replay_ptr, identity, snap, borrow,
+                          run->scratch().sorter);
     }
 
     // ---- AG1: the fold wraps the sink, and nothing else moves -----------
@@ -7182,8 +7445,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // and access statistics hold unchanged" a structural fact rather than a
     // list of things that were remembered.
     if (compiled.aggregated()) {
-        return RunAggregated(sink, text_sink, compiled, trail, replay_ptr, identity,
-                             snapshot.value().snap, borrow);
+        return RunAggregated(sink, text_sink, compiled, trail, replay_ptr, identity, snap, borrow,
+                             run->scratch().stats);
     }
 
     // ---- V09: the emission quota wraps the sink, and nothing else moves --
@@ -7201,9 +7464,9 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // because rows [m, m+n) of the sorted reply are not rows [m, m+n) of
     // the emitted one. A chain never carries both a fold and a sort - the
     // parser refuses the tail over aggregated output.
-    exec::EmissionQuota quota(compiled);
-    sorter_.Reset(compiled, sort_max_rows_);
-    exec_stats_.steps.clear();
+    run->quota.emplace(compiled);
+    run->scratch().sorter.Reset(compiled, sort_max_rows_);
+    run->scratch().stats.steps.clear();
 
     // `SELECT *` renders from the relation's schema, which the chain
     // deliberately does not carry types for. Resolved **once**, not per row:
@@ -7222,7 +7485,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // - which meant the two shapes were formatted by two loops that had to
     // stay in step. Resolving the projection here instead leaves exactly
     // one row path below.
-    StarDescription star;
+    StarDescription& star = run->star;
     if (star_access != nullptr) star = DescribeStar(star_access->schema.columns);
     const std::span<const exec::ColumnRef> projection =
         star_access != nullptr ? std::span<const exec::ColumnRef>(star.projection)
@@ -7240,82 +7503,28 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         return {"ERR " + described.message(), false, 0, described};
     }
 
-    // Encoding one row of the reply. Shared by the two paths below so the
-    // sorted and unsorted replies are formatted by one routine - the bug
-    // this shape avoids is a sorted statement rendering a DATE as an epoch
-    // day because a second formatter forgot `projection_types`.
-    std::string row_scratch;
-    Status encode_error = Status::OK();
-    auto render = [&](const exec::ChainFrame& frame, std::string& out) {
-        // A failure is remembered rather than thrown: the sort path calls
-        // this from a place that has already decided to keep the row, and
-        // the walk's own sink is the only caller that can end the
-        // statement. Checked at both, so an encode failure fails the
-        // statement rather than emitting a row the sink refused.
-        Status s = sink.EncodeProjectedRow(projection, types, frame, out);
-        if (!s.ok() && encode_error.ok()) encode_error = std::move(s);
-    };
+    run->projection = projection;
+    run->types = types;
 
-    Status ran = exec::Execute(
-        catalog_, page_store_, compiled,
-        [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
-            if (sorter_.active()) {
-                // **Ask before rendering.** The sort cannot skip or stop -
-                // the quota runs after the order exists - but under a
-                // `LIMIT` most rows are beaten by the heap's worst retained
-                // row and will never be seen, and rendering them is what
-                // made top-N bound memory without bounding work.
-                auto admitted = sorter_.Admit(frame);
-                if (!admitted.ok()) return admitted.status();
-                if (admitted.value()) {
-                    render(frame, row_scratch);
-                    if (!encode_error.ok()) return encode_error;
-                    sorter_.Take(row_scratch);
-                }
-                return storage::VisitControl::kContinue;
-            }
-            const exec::QuotaVerdict verdict = quota.Note();
-            if (verdict == exec::QuotaVerdict::kStop) return storage::VisitControl::kStop;
-            if (verdict == exec::QuotaVerdict::kSkip) return storage::VisitControl::kContinue;
-            render(frame, row_scratch);
-            if (!encode_error.ok()) return encode_error;
-            if (Status s = sink.Emit(row_scratch); !s.ok()) return s;
-            return verdict == exec::QuotaVerdict::kEmitThenStop
-                       ? storage::VisitControl::kStop
-                       : storage::VisitControl::kContinue;
-        },
-        &exec_stats_, budget_, trail, replay_ptr, cabins_, &snapshot.value().snap,
-        indexes_enabled_, &borrow);
-    if (!ran.ok()) {
-        // **No trail on the failure path.** A statement that errored part
-        // way through touched some tuples and then stopped; a trail
-        // describing that is a trail describing a state no reader should
-        // ever be pointed at (workplan P10).
-        return {ErrorReply(ran), false, 0, ran};
-    }
-
-    // The order exists only now, so the quota is applied here rather than
-    // in the sink - and it is the same quota object, so `LIMIT n OFFSET m`
-    // still means rows [m, m+n) of the reply the unlimited statement gives.
-    // What changed is which reply that is: the sorted one.
-    if (sorter_.active()) {
-        sorter_.Finish();
-        Status drained = Status::OK();
-        exec::DrainSorted(quota, sorter_.rows(), [&](const exec::OutputSort::Row& row) {
-            if (!drained.ok()) return;
-            drained = sink.Emit(row.text);
-        });
-        if (!drained.ok()) return {ErrorReply(drained), false, 0, drained};
-    }
-
-    RecordExecution(identity, trail, compiled, exec_stats_);
-
-    if (logging(LogLevel::kTrace)) {
-        log_->Trace("query", "chain of " + std::to_string(compiled.steps.size()) +
-                                 " step(s), class " +
-                                 std::to_string(static_cast<int>(compiled.klass)));
-    }
-    return {text_sink.Take(), false};
+    // ---- BA-S15: the walk, handed on or run here -------------------------
+    //
+    // Handed on where the statement may park (`DispatchAsync`), which runs
+    // it sliced after this head returns; a traced statement keeps its walk
+    // inside the request span it is timing, and every synchronous caller has
+    // nowhere to park. The hold and the pin are taken here, while this head
+    // still publishes the word it revalidated against.
+    //
+    // **A pk descent is never handed on**: it reads one leaf and cannot fill
+    // a slice, so it would pay the hand-off - a frame, a hold, a pin - for
+    // a yield it never reaches. A heap relation's lookup, which falls back
+    // to a chain walk, loses its yields with it (SUS-1: no new heap).
+    const exec::AccessKind outer = compiled.steps.front().kind;
+    const bool descends = outer == exec::AccessKind::kLookup || outer == exec::AccessKind::kProbe;
+    if (!may_park_ || trace_ != nullptr || descends) return run->RunInline();
+    run->HoldAcrossSuspension();
+    DispatchOutcome handed;
+    handed.select_run = run;
+    return handed;
 }
 
 void CommandDispatcher::RecordExecution(const std::optional<StatementIdentity>& identity,

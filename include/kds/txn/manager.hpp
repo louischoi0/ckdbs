@@ -204,10 +204,11 @@ private:
 };
 
 // Readers a purge must not purge under, beyond the live transactions the
-// manager already holds: autocommit snapshots held across a park. None is
-// today - the shipped pipeline stages, which kept theirs on a coroutine
-// frame across every credit gate, retired at AT-S10 - so every lease is
-// structural (`AutocommitSnapshot` below says why it is kept). Bounded and fixed so the registry is an array and never a malloc on a
+// manager already holds: autocommit snapshots held across a park. Since
+// BA-S15 a `SELECT`'s walk is one - it yields between slices holding its
+// view (`server::SelectRun`) - where the shipped pipeline stages, which
+// kept theirs on a coroutine frame across every credit gate, were the last
+// before AT-S10 retired them. Bounded and fixed so the registry is an array and never a malloc on a
 // statement's front door, and the bound refuses rather than drops: a
 // reader the registry could not admit would be a reader a purge cannot
 // see, so exhaustion refuses the reader rather than unsoundly proceeding.
@@ -843,15 +844,13 @@ struct LeasedSnapshot {
 // reader that outlives its statement across a park is exactly the reader
 // `live_` cannot name. Transactions need none: `live_` is their record.
 //
-// **The dispatcher's autocommit snapshot does not outlive its
-// statement**, and its lease is structural rather than load-bearing:
-// `DispatchInner` is synchronous throughout (`exec::Execute`), and the
-// statement returns its outcome - dropping this object - *before*
-// `DispatchAsync` awaits anything. So that reader is the synchronous one
-// txn.md section 4.1 exempts by proof. Kept leased anyway because the
-// exemption is an invariant to re-check whenever the executor gains a
-// suspension point, and one slot store per statement is cheaper than
-// rediscovering that.
+// **The lease is load-bearing since BA-S15.** A `SELECT`'s walk yields
+// between slices and keeps this snapshot across every suspension
+// (`server::SelectRun`), so it is a reader held across a park - the one a
+// purge could not otherwise see. It was structural until then: the
+// statement returned its outcome, dropping this object, before
+// `DispatchAsync` awaited anything, and the lease was kept as the invariant
+// to re-check the day the executor gained a suspension point.
 //
 // A null manager answers the default snapshot with an empty lease: every
 // writer visible, no undo log, which is the pre-MVCC engine exactly and

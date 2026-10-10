@@ -11,6 +11,7 @@
 #include "kds/base/status.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/auth.hpp"
+#include "kds/server/cancel_registry.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/session.hpp"
@@ -260,11 +261,17 @@ public:
     // a timed-out portal is discovered by the client when it names it.
     void ExpireIdlePortals();
 
-    // §10's cancel flag. Set from another connection; observed here at the
-    // next frame, which is this engine's only cooperative point - there is
-    // no preemption, so cancellation is best-effort-fast and
+    // §10's cancel flag, the engine session's (`Session::cancel_flag`). Set
+    // from another connection; observed by a running `SELECT` at its next
+    // slice boundary (BA-S15) and otherwise here at the next frame - there
+    // is no preemption, so cancellation is best-effort-fast and
     // guaranteed-eventually exactly as §10 says.
-    void RequestCancel() noexcept { cancel_requested_ = true; }
+    void RequestCancel() noexcept { session_.RequestCancel(); }
+
+    // Where a `C_CANCEL` this connection receives is matched (§10), or null
+    // where the server offers no `CANCEL` - and then the frame is refused
+    // as any unexpected first frame is.
+    void set_cancel_registry(CancelRegistry* registry) noexcept { cancels_ = registry; }
 
     std::size_t statement_count() const noexcept { return statements_.size(); }
     std::size_t portal_count() const noexcept { return portals_.size(); }
@@ -350,7 +357,7 @@ private:
     // discarded until the next `C_SYNC`. One bool, because that is the
     // whole rule.
     bool skipping_to_sync_ = false;
-    bool cancel_requested_ = false;
+    CancelRegistry* cancels_ = nullptr;
     std::uint64_t session_id_ = 0;
     std::uint64_t cancel_key_ = 0;
 

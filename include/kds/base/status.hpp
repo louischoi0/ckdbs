@@ -65,10 +65,11 @@ enum class StatusCode {
     // Not retryable - re-running does the same work and stops at the same
     // place; the fix is a different statement, or a shorter transaction.
     //
-    // It exists because nothing suspends mid-statement on a cooperative
-    // core, so an unbounded statement holds that core against every other
-    // client on it. Failing after a bounded amount of work is the kinder
-    // answer than a connection that never replies.
+    // It exists because a cooperative core yields mid-statement only at a
+    // `SELECT`'s slice boundary (BA-S15), so an unbounded statement holds
+    // that core, or its view and its borrow, against every other client.
+    // Failing after a bounded amount of work is the kinder answer than a
+    // connection that never replies.
     kResourceExhausted,
     // A write would leave a foreign key unsatisfied (docs/spec/foreign-keys.md
     // F2): a child row referencing a parent that is not there, or a parent
@@ -139,6 +140,13 @@ enum class StatusCode {
     // the live one) must treat this identically. The difference is across
     // releases, not across retries - neither code is retryable.
     kNotImplemented,
+    // **A statement its client cancelled** (docs/spec/protocol.md §10,
+    // BA-S15): an out-of-band `C_CANCEL` set the session's flag and the walk
+    // saw it at a slice boundary. Not retryable - the client asked for the
+    // statement to stop - and it means "nothing this statement would have
+    // returned was returned", never "nothing happened": a cancel is observed
+    // only where a read yields, so nothing it ends has written.
+    kCancelled,
 };
 
 // True for a Status a caller may sensibly re-issue the same statement for.
@@ -204,6 +212,9 @@ public:
     static Status NotImplemented(std::string msg) {
         return Status(StatusCode::kNotImplemented, std::move(msg));
     }
+    static Status Cancelled(std::string msg) {
+        return Status(StatusCode::kCancelled, std::move(msg));
+    }
 
     // A status decoded off a wire: the code as the integer it travelled as,
     // and a message the receiver chose. **A code outside the enum degrades
@@ -231,6 +242,7 @@ public:
             case StatusCode::kAssertionViolation: return AssertionViolation(std::move(msg));
             case StatusCode::kUnknownOutcome: return UnknownOutcome(std::move(msg));
             case StatusCode::kNotImplemented: return NotImplemented(std::move(msg));
+            case StatusCode::kCancelled: return Cancelled(std::move(msg));
         }
         return IoError(std::move(msg));
     }

@@ -190,12 +190,14 @@ enum class DurabilityLevel : std::uint8_t {
 
 // ---- Error taxonomy (docs/spec/protocol.md §11) ---------------------------------
 // Wire-level error categories: deliberately a superset of
-// kds::StatusCode (kds/base/status.hpp). kInternal/kProtocol/kCancelled
-// have no engine-level Status equivalent - they are wire/session-only
+// kds::StatusCode (kds/base/status.hpp). kInternal/kProtocol have no
+// engine-level Status equivalent - they are wire/session-only
 // categories that can occur before or outside any engine call (e.g. a
 // malformed frame is kProtocol, not any kind of Status). kUnsupported was
 // in that list until docs/spec/parser-v2.md I18 gave the language a use for it
 // at the engine level; StatusCode::kUnsupported now exists and maps here.
+// kCancelled was in it until BA-S15 gave a walk a cancel to observe;
+// StatusCode::kCancelled maps here.
 // The Status -> ErrorCategory mapping table for the categories that DO
 // overlap is not part of this header; it lands with the error registry
 // (docs/inflight/in-progress/protocol-wp.md P12, src/wire/error_registry.cpp), including its

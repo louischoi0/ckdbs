@@ -256,6 +256,15 @@ public:
     // kick ends the block the loop is sitting in - write-then-kick, as every
     // cross-core signal is now (AR0-6-R1).
     void Stop() noexcept { stopped_.store(true, std::memory_order_relaxed); }
+
+    // Destroys every queued task now, suspended frames and all. For an
+    // owner whose tasks borrow objects it destroys before this scheduler:
+    // a statement parked or between slices (BA-S15) reaches its dispatcher,
+    // catalog and transaction manager from its frame's destructors. The
+    // reactor's own thread, or none, after `Run` has returned.
+    void DiscardTasks() noexcept {
+        for (auto& queue : ready_queues_) queue.clear();
+    }
     bool stopped() const noexcept { return stopped_.load(std::memory_order_relaxed); }
 
 private:

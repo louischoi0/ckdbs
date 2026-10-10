@@ -286,6 +286,19 @@ public:
     // licenses and why only a sub-chain may have it.
     void RecordThroughStops() { record_through_stops_ = true; }
 
+    // The statement runner's slice (BA-S15, `SlicePolicy`). Never set on a
+    // nested runner: only the outermost walk yields.
+    void SetSlice(const SlicePolicy* slice) noexcept { slice_ = slice; }
+
+    // The session's cancel, taken at the slice boundary (§10).
+    Status TakeCancel() const {
+        if (slice_->cancel == nullptr ||
+            !slice_->cancel->exchange(false, std::memory_order_acq_rel)) {
+            return Status::OK();
+        }
+        return Status::Cancelled("cancelled by request");
+    }
+
     sched::Coro Run(const std::vector<Step>& steps) {
         if (depth_ > kMaxExecDepth) {
             co_return Status::Unsupported("chain nesting deeper than " +
@@ -1791,10 +1804,10 @@ private:
         // the walk has reached.
         std::uint64_t walk_page_min_key = 0;
 
-        // The access the visitor reads, through a pointer rather than the
-        // parameter: a park at the page boundary can cross a catalog
-        // invalidation, after which the re-Bind below points this at the
-        // refilled entry while the parameter's referent is freed memory.
+        // The access the visitor reads. A slice boundary (BA-S15) can cross
+        // a catalog invalidation; the statement's memo pin
+        // (`Catalog::MemoPin`) keeps this entry alive across it, retired
+        // rather than freed, so the pointer stays the one the walk bound.
         const catalog::TableAccess* live_access = &access;
 
         // The quadratic-shape signal (step_vm.hpp): a sub-chain's driving
@@ -1971,9 +1984,10 @@ private:
         // coroutine steps it page by page. Each *OnePage call holds its
         // page's pin only for the call, so the bottom of this loop - no
         // pin, no span - is the executor's one legal suspension point.
-        // Nothing suspends there since AT-S10 retired the remote producer
-        // that parked for credit, which is what keeps this bit-identical
-        // to the whole-chain walk it replaces.
+        // AT-S10 retired the remote producer that parked there for credit;
+        // since BA-S15 the statement's own outermost walk yields there every
+        // `SlicePolicy::pages_per_slice` pages, which is the slice boundary
+        // below. A walk with no policy - every sync `Execute` - never does.
         //
         // The first page is visited unconditionally, exactly as the
         // whole-chain forms do: a bad head fails inside the fetch, where
@@ -2052,6 +2066,30 @@ private:
             // already covers. The M2 rule: a nested walk declares no slice.
             if (position_ != nullptr && outermost && is_btree) {
                 position_->Position(live_access->oid, walk_page_min_key, kIdSpaceEnd);
+            }
+
+            // ---- BA-S15: the slice boundary ----------------------------
+            //
+            // No pin and no span here (the suspend audit checks), the read
+            // view and the borrow held - both statement-scoped and holding no
+            // page - and `cur` names the next page to read. A split while
+            // the walk is away leaves it neither missing nor repeating a
+            // row: a leaf keeps its id and its lower half and links the new
+            // page after itself, so a split of `cur` is walked in full and a
+            // split of a page already walked moves only rows already emitted
+            // to a page before `cur`; the view is fixed, so nothing written
+            // since is seen. The same holds across cores today, where no pin
+            // is held between pages either - the yield only widens the gap.
+            if (outermost && slice_ != nullptr &&
+                ++slice_pages_ >= slice_->pages_per_slice) {
+                slice_pages_ = 0;
+                if (Status s = TakeCancel(); !s.ok()) co_return s;
+                co_await sched::Yield{};
+                // The note is the thread's, and other statements ran here
+                // meanwhile: what this walk ends with must be its own
+                // (BA-S14's re-run reads it).
+                storage::ClearStructuralRefusal();
+                if (Status s = TakeCancel(); !s.ok()) co_return s;
             }
         }
     }
@@ -2661,6 +2699,10 @@ private:
     // once per outer row, so a per-page borrow there is the page cost times
     // the outer cardinality, and nothing consumes the finer position yet.
     PositionSink* position_ = nullptr;
+    // BA-S15: the statement's slice, and the outermost walk's pages since
+    // its last yield.
+    const SlicePolicy* slice_ = nullptr;
+    std::uint32_t slice_pages_ = 0;
 };
 
 // The highest step_id anywhere under `step`/`chain`, sub-chains included.
@@ -2824,7 +2866,7 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats,
                          const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
                          stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
-                         PositionSink* position) {
+                         PositionSink* position, const SlicePolicy* slice = nullptr) {
     if (chain.steps.empty()) {
         co_return Status::InvalidArgument("a step chain with no steps reads nothing");
     }
@@ -2850,6 +2892,7 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
 
     ChainRunner runner(catalog, store, sink, /*depth=*/0, /*parent=*/nullptr, counters, spend,
                        trail, replay, cabins, snapshot, indexes, /*builds=*/nullptr, position);
+    runner.SetSlice(slice);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
     // uncorrelated subquery's answer is the same for every outer row by
@@ -2877,6 +2920,15 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
 }
 
 }  // namespace
+
+sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
+                         const StepChain& chain, const RowSink& sink, ExecStats* stats,
+                         const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
+                         stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
+                         PositionSink* position, const SlicePolicy& slice) {
+    return ExecuteChain(catalog, store, chain, sink, stats, budget, trail, replay, cabins, snapshot,
+                        indexes, position, &slice);
+}
 
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats, const Budget& budget,
