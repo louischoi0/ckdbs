@@ -1,0 +1,6 @@
+n1000-run1 rc 0 load 1.80 -> 1.65 dur 21s cpu6/7=0.527/0.586 others_max=0.024 comp=no
+n1000-run2 rc 0 load 1.65 -> 1.44 dur 21s cpu6/7=0.524/0.591 others_max=0.029 comp=no
+n1000-run3 rc 0 load 1.44 -> 1.61 dur 21s cpu6/7=0.526/0.584 others_max=0.032 comp=no
+n1000-run4 rc 0 load 1.61 -> 1.70 dur 21s cpu6/7=0.53/0.587 others_max=0.028 comp=no
+n1000-run5 rc 0 load 1.70 -> 1.47 dur 21s cpu6/7=0.524/0.588 others_max=0.025 comp=no
+ALLDONE

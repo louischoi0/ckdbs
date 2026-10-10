@@ -1,0 +1,18 @@
+== B rows=1000 sub=200
+  select-pk          ops=16000 p50=97.4 p99=131.1 err=0 first='id,g,v\\n1,1,0'
+  select-pk-again    ops=16000 p50=97.5 p99=129.6 err=0 first='id,g,v\\n1,1,0'
+  insert             ops=16000 p50=72.3 p99=100.5 err=0 first='INSERTED oid=4000 id=10000001 page=140 slot=4'
+  insert-again       ops=16000 p50=72.3 p99=101.3 err=0 first='INSERTED oid=4004 id=10032001 page=149 slot=4'
+  exists             ops=1600 p50=789.6 p99=839.5 err=0 first='id\\n1\\n2\\n3\\n4\\n5\\n6\\n7\\n8\\n9\\n10\\n11\\n12\\n13\\n14\\n15\\n16\\n17\\n18\\n19\\n20\\n21\\n2'
+  join               ops=1600 p50=591.4 p99=624.2 err=0 first='a.id,b.v\\n1,0\\n2,0\\n3,0\\n4,0\\n5,0\\n6,0\\n7,0\\n8,0\\n9,0\\n10,0\\n11,0\\n12,0\\n13,0\\n1'
+  ping               ops=16000 p50=73.3 p99=94.5 err=0 first='version=21 create_time=1791675734 last_mount_time=1791675734 wal_topology=single'
+== A rows=1000 sub=200
+  select-pk          ops=16000 p50=97.2 p99=130.2 err=0 first='id,g,v\\n1,1,0'
+  select-pk-again    ops=16000 p50=97.5 p99=132.8 err=0 first='id,g,v\\n1,1,0'
+  insert             ops=16000 p50=72.0 p99=101.8 err=0 first='INSERTED oid=4000 id=10001001 page=140 slot=4'
+  insert-again       ops=16000 p50=72.1 p99=101.4 err=0 first='INSERTED oid=4004 id=10033001 page=149 slot=4'
+  exists             ops=1600 p50=792.3 p99=825.6 err=0 first='id\\n1\\n2\\n3\\n4\\n5\\n6\\n7\\n8\\n9\\n10\\n11\\n12\\n13\\n14\\n15\\n16\\n17\\n18\\n19\\n20\\n21\\n2'
+  join               ops=1600 p50=590.6 p99=624.2 err=0 first='a.id,b.v\\n1,0\\n2,0\\n3,0\\n4,0\\n5,0\\n6,0\\n7,0\\n8,0\\n9,0\\n10,0\\n11,0\\n12,0\\n13,0\\n1'
+  ping               ops=16000 p50=73.2 p99=94.4 err=0 first='version=21 create_time=1791675734 last_mount_time=1791675734 wal_topology=single'
+verify {'B': {'t': 'count(*)\\n17000', 't2': 'count(*)\\n17000', 'a': 'count(*)\\n200', 'b': 'count(*)\\n200', 'exists_rows': 'count(*)\\n200'}, 'A': {'t': 'count(*)\\n17000', 't2': 'count(*)\\n17000', 'a': 'count(*)\\n200', 'b': 'count(*)\\n200', 'exists_rows': 'count(*)\\n200'}}
+verify_ok True
