@@ -234,6 +234,281 @@ StatusOr<AstValue> Parser::ParseValue() {
     }
 }
 
+// ---- A SET value (BJ-S2) --------------------------------------------------
+//
+// Family 1 of BJ-R1 only: column references to the target relation,
+// literals, parentheses, unary `+`/`-`, binary `+ - * / %` and `||`.
+// Every other form is refused `NotImplemented` at its byte, never parsed
+// and dropped: a call (BJ-S6), a comparison, `AND`/`OR`/`NOT`, `CASE`
+// (BJ-S5), a subquery (BJ-S7).
+
+namespace {
+
+constexpr std::uint32_t kMaxExprDepth = 64;
+
+std::shared_ptr<const Expr> MakeLiteral(AstValue v, bool bare_numeric) {
+    auto e = std::make_shared<Expr>();
+    e->kind = Expr::Kind::kLiteral;
+    e->byte_offset = v.byte_offset;
+    e->literal = std::move(v);
+    e->bare_numeric = bare_numeric;
+    return e;
+}
+
+std::shared_ptr<const Expr> MakeBinary(ExprOp op, std::uint32_t op_at,
+                                       std::shared_ptr<const Expr> lhs,
+                                       std::shared_ptr<const Expr> rhs) {
+    auto e = std::make_shared<Expr>();
+    e->kind = Expr::Kind::kBinary;
+    e->byte_offset = lhs->byte_offset;
+    e->op_byte_offset = op_at;
+    e->op = op;
+    e->lhs = std::move(lhs);
+    e->rhs = std::move(rhs);
+    return e;
+}
+
+// A `-` the lexer fused into the literal that follows it (`v -1`) is, in
+// binary position, a minus and the literal's magnitude (BJ-Q9 (a)).
+bool IsSignedLiteral(const Token& tok) {
+    return (tok.type == TokenType::kIntLit && tok.negative) ||
+           (tok.type == TokenType::kNumLit && !tok.text.empty() && tok.text[0] == '-');
+}
+
+// The magnitude of a signed literal token, as the literal it would have
+// been without its sign. Read from the digits, never from the fused value,
+// so `INT64_MIN`'s magnitude survives (BJ-Q9).
+std::shared_ptr<const Expr> MagnitudeOf(const Token& tok) {
+    AstValue v;
+    v.byte_offset = tok.byte_offset + 1;  // past the sign
+    if (tok.type == TokenType::kIntLit) {
+        v.type = ValueType::kInt;
+        v.raw_int_text = std::string(tok.digits());
+        std::uint64_t m = 0;
+        for (char d : tok.digits()) m = m * 10 + static_cast<std::uint64_t>(d - '0');
+        v.int_val = static_cast<std::int64_t>(m);  // wraps past INT64_MAX; the digits are the truth
+        return MakeLiteral(std::move(v), /*bare_numeric=*/false);
+    }
+    v.type = ValueType::kStr;
+    v.str_val = std::string(tok.text.substr(1));
+    return MakeLiteral(std::move(v), /*bare_numeric=*/true);
+}
+
+}  // namespace
+
+Status Parser::ParseSetValue(Assignment& a) {
+    auto expr = ParseExprConcat();
+    if (!expr.ok()) return expr.status();
+
+    // What may follow a SET value is `,`, `WHERE`, `;` or the end. A
+    // comparison or a boolean word is a form this stage does not build, and
+    // saying so by name beats the generic complaint the caller would make.
+    const Token& next = lexer_.Peek();
+    switch (next.type) {
+        case TokenType::kEq:
+        case TokenType::kNeq:
+        case TokenType::kLt:
+        case TokenType::kLte:
+        case TokenType::kGt:
+        case TokenType::kGte:
+            return Status::NotImplemented(
+                "a comparison in a SET value is not supported yet (BJ-S5) (byte " +
+                std::to_string(next.byte_offset) + ")");
+        case TokenType::kIdent:
+            if (IEquals(next.text, "AND") || IEquals(next.text, "OR") ||
+                IEquals(next.text, "IS")) {
+                return Status::NotImplemented(
+                    "'" + std::string(next.text) +
+                    "' in a SET value is not supported yet (BJ-S5) (byte " +
+                    std::to_string(next.byte_offset) + ")");
+            }
+            break;
+        default:
+            break;
+    }
+
+    const Expr& e = *expr.value();
+    // One bare literal keeps today's shape and today's gate. A parenthesised
+    // one does not: its node starts at the `(`, the literal's own byte is
+    // later, and the two differ.
+    if (e.kind == Expr::Kind::kLiteral && e.byte_offset == e.literal.byte_offset) {
+        a.val = e.literal;
+        return Status::OK();
+    }
+    a.expr = std::move(expr.value());
+    return Status::OK();
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprConcat() {
+    auto lhs = ParseExprAdditive();
+    if (!lhs.ok()) return lhs;
+    std::shared_ptr<const Expr> acc = std::move(lhs.value());
+    while (lexer_.Peek().type == TokenType::kConcat) {
+        const Token op = lexer_.Next();
+        auto rhs = ParseExprAdditive();
+        if (!rhs.ok()) return rhs;
+        acc = MakeBinary(ExprOp::kConcat, op.byte_offset, std::move(acc), std::move(rhs.value()));
+    }
+    return acc;
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprAdditive() {
+    auto first = ParseExprMultiplicative(nullptr);
+    if (!first.ok()) return first;
+    std::shared_ptr<const Expr> acc = std::move(first.value());
+    for (;;) {
+        const Token& t = lexer_.Peek();
+        if (t.type == TokenType::kPlus || t.type == TokenType::kMinus) {
+            const Token op = lexer_.Next();
+            auto rhs = ParseExprMultiplicative(nullptr);
+            if (!rhs.ok()) return rhs;
+            acc = MakeBinary(op.type == TokenType::kPlus ? ExprOp::kAdd : ExprOp::kSub,
+                             op.byte_offset, std::move(acc), std::move(rhs.value()));
+        } else if (IsSignedLiteral(t)) {
+            // `v -1`: the minus is the literal's sign, and what follows it
+            // is the left operand of any `*` that comes next.
+            const Token lit = lexer_.Next();
+            auto rhs = ParseExprMultiplicative(MagnitudeOf(lit));
+            if (!rhs.ok()) return rhs;
+            acc = MakeBinary(ExprOp::kSub, lit.byte_offset, std::move(acc),
+                             std::move(rhs.value()));
+        } else {
+            return acc;
+        }
+    }
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprMultiplicative(
+    std::shared_ptr<const Expr> first) {
+    std::shared_ptr<const Expr> acc = std::move(first);
+    if (acc == nullptr) {
+        auto lhs = ParseExprUnary();
+        if (!lhs.ok()) return lhs;
+        acc = std::move(lhs.value());
+    }
+    for (;;) {
+        const TokenType t = lexer_.Peek().type;
+        ExprOp op;
+        if (t == TokenType::kStar) {
+            op = ExprOp::kMul;
+        } else if (t == TokenType::kSlash) {
+            op = ExprOp::kDiv;
+        } else if (t == TokenType::kPercent) {
+            op = ExprOp::kMod;
+        } else {
+            return acc;
+        }
+        const Token tok = lexer_.Next();
+        auto rhs = ParseExprUnary();
+        if (!rhs.ok()) return rhs;
+        acc = MakeBinary(op, tok.byte_offset, std::move(acc), std::move(rhs.value()));
+    }
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprUnary() {
+    const Token& t = lexer_.Peek();
+    if (t.type != TokenType::kPlus && t.type != TokenType::kMinus) return ParseExprPrimary();
+
+    if (expr_depth_ >= kMaxExprDepth) {
+        return Status::Unsupported("an expression nested deeper than " +
+                                   std::to_string(kMaxExprDepth) + " is not supported (byte " +
+                                   std::to_string(t.byte_offset) + ")");
+    }
+    const Token op = lexer_.Next();
+    ++expr_depth_;
+    auto operand = ParseExprUnary();
+    --expr_depth_;
+    if (!operand.ok()) return operand;
+    auto e = std::make_shared<Expr>();
+    e->kind = Expr::Kind::kUnary;
+    e->byte_offset = op.byte_offset;
+    e->op_byte_offset = op.byte_offset;
+    e->op = op.type == TokenType::kMinus ? ExprOp::kNeg : ExprOp::kPos;
+    e->lhs = std::move(operand.value());
+    return std::shared_ptr<const Expr>(std::move(e));
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
+    const Token tok = lexer_.Peek();
+    switch (tok.type) {
+        case TokenType::kIntLit:
+        case TokenType::kNumLit:
+        case TokenType::kStrLit:
+        case TokenType::kNullLit:
+        case TokenType::kParam:
+        case TokenType::kNamedParam: {
+            auto v = ParseValue();
+            if (!v.ok()) return v.status();
+            return MakeLiteral(std::move(v.value()), tok.type == TokenType::kNumLit);
+        }
+        case TokenType::kIdent: {
+            lexer_.Next();
+            const Token& after = lexer_.Peek();
+            if (after.type == TokenType::kLParen) {
+                return Status::NotImplemented(
+                    "a function call in a SET value is not supported yet (BJ-S6) (byte " +
+                    std::to_string(tok.byte_offset) + ")");
+            }
+            if (after.type == TokenType::kDot) {
+                return Status::NotImplemented(
+                    "a qualified column in a SET value is not supported (byte " +
+                    std::to_string(tok.byte_offset) + ")");
+            }
+            // `CASE` is not reserved, so a column may be named `case`; it
+            // opens an expression only when a word follows that is not the
+            // statement's own next clause.
+            if (IEquals(tok.text, "CASE") && after.type == TokenType::kIdent &&
+                !IEquals(after.text, "WHERE")) {
+                return Status::NotImplemented(
+                    "CASE in a SET value is not supported yet (BJ-S5) (byte " +
+                    std::to_string(tok.byte_offset) + ")");
+            }
+            auto e = std::make_shared<Expr>();
+            e->kind = Expr::Kind::kColumn;
+            e->byte_offset = tok.byte_offset;
+            e->column = std::string(tok.text);
+            return std::shared_ptr<const Expr>(std::move(e));
+        }
+        case TokenType::kLParen: {
+            if (expr_depth_ >= kMaxExprDepth) {
+                return Status::Unsupported("an expression nested deeper than " +
+                                           std::to_string(kMaxExprDepth) +
+                                           " is not supported (byte " +
+                                           std::to_string(tok.byte_offset) + ")");
+            }
+            lexer_.Next();
+            const Token& inner = lexer_.Peek();
+            if (inner.type == TokenType::kIdent && IEquals(inner.text, "SELECT")) {
+                return Status::NotImplemented(
+                    "a subquery in a SET value is not supported yet (BJ-S7) (byte " +
+                    std::to_string(tok.byte_offset) + ")");
+            }
+            ++expr_depth_;
+            auto e = ParseExprConcat();
+            --expr_depth_;
+            if (!e.ok()) return e;
+            if (Status s = ExpectToken(TokenType::kRParen, "')'"); !s.ok()) return s;
+            // The node is re-stamped to start at the '(' so a parenthesised
+            // literal is told from a bare one (ParseSetValue).
+            auto copy = std::make_shared<Expr>(*e.value());
+            copy->byte_offset = tok.byte_offset;
+            return std::shared_ptr<const Expr>(std::move(copy));
+        }
+        case TokenType::kKeyword:
+            if (tok.kw == Keyword::kNot || tok.kw == Keyword::kExists) {
+                return Status::NotImplemented(
+                    "'" + std::string(tok.text) +
+                    "' in a SET value is not supported yet (BJ-S5) (byte " +
+                    std::to_string(tok.byte_offset) + ")");
+            }
+            [[fallthrough]];
+        default:
+            return Status::InvalidArgument(
+                "expected a value or a column in a SET value, got '" +
+                std::string(Describe(tok)) + "' (byte " + std::to_string(tok.byte_offset) + ")");
+    }
+}
+
 StatusOr<CompareOp> Parser::ParseCompareOp() {
     Token tok = lexer_.Next();
     switch (tok.type) {
@@ -2161,9 +2436,7 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
 
         if (Status s = ExpectToken(TokenType::kEq, "'='"); !s.ok()) return s;
 
-        auto val = ParseValue();
-        if (!val.ok()) return val.status();
-        a.val = std::move(val.value());
+        if (Status s = ParseSetValue(a); !s.ok()) return s;
 
         stmt.assignments.push_back(std::move(a));
 
@@ -2176,8 +2449,8 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
 
     // Depth 0: an UPDATE's WHERE is an outermost query block, and a
     // subquery in it is `[OPEN: revisit]` in spec section 2 only for the
-    // *value* position (`SET a = (SELECT ...)`), which SET does not
-    // parse. A predicate-position subquery here nests exactly as a
+    // *value* position (`SET a = (SELECT ...)`), which SET refuses
+    // by name (BJ-S7). A predicate-position subquery here nests exactly as a
     // SELECT's does.
     auto where = ParseOptionalWhere(/*depth=*/0);
     if (!where.ok()) return where.status();

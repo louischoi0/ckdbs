@@ -241,6 +241,18 @@ private:
 
     StatusOr<std::string> ParseIdent();
 
+    // A SET value (BJ-S2): one bare literal into `a.val`, anything else
+    // into `a.expr`. The levels below are precedence climbing in
+    // PostgreSQL's order, loosest first: `||`, then `+ -`, then `* / %`,
+    // then a unary sign.
+    Status ParseSetValue(Assignment& a);
+    StatusOr<std::shared_ptr<const Expr>> ParseExprConcat();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprAdditive();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprMultiplicative(
+        std::shared_ptr<const Expr> first);
+    StatusOr<std::shared_ptr<const Expr>> ParseExprUnary();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprPrimary();
+
     // One argument of a parameterized type - `decimal(10, 2)`'s 10 and 2.
     // `what` names it in the error, so a client is told which of the two
     // was wrong rather than that "a type argument" was.
@@ -255,6 +267,10 @@ private:
     std::string_view sql_;
 
     Lexer lexer_;
+
+    // Nesting of parentheses and unary signs in a SET value, bounded so a
+    // hostile statement cannot recurse the stack away.
+    std::uint32_t expr_depth_ = 0;
 
 };
 

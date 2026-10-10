@@ -22,6 +22,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -129,7 +130,7 @@ struct ParkedWalk {
     explicit ParkedWalk(int rows, int held_id, std::string_view decide)
         : rows(rows), held(held_id), decide_line(decide) {}
 
-    // Returns the waiter's response once it has finished, or nullopt.
+    // Whether the waiter finished; its response is in `update.out`.
     bool Run() {
         rig = OpenRig();
         if (rig == nullptr) return false;
@@ -158,7 +159,9 @@ struct ParkedWalk {
         sched::Scheduler& peer = rig->core(1).scheduler();
         if (!Within(2000ms, [&] { return peer.idle_blocks() >= 1; })) return false;
         parked_before_decide = !update.done.load(std::memory_order_acquire);
-        applied_while_parked = applied.Max();
+        for (int pk = 1; pk <= rows; ++pk) {
+            parked_counts.push_back(applied.Of(static_cast<std::uint64_t>(pk)));
+        }
 
         decide.go.store(true, std::memory_order_release);
         if (!KickUntil(*rig, 0, [&] { return decide.done.load(std::memory_order_acquire); })) {
@@ -172,6 +175,13 @@ struct ParkedWalk {
         if (rig != nullptr) rig->Stop();
     }
 
+    // The waiter's response, read only once its `done` is seen: a failed
+    // `Run` leaves the statement live on core 1, writing `update.out`.
+    std::string Seen() const {
+        return update.done.load(std::memory_order_acquire) ? update.out.response
+                                                            : "<still running>";
+    }
+
     int rows;
     int held;
     std::string decide_line;
@@ -182,7 +192,7 @@ struct ParkedWalk {
     Statement decide;
     Applied applied;
     bool parked_before_decide = false;
-    int applied_while_parked = 0;
+    std::vector<int> parked_counts;  // per pk 1..rows, read while the walk was parked
 };
 
 TEST(BjSingleWriteRigTest, AWalkParkedMidwayResumesPastWhatItWroteAndWritesTheRestOnce) {
@@ -191,10 +201,10 @@ TEST(BjSingleWriteRigTest, AWalkParkedMidwayResumesPastWhatItWroteAndWritesTheRe
     // did write. Rows 1 and 2 are written before the park on row 3; a
     // resume that began again at the leftmost row would count them twice.
     ParkedWalk w(/*rows=*/5, /*held_id=*/3, "ROLLBACK");
-    ASSERT_TRUE(w.Run()) << "the parked statement did not finish; saw '" << w.update.out.response
-                         << "'";
+    ASSERT_TRUE(w.Run()) << "the parked statement did not finish; saw '" << w.Seen() << "'";
     EXPECT_TRUE(w.parked_before_decide) << "the walk did not park behind the holder";
-    EXPECT_EQ(w.applied_while_parked, 1) << "the rows before the held one were not written first";
+    // Rows before the held one written once, the held one and the rest not yet.
+    EXPECT_EQ(w.parked_counts, (std::vector<int>{1, 1, 0, 0, 0}));
     EXPECT_TRUE(StartsWith(w.update.out.response, "UPDATED 5")) << w.update.out.response;
     for (std::uint64_t pk = 1; pk <= 5; ++pk) {
         EXPECT_EQ(w.applied.Of(pk), 1) << "row " << pk << " was written "
@@ -207,10 +217,15 @@ TEST(BjSingleWriteRigTest, ARefusedResumeNeverWritesARowTwiceEither) {
     // view, meets a version it cannot see: the contract is a refusal, and
     // whatever it answers, no row may have been applied more than once.
     ParkedWalk w(/*rows=*/5, /*held_id=*/3, "COMMIT");
-    ASSERT_TRUE(w.Run()) << "the parked statement did not finish; saw '" << w.update.out.response
-                         << "'";
+    ASSERT_TRUE(w.Run()) << "the parked statement did not finish; saw '" << w.Seen() << "'";
     EXPECT_TRUE(w.parked_before_decide) << "the walk did not park behind the holder";
-    EXPECT_LE(w.applied.Max(), 1) << w.update.out.response;
+    // The resumed walk, still under its old view, meets the committed
+    // version it cannot see: a retryable refusal, and no row twice.
+    EXPECT_TRUE(StartsWith(w.update.out.response, "ERR TXN_CONFLICT")) << w.update.out.response;
+    EXPECT_EQ(w.applied.Of(1), 1);
+    EXPECT_EQ(w.applied.Of(2), 1);
+    EXPECT_EQ(w.applied.Of(3), 0);
+    EXPECT_LE(w.applied.Max(), 1);
 }
 
 TEST(BjSingleWriteRigTest, AStatementThatWroteNothingBeforeItsParkRunsOnceAfterIt) {
@@ -219,10 +234,10 @@ TEST(BjSingleWriteRigTest, AStatementThatWroteNothingBeforeItsParkRunsOnceAfterI
     // written before the park; the statement then runs from the start, and
     // each row must still be applied exactly once.
     ParkedWalk w(/*rows=*/5, /*held_id=*/1, "ROLLBACK");
-    ASSERT_TRUE(w.Run()) << "the parked statement did not finish; saw '" << w.update.out.response
-                         << "'";
+    ASSERT_TRUE(w.Run()) << "the parked statement did not finish; saw '" << w.Seen() << "'";
     EXPECT_TRUE(w.parked_before_decide) << "the walk did not park behind the holder";
-    EXPECT_EQ(w.applied_while_parked, 0) << "a row was written before the first one's park";
+    EXPECT_EQ(w.parked_counts, (std::vector<int>{0, 0, 0, 0, 0}))
+        << "a row was written before the first one's park";
     EXPECT_TRUE(StartsWith(w.update.out.response, "UPDATED 5")) << w.update.out.response;
     for (std::uint64_t pk = 1; pk <= 5; ++pk) {
         EXPECT_EQ(w.applied.Of(pk), 1) << "row " << pk << " was written "

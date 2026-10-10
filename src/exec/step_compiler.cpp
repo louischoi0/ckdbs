@@ -1389,6 +1389,16 @@ Status CompileAssignments(const catalog::TableAccess& access,
                                        std::to_string(a.byte_offset) +
                                        "; it is the tuple's identity, not a field of it");
         }
+        // BJ-S2 parses a SET expression and BJ-S4 evaluates it. Between the
+        // two, refusing here - before any row is read - is what keeps a
+        // half-built evaluator from writing one: the foreign-key hoist and
+        // the apply loop read `Assignment::val`, which an expression leaves
+        // unset.
+        if (a.expr != nullptr) {
+            return Status::NotImplemented(
+                "an expression in a SET value is parsed and not yet evaluated (BJ-S4) (byte " +
+                std::to_string(a.expr->byte_offset) + ")");
+        }
     }
     return Status::OK();
 }

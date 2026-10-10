@@ -164,6 +164,19 @@ enum class TokenType {
     kGt,
     kGte,
 
+    // Arithmetic and string operators (BJ-S2), the tokens of a SET value
+    // expression. Before BJ each lexed as kError, so no statement
+    // containing one had a fingerprint and none is stored. A `-` before a
+    // digit is **not** kMinus: it is part of the signed literal, as it
+    // always was (BJ-Q9 (a)), and the parser reads it as a minus in binary
+    // position. `*` is kStar in every position; the parser decides which
+    // it is.
+    kPlus,
+    kMinus,
+    kSlash,
+    kPercent,
+    kConcat,  // `||`
+
     kError,  // unrecognized character
 };
 

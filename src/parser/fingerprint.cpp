@@ -97,6 +97,16 @@ enum class ShapeTag : std::uint8_t {
     // fingerprint.hpp names explicitly as the case that does *not* need a
     // version bump - nothing already stored changes meaning.
     kDot = 14,
+    // Appended by BJ-S2 with the arithmetic tokens, on the same argument as
+    // kDot: each lexed as kError until then, so no statement containing one
+    // had a fingerprint and no stored pattern_id changes. A `-` that fuses
+    // with a following digit is still a signed literal (kValue), which is
+    // what keeps `WHERE x = -7` where it was (BJ-Q9 (a)).
+    kPlus = 15,
+    kMinus = 16,
+    kSlash = 17,
+    kPercent = 18,
+    kConcat = 19,
 };
 
 // Tags for the argument stream, distinguishing the literal's type. The
@@ -188,6 +198,11 @@ bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
         case TokenType::kLte: out = ShapeTag::kLte; return true;
         case TokenType::kGt: out = ShapeTag::kGt; return true;
         case TokenType::kGte: out = ShapeTag::kGte; return true;
+        case TokenType::kPlus: out = ShapeTag::kPlus; return true;
+        case TokenType::kMinus: out = ShapeTag::kMinus; return true;
+        case TokenType::kSlash: out = ShapeTag::kSlash; return true;
+        case TokenType::kPercent: out = ShapeTag::kPercent; return true;
+        case TokenType::kConcat: out = ShapeTag::kConcat; return true;
         // Not reachable: kSemicolon is skipped and kEof ends the walk
         // before either gets here, and kError has already returned.
         case TokenType::kSemicolon:

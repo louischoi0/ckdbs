@@ -164,7 +164,7 @@ Read, not run.
   `docs/inflight/bugs/a-column-assigned-twice-checks-its-first-foreign-key-value-and-writes-its-last.md`,
   **fixed at `586ffa5f` by BJ-Q12's adoption** (`CompileAssignments` refuses
   a column named twice, `InvalidArgument` at the second name's byte) and the
-  entry deleted with the fix, as `docs/inflight/bugs/README.md` asks;
+  entry deleted at `bfdd8680`, as `docs/inflight/bugs/README.md` asks;
   `git show fdad71e4:<that path>` retrieves it. The paragraph above is the
   state at `080cd55`.
 - `[source-read]` **No arithmetic tokens.** The punctuation is `(`, `)`,
@@ -586,7 +586,7 @@ at the milestone's close** (§5).
   foreign-key hoist (`command_dispatcher.cpp`, the `fk_assignments` build)
   and the apply loop that overwrites the decoded row. `sim/` reads
   `Oracle::Assignment`, its own single-value type, never the parser's.
-- Every caller of `CompileAssignments`: one, `UpdateInner`; a parked
+- Every production caller of `CompileAssignments`: one, `UpdateInner` (the unit test `step_compile_test.cpp` is the other); a parked
   statement re-enters `UpdateInner`, so a resume re-compiles and cannot skip
   a compile-time refusal.
 - Every spec sentence BJ-S8 restates is listed in §1.6 and was re-read; none
@@ -603,9 +603,52 @@ at the milestone's close** (§5).
   new seam `SetAfterUpdateRowAppliedForTest` that counts the calls per pk:
   a multi-leaf walk (1200 rows, each once), a walk parked midway and resumed
   after a `ROLLBACK` (rows before the held one written once, the rest once),
-  the same with a `COMMIT` (refused or not, no row twice), and a statement
+  the same with a `COMMIT` (always `TXN_CONFLICT` at the resumed row, no row twice), and a statement
   that wrote nothing before its park and then ran whole (each row once).
-  **They are green, not red**: the guards hold on `main`, which §1.5 said
-  they would. That they can fail was checked by mutation - calling the hook
-  twice per row fails all four. BJ-S4 makes them load-bearing; BA-S14's
+  **They are green, not red**: the guards hold on this branch at `bfdd8680`,
+  as §1.5 said they would. That the cells read the counter was checked by
+  mutation - calling the hook twice per row fails all four; that they catch
+  a broken guard (a resume from the leftmost row) is by reasoning only. BJ-S4 makes them load-bearing; BA-S14's
   in-engine re-run is the path they do not cover until BA is on `main`.
+
+### BJ-S2 — lexer, AST, parser, fingerprint (built 2026-10-10)
+
+On `worktree-bj-expression-update`, after `bfdd8680`. **Not measured;
+measured at the milestone's close** (§5).
+
+- **Tokens.** `kPlus`, `kMinus`, `kSlash`, `kPercent`, `kConcat` (`||`). A
+  `-` before a digit is still part of the signed literal and `--` still a
+  comment, so every statement that lexed before lexes the same (BJ-Q9 (a)).
+  `*` stays `kStar` and the parser decides what it is.
+- **AST.** `Expr` (literal, column, unary, binary; immutable and shared, so
+  `UpdateStmt` stays copyable) and `Assignment::expr`. **One bare literal
+  keeps `Assignment::val` and a null `expr`**, so the per-row gate at the
+  encode (BJ-Q3 (c)) and every reader of `val` are untouched; anything else,
+  a column reference and a parenthesised literal included, is an `expr` with
+  `val` unset.
+- **Parser.** Precedence climbing in PostgreSQL's order (`||` loosest, then
+  `+ -`, then `* / %`, then a unary sign), left associative; a signed
+  literal in binary position is read as a minus and its magnitude, from the
+  digits, so `INT64_MIN`'s magnitude survives; nesting is bounded at 64
+  (`Unsupported`). Every family-2..5 form is refused `NotImplemented` at its
+  byte and names the stage that builds it (BJ-S5, S6, S7); a column named
+  `case` stays a column.
+- **Execution is refused until BJ-S4.** `CompileAssignments` refuses an
+  assignment holding an `expr` `NotImplemented` before any row is read,
+  because the foreign-key hoist and the apply loop read `val` directly.
+- **Fingerprint.** Five tags appended (15-19). **No stored `pattern_id`
+  moved**: the golden corpus's existing lines are byte-identical in their
+  `pattern_id`, `arg_hash` and `fetch_id` columns (the regenerated file
+  differs from the old one only in two verdicts and 25 appended lines), so
+  `kFingerprintVersion` does not move (BJ-R6). The two verdicts that moved,
+  each by this stage's intent: `UPDATE t SET a = x` is `ok` at the parser
+  (the compile refuses it) and `SET a = (SELECT ...)` is `NotImplemented`
+  rather than `InvalidArgument`. `FunctionConjunctTest`'s pin of the old
+  message for `SET k = NOW()` was updated to the new one.
+- **Shape evidence** (`tests/parser_set_expression_test.cpp`): `v + 1` and
+  `v + 2` share a `pattern_id` and differ in `arg_hash`; `v + 1`, `v - 1`,
+  `v * 1`, `v / 1`, `v % 1`, `v || 1`, `w + 1`, `(v + 1)`, `-v` and
+  `v + 1 + 1` are ten distinct patterns; `x = -7` and `x BETWEEN -5 AND -1`
+  hash as they did.
+- **Suite:** 3342/3342 at this stage's tree, `HeapSuspensionIsLifted` disabled
+  as before.

@@ -335,8 +335,10 @@ TEST_F(FunctionConjunctTest, WhatIsRefusedAndWhere) {
         // A value position reads no call: named, not "expected value".
         {"SELECT id FROM t WHERE ts BETWEEN NOW() AND NOW()",
          "a function call is supported in a WHERE comparison only (byte 34)"},
+        // BJ-S2: a SET value is parsed as an expression, so the call is refused
+        // by the expression grammar, naming the stage that builds it.
         {"UPDATE t SET k = NOW() WHERE id = 1",
-         "a function call is supported in a WHERE comparison only (byte 17)"},
+         "a function call in a SET value is not supported yet (BJ-S6) (byte 17)"},
         {"SELECT * FROM sys.tables WHERE DATE(oid) = '2026-10-01'",
          "a function call over a catalog view (byte"},
     };

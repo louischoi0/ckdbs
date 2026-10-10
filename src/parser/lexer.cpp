@@ -226,6 +226,13 @@ Token Lexer::ScanToken() {
         return tok;
     }
 
+    if (c == '|' && pos_ + 1 < src_.size() && src_[pos_ + 1] == '|') {
+        tok.type = TokenType::kConcat;
+        tok.text = src_.substr(pos_, 2);
+        pos_ += 2;
+        return tok;
+    }
+
     // Single-character tokens. Sliced before `pos_` advances, so this is a
     // view into the source like every other token's text - no exception to
     // reason about later.
@@ -246,6 +253,12 @@ Token Lexer::ScanToken() {
         case '<': tok.type = TokenType::kLt; break;
         case '>': tok.type = TokenType::kGt; break;
         case '?': tok.type = TokenType::kParam; break;
+        // Reached only by a `-` that no digit follows: one that does is the
+        // signed literal above, and `--` is a comment (BJ-Q9 (a)).
+        case '+': tok.type = TokenType::kPlus; break;
+        case '-': tok.type = TokenType::kMinus; break;
+        case '/': tok.type = TokenType::kSlash; break;
+        case '%': tok.type = TokenType::kPercent; break;
         default: tok.type = TokenType::kError; break;
     }
     return tok;

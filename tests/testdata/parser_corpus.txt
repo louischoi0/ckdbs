@@ -311,7 +311,7 @@ InvalidArgument	efb58b4ca7e55ff4	b5d414774c8002cc	efb58b4ca7e55ff4	UPDATE SET a 
 InvalidArgument	d23b14459421e096	b5d414774c8002cc	d23b14459421e096	UPDATE t a = 1
 InvalidArgument	2d4efb7b83e3d0e6	b5d414774c8002cc	2d4efb7b83e3d0e6	UPDATE t SET a 1
 InvalidArgument	e11e00e11c30298b	b5d414774c8002cc	e11e00e11c30298b	UPDATE t SET a != 1
-InvalidArgument	26cbf75fc63b2736	cbf29ce484222325	26cbf75fc63b2736	UPDATE t SET a = x
+ok	26cbf75fc63b2736	cbf29ce484222325	26cbf75fc63b2736	UPDATE t SET a = x
 InvalidArgument	4bfaf50ff154c09b	307dfbacf8ce886d	4bfaf50ff154c09b	UPDATE t SET 42 = 1
 InvalidArgument	ad892082e0fa1af8	b5d414774c8002cc	ad892082e0fa1af8	UPDATE t SET a = 1,
 InvalidArgument	8af46ce9765f5fa1	cbf29ce484222325	8af46ce9765f5fa1	UPDATE t
@@ -430,7 +430,7 @@ InvalidArgument	9660f26161090c96	cbf29ce484222325	5febed2ffc007497	SELECT * FROM
 InvalidArgument	ae06d22736a3755c	cbf29ce484222325	4d5631aa9f8b8127	SELECT * FROM t WHERE id IN ()
 InvalidArgument	e0208a3774f7afe5	cbf29ce484222325	adfb2afe9c63cdc2	SELECT * FROM t WHERE EXISTS (SELECT * FROM u;)
 InvalidArgument	d91afc534d177df6	cbf29ce484222325	d91afc534d177df6	INSERT INTO t VALUES ((SELECT id FROM u))
-InvalidArgument	9964d7fce0f74496	cbf29ce484222325	9964d7fce0f74496	UPDATE t SET a = (SELECT id FROM u)
+NotImplemented	9964d7fce0f74496	cbf29ce484222325	9964d7fce0f74496	UPDATE t SET a = (SELECT id FROM u)
 #
 # [AG01] Aggregates in a subquery. V07's done-condition asked for
 # Unsupported with a position on these and they used to give a bare syntax
@@ -643,3 +643,30 @@ InvalidArgument	-	-	-	SHOW RELAYOUT
 InvalidArgument	-	-	-	SHOW RELAYOUT trades
 ok	4b08123e9d144ab4	b5d416774c800632	d44fc972a29e66c4	SELECT relayout FROM t WHERE relayout = 3
 ok	512d110d0175126f	b5d412774c7fff66	561cad9287ef547c	SELECT * FROM relayout WHERE id = 7
+# BJ-S2: the SET value expression (family 1). Verdict `ok` is the parse; the
+# compile refuses an expression until BJ-S4, and the refusal is not the parser's.
+ok	cc8f6a935f77b8a8	b5d414774c8002cc	cc8f6a935f77b8a8	UPDATE t SET a = a + 1
+ok	cc8f6a935f77b8a8	b5d417774c8007e5	cc8f6a935f77b8a8	UPDATE t SET a = a + 2
+ok	cc2cdc935f23fd03	b5d414774c8002cc	cc2cdc935f23fd03	UPDATE t SET a = a - 1
+ok	27a4c5bdd66f6e09	184a11bf54847d88	27a4c5bdd66f6e09	UPDATE t SET a = a -1
+ok	26cbf05fc63b1b51	cbf29ce484222325	26cbf05fc63b1b51	UPDATE t SET a = a--1
+ok	b18e19aa47adbd32	78f79099c419719c	b18e19aa47adbd32	UPDATE t SET a = (a + 1) * 2
+ok	43475952b322bd92	fc4f5d1dc631e094	43475952b322bd92	UPDATE t SET a = a * 2 + b % 3 / 4
+ok	46ce8bb5e8cde2a3	84710b9045511414	46ce8bb5e8cde2a3	UPDATE t SET s = s || 'x' || t
+ok	860a45fc2a9566d1	cbf29ce484222325	860a45fc2a9566d1	UPDATE t SET a = -a
+ok	ad4bfc82e0c62fae	b5d410774c7ffc00	ad4bfc82e0c62fae	UPDATE t SET a = - 5
+ok	eb8b616452e2f285	b5d410774c7ffc00	eb8b616452e2f285	UPDATE t SET a = (5)
+InvalidArgument	cc8f6a935f77b8a8	cbf29ce484222325	cc8f6a935f77b8a8	UPDATE t SET a = a + ?
+ok	cc8f6a935f77b8a8	064a8a899bed480c	cc8f6a935f77b8a8	UPDATE t SET a = a + 1.5
+ok	aa83919ff0528ad9	78f78d99c4196c83	aa83919ff0528ad9	UPDATE t SET a = a + 1 WHERE id = 7
+NotImplemented	7b3adf6c34d61c58	cbf29ce484222325	7b3adf6c34d61c58	UPDATE t SET a = abs(a)
+NotImplemented	cc7e6c935f6948db	b5d414774c8002cc	cc7e6c935f6948db	UPDATE t SET a = a = 1
+NotImplemented	232684ff8e5fbf44	b5d414774c8002cc	232684ff8e5fbf44	UPDATE t SET a = CASE WHEN a THEN 1 END
+NotImplemented	cf4cc03d7b43c48f	78f79399c41976b5	cf4cc03d7b43c48f	UPDATE t SET a = 1 + (SELECT 1)
+NotImplemented	d6ae465b2d115910	cbf29ce484222325	d6ae465b2d115910	UPDATE t SET a = NOT a
+NotImplemented	5a191fcd278cd65c	cbf29ce484222325	5a191fcd278cd65c	UPDATE t SET a = t.b
+InvalidArgument	27a4d0bdd66f80ba	cbf29ce484222325	27a4d0bdd66f80ba	UPDATE t SET a = a +
+InvalidArgument	f0a52d1c0a2827ec	b5d414774c8002cc	f0a52d1c0a2827ec	UPDATE t SET a = (a + 1
+ok	27a4c5bdd66f6e09	127b6008f08bb8c8	27a4c5bdd66f6e09	UPDATE t SET a = a -9223372036854775808
+ok	b436ec9aacafc194	407acb6038867d5b	8fdb51b8d22bc903	SELECT * FROM t WHERE x BETWEEN -5 AND -1
+ok	3921e0e6c3c75cb1	184a17bf548487ba	c10ff9655be614ee	SELECT * FROM t WHERE x = -7

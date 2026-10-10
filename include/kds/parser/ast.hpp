@@ -733,9 +733,53 @@ struct SelectStmt {
     bool star() const noexcept { return projection.empty() && !aggregated(); }
 };
 
+// A value expression in a SET value (BJ-R1 family 1, BJ-S2): column
+// references to the target relation, literals, parentheses, unary `+`/`-`,
+// binary `+ - * / %` and `||`. Parsed here, **typed at compile and evaluated
+// at the write** (BJ-S3, BJ-S4); until BJ-S4 an assignment that holds one is
+// refused `NotImplemented` before any row is read.
+//
+// Nodes are immutable and shared (`shared_ptr<const Expr>`), so an
+// `Assignment`, and with it an `UpdateStmt`, stays copyable.
+enum class ExprOp : std::uint8_t { kAdd, kSub, kMul, kDiv, kMod, kConcat, kNeg, kPos };
+
+struct Expr {
+    enum class Kind : std::uint8_t { kLiteral, kColumn, kUnary, kBinary };
+
+    Kind kind = Kind::kLiteral;
+
+    // The first byte of the node as written, and for a unary or binary node
+    // the operator's own byte. BJ-R10's refusals name the expression's first
+    // byte; a typing refusal (BJ-R3) names the operator it is about.
+    std::uint32_t byte_offset = 0;
+    std::uint32_t op_byte_offset = 0;
+
+    AstValue literal;           // kLiteral
+    // kLiteral: the literal was a bare number (`1.5`, not `'1.5'`). The
+    // parser turns both into a kStr value (types.md TY3), and an expression
+    // has to tell a numeric from a string operand, which a predicate's
+    // column never had to.
+    bool bare_numeric = false;
+
+    std::string column;         // kColumn, as written
+    ExprOp op = ExprOp::kAdd;   // kUnary, kBinary
+    std::shared_ptr<const Expr> lhs;  // kUnary's operand, kBinary's left
+    std::shared_ptr<const Expr> rhs;  // kBinary's right
+};
+
 struct Assignment {
     std::string col_name;
+
+    // The value when the SET value is one bare literal (`NULL` and `?`
+    // included), exactly as before BJ: such an assignment keeps the per-row
+    // type gate at the encode (BJ-Q3 (c)) and every reader of `val` stays
+    // right. Unset when `expr` is non-null.
     AstValue val;
+
+    // Non-null when the SET value is anything but one bare literal: a column
+    // reference, an operator, a parenthesised form. `val` is then unset, and
+    // a reader that wants the value must go through the typed expression.
+    std::shared_ptr<const Expr> expr;
 
     // Where `col_name` was written. Carried for the same reason
     // `AstValue::byte_offset` is (types.md TY05): the SET list is
