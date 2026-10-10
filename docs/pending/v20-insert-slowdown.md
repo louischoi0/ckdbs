@@ -15,11 +15,10 @@ flat across BE, superblock 19 on both arms).
 
 ## 1. What prompted it
 
-`[operator]` *"지금 superblock기준으로 v19 와 v20 인서트 속도가 현저히
-느려진게 확인돼. 약 3배 정도. 원인을 파악해봐"* - insert speed between
-superblock 19 and 20 dropped by about 3x. After a first pass the operator
-deferred it: *"일단 이 이슈에 대한 정확한 조사는 다음으로 미룰게 문서로
-남겨줘"*.
+`[operator]` *"By superblock, inserts on v20 are confirmed
+markedly slower than on v19, by about 3x. Find the cause"*. After a first
+pass the operator deferred it: *"I will put off the exact investigation of
+this issue for now; leave it in a document"*.
 
 The load is xrock's `fetch` (`/home/cdkbs/xrock`, outside this tree): one
 session, `CREATE TABLE ... BTREE EXPLICIT` with five columns (`id int64, ts

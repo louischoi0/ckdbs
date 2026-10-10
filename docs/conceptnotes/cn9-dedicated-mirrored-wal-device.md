@@ -293,8 +293,8 @@ Engine-side:
 
 - **O3 — Where C1 to C4 are recorded** (and C5, found while filing). CLA proposed: C1 and C2 in
   `known-gaps.md`, C3 and C4 in `bugs/`.
-  - **Answered 2026-09-28** `[operator]`: *"C1~C4도 inflight에 기록해줘"* —
-    record C1 to C4 in `docs/inflight/` too.
+  - **Answered 2026-09-28** `[operator]`: *"record C1 to C4 in inflight
+    too"*.
   - **As filed:**
     - C1, C2 and C4 are `known-gaps.md` entries under WAL. C4 is filed as a
       spec self-contradiction plus an unpriced cost, not as a defect, because

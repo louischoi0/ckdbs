@@ -269,7 +269,7 @@ do not depend on AN alike:
   per-core high-water mark.
 - **So D1's condition cannot be evaluated until AN-D4 is marked.** A decline
   is not a dead end: RR and RC survive as **per-core** levels, which is what
-  the engine ships at `f027a3c`. Whether that counts as "지원 가능" under
+  the engine ships at `f027a3c`. Whether that counts as "supportable" under
   D1's condition is the **one remaining unresolved half** of that condition,
   and AR0-M1 records it.
 

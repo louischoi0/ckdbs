@@ -1,9 +1,9 @@
 # Work order BB — the id fixed under the leaf it lands on: defect A closed at its source
 
 Written 2026-10-06 on `worktree-bb-s0-order` from `bddd450c`
-(`v2.7.0-622-gbddd450c`), on the operator's *"(b)로 원천 차단하는 방식으로
-진행하려고 해 일단 지금까지 마일스톤 작업은 잠시 중지하고 이 오류를 해결하기
-위한 서브 마일스톤 작업 계획 & 지시서를 작성해줘"*
+(`v2.7.0-622-gbddd450c`), on the operator's *"I intend to proceed with (b),
+blocking it at the source; pause the milestone work so far for now and write
+a sub-milestone work plan & work order to resolve this error"*
 (`raft-marks-2026-10-06.md` §4).
 
 **A sub-milestone of BA, and BA is paused for it.** BA-Q14 is marked (b): the
@@ -25,9 +25,9 @@ BD (`workorder-ba-parallelism.md`, "BA rebased on BD").
   BB-Q11 are marked (a)**, as proposed (§7).
 
 **Started whole 2026-10-06** (`raft-marks-2026-10-06.md` §7), on the
-operator's *"BB 마일스톤의 지시서를 읽고 진행해줘, 발생한 이슈에 대해서는 CLA의
-제안에 따름, btree가 항상 정렬 되고 파괴적인 오버헤드를 동반하지 않아야해. 해당
-마일스톤을 완성해줘"*: every stage runs, S1 through S5, on
+operator's *"read the BB milestone's work order and go ahead; for issues
+that arise, follow CLA's proposal; the btree must always be sorted and must
+not carry destructive overhead. Complete that milestone"*: every stage runs, S1 through S5, on
 `worktree-bb-issue-under-the-leaf`. A question BB raises is settled by CLA's
 proposal and recorded at the stage that raised it. The close carries a
 constraint sharper than BB-Q7: no cost BB-R8 resolves is landed as a deferral
@@ -618,7 +618,7 @@ marked (a)).**
 | BB-Q5 | **System relations out of BB** (BB-R9) | scope | Yes, recorded in `known-gaps.md` | **as proposed** |
 | BB-Q6 | **The sim integrity check** (BB-R6) | test | Yes | **as proposed** |
 | BB-Q7 | **BB lands whatever BB-R8 measures.** A material cost moves BA-S11 to the front of BA's fix stages | process | Yes | **as proposed** |
-| BB-Q8 | **What "원천 차단" covers.**<br>(a) The misorder only: `kUnordered` stays, set only by a named key below the mark.<br>(b) Also refuse a named key below the mark on a btree, so no relation is ever `kUnordered` | user-visible | (a) | **(b)**, the operator's word: *"kUnordered 자체를 삭제해야해"* |
+| BB-Q8 | **What "blocking at the source" covers.**<br>(a) The misorder only: `kUnordered` stays, set only by a named key below the mark.<br>(b) Also refuse a named key below the mark on a btree, so no relation is ever `kUnordered` | user-visible | (a) | **(b)**, the operator's word: *"kUnordered itself must be deleted"* |
 | BB-Q9 | **A mounted volume holding a `kUnordered` relation** (BB-R11).<br>(a) Refuse the mount, naming each such relation.<br>(b) Keep a legacy per-page emission for those relations only.<br>(c) Re-sort them at mount.<br>(d) Read them as ascending | user-visible, **[quiet-wrong] for (d)** | (a). (b) keeps alive the machinery BB-Q8 deletes, and (c) rewrites leaves whose `(page, slot)` addresses undo records, indexes and Cabins hold | **(a)**, the operator's word: *"give up backward compatatibility, refuse it"* |
 | BB-Q10 | **The code a refused named key gets on a btree** (BB-R12).<br>(a) `AlreadyExists` when present, `OutOfRange` when absent.<br>(b) `OutOfRange` always, as a heap | user-visible | (a). It is free, and duplicate detection keeps working | **as proposed: (a)**, 2026-10-06 (§7) |
 | BB-Q11 | **`DESCRIBE`'s `key_order=` and the byte** (BB-R10).<br>(a) The field is removed with the state it reported; the byte is reserved, written 0, and read only by BB-R11's check.<br>(b) The field is kept, always `ascending` | user-visible | (a). A field that cannot vary reports nothing | **as proposed: (a)**, 2026-10-06 (§7) |
@@ -675,8 +675,8 @@ the first draft. All three were applied at `e58c3b73`.
 - the cells' hang warning;
 - BB-R8's named-key cell;
 - BB-Q1's [quiet-wrong] mark;
-- BB-Q8, since the marks file had only read the operator's *"unordered된
-  btree라면 존재 이유가 없잖아"* and had not asked.
+- BB-Q8, since the marks file had only read the operator's *"an unordered
+  btree has no reason to exist"* and had not asked.
 
 **Rejected:** skipping the duplicate scan for an issued id (the review's
 S4). It is a performance change with no defect behind it, and BA's census
@@ -684,8 +684,8 @@ can ask for it.
 
 ### BB opened, and §4 marked - 2026-10-06
 
-On the operator's *"BB-Q8에서 kUnordered 자체를 삭제해야해. 이외에는 CLA
-제안에 따름, main push"* (`raft-marks-2026-10-06.md` §5):
+On the operator's *"in BB-Q8, kUnordered itself must be deleted.
+Otherwise follow CLA's proposal, main push"* (`raft-marks-2026-10-06.md` §5):
 
 - **BB-Q0..Q7 are marked as proposed.**
 - **BB-Q8 is marked (b)**, against CLA's proposal (a).
@@ -713,14 +713,14 @@ On the operator's *"BB-Q9: give up backward compatatibility, refuse it"*
 relation is refused, naming each such relation, and nothing reads that
 relation's leaves as ordered or re-sorts them. BB-R11 states it as marked.
 The scope - a check at catalog load, not a superblock bump refusing every
-older volume - was put back to the operator and confirmed: *"그래 a 맞아"*.
+older volume - was put back to the operator and confirmed: *"yes, a is right"*.
 BB-Q10 and BB-Q11 remain unmarked; BB-S3b waits on BB-Q11.
 
 ### BB started whole, BB-Q10 and BB-Q11 marked (a) - 2026-10-06
 
-On the operator's *"BB 마일스톤의 지시서를 읽고 진행해줘, 발생한 이슈에 대해서는
-CLA의 제안에 따름, btree가 항상 정렬 되고 파괴적인 오버헤드를 동반하지 않아야해.
-해당 마일스톤을 완성해줘"* (`raft-marks-2026-10-06.md` §7), recorded on
+On the operator's *"read the BB milestone's work order and go ahead; for
+issues that arise, follow CLA's proposal; the btree must always be sorted and
+must not carry destructive overhead. Complete that milestone"* (`raft-marks-2026-10-06.md` §7), recorded on
 `worktree-bb-issue-under-the-leaf` from `6dc792c9` (`v2.7.0-627-g6dc792c9`):
 
 - **Every stage starts**, S1 through S5, in §5's order, each through the
@@ -730,8 +730,8 @@ CLA의 제안에 따름, btree가 항상 정렬 되고 파괴적인 오버헤드
   of the stage that raised it with the alternatives it declined. BB-S1's
   *"an inversion found stops BB at this row, and the operator rules"* is read
   under that word: an inversion is resolved by CLA's proposal, and recorded.
-- **The close's constraint.** *"btree가 항상 정렬 되고"* is BB-R1 and BB-R3's
-  invariant as the goal. *"파괴적인 오버헤드를 동반하지 않아야해"* sharpens
+- **The close's constraint.** *"the btree must always be sorted"* is BB-R1 and BB-R3's
+  invariant as the goal. *"must not carry destructive overhead"* sharpens
   BB-Q7: at `cores = 1`, where BB reorders work and adds none (§1.9), BB is to
   cost nothing BB-R8's A/B resolves, and a cost it resolves is found and taken
   back inside BB. At `cores > 1`, a loss the widened hold causes is taken back
@@ -1409,10 +1409,10 @@ process holds (`kds_server`, pid 1035423), as at BB-S3.
 
 ### BB-S5 - measured in part, the rest deferred by the operator - 2026-10-07
 
-The operator stopped BB-S5 here to take other work first: *"일단
-benchmarking은 그대로 두고 main에 푸시해줘 다른 작업이 있어서 측정은 현재
-결과까지 포함하고 미루려고해"* - push to main now, include the measurement as
-far as it got, and defer the rest.
+The operator stopped BB-S5 here to take other work first: *"for now,
+leave the benchmarking as it is and push to main; there is other work, so I
+intend to include the measurement up to the current results and defer the
+rest"*.
 
 - **Measured** (`bench/v3.0.0/results-bb-s5-overhead-v2.7.0-640-gb76261bb.md`,
   A `bddd450c` against B `b76261bb`): the `cores = 1` gate - C1, C1s, C2,
@@ -1428,7 +1428,7 @@ far as it got, and defer the rest.
 ### BB-S5 - the close, 2026-10-08
 
 Written on `worktree-bb-s5-close` from `65a28553`, on the operator's
-*"close entry 작성 진행"* (`raft-marks-2026-10-08.md` §6). BB closes on the
+*"go ahead and write the close entry"* (`raft-marks-2026-10-08.md` §6). BB closes on the
 measurement it has (BD-Q12 (b)). It does not rebase BA, because BD-S6 did.
 BB cuts no tag.
 

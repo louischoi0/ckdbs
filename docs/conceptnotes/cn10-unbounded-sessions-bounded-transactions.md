@@ -27,17 +27,14 @@ and its bug file removed; §2's portal-sweep bullet describes `b54a769`.*
 
 ## 0. The concept
 
-`[operator]` First question: *"커넥션 풀 기능에 대해 고찰. one thread per
-core 모델에서도 1000개 이상의 커넥션 풀을 관리하는 방법"* - consider a
-connection-pool feature: how to manage a pool of more than 1,000
-connections under the one-thread-per-core model.
+`[operator]` First question: *"Consider a connection-pool feature: how
+to manage a pool of more than 1,000 connections even under the one thread
+per core model"*.
 
-`[operator]` The target, after CLA's first answer: *"논리적인 동시 접속
-커넥션은 최대한 상한이 없어야 해. 물론 동시에 열리는 트랜잭션은 관리가
-필요하겠지. Oracle과 같은 상용 DB 와 비슷한 수준이어야해"* - logical
-concurrent connections should have as close to no upper bound as possible;
-concurrently open transactions of course need managing; the level should be
-comparable to a commercial database such as Oracle.
+`[operator]` The target, after CLA's first answer: *"Logical concurrent
+connections should have as close to no upper bound as possible. Concurrently
+open transactions will of course need managing. It should be at a level
+comparable to a commercial DB such as Oracle"*.
 
 `[design]` Restated: **a session is cheap and unbounded; a transaction is
 scarce and admitted.** Three layers, each limited by what it actually

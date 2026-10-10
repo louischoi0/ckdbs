@@ -98,7 +98,8 @@ protected:
 // ---- Red at BD-S0: a key below the mark is placed (W8) --------------------
 
 TEST_F(SortedLeafSqlTest, AKeyBelowAnEarlierOneIsPlacedAndOrderByStaysElided) {
-    // W8 verbatim: "pk=100을 먼저 쓰면 pk=99 삽입이 안되는 현상이 있으면 안돼".
+    // W8: "there must be no case where writing pk=100 first makes inserting
+    // pk=99 fail".
     ASSERT_TRUE(Placed(Run("INSERT INTO t VALUES (100, 1)")));
     const DispatchOutcome below = Run("INSERT INTO t VALUES (99, 2)");
     ASSERT_TRUE(Placed(below)) << below.response;
@@ -142,7 +143,7 @@ TEST_F(SortedLeafSqlTest, ADescendingMultiRowValuesIsPlacedInKeyOrder) {
 }
 
 TEST_F(SortedLeafSqlTest, ARolledBackKeyIsNamedAgainAndPlaced) {
-    // W12: "롤백된 아이디는 당연히 재사용되어야해". The rolled-back tuple was
+    // W12: "a rolled-back id must of course be reusable". The rolled-back tuple was
     // never visible to another snapshot (BD §1.7), so the key is free.
     ASSERT_TRUE(Placed(Run("INSERT INTO t VALUES (1, 1)")));
     Session s;

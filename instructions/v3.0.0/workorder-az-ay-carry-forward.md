@@ -1,8 +1,8 @@
 # Work order AZ — what AY carried: seven items, one letter
 
 Written 2026-09-30 on `worktree-az-ay-carry-forward-order` from `a59da9c`
-(`v2.7.0-533-ga59da9c`), on the operator's *"미해결 항목 7건을 모두
-커버하는 새로운 작업 지시서를 작성해줘"*: a work order covering every item
+(`v2.7.0-533-ga59da9c`), on the operator's *"write a new work order
+covering all 7 unresolved items"*: a work order covering every item
 AY's close carried forward (`workorder-ay-following-letter.md` §7, *What AY
 carries forward*). **Opened as AZ on 2026-09-30, with every §4 item marked
 as proposed** (`raft-marks-2026-09-30.md` §16). Each stage still waits for
@@ -329,7 +329,7 @@ argument now lives in §1.1 only, and §5 keeps only the S2 → S3 order.
 
 ### AZ opened, and §4 marked - 2026-09-30
 
-On *"CLA 제안대로 진행하고 main에 push해줘"*, every §4 item was marked as
+On *"proceed as CLA proposed and push to main"*, every §4 item was marked as
 proposed and the order landed (`raft-marks-2026-09-30.md` §16).
 
 - **Open**: AZ-S1, S2, S3, S4, S5 and S7, each on its own word.
@@ -340,7 +340,7 @@ No stage has started.
 
 ### AZ-S1 — built 2026-09-30
 
-On `worktree-az-s1-catalog-tail-arm` from `f2f1ee7`, on *"AZ-S1 진행해줘"*.
+On `worktree-az-s1-catalog-tail-arm` from `f2f1ee7`, on *"go ahead with AZ-S1"*.
 The reproduction (`aa9c3ef`) was red at `f2f1ee7` in all three cells:
 
 - **the hook refused on the `sys.objects` tail**: the failed create's row

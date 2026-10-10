@@ -473,7 +473,7 @@ write pays nothing.
 
 ### AP opened, and §4 marked - 2026-10-02
 
-On *"CLA 제안대로 진행하고 main에 push해줘"*, every §4 item was marked as
+On *"proceed as CLA proposed and push to main"*, every §4 item was marked as
 proposed (`raft-marks-2026-10-02.md` §4), and the order landed on `main`.
 
 - **Open, each on its own word:** AP-S1, S2, S3 and S5.
@@ -493,7 +493,7 @@ No stage has started.
 
 ### AP-S1 — built 2026-10-02
 
-On `worktree-ap-s1-fetch-id` from `f992e7e`, on *"AP-S1 시작해줘"*.
+On `worktree-ap-s1-fetch-id` from `f992e7e`, on *"start AP-S1"*.
 
 - **Built.** `Fingerprint::fetch_id`, from one more FNV state in
   `FingerprintAccumulator`. It is fed only after a leading `SELECT`, so
@@ -539,7 +539,7 @@ every window case it listed. It found one defect, which was applied.
 
 ### AP-S2 — built 2026-10-02
 
-On `worktree-ap-s2-trail-on-fetch-id` from `d3d90b5`, on *"main에 push하고 AP-S2 시작해줘"*.
+On `worktree-ap-s2-trail-on-fetch-id` from `d3d90b5`, on *"push to main and start AP-S2"*.
 
 - **Built.**
   - The trail keys on `{fetch_id, arg_hash}`, so statements differing
@@ -623,7 +623,7 @@ Rejected:
 
 ### AP-S3 — built 2026-10-02
 
-On `worktree-ap-s3-rule-0-prime` from `7fc2c57`, on *"main에 push하고 AP-S3 시작해줘"*.
+On `worktree-ap-s3-rule-0-prime` from `7fc2c57`, on *"push to main and start AP-S3"*.
 
 - **The wording.** `waystone-concpets.md` §2 rule 0 now covers every
   replayed step, the driving step included, where it said "any join
@@ -679,8 +679,8 @@ every claim the commit made about `src/`. It found no code defect. Applied:
 
 ### AP-S4 — built 2026-10-02
 
-On `worktree-ap-s4-function-catalog` from `db5a5e6`, on *"main에 push하고
-AP-S4 시작해줘"*.
+On `worktree-ap-s4-function-catalog` from `db5a5e6`, on *"push to main and
+start AP-S4"*.
 
 **The mark taken on the way.** AP-Q1 as first marked put a call on the
 column side only, and `NOW()` takes no column, so it could filter no row.

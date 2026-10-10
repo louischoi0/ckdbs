@@ -7,14 +7,10 @@ open, though AT (Uniformity) inherits it.
 
 ## 0. The decision (operator, 2026-09-08, chat session)
 
-Verbatim: *"[proposal accepted] [in-flight] - CLA 권장: active 비트만
-publish, single-writer per core. InstanceVisibility가 이미 이 형태입니다 —
-코어별 슬롯에 발급 코어만 쓰고 모든 코어가 atomic으로 읽습니다. 같은 패턴을
-in-flight에 적용합니다."* — proposal accepted, in-flight: CLA's
-recommendation, publish only the active bit, single writer per core.
-`InstanceVisibility` already has this shape — per-core slots written only
-by the issuing core and read atomically by every core. Apply the same
-pattern to in-flight.
+*"[proposal accepted] [in-flight] - CLA's recommendation: publish only
+the active bit, single-writer per core. InstanceVisibility already has this
+shape — only the issuing core writes its per-core slot and every core reads
+it atomically. The same pattern is applied to in-flight."*
 
 **The proposal this accepts is not in the tree.** No document under
 `instructions/` or `docs/` carries "active bit" or "single-writer" beside

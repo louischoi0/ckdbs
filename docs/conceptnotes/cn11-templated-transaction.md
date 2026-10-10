@@ -24,14 +24,11 @@ they are (§3); the one status code it would need is O6.
 
 ## 0. The concept
 
-`[operator]` *"나는 templated-transaction 이라는 개념을 생각중이야.
-프로시져와 비슷한데, 한번의 호출이 하나의 트랜잭션에 대응된다는 개념이
-있어. 그리고 트랜잭션 선언 어디든 CHECK를 통해 제약을 확인하는 기능을
-제공하고, 만약 transaction이 커밋되기전에 CHECK가 실패하면 자동으로
-롤백되는 개념이지."* — a templated transaction is like a procedure, but
-one call is exactly one transaction; a `CHECK` may be written anywhere in
-the declaration, and a `CHECK` that fails before the commit rolls the
-transaction back automatically.
+`[operator]` *"I am thinking of a concept called templated-transaction.
+It is similar to a procedure, but one call corresponds to one transaction.
+It also provides a check of constraints through CHECK anywhere in the
+transaction's declaration, and if a CHECK fails before the transaction
+commits, it rolls back automatically."*
 
 `[design]` Restated in this tree's terms, the concept has three parts,
 and the note keeps them apart because each has its own cost:
