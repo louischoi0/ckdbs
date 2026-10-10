@@ -643,6 +643,10 @@ void PropagateEqualities(const Scope& scope, std::vector<StepPredicate>& predica
 std::optional<std::uint64_t> PkBound(const Operand& operand) {
     if (operand.kind != OperandKind::kLiteral) return std::nullopt;
     if (operand.literal.type != parser::ValueType::kInt) return std::nullopt;
+    // A literal past int64 wrapped in the lexer, so `int_val` is not its
+    // value. A uint64 pk keeps one through coercion, and it must not bound a
+    // range or key a lookup at the number it wrapped to.
+    if (parser::IntLiteralWrapped(operand.literal)) return std::nullopt;
     if (operand.literal.int_val < 0) return std::nullopt;
     return static_cast<std::uint64_t>(operand.literal.int_val);
 }
@@ -1866,10 +1870,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // consumed rather than refused, and it went with declared
                 // patterns on 2026-08-31; a kParam now falls through this
                 // check like any other non-integer literal.
-                if (candidate->literal.type != parser::ValueType::kInt ||
-                    candidate->literal.int_val < 0) {
-                    continue;
-                }
+                if (!PkBound(*candidate).has_value()) continue;
                 step.kind = AccessKind::kLookup;
                 step.key = candidate;
                 break;
