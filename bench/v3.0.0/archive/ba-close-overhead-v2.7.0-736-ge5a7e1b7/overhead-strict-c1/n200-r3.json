@@ -1,0 +1,185 @@
+{
+ "durability": "strict",
+ "rows": 200,
+ "run": 3,
+ "tag": "n200-r3",
+ "wait_s": 60.0,
+ "order_first": "A",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "9.87 8.92 7.67 1/413 2604315",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2603214 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I - <<'\"'\"'EOF'\"'\"' p='\"'\"'tests/function_conjunct_test.cpp'\"'\"' s=open(p).read() s=s.replace('\"'\"''\"'\"''\"'\"'        {\"UPDATE t SET k = NOW() WHERE id = 1\",          \"a function call is supported in a WHERE comparison only (byte 17)\"},'\"'\"''\"'\"''\"'\"','\"'\"''\"'\"''\"'\"'        // BJ-S2: a SET value is parsed as an expression, so the call is refused         // by the expression grammar, naming the stage that builds it.         {\"UPDATE t SET k = NOW() WHERE id = 1\",          \"a function call in a SET value is not supported yet (BJ-S6) (byte 17)\"},'\"'\"''\"'\"''\"'\"') open(p,'\"'\"'w'\"'\"').write(s) EOF cmake --build build -j8 2>&1 | grep -E \" error\" | head -3; cd build && ctest -j8 --timeout 300 2>&1 | tail -6' && pwd -P >| /tmp/claude-2253-cwd",
+   "2603369 ctest -j8 --timeout 300"
+  ]
+ },
+ "host_after": {
+  "loadavg": "9.45 9.02 7.79 1/370 2608687",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 1561619.0,
+  "B": 1700181.0
+ },
+ "count_be_a": {
+  "A": "count(*) 3200",
+  "B": "count(*) 3200"
+ },
+ "rss_hwm_kb": {
+  "A": 75336,
+  "B": 76208
+ },
+ "pool_end": {
+  "A": {
+   "pool_budget": 65536.0,
+   "pool_resident": 74.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 42679.0,
+   "pool_misses": 74.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  },
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 74.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 42679.0,
+   "pool_misses": 74.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 19.109667,
+    "qps": 157.0,
+    "mean_us": 6366.8,
+    "p0_us": 912.0,
+    "p25_us": 1158.2,
+    "p50_us": 1574.2,
+    "p95_us": 10677.7,
+    "p99_us": 89255.0,
+    "max_us": 594072.2,
+    "p90_us": 4334.8,
+    "p999_us": 442102.5
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.623987,
+    "qps": 827.8,
+    "mean_us": 1206.9,
+    "p0_us": 883.7,
+    "p25_us": 986.9,
+    "p50_us": 1021.2,
+    "p95_us": 2054.1,
+    "p99_us": 5174.4,
+    "max_us": 24178.0,
+    "p90_us": 1223.5,
+    "p999_us": 10884.5
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.135333,
+    "qps": 22167.5,
+    "mean_us": 44.8,
+    "p0_us": 34.5,
+    "p25_us": 42.2,
+    "p50_us": 42.5,
+    "p95_us": 55.5,
+    "p99_us": 62.8,
+    "max_us": 112.7,
+    "p90_us": 52.8,
+    "p999_us": 80.9
+   }
+  },
+  "B": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 33.273489,
+    "qps": 90.2,
+    "mean_us": 11087.9,
+    "p0_us": 972.2,
+    "p25_us": 1197.6,
+    "p50_us": 1715.9,
+    "p95_us": 42172.6,
+    "p99_us": 298999.9,
+    "max_us": 1141616.9,
+    "p90_us": 5662.1,
+    "p999_us": 593680.6
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.613533,
+    "qps": 830.2,
+    "mean_us": 1203.4,
+    "p0_us": 895.6,
+    "p25_us": 987.4,
+    "p50_us": 1021.2,
+    "p95_us": 1948.6,
+    "p99_us": 5008.2,
+    "max_us": 28216.8,
+    "p90_us": 1186.9,
+    "p999_us": 14681.1
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.155858,
+    "qps": 19248.3,
+    "mean_us": 51.7,
+    "p0_us": 45.5,
+    "p25_us": 49.4,
+    "p50_us": 50.0,
+    "p95_us": 61.0,
+    "p99_us": 69.4,
+    "max_us": 267.1,
+    "p90_us": 56.2,
+    "p999_us": 84.2
+   }
+  }
+ }
+}

@@ -1,0 +1,188 @@
+{
+ "engine": "pg",
+ "shape": "trade",
+ "durability": "on",
+ "cores": null,
+ "sessions": 16,
+ "run": 1,
+ "seconds": 8.0,
+ "warmup": 2.0,
+ "server_cpus": "0,2",
+ "client_cpus": "4,5,6,7",
+ "wait_s": 0.0,
+ "host_before": {
+  "loadavg": "2.65 1.40 1.57 2/521 2847217",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "host_after": {
+  "loadavg": "2.22 1.36 1.55 2/530 2847350",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "statements": 42040,
+ "span_s": 8.0203,
+ "statements_per_s": 5241.7,
+ "p25_us": 2574.8,
+ "p50_us": 2773.4,
+ "p95_us": 4926.6,
+ "p99_us": 8588.3,
+ "p0_us": 1508.8,
+ "max_us": 17836.0,
+ "by_kind": {
+  "write": {
+   "statements": 42040,
+   "p0_us": 1508.8,
+   "p25_us": 2574.8,
+   "p50_us": 2773.4,
+   "p95_us": 4926.6,
+   "p99_us": 8588.3
+  }
+ },
+ "by_client": [
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2771.4,
+   "p99_us": 8439.3
+  },
+  {
+   "core": null,
+   "statements": 2624,
+   "p50_us": 2772.3,
+   "p99_us": 8480.6
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2768.7,
+   "p99_us": 8673.8
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2770.8,
+   "p99_us": 8622.7
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2773.5,
+   "p99_us": 8605.3
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2762.4,
+   "p99_us": 8562.6
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2777.7,
+   "p99_us": 8731.2
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2778.0,
+   "p99_us": 8565.3
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2769.4,
+   "p99_us": 8504.3
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2773.4,
+   "p99_us": 8716.1
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2780.3,
+   "p99_us": 8565.0
+  },
+  {
+   "core": null,
+   "statements": 2624,
+   "p50_us": 2773.5,
+   "p99_us": 8499.9
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2777.7,
+   "p99_us": 8454.8
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2778.9,
+   "p99_us": 8579.8
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2773.5,
+   "p99_us": 8520.0
+  },
+  {
+   "core": null,
+   "statements": 2628,
+   "p50_us": 2772.8,
+   "p99_us": 8676.6
+  }
+ ],
+ "refusals": 0,
+ "errors": 0,
+ "first_error": null,
+ "client_cpu_share": [
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01,
+  0.01
+ ],
+ "client_bound": false,
+ "session_cores": [
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null
+ ],
+ "meta_delta": {},
+ "meta_longest": {},
+ "meta_session_core": null,
+ "bin_sha256": null,
+ "data_device": "/dev/root ext4",
+ "setup_meta": {}
+}

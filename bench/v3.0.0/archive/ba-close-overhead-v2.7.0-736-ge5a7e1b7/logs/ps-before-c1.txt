@@ -1,0 +1,8 @@
+    PID PSR %CPU     ELAPSED COMMAND
+2515199   0  303    01:02:04 .venv/bin/python -u python/train_deep.py datasets/btcusdt_120d_1s models/btc120 --threads 4
+2508438   6  4.5    01:12:31 /home/cdkbs/.local/share/claude/versions/2.1.296 --session-id f37d6904-c895-48f2-8ac3-4fe7034c85df --fork-session --resume /home/cdkbs/.claude/projects/-home-cdkbs-ckdbs--claude-worktrees-ba-open-marks/d5270512-dae5-41d5-8abe-0f0705846ec9.jsonl --permission-mode bypassPermissions
+2023379   4  1.4  1-15:37:43 claude
+   1009   6  0.7 10-01:41:24 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/store --log-level warn
+2161640   6  0.7    23:54:17 claude
+2152704   6  0.6  1-00:08:39 claude
+2508405   5  0.3    01:12:31 /home/cdkbs/.local/bin/claude daemon run --origin transient --spawned-by {"label":"claude","cwd":"/home/cdkbs/ckdbs/.claude/worktrees/ba-open-marks","pid":2023379}

@@ -1,0 +1,186 @@
+{
+ "durability": "group",
+ "rows": 1000,
+ "run": 11,
+ "tag": "n1000-r11",
+ "wait_s": 0.0,
+ "order_first": "A",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "1.66 2.64 3.19 1/463 2685985",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2685847 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \" error |Error \" | head; build/tests/kds_tests --gtest_filter='\"'\"'BjSingleWriteRigTest.*'\"'\"' --gtest_repeat=5 2>&1 | grep -E \"FAILED|PASSED\" | sort | uniq -c' < /dev/null && pwd -P >| /tmp/claude-f01f-cwd",
+   "2685977 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \" error |Error \" | head; build/tests/kds_tests --gtest_filter='\"'\"'BjSingleWriteRigTest.*'\"'\"' --gtest_repeat=5 2>&1 | grep -E \"FAILED|PASSED\" | sort | uniq -c' < /dev/null && pwd -P >| /tmp/claude-f01f-cwd"
+  ]
+ },
+ "host_after": {
+  "loadavg": "1.67 2.58 3.16 1/459 2686268",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2686230 ctest --test-dir /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build --output-on-failure -LE heap-suspended"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 9023.0,
+  "B": 348894.0
+ },
+ "count_be_a": {
+  "A": "count(*) 4000",
+  "B": "count(*) 4000"
+ },
+ "rss_hwm_kb": {
+  "A": 74680,
+  "B": 76208
+ },
+ "pool_end": {
+  "A": {
+   "pool_budget": 65536.0,
+   "pool_resident": 106.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 71620.0,
+   "pool_misses": 106.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  },
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 106.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 71620.0,
+   "pool_misses": 106.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "iso": {
+    "phase": "iso",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.12041,
+    "qps": 24914.9,
+    "mean_us": 39.9,
+    "p0_us": 35.1,
+    "p25_us": 37.5,
+    "p50_us": 37.9,
+    "p95_us": 48.5,
+    "p99_us": 58.6,
+    "max_us": 119.2,
+    "p90_us": 45.1,
+    "p999_us": 87.6
+   },
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 7.222215,
+    "qps": 415.4,
+    "mean_us": 2405.6,
+    "p0_us": 842.2,
+    "p25_us": 961.5,
+    "p50_us": 999.2,
+    "p95_us": 2482.5,
+    "p99_us": 10499.7,
+    "max_us": 386412.5,
+    "p90_us": 1287.0,
+    "p999_us": 265646.7
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.596346,
+    "qps": 834.2,
+    "mean_us": 1197.5,
+    "p0_us": 879.5,
+    "p25_us": 980.7,
+    "p50_us": 1020.5,
+    "p95_us": 2030.3,
+    "p99_us": 5036.7,
+    "max_us": 12291.3,
+    "p90_us": 1275.2,
+    "p999_us": 10847.6
+   }
+  },
+  "B": {
+   "iso": {
+    "phase": "iso",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.119191,
+    "qps": 25169.8,
+    "mean_us": 39.5,
+    "p0_us": 34.2,
+    "p25_us": 37.5,
+    "p50_us": 37.8,
+    "p95_us": 47.8,
+    "p99_us": 56.7,
+    "max_us": 77.3,
+    "p90_us": 44.1,
+    "p999_us": 66.1
+   },
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.803669,
+    "qps": 624.5,
+    "mean_us": 1599.8,
+    "p0_us": 870.5,
+    "p25_us": 958.9,
+    "p50_us": 994.3,
+    "p95_us": 2012.3,
+    "p99_us": 5428.4,
+    "max_us": 263378.8,
+    "p90_us": 1198.7,
+    "p999_us": 170269.4
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.499547,
+    "qps": 857.3,
+    "mean_us": 1165.4,
+    "p0_us": 881.7,
+    "p25_us": 972.1,
+    "p50_us": 1007.3,
+    "p95_us": 1736.2,
+    "p99_us": 4309.0,
+    "max_us": 28924.7,
+    "p90_us": 1166.3,
+    "p999_us": 13517.5
+   }
+  }
+ }
+}
