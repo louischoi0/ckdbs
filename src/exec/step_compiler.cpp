@@ -1424,8 +1424,8 @@ Status CompileAssignments(const catalog::TableAccess& access,
                     // checked against a key the row never gets.
                     if (!deferred.has_value()) {
                         deferred = Status::NotImplemented(
-                            "an expression that reads a column cannot be assigned to "
-                            "foreign-key column '" +
+                            "an expression that reads a column or the clock cannot be assigned "
+                            "to foreign-key column '" +
                             a.col_name + "' yet (BJ-Q10) (byte " +
                             std::to_string(a.expr->byte_offset) + ")");
                     }

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cstdlib>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -42,7 +41,7 @@ bool IsSignedInt(std::uint32_t t) {
 bool IsInteger(std::uint32_t t) { return IsSignedInt(t) || t == kTypeValUint64; }
 bool IsDecimal(std::uint32_t t) { return t == kTypeValDecimal || t == kTypeValDecimalWide; }
 bool IsText(std::uint32_t t) { return t == kTypeValVarchar || t == kTypeValChar; }
-bool IsTime(std::uint32_t t) { return t == kTypeValDate || t == kTypeValTimestamp; }
+bool IsDateType(const SetType& t) { return t.concrete() && t.type_val == kTypeValDate; }
 
 SetType Concrete(std::uint32_t type_val, std::uint32_t len) {
     SetType t;
@@ -102,6 +101,34 @@ std::string_view OpText(ExprOp op) {
     return "?";
 }
 
+std::string_view FunctionName(SetFunction f) {
+    switch (f) {
+        case SetFunction::kAbs: return "abs";
+        case SetFunction::kSign: return "sign";
+        case SetFunction::kCeil: return "ceil";
+        case SetFunction::kFloor: return "floor";
+        case SetFunction::kRound: return "round";
+        case SetFunction::kTrunc: return "trunc";
+        case SetFunction::kUpper: return "upper";
+        case SetFunction::kLower: return "lower";
+        case SetFunction::kLength: return "length";
+        case SetFunction::kSubstring: return "substring";
+        case SetFunction::kTrim: return "trim";
+        case SetFunction::kLtrim: return "ltrim";
+        case SetFunction::kRtrim: return "rtrim";
+        case SetFunction::kPosition: return "position";
+        case SetFunction::kReplace: return "replace";
+        case SetFunction::kLpad: return "lpad";
+        case SetFunction::kRpad: return "rpad";
+        case SetFunction::kConcat: return "concat";
+        case SetFunction::kNow: return "now";
+        case SetFunction::kCurrentDate: return "current_date";
+        case SetFunction::kDate: return "date";
+        case SetFunction::kNone: break;
+    }
+    return "function";
+}
+
 // The one shape of a typing refusal: what is wrong, the byte, and that no
 // conversion rescues it (BJ-R3).
 Status Refuse(std::uint32_t at, const std::string& what) {
@@ -127,15 +154,16 @@ SetType Scaled(std::uint32_t precision, std::uint32_t scale) {
     return t;
 }
 
-// The type of `a / b` for decimals (BJ-Q3 (a)): the dividend's scale plus 16
-// places, capped at 38, and the digits the quotient can need. Never narrowed
-// implicitly - `ROUND` or `CAST` is how the client narrows it.
+// The type of `a / b` for decimals (BJ-Q3 (a)): the dividend's scale plus up to
+// 16 places, as many as leave the quotient room for the integer digits it can
+// need (`p1 - s1 + s2`), and never fewer places than the dividend has. Never
+// narrowed implicitly - `ROUND` or `CAST` is how the client narrows it.
 SetType DecimalQuotient(const SetType& dividend, std::uint32_t divisor_scale) {
-    const std::uint32_t p1 = catalog::DecimalPrecisionOf(dividend.len);
-    const std::uint32_t s1 = catalog::DecimalScaleOf(dividend.len);
-    const std::uint32_t scale = std::min<std::uint32_t>(s1 + 16, 38);
-    const std::uint32_t precision =
-        std::max(scale, std::min<std::uint32_t>(p1 - s1 + divisor_scale + scale, 38));
+    const int p1 = catalog::DecimalPrecisionOf(dividend.len);
+    const int s1 = catalog::DecimalScaleOf(dividend.len);
+    const int integer_digits = p1 - s1 + static_cast<int>(divisor_scale);
+    const int scale = std::max(s1, std::min(s1 + 16, 38 - integer_digits));
+    const int precision = std::min(integer_digits + scale, 38);
     return Concrete(precision >= kMinDecimalPrecisionWide ? kTypeValDecimalWide : kTypeValDecimal,
                     catalog::PackDecimalLen(static_cast<std::uint8_t>(precision),
                                             static_cast<std::uint8_t>(scale)));
@@ -302,7 +330,11 @@ public:
             }
             case Expr::Kind::kCall: {
                 if (n.op == ExprOp::kFunction) {
-                    // Only a scaled decimal is untyped; it takes the context's
+                    if (n.type.kind == SetType::Kind::kNull) {
+                        n.type = want;  // a numeric function of NULL: NULL of any type
+                        return Status::OK();
+                    }
+                    // Otherwise a scaled decimal, which takes the context's
                     // precision when the scale is the one it yields.
                     if (!IsDecimal(want.type_val) ||
                         catalog::DecimalScaleOf(want.len) != catalog::DecimalScaleOf(n.type.len)) {
@@ -410,6 +442,7 @@ private:
                     return Mismatch();
                 }
                 break;
+            case SetType::Kind::kScaled:
             case SetType::Kind::kConcrete:
                 break;
         }
@@ -521,8 +554,12 @@ private:
     // one the same (the text family counts as one), and the untyped ones take
     // it. With none concrete the node stays untyped, of the kinds' merge,
     // until a context types it.
+    //
+    // `widen_scaled` is for a comparison, whose result is a bool: a scaled
+    // decimal beside a decimal of its scale takes the wider of the two
+    // precisions, so what is compared can never fail to fit.
     StatusOr<SetType> Unify(const std::vector<TypedSetExpr*>& values, std::uint32_t at,
-                            const std::string& who) const {
+                            const std::string& who, bool widen_scaled = false) const {
         const SetType* first = nullptr;
         for (const TypedSetExpr* v : values) {
             if (!v->type.concrete()) continue;
@@ -542,6 +579,14 @@ private:
                 }
             }
             for (TypedSetExpr* v : values) {
+                if (widen_scaled && v->type.kind == SetType::Kind::kScaled && IsDecimal(t.type_val) &&
+                    catalog::DecimalScaleOf(v->type.len) == catalog::DecimalScaleOf(t.len)) {
+                    const std::uint32_t precision = std::max(catalog::DecimalPrecisionOf(v->type.len),
+                                                             catalog::DecimalPrecisionOf(t.len));
+                    const SetType wide = Scaled(precision, catalog::DecimalScaleOf(t.len));
+                    if (Status s = Resolve(*v, Concrete(wide.type_val, wide.len)); !s.ok()) return s;
+                    continue;
+                }
                 if (Status s = Resolve(*v, t); !s.ok()) return s;
             }
             return t;
@@ -563,7 +608,13 @@ private:
                     return Refuse(at, who + " needs one type but is given " +
                                           SetTypeName(merged) + " and " + SetTypeName(vt));
                 }
-                merged = vt;  // a literal under a scaled decimal takes its scale
+                // A literal under a scaled decimal takes its scale; two scaled
+                // decimals of one scale keep the wider precision, so the order
+                // they are written in does not decide it.
+                if (merged.kind != SetType::Kind::kScaled ||
+                    catalog::DecimalPrecisionOf(vt.len) > catalog::DecimalPrecisionOf(merged.len)) {
+                    merged = vt;
+                }
             } else if (merged.kind != SetType::Kind::kScaled &&
                        vt.kind == SetType::Kind::kNumeric) {
                 merged.kind = SetType::Kind::kNumeric;
@@ -580,7 +631,7 @@ private:
             if (Status s = BoolOperand(*rhs, who, e.op_byte_offset); !s.ok()) return s;
         } else {
             auto t = Unify({lhs.get(), rhs.get()}, e.op_byte_offset,
-                           "operator " + std::string(OpText(e.op)));
+                           "operator " + std::string(OpText(e.op)), /*widen_scaled=*/true);
             if (!t.ok()) return t.status();
             // Two literals compare as what the two of them are by default; the
             // result is a bool whatever they are, so nothing later types them.
@@ -666,7 +717,10 @@ private:
             }
             return Wrong(i, "a whole number");
         };
-        // An argument that must be an integer or a decimal; a literal is int64.
+        // An argument that must be an integer or a decimal. A literal is int64;
+        // a NULL stays NULL (the result is NULL of whatever the context wants);
+        // a scaled decimal is passed on as it is, so `ABS(ROUND(x, 2))` still
+        // takes its context's precision.
         const auto Number = [&](std::size_t i) -> Status {
             TypedSetExpr& a = *n->args[i];
             if (a.type.concrete()) {
@@ -674,34 +728,39 @@ private:
                            ? Status::OK()
                            : Wrong(i, "a number");
             }
-            if (a.type.kind == SetType::Kind::kInteger || a.type.kind == SetType::Kind::kNull) {
+            if (a.type.kind == SetType::Kind::kNull || a.type.kind == SetType::Kind::kScaled) {
+                return Status::OK();
+            }
+            if (a.type.kind == SetType::Kind::kInteger) {
                 return Resolve(a, Concrete(kTypeValInt64, 0));
             }
-            if (a.type.kind == SetType::Kind::kScaled || a.type.kind == SetType::Kind::kNumeric) {
-                return SettleByDefault(a);
-            }
+            if (a.type.kind == SetType::Kind::kNumeric) return SettleByDefault(a);
             return Wrong(i, "a number");
         };
 
         switch (spec->fn) {
             case SetFunction::kAbs:
-            case SetFunction::kSign:
-                if (Status s = Number(0); !s.ok()) return s;
-                n->type = n->args[0]->type;
-                break;
-            case SetFunction::kCeil:
-            case SetFunction::kFloor: {
+            case SetFunction::kSign: {
                 if (Status s = Number(0); !s.ok()) return s;
                 const SetType& t = n->args[0]->type;
-                n->type = IsDecimal(t.type_val) && catalog::DecimalScaleOf(t.len) > 0
-                              ? Scaled(catalog::DecimalPrecisionOf(t.len), 0)
+                // `SIGN` is 1, -1 or 0 at the argument's scale, which a
+                // decimal whose precision is its scale cannot hold: the
+                // result takes its context's precision instead.
+                n->type = spec->fn == SetFunction::kSign && IsDecimal(t.type_val)
+                              ? Scaled(std::max<std::uint32_t>(catalog::DecimalPrecisionOf(t.len),
+                                                catalog::DecimalScaleOf(t.len) + 1u),
+                                       catalog::DecimalScaleOf(t.len))
                               : t;
                 break;
             }
+            case SetFunction::kCeil:
+            case SetFunction::kFloor:
             case SetFunction::kRound:
             case SetFunction::kTrunc: {
                 if (Status s = Number(0); !s.ok()) return s;
-                if (n->args.size() == 2) {
+                const bool has_places =
+                    spec->fn == SetFunction::kRound || spec->fn == SetFunction::kTrunc;
+                if (has_places && n->args.size() == 2) {
                     // The places are part of the type, so they are a literal.
                     const Expr& places = *e.args[1];
                     if (places.kind != Expr::Kind::kLiteral ||
@@ -710,24 +769,30 @@ private:
                                       name + " takes its number of places as a whole-number "
                                              "literal: it is part of the result's type");
                     }
-                    if (places.literal.int_val < 0 || parser::IntLiteralWrapped(places.literal) ||
-                        places.literal.int_val > 38) {
+                    if (places.literal.int_val < 0 && !parser::IntLiteralWrapped(places.literal)) {
                         return Status::NotImplemented(
-                            name + " takes places from 0 to 38; a negative count is not "
+                            name + " takes a count of places from 0; a negative count is not "
                                    "supported" +
                             At(places.byte_offset));
                     }
+                    if (parser::IntLiteralWrapped(places.literal) || places.literal.int_val > 38) {
+                        return Status::InvalidArgument(name + " takes places from 0 to 38" +
+                                                       At(places.byte_offset));
+                    }
                     n->places = static_cast<std::uint32_t>(places.literal.int_val);
+                    // Read; the tree needs no node for it, and no row should
+                    // evaluate one.
+                    n->args.resize(1);
                 }
                 const SetType& t = n->args[0]->type;
-                if (!IsDecimal(t.type_val)) {
-                    n->type = t;
+                if (t.kind == SetType::Kind::kNull || !IsDecimal(t.type_val)) {
+                    n->type = t;  // a NULL, or an integer, which has no places to drop
                 } else {
+                    // Always scaled: the result is a decimal of `places`
+                    // places and no precision of its own (BJ-Q3 (a)).
                     const std::uint32_t p = catalog::DecimalPrecisionOf(t.len);
                     const std::uint32_t s = catalog::DecimalScaleOf(t.len);
-                    n->type = n->places == s ? t
-                                             : Scaled(n->places > s ? p - s + n->places : p,
-                                                      n->places);
+                    n->type = Scaled(n->places > s ? p - s + n->places : p, n->places);
                 }
                 break;
             }
@@ -872,10 +937,9 @@ private:
                     At(e.op_byte_offset));
             }
         }
-        const auto IsDate = [](const TypedSetExpr& n) {
-            return n.type.concrete() && n.type.type_val == kTypeValDate;
-        };
-        if (IsDate(*lhs) || IsDate(*rhs)) return DateArithmetic(e, std::move(lhs), std::move(rhs));
+        if (IsDateType(lhs->type) || IsDateType(rhs->type)) {
+            return DateArithmetic(e, std::move(lhs), std::move(rhs));
+        }
 
         Node n = Make(e);
         // With only literals under this node it stays untyped until a
@@ -893,9 +957,7 @@ private:
     // `date + days`, `days + date`, `date - days` (a date) and `date - date`
     // (days, int32) - BJ-Q4 (a); every other operator over a date is refused.
     StatusOr<Node> DateArithmetic(const Expr& e, Node lhs, Node rhs) {
-        const auto IsDate = [](const TypedSetExpr& n) {
-            return n.type.concrete() && n.type.type_val == kTypeValDate;
-        };
+        const auto IsDate = [](const TypedSetExpr& n) { return IsDateType(n.type); };
         const auto Bad = [&]() {
             return Refuse(e.op_byte_offset, "operator " + std::string(OpText(e.op)) +
                                                 " cannot apply to " + SetTypeName(lhs->type) +
@@ -1155,6 +1217,11 @@ private:
     static bool IsTrue(const parser::AstValue& v) { return v.type == ValueType::kInt && v.int_val != 0; }
 
     StatusOr<parser::AstValue> Unary(const TypedSetExpr& e) const {
+        // `CAST(a / b AS decimal(p, s))` divides to `s` places once.
+        if (e.op == ExprOp::kCast && IsDecimalQuotient(*e.lhs) &&
+            (IsDecimal(e.type.type_val) || IsInteger(e.type.type_val))) {
+            return FusedQuotient(*e.lhs, ScaleOf(e.type), Rounding::kHalfAwayFromZero, e);
+        }
         auto operand = Eval(*e.lhs);
         if (!operand.ok()) return operand;
         switch (e.op) {
@@ -1307,10 +1374,7 @@ private:
                 } else if (target == Family::kTimestamp) {  // date -> timestamp
                     out.int_val = v.int_val * 86400LL * 1000000LL;
                 } else {  // timestamp -> date: the day it falls in, floored
-                    constexpr std::int64_t kDay = 86400LL * 1000000LL;
-                    std::int64_t days = v.int_val / kDay;
-                    if (v.int_val % kDay < 0) --days;
-                    out.int_val = days;
+                    out.int_val = FloorEpochDay(v.int_val);
                 }
                 return out;
             }
@@ -1335,27 +1399,18 @@ private:
             }
             return out;
         }
+        // At most 38 places are dropped, and 10^38 fits 128 bits.
         Int128 divisor = 1;
-        bool vast = false;  // the divisor passes 128 bits, so the whole value is a fraction of it
-        for (int i = to; i < from; ++i) {
-            if (__builtin_mul_overflow(divisor, static_cast<Int128>(10), &divisor)) {
-                vast = true;
-                break;
-            }
-        }
-        Int128 q = 0;
-        Int128 r = unscaled;
-        if (!vast) {
-            q = unscaled / divisor;
-            r = unscaled % divisor;
-        }
+        for (int i = to; i < from; ++i) divisor *= 10;
+        Int128 q = unscaled / divisor;
+        const Int128 r = unscaled % divisor;
         switch (mode) {
             case Rounding::kHalfAwayFromZero: {
                 // Half or more of the divisor rounds away from zero. Written as
                 // `|r| >= divisor - |r|` because `2|r|` can pass 2^127 when 38
                 // places are dropped.
                 const Int128 magnitude = r < 0 ? -r : r;
-                if (!vast && magnitude >= divisor - magnitude) q += unscaled < 0 ? -1 : 1;
+                if (magnitude >= divisor - magnitude) q += unscaled < 0 ? -1 : 1;
                 break;
             }
             case Rounding::kTowardZero: break;
@@ -1369,29 +1424,83 @@ private:
         return q;
     }
 
-    // `a / b` for decimals (BJ-Q3 (a)): exact to the node's scale, then rounded
-    // half away from zero. The dividend is scaled up first, which is why
-    // operands near 38 digits are refused rather than divided inexactly.
-    static StatusOr<parser::AstValue> DecimalQuotient(const TypedSetExpr& e, Int128 a, Int128 b) {
-        if (b == 0) return Status::InvalidArgument("division by zero" + At(e.op_byte_offset));
-        const int dividend_scale = static_cast<int>(catalog::DecimalScaleOf(e.lhs->type.len));
-        const int divisor_scale = IsDecimal(e.rhs->type.type_val)
-                                      ? static_cast<int>(catalog::DecimalScaleOf(e.rhs->type.len))
-                                      : 0;
-        const int scale = static_cast<int>(catalog::DecimalScaleOf(e.type.len));
+    // `a / b` of two decimals, divided **once** to `to_scale` places and rounded
+    // as asked - so `ROUND(x / y, 2)` rounds the true quotient once, never a
+    // quotient that was already rounded to more places. `sa` and `sb` are the
+    // operands' scales. The numerator (or, for fewer places than it has, the
+    // denominator) is scaled up exactly, which is why operands near 38 digits
+    // are refused rather than divided inexactly.
+    static StatusOr<Int128> DivideAt(Int128 a, Int128 b, int sa, int sb, int to_scale,
+                                     Rounding mode, const TypedSetExpr& division) {
+        if (b == 0) {
+            return Status::InvalidArgument("division by zero" + At(division.op_byte_offset));
+        }
         Int128 numerator = a;
-        for (int i = 0; i < scale - dividend_scale + divisor_scale; ++i) {
-            if (__builtin_mul_overflow(numerator, static_cast<Int128>(10), &numerator)) {
+        Int128 denominator = b;
+        const int k = to_scale - sa + sb;
+        for (int i = 0; i < (k < 0 ? -k : k); ++i) {
+            Int128& side = k > 0 ? numerator : denominator;
+            if (__builtin_mul_overflow(side, static_cast<Int128>(10), &side)) {
                 return Status::OutOfRange("the operands are too wide to divide to " +
-                                          std::to_string(scale) + " places" + At(e.op_byte_offset));
+                                          std::to_string(to_scale) + " places" +
+                                          At(division.op_byte_offset));
             }
         }
-        Int128 q = numerator / b;
-        const Int128 r = numerator % b;
-        const Int128 magnitude = r < 0 ? -r : r;
-        const Int128 divisor_magnitude = b < 0 ? -b : b;
-        if (magnitude >= divisor_magnitude - magnitude) q += (numerator < 0) != (b < 0) ? -1 : 1;
-        return Checked(q, e);
+        Int128 q = numerator / denominator;
+        const Int128 r = numerator % denominator;
+        if (r != 0) {
+            const bool negative = (numerator < 0) != (denominator < 0);
+            switch (mode) {
+                case Rounding::kHalfAwayFromZero: {
+                    const Int128 magnitude = r < 0 ? -r : r;
+                    const Int128 divisor = denominator < 0 ? -denominator : denominator;
+                    if (magnitude >= divisor - magnitude) q += negative ? -1 : 1;
+                    break;
+                }
+                case Rounding::kTowardZero: break;
+                case Rounding::kFloor:
+                    if (negative) --q;
+                    break;
+                case Rounding::kCeiling:
+                    if (!negative) ++q;
+                    break;
+            }
+        }
+        return q;
+    }
+
+    static int ScaleOf(const SetType& t) {
+        return IsDecimal(t.type_val) ? static_cast<int>(catalog::DecimalScaleOf(t.len)) : 0;
+    }
+
+    // A decimal `/` node evaluated straight to `to_scale` places, for the
+    // rounding functions and CAST that take it as their argument.
+    StatusOr<parser::AstValue> FusedQuotient(const TypedSetExpr& division, int to_scale,
+                                             Rounding mode, const TypedSetExpr& e) const {
+        auto l = Eval(*division.lhs);
+        if (!l.ok()) return l;
+        auto r = Eval(*division.rhs);
+        if (!r.ok()) return r;
+        if (IsNull(l.value()) || IsNull(r.value())) return parser::AstValue{};
+        auto a = NumberOf(l.value(), division.lhs->type);
+        if (!a.ok()) return a.status();
+        auto b = NumberOf(r.value(), division.rhs->type);
+        if (!b.ok()) return b.status();
+        auto q = DivideAt(a.value(), b.value(), ScaleOf(division.lhs->type),
+                          ScaleOf(division.rhs->type), to_scale, mode, division);
+        if (!q.ok()) return q.status();
+        return Checked(q.value(), e);
+    }
+
+    static bool IsDecimalQuotient(const TypedSetExpr& n) {
+        return n.kind == Expr::Kind::kBinary && n.op == ExprOp::kDiv && IsDecimal(n.type.type_val);
+    }
+
+    static StatusOr<parser::AstValue> DecimalQuotient(const TypedSetExpr& e, Int128 a, Int128 b) {
+        auto q = DivideAt(a, b, ScaleOf(e.lhs->type), ScaleOf(e.rhs->type), ScaleOf(e.type),
+                          Rounding::kHalfAwayFromZero, e);
+        if (!q.ok()) return q.status();
+        return Checked(q.value(), e);
     }
 
     // `date +/- days` and `date - date` (BJ-Q4 (a)); `a` and `b` are the
@@ -1420,13 +1529,6 @@ private:
         return out;
     }
 
-    static std::int64_t DayOf(std::int64_t micros) {
-        constexpr std::int64_t kDay = 86400LL * 1000000LL;
-        std::int64_t days = micros / kDay;
-        if (micros % kDay < 0) --days;
-        return days;
-    }
-
     StatusOr<parser::AstValue> Function(const TypedSetExpr& e) const {
         parser::AstValue instant;
         instant.type = ValueType::kInt;
@@ -1435,8 +1537,18 @@ private:
             return instant;
         }
         if (e.function == SetFunction::kCurrentDate) {
-            instant.int_val = DayOf(context_.now_us);
+            instant.int_val = FloorEpochDay(context_.now_us);
             return instant;
+        }
+
+        const bool rounding = e.function == SetFunction::kCeil || e.function == SetFunction::kFloor ||
+                              e.function == SetFunction::kRound || e.function == SetFunction::kTrunc;
+        if (rounding && IsDecimalQuotient(*e.args[0])) {
+            const Rounding mode = e.function == SetFunction::kCeil    ? Rounding::kCeiling
+                                  : e.function == SetFunction::kFloor ? Rounding::kFloor
+                                  : e.function == SetFunction::kTrunc ? Rounding::kTowardZero
+                                                                      : Rounding::kHalfAwayFromZero;
+            return FusedQuotient(*e.args[0], ScaleOf(e.type), mode, e);
         }
 
         std::vector<parser::AstValue> v;
@@ -1555,7 +1667,7 @@ private:
                     out += v[2].str_val;
                     at = hit + from.size();
                     if (out.size() > kMaxStringBytes) {
-                        return Status::OutOfRange("REPLACE builds more than " +
+                        return Status::OutOfRange("replace builds more than " +
                                                   std::to_string(kMaxStringBytes) + " bytes" +
                                                   At(e.op_byte_offset));
                     }
@@ -1570,7 +1682,7 @@ private:
                 if (!length.ok()) return length.status();
                 if (length.value() <= 0) return Text("");
                 if (length.value() > static_cast<Int128>(kMaxStringBytes)) {
-                    return Status::OutOfRange(std::string(OpFunctionName(e.function)) +
+                    return Status::OutOfRange(std::string(FunctionName(e.function)) +
                                               " builds more than " +
                                               std::to_string(kMaxStringBytes) + " bytes" +
                                               At(e.op_byte_offset));
@@ -1588,16 +1700,12 @@ private:
             case SetFunction::kDate: {
                 parser::AstValue out;
                 out.type = ValueType::kInt;
-                out.int_val = e.args[0]->type.type_val == kTypeValTimestamp ? DayOf(v[0].int_val)
+                out.int_val = e.args[0]->type.type_val == kTypeValTimestamp ? FloorEpochDay(v[0].int_val)
                                                                            : v[0].int_val;
                 return out;
             }
             default: return Status::Corruption("a function the evaluator does not know");
         }
-    }
-
-    static const char* OpFunctionName(SetFunction f) {
-        return f == SetFunction::kLpad ? "LPAD" : "RPAD";
     }
 
     // A decimal string as an unscaled value and its number of places, through
@@ -1695,8 +1803,11 @@ private:
     }
 
     static Status OutOfRangeResult(const TypedSetExpr& e) {
-        return Status::OutOfRange("the result of operator " + std::string(OpText(e.op)) +
-                                  " is outside " + SetTypeName(e.type) + At(e.op_byte_offset));
+        const std::string what = e.op == ExprOp::kFunction
+                                     ? "function " + std::string(FunctionName(e.function))
+                                     : "operator " + std::string(OpText(e.op));
+        return Status::OutOfRange("the result of " + what + " is outside " + SetTypeName(e.type) +
+                                  At(e.op_byte_offset));
     }
 
     static StatusOr<parser::AstValue> Checked(Int128 v, const TypedSetExpr& e) {

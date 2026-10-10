@@ -230,7 +230,7 @@ lexer wrapped it to.
 | `+` `-` `%` | two `decimal(p,s)` of one `(p,s)` | that decimal | a different `(p,s)` |
 | `*` | two decimals of one `(p,s)` | `decimal(min(p1+p2,38), s1+s2)`, which must be the target's | a different `(p,s)` |
 | `*` | a decimal and an integer **literal** | that decimal | an `int64` column |
-| `/` | two decimals of one `(p,s)`, or a decimal and an integer literal | `decimal(P, S)`, `S = min(s+16, 38)`, `P = min(p-s+s2+S, 38)` | a different `(p,s)`; the result is never narrowed implicitly - `ROUND` or `CAST` does it (BJ-Q3 (a)) |
+| `/` | two decimals of one `(p,s)`, or a decimal and an integer literal | `decimal(P, S)`: with `I = p-s+s2` integer digits, `S = max(s, min(s+16, 38-I))` and `P = min(I+S, 38)` - up to 16 more places than the dividend, as many as leave room for the integer digits | a different `(p,s)`; the result is never narrowed implicitly - `ROUND` or `CAST` does it (BJ-Q3 (a)) |
 | `||` | `varchar`/`char` and string literals | `varchar` | any other type |
 | unary `-` | a signed integer or a decimal | that type | `uint64` ("an unsigned value has no negation"), text, `bool` |
 | unary `+` | an integer or a decimal | that type | text, `bool` |
@@ -284,15 +284,23 @@ NULL for a NULL argument except `CONCAT`, which skips them.
 | `CURRENT_DATE` | none, written without parentheses | `date`; a column of that name wins, so the function is unreachable on a relation that has one (BJ-Q4) |
 | `DATE(ts)` | a timestamp | `date`, the day it falls in |
 
-**A scaled decimal.** `ROUND`, `TRUNC`, `CEIL` and `FLOOR` over a decimal yield a
-decimal of a fixed scale and **no precision of their own**: it takes the
-precision of the column it is assigned to, or of the decimal it is added to or
-compared with, and is refused if that is another scale. So `SET price =
-ROUND(price / 3, 2)` is a `decimal(10, 2)` whatever the quotient's width; a
-value too wide for the precision it lands in is `OutOfRange` at the row. Used
-with nothing to take a precision from it is the argument's own precision at
-that scale. An untyped scaled decimal under `*` or `/`, or two of different
-scales, needs a `CAST`. Nothing in the engine reads a function's purity yet
+**A scaled decimal.** `ROUND`, `TRUNC`, `CEIL`, `FLOOR` and, for a decimal,
+`SIGN` yield a decimal of a fixed scale and **no precision of their own**,
+and so do `ABS` and a nested `ROUND` over one: it takes the precision of the
+column it is assigned to, or of the decimal it is added to, and is refused if
+that is another scale. So `SET price = ROUND(price / 3, 2)` is a
+`decimal(10, 2)` whatever the quotient's width; a value too wide for the
+precision it lands in is `OutOfRange` at the row. In a **comparison** it takes
+the wider of its own and the other side's precision, so what is compared never
+fails to fit; two of one scale keep the wider, whichever is written first.
+Used with nothing to take a precision from it is the argument's own precision
+at that scale. An untyped scaled decimal under `*` or `/`, or two of different
+scales, needs a `CAST`. **A quotient is divided once**: `ROUND(a / b, n)`,
+`TRUNC`, `CEIL`, `FLOOR` and `CAST(a / b AS decimal(p, s))` take the exact
+quotient to `n` (or `s`) places in one division with their own rounding, never
+a quotient already rounded to its natural scale; `ROUND(ROUND(x, 4), 2)` is two
+roundings because it says two. `ROUND` and `TRUNC` over a NULL, and `ABS(NULL)`,
+are NULL of whatever type the context wants. Nothing in the engine reads a function's purity yet
 (`functions.hpp` declares it for the WHERE catalog, whose entries are not
 these), so none is declared for them: `NOW()` and `CURRENT_DATE` are the two
 stable ones, and the rest are pure.

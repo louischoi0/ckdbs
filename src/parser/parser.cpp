@@ -788,7 +788,12 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprFunction(const Token& nam
         return s;
     }
     // `MOD(a, b)` is `a % b`.
-    if (IEquals(name.text, "MOD") && args.size() == 2) {
+    if (IEquals(name.text, "MOD") && args.size() != 2) {
+        return Status::InvalidArgument("'" + std::string(name.text) +
+                                       "' takes 2 argument(s) (byte " +
+                                       std::to_string(name.byte_offset) + ")");
+    }
+    if (IEquals(name.text, "MOD")) {
         auto e = std::make_shared<Expr>(*MakeBinary(ExprOp::kMod, name.byte_offset,
                                                     std::move(args[0]), std::move(args[1])));
         e->byte_offset = name.byte_offset;  // the expression starts at `MOD`

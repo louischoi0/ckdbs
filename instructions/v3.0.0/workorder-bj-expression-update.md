@@ -969,3 +969,56 @@ tree, `HeapSuspensionIsLifted` disabled as before.
 - **Cells**: `tests/set_expr_functions_test.cpp` (11), eight parser cells' worth of
   corpus lines (the golden corpus: one verdict moved, no stored hash moved), the
   typing and function-conjunct pins moved to what is now true.
+
+### BJ-S6 — the `critics-developer` review of `1a04b918`, applied
+
+On `worktree-bj-expression-update`, after `1a04b918`, the review found, and
+the tree now fixes:
+- **A quiet wrong answer (high): a quotient was rounded twice.** The division
+  rounded to its own scale and `ROUND`/`TRUNC`/`CAST` rounded that again, so a
+  value just under a tie was pushed over it (`ROUND(d / 200000000000000001, 4)`
+  gave 0.0001 for 0.0000499...). A decimal `/` that is the argument of a
+  rounding function, or of a `CAST` to a decimal or an integer, is divided
+  **once** to the target's places with that function's rounding mode
+  (`DivideAt`); `CEIL`/`FLOOR` over one keep the inexact remainder. Whether
+  PostgreSQL's numeric division rounds twice was not checked; `types.md` states
+  this engine's rule.
+- **Decimals of scale 22 or more could not be divided (high).** `S = min(s+16, 38)`
+  left no integer digits. **The quotient's type is now `S = max(s, min(s+16,
+  38-I))`, `P = min(I+S, 38)` with `I = p-s+s2`: as many extra places as leave
+  room.** That changes the formula `types.md` §3.2b carried; it is CLA's proposal,
+  adopted on the operator's standing go-ahead of 2026-10-10
+  (go-ahead-achieving-milestone), not the operator's mark. `decimal(10,2) / 2` is
+  still `decimal(26,18)`; `decimal(38,2) / decimal(38,2)` has no room and stays at
+  scale 2.
+- **Scaled decimals (medium)**: `SIGN` of a decimal whose precision is its scale
+  could never fit; two scaled decimals took the last one's precision, so
+  `ROUND(w,2) = ROUND(x,2)` depended on the order; `ROUND(d52, 2)`,
+  `ABS(ROUND(w, 2))` and a nested `ROUND` were refused where `ROUND(d53, 2)` was
+  admitted. Every rounding function over a decimal is now scaled, `ABS` and the
+  rest pass a scaled argument on, two of one scale keep the wider precision, and
+  **in a comparison a scaled decimal takes the wider precision of the two sides**
+  (review item B5: a data-dependent row failure for a comparison is worse than
+  a compile refusal, and the result is a bool either way).
+- **Smaller**: `ROUND(NULL, 2)` and `ABS(NULL)` are NULL of the context's type;
+  `MOD(a)` and `MOD(a, 2, 3)` are refused as `MOD`'s arity, not as an unknown
+  function; places over 38 are `InvalidArgument`, a negative count
+  `NotImplemented`; a row error names the function (`the result of function abs
+  ...`); the foreign-key refusal says "or the clock".
+- **Cuts**: one `FloorEpochDay` (type_literals.hpp) for the three day floors
+  (`DATE()` in the WHERE catalog included); `Rescale`'s unreachable branch; one
+  `IsDateType`; ROUND/TRUNC's places argument is dropped from the typed tree once
+  read; a function-name table the row errors share.
+- **Cells**: the five brittle ones tightened (a tie that is a tie, TRUNC against
+  ROUND, a negative tie, FLOOR against TRUNC), and new ones for the double
+  rounding, the room for integer digits, SIGN over `decimal(2,2)`, the order of
+  two scaled operands, a scaled decimal in a comparison, a NULL argument,
+  `LENGTH('é') = 2`, a date below 1900-01-01 and the arity messages.
+
+**Rejected or left:** unifying `ParseExprFunction` and `ParseExprCall`'s
+argument loops (POSITION's `IN` and CAST's `AS` make them differ in the places
+that matter); the review's L5, a column named `Current_Date` still reaching the
+function through `CURRENT_DATE` (identifiers are folded, so they are one name);
+a cell for `NOW()` carried across a parked `SET` (the WHERE one exists in
+`function_conjunct_test.cpp`; the carried context is the same
+`ParkedWrite::context`, read, not run) - listed for `known-gaps.md` at BJ-S8.

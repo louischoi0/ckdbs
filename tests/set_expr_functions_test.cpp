@@ -89,7 +89,7 @@ TEST_F(SetExprFunctionsTest, RoundTruncCeilAndFloorYieldTheScaleTheyNameAndTakeT
     EXPECT_EQ(At("e", 2), "-1");
     Exec("UPDATE t SET e = FLOOR(d) WHERE id >= 1");
     EXPECT_EQ(At("e", 1), "12");
-    EXPECT_EQ(At("e", 2), "-2");
+    EXPECT_EQ(At("e", 2), "-2") << "FLOOR of a negative goes down, TRUNC goes toward zero";
     Exec("UPDATE t SET d = ROUND(w, 2) WHERE id >= 1");
     EXPECT_EQ(At("d", 1), "3.14");
     EXPECT_EQ(At("d", 2), "-0.50");
@@ -97,10 +97,19 @@ TEST_F(SetExprFunctionsTest, RoundTruncCeilAndFloorYieldTheScaleTheyNameAndTakeT
     EXPECT_EQ(At("w", 1), "3.1400") << "more places than the argument has pads";
     Exec("UPDATE t SET f = TRUNC(w, 1) WHERE id = 1");
     EXPECT_EQ(At("f", 1), "3.1");
+    Exec("UPDATE t SET w = 3.1415 WHERE id = 1");
+    Exec("UPDATE t SET w = CAST(ROUND(w, 3) AS decimal(30, 4)) WHERE id = 1");
+    EXPECT_EQ(At("w", 1), "3.1420") << "3.1415 rounds up at the third place";
+    Exec("UPDATE t SET w = 3.1415 WHERE id = 1");
+    Exec("UPDATE t SET w = CAST(TRUNC(w, 3) AS decimal(30, 4)) WHERE id = 1");
+    EXPECT_EQ(At("w", 1), "3.1410") << "TRUNC drops what ROUND would have rounded up";
     Exec("UPDATE t SET d = ROUND(d, 2) WHERE id = 1");
     EXPECT_EQ(At("d", 1), "3.14") << "the same scale is the same type";
     Exec("UPDATE t SET i64 = ROUND(i64, 2) WHERE id = 1");
     EXPECT_EQ(At("i64", 1), "-7");
+    Exec("UPDATE t SET d = -2.50 WHERE id = 1");
+    Exec("UPDATE t SET e = ROUND(d) WHERE id = 1");
+    EXPECT_EQ(At("e", 1), "-3") << "a negative tie rounds away from zero";
     // A scaled result adapts to the precision of what it is assigned to or
     // compared with, never to another scale.
     EXPECT_NE(Refusal("d = ROUND(w, 3)").find("scale 3 but is used as decimal(10,2)"),
@@ -143,8 +152,9 @@ TEST_F(SetExprFunctionsTest, ADecimalQuotientHasMoreDigitsAndIsNarrowedByRoundOr
     EXPECT_EQ(At("e", 1), "4") << "12.50 / 3 = 4.1666...";
     Exec("UPDATE t SET e = CAST(d / d AS decimal(10, 0)) WHERE id = 2");
     EXPECT_EQ(At("e", 2), "1");
+    Exec("UPDATE t SET d = 12.52 WHERE id = 1");
     Exec("UPDATE t SET d = CAST(d / 8 AS decimal(10, 2)) WHERE id = 1");
-    EXPECT_EQ(At("d", 1), "1.56") << "1.5625 rounds half away from zero";
+    EXPECT_EQ(At("d", 1), "1.57") << "12.52 / 8 = 1.565, a tie: half away from zero, not half even";
     const std::string zero = Run("UPDATE t SET d = ROUND(d / 0, 2) WHERE id = 1");
     EXPECT_NE(zero.find("division by zero"), std::string::npos) << zero;
     EXPECT_NE(Run("UPDATE t SET d = ROUND(d / (d - d), 2) WHERE id = 1").find("division by zero"),
@@ -155,11 +165,114 @@ TEST_F(SetExprFunctionsTest, ADecimalQuotientHasMoreDigitsAndIsNarrowedByRoundOr
     EXPECT_NE(Refusal("d = d / 2").find("but column 'd' is decimal(10,2)"), std::string::npos);
 }
 
+TEST_F(SetExprFunctionsTest, ADivisionIsRoundedOnceNotTwice) {
+    // BJ-S6's review: the quotient was rounded to its own scale and then again
+    // by ROUND / TRUNC / CAST, so a value just under a tie was pushed over it.
+    Exec("CREATE TABLE q (id int64, a decimal(18,2), r decimal(18,4), a38 decimal(38,2), "
+         "b38 decimal(38,2), r38 decimal(38,2), c decimal(10,4), n0 decimal(10,0))");
+    Exec("INSERT INTO q VALUES (1, '10000000000000.00', '1', '10000000000000.00', "
+         "'2000000000000000.01', '1', '1', '7')");
+    Exec("UPDATE q SET r = ROUND(a / 200000000000000001, 4) WHERE id = 1");
+    EXPECT_EQ(Run("SELECT r FROM q WHERE id = 1"), "r\\n0.0000") << "exactly 0.0000499999...";
+    Exec("UPDATE q SET a = 20000000000000.00 WHERE id = 1");
+    Exec("UPDATE q SET r = TRUNC(a / 200000000000000001, 4) WHERE id = 1");
+    EXPECT_EQ(Run("SELECT r FROM q WHERE id = 1"), "r\\n0.0000");
+    Exec("UPDATE q SET c = CAST(a / 200000000000000001 AS decimal(10, 4)) WHERE id = 1");
+    EXPECT_EQ(Run("SELECT c FROM q WHERE id = 1"), "c\\n0.0001")
+        << "0.0000999999... is just under 0.0001 at four places: it rounds to 0.0001 once";
+    Exec("UPDATE q SET r38 = ROUND(a38 / b38, 2) WHERE id = 1");
+    EXPECT_EQ(Run("SELECT r38 FROM q WHERE id = 1"), "r38\\n0.00");
+    // CEIL and FLOOR of a quotient keep the inexact remainder.
+    Exec("UPDATE q SET n0 = CEIL(a38 / b38) WHERE id = 1");
+    EXPECT_EQ(Run("SELECT n0 FROM q WHERE id = 1"), "n0\\n1");
+    Exec("UPDATE q SET n0 = FLOOR(a38 / (0 - b38)) WHERE id = 1");
+    EXPECT_EQ(Run("SELECT n0 FROM q WHERE id = 1"), "n0\\n-1");
+}
+
+TEST_F(SetExprFunctionsTest, AQuotientKeepsRoomForItsIntegerDigits) {
+    // BJ-S6's review: decimal(30,22) / 2 had no integer digits left and failed
+    // for any value. The 16 extra places are as many as leave room.
+    Exec("CREATE TABLE z (id int64, x decimal(30,22), y decimal(38,10), r decimal(38,30))");
+    Exec("INSERT INTO z VALUES (1, '4', '9999999999999999999999999999.0000000001', '1')");
+    Exec("UPDATE z SET x = ROUND(x / 2, 22) WHERE id = 1");
+    EXPECT_EQ(Run("SELECT x FROM z WHERE id = 1"), "x\\n2.0000000000000000000000");
+    Exec("UPDATE z SET r = x / 3 WHERE id = 1");
+    EXPECT_EQ(Run("SELECT r FROM z WHERE id = 1"),
+              "r\\n0.666666666666666666666666666667")
+        << "decimal(30,22) / 3 is decimal(38,30): eight integer digits and thirty places";
+    EXPECT_NE(Run("UPDATE z SET x = x / 2 WHERE id = 1").find("decimal(38,30) but column 'x'"),
+              std::string::npos);
+    // decimal(38,10) has 28 integer digits to keep: no extra places fit.
+    Exec("UPDATE z SET y = y / 2 WHERE id = 1");
+    EXPECT_EQ(Run("SELECT y FROM z WHERE id = 1"),
+              "y\\n4999999999999999999999999999.5000000001");
+}
+
+TEST_F(SetExprFunctionsTest, ScaledDecimalsAdaptWhereverTheyAreUsed) {
+    Exec("CREATE TABLE sc (id int64, w decimal(30,4), d53 decimal(5,3), d52 decimal(5,2), "
+         "d102 decimal(12,2), d22 decimal(2,2), b bool, i8 int8)");
+    Exec("INSERT INTO sc VALUES (1, '123456789.1234', '12.345', '1.00', '0.00', '0.50', 0, 0)");
+    const auto Sc = [&](const std::string& what) {
+        return Run("SELECT " + what + " FROM sc WHERE id = 1");
+    };
+    // B3: SIGN of a decimal whose precision is its scale.
+    Exec("UPDATE sc SET b = SIGN(d22) > 0 WHERE id = 1");
+    EXPECT_EQ(Sc("b"), "b\\n1");
+    Exec("UPDATE sc SET i8 = CAST(SIGN(d22) AS int8) WHERE id = 1");
+    EXPECT_EQ(Sc("i8"), "i8\\n1");
+    Exec("UPDATE sc SET d102 = SIGN(d22) WHERE id = 1");
+    EXPECT_EQ(Sc("d102"), "d102\\n1.00");
+    // B4: two scaled decimals take the wider precision, whichever is first.
+    Exec("UPDATE sc SET b = ROUND(w, 2) = ROUND(d53, 2) WHERE id = 1");
+    EXPECT_EQ(Sc("b"), "b\\n0");
+    Exec("UPDATE sc SET b = ROUND(d53, 2) = ROUND(w, 2) WHERE id = 1");
+    EXPECT_EQ(Sc("b"), "b\\n0");
+    Exec("UPDATE sc SET b = COALESCE(ROUND(w, 2), ROUND(d53, 2)) > 0 WHERE id = 1");
+    EXPECT_EQ(Sc("b"), "b\\n1");
+    // B5: compared with a decimal of the same scale, it takes the wider precision.
+    Exec("UPDATE sc SET b = ROUND(w, 2) > d52 WHERE id = 1");
+    EXPECT_EQ(Sc("b"), "b\\n1");
+    // B6: every rounding form over a decimal adopts its context's precision.
+    Exec("UPDATE sc SET d102 = ROUND(d52, 2) WHERE id = 1");
+    EXPECT_EQ(Sc("d102"), "d102\\n1.00");
+    Exec("UPDATE sc SET d102 = ABS(ROUND(w, 2)) WHERE id = 1");
+    EXPECT_EQ(Sc("d102"), "d102\\n123456789.12");
+    Exec("UPDATE sc SET d102 = ROUND(ROUND(w, 3), 2) WHERE id = 1");
+    EXPECT_EQ(Sc("d102"), "d102\\n123456789.12");
+    // A value too wide for the precision it lands in is the row's refusal.
+    const std::string wide = Run("UPDATE sc SET d52 = ROUND(w, 2) WHERE id = 1");
+    EXPECT_NE(wide.find("is outside decimal(5,2)"), std::string::npos) << wide;
+    // ABS and ROUND of NULL are NULL of any type (BJ-R4).
+    Exec("CREATE TABLE nn (id int64, d decimal(10,2) NULL, n int64 NULL)");
+    Exec("INSERT INTO nn VALUES (1, '1.00', 1)");
+    Exec("UPDATE nn SET d = ROUND(NULL, 2) WHERE id = 1");
+    EXPECT_EQ(Run("SELECT d FROM nn WHERE id = 1"), "d\\nNULL");
+    Exec("UPDATE nn SET d = '3.00' WHERE id = 1");
+    Exec("UPDATE nn SET d = ABS(NULL) WHERE id = 1");
+    EXPECT_EQ(Run("SELECT d FROM nn WHERE id = 1"), "d\\nNULL");
+}
+
+TEST_F(SetExprFunctionsTest, ARowErrorNamesTheFunctionNotTheOperator) {
+    Exec("UPDATE t SET i8 = -128 WHERE id = 1");
+    const std::string out = Run("UPDATE t SET i8 = ABS(i8) WHERE id = 1");
+    EXPECT_NE(out.find("the result of function abs is outside int8"), std::string::npos) << out;
+    EXPECT_NE(Refusal("i64 = MOD(i64)").find("'MOD' takes 2 argument(s)"), std::string::npos);
+    EXPECT_NE(Refusal("i64 = MOD(i64, 2, 3)").find("'MOD' takes 2 argument(s)"),
+              std::string::npos);
+    EXPECT_NE(Refusal("e = ROUND(d, 39)").find("0 to 38"), std::string::npos);
+    EXPECT_NE(Refusal("e = ROUND(d, 99999999999999999999)").find("0 to 38"), std::string::npos);
+}
+
 TEST_F(SetExprFunctionsTest, TextFunctions) {
     Exec("UPDATE t SET c = UPPER(c) WHERE id = 1");
     EXPECT_EQ(At("c", 1), "ABC");
     Exec("UPDATE t SET c = LOWER(c) WHERE id = 1");
     EXPECT_EQ(At("c", 1), "abc");
+    Exec("UPDATE t SET i32 = LENGTH('\xc3\xa9') WHERE id = 2");
+    EXPECT_EQ(At("i32", 2), "2") << "LENGTH counts bytes";
+    Exec("UPDATE t SET s = UPPER('\xc3\xa9" "a') WHERE id = 2");
+    EXPECT_EQ(At("s", 2), "\xc3\xa9" "A") << "UPPER touches ASCII letters only";
+    Exec("UPDATE t SET s = 'x' WHERE id = 2");
     Exec("UPDATE t SET i32 = LENGTH(s) WHERE id >= 1");
     EXPECT_EQ(At("i32", 1), "15");
     EXPECT_EQ(At("i32", 2), "1");
@@ -277,6 +390,10 @@ TEST_F(SetExprFunctionsTest, DateArithmeticIsDaysAndDifferences) {
     Exec("UPDATE t SET dt = '2026-02-28' WHERE id = 1");
     Exec("UPDATE t SET dt = dt + 1 WHERE id = 1");
     EXPECT_EQ(At("dt", 1), "2026-03-01") << "the calendar, not 30-day months";
+    Exec("UPDATE t SET dt = '1900-01-01' WHERE id = 1");
+    const std::string below = Run("UPDATE t SET dt = dt - 1 WHERE id = 1");
+    EXPECT_NE(below.find("outside the supported range"), std::string::npos) << below;
+    EXPECT_EQ(At("dt", 1), "1900-01-01");
     Exec("UPDATE t SET dt = '2999-12-31' WHERE id = 1");
     const std::string out = Run("UPDATE t SET dt = dt + 1 WHERE id = 1");
     EXPECT_NE(out.find("outside the supported range"), std::string::npos) << out;
