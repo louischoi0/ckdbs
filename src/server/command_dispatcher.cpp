@@ -7852,13 +7852,13 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     if (Status s = exec::CompileAssignments(ta, stmt.assignments, &compiled); !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
-    // One value per assignment for the row in hand: the bare literal's, or
-    // what the expression evaluated to. Owned by the statement so no row
-    // allocates for it after the first.
-    std::vector<parser::AstValue> evaluated(compiled.size());
-    const auto assigned_value = [&](std::size_t i) -> const parser::AstValue& {
-        return compiled[i].expr != nullptr ? evaluated[i] : stmt.assignments[i].val;
-    };
+    // One value per assignment for the row in hand. A bare literal's slot is
+    // filled once, here; an expression's is overwritten for every row. Owned
+    // by the statement so no row allocates for it after the first.
+    std::vector<parser::AstValue> values(compiled.size());
+    for (std::size_t i = 0; i < compiled.size(); ++i) {
+        if (compiled[i].expr == nullptr) values[i] = stmt.assignments[i].val;
+    }
 
     // The WHERE clause compiles to the same resolved predicates a chain
     // step carries, and is evaluated by the same evaluator (V16). UPDATE
@@ -8118,6 +8118,33 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
         }
 
+        // ---- BJ-S4: every expression is evaluated here, against the row as
+        // the walk read it (BJ-R2) ------------------------------------------
+        //
+        // After the row qualified and its conflict was decided, before
+        // anything of it is written and before the no-refuse window opens (an
+        // evaluation can fail, BJ-R10). The values are collected first and
+        // written second, so a later assignment never reads an earlier one's
+        // result. A failure names the expression's first byte and the row's
+        // pk and fails the statement like every mid-statement write failure
+        // (the AS9 resolution). A value that evaluates but does not fit its
+        // target - a NULL into a NOT NULL column, a `char(N)` too long - is
+        // the encode's verdict, further down.
+        for (std::size_t i = 0; i < compiled.size(); ++i) {
+            if (compiled[i].expr == nullptr) continue;
+            const std::uint32_t expression_byte = stmt.assignments[i].expr->byte_offset;
+            auto value = exec::EvaluateSetExpression(*compiled[i].expr, row.value());
+            if (!value.ok()) {
+                return value.status().WithMessage(
+                    value.status().message() + " in the expression at byte " +
+                    std::to_string(expression_byte) + ", row id " + std::to_string(id.value()));
+            }
+            values[i] = std::move(value.value());
+            // A computed value carries no position of its own; the encode's
+            // refusals name this one.
+            values[i].byte_offset = expression_byte;
+        }
+
         // ---- The forward check, for an fk column this SET touches (§2) --
         //
         // Per matched row, after the row has qualified and the cheap
@@ -8127,29 +8154,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // this row, which is what keeps an UPDATE matching zero rows
         // answering `UPDATED 0` rather than a violation it never used to
         // report.
-        //
-        // **BJ-S4: every expression is evaluated here, against the row as
-        // the walk read it** (BJ-R2) - after the row qualified and its
-        // conflict was decided, before anything of it is written and before
-        // the no-refuse window opens (an evaluation can fail, BJ-R10). The
-        // values are collected first and written second, so a later
-        // assignment never reads an earlier one's result. A failure names
-        // the expression's first byte and the row's pk and fails the
-        // statement like every mid-statement write failure (the AS9
-        // resolution).
-        for (std::size_t i = 0; i < compiled.size(); ++i) {
-            if (compiled[i].expr == nullptr) continue;
-            auto value = exec::EvaluateSetExpression(*compiled[i].expr, row.value());
-            if (!value.ok()) {
-                return value.status().WithMessage(
-                    value.status().message() + " in the expression at byte " +
-                    std::to_string(stmt.assignments[i].expr->byte_offset) + ", row id " +
-                    std::to_string(id.value()));
-            }
-            evaluated[i] = std::move(value.value());
-        }
         for (const auto& [fk, index] : fk_assignments) {
-            if (Status s = CheckForeignKeyOnWrite(ta, *fk, assigned_value(index), fk_held, scope);
+            if (Status s = CheckForeignKeyOnWrite(ta, *fk, values[index], fk_held, scope);
                 !s.ok()) {
                 return s;
             }
@@ -8173,7 +8179,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         }
 
         for (std::size_t i = 0; i < compiled.size(); ++i) {
-            row.value()[compiled[i].column_no] = assigned_value(i);
+            row.value()[compiled[i].column_no] = values[i];
         }
 
         // The pk is unchanged by construction (rejected above), so it was

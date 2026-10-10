@@ -1,6 +1,7 @@
 #include "kds/exec/set_expr.hpp"
 
 #include <algorithm>
+#include <array>
 #include <string_view>
 #include <utility>
 
@@ -409,9 +410,14 @@ private:
 // 128-bit integer, so one checked arithmetic serves every type and the range
 // of the node's own type is what judges the result.
 Int128 PowerOfTen(unsigned exponent) {
-    Int128 v = 1;
-    for (unsigned i = 0; i < exponent; ++i) v *= 10;
-    return v;
+    // 10^0 .. 10^38, the widest decimal precision.
+    static const std::array<Int128, 39> kTable = [] {
+        std::array<Int128, 39> t{};
+        t[0] = 1;
+        for (std::size_t i = 1; i < t.size(); ++i) t[i] = t[i - 1] * 10;
+        return t;
+    }();
+    return kTable[exponent];
 }
 
 bool InRange(Int128 v, const SetType& t) {
@@ -428,21 +434,6 @@ bool InRange(Int128 v, const SetType& t) {
         }
         default: return true;
     }
-}
-
-std::string Int128Text(Int128 v) {
-    if (v == 0) return "0";
-    const bool negative = v < 0;
-    std::string digits;
-    // The magnitude as unsigned, so the most negative value needs no case.
-    unsigned __int128 m = negative ? -static_cast<unsigned __int128>(v)
-                                   : static_cast<unsigned __int128>(v);
-    while (m != 0) {
-        digits.push_back(static_cast<char>('0' + static_cast<int>(m % 10)));
-        m /= 10;
-    }
-    if (negative) digits.push_back('-');
-    return std::string(digits.rbegin(), digits.rend());
 }
 
 StatusOr<Int128> NumberOf(const parser::AstValue& v, const SetType& t) {
@@ -475,7 +466,7 @@ parser::AstValue ValueOf(Int128 v, const SetType& t) {
     // The digits carry a uint64 above INT64_MAX, which `int_val` cannot
     // (`ValueAsUint64`'s rule).
     if (t.type_val == kTypeValUint64 && v > static_cast<Int128>(INT64_MAX)) {
-        out.raw_int_text = Int128Text(v);
+        out.raw_int_text = std::to_string(static_cast<std::uint64_t>(v));
     }
     return out;
 }

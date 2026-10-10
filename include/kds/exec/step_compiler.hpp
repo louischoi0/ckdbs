@@ -143,7 +143,7 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 struct CompiledAssignment {
     std::size_t column_no = 0;
     // Null for a bare literal, whose value is `Assignment::val`.
-    std::shared_ptr<const TypedSetExpr> expr;
+    std::unique_ptr<const TypedSetExpr> expr;
     // The value a foreign-key column's hoist resolves: the bare literal's, or
     // the folded constant. Unset for every other assignment, and for a
     // constant whose fold failed - the row that meets that failure raises it

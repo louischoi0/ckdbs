@@ -754,3 +754,96 @@ different thing than `DoesNotFit`); folding constant expressions at compile so
 evaluator is where a value is known); making `i64 = (NULL)` a compile
 refusal (the NOT NULL verdict is the row's, BJ-R4). **Not done:** the
 WHERE-side wrap, which is outside this order.
+
+### BJ-S3 → BJ-S4 gate — BA's code lands on `main` (2026-10-10)
+
+On the operator's word ("proceed with option 1", then, asked who merges,
+"CLA merges and pushes") `worktree-ba-open-marks` (`2eea2720`, BA-S2..S4,
+S7, S12..S15 and BA's close) was merged into `worktree-bj-expression-update`
+at `836b9551` with no conflict, and pushed to `main` at `1a5176ae` after the
+pre-push suite (3411 of 3411, `HeapSuspensionIsLifted` disabled). The merge
+broke two of BJ-S1's cells, not the engine: a resumed `UPDATE` now commits
+through BA-S7's parked-commit path, which the rig's held kicks never deliver,
+so `bj_single_write_rig_test.cpp`'s waiter commits `relaxed`, as BA's own
+`row_wait_wake_rig_test.cpp` does (`1a5176ae`).
+
+### BJ-S4 — evaluation and the write (built 2026-10-10)
+
+On `worktree-bj-expression-update`, after `1a5176ae`. **Not measured;
+measured at the milestone's close** (§5).
+
+- **`exec::EvaluateSetExpression`** (`src/exec/set_expr.cpp`): one `Evaluator`
+  over a decoded row. Integer, uint64 and decimal values ride one 128-bit
+  integer; every node's result is judged against **its own type** (an int8
+  intermediate of 200 is `OutOfRange` though the final result would fit),
+  with `__builtin_*_overflow` underneath so a decimal(38) pair cannot wrap
+  the 128 bits; a decimal's bound is `10^p`. `/` truncates toward zero, `%`
+  takes the dividend's sign, a zero divisor is `InvalidArgument` and is
+  judged after NULL, so `NULL / 0` is NULL. A uint64 above `INT64_MAX`
+  travels in `raw_int_text`, as `ValueAsUint64` reads it.
+- **`CompileAssignments`** takes an optional `std::vector<CompiledAssignment>*`:
+  the target's schema position (the row loop no longer finds a column by name
+  per row), the typed tree, and for a foreign-key column the value its hoist
+  resolves. The `NotImplemented (BJ-S4)` refusal is gone.
+- **`UpdateInner`** evaluates every expression right after the row qualified
+  and its conflict was decided - before the foreign-key check, before the
+  no-refuse window, before any write (BJ-R2, BJ-R10) - into one per-statement
+  `evaluated` vector, then writes them into the decoded row together. A failure
+  names the failing operator's byte, the expression's first byte and the
+  row's pk.
+- **BJ-Q10, as adopted**: a constant expression into a foreign-key column is
+  folded at compile and keeps the hoist; one that reads a column is refused
+  `NotImplemented` at its byte (the refusal waits until every assignment has
+  been judged). A constant whose fold fails hoists nothing, and the row that
+  meets the failure raises it before any foreign-key check.
+- **Cells**: `tests/set_expr_eval_test.cpp` (17: arithmetic, the swap, every
+  type's overflow, uint64 above INT64_MAX, division by zero, NULL, NOT NULL,
+  decimals, text and a spilled value, a failure in a later row, the foreign-key
+  path); `tests/set_expr_two_core_rig_test.cpp` (two cores each add 1 to one
+  row 300 times: the value is 600 and every retryable refusal is retried, none
+  lost); the typing cells now run over a WHERE that matches nothing, and
+  `ANegativeValueBoundAfterAMinusIsNotAComment` expects the statement to run
+  and change nothing. **Suite 3429/3429** at `d13c79ea`, 3434/3434 after the review (below).
+
+### BJ-S4 — the `critics-developer` review of `d13c79ea`, applied
+
+On `worktree-bj-expression-update`, after `d13c79ea`, the review found, and
+the tree now fixes:
+- **A NOT NULL refusal named `(byte 0)`** (medium, BJ-S4's own): a computed
+  value carries no position, so the encode's refusal printed none. The row
+  loop stamps the expression's first byte on each evaluated value.
+- **BJ-R10's wording.** A value that evaluates but does not fit its target -
+  a NULL into a NOT NULL column, a `char(N)` result too long - is refused by
+  the row's encode, after the no-refuse window opens and the assertion
+  reserves, and the char refusal names no byte. It is safe (the failure takes
+  the normal mid-statement path and the abort undoes the reservation); BJ-R10's
+  "before anything of the row is written" is therefore **read as the
+  evaluation's own failures**, and `types.md` §3.2b and the row loop's comment
+  say the other two are the encode's verdicts.
+- **Cuts**: one `values` vector (a bare literal's slot filled once, an
+  expression's per row) in place of two sources and a lambda; `Int128Text`
+  deleted for `std::to_string(uint64)`; the powers of ten a table, not a
+  loop per node per row; `CompiledAssignment::expr` a `unique_ptr`.
+- **Cells added**: the NOT NULL byte; `x * 2`, `x + x`, `-x - x` over the widest
+  `decimal(38,0)` and `u * u` over the widest `uint64` (the inputs that reach
+  the 128-bit overflow flag); a foreign-key constant whose fold fails
+  (matching and non-matching WHERE) and a `NULL + 1` fold; the two-core
+  counter now asserts the cores overlapped (the first to finish found the
+  other had applied some); an autocommit failure in a later row undoes the
+  earlier rows, and a failure inside `BEGIN` poisons the transaction.
+- **Confirmed by reading and by a scratch probe**: the evaluator's arithmetic
+  and value forms, the evaluation point, no other reader of `Assignment::val`,
+  and BJ-R9 - BA-S14's in-engine re-run fires only when the trail has not
+  grown, and an UPDATE's `NoteOverwrite` grows it before any write, so
+  `SET v = v + 1` is never applied twice.
+
+**Filed, not fixed (outside the stage):** `docs/inflight/bugs/a-negative-foreign-key-value-skips-the-parent-check.md` - a
+negative integer in a foreign-key column skips the parent check on `INSERT`
+and `UPDATE`, an older quiet wrong answer that a folded constant now reaches.
+
+**Rejected:** returning `StatusOr<vector<CompiledAssignment>>` instead of the
+out-parameter and storing the foreign key on the entry (a larger signature
+change for the one nullptr caller, a unit test; the stage's refusals are not
+waiting on it); a `constexpr` table for `kTable` (the first call builds it
+once); BJ-S3's `d = 2 * 3` against `d = 2 + 3` (the product of integers is an
+integer, the sum of integer literals takes its context, by design).

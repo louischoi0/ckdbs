@@ -156,9 +156,12 @@ TEST_F(SetExprEvalTest, NullPropagatesAndIsCountedAsUpdated) {
 }
 
 TEST_F(SetExprEvalTest, ANullIntoANotNullColumnIsRefusedAtTheRow) {
-    const std::string out = Run("UPDATE t SET m = n + 1 WHERE id = 2");
+    const std::string sql = "UPDATE t SET m = n + 1 WHERE id = 2";
+    const std::string out = Run(sql);
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
     EXPECT_NE(out.find("'m'"), std::string::npos) << out;
+    EXPECT_NE(out.find("(byte " + std::to_string(sql.find("n + 1")) + ")"), std::string::npos)
+        << "the refusal names the expression, not byte 0: " << out;
     EXPECT_EQ(At("m", 2), "4");
     // The same expression over the row whose n is not NULL is fine.
     Exec("UPDATE t SET m = n + 1 WHERE id = 1");
@@ -214,6 +217,19 @@ TEST_F(SetExprEvalTest, TextConcatenatesAndALongValueSpills) {
         << "s is NOT NULL, so a NULL result is refused at the row";
 }
 
+TEST_F(SetExprEvalTest, AnInt128OverflowIsRefusedNotWrapped) {
+    // The widest decimal and the widest uint64, doubled and squared: results
+    // past what 128 bits hold, which a wrap could land back in range.
+    Exec("CREATE TABLE big (id int64, x decimal(38,0), u uint64)");
+    Exec("INSERT INTO big VALUES (1, '99999999999999999999999999999999999999', 18446744073709551615)");
+    for (const char* set : {"x = x * 2", "x = x + x", "x = -x - x", "u = u * u"}) {
+        const std::string out = Run(std::string("UPDATE big SET ") + set + " WHERE id = 1");
+        EXPECT_NE(out.find("is outside"), std::string::npos) << set << ": " << out;
+    }
+    EXPECT_EQ(Run("SELECT x FROM big WHERE id = 1"), "x\\n99999999999999999999999999999999999999");
+    EXPECT_EQ(Run("SELECT u FROM big WHERE id = 1"), "u\\n18446744073709551615");
+}
+
 TEST_F(SetExprEvalTest, ARowThatDoesNotMatchIsNeverEvaluated) {
     // The expression would divide by zero for every row; no row qualifies.
     EXPECT_EQ(Run("UPDATE t SET i64 = i64 / 0 WHERE id = 99").substr(0, 9), "UPDATED 0");
@@ -266,6 +282,21 @@ TEST_F(SetExprForeignKeyTest, AConstantExpressionIsFoldedAndCheckedAgainstItsVal
     // pointed at an absent parent, and an UPDATE matching nothing is still
     // `UPDATED 0` for a parent that does not exist.
     EXPECT_EQ(Run("UPDATE child SET pid = 20 + 30 WHERE id = 99").substr(0, 9), "UPDATED 0");
+}
+
+TEST_F(SetExprForeignKeyTest, AFoldThatFailsIsRaisedByTheRowAndNeverBySomeoneWhoMatchesNothing) {
+    const std::string matching = Run("UPDATE child SET pid = 1 / 0 WHERE id = 1");
+    EXPECT_NE(matching.find("division by zero"), std::string::npos) << matching;
+    EXPECT_NE(matching.find("row id 1"), std::string::npos) << matching;
+    EXPECT_EQ(Run("UPDATE child SET pid = 1 / 0 WHERE id = 99").substr(0, 9), "UPDATED 0");
+    EXPECT_EQ(Run("SELECT pid FROM child WHERE id = 1"), "pid\\n1");
+}
+
+TEST_F(SetExprForeignKeyTest, ANullFoldPassesTheCheckLikeABareNull) {
+    Exec("CREATE TABLE child2 (id int64, pid int64 NULL REFERENCES parent)");
+    Exec("INSERT INTO child2 VALUES (1, 1)");
+    EXPECT_EQ(Run("UPDATE child2 SET pid = NULL + 1 WHERE id = 1").substr(0, 9), "UPDATED 1");
+    EXPECT_EQ(Run("SELECT pid FROM child2 WHERE id = 1"), "pid\\nNULL");
 }
 
 TEST_F(SetExprForeignKeyTest, AnExpressionOverAnotherColumnIsFineWhereNoForeignKeyIsSet) {
