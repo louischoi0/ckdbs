@@ -295,6 +295,10 @@ private:
     // Set while a SELECT that is a value inside another statement is parsed:
     // a `;` is that statement's end, not a way to end the subquery early.
     bool inside_value_subquery_ = false;
+    // A literal a SET value began with, already read, for the levels above the
+    // primary to carry on from (`ParseSetValue`): when an operator follows it,
+    // the expression chain is entered with the literal as its first primary.
+    std::shared_ptr<const Expr> pending_primary_;
 
 };
 

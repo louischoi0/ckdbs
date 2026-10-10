@@ -331,6 +331,33 @@ TEST(SetExpressionParseTest, ANestedSimpleCaseIsBoundedBySizeNotOnlyHeight) {
     EXPECT_NE(big.status().message().find("nodes"), std::string::npos) << big.status().message();
 }
 
+TEST(SetExpressionParseTest, AValueThatStartsWithALiteralContinuesAsAnExpression) {
+    // The literal is read ahead of the expression chain (BJ's close: the
+    // literal path was 1.6 us slower for building a tree it threw away). What
+    // follows it must still be an operator of the chain, at the right level.
+    EXPECT_EQ(Render(*SetOf("5 + a * 2").value().expr), "(5 + (a * 2))");
+    EXPECT_EQ(Render(*SetOf("'x' || a || 'y'").value().expr), "(('x' || a) || 'y')");
+    EXPECT_EQ(Render(*SetOf("-5 + a").value().expr), "(-5 + a)");
+    EXPECT_EQ(Render(*SetOf("2 * 3 - 1").value().expr), "((2 * 3) - 1)");
+    EXPECT_EQ(SetOf("1 = a AND b").value().expr->op, ExprOp::kAnd);
+    EXPECT_EQ(SetOf("NULL IS NULL").value().expr->op, ExprOp::kIsNull);
+    EXPECT_EQ(SetOf("5::int64 + 1").value().expr->op, ExprOp::kAdd);
+    EXPECT_EQ(SetOf("1.5 * a").value().expr->op, ExprOp::kMul);
+    // A lone literal is still a bare value, and ends at every terminator.
+    EXPECT_EQ(SetOf("7").value().expr, nullptr);
+    auto row = Parse("UPDATE t SET (a, b) = (1, 2) WHERE id = 3");
+    ASSERT_TRUE(row.ok()) << row.status().message();
+    EXPECT_EQ(std::get<UpdateStmt>(row.value()).assignments[1].val.int_val, 2);
+    EXPECT_TRUE(Parse("UPDATE t SET a = 1;").ok());
+    EXPECT_TRUE(Parse("UPDATE t SET a = 1, b = 2").ok());
+    // What cannot follow a literal is refused as before, by its own code.
+    auto negated = SetOf("1 NOT IN (1)");
+    ASSERT_FALSE(negated.ok());
+    EXPECT_EQ(negated.status().code(), StatusCode::kNotImplemented);
+    EXPECT_FALSE(SetOf("1 2").ok());
+    EXPECT_FALSE(SetOf("5 +").ok());
+}
+
 TEST(SetExpressionParseTest, AScalarSubqueryKeepsItsTextAndItsStatement) {
     const std::string sql = "UPDATE t SET a = 1 + (SELECT SUM(x) FROM u WHERE y > 2) * 3";
     auto parsed = Parse(sql);

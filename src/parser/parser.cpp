@@ -463,6 +463,34 @@ std::shared_ptr<const Expr> MagnitudeOf(const Token& tok) {
 }  // namespace
 
 Status Parser::ParseSetValue(Assignment& a) {
+    // **A bare literal is nearly every SET value**, and it should not pay for the
+    // expression grammar: eleven nested levels and a heap node to read one
+    // token and throw the node away (BJ's close measured the literal path
+    // 1.6 µs slower). The literal is read here, and if nothing continues it
+    // that is the answer; if an operator does, it is handed to the chain as its
+    // first primary.
+    switch (lexer_.Peek().type) {
+        case TokenType::kIntLit:
+        case TokenType::kNumLit:
+        case TokenType::kStrLit:
+        case TokenType::kNullLit:
+        case TokenType::kParam:
+        case TokenType::kNamedParam: {
+            const bool bare_numeric = lexer_.Peek().type == TokenType::kNumLit;
+            auto literal = ParseValue();
+            if (!literal.ok()) return literal.status();
+            const Token& next = lexer_.Peek();
+            if (next.type == TokenType::kComma || next.type == TokenType::kEof ||
+                next.type == TokenType::kSemicolon || next.type == TokenType::kRParen ||
+                (next.type == TokenType::kIdent && IEquals(next.text, "WHERE"))) {
+                a.val = std::move(literal.value());
+                return Status::OK();
+            }
+            pending_primary_ = MakeLiteral(std::move(literal.value()), bare_numeric);
+            break;
+        }
+        default: break;
+    }
     auto expr = ParseExprOr();
     if (!expr.ok()) return expr.status();
 
@@ -508,7 +536,9 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprAnd() {
 
 StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprNot() {
     const Token& t = lexer_.Peek();
-    if (t.type != TokenType::kKeyword || t.kw != Keyword::kNot) return ParseExprIs();
+    if (pending_primary_ != nullptr || t.type != TokenType::kKeyword || t.kw != Keyword::kNot) {
+        return ParseExprIs();
+    }
     if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(t.byte_offset);
     const Token op = lexer_.Next();
     StatusOr<std::shared_ptr<const Expr>> operand = Status::OK();
@@ -654,7 +684,9 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprMultiplicative(
 
 StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprUnary() {
     const Token& t = lexer_.Peek();
-    if (t.type != TokenType::kPlus && t.type != TokenType::kMinus) return ParseExprPostfix();
+    if (pending_primary_ != nullptr || (t.type != TokenType::kPlus && t.type != TokenType::kMinus)) {
+        return ParseExprPostfix();
+    }
 
     if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(t.byte_offset);
     const Token op = lexer_.Next();
@@ -867,6 +899,11 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprCase(const Token& kw) {
 }
 
 StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
+    if (pending_primary_ != nullptr) {
+        std::shared_ptr<const Expr> literal = std::move(pending_primary_);
+        pending_primary_ = nullptr;
+        return literal;
+    }
     const Token tok = lexer_.Peek();
     switch (tok.type) {
         case TokenType::kIntLit:

@@ -7999,15 +7999,21 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // BJ-S4: the typed expressions come back with it, and a column-reading
     // expression into a foreign-key column is refused here (BJ-Q10).
     std::vector<exec::CompiledAssignment> compiled;
+    // Built only for a statement with an expression in it: a capture this wide
+    // is a heap allocation, and most UPDATEs are literals.
     std::size_t subqueries_asked = 0;
-    const exec::SubqueryResolver resolve_subquery =
-        [&](const parser::Expr& node) -> StatusOr<exec::SubqueryResult> {
-        const std::size_t index = subqueries_asked++;
-        if (index < subqueries.size()) return subqueries[index];  // a resume: the first run's
-        auto answer = RunScalarSubquery(node, stmt, scope, snapshot);
-        if (answer.ok()) subqueries.push_back(answer.value());
-        return answer;
-    };
+    exec::SubqueryResolver resolve_subquery;
+    for (const parser::Assignment& a : stmt.assignments) {
+        if (a.expr == nullptr) continue;
+        resolve_subquery = [&](const parser::Expr& node) -> StatusOr<exec::SubqueryResult> {
+            const std::size_t index = subqueries_asked++;
+            if (index < subqueries.size()) return subqueries[index];  // a resume: the first run's
+            auto answer = RunScalarSubquery(node, stmt, scope, snapshot);
+            if (answer.ok()) subqueries.push_back(answer.value());
+            return answer;
+        };
+        break;
+    }
     if (Status s = exec::CompileAssignments(ta, stmt.assignments, &compiled, &resolve_subquery);
         !s.ok()) {
         return {ErrorReply(s), false, 0, s};
