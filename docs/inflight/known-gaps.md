@@ -907,6 +907,43 @@ pages and the cases it does not reach.
   leaf chain reaches every leaf, and the new root and its right half's
   internal nodes leak.
 
+## Statement scheduling
+
+Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
+`docs/spec/protocol.md` §10.
+
+- **Only a `SELECT`'s outermost walk yields.** It yields every
+  `exec::SlicePolicy::pages_per_slice` (64) pages. Nothing else running
+  gives its core back:
+  - a write;
+  - a pk descent, run inline by design;
+  - an index walk (`RunIndexStep`);
+  - a join's inner walk under one outer page;
+  - a heap relation's lookup that falls back to a chain walk.
+
+  Each holds its core until it ends or `exec::Budget` stops it. 64 is
+  BA-Q11's value, not re-measured in BA-S15.
+- **A cancel is observed only where a walk yields, or at the next
+  frame.** A write that `C_CANCEL` or a closing connection asks to stop
+  runs to its end, and the cancel then refuses the session's next frame.
+  So a dropped connection can still find its write applied.
+- **A core holds at most 256 suspended walks.** Each holds one of its
+  manager's `txn::kMaxRegisteredReaders` reader-lease slots across its
+  suspensions. The 257th walk suspended at once on one core is refused
+  `OutOfSpace` at its head.
+- **What the suite does not cover:**
+  - **A `strict` commit beside a suspended walk.** A deferred commit now
+    names its `DispatchAsync` call, and that fix is covered by reading
+    only.
+  - **`C_CANCEL` end to end through `TcpServer`.** Registration,
+    unregistration at close and at `Detach`, and capability negotiation
+    are covered by reading only. The cells drive `KwpSession` and the
+    registry directly.
+  - **The teardown cell kills its mutant only under AddressSanitizer.**
+    `WalkSliceRigTest.ACoreTornDownWithAWalkBetweenSlicesReleasesItFirst`
+    passes in Debug with `Scheduler::DiscardTasks` removed. The tree has
+    no sanitizer build.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1–D16: four are taken, one of them against AR0's own
