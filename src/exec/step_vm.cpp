@@ -347,6 +347,23 @@ private:
     }
 
 public:
+    // Runs a chain's hoisted sub-chains once each, in order, and says whether
+    // every one was true; the first that is not stops the rest. They run
+    // against an empty frame with no parent: a hoisted chain refers to
+    // nothing outside itself, which is what "uncorrelated" means. The
+    // top-level chain's and a sub-chain's are run by this one definition.
+    StatusOr<bool> HoistedAllTrue(const std::vector<SubChain>& hoisted) {
+        if (hoisted.empty()) return true;
+        ChainFrame empty;
+        empty.Open({}, /*parent=*/nullptr);
+        for (const SubChain& sub : hoisted) {
+            auto value = EvaluateSubChain(sub, empty);
+            if (!value.ok()) return value.status();
+            if (!Collapse(value.value())) return false;
+        }
+        return true;
+    }
+
     // Evaluates one sub-chain against the *current* frame, which becomes
     // the parent of the nested one. Correlation values are read through
     // that link and **never written into the AST** - the AST is shared
@@ -462,25 +479,12 @@ public:
         // once per outer row - which is the whole cost the map exists to
         // remove (JB6).
         //
-        // **What this sub-chain hoisted runs first, once**, exactly as
-        // `ExecuteChain` runs the top-level chain's: against an empty frame
-        // with no parent, since a hoisted chain refers to nothing outside
-        // itself. One that is not true leaves this sub-chain with no rows,
-        // so its steps never open and the accumulators below stay at zero.
-        bool opens = true;
-        if (!sub.hoisted.empty()) {
-            ChainFrame empty;
-            empty.Open({}, /*parent=*/nullptr);
-            for (const SubChain& hoisted : sub.hoisted) {
-                auto value = EvaluateSubChain(hoisted, empty);
-                if (!value.ok()) return value.status();
-                if (!Collapse(value.value())) {
-                    opens = false;
-                    break;
-                }
-            }
-        }
-        if (opens) {
+        // **What this sub-chain hoisted runs first, once.** One that is not
+        // true leaves this sub-chain with no rows, so its steps never open
+        // and the accumulators below stay at zero.
+        auto opens = HoistedAllTrue(sub.hoisted);
+        if (!opens.ok()) return opens.status();
+        if (opens.value()) {
             ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
                               trail_, replay_, cabins_, &snapshot_, indexes_, builds_);
             // Sub-chain mode - `record_through_stops_`'s comment carries the
@@ -2926,17 +2930,9 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
     // available because hoisting is decided structurally at compile.
     //
     // They run on the gated driver, as a nested step does.
-    if (!chain.hoisted.empty()) {
-        // An empty frame with no parent: a hoisted sub-chain refers to
-        // nothing outside itself, which is what "uncorrelated" means.
-        ChainFrame empty;
-        empty.Open({}, /*parent=*/nullptr);
-        for (const SubChain& sub : chain.hoisted) {
-            auto value = runner.EvaluateSubChain(sub, empty);
-            if (!value.ok()) co_return value.status();
-            if (!Collapse(value.value())) co_return Status::OK();  // no rows, nothing opened
-        }
-    }
+    auto opens = runner.HoistedAllTrue(chain.hoisted);
+    if (!opens.ok()) co_return opens.status();
+    if (!opens.value()) co_return Status::OK();  // no rows, nothing opened
 
     co_return co_await runner.Run(chain.steps);
 }

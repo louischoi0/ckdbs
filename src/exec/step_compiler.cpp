@@ -1209,6 +1209,11 @@ bool ReferencesAnOuterChain(const std::vector<Step>& steps) {
             // A grandchild's reference to *this* level shows up as up==1
             // inside it; anything deeper escapes past us too.
             if (SubChainEscapes(sub)) return true;
+            // Its tested column is written in this block's scope, so an
+            // `up` above 0 is a reference past this block. `SubChainEscapes`
+            // leaves it out for the sub-chain's *own* parent, which is the
+            // wrong scope for this question.
+            if (sub.has_value && sub.lhs.up > 0) return true;
         }
     }
     return false;

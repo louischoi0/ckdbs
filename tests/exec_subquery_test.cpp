@@ -430,6 +430,39 @@ TEST_F(ExecSubqueryTest, ANestedHoistedChainRunsOncePerRunOfItsEnclosingSubChain
     EXPECT_EQ(stats.Total().sub_chain_runs, 6u);
 }
 
+TEST_F(ExecSubqueryTest, ANestedChainWhoseValueColumnIsTheOutermostRowIsNotHoisted) {
+    // The grandchild's tested column (`acct.id`) is written inside the middle
+    // block but belongs to the outermost row, so the middle block depends on
+    // that row and must run per row. Classified as uncorrelated it was
+    // hoisted and run against an empty frame, where `acct.id` cannot resolve.
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                  "  SELECT trade.id FROM trade WHERE acct.id IN "
+                  "    (SELECT t2.acct_id FROM trade AS t2))"),
+              (std::vector<std::string>{"alice", "carol"}));
+}
+
+TEST_F(ExecSubqueryTest, AHoistedExistsInsideANotInOrScalarSubqueryIsEvaluated) {
+    // The enclosing sub-chain is a value-bearing kind: a false hoisted
+    // EXISTS must leave it with no rows, which is NOT IN's "matched nothing"
+    // (true for every row) and a scalar's NULL (never true).
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE id NOT IN ("
+                  "  SELECT trade.acct_id FROM trade WHERE EXISTS "
+                  "    (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))"),
+              (std::vector<std::string>{"alice", "bob", "carol"}));
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE id IN ("
+                  "  SELECT trade.acct_id FROM trade WHERE EXISTS "
+                  "    (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))"),
+              (std::vector<std::string>{}));
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE id = ("
+                  "  SELECT trade.acct_id FROM trade WHERE trade.sym = 'AAPL' AND EXISTS "
+                  "    (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))"),
+              (std::vector<std::string>{}));
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE id = ("
+                  "  SELECT trade.acct_id FROM trade WHERE trade.sym = 'AAPL' AND EXISTS "
+                  "    (SELECT trade.id FROM trade WHERE trade.sym = 'MSFT'))"),
+              (std::vector<std::string>{"alice"}));
+}
+
 TEST_F(ExecSubqueryTest, TheR1GuardStaysUntrippedWithSubChainsInPlay) {
     // The nested case is the one R1 exists for: a sub-chain fetches pages
     // while the outer walk is mid-flight. The outer step must have

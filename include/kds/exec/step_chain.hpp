@@ -442,8 +442,7 @@ struct SubChain {
     // its own row loop, which the top-level `StepChain::hoisted` is for the
     // outermost block. Each runs once per evaluation of this sub-chain,
     // before `steps` opens, and one that is not true leaves this sub-chain
-    // with no rows. Dropping them answered the statement as if the nested
-    // predicate were absent.
+    // with no rows.
     std::vector<SubChain> hoisted;
 
     // False when every reference inside resolves within the sub-chain.

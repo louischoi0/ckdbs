@@ -902,11 +902,12 @@ TEST_F(CommandDispatcherTest, ANestedUncorrelatedExistsFiltersAWriteToo) {
     EXPECT_EQ(d.Dispatch("DELETE FROM acct WHERE " + none).response, "DELETED 0");
     EXPECT_NE(d.Dispatch("SELECT * FROM acct").response.find("alice"), std::string::npos);
 
+    // Only alice has a trade, so only she is renamed - and only she is deleted.
     EXPECT_EQ(d.Dispatch("UPDATE acct SET name = 'x' WHERE " + aapl).response, "UPDATED 1");
+    EXPECT_EQ(d.Dispatch("SELECT * FROM acct").response.find("alice"), std::string::npos);
     EXPECT_EQ(d.Dispatch("DELETE FROM acct WHERE " + aapl).response, "DELETED 1");
     const std::string left = d.Dispatch("SELECT * FROM acct").response;
     EXPECT_NE(left.find("bob"), std::string::npos) << left;
-    EXPECT_EQ(left.find("alice"), std::string::npos) << left;
 }
 
 TEST_F(CommandDispatcherTest, WithIsDeclinedByNameRatherThanAsAnUnknownCommand) {
