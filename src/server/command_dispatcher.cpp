@@ -3094,12 +3094,12 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // another writer both holding the relation, the table may name the
     // other, and waiting for it would end in the same refusal. Resolved
     // under the session's view, as `HandleIndex` resolves, **and a name the
-    // view does not resolve is refused here**: it used to take no borrow and
-    // fall to a build that resolved the name unfiltered, so a relation
-    // another session's open transaction had created was built over with
-    // none of its writers fenced, and a row it wrote after the scan passed
-    // was in no check.
-    const std::optional<txn::ReadView> view = ViewFor(session);
+    // view does not resolve is refused here**, once: the oid it names is the
+    // one locked and the one built. `ViewFor` is empty when this core has no
+    // open DDL of its own, which would resolve a relation another core's open
+    // `CREATE TABLE` made, so a settled view stands in for it.
+    std::optional<txn::ReadView> view = ViewFor(session);
+    if (!view.has_value() && txn_ != nullptr) view = txn_->MintCheckView(txn::kNoTrxId);
     auto target = exec::AssertionTargetOid(catalog_, stmt, view.has_value() ? &*view : nullptr);
     if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
 
@@ -3139,12 +3139,26 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     txn::ReadView check_view = txn::ReadView::Everything();
     if (txn_ != nullptr) check_view = txn_->MintCheckView(txn::kNoTrxId);
 
+    // **The lock was waited for under the view the name resolved by**, and a
+    // drop-and-recreate that committed meanwhile leaves that name on another
+    // relation. The grant is on the old one, so what is built must be too, or
+    // nothing: the settled name is read again and must still be the locked oid.
+    if (build_lock.txn != nullptr) {
+        auto settled = exec::AssertionTargetOid(catalog_, stmt, &check_view);
+        if (!settled.ok() || settled.value() != target.value()) {
+            const Status moved = Status::TxnConflict(
+                "relation '" + stmt.table_name +
+                "' changed while CREATE ASSERTION waited for it - retry");
+            return {ErrorReply(moved), false, 0, moved};
+        }
+    }
+
     // Through ErrorReply, not a bare "ERR ": the build can refuse with the
     // two coded spellings - ASSERTION_VIOLATION for data already past the
     // bound, TXN_CONFLICT for an unsettled relation - and both are
     // compatibility surfaces a client switches on.
-    auto created = exec::CreateAssertion(catalog_, page_store_, stmt, check_view, wal_,
-                                         *enforcer_, after_assertion_publish_run_for_test_);
+    auto created = exec::CreateAssertion(catalog_, page_store_, stmt, target.value(), check_view,
+                                         wal_, *enforcer_, after_assertion_publish_run_for_test_);
     if (!created.ok()) {
         return {ErrorReply(created.status()), false, 0, created.status()};
     }
