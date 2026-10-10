@@ -7,6 +7,15 @@ registration and cross-instance coordination are **out of this note**
 (§6); so is the concurrent-hold ledger (escrow), which §6 places under a
 later note of the physical optimizer's.
 Author: CLA, 2026-09-26, against `2b41d31`
+**Revised 2026-10-10 on `worktree-bj-expression-update` at `080cd55`**, on
+the operator's word *"Write CN-7 to match the changed spec (not deleted,
+not closed)"* (`instructions/v3.0.0/raft-marks-2026-10-10.md` §1, BJ-R8).
+`instructions/v3.0.0/workorder-bj-expression-update.md` (BJ, written, not
+opened) gives `SET` a value expression, so §1's premise that a delta cannot
+be written in one statement no longer holds once BJ is built, and §6's
+exclusion of expressions is lifted by that order, not by this note. The
+note stays a concept note: its status, R1-R3 and O1-O9 stand, and the
+revisions below are marked **(BJ)**.
 Origin: the operator's proposal of 2026-09-26, in conversation, of a
 commutative SQL surface — `INC`/`DEC` supported at the SQL level — and
 three rulings on it the same day (§0). The rest is CLA's elaboration and
@@ -47,21 +56,38 @@ does not.
 
 ## 1. Why a delta verb, when `SET` exists
 
-`[source-read]` **Today a delta cannot be written in one statement.**
-`UPDATE`'s grammar is `SET <col> = <val>` (`manual/sql/sql.md:536`) and
-an `Assignment` carries an `AstValue` — a literal or a parameter, not an
+`[source-read]` **At `2b41d31`, a delta could not be written in one
+statement; BJ (written, not opened) is the order that makes it writable.**
+`UPDATE`'s grammar was `SET <col> = <val>` (`manual/sql/sql.md:536`) and
+an `Assignment` carried an `AstValue` — a literal or a parameter, not an
 expression (`include/kds/parser/ast.hpp:694-696`). `SET balance =
-balance - 100` does not parse. The only way to apply a delta is the
-client's: `SELECT`, compute, `UPDATE SET` the value. Under the default
-READ COMMITTED that pair is the lost-update pattern — the second client
-computes from a value the first has already changed — and the engine's
-only defence is the write conflict it refuses retryably when the row's
-header names a writer the snapshot cannot see (`sql.md:982`;
-`docs/spec/txn.md:586-592`). The client then retries the whole pair.
+balance - 100` did not parse, and at `080cd55` it still does not. The only
+way to apply a delta is the client's: `SELECT`, compute, `UPDATE SET` the
+value. Under the default READ COMMITTED that pair is the lost-update
+pattern — the second client computes from a value the first has already
+changed, and the `UPDATE`'s fresh snapshot sees that commit and overwrites
+it — and the engine's only defence is the write conflict, which fires only
+inside one statement's window between its snapshot and its write
+(`docs/spec/txn.md:677-691`). The client's retry cannot be triggered by a
+conflict the engine never raises.
+
+**(BJ)** `[design]` Once BJ is built, `SET balance = balance - 100` is one
+statement that reads the row under the borrow and writes it, so the
+round-trip and the lost update go with it, by BJ-R2's before-image rule
+and without any verb. **What this note's case rests on after BJ** is
+therefore not the one-statement read-modify-write, which `SET` then has
+too, but the four rows below that an overwrite cannot give: the log
+carrying a delta (§4), the inverse being defined, the commutative intent
+being in the statement, and a future ledger tier (§6). The first row
+(*one round trip*) and the second (*the conflict becomes a wait*) are
+shared with BJ's `SET` and no longer distinguish `INC`. R1 binds BJ as it
+binds this note: an expression `SET` is an ordinary overwrite and is never
+converted to `INC`, so the two spellings stay two statements with two log
+records (§7, last row).
 
 `[design]` So `INC` is not sugar over an existing expression. It is the
-engine's **first server-side read-modify-write**, and what it buys
-follows from that:
+engine's **first server-side read-modify-write** *(before BJ)*, and what
+it buys follows from that:
 
 | gain | why |
 |---|---|
@@ -88,11 +114,12 @@ The hot-row shape AT-S13 measured is unchanged by this note (§7).
 - **No `RETURNING` exists**; the write reply is `UPDATED <n>`
   (`sql.md:548`). A write that returns rows needs the row-description and
   row-batch frames a `SELECT` sends, on a write's reply (O6).
-- **The write conflict and the wait.** The row-level wait's predicate is
-  the core's in-flight set, so a holder on another core reads as settled
-  and the writer is refused retryable (`txn.md:589-592`;
-  `docs/inflight/known-gaps.md`, Locks). AX (instance in-flight
-  publication) is the order that makes the wait instance-wide.
+- **The write conflict and the wait.** The row-level wait's predicate was
+  the core's in-flight set, so a holder on another core read as settled
+  and the writer was refused retryable (`txn.md:589-592`;
+  `docs/inflight/known-gaps.md`, Locks). **(BJ)** AX (instance in-flight
+  publication) made the wait instance-wide since AX-S1 (`CLAUDE.md`'s
+  Transactions & MVCC row); this bullet is the state at `2b41d31`.
 - **Arithmetic is checked.** `SUM` uses overflow-checked int64, int128
   for `DECIMAL128`, and an overflow is a statement error (AG3,
   `docs/spec/aggregate.md:19`). `INC`/`DEC` take the same rule and the
@@ -183,8 +210,9 @@ visible to no other view until commit, rolls back with its transaction
 by the undo chain, poisons the transaction on any of its own errors
 (overflow, refusal) like every write, and obeys the durability class the
 transaction chose. Its interaction with a concurrent writer is the
-ordinary one — wait on the same core, refusal across cores until AX —
-and this note changes neither.
+ordinary one — a wait on any core since AX-S1 (**BJ**: §5 and §2 said
+"refusal across cores until AX", which AX has since made false) — and this
+note changes neither.
 
 ## 6. What this note does not license
 
@@ -202,8 +230,11 @@ and this note changes neither.
   cross-instance step. The inverse is defined here; who calls it is not.
 - Any commutative operation other than addition: set insertion,
   max-merge, string append, and the rest of the CRDT catalogue.
-- `SET col = <expression>`. Expressions in `SET` are a parser question
-  this note does not open; R1 says they would not become `INC`.
+- `SET col = <expression>`. **(BJ)** Expressions in `SET` are not this
+  note's: `workorder-bj-expression-update.md` owns them, and this note
+  opens nothing there. R1 stands in both directions: an expression `SET`
+  is never turned into an `INC`, and an `INC` is never a `SET` in
+  disguise.
 - A performance claim. The lock path is the `UPDATE` path; nothing is
   faster and nothing is measured (§8, O7).
 
@@ -224,6 +255,12 @@ and this note changes neither.
 - **`NULL` arithmetic has to be decided** (O4). SQL's `NULL + 100` is
   `NULL`, which makes an `INC` on a `NULL` counter a silent no-op —
   correct by the standard and surprising to a counter's author.
+  **(BJ)** The two statements differ on the count and agree on the value:
+  BJ-R4 makes `SET counter = counter + 1` on a `NULL` counter leave it
+  `NULL` **and count the row as updated**, because a `SET` writes the
+  row's new version whatever it computes; O4 proposes that `INC` leave it
+  `NULL` and **not** count it. Whether the two should agree on the count is
+  open under O4.
 - **Two log spellings of one write.** If O5 takes the delta record, an
   `INC` and a `SET` to the same value leave different records and the
   same page. Tooling that reads the log sees the difference; nothing
@@ -244,4 +281,4 @@ are not repeated here.
 | O6 | `RETURNING` on a write's reply | **Row description + row batches + `UPDATED <n>`**, the `SELECT` frames on a write, no new frame. `protocol.md` owns the sequence and says whether a client that did not ask for rows can receive them |
 | O7 | Measurement gate | **None before the stage.** The path is `UPDATE`'s with one addition. The stage's row states "not measured"; the first AS-E cell that includes it confirms `INC` ≈ `SET` and reports the `RETURNING` reply's cost |
 | O8 | Target rows | **Point and set alike**, as `UPDATE` is. Restricting to the pk point would be a limit the lock model does not require |
-| O9 | The ledger tier's home | **Out of CN-7** (§6): a physical-optimizer note, opened only after AX lands and AT-S13's C3 driver is re-run to price hot-row contention without the wait gap |
+| O9 | The ledger tier's home | **Out of CN-7** (§6): a physical-optimizer note, opened only after AX lands and AT-S13's C3 driver is re-run to price hot-row contention without the wait gap. **(BJ)** BJ's `SET v = v + 1` is a second shape for that driver to price: the same borrow and the same wait as `INC`, so the ledger's note prices both |
