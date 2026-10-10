@@ -38,4 +38,21 @@ struct CountAllocations {
     std::size_t count() const { return g_allocations; }
 };
 
+// Makes the Nth allocation made while it is alive throw `std::bad_alloc`, once
+// (N counted from construction, 1 is the next). For a test of what a
+// statement does when the allocator refuses - run it in a death test when the
+// engine is meant to stop, since the process is not left usable.
+extern std::size_t g_fail_after;
+extern std::size_t g_fail_seen;
+struct FailNthAllocation {
+    explicit FailNthAllocation(std::size_t n) {
+        g_fail_seen = 0;
+        g_fail_after = n;
+    }
+    ~FailNthAllocation() { g_fail_after = 0; }
+
+    FailNthAllocation(const FailNthAllocation&) = delete;
+    FailNthAllocation& operator=(const FailNthAllocation&) = delete;
+};
+
 }  // namespace kds::test_support

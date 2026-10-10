@@ -67,6 +67,11 @@
 
 namespace kds::sched {
 
+// What `Coro::promise_type::unhandled_exception` does: names the exception on
+// stderr and aborts the process. Called from inside the catch handler, which
+// is how it reaches the in-flight exception.
+[[noreturn]] void StopOnEscapedException() noexcept;
+
 // A coroutine that runs on a reactor and finishes with a Status.
 //
 // Lazily started: `initial_suspend` suspends, so calling a `Coro` function
@@ -123,12 +128,19 @@ public:
 
         void return_value(Status s) { result = std::move(s); }
 
-        // rules.md forbids exceptions in engine logic, so nothing should
-        // ever reach this. It cannot be omitted - the language requires the
-        // member - and it deliberately does nothing rather than calling
-        // std::terminate: a build that does enable exceptions should fail
-        // at the throw site, not here.
-        void unhandled_exception() {}
+        // rules.md forbids exceptions in engine logic, but the standard
+        // library throws `std::bad_alloc` from every container the engine
+        // grows and nothing catches it. **An exception that reaches here
+        // stops the process.** This used to do nothing, and a statement whose
+        // body threw then reached `final_suspend` as done with its result
+        // still `Status::OK()` and its outcome never assigned: it was
+        // reported to the client as a success - an aggregated `SELECT` with
+        // no rows, a `COMMIT` that never ran as one that had. Nothing here can
+        // say what the statement left behind (a page written and its record
+        // not yet appended, a hold released by unwinding mid-protocol), so the
+        // answer is the log's: stop, and let the mount restore it - as the
+        // engine's other fail-stops do (`std::abort` on a failed log write).
+        [[noreturn]] void unhandled_exception() noexcept { StopOnEscapedException(); }
     };
 
     Coro() noexcept = default;

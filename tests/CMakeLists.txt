@@ -162,6 +162,7 @@ add_executable(kds_tests
     kwp_load_server_test.cpp
     aggregate_contract_test.cpp
     aggregate_test.cpp
+    bad_alloc_death_test.cpp
     type_literals_test.cpp
     parser_subquery_test.cpp
     parser_fuzz_test.cpp

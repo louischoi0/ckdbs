@@ -7,11 +7,18 @@ namespace kds::test_support {
 
 std::size_t g_allocations = 0;
 bool g_counting = false;
+std::size_t g_fail_after = 0;
+std::size_t g_fail_seen = 0;
 
 }  // namespace kds::test_support
 
 void* operator new(std::size_t size) {
     if (kds::test_support::g_counting) ++kds::test_support::g_allocations;
+    if (kds::test_support::g_fail_after != 0 &&
+        ++kds::test_support::g_fail_seen == kds::test_support::g_fail_after) {
+        kds::test_support::g_fail_after = 0;  // once
+        throw std::bad_alloc();
+    }
     void* p = std::malloc(size == 0 ? 1 : size);
     if (p == nullptr) throw std::bad_alloc();
     return p;
