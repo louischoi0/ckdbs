@@ -280,6 +280,12 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
                 if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
                 days = parsed.value();
             } else if (val.type == parser::ValueType::kInt) {
+                // A literal past int64 wrapped in the lexer, so `int_val` is
+                // not its value: stored, it would be another day.
+                if (parser::IntLiteralWrapped(val)) {
+                    return Status::OutOfRange("column '" + NameOf() + "' integer literal " +
+                                              val.raw_int_text + " is outside int64");
+                }
                 if (val.int_val < kMinEpochDay || val.int_val > kMaxEpochDay) {
                     return Status::OutOfRange("column '" + NameOf() +
                                               "' date is outside the supported range");
@@ -300,6 +306,10 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
                 if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
                 micros = parsed.value();
             } else if (val.type == parser::ValueType::kInt) {
+                if (parser::IntLiteralWrapped(val)) {
+                    return Status::OutOfRange("column '" + NameOf() + "' integer literal " +
+                                              val.raw_int_text + " is outside int64");
+                }
                 if (val.int_val < kMinEpochMicros || val.int_val > kMaxEpochMicros) {
                     return Status::OutOfRange("column '" + NameOf() +
                                               "' timestamp is outside the supported range");

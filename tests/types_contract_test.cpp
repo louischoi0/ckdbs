@@ -448,5 +448,30 @@ TEST(TypesContract, Item8_TheTypesAreVisibleThroughTheCatalogViews) {
     EXPECT_NE(columns.find("decimal(9,3)"), std::string::npos) << columns;
 }
 
+// An integer literal past int64 wraps in the lexer (`18446744073709551617`
+// lexes as 1), and the date and timestamp columns accept an integer as the
+// epoch day / epoch microsecond they store. The wrap was stored as that
+// number - another date than the one written - with no error.
+TEST(TypesContract, AWrappedIntegerLiteralIsNotStoredAsADateOrATimestamp) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, d date, ts timestamp) BTREE").substr(0, 7),
+              "CREATED");
+    // 2^64 + 1 wraps to 1: epoch day 1, or one microsecond past the epoch.
+    for (const char* sql : {"INSERT INTO t VALUES (18446744073709551617, '2000-01-01 00:00:00')",
+                            "INSERT INTO t VALUES ('2000-01-01', 18446744073709551617)"}) {
+        const std::string out = db.Run(sql);
+        EXPECT_EQ(out.substr(0, 3), "ERR") << sql << " -> " << out;
+        EXPECT_NE(out.find("outside int64"), std::string::npos) << sql << " -> " << out;
+    }
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES ('2000-01-01', '2000-01-01 00:00:00')").substr(0, 8),
+              "INSERTED");
+    const std::string update1 = db.Run("UPDATE t SET d = 18446744073709551617 WHERE d = '2000-01-01'");
+    EXPECT_EQ(update1.substr(0, 3), "ERR") << update1;
+    const std::string update2 = db.Run("UPDATE t SET ts = 18446744073709551617 WHERE d = '2000-01-01'");
+    EXPECT_EQ(update2.substr(0, 3), "ERR") << update2;
+    // Only the one good row exists, as written.
+    EXPECT_EQ(db.Run("SELECT d, ts FROM t"), "d,ts\\n2000-01-01,2000-01-01 00:00:00");
+}
+
 }  // namespace
 }  // namespace kds::server
