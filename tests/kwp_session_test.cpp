@@ -517,6 +517,39 @@ TEST_F(KwpSessionTest, AParameterIsBoundAndTheStatementRunsWithIt) {
     EXPECT_EQ(rows.value().size(), 1u) << "one row has v = 20";
 }
 
+TEST_F(KwpSessionTest, ANegativeValueBoundAfterAMinusIsNotAComment) {
+    // `x -?` bound with -5 used to paste as `x --5`, a line comment that ate
+    // the rest of the statement - here the WHERE, so a statement meant for one
+    // row was a statement for all of them (BJ-S2's review). It is a minus
+    // and a negative literal now: an expression, which BJ-S3 types and
+    // BJ-S4 has not yet built, so nothing is written either way.
+    Handshake();
+    auto Int32 = [](std::int32_t v) {
+        std::vector<std::byte> bytes(4);
+        for (int i = 0; i < 4; ++i) {
+            bytes[i] = static_cast<std::byte>((static_cast<std::uint32_t>(v) >> (8 * i)) & 0xFF);
+        }
+        return bytes;
+    };
+    const std::vector<std::byte> minus5 = Int32(-5);
+    const std::vector<std::byte> ten = Int32(10);
+    wire::BoundParam a;
+    a.type_oid = catalog::kTypeValInt32;
+    a.bytes = std::span<const std::byte>(minus5);
+    wire::BoundParam b;
+    b.type_oid = catalog::kTypeValInt32;
+    b.bytes = std::span<const std::byte>(ten);
+
+    const std::string before = Run("SELECT id, v FROM t");
+    Feed(ClientFrameType::kParse, Parse("s", "UPDATE t SET v = 100 -? WHERE id = ?"));
+    Feed(ClientFrameType::kBind, Bind("p", "s", {a, b}));
+    auto frames = Feed(ClientFrameType::kExecute, Execute("p", 0));
+    ASSERT_EQ(frames.size(), 1u);
+    EXPECT_EQ(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError))
+        << "the statement kept its WHERE and its expression; nothing ran";
+    EXPECT_EQ(Run("SELECT id, v FROM t"), before);
+}
+
 TEST_F(KwpSessionTest, ANullParameterBindsAsNull) {
     Handshake();
     Feed(ClientFrameType::kParse, Parse("s", "SELECT id FROM t WHERE v = ?"));

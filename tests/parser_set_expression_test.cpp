@@ -212,6 +212,11 @@ TEST(SetExpressionParseTest, AFormALaterStageBuildsIsRefusedByNameAtItsByte) {
         {"NOT a", "BJ-S5", 0},           {"CASE WHEN a THEN 1 END", "BJ-S5", 0},
         {"(SELECT 1)", "BJ-S7", 0},      {"1 + (SELECT 1)", "BJ-S7", 4},
         {"t.b", "qualified", 0},
+        {"CAST(a AS int)", "BJ-S5", 0},  {"COALESCE(a, 1)", "BJ-S5", 0},
+        {"a + GREATEST(a, 1)", "BJ-S5", 4},
+        {"a IN (1)", "BJ-S5", 2},        {"a BETWEEN 1 AND 2", "BJ-S5", 2},
+        {"a::int", "BJ-S5", 1},          {"CASE 1 WHEN 1 THEN 2 END", "BJ-S5", 0},
+        {"CASE -1 WHEN 1 THEN 2 END", "BJ-S5", 0},
     };
     for (const Case& c : cases) {
         auto parsed = Parse(head + c.value);
@@ -256,6 +261,25 @@ TEST(SetExpressionParseTest, NestingIsBounded) {
     auto chain = Parse("UPDATE t SET a = " + spaced + "a");
     ASSERT_FALSE(chain.ok());
     EXPECT_EQ(chain.status().code(), StatusCode::kUnsupported) << chain.status().message();
+}
+
+TEST(SetExpressionParseTest, ALongChainIsBoundedByItsHeightNotOnlyItsNesting) {
+    // `1+1+1+...` leans entirely left, so no parenthesis or sign ever counts
+    // it, and a tree a million levels tall crashed the process in its
+    // destructor (BJ-S2's review). 200 terms is fine; 10,000 is refused.
+    const auto Chain = [](int terms, std::string_view op) {
+        std::string sql = "UPDATE t SET a = a";
+        for (int i = 0; i < terms; ++i) sql += std::string(" ") + std::string(op) + " 1";
+        return sql;
+    };
+    EXPECT_TRUE(Parse(Chain(200, "+")).ok());
+    for (std::string_view op : {"+", "*", "||"}) {
+        auto parsed = Parse(Chain(10000, op));
+        ASSERT_FALSE(parsed.ok()) << op;
+        EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported) << op;
+    }
+    EXPECT_EQ(Parse(Chain(1000000, "+")).status().code(), StatusCode::kUnsupported)
+        << "a megabyte of operators must be refused, not walked";
 }
 
 TEST(SetExpressionShapeTest, ALiteralIsAValueButAnOperatorIsShape) {

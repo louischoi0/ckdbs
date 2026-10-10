@@ -3,6 +3,7 @@
 #include "kds/exec/type_literals.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <charconv>
 #include <cstring>
@@ -812,6 +813,22 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
         default:
             // Every other type keeps the behaviour it had before this task.
             return Status::OK();
+    }
+}
+
+Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::AstValue& value) {
+    switch (col.type_val) {
+        case kTypeValInt8:
+        case kTypeValInt16:
+        case kTypeValInt32:
+        case kTypeValInt64:
+        case kTypeValUint64: {
+            std::array<std::byte, 8> cell{};
+            return EncodeOneValue(col, value, cell, VarHeapSink{});
+        }
+        default:
+            return Status::InvalidArgument("column type " + std::to_string(col.type_val) +
+                                           " is not an integer type");
     }
 }
 

@@ -109,6 +109,7 @@ add_library(kds
     src/exec/plan_printer.cpp
     src/exec/functions.cpp
     src/exec/step_compiler.cpp
+    src/exec/set_expr.cpp
     src/exec/aggregate.cpp
     src/exec/sort.cpp
     src/exec/type_literals.cpp

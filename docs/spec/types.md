@@ -192,6 +192,44 @@ Two scalar functions, in a WHERE comparison only (`parser-v2.md` I10;
 Both sides of a comparison must be of one type: `v = NOW()` over an
 `int64` column is refused `InvalidArgument` at the call's byte.
 
+### 3.2b A SET value is typed at compile (BJ-S3)
+
+**Built: parsing and typing. Not built: evaluation** - a statement whose SET
+value is an expression that types is refused `NotImplemented` until BJ-S4
+(`instructions/v3.0.0/workorder-bj-expression-update.md`), and one that does
+not type is refused for what is wrong with it, at compile, whether or not a
+row matches. `exec::TypeSetExpression` (`include/kds/exec/set_expr.hpp`) is the
+one place the rules below live. §3.2's "there is none" stands for every other
+position: the grammar admits an expression in a SET value only.
+
+**No implicit conversion** (W3, BJ-Q2 (b)). An operator's operands are one
+exact type; there is no widening of an integer or of a decimal's precision,
+and a scale difference is TY6's refusal. An untyped literal takes the other
+operand's type, or the target's, through `CoerceLiteralToColumn` and the
+integer gate `CheckIntegerLiteralFits`, so a literal that does not fit is a
+positioned compile error. `varchar` and `char` are one family for `||` and for
+the assignment (their length is a per-row check, as for a bare literal). An
+integer literal beside a decimal under `*` is scale 0.
+
+| operator | operands | result | refused |
+|---|---|---|---|
+| `+` `-` `*` `/` `%` | two of one integer type (`int8`..`int64`, `uint64`) | that type | `bool`, text, a mix of two types |
+| `+` `-` `%` | two `decimal(p,s)` of one `(p,s)` | that decimal | a different `(p,s)` |
+| `*` | two decimals | `decimal(min(p1+p2,38), s1+s2)`, which must be the target's | |
+| `*` | a decimal and an integer **literal** | that decimal | an `int64` column |
+| `/` | a decimal | `NotImplemented` (needs `ROUND`/`CAST`, BJ-S5/S6) | |
+| `||` | `varchar`/`char` and string literals | `varchar` | any other type |
+| unary `-` | a signed integer or a decimal | that type | `uint64` ("an unsigned value has no negation"), text, `bool` |
+| unary `+` | an integer or a decimal | that type | text, `bool` |
+| any arithmetic | `date` | `NotImplemented` (BJ-S6) | |
+| any arithmetic | `timestamp` | `Unsupported` (there is no `INTERVAL`) | |
+
+`NULL` types as its context's type, and a NULL operand yields NULL (BJ-R4).
+Whether a NULL result fits a `NOT NULL` target is the row's verdict. The
+whole expression must be the target column's type, or the statement is
+refused naming both types: "the expression is `int32` but column `v` is
+`int64`". The pk is read, never written (BJ-R5).
+
 ### 3.3 Rendering happens at the boundary
 
 `FormatValue` takes the column's `type_val` (signature

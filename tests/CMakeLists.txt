@@ -138,6 +138,7 @@ add_executable(kds_tests
     fingerprint_test.cpp
     parser_test.cpp
     parser_set_expression_test.cpp
+    set_expr_typing_test.cpp
     parser_golden_test.cpp
     parser_join_test.cpp
     parser_projection_test.cpp

@@ -1,4 +1,5 @@
 #include "kds/exec/step_compiler.hpp"
+#include "kds/exec/set_expr.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1395,6 +1396,11 @@ Status CompileAssignments(const catalog::TableAccess& access,
         // the apply loop read `Assignment::val`, which an expression leaves
         // unset.
         if (a.expr != nullptr) {
+            // Typed first (BJ-S3): a mistyped expression is refused here by
+            // what is wrong with it, whether or not a row matches.
+            if (auto typed = TypeSetExpression(access, *a.expr, *column); !typed.ok()) {
+                return typed.status();
+            }
             return Status::NotImplemented(
                 "an expression in a SET value is parsed and not yet evaluated (BJ-S4) (byte " +
                 std::to_string(a.expr->byte_offset) + ")");

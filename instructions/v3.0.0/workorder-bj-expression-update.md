@@ -652,3 +652,65 @@ measured at the milestone's close** (§5).
   hash as they did.
 - **Suite:** 3342/3342 at this stage's tree, `HeapSuspensionIsLifted` disabled
   as before.
+
+### BJ-S2 — the `critics-developer` review of `6a4fb896`, applied
+
+On `worktree-bj-expression-update` at `6a4fb896`, the review found, and the
+tree now fixes:
+- **A crash the stage made reachable (high).** The three binary levels are
+  loops, so `1+1+1+...` leans entirely left and the nesting counter never saw
+  it; a 2 MB statement parsed and then crashed the process freeing the tree.
+  `Expr::height` is tracked and bounded at 256 (`Unsupported` at the
+  operator's byte); the nesting bound of 64 stays for parentheses and signs.
+  The cell parses a million `+` and 10,000 of each of `+`, `*`, `||`.
+- **A pre-existing defect the grammar made reachable (high, quiet-wrong once
+  BJ-S4 lands).** `Substitute` (`kwp_session.cpp`) pasted a bound negative
+  value straight after a `-`, so `x -?` bound with -5 read `x --5`, a line
+  comment that ate the rest of the statement. Fixed in the same stage with a
+  space; the cell is red without it (`SET v = 100 -? WHERE id = ?` otherwise
+  updates every row) and green with.
+- **Wrong stage or code for four groups of not-yet-built forms**: `CAST`,
+  `COALESCE`, `NULLIF`, `GREATEST`, `LEAST`, `IN`, `BETWEEN`, `NOT`, `::` and a
+  `CASE` over a literal are BJ-S5's and are now named so; the `CASE` rule is
+  "any token that does not end the value or continue an operator".
+- **No cell for the compile refusal** that keeps the hoist and the apply loop
+  from reading an empty `val`: `AnExpressionNeverWritesBeforeBjS4` asserts
+  `NOT_IMPLEMENTED`, no `UPDATED`, and the row unchanged.
+- **The depth refusal** was written twice; one helper.
+
+**Rejected:** folding `MagnitudeOf` into `ParseValue` through a sign-stripped
+token copy - it would save about fifteen lines and add a token constructor the
+lexer owns, so the digit loop stays duplicated; removing
+`NoStoredShapeMovedWithTheNewTokens` as a duplicate of two corpus lines - it
+states the property in words and costs nothing. **Not done:** the select-list
+window's `select_item_due_` after an operator, which matters only when BJ-Q8
+opens the select list.
+
+### BJ-S3 — typing at compile (built 2026-10-10)
+
+On `worktree-bj-expression-update`, after `6a4fb896`. **Not measured;
+measured at the milestone's close** (§5).
+
+- **`exec::TypeSetExpression`** (`include/kds/exec/set_expr.hpp`,
+  `src/exec/set_expr.cpp`): a parsed `Expr` resolved against the relation's
+  schema into a `TypedSetExpr`, every column bound to its position, every
+  literal coerced through `CoerceLiteralToColumn` and the new
+  `CheckIntegerLiteralFits` (the integer gate `EncodeOneValue` already is,
+  exposed rather than copied), every node carrying its type.
+  `CompileAssignments` calls it for an expression assignment, so a mistyped
+  one is refused by what is wrong with it - both types and the byte - whether
+  or not a row matches; one that types is still refused `NotImplemented`
+  (BJ-S4).
+- **The rules as a table** in `docs/spec/types.md` §3.2b, marked as typing
+  built and evaluation not.
+- **BJ-Q2 (b), the exact type, is what the typer implements**: `int32 + int64`
+  is refused naming both, and the tree's type must be the target's.
+  An integer literal scaling a decimal under `*` is scale 0; decimal `/` is
+  refused `NotImplemented` (it needs the narrowing BJ-S5/S6 build); date
+  arithmetic `NotImplemented` (BJ-S6); timestamp arithmetic `Unsupported`.
+- **Cells**: `tests/set_expr_typing_test.cpp`, 16 of them over a 13-column
+  relation. **Suite 3360/3360** at this stage's tree with
+  `HeapSuspensionIsLifted` disabled as before.
+- **Stopped here.** BJ-S4 starts only after BA's code is on `main` (§3's
+  order), and `worktree-ba-open-marks` is not merged at `080cd55`. BJ-S5..S8
+  build on S4's evaluator, so they wait with it.

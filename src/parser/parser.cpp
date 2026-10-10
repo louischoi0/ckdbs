@@ -245,6 +245,17 @@ StatusOr<AstValue> Parser::ParseValue() {
 namespace {
 
 constexpr std::uint32_t kMaxExprDepth = 64;
+// The height of a tree, counting a left-leaning chain (`a+b+c+...`) that the
+// nesting depth above does not see. Every stage that walks the tree - the
+// destructor included - recurses once per level.
+constexpr std::uint32_t kMaxExprHeight = 256;
+
+Status ExprTooDeep(std::uint32_t byte) {
+    return Status::Unsupported("an expression nested deeper than " +
+                               std::to_string(kMaxExprDepth) + " levels or taller than " +
+                               std::to_string(kMaxExprHeight) + " is not supported (byte " +
+                               std::to_string(byte) + ")");
+}
 
 std::shared_ptr<const Expr> MakeLiteral(AstValue v, bool bare_numeric) {
     auto e = std::make_shared<Expr>();
@@ -252,6 +263,7 @@ std::shared_ptr<const Expr> MakeLiteral(AstValue v, bool bare_numeric) {
     e->byte_offset = v.byte_offset;
     e->literal = std::move(v);
     e->bare_numeric = bare_numeric;
+    e->height = 1;
     return e;
 }
 
@@ -263,6 +275,7 @@ std::shared_ptr<const Expr> MakeBinary(ExprOp op, std::uint32_t op_at,
     e->byte_offset = lhs->byte_offset;
     e->op_byte_offset = op_at;
     e->op = op;
+    e->height = std::max(lhs->height, rhs->height) + 1;
     e->lhs = std::move(lhs);
     e->rhs = std::move(rhs);
     return e;
@@ -314,6 +327,24 @@ Status Parser::ParseSetValue(Assignment& a) {
             return Status::NotImplemented(
                 "a comparison in a SET value is not supported yet (BJ-S5) (byte " +
                 std::to_string(next.byte_offset) + ")");
+        case TokenType::kKeyword:
+            if (next.kw == Keyword::kIn || next.kw == Keyword::kBetween ||
+                next.kw == Keyword::kNot) {
+                return Status::NotImplemented(
+                    "'" + std::string(next.text) +
+                    "' in a SET value is not supported yet (BJ-S5) (byte " +
+                    std::to_string(next.byte_offset) + ")");
+            }
+            break;
+        case TokenType::kError:
+            // `a::int`, the cast PostgreSQL spells with two colons (BJ-R1
+            // family 3).
+            if (next.text == ":") {
+                return Status::NotImplemented(
+                    "a '::' cast in a SET value is not supported yet (BJ-S5) (byte " +
+                    std::to_string(next.byte_offset) + ")");
+            }
+            break;
         case TokenType::kIdent:
             if (IEquals(next.text, "AND") || IEquals(next.text, "OR") ||
                 IEquals(next.text, "IS")) {
@@ -348,6 +379,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprConcat() {
         auto rhs = ParseExprAdditive();
         if (!rhs.ok()) return rhs;
         acc = MakeBinary(ExprOp::kConcat, op.byte_offset, std::move(acc), std::move(rhs.value()));
+        if (acc->height > kMaxExprHeight) return ExprTooDeep(acc->op_byte_offset);
     }
     return acc;
 }
@@ -364,6 +396,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprAdditive() {
             if (!rhs.ok()) return rhs;
             acc = MakeBinary(op.type == TokenType::kPlus ? ExprOp::kAdd : ExprOp::kSub,
                              op.byte_offset, std::move(acc), std::move(rhs.value()));
+            if (acc->height > kMaxExprHeight) return ExprTooDeep(acc->op_byte_offset);
         } else if (IsSignedLiteral(t)) {
             // `v -1`: the minus is the literal's sign, and what follows it
             // is the left operand of any `*` that comes next.
@@ -372,6 +405,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprAdditive() {
             if (!rhs.ok()) return rhs;
             acc = MakeBinary(ExprOp::kSub, lit.byte_offset, std::move(acc),
                              std::move(rhs.value()));
+            if (acc->height > kMaxExprHeight) return ExprTooDeep(acc->op_byte_offset);
         } else {
             return acc;
         }
@@ -402,6 +436,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprMultiplicative(
         auto rhs = ParseExprUnary();
         if (!rhs.ok()) return rhs;
         acc = MakeBinary(op, tok.byte_offset, std::move(acc), std::move(rhs.value()));
+        if (acc->height > kMaxExprHeight) return ExprTooDeep(acc->op_byte_offset);
     }
 }
 
@@ -409,11 +444,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprUnary() {
     const Token& t = lexer_.Peek();
     if (t.type != TokenType::kPlus && t.type != TokenType::kMinus) return ParseExprPrimary();
 
-    if (expr_depth_ >= kMaxExprDepth) {
-        return Status::Unsupported("an expression nested deeper than " +
-                                   std::to_string(kMaxExprDepth) + " is not supported (byte " +
-                                   std::to_string(t.byte_offset) + ")");
-    }
+    if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(t.byte_offset);
     const Token op = lexer_.Next();
     ++expr_depth_;
     auto operand = ParseExprUnary();
@@ -424,6 +455,8 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprUnary() {
     e->byte_offset = op.byte_offset;
     e->op_byte_offset = op.byte_offset;
     e->op = op.type == TokenType::kMinus ? ExprOp::kNeg : ExprOp::kPos;
+    e->height = operand.value()->height + 1;
+    if (e->height > kMaxExprHeight) return ExprTooDeep(op.byte_offset);
     e->lhs = std::move(operand.value());
     return std::shared_ptr<const Expr>(std::move(e));
 }
@@ -445,8 +478,15 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
             lexer_.Next();
             const Token& after = lexer_.Peek();
             if (after.type == TokenType::kLParen) {
+                // The conditional, null-handling and conversion forms are
+                // BJ-S5's; every other call is a scalar function, BJ-S6's.
+                const bool family2_3 = IEquals(tok.text, "CAST") || IEquals(tok.text, "COALESCE") ||
+                                       IEquals(tok.text, "NULLIF") ||
+                                       IEquals(tok.text, "GREATEST") || IEquals(tok.text, "LEAST");
                 return Status::NotImplemented(
-                    "a function call in a SET value is not supported yet (BJ-S6) (byte " +
+                    std::string(family2_3 ? "'" + std::string(tok.text) + "' in a SET value"
+                                          : "a function call in a SET value") +
+                    " is not supported yet (" + (family2_3 ? "BJ-S5" : "BJ-S6") + ") (byte " +
                     std::to_string(tok.byte_offset) + ")");
             }
             if (after.type == TokenType::kDot) {
@@ -457,8 +497,14 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
             // `CASE` is not reserved, so a column may be named `case`; it
             // opens an expression only when a word follows that is not the
             // statement's own next clause.
-            if (IEquals(tok.text, "CASE") && after.type == TokenType::kIdent &&
-                !IEquals(after.text, "WHERE")) {
+            const bool case_ends_value =
+                after.type == TokenType::kEof || after.type == TokenType::kComma ||
+                after.type == TokenType::kRParen || after.type == TokenType::kSemicolon ||
+                after.type == TokenType::kPlus || after.type == TokenType::kMinus ||
+                after.type == TokenType::kStar || after.type == TokenType::kSlash ||
+                after.type == TokenType::kPercent || after.type == TokenType::kConcat ||
+                (after.type == TokenType::kIdent && IEquals(after.text, "WHERE"));
+            if (IEquals(tok.text, "CASE") && !case_ends_value) {
                 return Status::NotImplemented(
                     "CASE in a SET value is not supported yet (BJ-S5) (byte " +
                     std::to_string(tok.byte_offset) + ")");
@@ -470,12 +516,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
             return std::shared_ptr<const Expr>(std::move(e));
         }
         case TokenType::kLParen: {
-            if (expr_depth_ >= kMaxExprDepth) {
-                return Status::Unsupported("an expression nested deeper than " +
-                                           std::to_string(kMaxExprDepth) +
-                                           " is not supported (byte " +
-                                           std::to_string(tok.byte_offset) + ")");
-            }
+            if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(tok.byte_offset);
             lexer_.Next();
             const Token& inner = lexer_.Peek();
             if (inner.type == TokenType::kIdent && IEquals(inner.text, "SELECT")) {

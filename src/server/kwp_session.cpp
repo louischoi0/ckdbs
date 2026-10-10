@@ -187,6 +187,14 @@ StatusOr<std::string> Substitute(std::string_view sql,
         }
         auto literal = LiteralOf(params[next++]);
         if (!literal.ok()) return literal.status();
+        // A negative value pasted after a `-` would read `--` and open a
+        // line comment that eats the rest of the statement: `x -?` bound with
+        // -5 is `x --5 WHERE ...`, with no WHERE. A space keeps it a minus
+        // and a negative literal.
+        if (!dst->empty() && dst->back() == '-' && !literal.value().empty() &&
+            literal.value().front() == '-') {
+            *dst += ' ';
+        }
         *dst += literal.value();
         return Status::OK();
     });

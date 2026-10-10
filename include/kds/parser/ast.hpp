@@ -752,7 +752,15 @@ struct Expr {
     // the operator's own byte. BJ-R10's refusals name the expression's first
     // byte; a typing refusal (BJ-R3) names the operator it is about.
     std::uint32_t byte_offset = 0;
+    // For a binary node the operator's own byte; a unary node's is its
+    // `byte_offset`.
     std::uint32_t op_byte_offset = 0;
+
+    // 1 for a leaf, `max(lhs, rhs) + 1` above. Bounded by the parser
+    // (`kMaxExprHeight`): a chain `1+1+1+...` leans entirely left, and a
+    // tree that tall is freed, typed and evaluated one nested call per
+    // level.
+    std::uint32_t height = 1;
 
     AstValue literal;           // kLiteral
     // kLiteral: the literal was a bare number (`1.5`, not `'1.5'`). The

@@ -208,6 +208,13 @@ Status DecodeAndResolve(storage::PageStore& store, const catalog::Schema& schema
 // engine compares or keys on must come through here.
 Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& value);
 
+// Whether an integer `value` fits the integer or `uint64` column `col`, by
+// the gate a row's encode applies (`EncodeOneValue`), so a compile-time check
+// of a literal and the per-row write cannot disagree about which integers
+// fit (BJ-S3). `value` is not changed. Any other column type is a caller
+// error and answers `InvalidArgument`.
+Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::AstValue& value);
+
 // Rejects a schema that cannot carry a Keystone word: no columns at all,
 // or a first column whose declared type is not an integer one. Exposed so
 // CREATE TABLE can refuse such a table at definition time rather than at
