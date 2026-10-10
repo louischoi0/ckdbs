@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <functional>
@@ -8,6 +9,7 @@
 #include <thread>
 
 #include "kds/base/status.hpp"
+#include "kds/sched/waker_table.hpp"
 #include "kds/wal/log_device.hpp"
 #include "kds/wal/record.hpp"
 
@@ -109,6 +111,37 @@ public:
     // (`workorder-bc-wal-recycling.md` §1.7, BC-Q5).
     void RequestReclaim();
 
+    // **Parked committers are kicked, not polled** (BA-R4 part 1,
+    // `instructions/v3.0.0/workorder-ba-parallelism.md`). A statement parked
+    // on a durability point counts itself into its core here for the life of
+    // its wait (`WalManager::DurableWait`); every time the watermark moves,
+    // and when the writer fails, each core with a waiter is kicked through
+    // `wake` - write-then-kick, as the lock table and the commit marker do
+    // (`sched/waker_table.hpp`). Null until set, and then no core is kicked:
+    // a reactor whose drain still reports a staged commit as work never
+    // blocks, so it needs none.
+    //
+    // **The order that makes a waiter visible.** A waiter counts itself in
+    // and then reads the watermark; the writer moves the watermark and then
+    // reads the counts. A full fence on each side between the two means at
+    // least one of them sees the other: the waiter sees the new watermark,
+    // or the writer sees the waiter and kicks it. The kick itself can still
+    // be skipped by the registry's sleeping-flag race (`WakerTable::Kick`),
+    // costing that core one idle block.
+    void SetWakeRegistry(const sched::WakeRegistry* wake) noexcept {
+        wake_.store(wake, std::memory_order_release);
+    }
+    bool kicks_durable_waiters() const noexcept {
+        return wake_.load(std::memory_order_acquire) != nullptr;
+    }
+    void EnterDurableWait(std::uint32_t core) noexcept {
+        durable_waiters_[core].fetch_add(1, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+    }
+    void LeaveDurableWait(std::uint32_t core) noexcept {
+        durable_waiters_[core].fetch_sub(1, std::memory_order_relaxed);
+    }
+
     // Stops the thread, after finishing whatever sync was in flight. Safe to
     // call twice; the destructor calls it.
     void Stop();
@@ -141,6 +174,14 @@ public:
 private:
     void Run();
     void Reclaim();
+    void KickDurableWaiters() const noexcept;
+
+    // `kMaxWalCores` (superblock.hpp, which this layer does not include):
+    // no instance has more cores, and `CheckCoreCount` refuses one that
+    // would, so a core always has its own slot.
+    static constexpr std::uint32_t kWaitSlots = 64;
+    std::array<std::atomic<std::uint32_t>, kWaitSlots> durable_waiters_{};
+    std::atomic<const sched::WakeRegistry*> wake_{nullptr};
 
     LogDevice* device_;
 

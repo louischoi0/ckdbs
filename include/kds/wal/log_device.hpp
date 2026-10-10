@@ -81,6 +81,16 @@ public:
     virtual Status CreateSegment(std::uint64_t segment_no,
                                  std::span<const std::byte> header = {}) = 0;
 
+    // **Asks for segment `segment_no`'s body to be built ahead of its
+    // creation** (BA-S12, BA-R9's first half): what a creation spends before
+    // its header and its name - the reservation and the zeroing - done off
+    // the append path, so the roll that later creates the segment does only
+    // the rest. Returns at once and does no I/O: the stream asks under its
+    // latch, right after a roll. Nothing built ahead is part of the live
+    // run, and a crash leaves nothing a mount adopts. The default builds
+    // nothing: a device whose creation costs nothing has nothing to move.
+    virtual void PrepareSegment(std::uint64_t /*segment_no*/) {}
+
     // Writes into a segment of the live run. Fails with OutOfRange if the
     // segment is not in it or the write would run past its end, IoError on
     // a device failure. Not durable until Sync().

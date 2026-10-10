@@ -196,6 +196,16 @@ struct LoadChunkHeader {
     // announced (wire/row_codec.hpp).
 };
 
+// `C_CANCEL` (§10): the first and only frame of a cancel connection, naming
+// the session to cancel and the key `S_HELLO` gave it.
+struct CancelRequest {
+    std::uint64_t session_id = 0;
+    std::uint64_t cancel_key = 0;
+};
+
+std::vector<std::byte> EncodeCancelRequest(const CancelRequest& request);
+StatusOr<CancelRequest> DecodeCancelRequest(std::span<const std::byte> payload);
+
 std::vector<std::byte> EncodeClientHello(const ClientHello& hello);
 StatusOr<ClientHello> DecodeClientHello(std::span<const std::byte> payload);
 

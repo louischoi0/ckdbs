@@ -204,6 +204,21 @@ public:
     // rebuild.
     void Invalidate() noexcept;
 
+    // **A walk holding the memo across a suspension** (BA-S15, BA-R12).
+    // `Invalidate` frees the memo, and since BA-S15 a `SELECT` on this core
+    // can be between slices, holding `TableAccess` and `Schema` pointers
+    // into it, while another statement's head revalidates. While any walk
+    // is pinned, `Invalidate` moves the maps to a graveyard rather than
+    // clearing them - a node-based map keeps every element's address when
+    // moved. **Pins are counted per generation** (the memo between two
+    // `Invalidate`s), so a retired generation is freed when the last walk
+    // that bound *it* ends, however many later walks overlap it on a busy
+    // core. The cache a later statement fills is fresh either way, so
+    // nothing reads a stale entry; the old ones only stay alive for the
+    // walks that bound them. `Pin` answers the generation `Unpin` takes.
+    std::uint64_t Pin();
+    void Unpin(std::uint64_t generation) noexcept;
+
     const Stats& stats() const noexcept { return stats_; }
 
     // Gauges, for tests and for whatever reports cache size later. Unlike
@@ -213,6 +228,8 @@ public:
     std::size_t table_access_entries() const noexcept { return table_access_.size(); }
     std::size_t name_entries() const noexcept { return name_to_oid_.size(); }
     std::size_t pattern_entries() const noexcept { return patterns_.size(); }
+    // Generations an `Invalidate` retired under a pin and not yet freed.
+    std::size_t retired_generations() const noexcept { return graveyard_.size(); }
 
 private:
     // Transparent hash so a lookup by string_view does not have to
@@ -245,6 +262,24 @@ private:
     std::optional<std::vector<SysObjectRow>> table_list_;
 
     Stats stats_;
+
+    // `Pin`'s state: the generation the live maps are, the walks holding
+    // each generation (ascending, one entry per pinned generation), and the
+    // generations an `Invalidate` retired while pinned.
+    struct Pins {
+        std::uint64_t generation;
+        std::uint32_t count;
+    };
+    struct Generation {
+        std::uint64_t generation;
+        std::unordered_map<Oid, TableAccess> table_access;
+        std::unordered_map<std::string, Oid, NameHash, std::equal_to<>> name_to_oid;
+        std::optional<std::vector<SysObjectRow>> table_list;
+        std::unordered_map<std::uint64_t, PatternAccess> patterns;
+    };
+    std::uint64_t generation_ = 0;
+    std::vector<Pins> pins_;
+    std::vector<Generation> graveyard_;
 };
 
 }  // namespace kds::catalog

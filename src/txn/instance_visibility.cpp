@@ -70,8 +70,8 @@ void InstanceVisibility::LowerSnapshotBound(std::uint32_t core, std::uint64_t ls
     NoteSlot(core);
 }
 
-void InstanceVisibility::BeginCommit(std::uint32_t core) {
-    if (core >= slots_.size()) return;
+std::uint64_t InstanceVisibility::BeginCommit(std::uint32_t core) {
+    if (core >= slots_.size()) return kUnboundedBound;
     // The ceiling as this core can see it, stored before the append. The
     // LSN the append assigns is above every commit this value covers, so
     // a snapshot capped by it cannot cover the commit. Reading the
@@ -83,14 +83,30 @@ void InstanceVisibility::BeginCommit(std::uint32_t core) {
     // against every publication and every pass (the header's Concurrency
     // note): a pass ordered after this sees the marker, and a pass ordered
     // before it published nothing this value fails to cover.
+    //
+    // **An earlier open marker keeps the slot** (BA-S7 part 2): its bound
+    // is at or below this one, so it already caps every mint below this
+    // commit's LSN, and the slot publishes the lowest open bound.
     LatchGuard guard(&window_latch_);
-    slots_[core].pending_commit_bound.store(commit_ceiling_.load());
+    CoreVisibilitySlot& slot = slots_[core];
+    const std::uint64_t bound = commit_ceiling_.load();
+    slot.open_bounds.push_back(bound);
+    slot.pending_commit_bound.store(slot.open_bounds.front());
     NoteSlot(core);
+    return bound;
 }
 
-void InstanceVisibility::EndCommit(std::uint32_t core) noexcept {
+void InstanceVisibility::EndCommit(std::uint32_t core, std::uint64_t bound) noexcept {
     if (core >= slots_.size()) return;
-    slots_[core].pending_commit_bound.store(kUnboundedBound);
+    // This commit's bound leaves the open set; the slot then publishes the
+    // lowest one left, or none. A lift that leaves an older open marker in
+    // place raises nothing - the slot keeps that marker's bound - but the
+    // kick below is cheap and a waiter re-tests.
+    CoreVisibilitySlot& slot = slots_[core];
+    const auto it = std::find(slot.open_bounds.begin(), slot.open_bounds.end(), bound);
+    if (it != slot.open_bounds.end()) slot.open_bounds.erase(it);
+    slot.pending_commit_bound.store(slot.open_bounds.empty() ? kUnboundedBound
+                                                             : slot.open_bounds.front());
     // **The lift, then the waiters** (BA-R1c): store-then-load against the
     // waiter's count-then-ceiling, both `seq_cst`, so this sees the waiter or
     // the waiter sees the lift (the header's "acknowledged-commit bound"

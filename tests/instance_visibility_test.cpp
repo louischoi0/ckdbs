@@ -406,7 +406,7 @@ TEST(InstanceVisibilityTest, ASnapshotNeverCoversACommitWhoseEntryIsNotYetPublis
     ASSERT_EQ(vis.SnapshotCeiling(), 100u);
 
     // Core 0 is between its append and its publication.
-    vis.BeginCommit(kCore0);
+    const std::uint64_t marker = vis.BeginCommit(kCore0);
     // Core 1 appends after core 0 - a higher LSN - and publishes first.
     vis.PublishCommit(20, 200);
     EXPECT_EQ(vis.CommitCeiling(), 200u) << "the published maximum moved";
@@ -420,7 +420,7 @@ TEST(InstanceVisibilityTest, ASnapshotNeverCoversACommitWhoseEntryIsNotYetPublis
 
     // Core 0's commit lands, at the LSN it was assigned before core 1's.
     vis.PublishCommit(11, 150);
-    vis.EndCommit(kCore0);
+    vis.EndCommit(kCore0, marker);
     EXPECT_EQ(vis.SnapshotCeiling(), 200u) << "the cap lifted with the publication";
     EXPECT_FALSE(early.Visible(11)) << "the early view's answer must not flip";
     EXPECT_FALSE(early.Visible(20));
@@ -434,6 +434,32 @@ TEST(InstanceVisibilityTest, ASnapshotNeverCoversACommitWhoseEntryIsNotYetPublis
     EXPECT_GE(later.snapshot_lsn, early.snapshot_lsn);
 }
 
+// **Several open markers on one core** (BA-S7 part 2: a parked `strict`
+// commit holds its marker while the core runs other commits). The slot caps
+// at the lowest open bound whichever order they end in.
+//
+// **Mutation**: publish the newest bound in `BeginCommit`, or clear the slot
+// in `EndCommit`, and an older open commit is left uncapped.
+TEST(InstanceVisibilityTest, ACoreWithSeveralOpenMarkersCapsAtTheLowest) {
+    InstanceVisibility vis;
+    vis.PublishCommit(10, 100);
+    const std::uint64_t first = vis.BeginCommit(kCore0);   // the parked commit
+    vis.PublishCommit(20, 200);                             // core 1's
+    const std::uint64_t second = vis.BeginCommit(kCore0);  // a later one here
+    EXPECT_EQ(first, 100u);
+    EXPECT_EQ(second, 200u);
+    EXPECT_EQ(vis.SnapshotCeiling(), 100u) << "the newer marker uncapped the older";
+
+    vis.PublishCommit(12, 260);
+    vis.EndCommit(kCore0, second);
+    EXPECT_EQ(vis.SnapshotCeiling(), 100u) << "the newer lift uncapped the older commit";
+
+    vis.PublishCommit(11, 150);
+    vis.EndCommit(kCore0, first);
+    EXPECT_EQ(vis.SnapshotCeiling(), 260u);
+    EXPECT_EQ(vis.slot(kCore0).pending_commit_bound.load(), kUnboundedBound);
+}
+
 // **The review's C2**: a pass is bounded by the pending-commit markers as
 // well as by the horizon. Core 0 has begun a commit with the ceiling at
 // 40; core 1 publishes at 50; a pass with no reader anywhere must not drop
@@ -445,7 +471,7 @@ TEST(InstanceVisibilityTest, AReclamationPassIsCappedByAPendingCommit) {
     InstanceVisibility vis;
     vis.PublishBounds(kCore0, kUnboundedBound, /*cursor=*/1000);
     vis.PublishCommit(10, 40);
-    vis.BeginCommit(kCore0);
+    const std::uint64_t marker = vis.BeginCommit(kCore0);
     vis.PublishCommit(20, 50);
 
     EXPECT_EQ(vis.Reclaim(), 1u) << "10 committed at 40 is below the marker and may go";
@@ -461,7 +487,7 @@ TEST(InstanceVisibilityTest, AReclamationPassIsCappedByAPendingCommit) {
     // does so the way any held view does - through its core's slot, which
     // a real mint lowers before it reads the ceiling (the manager's half,
     // `AHeldMintLowersTheSlotBeforeItIsPublished`).
-    vis.EndCommit(kCore0);
+    vis.EndCommit(kCore0, marker);
     vis.PublishSnapshotBound(kCore1, capped.snapshot_lsn);
     EXPECT_EQ(vis.Reclaim(), 0u);
     EXPECT_FALSE(capped.Visible(20)) << "still not: the view was minted at 40";

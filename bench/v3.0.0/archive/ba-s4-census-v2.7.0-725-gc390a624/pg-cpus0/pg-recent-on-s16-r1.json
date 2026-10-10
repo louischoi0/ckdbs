@@ -1,0 +1,196 @@
+{
+ "engine": "pg",
+ "shape": "recent",
+ "durability": "on",
+ "cores": null,
+ "sessions": 16,
+ "run": 1,
+ "seconds": 8.0,
+ "warmup": 2.0,
+ "server_cpus": "0",
+ "client_cpus": "4,5,6,7",
+ "wait_s": 0.0,
+ "host_before": {
+  "loadavg": "5.38 4.25 3.84 2/284 2279076",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "host_after": {
+  "loadavg": "5.00 4.23 3.84 1/297 2279149",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "statements": 78856,
+ "span_s": 8.0083,
+ "statements_per_s": 9846.7,
+ "p25_us": 190.6,
+ "p50_us": 1503.3,
+ "p95_us": 3713.4,
+ "p99_us": 6803.5,
+ "p0_us": 51.0,
+ "max_us": 33529.9,
+ "by_kind": {
+  "read": {
+   "statements": 39428,
+   "p0_us": 51.0,
+   "p25_us": 132.0,
+   "p50_us": 190.6,
+   "p95_us": 453.8,
+   "p99_us": 564.4
+  },
+  "write": {
+   "statements": 39428,
+   "p0_us": 1316.8,
+   "p25_us": 2473.0,
+   "p50_us": 2728.3,
+   "p95_us": 5247.0,
+   "p99_us": 9157.8
+  }
+ },
+ "by_client": [
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 1525.4,
+   "p99_us": 6731.6
+  },
+  {
+   "core": null,
+   "statements": 4930,
+   "p50_us": 1498.9,
+   "p99_us": 6792.1
+  },
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 738.5,
+   "p99_us": 6803.6
+  },
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 1643.6,
+   "p99_us": 6671.3
+  },
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 1033.8,
+   "p99_us": 6704.3
+  },
+  {
+   "core": null,
+   "statements": 4930,
+   "p50_us": 803.1,
+   "p99_us": 6767.6
+  },
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 1471.9,
+   "p99_us": 6851.3
+  },
+  {
+   "core": null,
+   "statements": 4930,
+   "p50_us": 1316.8,
+   "p99_us": 6790.4
+  },
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 1516.7,
+   "p99_us": 6711.9
+  },
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 1665.7,
+   "p99_us": 6897.6
+  },
+  {
+   "core": null,
+   "statements": 4930,
+   "p50_us": 716.9,
+   "p99_us": 6771.9
+  },
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 650.7,
+   "p99_us": 6953.4
+  },
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 646.7,
+   "p99_us": 6797.1
+  },
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 673.5,
+   "p99_us": 6911.3
+  },
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 1652.8,
+   "p99_us": 6727.2
+  },
+  {
+   "core": null,
+   "statements": 4928,
+   "p50_us": 806.6,
+   "p99_us": 6749.5
+  }
+ ],
+ "refusals": 0,
+ "errors": 0,
+ "first_error": null,
+ "client_cpu_share": [
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02,
+  0.02
+ ],
+ "client_bound": false,
+ "session_cores": [
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null
+ ],
+ "meta_delta": {},
+ "meta_longest": {},
+ "meta_session_core": null,
+ "bin_sha256": null,
+ "data_device": "/dev/root ext4",
+ "setup_meta": {}
+}

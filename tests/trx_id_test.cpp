@@ -109,6 +109,53 @@ TEST(TrxIdSequenceTest, OneDurableWritePerBlockNotPerId) {
     EXPECT_EQ(p.writes(), 2) << "the next block raised the ceiling again";
 }
 
+// **The early carve** (BA-S13, BA-R10): the next block is carved once
+// three-quarters of the window is issued, and installed without a carve when
+// the window runs dry.
+TEST(TrxIdSequenceTest, TheNextBlockIsCarvedAheadAtThreeQuartersAndInstalledWithoutACarve) {
+    Persisted p;
+    TrxIdSequence seq(p.superblock(), [&] { return p.Write(); });
+    ASSERT_TRUE(seq.Next().ok());  // the first window
+    const int writes_after_first = p.writes();
+    // Under three-quarters issued: nothing carved ahead.
+    while (seq.remaining() > kTrxIdBlockSize / 4 + 1) ASSERT_TRUE(seq.Next().ok());
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    EXPECT_FALSE(seq.has_block_ahead());
+    EXPECT_EQ(p.writes(), writes_after_first);
+    // At three-quarters: one block ahead, carved and persisted once.
+    ASSERT_TRUE(seq.Next().ok());
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    ASSERT_TRUE(seq.has_block_ahead());
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    EXPECT_EQ(p.writes(), writes_after_first + 1) << "a second block was carved ahead";
+    // The window runs dry: the block ahead is installed, nothing carved.
+    std::uint64_t last = 0;
+    while (seq.remaining() > 0) last = seq.Next().value();
+    auto next = seq.Next();
+    ASSERT_TRUE(next.ok());
+    EXPECT_GT(next.value(), last);
+    EXPECT_FALSE(seq.has_block_ahead());
+    EXPECT_EQ(p.writes(), writes_after_first + 1) << "draining the window carved on Begin's path";
+}
+
+TEST(TrxIdSequenceTest, ABurnDropsTheBlockAheadAndCarvesAboveIt) {
+    Persisted p;
+    TrxIdSequence seq(p.superblock(), [&] { return p.Write(); });
+    std::uint64_t last = seq.Next().value();
+    while (seq.remaining() > kTrxIdBlockSize / 4) last = seq.Next().value();
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    ASSERT_TRUE(seq.has_block_ahead());
+    const std::uint64_t ahead_ceiling = p.superblock().next_trx_id();
+    ASSERT_TRUE(seq.BurnWindow().ok());
+    EXPECT_FALSE(seq.has_block_ahead());
+    // The burn's block sits above the dropped one, and this core's ids keep
+    // rising: the dropped block is never issued after it.
+    auto next = seq.Next();
+    ASSERT_TRUE(next.ok());
+    EXPECT_GE(next.value(), ahead_ceiling);
+    EXPECT_GT(next.value(), last);
+}
+
 TEST(TrxIdSequenceTest, IdsAreNotReissuedAcrossARestart) {
     Persisted p;
     std::uint64_t last = 0;

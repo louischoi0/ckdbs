@@ -115,13 +115,12 @@ HandshakeOutcome Negotiate(const ClientHello& hello, const HandshakeConfig& conf
 // `kStreaming` is here because portals are built (§7). `kCapBulkLoad` is
 // here because the v0 load endpoint answers its block.
 //
-// `kCancel` is **not**, and that is the rule above applied to this build
-// rather than an oversight: `C_CANCEL` has no handler, so a server that
-// offered the bit would refuse the one frame it had just advertised, which
-// is worse for a client than the absence - an absent capability is a
-// branch it does not take, and a lying one is a branch that fails. The
-// session half exists (`KwpSession::RequestCancel` and its observation
-// point); the connection half is P14's remainder, in `known-gaps.md`.
+// `kCancel` is **not** here, because it is not this build's to promise: it
+// is the rule above applied per listener. `C_CANCEL` is answered only where
+// a key is a secret and there is a registry to match it in, so the listener
+// adds the bit itself when both are installed (`TcpServer::ClientSetup`,
+// BA-S15) - a server that offered it otherwise would refuse the one frame
+// it had just advertised, which is worse for a client than the absence.
 //
 // `kCompression` is not offered either: KW-D5 deferred it, the bit stays
 // reserved in the enum, and offering a shape nobody has specified is a

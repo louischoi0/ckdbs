@@ -73,6 +73,14 @@ inline_cell_width = 64
 # block, so overcommitting them serializes whole workloads behind each other.
 cores = 1
 
+# The CPU each reactor is pinned to, core 0 first: `reactor_cpus = 0,2` puts
+# reactor 0 on CPU 0 and reactor 1 on CPU 2. Exactly `cores` distinct CPUs
+# this machine has, or the server refuses to start. Left out, a peer reactor
+# k runs on CPU k and core 0 runs unpinned - which on a host numbering SMT
+# siblings adjacently (0/1, 2/3, ...) shares one physical core between
+# reactors 0 and 1.
+# reactor_cpus = 0,2
+
 # The buffer pool's maximum, in 8 KiB frames, for the whole instance: one
 # pool every core shares (docs/spec/eviction.md section 6). **Required** -
 # a config without it, a 0, and a server started with no config are each

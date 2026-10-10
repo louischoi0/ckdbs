@@ -188,6 +188,16 @@ construction and the instance's durability cost is read on core 0
 the same thing on every core: a peer writes `sys.patterns` and
 `sys.access_stats` itself, and both relations are the instance's one.
 Recovery runs once, on core 0, before any peer exists.
+`SHOW META`'s `contention_*` fields are the exception to "read on core 0":
+they are summed over every core, and count where one core waited for
+another (`docs/spec/client-manual.md`).
+
+**Which CPU each reactor runs on.** By default a peer reactor `k` is pinned
+to CPU `k` and core 0 runs unpinned, which on a host that numbers SMT
+siblings adjacently puts reactors 0 and 1 on one physical core.
+`reactor_cpus = 0,2` pins reactor `k` to the `k`th CPU listed, core 0
+included; it must name exactly `cores` distinct CPUs this machine has, or
+the server refuses to start.
 
 ## 6. What a restart loses — known gaps
 

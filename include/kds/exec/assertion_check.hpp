@@ -176,7 +176,7 @@ public:
     // A registry built unarmed takes neither, which is every fixture's and a
     // one-core instance's shape (`base/latch.hpp`'s G2).
     explicit AssertionEnforcer(bool shared = false)
-        : latch_(shared ? std::make_unique<Latch>() : nullptr) {}
+        : latch_(shared ? std::make_unique<Latch>(LatchKind::kAssertionDirectory) : nullptr) {}
     AssertionEnforcer(const AssertionEnforcer&) = delete;
     AssertionEnforcer& operator=(const AssertionEnforcer&) = delete;
 

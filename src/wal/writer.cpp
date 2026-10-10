@@ -1,5 +1,7 @@
 #include "kds/wal/writer.hpp"
 
+#include "kds/base/contention.hpp"
+
 #include <utility>
 
 namespace kds::wal {
@@ -127,6 +129,7 @@ void WalWriter::Run() {
                                                        std::memory_order_relaxed)) {
                 }
                 syncs_.fetch_add(1, std::memory_order_relaxed);
+                Contention::Add(Tally::kSyncsWriter);
             } else {
                 // The watermark stays where it was: a failed sync proves
                 // nothing about what reached the platter. Recorded so a
@@ -137,7 +140,19 @@ void WalWriter::Run() {
             }
         }
         done_.notify_all();
+        KickDurableWaiters();
         if (reclaim) Reclaim();
+    }
+}
+
+void WalWriter::KickDurableWaiters() const noexcept {
+    const sched::WakeRegistry* wake = wake_.load(std::memory_order_acquire);
+    if (wake == nullptr) return;
+    // The other half of `EnterDurableWait`'s fence (writer.hpp): the
+    // watermark moved above, so a waiter not counted here reads it.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    for (std::uint32_t core = 0; core < kWaitSlots; ++core) {
+        if (durable_waiters_[core].load(std::memory_order_relaxed) > 0) wake->Kick(core);
     }
 }
 

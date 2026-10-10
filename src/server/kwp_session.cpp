@@ -361,17 +361,26 @@ FrameAction KwpSession::OnFrame(const wire::DecodedFrame& frame, std::vector<std
         return action;
     }
 
-    // **Cancellation is observed here** (§10). The reactor has no
-    // preemption, so a session learns it was cancelled at its next frame,
-    // and the frame that learns it is refused rather than run. Consumed, so
-    // one cancel cancels one statement.
-    if (cancel_requested_ && phase_ == Phase::kReady) {
-        cancel_requested_ = false;
-        wire::WireError e =
-            wire::ErrorFromStatus(Status::InvalidArgument("cancelled by request"));
-        e.code = wire::MakeErrorCode(ErrorCategory::kCancelled, wire::kNoDetail);
+    // **Cancellation is observed here** (§10) when no walk took it first: a
+    // running `SELECT` observes it at its slice boundary (BA-S15), and a
+    // cancel that arrived between statements is learnt at the next frame,
+    // which is refused rather than run. Consumed, so one cancel cancels one
+    // statement.
+    if (phase_ == Phase::kReady && session_.TakeCancel()) {
         session_.Poison();
-        return Refuse(out, e);
+        return Refuse(out, wire::ErrorFromStatus(Status::Cancelled("cancelled by request")));
+    }
+
+    // **A cancel connection** (§10): `C_CANCEL` as the first frame, matched
+    // against the instance's registry, answered with nothing and closed -
+    // a hit and a miss look the same from outside.
+    if (phase_ == Phase::kAwaitHello && type == ClientFrameType::kCancel && cancels_ != nullptr) {
+        if (auto request = wire::DecodeCancelRequest(frame.payload); request.ok()) {
+            (void)cancels_->Cancel(request.value().session_id, request.value().cancel_key);
+        }
+        FrameAction action;
+        action.close = true;
+        return action;
     }
 
     if (phase_ == Phase::kAwaitHello) {

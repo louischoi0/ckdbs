@@ -4,6 +4,7 @@
 #include <string>
 #include <utility>
 
+#include "kds/base/contention.hpp"
 #include "kds/wal/analysis.hpp"
 
 namespace kds::wal {
@@ -342,11 +343,18 @@ Status Checkpointer::RunGated(CheckpointGate* gate, std::uint32_t core_id) {
     // is the delta: logging the total would read as "this checkpoint flushed
     // 5 pages" on every tick after the first one that did.
     const std::uint64_t flushed_before = stats_.pages_flushed;
-    if (Status s = RunToCompletion(); !s.ok()) {
+    Status ran;
+    {
+        // BA-R0's checkpoint count and longest run, on the periodic path:
+        // the run a reactor is held for, not mount's.
+        const StallTimer stall(Tally::kCheckpointRuns, Longest::kCheckpointNs);
+        ran = RunToCompletion();
+    }
+    if (!ran.ok()) {
         if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("checkpoint", who + "checkpoint failed: " + s.message());
+            log_->Error("checkpoint", who + "checkpoint failed: " + ran.message());
         }
-        return s;
+        return ran;
     }
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("checkpoint", who + "checkpoint complete: redo_start=" +

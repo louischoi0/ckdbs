@@ -10,12 +10,16 @@
 //
 // ---- Why a statement needs a bound at all -------------------------------
 //
-// Nothing suspends mid-statement. The engine is thread-per-core and
-// cooperative (docs/rules/rules.md §3): a statement runs to completion on the
-// core it started on, and no scheduler takes the core away from it. So a
-// statement that reads an unbounded number of rows does not merely run
-// slowly - it holds a core for as long as it takes, and every other client
-// on that core waits.
+// Little suspends mid-statement. The engine is thread-per-core and
+// cooperative (docs/rules/rules.md §3): a statement runs on the core it
+// started on, and no scheduler takes the core away from it. Since BA-S15 a
+// `SELECT`'s outermost walk gives the core back every
+// `exec::SlicePolicy::pages_per_slice` pages, but nothing else does - a
+// write, a join's inner walk under one outer page, an index walk - so a
+// statement that reads an unbounded number of rows there does not merely
+// run slowly: it holds a core for as long as it takes, and every other
+// client on that core waits. Even a sliced walk is bounded here, because
+// one that never ends holds its view, its borrow and its memo for good.
 //
 // A correlated subquery over a non-pk column is the easy way to write one.
 // `WHERE EXISTS (SELECT ... WHERE inner.col = outer.col)` with a non-pk

@@ -42,6 +42,12 @@ CoreRuntime::~CoreRuntime() {
     // one.
     const CurrentCoreGuard as_this_core(core_id());
     listener_.reset();
+    // **Queued statements go while what they borrow is still here**
+    // (BA-S15): `scheduler_` is declared above every borrower and so
+    // destroyed after them, and a `SELECT` between slices - or any statement
+    // parked on a wait - holds a frame whose destructors reach the
+    // dispatcher, the catalog and the transaction manager.
+    scheduler_->DiscardTasks();
     // **The WAL gate slot goes back before `wal_` does** (BA-S1): the shared
     // store outlives this runtime. Only this runtime's own gate is cleared.
     if (owned_store_ == nullptr && store_ != nullptr && wal_ != nullptr) {
@@ -488,13 +494,15 @@ void CoreRuntime::Run() {
         // would sleep between the staging and the wake-up, putting the
         // drain interval on every commit (Scheduler::SetPostTaskHook).
         // Read before the drain, which is what clears it.
-        const bool had_staged_commits = wal_->HasPendingGroupCommits();
+        // Not once the writer kicks a parked committer (BA-R4 part 1,
+        // `WalManager::StagedCommitIsWork`).
+        const bool staged_commit_is_work = wal_->StagedCommitIsWork();
         if (Status s = wal_->DrainOnce(); !s.ok() && log_ != nullptr &&
                                           log_->enabled(LogLevel::kError)) {
             log_->Error("wal", "core " + std::to_string(config_.core_id) +
                                    ": drain failed: " + s.message());
         }
-        return had_staged_commits;
+        return staged_commit_is_work;
     };
 
     // **After every iteration's tasks**, which is what makes group commit a
@@ -516,7 +524,10 @@ void CoreRuntime::Run() {
     // `docs/inflight/known-gaps.md`.)
     if (config_.core_id != 0 && config_.wal_drain_interval_ns > 0) {
         scheduler_->SubmitEvery(config_.wal_drain_interval_ns,
-                                [this] { (void)txn_manager_->MaybeBurnIdleBlock(); });
+                                [this] {
+                                    (void)txn_manager_->MaybeBurnIdleBlock();
+                                    txn_manager_->CarveAheadIfLow();
+                                });
     }
 
     // The `system`-group checkpoint cadence of wal.md §11, per core since

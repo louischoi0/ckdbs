@@ -3,6 +3,7 @@
 #include <cstring>
 #include <string>
 
+#include "kds/base/contention.hpp"
 #include "kds/storage/heap/heap_chain.hpp"  // kMaxChainPages: one cycle guard, not two
 #include "kds/storage/page_header.hpp"
 
@@ -192,6 +193,7 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
     // Retryable, for btree.cpp's reason: nothing about the statement is
     // wrong, and the client's retry crosses a task boundary, where the
     // root is re-read from the anchor.
+    Contention::Add(Tally::kRefusalIndexDescend);
     return Status::TxnConflict(
         "index descent from page " + std::to_string(root) + " gave up after " +
         std::to_string(storage::kMaxDescentRestarts + 1) +
@@ -251,6 +253,7 @@ StatusOr<storage::PageRef> FetchParent(storage::PageStore& store, const IndexLay
             return std::move(parent.value());
         }
     }
+    Contention::Add(Tally::kRefusalIndexParent);
     return Status::TxnConflict(
         "index insert could not find the parent of page " + std::to_string(child) +
         ": the path its descent recorded from root " + std::to_string(path[0]) +
@@ -276,6 +279,7 @@ StatusOr<Parents> SecureParents(storage::PageStore& store, const Descent& descen
                                 ? IndexLeafView(descent.leaf.bytes()).grown_over()
                                 : IndexInternalView(out.held[out.count - 1].bytes()).grown_over();
     if (grown_over) {
+        Contention::Add(Tally::kRefusalIndexSecure);
         return Status::TxnConflict(
             "index insert would grow a level over page " + std::to_string(descent.path[0]) +
             ", which is no longer the root: another core grew one over it after this core read "

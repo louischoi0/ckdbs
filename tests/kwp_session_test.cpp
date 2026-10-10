@@ -852,6 +852,55 @@ TEST_F(KwpSessionTest, ACancelIsObservedAtTheNextFrame) {
     EXPECT_EQ(RunStatement("SELECT id FROM t").size(), 3u);
 }
 
+// ---- BA-S15: the cancel connection --------------------------------------
+
+TEST_F(KwpSessionTest, ACancelConnectionSetsTheNamedSessionsFlagSilentlyAndCloses) {
+    Handshake();
+    CancelRegistry registry;
+    registry.Register(0x1111, 0x2222, session_->session().cancel_flag());
+
+    // A second connection whose first frame is `C_CANCEL`.
+    Session cancel_engine;
+    wire::HandshakeConfig config;
+    config.capabilities = wire::kServerCapabilities;
+    KwpSession canceller(cancel_engine, config);
+    canceller.set_cancel_registry(&registry);
+    const auto send = [&](std::uint64_t key) {
+        std::vector<std::byte> out;
+        const FrameAction action = canceller.OnFrame(
+            wire::DecodedFrame{static_cast<std::uint8_t>(ClientFrameType::kCancel), 0,
+                               wire::EncodeCancelRequest({0x1111, key})},
+            out);
+        EXPECT_TRUE(action.close);
+        EXPECT_TRUE(out.empty()) << "a cancel is answered with nothing, hit or miss";
+    };
+    send(0x2223);
+    EXPECT_FALSE(session_->session().cancel_flag()->load()) << "a wrong key is ignored";
+    send(0x2222);
+    EXPECT_TRUE(session_->session().cancel_flag()->load());
+
+    // Observed at the target's next frame, as any cancel between statements.
+    auto frames = Feed(ClientFrameType::kPing, {});
+    ASSERT_EQ(frames.size(), 1u);
+    auto err = wire::DecodeError(frames[0].payload);
+    ASSERT_TRUE(err.ok());
+    EXPECT_EQ(err.value().category(), wire::ErrorCategory::kCancelled);
+}
+
+TEST_F(KwpSessionTest, ACancelFrameWithNoRegistryIsAnUnexpectedFirstFrame) {
+    std::vector<std::byte> out;
+    const FrameAction action = session_->OnFrame(
+        wire::DecodedFrame{static_cast<std::uint8_t>(ClientFrameType::kCancel), 0,
+                           wire::EncodeCancelRequest({0x1111, 0x2222})},
+        out);
+    EXPECT_TRUE(action.close);
+    auto frames = Decode(out);
+    ASSERT_EQ(frames.size(), 1u);
+    auto err = wire::DecodeError(frames[0].payload);
+    ASSERT_TRUE(err.ok());
+    EXPECT_EQ(err.value().category(), wire::ErrorCategory::kProtocol);
+}
+
 TEST_F(KwpSessionTest, TerminateClosesInEveryPhase) {
     EXPECT_TRUE(Feed(ClientFrameType::kTerminate, {}).empty());
     EXPECT_TRUE(closed_);

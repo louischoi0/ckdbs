@@ -418,7 +418,21 @@ whole or not at all.
 entry where the transaction leaves the in-flight set — after
 `WalManager::Commit` returns, never under the append latch — so a reader
 sees a commit as soon as the record is appended, which under `group` is
-before the platter has it, exactly as before (`wal.md` §3). The ceiling a
+before the platter has it, exactly as before (`wal.md` §3). **A `strict`
+commit above one core publishes once its record is durable** (BA-S7 part 2,
+BA-Q3 (b)): it stages the record, keeps its marker and its borrows, and
+parks; the publish, the marker's lift, the retire and the release run when
+the writer's sync covers it (`TransactionManager::CommitDeferred`,
+`FinishDeferredCommit`), and a failed sync aborts it instead. A core can
+therefore hold several markers at once, and its slot carries the lowest. A
+checkpoint taken meanwhile does not list the parked transaction as active:
+its commit record lies below the checkpoint's begin, and the anchor is
+published only once that end record is durable, so every mount from it
+finds the commit. **Its window is new to a synchronous caller on the same
+core**: `Dispatch` (the KWP load stream, a connection-close `ROLLBACK`)
+cannot park, so one that meets a row or a relation a parked commit still
+holds is refused `TxnConflict` for up to one sync, where before no
+same-core statement could meet an unfinished `strict` commit. The ceiling a
 mint takes is the highest published commit LSN **capped by every core's
 pending-commit marker**, set before that core's append: no view ever covers
 a commit whose entry it cannot yet see, so a **held** view's answer for any
@@ -437,7 +451,10 @@ ceiling until the marker lifts. So a session records its last commit's LSN,
 and a statement whose bound sits above `SnapshotCeiling()` waits at the
 statement boundary - before anything is minted or held - until the markers
 below it lift: `DispatchAsync` parks and the last lift kicks its core, the
-synchronous `Dispatch` yields as its group commit blocks. The wait is at
+synchronous `Dispatch` yields as its group commit blocks - and, when the
+marker is a `strict` commit parked on its own core, whose statement cannot
+run until `Dispatch` returns, it makes that record durable and publishes
+the commit itself (BA-S7 part 2). The wait is at
 most the longest commit in flight when the bound's commit was published -
 one `strict` commit's sync, which on a peer can queue behind the one the
 writer is already running - and it happens only in that race; minting at
@@ -569,8 +586,15 @@ with recovery. This mirrors PostgreSQL's `FrozenTransactionId`, which is what
 **Every core carves its own block from the one ceiling since AT-S10b.**
 Each core's `TrxIdSequence` is built over the instance's one `SuperBlock`,
 the superblock latch and one persist callback, which encodes page 0 under
-the latch and syncs the store (`CoreRuntime::Config::trx_id_ceiling`,
-handed by `Expeditor`; `Expeditor::PersistTrxIdCeiling`). `Carve()` reads
+the latch and writes page 0 alone through `WriteBack`'s claim, then syncs
+the data file unconditionally (BA-S13; `CoreRuntime::Config::trx_id_ceiling`,
+handed by `Expeditor`; `Expeditor::PersistTrxIdCeiling`). The next block is
+carved ahead on the `system`-group tick once three-quarters of the window
+is issued (`TrxIdSequence::CarveAheadIfLow`), by a core that issued an id
+since the previous tick; a burn drops it. Core 0's tick runs at every core
+count, so at `cores = 1` the carve's stall moves from a `BEGIN` onto that
+tick; a peer's tick runs only while `wal_drain_interval_us` is above 0, and
+without it a peer carves on `BEGIN`'s path as before. `Carve()` reads
 the ceiling and raises it **in one step under the latch** - two cores
 carving at once get two disjoint blocks - and the raised ceiling is durable
 before the block is issued from, because a mount refuses a log naming an id

@@ -5,17 +5,21 @@ Written 2026-10-02 on `worktree-parallelism-workorder` from `d3d90b5`
 parallelism falls short compared with postgres. Plan an improvement for each
 cause analysed and write the work document"*. It plans one fix per cause, for every place where
 work on one core waits for work on another, and PostgreSQL 18.6's work does
-not. **Not opened.** The letter, the scope and every §4 item wait for the
-operator's mark, and each stage then waits for its own word. It cuts no
-tag. Like AS and AZ it sits outside AR0 §8's chain: it depends on no open
+not. **Opened 2026-10-09** (below). It cuts no tag. Like AS and AZ it sits outside AR0 §8's chain: it depends on no open
 order and gates none.
 
 **Paused 2026-10-06 for its sub-milestone BB** (`raft-marks-2026-10-06.md`
 §4): BA-Q14 is marked (b), and `workorder-bb-issue-under-the-leaf.md` takes
 defect A in BA-S1b's place. BA resumes at BB's close (BB-S5).
 **Resumed 2026-10-08**: BB closed (`raft-marks-2026-10-08.md` §6), and BD-S6
-had rebased these rows (§6, "BA rebased on BD"). BA-S2 waits for its own
-word.
+had rebased these rows (§6, "BA rebased on BD"). BA-S2 waited for its own
+word (given 2026-10-09, below).
+**Opened 2026-10-09** (`raft-marks-2026-10-09.md` §1), on the operator's
+*"continue BA from the work that was stopped; I want to finish BA"*: BA-Q0..Q13 were reviewed
+one by one and marked in §4, eight of them in wording restated to the tree
+at `d43845a0` (§1.14). Stages run from BA-S2 in §5's order without a word
+per stage, and a question a stage raises is settled by CLA's proposal,
+recorded as adopted (`raft-marks-2026-10-09.md` §2).
 
 **Where the items came from.** The starting point was
 `bench/v3.0.0/results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md`, plus a
@@ -606,7 +610,66 @@ corrected by the stage named:
   says a failed autocommit commit leaks its transaction, but `EndWrite`
   aborts it now (`command_dispatcher.cpp:8522-8524`).
 
-## 2. Rulings — CLA's proposals, not marked
+### 1.14 Re-read at `d43845a0`, for the marks
+
+§1 was read at `d3d90b5`. Before §4 was marked, every item was re-read at
+`c47fbeff`, by reading and not running; the citations below are
+`d43845a0`'s, which adds BH (`PURGE`) on top. Where it differs, this
+section wins over §0 and §1.1-§1.13 until a stage restates them:
+
+- **P1.** One `frames_latch_` over one `unordered_map` still
+  (`device_page_store.hpp:1658`, `:1828`), pins plain under it. BE rewrote
+  the sweep (one slot at a time, bounded reclaim batches inline and on core
+  0's 50 ms tick) and made `buffer_pool_frames` required, so §1.1's sorted
+  copy and its "default 0" are gone. **New:** BE-Q11's no-refuse window
+  takes the latch twice more per inserted row (`device_page_store.cpp:879`,
+  `:903`). BF-S2's `FreePage`, which replaced `EvictClean`, is one of the
+  table's three erasers, which an atomic pin must exclude. BG's scan queue
+  (BG-S2, not built) is designed under the same latch.
+- **P2, P3, P4, P8** hold as stated; line numbers moved. AZ-S5's
+  `ReleaseIf` gives back only a failed foreign-key check's borrows; the
+  decide's release is unchanged.
+- **P5.** Defect A is closed (BB, then BD). On a btree the issue still
+  holds page 7 but no leaf since BD-R6, with BD's bounded re-draw. The
+  `before_mark` hook is gone. **New:** every named key on a btree, below the
+  mark too, takes page 7 with a write fetch (`AdmitExplicitRowId` ->
+  `ForFirstRow`, `catalog.cpp:2600-2623`), logging only at or above the
+  mark. BH gives K1 its one named exception: invariant 11 now reads *"never
+  rebound except by `PURGE`"* (`heap-and-tuple.md:371`), the text BA-R8's
+  change lands on.
+- **P6.** Wider: a roll under the stream latch now syncs every live segment
+  through the sync gate (`stream.cpp:70-75`, `:92-95`), behind `sync_mutex_`, so it can
+  wait out the writer's `fdatasync`. `CreateSegment` adds a temp-name build,
+  a `renameat2` and a directory fsync. A ring still full after 4 drains
+  fail-stops the log (BC-S4).
+- **P7.** Defect C closed (BA-S1); defect B closed for the session's own
+  commit (BA-S1c), the other-session remainder open. BC recycles segments
+  below the durable redo start, so a sync covers live segments only.
+- **P9.** Holds. BD-R6 moved issue, borrow and encode before the descent;
+  BD-R3 E5's take-back needs the leaf held for every failure after
+  placement, a new reason the post-placement steps stay under it.
+- **P10.** Holds. **New:** BF-R9's statement epoch keeps one slot per core
+  because the executor never parks (`statement_epoch.hpp:22-31`); a yield
+  breaks that. BH's `PURGE` waits by polling between whole re-runs
+  (`command_dispatcher.cpp:731-760`), never inside a walk.
+- **P11.** Holds. Migration at a transaction boundary is
+  `docs/pending/session-load-balancing.md`'s.
+- **P12.** Attributed since §1.12 was written:
+  `docs/inflight/bugs/a-checkpoint-run-holds-its-cores-reactor-for-its-whole-length.md`
+  (`c0e0868a`) measured stalls up to 5.7 s ending at the core's own
+  checkpoint anchor. `workorder-bi-checkpoint-off-the-reactor.md` (written,
+  not opened) asks in BI-Q1 (a) to take the checkpoint half; BA keeps the
+  carve.
+- **§1.0** holds, with the sync gate's `sync_mutex_` added as a blocking
+  wait. Pinning is `PinToCore` (`expeditor.cpp:1246-1256`): peer k on CPU k,
+  core 0 unpinned. The reactor-k-on-CPU-2k map does not exist yet: BB-S5's
+  pinned `cores = 2` cell ran core 1 on CPU 1, core 0's SMT sibling.
+- **The driver.** `tools/bb_concurrent_benchmark.py` already has
+  multi-process clients, the client-bound mark, per-session `core=`, and
+  one relation or one per client, but no PostgreSQL twin; BA-S3 starts
+  from it.
+
+## 2. Rulings — CLA's proposals, marked in §4
 
 **BA-R0 — measure first, with an instrument that does not saturate first.**
 
@@ -624,8 +687,10 @@ corrected by the stage named:
   - Drain passes spent with a commit pending (§1.7's spin).
   - Time new snapshots spent capped below a held marker (defect B).
   - Carves and the longest one; checkpoint runs and the longest one.
-  - Refusals by site, at the six `TxnConflict` sites of §1.9: `btree.cpp:232`,
-    `:524` and `:549`, and `index_tree.cpp:195`, `:254` and `:279`.
+  - Refusals by site, at the `TxnConflict` sites of §1.9 - seven at
+    `d43845a0`, BtreeLookup's bounded re-descent being the seventh: the
+    btree's descend, parent, secure and lookup, and the index tree's descend,
+    parent and secure.
 - **How it is counted.** Try the lock first, and count and time only the
   contended branch. Counters are per core and summed when read, so the
   instrument adds no shared cache line. `SHOW META` prints them.
@@ -822,6 +887,9 @@ from a 2-core host. The census re-measures the hand-off's p50 and p99, under
   that clears its bit (`page.md` §5, BF-R5; the reason this bullet gave,
   "nothing frees a page", BF made false). It stays on the miss and create
   paths.
+- **What stays global** (BA-Q5 as marked): BE-R1's free list and CLOCK
+  hand, BE-Q11's `window_promised_` and BG-R1's scan queue, under one
+  remaining latch. BG-S2 lands before BA-S8.
 - **This re-opens AM-S2's decision** that pin accounting lives under the
   structure latch (`device_page_store.hpp:801-805`): BA-Q5.
 
@@ -879,28 +947,29 @@ ahead (P5).**
 - **Named keys.** A named key at or above the cursor raises the cursor by
   compare-and-swap, and raises the ceiling with it if needed. The heap
   relation's below-mark refusal compares against the cursor, not the
-  ceiling.
+  ceiling. A btree named key below the cursor takes no page 7 (BA-Q8).
 - **`next_id`.** On disk it becomes the ceiling for an omitted key, as it
   already is for a named one. `DESCRIBE` and `SHOW BUDGET` read the cursor.
 - **Placement order.** The cursor issues faster, and it must not widen
-  defect A. Whatever BA-S1b chose holds under it, and BA-S11's cells test
-  placement order, not only issue order.
+  defect A. BD-R2's sorted placement holds under it, and BA-S11's cells
+  test placement order, not only issue order.
 - **Text changes.**
-  - Invariant 11's *"every core bumps the one mark under its page latch"*
-    becomes *"every core issues from the one cursor; the mark is raised
-    under its page latch"*.
-  - `keystoneid-invariant.md:134-139` (*"none caches"*) is restated with it.
+  - Invariant 11's `next_id` sentence (`heap-and-tuple.md:371`, *"a
+    high-water mark on what has been placed"*) becomes the persisted
+    ceiling above one instance cursor every core issues from.
+  - `keystoneid-invariant.md` §2's *"Every core issues, and none caches"*
+    (`:180`) is restated with it.
 
   Both are the operator's (BA-Q8).
-- **The `before_mark` hook.** Its two partition latches move out from under
-  page 7 (§1.5).
 
 **BA-R9 — the WAL append's I/O moves out from under the latch (P6).**
 
 *The first half,* whenever P6 is material:
 
-- **The segment is prepared ahead.** The writer creates the next segment
-  ahead of need, so a roll under the latch only swaps in a prepared segment.
+- **The segment is prepared ahead.** The writer preallocates and prewrites
+  the next segment under its temporary name ahead of need. A roll under the
+  latch still syncs through the sync gate before it switches (BC,
+  `stream.cpp:92-95`), so that sync stays under it (BA-Q9).
 - **The flush writes outside the latch.** The flush stages into a second
   buffer; the latch swaps the buffers, and the `pwrite` runs outside it. A
   flush sequence keeps the durable watermark from passing a gap.
@@ -910,7 +979,8 @@ ahead (P5).**
 *The second half* is the reserve/copy/publish split that AL-R1 abandoned
 (BA-Q9). After the first half, nothing rolls under a reservation, and an
 oversized record is refused before it reserves. What remains is a full ring,
-which waits for space rather than unwinding. Whether to build it is decided
+which waits for space rather than unwinding; that wait replaces BC-S4's
+ring-full fail-stop rather than sitting beside it (BA-Q9). Whether to build it is decided
 from the census's stream-latch numbers after the first half.
 
 **BA-R10 — the periodic stalls shrink (P12).**
@@ -934,7 +1004,8 @@ runs dry. Both still run on a reactor; what shrinks is the stall.
 
 *The checkpoint runs through its own `Step()`*, `pages_per_step` at a time,
 one per reactor iteration, instead of `RunToCompletion`. The anchor is
-published after the last step.
+published after the last step. This paragraph is BI's if BI-Q1 is marked
+(a) (BA-Q1).
 
 **BA-R11 — the rightmost leaf (P9).**
 
@@ -960,9 +1031,10 @@ published after the last step.
     every earlier row of a multi-row `INSERT`. Those keep today's refusal,
     because statement-level rollback is out of scope (`txn.md` §9).
   - Scenario 0's refused trade is a single-row insert.
-- **Not proposed: B-link move-right.** It needs a high key per node: a node
-  format change, and a superblock bump that refuses every older volume (D14).
-  BA-Q10.
+- **Not proposed: B-link move-right.** It needs a high key per node, a node
+  format change, and BD-R3 E5's take-back still needs the leaf held after
+  placement. The superblock bump it brings is routine under the standing
+  order of 2026-10-07 and is not the cost. BA-Q10.
 
 **BA-R12 — a statement yields at its walk boundary (P10).**
 
@@ -975,6 +1047,9 @@ published after the last step.
     suspended.** `Revalidate` frees what a suspended statement holds
     (§1.10), and every btree root growth anywhere moves the schema word
     (`catalog.cpp:2682`).
+  - **No dropped relation's pages are freed under a suspended statement.**
+    BF-R9's statement epoch becomes the minimum over a core's suspended
+    statements, not one slot per running statement (§1.14, BA-Q11).
   - **Every per-statement `CommandDispatcher` member becomes
     statement-local** (§1.10).
   - **A walk resumed after a split neither misses nor repeats a row.** Other
@@ -999,7 +1074,8 @@ BA-Q11.
 
 ## 3. Stages
 
-Each stage waits for its own word. BA-Q1 says which also wait for the
+Since 2026-10-09 no stage waits for its own word (`raft-marks-2026-10-09.md`
+§2). BA-Q1 says which wait for the
 census.
 
 | stage | what | exit | size |
@@ -1017,9 +1093,9 @@ census.
 | BA-S8 | **The frame table** (BA-R5) | the store's suites green, and `cores = 1` byte-identical. A sweep racing a fetch of the same page, forced by a barrier and repeated. **Mutation**: the compare-and-swap made a plain store, killed. `page.md` §6 and `eviction.md` restated | L |
 | BA-S9 | **The visibility window** (BA-R6) | AN's visibility cells green. A two-core cell interleaving a reclaim with a lookup of a winner reclaimed in that pass answers visible. **Mutation**: the reclaim's floor-first order swapped, killed | M |
 | BA-S10 | **The relation borrow** (BA-R7) | for (1): an N-row insert takes the partition once, not N times. For (2), if marked: the fast-path and strong-ask race forced and repeated, and a DDL `X` waiting on a fast-path `IX` held on another core. The lock suites green | M, or L with (2) |
-| BA-S11 | **The pk cursor** (BA-R8) | the Keystone suites green. A sim crash between a ceiling raise and the placement reissues no id and burns at most 32. Two cores issuing into one relation: one sequence, and every leaf in key order (or the relation `kUnordered`, per BA-S1b). A named key inside [cursor, ceiling) is never issued. **Mutation**: the ceiling logged after the placement, killed | M |
+| BA-S11 | **The pk cursor** (BA-R8) | the Keystone suites green. A sim crash between a ceiling raise and the placement reissues no id and burns at most 32. Two cores issuing into one relation: one sequence, and every leaf in key order. An issue that draws an id a named key inside [cursor, ceiling) placed first is re-drawn, never placed. A btree named key below the cursor takes no page 7 (BA-Q8). **Mutation**: the ceiling logged after the placement, killed | M |
 | BA-S12 | **The WAL append** (BA-R9), first half | sim crash cells across a prepared roll and across a buffer swap. The stream latch's wait in the census shape. The second half only on BA-Q9's mark | M |
-| BA-S13 | **The periodic stalls** (BA-R10) | the stall counters under 10 ms in the census shape. A crash between a carve's persist and its first issue reissues no trx id, with another core's writeback racing the page-0 write. A crash mid-steps replays from the previous anchor | M |
+| BA-S13 | **The periodic stalls** (BA-R10; the checkpoint half BI's if BI-Q1 is marked (a), BA-Q1) | the stall counters under 10 ms in the census shape. A crash between a carve's persist and its first issue reissues no trx id, with another core's writeback racing the page-0 write. A crash mid-steps replays from the previous anchor | M |
 | BA-S14 | **The rightmost leaf** (BA-R11) | the survey's table, with a reason per step. Scenario 0's `c8-s` cell with no refusal. A forced root grown over is re-run and succeeds. **Mutation**: the re-run removed, killed | M |
 | BA-S15 | **The walk-boundary yield** (BA-R12) | `sched.md:42` true. A point read sharing a core with a long walk is bounded by one slice. A root growth on another core during a suspension frees no memo the walk holds. A split between two slices misses and repeats no row. Cancel cells | L |
 | BA-S16 | **Placement by load** (BA-R13) | 8 connections at `cores = 4` land 2 per core. The census's per-core session counts | S |
@@ -1027,28 +1103,28 @@ census.
 
 ## 4. Items for the operator
 
-| # | item | class | CLA proposal |
-|---|---|---|---|
-| BA-Q0 | **The letter and the scope**: one letter; twelve items and three defects; and the not-planned list of §0 | scope | Yes. BA is the next free letter: AQ and AR are held for AR1 (`raft-marks-2026-10-02.md` §4) |
-| BA-Q1 | **The premise gate**: no fix stage before the census, and only for an item BA-R0's materiality test marks. BA-S1, BA-S1b, BA-S1c (defects) and BA-S15 (a spec promise the code breaks) are exempt | process | Yes. It is `CLAUDE.md`'s *"re-measure a premise before building the fix"*, applied per item |
-| BA-Q2 | **The host and method**: this host, reactor k on CPU 2k and the clients on CPUs 4–7, so `cores = 2` is the largest clean cell; multi-process clients with the client-bound mark. Or a second host for the clients | method | This host, with its limit stated in every results file |
-| BA-Q3 | **`strict`'s shape** (BA-R4 part 2, BA-R1c): (a) publish then park, visible before durable like D2; (b) park before the publish, the marker held across the park, with BA-S1c first - and the synchronous `Dispatch`'s BA-R1c wait made a park before it, or it spins on its own core's marker (BA-S1c's review, C2); (c) snapshots carry their in-flight set, as their own order | user-visible | (b) now: it keeps D1's meaning and takes D1 off the reactor. (c) as a later order if the census finds the marker's cap material |
-| BA-Q4 | **Statistics freshness**: another core's counts arrive up to one cadence (100 ms) late, and CC13's sentence is struck (BA-R2) | user-visible | Yes |
-| BA-Q5 | **AM-S2's pin decision re-opened**: a partitioned frame table with atomic pins (BA-R5) | architecture | Yes |
-| BA-Q6 | **The window's read side**: (a) per-core commit tables with a block-to-core range table, or (b) an open-addressed atomic array with the latched fallback (BA-R6) | architecture | (b): it needs no block table and no per-core reclaim |
-| BA-Q7 | **The relation borrow**: (1) always; (2) the fast path only if material after (1); (3) AZ-Q4 re-opened only if the decide's release is material (BA-R7) | architecture | As stated |
-| BA-Q8 | **The pk cursor**: the text of invariant 11 and of `keystoneid-invariant.md` §2, the meaning of `next_id`, and `kRowIdLogAhead` = 32 (BA-R8) | invariant | Yes. K3 already licenses the burned ids |
-| BA-Q9 | **The WAL split** that AL-R1 abandoned (BA-R9's second half) | architecture | Not now. Decide on the first half's numbers |
-| BA-Q10 | **Structural refusals re-run at the statement level, with no move-right** (BA-R11) | user-visible | Yes |
-| BA-Q11 | **A yield every 64 pages, and a `C_CANCEL` handler** (BA-R12) | user-visible | Yes, with 64 re-measured in the stage |
-| BA-Q12 | **Placement**: the least-loaded hand-off as the default above one core, only if material (BA-R13) | user-visible | As stated |
-| BA-Q13 | **Waits stay blocking**: no suspending latch primitive (§1.0); every fix holds less, less often | architecture | Yes |
-| BA-Q14 | **Defect A's fix**: (a) a placement below the leaf's highest id flips `key_order`; (b) issue under the leaf's hold (BA-R1b) | user-visible | (a) now: small and sound. (b) with BA-S11, if the census asks for the elision back. **Marked (b) by the operator, 2026-10-06** (`raft-marks-2026-10-06.md` §4), as its own sub-milestone BB |
+| # | item | class | CLA proposal | mark (2026-10-09, `raft-marks-2026-10-09.md` §1) |
+|---|---|---|---|---|
+| BA-Q0 | **The letter and the scope**: one letter; twelve items and three defects; and the not-planned list of §0 | scope | Yes. BA is the next free letter: AQ and AR are held for AR1 (`raft-marks-2026-10-02.md` §4) | **as proposed**; defects A and C and B's own-session case are closed (§1.14) |
+| BA-Q1 | **The premise gate**: no fix stage before the census, and only for an item BA-R0's materiality test marks. BA-S1, BA-S1b, BA-S1c (defects) and BA-S15 (a spec promise the code breaks) are exempt | process | Yes. It is `CLAUDE.md`'s *"re-measure a premise before building the fix"*, applied per item | **as restated**: BA-S1b is struck (BB, BD); if BI-Q1 is marked (a), BI-S1's gate replaces the census for P12's checkpoint half and BA-S13 keeps the carve |
+| BA-Q2 | **The host and method**: this host, reactor k on CPU 2k and the clients on CPUs 4–7, so `cores = 2` is the largest clean cell; multi-process clients with the client-bound mark. Or a second host for the clients | method | This host, with its limit stated in every results file | **as proposed**; the reactor-k-on-CPU-2k map is BA-S2's to build (§1.14) |
+| BA-Q3 | **`strict`'s shape** (BA-R4 part 2, BA-R1c): (a) publish then park, visible before durable like D2; (b) park before the publish, the marker held across the park, with BA-S1c first - and the synchronous `Dispatch`'s BA-R1c wait made a park before it, or it spins on its own core's marker (BA-S1c's review, C2); (c) snapshots carry their in-flight set, as their own order | user-visible | (b) now: it keeps D1's meaning and takes D1 off the reactor. (c) as a later order if the census finds the marker's cap material | **(b)**, (c) a later order if the census finds the marker's cap material |
+| BA-Q4 | **Statistics freshness**: another core's counts arrive up to one cadence (100 ms) late, and CC13's sentence is struck (BA-R2) | user-visible | Yes | **as proposed** |
+| BA-Q5 | **AM-S2's pin decision re-opened**: a partitioned frame table with atomic pins (BA-R5) | architecture | Yes | **as restated**: the hit path (lookup and pin) partitioned over BE's slot array, 128 partitions, pins and the dirty generation atomic; BE-R1's free list and hand, BE-Q11's `window_promised_` and BG-R1's scan queue stay under one remaining global latch; `IsAllocated` leaves the hit path on BF-R5's invariant; BG-S2 lands before BA-S8 |
+| BA-Q6 | **The window's read side**: (a) per-core commit tables with a block-to-core range table, or (b) an open-addressed atomic array with the latched fallback (BA-R6) | architecture | (b): it needs no block table and no per-core reclaim | **(b)** |
+| BA-Q7 | **The relation borrow**: (1) always; (2) the fast path only if material after (1); (3) AZ-Q4 re-opened only if the decide's release is material (BA-R7) | architecture | As stated | **as proposed** |
+| BA-Q8 | **The pk cursor**: the text of invariant 11 and of `keystoneid-invariant.md` §2, the meaning of `next_id`, and `kRowIdLogAhead` = 32 (BA-R8) | invariant | Yes. K3 already licenses the burned ids | **as restated, on BD-R6**: issue a `fetch_add` under no page hold with BD's bounded re-draw; the ceiling raised under page 7 and the WAL append; invariant 11's `next_id` sentence (`heap-and-tuple.md` §4.1) and `keystoneid-invariant.md` §2 restated, `next_id` the persisted ceiling, `kRowIdLogAhead` = 32; **and a btree named key below the cursor takes no page 7** |
+| BA-Q9 | **The WAL split** that AL-R1 abandoned (BA-R9's second half) | architecture | Not now. Decide on the first half's numbers | **as proposed: not now**; the first half restated to BC: a roll still syncs the left segment through the sync gate, so only preallocation and the prewrite under the temporary name move ahead, and a ring-full wait replaces BC-S4's fail-stop rather than sitting beside it |
+| BA-Q10 | **Structural refusals re-run at the statement level, with no move-right** (BA-R11) | user-visible | Yes | **as proposed**; the cost cited against a B-link tree is the node format and BD-R3 E5's take-back under the hold, not a superblock bump, which is routine under the standing order of 2026-10-07 |
+| BA-Q11 | **A yield every 64 pages, and a `C_CANCEL` handler** (BA-R12) | user-visible | Yes, with 64 re-measured in the stage | **as proposed, with** BF-R9's statement epoch made the minimum over a core's suspended statements |
+| BA-Q12 | **Placement**: the least-loaded hand-off as the default above one core, only if material (BA-R13) | user-visible | As stated | **as proposed**; migration at a transaction boundary is not decided here and stays with `docs/pending/session-load-balancing.md` |
+| BA-Q13 | **Waits stay blocking**: no suspending latch primitive (§1.0); every fix holds less, less often | architecture | Yes | **as proposed**; §1.0's list restated with `sync_mutex_` (§1.14); BA-S1c's and BI-R2's parks wait where nothing is held and are not a suspending latch |
+| BA-Q14 | **Defect A's fix**: (a) a placement below the leaf's highest id flips `key_order`; (b) issue under the leaf's hold (BA-R1b) | user-visible | (a) now: small and sound. (b) with BA-S11, if the census asks for the elision back. **Marked (b) by the operator, 2026-10-06** (`raft-marks-2026-10-06.md` §4), as its own sub-milestone BB | (b), 2026-10-06 (above) |
 
 ## 5. Sequencing
 
 1. **The defects first**, independently of everything else and of each
-   other: BA-S1, BA-S1b and BA-S1c.
+   other: BA-S1 and BA-S1c, both built; BA-S1b superseded by BB.
 2. **Then BA-S2, BA-S3 and BA-S4, in that order.** BA-Q1 says what waits for
    BA-S4.
 3. **Then the fix stages, in the order the census ranks them.** CLA's prior,
@@ -1058,12 +1134,13 @@ census.
    - S1 before S7: both touch `wal/manager.cpp` and the store's gate.
    - S1c before S7's part 2.
    - S7 before S12: `stream.cpp` and `manager.cpp`.
+   - BG-S2 before S8 (BA-Q5).
    - S8 before S13: both touch the store's writeback paths.
-   - S1b before S11, and S11 before S14: all three touch the insert path in
-     `command_dispatcher.cpp`.
+   - S11 before S14: both touch the insert path in `command_dispatcher.cpp`.
    - S15 after S10: the read borrow's scope across a suspension.
 5. **BA-S17 last.** The overhead is measured once over the whole change,
-   from the commit BA opens at to the commit that closes it.
+   from the commit BA opened at, `d43845a0` (`raft-marks-2026-10-09.md` §2),
+   to the commit that closes it. BA-S1's and BA-S1c's code is outside it.
 
 ## 6. Row status
 
@@ -1385,3 +1462,796 @@ BB on its medians and is unresolved at ten runs
 (`bench/v3.0.0/results-bb-s5-overhead-v2.7.0-640-gb76261bb.md`). BA's census
 takes the wait breakdown BB did not, on an engine where BD-R6 took the issue
 back out from under the leaf. BA-S2 waits for its own word.
+
+### BA opened - 2026-10-09
+
+On `worktree-ba-open-marks` from `d43845a0`, on the operator's *"continue BA
+from the work that was stopped; I want to finish BA"* and the item-by-item review that
+followed (`raft-marks-2026-10-09.md` §1). Before marking, every item was
+re-read at `c47fbeff`: §1.14 records what moved. §4 carries the marks; eight
+items (Q1, Q5, Q8, Q9, Q10, Q11, Q12, Q13) were marked in wording restated
+to the tree. BA-S2 is the next stage.
+
+**Run to its close** (`raft-marks-2026-10-09.md` §2): the operator let
+BA-S2..S17 run without a word per stage, a stage's question settled by CLA's
+proposal and recorded as adopted under that go-ahead
+(go-ahead-achieving-milestone), and set the close's A to `d43845a0`.
+
+### BA-S2 - the counters, built 2026-10-09
+
+On `worktree-ba-open-marks` from `7b3b9732`.
+
+- **The instrument** (`include/kds/base/contention.hpp`). Each core has one
+  cache-line-aligned block, summed when read. `kds::Latch` became a class
+  over `std::mutex` that carries its `rules.md` §3 row as a `LatchKind`. Its
+  `lock` tries first, and only a failed try reads the clock and records the
+  wait. Every `Latch` row is tagged, plus `CabinStore`'s two raw mutexes, the
+  WAL sync gate (`sync_mutex_`) and the free map's flush latch. The flush
+  latch has a kind of its own because it is held across device I/O. An
+  uncontended acquisition costs what it did before.
+- **The tallies.**
+  - Page-latch waits and their spin turns (`AcquirePageLatch`).
+  - Syncs inline (the owning manager's arm) against syncs by the writer
+    thread.
+  - Drain passes taken with a group commit staged (`DrainOnce`).
+  - BA-S1c's ceiling waits and their length (`CeilingWait`).
+  - Carves and checkpoint runs, each with its longest (`StallTimer`). The
+    checkpoint is counted on `RunGated`, the periodic path.
+  - Refusals at seven `TxnConflict` descent sites, not the six BA-R0
+    listed: `BtreeLookup`'s bounded re-descent is the seventh.
+- **`SHOW META`** prints a `contention_*` block summed over every core
+  (`client-manual.md`). It is the one visible change at `cores = 1`, where
+  only the always-armed latches can move.
+- **The host map.** The new key `reactor_cpus` pins reactor k, core 0
+  included, to the k-th CPU listed. It must name exactly `cores` distinct
+  CPUs that the machine has, or the server is refused at boot. No existing
+  setting expressed CPU placement, so this is a new key and not a re-scope.
+- **Cells** (`tests/contention_counters_test.cpp`, plus the BA-S1c rig
+  cells).
+  - **Forced deterministically** by holding the real latch from a second
+    thread: every kind on a bare `Latch`, the frame table, the free map, the
+    window, a lock partition, the wait-for latch, a carve on the superblock
+    latch, and a page latch's spin.
+  - **On the two-core rig:** the stream latch, the writer's syncs and the
+    drain passes, from both cores inserting into one relation. Rounds are
+    repeated until the counts move, bounded at ten. The ceiling waits come
+    from BA-S1c's rig cells, which now assert the count.
+  - **Unit cells:** an owning manager's inline sync, and a checkpoint run.
+- **Not forced by any cell:**
+  - the seven refusal sites one by one. No cell reaches a given site
+    deterministically, and each count sits on its site's final return. Since
+    BA-S3, the two-core insert cell proves their sum against the refusals
+    its writers retried;
+  - the assertion directory, optimizer, Cabin and handoff latches (each is
+    tagged at its declaration, and the bare-`Latch` cell proves the
+    counting for every kind).
+- **Found on the way, a census fact:** ten rounds of two cores inserting
+  400 rows each into one relation never contended the window latch or a
+  lock partition.
+
+**The review** (`critics-developer`): no code bug found.
+- **Applied:**
+  - the free map's flush latch split into its own kind (`free_map_flush`),
+    so its I/O waits do not land on the bitmap latch;
+  - the handoff inbox latch tagged (`handoff`);
+  - `NsSince` replacing three copies of the duration conversion;
+  - `static_assert`s on the three name tables;
+  - `Latch::kind()` and `Contention::kSlots` deleted as unused;
+  - `RunGated`'s temporary removed;
+  - the latch cells' hold raised from 50 ms to 200 ms against a contender
+    that is not scheduled in time under `ctest -j8`;
+  - two documentation fixes, applied by the reviewer: the sync gate moves at
+    `cores = 1` too, and `HoldWhile`'s comment.
+- **Kept as is:** a ceiling lift that lands between `UncoveredCommit`'s
+  check and the registration counts a wait of about 0 ns. It is still the
+  event BA-R0 asks about.
+
+Overhead not measured; measured at the milestone's close (BA-S17, A =
+`d43845a0`).
+
+### BA-S3 - the driver and its PostgreSQL twin, built 2026-10-09
+
+On `worktree-ba-open-marks` from `2f8f7c42`. The tool is
+`tools/ba_census.py`, one file for both engines.
+
+- **Shapes:** `point`, `trade` (scenario 0's two `INSERT`s and two pk
+  `UPDATE`s, each client trading among its own accounts), `insert1`,
+  `insertN`, and `recent`. `recent` is an `INSERT`, then a pk read up to 300
+  ids behind it, with its reads and writes reported as separate
+  distributions.
+- **Equal work on both engines.**
+  - The pk: KDS omits it, PostgreSQL uses an identity column.
+  - Durability: KDS `relaxed`, `group` and `strict`; PostgreSQL
+    `synchronous_commit` `off` and `on`.
+- **Pinning.**
+  - KDS: `--server-cpus` is written as BA-S2's `reactor_cpus`.
+  - PostgreSQL: the postmaster and every process it has already forked are
+    re-pinned with `taskset -pc`. The cluster is the one the driver is
+    connected to, read from its `data_directory`.
+- **The client-bound mark:** a client that used more than 80 % of one CPU
+  over the measured span.
+- **What the JSON records.** For KDS, the delta of every numeric `SHOW
+  META` field over the measured span. The `*_longest_us` fields are maxima
+  and are recorded as read. Each run also records the server binary's
+  sha256 and the data file's device.
+- **bench/README.md's rules:**
+  - every server runs from one copy of `--bin`;
+  - ports have no default;
+  - a KDS port that something already answers on is refused.
+- **`--help`** documents the shapes, the pinning and the client-bound mark.
+  It also says that `sched_*` describes only the control session's core, so
+  BA-S4 divides an item's summed wait by `cores` times the span.
+- **The dry run** (`--dry-run`, on the Debug build): every shape at
+  `cores = 1`, one session, one second, on KDS and on PostgreSQL 18.6. Every
+  cell ran with no error. No number is claimed.
+- **PostgreSQL's cluster.** `~/pg-bench` would not start: `pg_ctl` reports
+  its control file corrupt. Its `pg.json` names PostgreSQL 17.10 and the
+  binaries are 18.6, which is the likely cause, not checked. It is not this
+  milestone's and is left untouched. BA runs its own cluster under
+  `~/pg-bench-ba` on port 15434, made by `tools/pg_setup.sh init` with
+  defaults.
+
+**The review** (`critics-developer`).
+- **Five bugs, fixed by the reviewer:**
+  - a `--pg-data` default that would have pinned the broken cluster; the
+    data directory now comes from the server;
+  - PostgreSQL's startup-forked processes were never pinned;
+  - cleanup ran on the success path only;
+  - a client could fail with a `NameError` when one unit outlasted the
+    span;
+  - a statement still refused after its retries was not counted as an
+    error.
+- **The reviewer also added:** the maxima reported as read, the binary's
+  hash, the device, and the port check.
+- **CLA applied:**
+  - every server runs from a copy of the binary;
+  - ports are required;
+  - per-kind distributions;
+  - setup rows loaded in batches of 200, not one sync each at `strict`;
+  - one error classifier per backend, with SQLSTATE matched as a prefix;
+  - `core()` deleted for `meta_all`;
+  - the `"RECENT"` placeholder replaced by a holder the generator reads;
+  - the silent port rewrite removed;
+  - a dead assignment removed.
+- **Kept as is:**
+  - `accounts` has three payload columns against scenario 0's five; the
+    same on both engines.
+  - The `df -T` parsing now repeated in five tools; one helper in
+    `bench_common.py` belongs to a tools clean-up, not this stage.
+
+**Suite.** `IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
+timed out at its 20 s bound in two of four full runs on this tree. CLA
+reproduced it under load: 9 of 80 runs failed at `2f8f7c42`, and 10 of 72
+at the base `d43845a0`, built for the comparison. So BA-S2 did not cause
+it. BA-S2's own two-core insert cell expired under the same load, and its
+progress print showed both writers part-way (52 to 400 of 400 rows after
+20 s, with `strict` against a real log). The host was slow, not stopped.
+The cell now commits `relaxed` and `group` only, with 200 rows and a 60 s
+bound. It also retries a retryable `TXN_CONFLICT`, which the faster runs
+then met: a stale descent and a root grown over (P9). It asserts that the
+seven refusal sites counted at least as many as its writers retried, so
+the refusal tallies are now proved on the rig where the race fires them.
+The cell then passed 32 of 32 under the same load. The finding went to
+`known-gaps.md`'s existing entry for the IdAllocation cell (Testing), not
+to `bugs/`: no engine defect is shown.
+Overhead not measured; measured at the milestone's close.
+
+### BA-S4 - the census, run 2026-10-09
+
+On `worktree-ba-open-marks` at `c390a624` (`v2.7.0-725-gc390a624`):
+`bench/v3.0.0/results-ba-s4-census-v2.7.0-725-gc390a624.md`, with its
+archive. 1,125 runs: KDS 675, PostgreSQL 18.6 450. No cell failed, and no
+run had an error.
+
+**Material, so these fix stages open** (BA-Q1):
+- **BA-S7** - P7, commit durability.
+  - On the write shapes (trade, insert1, insertN), `group` at
+    `cores = 2` and 16 sessions runs at 1,656-3,558 statements/s, against
+    4,918-4,977 at `cores = 1`. PostgreSQL `on` runs at 4,857-5,325.
+    `recent` does not fall (6,033 to 6,325).
+  - `strict` stays at 650-770 statements/s on the write shapes, whatever
+    the session count.
+  - The sync gate's waits reach 55 % of `cores` x span. The sum includes
+    any the WAL writer thread took, since it counts into core 0's slot.
+  - The snapshot ceiling (defect B) reaches 39 % at `strict`.
+  - The drain took 2.2 billion passes with a commit staged.
+- **BA-S12** - P6, the WAL append: 10.0 % in a clean cell.
+- **BA-S13** - P12: carves up to 2.2 s and checkpoints up to 3.1 s,
+  maxima over each server's life, setup and warm-up included. The carve
+  half only (below).
+- **BA-S14** - P9: 20 refusals.
+- **BA-S15** - exempt from the census (BA-Q1).
+
+**Not material, so these stages do not open:**
+- **BA-S5 (P3), BA-S6 (P8), BA-S8 (P1), BA-S9 (P2) and BA-S10 (P4):** each
+  item is below 1 % of `cores` x span in every clean cell, and below 2 %
+  in every cell.
+
+**Not shown material, because the census cannot measure them, so these
+stages do not open (BA-Q1). Neither is shown immaterial:**
+- **BA-S11 (P5):** page 7 has no latch of its own, and the page-latch
+  counters do not name a page. `insert1` and `insertN` both pay page 7,
+  so their gap prices the leaf, not page 7.
+- **BA-S16 (P11):** no balanced arm was run. In the proxy, the runs with a
+  session on every core were faster by over 10 % in 8 of 30 cells and
+  slower in 3, with one or two runs per arm and no spread to test
+  against. BA-S17's re-run reads it again once BA-S7 removes the
+  confound.
+
+**BA-R4's premise does not hold in this configuration, and the census
+cannot say why.**
+- `group` at `cores = 2`: core 0's sessions see a p50 of 11-43 ms and a
+  p99 of 1.3-1.6 s, and complete 16-44 statements in 8 s against a peer's
+  2,800-2,900. A peer's sessions see about 2.4 ms and 10 ms.
+- The core-0 arm holds the inline sync, the waits on the sync gate behind
+  the writer's peer syncs, and any carve or checkpoint core 0 ran. The
+  counters split none of them. At `cores = 1`, with no writer syncing,
+  `group` matches PostgreSQL. The arm the premise names, a hand-off from
+  every core, was not run.
+- `strict`: the two arms cost about the same, 14-18 ms at the p50. A peer
+  blocks its reactor on the writer's condition variable.
+
+**Adopted on the operator's standing go-ahead of 2026-10-09**
+(go-ahead-achieving-milestone; `raft-marks-2026-10-09.md` §2). Each is
+CLA's proposal; none is the operator's own mark.
+- **The matrix's runs and length:** 3 runs per cell, 8 s each after 2 s of
+  warm-up. BA-R0 named the axes, not these.
+- **The load bound.** Each run waits for a 1-min load at or below 6, not
+  1.5. The census's own runs held the 1-min average above 1.5 between
+  cells, which would have made the census about 10 hours long. A
+  competing build is still recorded per run, as rule 4 asks. The first
+  54 runs (18 cells), taken under the 1.5 bound, were kept: the restart
+  skipped complete cells.
+- **The client-bound mark** is recomputed in the analysis. It marks a run
+  in which any one client CPU was over 80 % busy with the clients pinned
+  to it, which the driver's per-client mark missed. Marked: `point` at 8
+  and 16 sessions at `cores` 2 and 4, `recent` `relaxed` at `cores = 4`
+  16 sessions, and eight PostgreSQL cells on CPUs 0,2,4,6.
+- **P5 and P11**, read as above. P5 cannot be separated from the leaf by
+  the `insert1`/`insertN` pair. P11 is read through the kernel's own
+  placement varying between runs, since the driver opens no balanced
+  arm. Both are "not shown", not "immaterial".
+- **BA-S13 takes the carve, and the checkpoint half waits for BI-Q1.** The
+  operator gave the checkpoint's shape in BI (BI-R1 and BI-R2,
+  `raft-marks-2026-10-08.md` §3-§4). Whether BA-R10's checkpoint
+  paragraph moves to BI is BI-Q1, which is unmarked and is not this
+  milestone's to mark. So BA does not build a second design for it. BA's
+  close carries the checkpoint half as a stop: it waits for the operator's
+  mark on BI-Q1.
+
+No code changed in this stage. The suite is unchanged from `c390a624`.
+
+### BA-S7 part 1 - `group` commits leave every reactor, built 2026-10-09
+
+On `worktree-ba-open-marks` from `66bb11b2` (BA-R4 part 1, no semantic
+change).
+
+- **The writer kicks a parked committer.** `WalWriter` keeps a per-core
+  count of statements parked on a durability point (`WalManager::DurableWait`,
+  taken by the dispatcher's group-commit park). After every sync, and after
+  a failed one, it kicks each core with a waiter through the wake registry.
+  The waiter counts itself in, fences, and then reads the watermark; the
+  writer moves the watermark, fences, and then reads the counts. So the
+  writer always sees a waiter that missed the new watermark. The kick
+  itself is best-effort, as every kick in the engine is: a skipped one
+  costs one idle block, which is 10 ms in production.
+- **Core 0's `group` sync goes to the writer** once the instance has a wake
+  registry (`cores > 1`), as a peer's always did.
+- **No drain reports a staged commit as work** once the writer kicks
+  (`WalManager::StagedCommitIsWork`, one rule for core 0's drain and for a
+  peer's). So the polling pass is gone: a reactor with nothing else to do
+  blocks.
+- **At `cores = 1` nothing changed.** `Expeditor` sets no registry there,
+  so the drain syncs inline and still reports the staged commit as work.
+- **Text:** `wal.md` §3, the `client-manual.md` `SHOW META` note,
+  `manager.hpp`'s header, `Sync()`'s comment, and `scheduler.hpp`'s
+  post-task hook.
+
+**Cells** (`tests/durable_kick_rig_test.cpp`):
+- A peer's five `group` commits, each answered inside 2 s against the
+  rig's 5 s idle block, so each one was kicked. Every sync was the
+  writer's.
+- A reactor with its commit parked behind a held log gate takes fewer than
+  100 drain passes in 300 ms, and is kicked at the release.
+- An owning manager's `group` drain syncs on the writer when a registry is
+  set, and inline when none is.
+
+**Mutations**, each killed:
+- the writer's kick removed (every kick cell);
+- the peer's drain reporting the commit (the spin cell);
+- the owning manager syncing inline (the owning cell).
+
+A first harness run restored files with `copy2`, which brought back the
+old mtimes, so make kept a mutant object and reported a spin that was not
+in the source. The files were touched, rebuilt and re-run, and the three
+results above are from that run.
+
+`tests/row_wait_wake_rig_test.cpp`'s two release-kick cells now give the
+waiter a `relaxed` session. The sim holds every kick, the writer's
+included, so a `group` re-run would wait for a writer kick the cell never
+delivers. The wake those cells test is the release's.
+
+**The work order's "spin counter at 0" is read as "no pass reported as
+work".** `contention_drain_passes_pending` still counts each drain taken
+with a commit staged. A blocked reactor takes one on each wake, not one
+per iteration.
+
+**The review** (`critics-developer`): the kick protocol is correct.
+- **Fixed by the reviewer:** a flake in the new cells. A single test kick
+  delivering the start could be skipped, leaving the reactor in its 5 s
+  block, so `go` is now set before `Start()`. 100 repeats then passed.
+- **Applied by CLA:**
+  - `WalManager::wake_` deleted (every caller sets the registry after
+    `StartWriter`, now asserted);
+  - the drain hooks' rule moved into `StagedCommitIsWork`;
+  - the writer's slot index taken as the core id, since `CheckCoreCount`
+    bounds it;
+  - the three stale comments corrected;
+  - the duplicate rig core-0 cell removed;
+  - `wal.md` and the `SHOW META` note updated.
+- **Rejected:**
+  - Kicking without the sleeping check, which would close the
+    skipped-kick window. "Best-effort, a skipped kick costing one idle
+    block" is the engine-wide contract for every kick (`CLAUDE.md`'s
+    cross-core row, the lock table's included). Changing it for one caller
+    belongs to the wake registry's owner, not to BA-S7.
+  - A wake for waiters when another core's write fail-stops the log. A
+    parked peer learns of the stop at its next idle block (10 ms), and
+    only the speed of an already-refused commit's reply is at stake.
+
+Overhead not measured; measured at the milestone's close.
+
+### BA-S7 part 2 - `strict` parks before its publish, built 2026-10-09
+
+On `worktree-ba-open-marks` from `f1a59fcd` (BA-R4 part 2, BA-Q3 (b)).
+
+- **The commit in two halves.** `TransactionManager::CommitDeferred` sets
+  the marker and stages the commit record for the writer
+  (`WalManager::StageStrictCommit`, staged as a `group` commit is and
+  counted as strict). The transaction stays active, in flight and holding
+  its borrows. `FinishDeferredCommit` is the rest of `Commit`: the publish,
+  the marker's lift, the retire and the release, in the same order. Both
+  share one body (`FinishCommitBody`).
+- **The dispatcher defers** a `strict` commit when the statement may park,
+  the writer kicks (`cores > 1`), and the transaction wrote no catalog row
+  (`DefersCommit`). This covers both an explicit `COMMIT` and an autocommit
+  statement. The statement parks on the record's durability like a `group`
+  commit. After the park, `FinishDeferredCommits` publishes every durable
+  entry in order. A statement that left an entry parks on it even if a
+  re-run's outcome no longer names it.
+- **Several markers per core.** A parked commit holds its marker, so a core
+  keeps its open bounds in begin order and its slot publishes the lowest
+  (`InstanceVisibility::BeginCommit` and `EndCommit`). The bounds are
+  non-decreasing, so `SnapshotCeiling`'s argument holds unchanged.
+- **The synchronous `Dispatch` (BA-S1c's review, C2).** Its BA-R1c wait can
+  be capped by a commit parked on its own core, whose statement cannot run
+  until `Dispatch` returns. The wait makes the last deferred record durable
+  and publishes the core's deferred commits itself.
+- **A failed sync aborts the parked commit** (D1, `txn.md` §6). The commit
+  is never published. Its session's acknowledged bound is cleared, so its
+  next statement does not wait for a ceiling that will never cover it.
+- **A checkpoint does not list a parked commit as active.** Its record is
+  below the checkpoint's begin, and the anchor is published only once the
+  end record is durable.
+- **At `cores = 1` nothing changed**: no registry, so no deferral.
+- **New for a synchronous caller on the same core.** One that meets a row
+  or relation a parked commit still holds is refused `TxnConflict` for up
+  to one sync (`txn.md` §4).
+- **Text:** `txn.md` §4 (when a commit becomes visible, and the BA-R1c
+  paragraph), `wal.md` §3, and `instance_visibility.hpp`'s snapshot-ceiling
+  note.
+
+**Cells** (`tests/strict_park_rig_test.cpp`, plus one in
+`instance_visibility_test.cpp`):
+- A core serves its other sessions while a `strict` commit awaits its sync.
+  The commit is invisible on every core until then, and a checkpoint
+  snapshot taken meanwhile does not list it.
+- An explicit `COMMIT` parks and publishes at its sync.
+- The synchronous wait on its own core's parked marker finishes the commit.
+- A parked commit whose sync fails is aborted, never visible, and its
+  session goes on.
+- Four `strict` commits staged during one held sync complete in at most two
+  syncs.
+- Several open markers on one core cap at the lowest, ended in reverse
+  order.
+
+**Mutations**, each killed:
+- no deferral (the serving and batching cells);
+- the synchronous wait not finishing its own core's commits (the cell
+  hangs);
+- an autocommit commit published at its stage (the serving and
+  synchronous cells);
+- publishing on a stopped log, and keeping the refused commit's bound (the
+  failure cell; run by the reviewer);
+- the newest bound published (the unit cell; run by the reviewer);
+- the checkpoint guard removed (the serving cell; run by the reviewer).
+
+**The review** (`critics-developer`).
+- **Two bugs, fixed by the reviewer:**
+  - B1: a parked commit was listed as active in a checkpoint taken during
+    its park, so a crash could undo a durable, acknowledged commit;
+  - B2: a stopped log published the parked commit beside its refusal,
+    which broke D1.
+- **Also by the reviewer:**
+  - one `DeferCommit` helper over a plain `txn*` per entry;
+  - the multi-marker unit cell;
+  - the header note.
+- **Applied by CLA:**
+  - the batching cell;
+  - parking on a statement's own deferred entry whatever its outcome says;
+  - `FinishCommitBody` moved into the private section;
+  - the `txn.md` and `wal.md` text;
+  - the new synchronous-caller refusal window stated.
+- **Checked, and nothing to change:** a shutdown with a parked commit does
+  not touch a freed wake registry. `EndCommit` reaches the registry only
+  while a ceiling waiter is counted, and the reactors are joined first.
+- **Kept as is:**
+  - the four copies of the cells' stop guard;
+  - the "finished already" guard in `FinishDeferredCommit`, which is cheap
+    and covers a second call.
+
+Overhead not measured; measured at the milestone's close.
+
+### BA-S12 - the WAL append's I/O out from under the latch, built 2026-10-09
+
+On `worktree-ba-open-marks` from `91a14db0`. This is BA-R9's first half, as
+restated in BA-Q9's mark.
+
+- **The next segment's body is built ahead.** Once the current segment is
+  half full, `WalStream::Append` asks the device for the next one
+  (`LogDevice::PrepareSegment`, asynchronous). `FileLogDevice` builds it on
+  a thread of its own, not the WAL writer's, so a 64 MiB zeroing never
+  sits in front of a parked committer's sync. The thread reserves the
+  segment, zeroes it and fsyncs it under the temporary name that `Open`
+  never adopts. The roll then writes the header, `fdatasync`s it, renames
+  and syncs the directory, so the header is still durable before the
+  name. With nothing built ahead, the creation builds the body itself, as
+  before. Both paths share one body builder (`BuildBody`).
+  - BC's rule stands. The roll still syncs the segment it leaves through
+    the sync gate before the next one exists, so preparation and zeroing
+    are all that moved.
+- **A flush writes outside the latch.** Under the latch it claims the
+  flush, swaps the staged ring for a second buffer and records the range.
+  The `pwrite` runs unlatched, so appenders keep staging across it.
+  - Only one flush is in flight at a time.
+  - A flush under the latch (the seal before a roll) and a detach each
+    wait the one in flight out first. So records reach a segment in LSN
+    order, and the device's segment table never changes beside a write.
+  - `Sync` takes the unlatched flush.
+  - `flushed_lsn_` is stored with release and read with acquire.
+- **Not built:**
+  - The CRC's LSN-independent part, BA-R9's third bullet. A record's
+    payload is about 100 B, so there is nothing material to take out from
+    under the latch. Adopted on the operator's standing go-ahead.
+  - The ring-full wait, which is BA-R9's second half (BA-Q9: not now).
+- **Text:** `wal.md` §4.1, §6-1 and §6-5, `stream.hpp`'s concurrency
+  header, `file_log_device.hpp`'s concurrency note, and `latch.hpp`.
+
+**Cells** (`tests/wal_append_off_latch_test.cpp`):
+- Past half a segment the next one is built ahead and the roll adopts it.
+  A reopened device scans through it.
+- A body built ahead and never adopted is not part of the log, and the
+  next creation replaces it.
+- An append is not held behind a flush's write.
+- A roll waits out a flush in flight, and the log stays in order.
+- A detach waits out a flush in flight (added by the reviewer).
+
+**Mutations**, each killed:
+- the flush writing under the latch;
+- a latched flush not waiting for the one in flight;
+- no build ahead asked for;
+- a creation ignoring the body built ahead;
+- a detach not waiting (run by the reviewer).
+
+**The review** (`critics-developer`).
+- **Two races, fixed by the reviewer:**
+  - a failed unlatched write released its claim before stopping the
+    stream, so a flush claimed in between could publish a durable point
+    past the hole. Now the stream stops first, and the claim is tested
+    before `stopped()`;
+  - a detach could change the segment table beside an unlatched write.
+- **Also fixed by the reviewer:** a data race on the preparer's read of
+  `end_segment()`.
+- **Applied by CLA:**
+  - the two body builders merged, with `Prewrite` losing its header half;
+  - a dead reset deleted;
+  - a misplaced comment moved;
+  - release/acquire on `flushed_lsn_`;
+  - the text the reviewer listed as owed.
+- **Kept as is:**
+  - The flush waiters yield-spin through another thread's `pwrite`,
+    which is one ring's worth, at most 1 MiB.
+  - A clean shutdown can leave one 64 MiB temporary body. The next
+    creation removes it.
+  - The device's destructor can wait out a body build.
+  - The simulation harness's in-memory device builds nothing ahead, so
+    the adoption's crash points are covered by the cells, not by the sim.
+  - The shared tail of `Flush` and `FlushLocked`, about 6 lines.
+
+Overhead not measured; measured at the milestone's close.
+
+### BA-S13 - the carve's stall, built 2026-10-09 (the checkpoint half waits for BI-Q1)
+
+On `worktree-ba-open-marks` from `7fa2bd96`.
+
+- **A carve persists page 0 alone** (`DevicePageStore::PersistPage`, used
+  by `Expeditor::PersistTrxIdCeiling` and mirrored by the rig). Page 0 is
+  written back through `WriteBack`'s claim (AT-S10e), and then the data
+  file is synced **unconditionally**: a writeback that carried the newer
+  image is covered too, because the claim is released only after its
+  write. Before this, a carve synced the whole pool, so it waited for
+  every dirty page's writeback and every one of their log records. BA-S4
+  measured carves of up to 2.2 s. Page 0 is unlogged, so the carve now
+  waits on no log record.
+- **The next block is carved ahead** (`TrxIdSequence::CarveAheadIfLow`).
+  Once three-quarters of a core's window is issued, the `system`-group tick
+  carves the next block, on core 0's tick and on each peer's. The `Begin`
+  that drains the window installs that block without carving on its own
+  path. A burn drops the block carved ahead, so this core's ids never move
+  backwards.
+- **The anchor publish is not disturbed.** Both write page 0 under the
+  superblock latch with the page held exclusive, and the claims keep the
+  device writes in order, so an older image never lands after a newer one.
+- **The mount's raise still syncs everything** (`PersistSuperBlock`), once
+  per mount, ahead of the completion checkpoint. Its comment is restated.
+- **The checkpoint half is not built.** BA-R10's third paragraph waits
+  for the operator's mark on BI-Q1 (the BA-S4 entry says why). It is
+  carried to BA's close as a stop.
+- **Text:** `wal.md` §11a and `txn.md`'s carve paragraph.
+
+**Cells:**
+- `peer_writeback_gate_rig_test`'s carve cell is rewritten. A peer's carve
+  persists page 0 and nothing else: the stamped page stays dirty, its
+  record undurable, and no log sync is asked.
+- `trx_id_carve_crash_rig_test`: a crash image taken right after a carve
+  holds a ceiling at or above the carved window. Even rounds carve alone.
+  Odd rounds race a writeback that holds page 0's claim with an older image
+  across the carve, forced by `SetAfterWritebackCopyForTest` (the
+  reviewer's fix).
+  - The image copies through the page cache, so it checks the write and
+    its order against the claim. It cannot see the `fdatasync`.
+- `trx_id_test`'s two early-carve cells: carved ahead at three-quarters and
+  installed without a carve, and a burn that drops the block ahead.
+
+**Mutations**, each killed:
+- the carve syncing the whole pool;
+- the carve writing page 0 nowhere;
+- the claim skipped (`kSkip`, run by the reviewer);
+- a burn keeping the block ahead;
+- a drained window ignoring the block ahead.
+
+**The review** (`critics-developer`): no bug in the production change.
+- **The crash cell's race arm did not race.** Its writeback usually
+  snapshotted the dirty pages before the carve's encode, so a carve that
+  skipped a claimed frame passed. The reviewer forced the interleaving.
+- **The early carve.** CLA first left it out, reasoning that a carve was
+  now one page write and one `fdatasync`. The reviewer pointed out that
+  BA-R10 states it as part of the stage, and that the data file's
+  `fdatasync` flushes everything else unsynced in the file too. A carve
+  right after a large checkpoint write could still take long. CLA built
+  it.
+- **Applied:** the `wal.md` and `txn.md` text, and the restated
+  `PersistSuperBlock` comment.
+- **Not applied:** deleting `PersistSuperBlock` in favour of
+  `PersistTrxIdCeiling` at the mount. That would drop the mount's log and
+  pool sync at that point, which is a behaviour change the stage does not
+  need.
+- **The early carve's own review:** no bug. Per-core monotonicity, the
+  floor, durability and threading all hold.
+  - **Applied:** the carve ahead runs only on a core that issued since the
+    previous tick, which avoids a carve an idle core's burn would drop and
+    one at boot; `ahead_` was moved off the sequence's hot offsets; and
+    `txn.md` states that core 0's tick carves at `cores = 1` too and that
+    a peer's tick needs `wal_drain_interval_us` above 0.
+  - **Not added:** a two-sequence cell for a carve by another core between
+    a carve ahead and its install. It is safe by construction, since every
+    block starts at the superblock's high-water.
+- **Not measured yet:** the "< 10 ms" exit. BA-S17's census re-run reads
+  `carve_longest_us`.
+
+Overhead not measured; measured at the milestone's close.
+
+### BA-S14 - the rightmost leaf, built 2026-10-09
+
+On `worktree-ba-open-marks` from `18f002e1` (BA-R11, BA-Q10).
+
+**The survey: no step moves.** Under the leaf's hold, after placement, each
+step falls in one of two kinds:
+- **The records AT-S21 logs under the hold:** the WAL append
+  (`LogInsert`), and the new root's publish after a split.
+- **Steps whose failure BD-R3 E5 takes back with the leaf still held:**
+  - the Cabin witness (a row no Cabin knows of must not outlive it);
+  - index maintenance;
+  - the assertion reservation (`ReserveInsert`, held until it is logged);
+  - the spill and undo notes (`NoteSpills`, `NoteInsert`, whose failure
+    E5's take-back answers).
+
+Issue, borrow, encode and `AdmitInsert` already run before the descent
+since BD-R6. Nothing left can run before it.
+
+**A structural refusal becomes a re-run.**
+- The four clustered-tree sites that give up a stale descent (descend,
+  parent, secure, lookup) note the statement through a thread-local
+  (`storage::NoteStructuralRefusal`). A caller that recovers from such a
+  refusal clears the note.
+- `DispatchAsync` takes a statement that wrote nothing before the refusal,
+  yields one turn, and re-runs it from the top under the statement's one
+  deadline, the fault net. The re-run re-reads the root, which a growth
+  moved through the schema word.
+- Inside `BEGIN`, `EndWrite` withholds the poison for such a refusal. The
+  poison is applied only if the re-runs end in a refusal. A read's refusal
+  never poisons, as before.
+- A statement that wrote rows first, or whose spills were noted, keeps
+  today's refusal (`txn.md` §9).
+- The index tree's three sites keep reaching the client. Their refusal
+  comes during index maintenance, after the row is placed, and a re-run
+  would leave earlier indexes' entries behind (adopted on the go-ahead,
+  from the review's residual).
+- Reads are re-run too, since `BtreeLookup` is one of the four sites. That
+  is wider than BA-R11's "single-row insert", for the same reason.
+- `SHOW META` gains `contention_structural_reruns`.
+- **Text:** `heap-and-tuple.md` §5, the `client-manual.md` `SHOW META`
+  note, and `btree.cpp`'s comment.
+
+**Cells** (`tests/structural_rerun_rig_test.cpp`): two cores insert into one
+relation without a client retry, in autocommit and inside `BEGIN`, repeated
+until the re-run counter moves. No reply is a refusal.
+
+**Mutations**, each killed:
+- the re-run disabled;
+- the poison applied regardless (inside `BEGIN`, run by the reviewer).
+
+**Not met in this stage:**
+- **"A forced root grown over is re-run and succeeds."** The cells' refusals
+  are `btree_descend`. Forcing `secure` deterministically needs a test seam
+  between `DescendTo` and `SecureParents`, and it is not built. The re-run
+  loop is the same for every site.
+- **"Scenario 0's `c8-s` cell with no refusal"** is a measurement, read at
+  BA-S17.
+
+**The review** (`critics-developer`). Four bugs, fixed by the reviewer:
+- B1: a re-run inside `BEGIN` always failed. `EndWrite` keyed on
+  `kTxnConflict`, but write paths hand it an `InvalidArgument` verdict, so
+  the transaction was poisoned.
+- B2: a read's refusal could poison a transaction at the deadline.
+- B3: three callers that recover from a structural refusal left the note
+  set, turning a later unrelated conflict into a re-run.
+- B4: a re-run kept the lock on each burned id until commit.
+
+**Applied by CLA:**
+- the index sites stop noting;
+- a redundant condition removed;
+- the text.
+
+**Not applied:** one helper for the three re-run blocks in `DispatchAsync`.
+Each differs in what it re-runs on, and one helper would need a mode for
+each.
+
+Overhead not measured; measured at the milestone's close.
+
+### BA-S15 - the walk-boundary yield and `C_CANCEL`, built 2026-10-10
+
+On `worktree-ba-open-marks` from `6aa76ec7` (BA-R12, BA-Q11). Exempt from
+the census (BA-Q1). The design is CLA's proposal, adopted under the
+go-ahead.
+
+**The walk yields.**
+- A `SELECT`'s outermost walk yields every `exec::SlicePolicy::pages_per_slice`
+  (64) pages, at the bottom of its page loop: no pin, no span
+  (`step_vm.cpp`, `ExecuteAsync`).
+- The structural-refusal note is cleared after each resume, so the note a
+  walk ends with is its own (BA-S14 reads it).
+- 64 was not re-measured. BA-Q11 asked for it "re-measured in the stage";
+  it is read at BA-S17's A/B instead.
+
+**`server::SelectRun` owns the statement.**
+- It owns everything a `SELECT` reads: view and lease, parse, AST,
+  borrow, chain, sinks, quota, and a scratch set (trail collector, replay
+  index, output sort, counters) borrowed from a per-dispatcher pool.
+- The pool replaces the members `trail_scratch_`, `replay_scratch_`,
+  `sorter_` and `exec_stats_`.
+- The plain path hands the run on in `DispatchOutcome::select_run` only
+  under `DispatchAsync` (`may_park_`), untraced, with an outermost step
+  that walks. A pk descent, a traced statement and every synchronous
+  caller run it inline.
+- `AwaitStatementWaits` completes the run at its tail, so every dispatch
+  `DispatchAsync` makes is followed by it.
+- While handed on, the run holds:
+  - this core's statement epoch at the word its head revalidated against;
+    the slot publishes the lowest of the running and the held words,
+    which is BA-Q11's amendment;
+  - a pin on the catalog memo (`Catalog::MemoPin`). `Invalidate` retires
+    a pinned generation whole rather than freeing it, and pins are counted
+    per generation.
+- **Members made statement-local** (§1.10):
+  - the BA-S14 poison flag rides the outcome (`poison_withheld`);
+  - a deferred `strict` commit carries the `DispatchAsync` call that
+    staged it, so a statement parks on its own entry and never on
+    another statement's.
+- The log line for a handed-on `SELECT` is written when its walk ends.
+
+**`C_CANCEL` has a handler** (`protocol.md` §3, §10).
+- `StatusCode::kCancelled` maps to the wire's existing `CANCELLED`
+  category.
+- `CancelRegistry` is one latched map for the instance.
+- A KWP session registers at accept on a listener that has both an
+  identity source and the registry, and only that listener offers
+  `CANCEL`. The session unregisters at close and at `Detach`.
+- A cancel connection's first frame is matched and closed unanswered.
+- The session's flag (`Session::cancel_flag`) is taken at the slice
+  boundary, before and after the yield, and ends the walk `Cancelled`
+  with the transaction failed. Otherwise it is taken at the next frame.
+- A connection closing mid-statement sets its own flag.
+
+**Teardown.** `~CoreRuntime` discards its scheduler's queued tasks before
+the dispatcher, catalog and transaction manager they borrow are destroyed
+(`Scheduler::DiscardTasks`).
+
+**Text:**
+- `sched.md` §3: the yield, what it holds, and the 256-lease cap per core
+  that a 257th suspended walk meets as `OutOfSpace`.
+- `protocol.md` §3 and §10.
+- `client-manual.md`.
+- The stale comments in `statement_epoch.hpp`, `txn/manager.hpp`,
+  `budget.hpp`, `status.hpp`, `handshake.hpp`, `tcp_server.hpp` and
+  `step_vm.cpp`.
+
+**Cells** (`tests/walk_slice_rig_test.cpp`, `kwp_session_test.cpp`):
+- a point read on a long walk's core is answered inside the walk;
+- a schema-word move during a suspension retires, and does not free, the
+  memo the walk bound; the core's epoch stays at the walk's word, and
+  both are given back when the walk ends;
+- a split of leaves behind, at and ahead of the walk, made inside its
+  suspension, leaves it missing and repeating nothing;
+- a cancel ends the walk and fails its transaction;
+- a walk of less than one slice never sees a cancel;
+- a core torn down with a walk queued;
+- the epoch hold, the per-generation pin, the registry, and a cancel
+  connection hit, miss and absent registry.
+
+**Not met in this stage:**
+- **"A root growth on another core"** is exercised as a schema-word move
+  on the walk's own core, a DDL. Both move the same word through the same
+  `Revalidate`.
+- **The teardown cell kills its mutant only under AddressSanitizer.** With
+  `DiscardTasks` removed, a local `-fsanitize=address` build of
+  `kds_tests` reports a heap-use-after-free in `~MemoPin`, and the fixed
+  tree runs clean. Plain Debug passes the mutant, because nothing reuses
+  the freed memory. The tree has no sanitizer build; the harness's
+  `alloc_counter.cpp` needs `alloc_dealloc_mismatch=0`.
+- No cell runs a `strict` commit beside a suspended walk. The fix is
+  covered by reading only.
+- No end-to-end `C_CANCEL` through `TcpServer`.
+- An index walk and a join's inner walk do not yield.
+
+**The review** (`critics-developer`), applied by CLA:
+- C1: a peer torn down with a walk queued was a use-after-free. Fixed by
+  `DiscardTasks`. It was latent before for any parked statement.
+- C2: `deferred_at_entry` adopted other statements' `strict` commits.
+  Fixed by the statement number.
+- C3: the pin graveyard was unbounded under overlapping walks. Fixed by
+  per-generation pins.
+- C4: the reader-lease cap became reachable. Stated in `sched.md`.
+- C5: registry registration and unregistration were asymmetric. Fixed by
+  `Connection::cancel_registered`.
+- Cuts:
+  - a pk descent runs inline;
+  - `sorter_` and `exec_stats_` deleted;
+  - one completion site;
+  - `MemoPin`'s null test gone;
+  - a `CurrentCoreGuard` around the recording;
+  - the stale comments.
+
+**Not applied:**
+- **`SetSelectRunStart`, kept.** Removing it means moving `SelectRun` and
+  `StarDescription` above `DispatchAndStage`, a large move for one
+  assignment.
+- **`StatementEpochs::Hold`'s sorted insert, kept.** An append would be
+  unsound the day a word arrives out of order, because the published
+  minimum would then be wrong. The comment was the part to fix.
+- **`select_run` as a `unique_ptr`, not tried.** It would make
+  `DispatchOutcome` move-only, and every caller that copies one would need
+  checking. The shared handle costs no more than one allocation, which the
+  run already pays.
+
+Overhead not measured; measured at the milestone's close.

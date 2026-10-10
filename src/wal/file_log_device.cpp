@@ -88,6 +88,41 @@ std::optional<std::uint64_t> ParseSegmentNo(const std::string& name, const std::
     return value;
 }
 
+// Full-size reservation, or a sized sparse file where the filesystem cannot
+// preallocate - the prewrite that follows then allocates the blocks for real,
+// which restores the no-ENOSPC-at-append promise by another route.
+Status Reserve(int fd, std::uint64_t size, const std::string& path) {
+    const int rc = ::posix_fallocate(fd, 0, static_cast<::off_t>(size));
+    if (rc == 0) return Status::OK();
+    if (!FallocateUnsupported(rc)) {
+        return ErrnoStatus("FileLogDevice: posix_fallocate on " + path, rc);
+    }
+    if (::ftruncate(fd, static_cast<::off_t>(size)) != 0) {
+        return ErrnoStatus("FileLogDevice: ftruncate on " + path, errno);
+    }
+    return Status::OK();
+}
+
+// A segment's header, written over its zeroed first block and made durable
+// before the rename: `fdatasync`, since the file's size and extents reached
+// the disk with the body's `fsync` (`Prewrite`).
+Status WriteHeaderAndSync(int fd, std::span<const std::byte> header) {
+    for (std::size_t done = 0; done < header.size();) {
+        const ::ssize_t n =
+            ::pwrite(fd, header.data() + done, header.size() - done, static_cast<::off_t>(done));
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return ErrnoStatus("FileLogDevice: header write", errno);
+        }
+        done += static_cast<std::size_t>(n);
+    }
+    while (::fdatasync(fd) != 0) {
+        if (errno == EINTR) continue;
+        return ErrnoStatus("FileLogDevice: fdatasync after the header", errno);
+    }
+    return Status::OK();
+}
+
 // Zero-fills a freshly allocated segment so its extents are *written*, not
 // merely reserved. posix_fallocate hands back unwritten extents, and the
 // first write into each of those costs an extent-conversion journal
@@ -96,7 +131,7 @@ std::optional<std::uint64_t> ParseSegmentNo(const std::string& name, const std::
 // (bench/results-scenario2-freight.md). Paying the whole conversion here,
 // once per segment and off every commit path, is what PostgreSQL's
 // wal_init_zero does and for the same reason.
-Status Prewrite(int fd, std::uint64_t size, std::span<const std::byte> header) {
+Status Prewrite(int fd, std::uint64_t size) {
     // 1 MiB per write: large enough that a 64 MiB segment is 64 syscalls,
     // small enough not to be a resident buffer anyone notices.
     static constexpr std::size_t kChunk = std::size_t{1} << 20;
@@ -113,20 +148,6 @@ Status Prewrite(int fd, std::uint64_t size, std::span<const std::byte> header) {
             return ErrnoStatus("FileLogDevice: prewrite at offset " + std::to_string(at), errno);
         }
         at += static_cast<std::uint64_t>(n);
-    }
-    // The header over the zeroes, before the fsync that follows: one sync
-    // makes the segment and its header durable together, so a power loss
-    // can never leave a full-size segment with a zeroed header.
-    for (std::size_t done = 0; done < header.size();) {
-        const ::ssize_t n = ::pwrite(fd, header.data() + done, header.size() - done,
-                                     static_cast<::off_t>(done));
-        if (n < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return ErrnoStatus("FileLogDevice: header write", errno);
-        }
-        done += static_cast<std::size_t>(n);
     }
     // fsync, not fdatasync: this is the one sync that must also persist the
     // file's metadata (its size, its now-written extents), so that every
@@ -283,12 +304,82 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& 
     return device;
 }
 
+void FileLogDevice::PrepareSegment(std::uint64_t segment_no) {
+    std::lock_guard<std::mutex> guard(request_mutex_);
+    if (stopping_) return;
+    requested_no_ = segment_no;
+    if (!preparer_.joinable()) preparer_ = std::thread([this] { RunPreparer(); });
+    request_cv_.notify_one();
+}
+
+FileLogDevice::~FileLogDevice() {
+    {
+        std::lock_guard<std::mutex> guard(request_mutex_);
+        stopping_ = true;
+    }
+    request_cv_.notify_one();
+    if (preparer_.joinable()) preparer_.join();
+}
+
+void FileLogDevice::RunPreparer() {
+    for (;;) {
+        std::uint64_t want = 0;
+        {
+            std::unique_lock<std::mutex> guard(request_mutex_);
+            request_cv_.wait(guard, [this] {
+                return stopping_ || requested_no_ != std::numeric_limits<std::uint64_t>::max();
+            });
+            if (stopping_) return;
+            want = std::exchange(requested_no_, std::numeric_limits<std::uint64_t>::max());
+        }
+        BuildAhead(want);
+    }
+}
+
+StatusOr<FileDescriptor> FileLogDevice::BuildBody(const std::string& temp) {
+    if (::unlink(temp.c_str()) != 0 && errno != ENOENT) {
+        return ErrnoStatus("FileLogDevice: remove leftover " + temp, errno);
+    }
+    auto fd = OpenSegmentFile(temp, /*create_exclusive=*/true);
+    if (!fd.ok()) return fd.status();
+    const auto abandon = [&temp](Status s) {
+        std::error_code remove_ec;
+        std::filesystem::remove(temp, remove_ec);
+        return s;
+    };
+    // Full-size reservation up front: an append issued after its record was
+    // already accepted into the ring must not be able to fail for space
+    // (file_log_device.hpp).
+    if (Status s = Reserve(fd.value().get(), segment_size_, temp); !s.ok()) return abandon(s);
+    if (Status s = Prewrite(fd.value().get(), segment_size_); !s.ok()) return abandon(s);
+    return fd;
+}
+
+void FileLogDevice::BuildAhead(std::uint64_t segment_no) {
+    std::lock_guard<std::mutex> guard(prepare_mutex_);
+    std::uint64_t end = 0;
+    {
+        // Under the table's lock: this thread is outside the stream's
+        // serialization, and a detach may change the table beside it. A
+        // creation cannot - it holds `prepare_mutex_`.
+        std::lock_guard<std::mutex> table(segments_mutex_);
+        end = end_segment();
+    }
+    if (segment_no != end || prepared_no_ == segment_no) return;
+    // A failed build is dropped: the creation then builds the body itself.
+    auto fd = BuildBody(SegmentPath(segment_no) + kTempSuffix);
+    if (!fd.ok()) return;
+    prepared_fd_ = std::move(fd.value());
+    prepared_no_ = segment_no;
+}
+
 Status FileLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const std::byte> header) {
     if (segment_no != end_segment()) {
         return Status::InvalidArgument("FileLogDevice: segments are created in order (expected " +
                                        std::to_string(end_segment()) + ", got " +
                                        std::to_string(segment_no) + ")");
     }
+    std::lock_guard<std::mutex> prepared(prepare_mutex_);
 
     // **Built under a name `Open` never adopts, and renamed when whole.** A
     // power cut inside a creation - during the prewrite, before its fsync -
@@ -303,39 +394,25 @@ Status FileLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const st
     const std::string temp = path + kTempSuffix;
     const std::string temp_name = std::filesystem::path(temp).filename().string();
     const std::string final_name = std::filesystem::path(path).filename().string();
-    if (::unlink(temp.c_str()) != 0 && errno != ENOENT) {
-        return ErrnoStatus("FileLogDevice: remove leftover " + temp, errno);
-    }
-    auto fd = OpenSegmentFile(temp, /*create_exclusive=*/true);
-    if (!fd.ok()) {
-        return fd.status();
-    }
     const auto abandon = [&temp](Status s) {
         std::error_code remove_ec;
         std::filesystem::remove(temp, remove_ec);
         return s;
     };
-
-    // Full-size reservation up front: an append issued after its record was
-    // already accepted into the ring must not be able to fail for space
-    // (file_log_device.hpp).
-    const int rc = ::posix_fallocate(fd.value().get(), 0, static_cast<::off_t>(segment_size_));
-    if (rc != 0) {
-        if (!FallocateUnsupported(rc)) {
-            return abandon(ErrnoStatus("FileLogDevice: posix_fallocate on " + temp, rc));
-        }
-        // Filesystems that cannot preallocate still get a correctly sized
-        // sparse file; the prewrite below then allocates the blocks for
-        // real, which restores the no-ENOSPC-at-append promise by another
-        // route.
-        if (::ftruncate(fd.value().get(), static_cast<::off_t>(segment_size_)) != 0) {
-            return abandon(ErrnoStatus("FileLogDevice: ftruncate on " + temp, errno));
-        }
+    // **The body built ahead or here, then the header** (BA-S12): either way
+    // the body is reserved, zeroed and synced first, and the header is
+    // written over its first block and synced before the rename - so a
+    // crash never leaves a full-size segment with a zeroed header under the
+    // final name. Ahead (`PrepareSegment`) the body costs this call nothing.
+    StatusOr<FileDescriptor> fd = FileDescriptor();
+    if (prepared_no_ == segment_no) {
+        fd = std::move(prepared_fd_);
+        prepared_no_ = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        fd = BuildBody(temp);
+        if (!fd.ok()) return fd.status();
     }
-
-    if (Status s = Prewrite(fd.value().get(), segment_size_, header); !s.ok()) {
-        return abandon(s);
-    }
+    if (Status s = WriteHeaderAndSync(fd.value().get(), header); !s.ok()) return abandon(s);
 
     // The final name, refused if a file already holds it: segments are
     // created once. A filesystem that refuses `RENAME_NOREPLACE` (`EINVAL`:

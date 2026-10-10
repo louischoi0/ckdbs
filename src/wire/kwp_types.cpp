@@ -42,6 +42,21 @@ StatusOr<ClientHello> DecodeClientHello(std::span<const std::byte> payload) {
     return out;
 }
 
+std::vector<std::byte> EncodeCancelRequest(const CancelRequest& request) {
+    PayloadWriter w;
+    w.U64(request.session_id);
+    w.U64(request.cancel_key);
+    return w.Take();
+}
+
+StatusOr<CancelRequest> DecodeCancelRequest(std::span<const std::byte> payload) {
+    PayloadReader r(payload);
+    const auto session = r.U64();
+    const auto key = r.U64();
+    if (!session || !key) return Status::InvalidArgument("C_CANCEL: truncated payload");
+    return CancelRequest{session.value(), key.value()};
+}
+
 std::vector<std::byte> EncodeServerHello(const ServerHello& hello) {
     PayloadWriter w;
     // No magic: the client already proved it speaks KWP, and echoing one

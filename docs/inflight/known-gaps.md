@@ -85,6 +85,22 @@ statement about an engine that no longer exists; re-verify or strike it.
     told apart from a writer that stopped.
   - **Owner: none.** The bound was not widened, since no cause has been
     observed.
+  - **Reproduced on 2026-10-09** (BA-S3, `worktree-ba-open-marks` at
+    `2f8f7c42`). It failed 2 of 4 plain `-j8` suites that day. Under the
+    `-j8` suite plus eight concurrent copies of the cell, 9 of 80 runs failed
+    there and 10 of 72 at the base `d43845a0`, so BA-S2 did not change the
+    rate.
+  - **A sibling cell answers "slow or stopped" for its own shape: slow.**
+    BA-S2's `ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`
+    drives the same rig, both cores inserting into one relation, and prints
+    each writer's progress when its bound expires. Under the same load, 14
+    of 32 runs expired. Every expired run had both writers part-way, at 52
+    to 400 of 400 rows after 20 s, with core 0 committing `strict` against a
+    real log file. That points at the host's device syncs and oversubscribed
+    CPUs, not at a lost wake. The IdAllocation cell still prints no
+    progress, so this is a reading by analogy for it, not an observation.
+    The sibling now commits `relaxed` and `group` only, with fewer rows and a
+    longer bound.
 
 - **An expeditor's `Start()` failed once under `-j8` and did not
   reproduce.** On `ay-s2-containment-wake` at `33b9433`, one full Debug
@@ -890,6 +906,43 @@ pages and the cases it does not reach.
   Where that cut stands, a reclaim walks from the grown-over root: the
   leaf chain reaches every leaf, and the new root and its right half's
   internal nodes leak.
+
+## Statement scheduling
+
+Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
+`docs/spec/protocol.md` §10.
+
+- **Only a `SELECT`'s outermost walk yields.** It yields every
+  `exec::SlicePolicy::pages_per_slice` (64) pages. Nothing else running
+  gives its core back:
+  - a write;
+  - a pk descent, run inline by design;
+  - an index walk (`RunIndexStep`);
+  - a join's inner walk under one outer page;
+  - a heap relation's lookup that falls back to a chain walk.
+
+  Each holds its core until it ends or `exec::Budget` stops it. 64 is
+  BA-Q11's value, not re-measured in BA-S15.
+- **A cancel is observed only where a walk yields, or at the next
+  frame.** A write that `C_CANCEL` or a closing connection asks to stop
+  runs to its end, and the cancel then refuses the session's next frame.
+  So a dropped connection can still find its write applied.
+- **A core holds at most 256 suspended walks.** Each holds one of its
+  manager's `txn::kMaxRegisteredReaders` reader-lease slots across its
+  suspensions. The 257th walk suspended at once on one core is refused
+  `OutOfSpace` at its head.
+- **What the suite does not cover:**
+  - **A `strict` commit beside a suspended walk.** A deferred commit now
+    names its `DispatchAsync` call, and that fix is covered by reading
+    only.
+  - **`C_CANCEL` end to end through `TcpServer`.** Registration,
+    unregistration at close and at `Detach`, and capability negotiation
+    are covered by reading only. The cells drive `KwpSession` and the
+    registry directly.
+  - **The teardown cell kills its mutant only under AddressSanitizer.**
+    `WalkSliceRigTest.ACoreTornDownWithAWalkBetweenSlicesReleasesItFirst`
+    passes in Debug with `Scheduler::DiscardTasks` removed. The tree has
+    no sanitizer build.
 
 ## Decisions the revision has not taken
 

@@ -92,14 +92,14 @@ CabinEntry CabinSet::At(std::size_t i) const {
     // and a plain read beside it would be a data race. The `shared_ptr` is
     // what keeps the set alive if the store has dropped it meanwhile, which
     // is why this is safe to take at all.
-    std::lock_guard<std::mutex> hold(store_->partitions_[partition_].latch);
+    std::lock_guard<Latch> hold(store_->partitions_[partition_].latch);
     return (*entries_)[i];
 }
 
 void CabinSet::Heal(std::size_t i, PageId page_id, std::uint16_t slot,
                     std::uint32_t page_epoch) const {
     if (store_ == nullptr || entries_ == nullptr || i >= count_) return;
-    std::lock_guard<std::mutex> hold(store_->partitions_[partition_].latch);
+    std::lock_guard<Latch> hold(store_->partitions_[partition_].latch);
     CabinEntry& entry = (*entries_)[i];
     entry.page_id = page_id;
     entry.slot = slot;
@@ -112,7 +112,7 @@ void CabinSet::Heal(std::size_t i, PageId page_id, std::uint16_t slot,
 CabinSet CabinStore::Find(const CabinKey& key) {
     const std::size_t index = PartitionOf(key.cabin_id);
     Partition& part = partitions_[index];
-    std::lock_guard<std::mutex> hold(part.latch);
+    std::lock_guard<Latch> hold(part.latch);
     auto it = part.observed.find(key);
     if (it == part.observed.end()) return CabinSet{};
     // **An announced build is present and unservable** (AT-S7). Its set
@@ -131,11 +131,11 @@ CabinSet CabinStore::Find(const CabinKey& key) {
 void CabinStore::NoteHit(std::uint64_t cabin_id) {
     {
         Partition& part = PartitionFor(cabin_id);
-        std::lock_guard<std::mutex> hold(part.latch);
+        std::lock_guard<Latch> hold(part.latch);
         ++part.info[cabin_id].hits;
     }
     {
-        std::lock_guard<std::mutex> hold(stats_latch_);
+        std::lock_guard<Latch> hold(stats_latch_);
         ++stats_.hits;
     }
     // Outside both latches: the signals sink is another structure with its
@@ -147,11 +147,11 @@ void CabinStore::NoteHit(std::uint64_t cabin_id) {
 void CabinStore::NoteMiss(std::uint64_t cabin_id) {
     {
         Partition& part = PartitionFor(cabin_id);
-        std::lock_guard<std::mutex> hold(part.latch);
+        std::lock_guard<Latch> hold(part.latch);
         ++part.info[cabin_id].misses;
     }
     {
-        std::lock_guard<std::mutex> hold(stats_latch_);
+        std::lock_guard<Latch> hold(stats_latch_);
         ++stats_.misses;
     }
     if (signals_ != nullptr) signals_->NoteCabinLookup(cabin_id, /*served=*/false);
@@ -163,7 +163,7 @@ void CabinStore::NoteHint(std::uint64_t cabin_id, bool ok) {
 
 bool CabinStore::MayObserve(const CabinKey& key) const {
     const Partition& part = PartitionFor(key.cabin_id);
-    std::lock_guard<std::mutex> hold(part.latch);
+    std::lock_guard<Latch> hold(part.latch);
     if (part.observed.contains(key)) return true;  // a heal replaces in place
     if (part.entry_capped.contains(key)) return false;
     auto info = part.info.find(key.cabin_id);
@@ -171,35 +171,35 @@ bool CabinStore::MayObserve(const CabinKey& key) const {
 }
 
 void CabinStore::NoteCapRefusal() {
-    std::lock_guard<std::mutex> hold(stats_latch_);
+    std::lock_guard<Latch> hold(stats_latch_);
     ++stats_.cap_refusals;
 }
 
 void CabinStore::NoteUnbankableView() {
-    std::lock_guard<std::mutex> hold(stats_latch_);
+    std::lock_guard<Latch> hold(stats_latch_);
     ++stats_.unbankable_views;
 }
 
 void CabinStore::NoteEntryCapRefusal(const CabinKey& key) {
     {
         Partition& part = PartitionFor(key.cabin_id);
-        std::lock_guard<std::mutex> hold(part.latch);
+        std::lock_guard<Latch> hold(part.latch);
         part.entry_capped.insert(key);
         part.sightings.erase(key);
     }
-    std::lock_guard<std::mutex> hold(stats_latch_);
+    std::lock_guard<Latch> hold(stats_latch_);
     ++stats_.cap_refusals;
 }
 
 CabinStore::Stats CabinStore::stats() const {
-    std::lock_guard<std::mutex> hold(stats_latch_);
+    std::lock_guard<Latch> hold(stats_latch_);
     return stats_;
 }
 
 std::size_t CabinStore::observed_value_count() const {
     std::size_t n = 0;
     for (const Partition& part : partitions_) {
-        std::lock_guard<std::mutex> hold(part.latch);
+        std::lock_guard<Latch> hold(part.latch);
         n += part.observed.size();
     }
     return n;
@@ -210,7 +210,7 @@ std::uint8_t CabinStore::Observe(const CabinKey& key) {
     std::uint8_t count = 0;
     {
         Partition& part = PartitionFor(key.cabin_id);
-        std::lock_guard<std::mutex> hold(part.latch);
+        std::lock_guard<Latch> hold(part.latch);
         if (part.sightings.size() >= kMaxSightings &&
             part.sightings.find(key) == part.sightings.end()) {
             // Wholesale, exactly as TrailRecorder does it: eviction here
@@ -232,7 +232,7 @@ std::uint8_t CabinStore::Observe(const CabinKey& key) {
         count = held;
     }
     if (cleared) {
-        std::lock_guard<std::mutex> hold(stats_latch_);
+        std::lock_guard<Latch> hold(stats_latch_);
         ++stats_.sighting_clears;
     }
     return count;
@@ -240,7 +240,7 @@ std::uint8_t CabinStore::Observe(const CabinKey& key) {
 
 bool CabinStore::BeginRecording(const CabinKey& key) {
     Partition& part = PartitionFor(key.cabin_id);
-    std::lock_guard<std::mutex> hold(part.latch);
+    std::lock_guard<Latch> hold(part.latch);
     // Already observed, or already being built by another core's probe.
     // Both are "do not walk-and-commit": the first is the heal path, which
     // un-observes before it re-records, and the second would have two
@@ -261,7 +261,7 @@ bool CabinStore::BeginRecording(const CabinKey& key) {
 
 void CabinStore::CancelRecording(const CabinKey& key) {
     Partition& part = PartitionFor(key.cabin_id);
-    std::lock_guard<std::mutex> hold(part.latch);
+    std::lock_guard<Latch> hold(part.latch);
     auto mark = part.building.find(key);
     if (mark == part.building.end()) return;
     part.building.erase(mark);
@@ -277,7 +277,7 @@ bool CabinStore::Commit(const CabinKey& key, std::vector<CabinEntry> entries) {
     bool accepted = false;
     {
         Partition& part = PartitionFor(key.cabin_id);
-        std::lock_guard<std::mutex> hold(part.latch);
+        std::lock_guard<Latch> hold(part.latch);
 
         // **The announced build's half** (AT-S7). Its set already holds
         // every write the hook took during the walk, from whichever core
@@ -350,7 +350,7 @@ bool CabinStore::Commit(const CabinKey& key, std::vector<CabinEntry> entries) {
             }
         }
     }
-    std::lock_guard<std::mutex> hold(stats_latch_);
+    std::lock_guard<Latch> hold(stats_latch_);
     if (counted == Counted::kCapRefusal) ++stats_.cap_refusals;
     if (counted == Counted::kRecording) ++stats_.recordings;
     return accepted;
@@ -359,7 +359,7 @@ bool CabinStore::Commit(const CabinKey& key, std::vector<CabinEntry> entries) {
 void CabinStore::Rebuild(const CabinKey& key, const CabinSet& viewed,
                          std::vector<CabinEntry> entries) {
     Partition& part = PartitionFor(key.cabin_id);
-    std::lock_guard<std::mutex> hold(part.latch);
+    std::lock_guard<Latch> hold(part.latch);
     auto it = part.observed.find(key);
     if (it == part.observed.end()) return;
     // **The same storage the heal walked, or nothing.** An `Unobserve` and
@@ -404,7 +404,7 @@ void CabinStore::Unobserve(const CabinKey& key) {
     bool dropped = false;
     {
         Partition& part = PartitionFor(key.cabin_id);
-        std::lock_guard<std::mutex> hold(part.latch);
+        std::lock_guard<Latch> hold(part.latch);
         auto it = part.observed.find(key);
         if (it != part.observed.end()) {
             RemoveSetLocked(part, key.cabin_id, it->second->size());
@@ -427,7 +427,7 @@ void CabinStore::Unobserve(const CabinKey& key) {
         part.sightings.erase(key);
         part.entry_capped.erase(key);
     }
-    std::lock_guard<std::mutex> hold(stats_latch_);
+    std::lock_guard<Latch> hold(stats_latch_);
     ++stats_.unobserved;
 }
 
@@ -446,7 +446,7 @@ bool CabinKeyLess(const CabinKey& a, const CabinKey& b) noexcept {
 std::vector<CabinKey> CabinStore::SightedUnobservedOf(std::uint64_t cabin_id) const {
     std::vector<CabinKey> keys;
     const Partition& part = PartitionFor(cabin_id);
-    std::lock_guard<std::mutex> hold(part.latch);
+    std::lock_guard<Latch> hold(part.latch);
     for (const auto& [key, count] : part.sightings) {
         if (key.cabin_id != cabin_id) continue;
         if (part.observed.find(key) != part.observed.end()) continue;
@@ -459,7 +459,7 @@ std::vector<CabinKey> CabinStore::SightedUnobservedOf(std::uint64_t cabin_id) co
 std::vector<CabinKey> CabinStore::ObservedValuesOf(std::uint64_t cabin_id) const {
     std::vector<CabinKey> keys;
     const Partition& part = PartitionFor(cabin_id);
-    std::lock_guard<std::mutex> hold(part.latch);
+    std::lock_guard<Latch> hold(part.latch);
     for (const auto& [key, entries] : part.observed) {
         if (key.cabin_id == cabin_id) keys.push_back(key);
     }
@@ -470,7 +470,7 @@ std::vector<CabinKey> CabinStore::ObservedValuesOf(std::uint64_t cabin_id) const
 std::size_t CabinStore::Discard(std::uint64_t cabin_id) {
     std::size_t sets = 0;
     Partition& part = PartitionFor(cabin_id);
-    std::lock_guard<std::mutex> hold(part.latch);
+    std::lock_guard<Latch> hold(part.latch);
     for (auto it = part.observed.begin(); it != part.observed.end();) {
         if (it->first.cabin_id != cabin_id) {
             ++it;
@@ -507,7 +507,7 @@ std::size_t CabinStore::Discard(std::uint64_t cabin_id) {
 void CabinStore::Forget(std::uint64_t cabin_id) {
     Discard(cabin_id);
     Partition& part = PartitionFor(cabin_id);
-    std::lock_guard<std::mutex> hold(part.latch);
+    std::lock_guard<Latch> hold(part.latch);
     // The announce marks go too: the Cabin is gone, so the walks that made
     // them will find no `sys.cabins` row to commit against and the marks
     // would be the one thing of this Cabin that outlived it. `Commit` on a
@@ -524,7 +524,7 @@ void CabinStore::NoteWrite(const CabinKey& key, const CabinEntry& entry) {
     Counted counted = Counted::kNone;
     {
         Partition& part = PartitionFor(key.cabin_id);
-        std::lock_guard<std::mutex> hold(part.latch);
+        std::lock_guard<Latch> hold(part.latch);
         auto it = part.observed.find(key);
         // **The common case, and the whole reason the hook is affordable**:
         // the value is not observed, so there is nothing this write can
@@ -558,7 +558,7 @@ void CabinStore::NoteWrite(const CabinKey& key, const CabinEntry& entry) {
             counted = Counted::kAppend;
         }
     }
-    std::lock_guard<std::mutex> hold(stats_latch_);
+    std::lock_guard<Latch> hold(stats_latch_);
     if (counted == Counted::kAppend) ++stats_.appends;
     if (counted == Counted::kCap) {
         ++stats_.unobserved;
@@ -568,7 +568,7 @@ void CabinStore::NoteWrite(const CabinKey& key, const CabinEntry& entry) {
 
 CabinStore::CabinInfo CabinStore::InfoFor(std::uint64_t cabin_id) const {
     const Partition& part = PartitionFor(cabin_id);
-    std::lock_guard<std::mutex> hold(part.latch);
+    std::lock_guard<Latch> hold(part.latch);
     auto it = part.info.find(cabin_id);
     return it == part.info.end() ? CabinInfo{} : it->second;
 }

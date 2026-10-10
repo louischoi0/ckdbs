@@ -197,9 +197,11 @@ public:
     // §10 makes `cancel_key` the whole of a cancel's authorization - "a
     // wrong key is silently ignored" - so a guessable one lets any peer
     // cancel any session. The default is therefore *not* offered as the
-    // `CANCEL` capability: a server with no identity source installed
-    // negotiates the bit away, and `C_CANCEL` has nothing to match. The
-    // Expeditor installs a real source where one is available.
+    // `CANCEL` capability: a server with no identity source installed, or
+    // no `CancelRegistry` (`ClientSetup::cancels`), negotiates the bit away,
+    // and `C_CANCEL` is refused as any unexpected first frame. The
+    // Expeditor installs a real source and the instance's registry where
+    // OpenSSL is available (BA-S15).
     using IdentitySource = std::function<std::uint64_t()>;
     void set_identity_source(IdentitySource source) noexcept {
         identity_source_ = std::move(source);
@@ -221,12 +223,17 @@ public:
         AuthGateFactory auth;
         // `tcp_keepalive_s` (`ConfigureAcceptedSocket`).
         std::uint32_t keepalive_s = kDefaultTcpKeepaliveS;
+        // The instance's cancel registry (§10, BA-S15). Used, and `CANCEL`
+        // offered, only beside an identity source: a counter's key is no
+        // authorization.
+        CancelRegistry* cancels = nullptr;
     };
     void Configure(const ClientSetup& setup) {
         protocol_ = setup.protocol;
         durability_ = setup.durability;
         keepalive_s_ = setup.keepalive_s;
         if (setup.identity) identity_source_ = setup.identity;
+        if (setup.cancels != nullptr) cancels_ = setup.cancels;
         if (setup.channel) channel_factory_ = setup.channel;
         if (setup.auth) auth_gate_factory_ = setup.auth;
     }
@@ -288,10 +295,14 @@ private:
 
         // The client hung up, or a write failed, while a statement was
         // running. The connection cannot be destroyed yet - the statement
-        // holds a reference to its session - so it is marked and torn down
-        // when the statement finishes. Cancelling instead would need
-        // cancellation the engine does not have.
+        // holds a reference to its session - so it is marked, its statement
+        // asked to stop (a `SELECT`'s walk sees it at its next slice
+        // boundary, BA-S15), and it is torn down when the statement ends.
         bool closing = false;
+
+        // In `CancelRegistry` under this session's id (§10, BA-S15), and so
+        // owed an `Unregister` when the connection goes.
+        bool cancel_registered = false;
 
         // The finished statement's reply, waiting to be appended to the
         // outbox. Owned by the connection because the coroutine writes
@@ -364,6 +375,7 @@ private:
     // tail still waiting to go out.
     void SyncWriteInterest(int client_fd, Connection& conn);
     void CloseClient(int client_fd);
+    void UnregisterCancel(Connection& conn);
 
     bool logging(LogLevel level) const noexcept {
         return log_ != nullptr && log_->enabled(level);
@@ -396,6 +408,8 @@ private:
     wal::DurabilityClass durability_ = wal::DurabilityClass::kGroup;
     std::uint32_t keepalive_s_ = kDefaultTcpKeepaliveS;
     IdentitySource identity_source_;
+    // `ClientSetup::cancels`; null keeps `CANCEL` withheld.
+    CancelRegistry* cancels_ = nullptr;
     // The counter behind the default identity source. Not a secret; see
     // `set_identity_source`.
     std::uint64_t next_identity_ = 0;

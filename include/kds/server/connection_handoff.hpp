@@ -76,7 +76,7 @@ public:
 
 private:
     struct Inbox {
-        Latch latch;
+        Latch latch{LatchKind::kHandoff};
         std::vector<int> fds;
         std::atomic<bool> pending{false};
     };

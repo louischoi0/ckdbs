@@ -2,6 +2,7 @@
 
 #include <unordered_set>
 
+#include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 
 #include <algorithm>
@@ -54,7 +55,7 @@ bool PageIsAllZero(std::span<const std::byte, kPageSize> page) noexcept {
 class LoadingGuard {
 public:
     LoadingGuard(std::unique_lock<Latch>& hold, std::unordered_set<PageId>& loading,
-                 std::condition_variable& done, PageId page_id) noexcept
+                 std::condition_variable_any& done, PageId page_id) noexcept
         : hold_(hold), loading_(loading), done_(done), page_id_(page_id) {}
     LoadingGuard(const LoadingGuard&) = delete;
     LoadingGuard& operator=(const LoadingGuard&) = delete;
@@ -71,7 +72,7 @@ public:
 private:
     std::unique_lock<Latch>& hold_;
     std::unordered_set<PageId>& loading_;
-    std::condition_variable& done_;
+    std::condition_variable_any& done_;
     PageId page_id_;
 };
 
@@ -2231,6 +2232,12 @@ std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn()
     return dirty;
 }
 
+Status DevicePageStore::PersistPage(PageId page_id) {
+    const PageId ids[] = {page_id};
+    if (auto written = WriteBack(ids); !written.ok()) return written.status();
+    return device_.Sync();
+}
+
 Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     // The checkpointer's route through the one writeback primitive - §4's
     // "consumer of the machinery, not a parallel implementation".
@@ -2724,7 +2731,12 @@ void DevicePageStore::AcquirePageLatch(PageId page_id, Frame& frame, PinMode mod
         // holding one shared table's word while claiming to be several
         // cores, which is a shape production cannot reach; they take a
         // `CurrentCoreGuard` then.
-        (void)PageLatch::Acquire(frame.latch, LatchModeFor(mode), CurrentCore());
+        if (const std::uint64_t turns =
+                PageLatch::Acquire(frame.latch, LatchModeFor(mode), CurrentCore());
+            turns > 0) {
+            Contention::Add(Tally::kPageLatchWaits);
+            Contention::Add(Tally::kPageLatchSpinTurns, turns);
+        }
 #ifndef NDEBUG
         // Recorded **after** the acquire, so the set never claims a hold
         // this thread is still waiting for.

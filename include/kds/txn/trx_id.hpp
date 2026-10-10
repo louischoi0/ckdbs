@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 
 #include "kds/base/latch.hpp"
 #include "kds/base/status.hpp"
@@ -155,6 +156,17 @@ public:
     // on any core, since AT-S10b.
     Status BurnWindow();
 
+    // **The next block, carved before this one runs dry** (BA-S13, BA-R10):
+    // once three-quarters of the window is issued, a `system`-group tick
+    // carves the next block and keeps it ahead, so the `Begin` that drains
+    // the window installs it without a carve on its path. A no-op while a
+    // block is already ahead or a quarter of the window is left. The block
+    // ahead is durable when carved, like every carve; a burn drops it,
+    // because a burn's fresh block sits above it and issuing it afterwards
+    // would move this core's ids backwards.
+    Status CarveAheadIfLow();
+    bool has_block_ahead() const noexcept { return ahead_.has_value(); }
+
 private:
     Status ReserveBlock();
     void InstallWindow(TrxIdRange window) noexcept;
@@ -166,7 +178,8 @@ private:
     // noise floor either way, so this is free rather than proven.
     std::uint64_t next_;
     std::uint64_t ceiling_;
-    Latch* superblock_latch_ = nullptr;  // SetLatch; last, off the hot offsets
+    Latch* superblock_latch_ = nullptr;  // SetLatch; off the hot offsets
+    std::optional<TrxIdRange> ahead_;    // CarveAheadIfLow; after the latch, off them too
 };
 
 }  // namespace kds::txn

@@ -38,17 +38,25 @@
 //     **under the latch**, and so does the segment roll - which is not
 //     microseconds but a device sync of the segment it leaves (through
 //     `SyncDevice`, so the seal marker is durable before the next segment
-//     exists), then the next segment's `CreateSegment`: a
-//     `posix_fallocate`, a full-segment prewrite with the header over it,
-//     and two `fsync`s (`wal/file_log_device.cpp`). That is why
-//     the latch is a mutex and not a spin: a waiter sleeps for the length
-//     of a segment creation instead of burning a core through it.
-//     Moving the write out from under the latch (stage a second buffer,
-//     write it unlatched) is the follow-on if AL-S8 prices this as
-//     material; the roll cannot move without an in-flight-segment rule.
-//   - `Sync`, from any thread: the flush under the latch, the device sync
-//     **outside** it, and the durable watermark published as a maximum,
-//     so two syncers can never pull it back.
+//     exists), then the next segment's `CreateSegment`,
+//     whose body (the reservation and the zeroing) the device has usually
+//     built ahead since BA-S12 - `Append` asks for it once a segment is half
+//     full - so the creation is a header write, its sync, a rename and a
+//     directory fsync (`wal/file_log_device.cpp`); without the body built,
+//     the creation builds it inline as before. That is why the latch is a
+//     mutex and not a spin: a waiter sleeps through a roll instead of
+//     burning a core through it.
+//   - **`Flush` writes outside the latch since BA-S12**: it swaps the staged
+//     ring for a second buffer under the latch and writes the swapped-out
+//     bytes unlatched, one such write in flight at a time. A flush under
+//     the latch (the seal before a roll) and a detach wait the one in
+//     flight out first, so the device's segment table never changes beside
+//     a write and records reach a segment in LSN order. A failed unlatched
+//     write stops the stream before it releases its claim, so no flush
+//     claimed after it can publish a durable point past the hole.
+//   - `Sync`, from any thread: the unlatched flush, the device sync
+//     **outside** the latch, and the durable watermark published as a
+//     maximum, so two syncers can never pull it back.
 //   - The gauges (`append_lsn`, `flushed_lsn`, `durable_lsn`, `ring_used`,
 //     `sealed`) are relaxed atomics: written under the latch, readable
 //     from any thread without it as the instantaneous values they are.
@@ -85,9 +93,9 @@
 // The core-local ring of wal.md section 6 is, today, a preallocated linear
 // staging buffer: append is a memcpy plus a cursor bump, and Flush() hands
 // the whole staged range to the device in one write and resets the cursor.
-// It is not circular, and deliberately so - every I/O path in the engine is
-// still synchronous, so there is no in-flight write for an appender to run
-// ahead of, and a circular buffer would buy nothing but the inability to
+// It is not circular: since BA-S12 a flush in flight writes the *other*
+// buffer (`flush_buf_`), so appenders stage into a fresh linear ring while
+// it runs, and a circular buffer would buy nothing but the inability to
 // encode a record that straddles the wrap point. When an asynchronous
 // backend lands (the [OPEN] I/O decision), this becomes a real ring; the
 // interface above it does not change.
@@ -182,7 +190,7 @@ public:
     // Everything below this has been handed to the device; everything below
     // durable_lsn() has been synced by it. The gap between them is exactly
     // what a crash would lose.
-    Lsn flushed_lsn() const noexcept { return flushed_lsn_.load(std::memory_order_relaxed); }
+    Lsn flushed_lsn() const noexcept { return flushed_lsn_.load(std::memory_order_acquire); }
     Lsn durable_lsn() const noexcept { return durable_lsn_.load(std::memory_order_acquire); }
 
     bool sealed() const noexcept { return sealed_.load(std::memory_order_relaxed); }
@@ -209,8 +217,8 @@ public:
     // Any thread; the flag is the only state, and it is atomic.
     Status FailStop(const Status& cause);
     std::size_t ring_used() const noexcept { return ring_used_.load(std::memory_order_relaxed); }
-    std::size_t ring_capacity() const noexcept { return ring_.size(); }
-    std::size_t ring_free() const noexcept { return ring_.size() - ring_used(); }
+    std::size_t ring_capacity() const noexcept { return ring_capacity_; }
+    std::size_t ring_free() const noexcept { return ring_capacity_ - ring_used(); }
 
     // The device under this stream, for the one caller that has to reach it
     // past the stream: the WAL writer thread syncs the device while this
@@ -282,6 +290,9 @@ private:
     Status StartSegment(std::uint64_t segment_no);
     Status Roll();
     Status FlushLocked();
+    // Yield-spins until no unlatched flush is in flight; that write needs no
+    // latch to finish, so a caller may hold it.
+    void WaitOutFlushInFlight() const noexcept;
     Status SealLocked();
     // Walks segment `segment_no` forward and leaves append_lsn_ at its
     // durable end, or seals it if a PAD marker is found. Open() only.
@@ -296,7 +307,19 @@ private:
     std::uint32_t core_id_;
     std::uint64_t segment_size_ = 0;
 
+    // **The flush writes outside the latch** (BA-S12, BA-R9's first half).
+    // `Flush` swaps the staged ring for `flush_buf_` under the latch and
+    // writes the swapped-out bytes with the latch released, so appenders
+    // keep encoding into the fresh ring across the `pwrite`. One such flush
+    // is in flight at a time (`flush_in_flight_`, claimed under the latch);
+    // a flush under the latch - the seal before a roll - waits it out first,
+    // which needs no latch to finish, so records reach the segment in LSN
+    // order. Both buffers are `ring_capacity_` bytes and are only ever
+    // swapped, never resized.
+    std::size_t ring_capacity_ = 0;
     std::vector<std::byte> ring_;
+    std::vector<std::byte> flush_buf_;
+    std::atomic<bool> flush_in_flight_{false};
     std::atomic<std::size_t> ring_used_{0};
 
     std::atomic<Lsn> append_lsn_{0};
@@ -309,15 +332,19 @@ private:
     // by `Sync` and the writer thread; nothing holding it takes the latch,
     // so the order is latch -> sync_mutex_ -> the device's `segments_mutex_`
     // (`FileLogDevice::Sync` copies its descriptors).
-    std::mutex sync_mutex_;
+    Latch sync_mutex_{LatchKind::kWalSyncGate};
 
     // `latch_` points at `latch_storage_` when shared and is null when not
     // (spin_latch.hpp: a null guard costs one branch and no atomic).
-    Latch latch_storage_;
+    Latch latch_storage_{LatchKind::kWalStream};
     Latch* latch_ = nullptr;
 
     // Preallocated so writing a segment header never allocates.
     std::vector<std::byte> header_block_;
+
+    // The segment whose body `Append` last asked the device to build ahead
+    // (BA-S12). Under the latch.
+    std::uint64_t prepare_asked_ = 0;
 };
 
 }  // namespace kds::wal

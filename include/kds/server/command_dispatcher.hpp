@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -170,6 +171,10 @@ enum class PhysicalOptimizerMode : std::uint8_t {
 };
 
 
+// A `SELECT` whose walk runs on after its head returns (BA-S15); defined
+// in `command_dispatcher.cpp`.
+class SelectRun;
+
 struct DispatchOutcome {
     std::string response;
     bool should_stop = false;
@@ -336,6 +341,31 @@ struct DispatchOutcome {
     // `DispatchAsync()` parks, which is what lets the next connection's
     // statement run and stage its own commit into the same sync.
     wal::Lsn pending_lsn = wal::kNoLsn;
+
+    // The `DispatchAsync` call this outcome belongs to, carried so a wait's
+    // re-run - inside `AwaitStatementWaits`, which has only the outcome -
+    // opens its window as the same statement (`MayParkScope`). 0 outside
+    // `DispatchAsync`.
+    std::uint64_t statement = 0;
+
+    // **A `SELECT`'s walk, not yet run** (BA-S15, BA-R12). Set only under
+    // `DispatchAsync`, on the plain path's reply - the one shape whose walk
+    // is unbounded - after the head has parsed, compiled and described the
+    // statement: the walk runs on after the head returns, yielding its core
+    // every `SlicePolicy::pages_per_slice` pages, and `DispatchAsync`
+    // awaits it before it reads anything else here. It owns everything the
+    // walk reads, holds this core's statement epoch at the word the head
+    // revalidated against and pins the catalog memo, and gives all three
+    // back when it is destroyed. Null on every other reply, and always
+    // null once `DispatchAsync` returns.
+    std::shared_ptr<SelectRun> select_run = nullptr;
+
+    // **The poison `EndWrite` withheld for a structural re-run** (BA-S14),
+    // carried with the statement rather than read back off the dispatcher:
+    // since BA-S15 another statement of this core can run between this
+    // statement's head and the end of `DispatchAsync`, and would overwrite
+    // a member.
+    bool poison_withheld = false;
 };
 
 // The one spelling of an error reply on the newline protocol (docs/spec/txn.md
@@ -1637,6 +1667,15 @@ private:
     DispatchOutcome HandleSelect(std::string_view line, Session& session,
                                  bool analyze = false);
 
+    // Runs the walk a `DispatchAndStage` reply left in `out->select_run`
+    // and writes the reply over `out` (BA-S15). `DispatchAsync` only.
+    sched::Coro CompleteSelect(std::string_view line, DispatchOutcome* out);
+
+    // The statement log line `DispatchAndStage` writes, split out so a
+    // `SELECT` whose walk ends after its head is logged when it ends.
+    void LogStatement(std::string_view line, const DispatchOutcome& outcome,
+                      sched::MonoTimeNs started_ns) const;
+
     // The ANALYZE reply: run the chain for its counters, print the plan
     // beside them. Split out so HandleSelect's row-formatting path and
     // this one visibly share everything above the sink.
@@ -1656,7 +1695,8 @@ private:
     DispatchOutcome RunAnalyze(const exec::StepChain& chain, exec::TrailCollector* trail,
                                const exec::TrailReplay* replay,
                                const std::optional<StatementIdentity>& identity,
-                               const txn::Snapshot& snapshot, exec::PositionSink& borrow);
+                               const txn::Snapshot& snapshot, exec::PositionSink& borrow,
+                               exec::OutputSort& sorter);
 
 public:
     // AG11's caps, from `aggregate_max_groups` / `aggregate_max_distinct`.
@@ -1932,12 +1972,14 @@ private:
     // nothing else was installed, and is what the reply is taken from.
     // Two references to one thing on the newline path, because a sink that
     // is somebody else's has no reply to give back.
-    // `borrow` as on `RunAnalyze` above (AT-R1).
+    // `borrow` as on `RunAnalyze` above (AT-R1). The sort and the counters
+    // each takes are the statement's pooled scratch (`SelectScratch`).
     DispatchOutcome RunAggregated(ResultSink& sink, TextResultSink& text_sink,
                                   const exec::StepChain& chain, exec::TrailCollector* trail,
                                   const exec::TrailReplay* replay,
                                   const std::optional<StatementIdentity>& identity,
-                                  const txn::Snapshot& snapshot, exec::PositionSink& borrow);
+                                  const txn::Snapshot& snapshot, exec::PositionSink& borrow,
+                                  exec::ExecStats& stats);
 
     // **The success-path recording point.** Three collectors observe the
     // same moment - a completed execution - and they are called from one
@@ -2241,6 +2283,51 @@ private:
     // for it - the same argument `pending_commit_lsn_` makes one line up.
     bool may_park_ = false;
 
+    // **`EndWrite` withheld an explicit transaction's poison for a
+    // structural re-run** (BA-S14). Read where the re-runs give up: only a
+    // statement whose poison was withheld is poisoned there - a read never
+    // poisons, so its refusal at the deadline must not either. Which
+    // statements re-run at all is `EndWrite`'s call, made by clearing
+    // `storage::StructuralRefusalNoted()` for any it ends otherwise.
+    bool structural_poison_withheld_ = false;
+
+    // **`strict` commits parked before their publish** (BA-S7 part 2,
+    // BA-Q3 (b)). A commit that may park stages its record for the writer
+    // (`TransactionManager::CommitDeferred`), holds its marker, and leaves
+    // its second half here; the statement then parks on durability like a
+    // `group` commit. Whoever first finds the record durable runs the
+    // second half - the parked statement on its kick, or `Dispatch`'s
+    // synchronous wait on its own core's marker, which could otherwise wait
+    // for a statement that cannot run until it returns. In LSN order, since
+    // the writer's watermark only rises. This core's alone.
+    //
+    // **Each entry names the statement that staged it** (BA-S15): another
+    // statement of this core can run inside a `SELECT`'s walk, or inside any
+    // park, and stage its own; `DispatchAsync` parks on its own entry only.
+    struct DeferredCommit {
+        wal::Lsn lsn = wal::kNoLsn;
+        txn::Transaction* txn = nullptr;
+        std::uint64_t statement = 0;
+    };
+    std::vector<DeferredCommit> deferred_commits_;
+
+    // Both commit arms' deferred tail: the statement parks on `lsn`, and
+    // `FinishDeferredCommits` owns `txn` from here.
+    void DeferCommit(txn::Transaction* txn, wal::Lsn lsn);
+
+    // Whether a commit of `txn` here takes the deferred path: `strict`, a
+    // statement that may park, a writer that kicks (above one core - at one
+    // core the commit syncs inline, as before), and no catalog write in the
+    // transaction, whose second half `EndDdlScope` owns.
+    bool DefersCommit(std::uint64_t txn_id) const;
+
+    // Runs the second half of every deferred commit whose record is
+    // durable, in order. Once the log is stopped, every one whose record is
+    // not durable is aborted instead: D1 never publishes a commit that is
+    // not durable, and a failed sync aborts on both paths (txn.md §6). The
+    // statement answers with the refusal (`DispatchAsync`).
+    void FinishDeferredCommits();
+
     // **The allowance, taken and given back structurally** (AO-S6d). The
     // argument for it is the one the `DispatchAsync` site already makes
     // about a hand-placed pair: it is correct today and silently wrong the
@@ -2253,18 +2340,29 @@ private:
     // about what "off" was.
     class MayParkScope {
     public:
-        MayParkScope(CommandDispatcher& owner, bool allowed) noexcept
-            : owner_(owner), saved_(owner.may_park_) {
+        // `statement` is the `DispatchAsync` call this window belongs to,
+        // which a deferred commit staged inside it is stamped with.
+        MayParkScope(CommandDispatcher& owner, bool allowed, std::uint64_t statement) noexcept
+            : owner_(owner), saved_(owner.may_park_), saved_statement_(owner.parking_statement_) {
             owner_.may_park_ = allowed;
+            owner_.parking_statement_ = statement;
         }
-        ~MayParkScope() { owner_.may_park_ = saved_; }
+        ~MayParkScope() {
+            owner_.may_park_ = saved_;
+            owner_.parking_statement_ = saved_statement_;
+        }
         MayParkScope(const MayParkScope&) = delete;
         MayParkScope& operator=(const MayParkScope&) = delete;
 
     private:
         CommandDispatcher& owner_;
         bool saved_;
+        std::uint64_t saved_statement_;
     };
+    // The `DispatchAsync` call whose synchronous window is running, and the
+    // last one issued (`MayParkScope`, `DeferredCommit::statement`).
+    std::uint64_t parking_statement_ = 0;
+    std::uint64_t last_statement_ = 0;
     Logger* log_;
     const sched::Clock* clock_;
     wal::WalManager* wal_;
@@ -2305,8 +2403,8 @@ private:
     exec::AggregateLimits aggregate_limits_;
 
     // The fold, **reused rather than constructed per statement** (workplan
-    // AP03). Same reason `trail_scratch_` and `replay_scratch_` beside it
-    // are hoisted, and the same shape of measurement: building one per
+    // AP03). Same reason `SelectScratch`'s trail collector and replay index
+    // are reused, and the same shape of measurement: building one per
     // statement cost about 4 microseconds of server CPU on a pk lookup,
     // roughly 6.5% of what that statement spends there, nearly all of it
     // allocation for buffers the previous statement had already sized.
@@ -2314,15 +2412,8 @@ private:
     // `Reset` points it at each statement's spec and labels, which live on
     // that statement's chain - so between statements it holds pointers that
     // are not valid, and nothing may read it there. That is the same
-    // contract `trail_scratch_` has with `Clear()`.
+    // contract the pooled trail collector has with `Clear()`.
     exec::Aggregator aggregator_;
-
-    // The output sort (OB4), hoisted for `aggregator_`'s reason and holding
-    // the same contract: `Reset` points it at one statement's keys, and
-    // between statements it holds a buffer nothing may read. Statements
-    // that wrote no `ORDER BY`, and those whose order the compiler elided,
-    // leave it inactive and untouched.
-    exec::OutputSort sorter_;
 
     // `sort_max_rows` - how many rows one sort may hold before the
     // statement is refused. A cap, not a budget: it never truncates.
@@ -2347,14 +2438,28 @@ private:
     // is every pre-existing test - behaves exactly as it always did.
     bool replay_enabled_ = false;
 
-    // Reused across statements so recording costs no allocation on the read
-    // path - a collector reserves a whole trail's worth of room, and doing
-    // that per SELECT is an 8 KB malloc per query. Cleared at the start of
-    // each execution, never read between them.
-    exec::TrailCollector trail_scratch_{stats::kMaxTrailEntries};
-
-    // The replay index, reused across statements for the same reason.
-    exec::TrailReplay replay_scratch_;
+    // **A `SELECT`'s scratch, pooled rather than owned** (BA-S15). The
+    // trail collector reserves a whole trail's worth of room - an 8 KB
+    // malloc per query if built per statement - and the replay index, the
+    // output sort and the per-step counters keep their buffers the same
+    // way. They were one set of dispatcher members while one statement ran
+    // at a time on a core; since BA-S15 several `SELECT` walks of one core
+    // can be suspended at once, so each `SelectRun` borrows a set here and
+    // gives it back when it ends. The pool grows to the most walks this
+    // core has had suspended together and keeps them.
+    //
+    // The output sort (OB4) and the counters are here for the same reason:
+    // `Reset` points the sort at one statement's keys, and between
+    // statements it holds a buffer nothing may read; a statement that wrote
+    // no `ORDER BY`, or whose order the compiler elided, leaves it inactive.
+    struct SelectScratch {
+        exec::TrailCollector trail{stats::kMaxTrailEntries};
+        exec::TrailReplay replay;
+        exec::OutputSort sorter;
+        exec::ExecStats stats;
+    };
+    std::vector<std::unique_ptr<SelectScratch>> select_scratch_pool_;
+    friend class SelectRun;
 
     // Whether a successful SELECT records its access shapes
     // (`access_statistics`). Defaults **on**: unlike Waystone this collects
@@ -2526,12 +2631,11 @@ private:
     PhysicalOptimizerMode relayout_mode_ = PhysicalOptimizerMode::kShadow;
     sched::MonoTimeNs decay_half_life_ns_ = 600'000'000'000ULL;
 
-    // PHY01's collector, and the per-statement counters that feed its S2.
-    // The ExecStats is hoisted for the aggregator's reason: `For()` sizes a
-    // vector, and a member reused across statements makes the ordinary
-    // SELECT allocate nothing for its counting.
+    // PHY01's collector. The per-statement counters that feed its S2 are
+    // `SelectScratch::stats`, pooled for the aggregator's reason: `For()`
+    // sizes a vector, and reuse makes the ordinary SELECT allocate nothing
+    // for its counting.
     stats::OptimizerSignals* optimizer_signals_ = nullptr;
-    exec::ExecStats exec_stats_;
     // §II.6's switch, off by default and experimental. **The instance's
     // since AT-S8** (`OptimizerSurface::cabin_optimizer_on`): a `SET` on any
     // core flips the one flag the controller's cadence reads, where it used

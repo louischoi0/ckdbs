@@ -207,7 +207,7 @@ std::shared_ptr<AssertionEnforcer::Live> AssertionEnforcer::MakeLive(
     LiveAssertion assertion) const {
     auto live = std::make_shared<Live>();
     live->a = std::move(assertion);
-    if (latch_ != nullptr) live->chain_latch = std::make_unique<Latch>();
+    if (latch_ != nullptr) live->chain_latch = std::make_unique<Latch>(LatchKind::kAssertionDirectory);
     return live;
 }
 

@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 
+#include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 
 namespace kds::wal {
@@ -182,8 +183,10 @@ void WalManager::RecycleBelow(Lsn durable_redo_start) {
 }
 
 Status WalManager::Sync() {
-    // **On the calling thread on an owning manager, always.** The writer
-    // thread is not used there and that is the decision, not an omission:
+    // **On the calling thread on an owning manager, always.** (A `group`
+    // commit's sync no longer comes here at `cores > 1`: the drain hands it
+    // to the writer, BA-R4 part 1, `DrainOnce`.) The writer thread is not
+    // used here and that is the decision, not an omission:
     // every caller of this has someone waiting on the result - a parked
     // committer, a client's SYNC, a checkpoint's gate - and handing such a
     // sync to another thread adds a wake-up to a latency somebody is
@@ -267,6 +270,7 @@ Status WalManager::Sync() {
         ++stats_.flushes;
     }
     ++stats_.syncs;
+    Contention::Add(Tally::kSyncsInline);
     last_sync_ns_ = clock_.Now();
 
     // Debug rather than Trace: a sync is a durability point, and there is
@@ -426,6 +430,15 @@ StatusOr<Lsn> WalManager::Commit(std::uint64_t txn_id, DurabilityClass durabilit
     return lsn.value();
 }
 
+StatusOr<Lsn> WalManager::StageStrictCommit(std::uint64_t txn_id) {
+    auto lsn = Append({RecordType::kTxnCommit, txn_id, kInvalidPageId, 0});
+    if (!lsn.ok()) return lsn.status();
+    ++pending_group_commits_;
+    highest_group_commit_lsn_ = lsn.value();
+    ++stats_.strict_commits;
+    return lsn.value();
+}
+
 StatusOr<Lsn> WalManager::Abort(std::uint64_t txn_id) {
     return Append({RecordType::kTxnAbort, txn_id, kInvalidPageId, 0});
 }
@@ -435,6 +448,8 @@ Status WalManager::DrainOnce() {
     // as a failure on every tick, for the life of the process
     // (`wal/stream.hpp`'s fail-stop).
     if (stream_->stopped()) return Status::OK();
+    // BA-R0's drain count: a pass taken while a group commit waits on it.
+    if (HasPendingGroupCommits()) Contention::Add(Tally::kDrainPassesPending);
     // **First, close what somebody else's sync already made durable.**
     // Under a shared stream this core's commit records can reach the
     // platter on another core's sync or the writer's, and the batch
@@ -475,7 +490,15 @@ Status WalManager::DrainOnce() {
         // and a drain that blocked would hold the whole reactor - every
         // other session on this core - for another thread's `fdatasync`.
         // The batch closes on a later tick, at the `ResolveBatches` above.
-        return attached() ? RequestSyncNow() : Sync();
+        //
+        // **An owning manager hands it over too once the writer kicks**
+        // (BA-R4 part 1): the census measured core 0's inline `group` sync
+        // at a p50 of 12.9 ms and a p99 of 1.4 s against a peer's 2.4 ms and
+        // 9.5 ms on the writer (`bench/v3.0.0/results-ba-s4-census-v2.7.0-725-gc390a624.md`), the
+        // reverse of the 2-core host Sync()'s comment describes. Without a
+        // kick the parked committer would wait out an idle block, so at one
+        // core - no registry - the sync stays inline.
+        return attached() || KicksDurableWaiters() ? RequestSyncNow() : Sync();
     }
 
     // **The loss window is the log's, and under one stream the log has one

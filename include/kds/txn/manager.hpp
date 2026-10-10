@@ -2,12 +2,16 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "kds/base/contention.hpp"
 #include "kds/base/status.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/instance_visibility.hpp"
@@ -192,14 +196,19 @@ private:
     LockHoldings borrows_;
     std::uint64_t last_undo_ptr_ = kNoUndoPtr;
     bool active_ = false;
+    // A deferred commit's first half (`TransactionManager::CommitDeferred`):
+    // its marker, held until `FinishDeferredCommit`, and its record's LSN.
+    std::optional<InstanceVisibility::PendingCommit> deferred_marker_;
+    wal::Lsn deferred_lsn_ = wal::kNoLsn;
     bool wrote_catalog_ = false;
 };
 
 // Readers a purge must not purge under, beyond the live transactions the
-// manager already holds: autocommit snapshots held across a park. None is
-// today - the shipped pipeline stages, which kept theirs on a coroutine
-// frame across every credit gate, retired at AT-S10 - so every lease is
-// structural (`AutocommitSnapshot` below says why it is kept). Bounded and fixed so the registry is an array and never a malloc on a
+// manager already holds: autocommit snapshots held across a park. Since
+// BA-S15 a `SELECT`'s walk is one - it yields between slices holding its
+// view (`server::SelectRun`) - where the shipped pipeline stages, which
+// kept theirs on a coroutine frame across every credit gate, were the last
+// before AT-S10 retired them. Bounded and fixed so the registry is an array and never a malloc on a
 // statement's front door, and the bound refuses rather than drops: a
 // reader the registry could not admit would be a reader a purge cannot
 // see, so exhaustion refuses the reader rather than unsoundly proceeding.
@@ -404,6 +413,19 @@ public:
     // client that acknowledgement and owns the wait, exactly as the
     // dispatcher's INSERT path already does.
     StatusOr<wal::Lsn> Commit(Transaction& txn, wal::DurabilityClass durability);
+
+    // **A `strict` commit in two halves** (BA-S7 part 2, BA-Q3 (b)): the
+    // commit record is staged for the writer's sync and the marker set, and
+    // nothing else - the transaction stays active, in flight and holding its
+    // borrows, invisible to every snapshot on every core, across the park
+    // the caller takes until the record is durable. `FinishDeferredCommit`
+    // is the rest of `Commit`: the publish, the marker's lift, the retire
+    // and the release, in `Commit`'s order. A failed first half leaves the
+    // transaction as a failed `Commit` does; the caller owes an `Abort`. So
+    // does a record the log stopped before it was durable: a failed sync
+    // aborts on both paths (txn.md §6), and `Abort` lifts the marker.
+    StatusOr<wal::Lsn> CommitDeferred(Transaction& txn);
+    void FinishDeferredCommit(Transaction& txn);
 
     // ---- Re-locating a row whose address moved --------------------------
     //
@@ -617,16 +639,25 @@ public:
     class CeilingWait {
     public:
         explicit CeilingWait(const TransactionManager& manager) noexcept
-            : visibility_(*manager.visibility_), core_(manager.core_) {
+            : visibility_(*manager.visibility_),
+              core_(manager.core_),
+              start_(std::chrono::steady_clock::now()) {
             visibility_.EnterCeilingWait(core_);
         }
-        ~CeilingWait() { visibility_.LeaveCeilingWait(core_); }
+        // BA-R0's ceiling count: one wait and its length, timed from the
+        // registration, which every waiter takes before it reads the ceiling.
+        ~CeilingWait() {
+            visibility_.LeaveCeilingWait(core_);
+            Contention::Add(Tally::kCeilingWaits);
+            Contention::Add(Tally::kCeilingWaitNs, NsSince(start_));
+        }
         CeilingWait(const CeilingWait&) = delete;
         CeilingWait& operator=(const CeilingWait&) = delete;
 
     private:
         InstanceVisibility& visibility_;
         std::uint32_t core_;
+        std::chrono::steady_clock::time_point start_;
     };
 
     // ---- Reader registration (docs/workplan-reader-registration.md) -----
@@ -672,6 +703,21 @@ public:
     // alone: an instance whose window drains has nothing to buy.
     BurnOutcome MaybeBurnIdleBlock();
 
+    // The early carve (BA-S13, `TrxIdSequence::CarveAheadIfLow`), on the
+    // same `system`-group tick: the next block carved once three-quarters
+    // of this core's window is issued. A failure is the next tick's to
+    // retry - the `Begin` that drains the window carves for itself.
+    //
+    // **Only on a core that issued since the previous tick.** An idle core
+    // would carve a block its next burn drops, and a core that has begun
+    // nothing since boot would carve one it may never use.
+    void CarveAheadIfLow() {
+        const std::uint64_t cursor = ids_.peek();
+        const bool issued = cursor != last_ahead_cursor_;
+        last_ahead_cursor_ = cursor;
+        if (issued) (void)ids_.CarveAheadIfLow();
+    }
+
     // **The oldest snapshot LSN any live reader on any core holds**
     // (AN-R3, AN-Q4): the minimum over every core's published bound, which
     // this core publishes from its active transactions' views and its
@@ -697,6 +743,10 @@ public:
 private:
     friend class ReaderLease;
 
+    // The part of a commit after its record is appended, shared by `Commit`
+    // and `FinishDeferredCommit`.
+    void FinishCommitBody(Transaction& txn, wal::Lsn lsn,
+                          std::optional<InstanceVisibility::PendingCommit>& pending);
     void UnregisterReader(std::uint32_t slot) noexcept;
     Status Compensate(const TrailEntry& entry, std::uint64_t trx_id,
                       const RowLocator& locate_row);
@@ -741,6 +791,9 @@ private:
     // is what "idle" means for a floor bound that only moves when ids are
     // issued.
     std::uint64_t last_burn_cursor_ = 0;
+    // `ids_.peek()` as `CarveAheadIfLow` last saw it. The first tick only
+    // records it: a core that has issued nothing yet has nothing to run dry.
+    std::uint64_t last_ahead_cursor_ = std::numeric_limits<std::uint64_t>::max();
 
     // How large the commit window must be before a burn is worth a
     // superblock write or a granted block. `[PROPOSED]`, not measured:
@@ -791,15 +844,13 @@ struct LeasedSnapshot {
 // reader that outlives its statement across a park is exactly the reader
 // `live_` cannot name. Transactions need none: `live_` is their record.
 //
-// **The dispatcher's autocommit snapshot does not outlive its
-// statement**, and its lease is structural rather than load-bearing:
-// `DispatchInner` is synchronous throughout (`exec::Execute`), and the
-// statement returns its outcome - dropping this object - *before*
-// `DispatchAsync` awaits anything. So that reader is the synchronous one
-// txn.md section 4.1 exempts by proof. Kept leased anyway because the
-// exemption is an invariant to re-check whenever the executor gains a
-// suspension point, and one slot store per statement is cheaper than
-// rediscovering that.
+// **The lease is load-bearing since BA-S15.** A `SELECT`'s walk yields
+// between slices and keeps this snapshot across every suspension
+// (`server::SelectRun`), so it is a reader held across a park - the one a
+// purge could not otherwise see. It was structural until then: the
+// statement returned its outcome, dropping this object, before
+// `DispatchAsync` awaited anything, and the lease was kept as the invariant
+// to re-check the day the executor gained a suspension point.
 //
 // A null manager answers the default snapshot with an empty lease: every
 // writer visible, no undo log, which is the pre-MVCC engine exactly and

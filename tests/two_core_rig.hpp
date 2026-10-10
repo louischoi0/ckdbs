@@ -92,6 +92,9 @@ public:
     void Hold() noexcept { held_.store(true, std::memory_order_release); }
     void Release() noexcept { held_.store(false, std::memory_order_release); }
     int parked() const noexcept { return parked_.load(std::memory_order_acquire); }
+    // Every `Sync` from here on fails, after any hold: a device that loses
+    // its sync, which fail-stops the log.
+    void FailSyncs() noexcept { fail_.store(true, std::memory_order_release); }
 
     std::uint64_t segment_size() const noexcept override { return inner_.segment_size(); }
     std::uint64_t first_segment() const noexcept override { return inner_.first_segment(); }
@@ -123,11 +126,13 @@ public:
             }
             parked_.fetch_sub(1, std::memory_order_acq_rel);
         }
+        if (fail_.load(std::memory_order_acquire)) return Status::IoError("gated sync failed");
         return inner_.Sync();
     }
 
 private:
     wal::LogDevice& inner_;
+    std::atomic<bool> fail_{false};
     std::atomic<bool> held_{false};
     std::atomic<int> parked_{0};
 };
@@ -282,7 +287,7 @@ private:
     explicit TwoCoreRig(Options options) : options_(options) {}
 
     // `Expeditor::PersistTrxIdCeiling`'s shape over the bootstrap image:
-    // the encode under the superblock latch, the store's sync outside it.
+    // the encode under the superblock latch, page 0's persist outside it.
     Status PersistSuperBlock() {
         {
             LatchGuard hold(&superblock_latch_);
@@ -290,7 +295,9 @@ private:
             if (!page.ok()) return page.status();
             boot_->superblock.Encode(page.value().bytes());
         }
-        return store_->Sync();
+        // Page 0 alone, as `Expeditor::PersistTrxIdCeiling` persists it
+        // (BA-S13).
+        return store_->PersistPage(server::kSuperBlockPageId);
     }
 
     Status Build() {
@@ -361,6 +368,9 @@ private:
         // And a commit marker's lift kicks a statement parked on the ceiling
         // (BA-R1c), through the same sim.
         visibility_->SetWakeRegistry(&*sim_);
+        // BA-R4 part 1, as `Expeditor` wires it: the writer kicks a core
+        // whose committer parked on a durability point.
+        wal_->SetWakeRegistry(&*sim_);
 
         if (options_.fold_anchor) {
             fold_anchor_.emplace(boot_->superblock, *store_);
@@ -448,7 +458,7 @@ private:
     std::optional<SuperBlockCheckpointAnchor> fold_anchor_;  // BC-S1: page 0's own
     wal::CheckpointGate checkpoint_gate_;          // AT-S8: one for both cores
     exec::AssertionEnforcer assertions_{/*shared=*/true};  // AT-S5d: one for both cores
-    Latch superblock_latch_;  // AT-S10b: the one ceiling both cores carve from
+    Latch superblock_latch_{LatchKind::kSuperblock};  // AT-S10b: the one ceiling both cores carve from
     std::array<std::thread, 2> threads_;
     // Last, so they die first: every runtime borrows everything above.
     std::array<std::unique_ptr<CoreRuntime>, 2> cores_;

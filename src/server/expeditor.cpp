@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstring>
 #include <fstream>
+#include <charconv>
 #include <limits>
 #include <sstream>
 #include <thread>
@@ -72,7 +73,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "waystone_replay",
             "access_statistics",       "cabins",   "cabin_max_values",
             "indexes",
-            "cabin_max_entries_per_value", "cores",
+            "cabin_max_entries_per_value", "cores",  "reactor_cpus",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
             "join_build_max_rows",   "lock_wait_fault_net_ms",
             "max_locks_per_txn",     "tcp_keepalive_s",
@@ -102,6 +103,58 @@ stats::CabinOptimizerConfig Expeditor::Config::CabinOptimizerSettings() const {
                            stats::kFixOne;
     config.cooldown_half_lives = cabin_optimizer_cooldown_half_lives;
     return config;
+}
+
+StatusOr<std::vector<std::uint32_t>> ParseReactorCpus(std::string_view text) {
+    std::vector<std::uint32_t> cpus;
+    std::size_t at = 0;
+    while (true) {
+        const std::size_t comma = text.find(',', at);
+        std::string_view item = text.substr(at, comma == std::string_view::npos ? text.size() - at
+                                                                                : comma - at);
+        while (!item.empty() && item.front() == ' ') item.remove_prefix(1);
+        while (!item.empty() && item.back() == ' ') item.remove_suffix(1);
+        std::uint64_t value = 0;
+        const auto [end, ec] = std::from_chars(item.data(), item.data() + item.size(), value);
+        if (item.empty() || ec != std::errc{} || end != item.data() + item.size() ||
+            value > std::numeric_limits<std::uint32_t>::max()) {
+            return Status::InvalidArgument("reactor_cpus item " + std::to_string(cpus.size()) +
+                                           " '" + std::string(item) +
+                                           "' is not a CPU number; write CPU numbers "
+                                           "separated by commas, one per reactor");
+        }
+        cpus.push_back(static_cast<std::uint32_t>(value));
+        if (comma == std::string_view::npos) break;
+        at = comma + 1;
+    }
+    return cpus;
+}
+
+Status CheckReactorCpus(const std::vector<std::uint32_t>& cpus, std::uint32_t cores,
+                        unsigned hardware_cpus) {
+    if (cpus.empty()) return Status::OK();
+    if (cpus.size() != cores) {
+        return Status::InvalidArgument("reactor_cpus names " + std::to_string(cpus.size()) +
+                                       " CPUs for " + std::to_string(cores) +
+                                       " cores; it names one CPU per reactor, core 0 first");
+    }
+    for (std::size_t i = 0; i < cpus.size(); ++i) {
+        if (hardware_cpus > 0 && cpus[i] >= hardware_cpus) {
+            return Status::InvalidArgument("reactor_cpus gives core " + std::to_string(i) +
+                                           " CPU " + std::to_string(cpus[i]) + ", but this "
+                                           "machine reports CPUs 0 to " +
+                                           std::to_string(hardware_cpus - 1));
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            if (cpus[j] == cpus[i]) {
+                return Status::InvalidArgument(
+                    "reactor_cpus gives CPU " + std::to_string(cpus[i]) + " to cores " +
+                    std::to_string(j) + " and " + std::to_string(i) +
+                    "; two pinned reactors on one CPU serialize each other's whole workloads");
+            }
+        }
+    }
+    return Status::OK();
 }
 
 Status CheckBufferPoolFrames(std::size_t frames) {
@@ -618,6 +671,15 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         }
         cores = count;
     }
+    if (file.Has("reactor_cpus")) {
+        auto v = file.GetString("reactor_cpus");
+        if (!v.ok()) return v.status();
+        auto cpus = ParseReactorCpus(v.value());
+        if (!cpus.ok()) {
+            return Status::InvalidArgument(file.origin() + ": " + cpus.status().message());
+        }
+        reactor_cpus = std::move(cpus.value());
+    }
     if (file.Has("log_dir")) {
         auto v = file.GetString("log_dir");
         if (!v.ok()) return v.status();
@@ -693,6 +755,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
             std::to_string(hardware_cores) +
             " this machine reports; reactors are pinned one per core and never block, so "
             "overcommitting them serializes whole workloads behind each other");
+    }
+    if (Status s = CheckReactorCpus(config.reactor_cpus, config.cores, hardware_cores); !s.ok()) {
+        return s;
     }
 
     auto device = storage::FilePageDevice::Open(config.data_file);
@@ -1208,7 +1273,7 @@ Status Expeditor::PersistSuperBlock() {
 
 Status Expeditor::PersistTrxIdCeiling() {
     if (Status s = EncodeSuperBlock(); !s.ok()) return s;
-    return store_->Sync();
+    return store_->PersistPage(kSuperBlockPageId);
 }
 
 OptimizerSurface Expeditor::Optimizer() {
@@ -1239,18 +1304,19 @@ Status Expeditor::Checkpoint() {
 
 namespace {
 
-// Pins `thread` to `core_id`. Best-effort by design: a container or a
-// restricted cpuset can refuse, and a reactor that runs unpinned is slower
-// rather than wrong - so this reports and continues instead of failing the
-// server. The platform layer is allowed the syscall (rules.md #4).
-void PinToCore(std::thread& thread, std::uint32_t core_id, Logger* log) {
+// Pins `thread` - core `core_id`'s reactor - to `cpu`. Best-effort by
+// design: a container or a restricted cpuset can refuse, and a reactor that
+// runs unpinned is slower rather than wrong - so this reports and continues
+// instead of failing the server. The platform layer is allowed the syscall
+// (rules.md #4).
+void PinToCpu(pthread_t thread, std::uint32_t core_id, std::uint32_t cpu, Logger* log) {
     cpu_set_t set;
     CPU_ZERO(&set);
-    CPU_SET(static_cast<int>(core_id), &set);
-    const int rc = pthread_setaffinity_np(thread.native_handle(), sizeof(set), &set);
+    CPU_SET(static_cast<int>(cpu), &set);
+    const int rc = pthread_setaffinity_np(thread, sizeof(set), &set);
     if (rc != 0 && log != nullptr && log->enabled(LogLevel::kWarn)) {
-        log->Warn("expeditor", "could not pin core " + std::to_string(core_id) +
-                                   " (errno " + std::to_string(rc) +
+        log->Warn("expeditor", "could not pin core " + std::to_string(core_id) + " to CPU " +
+                                   std::to_string(cpu) + " (errno " + std::to_string(rc) +
                                    "); it will run unpinned");
     }
 }
@@ -1337,6 +1403,9 @@ struct Expeditor::ServeRuntime {
     std::optional<TlsContext> tls_context;
     std::optional<FileCredentialStore> credentials;
 #endif
+    // §10's registry, before the listeners so it outlives every session
+    // registered in it (BA-S15).
+    CancelRegistry cancels;
     std::optional<TcpServer> listener;
     std::optional<TcpServer> text_listener;
     std::optional<KwpLoadServer> kwp_listener;
@@ -1552,9 +1621,9 @@ Status Expeditor::Start() {
     // salts already come from (`server/scram.cpp`).
     //
     // Without OpenSSL there is no unguessable source in this build, and the
-    // fallback counter is honest about it: `kServerCapabilities` does not
-    // offer `CANCEL` either way (handshake.hpp), so nothing depends on the
-    // value being a secret today.
+    // fallback counter is honest about it: with no source installed the
+    // listener withholds `CANCEL` (BA-S15), because a cancel key is the
+    // whole of a cancel's authorization (§10).
     client_setup.identity = [] {
         std::uint64_t v = 0;
         if (RAND_bytes(reinterpret_cast<unsigned char*>(&v), sizeof(v)) != 1) {
@@ -1562,6 +1631,7 @@ Status Expeditor::Start() {
         }
         return v;
     };
+    client_setup.cancels = &live.cancels;
 #endif
     listener.value().Configure(client_setup);
 
@@ -1639,6 +1709,9 @@ Status Expeditor::Start() {
         // BA-R1c: and a commit marker's lift kicks a core whose statement
         // parked until the snapshot ceiling covered its session's last commit.
         visibility_->SetWakeRegistry(&*wakers_);
+        // BA-R4 part 1: and the writer kicks a core whose committer parked on
+        // a durability point, so no drain spins its reactor polling for it.
+        wal_->SetWakeRegistry(&*wakers_);
 
         // Arms core 0's wake path too (sched/waker.hpp): core 0 is a
         // destination like any other - a peer's STOP and a lock decide on
@@ -1852,11 +1925,18 @@ Status Expeditor::Start() {
         // no thread to unwind.
         for (auto& core : cores_) {
             workers.emplace_back([&core] { core->Run(); });
-            PinToCore(workers.back(), core->core_id(), &*logger_);
+            const std::uint32_t id = core->core_id();
+            PinToCpu(workers.back().native_handle(), id,
+                     config_.reactor_cpus.empty() ? id : config_.reactor_cpus[id], &*logger_);
         }
         logger_->Info("expeditor", "running " + std::to_string(config_.cores) +
                                        " cores; every statement runs on the core its session "
                                        "is on");
+    }
+    // Core 0 runs on this thread, and is pinned only when the map names its
+    // CPU: unpinned is the default, kept for every caller that sets no map.
+    if (!config_.reactor_cpus.empty()) {
+        PinToCpu(pthread_self(), 0, config_.reactor_cpus[0], &*logger_);
     }
     // **The stop signal, as an ordinary readable fd** (`server/stop_signal.hpp`).
     // Registered here rather than polled, so a `systemctl stop` or a Ctrl-C takes
@@ -1978,7 +2058,11 @@ Status Expeditor::Start() {
         // first, so its block is the lowest in the instance, and an
         // instance whose sessions all land on peers has core 0 idle and
         // pinning from the first commit.
-        if (txn_manager_.has_value()) (void)txn_manager_->MaybeBurnIdleBlock();
+        if (txn_manager_.has_value()) {
+            (void)txn_manager_->MaybeBurnIdleBlock();
+            // And the early carve (BA-S13), on the same tick.
+            txn_manager_->CarveAheadIfLow();
+        }
     });
 
     // The other `system`-group task of wal.md section 6-2/6-3. It is what
@@ -1989,13 +2073,15 @@ Status Expeditor::Start() {
         // The bool is the post-task hook's answer to the idle policy: a
         // tick with a commit staged did work a parked statement is waiting
         // on (Scheduler::SetPostTaskHook). Read before the drain clears it.
-        const bool had_staged_commits = wal_->HasPendingGroupCommits();
+        // Not once the writer kicks a parked committer (BA-R4 part 1,
+        // `WalManager::StagedCommitIsWork`).
+        const bool staged_commit_is_work = wal_->StagedCommitIsWork();
         if (Status s = wal_->DrainOnce(); !s.ok()) {
             // Same shape as the checkpoint timer: no caller to return
             // to, so the log is the only place this becomes visible.
             logger_->Error("wal", "drain failed: " + s.message());
         }
-        return had_staged_commits;
+        return staged_commit_is_work;
     };
 
     // **The group committer.** Once per reactor iteration, after every

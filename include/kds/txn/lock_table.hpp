@@ -790,6 +790,9 @@ public:
     // Public for the same reason: "two partitions never serialize" is a
     // statement about these being distinct objects.
     const Latch* LatchOf(const LockKey& key) const noexcept;
+    // The wait-for graph's latch, null at `cores = 1`: what BA-S2's cell
+    // holds to make an edge count wait under its kind.
+    const Latch* WaitForLatchForTest() const noexcept { return wait_latch_.get(); }
 
     bool latched() const noexcept { return !latches_.empty(); }
 

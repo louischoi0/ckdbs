@@ -228,7 +228,8 @@ public:
     // idle policy (§7, `IdleTimeoutMs`) lets the reactor sleep on an
     // iteration where nothing advanced, and this hook is the one source of
     // progress that is neither a task poll nor an event: a statement parks
-    // on `durable_lsn` and it is *this* that moves it. A hook that answered
+    // on `durable_lsn` and at one core it is *this* that moves it (above one
+    // core the WAL writer kicks the parked core instead, BA-R4 part 1). A hook that answered
     // "nothing happened" while it was syncing would let the reactor block
     // between the staging and the wake-up, adding the drain interval to
     // every commit - the one regression this whole change must not cause.
@@ -255,6 +256,15 @@ public:
     // kick ends the block the loop is sitting in - write-then-kick, as every
     // cross-core signal is now (AR0-6-R1).
     void Stop() noexcept { stopped_.store(true, std::memory_order_relaxed); }
+
+    // Destroys every queued task now, suspended frames and all. For an
+    // owner whose tasks borrow objects it destroys before this scheduler:
+    // a statement parked or between slices (BA-S15) reaches its dispatcher,
+    // catalog and transaction manager from its frame's destructors. The
+    // reactor's own thread, or none, after `Run` has returned.
+    void DiscardTasks() noexcept {
+        for (auto& queue : ready_queues_) queue.clear();
+    }
     bool stopped() const noexcept { return stopped_.load(std::memory_order_relaxed); }
 
 private:

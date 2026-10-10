@@ -1,6 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -193,6 +195,16 @@ public:
     ResultSink* result_sink() const noexcept { return result_sink_; }
     void set_result_sink(ResultSink* sink) noexcept { result_sink_ = sink; }
 
+    // **§10's cancel flag** (docs/spec/protocol.md, BA-S15). Set from any
+    // core - a cancel connection's, through `CancelRegistry`, or this
+    // connection's own teardown - and taken by whoever observes it first:
+    // a `SELECT`'s walk at its slice boundary, or the KWP session at its
+    // next frame. Taken, so one cancel cancels one statement. Shared so a
+    // cancel racing this session's close sets a flag that is still there.
+    const std::shared_ptr<std::atomic<bool>>& cancel_flag() const noexcept { return cancel_; }
+    void RequestCancel() noexcept { cancel_->store(true, std::memory_order_release); }
+    bool TakeCancel() noexcept { return cancel_->exchange(false, std::memory_order_acq_rel); }
+
     // What this connection may do (role.hpp), checked once per statement
     // by the dispatcher. **kAdmin by default, and that is the auth-off
     // contract**: an unauthenticated instance is the operator's own
@@ -317,6 +329,7 @@ private:
     State state_ = State::kIdle;
     txn::IsolationLevel isolation_ = txn::IsolationLevel::kReadCommitted;
     ResultSink* result_sink_ = nullptr;
+    std::shared_ptr<std::atomic<bool>> cancel_ = std::make_shared<std::atomic<bool>>(false);
     std::optional<wal::DurabilityClass> durability_;      // SET DURABILITY
     std::optional<wal::DurabilityClass> txn_durability_;  // BEGIN ... DURABILITY
     wal::Lsn acknowledged_commit_lsn_ = wal::kNoLsn;      // BA-R1c
