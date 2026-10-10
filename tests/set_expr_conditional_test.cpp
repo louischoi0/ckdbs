@@ -75,6 +75,8 @@ TEST_F(SetExprConditionalTest, AComparisonIsABoolValue) {
     EXPECT_EQ(At("g", 2), "0");
     Exec("UPDATE t SET g = s = c WHERE id = 1");
     EXPECT_EQ(At("g", 1), "0") << "varchar and char compare as text";
+    Exec("UPDATE t SET g = c = 'cd' WHERE id = 1");
+    EXPECT_EQ(At("g", 1), "1") << "a char column compares as the value it holds, not its padding";
 }
 
 TEST_F(SetExprConditionalTest, AComparisonWithNullIsNull) {
@@ -133,6 +135,9 @@ TEST_F(SetExprConditionalTest, ComparisonAndBooleanTypingNamesBothTypes) {
     EXPECT_TRUE(Types("g = 'a' = 'b'"));
     EXPECT_NE(Refusal("g = 1.5 > 1.2").find("numeric literal"), std::string::npos);
     EXPECT_TRUE(Types("g = NULL = NULL"));
+    EXPECT_TRUE(Types("g = NULL = 'a'")) << "NULL takes the string's type, whichever side it is on";
+    EXPECT_TRUE(Types("g = 'a' = NULL"));
+    EXPECT_TRUE(Types("g = NULL = 1"));
     EXPECT_TRUE(Types("g = NULL AND NULL"));
     EXPECT_TRUE(Types("g = d > 1.5"));
     EXPECT_TRUE(Types("g = g = g"));
@@ -218,7 +223,6 @@ TEST_F(SetExprConditionalTest, CastBetweenNumbersRoundsHalfAwayFromZeroAndNeverW
     Exec("UPDATE t SET d = 2.49 WHERE id = 1");
     Exec("UPDATE t SET i64 = d::int64 WHERE id = 1");
     EXPECT_EQ(At("i64", 1), "2");
-    Exec("UPDATE t SET d = 1.005 WHERE id = 99");
     // Narrowing to a type that cannot hold the value is refused, not wrapped.
     Exec("UPDATE t SET i64 = 200 WHERE id = 1");
     const std::string out = Run("UPDATE t SET i8 = CAST(i64 AS int8) WHERE id = 1");
@@ -232,12 +236,41 @@ TEST_F(SetExprConditionalTest, CastBetweenNumbersRoundsHalfAwayFromZeroAndNeverW
     EXPECT_NE(negative.find("outside uint64"), std::string::npos) << negative;
 }
 
+TEST_F(SetExprConditionalTest, CastDroppingAllThirtyEightPlacesStillRoundsHalfAwayFromZero) {
+    // 2|r| overflows 128 bits there (BJ-S5's review): 0.9 became 0, not 1.
+    Exec("CREATE TABLE wide (id int64, w decimal(38,38), r int64)");
+    Exec("INSERT INTO wide VALUES (1, '0.90000000000000000000000000000000000000', 0)");
+    Exec("INSERT INTO wide VALUES (2, '-0.90000000000000000000000000000000000000', 0)");
+    Exec("INSERT INTO wide VALUES (3, '0.49999999999999999999999999999999999999', 0)");
+    Exec("INSERT INTO wide VALUES (4, '0.50000000000000000000000000000000000000', 0)");
+    Exec("UPDATE wide SET r = CAST(w AS int64) WHERE id >= 1");
+    EXPECT_EQ(Run("SELECT r FROM wide WHERE id = 1"), "r\\n1");
+    EXPECT_EQ(Run("SELECT r FROM wide WHERE id = 2"), "r\\n-1");
+    EXPECT_EQ(Run("SELECT r FROM wide WHERE id = 3"), "r\\n0");
+    EXPECT_EQ(Run("SELECT r FROM wide WHERE id = 4"), "r\\n1");
+    Exec("UPDATE wide SET r = CAST('0.90000000000000000000000000000000000000' AS int64) WHERE id = 1");
+    EXPECT_EQ(Run("SELECT r FROM wide WHERE id = 1"), "r\\n1");
+}
+
+TEST_F(SetExprConditionalTest, ASignedLiteralBeforeACastEvaluates) {
+    Exec("UPDATE t SET m = m -1::int64 WHERE id = 1");
+    EXPECT_EQ(At("m", 1), "3");
+    Exec("UPDATE t SET m = m - 1::int64 WHERE id = 1");
+    EXPECT_EQ(At("m", 1), "2");
+}
+
+TEST_F(SetExprConditionalTest, ABareDecimalInACastIsRefusedAtCompile) {
+    EXPECT_NE(Refusal("d = CAST(i64 AS decimal)").find("precision and a scale"),
+              std::string::npos);
+    EXPECT_NE(Refusal("d = i64::decimal").find("precision and a scale"), std::string::npos);
+}
+
 TEST_F(SetExprConditionalTest, CastToAndFromText) {
     Exec("UPDATE t SET s = CAST(i64 AS varchar) || '/' || CAST(d AS varchar) WHERE id = 1");
     EXPECT_EQ(At("s", 1), "10/12.50");
     Exec("UPDATE t SET i64 = CAST(s AS int64) WHERE id = 2");
     EXPECT_EQ(At("i64", 2), "12");
-    Exec("UPDATE t SET d = CAST('  -3.456 ' AS decimal(10, 2)) WHERE id = 1");
+    Exec("UPDATE t SET d = CAST('-3.456' AS decimal(10, 2)) WHERE id = 1");
     EXPECT_EQ(At("d", 1), "-3.46");
     const std::string bad = Run("UPDATE t SET i64 = CAST(s AS int64) WHERE id = 1");
     EXPECT_NE(bad.find("is not a number"), std::string::npos) << bad;

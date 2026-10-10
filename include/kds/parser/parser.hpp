@@ -262,7 +262,9 @@ private:
     StatusOr<std::shared_ptr<const Expr>> ParseExprCall(const Token& name);
     StatusOr<std::shared_ptr<const Expr>> ParseExprCase(const Token& kw);
     // A type name with its optional `(width)` or `(precision, scale)`.
-    Status ParseTypeSpec(TypeSpec& out, bool allow_bare_decimal);
+    Status ParseTypeSpec(TypeSpec& out);
+    // Any `::type` after `operand`.
+    StatusOr<std::shared_ptr<const Expr>> ParseCastSuffix(std::shared_ptr<const Expr> operand);
 
     // One argument of a parameterized type - `decimal(10, 2)`'s 10 and 2.
     // `what` names it in the error, so a client is told which of the two

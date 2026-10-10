@@ -453,26 +453,32 @@ private:
     // The type an operand with no context takes when nothing else will give
     // it one: an integer or a NULL is int64, a string varchar. A bare number
     // with a point has no default - which scale would it be?
-    Status SettleByDefault(TypedSetExpr& n) const {
-        if (n.type.concrete()) return Status::OK();
-        switch (n.type.kind) {
+    static StatusOr<SetType> DefaultOf(SetType::Kind kind, std::uint32_t at) {
+        switch (kind) {
             case SetType::Kind::kInteger:
-            case SetType::Kind::kNull: return Resolve(n, Concrete(kTypeValInt64, 0));
-            case SetType::Kind::kString: return Resolve(n, Concrete(kTypeValVarchar, 0));
+            case SetType::Kind::kNull: return Concrete(kTypeValInt64, 0);
+            case SetType::Kind::kString: return Concrete(kTypeValVarchar, 0);
             default:
-                return Refuse(n.byte_offset,
+                return Refuse(at,
                               "a numeric literal here has no type; give it a column to take "
                               "one from, or CAST it");
         }
+    }
+
+    Status SettleByDefault(TypedSetExpr& n) const {
+        if (n.type.concrete()) return Status::OK();
+        auto type = DefaultOf(n.type.kind, n.byte_offset);
+        if (!type.ok()) return type.status();
+        return Resolve(n, type.value());
     }
 
     // One common type for operands that must agree (a comparison, a CASE's
     // results, COALESCE, ...): the first concrete one's, every other concrete
     // one the same (the text family counts as one), and the untyped ones take
     // it. With none concrete the node stays untyped, of the kinds' merge,
-    // until a context types it (`ctx`, when the caller has one).
-    StatusOr<SetType> Unify(const std::vector<TypedSetExpr*>& values, const SetType* ctx,
-                            std::uint32_t at, const std::string& who) const {
+    // until a context types it.
+    StatusOr<SetType> Unify(const std::vector<TypedSetExpr*>& values, std::uint32_t at,
+                            const std::string& who) const {
         const SetType* first = nullptr;
         for (const TypedSetExpr* v : values) {
             if (!v->type.concrete()) continue;
@@ -495,12 +501,6 @@ private:
                 if (Status s = Resolve(*v, t); !s.ok()) return s;
             }
             return t;
-        }
-        if (ctx != nullptr) {
-            for (TypedSetExpr* v : values) {
-                if (Status s = Resolve(*v, *ctx); !s.ok()) return s;
-            }
-            return *ctx;
         }
         SetType::Kind merged = SetType::Kind::kNull;
         for (const TypedSetExpr* v : values) {
@@ -528,19 +528,16 @@ private:
             if (Status s = BoolOperand(*lhs, who, e.op_byte_offset); !s.ok()) return s;
             if (Status s = BoolOperand(*rhs, who, e.op_byte_offset); !s.ok()) return s;
         } else {
-            auto t = Unify({lhs.get(), rhs.get()}, nullptr, e.op_byte_offset,
+            auto t = Unify({lhs.get(), rhs.get()}, e.op_byte_offset,
                            "operator " + std::string(OpText(e.op)));
             if (!t.ok()) return t.status();
-            // Two literals compare as what each is by default; the result is
-            // a bool whatever they are, so nothing later types them.
-            if (Status s = SettleByDefault(*lhs); !s.ok()) return s;
-            if (Status s = SettleByDefault(*rhs); !s.ok()) return s;
-            if (!SameType(lhs->type, rhs->type) &&
-                !(IsText(lhs->type.type_val) && IsText(rhs->type.type_val))) {
-                return Refuse(e.op_byte_offset, "operator " + std::string(OpText(e.op)) +
-                                                    " needs one type but is given " +
-                                                    SetTypeName(lhs->type) + " and " +
-                                                    SetTypeName(rhs->type));
+            // Two literals compare as what the two of them are by default; the
+            // result is a bool whatever they are, so nothing later types them.
+            if (!t.value().concrete()) {
+                auto type = DefaultOf(t.value().kind, e.byte_offset);
+                if (!type.ok()) return type.status();
+                if (Status s = Resolve(*lhs, type.value()); !s.ok()) return s;
+                if (Status s = Resolve(*rhs, type.value()); !s.ok()) return s;
             }
         }
         n->type = BoolType();
@@ -571,7 +568,7 @@ private:
         } else {
             for (auto& a : n->args) values.push_back(a.get());
         }
-        auto t = Unify(values, nullptr, e.op_byte_offset, std::string(OpText(e.op)));
+        auto t = Unify(values, e.op_byte_offset, std::string(OpText(e.op)));
         if (!t.ok()) return t.status();
         n->type = t.value();
         return n;
@@ -1042,46 +1039,33 @@ private:
         }
         Int128 q = unscaled / divisor;
         const Int128 r = unscaled % divisor;
-        const Int128 twice = (r < 0 ? -r : r) * 2;  // |r| < 10^38, so this fits
-        if (twice >= divisor) q += unscaled < 0 ? -1 : 1;
+        // Half or more of the divisor rounds away from zero. Written as
+        // `|r| >= divisor - |r|` because `2|r|` can pass 2^127 when 38 places
+        // are dropped.
+        const Int128 magnitude = r < 0 ? -r : r;
+        if (magnitude >= divisor - magnitude) q += unscaled < 0 ? -1 : 1;
         return q;
     }
 
-    // `[+-]digits[.digits]` with surrounding spaces, as an unscaled value and
-    // its number of places; anything else is refused.
+    // A decimal string as an unscaled value and its number of places, through
+    // the parser every decimal literal goes through (TY01): the text's own
+    // fraction digits are its scale, so nothing is rounded here - `Rescale`
+    // rounds.
     static StatusOr<std::pair<Int128, int>> ParseNumberText(const std::string& text,
                                                            const TypedSetExpr& e) {
-        std::size_t i = 0;
-        std::size_t end = text.size();
-        while (i < end && text[i] == ' ') ++i;
-        while (end > i && text[end - 1] == ' ') --end;
-        bool negative = false;
-        if (i < end && (text[i] == '+' || text[i] == '-')) negative = text[i++] == '-';
-        Int128 value = 0;
-        int places = 0;
-        bool digits = false;
-        bool point = false;
-        for (; i < end; ++i) {
-            const char c = text[i];
-            if (c == '.' && !point) {
-                point = true;
-            } else if (c >= '0' && c <= '9') {
-                digits = true;
-                if (__builtin_mul_overflow(value, static_cast<Int128>(10), &value) ||
-                    __builtin_add_overflow(value, static_cast<Int128>(c - '0'), &value)) {
-                    return OutOfRangeResult(e);
-                }
-                if (point) ++places;
-            } else {
-                digits = false;
-                break;
-            }
+        const std::size_t point = text.find('.');
+        const std::size_t places = point == std::string::npos ? 0 : text.size() - point - 1;
+        const auto NotANumber = [&](const Status& why) {
+            return why.WithMessage("the string '" + text + "' is not a number" +
+                                   At(e.op_byte_offset));
+        };
+        if (places > kMaxDecimalPrecisionWide) {
+            return NotANumber(Status::OutOfRange("more than 38 decimal places"));
         }
-        if (!digits) {
-            return Status::InvalidArgument("the string '" + text + "' is not a number" +
-                                           At(e.op_byte_offset));
-        }
-        return std::pair<Int128, int>{negative ? -value : value, places};
+        auto value = ParseDecimalLiteralWide(text, kMaxDecimalPrecisionWide,
+                                             static_cast<std::uint8_t>(places));
+        if (!value.ok()) return NotANumber(value.status());
+        return std::pair<Int128, int>{value.value(), static_cast<int>(places)};
     }
 
     // Three-valued AND and OR, left to right, the right operand skipped once

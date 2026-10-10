@@ -265,7 +265,10 @@ TEST(SetExpressionParseTest, ACaseIsASearchedCaseWhateverItWasWrittenAs) {
     ASSERT_EQ(c.args.size(), 5u);  // when, then, when, then, else
     EXPECT_EQ(c.args[0]->op, ExprOp::kEq) << "WHEN a = 1";
     EXPECT_EQ(c.args[0]->lhs->column, "a");
-    EXPECT_FALSE(SetOf("CASE END").ok());
+    auto empty = SetOf("CASE a END");
+    ASSERT_FALSE(empty.ok());
+    EXPECT_NE(empty.status().message().find("at least one WHEN"), std::string::npos)
+        << empty.status().message();
     EXPECT_FALSE(SetOf("CASE WHEN a THEN 1").ok());
     EXPECT_FALSE(SetOf("CASE WHEN a 1 END").ok());
 }
@@ -285,9 +288,47 @@ TEST(SetExpressionParseTest, TheNaryFormsAndTheCastsParse) {
     // `::` binds tighter than a unary minus.
     EXPECT_EQ(SetOf("-a::int64").value().expr->op, ExprOp::kNeg);
     for (const char* v : {"NULLIF(a)", "NULLIF(a, b, c)", "COALESCE()", "CAST(a int64)",
-                          "a::", "CAST(a AS decimal)", "a::int64(3)"}) {
+                          "a::", "a::int64(3)"}) {
         EXPECT_FALSE(SetOf(v).ok()) << v;
     }
+}
+
+TEST(SetExpressionParseTest, ASignedLiteralBeforeACastIsStillCast) {
+    // `m -1::int64` is `m - (1::int64)`: the fused minus is the literal's sign,
+    // and the `::` that follows belongs to its magnitude (BJ-S5's review).
+    auto a = SetOf("m -1::int64");
+    ASSERT_TRUE(a.ok()) << a.status().message();
+    EXPECT_EQ(a.value().expr->op, ExprOp::kSub);
+    EXPECT_EQ(a.value().expr->rhs->op, ExprOp::kCast);
+    EXPECT_TRUE(SetOf("d -1.5::decimal(10, 2)").ok());
+    EXPECT_TRUE(SetOf("m -1::int64 * 2").ok());
+}
+
+TEST(SetExpressionParseTest, AColumnNamedCaseTakesACastAndAKeywordAfterIt) {
+    auto a = SetOf("CAST(case AS int64)");
+    ASSERT_TRUE(a.ok()) << a.status().message();
+    EXPECT_EQ(a.value().expr->lhs->column, "case");
+    EXPECT_TRUE(SetOf("case::int64").ok());
+    EXPECT_TRUE(SetOf("case = 1").ok());
+}
+
+TEST(SetExpressionParseTest, ANestedSimpleCaseIsBoundedBySizeNotOnlyHeight) {
+    // A simple CASE puts its operand in every WHEN, so nesting one inside
+    // another's operand is exponential in the text while the tree stays
+    // short (BJ-S5's review: 700 bytes took 35 s to compile). The parser
+    // counts a shared child once per reference and refuses past 4096 nodes.
+    const auto Nested = [](int depth) {
+        std::string v = "x";
+        for (int i = 0; i < depth; ++i) {
+            v = "CASE " + v + " WHEN 1 THEN 1 WHEN 2 THEN 2 WHEN 3 THEN 3 WHEN 4 THEN 4 END";
+        }
+        return v;
+    };
+    EXPECT_TRUE(SetOf(Nested(3)).ok());
+    auto big = SetOf(Nested(12));
+    ASSERT_FALSE(big.ok());
+    EXPECT_EQ(big.status().code(), StatusCode::kUnsupported);
+    EXPECT_NE(big.status().message().find("nodes"), std::string::npos) << big.status().message();
 }
 
 TEST(SetExpressionParseTest, ARowValueIsOneAssignmentPerColumn) {

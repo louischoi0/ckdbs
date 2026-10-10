@@ -847,3 +847,85 @@ change for the one nullptr caller, a unit test; the stage's refusals are not
 waiting on it); a `constexpr` table for `kTable` (the first call builds it
 once); BJ-S3's `d = 2 * 3` against `d = 2 + 3` (the product of integers is an
 integer, the sum of integer literals takes its context, by design).
+
+### BJ-S5 — families 2 and 3, and the row-value form (built 2026-10-10)
+
+On `worktree-bj-expression-update`, after `1a251cea`. **Not measured;
+measured at the milestone's close** (§5).
+
+- **Grammar** (`src/parser/parser.cpp`): PostgreSQL's precedence, loosest
+  first - `OR`, `AND`, `NOT`, `IS [NOT] NULL`, the six comparisons (which do
+  not chain), `||`, `+ -`, `* / %`, a unary sign, `::`. `CASE` (a simple one
+  is desugared to the searched form at parse), `COALESCE`, `NULLIF`,
+  `GREATEST`, `LEAST` are one n-ary node kind (`Expr::Kind::kCall`); `CAST(x AS
+  T)` and `x::T` are a unary node carrying a `TypeSpec`, whose parse is
+  shared with `CREATE TABLE`'s column type. `SET (a, b) = (x, y)` (BJ-Q7) is
+  `a = x, b = y`. **A new token `::`** (`kDoubleColon`, `ShapeTag` 20) lexed as
+  `kError` before, so no stored hash moved: the golden corpus changed three
+  verdicts (`NotImplemented` to `ok`) and gained nineteen lines.
+- **Typing**: a comparison, `AND`/`OR`/`NOT`, `IS [NOT] NULL` yield `bool`; the
+  operands of one comparison, one `CASE`'s results, `COALESCE`, `GREATEST` and
+  `LEAST` are one exact type (the text family counts as one) and untyped
+  literals take it - two untyped literals take int64 or varchar, a bare
+  number with a point has no default and is refused; a string literal is also
+  accepted where the encode accepts one (a date, a timestamp, a decimal). A
+  `CAST` pair outside the table in `types.md` §3.2b, `float`, and `varchar(N)`
+  are refused at compile; the CAST target's type names are listed in the
+  typer (it takes no catalog).
+- **Evaluation**: `AND`/`OR` left to right, the right operand skipped once the
+  left decides, so a guarded division is safe; `CASE` evaluates only the
+  chosen branch; `GREATEST`/`LEAST` skip NULLs; `CAST` rounds half away from
+  zero when it narrows a scale (BJ-Q3 (a)) and refuses a result its target
+  cannot hold (`OutOfRange`), a string that is not a number
+  (`InvalidArgument`) and a `char(N)` too long.
+- **Not built, by BJ-R1's own list**: `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `IS
+  TRUE`, `IS DISTINCT FROM`, a boolean literal (`TRUE`/`FALSE`) and `<>` (the
+  engine spells inequality `!=`); each is refused at its byte. Decimal `/`
+  moves to BJ-S6 with `ROUND`.
+- **Cells**: `tests/set_expr_conditional_test.cpp` (15), nine new parser cells,
+  the corpus lines. At this stage's tree the full suite had one failure,
+  `IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`, under
+  `ctest -j8`; it passed 5 of 5 repeated alone (the load flake the notes
+  name). The suite is re-run whole after the review, below.
+
+### BJ-S5 — the `critics-developer` review of `ab37991c`, applied
+
+On `worktree-bj-expression-update`, after `ab37991c`, the review found, and
+the tree now fixes:
+- **A wrong answer (high, BJ-Q3 (a)).** `Rescale`'s rounding test `2|r| >= divisor`
+  overflowed 128 bits when 38 places are dropped, so `CAST(0.9 AS int64)` over a
+  `decimal(38,38)` gave 0, not 1. It reads `|r| >= divisor - |r|` now; the cell
+  covers +-0.9, 0.4999..., 0.5 and the text form.
+- **A denial of service (high).** A simple `CASE` reuses its operand in every
+  `WHEN`, so one nested in another's operand made typing and every row's
+  evaluation exponential while the height and depth bounds saw a short tree:
+  a 700-byte statement took 35 s to compile. `Expr::size` counts a shared
+  child once per reference and the parser refuses past 4096 nodes
+  (`Unsupported`, at the node's byte). The redesign the review also offers -
+  the operand held once on the `CASE` node and evaluated once per row, which
+  departs from the order's "desugared at parse" and would matter once BJ-S6
+  adds non-trivial functions - is **left open**, not chosen.
+- **Valid input refused**: `m -1::int64` (the fused-minus branch skipped the
+  `::` level; `ParseCastSuffix` now serves both), `CAST(case AS int64)` (`AS`
+  ends a value), and `NULL = 'a'` (a comparison of two untyped literals now
+  settles both to the default of their merged kind).
+- **Cuts**: the hand-written number parser inside `CAST` (it disagreed with the
+  engine's: a leading space) is the engine's `ParseDecimalLiteralWide` now;
+  `Unify`'s unused context, `ParseTypeSpec`'s bare-decimal switch (the CAST
+  typer refuses it, with its byte), the `SameType` re-check in
+  `BooleanBinary`; one `ComparisonOf`, one `NaryOf`, one `DepthScope`, one
+  `MakeCast`.
+- **Cells**: the +-0.9 narrowing, the nested-CASE bound, `m -1::int64` (parse and
+  eval), a column named `case` before `AS`, `NULL = 'a'`, a bare `decimal` in a
+  CAST, an equal char pair; two vacuous lines removed (`CASE END` now asserts
+  the "at least one WHEN" refusal).
+
+**Rejected or left:** `CAST('1.5' AS int64)` is 2 where PostgreSQL errors -
+`types.md` §3.2b states the rounding as the engine's rule, so it stays;
+`CAST(18446744073709551615 AS uint64)` refused because a bare integer literal
+resolves to int64 first (the bare `SET u = 18446744073709551615` works) and
+`-128::int8` accepted through the fused minus - both recorded for
+`known-gaps.md` at BJ-S8; `DecimalTypeOfLiteral` counting leading zeros, an
+unbounded `char(N)` in a CAST, and the byte named by `CASE END` / `<>` errors
+(cosmetic, no wrong answer); `ColumnDef` holding a `TypeSpec` (touches every
+CREATE TABLE reader for no behaviour).

@@ -787,6 +787,13 @@ struct Expr {
     // level.
     std::uint32_t height = 1;
 
+    // The nodes under this one **counting a shared child once per reference**
+    // (a simple CASE reuses its operand in every WHEN), which is what the
+    // typer and the evaluator walk. Bounded by the parser (`kMaxExprSize`):
+    // height and nesting depth cannot see a short tree whose size is
+    // exponential in its text.
+    std::uint32_t size = 1;
+
     AstValue literal;           // kLiteral
     // kLiteral: the literal was a bare number (`1.5`, not `'1.5'`). The
     // parser turns both into a kStr value (types.md TY3), and an expression
