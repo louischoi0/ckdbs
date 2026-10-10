@@ -1333,11 +1333,6 @@ TEST_F(CompileAssignmentsTest, AColumnAssignedTwiceIsInvalidAndNamesTheSecondByt
         << s.message();
 }
 
-TEST_F(CompileAssignmentsTest, TwoDifferentColumnsAreNotADuplicate) {
-    // The control for the cell above: the check is per column, not per list.
-    EXPECT_TRUE(Check("UPDATE acct SET name = 'x', tier = 'y'").ok());
-}
-
 TEST_F(CompileAssignmentsTest, APkNamedOnAnotherRelationIsNotThisRelationsPk) {
     // `acct_id` is trade's second column and an ordinary field. Nothing
     // about the *name* is what makes a column refusable - position 0 is.

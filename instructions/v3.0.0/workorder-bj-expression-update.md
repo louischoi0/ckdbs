@@ -160,9 +160,13 @@ Read, not run.
   check applies that pair's verdict (`:7780-7784`), and the write keeps the
   **last** (`:7803-7810`). So `SET fk = <existing parent>, fk = <absent
   parent>` passes the check and writes a child pointing at an absent
-  parent, with no error. Filed as
-  `docs/inflight/bugs/a-column-assigned-twice-checks-its-first-foreign-key-value-and-writes-its-last.md`.
-  BJ-R2's refusal closes it; BJ-Q12 asks whether it is closed ahead of BJ.
+  parent, with no error. Filed at `fdad71e4` as
+  `docs/inflight/bugs/a-column-assigned-twice-checks-its-first-foreign-key-value-and-writes-its-last.md`,
+  **fixed at `586ffa5f` by BJ-Q12's adoption** (`CompileAssignments` refuses
+  a column named twice, `InvalidArgument` at the second name's byte) and the
+  entry deleted with the fix, as `docs/inflight/bugs/README.md` asks;
+  `git show fdad71e4:<that path>` retrieves it. The paragraph above is the
+  state at `080cd55`.
 - `[source-read]` **No arithmetic tokens.** The punctuation is `(`, `)`,
   `,`, `;`, `*`, `.`, and the comparisons (`include/kds/parser/token.hpp:147-166`).
   `+`, `/`, `%` and `||` lex as `kError`.
@@ -571,3 +575,37 @@ its premise re-read at `080cd555` (the mark column says what was read).
 from CLA's written proposal, because (a) is an implicit conversion by W3's
 letter and cannot be taken back. The operator's reading of W3 would
 reverse it. The rest follow the proposals as written.
+
+### BJ-S1 — red first, and the census (built 2026-10-10)
+
+On `worktree-bj-expression-update`, after `586ffa5f`. **Not measured; measured
+at the milestone's close** (§5).
+
+**The census**, `[source-read]` at the same tree:
+- Every reader of `Assignment::val`: two, both in `UpdateInner` - the
+  foreign-key hoist (`command_dispatcher.cpp`, the `fk_assignments` build)
+  and the apply loop that overwrites the decoded row. `sim/` reads
+  `Oracle::Assignment`, its own single-value type, never the parser's.
+- Every caller of `CompileAssignments`: one, `UpdateInner`; a parked
+  statement re-enters `UpdateInner`, so a resume re-compiles and cannot skip
+  a compile-time refusal.
+- Every spec sentence BJ-S8 restates is listed in §1.6 and was re-read; none
+  has moved since.
+
+**Red cells and what they showed:**
+- A duplicate SET target. Built with BJ-Q12's fix (`586ffa5f`, adopted
+  under BJ-Q12): `CompileAssignmentsTest` and `ForeignKeyCheckTest` carry the
+  cells, and the review reasoned the fk cell red against the unfixed tree
+  (the hoist checks the first value, the write keeps the last). The cell was
+  not run red; it was written with the fix in one step.
+- `SET a = b, b = a` cannot be parsed before BJ-S2 and stays pending here.
+- **BJ-R9's three paths**, `tests/bj_single_write_rig_test.cpp`, through a
+  new seam `SetAfterUpdateRowAppliedForTest` that counts the calls per pk:
+  a multi-leaf walk (1200 rows, each once), a walk parked midway and resumed
+  after a `ROLLBACK` (rows before the held one written once, the rest once),
+  the same with a `COMMIT` (refused or not, no row twice), and a statement
+  that wrote nothing before its park and then ran whole (each row once).
+  **They are green, not red**: the guards hold on `main`, which §1.5 said
+  they would. That they can fail was checked by mutation - calling the hook
+  twice per row fails all four. BJ-S4 makes them load-bearing; BA-S14's
+  in-engine re-run is the path they do not cover until BA is on `main`.

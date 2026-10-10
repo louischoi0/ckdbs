@@ -1757,6 +1757,16 @@ public:
         before_drop_exclusive_for_test_ = std::move(hook);
     }
 
+    // **A seam after an `UPDATE` wrote a row** (BJ-R9), handed the row's pk:
+    // the application count a non-idempotent `SET` makes load-bearing. A
+    // literal `SET` is idempotent, so a path that applied it twice to one
+    // row was invisible; the cell counts the calls instead of reading a
+    // value. The hook runs on the reactor of the statement, inside its walk.
+    // Empty in production.
+    void SetAfterUpdateRowAppliedForTest(std::function<void(std::uint64_t)> hook) {
+        after_update_row_applied_for_test_ = std::move(hook);
+    }
+
     // **`SetAccessBatch` and `SetAccessStatsApplied` stood here and are
     // gone** (AT-S7). A peer had no way to write `sys.access_stats`, so it
     // folded its shapes into an `AccessBatch` and core 0 applied the fold;
@@ -2371,6 +2381,7 @@ private:
     EpochSeam epoch_seam_at_ = EpochSeam::kBeforePublish;
     std::function<void()> epoch_seam_for_test_;
     std::function<void()> before_drop_exclusive_for_test_;
+    std::function<void(std::uint64_t)> after_update_row_applied_for_test_;
     std::function<void()> purge_seam_for_test_;
     // **What an open transaction's drops owe** (BF-R9): recorded when the
     // drop's catalog write succeeds, queued by `EndDdlScopeById` at the

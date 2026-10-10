@@ -19,7 +19,7 @@ Korean.
 | | |
 |---|---|
 | **Word** | *"Proceed with option 1."*, given after CLA reported that none of BJ-S0's deliverables existed on `main` at `0446b3b0` and offered three actions: sync BJ-S0 into the tree, fix BJ-Q12 first, or something else |
-| **Mark** | BJ-S0: the order written on §1's eight rulings, `raft-marks-2026-10-10.md` (this file), `index.md`'s BJ row, CN-7 revised per BJ-R8, and the bug entry BJ-Q12 refers to, filed at `docs/inflight/bugs/a-column-assigned-twice-checks-its-first-foreign-key-value-and-writes-its-last.md`. **Not opened**: BJ-Q0 is unmarked |
+| **Mark** | BJ-S0: the order written on §1's eight rulings, `raft-marks-2026-10-10.md` (this file), `index.md`'s BJ row, CN-7 revised per BJ-R8, and the bug entry BJ-Q12 refers to, filed at `fdad71e4` (since fixed at `586ffa5f` and deleted; the order's §1.1 says where it is retrievable). **Not opened**: BJ-Q0 is unmarked |
 | **Does not settle** | BJ-Q0..Q12, among them BJ-Q12 (the duplicate-target fix ahead of BJ), which the operator did not choose over option 1; BJ-S1's start; any push |
 | **Recorded at** | `workorder-bj-expression-update.md` §6; `index.md`'s BJ row |
 

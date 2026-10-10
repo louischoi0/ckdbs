@@ -7507,8 +7507,9 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     }
 
     // Resolve the SET list before touching storage, so a bad target fails
-    // clean with no partial update. Both refusals - an unknown column, and
-    // the primary key (K2, `Unsupported`) - live in the compiler beside
+    // clean with no partial update. All three refusals - an unknown column,
+    // a column named twice (BJ-R2), and the primary key (K2, `Unsupported`) -
+    // live in the compiler beside
     // CompileWhere rather than here: the two halves of an UPDATE's compile
     // belong at one layer, and a check the dispatcher owns is one a second
     // write path can be written without.
@@ -8020,6 +8021,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         }
 
         ++updated;
+        if (after_update_row_applied_for_test_) after_update_row_applied_for_test_(id.value());
         if (page_id != last_page) {
             last_page = page_id;
             ++pages_touched;

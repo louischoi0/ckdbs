@@ -63,6 +63,7 @@ add_executable(kds_tests
     inflight_publication_rig_test.cpp
     dt9_across_cores_rig_test.cpp
     row_wait_wake_rig_test.cpp
+    bj_single_write_rig_test.cpp
     strict_marker_snapshot_rig_test.cpp
     issue_under_the_leaf_rig_test.cpp
     lock_family_test.cpp

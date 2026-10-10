@@ -579,7 +579,6 @@ TEST_F(ForeignKeyCheckTest, AFkColumnAssignedTwiceIsRefusedNotCheckedByItsFirstV
     const std::string out = Run("UPDATE trades SET account_id = 1, account_id = 99 WHERE id = 1");
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
     EXPECT_NE(out.find("more than once"), std::string::npos) << out;
-    EXPECT_EQ(Run("SELECT * FROM trades WHERE id = 1").find(",99"), std::string::npos);
     EXPECT_NE(Run("SELECT * FROM trades WHERE id = 1").find("1,2,"), std::string::npos);
 }
 

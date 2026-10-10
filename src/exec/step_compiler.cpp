@@ -1363,8 +1363,6 @@ Status CompileAssignments(const catalog::TableAccess& access,
     }
     const std::string_view pk_name = catalog::NameView(access.schema.columns.front().name);
 
-    // The columns already named, by resolved column rather than by spelling,
-    // so a name the catalog folds is still one column.
     std::vector<const catalog::SysColumnRow*> assigned;
     for (const parser::Assignment& a : assignments) {
         const auto* column = access.schema.FindColumn(a.col_name);
@@ -1372,11 +1370,8 @@ Status CompileAssignments(const catalog::TableAccess& access,
             return Status::InvalidArgument("unknown column '" + a.col_name + "' at byte " +
                                            std::to_string(a.byte_offset));
         }
-        // BJ-R2 (the standard's rule): one assignment per column. Last-wins
-        // was never a meaning a client could rely on, and on a foreign-key
-        // column it was a bypass - the check read the first value and the
-        // write kept the last (docs/inflight/bugs/a-column-assigned-twice-
-        // checks-its-first-foreign-key-value-and-writes-its-last.md).
+        // BJ-R2: one assignment per column; last-wins let the foreign-key
+        // hoist check the first value while the write kept the last.
         if (std::find(assigned.begin(), assigned.end(), column) != assigned.end()) {
             return Status::InvalidArgument("column '" + a.col_name +
                                            "' is assigned more than once at byte " +
