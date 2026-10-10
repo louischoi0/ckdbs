@@ -50,6 +50,13 @@ namespace kds::exec {
 namespace {
 
 using storage::cabin::BoundCabinEntry;
+
+// A BY column's schema row, carrying only the type a hand-built assertion needs.
+catalog::SysColumnRow GroupColumn(std::uint32_t type_val) {
+    catalog::SysColumnRow col{};
+    col.type_val = type_val;
+    return col;
+}
 using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryBytes;
 using storage::cabin::kEntryHintValid;
@@ -599,7 +606,7 @@ TEST(AssertionSnapshotDoorTest, AGroupPastWhatARunCanCountIsRefusedAtAdmission) 
         a.aggregate = BoundAggregate::kCount;
         a.group_cols = {1};
         a.group_col_names = {"v"};
-        a.group_type_vals = {catalog::kTypeValInt64};
+        a.group_columns = {GroupColumn(catalog::kTypeValInt64)};
         a.cabin = BoundCabin(BoundAggregate::kCount, /*bound=*/1'000'000);
         for (std::int64_t v = 0; v < groups; ++v) a.cabin.EnsureGroupId(EncodeGroupKey(IntRow(v)));
         registry->Adopt(std::move(a));
@@ -645,7 +652,7 @@ TEST(AssertionSnapshotDoorTest, AnEvictionMidStatementRefusesTheRowsAfterIt) {
     a.aggregate = BoundAggregate::kCount;
     a.group_cols = {1};
     a.group_col_names = {"v"};
-    a.group_type_vals = {catalog::kTypeValInt64};
+    a.group_columns = {GroupColumn(catalog::kTypeValInt64)};
     a.cabin = BoundCabin(BoundAggregate::kCount, /*bound=*/1'000'000);
     a.cabin.EnsureGroupId(EncodeGroupKey(IntRow(1)));
     registry.Adopt(std::move(a));
@@ -684,7 +691,7 @@ TEST(AssertionSnapshotDoorTest, AKeyPastItsRecordsLengthFieldIsRefusedAtAdmissio
     a.aggregate = BoundAggregate::kCount;
     a.group_cols = {1};
     a.group_col_names = {"v"};
-    a.group_type_vals = {catalog::kTypeValVarchar};
+    a.group_columns = {GroupColumn(catalog::kTypeValVarchar)};
     a.cabin = BoundCabin(BoundAggregate::kCount, /*bound=*/1'000'000);
     registry.Adopt(std::move(a));
     registry.SetRecordBudget(std::size_t{1} << 20);

@@ -337,5 +337,66 @@ TEST_F(AssertionEnforceTest, AFreshDispatcherOverTheSameStoreReportsAndDoesNotEn
               "INSERTED");
 }
 
+// A group key built from a literal must be the key the stored row is counted
+// under. An INSERT's values arrive as written (a `date` as a string, a
+// `decimal` as text) while CREATE ASSERTION's backfill and DELETE/UPDATE key
+// from decoded rows; before the fix the three disagreed, so the backfilled
+// count never met a later write, and a DELETE was refused outright for
+// departing from a group no insert had used.
+TEST_F(AssertionEnforceTest, ADateGroupKeyedFromALiteralMeetsTheBackfilledCount) {
+    ASSERT_EQ(Run("CREATE TABLE ev (id int64, d date) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01')").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01')").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON ev GROUP BY (d) CHECK COUNT(*) <= 2").substr(0, 7),
+              "CREATED");
+    EXPECT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01')").substr(0, 23),
+              "ERR ASSERTION_VIOLATION");
+    // Another day is another group.
+    EXPECT_EQ(Run("INSERT INTO ev VALUES ('2026-01-02')").substr(0, 8), "INSERTED");
+}
+
+TEST_F(AssertionEnforceTest, ATimestampGroupKeyedFromALiteralMeetsTheBackfilledCount) {
+    ASSERT_EQ(Run("CREATE TABLE ev (id int64, t timestamp) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01 10:00:00')").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON ev GROUP BY (t) CHECK COUNT(*) <= 1").substr(0, 7),
+              "CREATED");
+    EXPECT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01 10:00:00')").substr(0, 23),
+              "ERR ASSERTION_VIOLATION");
+}
+
+TEST_F(AssertionEnforceTest, ADecimalGroupKeyedFromALiteralMeetsTheBackfilledCount) {
+    ASSERT_EQ(Run("CREATE TABLE px (id int64, p decimal(10,2)) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO px VALUES ('1.50')").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO px VALUES ('1.50')").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON px GROUP BY (p) CHECK COUNT(*) <= 2").substr(0, 7),
+              "CREATED");
+    EXPECT_EQ(Run("INSERT INTO px VALUES ('1.50')").substr(0, 23), "ERR ASSERTION_VIOLATION");
+    EXPECT_EQ(Run("INSERT INTO px VALUES ('2.50')").substr(0, 8), "INSERTED");
+}
+
+TEST_F(AssertionEnforceTest, ADeleteAndAnUpdateOnADateGroupAgreeWithTheInsertKey) {
+    ASSERT_EQ(Run("CREATE TABLE ev (id int64, d date) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON ev GROUP BY (d) CHECK COUNT(*) <= 2").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01')").substr(0, 8), "INSERTED");  // id 1
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01')").substr(0, 8), "INSERTED");  // id 2
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01')").substr(0, 23),
+              "ERR ASSERTION_VIOLATION");
+
+    // The delete gives back under the key the inserts used: one slot frees,
+    // and exactly one.
+    ASSERT_EQ(Run("DELETE FROM ev WHERE id = 1"), "DELETED 1");
+    EXPECT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01')").substr(0, 8), "INSERTED");
+    EXPECT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01')").substr(0, 23),
+              "ERR ASSERTION_VIOLATION");
+
+    // An UPDATE that moves a row out of the full group frees a slot in it;
+    // one that moves a row into it is charged there.
+    ASSERT_EQ(Run("UPDATE ev SET d = '2026-01-02' WHERE id = 2").substr(0, 7), "UPDATED");
+    EXPECT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01')").substr(0, 8), "INSERTED");
+    EXPECT_EQ(Run("UPDATE ev SET d = '2026-01-01' WHERE id = 2").substr(0, 23),
+              "ERR ASSERTION_VIOLATION");
+}
+
 }  // namespace
 }  // namespace kds::server

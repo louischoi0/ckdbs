@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "kds/exec/assertion_violation.hpp"
+#include "kds/exec/row_codec.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/payload.hpp"
 
@@ -29,11 +30,24 @@ const parser::AstValue& ValueAt(std::span<const parser::AstValue> values,
     return values[schema_pos - first_col_pos];
 }
 
+// **Coerced first, and this is load-bearing.** An INSERT hands the values as
+// written - a `date` or `timestamp` as a string, a `decimal` as text - while
+// the build's backfill and the DELETE/UPDATE paths hand decoded rows, and
+// `EncodeGroupKey` tags each kind apart. Left alone, one stored value had two
+// keys: the backfilled count was never met by a later insert, and a delete
+// departed from a group no insert had used. Through the codec's one coercion
+// (`NoteCabinWrite` does the same for Cabins), so every path keys on the
+// decoded kind. A value that does not coerce keeps its written form: the row
+// is refused at encode, and nothing reserved under it survives that.
 std::string KeyFor(const LiveAssertion& a, std::span<const parser::AstValue> values,
                    std::size_t first_col_pos) {
     std::vector<parser::AstValue> group(a.group_cols.size());
     for (std::size_t i = 0; i < a.group_cols.size(); ++i) {
         group[i] = ValueAt(values, first_col_pos, a.group_cols[i]);
+        parser::AstValue coerced = group[i];
+        if (CoerceLiteralToColumn(a.group_columns[i], coerced).ok()) {
+            group[i] = std::move(coerced);
+        }
     }
     return EncodeGroupKey(group);
 }
@@ -54,7 +68,7 @@ Status Refuse(const LiveAssertion& a, std::span<const parser::AstValue> values,
     std::vector<GroupKeyPart> parts(a.group_cols.size());
     for (std::size_t i = 0; i < a.group_cols.size(); ++i) {
         parts[i].column = a.group_col_names[i];
-        parts[i].type_val = a.group_type_vals[i];
+        parts[i].type_val = a.group_columns[i].type_val;
         parts[i].value = ValueAt(values, first_col_pos, a.group_cols[i]);
     }
     return Status::AssertionViolation(AssertionViolationMessage(

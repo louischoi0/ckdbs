@@ -139,7 +139,10 @@ struct LiveAssertion {
     std::uint16_t sum_col = 0;              // schema position; read for kSum only
     std::string sum_col_name;
     std::vector<std::string> group_col_names;      // for the §4.4 message
-    std::vector<std::uint32_t> group_type_vals;    // for the §4.4 message
+    // The BY columns' schema rows: the §4.4 message's type, and what
+    // `KeyFor` coerces each written value by, so an INSERT's literal keys
+    // the group the build's backfill and a decoded row key it under.
+    std::vector<catalog::SysColumnRow> group_columns;
     BoundCabinChainWriter chain;
     BoundCabin cabin;
 
