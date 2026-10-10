@@ -195,6 +195,15 @@ dispatch fork. Two things pay for it, and neither is a ring round trip:
   open `WriteScope`, which is no place to park; the fork is before any row
   is written, so a statement refused there can be re-run whole.
 
+**An expression assigned to a foreign-key column** (BJ-Q10). A SET value that
+is a constant - no column reference, no `NOW()` - is folded at compile, and
+its value is what the hoist resolves and what the per-row check applies. One
+that reads a column, or the clock, is refused `NotImplemented` at its byte:
+resolving its parent per row would descend the parent under the write walk's
+exclusive leaf, the open page-latch cycle
+(`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`).
+A scalar subquery is run once before the walk and is a constant from then on.
+
 **Nothing inside an open `WriteScope` waits or crosses**, which was
 AH-R1's rule and survives it: the per-row check answers from the resolved
 verdicts and local state alone. The self-referencing arm's hold (below) is

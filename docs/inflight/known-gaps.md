@@ -944,6 +944,51 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
     passes in Debug with `Scheduler::DiscardTasks` removed. The tree has
     no sanitizer build.
 
+## Expressions in `UPDATE ... SET` (BJ)
+
+Written at BJ's close on `worktree-bj-expression-update`. Owned by
+`docs/spec/types.md` §3.2b and `instructions/v3.0.0/workorder-bj-expression-update.md`.
+
+- **Refused by name at their byte, never parsed and dropped:** `IN`, `BETWEEN`,
+  `LIKE`, `EXISTS`, `IS TRUE` and `IS DISTINCT FROM`; a boolean literal
+  (`TRUE`/`FALSE`); `<>` (inequality is `!=`); a correlated subquery; a
+  subquery over a catalog view; the row form `SET (a, b) = (SELECT ...)`;
+  `DEFAULT` and `UPDATE ... FROM`; timestamp arithmetic (there is no
+  `INTERVAL`); a negative count of places in `ROUND`/`TRUNC`; an expression
+  that reads a column or the clock assigned to a foreign-key column.
+- **An expression in `INSERT ... VALUES`, a select list or a WHERE** is not
+  built (BJ-Q8): each is its own order on the same grammar.
+- **Where it differs from the reference dialect, on purpose:**
+  - **Exact types** (BJ-Q2 (b)): `int32 + int64` needs a `CAST`. The one
+    departure is a scaled decimal (`ROUND`/`TRUNC`/`CEIL`/`FLOOR` over a
+    decimal), which takes its context's precision.
+  - `CAST('1.5' AS int64)` is 2; PostgreSQL refuses it. `CAST(18446744073709551615
+    AS uint64)` is refused (a bare integer literal resolves to int64 first); `-128::int8`
+    is admitted through the fused minus where PostgreSQL refuses both spellings.
+  - Strings are bytes: `LENGTH` counts them and `UPPER`/`LOWER` change ASCII
+    letters only.
+  - **A decimal quotient has more places than its operands** and is never
+    narrowed implicitly; whether PostgreSQL's own division rounds twice was
+    not checked, and this engine's does not.
+  - **A scalar subquery is run once, before the walk, wherever it is
+    written**, so one in a `CASE` branch no row takes still runs and its
+    error stands; and a WHERE-position subquery in the same statement is
+    re-run per row and sees the statement's earlier rows.
+  - A simple `CASE x WHEN a` is the searched form with `x` repeated, so a
+    nested one multiplies its operand's size; the parser bounds an
+    expression at 4,096 nodes counting a shared child per reference. Holding
+    the operand once on the node is open.
+- **What the suite does not cover:**
+  - `NOW()` carried across a parked SET (the WHERE-position cell exists; the
+    SET one is covered by reading, the same `ParkedWrite::context`).
+  - **An autocommit UPDATE's two subqueries reading one snapshot.** The fix
+    pins the UPDATE's snapshot; the race it closes needs a commit between two
+    subqueries of one statement and has no cell.
+  - A function's purity is declared nowhere: nothing reads it until AQ
+    evaluates a function on the write path.
+- **Filed beside it:** `docs/inflight/bugs/a-negative-foreign-key-value-skips-the-parent-check.md`
+  (older than BJ; a folded constant now reaches it).
+
 ## Decisions the revision has not taken
 
 - **AR0's D1–D16: four are taken, one of them against AR0's own

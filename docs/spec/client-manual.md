@@ -309,8 +309,9 @@ hold on the debug port too (Appendix A gives the text spellings).
   recorded against balances that never moved, and those are counted and
   reported as `torn`. That number is a property of the tool's choices
   rather than of the engine.
-- **Balances are computed client-side**, because `UPDATE ... SET col =
-  <val>` takes a literal and not an expression. Each trader process owns a
+- **Balances are computed client-side** (the tool predates `SET col = col +
+  <n>`, which computes server-side since BJ; it has not been changed to use
+  it). Each trader process owns a
   *disjoint* partition of accounts, which is what makes that safe without
   locks; `--verify` reads a sample back and compares stored against
   expected.

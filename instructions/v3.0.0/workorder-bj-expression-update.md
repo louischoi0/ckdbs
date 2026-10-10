@@ -1057,3 +1057,46 @@ measured at the milestone's close** (§5).
   by an outward name, types, the subquery's own errors, a foreign-key column, a
   transaction's own writes), a parser cell, the parked rig cell, and the corpus
   (two verdicts and three lines).
+
+### BJ-S7 — the `critics-developer` review of `7c8b2cef`, applied
+
+On `worktree-bj-expression-update`, after `7c8b2cef`, the review found, and
+the tree now fixes:
+- **A silent wrong value (high).** The collecting sink saved "the last row
+  rendered", but a sorted statement renders rows as the top-N heap admits them
+  and emits the survivors afterwards, so `(SELECT x FROM u ORDER BY x LIMIT 1
+  OFFSET 1)` stored the third value, not the second. The row text is now the
+  index of its value, so `Emit` takes exactly the one that was encoded for it.
+- **Two reads of two states (medium).** Outside `BEGIN` the SELECT minted its own
+  snapshot, later than the UPDATE's, so `SET a = (SELECT ...), b = (SELECT ...)`
+  could read two versions of a row. `HandleSelect` takes an optional pinned
+  snapshot, and the subquery reads at the UPDATE's own. Inside `BEGIN` it
+  already did; the repeatable-read cell shows it (the subquery read the
+  transaction's view, not another session's later commit). **The autocommit race
+  itself has no cell** - it needs another core to commit between two subqueries of
+  one statement - and is covered by reading.
+- **Correlation (medium).** The text probe refused valid nested subqueries
+  (it counted a grandchild's reference to the subquery's own relation as
+  reaching the target) and skipped every aggregated or paginated correlated one
+  (the probe did not parse), answering `InvalidArgument` where the order says
+  `NotImplemented`. A subquery that **compiles on its own** names nothing outside
+  it; one that does not is compiled as an `EXISTS` over the target, from the
+  AST, and refused if that makes it correlated. Both are compiles; neither runs.
+- **Error bytes (low)**: the SELECT's own offsets were relative to the
+  subquery's text; the text is now padded to where it stood, so every byte is a
+  byte of the UPDATE.
+- **`;` inside the parentheses (low)** is refused: it ended the subquery early
+  and the UPDATE went on.
+- **Pinned in a cell, not changed (low)**: a subquery in a branch never taken
+  still runs and its error fails the statement - the answer is taken before the
+  walk whatever a row would do; `types.md` says so.
+- **Cuts**: `Session local`, the `last_subquery_close_` side channel (the close
+  byte is returned), the text probe.
+
+**Rejected:** moving `SubqueryResult` to a header of its own so `session.hpp`
+need not include `set_expr.hpp` (a header split for one struct); a
+`const SubqueryResolver&` in place of the pointer (a signature churn through
+`CompileAssignments`'s callers for no behaviour); `std::move` of the parked
+answers (the parked write is read through a const reference and cleared two
+lines later; the vector is a handful of values); the sink keeping only the
+type oid and modifier (it keeps the field it was given).

@@ -814,7 +814,7 @@ struct Expr {
     // kSubquery (BJ-S7): `(SELECT ...)` as a value. The statement as parsed, and
     // its text without the parentheses - the dispatcher runs the text through
     // the SELECT path once, before the walk.
-    std::shared_ptr<const SelectStmt> subquery;
+    std::shared_ptr<SelectStmt> subquery;
     std::string subquery_sql;
 };
 

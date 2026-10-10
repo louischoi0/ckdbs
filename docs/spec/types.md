@@ -18,7 +18,7 @@ is refused at CREATE TABLE. Consistent with
 | TY5 | Value model | `DATE`/`TIMESTAMP` **reuse `AstValue` kInt** — the value *is* an integer; only its rendering differs, and rendering happens at the emission boundary (§3.3), not in the value. **`DECIMAL` alone adds a kind**: `kDecimal` carrying the unscaled int64 plus its scale (and `kDecimalWide` for the 16-byte type, §2a). One new kind per representation, not three, is what keeps every switch over `ValueType` from growing arms that behave identically |
 | TY6 | Mixed-scale comparison | Column–literal: the literal is normalized **to the column's scale at compile time**, and digits beyond `s` are a positioned statement error — rounding a literal to make it match is a silent wrong answer. Column–column (a join residual): **same `(p, s)` only**; differing scales answer `Unsupported`. Rescaling under overflow semantics is not offered |
 | TY7 | Validation | `EncodeOneValue` is the **only gate**: it parses `YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS[.ffffff]` and decimal strings, rejects out-of-range and malformed input as a positioned statement error, and range-checks against the type's width. The valid `DATE` range is **1900-01-01 .. 2999-12-31** and `TIMESTAMP`'s is its microsecond equivalent; outside is a positioned encode error. Decode never re-validates — stored bytes were proven at the gate, same principle the codec already runs on |
-| TY8 | Value functions | `NOW()`, `CURRENT_DATE`, arithmetic on dates: **none**. A value function imports an evaluation-time question (once per statement? per row?) that "the query is the plan" has no slot for. Clients send literals |
+| TY8 | Value functions | `NOW()`, `CURRENT_DATE`, arithmetic on dates: **none in a predicate, a select list or an `INSERT` value** (AP-S4's `DATE()` and `NOW()` in a WHERE comparison apart, §3.2a). A value function imports an evaluation-time question (once per statement? per row?) that "the query is the plan" has no slot for. **A `SET` value is the exception since BJ**, and the question has an answer there: `NOW()` and `CURRENT_DATE` are one value per statement (`StatementContext`), and date arithmetic is `date +/- days` and `date - date` (§3.2b) |
 | TY9 | Catalog | Purely additive `type_val`s: `kTypeValDate = 11`, `kTypeValTimestamp = 12`, `kTypeValDecimalWide = 13`; DECIMAL reuses the reserved `kTypeValDecimal = 7`. No existing relation changes meaning. `(p, s)` persists **packed into `SysColumnRow::len`** (§4a): no format change, no version bump |
 
 ---
@@ -161,8 +161,10 @@ positioned error at compile, not a row-by-row false.
 
 ### 3.2 DECIMAL arithmetic
 
-There is none — no `+`, no `*`, no expressions (the grammar has none).
-What exists is comparison (TY6) and aggregation: `SUM` over `DECIMAL(p,s)`
+**In a predicate, a select list or an `INSERT` value there is none** - no `+`,
+no `*`, no expressions (the grammar has none there). **A `SET` value is an
+expression** since BJ, and §3.2b states it. What exists everywhere else is
+comparison (TY6) and aggregation: `SUM` over `DECIMAL(p,s)`
 folds unscaled int64 through the checked adder and yields `DECIMAL(18,s)`
 semantics — overflow is a statement error exactly as AG3 states, and the
 answer's scale is the column's. `MIN`/`MAX` are int comparisons. `SUM`
@@ -321,6 +323,13 @@ one over a catalog view and the row form `SET (a, b) = (SELECT ...)`: a per-row
 sub-chain under the write walk's exclusive leaf is the open page-latch cycle
 (`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`),
 and a view always sees its own transaction's writes.
+
+It is **run wherever it is written**: a subquery inside a `CASE` branch no row
+takes, or after a `COALESCE` that settles, still runs, and its error (more than
+one row) fails the statement. It reads at the UPDATE's own snapshot, so the
+statement sees one state of the database, and it is also an ordinary SELECT to
+the engine: it records a Waystone trail and `SHOW ACCESS` statistics as one.
+Its errors name bytes of the UPDATE.
 
 `NULL` types as its context's type, and a NULL operand yields NULL (BJ-R4).
 Whether a NULL result fits a `NOT NULL` target is the row's verdict. The

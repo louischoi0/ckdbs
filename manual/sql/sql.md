@@ -576,8 +576,47 @@ INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
 UPDATE accounts SET balance = 99.00 WHERE id = 42;
 ```
 
-- Grammar: `UPDATE <table> SET <col> = <val> [, ...] [WHERE ...]`.
+- Grammar: `UPDATE <table> SET <col> = <value expression> [, ...] [WHERE ...]`,
+  and `SET (<col>, ...) = (<value>, ...)`.
 - The WHERE is the same production SELECT uses, subqueries included.
+- **A SET value is an expression** (BJ). `UPDATE accounts SET balance =
+  balance + 25.00 WHERE id = 42` is one statement and one lost-update-free
+  step, where a client used to `SELECT`, add and `UPDATE`. What a value may
+  be, and how each is typed, is `docs/spec/types.md` §3.2b; in short:
+  - **Operators**: `+ - * / %` over numbers, `||` over text, unary `+ -`;
+    `date + n`, `date - n`, `date - date`; the comparisons `= != < <= > >=`,
+    `AND`, `OR`, `NOT` and `IS [NOT] NULL`, which give a `bool` a `bool` column
+    takes. Precedence is PostgreSQL's. Write inequality `!=`; `<>` is not
+    lexed.
+  - **Forms**: `CASE` (simple and searched), `COALESCE`, `NULLIF`,
+    `GREATEST`, `LEAST`, `CAST(x AS t)` and `x::t`.
+  - **Functions**: `ABS SIGN CEIL FLOOR ROUND TRUNC MOD`, `UPPER LOWER LENGTH
+    SUBSTRING TRIM LTRIM RTRIM POSITION(a IN b) REPLACE LPAD RPAD CONCAT`,
+    `NOW()`, `CURRENT_DATE`, `DATE(ts)`. Strings are bytes.
+  - **A scalar subquery**, `SET v = v + (SELECT SUM(v) FROM t)`: run once,
+    before the first row, so every row is raised by the sum the table had
+    before the statement. Unlike a WHERE subquery it does not see the rows
+    the statement has already written. One column, at most one row (more is
+    an error even when the WHERE matches nothing), no row is NULL, and one
+    that reads the row being updated is refused.
+  - **Every SET expression reads the row as it was before the statement**:
+    `SET a = b, b = a` swaps. A column named twice is refused.
+  - **No implicit conversion**: an operator's operands, a `CASE`'s results
+    and the value assigned are each one exact type, and a literal takes the
+    type its neighbour or its column has. `int32 + int64` needs a `CAST`.
+    A decimal result of another scale is narrowed by `ROUND(x, s)` or `CAST`,
+    which round half away from zero; a quotient is `decimal` with the
+    dividend's scale and up to 16 more places.
+  - **Arithmetic is checked in its own type at every step**: a result
+    outside it is `OutOfRange` at that row, naming the operator's byte, the
+    expression's first byte and the row's key, and a division by zero is
+    `InvalidArgument`. NULL propagates (`SET n = n + 1` over a NULL leaves
+    it NULL and counts the row); a NULL into a `NOT NULL` column is refused
+    at the row.
+  - **What is not there**: `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `IS TRUE`,
+    boolean literals, a correlated or catalog-view subquery, an expression
+    in `INSERT ... VALUES` or a select list, and an expression that reads a
+    column assigned to a foreign-key column (a constant one is checked).
 - **The primary key cannot be assigned**, and the
   refusal is `Unsupported` with the column's byte — understood and
   declined, not a feature awaiting work (K2). This holds whether the key was
@@ -589,6 +628,10 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
   compile, before any storage is touched, so a refused UPDATE writes
   nothing.
 - An UPDATE never migrates a tuple.
+- A statement whose expression does not type is refused at compile whether or
+  not a row matches, naming both types and the byte. A bare literal keeps its
+  per-row check, so `SET int_col = 'abc'` over a WHERE that matches nothing
+  still answers `UPDATED 0`.
 - Reply: `UPDATED <n>`.
 
 ### DELETE (verified — it exists)

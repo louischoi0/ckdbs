@@ -137,15 +137,92 @@ TEST_F(SetExprSubqueryTest, TheAnswerHasItsColumnsTypeAndTheAssignmentNeedsIt) {
 }
 
 TEST_F(SetExprSubqueryTest, ASubqueryTheStatementCannotRunIsRefusedWithItsOwnReason) {
-    const std::string missing = Run("UPDATE t SET v = (SELECT x FROM nosuch)");
+    const std::string missing_sql = "UPDATE t SET v = (SELECT nosuch FROM u WHERE id = 1)";
+    const std::string missing = Run(missing_sql);
     EXPECT_EQ(missing.substr(0, 3), "ERR") << missing;
-    EXPECT_NE(missing.find("byte"), std::string::npos) << "the subquery's own refusal: " << missing;
-    EXPECT_NE(Run("UPDATE t SET v = (SELECT nosuch FROM u WHERE id = 1)").find("nosuch"),
-              std::string::npos);
+    EXPECT_NE(missing.find("nosuch"), std::string::npos) << "the subquery's own refusal: " << missing;
+    EXPECT_NE(missing.find("byte " + std::to_string(missing_sql.find("nosuch"))), std::string::npos)
+        << "a byte of the UPDATE, not of the subquery's text: " << missing;
+    EXPECT_EQ(Run("UPDATE t SET v = (SELECT x FROM nosuch)").substr(0, 3), "ERR");
     EXPECT_NE(Run("UPDATE t SET v = (SELECT oid FROM sys.tables WHERE oid = 1)")
                   .find("catalog view"),
               std::string::npos);
     EXPECT_EQ(Run("UPDATE t SET (v, n) = (SELECT x, y FROM u WHERE id = 2)").substr(0, 3), "ERR");
+}
+
+TEST_F(SetExprSubqueryTest, AnOrderedAndPaginatedSubqueryAnswersTheRowItEmits) {
+    // BJ-S7's review: the sorted path renders rows as the top-N heap admits
+    // them and emits the survivors afterwards, so "the last row rendered" was
+    // not the row emitted - OFFSET 1 stored the third value, not the second.
+    Exec("INSERT INTO u VALUES (3, 50, 'three', '1.00', 1)");
+    EXPECT_EQ(Run("SELECT x FROM u ORDER BY x LIMIT 1 OFFSET 1"), "x\\n100");
+    Exec("UPDATE t SET v = (SELECT x FROM u ORDER BY x LIMIT 1 OFFSET 1) WHERE id = 1");
+    EXPECT_EQ(At("v", 1), "100");
+    Exec("UPDATE t SET v = (SELECT x FROM u ORDER BY x DESC LIMIT 1) WHERE id = 1");
+    EXPECT_EQ(At("v", 1), "200");
+    Exec("UPDATE t SET v = (SELECT x FROM u ORDER BY x DESC LIMIT 1 OFFSET 2) WHERE id = 1");
+    EXPECT_EQ(At("v", 1), "50");
+}
+
+TEST_F(SetExprSubqueryTest, CorrelationIsJudgedByWhatTheSubqueryNeedsFromOutside) {
+    // An aggregated or paginated subquery cannot be text-probed; it is still
+    // refused as correlated, and by the right code.
+    EXPECT_NE(Run("UPDATE t SET v = (SELECT MAX(x) FROM u WHERE u.id = t.id)")
+                  .find("NOT_IMPLEMENTED"),
+              std::string::npos);
+    EXPECT_NE(Run("UPDATE t SET v = (SELECT x FROM u WHERE id = t.id ORDER BY x LIMIT 1)")
+                  .find("NOT_IMPLEMENTED"),
+              std::string::npos);
+    // A nested subquery that correlates only with the subquery's own relation
+    // reads nothing of the row being updated.
+    Exec("UPDATE t SET v = (SELECT x FROM u WHERE EXISTS (SELECT id FROM u AS w WHERE w.id = "
+         "u.id) AND id = 2) WHERE id = 1");
+    EXPECT_EQ(At("v", 1), "200");
+}
+
+TEST_F(SetExprSubqueryTest, TheSubqueryEndsAtItsOwnParenthesisAndOnlyThere) {
+    // `;` ends a statement, not a subquery inside one.
+    EXPECT_EQ(Run("UPDATE t SET v = (SELECT x FROM u WHERE id = 2;)").substr(0, 3), "ERR");
+    // A parenthesis in a string literal or after a comment marker is text.
+    Exec("UPDATE t SET name = (SELECT s FROM u WHERE s != ')x(' AND id = 1) WHERE id = 1");
+    EXPECT_EQ(At("name", 1), "one");
+    Exec("UPDATE t SET v = (SELECT x FROM u WHERE id = 2 -- )\n) WHERE id = 1");
+    EXPECT_EQ(At("v", 1), "200");
+}
+
+TEST_F(SetExprSubqueryTest, ASubqueryInABranchNeverTakenStillRunsAndItsErrorStands) {
+    // The answer is taken before the walk, whatever branch the row would take.
+    const std::string out =
+        Run("UPDATE t SET v = CASE WHEN 1 = 1 THEN 5 ELSE (SELECT x FROM u) END WHERE id = 1");
+    EXPECT_NE(out.find("more than one row returned by a subquery"), std::string::npos) << out;
+    EXPECT_EQ(At("v", 1), "10");
+    Exec("UPDATE t SET v = COALESCE(5, (SELECT x FROM u WHERE id = 1)) WHERE id = 1");
+    EXPECT_EQ(At("v", 1), "5");
+}
+
+TEST_F(SetExprSubqueryTest, ARepeatableReadStatementReadsTheSubqueryAtItsOwnView) {
+    auto opened = TwoCoreRig::Open();
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    auto rig = std::move(opened.value());
+    CommandDispatcher& d = rig->core(0).dispatcher();
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, v int64)").response.substr(0, 3), "CRE");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE u (id int64, x int64)").response.substr(0, 3), "CRE");
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (1, 1)").response.substr(0, 8), "INSERTED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO u VALUES (1, 5)").response.substr(0, 8), "INSERTED");
+
+    Session reader;
+    ASSERT_EQ(d.Dispatch("SET ISOLATION LEVEL REPEATABLE READ", &reader).response.substr(0, 3),
+              "SET");
+    ASSERT_EQ(d.Dispatch("BEGIN", &reader).response.substr(0, 5), "BEGIN");
+    ASSERT_EQ(d.Dispatch("SELECT x FROM u WHERE id = 1", &reader).response, "x\\n5");
+    // Another session commits a change after the reader's view was taken.
+    ASSERT_EQ(d.Dispatch("UPDATE u SET x = 999 WHERE id = 1").response.substr(0, 9), "UPDATED 1");
+    ASSERT_EQ(d.Dispatch("UPDATE t SET v = (SELECT x FROM u WHERE id = 1) WHERE id = 1", &reader)
+                  .response.substr(0, 9),
+              "UPDATED 1");
+    EXPECT_EQ(d.Dispatch("SELECT v FROM t WHERE id = 1", &reader).response, "v\\n5")
+        << "the subquery read the transaction's view, not the latest commit";
+    ASSERT_EQ(d.Dispatch("ROLLBACK", &reader).response.substr(0, 8), "ROLLBACK");
 }
 
 TEST_F(SetExprSubqueryTest, AConstantSubqueryIntoAForeignKeyIsCheckedAgainstItsValue) {

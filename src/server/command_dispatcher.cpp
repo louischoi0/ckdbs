@@ -7165,7 +7165,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
 }
 
 DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& session,
-                                                bool analyze) {
+                                                bool analyze, const txn::Snapshot* pinned) {
     // The statement boundary. Under READ COMMITTED this is where a new read
     // view is taken - so two SELECTs in one transaction can see different
     // data, which is the level's entire definition.
@@ -7173,7 +7173,9 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // **Everything the statement reads lives on its run** (BA-S15), which
     // the plain path hands on so its walk can outlive this function.
     const auto run = std::make_shared<SelectRun>(*this, session);
-    auto snapshot = SnapshotFor(session);
+    auto snapshot = pinned != nullptr
+                        ? StatusOr<txn::LeasedSnapshot>(txn::LeasedSnapshot{*pinned, {}})
+                        : SnapshotFor(session);
     // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse (a spent
     // transaction-id lease on a peer did, until AT-S10b), and the wire's
     // `retryable=1` is what a client's retry loop reads. The
@@ -7790,25 +7792,29 @@ public:
         described_ = true;
         return Status::OK();
     }
+    // The row's text is the index of its value, so what `Emit` is handed is the
+    // value that was encoded for it: a sorted statement encodes rows as the top-N
+    // heap admits them and emits the survivors afterwards, in order, and "the
+    // last row encoded" is not the row emitted.
     Status EncodeProjectedRow(std::span<const exec::ColumnRef> projection,
                               std::span<const std::uint32_t>, const exec::ChainFrame& frame,
                               std::string& out) override {
-        out.clear();
-        if (!projection.empty()) pending_ = frame.Get(projection[0]);
+        rendered_.push_back(projection.empty() ? parser::AstValue{} : frame.Get(projection[0]));
+        out = std::to_string(rendered_.size() - 1);
         return Status::OK();
     }
     Status EncodeValueRow(std::span<const std::uint32_t>, std::span<const parser::AstValue> values,
                           std::string& out) override {
-        out.clear();
-        if (!values.empty()) pending_ = values[0];
+        rendered_.push_back(values.empty() ? parser::AstValue{} : values[0]);
+        out = std::to_string(rendered_.size() - 1);
         return Status::OK();
     }
-    Status Emit(std::string_view) override {
+    Status Emit(std::string_view row) override {
         if (++rows_ > 1) {
             return Status::InvalidArgument(
                 "more than one row returned by a subquery used as an expression");
         }
-        value_ = std::move(pending_);
+        value_ = std::move(rendered_[static_cast<std::size_t>(std::stoull(std::string(row)))]);
         return Status::OK();
     }
 
@@ -7820,7 +7826,7 @@ private:
     bool described_ = false;
     wire::FieldDescription field_;
     std::uint64_t rows_ = 0;
-    parser::AstValue pending_;
+    std::vector<parser::AstValue> rendered_;
     parser::AstValue value_;  // NULL until a row arrives
 };
 
@@ -7828,25 +7834,30 @@ private:
 
 StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser::Expr& node,
                                                                     const parser::UpdateStmt& stmt,
-                                                                    WriteScope& scope) {
+                                                                    WriteScope& scope,
+                                                                    const txn::Snapshot& snapshot) {
     const std::string at = " (byte " + std::to_string(node.byte_offset) + ")";
-    Session local;
-    Session& session = scope.session != nullptr ? *scope.session : local;
+    Session& session = *scope.session;
 
-    // Correlated or not is the SELECT compiler's own classification: the
-    // subquery is compiled as an `EXISTS` predicate over the target relation,
-    // where a reference that resolves outward makes its sub-chain correlated.
-    // A compile that fails here is left for the real run to report in its own
+    // **Correlated or not**: a subquery that compiles on its own names nothing
+    // outside it. One that does not may name the relation being updated, and
+    // the SELECT compiler says so by compiling it as an `EXISTS` over that
+    // relation, where a reference that resolves outward makes its sub-chain
+    // correlated. Both are compiles of the parsed statement; neither runs.
+    // A subquery that fails both is left for the real run to refuse in its own
     // words.
     {
-        const std::string probe = "SELECT * FROM " +
-                                  (stmt.schema.empty() ? std::string() : stmt.schema + ".") +
-                                  stmt.table_name + " WHERE EXISTS (" + node.subquery_sql + ")";
-        auto parsed = parser::Parse(probe);
-        if (parsed.ok() && std::holds_alternative<parser::SelectStmt>(parsed.value())) {
-            const std::optional<txn::ReadView> view = ViewFor(session);
-            auto chain = exec::Compile(catalog_, std::get<parser::SelectStmt>(parsed.value()),
-                                       view.has_value() ? &*view : nullptr);
+        const std::optional<txn::ReadView> view = ViewFor(session);
+        const txn::ReadView* const resolve_view = view.has_value() ? &*view : nullptr;
+        if (!exec::Compile(catalog_, *node.subquery, resolve_view).ok()) {
+            parser::SelectStmt probe;
+            probe.from.schema = stmt.schema;
+            probe.from.table_name = stmt.table_name;
+            parser::Condition exists;
+            exists.kind = parser::PredicateKind::kExists;
+            exists.subquery = node.subquery;
+            probe.where.push_back(std::move(exists));
+            auto chain = exec::Compile(catalog_, probe, resolve_view);
             if (chain.ok()) {
                 for (const exec::Step& step : chain.value().steps) {
                     for (const exec::SubChain& sub : step.sub_chains) {
@@ -7870,16 +7881,26 @@ StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser
         ~Restore() { session.set_result_sink(sink); }
     } restore{session, previous};
 
-    DispatchOutcome out = HandleSelect(node.subquery_sql, session, /*analyze=*/false);
+    // The text is padded to where it stood in the statement, so every byte the
+    // SELECT reports is a byte of the UPDATE.
+    const std::string text = std::string(node.byte_offset + 1, ' ') + node.subquery_sql;
+    DispatchOutcome out = HandleSelect(text, session, /*analyze=*/false, &snapshot);
     // The walk is handed on for a yield; a SET value's subquery is run to its
     // end here, before the statement's own walk begins.
     if (out.select_run != nullptr) {
         const std::shared_ptr<SelectRun> run = std::move(out.select_run);
         out = run->RunInline();
     }
-    if (!out.status.ok()) return out.status.WithMessage(out.status.message() + at);
+    // The subquery's own refusals carry their byte already; the rest are given
+    // the subquery's.
+    const auto Positioned = [&](const std::string& what) {
+        return what.find("(byte ") != std::string::npos || what.find("byte ") != std::string::npos
+                   ? what
+                   : what + at;
+    };
+    if (!out.status.ok()) return out.status.WithMessage(Positioned(out.status.message()));
     if (out.response.rfind("ERR", 0) == 0) {
-        return Status::InvalidArgument(out.response.substr(4) + at);
+        return Status::InvalidArgument(Positioned(out.response.substr(4)));
     }
     if (!sink.described()) {
         return Status::NotImplemented("a subquery over a catalog view is not supported as a SET "
@@ -7983,7 +8004,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         [&](const parser::Expr& node) -> StatusOr<exec::SubqueryResult> {
         const std::size_t index = subqueries_asked++;
         if (index < subqueries.size()) return subqueries[index];  // a resume: the first run's
-        auto answer = RunScalarSubquery(node, stmt, scope);
+        auto answer = RunScalarSubquery(node, stmt, scope, snapshot);
         if (answer.ok()) subqueries.push_back(answer.value());
         return answer;
     };
