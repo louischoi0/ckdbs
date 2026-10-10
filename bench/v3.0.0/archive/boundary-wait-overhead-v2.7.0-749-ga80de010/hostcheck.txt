@@ -1,0 +1,8 @@
+291 runs; flagged 0 []
+max other-CPU run-mean 0.403 max other-CPU 1s sample 1.0 load1 at start 0.15 2.35
+[(0.403, 1.0, 'c3b-n1000/c3b-n1000-t1-A.host.json'), (0.225, 1.0, 'c2-n1000/c2-n1000-t1-B.host.json'), (0.067, 0.091, 'c3b-n1000/c3b-n1000-t6-B.host.json')]
+client errors total 0
+3
+('c2-n1000/c2-n1000-t1-B.host.json', '0', 1.0, 8, '2026-10-10 21:36:18')
+('c3-n1000/c3-n1000-t1-A.host.json', '0', 0.727, 18, '2026-10-10 21:42:09')
+('c3b-n1000/c3b-n1000-t1-A.host.json', '0', 1.0, 8, '2026-10-10 22:07:32')
