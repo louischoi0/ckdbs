@@ -230,5 +230,26 @@ TEST(StrictMarkerSnapshotRigTest, AnotherSessionsExplicitCommitIsSeenByTheSynchr
                      /*other_session=*/true);
 }
 
+TEST(StrictMarkerSnapshotRigTest, WithNoMarkerHeldNoStatementWaitsForAnyCommit) {
+    // The cost is only where a marker is held: with none, another session's
+    // acknowledged commit is already under the ceiling, the statement reads it
+    // at once, and nothing is counted as a ceiling wait.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+
+    Session writer;
+    writer.set_durability(wal::DurabilityClass::kRelaxed);
+    const Contention::Snapshot before = Contention::Read();
+    ASSERT_TRUE(StartsWith(d1.Dispatch("INSERT INTO t VALUES (7, 1)", &writer).response, "INSERTED"));
+    Session reader;
+    EXPECT_EQ(d0.Dispatch("SELECT id FROM t WHERE id = 7", &reader).response, "id\\n7");
+    const Contention::Snapshot after = Contention::Read();
+    EXPECT_EQ(after.of(Tally::kCeilingWaits), before.of(Tally::kCeilingWaits));
+}
+
 }  // namespace
 }  // namespace kds::server

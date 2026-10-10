@@ -117,20 +117,25 @@ class WakeRegistry;
 // the marker lifts is capped below that commit - the committing session's
 // own next statement included.
 //
-// **The session's own case is closed at the statement boundary.** A session
-// records its last commit's LSN (`Session::acknowledged_commit_lsn`), and a
-// statement whose bound sits above `SnapshotCeiling()` parks until it does
-// not (`CommandDispatcher::DispatchAsync`). It cannot mint at the bound
+// **It is closed at the statement boundary.** A statement whose bound sits
+// above `SnapshotCeiling()` parks until it does not
+// (`CommandDispatcher::DispatchAsync`). It cannot mint at the bound
 // instead: that would cover a commit whose entry is not in yet, which is
 // AN-Q3. The wait ends: every marker below the bound was set before the
 // bound's commit was published, a marker set after reads a ceiling at or
-// above it, and every marker lifts on every exit (`PendingCommit`). So the
-// wait is at most the longest commit in flight when the bound's was
-// published - one `strict` commit's sync, which on a peer can queue behind
-// the one the writer is already running. And a covered bound stays
-// covered - the ceiling is monotone - so the session consumes it at its
-// first covered read, and only the first statement after a commit ever
-// waits: a `BEGIN` or an autocommit statement, holding nothing.
+// above it, and every marker lifts on every exit (`PendingCommit`). A
+// marker is conservative - it is the published ceiling when its commit
+// began, not its commit's own LSN - so a commit staged during one sync
+// holds a marker below everything that sync publishes, and a statement
+// beginning after that sync waits for the next one too: the wait is at
+// most the longest commit in flight when the bound's was published, and
+// two syncs when `strict` commits queue behind each other. Raising a
+// marker to its own LSN once appended would cut it to the commits that are
+// unpublished below a published one; `WalManager::Commit` appends and syncs
+// in one call, so that needs a seam the commit path does not have. A
+// covered bound stays covered - the ceiling is monotone - and a dispatcher
+// remembers the highest it has seen covered (`covered_through_`), so a
+// statement with no new commit since costs one load.
 //
 // **The lift kicks the waiter's core.** A parked statement counts itself
 // into its core's `ceiling_waiters`, then reads the ceiling; `EndCommit`
@@ -147,9 +152,13 @@ class WakeRegistry;
 // to any session before it is at or below. With no marker held below the
 // ceiling the two are equal and nothing waits; a marker held below it - a
 // `strict` commit in its sync, with a later commit published meanwhile -
-// makes the statement wait the rest of that sync, as the committing session's
-// own does. The alternative, snapshots that carry their in-flight set
-// (BA-Q3 (c)), would remove the wait and is a redesign of `txn.md` §4.
+// makes **every** statement on the instance wait for it, a read-only
+// `relaxed` session's included: the cost is in the reads of an instance that
+// runs `strict` commits, and `group` (the default) holds no marker across
+// its wait. A statement inside an open `REPEATABLE READ` transaction mints
+// nothing and does not wait. The alternative, snapshots that carry their
+// in-flight set (BA-Q3 (c)), would remove the wait and is a redesign of
+// `txn.md` §4.
 //
 // ---- Reclamation, and the two windows it must not outrun -----------------
 //
