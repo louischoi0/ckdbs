@@ -702,15 +702,13 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // suspends here is a statement's own wait - a lock, a blocking writer,
     // the group commit - never a stage on another core.
 
-    // ---- BA-R1c: the last commit acknowledged, before any mint ------------
+    // ---- BA-R1c: the session's own last commit, before any mint ----------
     //
     // Another core's commit marker can hold the snapshot ceiling below a
-    // commit already acknowledged - to this session or to another - for a
-    // whole `strict` sync, and a statement minted under it misses the row.
-    // So the statement waits here, at the boundary, until the markers below
-    // its bound lift (holding nothing, unless it is a statement of an open
-    // transaction, which holds that transaction's locks and waits at most as
-    // long); the last lift kicks this core
+    // commit this session was already acknowledged - for a whole `strict`
+    // sync - and a statement minted under it misses its own session's row.
+    // So the statement waits here, at the boundary, holding nothing, until
+    // the markers below its bound lift; the last lift kicks this core
     // (`instance_visibility.hpp`'s "acknowledged-commit bound" note). Not a
     // mint at the bound instead: that covers a commit whose entry is not in.
     if (const wal::Lsn bound = UncoveredCommit(session); bound != wal::kNoLsn) {
@@ -1117,30 +1115,8 @@ void CommandDispatcher::FinishDeferredCommits() {
 
 wal::Lsn CommandDispatcher::UncoveredCommit(Session* session) {
     Session& bound_session = session != nullptr ? *session : autocommit_session_;
-    // No manager, no markers, and nothing to wait for.
-    if (txn_ == nullptr) return wal::kNoLsn;
-    // **A statement inside an open `REPEATABLE READ` transaction mints no
-    // snapshot**: its view was taken at `BEGIN`, so a wait here buys nothing
-    // and would hold the transaction's locks across it.
-    if (const txn::Transaction* open = bound_session.transaction();
-        open != nullptr && open->isolation() == txn::IsolationLevel::kRepeatableRead) {
-        return wal::kNoLsn;
-    }
-    // **The bound is the higher of the session's own last commit and the
-    // highest commit published on the instance now.** The second is what a
-    // statement "sees everything committed before it began" (`txn.md`'s level
-    // table) means across sessions: a commit acknowledged to another session
-    // before this statement began is at or below the published ceiling, and a
-    // marker still held below it - a `strict` commit in its sync - would cap
-    // this statement's snapshot beneath it.
-    const wal::Lsn bound = std::max<wal::Lsn>(bound_session.acknowledged_commit_lsn(),
-                                              txn_->PublishedCommitCeiling());
-    // **The ceiling is monotone**, so a bound once covered stays covered: with
-    // no new commit since, the statement costs one load of the published
-    // ceiling and no walk over every core's marker.
-    if (bound <= covered_through_) return wal::kNoLsn;
+    const wal::Lsn bound = bound_session.acknowledged_commit_lsn();
     if (bound == wal::kNoLsn || txn_->CeilingCovers(bound)) {
-        covered_through_ = bound;
         bound_session.set_acknowledged_commit_lsn(wal::kNoLsn);
         return wal::kNoLsn;
     }

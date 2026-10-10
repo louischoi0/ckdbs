@@ -630,16 +630,6 @@ public:
         return visibility_->SnapshotCeiling() >= lsn;
     }
 
-    // The highest commit LSN published on any core - every commit
-    // acknowledged to any session before this call is at or below it. What a
-    // statement boundary waits for the snapshot ceiling to reach, so that a
-    // commit acknowledged to **another** session before the statement began
-    // is in the snapshot it mints (`instance_visibility.hpp`'s
-    // "acknowledged-commit bound" note).
-    std::uint64_t PublishedCommitCeiling() const noexcept {
-        return visibility_->CommitCeiling();
-    }
-
     // A statement waiting until `CeilingCovers`: counted into this core's
     // waiters for its life, so a marker's lift kicks this core. Constructed
     // before the wait's own reads of the ceiling - `WaitUntil::await_ready`

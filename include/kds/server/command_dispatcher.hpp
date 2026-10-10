@@ -984,19 +984,11 @@ private:
     sched::Coro AwaitRelationLock(std::string_view line, Session* session, DispatchOutcome* out,
                                   sched::MonoTimeNs* statement_deadline_ns);
 
-    // **BA-R1c**: the commit LSN - the session's last, or the highest
-    // published on the instance as the statement begins, whichever is higher -
-    // while no snapshot minted now would cover it, else `wal::kNoLsn`,
-    // consuming a covered one since the ceiling never falls back below it. What
-    // `DispatchAsync` parks on and `Dispatch` spins on before the statement
-    // runs. A statement inside an open `REPEATABLE READ` transaction mints
-    // nothing and has none.
+    // **BA-R1c**: the session's last commit LSN while no snapshot minted now
+    // would cover it, else `wal::kNoLsn` - consuming a covered one, since
+    // the ceiling never falls back below it. What `DispatchAsync` parks on
+    // and `Dispatch` spins on before the statement runs.
     wal::Lsn UncoveredCommit(Session* session);
-
-    // The highest bound `UncoveredCommit` has found covered on this core: the
-    // ceiling is monotone, so a bound at or below it needs no walk over the
-    // other cores' markers. Per dispatcher, which one core's thread owns.
-    wal::Lsn covered_through_ = wal::kNoLsn;
 
     // Both waits, looped until neither is set, through one function so the
     // two cannot diverge (the AT-S5e review's C3): each wait's re-run is a

@@ -89,7 +89,7 @@ not unbuilt.
 
 | Level | Read view | Meaning |
 |---|---|---|
-| `READ COMMITTED` | taken afresh at the start of **every statement** — see the note below on what "statement" means | a statement sees everything committed before it began — by waiting at the statement boundary, for up to two `strict` syncs, when a marker held by a `strict` commit caps the snapshot beneath a commit already published (§4.1) |
+| `READ COMMITTED` | taken afresh at the start of **every statement** — see the note below on what "statement" means | a statement sees everything committed before it began — except, for up to one `strict` sync, a commit acknowledged to **another** session while that sync held its marker (§4.1, BA-S1c) |
 | `REPEATABLE READ` | taken once at `BEGIN`, held for the transaction | every statement in the transaction sees the same database state |
 
 **What takes the boundary**: the re-mint happens once per statement,
@@ -442,40 +442,32 @@ slot, so reclamation can move its answer for a committed writer to
 it moves. An unlogged instance has no LSN and the window assigns the next
 position in commit order.
 
-**A marker caps commits already acknowledged, and a statement waits for
-them** (BA-S1c, `workorder-ba-parallelism.md` BA-R1c; every session's, not
-only its own). A marker is
+**A marker caps commits already acknowledged, and a session's own is
+waited for** (BA-S1c, `workorder-ba-parallelism.md` BA-R1c). A marker is
 held from before its commit's append until after its publish, and under
 `strict` that span includes the `fdatasync`; a commit on another core can
 publish and be acknowledged inside it and stay above every new snapshot's
-ceiling until the marker lifts. So a statement's bound is the higher of its
-session's last commit LSN and the highest commit published on the instance
-as the statement begins (`CommitCeiling()`: every commit acknowledged to any
-session before it is at or below it), and a statement whose bound sits above
-`SnapshotCeiling()` waits at the
-statement boundary - before anything is minted - until the markers
+ceiling until the marker lifts. So a session records its last commit's LSN,
+and a statement whose bound sits above `SnapshotCeiling()` waits at the
+statement boundary - before anything is minted or held - until the markers
 below it lift: `DispatchAsync` parks and the last lift kicks its core, the
 synchronous `Dispatch` yields as its group commit blocks - and, when the
 marker is a `strict` commit parked on its own core, whose statement cannot
 run until `Dispatch` returns, it makes that record durable and publishes
-the commit itself (BA-S7 part 2). A marker is conservative: it is the
-published ceiling when its commit began, not that commit's own LSN, so a
-commit staged during one sync holds a marker below everything the sync
-publishes, and a statement beginning after that sync waits for the next one
-too. The wait is therefore at most the longest commit in flight when the
-bound's commit was published, and up to **two** `strict` syncs when `strict`
-commits queue behind one another; minting at the bound instead would cover a
-commit whose entry is not in. The ceiling is monotone, so a covered bound
-stays covered, and a dispatcher remembers the highest it has seen covered, so
-a statement with no new commit since costs one load. A statement inside an
-open `REPEATABLE READ` transaction mints nothing and does not wait; one of an
-open `READ COMMITTED` transaction does, holding that transaction's locks.
-**The cost is that wait, and it is every statement's**: on an instance that
-runs `strict` commits, a read of any session on any core can wait out a
-`strict` sync a later commit published inside; `group`, the default, holds no
-marker across its wait. Raising a marker to its own LSN once appended, or
-BA-Q3 (c), snapshots that carry their in-flight set, would cut it, and each
-needs a change to the commit path this section does not describe.
+the commit itself (BA-S7 part 2). The wait is at
+most the longest commit in flight when the bound's commit was published -
+one `strict` commit's sync, which on a peer can queue behind the one the
+writer is already running - and it happens only in that race; minting at
+the bound instead would cover a commit whose entry is not in. The ceiling
+is monotone, so a covered bound is consumed and only the first statement
+after a commit can wait - a `BEGIN` or an autocommit statement, holding
+nothing. **What it does not close**: a
+commit another session was acknowledged before this statement began stays
+invisible to it for up to one sync, against the level table's "sees
+everything committed before it began" - the remainder
+`docs/inflight/bugs/a-strict-commits-marker-caps-every-cores-snapshot-across-its-sync.md`
+keeps, which BA-Q3 (c) would close with snapshots that carry their
+in-flight set.
 
 **Who is in flight is the instance's answer** (AX-S1,
 `instructions/v3.0.0/workorder-ax-inflight-publication.md`). The window
