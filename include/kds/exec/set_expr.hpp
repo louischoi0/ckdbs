@@ -73,6 +73,8 @@ struct TypedSetExpr {
 
     std::unique_ptr<TypedSetExpr> lhs;  // kUnary's operand, kBinary's left
     std::unique_ptr<TypedSetExpr> rhs;
+    // kCall: `kCase`'s `[when, then, ..., else?]`, or the n-ary forms' operands.
+    std::vector<std::unique_ptr<TypedSetExpr>> args;
 };
 
 // Types `expr` for assignment to `target`. The result is concrete and

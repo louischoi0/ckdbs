@@ -241,17 +241,28 @@ private:
 
     StatusOr<std::string> ParseIdent();
 
-    // A SET value (BJ-S2): one bare literal into `a.val`, anything else
-    // into `a.expr`. The levels below are precedence climbing in
-    // PostgreSQL's order, loosest first: `||`, then `+ -`, then `* / %`,
-    // then a unary sign.
+    // A SET value (BJ-S2, BJ-S5): one bare literal into `a.val`, anything
+    // else into `a.expr`. The levels below are precedence climbing in
+    // PostgreSQL's order, loosest first: OR, AND, NOT, IS, the comparisons,
+    // `||`, `+ -`, `* / %`, a unary sign, then `::`.
     Status ParseSetValue(Assignment& a);
+    Status ParseRowValueAssignments(std::vector<Assignment>& out);
+    StatusOr<std::shared_ptr<const Expr>> ParseExprOr();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprAnd();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprNot();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprIs();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprComparison();
     StatusOr<std::shared_ptr<const Expr>> ParseExprConcat();
     StatusOr<std::shared_ptr<const Expr>> ParseExprAdditive();
     StatusOr<std::shared_ptr<const Expr>> ParseExprMultiplicative(
         std::shared_ptr<const Expr> first);
     StatusOr<std::shared_ptr<const Expr>> ParseExprUnary();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprPostfix();
     StatusOr<std::shared_ptr<const Expr>> ParseExprPrimary();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprCall(const Token& name);
+    StatusOr<std::shared_ptr<const Expr>> ParseExprCase(const Token& kw);
+    // A type name with its optional `(width)` or `(precision, scale)`.
+    Status ParseTypeSpec(TypeSpec& out, bool allow_bare_decimal);
 
     // One argument of a parameterized type - `decimal(10, 2)`'s 10 and 2.
     // `what` names it in the error, so a client is told which of the two

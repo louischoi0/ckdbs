@@ -207,16 +207,12 @@ TEST(SetExpressionParseTest, AFormALaterStageBuildsIsRefusedByNameAtItsByte) {
     const std::string head = "UPDATE t SET a = ";
     const std::vector<Case> cases = {
         {"abs(a)", "BJ-S6", 0},          {"a + abs(b)", "BJ-S6", 4},
-        {"a = 1", "BJ-S5", 2},           {"a < 1", "BJ-S5", 2},
-        {"a AND b", "BJ-S5", 2},         {"a IS NULL", "BJ-S5", 2},
-        {"NOT a", "BJ-S5", 0},           {"CASE WHEN a THEN 1 END", "BJ-S5", 0},
         {"(SELECT 1)", "BJ-S7", 0},      {"1 + (SELECT 1)", "BJ-S7", 4},
         {"t.b", "qualified", 0},
-        {"CAST(a AS int)", "BJ-S5", 0},  {"COALESCE(a, 1)", "BJ-S5", 0},
-        {"a + GREATEST(a, 1)", "BJ-S5", 4},
-        {"a IN (1)", "BJ-S5", 2},        {"a BETWEEN 1 AND 2", "BJ-S5", 2},
-        {"a::int", "BJ-S5", 1},          {"CASE 1 WHEN 1 THEN 2 END", "BJ-S5", 0},
-        {"CASE -1 WHEN 1 THEN 2 END", "BJ-S5", 0},
+        // The comparison forms BJ leaves out (BJ-R1 family 2).
+        {"a IN (1)", "not supported", 2}, {"a BETWEEN 1 AND 2", "not supported", 2},
+        {"a NOT IN (1)", "not supported", 2}, {"a LIKE 'x'", "not supported", 2},
+        {"a IS TRUE", "IS [NOT] NULL", 5}, {"EXISTS (SELECT 1)", "EXISTS", 0},
     };
     for (const Case& c : cases) {
         auto parsed = Parse(head + c.value);
@@ -229,6 +225,88 @@ TEST(SetExpressionParseTest, AFormALaterStageBuildsIsRefusedByNameAtItsByte) {
                   std::string::npos)
             << c.value << ": " << parsed.status().message();
     }
+}
+
+TEST(SetExpressionParseTest, TheBooleanLevelsBindInPostgresOrder) {
+    // OR loosest, then AND, NOT, IS, the comparisons, `||`, `+ -`, `* / %`.
+    auto a = SetOf("a > 1 + 2 * 3 AND NOT b IS NULL OR c");
+    ASSERT_TRUE(a.ok()) << a.status().message();
+    const Expr& or_node = *a.value().expr;
+    EXPECT_EQ(or_node.op, ExprOp::kOr);
+    EXPECT_EQ(or_node.rhs->column, "c");
+    const Expr& and_node = *or_node.lhs;
+    EXPECT_EQ(and_node.op, ExprOp::kAnd);
+    EXPECT_EQ(and_node.lhs->op, ExprOp::kGt);
+    EXPECT_EQ(and_node.lhs->rhs->op, ExprOp::kAdd);
+    EXPECT_EQ(and_node.lhs->rhs->rhs->op, ExprOp::kMul);
+    // NOT covers the IS test, not just `b`.
+    EXPECT_EQ(and_node.rhs->op, ExprOp::kNot);
+    EXPECT_EQ(and_node.rhs->lhs->op, ExprOp::kIsNull);
+    // `||` binds tighter than a comparison.
+    auto concat = SetOf("s || 'x' = t");
+    ASSERT_TRUE(concat.ok());
+    EXPECT_EQ(concat.value().expr->op, ExprOp::kEq);
+    EXPECT_EQ(concat.value().expr->lhs->op, ExprOp::kConcat);
+}
+
+TEST(SetExpressionParseTest, AComparisonDoesNotChain) {
+    auto chained = SetOf("a < b < c");
+    ASSERT_FALSE(chained.ok());
+    EXPECT_EQ(chained.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_TRUE(SetOf("(a < b) = (c < d)").ok());
+}
+
+TEST(SetExpressionParseTest, ACaseIsASearchedCaseWhateverItWasWrittenAs) {
+    auto simple = SetOf("CASE a WHEN 1 THEN 10 WHEN 2 THEN 20 ELSE 30 END");
+    ASSERT_TRUE(simple.ok()) << simple.status().message();
+    const Expr& c = *simple.value().expr;
+    ASSERT_EQ(c.kind, Expr::Kind::kCall);
+    ASSERT_EQ(c.op, ExprOp::kCase);
+    ASSERT_EQ(c.args.size(), 5u);  // when, then, when, then, else
+    EXPECT_EQ(c.args[0]->op, ExprOp::kEq) << "WHEN a = 1";
+    EXPECT_EQ(c.args[0]->lhs->column, "a");
+    EXPECT_FALSE(SetOf("CASE END").ok());
+    EXPECT_FALSE(SetOf("CASE WHEN a THEN 1").ok());
+    EXPECT_FALSE(SetOf("CASE WHEN a 1 END").ok());
+}
+
+TEST(SetExpressionParseTest, TheNaryFormsAndTheCastsParse) {
+    for (const char* v : {"COALESCE(a, b, 1)", "NULLIF(a, 0)", "GREATEST(a, b)", "LEAST(1, a, 2)",
+                          "CAST(a AS int64)", "a::int64", "CAST(a AS decimal(10, 2))",
+                          "-a::int64", "CAST(a + 1 AS varchar)"}) {
+        EXPECT_TRUE(SetOf(v).ok()) << v << ": " << SetOf(v).status().message();
+    }
+    auto cast = SetOf("a::decimal(10, 2)");
+    ASSERT_TRUE(cast.ok());
+    EXPECT_EQ(cast.value().expr->op, ExprOp::kCast);
+    EXPECT_EQ(cast.value().expr->cast_to.name, "decimal");
+    EXPECT_EQ(cast.value().expr->cast_to.precision, 10u);
+    EXPECT_EQ(cast.value().expr->cast_to.scale, 2u);
+    // `::` binds tighter than a unary minus.
+    EXPECT_EQ(SetOf("-a::int64").value().expr->op, ExprOp::kNeg);
+    for (const char* v : {"NULLIF(a)", "NULLIF(a, b, c)", "COALESCE()", "CAST(a int64)",
+                          "a::", "CAST(a AS decimal)", "a::int64(3)"}) {
+        EXPECT_FALSE(SetOf(v).ok()) << v;
+    }
+}
+
+TEST(SetExpressionParseTest, ARowValueIsOneAssignmentPerColumn) {
+    auto parsed = Parse("UPDATE t SET (a, b) = (b, a + 1), c = 2 WHERE id = 1");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto& stmt = std::get<UpdateStmt>(parsed.value());
+    ASSERT_EQ(stmt.assignments.size(), 3u);
+    EXPECT_EQ(stmt.assignments[0].col_name, "a");
+    EXPECT_EQ(stmt.assignments[0].expr->column, "b");
+    EXPECT_EQ(stmt.assignments[1].col_name, "b");
+    EXPECT_EQ(stmt.assignments[1].expr->op, ExprOp::kAdd);
+    EXPECT_EQ(stmt.assignments[2].col_name, "c");
+    for (const char* sql : {"UPDATE t SET (a, b) = (1)", "UPDATE t SET (a) = (1, 2)",
+                            "UPDATE t SET (a, b) = 1", "UPDATE t SET (a, b) = (b, a"}) {
+        EXPECT_FALSE(Parse(sql).ok()) << sql;
+    }
+    auto sub = Parse("UPDATE t SET (a, b) = (SELECT 1, 2)");
+    ASSERT_FALSE(sub.ok());
+    EXPECT_EQ(sub.status().code(), StatusCode::kNotImplemented);
 }
 
 TEST(SetExpressionParseTest, AColumnNamedCaseIsStillAColumn) {

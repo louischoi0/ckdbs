@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -11,6 +13,7 @@
 #include "kds/catalog/rows.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/row_codec.hpp"
+#include "kds/exec/type_literals.hpp"
 
 namespace kds::exec {
 
@@ -76,6 +79,23 @@ std::string_view OpText(ExprOp op) {
         case ExprOp::kConcat: return "||";
         case ExprOp::kNeg: return "-";
         case ExprOp::kPos: return "+";
+        case ExprOp::kEq: return "=";
+        case ExprOp::kNe: return "!=";
+        case ExprOp::kLt: return "<";
+        case ExprOp::kLe: return "<=";
+        case ExprOp::kGt: return ">";
+        case ExprOp::kGe: return ">=";
+        case ExprOp::kAnd: return "AND";
+        case ExprOp::kOr: return "OR";
+        case ExprOp::kNot: return "NOT";
+        case ExprOp::kIsNull: return "IS NULL";
+        case ExprOp::kIsNotNull: return "IS NOT NULL";
+        case ExprOp::kCase: return "CASE";
+        case ExprOp::kCoalesce: return "COALESCE";
+        case ExprOp::kNullif: return "NULLIF";
+        case ExprOp::kGreatest: return "GREATEST";
+        case ExprOp::kLeast: return "LEAST";
+        case ExprOp::kCast: return "CAST";
     }
     return "?";
 }
@@ -88,9 +108,133 @@ Status Refuse(std::uint32_t at, const std::string& what) {
 
 Status DivisionRefused(std::uint32_t at) {
     return Status::NotImplemented(
-        "decimal division needs an explicit narrowing (ROUND or CAST), which BJ-S5 and "
-        "BJ-S6 build" +
+        "decimal division yields more digits than its operands and needs an explicit "
+        "narrowing (ROUND), which BJ-S6 builds" +
         At(at));
+}
+
+bool IsComparison(ExprOp op) { return op >= ExprOp::kEq && op <= ExprOp::kGe; }
+bool IsBooleanBinary(ExprOp op) {
+    return IsComparison(op) || op == ExprOp::kAnd || op == ExprOp::kOr;
+}
+
+SetType BoolType() { return Concrete(kTypeValBool, 0); }
+
+// What CAST converts between (BJ-S5, BJ-Q3). The classes are the reference
+// dialect's families, restricted to the engine's types; a pair not listed is
+// refused at compile, and `bool` converts to nothing but itself.
+enum class Family : std::uint8_t { kInt, kDec, kText, kDate, kTimestamp, kBool, kOther };
+
+Family FamilyOf(std::uint32_t type_val) {
+    if (IsInteger(type_val)) return Family::kInt;
+    if (IsDecimal(type_val)) return Family::kDec;
+    if (IsText(type_val)) return Family::kText;
+    if (type_val == kTypeValDate) return Family::kDate;
+    if (type_val == kTypeValTimestamp) return Family::kTimestamp;
+    if (type_val == kTypeValBool) return Family::kBool;
+    return Family::kOther;
+}
+
+bool CastAdmitted(Family from, Family to) {
+    switch (from) {
+        case Family::kInt:
+        case Family::kDec: return to == Family::kInt || to == Family::kDec || to == Family::kText;
+        case Family::kText: return to != Family::kBool && to != Family::kOther;
+        case Family::kDate: return to == Family::kText || to == Family::kDate || to == Family::kTimestamp;
+        case Family::kTimestamp:
+            return to == Family::kText || to == Family::kDate || to == Family::kTimestamp;
+        case Family::kBool: return to == Family::kBool;
+        case Family::kOther: return false;
+    }
+    return false;
+}
+
+std::string Lower(std::string_view s) {
+    std::string out(s);
+    for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return out;
+}
+
+// The type a CAST names. The names are the ones `sys.types` registers;
+// they are listed here because the typer is pure and takes no catalog.
+StatusOr<SetType> CastTarget(const parser::TypeSpec& spec) {
+    const std::string name = Lower(spec.name);
+    const std::string where = " (byte " + std::to_string(spec.byte_offset) + ")";
+    const auto NoArguments = [&]() -> std::optional<Status> {
+        if (spec.has_precision || spec.has_width) {
+            return Status::InvalidArgument("type '" + spec.name + "' takes no arguments" + where);
+        }
+        return std::nullopt;
+    };
+    static const std::pair<const char*, std::uint32_t> kPlain[] = {
+        {"int8", kTypeValInt8},   {"int16", kTypeValInt16}, {"int32", kTypeValInt32},
+        {"int64", kTypeValInt64}, {"uint64", kTypeValUint64}, {"bool", kTypeValBool},
+        {"date", kTypeValDate},   {"timestamp", kTypeValTimestamp}};
+    for (const auto& [n, type_val] : kPlain) {
+        if (name == n) {
+            if (auto refused = NoArguments(); refused.has_value()) return *refused;
+            return Concrete(type_val, 0);
+        }
+    }
+    if (name == "varchar") {
+        if (spec.has_width) {
+            return Status::InvalidArgument(
+                "varchar(N) names a column's cell width, which a CAST has none of; write varchar" +
+                where);
+        }
+        return Concrete(kTypeValVarchar, 0);
+    }
+    if (name == "char") {
+        const std::uint32_t width = spec.has_width ? spec.width : 1;
+        if (width == 0) {
+            return Status::InvalidArgument("char(0) holds nothing" + where);
+        }
+        return Concrete(kTypeValChar, width);
+    }
+    if (name == "decimal") {
+        if (!spec.has_precision) {
+            return Status::InvalidArgument("decimal needs a precision and a scale" + where);
+        }
+        const bool wide = spec.precision >= kMinDecimalPrecisionWide;
+        if (Status s = wide ? CheckDecimalWidePrecisionScale(spec.precision, spec.scale)
+                            : CheckDecimalPrecisionScale(spec.precision, spec.scale);
+            !s.ok()) {
+            return s.WithMessage(s.message() + where);
+        }
+        return Concrete(wide ? kTypeValDecimalWide : kTypeValDecimal,
+                        catalog::PackDecimalLen(static_cast<std::uint8_t>(spec.precision),
+                                                static_cast<std::uint8_t>(spec.scale)));
+    }
+    if (name == "float") {
+        return Status::Unsupported("float is not a type this engine stores" + where);
+    }
+    return Status::InvalidArgument("unknown type '" + spec.name + "' in CAST" + where);
+}
+
+// A bare numeric literal `1.50` as the decimal it is written: its own digits
+// are its precision and its fraction its scale. A CAST's operand has no
+// other context to give it one.
+StatusOr<SetType> DecimalTypeOfLiteral(const parser::AstValue& v) {
+    std::uint32_t digits = 0;
+    std::uint32_t fraction = 0;
+    bool after_point = false;
+    for (char c : v.str_val) {
+        if (c == '.') {
+            after_point = true;
+        } else if (c >= '0' && c <= '9') {
+            ++digits;
+            if (after_point) ++fraction;
+        }
+    }
+    digits = std::max(digits, fraction);
+    if (digits == 0) digits = 1;
+    if (digits > 38) {
+        return Status::OutOfRange("a numeric literal of " + std::to_string(digits) +
+                                  " digits exceeds 38" + At(v.byte_offset));
+    }
+    return Concrete(digits >= kMinDecimalPrecisionWide ? kTypeValDecimalWide : kTypeValDecimal,
+                    catalog::PackDecimalLen(static_cast<std::uint8_t>(digits),
+                                            static_cast<std::uint8_t>(fraction)));
 }
 
 class Typer {
@@ -108,6 +252,7 @@ public:
             case Expr::Kind::kColumn: return Column(e);
             case Expr::Kind::kUnary: return Unary(e);
             case Expr::Kind::kBinary: return Binary(e);
+            case Expr::Kind::kCall: return Call(e);
         }
         return Status::Corruption("an expression node of an unknown kind");
     }
@@ -132,6 +277,18 @@ public:
                 auto result = Settle(n.op, n.op_byte_offset, *n.lhs, *n.rhs, &want);
                 if (!result.ok()) return result.status();
                 n.type = result.value();
+                return Status::OK();
+            }
+            case Expr::Kind::kCall: {
+                // The value positions take the context's type; a CASE's
+                // conditions are bool already.
+                const std::size_t pairs = n.op == ExprOp::kCase ? n.args.size() / 2 : 0;
+                for (std::size_t i = 0; i < n.args.size(); ++i) {
+                    const bool condition = i < pairs * 2 && i % 2 == 0;
+                    if (condition) continue;
+                    if (Status s = Resolve(*n.args[i], want); !s.ok()) return s;
+                }
+                n.type = want;
                 return Status::OK();
             }
         }
@@ -209,7 +366,16 @@ private:
                 }
                 break;
             case SetType::Kind::kString:
-                if (!IsText(want.type_val)) return Mismatch();
+                // A string literal is what a date, a timestamp or a decimal is
+                // written as (types.md TY7): the encode's own parse judges it.
+                if (want.type_val == kTypeValDate || want.type_val == kTypeValTimestamp ||
+                    IsDecimal(want.type_val)) {
+                    if (Status s = CoerceLiteralToColumn(col, n.literal); !s.ok()) {
+                        return DoesNotFit(s);
+                    }
+                } else if (!IsText(want.type_val)) {
+                    return Mismatch();
+                }
                 break;
             case SetType::Kind::kConcrete:
                 break;
@@ -250,9 +416,197 @@ private:
         auto child = Type(*e.lhs);
         if (!child.ok()) return child;
         Node n = Make(e);
-        n->type = child.value()->type;
-        if (Status s = CheckUnary(e.op, n->type, e.op_byte_offset); !s.ok()) return s;
+        switch (e.op) {
+            case ExprOp::kNot:
+                if (Status s = BoolOperand(*child.value(), "operator NOT", e.op_byte_offset);
+                    !s.ok()) {
+                    return s;
+                }
+                n->type = BoolType();
+                break;
+            case ExprOp::kIsNull:
+            case ExprOp::kIsNotNull:
+                if (Status s = SettleByDefault(*child.value()); !s.ok()) return s;
+                n->type = BoolType();
+                break;
+            case ExprOp::kCast: return Cast(e, std::move(child.value()));
+            default:
+                n->type = child.value()->type;
+                if (Status s = CheckUnary(e.op, n->type, e.op_byte_offset); !s.ok()) return s;
+                break;
+        }
         n->lhs = std::move(child.value());
+        return n;
+    }
+
+    // An operand of `AND`, `OR`, `NOT` or a CASE condition: a bool, or a NULL,
+    // which takes bool.
+    Status BoolOperand(TypedSetExpr& n, const std::string& who, std::uint32_t at) const {
+        if (n.type.concrete()) {
+            if (n.type.type_val == kTypeValBool) return Status::OK();
+        } else if (n.type.kind == SetType::Kind::kNull) {
+            return Resolve(n, BoolType());
+        }
+        return Refuse(at, who + " needs a bool but is given " + SetTypeName(n.type));
+    }
+
+    // The type an operand with no context takes when nothing else will give
+    // it one: an integer or a NULL is int64, a string varchar. A bare number
+    // with a point has no default - which scale would it be?
+    Status SettleByDefault(TypedSetExpr& n) const {
+        if (n.type.concrete()) return Status::OK();
+        switch (n.type.kind) {
+            case SetType::Kind::kInteger:
+            case SetType::Kind::kNull: return Resolve(n, Concrete(kTypeValInt64, 0));
+            case SetType::Kind::kString: return Resolve(n, Concrete(kTypeValVarchar, 0));
+            default:
+                return Refuse(n.byte_offset,
+                              "a numeric literal here has no type; give it a column to take "
+                              "one from, or CAST it");
+        }
+    }
+
+    // One common type for operands that must agree (a comparison, a CASE's
+    // results, COALESCE, ...): the first concrete one's, every other concrete
+    // one the same (the text family counts as one), and the untyped ones take
+    // it. With none concrete the node stays untyped, of the kinds' merge,
+    // until a context types it (`ctx`, when the caller has one).
+    StatusOr<SetType> Unify(const std::vector<TypedSetExpr*>& values, const SetType* ctx,
+                            std::uint32_t at, const std::string& who) const {
+        const SetType* first = nullptr;
+        for (const TypedSetExpr* v : values) {
+            if (!v->type.concrete()) continue;
+            if (first == nullptr) {
+                first = &v->type;
+            } else if (!SameType(*first, v->type) &&
+                       !(IsText(first->type_val) && IsText(v->type.type_val))) {
+                return Refuse(at, who + " needs one type but is given " + SetTypeName(*first) +
+                                      " and " + SetTypeName(v->type));
+            }
+        }
+        if (first != nullptr) {
+            SetType t = *first;
+            for (const TypedSetExpr* v : values) {
+                if (v->type.concrete() && IsText(t.type_val) && v->type.type_val != t.type_val) {
+                    t = Concrete(kTypeValVarchar, 0);  // char with varchar
+                }
+            }
+            for (TypedSetExpr* v : values) {
+                if (Status s = Resolve(*v, t); !s.ok()) return s;
+            }
+            return t;
+        }
+        if (ctx != nullptr) {
+            for (TypedSetExpr* v : values) {
+                if (Status s = Resolve(*v, *ctx); !s.ok()) return s;
+            }
+            return *ctx;
+        }
+        SetType::Kind merged = SetType::Kind::kNull;
+        for (const TypedSetExpr* v : values) {
+            const SetType::Kind k = v->type.kind;
+            if (k == SetType::Kind::kNull) continue;
+            if (merged == SetType::Kind::kNull) {
+                merged = k;
+            } else if (merged == SetType::Kind::kString || k == SetType::Kind::kString) {
+                if (merged != k) {
+                    return Refuse(at, who + " needs one type but is given " +
+                                          SetTypeName(Untyped(merged)) + " and " +
+                                          SetTypeName(Untyped(k)));
+                }
+            } else if (k == SetType::Kind::kNumeric) {
+                merged = SetType::Kind::kNumeric;
+            }
+        }
+        return Untyped(merged);
+    }
+
+    StatusOr<Node> BooleanBinary(const Expr& e, Node lhs, Node rhs) {
+        Node n = Make(e);
+        if (e.op == ExprOp::kAnd || e.op == ExprOp::kOr) {
+            const std::string who = "operator " + std::string(OpText(e.op));
+            if (Status s = BoolOperand(*lhs, who, e.op_byte_offset); !s.ok()) return s;
+            if (Status s = BoolOperand(*rhs, who, e.op_byte_offset); !s.ok()) return s;
+        } else {
+            auto t = Unify({lhs.get(), rhs.get()}, nullptr, e.op_byte_offset,
+                           "operator " + std::string(OpText(e.op)));
+            if (!t.ok()) return t.status();
+            // Two literals compare as what each is by default; the result is
+            // a bool whatever they are, so nothing later types them.
+            if (Status s = SettleByDefault(*lhs); !s.ok()) return s;
+            if (Status s = SettleByDefault(*rhs); !s.ok()) return s;
+            if (!SameType(lhs->type, rhs->type) &&
+                !(IsText(lhs->type.type_val) && IsText(rhs->type.type_val))) {
+                return Refuse(e.op_byte_offset, "operator " + std::string(OpText(e.op)) +
+                                                    " needs one type but is given " +
+                                                    SetTypeName(lhs->type) + " and " +
+                                                    SetTypeName(rhs->type));
+            }
+        }
+        n->type = BoolType();
+        n->lhs = std::move(lhs);
+        n->rhs = std::move(rhs);
+        return n;
+    }
+
+    StatusOr<Node> Call(const Expr& e) {
+        Node n = Make(e);
+        for (const auto& arg : e.args) {
+            auto a = Type(*arg);
+            if (!a.ok()) return a;
+            n->args.push_back(std::move(a.value()));
+        }
+        std::vector<TypedSetExpr*> values;
+        if (e.op == ExprOp::kCase) {
+            const std::size_t pairs = n->args.size() / 2;
+            for (std::size_t i = 0; i < pairs; ++i) {
+                if (Status s = BoolOperand(*n->args[2 * i], "a CASE condition",
+                                           e.args[2 * i]->byte_offset);
+                    !s.ok()) {
+                    return s;
+                }
+                values.push_back(n->args[2 * i + 1].get());
+            }
+            if (n->args.size() % 2 == 1) values.push_back(n->args.back().get());
+        } else {
+            for (auto& a : n->args) values.push_back(a.get());
+        }
+        auto t = Unify(values, nullptr, e.op_byte_offset, std::string(OpText(e.op)));
+        if (!t.ok()) return t.status();
+        n->type = t.value();
+        return n;
+    }
+
+    StatusOr<Node> Cast(const Expr& e, Node child) {
+        auto target = CastTarget(e.cast_to);
+        if (!target.ok()) return target.status();
+        if (!child->type.concrete()) {
+            Status s = Status::OK();
+            switch (child->type.kind) {
+                case SetType::Kind::kNull: s = Resolve(*child, target.value()); break;
+                case SetType::Kind::kInteger: s = Resolve(*child, Concrete(kTypeValInt64, 0)); break;
+                case SetType::Kind::kString: s = Resolve(*child, Concrete(kTypeValVarchar, 0)); break;
+                default: {
+                    if (child->kind != Expr::Kind::kLiteral) {
+                        return Refuse(e.op_byte_offset,
+                                      "a CAST of an expression of numeric literals has no type "
+                                      "to convert from");
+                    }
+                    auto literal_type = DecimalTypeOfLiteral(child->literal);
+                    if (!literal_type.ok()) return literal_type.status();
+                    s = Resolve(*child, literal_type.value());
+                }
+            }
+            if (!s.ok()) return s;
+        }
+        if (!CastAdmitted(FamilyOf(child->type.type_val), FamilyOf(target.value().type_val))) {
+            return Status::InvalidArgument("CAST from " + SetTypeName(child->type) + " to " +
+                                           SetTypeName(target.value()) + " is not supported" +
+                                           At(e.op_byte_offset));
+        }
+        Node n = Make(e);
+        n->type = target.value();
+        n->lhs = std::move(child);
         return n;
     }
 
@@ -263,6 +617,8 @@ private:
         if (!r.ok()) return r;
         Node lhs = std::move(l.value());
         Node rhs = std::move(r.value());
+
+        if (IsBooleanBinary(e.op)) return BooleanBinary(e, std::move(lhs), std::move(rhs));
 
         // Time types are refused by name, whatever the other operand is.
         for (const SetType& t : {lhs->type, rhs->type}) {
@@ -485,22 +841,265 @@ public:
                 return row_[e.column_no];
             case Expr::Kind::kUnary: return Unary(e);
             case Expr::Kind::kBinary: return Binary(e);
+            case Expr::Kind::kCall: return Call(e);
         }
         return Status::Corruption("an expression node of an unknown kind");
     }
 
 private:
+    // A bool is `kInt` 0 or 1, as a bool column decodes; unknown is NULL.
+    static parser::AstValue Bool(bool v) {
+        parser::AstValue out;
+        out.type = ValueType::kInt;
+        out.int_val = v ? 1 : 0;
+        return out;
+    }
+    static bool IsNull(const parser::AstValue& v) { return v.type == ValueType::kNull; }
+    static bool IsTrue(const parser::AstValue& v) { return v.type == ValueType::kInt && v.int_val != 0; }
+
     StatusOr<parser::AstValue> Unary(const TypedSetExpr& e) const {
         auto operand = Eval(*e.lhs);
         if (!operand.ok()) return operand;
-        if (operand.value().type == ValueType::kNull) return operand;
+        switch (e.op) {
+            case ExprOp::kIsNull: return Bool(IsNull(operand.value()));
+            case ExprOp::kIsNotNull: return Bool(!IsNull(operand.value()));
+            case ExprOp::kNot:
+                if (IsNull(operand.value())) return operand;
+                return Bool(!IsTrue(operand.value()));
+            case ExprOp::kCast: return Cast(e, operand.value());
+            default: break;
+        }
+        if (IsNull(operand.value())) return operand;
         if (e.op == ExprOp::kPos) return operand;
         auto n = NumberOf(operand.value(), e.lhs->type);
         if (!n.ok()) return n.status();
         return Checked(-n.value(), e);
     }
 
+    // -1, 0, 1 of two non-NULL values of one type.
+    static StatusOr<int> Compare(const parser::AstValue& a, const parser::AstValue& b,
+                                 const SetType& t) {
+        if (IsText(t.type_val)) {
+            const int c = a.str_val.compare(b.str_val);
+            return c < 0 ? -1 : (c > 0 ? 1 : 0);
+        }
+        auto x = NumberOf(a, t);
+        if (!x.ok()) return x.status();
+        auto y = NumberOf(b, t);
+        if (!y.ok()) return y.status();
+        return x.value() < y.value() ? -1 : (x.value() > y.value() ? 1 : 0);
+    }
+
+    StatusOr<parser::AstValue> Call(const TypedSetExpr& e) const {
+        switch (e.op) {
+            case ExprOp::kCase: {
+                const std::size_t pairs = e.args.size() / 2;
+                for (std::size_t i = 0; i < pairs; ++i) {
+                    auto when = Eval(*e.args[2 * i]);
+                    if (!when.ok()) return when;
+                    if (IsTrue(when.value())) return Eval(*e.args[2 * i + 1]);
+                }
+                if (e.args.size() % 2 == 1) return Eval(*e.args.back());
+                return parser::AstValue{};
+            }
+            case ExprOp::kCoalesce:
+                for (const auto& a : e.args) {
+                    auto v = Eval(*a);
+                    if (!v.ok() || !IsNull(v.value())) return v;
+                }
+                return parser::AstValue{};
+            case ExprOp::kNullif: {
+                auto a = Eval(*e.args[0]);
+                if (!a.ok() || IsNull(a.value())) return a;
+                auto b = Eval(*e.args[1]);
+                if (!b.ok()) return b;
+                if (IsNull(b.value())) return a;
+                auto c = Compare(a.value(), b.value(), e.args[0]->type);
+                if (!c.ok()) return c.status();
+                return c.value() == 0 ? parser::AstValue{} : a.value();
+            }
+            case ExprOp::kGreatest:
+            case ExprOp::kLeast: {
+                // NULLs are skipped, as the reference dialect does; the
+                // result is NULL only when every argument is.
+                parser::AstValue best;
+                for (const auto& a : e.args) {
+                    auto v = Eval(*a);
+                    if (!v.ok()) return v;
+                    if (IsNull(v.value())) continue;
+                    if (IsNull(best)) {
+                        best = std::move(v.value());
+                        continue;
+                    }
+                    auto c = Compare(v.value(), best, e.type);
+                    if (!c.ok()) return c.status();
+                    if (e.op == ExprOp::kGreatest ? c.value() > 0 : c.value() < 0) {
+                        best = std::move(v.value());
+                    }
+                }
+                return best;
+            }
+            default: return Status::Corruption("a call the evaluator does not know");
+        }
+    }
+
+    // CAST, source `e.lhs->type` to target `e.type` (BJ-S5, BJ-Q3). A
+    // narrowing of scale rounds half away from zero and a result outside the
+    // target is `OutOfRange`; nothing is truncated or wrapped.
+    StatusOr<parser::AstValue> Cast(const TypedSetExpr& e, const parser::AstValue& v) const {
+        if (IsNull(v)) return v;
+        const SetType& from = e.lhs->type;
+        const SetType& to = e.type;
+        const Family source = FamilyOf(from.type_val);
+        const Family target = FamilyOf(to.type_val);
+
+        // An unscaled value and its scale, for the numeric sources.
+        const auto AsDecimal = [&]() -> StatusOr<std::pair<Int128, int>> {
+            if (source == Family::kText) return ParseNumberText(v.str_val, e);
+            auto n = NumberOf(v, from);
+            if (!n.ok()) return n.status();
+            return std::pair<Int128, int>{
+                n.value(), source == Family::kDec ? static_cast<int>(catalog::DecimalScaleOf(from.len)) : 0};
+        };
+
+        switch (target) {
+            case Family::kInt:
+            case Family::kDec: {
+                auto d = AsDecimal();
+                if (!d.ok()) return d.status();
+                const int to_scale =
+                    target == Family::kDec ? static_cast<int>(catalog::DecimalScaleOf(to.len)) : 0;
+                auto rescaled = Rescale(d.value().first, d.value().second, to_scale, e);
+                if (!rescaled.ok()) return rescaled.status();
+                return Checked(rescaled.value(), e);
+            }
+            case Family::kText: {
+                std::string text;
+                if (source == Family::kText) {
+                    text = v.str_val;
+                } else {
+                    text = FormatValue(from.type_val, v);
+                }
+                if (to.type_val == kTypeValChar && text.size() > to.len) {
+                    return Status::OutOfRange("the value of " + std::to_string(text.size()) +
+                                              " byte(s) is too long for " + SetTypeName(to) +
+                                              At(e.op_byte_offset));
+                }
+                parser::AstValue out;
+                out.type = ValueType::kStr;
+                out.str_val = std::move(text);
+                return out;
+            }
+            case Family::kDate:
+            case Family::kTimestamp: {
+                parser::AstValue out;
+                if (source == Family::kText) {
+                    catalog::SysColumnRow col{};
+                    col.type_val = to.type_val;
+                    out = v;
+                    out.type = ValueType::kStr;
+                    if (Status s = CoerceLiteralToColumn(col, out); !s.ok()) {
+                        return s.WithMessage(s.message() + At(e.op_byte_offset));
+                    }
+                    return out;
+                }
+                out.type = ValueType::kInt;
+                if (source == target) {
+                    out.int_val = v.int_val;
+                } else if (target == Family::kTimestamp) {  // date -> timestamp
+                    out.int_val = v.int_val * 86400LL * 1000000LL;
+                } else {  // timestamp -> date: the day it falls in, floored
+                    constexpr std::int64_t kDay = 86400LL * 1000000LL;
+                    std::int64_t days = v.int_val / kDay;
+                    if (v.int_val % kDay < 0) --days;
+                    out.int_val = days;
+                }
+                return out;
+            }
+            case Family::kBool: return v;
+            case Family::kOther: break;
+        }
+        return Status::Corruption("a CAST between families the typer admitted but cannot run");
+    }
+
+    // `unscaled / 10^from` at `to` decimal places, rounding half away from
+    // zero when places are dropped.
+    static StatusOr<Int128> Rescale(Int128 unscaled, int from, int to, const TypedSetExpr& e) {
+        if (to >= from) {
+            Int128 out = unscaled;
+            for (int i = from; i < to; ++i) {
+                if (__builtin_mul_overflow(out, static_cast<Int128>(10), &out)) {
+                    return OutOfRangeResult(e);
+                }
+            }
+            return out;
+        }
+        Int128 divisor = 1;
+        for (int i = to; i < from; ++i) {
+            if (__builtin_mul_overflow(divisor, static_cast<Int128>(10), &divisor)) {
+                return static_cast<Int128>(0);  // the whole value is a fraction of 10^38+
+            }
+        }
+        Int128 q = unscaled / divisor;
+        const Int128 r = unscaled % divisor;
+        const Int128 twice = (r < 0 ? -r : r) * 2;  // |r| < 10^38, so this fits
+        if (twice >= divisor) q += unscaled < 0 ? -1 : 1;
+        return q;
+    }
+
+    // `[+-]digits[.digits]` with surrounding spaces, as an unscaled value and
+    // its number of places; anything else is refused.
+    static StatusOr<std::pair<Int128, int>> ParseNumberText(const std::string& text,
+                                                           const TypedSetExpr& e) {
+        std::size_t i = 0;
+        std::size_t end = text.size();
+        while (i < end && text[i] == ' ') ++i;
+        while (end > i && text[end - 1] == ' ') --end;
+        bool negative = false;
+        if (i < end && (text[i] == '+' || text[i] == '-')) negative = text[i++] == '-';
+        Int128 value = 0;
+        int places = 0;
+        bool digits = false;
+        bool point = false;
+        for (; i < end; ++i) {
+            const char c = text[i];
+            if (c == '.' && !point) {
+                point = true;
+            } else if (c >= '0' && c <= '9') {
+                digits = true;
+                if (__builtin_mul_overflow(value, static_cast<Int128>(10), &value) ||
+                    __builtin_add_overflow(value, static_cast<Int128>(c - '0'), &value)) {
+                    return OutOfRangeResult(e);
+                }
+                if (point) ++places;
+            } else {
+                digits = false;
+                break;
+            }
+        }
+        if (!digits) {
+            return Status::InvalidArgument("the string '" + text + "' is not a number" +
+                                           At(e.op_byte_offset));
+        }
+        return std::pair<Int128, int>{negative ? -value : value, places};
+    }
+
+    // Three-valued AND and OR, left to right, the right operand skipped once
+    // the left decides the answer - so `b <> 0 AND a / b > 1` is safe.
+    StatusOr<parser::AstValue> Logic(const TypedSetExpr& e) const {
+        const bool is_and = e.op == ExprOp::kAnd;
+        auto l = Eval(*e.lhs);
+        if (!l.ok()) return l;
+        if (!IsNull(l.value()) && IsTrue(l.value()) != is_and) return Bool(!is_and);
+        auto r = Eval(*e.rhs);
+        if (!r.ok()) return r;
+        if (!IsNull(r.value()) && IsTrue(r.value()) != is_and) return Bool(!is_and);
+        if (IsNull(l.value()) || IsNull(r.value())) return parser::AstValue{};
+        return Bool(is_and);
+    }
+
     StatusOr<parser::AstValue> Binary(const TypedSetExpr& e) const {
+        if (e.op == ExprOp::kAnd || e.op == ExprOp::kOr) return Logic(e);
         auto l = Eval(*e.lhs);
         if (!l.ok()) return l;
         auto r = Eval(*e.rhs);
@@ -509,6 +1108,18 @@ private:
         // (BJ-R4): `NULL / 0` is NULL.
         if (l.value().type == ValueType::kNull || r.value().type == ValueType::kNull) {
             return parser::AstValue{};
+        }
+        if (IsComparison(e.op)) {
+            auto c = Compare(l.value(), r.value(), e.lhs->type);
+            if (!c.ok()) return c.status();
+            switch (e.op) {
+                case ExprOp::kEq: return Bool(c.value() == 0);
+                case ExprOp::kNe: return Bool(c.value() != 0);
+                case ExprOp::kLt: return Bool(c.value() < 0);
+                case ExprOp::kLe: return Bool(c.value() <= 0);
+                case ExprOp::kGt: return Bool(c.value() > 0);
+                default: return Bool(c.value() >= 0);
+            }
         }
         if (e.op == ExprOp::kConcat) {
             parser::AstValue out;
@@ -562,6 +1173,11 @@ bool IsConstantSetExpression(const TypedSetExpr& expr) {
         case Expr::Kind::kUnary: return IsConstantSetExpression(*expr.lhs);
         case Expr::Kind::kBinary:
             return IsConstantSetExpression(*expr.lhs) && IsConstantSetExpression(*expr.rhs);
+        case Expr::Kind::kCall:
+            for (const auto& a : expr.args) {
+                if (!IsConstantSetExpression(*a)) return false;
+            }
+            return true;
     }
     return false;
 }

@@ -230,13 +230,34 @@ lexer wrapped it to.
 | `+` `-` `%` | two `decimal(p,s)` of one `(p,s)` | that decimal | a different `(p,s)` |
 | `*` | two decimals of one `(p,s)` | `decimal(min(p1+p2,38), s1+s2)`, which must be the target's | a different `(p,s)` |
 | `*` | a decimal and an integer **literal** | that decimal | an `int64` column |
-| `/` | a decimal | `NotImplemented` (needs `ROUND`/`CAST`, BJ-S5/S6) | |
+| `/` | a decimal | `NotImplemented` (needs `ROUND`, BJ-S6) | |
 | `||` | `varchar`/`char` and string literals | `varchar` | any other type |
 | unary `-` | a signed integer or a decimal | that type | `uint64` ("an unsigned value has no negation"), text, `bool` |
 | unary `+` | an integer or a decimal | that type | text, `bool` |
 | binary arithmetic | `date` | `NotImplemented` (BJ-S6) | |
 | binary arithmetic | `timestamp` | `Unsupported` (there is no `INTERVAL`) | |
 | unary `-` `+` | `date`, `timestamp` | `InvalidArgument` | |
+| `=` `!=` `<` `<=` `>` `>=` | two of one type (the text family counts as one), or a literal and a column | `bool` | two types, a bare number with a point beside another literal |
+| `AND` `OR` `NOT` | `bool`, or a `NULL` | `bool`, three-valued | any other type |
+| `IS [NOT] NULL` | any type | `bool`, never NULL | |
+| `CASE`, `COALESCE`, `GREATEST`, `LEAST` | every result one type (the text family counts as one) | that type | two types; a `CASE` condition that is not `bool` |
+| `NULLIF(a, b)` | `a` and `b` of one type | `a`'s type | two types |
+| `CAST(x AS T)`, `x::T` | an integer or a decimal to an integer, a decimal or text; text to an integer, a decimal, a date or a timestamp; a date or a timestamp to text, a date or a timestamp; `bool` to `bool` | `T` | every other pair; `float`; `varchar(N)` (a column's cell width) |
+
+**Boolean values, CASE, null handling and CAST (BJ-S5).** A comparison, `AND`,
+`OR`, `NOT` and `IS [NOT] NULL` yield a `bool`, which a `bool` column takes
+and nothing else does; `AND` and `OR` are three-valued and evaluate left to
+right, skipping the right operand once the left decides, so `b != 0 AND a / b
+> 1` is safe. A comparison does not chain (`a < b < c` is refused). The
+precedence is PostgreSQL's. A simple `CASE x WHEN a` is the searched form
+`WHEN x = a`; no matching branch and no `ELSE` is NULL, and a NULL condition
+is not true. `GREATEST` and `LEAST` skip NULLs. `CAST` narrows a scale by
+rounding half away from zero and refuses a result its target cannot hold
+(`OutOfRange`), a string that is not a number (`InvalidArgument`) and a
+`char(N)` too long - nothing is truncated or wrapped. A timestamp cast to a
+date floors to its day. `SET (a, b) = (x, y)` is `a = x, b = y`, both read from
+the before-image. `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `IS TRUE`, `<>` and a
+boolean literal are not in the grammar.
 
 `NULL` types as its context's type, and a NULL operand yields NULL (BJ-R4).
 Whether a NULL result fits a `NOT NULL` target is the row's verdict. The

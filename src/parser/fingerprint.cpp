@@ -107,6 +107,7 @@ enum class ShapeTag : std::uint8_t {
     kSlash = 17,
     kPercent = 18,
     kConcat = 19,
+    kDoubleColon = 20,
 };
 
 // Tags for the argument stream, distinguishing the literal's type. The
@@ -203,6 +204,7 @@ bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
         case TokenType::kSlash: out = ShapeTag::kSlash; return true;
         case TokenType::kPercent: out = ShapeTag::kPercent; return true;
         case TokenType::kConcat: out = ShapeTag::kConcat; return true;
+        case TokenType::kDoubleColon: out = ShapeTag::kDoubleColon; return true;
         // Not reachable: kSemicolon is skipped and kEof ends the walk
         // before either gets here, and kError has already returned.
         case TokenType::kSemicolon:

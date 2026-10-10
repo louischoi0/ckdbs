@@ -125,7 +125,7 @@ TEST_F(SetExprTypingTest, ADecimalProductAddsScalesAndMustBeNarrowedToItsTarget)
     EXPECT_NE(Refusal("d = d * i64").find("decimal(10,2) and int64"), std::string::npos)
         << "only a literal scales a decimal; an int64 column is another type";
     // Division needs an explicit narrowing, which BJ-S5/S6 build.
-    EXPECT_NE(Run("UPDATE t SET d = d / 2 WHERE id = 1").find("BJ-S5"), std::string::npos);
+    EXPECT_NE(Run("UPDATE t SET d = d / 2 WHERE id = 1").find("BJ-S6"), std::string::npos);
     EXPECT_NE(Run("UPDATE t SET d = d / e WHERE id = 1").find("NOT_IMPLEMENTED"),
               std::string::npos);
 }
