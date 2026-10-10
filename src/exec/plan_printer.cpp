@@ -10,14 +10,23 @@ namespace kds::exec {
 
 namespace {
 
+bool SubChainHasReplayable(const SubChain& sub) noexcept;
+
 bool StepsHaveReplayable(const std::vector<Step>& steps) noexcept {
     for (const Step& step : steps) {
         if (IsTrailReplayable(step.kind)) return true;
         for (const SubChain& sub : step.sub_chains) {
-            if (StepsHaveReplayable(sub.steps)) return true;
+            if (SubChainHasReplayable(sub)) return true;
         }
     }
     return false;
+}
+
+bool SubChainHasReplayable(const SubChain& sub) noexcept {
+    for (const SubChain& hoisted : sub.hoisted) {
+        if (SubChainHasReplayable(hoisted)) return true;
+    }
+    return StepsHaveReplayable(sub.steps);
 }
 
 }  // namespace
@@ -25,7 +34,7 @@ bool StepsHaveReplayable(const std::vector<Step>& steps) noexcept {
 bool HasReplayableStep(const StepChain& chain) noexcept {
     if (StepsHaveReplayable(chain.steps)) return true;
     for (const SubChain& sub : chain.hoisted) {
-        if (StepsHaveReplayable(sub.steps)) return true;
+        if (SubChainHasReplayable(sub)) return true;
     }
     return false;
 }
@@ -232,6 +241,11 @@ void PrintSubChain(std::ostringstream& os, const SubChain& sub, int depth, bool 
     // today) would be a compiler bug worth being able to see.
     os << (sub.correlated ? " [correlated]" : " [uncorrelated]") << '\n';
 
+    // Hoisted first, the execution order: they run before this sub-chain's
+    // steps open, as the top-level chain's do.
+    for (const SubChain& nested : sub.hoisted) {
+        PrintSubChain(os, nested, depth + 1, /*hoisted=*/true);
+    }
     for (const Step& step : sub.steps) PrintStep(os, step, depth + 1);
 }
 
@@ -374,6 +388,7 @@ namespace {
 void CollectStepIds(const Step& step, std::vector<std::uint32_t>& out);
 
 void CollectStepIds(const SubChain& sub, std::vector<std::uint32_t>& out) {
+    for (const SubChain& hoisted : sub.hoisted) CollectStepIds(hoisted, out);
     for (const Step& step : sub.steps) CollectStepIds(step, out);
 }
 
@@ -385,6 +400,9 @@ void CollectStepIds(const Step& step, std::vector<std::uint32_t>& out) {
 const Step* FindStep(const StepChain& chain, std::uint32_t step_id);
 
 const Step* FindStep(const SubChain& sub, std::uint32_t step_id) {
+    for (const SubChain& hoisted : sub.hoisted) {
+        if (const Step* found = FindStep(hoisted, step_id)) return found;
+    }
     for (const Step& step : sub.steps) {
         if (step.step_id == step_id) return &step;
         for (const SubChain& nested : step.sub_chains) {

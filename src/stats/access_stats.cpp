@@ -9,7 +9,10 @@ void RecordSteps(catalog::Catalog& catalog, const std::vector<exec::Step>& steps
 
 void RecordSubChains(catalog::Catalog& catalog, const std::vector<exec::SubChain>& subs,
                      std::uint64_t now, AccessStatsCounters* counters) {
-    for (const exec::SubChain& sub : subs) RecordSteps(catalog, sub.steps, now, counters);
+    for (const exec::SubChain& sub : subs) {
+        RecordSubChains(catalog, sub.hoisted, now, counters);
+        RecordSteps(catalog, sub.steps, now, counters);
+    }
 }
 
 void RecordSteps(catalog::Catalog& catalog, const std::vector<exec::Step>& steps,

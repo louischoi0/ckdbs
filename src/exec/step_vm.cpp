@@ -461,13 +461,34 @@ public:
         // per outer row, so a map it owned would be filled and destroyed
         // once per outer row - which is the whole cost the map exists to
         // remove (JB6).
-        ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
-                          trail_, replay_, cabins_, &snapshot_, indexes_, builds_);
-        // Sub-chain mode - `record_through_stops_`'s comment carries the
-        // argument.
-        inner.RecordThroughStops();
-        Status ran = RunToCompletionAtWalkBoundary(inner.Run(sub.steps));
-        if (!ran.ok()) return ran;
+        //
+        // **What this sub-chain hoisted runs first, once**, exactly as
+        // `ExecuteChain` runs the top-level chain's: against an empty frame
+        // with no parent, since a hoisted chain refers to nothing outside
+        // itself. One that is not true leaves this sub-chain with no rows,
+        // so its steps never open and the accumulators below stay at zero.
+        bool opens = true;
+        if (!sub.hoisted.empty()) {
+            ChainFrame empty;
+            empty.Open({}, /*parent=*/nullptr);
+            for (const SubChain& hoisted : sub.hoisted) {
+                auto value = EvaluateSubChain(hoisted, empty);
+                if (!value.ok()) return value.status();
+                if (!Collapse(value.value())) {
+                    opens = false;
+                    break;
+                }
+            }
+        }
+        if (opens) {
+            ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
+                              trail_, replay_, cabins_, &snapshot_, indexes_, builds_);
+            // Sub-chain mode - `record_through_stops_`'s comment carries the
+            // argument.
+            inner.RecordThroughStops();
+            Status ran = RunToCompletionAtWalkBoundary(inner.Run(sub.steps));
+            if (!ran.ok()) return ran;
+        }
 
         switch (sub.kind) {
             case parser::PredicateKind::kExists:
@@ -2712,6 +2733,7 @@ std::uint32_t MaxStepId(const Step& step);
 
 std::uint32_t MaxStepId(const SubChain& sub) {
     std::uint32_t max = 0;
+    for (const SubChain& hoisted : sub.hoisted) max = std::max(max, MaxStepId(hoisted));
     for (const Step& step : sub.steps) max = std::max(max, MaxStepId(step));
     return max;
 }

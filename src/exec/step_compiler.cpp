@@ -297,6 +297,8 @@ StatusOr<FunctionPredicate> LowerFunctionConjunct(const Scope& scope,
 
 // The statement's class: the most volatile purity any function conjunct
 // calls, through every sub-chain (AR1 §3).
+DeterminismClass DeterminismOf(const SubChain& sub);
+
 DeterminismClass DeterminismOf(const std::vector<Step>& steps) {
     DeterminismClass out = DeterminismClass::kD0;
     for (const Step& step : steps) {
@@ -305,8 +307,16 @@ DeterminismClass DeterminismOf(const std::vector<Step>& steps) {
                 if (side->call.has_value()) out = std::max(out, ClassOf(side->call->fn->purity));
             }
         }
-        for (const SubChain& sub : step.sub_chains) out = std::max(out, DeterminismOf(sub.steps));
+        for (const SubChain& sub : step.sub_chains) out = std::max(out, DeterminismOf(sub));
     }
+    return out;
+}
+
+// A sub-chain's own steps and the chains it hoisted: a function conjunct in
+// either decides the statement's class.
+DeterminismClass DeterminismOf(const SubChain& sub) {
+    DeterminismClass out = DeterminismOf(sub.steps);
+    for (const SubChain& hoisted : sub.hoisted) out = std::max(out, DeterminismOf(hoisted));
     return out;
 }
 
@@ -1348,7 +1358,7 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
     StepChain& out = chain.value();
     out.determinism = DeterminismOf(out.steps);
     for (const SubChain& sub : out.hoisted) {
-        out.determinism = std::max(out.determinism, DeterminismOf(sub.steps));
+        out.determinism = std::max(out.determinism, DeterminismOf(sub));
     }
     return chain;
 }
@@ -1451,6 +1461,9 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
                                       view, /*inner_build=*/false, declare);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
+            // What the inner block hoisted travels with it: only the
+            // top-level chain's list is run by the executor itself.
+            sub.hoisted = std::move(inner.value().hoisted);
 
             if (tests_a_column) {
                 if (inner.value().projection.size() != 1) {
@@ -1665,6 +1678,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                              sub_inner_build, declare);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
+            // See CompileWhere's lowering above: a block lowered to a
+            // SubChain keeps the sub-chains it hoisted, or they never run.
+            sub.hoisted = std::move(inner.value().hoisted);
 
             if (tests_a_column) {
                 // IN and the scalar form read a value out of the

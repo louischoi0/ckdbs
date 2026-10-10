@@ -17,7 +17,10 @@ void IndexSteps(const std::vector<Step>& steps,
 
 void IndexSubChains(const std::vector<SubChain>& subs,
                     std::unordered_map<std::uint32_t, const Step*>& out) {
-    for (const SubChain& sub : subs) IndexSteps(sub.steps, out);
+    for (const SubChain& sub : subs) {
+        IndexSubChains(sub.hoisted, out);
+        IndexSteps(sub.steps, out);
+    }
 }
 
 void IndexSteps(const std::vector<Step>& steps,
