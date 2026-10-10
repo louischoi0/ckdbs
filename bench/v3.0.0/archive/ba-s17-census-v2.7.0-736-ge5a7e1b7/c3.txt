@@ -1,0 +1,16 @@
+kds-point-group-k4-s1-r2.json
+kds-point-group-k4-s2-r0.json
+kds-point-relaxed-k2-s1-r2.json
+kds-point-relaxed-k2-s2-r0.json
+kds-point-relaxed-k2-s2-r1.json
+kds-point-relaxed-k2-s2-r2.json
+kds-point-relaxed-k4-s1-r2.json
+kds-point-relaxed-k4-s2-r0.json
+kds-point-relaxed-k4-s2-r1.json
+kds-point-relaxed-k4-s2-r2.json
+kds-trade-relaxed-k4-s1-r1.json
+kds-trade-relaxed-k4-s1-r2.json
+kds-trade-relaxed-k4-s2-r0.json
+kds-trade-strict-k1-s2-r2.json
+kds-trade-strict-k1-s4-r0.json
+kds-trade-strict-k1-s4-r1.json

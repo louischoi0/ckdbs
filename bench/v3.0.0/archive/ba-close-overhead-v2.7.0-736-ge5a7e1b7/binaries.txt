@@ -1,0 +1,4 @@
+1d41bdd516c7737b320ced94a9d7b755016299d6e4e81f47cb92934ea39cfd08  kds_server-A
+d2a6977f220a32147b6a2df985aec10b60ee7411fe3fca3381b78e46e525223e  kds_server-B
+A: d43845a0 (v2.7.0-720-gd43845a0), tree exported by tar, built Release in a scratch directory; source binary mtime 2026-10-10 02:10:06 UTC; measured copy mtime 2026-10-10 02:10:11.048501110 +0000
+B: e5a7e1b7 (v2.7.0-736-ge5a7e1b7), build-release/kds_server, source binary mtime 2026-10-10 02:09:03 UTC; measured copy mtime 2026-10-10 02:10:11.051501190 +0000

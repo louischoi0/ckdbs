@@ -1,0 +1,183 @@
+{
+ "durability": "group",
+ "rows": 200,
+ "run": 1,
+ "tag": "n200-r1",
+ "wait_s": 0.0,
+ "order_first": "A",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "1.87 3.84 5.69 1/382 2577392",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "host_after": {
+  "loadavg": "1.62 3.66 5.59 1/353 2577446",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 5552.0,
+  "B": 5558.0
+ },
+ "count_be_a": {
+  "A": "count(*) 3200",
+  "B": "count(*) 3200"
+ },
+ "rss_hwm_kb": {
+  "A": 75212,
+  "B": 76244
+ },
+ "pool_end": {
+  "A": {
+   "pool_budget": 65536.0,
+   "pool_resident": 74.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 42670.0,
+   "pool_misses": 74.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  },
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 74.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 42670.0,
+   "pool_misses": 74.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.602178,
+    "qps": 651.9,
+    "mean_us": 1532.9,
+    "p0_us": 1059.2,
+    "p25_us": 1231.4,
+    "p50_us": 1289.5,
+    "p95_us": 2751.9,
+    "p99_us": 8118.5,
+    "max_us": 17183.7,
+    "p90_us": 1642.9,
+    "p999_us": 15287.4
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.361922,
+    "qps": 687.8,
+    "mean_us": 1452.8,
+    "p0_us": 1024.6,
+    "p25_us": 1203.0,
+    "p50_us": 1260.9,
+    "p95_us": 2454.9,
+    "p99_us": 5421.7,
+    "max_us": 21879.0,
+    "p90_us": 1535.0,
+    "p999_us": 13269.6
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.138403,
+    "qps": 21675.8,
+    "mean_us": 45.9,
+    "p0_us": 36.3,
+    "p25_us": 44.4,
+    "p50_us": 45.3,
+    "p95_us": 54.5,
+    "p99_us": 62.1,
+    "max_us": 83.2,
+    "p90_us": 49.1,
+    "p999_us": 73.5
+   }
+  },
+  "B": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.441459,
+    "qps": 675.5,
+    "mean_us": 1479.3,
+    "p0_us": 1060.9,
+    "p25_us": 1245.1,
+    "p50_us": 1309.6,
+    "p95_us": 2429.4,
+    "p99_us": 4870.4,
+    "max_us": 16465.0,
+    "p90_us": 1553.7,
+    "p999_us": 11358.4
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.232165,
+    "qps": 708.9,
+    "mean_us": 1409.6,
+    "p0_us": 1011.0,
+    "p25_us": 1177.9,
+    "p50_us": 1242.1,
+    "p95_us": 2210.2,
+    "p99_us": 5226.6,
+    "max_us": 15601.8,
+    "p90_us": 1456.5,
+    "p999_us": 12207.8
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.15997,
+    "qps": 18753.5,
+    "mean_us": 53.1,
+    "p0_us": 46.0,
+    "p25_us": 49.8,
+    "p50_us": 50.5,
+    "p95_us": 67.3,
+    "p99_us": 81.3,
+    "max_us": 395.4,
+    "p90_us": 60.6,
+    "p999_us": 107.9
+   }
+  }
+ }
+}

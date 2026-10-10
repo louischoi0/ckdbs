@@ -2255,3 +2255,68 @@ the dispatcher, catalog and transaction manager they borrow are destroyed
   run already pays.
 
 Overhead not measured; measured at the milestone's close.
+
+### BA-S17 - the close, 2026-10-10
+
+On `worktree-ba-open-marks`. The code measured is at `e5a7e1b7`
+(`v2.7.0-736-ge5a7e1b7`). The branch was merged into `main` at `836b9551`
+and fast-forwarded to `1a5176ae` (BJ's commits, no BA code). The suite at
+`1a5176ae` passed 3411/3411, 1 disabled.
+
+**Measured** (A = `d43845a0`, B = `e5a7e1b7`, `build-release`):
+- **The overhead A/B**
+  (`bench/v3.0.0/results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`):
+  - An unsynced pk `INSERT`: nothing resolvable.
+  - The other pk statements: +0.1 to 1.25 µs.
+  - A whole-relation walk: about 2-4.5 ns per row, +20 to +46 µs at
+    10,000 rows. Not attributed to a stage.
+  - A synced `INSERT` at `cores = 2`: +13 to +32 µs, 1-3 % of a commit
+    that is 95 % device.
+  - **At 10,000 rows, B's longest statement is 62-226 ms in 31 of 32
+    runs** (A: 18-22 ms), attributed to the checkpoint.
+  - Scenario 0's `c8-s` cell: no visible refusal in 3 of 3 passes.
+  - The 50,000- and 100,000-row walk cell is invalid: setup timeouts under
+    another session's build. Its reproduction on a quiet host ran clean.
+- **The census, KDS half**
+  (`bench/v3.0.0/results-ba-s17-census-v2.7.0-736-ge5a7e1b7.md`): 675 runs.
+  The 32 cells holding the 76 contaminated runs were quarantined and
+  re-run, and the second screen flags none.
+  - **BA-S7 met.** At `cores = 2` and 16 sessions:
+    - `group` runs at 6,102-6,606 statements/s, against 1,656-3,558 at
+      BA-S4;
+    - `strict` runs at 6,214-6,383, against 703-752;
+    - PostgreSQL `on` runs at 5,035-5,325.
+    - The sync gate's share fell from 55 % to 9.6 %.
+    - Core 0's p99 fell from 1.3-1.6 s to the peers' 8.5-9.7 ms, so
+      BA-R4's premise holds now.
+  - **BA-S12 met.** P6 fell from 10.0 % to 0.38 %.
+  - **BA-S14 met.** No refusal reaches a client; 29 are re-run inside the
+    engine.
+  - **BA-S13 not met.** The carve's median is 3.6-5.9 ms under `group`
+    and `strict`, but **226-258 ms under `relaxed`**, against BA-S4's
+    20-46 ms and the 10 ms exit. The unconditional data-file
+    `fdatasync` flushing the whole unsynced backlog is the candidate;
+    it is untested.
+  - **The `relaxed` path is unchanged**, as BA-S4's verdicts (P1-P5 not
+    material) predicted. `cores = 4` still falls below `cores = 2`;
+    unresolved.
+  - P11 is not shown material.
+  - The cross-day shift: unchanged cells read +12 to +28 % over BA-S4,
+    and the same-day A/B is equal on them. So ratios against BA-S4 carry
+    a host shift. The `cores = 2` gains are far above it.
+
+**BA closes on this measurement**, adopted on the operator's word of
+2026-10-10, translated: *"and close that milestone"*. It carries these stops
+and findings:
+- **The checkpoint half of P12** waits for the operator's mark on BI-Q1.
+  B's 10,000-row checkpoint stall belongs to it.
+- **BA-S13's `relaxed` carve regression**:
+  `known-gaps.md`, "Statement scheduling" and the carve entry.
+- **The walk's per-row cost and the pk `SELECT`'s +0.5-0.95 µs**: not
+  bisected to a stage.
+- **BA-S15's 64-page slice**: not varied.
+- **BA-S14's forced grown-over-root cell**: not built.
+- **BA-S5, S6, S8, S9, S10, S11, S16**: not opened (BA-S4), and BA-Q6 (b)
+  stays recorded for BA-S8.
+
+Overhead measured at the milestone's close, above.

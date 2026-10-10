@@ -1,0 +1,192 @@
+{
+ "durability": "relaxed",
+ "rows": 50000,
+ "run": 1,
+ "tag": "n50000-r1",
+ "wait_s": 0.0,
+ "order_first": "A",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "0.57 0.36 0.30 2/562 2964524",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+  ]
+ },
+ "host_after": {
+  "loadavg": "1.28 0.52 0.35 9/615 2964695",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2964563 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/s5_fix_typer.py && cmake --build build -j8 --target kds 2>&1 | grep -E \" error |error:\" -A5 | head -30' < /dev/null && pwd -P >| /tmp/claude-0e80-cwd",
+   "2964565 cmake --build build -j8 --target kds",
+   "2964566 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/s5_fix_typer.py && cmake --build build -j8 --target kds 2>&1 | grep -E \" error |error:\" -A5 | head -30' < /dev/null && pwd -P >| /tmp/claude-0e80-cwd",
+   "2964608 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.d -MF CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o.d -MT CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/server/command_dispatcher.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/server/ -dumpbase command_dispatcher.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccbr5m6h.s",
+   "2964612 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/server/expeditor.cpp.d -MF CMakeFiles/kds.dir/src/server/expeditor.cpp.o.d -MT CMakeFiles/kds.dir/src/server/expeditor.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/server/expeditor.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/server/ -dumpbase expeditor.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccq0hY6N.s",
+   "2964640 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/server/kwp_load_server.cpp.d -MF CMakeFiles/kds.dir/src/server/kwp_load_server.cpp.o.d -MT CMakeFiles/kds.dir/src/server/kwp_load_server.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/server/kwp_load_server.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/server/ -dumpbase kwp_load_server.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccpUU5GG.s",
+   "2964647 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/server/kwp_session.cpp.d -MF CMakeFiles/kds.dir/src/server/kwp_session.cpp.o.d -MT CMakeFiles/kds.dir/src/server/kwp_session.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/server/kwp_session.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/server/ -dumpbase kwp_session.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc9zyTw5.s",
+   "2964667 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/parser/parser.cpp.d -MF CMakeFiles/kds.dir/src/parser/parser.cpp.o.d -MT CMakeFiles/kds.dir/src/parser/parser.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/parser/parser.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/parser/ -dumpbase parser.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccHnegnc.s",
+   "2964684 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/exec/row_codec.cpp.d -MF CMakeFiles/kds.dir/src/exec/row_codec.cpp.o.d -MT CMakeFiles/kds.dir/src/exec/row_codec.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/exec/row_codec.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/exec/ -dumpbase row_codec.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccfNvcuU.s"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 4992.0,
+  "B": 4965.0
+ },
+ "count_be_a": {
+  "A": "count(*) 50000",
+  "B": "count(*) 50000"
+ },
+ "rss_hwm_kb": {
+  "A": 74972,
+  "B": 76024
+ },
+ "pool_end": {
+  "A": {
+   "pool_budget": 65536.0,
+   "pool_resident": 1840.0,
+   "pool_slots": 2048.0,
+   "pool_hits": 1997997.0,
+   "pool_misses": 1840.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  },
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 1840.0,
+   "pool_slots": 2048.0,
+   "pool_hits": 1997997.0,
+   "pool_misses": 1840.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "iso": {
+    "phase": "iso",
+    "detail": "",
+    "ops": 600,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.023446,
+    "qps": 25591.1,
+    "mean_us": 38.8,
+    "p0_us": 36.5,
+    "p25_us": 37.5,
+    "p50_us": 37.8,
+    "p95_us": 46.6,
+    "p99_us": 52.8,
+    "max_us": 89.5,
+    "p90_us": 41.6,
+    "p999_us": 89.5
+   },
+   "select-pk": {
+    "phase": "select-pk",
+    "detail": "",
+    "ops": 600,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.040727,
+    "qps": 14732.3,
+    "mean_us": 67.3,
+    "p0_us": 60.8,
+    "p25_us": 64.1,
+    "p50_us": 64.9,
+    "p95_us": 79.9,
+    "p99_us": 89.6,
+    "max_us": 261.3,
+    "p90_us": 74.8,
+    "p999_us": 261.3
+   },
+   "range100": {
+    "phase": "range100",
+    "detail": "",
+    "ops": 600,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.817275,
+    "qps": 157.2,
+    "mean_us": 6355.3,
+    "p0_us": 3329.2,
+    "p25_us": 5762.1,
+    "p50_us": 6124.8,
+    "p95_us": 7617.0,
+    "p99_us": 9397.3,
+    "max_us": 156185.5,
+    "p90_us": 7158.3,
+    "p999_us": 156185.5
+   }
+  },
+  "B": {
+   "iso": {
+    "phase": "iso",
+    "detail": "",
+    "ops": 600,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.023805,
+    "qps": 25204.8,
+    "mean_us": 39.4,
+    "p0_us": 35.1,
+    "p25_us": 37.7,
+    "p50_us": 38.0,
+    "p95_us": 48.0,
+    "p99_us": 55.8,
+    "max_us": 108.8,
+    "p90_us": 43.9,
+    "p999_us": 108.8
+   },
+   "select-pk": {
+    "phase": "select-pk",
+    "detail": "",
+    "ops": 600,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.04147,
+    "qps": 14468.1,
+    "mean_us": 68.5,
+    "p0_us": 64.2,
+    "p25_us": 65.4,
+    "p50_us": 66.1,
+    "p95_us": 80.3,
+    "p99_us": 90.4,
+    "max_us": 205.7,
+    "p90_us": 76.3,
+    "p999_us": 205.7
+   },
+   "range100": {
+    "phase": "range100",
+    "detail": "",
+    "ops": 600,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.993784,
+    "qps": 150.2,
+    "mean_us": 6649.3,
+    "p0_us": 3545.7,
+    "p25_us": 6057.0,
+    "p50_us": 6376.2,
+    "p95_us": 8003.4,
+    "p99_us": 10014.0,
+    "max_us": 134216.6,
+    "p90_us": 7336.8,
+    "p999_us": 134216.6
+   }
+  }
+ }
+}

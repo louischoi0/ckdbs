@@ -1,0 +1,199 @@
+{
+ "durability": "group",
+ "rows": 200,
+ "run": 11,
+ "tag": "n200-r11",
+ "wait_s": 0.0,
+ "order_first": "A",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "1.40 2.63 4.86 9/379 2578332",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2578230 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/build1.log 2>&1; tail -3 /tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/build1.log' < /dev/null && pwd -P >| /tmp/claude-f1fb-cwd",
+   "2578231 cmake --build build -j8",
+   "2578264 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/base/log.cpp.d -MF CMakeFiles/kds.dir/src/base/log.cpp.o.d -MT CMakeFiles/kds.dir/src/base/log.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/base/log.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/base/ -dumpbase log.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccWyoSVT.s",
+   "2578289 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/varheap.cpp.d -MF CMakeFiles/kds.dir/src/storage/varheap.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/varheap.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/storage/varheap.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/storage/ -dumpbase varheap.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cclTJel3.s",
+   "2578299 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/heap/heap_chain.cpp.d -MF CMakeFiles/kds.dir/src/storage/heap/heap_chain.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/heap/heap_chain.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/storage/heap/heap_chain.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/storage/heap/ -dumpbase heap_chain.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccwDX1kU.s",
+   "2578309 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/btree/btree.cpp.d -MF CMakeFiles/kds.dir/src/storage/btree/btree.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/btree/btree.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/storage/btree/btree.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/storage/btree/ -dumpbase btree.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cclGb43W.s",
+   "2578325 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/index/index_page.cpp.d -MF CMakeFiles/kds.dir/src/storage/index/index_page.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/index/index_page.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/storage/index/index_page.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/storage/index/ -dumpbase index_page.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc4rUWBl.s",
+   "2578326 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/index/index_tree.cpp.d -MF CMakeFiles/kds.dir/src/storage/index/index_tree.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/index/index_tree.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/storage/index/index_tree.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/storage/index/ -dumpbase index_tree.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccv26Sl9.s",
+   "2578328 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/free_map.cpp.d -MF CMakeFiles/kds.dir/src/storage/free_map.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/free_map.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/storage/free_map.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/storage/ -dumpbase free_map.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccohtC7I.s",
+   "2578332 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/txn/undo_page.cpp.d -MF CMakeFiles/kds.dir/src/txn/undo_page.cpp.o.d -MT CMakeFiles/kds.dir/src/txn/undo_page.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/txn/undo_page.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/txn/ -dumpbase undo_page.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccvzA78K.s"
+  ]
+ },
+ "host_after": {
+  "loadavg": "4.07 3.16 4.98 6/397 2578991",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2578230 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/build1.log 2>&1; tail -3 /tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/build1.log' < /dev/null && pwd -P >| /tmp/claude-f1fb-cwd",
+   "2578231 cmake --build build -j8",
+   "2578934 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/exec/cabin_optimizer_exec.cpp.d -MF CMakeFiles/kds.dir/src/exec/cabin_optimizer_exec.cpp.o.d -MT CMakeFiles/kds.dir/src/exec/cabin_optimizer_exec.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/exec/cabin_optimizer_exec.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/exec/ -dumpbase cabin_optimizer_exec.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc7x1LcM.s",
+   "2578975 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/server/tls_channel.cpp.d -MF CMakeFiles/kds.dir/src/server/tls_channel.cpp.o.d -MT CMakeFiles/kds.dir/src/server/tls_channel.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/server/tls_channel.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/server/ -dumpbase tls_channel.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccuUgrHn.s",
+   "2578982 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/server/scram.cpp.d -MF CMakeFiles/kds.dir/src/server/scram.cpp.o.d -MT CMakeFiles/kds.dir/src/server/scram.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/server/scram.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/server/ -dumpbase scram.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccpxpzz9.s",
+   "2578986 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/server/auth.cpp.d -MF CMakeFiles/kds.dir/src/server/auth.cpp.o.d -MT CMakeFiles/kds.dir/src/server/auth.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/server/auth.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/server/ -dumpbase auth.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccPu87j8.s"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 12311.0,
+  "B": 6255.0
+ },
+ "count_be_a": {
+  "A": "count(*) 3200",
+  "B": "count(*) 3200"
+ },
+ "rss_hwm_kb": {
+  "A": 75228,
+  "B": 76228
+ },
+ "pool_end": {
+  "A": {
+   "pool_budget": 65536.0,
+   "pool_resident": 74.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 42671.0,
+   "pool_misses": 74.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  },
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 74.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 42671.0,
+   "pool_misses": 74.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.298689,
+    "qps": 566.2,
+    "mean_us": 1762.5,
+    "p0_us": 1140.0,
+    "p25_us": 1379.8,
+    "p50_us": 1476.6,
+    "p95_us": 3414.9,
+    "p99_us": 5816.0,
+    "max_us": 26339.9,
+    "p90_us": 2173.3,
+    "p999_us": 14926.3
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.773144,
+    "qps": 519.6,
+    "mean_us": 1920.7,
+    "p0_us": 1180.4,
+    "p25_us": 1376.5,
+    "p50_us": 1480.9,
+    "p95_us": 3535.1,
+    "p99_us": 6880.9,
+    "max_us": 390251.5,
+    "p90_us": 2211.8,
+    "p999_us": 17534.8
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.409853,
+    "qps": 7319.7,
+    "mean_us": 135.7,
+    "p0_us": 54.9,
+    "p25_us": 83.7,
+    "p50_us": 94.3,
+    "p95_us": 328.9,
+    "p99_us": 823.5,
+    "max_us": 3814.6,
+    "p90_us": 206.2,
+    "p999_us": 1084.6
+   }
+  },
+  "B": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.291745,
+    "qps": 566.9,
+    "mean_us": 1760.1,
+    "p0_us": 1138.8,
+    "p25_us": 1366.1,
+    "p50_us": 1453.0,
+    "p95_us": 3390.0,
+    "p99_us": 6883.8,
+    "max_us": 19804.8,
+    "p90_us": 2182.6,
+    "p999_us": 14606.9
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.520315,
+    "qps": 543.4,
+    "mean_us": 1836.4,
+    "p0_us": 1137.8,
+    "p25_us": 1394.7,
+    "p50_us": 1489.5,
+    "p95_us": 3629.8,
+    "p99_us": 8293.0,
+    "max_us": 54922.3,
+    "p90_us": 2165.5,
+    "p999_us": 18563.9
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.454082,
+    "qps": 6606.7,
+    "mean_us": 150.5,
+    "p0_us": 62.1,
+    "p25_us": 98.4,
+    "p50_us": 110.1,
+    "p95_us": 272.1,
+    "p99_us": 999.1,
+    "max_us": 3407.2,
+    "p90_us": 200.6,
+    "p999_us": 2958.8
+   }
+  }
+ }
+}

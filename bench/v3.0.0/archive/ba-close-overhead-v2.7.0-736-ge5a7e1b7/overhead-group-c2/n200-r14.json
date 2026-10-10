@@ -1,0 +1,190 @@
+{
+ "durability": "group",
+ "rows": 200,
+ "run": 14,
+ "tag": "n200-r14",
+ "wait_s": 0.0,
+ "order_first": "B",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "2.27 5.06 6.45 2/375 2639735",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2639625 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \"error|Error|warning\" | head -20' < /dev/null && pwd -P >| /tmp/claude-e0dd-cwd",
+   "2639626 cmake --build build -j8 --target kds_tests",
+   "2639627 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \"error|Error|warning\" | head -20' < /dev/null && pwd -P >| /tmp/claude-e0dd-cwd"
+  ]
+ },
+ "host_after": {
+  "loadavg": "2.06 4.88 6.37 2/401 2639909",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2639871 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \"error|warning\" | head; build/tests/kds_tests --gtest_filter='\"'\"'SetExprTypingTest.*'\"'\"' 2>&1 | tail -6' < /dev/null && pwd -P >| /tmp/claude-f7aa-cwd",
+   "2639872 cmake --build build -j8 --target kds_tests",
+   "2639873 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests 2>&1 | grep -E \"error|warning\" | head; build/tests/kds_tests --gtest_filter='\"'\"'SetExprTypingTest.*'\"'\"' 2>&1 | tail -6' < /dev/null && pwd -P >| /tmp/claude-f7aa-cwd",
+   "2639907 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/set_expr_typing_test.cpp.d -MF CMakeFiles/kds_tests.dir/set_expr_typing_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/set_expr_typing_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/tests/set_expr_typing_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase set_expr_typing_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccFZuVpn.s"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 3856.0,
+  "B": 8340.0
+ },
+ "count_be_a": {
+  "A": "count(*) 3200",
+  "B": "count(*) 3200"
+ },
+ "rss_hwm_kb": {
+  "A": 75136,
+  "B": 75952
+ },
+ "pool_end": {
+  "A": {
+   "pool_budget": 65536.0,
+   "pool_resident": 101.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 42647.0,
+   "pool_misses": 101.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  },
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 101.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 42648.0,
+   "pool_misses": 101.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.276364,
+    "qps": 701.5,
+    "mean_us": 1424.3,
+    "p0_us": 880.6,
+    "p25_us": 984.2,
+    "p50_us": 1020.4,
+    "p95_us": 1848.2,
+    "p99_us": 5665.6,
+    "max_us": 161012.2,
+    "p90_us": 1220.4,
+    "p999_us": 138154.8
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.732216,
+    "qps": 803.8,
+    "mean_us": 1242.9,
+    "p0_us": 879.8,
+    "p25_us": 993.6,
+    "p50_us": 1027.9,
+    "p95_us": 2248.7,
+    "p99_us": 5435.0,
+    "max_us": 28861.9,
+    "p90_us": 1284.9,
+    "p999_us": 16333.5
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.143863,
+    "qps": 20853.1,
+    "mean_us": 47.7,
+    "p0_us": 35.5,
+    "p25_us": 44.8,
+    "p50_us": 45.7,
+    "p95_us": 60.5,
+    "p99_us": 69.6,
+    "max_us": 206.2,
+    "p90_us": 55.4,
+    "p999_us": 94.9
+   }
+  },
+  "B": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.724106,
+    "qps": 805.6,
+    "mean_us": 1240.2,
+    "p0_us": 921.5,
+    "p25_us": 1020.0,
+    "p50_us": 1057.1,
+    "p95_us": 1989.1,
+    "p99_us": 5701.1,
+    "max_us": 18595.9,
+    "p90_us": 1270.7,
+    "p999_us": 11468.7
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 3.751669,
+    "qps": 799.6,
+    "mean_us": 1249.4,
+    "p0_us": 928.2,
+    "p25_us": 1025.4,
+    "p50_us": 1062.9,
+    "p95_us": 1924.3,
+    "p99_us": 6012.4,
+    "max_us": 19578.9,
+    "p90_us": 1267.5,
+    "p999_us": 12221.6
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.166122,
+    "qps": 18059.0,
+    "mean_us": 55.1,
+    "p0_us": 45.5,
+    "p25_us": 49.9,
+    "p50_us": 51.0,
+    "p95_us": 70.3,
+    "p99_us": 82.4,
+    "max_us": 151.7,
+    "p90_us": 67.5,
+    "p999_us": 114.1
+   }
+  }
+ }
+}

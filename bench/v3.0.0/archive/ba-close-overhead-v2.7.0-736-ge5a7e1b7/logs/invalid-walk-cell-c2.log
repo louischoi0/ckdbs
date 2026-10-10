@@ -1,0 +1,23 @@
+Traceback (most recent call last):
+  File "/home/cdkbs/bench-runs/ba-close/driver/ba_overhead_ctrl.py", line 232, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/bench-runs/ba-close/driver/ba_overhead_ctrl.py", line 228, in main
+    run_one(args, rows, run)
+  File "/home/cdkbs/bench-runs/ba-close/driver/ba_overhead_ctrl.py", line 100, in run_one
+    bb.must(s.conn, f"INSERT INTO be_{t} VALUES " +
+  File "/home/cdkbs/ckdbs/.claude/worktrees/ba-open-marks/tools/bb_overhead_benchmark.py", line 79, in must
+    reply = conn.send_command(sql)
+            ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/ba-open-marks/tools/ckdbs_cli.py", line 204, in send_command
+    fields, rows, tag, _affected = self._conn.execute(stripped)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/ba-open-marks/tools/kwp.py", line 417, in execute
+    ftype, _flags, payload = self._recv_frame()
+                             ^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/ba-open-marks/tools/kwp.py", line 309, in _recv_frame
+    self._fill()
+  File "/home/cdkbs/ckdbs/.claude/worktrees/ba-open-marks/tools/kwp.py", line 320, in _fill
+    chunk = self.sock.recv(65536)
+            ^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: timed out

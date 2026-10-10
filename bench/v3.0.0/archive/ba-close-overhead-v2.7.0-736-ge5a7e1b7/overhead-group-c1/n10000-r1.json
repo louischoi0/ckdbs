@@ -1,0 +1,190 @@
+{
+ "durability": "group",
+ "rows": 10000,
+ "run": 1,
+ "tag": "n10000-r1",
+ "wait_s": 0.0,
+ "order_first": "A",
+ "frames": 65536,
+ "host_before": {
+  "loadavg": "3.18 5.12 5.58 3/363 2588385",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2588358 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cat >> instructions/v3.0.0/workorder-bj-expression-update.md <<'\"'\"'EOF'\"'\"'  ### BJ-S1 \u2014 red first, and the census (built 2026-10-10)  On `worktree-bj-expression-update`, after `586ffa5f`. **Not measured; measured at the milestone'\"'\"'s close** (\u00a75).  **The census**, `[source-read]` at the same tree: - Every reader of `Assignment::val`: two, both in `UpdateInner` - the   foreign-key hoist (`command_dispatcher.cpp`, the `fk_assignments` build)   and the apply loop that overwrites the decoded row. `sim/` reads   `Oracle::Assignment`, its own single-value type, never the parser'\"'\"'s. - Every caller of `CompileAssignments`: one, `UpdateInner`; a parked   statement re-enters `UpdateInner`, so a resume re-compiles and cannot skip   a compile-time refusal. - Every spec sentence BJ-S8 restates is listed in \u00a71.6 and was re-read; none   has moved since.  **Red cells and what they showed:** - A duplicate SET target. Built with BJ-Q12'\"'\"'s fix (`586ffa5f`, adopted   under BJ-Q12): `CompileAssignmentsTest` and `ForeignKeyCheckTest` carry the   cells, and the review reasoned the fk cell red against the unfixed tree   (the hoist checks the first value, the write keeps the last). The cell was   not run red; it was written with the fix in one step. - `SET a = b, b = a` cannot be parsed before BJ-S2 and stays pending here. - **BJ-R9'\"'\"'s three paths**, `tests/bj_single_write_rig_test.cpp`, through a   new seam `SetAfterUpdateRowAppliedForTest` that counts the calls per pk:   a multi-leaf walk (1200 rows, each once), a walk parked midway and resumed   after a `ROLLBACK` (rows before the held one written once, the rest once),   the same with a `COMMIT` (refused or not, no row twice), and a statement   that wrote nothing before its park and then ran whole (each row once).   **They are green, not red**: the guards hold on `main`, which \u00a71.5 said   they would. That they can fail was checked by mutation - calling the hook   twice per row fails all four. BJ-S4 makes them load-bearing; BA-S14'\"'\"'s   in-engine re-run is the path they do not cover until BA is on `main`. EOF cmake --build build -j8 2>&1 | grep -E \" error\" | head' && pwd -P >| /tmp/claude-87ee-cwd",
+   "2588360 cmake --build build -j8",
+   "2588361 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cat >> instructions/v3.0.0/workorder-bj-expression-update.md <<'\"'\"'EOF'\"'\"'  ### BJ-S1 \u2014 red first, and the census (built 2026-10-10)  On `worktree-bj-expression-update`, after `586ffa5f`. **Not measured; measured at the milestone'\"'\"'s close** (\u00a75).  **The census**, `[source-read]` at the same tree: - Every reader of `Assignment::val`: two, both in `UpdateInner` - the   foreign-key hoist (`command_dispatcher.cpp`, the `fk_assignments` build)   and the apply loop that overwrites the decoded row. `sim/` reads   `Oracle::Assignment`, its own single-value type, never the parser'\"'\"'s. - Every caller of `CompileAssignments`: one, `UpdateInner`; a parked   statement re-enters `UpdateInner`, so a resume re-compiles and cannot skip   a compile-time refusal. - Every spec sentence BJ-S8 restates is listed in \u00a71.6 and was re-read; none   has moved since.  **Red cells and what they showed:** - A duplicate SET target. Built with BJ-Q12'\"'\"'s fix (`586ffa5f`, adopted   under BJ-Q12): `CompileAssignmentsTest` and `ForeignKeyCheckTest` carry the   cells, and the review reasoned the fk cell red against the unfixed tree   (the hoist checks the first value, the write keeps the last). The cell was   not run red; it was written with the fix in one step. - `SET a = b, b = a` cannot be parsed before BJ-S2 and stays pending here. - **BJ-R9'\"'\"'s three paths**, `tests/bj_single_write_rig_test.cpp`, through a   new seam `SetAfterUpdateRowAppliedForTest` that counts the calls per pk:   a multi-leaf walk (1200 rows, each once), a walk parked midway and resumed   after a `ROLLBACK` (rows before the held one written once, the rest once),   the same with a `COMMIT` (refused or not, no row twice), and a statement   that wrote nothing before its park and then ran whole (each row once).   **They are green, not red**: the guards hold on `main`, which \u00a71.5 said   they would. That they can fail was checked by mutation - calling the hook   twice per row fails all four. BJ-S4 makes them load-bearing; BA-S14'\"'\"'s   in-engine re-run is the path they do not cover until BA is on `main`. EOF cmake --build build -j8 2>&1 | grep -E \" error\" | head' && pwd -P >| /tmp/claude-87ee-cwd",
+   "2588379 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.d -MF CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o.d -MT CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/server/command_dispatcher.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/server/ -dumpbase command_dispatcher.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccFMCiCe.s",
+   "2588380 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/include -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/exec/step_compiler.cpp.d -MF CMakeFiles/kds.dir/src/exec/step_compiler.cpp.o.d -MT CMakeFiles/kds.dir/src/exec/step_compiler.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/src/exec/step_compiler.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/exec/ -dumpbase step_compiler.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccCbAhPQ.s"
+  ]
+ },
+ "host_after": {
+  "loadavg": "3.33 4.98 5.52 8/378 2588588",
+  "competing": [
+   "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd",
+   "2588546 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cd /home/cdkbs/ckdbs/.claude/worktrees/bj-expression-update/build && ctest -j8 --timeout 300 2>&1 | tail -6' < /dev/null && pwd -P >| /tmp/claude-4c0f-cwd",
+   "2588547 ctest -j8 --timeout 300"
+  ]
+ },
+ "mount_ckpt_us": {
+  "A": 13474.0,
+  "B": 28333.0
+ },
+ "count_be_a": {
+  "A": "count(*) 13000",
+  "B": "count(*) 13000"
+ },
+ "rss_hwm_kb": {
+  "A": 75048,
+  "B": 76248
+ },
+ "pool_end": {
+  "A": {
+   "pool_budget": 65536.0,
+   "pool_resident": 430.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 397263.0,
+   "pool_misses": 430.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  },
+  "B": {
+   "pool_budget": 65536.0,
+   "pool_resident": 430.0,
+   "pool_slots": 1024.0,
+   "pool_hits": 397263.0,
+   "pool_misses": 430.0,
+   "pool_reclaimed_inline": 0.0,
+   "pool_reclaimed_background": 0.0,
+   "pool_batches_inline": 0.0,
+   "pool_batches_background": 0.0,
+   "pool_batches_partial": 0.0,
+   "pool_batch_steps": 0.0,
+   "pool_batch_steps_background": 0.0,
+   "pool_dirty_queued": 0.0,
+   "pool_dirty_drained": 0.0,
+   "pool_refused": 0.0
+  }
+ },
+ "arms": {
+  "A": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 4.11824,
+    "qps": 728.5,
+    "mean_us": 1370.6,
+    "p0_us": 881.8,
+    "p25_us": 1002.8,
+    "p50_us": 1045.1,
+    "p95_us": 1988.9,
+    "p99_us": 5325.5,
+    "max_us": 156070.4,
+    "p90_us": 1293.3,
+    "p999_us": 51671.2
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.319793,
+    "qps": 563.9,
+    "mean_us": 1771.8,
+    "p0_us": 886.1,
+    "p25_us": 996.3,
+    "p50_us": 1033.7,
+    "p95_us": 2456.5,
+    "p99_us": 7124.9,
+    "max_us": 162206.8,
+    "p90_us": 1421.9,
+    "p999_us": 155864.2
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.362438,
+    "qps": 8277.3,
+    "mean_us": 120.4,
+    "p0_us": 47.6,
+    "p25_us": 57.3,
+    "p50_us": 60.6,
+    "p95_us": 446.7,
+    "p99_us": 870.7,
+    "max_us": 3844.6,
+    "p90_us": 277.0,
+    "p999_us": 1316.6
+   }
+  },
+  "B": {
+   "insert": {
+    "phase": "insert",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 5.652663,
+    "qps": 530.7,
+    "mean_us": 1882.1,
+    "p0_us": 879.7,
+    "p25_us": 999.7,
+    "p50_us": 1039.7,
+    "p95_us": 2666.1,
+    "p99_us": 7632.5,
+    "max_us": 158396.5,
+    "p90_us": 1327.9,
+    "p999_us": 151871.0
+   },
+   "insert-again": {
+    "phase": "insert-again",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 6.260122,
+    "qps": 479.2,
+    "mean_us": 2085.2,
+    "p0_us": 892.0,
+    "p25_us": 999.5,
+    "p50_us": 1039.2,
+    "p95_us": 2751.2,
+    "p99_us": 10452.2,
+    "max_us": 612000.9,
+    "p90_us": 1545.5,
+    "p999_us": 297666.8
+   },
+   "ping": {
+    "phase": "ping",
+    "detail": "",
+    "ops": 3000,
+    "errors": 0,
+    "first_error": null,
+    "elapsed_s": 0.406712,
+    "qps": 7376.2,
+    "mean_us": 135.1,
+    "p0_us": 59.4,
+    "p25_us": 66.8,
+    "p50_us": 69.0,
+    "p95_us": 444.8,
+    "p99_us": 998.5,
+    "max_us": 4090.5,
+    "p90_us": 280.1,
+    "p999_us": 3548.2
+   }
+  }
+ }
+}

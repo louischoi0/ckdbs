@@ -1,0 +1,5 @@
+loaded 0.06 s {'wal_syncs': 7.0, 'recovery_checkpoint_us': 12858.0}
+bulk20 slow(>20ms) (index, us, t_since_arm_start_s): [] {'wal_syncs': 38.0, 'recovery_checkpoint_us': 12858.0}
+range100 slow(>20ms) (index, us, t_since_arm_start_s): [] {'wal_syncs': 39.0, 'recovery_checkpoint_us': 12858.0}
+bulk20 slow(>20ms) (index, us, t_since_arm_start_s): [] {'wal_syncs': 71.0, 'recovery_checkpoint_us': 12858.0}
+range100 slow(>20ms) (index, us, t_since_arm_start_s): [] {'wal_syncs': 73.0, 'recovery_checkpoint_us': 12858.0}

@@ -944,6 +944,26 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
     passes in Debug with `Scheduler::DiscardTasks` removed. The tree has
     no sanitizer build.
 
+## Carve and checkpoint stalls
+
+Verified at `e5a7e1b7` (BA's close,
+`bench/v3.0.0/results-ba-s17-census-v2.7.0-736-ge5a7e1b7.md` and
+`results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`). Owned by `docs/spec/wal.md`
+§11a and, for the checkpoint, BI (`workorder-bi-checkpoint-off-the-reactor.md`).
+
+- **A `relaxed` carve is slower since BA-S13.** Its median is 226-258 ms per
+  server life, against 20-46 ms at BA-S4. Under `group` and `strict` it
+  fell to 3.6-5.9 ms. The candidate cause is the carve's unconditional
+  data-file `fdatasync`, which under `relaxed` flushes every unsynced
+  page write before it. That is untested. BA-S13's exit, a carve under
+  10 ms, is not met.
+- **The checkpoint holds statements for up to a quarter-second.** At
+  10,000 rows, B's longest statement was 62-226 ms in 31 of 32 A/B runs,
+  against A's 18-22 ms. The census's checkpoint median rose from 46 to
+  92 ms, with a maximum of 1.5 s. Neither measurement separates "BA made
+  the checkpoint longer" from "BA moved work off the carve". The fix
+  waits on BI-Q1.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1–D16: four are taken, one of them against AR0's own
