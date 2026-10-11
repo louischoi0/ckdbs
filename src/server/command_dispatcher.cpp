@@ -1784,7 +1784,9 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << load(ckpt.last_step_page_write_max_ns) / 1000
            << " checkpoint_last_steps=" << load(ckpt.last_steps)
            << " checkpoint_last_pages=" << load(ckpt.last_pages)
-           << " checkpoint_last_dirty_at_start=" << load(ckpt.last_dirty_at_start);
+           << " checkpoint_last_dirty_at_start=" << load(ckpt.last_dirty_at_start)
+           << " checkpoint_last_gate_parks=" << load(ckpt.last_gate_parks)
+           << " checkpoint_last_end_parks=" << load(ckpt.last_end_parks);
         for (std::size_t i = 0; i < kCheckpointPhaseCount; ++i) {
             os << " checkpoint_last_" << kCheckpointPhaseNames[i]
                << "_sum_us=" << load(ckpt.last_sum_ns[i]) / 1000 << " checkpoint_last_"

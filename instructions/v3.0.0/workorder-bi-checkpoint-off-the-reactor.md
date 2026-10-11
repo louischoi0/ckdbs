@@ -588,7 +588,10 @@ otherwise.
 | BI-Q9 | **BI-S1's premise gate, and `pages_per_step`.** BI stops for a ruling when either:<br>(i) no cell shows a run holding its reactor over 10 ms in one iteration; or<br>(ii) the per-phase split puts one step's page writes (64 pages, which W1 and W2 do not move) over 10 ms.<br>`pages_per_step` stays 64 unless (ii) holds, in which case its new value is part of the ruling | process | As written. (i) is BA's P12 bar. (ii) says the decisions would not reach the stall at 64 pages a step || As written: adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone) |
 | BI-Q10 | **The bar for BI-S5**, with A = BI-S1's instrumented commit and B = the close:<br>(i) the longest reactor iteration inside a run under 10 ms in every cell, the publish included;<br>(ii) the same-core probe's p99 inside runs within 2× its p99 outside;<br>(iii) the OLTP overhead A/B within its own run-to-run noise;<br>(iv) run length, per-core and instance-wide anchor gaps, and `D`'s lag reported for A and B, with no bar | measurement | As written. (iv) has no bar because W1 accepts longer runs; it is reported so that cost can be seen || As written: adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone) |
 | BI-Q11 | **The measurement** (§5.2), at BI's close, per `CLAUDE.md`'s Session Workflow step 3 | process | As written || As written: adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone) |
+| BI-Q9-R | **BI-Q9's gate, as it tripped** (written at BI-S1). `[measured]` BI-S1's cells at `v2.7.0-779-g55ee8370` (`bench/v3.0.0/results-bi-s1-checkpoint-stall-v2.7.0-779-g55ee8370.md`): (i) does not hold - every cell shows a run holding its reactor for hundreds of milliseconds in one iteration, to 1.9 s. (ii) holds by its letter: in 0 to 23 runs per cell one step's page writes passed 10 ms, the worst 505.9 ms, while the per-run maximum of a step's page writes is 0.21-4.1 ms at p90 in eleven cells. The twelfth, `c4-relaxed-r3`, overlapped another session's load (1-minute load 13 at its end) and reads 97.6 ms at p90. The outliers are one device call each (`page_write_max_us` equals the step's sum where checked), a run of at most 8 pages stalled in the kernel's writeback throttle, which a smaller step would not shorten.<br>(a) `pages_per_step` stays 64 and BI proceeds; the outliers are reported at the close beside the iteration holds.<br>(b) Lower `pages_per_step` (16 would put the p90 near 0.1 ms and leave the outliers as they are) | process | (a). (ii) exists to catch a step size the decisions cannot reach; the p90 is under the bar in every uncontended cell and the outliers are not a function of the step | (a): adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone), written into the order at BI-S1 |
 | BI-Q12 | **A checkpoint step's map write** (surfaced at BI-S2). `[source-read]` A step's `FlushPages` wrote every dirty free-map region after its own pages (`device_page_store.cpp`, `FlushMaps`), and those regions carry the bit of every page allocated so far, snapshot pages a later step has not reached among them. `[measured]` BI-S2's sim cell (a run abandoned after one step, then a crash) found it on committed seed 1, `--mode crash --ops 1500 --iterations 3`: a Waystone page (type 9, created unlogged, recLSN 0) left allocated and all zero after recovery, which no redo re-creates. A logged page is re-created by its `PAGE_INIT`. The shape is live before BI for any crash between two steps; BI-R1 lengthens the window from one call to the whole run.<br>(a) A step writes no map; the publish's whole-store `Flush` writes the maps after every dirty page. A step's page then reaches the device ahead of its bit, the state every eviction writeback already leaves and recovery's floor and redo already answer.<br>(b) A step writes the maps only once no snapshot page is left unwritten, i.e. at its last step.<br>(c) Unchanged | design | (a). (b) still writes the bit of a page allocated after the snapshot whose bytes are not out, which is the same hazard by another door; (a) removes the only writer of maps that runs ahead of its pages, and adds no state the engine does not already reach. (c) leaves the sim cell red | (a): adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone), written into the order at BI-S2 |
+| BI-Q6-R | **BI-Q6's premise, re-read at BI-S3.** `[source-read]` BI-Q6 (b) rested on §1.4's *"the writer wakes only threads blocked in its own `EnsureDurable`, never a reactor"*. That is stale: since BA-R4 part 1 the writer kicks every core counted in by a `WalManager::DurableWait` (`include/kds/wal/manager.hpp`), which commits already construct around their park (`command_dispatcher.cpp`), and the kick's lifetime is the commit's, already solved. Found by BI-S3's review.<br>(a') A log park constructs a `DurableWait`: the writer's existing kick wakes it, with no new kicking thread; the data-file park (BI-S4), whose thread has no kick, keeps (b).<br>(b) As adopted | design | (a'). It costs nothing new, and (b)'s ~1 ms a park was the price of a missing mechanism that is not missing | (a'): adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone), revising BI-Q6 (b) against the tree at BI-S3 |
+| BI-Q4-T | **BI-Q4's trigger, met at BI-S1.** BI-Q4 (b) was adopted with *"(a) is written only if S1 or BI-S3 counts it non-zero under load"*. `[measured]` BI-S1 counted the per-run arm at 68-98 s of inline wait per 10-minute cell at `cores = 4`, `relaxed` (`log_gate_run`), against 0 at `cores = 1`: another core's sessions re-dirty a batch's page between the batch gate and its run's copy. So (a) is written, as the adopted mark says: `WriteBack` takes an optional `defer`, and where either gate needs the log past an LSN not yet durable it stops before that run, gives back its claims with the frames dirty and returns the LSN; the task parks and re-runs the step, inline after `kGateParks` parks. `[quiet-wrong]` under (a) was the risk of a run written before its LSN is durable: the deferring arm returns before the device call, and `CheckpointLogParkTest.ARunWhoseRecordIsNotDurableIsHandedBackUnwritten` writes through a device that counts any page written ahead of its record | process | (a), as the mark conditions | (a): the adopted BI-Q4 mark's own condition, met; recorded at BI-S3 |
 
 ## 5. Measurement
 
@@ -750,3 +753,48 @@ failure logged once (the task's line; a synchronous caller logs its own).
 order with a run parked at stop; the unit cell pins the checkpointer's half
 and BI-S5's measurement reads the shutdown lines of every stop. Overhead not
 measured; measured at the milestone's close.
+
+### BI-S1's measurement — taken 2026-10-11
+
+`bench/v3.0.0/results-bi-s1-checkpoint-stall-v2.7.0-779-g55ee8370.md`,
+twelve 600 s cells at `55ee8370`. A run holds its core's reactor for its
+whole length: at `cores = 4`, `group`, the same-core probe answers in
+0.51-0.62 ms at p50 outside a run and 315-502 ms inside one. The data
+file's per-step `fsync` is 37-89 % of a run; page writes are under 1 %. At
+`cores = 4`, `relaxed` the bug entry reproduces - 82-114 s anchor gaps, a
+starved gate (4/20/2/42 runs per core in ten minutes) - and the per-run log
+gate costs 68-98 s per cell, which met BI-Q4's condition (BI-Q4-T). BI-Q9's
+gate tripped on (ii) by its letter and is ruled at BI-Q9-R. The run also
+found an engine defect outside BI, filed as
+`docs/inflight/bugs/a-rollback-whose-pk-descent-is-refused-leaves-its-keys-bound.md`.
+
+### BI-S3 — built 2026-10-11
+
+A step that needs the log further no longer waits for it on the reactor:
+`WriteBack` takes an optional `defer` and, at either gate, returns the LSN
+it needs with the run unwritten and its frames dirty (BI-Q4 (a), by
+BI-Q4-T); the task asks the writer (`RequestSyncNow`, now public) and parks
+counted into the writer's kick (`WalManager::DurableWait`, BI-Q6-R), then
+re-runs the step, inline after `kGateParks` = 4 parks. `Complete` is split
+into `AppendEnd` and `PublishAnchor`, and the task parks for the end record
+the same way. On core 0 the checkpoint's log syncs are the writer's.
+Cells: `tests/checkpoint_log_park_test.cpp` (five: a peer's and core 0's
+park while the reactor polls a foreground task, through a log device the
+test holds and a page device that counts any page written ahead of its
+record; a page re-dirtied during the park re-gated by another deferral; a
+run whose record is not durable handed back unwritten; a fail-stopped log
+answering a parked step). **Mutations**, each three times, all killed: the
+deferral and the store's gate both removed (all five cells); the re-step
+after a park removed (the re-dirty cell); the `stopped()` disjunct removed
+(the fail-stop cell, by its 10 s bound); the per-run gate waiting instead
+of deferring (the hand-back cell, by a hang at the 60 s timeout). **Review**
+(`critics-developer`): fixed a park that could never wake - a `page_lsn` at
+or past the append point names no record, so the task now leaves it to the
+step's inline gate, which refuses it as before; found BI-Q6's premise stale
+(BI-Q6-R); applied the park counters to `SHOW META`, `LogStopped` made
+file-local, the batch helper removed. The re-dirty cell failed once in the
+suite under load: the counter counted suspended parks, and the writer's
+sync can land before the check, so the count now counts deferrals, which
+the reactor thread takes deterministically (300 repeats, and six
+concurrent copies x 150, clean). Suite and sim at the commit below. Overhead
+not measured; measured at the milestone's close.

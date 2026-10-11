@@ -426,6 +426,14 @@ public:
     // on this stack.
     Status SyncAll();
 
+    // **Non-blocking**: stages the bytes and asks the writer for a sync,
+    // without waiting for one. The drain's path on an attached manager,
+    // where a tick may not hold the reactor, and a checkpoint task's on any
+    // core, core 0 included, which then parks on `IsDurable` (BI-R2). On a
+    // manager with no writer (tests, tools) there is nobody to ask, so this
+    // is `Sync()`.
+    Status RequestSyncNow();
+
 private:
     WalManager(WalStream* stream, std::unique_ptr<WalStream> owned_stream, WalWriter* writer,
                const sched::Clock& clock, std::uint32_t core_id, WalManagerConfig config);
@@ -439,11 +447,6 @@ private:
     // commit, `EnsureDurable`'s gate, and `SyncAll`.
     Status Sync();
 
-    // **Non-blocking**: stages the bytes and asks for a sync, without
-    // waiting for one. The drain's path on an attached manager, where a
-    // tick may not hold the reactor. On an owning manager there is nobody
-    // to ask, so this is `Sync()`.
-    Status RequestSyncNow();
 
     // The batch, closed against the durable watermark. Called after every sync this manager performs and, on an
     // attached manager, on every drain tick - because there the watermark

@@ -414,9 +414,17 @@ public:
     // in debug builds only - is what keeps the writer it waits for running.
     //
     // Returns how many pages it wrote.
+    //
+    // **`defer`, when given, turns both log gates into a return** (BI-S3,
+    // BI-Q4 (a)): where the batch or a run needs the log durable past an LSN
+    // it is not yet, the writeback stops before writing that run, gives back
+    // its claims with the frames still dirty, stores the LSN in `*defer` and
+    // returns what it wrote before. A checkpoint task parks on that LSN and
+    // asks again; nothing is written ahead of its record either way.
     enum class HeldFrames : std::uint8_t { kWait, kSkip };
     StatusOr<std::size_t> WriteBack(std::span<const PageId> page_ids,
-                                    HeldFrames held = HeldFrames::kWait);
+                                    HeldFrames held = HeldFrames::kWait,
+                                    wal::Lsn* defer = nullptr);
 
     // Pages one coalesced run may span, and so the scratch bound: 8 pages
     // = 64 KiB, chosen as the largest single write the background task
@@ -574,7 +582,9 @@ public:
     // as an error - something else may have flushed them since the caller's
     // snapshot. **Writes no map** (BI-Q12): the publish's `Flush` does,
     // after every dirty page.
-    Status FlushPages(std::span<const PageId> page_ids);
+    // `defer` as `WriteBack`'s: set, nothing past the deferred run was
+    // written, and the caller re-runs the call once the log is durable.
+    Status FlushPages(std::span<const PageId> page_ids, wal::Lsn* defer = nullptr);
 
     // **One page made durable, and nothing else** (BA-S13, BA-R10): written
     // back through `WriteBack`'s claim (AT-S10e) and then the data file
@@ -1285,8 +1295,14 @@ private:
 
     // Waits, through `gate`, for the log records of `page_ids` to be durable
     // before any of them is written. A no-op with a null gate or no logged
-    // page in the batch.
-    Status AwaitWalGate(std::span<const PageId> page_ids, wal::WalDurability* gate);
+    // page in the batch. With `defer`, an LSN not yet durable is stored
+    // there instead of waited for (`WriteBack`'s `defer`).
+    Status AwaitWalGate(std::span<const PageId> page_ids, wal::WalDurability* gate,
+                        wal::Lsn* defer);
+    // The highest `page_lsn` among `page_ids` that are resident and dirty,
+    // headerless pages skipped; `wal::kNoLsn` when none is logged. Under the
+    // structure latch, released before it returns.
+    wal::Lsn HighestDirtyPageLsn(std::span<const PageId> page_ids);
 
     // The gate a writeback on this thread asks: the calling core's own
     // (SetCoreWalGate), or the default.

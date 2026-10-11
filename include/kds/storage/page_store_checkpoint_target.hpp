@@ -45,6 +45,10 @@ public:
         return store_.FlushPages(page_ids);
     }
 
+    Status FlushPagesOrDefer(std::span<const PageId> page_ids, wal::Lsn* defer) override {
+        return store_.FlushPages(page_ids, defer);
+    }
+
 private:
     DevicePageStore& store_;
 };

@@ -118,14 +118,37 @@ def load_worker(port, session, stop_at, out_q):
     base = (session + 1) * 1_000_000_000
     k = 0
     lat = []
-    while time.monotonic() < stop_at:
-        rows = ",".join(f"({base + k + i}, {k + i}, '{PAD}')" for i in range(ROWS_PER_INSERT))
-        t = time.monotonic()
-        check(conn.send_command(f"INSERT INTO load VALUES {rows}"), "insert")
-        lat.append(time.monotonic() - t)
-        k += ROWS_PER_INSERT
-    conn.close()
-    out_q.put({"session": session, "rows": k, "statements": len(lat),
+    retries = 0
+    # A retried batch refused as a duplicate: the refusal before it left rows
+    # behind. Counted and skipped, so the load goes on; the count is a
+    # finding about the engine, not about BI (the results file says so).
+    dup_after_retry = []
+    error = None
+    retried = False
+    try:
+        while time.monotonic() < stop_at:
+            rows = ",".join(f"({base + k + i}, {k + i}, '{PAD}')" for i in range(ROWS_PER_INSERT))
+            t = time.monotonic()
+            reply = conn.send_command(f"INSERT INTO load VALUES {rows}")
+            if reply.startswith("ERR") and "retryable=1" in reply:
+                retries += 1  # documented as writing nothing; the same rows go again
+                retried = True
+                continue
+            if retried and reply.startswith("ERR duplicate primary key"):
+                dup_after_retry.append(reply)
+                retried = False
+                k += ROWS_PER_INSERT
+                continue
+            retried = False
+            check(reply, "insert")
+            lat.append(time.monotonic() - t)
+            k += ROWS_PER_INSERT
+        conn.close()
+    except Exception as e:  # reported with the cell, never a silent dead worker
+        error = str(e)
+    out_q.put({"session": session, "rows": k, "statements": len(lat), "retries": retries,
+               "dup_after_retry": dup_after_retry[:5], "dup_after_retry_n": len(dup_after_retry),
+               "error": error,
                "p50_ms": 1000 * statistics.median(lat) if lat else None,
                "max_ms": 1000 * max(lat) if lat else None})
 
@@ -176,7 +199,8 @@ def probe_loop(kind, conn, core, interval, stop_at, samples, start_at):
 
 # ---- the log ---------------------------------------------------------------
 
-RUN_RE = re.compile(r"run: core=(\d+) completed=(\d) start_ns=(\d+) end_ns=(\d+) (.*)")
+RUN_RE = re.compile(r"run: core=(\d+) completed=(\d) (?:resumed=\d )?start_ns=(\d+) "
+                    r"end_ns=(\d+) (.*)")
 
 
 def parse_runs(log_path):
@@ -268,7 +292,7 @@ def run_cell(a):
     runs = parse_runs(log)
     cell = {"tag": tag, "cores": a.cores, "durability": a.durability, "seconds": a.seconds,
             "frames": a.frames, "checkpoint_ms": a.checkpoint_ms, "probe_ms": a.probe_ms,
-            "window": [start_at, stop_at], "load": load, "runs": runs,
+            "window": [start_at, stop_at], "load": load, "runs": runs, "log": log,
             "meta": {str(k): v for k, v in meta.items()},
             "samples": {f"{k}:{c}": v for (k, c), v in samples.items()},
             "host_before": host_before, "host_after": host_state(a.workdir),

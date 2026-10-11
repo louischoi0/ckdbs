@@ -208,7 +208,7 @@ Status Checkpointer::Start() {
     return Status::OK();
 }
 
-StatusOr<bool> Checkpointer::Step() {
+StatusOr<bool> Checkpointer::Step(Lsn* defer) {
     if (!in_progress_) {
         return Status::OutOfRange("checkpointer: no checkpoint in progress");
     }
@@ -229,7 +229,8 @@ StatusOr<bool> Checkpointer::Step() {
         const sched::MonoTimeNs step_start = wal_.clock().Now();
         const std::size_t write = static_cast<std::size_t>(CheckpointPhase::kPageWrite);
         const std::uint64_t writes_before = run_report_ != nullptr ? run_report_->sum_ns[write] : 0;
-        flushed = target_.FlushPages(pages);
+        flushed = defer != nullptr ? target_.FlushPagesOrDefer(pages, defer)
+                                   : target_.FlushPages(pages);
         if (run_report_ != nullptr) {
             const std::uint64_t held = wal_.clock().Now() - step_start;
             run_report_->step_max_ns = std::max(run_report_->step_max_ns, held);
@@ -251,6 +252,9 @@ StatusOr<bool> Checkpointer::Step() {
         }
         return s;
     }
+    // Deferred: the pages before the deferred run are clean now and the
+    // next call skips them; the cursor stays on this batch.
+    if (defer != nullptr && *defer != kNoLsn) return false;
     next_page_ += batch;
     stats_.pages_flushed += batch;
     if (run_report_ != nullptr) run_report_->pages += batch;
@@ -262,7 +266,7 @@ StatusOr<bool> Checkpointer::Step() {
     return next_page_ >= pending_pages_.size();
 }
 
-Status Checkpointer::Complete() {
+StatusOr<Lsn> Checkpointer::AppendEnd() {
     if (!in_progress_) {
         return Status::OutOfRange("checkpointer: no checkpoint in progress");
     }
@@ -275,7 +279,6 @@ Status Checkpointer::Complete() {
             "checkpointer: " + std::to_string(pending_pages_.size() - next_page_) +
             " pages of the checkpoint's dirty table are still unflushed");
     }
-
     const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
     payload_scratch_.assign(kCheckpointEndPayloadSize, std::byte{0});
     const CheckpointEndPayload fields{pending_redo_start_};
@@ -283,24 +286,31 @@ Status Checkpointer::Complete() {
     if (!encoded.ok()) {
         return encoded.status();
     }
-    auto end_lsn = wal_.Append({RecordType::kCheckpointEnd, kNoTxnId, kInvalidPageId,
-                                static_cast<std::uint8_t>(wal_.core_id())},
-                               std::span(payload_scratch_).first(encoded.value()));
-    if (!end_lsn.ok()) {
-        return end_lsn.status();
-    }
+    return wal_.Append({RecordType::kCheckpointEnd, kNoTxnId, kInvalidPageId,
+                        static_cast<std::uint8_t>(wal_.core_id())},
+                       std::span(payload_scratch_).first(encoded.value()));
+}
+
+Status Checkpointer::Complete() {
+    auto end_lsn = AppendEnd();
+    if (!end_lsn.ok()) return end_lsn.status();
 
     // The end record has to be on disk before anything points at it: an
     // anchor naming a redo start that a crash then erases is worse than no
     // checkpoint at all, because recovery would skip records it still
     // needs.
     {
+        const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
         const PhaseTimer timed(CheckpointPhase::kEndWait);
         if (Status s = wal_.EnsureDurable(end_lsn.value()); !s.ok()) {
             return s;
         }
     }
+    return PublishAnchor();
+}
 
+Status Checkpointer::PublishAnchor() {
+    const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
     const CheckpointAnchorRecord anchor{wal_.core_id(),
                                         begin_lsn_,
                                         pending_redo_start_,
@@ -413,14 +423,74 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
     }
+    // **The log's waits are parks, not syncs on this thread** (BI-R2): a
+    // step that needs the log further hands back the LSN instead of waiting
+    // (BI-Q4 (a)); the task asks the writer for the sync and parks, as a
+    // commit does, counted into the writer's kick so the wake is the
+    // writer's rather than the next drain tick's (BI-Q6, revised). The
+    // reactor polls everything else meanwhile. The step then runs again;
+    // after `kGateParks` parks it waits inline, the counted remainder.
+    int parks = 0;
     while (true) {
-        auto done = Step();
+        Lsn deferred = kNoLsn;
+        auto done = Step(parks < kGateParks ? &deferred : nullptr);
         if (!done.ok()) co_return FinishTask(core_id, done.status());
+        if (deferred != kNoLsn) {
+            // A page_lsn at or past the append point names no record, and no
+            // sync satisfies a park on it: the next step's inline gate
+            // refuses it, as before, rather than the task parking for good on
+            // the instance's gate.
+            if (deferred >= wal_.appended_lsn()) {
+                parks = kGateParks;
+                continue;
+            }
+            ++parks;
+            ++task_report_.gate_parks;
+            if (Status s = co_await ParkOnLog(deferred, core_id); !s.ok()) {
+                co_return FinishTask(core_id, s);
+            }
+            if (generation != task_generation_) co_return Status::OK();
+            continue;
+        }
+        parks = 0;
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
         if (done.value()) break;
     }
-    co_return FinishTask(core_id, Complete());
+
+    // `CHECKPOINT_END`, then the same park for its LSN, then the publish.
+    auto end_lsn = AppendEnd();
+    if (!end_lsn.ok()) co_return FinishTask(core_id, end_lsn.status());
+    if (!wal_.IsDurable(end_lsn.value())) ++task_report_.end_parks;
+    if (Status s = co_await ParkOnLog(end_lsn.value(), core_id); !s.ok()) {
+        co_return FinishTask(core_id, s);
+    }
+    if (generation != task_generation_) co_return Status::OK();
+    co_return FinishTask(core_id, PublishAnchor());
+}
+
+namespace {
+
+// As `WriteBack` answers it: nothing is written after a log fail-stop.
+Status LogStopped() {
+    return Status::IoError("checkpointer: the log fail-stopped; no page is written back and no "
+                           "anchor published until a restart");
+}
+
+}  // namespace
+
+sched::Coro Checkpointer::ParkOnLog(Lsn lsn, std::uint32_t core_id) {
+    if (wal_.IsDurable(lsn)) co_return Status::OK();
+    if (wal_.stopped()) co_return LogStopped();
+    if (Status s = wal_.RequestSyncNow(); !s.ok()) co_return s;
+    const std::function<bool()> durable = [this, lsn] {
+        return wal_.IsDurable(lsn) || wal_.stopped();
+    };
+    if (!durable()) {
+        const WalManager::DurableWait waiting(wal_, core_id);
+        co_await sched::WaitUntil{&durable};
+    }
+    co_return wal_.IsDurable(lsn) ? Status::OK() : LogStopped();
 }
 
 Status Checkpointer::FinishTask(std::uint32_t core_id, const Status& ran) {
@@ -494,9 +564,12 @@ void Checkpointer::LogRun(std::uint32_t core_id, const CheckpointRunReport& r) c
                        " steps=" + std::to_string(r.steps) + " pages=" + std::to_string(r.pages) +
                        " dirty_at_start=" + std::to_string(r.dirty_at_start) +
                        " step_max_us=" + std::to_string(r.step_max_ns / 1000) +
-                       " step_page_write_max_us=" + std::to_string(r.step_page_write_max_ns / 1000);
+                       " step_page_write_max_us=" + std::to_string(r.step_page_write_max_ns / 1000) +
+                       " gate_parks=" + std::to_string(r.gate_parks) +
+                       " end_parks=" + std::to_string(r.end_parks);
     for (std::size_t i = 0; i < kCheckpointPhaseCount; ++i) {
         line += std::string(" ") + kCheckpointPhaseNames[i] +
+                "_n=" + std::to_string(r.count[i]) + " " + kCheckpointPhaseNames[i] +
                 "_sum_us=" + std::to_string(r.sum_ns[i] / 1000) + " " +
                 kCheckpointPhaseNames[i] + "_max_us=" + std::to_string(r.max_ns[i] / 1000);
     }
