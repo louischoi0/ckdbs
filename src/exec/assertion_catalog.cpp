@@ -419,11 +419,19 @@ StatusOr<AssertionColumns> ResolveAssertionColumns(const catalog::TableAccess& a
     return out;
 }
 
-// The relation, or §3.1's refusal with the byte the parser recorded.
+}  // namespace
+
+// The relation, or §3.1's refusal with the byte the parser recorded. Under
+// `view` when one is given: the dispatcher resolves the target under a
+// settled view, so a relation an open transaction created is no relation
+// yet, and what it fenced is what the build reads.
 StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
-                                          const parser::AssertionStmt& stmt) {
-    auto oid = catalog.FindTableOidByName(stmt.table_name);
+                                          const parser::AssertionStmt& stmt,
+                                          const txn::ReadView* view) {
+    auto oid = catalog.FindTableOidByName(stmt.table_name, view);
     if (!oid.ok()) {
+        // Only an absent name is §3.1's refusal; a read that failed is itself.
+        if (oid.status().code() != StatusCode::kNotFound) return oid.status();
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
                                 std::to_string(stmt.table_byte_offset) + ")");
     }
@@ -436,6 +444,7 @@ StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
     return oid.value();
 }
 
+namespace {
 
 // ---- `CREATE ASSERTION` in its three steps -----------------------------
 //
@@ -462,10 +471,9 @@ struct AssertionCabinBuild {
 
 StatusOr<AssertionPrepared> PrepareAssertionDef(catalog::Catalog& catalog,
                                                 storage::PageStore& store,
-                                                const parser::AssertionStmt& stmt) {
-    auto oid = AssertionTargetOid(catalog, stmt);
-    if (!oid.ok()) return oid.status();
-    auto access = catalog.InitTableAccess(oid.value());
+                                                const parser::AssertionStmt& stmt,
+                                                catalog::Oid target_oid) {
+    auto access = catalog.InitTableAccess(target_oid);
     if (!access.ok()) return access.status();
     auto columns = ResolveAssertionColumns(*access.value(), stmt);
     if (!columns.ok()) return columns.status();
@@ -494,7 +502,7 @@ StatusOr<AssertionPrepared> PrepareAssertionDef(catalog::Catalog& catalog,
     if (!id.ok()) return id.status();
 
     AssertionPrepared prepared;
-    prepared.target_oid = oid.value();
+    prepared.target_oid = target_oid;
     prepared.assertion_id = id.value();
     return prepared;
 }
@@ -502,12 +510,11 @@ StatusOr<AssertionPrepared> PrepareAssertionDef(catalog::Catalog& catalog,
 StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
                                                   storage::PageStore& store,
                                                   const parser::AssertionStmt& stmt,
+                                                  catalog::Oid target_oid,
                                                   std::uint64_t assertion_id,
                                                   const txn::ReadView& check_view,
                                                   wal::WalManager* wal) {
-    auto oid = AssertionTargetOid(catalog, stmt);
-    if (!oid.ok()) return oid.status();
-    auto access = catalog.InitTableAccess(oid.value());
+    auto access = catalog.InitTableAccess(target_oid);
     if (!access.ok()) return access.status();
     auto columns = ResolveAssertionColumns(*access.value(), stmt);
     if (!columns.ok()) return columns.status();
@@ -534,7 +541,7 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
     // re-parse a declaration per statement.
     LiveAssertion& live = out.live;
     live.assertion_id = assertion_id;
-    live.target_oid = oid.value();
+    live.target_oid = target_oid;
     live.name = stmt.name;
     live.aggregate = stmt.func == parser::AggFunc::kSum ? BoundAggregate::kSum
                                                         : BoundAggregate::kCount;
@@ -554,15 +561,17 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
 
 StatusOr<AssertionDdlResult> CreateAssertion(
     catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
-    const txn::ReadView& check_view, wal::WalManager* wal,
+    catalog::Oid target_oid, const txn::ReadView& check_view, wal::WalManager* wal,
     AssertionEnforcer& enforcer, const std::function<void()>& after_publish_run_for_test) {
     // **The order is validate -> build -> publish** (§8.1): the three entry
     // points a cross-core create split across until AT-S5d, back to back.
-    auto prepared = PrepareAssertionDef(catalog, store, stmt);
+    // **One oid for all three**: the caller resolved the target and took the
+    // relation `X` on it, and a second lookup here could name another.
+    auto prepared = PrepareAssertionDef(catalog, store, stmt, target_oid);
     if (!prepared.ok()) return prepared.status();
 
-    auto build = BuildAssertionCabin(catalog, store, stmt, prepared.value().assertion_id,
-                                     check_view, wal);
+    auto build = BuildAssertionCabin(catalog, store, stmt, target_oid,
+                                     prepared.value().assertion_id, check_view, wal);
     if (!build.ok()) return build.status();
 
     // ---- The new cabin's base, adopted with it (AS6a; AZ-S2) --------------

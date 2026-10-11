@@ -239,5 +239,41 @@ TEST(AssertionPublishRigTest, ACreateThatFailsAfterItsAdoptionLeavesNothingEnfor
               std::string::npos);
 }
 
+TEST(AssertionPublishRigTest, ACreateOnACoreWithNoOpenDdlRefusesARelationAnotherCoreIsCreating) {
+    // A relation another core's open `CREATE TABLE` made is no relation to
+    // this core's session: `ViewFor` is empty on a core with no DDL of its
+    // own, and a name resolved with no view saw the uncommitted row, locked
+    // it and built over it with the creating transaction's writers unfenced.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+
+    Session creator;
+    ASSERT_EQ(d1.Dispatch("BEGIN", &creator).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(d1.Dispatch("CREATE TABLE ghost (id int64, g int64) BTREE", &creator)
+                  .response.rfind("CREATED", 0),
+              0u);
+
+    const std::string refused =
+        d0.Dispatch("CREATE ASSERTION cap ON ghost GROUP BY (g) CHECK COUNT(*) <= 1").response;
+    EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
+    EXPECT_NE(refused.find("no relation named 'ghost'"), std::string::npos) << refused;
+    EXPECT_NE(d0.Dispatch("SHOW ASSERTIONS").response.find("assertions=0"), std::string::npos);
+
+    // The creator's table is free of it, and settles normally.
+    EXPECT_EQ(d1.Dispatch("INSERT INTO ghost VALUES (1)", &creator).response.rfind("INSERTED", 0),
+              0u);
+    EXPECT_EQ(d1.Dispatch("INSERT INTO ghost VALUES (1)", &creator).response.rfind("INSERTED", 0),
+              0u);
+    ASSERT_EQ(d1.Dispatch("COMMIT", &creator).response.rfind("COMMIT", 0), 0u);
+
+    // Once committed it is every core's relation, and the create is accepted.
+    EXPECT_EQ(d0.Dispatch("CREATE ASSERTION cap ON ghost GROUP BY (g) CHECK COUNT(*) <= 2")
+                  .response.rfind("CREATED", 0),
+              0u);
+}
+
 }  // namespace
 }  // namespace kds::server

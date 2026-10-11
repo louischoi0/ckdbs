@@ -33,6 +33,27 @@ using catalog::kTypeValInt8;
 using catalog::kTypeValUint64;
 using catalog::kTypeValVarchar;
 
+// Whether a column of this type takes an integer's `int_val` as the value
+// itself - the types for which a literal past int64, whose `int_val` is the
+// lexer's wrap, names nothing the column holds. A uint64 reads the digits
+// instead, and every other type refuses an integer by kind. **One list for
+// the encoder and the coercion**, so what stores and what compares cannot
+// come to disagree about a wrapped literal.
+bool TakesIntValAsValue(std::uint32_t type_val) noexcept {
+    switch (type_val) {
+        case kTypeValInt8:
+        case kTypeValInt16:
+        case kTypeValInt32:
+        case kTypeValInt64:
+        case kTypeValBool:
+        case kTypeValDate:
+        case kTypeValTimestamp:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void StoreLe64(std::byte* out, std::uint64_t v) {
     for (int i = 0; i < 8; ++i) {
         out[i] = static_cast<std::byte>((v >> (8 * i)) & 0xFF);
@@ -131,6 +152,14 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
                                   val.param_name() + "' has no bound value to store");
     }
 
+    // `int_val` is the lexer's wrap, not the value (`TakesIntValAsValue`):
+    // stored, it would be another number. The type is asked first, so a
+    // decoded uint64 above INT64_MAX does not have its digits parsed.
+    if (TakesIntValAsValue(col.type_val) && parser::IntLiteralWrapped(val)) {
+        return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                  " does not fit column '" + NameOf() + "'");
+    }
+
     switch (col.type_val) {
         case kTypeValInt8:
         case kTypeValInt16:
@@ -138,12 +167,6 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
         case kTypeValInt64: {
             if (val.type != parser::ValueType::kInt) {
                 return Status::InvalidArgument("column '" + NameOf() + "' expects an integer");
-            }
-            // A literal past int64 wrapped in the lexer, so `int_val` is not
-            // its value: stored, it would be another number (BJ-S3's review).
-            if (parser::IntLiteralWrapped(val)) {
-                return Status::OutOfRange("integer literal " + val.raw_int_text +
-                                          " does not fit column '" + NameOf() + "'");
             }
             int width = IntWidthFor(col.type_val);
             if (!FitsSigned(val.int_val, width)) {
@@ -662,13 +685,16 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
     // An integer literal wider than int64 **wrapped in the lexer**, which
     // has always been the token's documented behaviour - `int_val` cannot
     // be trusted for a range question, only `raw_int_text` can (token.hpp's
-    // digits() note). The arms below that read `int_val` as the value must
-    // refuse a wrapped one, or `= 36893488147419103232` coerces as the
-    // 0 it wrapped to and matches rows the client never named. Scoped to
-    // those arms and not hoisted: a uint64 comparison legitimately carries
-    // its upper half in the digits (`ValueAsUint64`), and the wide-decimal
-    // arm reads the digits themselves.
-    const bool int_literal_wrapped = parser::IntLiteralWrapped(val);
+    // digits() note). A type that reads `int_val` as the value refuses a
+    // wrapped one by the encoder's list (`TakesIntValAsValue`), or
+    // `= 36893488147419103232` coerces as the 0 it wrapped to and matches
+    // rows the client never named. A uint64 reads the digits (its arm
+    // below), the wide-decimal arm reads them too, and the narrow one
+    // refuses them.
+    if (TakesIntValAsValue(col.type_val) && parser::IntLiteralWrapped(val)) {
+        return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                  " is outside the range of an int64");
+    }
 
     switch (col.type_val) {
         case catalog::kTypeValDate: {
@@ -676,8 +702,7 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
                 // Already an epoch day. Accepted, and range-checked to the
                 // same bounds the encoder applies - the two sides of the
                 // engine must agree on which integers are dates.
-                if (int_literal_wrapped || val.int_val < kMinEpochDay ||
-                    val.int_val > kMaxEpochDay) {
+                if (val.int_val < kMinEpochDay || val.int_val > kMaxEpochDay) {
                     return Status::OutOfRange("date is outside the supported range");
                 }
                 return Status::OK();
@@ -696,8 +721,7 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
 
         case catalog::kTypeValTimestamp: {
             if (val.type == parser::ValueType::kInt) {
-                if (int_literal_wrapped || val.int_val < kMinEpochMicros ||
-                    val.int_val > kMaxEpochMicros) {
+                if (val.int_val < kMinEpochMicros || val.int_val > kMaxEpochMicros) {
                     return Status::OutOfRange("timestamp is outside the supported range");
                 }
                 return Status::OK();
@@ -755,7 +779,7 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             if (val.type != parser::ValueType::kInt && val.type != parser::ValueType::kStr) {
                 return Status::InvalidArgument("a decimal is written as a string, e.g. '12.34'");
             }
-            if (int_literal_wrapped) {
+            if (parser::IntLiteralWrapped(val)) {
                 // The true digits cannot fit any narrow decimal (p <= 18),
                 // so the precision check would refuse them anyway - but
                 // only if it sees them rather than the wrapped value.
@@ -815,22 +839,6 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             val.raw_int_text.clear();
             return Status::OK();
         }
-
-        case catalog::kTypeValInt8:
-        case catalog::kTypeValInt16:
-        case catalog::kTypeValInt32:
-        case catalog::kTypeValInt64:
-        case catalog::kTypeValBool:
-            // These columns hold nothing outside int64, so a wrapped literal
-            // names nothing they hold: `= 18446744073709551621` is not
-            // `= 5`. Refused here, as the INSERT's encode refuses it, so a
-            // WHERE, an UPDATE's and a DELETE's cannot read or touch a row
-            // the client never named.
-            if (int_literal_wrapped) {
-                return Status::OutOfRange("integer literal " + val.raw_int_text +
-                                          " is outside the range of an int64");
-            }
-            return Status::OK();
 
         case kTypeValUint64:
             // The same rule over the unsigned range, which the digits carry
