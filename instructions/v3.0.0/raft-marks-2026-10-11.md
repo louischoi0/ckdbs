@@ -31,3 +31,39 @@ the option the operator chose where CLA asked with options.
 | **Mark** | BK-R2 (SV1-SV4): every `SHOW` target is one `SELECT` over one `sys` view, the same result through either spelling, nothing readable only through `SHOW`. BK-S0: the order written and pushed to `main`. **Not opened**: BK-Q0 is unmarked |
 | **Does not settle** | BK-Q0..Q13, among them the rendering of a `SHOW` reply (BK-Q1), each view's filter class (BK-Q2, `[quiet-wrong]`) and whether three of the relations are persisted at the cost of a superblock bump (BK-Q5) |
 | **Recorded at** | `workorder-bk-sys-statistics-show-sugar.md` §2, §7; `index.md`'s BK row |
+
+## 4. No session is pinned; a balancer between connection and core
+
+| | |
+|---|---|
+| **Word** | *"I am thinking of a scheme with a balancer between the connection and the core, and scheduling according to the session's priority. That is, a session is never pinned to a core at any time."* |
+| **Mark** | BL-R1: a session is placed at its accept and may move at any transaction boundary. The operator's ruling on `docs/pending/session-load-balancing.md`, which BL-S0 deletes |
+| **Does not settle** | The grain of "never pinned" - session or statement (BL-Q1, `[quiet-wrong]` under the statement); the carrier (BL-Q2) |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` header, §2 |
+
+## 5. Two session axes, priority and affinity
+
+| | |
+|---|---|
+| **Word** | *"So the session has to be split along two axes, priority and affinity. Priority is how many resources are allocated, and how quickly, within one core; the affinity setting is how much the session moves between cores."* |
+| **Mark** | BL-R2 (priority: a share of a contended core) and BL-R3 (affinity: the cost the balancer charges a move) |
+| **Does not settle** | BL-Q4..Q9: priority's components, affinity's form, whether the axes interact, whether the settings are user-visible, and the name, since `affinity` already names a namespace's quantity |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` §0.1, §2 |
+
+## 6. BL written, on the premise that BI has closed
+
+| | |
+|---|---|
+| **Word** | *"Now write a work order for this, including the measurements, the work and the intent. If one already exists, amend that work order. Write it on the premise that BI has been completed."* |
+| **Mark** | BL-S0: the order written and pushed to `main` (§1's direction for documents). No order on `main` held the subject, so none was amended. **Not opened**: BL-Q0 is unmarked, and proposes opening only after BI-S5 closes |
+| **Does not settle** | BL-Q0..Q15; BI-Q0..Q11, which are BI's |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md`; `index.md`'s BL row |
+
+## 7. A balancer is recommended in any case - CLA's answer, recorded
+
+| | |
+|---|---|
+| **Word** | *"In any case, putting a balancer between the session and the core is recommended, right?"* CLA answered yes, on two conditions: the balancer is a decision each core takes at a transaction boundary, not a central dispatcher on every transaction's path; and its premise is measured first, since BA's census ran no balanced arm |
+| **Mark** | None: a question answered. The two conditions are written into BL as BL-R4 and BL-S1 |
+| **Does not settle** | Anything |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` header (W3) |
