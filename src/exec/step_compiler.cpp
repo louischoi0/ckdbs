@@ -296,17 +296,17 @@ StatusOr<FunctionPredicate> LowerFunctionConjunct(const Scope& scope,
 }
 
 // The statement's class: the most volatile purity any function conjunct
-// calls, through every sub-chain (AR1 §3).
-DeterminismClass DeterminismOf(const std::vector<Step>& steps) {
+// calls, through every sub-chain, hoisted or placed (AR1 §3).
+DeterminismClass DeterminismOf(const StepChain& chain) {
     DeterminismClass out = DeterminismClass::kD0;
-    for (const Step& step : steps) {
+    ForEachStep(chain, [&](const Step& step) {
         for (const FunctionPredicate& pred : step.fn_residual) {
             for (const FunctionSide* side : {&pred.lhs, &pred.rhs}) {
                 if (side->call.has_value()) out = std::max(out, ClassOf(side->call->fn->purity));
             }
         }
-        for (const SubChain& sub : step.sub_chains) out = std::max(out, DeterminismOf(sub.steps));
-    }
+        return true;
+    });
     return out;
 }
 
@@ -1199,6 +1199,11 @@ bool ReferencesAnOuterChain(const std::vector<Step>& steps) {
             // A grandchild's reference to *this* level shows up as up==1
             // inside it; anything deeper escapes past us too.
             if (SubChainEscapes(sub)) return true;
+            // Its tested column is written in this block's scope, so an
+            // `up` above 0 is a reference past this block. `SubChainEscapes`
+            // leaves it out for the sub-chain's *own* parent, which is the
+            // wrong scope for this question.
+            if (sub.has_value && sub.lhs.up > 0) return true;
         }
     }
     return false;
@@ -1345,13 +1350,8 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
     auto chain = CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
                               view, /*inner_build=*/true, declare, context);
     if (!chain.ok()) return chain;
-    // The class folds over the whole statement - every step, every
-    // sub-chain, hoisted or placed - after compile, from what was lowered.
     StepChain& out = chain.value();
-    out.determinism = DeterminismOf(out.steps);
-    for (const SubChain& sub : out.hoisted) {
-        out.determinism = std::max(out.determinism, DeterminismOf(sub.steps));
-    }
+    out.determinism = DeterminismOf(out);
     return chain;
 }
 
@@ -1479,6 +1479,9 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
                                       view, /*inner_build=*/false, declare);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
+            // What the inner block hoisted travels with it: only the
+            // top-level chain's list is run by the executor itself.
+            sub.hoisted = std::move(inner.value().hoisted);
 
             if (tests_a_column) {
                 if (inner.value().projection.size() != 1) {
@@ -1695,6 +1698,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                              sub_inner_build, declare);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
+            // See CompileWhere's lowering above: a block lowered to a
+            // SubChain keeps the sub-chains it hoisted, or they never run.
+            sub.hoisted = std::move(inner.value().hoisted);
 
             if (tests_a_column) {
                 // IN and the scalar form read a value out of the

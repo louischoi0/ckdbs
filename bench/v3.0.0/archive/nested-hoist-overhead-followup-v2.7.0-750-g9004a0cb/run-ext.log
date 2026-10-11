@@ -1,0 +1,27 @@
+n200-run1 rc 0 load 2.93 -> 2.93 dur 5s cpu6/7=0.566/0.291
+n200-run2 rc 0 load 2.93 -> 2.86 dur 5s cpu6/7=0.569/0.281
+n200-run3 rc 0 load 2.86 -> 2.79 dur 5s cpu6/7=0.587/0.286
+n200-run4 rc 0 load 2.79 -> 2.57 dur 5s cpu6/7=0.573/0.282
+n200-run5 rc 0 load 2.57 -> 2.52 dur 5s cpu6/7=0.572/0.286
+n200-run6 rc 0 load 2.52 -> 2.56 dur 5s cpu6/7=0.569/0.281
+n200-run7 rc 0 load 2.56 -> 2.52 dur 5s cpu6/7=0.569/0.289
+n200-run8 rc 0 load 2.52 -> 2.39 dur 5s cpu6/7=0.571/0.286
+ALLDONE
+n1000-run1 rc 0 load 3.63 -> 3.58 dur 5s cpu6/7=0.671/0.178
+n1000-run2 rc 0 load 3.58 -> 3.54 dur 5s cpu6/7=0.68/0.181
+n1000-run3 rc 0 load 3.54 -> 3.49 dur 5s cpu6/7=0.666/0.185
+n1000-run4 rc 0 load 3.49 -> 3.45 dur 5s cpu6/7=0.668/0.182
+n1000-run5 rc 0 load 3.45 -> 3.34 dur 5s cpu6/7=0.67/0.177
+n1000-run6 rc 0 load 3.34 -> 3.39 dur 5s cpu6/7=0.669/0.176
+n1000-run7 rc 0 load 3.39 -> 3.36 dur 5s cpu6/7=0.669/0.177
+n1000-run8 rc 0 load 3.36 -> 3.33 dur 5s cpu6/7=0.666/0.18
+ALLDONE
+n10000-run1 rc 0 load 2.88 -> 2.73 dur 5s cpu6/7=0.678/0.174
+n10000-run2 rc 0 load 2.73 -> 2.59 dur 5s cpu6/7=0.669/0.177
+n10000-run3 rc 0 load 2.59 -> 2.54 dur 5s cpu6/7=0.671/0.173
+n10000-run4 rc 0 load 2.54 -> 2.42 dur 5s cpu6/7=0.672/0.173
+n10000-run5 rc 0 load 2.42 -> 2.30 dur 5s cpu6/7=0.673/0.171
+n10000-run6 rc 0 load 2.30 -> 2.28 dur 5s cpu6/7=0.671/0.173
+n10000-run7 rc 0 load 2.28 -> 2.42 dur 5s cpu6/7=0.648/0.171
+n10000-run8 rc 0 load 2.42 -> 2.87 dur 6s cpu6/7=0.583/0.164
+ALLDONE

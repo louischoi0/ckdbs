@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <optional>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -256,23 +257,35 @@ struct InnerBuildState {
 // references hold.
 using InnerBuildStore = std::unordered_map<std::uint32_t, InnerBuildState>;
 
+// What one statement keeps across the runners it builds per outer row.
+struct StatementStore {
+    InnerBuildStore builds;
+    // A sub-chain's hoisted chains' answers, by chain. A hoisted chain
+    // refers to nothing outside itself, so under the statement's one
+    // snapshot it answers once; one inside a correlated subquery ran once
+    // per outer row without this. A write evaluates its conjuncts through a
+    // runner of its own per row (`EvaluateConjuncts`), so only a statement
+    // run by `Execute` - a read - keeps an answer past one row.
+    std::unordered_map<const SubChain*, bool> hoisted;
+};
+
 class ChainRunner {
 public:
-    // `builds` is the statement's inner-build store, shared the way
-    // `stats` and `budget` are: a nested runner is rebuilt per outer row,
-    // and a map rebuilt per outer row is not a map (JB6). Null means "this
-    // runner is the statement" and it owns one.
+    // `statement` is the statement's store, shared the way `stats` and
+    // `budget` are: a nested runner is rebuilt per outer row, and a map
+    // rebuilt per outer row is not a map (JB6). Null means "this runner is
+    // the statement" and it owns one.
     ChainRunner(catalog::Catalog& catalog, storage::PageStore& store, const RowSink& sink,
                 std::uint32_t depth, const ChainFrame* parent, ExecStats& stats, Budget& budget,
                 TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
                 const txn::Snapshot* snapshot, bool indexes,
-                InnerBuildStore* builds = nullptr, PositionSink* position = nullptr)
+                StatementStore* statement = nullptr, PositionSink* position = nullptr)
         // Listed in declaration order, which is the order they are actually
         // initialized in - `snapshot_` sits third among the members even
         // though it is eleventh in the parameter list. Every initializer but
         // the last reads a constructor parameter, so no value here depends on
-        // the order. `builds_` is the one that names a member - it stores
-        // `&owned_builds_` - but only takes its address, which is valid
+        // the order. `statement_` is the one that names a member - it stores
+        // `&owned_statement_` - but only takes its address, which is valid
         // whatever the order, so the list is order-independent in fact as
         // well as in value. Recorded because a reorder that *dereferenced*
         // a member would not be, and this is the line to check first.
@@ -280,7 +293,7 @@ public:
           snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), sink_(sink),
           depth_(depth), parent_(parent), stats_(stats), budget_(budget), trail_(trail),
           replay_(replay), cabins_(cabins), indexes_(indexes),
-          builds_(builds != nullptr ? builds : &owned_builds_), position_(position) {}
+          statement_(statement != nullptr ? statement : &owned_statement_), position_(position) {}
 
     // Sub-chain mode - see `record_through_stops_`'s comment for what it
     // licenses and why only a sub-chain may have it.
@@ -347,6 +360,36 @@ private:
     }
 
 public:
+    // Runs a chain's hoisted sub-chains once each, in order, and says whether
+    // every one was true; the first that is not stops the rest. They run
+    // against an empty frame with no parent: a hoisted chain refers to
+    // nothing outside itself, which is what "uncorrelated" means. The
+    // top-level chain's and a sub-chain's are run by this one definition.
+    // Each answers once per statement (`StatementStore::hoisted`).
+    StatusOr<bool> HoistedAllTrue(const std::vector<SubChain>& hoisted) {
+        if (hoisted.empty()) return true;
+        std::optional<ChainFrame> empty;
+        auto& answers = statement_->hoisted;
+        for (const SubChain& sub : hoisted) {
+            if (const auto known = answers.find(&sub); known != answers.end()) {
+                if (!known->second) return false;
+                continue;
+            }
+            if (!empty.has_value()) {
+                empty.emplace();
+                empty->Open({}, /*parent=*/nullptr);
+            }
+            auto value = EvaluateSubChain(sub, *empty);
+            if (!value.ok()) return value.status();
+            // Inserted after the walk: a nested hoisted chain's own answer
+            // may have been inserted during it.
+            const bool all = Collapse(value.value());
+            answers.emplace(&sub, all);
+            if (!all) return false;
+        }
+        return true;
+    }
+
     // Evaluates one sub-chain against the *current* frame, which becomes
     // the parent of the nested one. Correlation values are read through
     // that link and **never written into the AST** - the AST is shared
@@ -456,18 +499,34 @@ public:
         // collector is: a subquery is part of one statement, and a nested
         // step reading a relation through a different view than its outer
         // step would make one statement see two databases.
-        // The inner-build store is shared for the reason the collector and
-        // the snapshot are, and one more of its own: this runner is built
-        // per outer row, so a map it owned would be filled and destroyed
-        // once per outer row - which is the whole cost the map exists to
-        // remove (JB6).
-        ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
-                          trail_, replay_, cabins_, &snapshot_, indexes_, builds_);
-        // Sub-chain mode - `record_through_stops_`'s comment carries the
-        // argument.
-        inner.RecordThroughStops();
-        Status ran = RunToCompletionAtWalkBoundary(inner.Run(sub.steps));
-        if (!ran.ok()) return ran;
+        // The statement's store (builds and hoisted answers) is shared for
+        // the reason the collector and the snapshot are, and one more of its
+        // own: this runner is built per outer row, so a map it owned would
+        // be filled and destroyed once per outer row - which is the whole
+        // cost the map exists to remove (JB6).
+        //
+        // **What this sub-chain hoisted runs first, once.** One that is not
+        // true leaves this sub-chain with no rows, so its steps never open
+        // and the accumulators below stay at zero.
+        //
+        // The empty case is tested here and not left to the helper: this
+        // runs once per outer row of a correlated subquery, and building a
+        // `StatusOr` to say "nothing hoisted" measured +35 ns a row.
+        bool opens = true;
+        if (!sub.hoisted.empty()) {
+            auto all = HoistedAllTrue(sub.hoisted);
+            if (!all.ok()) return all.status();
+            opens = all.value();
+        }
+        if (opens) {
+            ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
+                              trail_, replay_, cabins_, &snapshot_, indexes_, statement_);
+            // Sub-chain mode - `record_through_stops_`'s comment carries the
+            // argument.
+            inner.RecordThroughStops();
+            Status ran = RunToCompletionAtWalkBoundary(inner.Run(sub.steps));
+            if (!ran.ok()) return ran;
+        }
 
         switch (sub.kind) {
             case parser::PredicateKind::kExists:
@@ -1001,7 +1060,7 @@ private:
             co_return co_await RunWalkStep(steps, index, step, access);
         }
 
-        InnerBuildState& state = (*builds_)[step.step_id];
+        InnerBuildState& state = statement_->builds[step.step_id];
         // The off-switch and the cap's standing verdict (workplan JB5):
         // `join_build_max_rows == 0` disables the build outright - no map
         // can hold a row - and a declined step already took the Cabin's
@@ -1082,7 +1141,7 @@ private:
             co_return co_await RunWalkStep(steps, index, step, access);
         }
 
-        InnerBuildState& state = (*builds_)[step.step_id];
+        InnerBuildState& state = statement_->builds[step.step_id];
 
         // 1. The prefix, replayed for this key.
         if (state.map.rows() > 0) {
@@ -2682,14 +2741,15 @@ private:
     // property (pagination_exec_test) a completed walk would break.
     bool record_through_stops_ = false;
 
-    // ---- The statement-local inner build (workplan JB3/JB5/JB6) ----------
+    // ---- The statement's store: inner builds (workplan JB3/JB5/JB6), and
+    // hoisted answers ----------------------------------------------------
     //
     // The store and its state types are above the class, because the
     // constructor takes one: the statement owns it, every nested runner
     // borrows it. Owned only by a top-level runner; a nested one leaves
-    // `owned_builds_` empty and points `builds_` at its parent's.
-    InnerBuildStore owned_builds_;
-    InnerBuildStore* builds_ = nullptr;
+    // `owned_statement_` empty and points `statement_` at its parent's.
+    StatementStore owned_statement_;
+    StatementStore* statement_ = nullptr;
 
     // The read borrow's seam (AO-S6e-b). Null for every nested runner and
     // for every caller that holds no position - which is every caller but
@@ -2707,24 +2767,13 @@ private:
 // The highest step_id anywhere under `step`/`chain`, sub-chains included.
 // step_ids are global across the statement (step_chain.hpp), so this is
 // how many slots the per-step stats vector needs.
-std::uint32_t MaxStepId(const Step& step);
-
-std::uint32_t MaxStepId(const SubChain& sub) {
+template <typename Tree>
+std::uint32_t MaxStepId(const Tree& tree) {
     std::uint32_t max = 0;
-    for (const Step& step : sub.steps) max = std::max(max, MaxStepId(step));
-    return max;
-}
-
-std::uint32_t MaxStepId(const Step& step) {
-    std::uint32_t max = step.step_id;
-    for (const SubChain& sub : step.sub_chains) max = std::max(max, MaxStepId(sub));
-    return max;
-}
-
-std::uint32_t MaxStepId(const StepChain& chain) {
-    std::uint32_t max = 0;
-    for (const SubChain& sub : chain.hoisted) max = std::max(max, MaxStepId(sub));
-    for (const Step& step : chain.steps) max = std::max(max, MaxStepId(step));
+    ForEachStep(tree, [&](const Step& step) {
+        max = std::max(max, step.step_id);
+        return true;
+    });
     return max;
 }
 
@@ -2885,7 +2934,7 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
     Budget spend = budget.Fresh();
 
     ChainRunner runner(catalog, store, sink, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       trail, replay, cabins, snapshot, indexes, /*builds=*/nullptr, position);
+                       trail, replay, cabins, snapshot, indexes, /*statement=*/nullptr, position);
     runner.SetSlice(slice);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
@@ -2898,17 +2947,9 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
     // available because hoisting is decided structurally at compile.
     //
     // They run on the gated driver, as a nested step does.
-    if (!chain.hoisted.empty()) {
-        // An empty frame with no parent: a hoisted sub-chain refers to
-        // nothing outside itself, which is what "uncorrelated" means.
-        ChainFrame empty;
-        empty.Open({}, /*parent=*/nullptr);
-        for (const SubChain& sub : chain.hoisted) {
-            auto value = runner.EvaluateSubChain(sub, empty);
-            if (!value.ok()) co_return value.status();
-            if (!Collapse(value.value())) co_return Status::OK();  // no rows, nothing opened
-        }
-    }
+    auto opens = runner.HoistedAllTrue(chain.hoisted);
+    if (!opens.ok()) co_return opens.status();
+    if (!opens.value()) co_return Status::OK();  // no rows, nothing opened
 
     co_return co_await runner.Run(chain.steps);
 }
