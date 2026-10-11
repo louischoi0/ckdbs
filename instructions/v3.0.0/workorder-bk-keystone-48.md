@@ -11,13 +11,19 @@ Written 2026-10-11 on `worktree-bk-keystone-48` from `5979b5e7`
 - **W3** (the same day, after the review): the operator's answers to the
   four questions CLA put, each the proposed option
   (`raft-marks-2026-10-11.md` §2).
+- **W4** (the same day): *"Start BK-S1 and do not stop until that
+  milestone is complete in full; after that, for the matters that need a
+  decision, follow CLA's proposal."* (`raft-marks-2026-10-11.md` §3)
 
 **Opened 2026-10-11 by W3** (`raft-marks-2026-10-11.md` §2): BK-Q0..Q6 are
 each marked by the operator, every one as CLA proposed - Q0 yes, Q1 (a),
-Q2 (a), Q3 (a), Q4 as written, Q5 (a), Q6 (a) - so BK-R1..R9 are rulings
-and BK-S1 is the next stage. W2 asked to be asked, so the marks are the
-operator's own and not a standing go-ahead's: a decision that surfaces
-mid-stage goes back to the operator the same way.
+Q2 (a), Q3 (a), Q4 as written, Q5 (a), Q6 (a) - so BK-R1..R9 are rulings.
+W2 asked to be asked, so those marks are the operator's own. **W4 is the
+standing go-ahead** (`go-ahead-achieving-milestone`): BK runs to its close
+in this session, and a decision that surfaces mid-stage is written into
+this order with CLA's proposal and adopted under W4, recorded as adopted
+and never as the operator's mark. A push, a tag or a version still waits
+for the word.
 
 **What the words settle, and what they leave open.**
 
@@ -594,5 +600,112 @@ Applied from its duplication findings: the fixed-length bullet left "what
 BK leaves standing" for BK-R7, BK-R9's `CLAUDE.md` sentence left for
 BK-S3, and §1.8's by-name list became a count. Declined: none.
 
-**Opened the same day by W3**, every item as proposed; BK-S1 is next and
-has not started.
+**Opened the same day by W3**, every item as proposed.
+
+### BK-S1 — the census, and red first, 2026-10-11
+
+Built on `worktree-bk-keystone-48` from `17e03da2` (BK-S0 and its marks;
+the engine as at `5979b5e7`). No file under `src/`, `include/` or `sim/`
+moved; `tests/` gained one file and four cells, `docs/inflight/bugs/` one
+entry. The suite was not run as a gate: the cells are red by design (§3).
+
+**The census, re-run at `5979b5e7`** (the tip of `main` at 03:25 UTC;
+`main` moved to `e623fb5a` at 03:35, BJ's review, and no line of that diff
+names the width): §1.2-§1.5 and §1.8 hold line for line - the greps are
+those sections' own and found no site §1 does not list or count. The
+twenty-three test lines §1.8 counts as reading the constants by name, and
+which move on their own: `btree_test.cpp:488, 1388, 1400, 1451, 1454`;
+`exec_chain_test.cpp:543, 555, 580, 606`; `keystone_budget_test.cpp:45,
+62, 69, 191`; `keystone_id_test.cpp:216, 229`; `keystone_test.cpp:19, 23,
+40, 55`; `lock_family_test.cpp:512`; `row_codec_test.cpp:105, 110`;
+`wal_payload_test.cpp:76` (the grep's two other hits by name,
+`keystone_budget_test.cpp:59-60`, are the comments in §1.8's table).
+Classified: `decay.hpp:218`'s
+`1ULL << 40` saturates elapsed half-lives and `relayout_planner_test.cpp:60`
+feeds a use count, neither Keystone; `waystone_dir_test.cpp:115`'s
+`1ull << 40` is a bit above the directory depth in a hash key;
+`heap_page.hpp:172` `kMaxTrxId` and `record.hpp:329` `kMaxTxnId` are the
+transaction id's 48 bits and BK-S2 leaves them; `step_vm.cpp:2482` narrows
+`Step::step_id` by a truncating cast, recorded under BK-R3 and left alone.
+The suite's width-naming lines were 44 in 19 files before this stage.
+
+**Red cells**, each run at `17e03da2` and failing by the old answer:
+
+| cell | fails with |
+|---|---|
+| `KeystoneWidthTest.TheIdIsFortyEightBitsAndTheMaxRoundTrips` (`tests/keystone_width_test.cpp`, new, registered) | `kKeystoneIdBits` 40, `kKeystoneReservedBits` 16, `kMaxKeystoneId` 1099511627775; `Encode(2^48 - 1)` *"Keystone id exceeds 40-bit range"* |
+| `KeystoneWidthTest.FlagsIsByteSixAndReservedByteSeven` | byte 5 = 0xA5, byte 6 = 0x5A, byte 7 = 0 - the 40-bit layout, read as bytes |
+| `KeystoneWidthTest.ACabinBoundEntryKeepsTheUpperEightBitsOfItsPk` | *"bound cabin entry: pk 1099511627777 exceeds the 40-bit Keystone range"* |
+| `KeystoneWidthTest.APageInitInTheUpperEightBitsRoundTripsAndFormatsItsLeaf` | *"wal payload: PAGE_INIT min_key exceeds the 40-bit id space"*; the leaf's format stands behind it |
+| `KeystoneWidthTest.AHeapPageAndASeparatorTakeAnIdInTheUpperEightBits` | *"min_key exceeds 40-bit tuple id range"* at the heap page; the separator stands behind it |
+| `WaystoneReplayTest.ATrailEntryKeepsTheUpperEightBitsOfItsPk` (`tests/waystone_replay_test.cpp`) | `replay.size()` 1 of 2: the 40-bit mask folded two pks into one key |
+| `SortedLeafSqlTest.AKeyInTheUpperEightBitsIsPlacedAndTheFortyEightBitCeilingIsExhausted` (`tests/sorted_leaf_named_keys_test.cpp`) | `INSERT INTO t VALUES (1099511627776, 1)` refused |
+
+**Green by design**: `WaystoneReplayTest.AStepIdAndAPksUpperBitsNeverShareAKey`
+passes at 40 and at 48 - `(1, k)` and `(0, k + 2^40)` differ under either
+consistent packing - and exists to kill BK-S2's half-move mutant (the mask
+on the constant, the shift at 40). Listed so a reader does not take it for
+a red cell that turned.
+
+**BK-S2's closing grep meets these cells.** Its `<< ?40` finds the three
+`std::uint64_t{1} << 40` they spell (`keystone_width_test.cpp:29`,
+`waystone_replay_test.cpp:465, 499`): bit 40 is the boundary they test,
+not a width the code assumes, so they stand beside §1.5's three when
+BK-S2 reports the grep. Nothing else here matches it, and the bug entry
+names no width, so BK-S3's grep over `docs` does not meet it.
+
+**The bug entry** (BK-Q6 (a)):
+`docs/inflight/bugs/a-pk-declared-narrower-than-sixty-four-bits-is-cut-on-the-wire.md`,
+reproduced by `WireRowBatchTest.DISABLED_AnInt32PkAboveItsDeclaredWidthReachesTheClientWhole`
+(`tests/wire_row_codec_test.cpp`): an `int32` pk 2147483653 is a 4-byte
+field decoding to -2147483643.
+
+**Decisions that surfaced, adopted on the standing go-ahead of 2026-10-11
+(W4, `go-ahead-achieving-milestone`):**
+
+- The wire probe is committed `DISABLED_` - the shape of the one cell the
+  suite already carries failing by design, SUS-1's resume condition
+  (`command_dispatcher_test.cpp:532`) - so the suite stays green while the
+  bug is open; the letter that fixes it drops the prefix.
+- The red cells are committed red, as §3 says; the trail and named-key
+  cells live beside the harnesses they need (`WaystoneReplayTest`,
+  `SortedLeafSqlTest`) rather than in the new file.
+- The PAGE_INIT cell's "replays" half is `heap::PageView::CreateEmptyAs`
+  with the decoded `min_key` - what `ApplyPageInit` does with the record
+  (`wal/redo.cpp:77-95`) - rather than a stream-and-redo round trip: the
+  refusals it has to clear are `DecodePageInit`'s and the page format's,
+  and the redo harness would add nothing to either. The cell formats a
+  `kBtreeLeaf`, redo's other branch; the heap page is the next cell's.
+
+**Its review** (`critics-developer`, the same day) found no correctness
+defect: every cell asserts what BK-S2 delivers, and the seven red cells
+fail for the reasons the table gives. Corrected in place: two comments and
+the bug entry's two width-naming lines, which would have met BK-S2's and
+BK-S3's closing greps; the bug entry's session-path evidence
+(`kwp_session.cpp:240, 258` and `command_dispatcher.cpp:4806`, not the
+flag at `:4822`), its "first id cut" (128 under `int8` is one byte `0x80`
+read back as -128; bytes are dropped from 256, 65536 and 2^32) and its
+debug-text claim given its evidence (`result_sink.hpp:119, 129`); the
+`DISABLED_` precedent named for what it is (SUS-1's resume condition, not
+a house shape for open defects); the census's twenty-three by-name lines
+listed; `main`'s move to `e623fb5a` noted. **Applied from its proposals:**
+BK-R3's guard check - `Find(0x10000, pk)` is null - added to the first
+trail cell, the one cell that catches a `Find` narrowed instead of guarded,
+evaluated once that cell's size assertion holds; the Cabin entry cell cut
+to pk and flags; the PAGE_INIT cell moved to `kBtreeLeaf` and the leaf half
+dropped from the heap-page cell, so no two cells make one call; the two
+cells whose names spelt forty renamed, so BK-S2's rename list stays at
+seven; the trail cells' parse-and-compile and entry-filling factored into
+`ChainOf` and `ValidEntry`; the width cell's derived `kIdSpaceEnd` check
+dropped. **Declined:** a second `DISABLED_` cell at the KWP session level
+for the wire defect - one disabled cell per open defect, placed at the
+codec every row batch goes through, with the session path cited by reading
+in the entry. **Carried to BK-S2:** once `bound_cabin_test.cpp:63` names
+`kMaxKeystoneId`, that round trip and the Cabin entry cell pin one property
+- delete one; once `keystone_test.cpp:18-26`'s reserved is `0xFF`, it and
+the width cell's round trip do too.
+
+**The suite at `17e03da2` with the cells in** (`ctest -j8`, Debug): 3494
+of 3501 pass; the seven failures are the seven red cells and nothing else.
+Not a gate - the stage's cells are red by design - and stated so BK-S2 has
+the baseline.

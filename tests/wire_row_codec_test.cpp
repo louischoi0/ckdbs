@@ -472,5 +472,28 @@ TEST(WireRowBatchTest, TheByteLayoutIsWhatTheSpecSays) {
     }
 }
 
+// ---- A pk declared narrower than 64 bits is cut on the wire --------------
+//
+// `docs/inflight/bugs/a-pk-declared-narrower-than-sixty-four-bits-is-cut-on-the-wire.md`
+// (filed by BK-S1 under BK-Q6 (a)): protocol.md §6 says field 0 of every
+// user relation is the Keystone id as u64, and the encoder writes it at the
+// declared column's width. `DISABLED_` while the bug is open so the suite
+// stays green; the letter that takes the fix drops the prefix.
+
+TEST(WireRowBatchTest, DISABLED_AnInt32PkAboveItsDeclaredWidthReachesTheClientWhole) {
+    const auto schema = SchemaOf({Column(0, "id", catalog::kTypeValInt32),
+                                  Column(1, "v", catalog::kTypeValInt64)});
+    // A Keystone id inside the id space and past int32.
+    const std::int64_t id = (std::int64_t{1} << 31) + 5;
+
+    RowBatchWriter writer;
+    ASSERT_TRUE(writer.AppendRow(schema, std::vector<parser::AstValue>{Int(id), Int(1)}).ok());
+    const auto payload = writer.Finish();
+    auto rows = DecodeRowBatch(payload, 2);
+    ASSERT_TRUE(rows.ok()) << rows.status().message();
+    EXPECT_EQ(rows.value()[0][0].bytes.size(), 8u) << "a Keystone id is u64 on the wire";
+    EXPECT_EQ(DecodeInt(rows.value()[0][0].bytes).value(), id);
+}
+
 }  // namespace
 }  // namespace kds::wire

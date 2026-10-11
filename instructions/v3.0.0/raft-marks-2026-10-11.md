@@ -21,3 +21,12 @@ word is recorded **in English**, translated where it was typed in Korean.
 | **Mark** | **Marked per item, by the operator:** BK-Q0 yes - BK opens; BK-Q1 (a), `id:48 \| flags:8 \| reserved:8`, the Cabin bound entry's word identical to the Keystone word; BK-Q2 (a), the rejection at `keystoneid-invariant.md:230-233` restated as overturned on 2026-10-11, §3's table recomputed, K5 kept; BK-Q3 (a), refusals name the ceiling's value; BK-Q4 as written, the A/B at the close reported and gating nothing; BK-Q5 (a), no tag at the close; BK-Q6 (a), the narrow-pk wire truncation filed as a `docs/inflight/bugs/` entry in BK-S1 with (b) recommended as its fix, in its own letter. BK-R1..R9 are rulings; BK-S1 is next |
 | **Does not settle** | BK-S1's start; any push; the letter that takes BK-Q6's fix; a decision that surfaces mid-stage, which W2's "ask me" sends back to the operator rather than to a standing go-ahead |
 | **Recorded at** | `workorder-bk-keystone-48.md`'s header (W3), §2's heading, §4's mark column and §6; `index.md`'s BK row |
+
+## 3. BK-S1 started, and the standing go-ahead for BK
+
+| | |
+|---|---|
+| **Word** | *"Start BK-S1 and do not stop until that milestone is complete in full; after that, for the matters that need a decision, follow CLA's proposal."* (W4) |
+| **Mark** | The standing go-ahead of `go-ahead-achieving-milestone`, for BK: every stage to the close in this session; a decision that surfaces mid-stage is written into the order with CLA's proposal and adopted under this word, recorded as *adopted on the operator's standing go-ahead of 2026-10-11* and never as the operator's own mark. BK-S1 started |
+| **Does not settle** | Any push, merge to `main`, tag or version; a decision CLA cannot propose from the tree; anything outside BK |
+| **Recorded at** | `workorder-bk-keystone-48.md`'s header (W4) and §6's BK-S1 row; `index.md`'s BK row |

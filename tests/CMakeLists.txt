@@ -29,6 +29,7 @@ add_executable(kds_tests
     file_page_device_test.cpp
     memory_page_device_test.cpp
     keystone_test.cpp
+    keystone_width_test.cpp
     keystone_id_test.cpp
     keystone_budget_test.cpp
     heap_page_test.cpp

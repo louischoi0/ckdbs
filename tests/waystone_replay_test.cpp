@@ -426,5 +426,91 @@ TEST_F(WaystoneReplayTest, AScanStepIsNeverServedFromATrail) {
     EXPECT_TRUE(replay.empty()) << "a Scan step's entry must never be indexed";
 }
 
+// ---- BK-S1: the packed key keeps the pk's upper eight bits ---------------
+//
+// `TrailReplay` packs `(step_id, pk)` into one uint64 (BK-R3,
+// `instructions/v3.0.0/workorder-bk-keystone-48.md`). Under a 48-bit id the
+// pair fits exactly, and the two ways of getting the packing wrong are each
+// silent - a miss, bounded by the verifier, never a wrong row - which is why
+// each has a cell rather than a refusal.
+
+// The chain `sql` compiles to, for a cell that builds a trail by hand.
+StatusOr<StepChain> ChainOf(catalog::Catalog& catalog, const std::string& sql) {
+    auto parsed = parser::Parse(sql);
+    if (!parsed.ok()) return parsed.status();
+    return Compile(catalog, std::get<parser::SelectStmt>(parsed.value()));
+}
+
+// A valid entry for `pk` at `step`, recorded at `(page, slot)`.
+stats::WaystoneEntry ValidEntry(std::uint64_t rel_oid, std::uint16_t step, std::uint64_t pk,
+                                PageId page, std::uint16_t slot) {
+    stats::WaystoneEntry e{};
+    e.pk = pk;
+    e.rel_oid = rel_oid;
+    e.page_id = page;
+    e.slot = slot;
+    e.step_id = step;
+    e.flags = stats::kWaystoneEntryValid;
+    return e;
+}
+
+TEST_F(WaystoneReplayTest, ATrailEntryKeepsTheUpperEightBitsOfItsPk) {
+    // Two pks that differ only in bits 40-47 are two rows, each found at its
+    // own location. A mask left at 40 bits folds them into one key, and the
+    // second entry built overwrites the first.
+    auto chain = ChainOf(boot_->catalog, "SELECT * FROM t WHERE id = 10");
+    ASSERT_TRUE(chain.ok()) << chain.status().message();
+    const std::uint64_t rel = chain.value().steps[0].rel_oid;
+    const std::uint64_t low_pk = 10;
+    const std::uint64_t high_pk = low_pk + (std::uint64_t{1} << 40);
+    const stats::WaystoneEntry entries[] = {ValidEntry(rel, 0, low_pk, 129, 1),
+                                            ValidEntry(rel, 0, high_pk, 130, 2)};
+
+    TrailReplay replay;
+    replay.Build(chain.value(), entries);
+    ASSERT_EQ(replay.size(), 2u) << "two pks are two keys";
+    const TrailLocation* at_low = replay.Find(0, low_pk);
+    const TrailLocation* at_high = replay.Find(0, high_pk);
+    ASSERT_NE(at_low, nullptr);
+    ASSERT_NE(at_high, nullptr);
+    EXPECT_EQ(at_low->page_id, 129u);
+    EXPECT_EQ(at_low->slot, 1u);
+    EXPECT_EQ(at_high->page_id, 130u);
+    EXPECT_EQ(at_high->slot, 2u);
+
+    // BK-R3's guard: a step id above the entry format's 16 bits is a miss,
+    // today and after. A `Find` that narrowed its parameter instead would
+    // read step 65,536 as step 0 and answer with step 0's entry.
+    EXPECT_EQ(replay.Find(0x10000, low_pk), nullptr);
+}
+
+TEST_F(WaystoneReplayTest, AStepIdAndAPksUpperBitsNeverShareAKey) {
+    // The half move - the mask widened to 48 bits with the shift left at 40
+    // - packs `(1, k)` and `(0, k + 2^40)` to one key. Green at 5979b5e7
+    // (both at 40, so the keys differ) and after BK-S2 (both at 48); it is
+    // here to kill that mutant, which the cell above lets live.
+    ASSERT_EQ(Run("CREATE TABLE u (id int64, w int64) BTREE").substr(0, 7), "CREATED");
+    auto chain = ChainOf(boot_->catalog,
+                         "SELECT a.v, b.w FROM t AS a JOIN u AS b ON a.id = b.id WHERE a.id = 3");
+    ASSERT_TRUE(chain.ok()) << chain.status().message();
+    ASSERT_GE(chain.value().steps.size(), 2u);
+
+    const std::uint64_t k = 3;
+    const std::uint64_t k_high = k + (std::uint64_t{1} << 40);
+    const stats::WaystoneEntry entries[] = {
+        ValidEntry(chain.value().steps[1].rel_oid, 1, k, 131, 3),
+        ValidEntry(chain.value().steps[0].rel_oid, 0, k_high, 132, 4)};
+
+    TrailReplay replay;
+    replay.Build(chain.value(), entries);
+    ASSERT_EQ(replay.size(), 2u) << "a step id and a pk's upper bits are two keys";
+    const TrailLocation* one = replay.Find(1, k);
+    const TrailLocation* zero = replay.Find(0, k_high);
+    ASSERT_NE(one, nullptr);
+    ASSERT_NE(zero, nullptr);
+    EXPECT_EQ(one->page_id, 131u);
+    EXPECT_EQ(zero->page_id, 132u);
+}
+
 }  // namespace
 }  // namespace kds::exec

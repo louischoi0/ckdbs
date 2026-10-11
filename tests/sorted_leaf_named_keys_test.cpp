@@ -232,5 +232,23 @@ TEST_F(SortedLeafSqlTest, EveryRefusalANamedKeyGetsForItsPkIsDuplicateOrExhauste
         << "a refused statement left its first row";
 }
 
+// ---- BK-S1: the upper eight bits of the id space -------------------------
+
+TEST_F(SortedLeafSqlTest, AKeyInTheUpperEightBitsIsPlacedAndTheFortyEightBitCeilingIsExhausted) {
+    // BK (`instructions/v3.0.0/workorder-bk-keystone-48.md`): the id space is
+    // `[1, 2^48 - 1]`. 2^40, refused `OutOfRange` at 5979b5e7, is a key and
+    // is read back by pk; 2^48 is exhausted, and the refusal names the
+    // ceiling's value, not its width (BK-R5).
+    ASSERT_TRUE(Placed(Run("INSERT INTO t VALUES (1099511627776, 1)")));
+    EXPECT_EQ(EmittedIds(Run("SELECT * FROM t WHERE id = 1099511627776").response),
+              (std::vector<std::uint64_t>{1099511627776ULL}));
+    EXPECT_EQ(Walk(), (std::vector<std::uint64_t>{1099511627776ULL}));
+
+    const DispatchOutcome past = Run("INSERT INTO t VALUES (281474976710656, 1)");
+    EXPECT_EQ(past.status.code(), StatusCode::kOutOfRange) << past.response;
+    EXPECT_NE(past.response.find("281474976710655"), std::string::npos) << past.response;
+    EXPECT_NE(past.response.find("(byte 22)"), std::string::npos) << past.response;
+}
+
 }  // namespace
 }  // namespace kds::server
