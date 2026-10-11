@@ -3612,12 +3612,6 @@ std::optional<std::uint64_t> FkParentIdOf(const parser::AstValue& value) {
     return static_cast<std::uint64_t>(value.int_val);
 }
 
-// The value as the statement gave it, for a message: a literal's own digits
-// where it has them, which a wrapped `int_val` is not.
-std::string FkValueText(const parser::AstValue& value) {
-    return value.raw_int_text.empty() ? std::to_string(value.int_val) : value.raw_int_text;
-}
-
 }  // namespace
 
 Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& child,
@@ -3751,6 +3745,8 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     if (value.type != parser::ValueType::kInt) return Status::OK();
 
     const std::optional<std::uint64_t> id = FkParentIdOf(value);
+    // 0 for no id: no `S` is ever held on pk 0, so the release below meets
+    // nothing of it.
     const std::uint64_t parent_pk = id.value_or(0);
 
     // The held verdict, resolved by `ResolveForeignKeyParents` before any
@@ -3859,8 +3855,13 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
                                      *verdict == exec::FkVerdict::kViolation;
                           });
     }
-    return Status::FkViolation("'" + column + "' references row id=" + FkValueText(value) +
-                               " of '" + RelationNameOf(fk.rel_oid) + "', which does not exist");
+    // The value as written - a literal's own digits, which a wrapped
+    // `int_val` is not - and its byte (a computed value carries its
+    // expression's).
+    return Status::FkViolation("'" + column + "' references row id=" +
+                               exec::FormatValue(0, value) + " of '" +
+                               RelationNameOf(fk.rel_oid) + "', which does not exist (byte " +
+                               std::to_string(value.byte_offset) + ")");
 }
 
 Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent,

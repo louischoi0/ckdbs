@@ -837,7 +837,7 @@ the tree now fixes:
   grown, and an UPDATE's `NoteOverwrite` grows it before any write, so
   `SET v = v + 1` is never applied twice.
 
-**Filed, not fixed (outside the stage):** `docs/inflight/bugs/a-negative-foreign-key-value-skips-the-parent-check.md` - a
+**Filed, not fixed (outside the stage; fixed 2026-10-11 on `worktree-fix-negative-fk-value`, the entry deleted):** `docs/inflight/bugs/a-negative-foreign-key-value-skips-the-parent-check.md` - a
 negative integer in a foreign-key column skips the parent check on `INSERT`
 and `UPDATE`, an older quiet wrong answer that a folded constant now reaches.
 
