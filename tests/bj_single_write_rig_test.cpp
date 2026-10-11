@@ -106,7 +106,11 @@ TEST(BjSingleWriteRigTest, AMultiRowWalkAppliesEveryRowExactlyOnce) {
     // The first of BJ-R9's three facts: an `UPDATE` overwrites in place and
     // never migrates a tuple, so the walk, advancing in key order, never
     // meets a row it already wrote. Enough rows to span several leaves, so
-    // a walk that re-entered a leaf after a divide would count twice.
+    // a walk that re-read a leaf at a leaf boundary would count twice. No
+    // insert runs beside it, so no divide happens during the walk: that a
+    // divide behind the walk cannot send it back is read from
+    // `BtreeVisitLeafPage` (it reads `next` under the leaf's hold), not
+    // exercised here.
     auto rig = OpenRig();
     ASSERT_NE(rig, nullptr);
     CommandDispatcher& d0 = rig->core(0).dispatcher();

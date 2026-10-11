@@ -55,6 +55,17 @@ protected:
     std::optional<CommandDispatcher> dispatcher_;
 };
 
+// A refusal from inside the subquery names the token that failed, once: the
+// subquery's own byte is added only to a message that carries none.
+TEST_F(SetExprSubqueryTest, ARefusalInsideTheSubqueryCarriesOneBytePosition) {
+    const std::string out = Run("UPDATE t SET v = (SELECT nope FROM u) WHERE id = 1");
+    ASSERT_EQ(out.rfind("ERR", 0), 0u) << out;
+    const std::size_t first = out.find("byte ");
+    ASSERT_NE(first, std::string::npos) << out;
+    EXPECT_EQ(out.find("byte ", first + 1), std::string::npos) << out;
+    EXPECT_NE(out.find("byte 25"), std::string::npos) << "the byte of `nope`: " << out;
+}
+
 TEST_F(SetExprSubqueryTest, EveryRowIsRaisedByThePreStatementAggregate) {
     // BJ-Q6's cell. A per-row subquery would see the rows already raised, and
     // the sums would grow: 70, then 70 + 10 + 70 ... Evaluated once, it is 60.

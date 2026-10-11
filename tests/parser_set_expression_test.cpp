@@ -475,6 +475,51 @@ TEST(SetExpressionParseTest, ALongChainIsBoundedByItsHeightNotOnlyItsNesting) {
         << "a megabyte of operators must be refused, not walked";
 }
 
+TEST(SetExpressionParseTest, AColumnNamedCaseBeforeAFusedMinusIsASubtraction) {
+    auto a = SetOf("case -1");
+    ASSERT_TRUE(a.ok()) << a.status().message();
+    ASSERT_NE(a.value().expr, nullptr);
+    EXPECT_EQ(Render(*a.value().expr), "(case - 1)");
+    // A negative operand is written in parentheses: `CASE (` is never a call.
+    auto simple = SetOf("CASE (-1) WHEN b THEN 2 ELSE 3 END");
+    ASSERT_TRUE(simple.ok()) << simple.status().message();
+    EXPECT_EQ(simple.value().expr->op, ExprOp::kCase);
+    // A comparison form BJ leaves out is named, not read as a CASE.
+    for (const char* v : {"case IN (1)", "case BETWEEN 1 AND 2", "case LIKE 'a'"}) {
+        auto refused = SetOf(v);
+        ASSERT_FALSE(refused.ok()) << v;
+        EXPECT_EQ(refused.status().code(), StatusCode::kNotImplemented)
+            << v << ": " << refused.status().message();
+    }
+}
+
+TEST(SetExpressionParseTest, NotOpensAComparisonsRightOperand) {
+    // `a = NOT b AND c` is `(a = (NOT b)) AND c`, as in PostgreSQL.
+    auto a = SetOf("x = NOT y AND z");
+    ASSERT_TRUE(a.ok()) << a.status().message();
+    const Expr& e = *a.value().expr;
+    ASSERT_EQ(e.op, ExprOp::kAnd);
+    ASSERT_EQ(e.lhs->op, ExprOp::kEq);
+    EXPECT_EQ(e.lhs->rhs->op, ExprOp::kNot);
+    EXPECT_EQ(e.lhs->rhs->lhs->column, "y");
+}
+
+TEST(SetExpressionParseTest, ARowValueNamesWhatIsWrongWithIt) {
+    auto fewer = Parse("UPDATE t SET (a, b) = (1)");
+    ASSERT_FALSE(fewer.ok());
+    EXPECT_NE(fewer.status().message().find("fewer entries"), std::string::npos)
+        << fewer.status().message();
+    auto junk = Parse("UPDATE t SET (a, b) = (x y, 1)");
+    ASSERT_FALSE(junk.ok());
+    EXPECT_EQ(junk.status().message().find("fewer entries"), std::string::npos)
+        << "junk between values is not an arity error: " << junk.status().message();
+    auto row_subquery = Parse("UPDATE t SET (a, b) = (SELECT x, y FROM u)");
+    ASSERT_FALSE(row_subquery.ok());
+    EXPECT_EQ(row_subquery.status().code(), StatusCode::kNotImplemented);
+    EXPECT_EQ(row_subquery.status().message().find("BJ-S7"), std::string::npos)
+        << row_subquery.status().message();
+}
+
 TEST(SetExpressionShapeTest, ALiteralIsAValueButAnOperatorIsShape) {
     // BJ-R6: `v + 1` and `v + 2` share a pattern and differ in their
     // arguments; `v + 1` and `v - 1` are two patterns.

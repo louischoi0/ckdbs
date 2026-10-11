@@ -1670,9 +1670,11 @@ private:
     // mints: a scalar subquery of an UPDATE reads at the UPDATE's own (BJ-S7),
     // so the statement sees one state of the database. No lease comes with it -
     // the transaction the UPDATE holds keeps the horizon beneath it for as long
-    // as the subquery runs.
+    // as the subquery runs. `context` is pinned with it: the subquery's
+    // `NOW()` is the UPDATE's.
     DispatchOutcome HandleSelect(std::string_view line, Session& session, bool analyze = false,
-                                 const txn::Snapshot* pinned = nullptr);
+                                 const txn::Snapshot* pinned = nullptr,
+                                 const exec::StatementContext* context = nullptr);
 
     // Runs the walk a `DispatchAndStage` reply left in `out->select_run`
     // and writes the reply over `out` (BA-S15). `DispatchAsync` only.
@@ -2112,7 +2114,8 @@ private:
     StatusOr<exec::SubqueryResult> RunScalarSubquery(const parser::Expr& node,
                                                      const parser::UpdateStmt& stmt,
                                                      WriteScope& scope,
-                                                     const txn::Snapshot& snapshot);
+                                                     const txn::Snapshot& snapshot,
+                                                     const exec::StatementContext& context);
     DispatchOutcome HandleSync();
 
 

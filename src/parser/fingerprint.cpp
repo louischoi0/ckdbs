@@ -395,7 +395,11 @@ void FingerprintAccumulator::Feed(const Token& tok) noexcept {
         // `tok.text` carries the same characters for `12.34` and `'12.34'`
         // (the quotes are stripped at lexing). Identical tag, identical
         // field, identical arg_hash - the two spellings share a waystone
-        // because they are one statement, not because they collide.
+        // because they are one statement, not because they collide. In a
+        // SET value they are not one statement (`1.5 || 'x'` is refused,
+        // `'1.5' || 'x'` is not; BJ-Q3), and they still share a hash: an
+        // UPDATE's trail is keyed by its WHERE and a refusal records none,
+        // so no reader of the hash is told apart by the value.
         case TokenType::kNumLit:
         case TokenType::kStrLit: {
             Fnv1a args(args_);

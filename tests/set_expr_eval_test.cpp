@@ -52,6 +52,16 @@ protected:
     std::optional<CommandDispatcher> dispatcher_;
 };
 
+// An expression into an indexed column moves the index entry to the
+// evaluated value, not to anything the literal path would have written.
+TEST_F(SetExprEvalTest, AnExpressionIntoAnIndexedColumnMovesItsEntry) {
+    Exec("CREATE INDEX by_i64 ON t (i64) COVERING (m)");
+    Exec("UPDATE t SET i64 = i64 * 2 + m, m = m + 1 WHERE id >= 1");
+    EXPECT_EQ(Run("SELECT id, m FROM t WHERE i64 = 2003"), "id,m\\n1,4");
+    EXPECT_EQ(Run("SELECT id, m FROM t WHERE i64 = -1996"), "id,m\\n2,5");
+    EXPECT_EQ(Run("SELECT id FROM t WHERE i64 = 1000"), "id");
+}
+
 TEST_F(SetExprEvalTest, IntegerArithmeticReadsTheRowAndWritesTheResult) {
     EXPECT_EQ(Run("UPDATE t SET i64 = i64 + 1 WHERE id = 1").substr(0, 9), "UPDATED 1");
     EXPECT_EQ(At("i64", 1), "1001");
