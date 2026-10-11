@@ -703,8 +703,15 @@ of the same id could cross the create's chunk by chunk, and recovery
 discards both (§7, AS6a). The adoption is safe before the row wherever the
 dispatcher takes the relation `X`, which is held across all of it: no writer
 meets the assertion before it is published. The dispatcher takes none with
-no lock table, and none for a name its session's view does not resolve
-(`docs/inflight/bugs/a-create-assertion-on-a-relation-its-view-cannot-see-builds-unfenced.md`).
+no lock table. **The target is resolved once, under a settled view, and the
+oid it names is the one locked and the one built**: a relation an open
+transaction created - the session's own included - is refused `NotFound`
+with its byte, as is a name dropped while the build waited for the `X`; a
+name that resolves to another oid once the `X` is granted (dropped and
+re-created meanwhile) is refused `TxnConflict`. Settled rather than the
+session's view because the statement reads settled state, and because a
+repeatable-read transaction's view would keep naming a relation dropped and
+re-created since its `BEGIN`, refusing every retry.
 **A publish that is then refused evicts the directory** before its
 `ASSERT_DROP` (a row whose own log fails stays on its page:
 `docs/inflight/bugs/an-assertion-row-whose-log-fails-stays-on-its-page.md`); a refused base adopts nothing and logs the `ASSERT_DROP`

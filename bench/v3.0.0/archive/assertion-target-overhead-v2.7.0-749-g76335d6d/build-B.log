@@ -1,0 +1,171 @@
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found OpenSSL: /usr/lib/x86_64-linux-gnu/libcrypto.so (found suitable version "3.0.13", minimum required is "3.0")  
+-- Found GTest: /usr/lib/x86_64-linux-gnu/cmake/GTest/GTestConfig.cmake (found version "1.14.0")  
+-- Found Threads: TRUE  
+-- Configuring done (0.3s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/build-release
+[  2%] Building CXX object CMakeFiles/kds.dir/src/base/crash_point.cpp.o
+[  2%] Building CXX object CMakeFiles/kds.dir/src/storage/crc32c.cpp.o
+[  2%] Building CXX object CMakeFiles/kds.dir/src/base/log.cpp.o
+[  5%] Building CXX object CMakeFiles/kds.dir/src/storage/anchor_page.cpp.o
+[  5%] Building CXX object CMakeFiles/kds.dir/src/storage/page_header.cpp.o
+[  5%] Building CXX object CMakeFiles/kds.dir/src/storage/page_device.cpp.o
+[  5%] Building CXX object CMakeFiles/kds.dir/src/storage/file_page_device.cpp.o
+[  5%] Building CXX object CMakeFiles/kds.dir/src/storage/memory_page_device.cpp.o
+[  7%] Building CXX object CMakeFiles/kds.dir/src/storage/keystone.cpp.o
+[  7%] Building CXX object CMakeFiles/kds.dir/src/storage/tagged_cell.cpp.o
+[  7%] Building CXX object CMakeFiles/kds.dir/src/storage/varheap.cpp.o
+[ 10%] Building CXX object CMakeFiles/kds.dir/src/storage/heap/heap_page.cpp.o
+[ 10%] Building CXX object CMakeFiles/kds.dir/src/storage/heap/heap_chain.cpp.o
+[ 10%] Building CXX object CMakeFiles/kds.dir/src/storage/btree/btree_page.cpp.o
+[ 10%] Building CXX object CMakeFiles/kds.dir/src/storage/btree/btree.cpp.o
+[ 13%] Building CXX object CMakeFiles/kds.dir/src/storage/index/index_page.cpp.o
+[ 13%] Building CXX object CMakeFiles/kds.dir/src/storage/index/index_tree.cpp.o
+[ 13%] Building CXX object CMakeFiles/kds.dir/src/storage/free_map.cpp.o
+[ 15%] Building CXX object CMakeFiles/kds.dir/src/txn/undo_page.cpp.o
+[ 15%] Building CXX object CMakeFiles/kds.dir/src/txn/varheap_release.cpp.o
+[ 15%] Building CXX object CMakeFiles/kds.dir/src/txn/undo_log.cpp.o
+[ 15%] Building CXX object CMakeFiles/kds.dir/src/txn/recovery_undo.cpp.o
+[ 18%] Building CXX object CMakeFiles/kds.dir/src/txn/visibility.cpp.o
+[ 18%] Building CXX object CMakeFiles/kds.dir/src/txn/trx_id.cpp.o
+[ 18%] Building CXX object CMakeFiles/kds.dir/src/txn/instance_visibility.cpp.o
+/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/src/txn/visibility.cpp: In function ‘kds::StatusOr<kds::txn::Visibility> kds::txn::ResolveThroughUndo(const ReadView&, UndoLog&, uint64_t, bool, uint64_t, std::vector<std::byte>&)’:
+/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/src/txn/visibility.cpp:25:16: warning: enumeration value ‘kVarHeapAppend’ not handled in switch [-Wswitch]
+   25 |         switch (version.value().type) {
+      |                ^
+[ 21%] Building CXX object CMakeFiles/kds.dir/src/txn/lock_table.cpp.o
+[ 21%] Building CXX object CMakeFiles/kds.dir/src/txn/manager.cpp.o
+[ 21%] Building CXX object CMakeFiles/kds.dir/src/storage/in_memory_page_store.cpp.o
+[ 21%] Building CXX object CMakeFiles/kds.dir/src/storage/cabin_bound_page.cpp.o
+[ 23%] Building CXX object CMakeFiles/kds.dir/src/storage/device_page_store.cpp.o
+[ 23%] Building CXX object CMakeFiles/kds.dir/src/storage/page_mgr/page_mgr.cpp.o
+/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/src/txn/manager.cpp: In member function ‘kds::Status kds::txn::TransactionManager::Compensate(const kds::txn::TrailEntry&, uint64_t, const RowLocator&)’:
+/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/src/txn/manager.cpp:526:12: warning: enumeration value ‘kVarHeapAppend’ not handled in switch [-Wswitch]
+  526 |     switch (entry.action) {
+      |            ^
+[ 23%] Building CXX object CMakeFiles/kds.dir/src/server/superblock.cpp.o
+[ 26%] Building CXX object CMakeFiles/kds.dir/src/server/superblock_checkpoint_anchor.cpp.o
+[ 26%] Building CXX object CMakeFiles/kds.dir/src/server/page_reclaim.cpp.o
+[ 26%] Building CXX object CMakeFiles/kds.dir/src/server/core_runtime.cpp.o
+[ 26%] Building CXX object CMakeFiles/kds.dir/src/server/mount_recovery.cpp.o
+[ 28%] Building CXX object CMakeFiles/kds.dir/src/server/stop_signal.cpp.o
+[ 28%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_recover.cpp.o
+[ 28%] Building CXX object CMakeFiles/kds.dir/src/catalog/oid.cpp.o
+[ 31%] Building CXX object CMakeFiles/kds.dir/src/catalog/rows.cpp.o
+[ 31%] Building CXX object CMakeFiles/kds.dir/src/catalog/keystone_budget.cpp.o
+[ 31%] Building CXX object CMakeFiles/kds.dir/src/catalog/schema.cpp.o
+[ 34%] Building CXX object CMakeFiles/kds.dir/src/catalog/foreign_key.cpp.o
+[ 34%] Building CXX object CMakeFiles/kds.dir/src/catalog/row_layout.cpp.o
+[ 34%] Building CXX object CMakeFiles/kds.dir/src/catalog/sys_object_registry.cpp.o
+[ 34%] Building CXX object CMakeFiles/kds.dir/src/stats/waystone_page.cpp.o
+[ 36%] Building CXX object CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o
+[ 36%] Building CXX object CMakeFiles/kds.dir/src/stats/trail_store.cpp.o
+[ 36%] Building CXX object CMakeFiles/kds.dir/src/stats/trail_recorder.cpp.o
+[ 39%] Building CXX object CMakeFiles/kds.dir/src/stats/access_stats.cpp.o
+[ 39%] Building CXX object CMakeFiles/kds.dir/src/stats/cabin_store.cpp.o
+[ 39%] Building CXX object CMakeFiles/kds.dir/src/stats/relayout_planner.cpp.o
+[ 39%] Building CXX object CMakeFiles/kds.dir/src/stats/optimizer_signals.cpp.o
+[ 42%] Building CXX object CMakeFiles/kds.dir/src/stats/cabin_optimizer.cpp.o
+[ 42%] Building CXX object CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o
+[ 42%] Building CXX object CMakeFiles/kds.dir/src/catalog/catalog.cpp.o
+[ 44%] Building CXX object CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o
+[ 44%] Building CXX object CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o
+[ 44%] Building CXX object CMakeFiles/kds.dir/src/server/expeditor.cpp.o
+[ 44%] Building CXX object CMakeFiles/kds.dir/src/server/config_file.cpp.o
+[ 47%] Building CXX object CMakeFiles/kds.dir/src/server/tcp_server.cpp.o
+[ 47%] Building CXX object CMakeFiles/kds.dir/src/server/connection_handoff.cpp.o
+/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::DispatchAndStage(std::string_view, kds::server::Session*)’:
+/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/src/server/command_dispatcher.cpp:1005:88: warning: missing initializer for member ‘kds::server::DispatchOutcome::WriteBlock::slot’ [-Wmissing-field-initializers]
+ 1005 |         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_pk_};
+      |                                                                                        ^
+[ 47%] Building CXX object CMakeFiles/kds.dir/src/server/kwp_load_server.cpp.o
+[ 50%] Building CXX object CMakeFiles/kds.dir/src/server/kwp_session.cpp.o
+/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/src/server/kwp_session.cpp: In function ‘constexpr uint8_t kds::server::{anonymous}::TxnStateOf(const kds::server::Session&)’:
+/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/src/server/kwp_session.cpp:33:51: warning: call to non-‘constexpr’ function ‘kds::server::Session::State kds::server::Session::state() const’ [-Winvalid-constexpr]
+   33 |     return static_cast<std::uint8_t>(session.state());
+      |                                      ~~~~~~~~~~~~~^~
+In file included from /home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/include/kds/server/command_dispatcher.hpp:40,
+                 from /home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/include/kds/server/kwp_session.hpp:15,
+                 from /home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/src/server/kwp_session.cpp:1:
+/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/include/kds/server/session.hpp:126:11: note: ‘kds::server::Session::State kds::server::Session::state() const’ declared here
+  126 |     State state() const noexcept { return state_; }
+      |           ^~~~~
+[ 50%] Building CXX object CMakeFiles/kds.dir/src/parser/lexer.cpp.o
+[ 50%] Building CXX object CMakeFiles/kds.dir/src/parser/fingerprint.cpp.o
+[ 50%] Building CXX object CMakeFiles/kds.dir/src/parser/ast.cpp.o
+[ 52%] Building CXX object CMakeFiles/kds.dir/src/parser/parser.cpp.o
+[ 52%] Building CXX object CMakeFiles/kds.dir/src/wire/frame_codec.cpp.o
+[ 52%] Building CXX object CMakeFiles/kds.dir/src/wire/kwp_types.cpp.o
+[ 55%] Building CXX object CMakeFiles/kds.dir/src/wire/handshake.cpp.o
+[ 55%] Building CXX object CMakeFiles/kds.dir/src/wire/error_registry.cpp.o
+[ 55%] Building CXX object CMakeFiles/kds.dir/src/wire/row_codec.cpp.o
+[ 55%] Building CXX object CMakeFiles/kds.dir/src/wal/record.cpp.o
+[ 57%] Building CXX object CMakeFiles/kds.dir/src/wal/payload.cpp.o
+[ 57%] Building CXX object CMakeFiles/kds.dir/src/wal/stream.cpp.o
+[ 57%] Building CXX object CMakeFiles/kds.dir/src/wal/log_scanner.cpp.o
+[ 60%] Building CXX object CMakeFiles/kds.dir/src/wal/analysis.cpp.o
+[ 60%] Building CXX object CMakeFiles/kds.dir/src/wal/redo.cpp.o
+[ 60%] Building CXX object CMakeFiles/kds.dir/src/wal/high_water.cpp.o
+[ 60%] Building CXX object CMakeFiles/kds.dir/src/wal/recovery.cpp.o
+[ 63%] Building CXX object CMakeFiles/kds.dir/src/wal/manager.cpp.o
+[ 63%] Building CXX object CMakeFiles/kds.dir/src/wal/checkpointer.cpp.o
+[ 63%] Building CXX object CMakeFiles/kds.dir/src/wal/log_device.cpp.o
+[ 65%] Building CXX object CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.o
+[ 65%] Building CXX object CMakeFiles/kds.dir/src/wal/file_log_device.cpp.o
+[ 65%] Building CXX object CMakeFiles/kds.dir/src/wal/writer.cpp.o
+[ 68%] Building CXX object CMakeFiles/kds.dir/src/exec/row_codec.cpp.o
+[ 68%] Building CXX object CMakeFiles/kds.dir/src/exec/catalog_spills.cpp.o
+[ 68%] Building CXX object CMakeFiles/kds.dir/src/exec/purge_key.cpp.o
+[ 68%] Building CXX object CMakeFiles/kds.dir/src/exec/varheap_sweep.cpp.o
+[ 71%] Building CXX object CMakeFiles/kds.dir/src/stats/trace.cpp.o
+[ 71%] Building CXX object CMakeFiles/kds.dir/src/exec/index_key.cpp.o
+[ 71%] Building CXX object CMakeFiles/kds.dir/src/exec/fk_check.cpp.o
+[ 73%] Building CXX object CMakeFiles/kds.dir/src/exec/plan_printer.cpp.o
+[ 73%] Building CXX object CMakeFiles/kds.dir/src/exec/functions.cpp.o
+[ 73%] Building CXX object CMakeFiles/kds.dir/src/exec/step_compiler.cpp.o
+[ 73%] Building CXX object CMakeFiles/kds.dir/src/exec/set_expr.cpp.o
+[ 76%] Building CXX object CMakeFiles/kds.dir/src/exec/aggregate.cpp.o
+[ 76%] Building CXX object CMakeFiles/kds.dir/src/exec/sort.cpp.o
+[ 76%] Building CXX object CMakeFiles/kds.dir/src/exec/type_literals.cpp.o
+[ 78%] Building CXX object CMakeFiles/kds.dir/src/exec/chain_frame.cpp.o
+[ 78%] Building CXX object CMakeFiles/kds.dir/src/exec/step_vm.cpp.o
+[ 78%] Building CXX object CMakeFiles/kds.dir/src/exec/budget.cpp.o
+[ 78%] Building CXX object CMakeFiles/kds.dir/src/exec/catalog_view.cpp.o
+[ 81%] Building CXX object CMakeFiles/kds.dir/src/exec/trail_replay.cpp.o
+[ 81%] Building CXX object CMakeFiles/kds.dir/src/exec/tuple_verify.cpp.o
+[ 81%] Building CXX object CMakeFiles/kds.dir/src/exec/wal_row_log.cpp.o
+[ 84%] Building CXX object CMakeFiles/kds.dir/src/exec/cabin_ddl.cpp.o
+[ 84%] Building CXX object CMakeFiles/kds.dir/src/exec/index_ddl.cpp.o
+[ 84%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_build.cpp.o
+[ 84%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_catalog.cpp.o
+[ 86%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_check.cpp.o
+[ 86%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_replay.cpp.o
+[ 86%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_violation.cpp.o
+[ 89%] Building CXX object CMakeFiles/kds.dir/src/exec/bound_cabin.cpp.o
+[ 89%] Building CXX object CMakeFiles/kds.dir/src/exec/cabin_optimizer_exec.cpp.o
+[ 89%] Building CXX object CMakeFiles/kds.dir/src/exec/index_maintain.cpp.o
+[ 89%] Building CXX object CMakeFiles/kds.dir/src/sched/clock.cpp.o
+[ 92%] Building CXX object CMakeFiles/kds.dir/src/sched/scheduler.cpp.o
+[ 92%] Building CXX object CMakeFiles/kds.dir/src/sched/coro.cpp.o
+[ 92%] Building CXX object CMakeFiles/kds.dir/src/sched/waker.cpp.o
+[ 94%] Building CXX object CMakeFiles/kds.dir/src/sched/sim_waker_table.cpp.o
+[ 94%] Building CXX object CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.o
+/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/src/sched/waker.cpp: In member function ‘void kds::sched::Waker::Drain() const’:
+/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-on-invisible-relation/src/sched/waker.cpp:50:17: warning: ignoring return value of ‘ssize_t read(int, void*, size_t)’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+   50 |     (void)::read(fd_, &sink, sizeof(sink));
+      |           ~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~
+[ 94%] Building CXX object CMakeFiles/kds.dir/src/server/tls_channel.cpp.o
+[ 94%] Building CXX object CMakeFiles/kds.dir/src/server/scram.cpp.o
+[ 97%] Building CXX object CMakeFiles/kds.dir/src/server/auth.cpp.o
+[ 97%] Linking CXX static library libkds.a
+[ 97%] Built target kds
+[ 97%] Building CXX object CMakeFiles/kds_server.dir/src/server/main.cpp.o
+[100%] Linking CXX executable kds_server
+[100%] Built target kds_server
+exit 0

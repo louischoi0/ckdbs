@@ -1,0 +1,6 @@
+runs 60 loadavg(1m) at start min/max 1.21 2.76
+runs that started beside a compile/ctest: 0  waited>0: 0
+max busy of any CPU other than 6/7 during run: 0.418 (excl CPU 2: 0.062); 1 s before start: 0.410
+runs with another CPU > 0.5 (any CPU): 0 ; excl CPU 2: 0
+CPU 6/7 busy during runs min/max 0.320 0.465
+which CPU was the max other: [0, 1, 2, 3, 4, 5]

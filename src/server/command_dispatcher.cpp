@@ -3124,12 +3124,22 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // and is rolled back when the statement ends, so the relation is
     // released there and a failed `CREATE ASSERTION` poisons nothing - a
     // transaction rather than a minted id because a waiter names its holder.
-    // **The session's own transaction is tested first**, by what it holds
-    // rather than by who the table reports (the review's C7): with it and
-    // another writer both holding the relation, the table may name the
-    // other, and waiting for it would end in the same refusal. Resolved
-    // under the session's view, as `HandleIndex` resolves; a name that does
-    // not resolve takes no borrow and falls to `PrepareAssertionDef`.
+    // **Resolved under a settled view, and a name it does not resolve is
+    // refused here**, once: the oid it names is the one locked and the one
+    // built. Settled and not the session's, because the statement reads
+    // settled state - a relation an open transaction created, the session's
+    // own included, is not there yet - and because a repeatable-read view
+    // minted at `BEGIN` would keep naming a relation dropped and re-created
+    // since, so the re-check below would refuse every retry. A dispatcher
+    // with no manager reads everything, which is the pre-MVCC engine and what
+    // every socket-free test runs on.
+    const auto settled_view = [this] {
+        return txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
+    };
+    const txn::ReadView view = settled_view();
+    auto target = exec::AssertionTargetOid(catalog_, stmt, &view);
+    if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
+
     struct BuildLock {
         txn::TransactionManager* manager = nullptr;
         txn::Transaction* txn = nullptr;
@@ -3140,43 +3150,55 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
         }
     } build_lock;
     if (locks_ != nullptr && txn_ != nullptr) {
-        const std::optional<txn::ReadView> view = ViewFor(session);
-        if (auto rel = catalog_.FindTableOidByName(stmt.table_name,
-                                                   view.has_value() ? &*view : nullptr);
-            rel.ok()) {
-            const txn::Transaction* own = session.transaction();
-            if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(rel.value()))) {
-                const Status mine = Status::TxnConflict(
-                    "relation '" + stmt.table_name +
-                    "' is held by this session's own transaction; CREATE ASSERTION reads "
-                    "settled state - retry when it has ended");
-                return {ErrorReply(mine), false, 0, mine};
-            }
-            auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
-            if (!begun.ok()) return {ErrorReply(begun.status()), false, 0, begun.status()};
-            build_lock.manager = txn_;
-            build_lock.txn = begun.value();
-            if (std::optional<Status> held =
-                    BorrowRelationForDdl(build_lock.txn, rel.value(), /*poisons=*/false);
-                held.has_value()) {
-                return {ErrorReply(*held), false, 0, *held};
-            }
+        // **The session's own transaction is tested first**, by what it holds
+        // rather than by who the table reports (the review's C7): with it and
+        // another writer both holding the relation, the table may name the
+        // other, and waiting for it would end in the same refusal.
+        const txn::Transaction* own = session.transaction();
+        if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(target.value()))) {
+            const Status mine = Status::TxnConflict(
+                "relation '" + stmt.table_name +
+                "' is held by this session's own transaction; CREATE ASSERTION reads "
+                "settled state - retry when it has ended");
+            return {ErrorReply(mine), false, 0, mine};
+        }
+        auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
+        if (!begun.ok()) return {ErrorReply(begun.status()), false, 0, begun.status()};
+        build_lock.manager = txn_;
+        build_lock.txn = begun.value();
+        if (std::optional<Status> held =
+                BorrowRelationForDdl(build_lock.txn, target.value(), /*poisons=*/false);
+            held.has_value()) {
+            return {ErrorReply(*held), false, 0, *held};
         }
     }
 
-    // The visibility the build's scan reads under: latest settled state,
-    // minted here exactly as a FK check's view is. A dispatcher with no
-    // manager reads everything, which is the pre-MVCC engine and what every
-    // socket-free test runs on.
-    txn::ReadView check_view = txn::ReadView::Everything();
-    if (txn_ != nullptr) check_view = txn_->MintCheckView(txn::kNoTrxId);
+    // The visibility the build's scan reads under: settled state, minted
+    // after the grant exactly as a FK check's view is.
+    const txn::ReadView check_view = settled_view();
+
+    // **The lock was waited for under the view the name resolved by**, and a
+    // drop-and-recreate that committed meanwhile leaves that name on another
+    // relation. The grant is on the old one, so what is built must be too, or
+    // nothing: the settled name is read again and must still be the locked oid.
+    // A name that is gone is the `NotFound` a retry would give.
+    if (build_lock.txn != nullptr) {
+        auto settled = exec::AssertionTargetOid(catalog_, stmt, &check_view);
+        if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
+        if (settled.value() != target.value()) {
+            const Status moved = Status::TxnConflict(
+                "relation '" + stmt.table_name +
+                "' changed while CREATE ASSERTION waited for it - retry");
+            return {ErrorReply(moved), false, 0, moved};
+        }
+    }
 
     // Through ErrorReply, not a bare "ERR ": the build can refuse with the
     // two coded spellings - ASSERTION_VIOLATION for data already past the
     // bound, TXN_CONFLICT for an unsettled relation - and both are
     // compatibility surfaces a client switches on.
-    auto created = exec::CreateAssertion(catalog_, page_store_, stmt, check_view, wal_,
-                                         *enforcer_, after_assertion_publish_run_for_test_);
+    auto created = exec::CreateAssertion(catalog_, page_store_, stmt, target.value(), check_view,
+                                         wal_, *enforcer_, after_assertion_publish_run_for_test_);
     if (!created.ok()) {
         return {ErrorReply(created.status()), false, 0, created.status()};
     }

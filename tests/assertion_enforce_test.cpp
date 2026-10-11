@@ -337,6 +337,57 @@ TEST_F(AssertionEnforceTest, AFreshDispatcherOverTheSameStoreReportsAndDoesNotEn
               "INSERTED");
 }
 
+TEST_F(AssertionEnforceTest, ACreateOnARelationTheSessionCannotSeeIsRefusedAndBuildsNothing) {
+    // A relation another session's open transaction created is not the
+    // creating session's to read. `CREATE ASSERTION` resolves its target
+    // under settled state to take the relation `X` that fences the writers,
+    // and used to take no `X` when the session's lookup failed - then build
+    // over the relation resolved unfiltered, which no writer was fenced
+    // from: a row its creator wrote between the scan and the adoption was
+    // in neither the directory nor any check.
+    Session creator;
+    ASSERT_EQ(Run(creator, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(creator, "CREATE TABLE ghost (id int64, g int64) BTREE").substr(0, 7),
+              "CREATED");
+
+    // The other session cannot see it ...
+    ASSERT_EQ(Run("SELECT * FROM ghost").substr(0, 3), "ERR");
+    // ... so it cannot put an assertion on it either.
+    const std::string out =
+        Run("CREATE ASSERTION cap ON ghost GROUP BY (g) CHECK COUNT(*) <= 1");
+    EXPECT_EQ(out.substr(0, 3), "ERR") << out;
+    EXPECT_NE(Run("SHOW ASSERTIONS").find("assertions=0"), std::string::npos)
+        << "the refused create published an assertion: " << Run("SHOW ASSERTIONS");
+
+    // The creator's own table is untouched by the refusal.
+    EXPECT_EQ(Run(creator, "INSERT INTO ghost VALUES (1)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(Run(creator, "INSERT INTO ghost VALUES (1)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run(creator, "ROLLBACK").substr(0, 8), "ROLLBACK");
+}
+
+// The target resolves under settled state, never the session's view: a
+// relation the session's own open transaction created is not there yet, and
+// one dropped and re-created since a repeatable-read `BEGIN` is the new one -
+// the transaction's view would name the old one, and the re-check after the
+// lock would refuse every retry as "changed".
+TEST_F(AssertionEnforceTest, ACreateResolvesItsTargetUnderSettledStateInsideATransaction) {
+    ASSERT_EQ(Run("CREATE TABLE t (id int64, g int64) BTREE").substr(0, 7), "CREATED");
+    Session mine(txn::IsolationLevel::kRepeatableRead);
+    ASSERT_EQ(Run(mine, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(mine, "CREATE TABLE mine (id int64, g int64) BTREE").substr(0, 7),
+              "CREATED");
+    const std::string own = Run(mine, "CREATE ASSERTION cap ON mine GROUP BY (g) CHECK COUNT(*) <= 1");
+    EXPECT_NE(own.find("no relation named 'mine'"), std::string::npos) << own;
+
+    ASSERT_EQ(Run("DROP TABLE t").substr(0, 7), "DROPPED");
+    ASSERT_EQ(Run("CREATE TABLE t (id int64, g int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO t VALUES (1)").substr(0, 8), "INSERTED");
+    const std::string out = Run(mine, "CREATE ASSERTION cap ON t GROUP BY (g) CHECK COUNT(*) <= 1");
+    EXPECT_EQ(out.substr(0, 7), "CREATED") << out;
+    ASSERT_EQ(Run(mine, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    EXPECT_EQ(Run("INSERT INTO t VALUES (1)").substr(0, 23), "ERR ASSERTION_VIOLATION");
+}
+
 // A group key built from a literal must be the key the stored row is counted
 // under. An INSERT's values arrive as written (a `date` as a string, a
 // `decimal` as text) while CREATE ASSERTION's backfill and DELETE/UPDATE key
