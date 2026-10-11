@@ -52,6 +52,15 @@ protected:
     std::optional<CommandDispatcher> dispatcher_;
 };
 
+// An integer literal over a decimal divides as the divisor's type.
+TEST_F(SetExprEvalTest, AnIntegerLiteralDividesByADecimal) {
+    Exec("UPDATE t SET d = ROUND(100 / d, 2) WHERE id >= 1");
+    EXPECT_EQ(At("d", 1), "8.00");
+    EXPECT_EQ(At("d", 2), "-80.00");
+    Exec("UPDATE t SET d = ROUND(1 / w, 2) WHERE id = 1");
+    EXPECT_EQ(At("d", 1), "0.33");
+}
+
 // An expression into an indexed column moves the index entry to the
 // evaluated value, not to anything the literal path would have written.
 TEST_F(SetExprEvalTest, AnExpressionIntoAnIndexedColumnMovesItsEntry) {
