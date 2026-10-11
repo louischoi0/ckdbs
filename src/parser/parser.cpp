@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <utility>
 
 namespace kds::parser {
 
@@ -281,7 +282,7 @@ StatusOr<AstValue> Parser::ParseValue() {
             // name rather than as a malformed value.
             if (tok.type == TokenType::kIdent && lexer_.Peek().type == TokenType::kLParen) {
                 return Status::NotImplemented(
-                    "a function call is supported in a WHERE comparison only (byte " +
+                    "a function call is supported only in a WHERE comparison and a SET value (byte " +
                     std::to_string(tok.byte_offset) + ")");
             }
             return Status::InvalidArgument(
@@ -295,10 +296,11 @@ StatusOr<AstValue> Parser::ParseValue() {
 // Families 1-3 of BJ-R1: column references to the target relation,
 // literals, parentheses, unary `+`/`-`, binary `+ - * / %` and `||`; the
 // comparisons, `AND`, `OR`, `NOT` and `IS [NOT] NULL` as boolean values;
-// `CASE`, `COALESCE`, `NULLIF`, `GREATEST`, `LEAST`; `CAST` and `::`. Every
-// other form is refused `NotImplemented` at its byte, never parsed and
-// dropped: a scalar function (BJ-S6), a subquery (BJ-S7), and the
-// comparison forms BJ leaves out (`IN`, `BETWEEN`, `LIKE`, `EXISTS`).
+// `CASE`, `COALESCE`, `NULLIF`, `GREATEST`, `LEAST`; `CAST` and `::`; the
+// scalar functions (BJ-S6) and an uncorrelated scalar subquery (BJ-S7).
+// Every other form is refused `NotImplemented` at its byte, never parsed
+// and dropped: a row subquery and the comparison forms BJ leaves out (`IN`,
+// `BETWEEN`, `LIKE`, `EXISTS`).
 // Precedence is PostgreSQL's, tightest first: `::`, unary sign, `* / %`,
 // `+ -`, `||`, the comparisons (which do not chain), `IS`, `NOT`, `AND`,
 // `OR`.
@@ -434,6 +436,14 @@ std::optional<ExprOp> NaryOf(std::string_view name) {
 // parser build a list as wide as its text is long.
 constexpr std::size_t kMaxExprArgs = 128;
 
+// A token after which a SET value is complete: the next assignment, the
+// statement's end, a row value's `)`, or the WHERE.
+bool EndsSetValue(const Token& t) {
+    return t.type == TokenType::kComma || t.type == TokenType::kEof ||
+           t.type == TokenType::kSemicolon || t.type == TokenType::kRParen ||
+           (t.type == TokenType::kIdent && IEquals(t.text, "WHERE"));
+}
+
 // A `-` the lexer fused into the literal that follows it (`v -1`) is, in
 // binary position, a minus and the literal's magnitude (BJ-Q9 (a)).
 bool IsSignedLiteral(const Token& tok) {
@@ -480,9 +490,7 @@ Status Parser::ParseSetValue(Assignment& a) {
             auto literal = ParseValue();
             if (!literal.ok()) return literal.status();
             const Token& next = lexer_.Peek();
-            if (next.type == TokenType::kComma || next.type == TokenType::kEof ||
-                next.type == TokenType::kSemicolon || next.type == TokenType::kRParen ||
-                (next.type == TokenType::kIdent && IEquals(next.text, "WHERE"))) {
+            if (EndsSetValue(next)) {
                 a.val = std::move(literal.value());
                 return Status::OK();
             }
@@ -598,7 +606,12 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprComparison() {
     }
     const ExprOp op = *compare;
     const Token tok = lexer_.Next();
-    auto rhs = ParseExprConcat();
+    // `a = NOT b`: NOT binds looser than a comparison but may still open its
+    // right operand, as in PostgreSQL - `a = NOT (b)`, and `a = NOT b AND c`
+    // is `(a = NOT b) AND c`.
+    const Token& after = lexer_.Peek();
+    auto rhs = after.type == TokenType::kKeyword && after.kw == Keyword::kNot ? ParseExprNot()
+                                                                               : ParseExprConcat();
     if (!rhs.ok()) return rhs;
     if (ComparisonOf(lexer_.Peek().type).has_value()) {
         return Status::InvalidArgument("comparison operators do not chain; parenthesise one "
@@ -752,8 +765,6 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprCall(const Token& name) {
     }
 
     const ExprOp op = *NaryOf(name.text);  // the caller dispatched on this
-    const std::size_t min_args = 1;
-    const std::size_t max_args = op == ExprOp::kNullif ? 2 : kMaxExprArgs;
     std::vector<std::shared_ptr<const Expr>> args;
     for (;;) {
         auto arg = ParseExprOr();
@@ -772,12 +783,11 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprCall(const Token& name) {
     if (Status s = ExpectToken(TokenType::kRParen, "')' closing the argument list"); !s.ok()) {
         return s;
     }
-    if (args.size() < min_args || args.size() > max_args ||
-        (op == ExprOp::kNullif && args.size() != 2)) {
-        return Status::InvalidArgument("'" + std::string(name.text) + "' takes " +
-                                       (op == ExprOp::kNullif ? "exactly 2" : "at least 1") +
-                                       " argument(s) (byte " + std::to_string(name.byte_offset) +
-                                       ")");
+    // At least one argument: an empty list was refused at its `)`.
+    if (op == ExprOp::kNullif && args.size() != 2) {
+        return Status::InvalidArgument("'" + std::string(name.text) +
+                                       "' takes exactly 2 argument(s) (byte " +
+                                       std::to_string(name.byte_offset) + ")");
     }
     auto call = MakeCall(op, name.byte_offset, name.byte_offset, std::move(args));
     if (TooBig(*call)) return ExprTooDeep(name.byte_offset);
@@ -937,15 +947,16 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
             // opens an expression only when what follows is not something
             // that ends or continues a value.
             const bool case_is_a_column =
-                after.type == TokenType::kEof || after.type == TokenType::kComma ||
-                after.type == TokenType::kRParen || after.type == TokenType::kSemicolon ||
+                EndsSetValue(after) || IsSignedLiteral(after) ||
                 after.type == TokenType::kPlus || after.type == TokenType::kMinus ||
                 after.type == TokenType::kStar || after.type == TokenType::kSlash ||
                 after.type == TokenType::kPercent || after.type == TokenType::kConcat ||
                 ComparisonOf(after.type).has_value() || after.type == TokenType::kDoubleColon ||
-                (after.type == TokenType::kKeyword && after.kw == Keyword::kAs) ||
+                (after.type == TokenType::kKeyword &&
+                 (after.kw == Keyword::kAs || after.kw == Keyword::kIn ||
+                  after.kw == Keyword::kBetween)) ||
                 (after.type == TokenType::kIdent &&
-                 (IEquals(after.text, "WHERE") || IEquals(after.text, "AND") ||
+                 (IEquals(after.text, "LIKE") || IEquals(after.text, "AND") ||
                   IEquals(after.text, "OR") || IEquals(after.text, "IS") ||
                   IEquals(after.text, "THEN") || IEquals(after.text, "ELSE") ||
                   IEquals(after.text, "END")));
@@ -965,9 +976,9 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
                 // it is parsed as an outermost block (an aggregate is allowed);
                 // what it nests is counted from here.
                 std::uint32_t close_at = 0;
-                inside_value_subquery_ = true;
+                const bool was_inside = std::exchange(inside_value_subquery_, true);
                 auto sub = ParseSubqueryAfterOpen(0, &close_at);
-                inside_value_subquery_ = false;
+                inside_value_subquery_ = was_inside;
                 if (!sub.ok()) return sub.status();
                 auto node = std::make_shared<Expr>();
                 node->kind = Expr::Kind::kSubquery;
@@ -1039,9 +1050,10 @@ StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubquery(std::uint32_t depth)
 StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubqueryAfterOpen(std::uint32_t select_depth,
                                                                       std::uint32_t* close_at) {
     // One token of lookahead is enough to know a subquery from anything
-    // else here, because this grammar has no parenthesized expressions
-    // (spec I10) - a '(' in predicate position can only open a SELECT or
-    // a value list, and the value list is V08's.
+    // else here, because a predicate has no parenthesized expressions (spec
+    // I10; a SET value tells its own `(` apart before calling this) - a '('
+    // in predicate position can only open a SELECT or a value list, and the
+    // value list is V08's.
     const Token& head = lexer_.Peek();
     if (head.type != TokenType::kIdent || !IEquals(head.text, "SELECT")) {
         return Status::InvalidArgument("expected a subquery `(SELECT ...)`, got '" +
@@ -2211,7 +2223,7 @@ StatusOr<SelectItem> Parser::ParseSelectItem() {
     if (!col.value().qualified() && lexer_.Peek().type == TokenType::kLParen &&
         !AggFuncOf(col.value().name, func)) {
         return Status::NotImplemented(
-            "a function call is supported in a WHERE comparison only (byte " +
+            "a function call is supported only in a WHERE comparison and a SET value (byte " +
             std::to_string(col.value().byte_offset) + ")");
     }
     if (col.value().qualified() || lexer_.Peek().type != TokenType::kLParen ||
@@ -2899,18 +2911,21 @@ Status Parser::ParseRowValueAssignments(std::vector<Assignment>& out) {
     lexer_.Next();
     if (lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, "SELECT")) {
         return Status::NotImplemented(
-            "a subquery in a SET value is not supported yet (BJ-S7) (byte " +
+            "a row subquery in a SET value is not implemented (byte " +
             std::to_string(lexer_.Peek().byte_offset) + ")");
     }
     for (std::size_t i = 0; i < targets.size(); ++i) {
         if (Status s = ParseSetValue(targets[i]); !s.ok()) return s;
         if (i + 1 < targets.size()) {
-            if (Status s = ExpectToken(TokenType::kComma, "',' between the row's values");
-                !s.ok()) {
+            if (lexer_.Peek().type == TokenType::kRParen) {
                 return Status::InvalidArgument(
                     "the row of values has fewer entries than the " +
                     std::to_string(targets.size()) + " columns before '=' (byte " +
                     std::to_string(open_at) + ")");
+            }
+            if (Status s = ExpectToken(TokenType::kComma, "',' between the row's values");
+                !s.ok()) {
+                return s;
             }
         }
     }
@@ -2974,8 +2989,8 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
 
     // Depth 0: an UPDATE's WHERE is an outermost query block, and a
     // subquery in it is `[OPEN: revisit]` in spec section 2 only for the
-    // *value* position (`SET a = (SELECT ...)`), which SET refuses
-    // by name (BJ-S7). A predicate-position subquery here nests exactly as a
+    // *value* position (`SET a = (SELECT ...)`), which BJ-S7 built as an
+    // uncorrelated scalar subquery. A predicate-position subquery here nests exactly as a
     // SELECT's does.
     auto where = ParseOptionalWhere(/*depth=*/0);
     if (!where.ok()) return where.status();

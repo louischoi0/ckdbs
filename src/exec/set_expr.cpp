@@ -67,6 +67,13 @@ bool SameType(const SetType& a, const SetType& b) {
     return !IsDecimal(a.type_val) || a.len == b.len;
 }
 
+// A value of `got` stands where `want` is expected: the same type, or both
+// text (char and varchar compare and store as the text they hold).
+bool Assignable(const SetType& got, const SetType& want) {
+    return got.concrete() &&
+           (SameType(got, want) || (IsText(got.type_val) && IsText(want.type_val)));
+}
+
 std::string At(std::uint32_t byte) { return " (byte " + std::to_string(byte) + ")"; }
 
 std::string_view OpText(ExprOp op) {
@@ -354,13 +361,24 @@ public:
                 for (std::size_t i = 0; i < n.args.size(); ++i) {
                     const bool condition = i < pairs * 2 && i % 2 == 0;
                     if (condition) continue;
-                    if (Status s = Resolve(*n.args[i], want); !s.ok()) return s;
+                    if (Status s = ResolveExactly(*n.args[i], want); !s.ok()) return s;
                 }
                 n.type = want;
                 return Status::OK();
             }
         }
         return Status::OK();
+    }
+
+    // Resolve, for a position that holds a value of `want` beside others of
+    // it: an operation of literals settles to its own type (`2 * 3` is int64
+    // under a decimal context), and a value of another type there would be
+    // compared or chosen as unscaled numbers.
+    Status ResolveExactly(TypedSetExpr& n, const SetType& want) const {
+        if (Status s = Resolve(n, want); !s.ok()) return s;
+        if (Assignable(n.type, want)) return Status::OK();
+        return Refuse(n.byte_offset,
+                      "the value is " + SetTypeName(n.type) + " but is used as " + SetTypeName(want));
     }
 
 private:
@@ -587,10 +605,10 @@ private:
                     const std::uint32_t precision = std::max(catalog::DecimalPrecisionOf(v->type.len),
                                                              catalog::DecimalPrecisionOf(t.len));
                     const SetType wide = Scaled(precision, catalog::DecimalScaleOf(t.len));
-                    if (Status s = Resolve(*v, Concrete(wide.type_val, wide.len)); !s.ok()) return s;
+                    if (Status s = ResolveExactly(*v, Concrete(wide.type_val, wide.len)); !s.ok()) return s;
                     continue;
                 }
-                if (Status s = Resolve(*v, t); !s.ok()) return s;
+                if (Status s = ResolveExactly(*v, t); !s.ok()) return s;
             }
             return t;
         }
@@ -641,8 +659,8 @@ private:
             if (!t.value().concrete()) {
                 auto type = DefaultOf(t.value(), e.byte_offset);
                 if (!type.ok()) return type.status();
-                if (Status s = Resolve(*lhs, type.value()); !s.ok()) return s;
-                if (Status s = Resolve(*rhs, type.value()); !s.ok()) return s;
+                if (Status s = ResolveExactly(*lhs, type.value()); !s.ok()) return s;
+                if (Status s = ResolveExactly(*rhs, type.value()); !s.ok()) return s;
             }
         }
         n->type = BoolType();
@@ -1913,9 +1931,7 @@ StatusOr<std::unique_ptr<TypedSetExpr>> TypeSetExpression(const catalog::TableAc
     if (Status st = typer.Resolve(*typed.value(), want); !st.ok()) return st;
 
     const SetType& got = typed.value()->type;
-    const bool assignable = got.concrete() && (SameType(got, want) || (IsText(got.type_val) &&
-                                                                       IsText(want.type_val)));
-    if (!assignable) {
+    if (!Assignable(got, want)) {
         return Status::InvalidArgument(
             "the expression is " + SetTypeName(got) + " but column '" +
             std::string(catalog::NameView(target.name)) + "' is " + SetTypeName(want) +

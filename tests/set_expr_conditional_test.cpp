@@ -342,5 +342,21 @@ TEST_F(SetExprConditionalTest, AConstantBoolOrCaseIntoAForeignKeyIsFoldedAndACol
               std::string::npos);
 }
 
+// A literal-only operation under a decimal context settles to its own type
+// (`2 * 3` is int64, `1.5 * 1.5` decimal(20,4)); compared with, or chosen
+// beside, a decimal it is refused rather than compared as unscaled numbers.
+TEST_F(SetExprConditionalTest, ALiteralOperationOfAnotherTypeBesideADecimalIsRefused) {
+    for (const char* set : {"g = d = 2 * 3", "g = d < 10.00 / 3", "g = d = 1.5 * 1.5",
+                            "d = NULLIF(d, 2 * 3)", "d = GREATEST(d, 2 * 3)",
+                            "d = GREATEST(2 * 3, 1.5)", "d = COALESCE(2 * 3, d)",
+                            "d = CASE WHEN g THEN 2 * 3 ELSE d END"}) {
+        EXPECT_NE(Refusal(set), "") << set;
+    }
+    Exec("UPDATE t SET g = d = 12.5 WHERE id = 1");
+    EXPECT_EQ(At("g", 1), "1");
+    Exec("UPDATE t SET d = GREATEST(d, 20) WHERE id = 1");
+    EXPECT_EQ(At("d", 1), "20.00");
+}
+
 }  // namespace
 }  // namespace kds::server

@@ -821,7 +821,7 @@ struct Expr {
 struct Assignment {
     std::string col_name;
 
-    // The value when the SET value is one bare literal (`NULL` and `?`
+    // The value when the SET value is one bare literal (`NULL`
     // included), exactly as before BJ: such an assignment keeps the per-row
     // type gate at the encode (BJ-Q3 (c)) and every reader of `val` stays
     // right. Unset when `expr` is non-null.
