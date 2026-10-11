@@ -137,6 +137,7 @@ add_executable(kds_tests
     sorted_leaf_named_keys_test.cpp
     purge_key_test.cpp
     purge_key_crash_test.cpp
+    varheap_carry_crash_test.cpp
     purge_key_rig_test.cpp
     sorted_leaf_crash_test.cpp
     sorted_leaf_rig_test.cpp
@@ -202,6 +203,8 @@ add_executable(kds_tests
     wal_manager_test.cpp
     page_mgr_wal_gate_test.cpp
     wal_checkpointer_test.cpp
+    checkpoint_census_test.cpp
+    checkpoint_task_test.cpp
     memory_log_device_test.cpp
     file_log_device_test.cpp
     wal_append_off_latch_test.cpp

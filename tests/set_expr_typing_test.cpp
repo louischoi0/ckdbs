@@ -133,6 +133,24 @@ TEST_F(SetExprTypingTest, ADecimalProductAddsScalesAndMustBeNarrowedToItsTarget)
     EXPECT_TRUE(Types("d = CAST(d / e AS decimal(10, 2))"));
 }
 
+// A dividend is never a scalar: an integer literal over a decimal takes the
+// divisor's type, as `2.00 / d` does, and the quotient is that decimal's.
+TEST_F(SetExprTypingTest, AnIntegerLiteralOverADecimalTakesTheDivisorsType) {
+    EXPECT_NE(Refusal("d = 2 / d").find("decimal(28,18) but column 'd' is decimal(10,2)"),
+              std::string::npos)
+        << Refusal("d = 2 / d");
+    EXPECT_EQ(Refusal("d = 2 / d"), Refusal("d = 2.00 / d"));
+    EXPECT_TRUE(Types("d = ROUND(2 / d, 2)")) << Refusal("d = ROUND(2 / d, 2)");
+    EXPECT_TRUE(Types("w = ROUND(-3 / w, 4)")) << Refusal("w = ROUND(-3 / w, 4)");
+    EXPECT_TRUE(Types("d = ROUND(NULL / d, 2)")) << Refusal("d = ROUND(NULL / d, 2)");
+    // A literal the divisor's type cannot hold is refused where it is written.
+    EXPECT_FALSE(Refusal("d = ROUND(100000000 / d, 2)").empty());
+    // Only a literal: an int64 column is another type, as under `*`.
+    EXPECT_NE(Refusal("d = ROUND(i64 / d, 2)").find("int64 and decimal(10,2)"), std::string::npos);
+    // A divisor literal is still the scalar it was.
+    EXPECT_NE(Refusal("d = d / 2").find("decimal(26,18)"), std::string::npos);
+}
+
 TEST_F(SetExprTypingTest, TextConcatenatesAcrossVarcharAndChar) {
     EXPECT_TRUE(Types("s = s || 'x' || c"));
     EXPECT_TRUE(Types("c = s || c")) << "varchar and char are one family; the length is a row's check";

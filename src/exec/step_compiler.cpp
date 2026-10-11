@@ -427,7 +427,7 @@ StatusOr<AggregateSpec> CompileAggregate(const Scope& scope, const parser::Selec
         out.type_val = arg.type_val;
         if (arg.type_val == catalog::kTypeValDecimal ||
             arg.type_val == catalog::kTypeValDecimalWide) {
-            out.scale = catalog::DecimalScaleOf(arg.len);
+            out.decimal_len = arg.len;
         }
 
         if (item.is_aggregate) {

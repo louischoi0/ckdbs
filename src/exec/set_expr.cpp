@@ -1052,6 +1052,8 @@ private:
     // decimal, an integer literal (or an expression of them) stays an int64
     // of scale 0 and a NULL stays NULL, so `price * 2` and `price * NULL`
     // keep the decimal's own scale (BJ-R3); an int64 *column* is never one.
+    // A dividend is never a scalar: the quotient's type is the dividend's,
+    // so `2 / price` takes the divisor's type as `2.00 / price` does.
     StatusOr<SetType> Settle(ExprOp op, std::uint32_t at, TypedSetExpr& l, TypedSetExpr& r,
                              const SetType* ctx) const {
         const bool mul_div = op == ExprOp::kMul || op == ExprOp::kDiv;
@@ -1068,7 +1070,8 @@ private:
         bool r_scalar = false;
         const auto Give = [&](TypedSetExpr& u, const SetType& target, bool& scalar) {
             SetType t = target;
-            if (mul_div && IsDecimal(target.type_val)) {
+            const bool dividend = op == ExprOp::kDiv && &u == &l;
+            if (mul_div && !dividend && IsDecimal(target.type_val)) {
                 if (u.type.kind == SetType::Kind::kInteger) {
                     t = Concrete(kTypeValInt64, 0);
                     scalar = true;
@@ -1227,6 +1230,14 @@ public:
             case Expr::Kind::kColumn:
                 if (e.column_no >= row_.size()) {
                     return Status::Corruption("an expression names a column past the row");
+                }
+                // A slot the partial decode left out (BK-R2 of
+                // `workorder-bk-opt-read-update-path.md`): the mask that
+                // chose the columns missed one this expression reads.
+                if (row_[e.column_no].type == parser::ValueType::kParam) {
+                    return Status::Corruption("an expression reads column " +
+                                              std::to_string(e.column_no) +
+                                              ", which the row's decode left out");
                 }
                 return row_[e.column_no];
             case Expr::Kind::kUnary: return Unary(e);
@@ -1860,6 +1871,24 @@ bool IsConstantSetExpression(const TypedSetExpr& expr) {
             return true;
     }
     return false;
+}
+
+std::uint64_t SetExpressionColumns(const TypedSetExpr& expr) {
+    switch (expr.kind) {
+        case Expr::Kind::kLiteral:
+        case Expr::Kind::kSubquery: return 0;
+        case Expr::Kind::kColumn:
+            return expr.column_no < 64 ? std::uint64_t{1} << expr.column_no : kAllColumnsMask;
+        case Expr::Kind::kUnary: return SetExpressionColumns(*expr.lhs);
+        case Expr::Kind::kBinary:
+            return SetExpressionColumns(*expr.lhs) | SetExpressionColumns(*expr.rhs);
+        case Expr::Kind::kCall: {
+            std::uint64_t mask = 0;
+            for (const auto& a : expr.args) mask |= SetExpressionColumns(*a);
+            return mask;
+        }
+    }
+    return kAllColumnsMask;
 }
 
 StatusOr<parser::AstValue> EvaluateSetExpression(const TypedSetExpr& expr,

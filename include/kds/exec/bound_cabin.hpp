@@ -4,6 +4,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -113,6 +114,12 @@ inline std::int64_t SumContribution(const parser::AstValue& value) noexcept {
 // aggregate fold's key encoding (`aggregate.md`), and NULL is a value
 // here rather than an absence, so two NULL keys are one group.
 std::string EncodeGroupKey(const std::vector<parser::AstValue>& values);
+
+// The kind of each value an encoded key holds, in order - the inverse of
+// `EncodeGroupKey`'s tags, which is all a mount needs to ask whether a key
+// was built from a value as written rather than as stored. `nullopt` for
+// bytes `EncodeGroupKey` cannot have produced.
+std::optional<std::vector<parser::ValueType>> GroupKeyKinds(std::string_view encoded);
 
 // A 64-bit hash of an encoded key. Collisions are *expected* to be possible
 // and are handled by confirming the key, so this is a mixing function and not

@@ -1,32 +1,78 @@
 # Ratification marks — 2026-10-11
 
-**The operator's words of 2026-10-11**, recorded by CLA on
-`worktree-bk-keystone-48` (`v2.7.0-*`; the v3.0.0 tag is not cut). Every
-word is recorded **in English**, translated where it was typed in Korean.
+**The operator's words of 2026-10-11**, recorded by CLA in the main
+checkout on `main` at `ab2c46d0` (`v2.7.0-771-gab2c46d0`; the v3.0.0 tag is
+not cut). All of it is the operator's words, translated into English, or
+the option the operator chose where CLA asked with options.
 
-## 1. The pk width asked about, 42 then 48; BK's order written
-
-| | |
-|---|---|
-| **Word** | *"Is it possible to change kdbs's pk width to 42 now? What would the scope of work be? Do not mind backward compatibility of the data."* (W0); *"How about changing it to about 48?"* (W1); *"Do it as 48 bits. Write a new milestone and ask me about the parts that need a decision."* (W2) |
-| **Mark** | **W2 decides the width: 48 bits.** BK-S0: the order written on it (`workorder-bk-keystone-48.md`), this file, `index.md`'s BK row. The rejection of widening at `docs/rules/keystoneid-invariant.md:230-233` is overturned by W2 and will be restated by BK-S3. W0's "do not mind backward compatibility" is answered by the standing order of 2026-10-07 (bump the superblock version, refuse older volumes, never migrate), applied as BK-R4 - a ruling, not an item. **Not opened**: BK-Q0 is unmarked, and W2 asks that the items be put to the operator, so no standing go-ahead applies |
-| **Does not settle** | BK-Q0..Q6: the layout of the upper 16 bits (BK-Q1), the rules document's stance on K5 (BK-Q2), how a refusal names the ceiling (BK-Q3), the close's measurement (BK-Q4), a tag (BK-Q5), the narrow-pk wire truncation the review found (BK-Q6); BK-S1's start; any push |
-| **Recorded at** | `workorder-bk-keystone-48.md`'s header (W0-W2), §0 and §4; `index.md`'s BK row |
-
-## 2. BK opened; every item marked as CLA proposed
+## 1. This session's documents go to `main` directly
 
 | | |
 |---|---|
-| **Word** | The operator's answers to the four questions CLA put after the order's review, each the first option offered (W3): BK-Q1 *"(a) flags:8 \| reserved:8"*; BK-Q6 *"(a) file the bug only, the fix in its own letter"*; BK-Q2 *"(a) overturn the rejection sentence with its date and keep K5"*; and for BK-Q0, Q3, Q4 and Q5 *"all as proposed"* |
-| **Mark** | **Marked per item, by the operator:** BK-Q0 yes - BK opens; BK-Q1 (a), `id:48 \| flags:8 \| reserved:8`, the Cabin bound entry's word identical to the Keystone word; BK-Q2 (a), the rejection at `keystoneid-invariant.md:230-233` restated as overturned on 2026-10-11, §3's table recomputed, K5 kept; BK-Q3 (a), refusals name the ceiling's value; BK-Q4 as written, the A/B at the close reported and gating nothing; BK-Q5 (a), no tag at the close; BK-Q6 (a), the narrow-pk wire truncation filed as a `docs/inflight/bugs/` entry in BK-S1 with (b) recommended as its fix, in its own letter. BK-R1..R9 are rulings; BK-S1 is next |
-| **Does not settle** | BK-S1's start; any push; the letter that takes BK-Q6's fix; a decision that surfaces mid-stage, which W2's "ask me" sends back to the operator rather than to a standing go-ahead |
-| **Recorded at** | `workorder-bk-keystone-48.md`'s header (W3), §2's heading, §4's mark column and §6; `index.md`'s BK row |
+| **Word** | *"In this session it will be almost only documents, so push directly."*, answering CLA's question of whether the session's documents land by a direct push to `main` or by a branch and a pull request |
+| **Mark** | A direction for this session: a document CLA writes in it is committed in the main checkout and pushed to `main`, with no worktree and no work branch. A push of documents only skips the pre-push hook under the hook's own exemption, and the reply says so |
+| **Does not settle** | Code: a change that touches code still runs the Session Workflow and its gates. Any other session |
+| **Recorded at** | This file; `workorder-bk-sys-statistics-show-sugar.md`'s header |
 
-## 3. BK-S1 started, and the standing go-ahead for BK
+## 2. Statistics tables wanted; five proposed, one excluded
 
 | | |
 |---|---|
-| **Word** | *"Start BK-S1 and do not stop until that milestone is complete in full; after that, for the matters that need a decision, follow CLA's proposal."* (W4) |
-| **Mark** | The standing go-ahead of `go-ahead-achieving-milestone`, for BK: every stage to the close in this session; a decision that surfaces mid-stage is written into the order with CLA's proposal and adopted under this word, recorded as *adopted on the operator's standing go-ahead of 2026-10-11* and never as the operator's own mark. BK-S1 started |
-| **Does not settle** | Any push, merge to `main`, tag or version; a decision CLA cannot propose from the tree; anything outside BK |
-| **Recorded at** | `workorder-bk-keystone-48.md`'s header (W4) and §6's BK-S1 row; `index.md`'s BK row |
+| **Word** | *"Right now ckdbs has only the tables the sys catalog strictly needs, so the meta-information tables for analysis, operations and profiling are limited. Pick about five tables worth adding."* CLA proposed `sys.statement_stats`, `sys.relation_stats`, `sys.lock_waits`, `sys.checkpoints` and `sys.sessions`; asked which to leave out, the operator chose *"Exclude `sys.sessions`."* (the option CLA had marked as its recommendation) |
+| **Mark** | BK-R1: four relations, `sys.sessions` not among them |
+| **Does not settle** | BK-Q0..Q13 |
+| **Recorded at** | `workorder-bk-sys-statistics-show-sugar.md` §2 |
+
+## 3. `SHOW` is sugar; BK written and pushed
+
+| | |
+|---|---|
+| **Word** | *"Write a workplan that adds four tables, and it must contain this: keywords such as `SHOW META` and `BUDGET` are only syntactic sugar, and the same result must be referenceable through `SELECT` as well. And push it."* |
+| **Mark** | BK-R2 (SV1-SV4): every `SHOW` target is one `SELECT` over one `sys` view, the same result through either spelling, nothing readable only through `SHOW`. BK-S0: the order written and pushed to `main`. **Not opened**: BK-Q0 is unmarked |
+| **Does not settle** | BK-Q0..Q13, among them the rendering of a `SHOW` reply (BK-Q1), each view's filter class (BK-Q2, `[quiet-wrong]`) and whether three of the relations are persisted at the cost of a superblock bump (BK-Q5) |
+| **Recorded at** | `workorder-bk-sys-statistics-show-sugar.md` §2, §7; `index.md`'s BK row |
+
+## 4. No session is pinned; a balancer between connection and core
+
+| | |
+|---|---|
+| **Word** | *"I am thinking of a scheme with a balancer between the connection and the core, and scheduling according to the session's priority. That is, a session is never pinned to a core at any time."* |
+| **Mark** | BL-R1: a session is placed at its accept and may move at any transaction boundary. The operator's ruling on `docs/pending/session-load-balancing.md`, which BL-S0 deletes |
+| **Does not settle** | The grain of "never pinned" - session or statement (BL-Q1, `[quiet-wrong]` under the statement); the carrier (BL-Q2) |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` header, §2 |
+
+## 5. Two session axes, priority and affinity
+
+| | |
+|---|---|
+| **Word** | *"So the session has to be split along two axes, priority and affinity. Priority is how many resources are allocated, and how quickly, within one core; the affinity setting is how much the session moves between cores."* |
+| **Mark** | BL-R2 (priority: a share of a contended core) and BL-R3 (affinity: the cost the balancer charges a move) |
+| **Does not settle** | BL-Q4..Q9: priority's components, affinity's form, whether the axes interact, whether the settings are user-visible, and the name, since `affinity` already names a namespace's quantity |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` §0.1, §2 |
+
+## 6. BL written, on the premise that BI has closed
+
+| | |
+|---|---|
+| **Word** | *"Now write a work order for this, including the measurements, the work and the intent. If one already exists, amend that work order. Write it on the premise that BI has been completed."* |
+| **Mark** | BL-S0: the order written and pushed to `main` (§1's direction for documents). No order on `main` held the subject, so none was amended. **Not opened**: BL-Q0 is unmarked, and proposes opening only after BI-S5 closes |
+| **Does not settle** | BL-Q0..Q15; BI-Q0..Q11, which are BI's |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md`; `index.md`'s BL row |
+
+## 7. A balancer is recommended in any case - CLA's answer, recorded
+
+| | |
+|---|---|
+| **Word** | *"In any case, putting a balancer between the session and the core is recommended, right?"* CLA answered yes, on two conditions: the balancer is a decision each core takes at a transaction boundary, not a central dispatcher on every transaction's path; and its premise is measured first, since BA's census ran no balanced arm |
+| **Mark** | None: a question answered. The two conditions are written into BL as BL-R4 and BL-S1 |
+| **Does not settle** | Anything |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` header (W3) |
+
+## 7. BI opened, every item adopted as CLA proposed
+
+| | |
+|---|---|
+| **Word** | *"Read the work order for the BI milestone and start the work. Do not stop working until the milestone closes; every matter that needs a decision follows CLA's proposal. Start the work."* (translated), given with the `go-ahead-achieving-milestone` skill |
+| **Mark** | **Adopted on the operator's standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone), not marked per item:** BI-Q0 yes (BI opens, BI-R3..R5 as written); BI-Q1 (a); BI-Q2 (a); **BI-Q3 (a) `[quiet-wrong]`**; BI-Q4 (b); BI-Q5 (a); BI-Q6 (b); BI-Q7 (a); BI-Q8 yes; BI-Q9 as written; BI-Q10 as written; BI-Q11 as written; **BI-Q12 (a)**, written into the order at BI-S2 when the simulation corpus found a step's map write ahead of its pages, and adopted under the same word. Before adopting BI-Q3, CLA re-read its premise on `worktree-bi-checkpoint-off-the-reactor` at `0e6e7d8d`: `FilePageDevice::Sync` still returns an `fsync` failure and records nothing (`src/storage/file_page_device.cpp:241-249`), and a writeback still cleans its frames before any sync, so the premise holds. `worktree-fix-data-file-fsync-sticky-failure` (another session's branch, `454879b1`, not on `main`) makes the failure sticky and stops the log; BI does not build on it and does not touch it. BI-Q9's gate, if it trips, is ruled the same way: CLA writes the ruling into the order with its proposal and adopts it |
+| **Does not settle** | Any decision that surfaces mid-stage; each is written into the order with CLA's proposal and adopted under the same word, never recorded as the operator's own mark. A push, a tag or a version still waits for the operator's word |
+| **Recorded at** | This file; `workorder-bi-checkpoint-off-the-reactor.md`'s header and §4's mark column; `index.md`'s BI row |

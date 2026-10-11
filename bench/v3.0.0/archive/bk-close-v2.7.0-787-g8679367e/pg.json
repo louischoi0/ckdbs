@@ -1,0 +1,185 @@
+{
+ "args": {
+  "port": 15434,
+  "database": "bench",
+  "rows": 10000,
+  "ops": 200,
+  "point_ops": 3000,
+  "runs": 5,
+  "pin_backend": "2",
+  "pin_driver": "4",
+  "out": "/home/cdkbs/bench-runs/bk/close/pg.json"
+ },
+ "runs": [
+  {
+   "run": 0,
+   "host_before": {
+    "loadavg": "1.37 4.43 6.03 1/495 3895392",
+    "competing": [
+     "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+    ]
+   },
+   "scan": {
+    "ops": 200,
+    "p0_us": 395.8779852837324,
+    "p25_us": 401.01492777466774,
+    "p50_us": 405.95303289592266,
+    "p90_us": 424.41103141754866,
+    "p99_us": 436.68900616467,
+    "server_cpu_us": 389.51671000000005
+   },
+   "point": {
+    "ops": 3000,
+    "p0_us": 53.419964388012886,
+    "p25_us": 56.96597509086132,
+    "p50_us": 57.72709846496582,
+    "p90_us": 76.28498133271933,
+    "p99_us": 162.17492520809174,
+    "server_cpu_us": 41.56926466666667
+   },
+   "host_after": {
+    "loadavg": "1.37 4.43 6.03 1/496 3895401",
+    "competing": [
+     "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+    ]
+   },
+   "scan_row_ns": 34.794744533333336
+  },
+  {
+   "run": 1,
+   "host_before": {
+    "loadavg": "1.37 4.43 6.03 1/496 3895404",
+    "competing": [
+     "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+    ]
+   },
+   "scan": {
+    "ops": 200,
+    "p0_us": 387.71494291722775,
+    "p25_us": 392.1820316463709,
+    "p50_us": 396.5790383517742,
+    "p90_us": 415.02597741782665,
+    "p99_us": 441.916985437274,
+    "server_cpu_us": 381.96956
+   },
+   "point": {
+    "ops": 3000,
+    "p0_us": 55.05396984517574,
+    "p25_us": 56.475051678717136,
+    "p50_us": 56.944903917610645,
+    "p90_us": 61.493017710745335,
+    "p99_us": 75.16297046095133,
+    "server_cpu_us": 40.985345
+   },
+   "host_after": {
+    "loadavg": "1.37 4.43 6.03 1/496 3895405",
+    "competing": [
+     "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+    ]
+   },
+   "scan_row_ns": 34.0984215
+  },
+  {
+   "run": 2,
+   "host_before": {
+    "loadavg": "1.37 4.43 6.03 1/496 3895408",
+    "competing": [
+     "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+    ]
+   },
+   "scan": {
+    "ops": 200,
+    "p0_us": 387.57501170039177,
+    "p25_us": 393.7639994546771,
+    "p50_us": 397.68009446561337,
+    "p90_us": 417.84089989960194,
+    "p99_us": 437.28097807615995,
+    "server_cpu_us": 383.597625
+   },
+   "point": {
+    "ops": 3000,
+    "p0_us": 52.89993714541197,
+    "p25_us": 56.385062634944916,
+    "p50_us": 56.8759860470891,
+    "p90_us": 61.99406925588846,
+    "p99_us": 76.18498057126999,
+    "server_cpu_us": 40.84707366666667
+   },
+   "host_after": {
+    "loadavg": "1.42 4.39 6.01 1/497 3895411",
+    "competing": [
+     "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+    ]
+   },
+   "scan_row_ns": 34.27505513333333
+  },
+  {
+   "run": 3,
+   "host_before": {
+    "loadavg": "1.42 4.39 6.01 1/497 3895414",
+    "competing": [
+     "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+    ]
+   },
+   "scan": {
+    "ops": 200,
+    "p0_us": 388.75697646290064,
+    "p25_us": 392.7029902115464,
+    "p50_us": 396.9389945268631,
+    "p90_us": 416.0379758104682,
+    "p99_us": 565.633992664516,
+    "server_cpu_us": 388.323
+   },
+   "point": {
+    "ops": 3000,
+    "p0_us": 54.25198469310999,
+    "p25_us": 56.47493526339531,
+    "p50_us": 56.93593993782997,
+    "p90_us": 62.725041061639786,
+    "p99_us": 78.38790770620108,
+    "server_cpu_us": 41.060401666666664
+   },
+   "host_after": {
+    "loadavg": "1.42 4.39 6.01 1/497 3895415",
+    "competing": [
+     "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+    ]
+   },
+   "scan_row_ns": 34.72625983333333
+  },
+  {
+   "run": 4,
+   "host_before": {
+    "loadavg": "1.42 4.39 6.01 2/497 3895418",
+    "competing": [
+     "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+    ]
+   },
+   "scan": {
+    "ops": 200,
+    "p0_us": 390.03801066428423,
+    "p25_us": 394.4049822166562,
+    "p50_us": 398.3710194006562,
+    "p90_us": 414.6959399804473,
+    "p99_us": 476.4900077134371,
+    "server_cpu_us": 383.87093
+   },
+   "point": {
+    "ops": 3000,
+    "p0_us": 54.751988500356674,
+    "p25_us": 56.26492202281952,
+    "p50_us": 56.72604311257601,
+    "p90_us": 62.203966081142426,
+    "p99_us": 79.49990686029196,
+    "server_cpu_us": 40.927614
+   },
+   "host_after": {
+    "loadavg": "1.42 4.39 6.01 1/497 3895420",
+    "competing": [
+     "1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f \"cmake --build build\" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd"
+    ]
+   },
+   "scan_row_ns": 34.2943316
+  }
+ ]
+}

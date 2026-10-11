@@ -245,7 +245,11 @@ client author has to know to write one.
   every frame until the next `C_SYNC`**, then answers `S_READY` with the
   transaction state. That skip-to-sync rule is the whole pipelining error
   contract; a client that does not send `C_SYNC` after an error will find
-  its next statement swallowed.
+  its next statement swallowed. **Pipelined, the answers arrive together**:
+  `S_PARSE_OK` and `S_BIND_OK` for frames sent ahead of a `C_EXECUTE` come
+  with the statement's own answer, at its completion (`protocol.md` §5,
+  BK-R7 of `workorder-bk-opt-read-update-path.md`); a client that waits for
+  `S_PARSE_OK` before executing gets it at once.
 - **Errors** are `S_ERROR {code, retryable, severity, message, detail?,
   position?}`, `code` being `category << 16 | detail`. `severity` says
   whether the connection survives: an ordinary refusal leaves it standing,

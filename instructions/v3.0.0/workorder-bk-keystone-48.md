@@ -10,12 +10,12 @@ Written 2026-10-11 on `worktree-bk-keystone-48` from `5979b5e7`
   parts that need a decision."*
 - **W3** (the same day, after the review): the operator's answers to the
   four questions CLA put, each the proposed option
-  (`raft-marks-2026-10-11.md` §2).
+  (`raft-marks-2026-10-11-keystone-48.md` §2).
 - **W4** (the same day): *"Start BK-S1 and do not stop until that
   milestone is complete in full; after that, for the matters that need a
-  decision, follow CLA's proposal."* (`raft-marks-2026-10-11.md` §3)
+  decision, follow CLA's proposal."* (`raft-marks-2026-10-11-keystone-48.md` §3)
 
-**Opened 2026-10-11 by W3** (`raft-marks-2026-10-11.md` §2): BK-Q0..Q6 are
+**Opened 2026-10-11 by W3** (`raft-marks-2026-10-11-keystone-48.md` §2): BK-Q0..Q6 are
 each marked by the operator, every one as CLA proposed - Q0 yes, Q1 (a),
 Q2 (a), Q3 (a), Q4 as written, Q5 (a), Q6 (a) - so BK-R1..R9 are rulings.
 W2 asked to be asked, so those marks are the operator's own. **W4 is the
@@ -28,6 +28,13 @@ for the word.
 **CLOSED 2026-10-11 at BK-S4** (§6): every stage landed on
 `worktree-bk-keystone-48`, the close measured at `efa6adba` against
 `5979b5e7`, `origin/main` merged in at `a45311b5`; no tag (BK-Q5 (a)).
+
+**The letter collides.** Two orders opened on `main` the same day carry
+BK too - `workorder-bk-opt-read-update-path.md` and
+`workorder-bk-sys-statistics-show-sugar.md` - found when `main` was merged
+again for the push. Cite the file, never the bare letter (`index.md`'s
+rule); this order's marks are `raft-marks-2026-10-11-keystone-48.md`, and
+`raft-marks-2026-10-11.md` is another session's record of the same day.
 
 **What the words settle, and what they leave open.**
 
@@ -513,7 +520,7 @@ on 2026-10-11 and why its reason no longer held (§0).
 
 | stage | what | done when | size |
 |---|---|---|---|
-| BK-S0 | **The order** | <ul><li>This file</li><li>Its review (§6)</li><li>The index row</li><li>`raft-marks-2026-10-11.md`'s section for the words</li></ul> | S |
+| BK-S0 | **The order** | <ul><li>This file</li><li>Its review (§6)</li><li>The index row</li><li>`raft-marks-2026-10-11-keystone-48.md`'s section for the words</li></ul> | S |
 | BK-S1 | **The census, and red first** | <ul><li>**The census** at the tip of `main`: §1.2-§1.5 and §1.8 re-run as greps, every site listed with its line, every `1 << 40` classified as Keystone or not (`decay.hpp`, `waystone_dir_test.cpp:115`), `kMaxTrxId`/`kMaxTxnId` named as the two 48-bit constants BK must not touch; the producer's truncating cast at `step_vm.cpp:2482` recorded as a pre-existing fact (BK-R3).</li><li>**The bug entry** for the narrow-pk wire truncation (BK-Q6), filed under `docs/inflight/bugs/` at the tip of `main` with the cell that shows it (an `int32` pk above 2^31 read back over KWP/1), whichever option BK-Q6 takes - under (b) the entry is deleted again when BK-S2b fixes it.</li><li>**Red cells**, each failing at `5979b5e7` for the right reason - refused where the tree refuses the value, the 40-bit answer where it computes one (the width, trail and flags-byte cells):<ul><li>`Keystone::Encode(kMaxKeystoneId, 0xFF, 0xFF)` round-trips with `kMaxKeystoneId == (1 << 48) - 1` - the width cell.</li><li>a named `INSERT` of key `2^40` is placed and read back by pk, and `2^48` is `OutOfRange` naming the value.</li><li>BK-R3's two trail cells: two pks differing only in bits 40-47, each found at its own location; and the cross-step pair `(1, k)` and `(0, k + 2^40)`, each found at its own.</li><li>a Cabin bound entry with pk `2^40 + 1` **and flags `0x3`** (a flag bit where the pk's bits 40-47 are clear) encodes and decodes to itself, pk and flags both compared - with flags `0x1` alone the half move of §1.2 would pass.</li><li>a `PAGE_INIT` with `min_key = 2^40 + 1` encodes, decodes and replays.</li><li>a heap page and a btree leaf created with `min_key = 2^40 + 1`, and a separator key `2^40 + 1` inserted in an inner node.</li><li>the flags byte: a word encoded with `flags = 0xA5` reads `0xA5` from `Decode` **and** from byte 6 of the payload, `reserved = 0x5A` from byte 7 - §1.1's grep made a claim; this is its cell.</li></ul></li><li>No engine file moved; the suite not run as a gate (the new cells are red by design).</li></ul> | S |
 | BK-S2 | **The word** (BK-R1..R5, R7, R8) | <ul><li>**Code:** `keystone.hpp`/`.cpp` (BK-R1); the three duplicates deleted and the Cabin entry word on the constants (BK-R2); `PackKey` (BK-R3); `kSuperBlockVersion` 22 (BK-R4); the eight messages (BK-R5); the sim's constants (BK-R8); §1.4's comments and §1.8's cells restated, `keystone_test.cpp`'s `reserved` cells at 8 bits. **Two cuts taken while in the files**: `RowKeystoneId` (`row_codec.cpp:911-916`), a copy of `KeystoneIdOfPayload` with its own `LoadLe64`, forwards to it - `keystone.hpp:78-82` says that decode exists once; `keystone.hpp:11-22`'s header comment restated (its `id:40` and its "system-generated, callers do not supply it" sentence, stale since BD).</li><li>**BK-S2b, only under BK-Q6 (b):** the pk field on the binary wire is sent as 8 bytes, `u64`, whatever the column's declared type (`wire/row_codec.cpp:117-118, 183-185`), as `protocol.md:93` states; a cell reads an `int32` pk above 2^31 back whole; `protocol.md` §6 and `client-manual.md` say the pk field's width is fixed; the bug entry BK-S1 filed is deleted.</li><li>**Cells:** BK-S1's red cells green; a 21 volume is refused at mount naming 21 and 22 (the existing version cell, `superblock_test.cpp:257`, re-pointed: it iterates `kSuperBlockVersion ± 1` and so passes at either version until it spells 21); `SHOW BUDGET` reports `capacity=281474976710655` and `DESCRIBE` an `ids_remaining` derived from it (`keystone_budget_test.cpp:152`); `PURGE FROM t WHERE id > 281474976710655` purges 0 and `id > 1099511627775` is a live window.</li><li>**Mutations, each repeated:** `PackKey` left at 40 (killed by the first trail cell); `PackKey`'s half move - mask on the constant, shift at 40 (killed by the cross-step pair); `cabin_bound_page.cpp:87, 104` left at 40 with `kMaxEntryPk` replaced - §1.2's half move (killed by the entry cell's flags compare); `kKeystoneIdBits`/`kKeystoneReservedBits` left at 40/16 (killed by the width cell). `Decode`'s reserved mask left at `0xFFFF` is **not** a mutant: under BK it is equivalent (§1.1), and is derived for clarity only. `kSuperBlockVersion` left at 21 (killed by the mount cell).</li><li>**The grep:** `grep -rnE "<< ?40|>> ?40|40-bit|upper 24|1099511627775" include src sim tests` finds `decay.hpp`, `relayout_planner_test.cpp` and `waystone_dir_test.cpp:115` only (§1.5).</li><li>**The suite green** and the sim corpus (`scripts/sim.sh`) green, each stated with its count.</li></ul> | M |
 | BK-S3 | **The text** (BK-R6, BK-R9) | <ul><li>§1.9's every line, `keystoneid-invariant.md` §3's table and its overturned sentence first.</li><li>`CLAUDE.md`: invariants 5, 7, 11; the pk row; this order's row in the milestone table is not added - the pk row carries the width.</li><li>The grep over `docs manual CLAUDE.md` for `2\^40|40-bit|40 bits|id:40|upper 24|1099511627775` finds only the rules document's dated overturn (this order and the marks file lie outside those paths); the three sites it cannot see - `heap-and-tuple.md:107`, `assertion.md:222-224`, `cabin.md:719-721` - checked by reading.</li></ul> | S |
@@ -522,7 +529,7 @@ on 2026-10-11 and why its reason no longer held (§0).
 ## 4. Items for the operator
 
 W2 asked that these be put to the operator; **W3 marked every one as
-proposed** (`raft-marks-2026-10-11.md` §2).
+proposed** (`raft-marks-2026-10-11-keystone-48.md` §2).
 
 | item | question | kind | CLA's proposal | mark |
 |---|---|---|---|---|

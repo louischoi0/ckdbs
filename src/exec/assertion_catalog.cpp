@@ -543,8 +543,7 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
     live.sum_col_name = stmt.sum_column.name;
     for (std::size_t i = 0; i < live.group_cols.size(); ++i) {
         live.group_col_names.push_back(stmt.group_columns[i].name);
-        live.group_type_vals.push_back(
-            access.value()->schema.columns[live.group_cols[i]].type_val);
+        live.group_columns.push_back(access.value()->schema.columns[live.group_cols[i]]);
     }
     live.chain = build.value().chain;
     live.cabin = std::move(build.value().cabin);
@@ -701,7 +700,7 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
     live.sum_col_name = stmt_value.sum_column.name;
     for (std::size_t i = 0; i < group_cols.size(); ++i) {
         live.group_col_names.push_back(stmt_value.group_columns[i].name);
-        live.group_type_vals.push_back(access.value()->schema.columns[group_cols[i]].type_val);
+        live.group_columns.push_back(access.value()->schema.columns[group_cols[i]]);
     }
 
     // The writer takes over the chain the entries are already on; a fresh one

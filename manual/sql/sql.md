@@ -464,7 +464,7 @@ Registered in `sys.types` (verified in `src/catalog/catalog.cpp`):
 | `date` | int32, days since 1970-01-01 | literal: `'2026-08-09'` |
 | `timestamp` | int64, microseconds since the epoch, UTC | literal: `'2026-08-09 12:00:00'` |
 | `decimal(p,s)`, p ≤ 18 | int64 unscaled + scale | TY01-TY11; both arguments **mandatory** |
-| `decimal(p,s)`, 19 ≤ p ≤ 38 (also spelled `decimal128(p,s)`) | int128 | a separate type, never a widening of the 8-byte one |
+| `decimal(p,s)`, 19 ≤ p ≤ 38 (DESCRIBE shows it as `decimal128(p,s)`, a name only: declare it as `decimal(p,s)`) | int128 | a separate type, never a widening of the 8-byte one |
 
 - **A bare `decimal` is refused, never defaulted** — a default scale is a
   silent decision about someone's money, and only the parser can still tell
@@ -606,7 +606,8 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
     type its neighbour or its column has. `int32 + int64` needs a `CAST`.
     A decimal result of another scale is narrowed by `ROUND(x, s)` or `CAST`,
     which round half away from zero; a quotient is `decimal` with the
-    dividend's scale and up to 16 more places.
+    dividend's scale and up to 16 more places. An integer literal divided
+    by a decimal takes the decimal's type: `2 / price` is `2.00 / price`.
   - **Arithmetic is checked in its own type at every step**: a result
     outside it is `OutOfRange` at that row, naming the operator's byte, the
     expression's first byte and the row's key, and a division by zero is

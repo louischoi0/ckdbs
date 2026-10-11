@@ -232,7 +232,7 @@ Widening the id beyond 40 bits was considered and rejected before BK, on
 the ground that it would forfeit the fixed 64-bit super-column word
 (40+8+16) the tuple header, meta-pool handle and page arithmetic were
 built on. **Overturned on 2026-10-11 by the operator** (BK, W2,
-`instructions/v3.0.0/raft-marks-2026-10-11.md` §1): the word stays 64
+`instructions/v3.0.0/raft-marks-2026-10-11-keystone-48.md` §1): the word stays 64
 bits (48+8+8), the meta-pool handle had already been retired, and nothing
 in page arithmetic read the id's width (`workorder-bk-keystone-48.md`
 §1.7), so the reason no longer held and the id took eight bits of the

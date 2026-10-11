@@ -225,7 +225,11 @@ public:
     std::uint64_t PagesRecycled() const noexcept { return pages_recycled_; }
 
 private:
-    StatusOr<PageId> TailFor(std::uint64_t trx_id, std::size_t need);
+    // The page the next record goes on, **held**: the caller appends
+    // through the hold that checked its room (BK-S3,
+    // `workorder-bk-opt-read-update-path.md`), not through a second
+    // fetch of the same page.
+    StatusOr<storage::PageRef> TailFor(std::uint64_t trx_id, std::size_t need);
     // Appends the PAGE_INIT for a new or reclaimed page and returns its
     // LSN - `wal::kNoLsn` on the unlogged path. **Stamping is separate**
     // because FormatUndoPage memsets the frame, `page_lsn` included, so

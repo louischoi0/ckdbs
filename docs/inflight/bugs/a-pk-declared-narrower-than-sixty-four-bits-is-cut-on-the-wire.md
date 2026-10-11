@@ -59,7 +59,7 @@ bytes. A client that then names the pk it received in an `UPDATE` or
 
 Known and unscheduled. BK-Q6 was marked (a) by the operator on 2026-10-11
 (`instructions/v3.0.0/workorder-bk-keystone-48.md` §4,
-`raft-marks-2026-10-11.md` §2): this entry now, the fix in its own letter.
+`raft-marks-2026-10-11-keystone-48.md` §2): this entry now, the fix in its own letter.
 The fix CLA recommends is BK-Q6 (b): field 0 is sent as 8 bytes, u64,
 whatever the column declares, `DescribeSchema` reports `type_len` 8 for
 it, and `protocol.md` §6 and `client-manual.md` say the pk field's width is

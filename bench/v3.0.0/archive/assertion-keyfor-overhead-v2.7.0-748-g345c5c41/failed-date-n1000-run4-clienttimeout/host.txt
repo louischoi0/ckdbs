@@ -1,0 +1,6 @@
+loadavg_at_start=8.41
+8.41 4.49 4.50 2/545 3023771
+1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f "cmake --build build" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd
+3022594 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791598544815-th8w6y.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/9e4ebe07-b231-4ceb-81c2-e87506438cb1/scratchpad/s6_docs2.py && cd build && ctest -j8 --timeout 900 2>&1 | tail -8' < /dev/null && pwd -P >| /tmp/claude-df52-cwd
+3022596 ctest -j8 --timeout 900
+3023770 /bin/sh -c echo loadavg_at_start=8.41; cat /proc/loadavg; pgrep -a -f 'cc1plus|cmake --build|ctest' || echo no-competing
