@@ -296,27 +296,17 @@ StatusOr<FunctionPredicate> LowerFunctionConjunct(const Scope& scope,
 }
 
 // The statement's class: the most volatile purity any function conjunct
-// calls, through every sub-chain (AR1 §3).
-DeterminismClass DeterminismOf(const SubChain& sub);
-
-DeterminismClass DeterminismOf(const std::vector<Step>& steps) {
+// calls, through every sub-chain, hoisted or placed (AR1 §3).
+DeterminismClass DeterminismOf(const StepChain& chain) {
     DeterminismClass out = DeterminismClass::kD0;
-    for (const Step& step : steps) {
+    ForEachStep(chain, [&](const Step& step) {
         for (const FunctionPredicate& pred : step.fn_residual) {
             for (const FunctionSide* side : {&pred.lhs, &pred.rhs}) {
                 if (side->call.has_value()) out = std::max(out, ClassOf(side->call->fn->purity));
             }
         }
-        for (const SubChain& sub : step.sub_chains) out = std::max(out, DeterminismOf(sub));
-    }
-    return out;
-}
-
-// A sub-chain's own steps and the chains it hoisted: a function conjunct in
-// either decides the statement's class.
-DeterminismClass DeterminismOf(const SubChain& sub) {
-    DeterminismClass out = DeterminismOf(sub.steps);
-    for (const SubChain& hoisted : sub.hoisted) out = std::max(out, DeterminismOf(hoisted));
+        return true;
+    });
     return out;
 }
 
@@ -1358,13 +1348,8 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
     auto chain = CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
                               view, /*inner_build=*/true, declare);
     if (!chain.ok()) return chain;
-    // The class folds over the whole statement - every step, every
-    // sub-chain, hoisted or placed - after compile, from what was lowered.
     StepChain& out = chain.value();
-    out.determinism = DeterminismOf(out.steps);
-    for (const SubChain& sub : out.hoisted) {
-        out.determinism = std::max(out.determinism, DeterminismOf(sub));
-    }
+    out.determinism = DeterminismOf(out);
     return chain;
 }
 

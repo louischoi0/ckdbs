@@ -417,17 +417,37 @@ TEST_F(ExecSubqueryTest, ADepthThreeUncorrelatedExistsIsEvaluated) {
               (std::vector<std::string>{"alice", "carol"}));
 }
 
-TEST_F(ExecSubqueryTest, ANestedHoistedChainRunsOncePerRunOfItsEnclosingSubChain) {
+TEST_F(ExecSubqueryTest, ANestedHoistedChainRunsOncePerStatement) {
     // The enclosing sub-chain is correlated, so it runs once per outer row;
-    // what it hoists runs once per such run - never once per row *of* it.
+    // what it hoists refers to nothing outside itself and answers once for
+    // the statement - not once per run of the sub-chain around it, which
+    // made a statement quadratic in the outer rows.
     ExecStats stats;
     EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE EXISTS ("
                   "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
                   "  AND EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'AAPL'))",
                   &stats),
               (std::vector<std::string>{"alice", "carol"}));
-    // 3 runs of the correlated sub-chain + 3 of its hoisted one.
-    EXPECT_EQ(stats.Total().sub_chain_runs, 6u);
+    // 3 runs of the correlated sub-chain + 1 of its hoisted one.
+    EXPECT_EQ(stats.Total().sub_chain_runs, 4u);
+
+    // A false answer is kept too: every outer row is answered without the
+    // correlated sub-chain opening a step, and the hoisted chain ran once.
+    ExecStats none;
+    EXPECT_TRUE(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                    "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
+                    "  AND EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))",
+                    &none)
+                    .empty());
+    EXPECT_EQ(none.Total().sub_chain_runs, 4u);
+
+    // And the answer is the statement's, not the plan's: a witness for the
+    // hoisted chain inserted between two runs changes the second one.
+    Insert("trade", {Int(2), Str("NONE")});  // bob
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                  "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
+                  "  AND EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))"),
+              (std::vector<std::string>{"alice", "bob", "carol"}));
 }
 
 TEST_F(ExecSubqueryTest, ANestedChainWhoseValueColumnIsTheOutermostRowIsNotHoisted) {

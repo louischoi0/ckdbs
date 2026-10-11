@@ -809,6 +809,44 @@ struct StepChain {
 
     bool sorted() const noexcept { return !sort_keys.empty(); }
 };
+
+// **The one walk of a step tree.** Every step under a chain, sub-chain or
+// step, in one order: a chain's hoisted sub-chains, then its steps, and each
+// step before the sub-chains it carries. `fn(const Step&)` answers whether to
+// go on, and the walk answers whether it finished. Every walk that needs
+// neither depth nor structure is written over this, so a field added to the
+// tree is followed by all of them or none.
+namespace detail {
+template <typename Fn>
+bool VisitSteps(const std::vector<Step>& steps, Fn& fn);
+
+template <typename Fn>
+bool VisitSubChains(const std::vector<SubChain>& subs, Fn& fn) {
+    for (const SubChain& sub : subs) {
+        if (!VisitSubChains(sub.hoisted, fn) || !VisitSteps(sub.steps, fn)) return false;
+    }
+    return true;
+}
+
+template <typename Fn>
+bool VisitSteps(const std::vector<Step>& steps, Fn& fn) {
+    for (const Step& step : steps) {
+        if (!fn(step) || !VisitSubChains(step.sub_chains, fn)) return false;
+    }
+    return true;
+}
+}  // namespace detail
+
+template <typename Fn>
+bool ForEachStep(const StepChain& chain, Fn fn) {
+    return detail::VisitSubChains(chain.hoisted, fn) && detail::VisitSteps(chain.steps, fn);
+}
+
+template <typename Fn>
+bool ForEachStep(const Step& step, Fn fn) {
+    return fn(step) && detail::VisitSubChains(step.sub_chains, fn);
+}
+
 // Whether any step anywhere in `chain` - sub-chains included - is one a
 // Waystone trail may replace.
 //

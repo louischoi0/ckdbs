@@ -874,6 +874,25 @@ TEST_F(CommandDispatcherTest, SubqueryPredicatesExecuteAndActuallyFilter) {
     EXPECT_NE(d.Dispatch("SELECT * FROM acct").response.find("alice"), std::string::npos);
 }
 
+// A NULL tested against a non-empty subquery result is UNKNOWN for IN and
+// NOT IN alike, so neither admits the row. `docs/inflight/bugs/a-null-
+// probe-not-in-a-non-empty-subquery-answers-true.md`: NOT IN answers TRUE
+// and admits it. Disabled until the fix lands, as the entry says.
+TEST_F(CommandDispatcherTest, DISABLED_ANullProbeIsUnknownAgainstANonEmptySubquery) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE n (id int64, v int64 NULL)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE s (id int64, x int64)").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO n VALUES (NULL)").response.substr(0, 8), "INSERTED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO n VALUES (1)").response.substr(0, 8), "INSERTED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO s VALUES (2)").response.substr(0, 8), "INSERTED");
+
+    // Row 2 (v = 1) is not in {2}; row 1 (v = NULL) is unknown.
+    EXPECT_EQ(d.Dispatch("SELECT id FROM n WHERE v NOT IN (SELECT x FROM s)").response,
+              "id\\n2");
+    EXPECT_EQ(d.Dispatch("SELECT id FROM n WHERE v IN (SELECT x FROM s)").response, "id");
+}
+
 TEST_F(CommandDispatcherTest, ANestedUncorrelatedExistsFiltersAWriteToo) {
     // An uncorrelated EXISTS inside a sub-chain was dropped when the block
     // was lowered, for a write's WHERE exactly as for a SELECT's: the

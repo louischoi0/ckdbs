@@ -8,35 +8,8 @@
 
 namespace kds::exec {
 
-namespace {
-
-bool SubChainHasReplayable(const SubChain& sub) noexcept;
-
-bool StepsHaveReplayable(const std::vector<Step>& steps) noexcept {
-    for (const Step& step : steps) {
-        if (IsTrailReplayable(step.kind)) return true;
-        for (const SubChain& sub : step.sub_chains) {
-            if (SubChainHasReplayable(sub)) return true;
-        }
-    }
-    return false;
-}
-
-bool SubChainHasReplayable(const SubChain& sub) noexcept {
-    for (const SubChain& hoisted : sub.hoisted) {
-        if (SubChainHasReplayable(hoisted)) return true;
-    }
-    return StepsHaveReplayable(sub.steps);
-}
-
-}  // namespace
-
 bool HasReplayableStep(const StepChain& chain) noexcept {
-    if (StepsHaveReplayable(chain.steps)) return true;
-    for (const SubChain& sub : chain.hoisted) {
-        if (SubChainHasReplayable(sub)) return true;
-    }
-    return false;
+    return !ForEachStep(chain, [](const Step& step) { return !IsTrailReplayable(step.kind); });
 }
 
 std::uint8_t StoredAccessKind(AccessKind kind) noexcept {
@@ -380,62 +353,16 @@ std::string FormatPlan(const StepChain& chain) {
     return os.str();
 }
 
-namespace {
-
-// One line per step that recorded anything, in step_id order. Sub-chain
-// steps appear here too, since step_id is global across the statement -
-// which is exactly why the stats vector needs no parent linkage.
-void CollectStepIds(const Step& step, std::vector<std::uint32_t>& out);
-
-void CollectStepIds(const SubChain& sub, std::vector<std::uint32_t>& out) {
-    for (const SubChain& hoisted : sub.hoisted) CollectStepIds(hoisted, out);
-    for (const Step& step : sub.steps) CollectStepIds(step, out);
-}
-
-void CollectStepIds(const Step& step, std::vector<std::uint32_t>& out) {
-    out.push_back(step.step_id);
-    for (const SubChain& sub : step.sub_chains) CollectStepIds(sub, out);
-}
-
-const Step* FindStep(const StepChain& chain, std::uint32_t step_id);
-
-const Step* FindStep(const SubChain& sub, std::uint32_t step_id) {
-    for (const SubChain& hoisted : sub.hoisted) {
-        if (const Step* found = FindStep(hoisted, step_id)) return found;
-    }
-    for (const Step& step : sub.steps) {
-        if (step.step_id == step_id) return &step;
-        for (const SubChain& nested : step.sub_chains) {
-            if (const Step* found = FindStep(nested, step_id)) return found;
-        }
-    }
-    return nullptr;
-}
-
-const Step* FindStep(const StepChain& chain, std::uint32_t step_id) {
-    for (const SubChain& sub : chain.hoisted) {
-        if (const Step* found = FindStep(sub, step_id)) return found;
-    }
-    for (const Step& step : chain.steps) {
-        if (step.step_id == step_id) return &step;
-        for (const SubChain& sub : step.sub_chains) {
-            if (const Step* found = FindStep(sub, step_id)) return found;
-        }
-    }
-    return nullptr;
-}
-
-}  // namespace
-
 std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
-    std::vector<std::uint32_t> ids;
-    for (const SubChain& sub : chain.hoisted) CollectStepIds(sub, ids);
-    for (const Step& step : chain.steps) CollectStepIds(step, ids);
-
+    // One line per step that recorded anything, in the walk's order.
+    // Sub-chain steps appear here too, since step_id is global across the
+    // statement - which is exactly why the stats vector needs no parent
+    // linkage.
     std::ostringstream os;
     bool first = true;
-    for (std::uint32_t id : ids) {
-        if (id >= stats.steps.size()) continue;
+    ForEachStep(chain, [&](const Step& step) {
+        const std::uint32_t id = step.step_id;
+        if (id >= stats.steps.size()) return true;
         const StepStats& counters = stats.steps[id];
         // A step that recorded nothing is omitted - see the header: for a
         // chain with sub-chains, "which steps ran at all" is usually the
@@ -445,16 +372,14 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
             counters.trail_misses == 0 && counters.range_pages_pruned == 0 &&
             counters.cabin_hits == 0 && counters.cabin_misses == 0 &&
             counters.index_entries_scanned == 0) {
-            continue;
+            return true;
         }
 
         if (!first) os << '\n';
         first = false;
 
-        const Step* step = FindStep(chain, id);
-        os << "step " << id << ' '
-           << (step != nullptr ? AccessKindName(step->kind) : "?") << ' '
-           << (step != nullptr && !step->rel_name.empty() ? step->rel_name : std::string("?"))
+        os << "step " << id << ' ' << AccessKindName(step.kind) << ' '
+           << (!step.rel_name.empty() ? step.rel_name : std::string("?"))
            << " opens=" << counters.relation_opens << " examined=" << counters.rows_examined
            << " matched=" << counters.rows_matched;
 
@@ -531,12 +456,13 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         // first row's walk *was* the build - which, with the `Probe` kind
         // printed on the plan line above, is why neither is spelled §4's
         // `probes=k` (workplan JB7 carries the argument).
-        if (step != nullptr && step->build.has_value()) {
+        if (step.build.has_value()) {
             os << " inner_built=" << counters.inner_builds;
             if (counters.build_rows > 0) os << " build_rows=" << counters.build_rows;
             if (counters.build_probes > 0) os << " build_probes=" << counters.build_probes;
         }
-    }
+        return true;
+    });
     return os.str();
 }
 
