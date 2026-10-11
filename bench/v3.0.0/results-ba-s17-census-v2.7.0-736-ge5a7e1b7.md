@@ -9,14 +9,21 @@ sessions and `cores = 2`, `group` reads 6,102-6,606 stmt/s on the write shapes (
 5,035-5,325 stmt/s read a day earlier and re-read at +1.3 to +7.4 % today. The WAL append's
 latch wait fell from 10.01 % to 0.38 % of `cores` x span, the sync gate from 55.35 % to
 9.60 %, and no refusal reaches a client. **Two things BA carries are not met**: the carve's
-longest stall at `relaxed` is a median 226-258 ms against BA-S13's 10 ms exit (BA-S4: 20-46 ms),
-and the checkpoint half (BI-Q1) is unbuilt and its longest stall at `relaxed` is also longer
-than BA-S4's. **Corrected 2026-10-11 by `results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`**: the
-checkpoint's lengthening is BA-S13's, which moved the pool's writeback from the carve to the
-checkpoint, and the carve's is not BA-S13's - the carve's number is a life-long maximum that
-reads where a once-a-run device stall of the data file's `fsync` lands. Cells BA did not change read +12 to +28 % over BA-S4 on the synced
+longest stall at `relaxed` is a median 226-258 ms against BA-S13's 10 ms exit (BA-S4: 20-46 ms,
+so it is worse), and the checkpoint half (BI-Q1) is unbuilt and its longest stall at `relaxed`
+is also longer than BA-S4's. Cells BA did not change read +12 to +28 % over BA-S4 on the synced
 write shapes at `cores = 1`, a shift the same-day A/B shows is not BA's and the PostgreSQL control
 does not reproduce; **ratios against BA-S4 on synced cells carry it.**
+
+**Correction, 2026-10-11** (`results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`; `relaxed` at
+`cores = 1` only). **The `relaxed` checkpoint's lengthening is BA-S13's**: it moved the pool's
+writeback from the carve, which synced the whole pool, to the checkpoint, and reverting that
+one change returns the checkpoint to BA-S4's length. **The `relaxed` carve's is not BA-S13's**:
+reverting BA-S13 leaves the carve as long, and BA-S12, before it, already reads 258 ms and
+more. The carve number is a life-long maximum; at B it reads a data-file `fsync` stall BA-S4's
+binary also meets, and maxima above 300 ms are unexplained. `cores` 2 and 4, and carves inside
+the measured span, were not re-measured. The readings below that name BA-S13's sync as the
+carve's cause, or call the checkpoint comparison inseparable, are withdrawn.
 
 - **B** = `e5a7e1b7`, `v2.7.0-736-ge5a7e1b7`; the binary is the same copy as the A/B file's B,
   sha256 `d2a6977f220a32147b6a2df985aec10b60ee7411fe3fca3381b78e46e525223e`. The worktree
@@ -430,33 +437,18 @@ since the server started and include setup and warm-up (reported as read, never 
     20.5, 30.5 and 45.8 ms: 5.5-11 times worse**, 180 of 225 runs over 10 ms, maximum 352.4 ms.
     The whole-matrix maximum fell from 2,242 ms to 352 ms and 243 of 675 runs are over 10 ms
     against 340, but all of the remainder's weight sits in `relaxed`.
-  - **Corrected 2026-10-11** (`results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`): not
-    BA-S13's. With BA-S13's persist reverted the carve still reads 277-620 ms, and BA-S12,
-    before BA-S13, reads 258-886 ms. A carve's time is its data-file `fsync` (median 3.2 ms,
-    up to 252 ms), and the life-long maximum reads a 250-300 ms device stall that BA-S4's own
-    binary meets about once a run, inside a carve or not. The reading below is withdrawn.
-  - *Withdrawn:* BA-S13's text says its carve now syncs the data file
-    unconditionally and that "the data file's `fdatasync` flushes everything else unsynced in the
-    file too"; at `relaxed` nothing else syncs the data file, so the carve may pay for the whole
-    backlog of dirty pages. That is a reading consistent with the direction and with the
-    A/B file's probe (carve 1.9-3.9 ms on a small fresh server), and it is untested.
+  - Not BA-S13's at `cores = 1`; see the correction under the thesis.
 - **The checkpoint half is unbuilt** (BA-R10's third paragraph waits for the operator's mark on
   BI-Q1) and its longest stall is not better: median 92.1 ms and maximum 1,555 ms against
   BA-S4's 46.5 ms and 3,094 ms; runs over 10 ms 648 of 675 against 596. **At `relaxed` it is
   1.7-6.4 times longer** (median 122.8, 187.9 and 209.1 ms against 19.3, 55.9 and 121.0 ms);
   at `group` and `strict` it ranges from 0.3x to 1.6x of BA-S4's. The A/B file reads the same
   stall from one connection: a 62-226 ms statement in nearly every 10,000-row run.
-- **Whether the checkpoint got longer or the carve's old whole-pool sync had been doing part of
-  its work is not separable here**: both readings predict this table. **Separated 2026-10-11**
-  (`results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`): the second. At `relaxed` `cores = 1`, the
-  checkpoint reads 9.4-18.0 ms before BA-S13, 87-124 ms at B, and 13-19 ms at B with BA-S13's
-  carve persist reverted to the whole-pool sync.
+- The checkpoint took over the carve's old whole-pool writeback; see the correction under the
+  thesis.
 - Carves in the measured span: 16,345 (BA-S4: 13,786). Checkpoint runs: 2,393 (2,356).
 - **Verdict: BA-S13 is not met.** The carve's stall is gone at `group` and `strict` and larger
-  at `relaxed`; the checkpoint's is unchanged or larger and is BI-Q1's. **Restated
-  2026-10-11**: BA-S13 is not met at `relaxed`, and the larger `relaxed` carve is not BA-S13's
-  doing; the larger `relaxed` checkpoint is BA-S13's, as work moved off the carve, and its cure
-  stays BI-Q1's.
+  at `relaxed`; the checkpoint's is unchanged or larger and is BI-Q1's.
 
 ### BA-S14: P9, the rightmost leaf
 
@@ -631,20 +623,17 @@ these do not.
   which is what removing a latch wait predicts and is not attributed to S12 alone.
 - **The remaining bound is the stall, not a latch.** At `relaxed` the carve and the checkpoint
   hold a reactor for a median 226-258 ms and 123-209 ms, which BA-S4 saw at 20-46 ms and 19-121
-  ms. The one BA stage aimed at the carve made it better at the synced durabilities and
-  lengthened the `relaxed` checkpoint by moving the pool's writeback onto it; the `relaxed`
-  carve's maximum reads a device stall of the data file's `fsync`, not BA-S13's work
-  (corrected 2026-10-11, `results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`).
+  ms. The one BA stage aimed at the carve made it better at the synced durabilities and moved
+  the pool's writeback onto the `relaxed` checkpoint, whose cure is BI's (correction under the
+  thesis).
 - **`strict` at `cores = 1` is the one synced cell that still does not batch** (862 stmt/s on
   16 sessions against 5,569 for `group`), as designed by BA-S7 and not as PostgreSQL does it.
 
 ## 7. What BA carries
 
 1. **The relaxed carve** (median 226-258 ms against a 10 ms exit; BA-S4 20-46 ms): BA-S13 is
-   not met at `relaxed`. The life-long maximum reads a data-file `fsync` stall; carves inside
-   the measured span were not compared (`results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`).
-2. **The checkpoint half** (BI-Q1, unmarked): unbuilt, and longer than at BA-S4 at `relaxed`
-   because BA-S13 moved the pool's writeback onto it.
+   not met at `relaxed`.
+2. **The checkpoint half** (BI-Q1, unmarked): unbuilt, and longer than at BA-S4 at `relaxed`.
 3. **P7's residue**: the sync gate over 5 % in two `group` cells at 8 sessions (9.60 %, 7.73 %);
    the snapshot ceiling's share is a wait on parked statements and is not comparable to BA-S4's;
    `strict` at `cores = 1` does not batch.
@@ -661,10 +650,6 @@ these do not.
 
 ## 8. Where the data could not support a claim
 
-- The carve's relaxed regression has a candidate cause (BA-S13's own caveat) and no test.
-  *Tested 2026-10-11 and withdrawn: not BA-S13's.*
-- The checkpoint comparison cannot separate "longer" from "took over the carve's work".
-  *Separated 2026-10-11: it took over the carve's work.*
 - `c3.txt`'s generator is not recorded; its meaning is read from the sampler.
 - The screen's input is not archived; BA-S4 was not screened.
 - The synced `cores = 1` +20 % has no isolated cause; the experiment to run is named above.

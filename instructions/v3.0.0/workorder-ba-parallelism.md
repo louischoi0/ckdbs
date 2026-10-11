@@ -2295,14 +2295,10 @@ and fast-forwarded to `1a5176ae` (BJ's commits, no BA code). The suite at
   - **BA-S13 not met.** The carve's median is 3.6-5.9 ms under `group`
     and `strict`, but **226-258 ms under `relaxed`**, against BA-S4's
     20-46 ms and the 10 ms exit. **Corrected 2026-10-11**
-    (`bench/v3.0.0/results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`): the
-    `relaxed` carve number is not BA-S13's. It is a maximum over the
-    server's life that reads a data-file `fsync` stall BA-S4's binary
-    also meets, and reverting BA-S13's persist leaves it at 277-620 ms.
-    **The `relaxed` checkpoint's lengthening is BA-S13's**: it moved the
-    pool's writeback from the carve to the checkpoint (9.4-18.0 ms
-    before BA-S13, 87-124 ms at B, 13-19 ms with the carve's whole-pool
-    sync restored, `relaxed` `cores = 1`).
+    (`bench/v3.0.0/results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`,
+    `relaxed` `cores = 1`): the `relaxed` carve's number is not BA-S13's,
+    and the `relaxed` checkpoint's lengthening is, since BA-S13 moved the
+    pool's writeback from the carve to the checkpoint.
   - **The `relaxed` path is unchanged**, as BA-S4's verdicts (P1-P5 not
     material) predicted. `cores = 4` still falls below `cores = 2`;
     unresolved.
@@ -2315,11 +2311,9 @@ and fast-forwarded to `1a5176ae` (BJ's commits, no BA code). The suite at
 2026-10-10, translated: *"and close that milestone"*. It carries these stops
 and findings:
 - **The checkpoint half of P12** waits for the operator's mark on BI-Q1.
-  B's 10,000-row checkpoint stall belongs to it, lengthened by BA-S13's
-  move of the pool's writeback off the carve.
-- **The `relaxed` carve's stall**, a data-file `fsync` stall the life-long
-  maximum reads, with carves inside the measured span not compared:
-  `known-gaps.md`, "Carve and checkpoint stalls".
+  B's 10,000-row checkpoint stall belongs to it.
+- **The `relaxed` carve's and checkpoint's stalls**: `known-gaps.md`,
+  "Carve and checkpoint stalls".
 - **The walk's per-row cost and the pk `SELECT`'s +0.5-0.95 µs**: not
   bisected to a stage.
 - **BA-S15's 64-page slice**: not varied.
