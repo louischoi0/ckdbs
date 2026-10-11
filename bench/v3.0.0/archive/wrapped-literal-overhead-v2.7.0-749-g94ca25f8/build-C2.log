@@ -1,0 +1,9 @@
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /tmp/claude-1000/-home-cdkbs-ckdbs/305b0005-d7d2-422c-b0ed-247e8d0b8e88/scratchpad/lw/base-ctl/build-release
+[  2%] Building CXX object CMakeFiles/kds.dir/src/exec/step_compiler.cpp.o
+[  2%] Building CXX object CMakeFiles/kds.dir/src/exec/row_codec.cpp.o
+[  2%] Linking CXX static library libkds.a
+[ 97%] Built target kds
+[100%] Linking CXX executable kds_server
+[100%] Built target kds_server

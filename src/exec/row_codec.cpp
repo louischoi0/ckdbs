@@ -654,8 +654,8 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
     // An integer literal wider than int64 **wrapped in the lexer**, which
     // has always been the token's documented behaviour - `int_val` cannot
     // be trusted for a range question, only `raw_int_text` can (token.hpp's
-    // digits() note). The three arms below that read `int_val` as the value
-    // must refuse a wrapped one, or `= 36893488147419103232` coerces as the
+    // digits() note). The arms below that read `int_val` as the value must
+    // refuse a wrapped one, or `= 36893488147419103232` coerces as the
     // 0 it wrapped to and matches rows the client never named. Scoped to
     // those arms and not hoisted: a uint64 comparison legitimately carries
     // its upper half in the digits (`ValueAsUint64`), and the wide-decimal
@@ -808,8 +808,35 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             return Status::OK();
         }
 
+        case catalog::kTypeValInt8:
+        case catalog::kTypeValInt16:
+        case catalog::kTypeValInt32:
+        case catalog::kTypeValInt64:
+        case catalog::kTypeValBool:
+            // These columns hold nothing outside int64, so a wrapped literal
+            // names nothing they hold: `= 18446744073709551621` is not
+            // `= 5`. Refused here, as the INSERT's encode refuses it, so a
+            // WHERE, an UPDATE's and a DELETE's cannot read or touch a row
+            // the client never named.
+            if (int_literal_wrapped) {
+                return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                          " is outside the range of an int64");
+            }
+            return Status::OK();
+
+        case kTypeValUint64:
+            // The same rule over the unsigned range, which the digits carry
+            // (`ValueAsUint64`): a negative literal or one past 2^64 - 1
+            // names nothing the column holds. Compared, it answered false
+            // under every operator - `!=` and `>` included - and no row.
+            if (val.type == parser::ValueType::kInt && !ValueAsUint64(val).ok()) {
+                return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                          " is outside the range of a uint64");
+            }
+            return Status::OK();
+
         default:
-            // Every other type keeps the behaviour it had before this task.
+            // Every other type is compared as it was written.
             return Status::OK();
     }
 }
