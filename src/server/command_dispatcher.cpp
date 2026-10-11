@@ -3595,6 +3595,31 @@ std::vector<parser::AstValue> CommandDispatcher::InsertBodyOf(
     return {};
 }
 
+namespace {
+
+// The parent row an integer foreign-key value names, or nothing when it names
+// none: a parent's pk is a Keystone id in [kFirstRowId, kMaxKeystoneId]
+// (invariant 11), so a negative value, zero, a value past 2^40 - 1, and a
+// literal past int64 (a uint64 above INT64_MAX among them, whose `int_val`
+// has wrapped) reference no row that can exist. Such a value is an absent
+// parent - `FK_VIOLATION` - and is not looked up.
+std::optional<std::uint64_t> FkParentIdOf(const parser::AstValue& value) {
+    if (parser::IntLiteralWrapped(value) ||
+        value.int_val < static_cast<std::int64_t>(catalog::kFirstRowId) ||
+        static_cast<std::uint64_t>(value.int_val) > kMaxKeystoneId) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint64_t>(value.int_val);
+}
+
+// The value as the statement gave it, for a message: a literal's own digits
+// where it has them, which a wrapped `int_val` is not.
+std::string FkValueText(const parser::AstValue& value) {
+    return value.raw_int_text.empty() ? std::to_string(value.int_val) : value.raw_int_text;
+}
+
+}  // namespace
+
 Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& child,
                                                     const std::vector<parser::AstValue>& body,
                                                     exec::FkParentVerdicts& into,
@@ -3604,8 +3629,11 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         const parser::AstValue& value = body[fk.column_no - 1];
         // The same bail `CheckForeignKeyOnWrite` takes, and it must be the
         // same one: a value that is not an id cannot reference one, and
-        // resolving it would put a nonsense pk in the held set.
-        if (value.type != parser::ValueType::kInt || value.int_val < 0) continue;
+        // resolving it would put a nonsense pk in the held set. An integer
+        // that is no id is that check's violation, with nothing to look up.
+        if (value.type != parser::ValueType::kInt) continue;
+        const std::optional<std::uint64_t> id = FkParentIdOf(value);
+        if (!id.has_value()) continue;
 
         // ---- The one thing this pass does not hoist -------------------
         //
@@ -3624,7 +3652,7 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // the ordering above alone.
         if (fk.rel_oid == child.oid) continue;
 
-        const auto pk = static_cast<std::uint64_t>(value.int_val);
+        const std::uint64_t pk = *id;
         if (into.Find(fk.rel_oid, pk) != nullptr) continue;  // AH-R2's dedup
 
         auto parent = catalog_.InitTableAccess(fk.rel_oid);
@@ -3716,16 +3744,24 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     //     message about the column's declared type, which is the better
     //     error - a type mistake reported as a constraint violation sends
     //     the reader looking at the wrong table.
-    if (value.type != parser::ValueType::kInt || value.int_val < 0) return Status::OK();
+    // An integer is not a type mistake, and one that is no Keystone id -
+    // `-7`, `0`, past 2^40 - 1 - names no parent that can exist: the
+    // violation, with no lock taken and nothing descended. It used to pass
+    // here unchecked when negative, and the codec stored it.
+    if (value.type != parser::ValueType::kInt) return Status::OK();
 
-    const auto parent_pk = static_cast<std::uint64_t>(value.int_val);
+    const std::optional<std::uint64_t> id = FkParentIdOf(value);
+    const std::uint64_t parent_pk = id.value_or(0);
 
     // The held verdict, resolved by `ResolveForeignKeyParents` before any
     // row work (§2a). No descent happens here and none may be added: this
     // call site is inside an open `WriteScope`, which is the place AH-R1
     // exists to keep free of anything that could need to wait.
     exec::FkVerdict resolved{};
-    if (const exec::FkVerdict* found = held.Find(fk.rel_oid, parent_pk); found != nullptr) {
+    if (!id.has_value()) {
+        resolved = exec::FkVerdict::kViolation;
+    } else if (const exec::FkVerdict* found = held.Find(fk.rel_oid, parent_pk);
+               found != nullptr) {
         resolved = *found;
     } else if (fk.rel_oid == child.oid) {
         // The self-referencing arm, the one case the extraction pass
@@ -3823,9 +3859,8 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
                                      *verdict == exec::FkVerdict::kViolation;
                           });
     }
-    return Status::FkViolation("'" + column + "' references row id=" +
-                               std::to_string(value.int_val) + " of '" +
-                               RelationNameOf(fk.rel_oid) + "', which does not exist");
+    return Status::FkViolation("'" + column + "' references row id=" + FkValueText(value) +
+                               " of '" + RelationNameOf(fk.rel_oid) + "', which does not exist");
 }
 
 Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent,

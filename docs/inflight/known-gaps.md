@@ -991,8 +991,6 @@ Written at BJ's close on `worktree-bj-expression-update`. Owned by
   every-row `UPDATE` about +6 to +19 ns a row slower than before BJ; the share
   between the parser and `UpdateInner` is not attributed (`perf` is locked out).
   A constant-folding or lazier-allocation second attempt was not made.
-- **Filed beside it:** `docs/inflight/bugs/a-negative-foreign-key-value-skips-the-parent-check.md`
-  (older than BJ; a folded constant now reaches it).
 
 ## Carve and checkpoint stalls
 
