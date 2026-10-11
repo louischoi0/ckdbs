@@ -1,0 +1,25 @@
+started 2026-10-11 20:05:07 UTC
+cell relaxed-c1 start 20:05:07 load 0.51 1.72 2.83
+cell relaxed-c1 end 20:11:13 rc=0 load 1.71 1.81 2.52
+cell relaxed-c2 start 20:11:13 load 1.71 1.81 2.52
+cell relaxed-c2 end 20:18:42 rc=0 load 1.77 1.87 2.28
+cell group-c1 start 20:18:42 load 1.77 1.87 2.28
+cell group-c1 end 20:28:04 rc=0 load 1.09 1.30 1.79
+cell group-c2 start 20:28:04 load 1.09 1.30 1.79
+cell group-c2 end 20:37:43 rc=0 load 1.46 1.42 1.62
+cell dense-c1 start 20:37:43 load 1.46 1.42 1.62
+cell dense-c1 end 20:40:36 rc=0 load 1.88 1.65 1.68
+cell dense-c2 start 20:40:36 load 1.88 1.65 1.68
+cell dense-c2 end 20:43:32 rc=0 load 1.73 1.70 1.70
+cell aa-c1 start 20:43:32 load 1.73 1.70 1.70
+cell aa-c1 end 20:46:41 rc=0 load 1.62 1.72 1.71
+cell aa-c2 start 20:46:41 load 1.62 1.72 1.71
+cell aa-c2 end 20:49:39 rc=0 load 1.84 1.80 1.74
+all done 2026-10-11 20:49:39 UTC
+cell dense200-c1 start 20:49:43 load 1.69 1.77 1.73
+cell dense200-c1 end 20:50:42 rc=0 load 1.80 1.79 1.74
+cell dense200-c2 start 20:50:42 load 1.80 1.79 1.74
+cell dense200-c2 end 20:51:43 rc=0 load 1.96 1.82 1.75
+cell aadense-c1 start 20:51:43 load 1.96 1.82 1.75
+cell aadense-c1 end 20:54:51 rc=0 load 1.49 1.73 1.73
+extra done 2026-10-11 20:54:51 UTC

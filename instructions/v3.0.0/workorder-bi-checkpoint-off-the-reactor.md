@@ -845,3 +845,55 @@ path - mount, shutdown, tests - keeps `FlushPages`' contract and its phase
 timers); one `DataSyncer*` on the target instead of three virtuals (`wal/`
 does not depend on `storage/`). Overhead not measured; measured at the
 milestone's close.
+
+### BI-S5 — the close, 2026-10-11
+
+**Code.** BI-S5 began as text and became two code commits, each written into
+§4 and adopted on the standing go-ahead. `cc432881`: the scheduler says who
+held it (per group the longest poll and polls over 10 ms and 100 ms, and the
+longest stretch of an iteration no poll accounts for), because B's first
+smoke run showed 3 s holds that were the load's own statements; `kGateParks`
+4 → 16 (BI-Q10-R). `ec827a19`: one log park per snapshot after `Start`, and a
+step asks for its data-file sync without waiting, because B's first close
+cells completed a quarter of A's runs at `cores = 1`, `relaxed` (BI-Q13).
+Each was reviewed (`critics-developer`): the first's review fixed a leaked
+probe connection set in the driver and corrected BI-Q10-R's text (the
+counters are per group and cumulative; two attributions were inferences);
+the second's found no bug and named the unsynced backlog a carve's sync
+would inherit, answered by the unawaited per-step request; declined:
+dropping the synchronous path's per-step sync (it bounds mount's and
+shutdown's backlog the same way), and narrowing `WritePages` to `Status`
+(the step reads its count). A mutant restoring the per-step park was killed
+3/3 by the held-sync cell. Suite 3535/3535 and sim 180/180 at `ec827a19`.
+
+**Measurement.** `bench/v3.0.0/results-bi-s5-checkpoint-stall-v2.7.0-784-gec827a19.md`
+(A = `55ee8370`, B = `ec827a19`, twelve cells each, plus two idle-core cells
+of A) and `results-bi-close-overhead-v2.7.0-784-gec827a19.md` (`ck-tester`,
+296 runs). Against BI-Q10:
+
+- **(i), as BI-Q10-R reads it - not met.** The checkpoint's longest own hold
+  fell from 1.1-79 s to 0.15-4.2 s and its reactor time about tenfold, but it
+  still holds past 10 ms: a `pwrite` stalled in the kernel's writeback
+  throttle (up to about 300 ms), the inline log gate after 16 deferrals at
+  `relaxed`, and publish batches. W2 moved the syncs, not the writes.
+- **(ii) - met in 10 of 12 cells**; `c4-group` r1 2.06x and r2 3.6x, against
+  A's 30x and 11x in that shape.
+- **(iii) - met.** Per-statement p50s flat within run-to-run noise (53 of 54
+  `relaxed` cells, every OLTP cell resolved slower: none); the longest
+  statement falls where a checkpoint lands in the measured arm (45.8 → 2.1 ms
+  at `cores = 1`, 10,000 rows).
+- **(iv), reported.** `group`: runs and anchor gaps unchanged at `cores = 1`.
+  `relaxed`: at `cores = 1` runs 3.5-6.2 s against 0.66-0.83 s and the worst
+  anchor gap 11-16 s against 6 s; at `cores = 4` 72-113 s against 83-289 s.
+  An idle core's run: 37-64 ms at p50 against 39-40 ms.
+
+**Docs.** `wal.md` §8-1 and §11, `sched.md` §4 and §9, the stale comments
+§3's row names, `CLAUDE.md`'s WAL row, `known-gaps.md`'s checkpoint entry
+and a new one for the publish's map window, BA-R10 and BA-S13 per BI-Q1
+(a). The stall's bug entry is restated with the numbers, not deleted, since
+the bar is not met; the data-file `fsync` entry was deleted at BI-S4.
+`page.md` §13 is not edited: `wal.md` §11-2 no longer cites it.
+
+**What the bar's miss leaves for the operator**: moving the checkpoint's page
+writes off the reactor (outside W2), and the inline remainder's fix, which
+touches the recLSN rule (`[quiet-wrong]`) - both in the bug entry.
