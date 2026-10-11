@@ -19,6 +19,15 @@ core, classed against the server's own per-run log lines.
   the same clock.
 * **After.** `SHOW META` on each probe session (its core's reactor holds and
   last run), then a stop, then the log is parsed.
+* **BI-S5's two readings** (§5.2). `--idle-seconds N` keeps the probes
+  running N seconds after the load stops, so the runs that start then are
+  runs on cores with no foreground load (their wall time is BI-Q6's price).
+  A third probe on core 0 reads `SHOW META`'s `wal_interval_syncs` (the
+  loss-window syncs core 0 asked for) every 50 ms. The interval from the
+  last reading before the count moved to the reading that saw it move next
+  approximates, from above, core 0's `relaxed` loss window during its own
+  runs - served by core 0's own reactor, so a stall delays the very reading
+  that would measure it.
 
 Writes one JSON file per cell; `--summarize` turns a set of them into the
 tables §5.1 asks for.
@@ -174,6 +183,25 @@ def connections_per_core(port, cores, limit=200):
     return found
 
 
+def meta_loop(conn, interval, stop_at, samples, start_at):
+    """Core 0's `wal_interval_syncs`, sampled: (done time, count)."""
+    n = 0
+    while True:
+        sched_t = start_at + n * interval
+        if sched_t >= stop_at:
+            return
+        now = time.monotonic()
+        if sched_t > now:
+            time.sleep(sched_t - now)
+        try:
+            reply = conn.send_command("SHOW META")
+        except Exception as e:
+            print(f"meta probe: {e}", file=sys.stderr)
+            return
+        samples.append((time.monotonic(), meta_fields(reply).get("wal_interval_syncs", -1)))
+        n += 1
+
+
 def probe_loop(kind, conn, core, interval, stop_at, samples, start_at):
     n = 0
     while True:
@@ -245,14 +273,19 @@ def run_cell(a):
 
         stmt = connections_per_core(a.port, a.cores)
         pings = connections_per_core(a.port, a.cores)
+        extra = connections_per_core(a.port, a.cores)  # core 0's kept as the meta probe
+        meta0 = extra.pop(0)
+        for c in extra.values():
+            c.close()
         for c in stmt.values():  # warm the probe relation on every core
             for i in range(1, PROBE_ROWS + 1, 7):
                 c.send_command(f"SELECT * FROM probe WHERE id = {i}")
 
         start_at = time.monotonic() + 1.0
-        stop_at = start_at + a.seconds
+        load_stop_at = start_at + a.seconds
+        stop_at = load_stop_at + a.idle_seconds
         q = multiprocessing.Queue()
-        loaders = [multiprocessing.Process(target=load_worker, args=(a.port, s, stop_at, q))
+        loaders = [multiprocessing.Process(target=load_worker, args=(a.port, s, load_stop_at, q))
                    for s in range(a.sessions)]
         for p in loaders:
             p.start()
@@ -264,10 +297,14 @@ def run_cell(a):
         for core, c in pings.items():
             threads.append(threading.Thread(target=probe_loop, args=(
                 "ping", c, core, a.probe_ms / 1000, stop_at, samples[("ping", core)], start_at)))
+        meta_samples = []
+        threads.append(threading.Thread(target=meta_loop, args=(
+            meta0, 0.05, stop_at, meta_samples, start_at)))
         for t in threads:
             t.start()
         for t in threads:
             t.join()
+        meta0.close()
         load = [q.get(timeout=600) for _ in loaders]
         for p in loaders:
             p.join()
@@ -292,7 +329,8 @@ def run_cell(a):
     runs = parse_runs(log)
     cell = {"tag": tag, "cores": a.cores, "durability": a.durability, "seconds": a.seconds,
             "frames": a.frames, "checkpoint_ms": a.checkpoint_ms, "probe_ms": a.probe_ms,
-            "window": [start_at, stop_at], "load": load, "runs": runs, "log": log,
+            "window": [start_at, stop_at], "load_stop": load_stop_at,
+            "core0_interval_syncs": meta_samples, "load": load, "runs": runs, "log": log,
             "meta": {str(k): v for k, v in meta.items()},
             "samples": {f"{k}:{c}": v for (k, c), v in samples.items()},
             "host_before": host_before, "host_after": host_state(a.workdir),
@@ -329,8 +367,10 @@ def phases_of(runs):
 
 
 def summarize_cell(cell):
-    """Per core: the run record, the reactor holds, and the probe inside/outside."""
-    lo, hi = cell["window"]
+    """Per core: the run record, the reactor holds, and the probe inside/outside,
+    over the load's span (runs after it are `idle_runs`)."""
+    lo = cell["window"][0]
+    hi = cell.get("load_stop", cell["window"][1])
     phases = phases_of(cell["runs"])
     out = []
     for core in sorted(int(c) for c in cell["meta"]):
@@ -362,6 +402,11 @@ def summarize_cell(cell):
         row["charged_to_no_group_ms"] = (m.get("sched_wall_us", 0) - polled -
                                          m.get("sched_idle_block_us", 0)) / 1000
         row["system_polled_ms"] = m.get("sched_system_polled_us", 0) / 1000
+        row["system_longest_poll_ms"] = m.get("sched_system_longest_poll_us", 0) / 1000
+        row["system_polls_over_10ms"] = m.get("sched_system_polls_over_10ms")
+        row["system_polls_over_100ms"] = m.get("sched_system_polls_over_100ms")
+        row["idle_runs_ms"] = [r["wall_us"] / 1000 for r in cell["runs"]
+                               if r["core"] == core and r["start"] >= hi]
         for kind in ("stmt", "ping"):
             ss = cell["samples"].get(f"{kind}:{core}", [])
             errs = sum(1 for _, ms in ss if ms < 0)
@@ -435,6 +480,7 @@ def main():
     ap.add_argument("--cores", type=int, default=4)
     ap.add_argument("--durability", default="relaxed")
     ap.add_argument("--seconds", type=float, default=600)
+    ap.add_argument("--idle-seconds", type=float, default=0)
     ap.add_argument("--sessions", type=int, default=4)
     ap.add_argument("--port", type=int, default=25480)
     ap.add_argument("--frames", type=int, default=786432)

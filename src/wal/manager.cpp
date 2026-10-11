@@ -188,9 +188,13 @@ Status WalManager::Sync() {
     // to the writer, BA-R4 part 1, `DrainOnce`.) The writer thread is not
     // used here and that is the decision, not an omission:
     // every caller of this has someone waiting on the result - a parked
-    // committer, a client's SYNC, a checkpoint's gate - and handing such a
-    // sync to another thread adds a wake-up to a latency somebody is
-    // measuring. Measured on a 2-core host it doubled `group`'s p99 while
+    // committer, a client's SYNC, a synchronous checkpoint's gate (mount,
+    // shutdown, a cadence step's inline remainder after its parks) - and
+    // handing such a sync to another thread adds a wake-up to a latency
+    // somebody is measuring. **A cadence checkpoint is the exception since
+    // BI-S3**, and it does not come here: nobody waits on a checkpoint's
+    // latency while every session on its core waits out an inline sync, so
+    // its task asks the writer (`RequestSyncNow`) and parks. Measured on a 2-core host it doubled `group`'s p99 while
     // barely moving its median, which is what an occasional slow wake-up
     // looks like (bench/results-latency-matrix.md).
     //

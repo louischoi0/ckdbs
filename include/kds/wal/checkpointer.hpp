@@ -20,7 +20,9 @@
 #include "kds/wal/record.hpp"
 
 // Fuzzy checkpointing (wal.md section 11), run as a `system`-group task
-// per core.
+// per core since BI-S2: the cadence submits `RunTask`, which takes one call
+// per poll and parks for every wait on the log or the data file (BI-R1,
+// BI-R2); `RunToCompletion` stays for the synchronous callers.
 //
 // What a checkpoint buys is bounded recovery: it moves the **redo start**
 // forward so restart does not have to replay the whole log. It does not
@@ -360,13 +362,13 @@ private:
 };
 
 struct CheckpointerConfig {
-    // Pages flushed per Step(). The pacing knob of wal.md section 11-2:
-    // small enough that a checkpoint does not monopolize a reactor
-    // iteration, large enough that the per-batch barrier amortizes. The
-    // real thing is SLO-feedback-driven (page.md section 13's checkpoint
-    // spreading), which needs the controller that does not exist yet - so
-    // this is a fixed batch size, deliberately a parameter and not a
-    // constant.
+    // Pages flushed per Step(), and per batch of the paced publish. The
+    // pacing knob of wal.md section 11-2: one step is one poll of the run
+    // task (BI-R1), so small enough that a poll does not monopolize a
+    // reactor iteration, large enough that the per-batch barrier amortizes.
+    // BI-S1 measured a step's page writes at 0.2-4 ms at p90 (BI-Q9-R). An
+    // SLO-feedback controller would replace it; none exists, so this is a
+    // fixed batch size, deliberately a parameter and not a constant.
     std::size_t pages_per_step = 64;
 };
 
@@ -430,8 +432,9 @@ public:
     Status Complete();
 
     // Start() + Step() until done + Complete(), for callers that do not
-    // need the checkpoint spread across reactor iterations (tests, and
-    // shutdown).
+    // need the checkpoint spread across reactor iterations: the mount's
+    // completion checkpoint, shutdown's, and tests. The cadence's is
+    // `SubmitRun`'s task.
     Status RunToCompletion();
 
     // **One synchronous attempt at `gate`** (null runs ungated), then
@@ -512,7 +515,7 @@ private:
     // a page re-dirtied while the sync ran. A bound, not a tuned number: the
     // remainder is counted (`log_gate_batch_n`, `log_gate_run_n`) and BI-S5
     // reports it.
-    static constexpr int kGateParks = 4;
+    static constexpr int kGateParks = 16;
     // Parks until the log is durable past `lsn`, registered with the
     // writer's kick; the log's fail-stop answers it.
     sched::Coro ParkOnLog(Lsn lsn, std::uint32_t core_id);

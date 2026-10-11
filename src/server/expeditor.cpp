@@ -873,10 +873,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
 
     // **The idle sync stops touching the reactor here.** D3's loss-window
     // tick moves to the WAL writer thread (wal/writer.hpp) - and only it.
-    // A commit's sync, a prepare's, a client `SYNC`'s and the checkpoint
-    // gate's all stay on the reactor, by the decision `WalManager::Sync()`
-    // states: every one of them has somebody parked on the result, and a
-    // hand-off adds a wake-up to a latency somebody is measuring. This
+    // A client `SYNC`'s and a synchronous checkpoint's stay on the reactor,
+    // by the decision `WalManager::Sync()` states: somebody is parked on the
+    // result, and a hand-off adds a wake-up to a latency somebody is
+    // measuring. A `group` commit above one core (BA-R4 part 1) and a
+    // cadence checkpoint's gate (BI-S3) are handed to it and parked on. This
     // comment claimed the opposite until XD0 read the code
     // (`instructions/v2.7.1/measurement-xd.md`). The server starts one and
     // an in-process caller does not, because a test that drives a

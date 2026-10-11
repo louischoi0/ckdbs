@@ -272,10 +272,13 @@ public:
     bool stopped() const noexcept override { return stream_->stopped(); }
 
     // Starts the WAL writer thread, which from then on performs the syncs
-    // **nobody is waiting on** - D3's loss-window tick in DrainOnce(), and
-    // nothing else. Every waited-on sync stays on the reactor, by the
-    // decision Sync() states: a parked committer, a client's SYNC and the
-    // checkpoint gate all pay a hand-off if their sync is handed away.
+    // **nobody is waiting on** - D3's loss-window tick in DrainOnce() - and
+    // the ones a parked task asked for through `RequestSyncNow`: a `group`
+    // commit's above one core (BA-R4 part 1) and a cadence checkpoint's
+    // (BI-S3). Every other waited-on sync stays on the reactor, by the
+    // decision Sync() states: a client's SYNC, a `strict` commit at one core
+    // and a checkpoint's inline remainder pay a hand-off if theirs is handed
+    // away.
     //
     // Off by default and started by the server, deliberately: a test or a
     // tool that drives a WalManager on one thread wants its syncs to have

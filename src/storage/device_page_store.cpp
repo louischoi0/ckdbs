@@ -2302,10 +2302,12 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     // **Why a zero count may skip the sync.** Under sharing this call can
     // write nothing because another core's writeback already copied the
     // pages and is between its copy and its own sync. That is covered: a
-    // checkpoint's durability point is the anchor publish, and
-    // `SuperBlockCheckpointAnchor::Publish` syncs the store itself, after
-    // every step - the same cover the contract above already relies on for
-    // pages "something else may have flushed since the snapshot".
+    // checkpoint's durability point is the anchor publish, which syncs the
+    // data file after every step and before it writes the anchor's page -
+    // `SuperBlockCheckpointAnchor::Publish`'s store sync for a synchronous
+    // run, and the run task's parked sync of its collection for a cadence
+    // one (BI-Q5 (a)) - the same cover the contract above already relies on
+    // for pages "something else may have flushed since the snapshot".
     if (written.value() == 0) return Status::OK();
     Status s;
     {
