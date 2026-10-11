@@ -136,9 +136,10 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync,
     rig->log_gate().Hold();
     rig->Start();
 
-    // Core 0's `strict` commit is inside its sync: its marker is set, its
-    // reactor blocked in the device. Both, because another sync parked at
-    // the gate - a drain tick, the writer - would satisfy the first alone.
+    // Core 0's `strict` commit is inside its sync: its marker is set, and a
+    // sync is parked at the gate - the WAL writer's, since at two cores the
+    // commit is deferred (BA-S7). Both, because another sync parked at the
+    // gate - a drain tick - would satisfy the first alone.
     const txn::CoreVisibilitySlot& core0_slot = rig->visibility().slot(0);
     strict.go.store(true, std::memory_order_release);
     ASSERT_TRUE(KickUntil(*rig, 0, [&] {
@@ -162,9 +163,15 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync,
     // The other session asks only now, after the commit was acknowledged.
     if (other_session) reader.go.store(true, std::memory_order_release);
 
-    // Its next statement waits for core 0's marker rather than read under it,
-    // counted into core 1's ceiling waiters - parked, or holding its reactor
-    // on the synchronous path.
+    // The session's own next statement waits for core 0's marker rather than
+    // read under it, counted into core 1's ceiling waiters - parked, or
+    // holding its reactor on the synchronous path. **Another session's is
+    // held to the answer alone**, checked below: a design that closes it
+    // without a wait (BA-Q3 (c), snapshots carrying their in-flight set)
+    // answers at once, and must answer the row. A design that waits must
+    // count itself into `ceiling_waiters` (`TransactionManager::CeilingWait`)
+    // - the condition below is what keeps a cell that has not yet asked
+    // from passing, and a plain "started" flag would race the lift.
     const txn::CoreVisibilitySlot& peer_slot = rig->visibility().slot(1);
     const auto answered_or_waiting = [&] {
         return asker.done.load() > select || peer_slot.ceiling_waiters.load() >= 1;
@@ -172,8 +179,11 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync,
     // The reader was released just now and its reactor may be idle: kick it.
     ASSERT_TRUE(other_session ? KickUntil(*rig, 1, answered_or_waiting)
                               : Within(2000ms, answered_or_waiting));
-    EXPECT_EQ(asker.done.load(), select)
-        << "core 1's SELECT did not wait for the marker; it answered " << Response(asker, select);
+    if (!other_session) {
+        EXPECT_EQ(asker.done.load(), select)
+            << "core 1's SELECT did not wait for the marker; it answered "
+            << Response(asker, select);
+    }
 
     // The sync lands, the marker lifts, and the lift kicks core 1.
     rig->log_gate().Release();
@@ -185,11 +195,14 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync,
     EXPECT_TRUE(StartsWith(Response(strict, 0), "INSERTED")) << Response(strict, 0);
     // No waiter outlives its statement.
     EXPECT_EQ(peer_slot.ceiling_waiters.load(), 0u);
-    // **And the wait is counted** (BA-S2): one statement waited, for at
-    // least the time this thread held the gate after it registered.
-    const Contention::Snapshot after = Contention::Read();
-    EXPECT_GE(after.of(Tally::kCeilingWaits) - before.of(Tally::kCeilingWaits), 1u);
-    EXPECT_GT(after.of(Tally::kCeilingWaitNs), before.of(Tally::kCeilingWaitNs));
+    // **And the session's own wait is counted** (BA-S2): one statement
+    // waited, for at least the time this thread held the gate after it
+    // registered.
+    if (!other_session) {
+        const Contention::Snapshot after = Contention::Read();
+        EXPECT_GE(after.of(Tally::kCeilingWaits) - before.of(Tally::kCeilingWaits), 1u);
+        EXPECT_GT(after.of(Tally::kCeilingWaitNs), before.of(Tally::kCeilingWaitNs));
+    }
 }
 
 // **Mutations**, each run repeatedly (BA-S1c): the bound never recorded -
@@ -219,7 +232,8 @@ TEST(StrictMarkerSnapshotRigTest, ASynchronousDispatchWaitsForTheBoundToo) {
 // **Another session's commit** (the half BA-S1c left): a statement that
 // began after a commit was acknowledged to someone else must see it too,
 // whatever the session it ran in, because `READ COMMITTED` promises a
-// statement everything committed before it began (`txn.md`'s level table).
+// statement everything committed before it began - a promise `txn.md`'s
+// level table carries this case as a disclosed exception to.
 //
 // **Disabled, and red when enabled** - on every run at `6b0d8412`, which is
 // the reproduction `docs/inflight/bugs/a-strict-commits-marker-caps-every-
@@ -229,8 +243,10 @@ TEST(StrictMarkerSnapshotRigTest, ASynchronousDispatchWaitsForTheBoundToo) {
 // (`bench/v3.0.0/results-boundary-wait-overhead-v2.7.0-749-ga80de010.md`)
 // and not landed: a read-only session beside a `strict` committer and a
 // `relaxed` one lost 89 percent of its throughput. The cells stay for the
-// design that closes it without that wait, snapshots that carry their
-// in-flight set (BA-Q3 (c)); enable them with it.
+// design that closes it - snapshots that carry their in-flight set (BA-Q3
+// (c)), or a wait scoped to the relations the statement bound (the entry's
+// interim option) - and assert the answer alone, never whether the
+// statement waited; enable them with it.
 TEST(StrictMarkerSnapshotRigTest, DISABLED_AnotherSessionsAcknowledgedCommitIsSeenByAStatementThatBeganAfter) {
     SeesItsOwnCommit({"INSERT INTO t VALUES (102, 2)"}, /*select_sync=*/false,
                      /*other_session=*/true);
