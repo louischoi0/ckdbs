@@ -306,6 +306,15 @@ TEST_F(SetExprFunctionsTest, TextFunctions) {
     EXPECT_EQ(At("s", 1), "") << "a length of nothing or less is the empty string";
     EXPECT_NE(Run("UPDATE t SET s = LPAD('x', 2000000000) WHERE id = 1").find("builds more than"),
               std::string::npos);
+    // Each string operation is bounded by the same cap, so nesting them
+    // cannot build what one of them may not.
+    for (const char* set : {"s = LPAD('x', 1048576) || 'y'",
+                            "s = CONCAT(LPAD('x', 600000), LPAD('y', 600000))",
+                            "s = REPLACE(LPAD('x', 600000, 'x'), 'x', 'xy')"}) {
+        EXPECT_NE(Run(std::string("UPDATE t SET ") + set + " WHERE id = 1").find("builds more than"),
+                  std::string::npos)
+            << set;
+    }
     Exec("UPDATE t SET s = CONCAT('a', c, 'b') WHERE id = 1");
     EXPECT_EQ(At("s", 1), "aabcb");
 }

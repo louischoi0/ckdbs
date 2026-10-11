@@ -142,12 +142,24 @@ Status Refuse(std::uint32_t at, const std::string& what) {
     return Status::InvalidArgument(what + At(at) + "; there is no implicit conversion (BJ-R3)");
 }
 
+Status CannotApply(ExprOp op, std::uint32_t at, const SetType& a, const SetType& b) {
+    return Refuse(at, "operator " + std::string(OpText(op)) + " cannot apply to " +
+                          SetTypeName(a) + " and " + SetTypeName(b));
+}
+
 bool IsComparison(ExprOp op) { return op >= ExprOp::kEq && op <= ExprOp::kGe; }
 bool IsBooleanBinary(ExprOp op) {
     return IsComparison(op) || op == ExprOp::kAnd || op == ExprOp::kOr;
 }
 
 SetType BoolType() { return Concrete(kTypeValBool, 0); }
+
+// `decimal(precision, scale)`: the precision alone selects the width (TY2).
+SetType DecimalType(std::uint32_t precision, std::uint32_t scale) {
+    return Concrete(precision >= kMinDecimalPrecisionWide ? kTypeValDecimalWide : kTypeValDecimal,
+                    catalog::PackDecimalLen(static_cast<std::uint8_t>(precision),
+                                            static_cast<std::uint8_t>(scale)));
+}
 
 // A decimal of `scale` places whose precision the context gives, naturally
 // `precision`.
@@ -171,9 +183,7 @@ SetType DecimalQuotient(const SetType& dividend, std::uint32_t divisor_scale) {
     const int integer_digits = p1 - s1 + static_cast<int>(divisor_scale);
     const int scale = std::max(s1, std::min(s1 + 16, 38 - integer_digits));
     const int precision = std::min(integer_digits + scale, 38);
-    return Concrete(precision >= kMinDecimalPrecisionWide ? kTypeValDecimalWide : kTypeValDecimal,
-                    catalog::PackDecimalLen(static_cast<std::uint8_t>(precision),
-                                            static_cast<std::uint8_t>(scale)));
+    return DecimalType(static_cast<std::uint32_t>(precision), static_cast<std::uint32_t>(scale));
 }
 
 // What CAST converts between (BJ-S5, BJ-Q3). The classes are the reference
@@ -257,9 +267,7 @@ StatusOr<SetType> CastTarget(const parser::TypeSpec& spec) {
             !s.ok()) {
             return s.WithMessage(s.message() + where);
         }
-        return Concrete(wide ? kTypeValDecimalWide : kTypeValDecimal,
-                        catalog::PackDecimalLen(static_cast<std::uint8_t>(spec.precision),
-                                                static_cast<std::uint8_t>(spec.scale)));
+        return DecimalType(spec.precision, spec.scale);
     }
     if (name == "float") {
         return Status::Unsupported("float is not a type this engine stores" + where);
@@ -288,9 +296,7 @@ StatusOr<SetType> DecimalTypeOfLiteral(const parser::AstValue& v) {
         return Status::OutOfRange("a numeric literal of " + std::to_string(digits) +
                                   " digits exceeds 38" + At(v.byte_offset));
     }
-    return Concrete(digits >= kMinDecimalPrecisionWide ? kTypeValDecimalWide : kTypeValDecimal,
-                    catalog::PackDecimalLen(static_cast<std::uint8_t>(digits),
-                                            static_cast<std::uint8_t>(fraction)));
+    return DecimalType(digits, fraction);
 }
 
 class Typer {
@@ -586,8 +592,7 @@ private:
             if (!v->type.concrete()) continue;
             if (first == nullptr) {
                 first = &v->type;
-            } else if (!SameType(*first, v->type) &&
-                       !(IsText(first->type_val) && IsText(v->type.type_val))) {
+            } else if (!Assignable(v->type, *first)) {
                 return Refuse(at, who + " needs one type but is given " + SetTypeName(*first) +
                                       " and " + SetTypeName(v->type));
             }
@@ -979,11 +984,7 @@ private:
     // (days, int32) - BJ-Q4 (a); every other operator over a date is refused.
     StatusOr<Node> DateArithmetic(const Expr& e, Node lhs, Node rhs) {
         const auto IsDate = [](const TypedSetExpr& n) { return IsDateType(n.type); };
-        const auto Bad = [&]() {
-            return Refuse(e.op_byte_offset, "operator " + std::string(OpText(e.op)) +
-                                                " cannot apply to " + SetTypeName(lhs->type) +
-                                                " and " + SetTypeName(rhs->type));
-        };
+        const auto Bad = [&]() { return CannotApply(e.op, e.op_byte_offset, lhs->type, rhs->type); };
         // The other operand is a number of days: any integer type, or a literal.
         const auto Days = [&](TypedSetExpr& n) -> Status {
             if (n.type.concrete()) return IsInteger(n.type.type_val) ? Status::OK() : Bad();
@@ -1016,10 +1017,7 @@ private:
     static StatusOr<SetType> UntypedResult(ExprOp op, std::uint32_t at, const SetType& a,
                                            const SetType& b) {
         constexpr auto K = SetType::Kind::kNull;
-        const auto Bad = [&]() {
-            return Refuse(at, "operator " + std::string(OpText(op)) + " cannot apply to " +
-                                  SetTypeName(a) + " and " + SetTypeName(b));
-        };
+        const auto Bad = [&]() { return CannotApply(op, at, a, b); };
         if (op == ExprOp::kConcat) {
             const bool ok = (a.kind == SetType::Kind::kString || a.kind == K) &&
                             (b.kind == SetType::Kind::kString || b.kind == K);
@@ -1092,10 +1090,7 @@ private:
     // The declared signatures of family 1 (BJ-R3), over two concrete types.
     static StatusOr<SetType> ResultType(ExprOp op, std::uint32_t at, const SetType& a,
                                         const SetType& b, bool a_scalar, bool b_scalar) {
-        const auto Bad = [&]() {
-            return Refuse(at, "operator " + std::string(OpText(op)) + " cannot apply to " +
-                                  SetTypeName(a) + " and " + SetTypeName(b));
-        };
+        const auto Bad = [&]() { return CannotApply(op, at, a, b); };
         if (op == ExprOp::kConcat) {
             if (IsText(a.type_val) && IsText(b.type_val)) return Concrete(kTypeValVarchar, 0);
             return Bad();
@@ -1125,9 +1120,7 @@ private:
                                                   SetTypeName(b) + " has scale " +
                                                   std::to_string(s) + " beyond 38" + At(at));
                     }
-                    return Concrete(p <= 18 ? kTypeValDecimal : kTypeValDecimalWide,
-                                    catalog::PackDecimalLen(static_cast<std::uint8_t>(p),
-                                                            static_cast<std::uint8_t>(s)));
+                    return DecimalType(p, s);
                 }
                 case ExprOp::kDiv: return DecimalQuotient(a, catalog::DecimalScaleOf(b.len));
                 default: return Bad();
@@ -1439,29 +1432,18 @@ private:
             }
             return out;
         }
-        // At most 38 places are dropped, and 10^38 fits 128 bits.
-        Int128 divisor = 1;
-        for (int i = to; i < from; ++i) divisor *= 10;
-        Int128 q = unscaled / divisor;
-        const Int128 r = unscaled % divisor;
-        switch (mode) {
-            case Rounding::kHalfAwayFromZero: {
-                // Half or more of the divisor rounds away from zero. Written as
-                // `|r| >= divisor - |r|` because `2|r|` can pass 2^127 when 38
-                // places are dropped.
-                const Int128 magnitude = r < 0 ? -r : r;
-                if (magnitude >= divisor - magnitude) q += unscaled < 0 ? -1 : 1;
-                break;
-            }
-            case Rounding::kTowardZero: break;
-            case Rounding::kFloor:
-                if (r < 0) --q;
-                break;
-            case Rounding::kCeiling:
-                if (r > 0) ++q;
-                break;
+        // Dropping places is a division by 10^(from - to), at most 10^38,
+        // which fits 128 bits: it cannot fail.
+        return DivideAt(unscaled, 1, from, 0, to, mode, e);
+    }
+
+    static Rounding ModeOf(SetFunction f) {
+        switch (f) {
+            case SetFunction::kCeil: return Rounding::kCeiling;
+            case SetFunction::kFloor: return Rounding::kFloor;
+            case SetFunction::kTrunc: return Rounding::kTowardZero;
+            default: return Rounding::kHalfAwayFromZero;
         }
-        return q;
     }
 
     // `a / b` of two decimals, divided **once** to `to_scale` places and rounded
@@ -1558,9 +1540,15 @@ private:
         return value;
     }
 
-    // The most bytes a function builds, so `LPAD(s, 2000000000)` cannot
-    // exhaust memory before the encode refuses a value that large.
+    // The most bytes a string operation builds, so `LPAD(s, 2000000000)` or a
+    // chain of `||` cannot exhaust memory before the encode refuses a value
+    // that large (no stored value exceeds `varheap.hpp`'s kMaxValueSize).
     static constexpr std::size_t kMaxStringBytes = 1u << 20;
+
+    static Status BuildsTooMuch(std::string_view what, std::uint32_t at) {
+        return Status::OutOfRange(std::string(what) + " builds more than " +
+                                  std::to_string(kMaxStringBytes) + " bytes" + At(at));
+    }
 
     static parser::AstValue Text(std::string text) {
         parser::AstValue out;
@@ -1584,11 +1572,7 @@ private:
         const bool rounding = e.function == SetFunction::kCeil || e.function == SetFunction::kFloor ||
                               e.function == SetFunction::kRound || e.function == SetFunction::kTrunc;
         if (rounding && IsDecimalQuotient(*e.args[0])) {
-            const Rounding mode = e.function == SetFunction::kCeil    ? Rounding::kCeiling
-                                  : e.function == SetFunction::kFloor ? Rounding::kFloor
-                                  : e.function == SetFunction::kTrunc ? Rounding::kTowardZero
-                                                                      : Rounding::kHalfAwayFromZero;
-            return FusedQuotient(*e.args[0], ScaleOf(e.type), mode, e);
+            return FusedQuotient(*e.args[0], ScaleOf(e.type), ModeOf(e.function), e);
         }
 
         std::vector<parser::AstValue> v;
@@ -1599,7 +1583,11 @@ private:
             v.push_back(std::move(value.value()));
         }
         if (e.function == SetFunction::kConcat) {
+            std::size_t total = 0;
+            for (const auto& a : v) total += IsNull(a) ? 0 : a.str_val.size();
+            if (total > kMaxStringBytes) return BuildsTooMuch("concat", e.op_byte_offset);
             std::string joined;
+            joined.reserve(total);
             for (const auto& a : v) {
                 if (!IsNull(a)) joined += a.str_val;
             }
@@ -1633,13 +1621,8 @@ private:
                 auto n = Whole(0);
                 if (!n.ok()) return n.status();
                 if (!IsDecimal(e.args[0]->type.type_val)) return Checked(n.value(), e);
-                const Rounding mode = e.function == SetFunction::kCeil    ? Rounding::kCeiling
-                                      : e.function == SetFunction::kFloor ? Rounding::kFloor
-                                      : e.function == SetFunction::kTrunc ? Rounding::kTowardZero
-                                                                          : Rounding::kHalfAwayFromZero;
-                auto rescaled = Rescale(n.value(),
-                                        static_cast<int>(catalog::DecimalScaleOf(e.args[0]->type.len)),
-                                        static_cast<int>(catalog::DecimalScaleOf(e.type.len)), e, mode);
+                auto rescaled = Rescale(n.value(), ScaleOf(e.args[0]->type), ScaleOf(e.type), e,
+                                        ModeOf(e.function));
                 if (!rescaled.ok()) return rescaled.status();
                 return Checked(rescaled.value(), e);
             }
@@ -1707,12 +1690,11 @@ private:
                     out += v[2].str_val;
                     at = hit + from.size();
                     if (out.size() > kMaxStringBytes) {
-                        return Status::OutOfRange("replace builds more than " +
-                                                  std::to_string(kMaxStringBytes) + " bytes" +
-                                                  At(e.op_byte_offset));
+                        return BuildsTooMuch("replace", e.op_byte_offset);
                     }
                 }
                 out.append(text, at, std::string::npos);
+                if (out.size() > kMaxStringBytes) return BuildsTooMuch("replace", e.op_byte_offset);
                 return Text(std::move(out));
             }
             case SetFunction::kLpad:
@@ -1722,10 +1704,7 @@ private:
                 if (!length.ok()) return length.status();
                 if (length.value() <= 0) return Text("");
                 if (length.value() > static_cast<Int128>(kMaxStringBytes)) {
-                    return Status::OutOfRange(std::string(FunctionName(e.function)) +
-                                              " builds more than " +
-                                              std::to_string(kMaxStringBytes) + " bytes" +
-                                              At(e.op_byte_offset));
+                    return BuildsTooMuch(FunctionName(e.function), e.op_byte_offset);
                 }
                 const std::size_t want = static_cast<std::size_t>(length.value());
                 if (text.size() >= want) return Text(text.substr(0, want));
@@ -1807,10 +1786,10 @@ private:
             }
         }
         if (e.op == ExprOp::kConcat) {
-            parser::AstValue out;
-            out.type = ValueType::kStr;
-            out.str_val = l.value().str_val + r.value().str_val;
-            return out;
+            if (l.value().str_val.size() + r.value().str_val.size() > kMaxStringBytes) {
+                return BuildsTooMuch("||", e.op_byte_offset);
+            }
+            return Text(l.value().str_val + r.value().str_val);
         }
         auto a = NumberOf(l.value(), e.lhs->type);
         if (!a.ok()) return a.status();

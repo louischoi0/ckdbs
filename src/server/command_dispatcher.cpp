@@ -7165,7 +7165,8 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
 }
 
 DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& session,
-                                                bool analyze, const txn::Snapshot* pinned) {
+                                                bool analyze, const txn::Snapshot* pinned,
+                                                const exec::StatementContext* context) {
     // The statement boundary. Under READ COMMITTED this is where a new read
     // view is taken - so two SELECTs in one transaction can see different
     // data, which is the level's entire definition.
@@ -7297,7 +7298,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // statement, which is the end of this function.
     ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_);
     auto chain = exec::Compile(catalog_, stmt,
-                               resolve_view.has_value() ? &*resolve_view : nullptr, &borrow);
+                               resolve_view.has_value() ? &*resolve_view : nullptr, &borrow,
+                               context);
     if (!chain.ok()) {
         return {ErrorReply(chain.status()), false, 0, chain.status()};
     }
@@ -7835,7 +7837,8 @@ private:
 StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser::Expr& node,
                                                                     const parser::UpdateStmt& stmt,
                                                                     WriteScope& scope,
-                                                                    const txn::Snapshot& snapshot) {
+                                                                    const txn::Snapshot& snapshot,
+                                                                    const exec::StatementContext& context) {
     const std::string at = " (byte " + std::to_string(node.byte_offset) + ")";
     Session& session = *scope.session;
 
@@ -7884,7 +7887,7 @@ StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser
     // The text is padded to where it stood in the statement, so every byte the
     // SELECT reports is a byte of the UPDATE.
     const std::string text = std::string(node.byte_offset + 1, ' ') + node.subquery_sql;
-    DispatchOutcome out = HandleSelect(text, session, /*analyze=*/false, &snapshot);
+    DispatchOutcome out = HandleSelect(text, session, /*analyze=*/false, &snapshot, &context);
     // The walk is handed on for a yield; a SET value's subquery is run to its
     // end here, before the statement's own walk begins.
     if (out.select_run != nullptr) {
@@ -7894,9 +7897,7 @@ StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser
     // The subquery's own refusals carry their byte already; the rest are given
     // the subquery's.
     const auto Positioned = [&](const std::string& what) {
-        return what.find("(byte ") != std::string::npos || what.find("byte ") != std::string::npos
-                   ? what
-                   : what + at;
+        return what.find("(byte ") != std::string::npos ? what : what + at;
     };
     if (!out.status.ok()) return out.status.WithMessage(Positioned(out.status.message()));
     if (out.response.rfind("ERR", 0) == 0) {
@@ -8003,16 +8004,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // is a heap allocation, and most UPDATEs are literals.
     std::size_t subqueries_asked = 0;
     exec::SubqueryResolver resolve_subquery;
-    for (const parser::Assignment& a : stmt.assignments) {
-        if (a.expr == nullptr) continue;
+    if (std::any_of(stmt.assignments.begin(), stmt.assignments.end(),
+                    [](const parser::Assignment& a) { return a.expr != nullptr; })) {
         resolve_subquery = [&](const parser::Expr& node) -> StatusOr<exec::SubqueryResult> {
             const std::size_t index = subqueries_asked++;
             if (index < subqueries.size()) return subqueries[index];  // a resume: the first run's
-            auto answer = RunScalarSubquery(node, stmt, scope, snapshot);
+            auto answer = RunScalarSubquery(node, stmt, scope, snapshot, context);
             if (answer.ok()) subqueries.push_back(answer.value());
             return answer;
         };
-        break;
     }
     if (Status s = exec::CompileAssignments(ta, stmt.assignments, &compiled, &resolve_subquery);
         !s.ok()) {

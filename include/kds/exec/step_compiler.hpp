@@ -67,11 +67,16 @@ namespace kds::exec {
 // the whole id space - the relation - which is what that sink's
 // whole-space case already means. Null is "declare nothing", which is
 // every caller that is not executing a client's statement.
+//
+// `context`, when given, is the statement's `NOW()` instead of a fresh
+// reading: a scalar subquery of an UPDATE reads its UPDATE's (BJ-S7), so
+// the statement has one `NOW()`.
 class PositionSink;
 
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                             const txn::ReadView* view = nullptr,
-                            PositionSink* declare = nullptr);
+                            PositionSink* declare = nullptr,
+                            const StatementContext* context = nullptr);
 
 // Compiles a single-relation WHERE clause - what UPDATE and, later,
 // DELETE have instead of a chain.

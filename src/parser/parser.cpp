@@ -444,6 +444,13 @@ bool EndsSetValue(const Token& t) {
            (t.type == TokenType::kIdent && IEquals(t.text, "WHERE"));
 }
 
+// `IN`, `BETWEEN`, `LIKE`: comparison forms BJ does not build (BJ-R1 family
+// 2), refused by name. None can open a value, so none starts a CASE operand.
+bool IsUnbuiltComparison(const Token& t) {
+    return (t.type == TokenType::kKeyword && (t.kw == Keyword::kIn || t.kw == Keyword::kBetween)) ||
+           (t.type == TokenType::kIdent && IEquals(t.text, "LIKE"));
+}
+
 // A `-` the lexer fused into the literal that follows it (`v -1`) is, in
 // binary position, a minus and the literal's magnitude (BJ-Q9 (a)).
 bool IsSignedLiteral(const Token& tok) {
@@ -596,8 +603,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprComparison() {
         // The comparison forms BJ does not build, named at their byte rather
         // than left to a generic complaint about what follows.
         const bool not_form = t.type == TokenType::kKeyword && t.kw == Keyword::kNot;
-        if ((t.type == TokenType::kKeyword && (t.kw == Keyword::kIn || t.kw == Keyword::kBetween)) ||
-            (t.type == TokenType::kIdent && IEquals(t.text, "LIKE")) || not_form) {
+        if (IsUnbuiltComparison(t) || not_form) {
             return Status::NotImplemented("'" + std::string(t.text) +
                                           "' in a SET value is not supported (byte " +
                                           std::to_string(t.byte_offset) + ")");
@@ -930,6 +936,11 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
             lexer_.Next();
             const Token& after = lexer_.Peek();
             if (after.type == TokenType::kLParen) {
+                // `CASE (b) WHEN ...`: no function is named `case` and no
+                // column is followed by `(`, so this is a simple CASE whose
+                // operand opens with a parenthesis - the one way to write a
+                // negative operand, since `case -1` is a column's subtraction.
+                if (IEquals(tok.text, "CASE")) return ParseExprCase(tok);
                 if (IEquals(tok.text, "CAST") || NaryOf(tok.text).has_value()) {
                     lexer_.Next();  // the '('
                     return ParseExprCall(tok);
@@ -952,11 +963,10 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
                 after.type == TokenType::kStar || after.type == TokenType::kSlash ||
                 after.type == TokenType::kPercent || after.type == TokenType::kConcat ||
                 ComparisonOf(after.type).has_value() || after.type == TokenType::kDoubleColon ||
-                (after.type == TokenType::kKeyword &&
-                 (after.kw == Keyword::kAs || after.kw == Keyword::kIn ||
-                  after.kw == Keyword::kBetween)) ||
+                IsUnbuiltComparison(after) ||
+                (after.type == TokenType::kKeyword && after.kw == Keyword::kAs) ||
                 (after.type == TokenType::kIdent &&
-                 (IEquals(after.text, "LIKE") || IEquals(after.text, "AND") ||
+                 (IEquals(after.text, "AND") ||
                   IEquals(after.text, "OR") || IEquals(after.text, "IS") ||
                   IEquals(after.text, "THEN") || IEquals(after.text, "ELSE") ||
                   IEquals(after.text, "END")));

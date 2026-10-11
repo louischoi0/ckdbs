@@ -352,6 +352,8 @@ TEST_F(SetExprConditionalTest, ALiteralOperationOfAnotherTypeBesideADecimalIsRef
                             "d = CASE WHEN g THEN 2 * 3 ELSE d END"}) {
         EXPECT_NE(Refusal(set), "") << set;
     }
+    Exec("UPDATE t SET i64 = CASE (i8 - 10) WHEN -5 THEN 1 ELSE 2 END WHERE id = 1");
+    EXPECT_EQ(At("i64", 1), "1") << "a parenthesised simple-CASE operand";
     Exec("UPDATE t SET g = d = 12.5 WHERE id = 1");
     EXPECT_EQ(At("g", 1), "1");
     Exec("UPDATE t SET d = GREATEST(d, 20) WHERE id = 1");

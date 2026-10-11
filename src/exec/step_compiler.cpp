@@ -1333,15 +1333,17 @@ std::uint64_t FilterColumnsOf(const Step& step, std::uint16_t index) {
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth, const txn::ReadView* view,
-                                 bool inner_build, PositionSink* declare);
+                                 bool inner_build, PositionSink* declare,
+                                 const StatementContext* context = nullptr);
 
 }  // namespace
 
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
-                            const txn::ReadView* view, PositionSink* declare) {
+                            const txn::ReadView* view, PositionSink* declare,
+                            const StatementContext* context) {
     std::uint32_t next_step_id = 0;
     auto chain = CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
-                              view, /*inner_build=*/true, declare);
+                              view, /*inner_build=*/true, declare, context);
     if (!chain.ok()) return chain;
     // The class folds over the whole statement - every step, every
     // sub-chain, hoisted or placed - after compile, from what was lowered.
@@ -1568,7 +1570,8 @@ namespace {
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth, const txn::ReadView* view,
-                                 bool inner_build, PositionSink* declare) {
+                                 bool inner_build, PositionSink* declare,
+                                 const StatementContext* context) {
     // The execute-time half of spec I15 R3: recursion is bounded at both
     // ends. The parser caps nesting too, but a chain can also be built by
     // something other than a parse, and a bound that only one producer
@@ -1582,7 +1585,8 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // ---- 1. Bind every relation in written order --------------------------
     Scope scope;
     scope.parent = parent;
-    if (parent == nullptr) scope.context = StatementContextNow();
+    // A nested block reads its outermost's through `parent`.
+    if (parent == nullptr) scope.context = context != nullptr ? *context : StatementContextNow();
     std::vector<const parser::RelationRef*> refs;
     refs.push_back(&stmt.from);
     for (const parser::JoinClause& j : stmt.joins) refs.push_back(&j.relation);

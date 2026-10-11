@@ -480,6 +480,10 @@ TEST(SetExpressionParseTest, AColumnNamedCaseBeforeAFusedMinusIsASubtraction) {
     ASSERT_TRUE(a.ok()) << a.status().message();
     ASSERT_NE(a.value().expr, nullptr);
     EXPECT_EQ(Render(*a.value().expr), "(case - 1)");
+    // A negative operand is written in parentheses: `CASE (` is never a call.
+    auto simple = SetOf("CASE (-1) WHEN b THEN 2 ELSE 3 END");
+    ASSERT_TRUE(simple.ok()) << simple.status().message();
+    EXPECT_EQ(simple.value().expr->op, ExprOp::kCase);
     // A comparison form BJ leaves out is named, not read as a CASE.
     for (const char* v : {"case IN (1)", "case BETWEEN 1 AND 2", "case LIKE 'a'"}) {
         auto refused = SetOf(v);
