@@ -5,6 +5,7 @@
 
 #include "kds/txn/lock_table.hpp"
 
+#include "kds/sched/checkpoint_census.hpp"
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 
@@ -1754,6 +1755,40 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                << "_polls=" << scheduler_view_->polls_total(group)
                << " sched_" << kGroupNames[i]
                << "_consumed_us=" << scheduler_view_->consumed_ns(group) / 1000;
+        }
+        // BI-S1: how long one iteration held this reactor, apart for the
+        // iterations a checkpoint run of this core overlapped.
+        const auto print_holds = [&os](const char* where, const sched::Scheduler::IterationHolds& h) {
+            os << " sched_hold_" << where << "_longest_us=" << h.longest_ns / 1000
+               << " sched_hold_" << where << "_over_10ms=" << h.over_10ms
+               << " sched_hold_" << where << "_over_100ms=" << h.over_100ms
+               << " sched_hold_" << where << "_over_1s=" << h.over_1s;
+        };
+        print_holds("in_run", scheduler_view_->holds_inside_run());
+        print_holds("out_run", scheduler_view_->holds_outside_run());
+    }
+
+    // BI-S1's run record for this core (`sched/checkpoint_census.hpp`): the
+    // runs it took and its last run whole, per phase.
+    {
+        const CheckpointCensus::Slot& ckpt = CheckpointCensus::Of(core_id_);
+        const auto load = [](const std::atomic<std::uint64_t>& v) {
+            return v.load(std::memory_order_relaxed);
+        };
+        os << " checkpoint_runs=" << load(ckpt.run_edges) / 2
+           << " checkpoint_start_refused=" << load(ckpt.start_refused)
+           << " checkpoint_last_completed=" << (ckpt.last_completed.load(std::memory_order_relaxed) ? 1 : 0)
+           << " checkpoint_last_wall_us=" << load(ckpt.last_wall_ns) / 1000
+           << " checkpoint_last_step_max_us=" << load(ckpt.last_step_max_ns) / 1000
+           << " checkpoint_last_step_page_write_max_us="
+           << load(ckpt.last_step_page_write_max_ns) / 1000
+           << " checkpoint_last_steps=" << load(ckpt.last_steps)
+           << " checkpoint_last_pages=" << load(ckpt.last_pages)
+           << " checkpoint_last_dirty_at_start=" << load(ckpt.last_dirty_at_start);
+        for (std::size_t i = 0; i < kCheckpointPhaseCount; ++i) {
+            os << " checkpoint_last_" << kCheckpointPhaseNames[i]
+               << "_sum_us=" << load(ckpt.last_sum_ns[i]) / 1000 << " checkpoint_last_"
+               << kCheckpointPhaseNames[i] << "_max_us=" << load(ckpt.last_max_ns[i]) / 1000;
         }
     }
 
