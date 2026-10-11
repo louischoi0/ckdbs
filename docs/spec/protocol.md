@@ -87,6 +87,7 @@ PG-shaped phases, KDS semantics:
 - **`C_DESCRIBE`** `{kind u8 stmt|portal, name Str}` → `S_ROW_DESC`, **for an executed portal only**. Describing a *statement* is refused with `Unsupported` and the reason: this engine resolves a result's shape by compiling the statement against a catalog and a snapshot, which happens at execution — so the shape of an unexecuted statement is not knowable without running it, and running it to answer a describe would make a describe a side effect. A client that needs the shape executes and reads `S_ROW_DESC`.
 - **`C_EXECUTE`** `{portal_name str, max_rows u32}` — results per §7; `max_rows = 0` means unlimited.
 - **`C_SYNC`** — pipeline barrier. Clients may pipeline PARSE/BIND/EXECUTE without waiting; after any `S_ERROR`, the server **discards frames until the next `C_SYNC`**, then answers `S_READY(failed-txn or idle)`. This skip-to-sync rule is the whole pipelining error contract.
+- **A pipelined statement's reply leaves in one write** (BK-R7, `instructions/v3.0.0/workorder-bk-opt-read-update-path.md`): the answers to the frames ahead of an `C_EXECUTE` that started a statement - `S_PARSE_OK`, `S_BIND_OK` - are sent with the statement's own, at its completion, not when the read that carried them is handled. The frames and their order are unchanged; only their timing is. A client that needs `S_PARSE_OK` before it executes does not pipeline the `C_EXECUTE`, and is answered at once.
 
 ## 6. Data Encoding
 

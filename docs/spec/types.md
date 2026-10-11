@@ -207,7 +207,14 @@ zero and `%` takes the dividend's sign, a division by zero is `InvalidArgument`,
 a NULL operand yields NULL before a zero divisor is judged, and `||` yields
 the concatenation (a `char(N)` target's length and a NOT NULL target are the
 row's encode verdicts). Every assignment reads the before-image and the values
-are written together. A failure names the failing operator's byte, the
+are written together. **What a row decodes for it** (BK-R2,
+`workorder-bk-opt-read-update-path.md`): a relation with a Cabin, an index or
+an assertion decodes the row whole for its hooks; any other decodes only the
+columns its SET expressions read (`exec::SetExpressionColumns`), and the
+evaluator refuses `Corruption` a column the decode left out (`exec::kUndecoded`)
+rather than read a default. The new image is the row's own bytes with only the
+assigned cells re-encoded (`exec::EncodeAssigned`, BK-R3, `heap-and-tuple.md`
+§3.4). A failure names the failing operator's byte, the
 expression's first byte and the row's pk. `exec::TypeSetExpression` (`include/kds/exec/set_expr.hpp`) is the
 one place the rules below live. §3.2's "there is none" stands for every other
 position: the grammar admits an expression in a SET value only.

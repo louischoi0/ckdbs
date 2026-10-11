@@ -214,8 +214,12 @@ def run_block(srv, shape, path, qs, acc):
         if not got.startswith(tag) or (name in ("select-pk", "scan") and len(rows) != 1):
             acc["bad"] += 1
     acc["wall"] += time.perf_counter() - w0
-    acc["server_ns"] += sched_ns(srv.proc.pid) - s0
+    block_ns = sched_ns(srv.proc.pid) - s0
+    acc["server_ns"] += block_ns
     acc["driver_ns"] += self_ns() - c0
+    # Per block, so an arm whose cost grows as it runs (a lengthening chain)
+    # shows it: the first block against the last.
+    acc.setdefault("block_server_us", []).append(round(block_ns / max(1, len(qs)) / 1e3, 2))
 
 
 def summarize(name, path, label, acc):
@@ -226,7 +230,8 @@ def summarize(name, path, label, acc):
             "p50_us": pct(lat, 50) * 1e6, "p90_us": pct(lat, 90) * 1e6,
             "p99_us": pct(lat, 99) * 1e6, "mean_us": acc["wall"] / ops * 1e6,
             "server_cpu_us": acc["server_ns"] / ops / 1e3,
-            "driver_cpu_us": acc["driver_ns"] / ops / 1e3}
+            "driver_cpu_us": acc["driver_ns"] / ops / 1e3,
+            "block_server_us": acc.get("block_server_us", [])}
 
 
 def setup(a, conn):
@@ -252,12 +257,26 @@ def end_state(conn, a, q_range_last):
             "spill_txt_ok": bool(rows) and rows[0][0].decode() == SPILL}
 
 
+def quiet_gate(a):
+    """Waits until the 1-minute load average is at or under `--quiet-load`,
+    for at most `--quiet-wait` seconds; returns (waited s, load at the end)."""
+    t0 = time.time()
+    while True:
+        with open("/proc/loadavg") as f:
+            load = float(f.read().split()[0])
+        if a.quiet_load <= 0 or load <= a.quiet_load or time.time() - t0 >= a.quiet_wait:
+            return round(time.time() - t0, 1), load
+        time.sleep(5)
+
+
 def one_run(a, r):
     tag = f"r{r}"
+    waited, load = quiet_gate(a)
     before = host_state()
     bins = [("A", a.bin, a.port)] + ([("B", a.bin_b, a.port + 1)] if a.bin_b else [])
     servers = []
-    out = {"run": r, "host_before": before, "arms": [], "idle_cpu_us_per_s": {}}
+    out = {"run": r, "host_before": before, "arms": [], "idle_cpu_us_per_s": {},
+           "quiet_gate": {"waited_s": waited, "load": load}}
     try:
         for label, binary, port in bins:
             servers.append(Server(a, label, binary, port, tag))
@@ -292,7 +311,8 @@ def one_run(a, r):
                     res["host"] = host
                     out["arms"].append(res)
                     print(json.dumps({k: (round(v, 2) if isinstance(v, float) else v)
-                                      for k, v in res.items() if k != "host"}), flush=True)
+                                      for k, v in res.items()
+                                      if k not in ("host", "block_server_us")}), flush=True)
         for srv in servers:
             out.setdefault("end_state", {})[srv.label] = end_state(srv.conn, a, range_last)
             # The spill's page growth, against the same updates of an unspilled row.
@@ -360,6 +380,9 @@ def main():
     ap.add_argument("--range-ops", type=int, default=60)
     ap.add_argument("--blocks", type=int, default=12)
     ap.add_argument("--runs", type=int, default=3)
+    ap.add_argument("--quiet-load", type=float, default=0.0,
+                    help="before each run, wait for the 1-min loadavg to reach this (0: no gate)")
+    ap.add_argument("--quiet-wait", type=float, default=600.0)
     ap.add_argument("--sampler")
     ap.add_argument("--sampler-dir")
     ap.add_argument("--profile-ops", type=int, default=100000)

@@ -992,6 +992,41 @@ Written at BJ's close on `worktree-bj-expression-update`. Owned by
   between the parser and `UpdateInner` is not attributed (`perf` is locked out).
   A constant-folding or lazier-allocation second attempt was not made.
 
+## The read and update paths (BK)
+
+Written at BK's close on `worktree-bk-read-update-paths`. Owned by
+`instructions/v3.0.0/workorder-bk-opt-read-update-path.md` and the specs each
+stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
+
+- **A prepared statement is still substituted into its text and parsed again
+  at every execution** (BK-R1 not built, BK-Q13). Parse and compile are
+  2.2-4.2 µs of a point statement's server CPU after BK (7-12 % of it), and a
+  client that prepares is the only one a cached parse would help; no driver
+  in the tree prepares. A text parameter containing a single quote stays
+  unbindable at `C_BIND` for the same reason.
+- **Waystone records a trail for a point `SELECT` by pk**: recording and the
+  replay attempt are 7-9 % of its server CPU (BK-S1's census), for a lookup
+  the descent already answers directly. No BK proposal named it.
+- **The request path's floor is the kernel's**: a `C_PING` round trip costs
+  14-25 µs of server CPU on the census host, 59-61 % in its one `send()` and
+  34-37 % in the read and the reactor's wake (BK-Q8: no engine change in BK
+  reaches it).
+- **A spilled value an UPDATE re-assigns is still never released**: BK-R3
+  stopped the copy of a value the SET list does not name, not the
+  superseded one it does. The deferred-release drain stays unbuilt, and
+  `heap-and-tuple.md` §3.4 states the rule it must take: a value goes only
+  once the newest version naming it is reclaimed.
+- **What the suite does not cover:**
+  - the race BK-S3's review found and the order fixed - an assertion adopted
+    on another core between a statement's refused `IS` and its row's `IX` -
+    has no cell; the ask sits after the conflict check, where it always did;
+  - the var-heap tail hint across a `DROP TABLE` reclaim that reuses the
+    dropped chain's root id: the cell (`ARootIsBornWithNoHint`) uses the
+    in-memory store's id order, not a reclaim on `DevicePageStore`.
+- **A scan row's walk has no single dominant part**: about 80 ns of server
+  CPU a row on the census host, split between visibility, decode, the
+  residual and the leaf visit, none above a quarter (BK-S1's re-profile).
+
 ## Carve and checkpoint stalls
 
 Verified at `e5a7e1b7` (BA's close,
