@@ -2323,9 +2323,8 @@ private:
             !s.ok()) {
             return s;
         }
-        stats_.For(step.step_id).spill_fetches += spills_.size();
-
         StepStats& step_stats = stats_.For(step.step_id);
+        step_stats.spill_fetches += spills_.size();
         ++step_stats.rows_examined;
 
         // ---- Cabin recording (docs/spec/cabin.md §4's miss path) ---------
@@ -2808,11 +2807,6 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     build_rows += other.build_rows;
     build_probes += other.build_probes;
     return *this;
-}
-
-StepStats& ExecStats::For(std::uint32_t step_id) {
-    if (step_id >= steps.size()) steps.resize(step_id + 1);
-    return steps[step_id];
 }
 
 StepStats ExecStats::Total() const noexcept {

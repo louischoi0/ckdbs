@@ -785,6 +785,35 @@ TEST_F(CoreRuntimeTest, APeersCheckpointSkipsWhileAnotherCoresRuns) {
     EXPECT_EQ(gate.skipped(), 1u);
 }
 
+TEST_F(CoreRuntimeTest, ACadenceRunIsASystemTaskNotATimerCallback) {
+    // BI-S2 (BI-R1), through the peer's own cadence: the timer only submits,
+    // and the run is polled in the `system` group. A callback that ran the
+    // checkpoint itself would publish with no `system` poll at all.
+    wal::InMemoryCheckpointAnchor anchor;
+    wal::CheckpointGate gate;
+    CoreRuntime::Config config = ConfigFor(1);
+    config.checkpoint_anchor = &anchor;
+    config.checkpoint_gate = &gate;
+    config.checkpoint_interval_ns = 20'000'000;  // 20 ms
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    const std::uint64_t edges_before = CheckpointCensus::Of(1).run_edges.load();
+    std::thread worker([&] { peer.value()->Run(); });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (CheckpointCensus::Of(1).run_edges.load() < edges_before + 4 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    peer.value()->scheduler().Stop();
+    worker.join();
+
+    EXPECT_GE(CheckpointCensus::Of(1).run_edges.load(), edges_before + 4)
+        << "the cadence never ran twice";
+    EXPECT_GT(peer.value()->scheduler().polls_total(sched::SchedulingGroup::kSystem), 0u)
+        << "the cadence ran its checkpoints inline in the timer callback";
+}
+
 TEST(CheckpointGateTest, TwoThreadsNeverHoldTheRunAtOnce) {
     // The gate's own claim, under real threads: whichever of two contenders
     // enters, the other is refused until it leaves. `inside` would reach 2

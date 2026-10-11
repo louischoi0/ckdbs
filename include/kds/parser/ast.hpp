@@ -733,18 +733,46 @@ struct SelectStmt {
     bool star() const noexcept { return projection.empty() && !aggregated(); }
 };
 
-// A value expression in a SET value (BJ-R1 family 1, BJ-S2): column
-// references to the target relation, literals, parentheses, unary `+`/`-`,
-// binary `+ - * / %` and `||`. Parsed here, **typed at compile and evaluated
-// at the write** (BJ-S3, BJ-S4); until BJ-S4 an assignment that holds one is
-// refused `NotImplemented` before any row is read.
+// A type as a statement writes it, unresolved: `int64`, `varchar(32)`,
+// `decimal(10, 2)`. The same fields `ColumnDef` carries for a column, for a
+// `CAST` target (BJ-S5); the bounds are the catalog's to check.
+struct TypeSpec {
+    std::string name;
+    bool has_precision = false;
+    std::uint32_t precision = 0;
+    std::uint32_t scale = 0;
+    bool has_width = false;
+    std::uint32_t width = 0;
+    std::uint32_t byte_offset = 0;      // the name
+    std::uint32_t arg_byte_offset = 0;  // the first argument
+};
+
+// A value expression in a SET value (BJ-R1 families 1-3, BJ-S2, BJ-S5):
+// column references to the target relation, literals, parentheses, unary
+// `+`/`-`, binary `+ - * / %` and `||`; the comparisons, `AND`, `OR`, `NOT`
+// and `IS [NOT] NULL` as boolean values; `CASE`, `COALESCE`, `NULLIF`,
+// `GREATEST`, `LEAST`; `CAST(x AS type)` and `x::type`. Parsed here, **typed
+// at compile and evaluated at the write** (BJ-S3, BJ-S4).
 //
 // Nodes are immutable and shared (`shared_ptr<const Expr>`), so an
 // `Assignment`, and with it an `UpdateStmt`, stays copyable.
-enum class ExprOp : std::uint8_t { kAdd, kSub, kMul, kDiv, kMod, kConcat, kNeg, kPos };
+enum class ExprOp : std::uint8_t {
+    kAdd, kSub, kMul, kDiv, kMod, kConcat, kNeg, kPos,
+    // Boolean values (BJ-S5): three-valued, yielding `bool`.
+    kEq, kNe, kLt, kLe, kGt, kGe, kAnd, kOr, kNot, kIsNull, kIsNotNull,
+    // `kCall` nodes: the n-ary forms. `kCase`'s args are
+    // `[when, then, when, then, ..., else?]` - a simple `CASE x WHEN a` is
+    // desugared at parse to `WHEN x = a`, so an odd count is an `ELSE`.
+    kCase, kCoalesce, kNullif, kGreatest, kLeast,
+    // `kUnary`: `lhs` converted to `cast_to`.
+    kCast,
+    // `kCall`: a scalar function by name (`Expr::function`), BJ-S6. Which
+    // names exist, their signatures and their results are the typer's.
+    kFunction,
+};
 
 struct Expr {
-    enum class Kind : std::uint8_t { kLiteral, kColumn, kUnary, kBinary };
+    enum class Kind : std::uint8_t { kLiteral, kColumn, kUnary, kBinary, kCall, kSubquery };
 
     Kind kind = Kind::kLiteral;
 
@@ -753,14 +781,21 @@ struct Expr {
     // byte; a typing refusal (BJ-R3) names the operator it is about.
     std::uint32_t byte_offset = 0;
     // For a binary node the operator's own byte; a unary node's is its
-    // `byte_offset`.
+    // `byte_offset`; a call's is the keyword's.
     std::uint32_t op_byte_offset = 0;
 
-    // 1 for a leaf, `max(lhs, rhs) + 1` above. Bounded by the parser
+    // 1 for a leaf, `max(children) + 1` above. Bounded by the parser
     // (`kMaxExprHeight`): a chain `1+1+1+...` leans entirely left, and a
     // tree that tall is freed, typed and evaluated one nested call per
     // level.
     std::uint32_t height = 1;
+
+    // The nodes under this one **counting a shared child once per reference**
+    // (a simple CASE reuses its operand in every WHEN), which is what the
+    // typer and the evaluator walk. Bounded by the parser (`kMaxExprSize`):
+    // height and nesting depth cannot see a short tree whose size is
+    // exponential in its text.
+    std::uint32_t size = 1;
 
     AstValue literal;           // kLiteral
     // kLiteral: the literal was a bare number (`1.5`, not `'1.5'`). The
@@ -770,15 +805,23 @@ struct Expr {
     bool bare_numeric = false;
 
     std::string column;         // kColumn, as written
-    ExprOp op = ExprOp::kAdd;   // kUnary, kBinary
+    ExprOp op = ExprOp::kAdd;   // kUnary, kBinary, kCall
     std::shared_ptr<const Expr> lhs;  // kUnary's operand, kBinary's left
     std::shared_ptr<const Expr> rhs;  // kBinary's right
+    std::vector<std::shared_ptr<const Expr>> args;  // kCall
+    TypeSpec cast_to;                               // kUnary with kCast
+    std::string function;                           // kCall with kFunction, as written
+    // kSubquery (BJ-S7): `(SELECT ...)` as a value. The statement as parsed, and
+    // its text without the parentheses - the dispatcher runs the text through
+    // the SELECT path once, before the walk.
+    std::shared_ptr<SelectStmt> subquery;
+    std::string subquery_sql;
 };
 
 struct Assignment {
     std::string col_name;
 
-    // The value when the SET value is one bare literal (`NULL` and `?`
+    // The value when the SET value is one bare literal (`NULL`
     // included), exactly as before BJ: such an assignment keeps the per-row
     // type gate at the encode (BJ-Q3 (c)) and every reader of `val` stays
     // right. Unset when `expr` is non-null.

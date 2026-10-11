@@ -322,7 +322,7 @@ TEST_F(FunctionConjunctTest, WhatIsRefusedAndWhere) {
         {"SELECT id FROM t WHERE v = NOW()", "different types at byte 27"},
         // Understood and not built.
         {"SELECT DATE(ts) FROM t", "NOT_IMPLEMENTED retryable=0 a function call is supported "
-                                   "in a WHERE comparison only (byte 7)"},
+                                   "only in a WHERE comparison and a SET value (byte 7)"},
         {"SELECT id FROM t ORDER BY DATE(ts)", "NOT_IMPLEMENTED"},
         {"SELECT id FROM t GROUP BY DATE(ts)", "NOT_IMPLEMENTED"},
         {"SELECT id FROM t WHERE DATE(DATE(ts)) = '2026-10-01'",
@@ -334,11 +334,11 @@ TEST_F(FunctionConjunctTest, WhatIsRefusedAndWhere) {
         {"SELECT id FROM t WHERE DATE(ts) IN (SELECT id FROM u)", "NOT_IMPLEMENTED"},
         // A value position reads no call: named, not "expected value".
         {"SELECT id FROM t WHERE ts BETWEEN NOW() AND NOW()",
-         "a function call is supported in a WHERE comparison only (byte 34)"},
-        // BJ-S2: a SET value is parsed as an expression, so the call is refused
-        // by the expression grammar, naming the stage that builds it.
+         "a function call is supported only in a WHERE comparison and a SET value (byte 34)"},
+        // BJ-S6: a SET value calls NOW() (a timestamp), and the typer says what
+        // it is where an int64 column wants a number.
         {"UPDATE t SET k = NOW() WHERE id = 1",
-         "a function call in a SET value is not supported yet (BJ-S6) (byte 17)"},
+         "the expression is timestamp but column 'k' is int64 (byte 17)"},
         {"SELECT * FROM sys.tables WHERE DATE(oid) = '2026-10-01'",
          "a function call over a catalog view (byte"},
     };

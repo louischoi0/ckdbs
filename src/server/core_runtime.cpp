@@ -547,7 +547,10 @@ void CoreRuntime::Run() {
         const sched::MonoTimeNs phase =
             period / std::max<std::uint32_t>(config_.core_count, 1) * config_.core_id;
         scheduler_->SubmitAt(scheduler_->clock().Now() + phase, [this, period] {
-            scheduler_->SubmitEvery(period, [this] { (void)Checkpoint(); });
+            // Submits the run as a task and returns (BI-R1).
+            scheduler_->SubmitEvery(period, [this] {
+                checkpointer_->SubmitRun(*scheduler_, config_.checkpoint_gate, config_.core_id);
+            });
         });
     }
 
@@ -587,6 +590,10 @@ Status CoreRuntime::Checkpoint() {
     // lives on `Expeditor`, and any runtime handed no anchor.
     if (!checkpointer_.has_value()) return Status::OK();
     return checkpointer_->RunGated(config_.checkpoint_gate, config_.core_id);
+}
+
+void CoreRuntime::AbandonCheckpoint() noexcept {
+    if (checkpointer_.has_value()) checkpointer_->Abandon();
 }
 
 Status CoreRuntime::ShutdownCheckpoint() {

@@ -190,6 +190,19 @@ Status SimInstance::RunCheckpoint() {
                                            /*elapsed_ns=*/nullptr, &dispatcher_->assertions());
 }
 
+Status SimInstance::AbandonCheckpointMidSteps() {
+    if (!anchor_.has_value()) return Status::OK();  // no anchor yet to fall back to
+    storage::PageStoreCheckpointTarget target(*store_);
+    wal::NoActiveTransactions none;
+    wal::Checkpointer checkpointer(*wal_, target, none, *anchor_,
+                                   wal::CheckpointerConfig{.pages_per_step = 4});
+    checkpointer.SetAssertionSource(&dispatcher_->assertions());  // a real BEGIN carries its run
+    if (Status s = checkpointer.Start(); !s.ok()) return s;
+    if (auto stepped = checkpointer.Step(); !stepped.ok()) return stepped.status();
+    checkpointer.Abandon();
+    return Status::OK();
+}
+
 void SimInstance::TearDown() {
     // Reverse of Boot(). The session first: it may hold a pointer into the
     // transaction manager it sits above.

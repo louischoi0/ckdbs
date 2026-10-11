@@ -754,3 +754,495 @@ different thing than `DoesNotFit`); folding constant expressions at compile so
 evaluator is where a value is known); making `i64 = (NULL)` a compile
 refusal (the NOT NULL verdict is the row's, BJ-R4). **Not done:** the
 WHERE-side wrap, which is outside this order.
+
+### BJ-S3 → BJ-S4 gate — BA's code lands on `main` (2026-10-10)
+
+On the operator's word ("proceed with option 1", then, asked who merges,
+"CLA merges and pushes") `worktree-ba-open-marks` (`2eea2720`, BA-S2..S4,
+S7, S12..S15 and BA's close) was merged into `worktree-bj-expression-update`
+at `836b9551` with no conflict, and pushed to `main` at `1a5176ae` after the
+pre-push suite (3411 of 3411, `HeapSuspensionIsLifted` disabled). The merge
+broke two of BJ-S1's cells, not the engine: a resumed `UPDATE` now commits
+through BA-S7's parked-commit path, which the rig's held kicks never deliver,
+so `bj_single_write_rig_test.cpp`'s waiter commits `relaxed`, as BA's own
+`row_wait_wake_rig_test.cpp` does (`1a5176ae`).
+
+### BJ-S4 — evaluation and the write (built 2026-10-10)
+
+On `worktree-bj-expression-update`, after `1a5176ae`. **Not measured;
+measured at the milestone's close** (§5).
+
+- **`exec::EvaluateSetExpression`** (`src/exec/set_expr.cpp`): one `Evaluator`
+  over a decoded row. Integer, uint64 and decimal values ride one 128-bit
+  integer; every node's result is judged against **its own type** (an int8
+  intermediate of 200 is `OutOfRange` though the final result would fit),
+  with `__builtin_*_overflow` underneath so a decimal(38) pair cannot wrap
+  the 128 bits; a decimal's bound is `10^p`. `/` truncates toward zero, `%`
+  takes the dividend's sign, a zero divisor is `InvalidArgument` and is
+  judged after NULL, so `NULL / 0` is NULL. A uint64 above `INT64_MAX`
+  travels in `raw_int_text`, as `ValueAsUint64` reads it.
+- **`CompileAssignments`** takes an optional `std::vector<CompiledAssignment>*`:
+  the target's schema position (the row loop no longer finds a column by name
+  per row), the typed tree, and for a foreign-key column the value its hoist
+  resolves. The `NotImplemented (BJ-S4)` refusal is gone.
+- **`UpdateInner`** evaluates every expression right after the row qualified
+  and its conflict was decided - before the foreign-key check, before the
+  no-refuse window, before any write (BJ-R2, BJ-R10) - into one per-statement
+  `evaluated` vector, then writes them into the decoded row together. A failure
+  names the failing operator's byte, the expression's first byte and the
+  row's pk.
+- **BJ-Q10, as adopted**: a constant expression into a foreign-key column is
+  folded at compile and keeps the hoist; one that reads a column is refused
+  `NotImplemented` at its byte (the refusal waits until every assignment has
+  been judged). A constant whose fold fails hoists nothing, and the row that
+  meets the failure raises it before any foreign-key check.
+- **Cells**: `tests/set_expr_eval_test.cpp` (17: arithmetic, the swap, every
+  type's overflow, uint64 above INT64_MAX, division by zero, NULL, NOT NULL,
+  decimals, text and a spilled value, a failure in a later row, the foreign-key
+  path); `tests/set_expr_two_core_rig_test.cpp` (two cores each add 1 to one
+  row 300 times: the value is 600 and every retryable refusal is retried, none
+  lost); the typing cells now run over a WHERE that matches nothing, and
+  `ANegativeValueBoundAfterAMinusIsNotAComment` expects the statement to run
+  and change nothing. **Suite 3429/3429** at `d13c79ea`, 3434/3434 after the review (below).
+
+### BJ-S4 — the `critics-developer` review of `d13c79ea`, applied
+
+On `worktree-bj-expression-update`, after `d13c79ea`, the review found, and
+the tree now fixes:
+- **A NOT NULL refusal named `(byte 0)`** (medium, BJ-S4's own): a computed
+  value carries no position, so the encode's refusal printed none. The row
+  loop stamps the expression's first byte on each evaluated value.
+- **BJ-R10's wording.** A value that evaluates but does not fit its target -
+  a NULL into a NOT NULL column, a `char(N)` result too long - is refused by
+  the row's encode, after the no-refuse window opens and the assertion
+  reserves, and the char refusal names no byte. It is safe (the failure takes
+  the normal mid-statement path and the abort undoes the reservation); BJ-R10's
+  "before anything of the row is written" is therefore **read as the
+  evaluation's own failures**, and `types.md` §3.2b and the row loop's comment
+  say the other two are the encode's verdicts.
+- **Cuts**: one `values` vector (a bare literal's slot filled once, an
+  expression's per row) in place of two sources and a lambda; `Int128Text`
+  deleted for `std::to_string(uint64)`; the powers of ten a table, not a
+  loop per node per row; `CompiledAssignment::expr` a `unique_ptr`.
+- **Cells added**: the NOT NULL byte; `x * 2`, `x + x`, `-x - x` over the widest
+  `decimal(38,0)` and `u * u` over the widest `uint64` (the inputs that reach
+  the 128-bit overflow flag); a foreign-key constant whose fold fails
+  (matching and non-matching WHERE) and a `NULL + 1` fold; the two-core
+  counter now asserts the cores overlapped (the first to finish found the
+  other had applied some); an autocommit failure in a later row undoes the
+  earlier rows, and a failure inside `BEGIN` poisons the transaction.
+- **Confirmed by reading and by a scratch probe**: the evaluator's arithmetic
+  and value forms, the evaluation point, no other reader of `Assignment::val`,
+  and BJ-R9 - BA-S14's in-engine re-run fires only when the trail has not
+  grown, and an UPDATE's `NoteOverwrite` grows it before any write, so
+  `SET v = v + 1` is never applied twice.
+
+**Filed, not fixed (outside the stage; fixed 2026-10-11 on `worktree-fix-negative-fk-value`, the entry deleted):** `docs/inflight/bugs/a-negative-foreign-key-value-skips-the-parent-check.md` - a
+negative integer in a foreign-key column skips the parent check on `INSERT`
+and `UPDATE`, an older quiet wrong answer that a folded constant now reaches.
+
+**Rejected:** returning `StatusOr<vector<CompiledAssignment>>` instead of the
+out-parameter and storing the foreign key on the entry (a larger signature
+change for the one nullptr caller, a unit test; the stage's refusals are not
+waiting on it); a `constexpr` table for `kTable` (the first call builds it
+once); BJ-S3's `d = 2 * 3` against `d = 2 + 3` (the product of integers is an
+integer, the sum of integer literals takes its context, by design).
+
+### BJ-S5 — families 2 and 3, and the row-value form (built 2026-10-10)
+
+On `worktree-bj-expression-update`, after `1a251cea`. **Not measured;
+measured at the milestone's close** (§5).
+
+- **Grammar** (`src/parser/parser.cpp`): PostgreSQL's precedence, loosest
+  first - `OR`, `AND`, `NOT`, `IS [NOT] NULL`, the six comparisons (which do
+  not chain), `||`, `+ -`, `* / %`, a unary sign, `::`. `CASE` (a simple one
+  is desugared to the searched form at parse), `COALESCE`, `NULLIF`,
+  `GREATEST`, `LEAST` are one n-ary node kind (`Expr::Kind::kCall`); `CAST(x AS
+  T)` and `x::T` are a unary node carrying a `TypeSpec`, whose parse is
+  shared with `CREATE TABLE`'s column type. `SET (a, b) = (x, y)` (BJ-Q7) is
+  `a = x, b = y`. **A new token `::`** (`kDoubleColon`, `ShapeTag` 20) lexed as
+  `kError` before, so no stored hash moved: the golden corpus changed three
+  verdicts (`NotImplemented` to `ok`) and gained nineteen lines.
+- **Typing**: a comparison, `AND`/`OR`/`NOT`, `IS [NOT] NULL` yield `bool`; the
+  operands of one comparison, one `CASE`'s results, `COALESCE`, `GREATEST` and
+  `LEAST` are one exact type (the text family counts as one) and untyped
+  literals take it - two untyped literals take int64 or varchar, a bare
+  number with a point has no default and is refused; a string literal is also
+  accepted where the encode accepts one (a date, a timestamp, a decimal). A
+  `CAST` pair outside the table in `types.md` §3.2b, `float`, and `varchar(N)`
+  are refused at compile; the CAST target's type names are listed in the
+  typer (it takes no catalog).
+- **Evaluation**: `AND`/`OR` left to right, the right operand skipped once the
+  left decides, so a guarded division is safe; `CASE` evaluates only the
+  chosen branch; `GREATEST`/`LEAST` skip NULLs; `CAST` rounds half away from
+  zero when it narrows a scale (BJ-Q3 (a)) and refuses a result its target
+  cannot hold (`OutOfRange`), a string that is not a number
+  (`InvalidArgument`) and a `char(N)` too long.
+- **Not built, by BJ-R1's own list**: `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `IS
+  TRUE`, `IS DISTINCT FROM`, a boolean literal (`TRUE`/`FALSE`) and `<>` (the
+  engine spells inequality `!=`); each is refused at its byte. Decimal `/`
+  moves to BJ-S6 with `ROUND`.
+- **Cells**: `tests/set_expr_conditional_test.cpp` (15), nine new parser cells,
+  the corpus lines. At this stage's tree the full suite had one failure,
+  `IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`, under
+  `ctest -j8`; it passed 5 of 5 repeated alone (the load flake the notes
+  name). The suite is re-run whole after the review, below.
+
+### BJ-S5 — the `critics-developer` review of `ab37991c`, applied
+
+On `worktree-bj-expression-update`, after `ab37991c`, the review found, and
+the tree now fixes:
+- **A wrong answer (high, BJ-Q3 (a)).** `Rescale`'s rounding test `2|r| >= divisor`
+  overflowed 128 bits when 38 places are dropped, so `CAST(0.9 AS int64)` over a
+  `decimal(38,38)` gave 0, not 1. It reads `|r| >= divisor - |r|` now; the cell
+  covers +-0.9, 0.4999..., 0.5 and the text form.
+- **A denial of service (high).** A simple `CASE` reuses its operand in every
+  `WHEN`, so one nested in another's operand made typing and every row's
+  evaluation exponential while the height and depth bounds saw a short tree:
+  a 700-byte statement took 35 s to compile. `Expr::size` counts a shared
+  child once per reference and the parser refuses past 4096 nodes
+  (`Unsupported`, at the node's byte). The redesign the review also offers -
+  the operand held once on the `CASE` node and evaluated once per row, which
+  departs from the order's "desugared at parse" and would matter once BJ-S6
+  adds non-trivial functions - is **left open**, not chosen.
+- **Valid input refused**: `m -1::int64` (the fused-minus branch skipped the
+  `::` level; `ParseCastSuffix` now serves both), `CAST(case AS int64)` (`AS`
+  ends a value), and `NULL = 'a'` (a comparison of two untyped literals now
+  settles both to the default of their merged kind).
+- **Cuts**: the hand-written number parser inside `CAST` (it disagreed with the
+  engine's: a leading space) is the engine's `ParseDecimalLiteralWide` now;
+  `Unify`'s unused context, `ParseTypeSpec`'s bare-decimal switch (the CAST
+  typer refuses it, with its byte), the `SameType` re-check in
+  `BooleanBinary`; one `ComparisonOf`, one `NaryOf`, one `DepthScope`, one
+  `MakeCast`.
+- **Cells**: the +-0.9 narrowing, the nested-CASE bound, `m -1::int64` (parse and
+  eval), a column named `case` before `AS`, `NULL = 'a'`, a bare `decimal` in a
+  CAST, an equal char pair; two vacuous lines removed (`CASE END` now asserts
+  the "at least one WHEN" refusal).
+
+**Rejected or left:** `CAST('1.5' AS int64)` is 2 where PostgreSQL errors -
+`types.md` §3.2b states the rounding as the engine's rule, so it stays;
+`CAST(18446744073709551615 AS uint64)` refused because a bare integer literal
+resolves to int64 first (the bare `SET u = 18446744073709551615` works) and
+`-128::int8` accepted through the fused minus - both recorded for
+`known-gaps.md` at BJ-S8; `DecimalTypeOfLiteral` counting leading zeros, an
+unbounded `char(N)` in a CAST, and the byte named by `CASE END` / `<>` errors
+(cosmetic, no wrong answer); `ColumnDef` holding a `TypeSpec` (touches every
+CREATE TABLE reader for no behaviour).
+
+### BJ-S6 — scalar functions, date arithmetic and decimal division (built 2026-10-10)
+
+On `worktree-bj-expression-update`, after `022e5e46`. **Not measured;
+measured at the milestone's close** (§5). **Suite 3472/3472** at this stage's
+tree, `HeapSuspensionIsLifted` disabled as before.
+
+- **Functions** (BJ-Q5, as adopted): `ABS SIGN CEIL FLOOR ROUND TRUNC MOD`, `UPPER
+  LOWER LENGTH SUBSTRING TRIM LTRIM RTRIM POSITION(a IN b) REPLACE LPAD RPAD
+  CONCAT`, and `NOW()`, `CURRENT_DATE`, `DATE(ts)` (BJ-Q4); anything else is
+  refused `unknown function` at its byte, as AP-S4 refuses one. The parser takes
+  any `name(...)` (`Expr::kFunction`; `MOD(a, b)` becomes `a % b`, `POSITION`
+  its `IN` form); the typer owns the table (`Typer::Function`), the evaluator
+  the semantics. Strings are bytes (`LENGTH` counts bytes, `UPPER` touches
+  ASCII), because that is how `char(N)` and a `varchar`'s width are measured.
+- **Date arithmetic** (BJ-Q4 (a)): `date + n`, `n + date`, `date - n` (a date,
+  refused outside the supported range) and `date - date` (an `int32` of days);
+  every other operator over a date is refused, and timestamp arithmetic stays
+  `Unsupported`.
+- **Decimal `/`** (BJ-Q3 (a)): `decimal(P, S)` with `S = min(s + 16, 38)` and the
+  digits a quotient can need, exact then rounded half away from zero, never
+  narrowed implicitly.
+- **A scaled decimal** (`SetType::Kind::kScaled`): `ROUND/TRUNC/CEIL/FLOOR` over a
+  decimal yield a fixed scale and take the precision of what they are assigned to
+  or combined with, so `SET price = ROUND(price / 3, 2)` types for a
+  `decimal(10, 2)` column. **This is a departure from BJ-Q2 (b)'s exact type,
+  recorded as a CLA proposal under the standing go-ahead**: without it the
+  explicit narrowing BJ-Q3 (a) names ("`ROUND(x, s)` or `CAST` is how to narrow
+  it") could not produce the column's type for any precision but the argument's.
+  `CAST` still names the whole type.
+- **Purity** is not declared in `functions.hpp`. The order's §3 asked for it
+  there; that catalog's entries are what a WHERE conjunct compiles, with a
+  single argument type, and its own rule is that a field nothing reads is a
+  promise nothing checks - an UPDATE has no determinism class until AQ. `NOW()`
+  and `CURRENT_DATE` are the stable two (`StatementContext`, carried across a
+  park); the rest are pure; `IsConstantSetExpression` treats the first two as
+  not constant, so BJ-Q10 never folds them.
+- **Cells**: `tests/set_expr_functions_test.cpp` (11), eight parser cells' worth of
+  corpus lines (the golden corpus: one verdict moved, no stored hash moved), the
+  typing and function-conjunct pins moved to what is now true.
+
+### BJ-S6 — the `critics-developer` review of `1a04b918`, applied
+
+On `worktree-bj-expression-update`, after `1a04b918`, the review found, and
+the tree now fixes:
+- **A quiet wrong answer (high): a quotient was rounded twice.** The division
+  rounded to its own scale and `ROUND`/`TRUNC`/`CAST` rounded that again, so a
+  value just under a tie was pushed over it (`ROUND(d / 200000000000000001, 4)`
+  gave 0.0001 for 0.0000499...). A decimal `/` that is the argument of a
+  rounding function, or of a `CAST` to a decimal or an integer, is divided
+  **once** to the target's places with that function's rounding mode
+  (`DivideAt`); `CEIL`/`FLOOR` over one keep the inexact remainder. Whether
+  PostgreSQL's numeric division rounds twice was not checked; `types.md` states
+  this engine's rule.
+- **Decimals of scale 22 or more could not be divided (high).** `S = min(s+16, 38)`
+  left no integer digits. **The quotient's type is now `S = max(s, min(s+16,
+  38-I))`, `P = min(I+S, 38)` with `I = p-s+s2`: as many extra places as leave
+  room.** That changes the formula `types.md` §3.2b carried; it is CLA's proposal,
+  adopted on the operator's standing go-ahead of 2026-10-10
+  (go-ahead-achieving-milestone), not the operator's mark. `decimal(10,2) / 2` is
+  still `decimal(26,18)`; `decimal(38,2) / decimal(38,2)` has no room and stays at
+  scale 2.
+- **Scaled decimals (medium)**: `SIGN` of a decimal whose precision is its scale
+  could never fit; two scaled decimals took the last one's precision, so
+  `ROUND(w,2) = ROUND(x,2)` depended on the order; `ROUND(d52, 2)`,
+  `ABS(ROUND(w, 2))` and a nested `ROUND` were refused where `ROUND(d53, 2)` was
+  admitted. Every rounding function over a decimal is now scaled, `ABS` and the
+  rest pass a scaled argument on, two of one scale keep the wider precision, and
+  **in a comparison a scaled decimal takes the wider precision of the two sides**
+  (review item B5: a data-dependent row failure for a comparison is worse than
+  a compile refusal, and the result is a bool either way).
+- **Smaller**: `ROUND(NULL, 2)` and `ABS(NULL)` are NULL of the context's type;
+  `MOD(a)` and `MOD(a, 2, 3)` are refused as `MOD`'s arity, not as an unknown
+  function; places over 38 are `InvalidArgument`, a negative count
+  `NotImplemented`; a row error names the function (`the result of function abs
+  ...`); the foreign-key refusal says "or the clock".
+- **Cuts**: one `FloorEpochDay` (type_literals.hpp) for the three day floors
+  (`DATE()` in the WHERE catalog included); `Rescale`'s unreachable branch; one
+  `IsDateType`; ROUND/TRUNC's places argument is dropped from the typed tree once
+  read; a function-name table the row errors share.
+- **Cells**: the five brittle ones tightened (a tie that is a tie, TRUNC against
+  ROUND, a negative tie, FLOOR against TRUNC), and new ones for the double
+  rounding, the room for integer digits, SIGN over `decimal(2,2)`, the order of
+  two scaled operands, a scaled decimal in a comparison, a NULL argument,
+  `LENGTH('é') = 2`, a date below 1900-01-01 and the arity messages.
+
+**Rejected or left:** unifying `ParseExprFunction` and `ParseExprCall`'s
+argument loops (POSITION's `IN` and CAST's `AS` make them differ in the places
+that matter); the review's L5, a column named `Current_Date` still reaching the
+function through `CURRENT_DATE` (identifiers are folded, so they are one name);
+a cell for `NOW()` carried across a parked `SET` (the WHERE one exists in
+`function_conjunct_test.cpp`; the carried context is the same
+`ParkedWrite::context`, read, not run) - listed for `known-gaps.md` at BJ-S8.
+
+### BJ-S7 — the scalar subquery (built 2026-10-10)
+
+On `worktree-bj-expression-update`, after `3292b20d`. **Not measured;
+measured at the milestone's close** (§5).
+
+- **`(SELECT ...)` in a SET value** (BJ-Q6, as revised): `Expr::Kind::kSubquery`
+  carries the parsed statement and its text. The parser takes it as an
+  outermost SELECT (an aggregate is allowed, which a nested one is not),
+  so `SET v = v + (SELECT SUM(v) FROM t)` parses.
+- **Run once, before the walk.** `TypeSetExpression` asks a
+  `SubqueryResolver` (the dispatcher's `RunScalarSubquery`), which runs the text
+  through `HandleSelect` with a one-column collecting `ResultSink` in the
+  session's view (inside `BEGIN`, the transaction's own writes included) and
+  returns the value and its column's type. The node becomes a **typed
+  constant** of the tree - a literal of that type - so every later stage (the
+  evaluator, the foreign-key fold) needs nothing new. No row is NULL; more than
+  one row or column is `InvalidArgument`, **even when the WHERE matches
+  nothing**, the stated difference from a per-row evaluation.
+- **Correlation is the SELECT compiler's own classification**: the subquery is
+  compiled as an `EXISTS` over the target relation, and a sub-chain it marks
+  correlated is refused `NotImplemented` at the subquery's byte. `SELECT SUM(v)
+  FROM t` inside `UPDATE t` is not correlated - its `v` is its own.
+- **A park keeps its answer.** The resume compiles the statement again, which
+  would run the subquery again and set the rows after the park from another state
+  of the database than the rows before it. `Session::ParkedWrite` carries the
+  answers; a mutant that ignores them is killed by `bj_single_write_rig_test.cpp`
+  (rows 3..5 became 777).
+- **Not built**: a subquery over a catalog view, the row form `SET (a, b) =
+  (SELECT ...)`, and a correlated one - each refused by name.
+- **Cells**: `tests/set_expr_subquery_test.cpp` (9: the pinned BJ-Q6 cell, another
+  relation, aggregates, no row, more than one row, correlated by qualifier and
+  by an outward name, types, the subquery's own errors, a foreign-key column, a
+  transaction's own writes), a parser cell, the parked rig cell, and the corpus
+  (two verdicts and three lines).
+
+### BJ-S7 — the `critics-developer` review of `7c8b2cef`, applied
+
+On `worktree-bj-expression-update`, after `7c8b2cef`, the review found, and
+the tree now fixes:
+- **A silent wrong value (high).** The collecting sink saved "the last row
+  rendered", but a sorted statement renders rows as the top-N heap admits them
+  and emits the survivors afterwards, so `(SELECT x FROM u ORDER BY x LIMIT 1
+  OFFSET 1)` stored the third value, not the second. The row text is now the
+  index of its value, so `Emit` takes exactly the one that was encoded for it.
+- **Two reads of two states (medium).** Outside `BEGIN` the SELECT minted its own
+  snapshot, later than the UPDATE's, so `SET a = (SELECT ...), b = (SELECT ...)`
+  could read two versions of a row. `HandleSelect` takes an optional pinned
+  snapshot, and the subquery reads at the UPDATE's own. Inside `BEGIN` it
+  already did; the repeatable-read cell shows it (the subquery read the
+  transaction's view, not another session's later commit). **The autocommit race
+  itself has no cell** - it needs another core to commit between two subqueries of
+  one statement - and is covered by reading.
+- **Correlation (medium).** The text probe refused valid nested subqueries
+  (it counted a grandchild's reference to the subquery's own relation as
+  reaching the target) and skipped every aggregated or paginated correlated one
+  (the probe did not parse), answering `InvalidArgument` where the order says
+  `NotImplemented`. A subquery that **compiles on its own** names nothing outside
+  it; one that does not is compiled as an `EXISTS` over the target, from the
+  AST, and refused if that makes it correlated. Both are compiles; neither runs.
+- **Error bytes (low)**: the SELECT's own offsets were relative to the
+  subquery's text; the text is now padded to where it stood, so every byte is a
+  byte of the UPDATE.
+- **`;` inside the parentheses (low)** is refused: it ended the subquery early
+  and the UPDATE went on.
+- **Pinned in a cell, not changed (low)**: a subquery in a branch never taken
+  still runs and its error fails the statement - the answer is taken before the
+  walk whatever a row would do; `types.md` says so.
+- **Cuts**: `Session local`, the `last_subquery_close_` side channel (the close
+  byte is returned), the text probe.
+
+**Rejected:** moving `SubqueryResult` to a header of its own so `session.hpp`
+need not include `set_expr.hpp` (a header split for one struct); a
+`const SubqueryResolver&` in place of the pointer (a signature churn through
+`CompileAssignments`'s callers for no behaviour); `std::move` of the parked
+answers (the parked write is read through a const reference and cleared two
+lines later; the vector is a handful of values); the sink keeping only the
+type oid and modifier (it keeps the field it was given).
+
+### BJ-S8 — the close (2026-10-10)
+
+On `worktree-bj-expression-update`. The restatements of §1.6 are done in the
+same stage: `types.md` §3.2, §3.2b and TY8, `parser-v2.md` I10, `foreign-keys.md`
+§2a, `manual/sql/sql.md`'s UPDATE, `client-manual.md`, `CLAUDE.md`'s row,
+`known-gaps.md`'s BJ section, `raft-marks-2026-10-10.md` §4 and the index row.
+
+**The measurement** (§5, `ck-tester`, `build-release`, interleaved A/B, relaxed
+durability, `cores` 1 and 2, 16 runs per cell, the host busy with other
+sessions' builds throughout and every discarded run kept in the archive):
+- **A is a real commit, not a constructed one**: `e5a7e1b7`
+  (`v2.7.0-736-ge5a7e1b7`, BA's close). `080cd555` is its ancestor, so "BJ's base
+  plus BA" is `e5a7e1b7`; between A and BJ's close `src` and `include` differ in
+  BJ's 18 files only.
+- **First close, B = `8e37baf4`** (`bench/v3.0.0/results-bj-close-v2.7.0-756-g8e37baf4.md`):
+  **a point `UPDATE ... SET v = <literal> WHERE id = k` was 1.6-1.9 µs slower
+  (+3.0 to +3.7 % at p50)**, in all six cells, a fixed price per statement,
+  against §5's "the expectation is flat". `INSERT`/`DELETE`/`SELECT` by pk and
+  the `SHOW META` control did not move. A stage bisection put about 0.65-0.95 µs
+  of it in by the parser and typer stages (BJ-S2/S3) and about 0.7 µs more with
+  BJ-S4's evaluator and row loop (intervals 0.6-1.7 µs wide: a trend).
+- **The remedy, `e458e272`** (`v2.7.0-757-ge458e272`; BJ-R7 gates nothing, so this
+  is the go-ahead skill's "propose a remedy within the milestone, apply it, measure
+  again", one attempt): a SET value's leading literal is read ahead of the
+  expression chain (a bare literal no longer pays eleven grammar levels and a
+  heap node), and the subquery resolver - a `std::function` whose capture was a
+  heap allocation per UPDATE - is built only for a statement with an expression.
+  **Re-measured** (`results-bj-close-v2.7.0-757-ge458e272.md`): the point literal
+  is **+0.25 to +0.70 µs (+0.5 to +1.3 %)** over A, the two-assignment form
+  +0.65 to +0.95 µs, and a B-against-B' pair recovered 1.1-1.35 µs. **What
+  remains is 16-41 % of the original and is not attributed**: no stage build
+  separates the parser change from the `UpdateInner` change, and `perf` is
+  locked out. A second attempt was not made.
+- **The every-row literal `UPDATE`** is +0.4 to +2.0 % at p50 (+6 to +19 ns a
+  row) in both files; a per-statement remedy does not touch it, and no cell
+  resolves it against its own noise floor.
+- **The expression's price** (on B'): `SET v = v + 1` is +2.9 µs a point
+  statement over a literal, the swap +2.4, a three-way `CASE` +9.15; 108-130 ns
+  more per row for `v + 1` over an every-row statement; `SET v = (SELECT
+  COUNT(*) FROM t)` costs one walk of the relation per statement. **What BJ saves
+  a client**: `SELECT v` then `UPDATE` is 124-128 µs at p50, one `UPDATE ... SET v
+  = v + 1` is 55-56 µs, **69-72 µs (56 %) less, 2.3 times the operations per
+  second**.
+- **Not run**: 200 rows at B', `cores = 2` at 10,000 rows, `strict` and `group`,
+  more than two cores, multi-client contention, a PostgreSQL floor, other types
+  and indexed, foreign-key or Cabin-managed target columns. **The suite was not
+  executed by the measurement.**
+- **A finding that is not BJ's**: a 0.2-0.45 s carve stall hits every server in
+  every run, A and B alike, and lands in the `INSERT` arm more often in B (13 of
+  16 runs against 3 of 16 at 1,000 rows) for a reason the file could not
+  establish; it is BA's record, not BJ's (`known-gaps.md`, "Carve and checkpoint stalls", which the
+  diagnosis at `e5a7e1b7` has since corrected: at `cores = 1` the relaxed carve's stall is a data-file
+  `fsync` stall the pre-BA binary also meets).
+
+**The suite at the closing code** (`e458e272`): 3492 of 3493 passed under
+`ctest -j8`; the one failure, `SortedLeafRigTest.AppendsFromTwoCoresKeepTheTreeWholeAndDense`,
+is a `TXN_CONFLICT retryable=1` from a btree descent that the cell does not retry,
+reproduced alone on the same loaded host (2 of 5, 1 of 8) and passing on a quiet
+one; BJ does not touch `INSERT` or the descent. `IdAllocationAcrossCores` failed
+under `-j8` in about half the plain runs and never alone (memory
+`suite-parallel-ctest`); the pre-push gate runs ctest serially.
+
+### BJ — the post-close review (2026-10-11)
+
+After the close, the operator asked: "Review the BJ milestone's work, find
+what to improve and what to fix, and improve it." Three `critics-developer`
+reviews ran on `5979b5e7`, over the typer and evaluator, the parser, and the
+UPDATE path. Their findings were applied on `worktree-bj-review-fixes` in
+`a1b06d5a` and `fdf882a9` and the commit after them, and each commit had a
+review of its own.
+
+**Fixed:**
+- **Quiet-wrong: an operation of literals beside a decimal.** Under a decimal
+  context `Resolve` gives `2 * 3` the type int64 and `1.5 * 1.5` the type
+  decimal(20,4). `Unify`, a comparison of two literals, and the value positions
+  of `CASE`/`COALESCE`/`NULLIF`/`GREATEST`/`LEAST` then compared or chose them
+  as unscaled numbers. `d = 2 * 3` was false for `d = 6.00`, and
+  `GREATEST(2 * 3, 1.5)` stored `1.50`. These are now refused
+  (`ResolveExactly`), as the top-level assignment already refused them.
+- **One `NOW()` per statement:** a SET-value subquery compiles under its
+  UPDATE's `StatementContext` (`HandleSelect`, `exec::Compile`). Before this it
+  took a reading of its own. No cell covers it: the statement clock cannot be
+  moved between the UPDATE's reading and the subquery's compile.
+- **Memory:** `||`, `CONCAT` and `REPLACE`'s last append are bounded by the
+  1 MiB `kMaxStringBytes` that `LPAD`/`RPAD` already had.
+- **Valid input that was refused:**
+  - `SET v = case -1` (a column named `case`).
+  - `a = NOT b`, which is now as in PostgreSQL.
+  - `CASE (expr) WHEN ...`, a simple CASE whose operand opens with a parenthesis.
+- **Wrong messages:**
+  - `case IN/BETWEEN/LIKE` is named `NotImplemented`.
+  - Junk in a row value is no longer called an arity error.
+  - The row-subquery and function-call messages no longer say "yet (BJ-S7)" or
+    "WHERE only".
+- **Simplifications:**
+  - Cut: dead argument-count checks, and `Rescale`'s second rounding switch
+    (it now drops places through `DivideAt`).
+  - Made one helper each: `Assignable`, `EndsSetValue`, `IsUnbuiltComparison`,
+    `ModeOf`, `DecimalType`, `CannotApply`.
+  - Other: the resolver is built on `any_of`.
+- **Tests:**
+  - An expression into an indexed covered column.
+  - The string caps.
+  - A subquery refusal that carries one byte.
+  - The single-write rig's comment no longer claims a divide it never makes.
+
+**Rejected:**
+- **`decimal128(p, s)` in CAST.** The parser takes no arguments for
+  `decimal128` in DDL either (`command_dispatcher.cpp`), so CAST agrees with
+  DDL. `types.md` TY2 and §2a still say "also declarable as `decimal128(p, s)`".
+  That conflict is older than BJ and is left for the operator.
+- **Expression factories returning a mutable node.** `StatusOr` cannot take
+  the two-step conversion, so every `return e;` would change to save one copy
+  per parsed `MOD` or function node.
+- **A literal argument of a numeric function taking its context's type**
+  (`SET i32 = ABS(-5)`). Only a function of a constant reaches this, and
+  `CAST` covers it.
+- **A null-session guard in `RunScalarSubquery`.** The state cannot be reached
+  from any caller.
+- **The first review's narrowing of `Positioned` to `"(byte "`.** It gave
+  "at byte N" refusals a second byte, and was restored by the following commit.
+
+**Filed, not fixed:**
+`docs/inflight/bugs/a-set-value-subquery-is-reparsed-behind-padding-as-long-as-its-offset.md`.
+
+**Ruled by the operator (2026-10-11):**
+- **A decimal `MIN`/`MAX` subquery: (a).** It was typed decimal(18,s) or
+  decimal(38,s), the wire's widened precision, so `SET d = (SELECT MAX(d)
+  FROM t)` was refused for a `decimal(10,2)` `d`. `MIN`/`MAX` and a grouping
+  column are now described in the column's own `(p, s)`; `SUM`/`AVG` keep the
+  maximum (`types.md` §3.2b). A client reading `SELECT MAX(d)` sees
+  `numeric(10,2)` where it saw `numeric(18,2)`.
+- **`int / decimal`: (a).** `2 / price` was refused while `price / 2` was
+  admitted, though §3.2b's row read as covering both orders: the scalar rule
+  made the dividend an int64 with no `(p, s)` for the quotient's type. A
+  dividend is now never a scalar, so an integer literal (or NULL) over a
+  decimal takes the divisor's type, as `2.00 / price` does and as a literal
+  under `+`/`-` does; a literal the type cannot hold is refused where it is
+  written, and an int64 column is still refused.
+- **`decimal128(p, s)`: (a), the spec follows the code.** `types.md` TY2,
+  §2, its grammar and §2a said the wide type was declarable as
+  `decimal128(p, s)`; the parser refuses it, as H8 (2026-08-29) decided and
+  `types_contract_test` pins. The spec now says `decimal128` is the type's
+  name and DESCRIBE's rendering only, reached by declaring `decimal(p, s)`
+  with `p >= 19`. No code changed.

@@ -1,0 +1,86 @@
+c1-n200-r0 load 6.72->6.00 gate 42s/0.019 dur 6.0s errs=0 bad=0 verify=ok lit-point:A=52.0/B=53.3 lit-range:A=240.4/B=237.4 ping:A=50.3/B=50.2
+c1-n200-r1 load 6.00->5.60 gate 3s/0.037 dur 6.1s errs=0 bad=0 verify=ok lit-point:A=51.7/B=53.0 lit-range:A=242.4/B=241.8 ping:A=50.4/B=49.8
+c1-n200-r2 load 5.15->4.90 gate 3s/0.025 dur 6.0s errs=0 bad=0 verify=ok lit-point:A=51.5/B=53.0 lit-range:A=239.4/B=241.6 ping:A=50.4/B=50.0
+c1-n200-r3 load 4.51->4.31 gate 3s/0.029 dur 5.9s errs=0 bad=0 verify=ok lit-point:A=51.2/B=52.9 lit-range:A=239.4/B=238.4 ping:A=50.9/B=50.2
+c1-n200-r4 load 4.12->3.87 gate 3s/0.027 dur 6.0s errs=0 bad=0 verify=ok lit-point:A=51.0/B=53.6 lit-range:A=235.7/B=246.1 ping:A=50.0/B=50.6
+c1-n200-r5 load 3.56->3.36 gate 3s/0.018 dur 6.1s errs=0 bad=0 verify=ok lit-point:A=51.3/B=53.0 lit-range:A=237.0/B=236.9 ping:A=50.3/B=50.4
+c1-n200-r6 load 3.17->3.23 gate 3s/0.025 dur 6.1s errs=0 bad=0 verify=ok lit-point:A=51.6/B=53.6 lit-range:A=235.6/B=238.6 ping:A=50.8/B=50.1
+c1-n200-r7 load 3.32->3.21 gate 60s/0.019 dur 6.2s errs=0 bad=0 verify=ok lit-point:A=52.0/B=53.1 lit-range:A=235.3/B=240.5 ping:A=50.4/B=50.1
+c1-n200-r8 load 3.04->3.03 gate 3s/0.029 dur 5.9s errs=0 bad=0 verify=ok lit-point:A=51.0/B=53.1 lit-range:A=241.5/B=241.4 ping:A=49.6/B=50.2
+c1-n200-r9 load 2.79->2.81 gate 3s/0.021 dur 6.1s errs=0 bad=0 verify=ok lit-point:A=51.4/B=52.4 lit-range:A=236.4/B=236.1 ping:A=50.0/B=49.9
+c1-n200-r10 load 2.81->2.61 gate 3s/0.02 dur 6.0s errs=0 bad=0 verify=ok lit-point:A=51.3/B=53.1 lit-range:A=235.8/B=238.2 ping:A=50.3/B=50.3
+c1-n200-r11 load 2.61->2.64 gate 3s/0.023 dur 5.9s errs=0 bad=0 verify=ok lit-point:A=51.1/B=53.7 lit-range:A=235.0/B=242.8 ping:A=50.2/B=50.2
+c1-n200-r12 load 2.51->2.47 gate 3s/0.021 dur 5.9s errs=0 bad=0 verify=ok lit-point:A=50.6/B=52.5 lit-range:A=238.8/B=240.4 ping:A=49.3/B=49.3
+c1-n200-r13 load 2.35->2.24 gate 3s/0.021 dur 6.2s errs=0 bad=0 verify=ok lit-point:A=51.1/B=52.9 lit-range:A=235.5/B=241.9 ping:A=50.2/B=50.1
+c1-n200-r14 load 2.06->1.98 gate 3s/0.015 dur 6.3s errs=0 bad=0 verify=ok lit-point:A=51.2/B=53.1 lit-range:A=244.7/B=248.9 ping:A=50.2/B=50.7
+c1-n200-r15 load 2.31->2.21 gate 15s/0.013 dur 6.0s errs=0 bad=0 verify=ok lit-point:A=51.4/B=53.6 lit-range:A=236.9/B=237.0 ping:A=50.4/B=50.3
+c1-n1000-r0 load 2.03->2.19 gate 3s/0.027 dur 8.6s errs=0 bad=0 verify=ok lit-point:A=51.5/B=53.1 lit-range:A=960.8/B=963.9 ping:A=51.0/B=52.2
+c1-n1000-r1 load 2.75->2.56 gate 12s/0.014 dur 8.0s errs=0 bad=0 verify=ok lit-point:A=51.6/B=53.1 lit-range:A=958.8/B=959.8 ping:A=50.2/B=50.3
+c1-n1000-r2 load 2.43->2.40 gate 3s/0.021 dur 7.7s errs=0 bad=0 verify=ok lit-point:A=51.6/B=53.0 lit-range:A=948.2/B=966.4 ping:A=50.0/B=50.3
+c1-n1000-r3 load 2.20->2.19 gate 3s/0.027 dur 7.8s errs=0 bad=0 verify=ok lit-point:A=51.3/B=52.9 lit-range:A=956.5/B=959.8 ping:A=50.1/B=49.9
+c1-n1000-r4 load 2.01->2.31 gate 3s/0.027 dur 7.9s errs=0 bad=0 verify=ok lit-point:A=50.8/B=53.7 lit-range:A=956.3/B=952.0 ping:A=50.2/B=50.4
+c1-n1000-r5 load 2.31->2.34 gate 3s/0.016 dur 7.8s errs=0 bad=0 verify=ok lit-point:A=50.8/B=53.4 lit-range:A=952.4/B=961.9 ping:A=50.1/B=50.5
+c1-n1000-r6 load 2.34->2.21 gate 3s/0.016 dur 7.9s errs=0 bad=0 verify=ok lit-point:A=51.1/B=52.9 lit-range:A=948.6/B=971.2 ping:A=49.9/B=50.1
+c1-n1000-r7 load 2.03->2.03 gate 3s/0.02 dur 7.8s errs=0 bad=0 verify=ok lit-point:A=51.8/B=52.7 lit-range:A=951.8/B=963.3 ping:A=50.2/B=50.2
+c1-n1000-r8 load 2.21->2.55 gate 18s/0.017 dur 8.0s errs=0 bad=0 verify=ok lit-point:A=51.4/B=53.2 lit-range:A=974.2/B=993.0 ping:A=49.9/B=50.0
+c1-n1000-r9 load 2.43->2.37 gate 9s/0.019 dur 7.9s errs=0 bad=0 verify=ok lit-point:A=51.0/B=52.2 lit-range:A=956.6/B=967.9 ping:A=50.0/B=50.5
+c1-n1000-r10 load 2.18->2.24 gate 3s/0.029 dur 7.8s errs=0 bad=0 verify=ok lit-point:A=51.2/B=52.8 lit-range:A=945.2/B=965.4 ping:A=50.4/B=50.6
+c1-n1000-r11 load 2.06->2.62 gate 3s/0.018 dur 7.9s errs=0 bad=0 verify=ok lit-point:A=51.2/B=54.0 lit-range:A=951.6/B=963.3 ping:A=50.1/B=50.4
+c1-n1000-r12 load 6.48->5.95 gate 114s/0.018 dur 8.8s errs=0 bad=0 verify=ok lit-point:A=51.1/B=53.4 lit-range:A=953.5/B=956.7 ping:A=50.2/B=50.6
+c1-n1000-r13 load 9.81->10.53 gate 144s/0.034 dur 31.6s errs=0 bad=0 verify=ok lit-point:A=51.7/B=53.1 lit-range:A=966.6/B=966.8 ping:A=50.4/B=49.7
+c1-n1000-r14 load 9.10->7.93 gate 21s/0.021 dur 8.0s errs=0 bad=0 verify=ok lit-point:A=51.7/B=53.9 lit-range:A=975.7/B=973.3 ping:A=49.9/B=50.1
+c1-n1000-r15 load 7.93->6.87 gate 3s/0.038 dur 7.8s errs=0 bad=0 verify=ok lit-point:A=52.4/B=53.2 lit-range:A=952.0/B=963.6 ping:A=50.3/B=50.5
+c1-n10000-r0 load 6.32->5.09 gate 3s/0.027 dur 30.2s errs=0 bad=0 verify=ok lit-point:A=51.2/B=53.7 lit-range:A=9664.7/B=9811.4 ping:A=50.1/B=50.0
+c1-n10000-r1 load 3.64->3.81 gate 162s/0.013 dur 32.4s errs=0 bad=0 verify=ok lit-point:A=51.6/B=53.3 lit-range:A=9708.0/B=9868.1 ping:A=50.3/B=50.1
+c1-n10000-r2 load 3.51->3.50 gate 6s/0.014 dur 31.7s errs=0 bad=0 verify=ok lit-point:A=51.4/B=53.7 lit-range:A=9674.1/B=9928.0 ping:A=50.0/B=50.1
+c1-n10000-r3 load 2.12->2.44 gate 477s/0.02 dur 32.6s errs=0 bad=0 verify=ok lit-point:A=52.0/B=53.9 lit-range:A=9956.3/B=9865.2 ping:A=50.7/B=50.2
+c1-n10000-r4 load 2.25->3.17 gate 3s/0.043 dur 31.3s errs=0 bad=0 verify=ok lit-point:A=52.6/B=53.8 lit-range:A=9958.3/B=9887.8 ping:A=50.5/B=49.7
+c1-n10000-r5 load 1.94->3.71 gate 294s/0.019 dur 32.2s errs=0 bad=0 verify=ok lit-point:A=51.3/B=52.5 lit-range:A=10016.0/B=9900.4 ping:A=50.3/B=50.1
+c1-n200-r0 exists, skipped
+c1-n200-r1 exists, skipped
+c1-n200-r2 exists, skipped
+c1-n200-r3 exists, skipped
+c1-n200-r4 exists, skipped
+c1-n200-r5 exists, skipped
+c1-n200-r6 exists, skipped
+c1-n200-r7 exists, skipped
+c1-n200-r8 exists, skipped
+c1-n200-r9 exists, skipped
+c1-n200-r10 exists, skipped
+c1-n200-r11 exists, skipped
+c1-n200-r12 exists, skipped
+c1-n200-r13 exists, skipped
+c1-n200-r14 exists, skipped
+c1-n200-r15 exists, skipped
+c1-n1000-r0 exists, skipped
+c1-n1000-r1 exists, skipped
+c1-n1000-r2 exists, skipped
+c1-n1000-r3 exists, skipped
+c1-n1000-r4 exists, skipped
+c1-n1000-r5 exists, skipped
+c1-n1000-r6 exists, skipped
+c1-n1000-r7 exists, skipped
+c1-n1000-r8 exists, skipped
+c1-n1000-r9 exists, skipped
+c1-n1000-r10 exists, skipped
+c1-n1000-r11 exists, skipped
+c1-n1000-r12 exists, skipped
+c1-n1000-r13 exists, skipped
+c1-n1000-r14 exists, skipped
+c1-n1000-r15 exists, skipped
+c1-n10000-r0 exists, skipped
+c1-n10000-r1 exists, skipped
+c1-n10000-r2 exists, skipped
+c1-n10000-r3 exists, skipped
+c1-n10000-r4 exists, skipped
+c1-n10000-r5 exists, skipped
+c1-n10000-r6 load 2.42->2.95 gate 39s/0.148 dur 30.3s errs=0 bad=0 verify=ok lit-point:A=51.4/B=54.0 lit-range:A=9729.0/B=9912.5 ping:A=50.5/B=50.4
+c1-n10000-r7 load 2.52->3.59 gate 18s/0.149 dur 30.1s errs=0 bad=0 verify=ok lit-point:A=51.7/B=53.8 lit-range:A=9776.5/B=9895.3 ping:A=50.3/B=50.5
+c1-n10000-r8 load 2.91->2.98 gate 24s/0.147 dur 29.9s errs=0 bad=0 verify=ok lit-point:A=51.2/B=53.8 lit-range:A=9698.7/B=9769.5 ping:A=50.3/B=50.5
+c1-n10000-r9 load 2.15->2.54 gate 120s/0.149 dur 29.9s errs=0 bad=0 verify=ok lit-point:A=51.4/B=53.3 lit-range:A=9761.1/B=9833.2 ping:A=50.0/B=50.2
+c1-n10000-r10 load 2.25->2.98 gate 18s/0.136 dur 30.3s errs=0 bad=0 verify=ok lit-point:A=51.9/B=53.8 lit-range:A=9830.8/B=10002.4 ping:A=50.1/B=50.2
+c1-n10000-r11 load 2.74->3.16 gate 3s/0.017 dur 29.8s errs=0 bad=0 verify=ok lit-point:A=51.4/B=53.9 lit-range:A=9827.5/B=9916.7 ping:A=50.4/B=50.2
+c1-n10000-r12 load 2.99->3.47 gate 3s/0.012 dur 30.6s errs=0 bad=0 verify=ok lit-point:A=52.0/B=52.9 lit-range:A=9738.4/B=9826.7 ping:A=50.1/B=49.9
+c1-n10000-r13 load 2.60->3.24 gate 243s/0.145 dur 30.1s errs=0 bad=0 verify=ok lit-point:A=51.9/B=53.6 lit-range:A=9757.6/B=9909.5 ping:A=50.0/B=50.0
+c1-n10000-r14 load 2.92->3.21 gate 18s/0.15 dur 29.9s errs=0 bad=0 verify=ok lit-point:A=51.9/B=53.3 lit-range:A=9771.8/B=9875.7 ping:A=49.7/B=49.9
+c1-n10000-r15 load 2.16->3.34 gate 273s/0.15 dur 29.9s errs=0 bad=0 verify=ok lit-point:A=51.2/B=53.5 lit-range:A=9754.3/B=9773.8 ping:A=49.9/B=50.2

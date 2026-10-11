@@ -1,0 +1,25 @@
+# Measured copies: sha256 of the copy every server was started from (copies live under /home/cdkbs/bench-runs/bj-close/bin/).
+# Source mtimes are of build-release/kds_server in the measuring worktree, UTC. All builds: Release (CMAKE_BUILD_TYPE read back
+# from each CMakeCache.txt), -DKDS_BUILD_TESTS=OFF -DKDS_BUILD_SIM=OFF, target kds_server only.
+
+A   e5a7e1b7  v2.7.0-736-ge5a7e1b7   committed 2026-10-10 02:06:37 UTC, binary mtime 2026-10-10 16:18:38 UTC
+d2a6977f220a32147b6a2df985aec10b60ee7411fe3fca3381b78e46e525223e  kds_server-A
+
+B   8e37baf4  v2.7.0-756-g8e37baf4   committed 2026-10-10 16:15:33 UTC, binary mtime 2026-10-10 16:19:30 UTC
+69733b1bb373ca6ef034ed4d391685c8bd908cfc86f861909c78d983c6bfe99d  kds_server-B
+
+# Stage binaries, used only by the literal-path attribution (section 3.2 of the results file)
+s0  080cd555  (BJ's opening commit, no BA)                   mtime 2026-10-10 17:53:32 UTC
+1d41bdd516c7737b320ced94a9d7b755016299d6e4e81f47cb92934ea39cfd08  kds_server-s0
+s1  586ffa5f  (s0 + BJ-Q12)                                  mtime 2026-10-10 17:54:16 UTC
+41d854770b6e9470392090f176b6da567528b88f56e71cfdd68a70c237cf99e6  kds_server-s1
+s2  6a4fb896  (s1 + BJ-S1, BJ-S2: lexer, AST, parser)       mtime 2026-10-10 17:54:59 UTC
+d9acae4414d211cde8481e1dc8d419bfc2a6025a9db5c8f73978e963ced2d8ba  kds_server-s2
+s3  88155d5b  (s2 + BJ-S3: typer)                            mtime 2026-10-10 17:55:58 UTC
+b3c8124d75c74113dc710184c752d176bdb231ed4775d4345156739ebe3dcfbc  kds_server-s3
+s4  836b9551  (A + BJ-Q12, S1..S3: the merge of BA into BJ) mtime 2026-10-10 17:57:25 UTC
+ee29d277d3b19939f1c93bdd57e789796c3a987dbd421deafc862afa2c7ef574  kds_server-s4
+s5  1a251cea  (s4 + BJ-S4: evaluation and the write)        mtime 2026-10-10 17:58:55 UTC
+806abee6a1d1b205b00ba223c5ff2adaa80c2fc1304155071413faa3603378f0  kds_server-s5
+s6  3292b20d  (s5 + BJ-S5, BJ-S6)                            mtime 2026-10-10 18:00:30 UTC
+c438ad82789ee3d5dc777ab0a0aadd6f1c6f8e9a9200b373a1ee13610be97df5  kds_server-s6

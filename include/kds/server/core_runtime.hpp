@@ -443,6 +443,12 @@ public:
     // next mount, which the caller logs.
     Status ShutdownCheckpoint();
 
+    // Abandons this core's cadence run, if one is queued or parked
+    // (`wal::Checkpointer::Abandon`, BI-R4). The shutdown path calls it for
+    // every core before the first shutdown checkpoint, with this core's
+    // reactor joined.
+    void AbandonCheckpoint() noexcept;
+
     // **`MaybeFlushAccessStats` rode this tick and is gone** (AT-S7). It
     // sent CR7's folded access shapes to core 0 at `wal_drain_interval_ns`,
     // because a peer could not write `sys.access_stats`; it writes the row

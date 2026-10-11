@@ -1,0 +1,48 @@
+c2-n1000-r0 exists, skipped
+c2-n1000-r1 exists, skipped
+c2-n1000-r2 exists, skipped
+c2-n1000-r3 exists, skipped
+c2-n1000-r4 exists, skipped
+c2-n1000-r5 exists, skipped
+c2-n1000-r6 exists, skipped
+c2-n1000-r7 exists, skipped
+c2-n1000-r8 exists, skipped
+c2-n1000-r9 exists, skipped
+c2-n1000-r10 exists, skipped
+c2-n1000-r11 exists, skipped
+c2-n1000-r12 exists, skipped
+c2-n1000-r13 exists, skipped
+c2-n1000-r14 load 1.74->2.18 gate 12s/0.1 dur 8.5s errs=0 bad=0 verify=ok lit-point:A=52.3/B=54.5 lit-range:A=1312.8/B=1326.4 ping:A=50.0/B=49.8
+c2-n1000-r15 load 2.18->2.23 gate 3s/0.143 dur 8.2s errs=0 bad=0 verify=ok lit-point:A=52.8/B=54.3 lit-range:A=1304.2/B=1327.7 ping:A=50.2/B=50.1
+c2-n1000-r0 exists, skipped
+c2-n1000-r1 exists, skipped
+c2-n1000-r2 exists, skipped
+c2-n1000-r3 exists, skipped
+c2-n1000-r4 exists, skipped
+c2-n1000-r5 exists, skipped
+c2-n1000-r6 exists, skipped
+c2-n1000-r7 exists, skipped
+c2-n1000-r8 exists, skipped
+c2-n1000-r9 exists, skipped
+c2-n1000-r10 exists, skipped
+c2-n1000-r11 exists, skipped
+c2-n1000-r12 exists, skipped
+c2-n1000-r13 exists, skipped
+c2-n1000-r14 load 1.81->2.44 gate 3s/0.027 dur 8.4s errs=0 bad=0 verify=ok lit-point:A=52.0/B=54.5 lit-range:A=1280.2/B=1308.5 ping:A=50.3/B=50.2
+c2-n1000-r15 load 2.44->2.69 gate 3s/0.017 dur 8.3s errs=0 bad=0 verify=ok lit-point:A=52.7/B=53.1 lit-range:A=1306.5/B=1330.9 ping:A=50.3/B=50.6
+c2-n1000-r0 exists, skipped
+c2-n1000-r1 exists, skipped
+c2-n1000-r2 exists, skipped
+c2-n1000-r3 exists, skipped
+c2-n1000-r4 exists, skipped
+c2-n1000-r5 exists, skipped
+c2-n1000-r6 exists, skipped
+c2-n1000-r7 exists, skipped
+c2-n1000-r8 exists, skipped
+c2-n1000-r9 exists, skipped
+c2-n1000-r10 exists, skipped
+c2-n1000-r11 exists, skipped
+c2-n1000-r12 exists, skipped
+c2-n1000-r13 exists, skipped
+c2-n1000-r14 exists, skipped
+c2-n1000-r15 load 1.96->2.27 gate 3s/0.02 dur 8.9s errs=0 bad=0 verify=ok lit-point:A=53.2/B=54.6 lit-range:A=1332.2/B=1329.9 ping:A=50.1/B=51.2
