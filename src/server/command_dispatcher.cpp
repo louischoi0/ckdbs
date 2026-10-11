@@ -8089,6 +8089,20 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     std::vector<exec::PendingSpill> spills;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
 
+    // Stage 2's decode target and what it decodes (BK-R2): every column
+    // where a Cabin or an index reads the row (an assertion is asked per
+    // row, below), otherwise the columns the SET expressions read.
+    // `row_poisoned` says the slots outside the mask hold `kUndecoded`.
+    std::vector<parser::AstValue> row(ta.schema.columns.size());
+    bool row_poisoned = false;
+    // The negation of `NoteCabinWrite`'s and `MaintainIndexes`' early
+    // returns: loosen either and that hook is handed `kUndecoded`.
+    const bool hooked = (cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty();
+    std::uint64_t set_read_mask = 0;
+    for (const exec::CompiledAssignment& c : compiled) {
+        if (c.expr != nullptr) set_read_mask |= exec::SetExpressionColumns(*c.expr);
+    }
+
     // ---- Which foreign keys this SET list touches (§2) -------------------
     //
     // Resolved once, here: an UPDATE that changes no fk column must cost
@@ -8242,16 +8256,6 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
 
-        // ---- Stage 2: the whole row, for a row that qualified -----------
-        //
-        // An owned copy, because the SET expressions and the write hooks
-        // read it (the new image is encoded from `payload_copy`, BK-R3); the
-        // frame is for evaluation only and is not read again below. Decoded from `payload_copy`, whose bytes outlive
-        // every page fetch stage 1 may have made.
-        auto row = exec::DecodeRow(ta.schema, ta.layout, payload_copy, &spills);
-        if (!row.ok()) return row.status();
-        if (Status s = exec::ResolveSpills(page_store_, spills, row.value()); !s.ok()) return s;
-
         // ---- First-updater-wins (docs/spec/txn.md section 5) ----------------
         //
         // Checked only once the row has qualified: a conflict is reported
@@ -8325,6 +8329,46 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
         }
 
+        // ---- Stage 2: what the SET list and the hooks read (BK-R2) -------
+        //
+        // Into `row`, the statement's, because the SET expressions and the
+        // write hooks read it (the new image is encoded from `payload_copy`,
+        // BK-R3). Decoded from `payload_copy`, whose bytes outlive every page
+        // fetch stage 1 may have made.
+        //
+        // **Whole only where a hook reads it.** A Cabin, an index and an
+        // assertion each take the row full-width, so a relation with any of
+        // them decodes every column; one with none decodes only the columns
+        // the SET expressions read (`set_read_mask`), and every other slot
+        // holds `kUndecoded`, which the evaluator refuses `Corruption` rather
+        // than read as a value.
+        //
+        // **The registry is asked here, after the conflict check, and only
+        // here** - the answer is the assertion site's too (the AT-S5d review:
+        // an assertion adopted on another core between two asks would send
+        // the check an empty `previous`). After, because the check is where
+        // the row's writer takes the relation's `IX`, and a build adopts its
+        // assertion under `X`: asked before the grant, a build that adopts in
+        // between would leave this row written unchecked.
+        const bool asserted = enforcer_->AnyOn(ta.oid);
+        const bool whole_row = hooked || asserted;
+        if (whole_row) {
+            row_poisoned = false;
+        } else if (!row_poisoned) {
+            for (std::size_t c = 0; c < row.size(); ++c) {
+                if (c >= 64 || (set_read_mask & (std::uint64_t{1} << c)) == 0) {
+                    row[c] = exec::kUndecoded;
+                }
+            }
+            row_poisoned = true;
+        }
+        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy, row,
+                                              whole_row ? exec::kAllColumnsMask : set_read_mask,
+                                              spills);
+            !s.ok()) {
+            return s;
+        }
+
         // ---- BJ-S4: every expression is evaluated here, against the row as
         // the walk read it (BJ-R2) ------------------------------------------
         //
@@ -8340,7 +8384,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         for (std::size_t i = 0; i < compiled.size(); ++i) {
             if (compiled[i].expr == nullptr) continue;
             const std::uint32_t expression_byte = stmt.assignments[i].expr->byte_offset;
-            auto value = exec::EvaluateSetExpression(*compiled[i].expr, row.value(), context);
+            auto value = exec::EvaluateSetExpression(*compiled[i].expr, row, context);
             if (!value.ok()) {
                 return value.status().WithMessage(
                     value.status().message() + " in the expression at byte " +
@@ -8368,25 +8412,16 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
         }
 
-        // The row as it stands *before* the SET list is applied, kept only
-        // when this relation has a Cabin - it is what tells the write hook
-        // whether a key column actually moved (§5's third row). A relation
-        // with no Cabin copies nothing.
-        // ...and what tells the index hook the same thing (index.md §2).
-        // A relation with neither copies nothing.
-        //
-        // **Asked once, and the answer used at both sites below** (the
-        // AT-S5d review). The registry is the instance's, so an assertion
-        // adopted on another core between two asks would send the check an
-        // empty `previous` - a read past the end of it.
-        const bool asserted = enforcer_->AnyOn(ta.oid);
+        // The row as it stands *before* the SET list is applied - what tells
+        // the Cabin, index and assertion hooks whether a column they read
+        // actually moved (cabin.md §5's third row, index.md §2) - taken only
+        // where a hook reads it, which is where the row was decoded whole.
         std::vector<parser::AstValue> previous;
-        if ((cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty() || asserted) {
-            previous = row.value();
-        }
-
-        for (std::size_t i = 0; i < compiled.size(); ++i) {
-            row.value()[compiled[i].column_no] = values[i];
+        if (whole_row) {
+            previous = row;
+            for (std::size_t i = 0; i < compiled.size(); ++i) {
+                row[compiled[i].column_no] = values[i];
+            }
         }
 
         // ---- The assertion check, §4.2's delta rules --------------------
@@ -8410,7 +8445,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         if (asserted) {
             std::uint64_t reserver = 0;
             if (Status s = enforcer_->AdmitAndReserveUpdate(page_store_, wal_, WriterId(scope),
-                                                           ta.oid, previous, row.value(),
+                                                           ta.oid, previous, row,
                                                            id.value(), page_id, slot, &reserver);
                 !s.ok()) {
                 // AO-S6e-c, and the INSERT site states the argument. The pk
@@ -8530,7 +8565,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
 
         // ---- The Cabin witness, UPDATE half (docs/spec/cabin.md §5) -----
         //
-        // `row.value()` now holds the **new** values, so this appends the pk
+        // `row` now holds the **new** values, so this appends the pk
         // to v′'s set for every cabined column. The old value's set is
         // deliberately left alone: a pre-update snapshot is still entitled
         // to match through it, and for newer readers the stale entry is a
@@ -8540,14 +8575,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // The location is unchanged by construction - an UPDATE is an
         // in-place overwrite under invariant 13 - so the appended hint is
         // the row's real address.
-        NoteCabinWrite(ta, row.value(), /*first_col_pos=*/0, id.value(), page_id, slot, previous);
+        NoteCabinWrite(ta, row, /*first_col_pos=*/0, id.value(), page_id, slot, previous);
 
         // The index half. `previous` is what makes §2's rule work: an UPDATE
         // that moved no key and no covered column appends nothing, which is
         // what keeps an index from growing by an entry per write forever.
         std::vector<exec::IndexWrite> index_writes;
         const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
-        if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row.value(),
+        if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row,
                                               /*first_col_pos=*/0, encoded.value(), id.value(),
                                               previous, log_index ? &log_index : nullptr);
             !s.ok()) {

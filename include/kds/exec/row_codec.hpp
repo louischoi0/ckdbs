@@ -166,6 +166,21 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
 // a decoder needs no opinion about chains.
 inline constexpr std::uint64_t kAllColumnsMask = ~std::uint64_t{0};
 
+// **A slot a partial decode deliberately left out** (BK-R2): an UPDATE with
+// no hook decodes only the columns its SET expressions read and fills every
+// other slot with this, so an expression the mask missed is refused
+// `Corruption` by the SET evaluator rather than handed a default value. A
+// hook (Cabin, index, assertion) never sees one, because a relation with any
+// of them decodes whole, and the encoder never does since BK-R3 encodes only
+// the assigned values. A `kParam`, because no other one reaches a decoded
+// row since declared patterns were withdrawn.
+inline const parser::AstValue kUndecoded = [] {
+    parser::AstValue v;
+    v.type = parser::ValueType::kParam;
+    v.str_val = "undecoded";
+    return v;
+}();
+
 // Decode `columns` of one row into `out`, then resolve whatever spilled.
 //
 // **One rule, one place.** Every walker that filters before it completes a

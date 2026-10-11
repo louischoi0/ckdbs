@@ -1228,6 +1228,13 @@ public:
                 if (e.column_no >= row_.size()) {
                     return Status::Corruption("an expression names a column past the row");
                 }
+                // A slot BK-R2's partial decode left out: the mask that
+                // chose the columns missed one this expression reads.
+                if (row_[e.column_no].type == parser::ValueType::kParam) {
+                    return Status::Corruption("an expression reads column " +
+                                              std::to_string(e.column_no) +
+                                              ", which the row's decode left out");
+                }
                 return row_[e.column_no];
             case Expr::Kind::kUnary: return Unary(e);
             case Expr::Kind::kBinary: return Binary(e);
@@ -1860,6 +1867,24 @@ bool IsConstantSetExpression(const TypedSetExpr& expr) {
             return true;
     }
     return false;
+}
+
+std::uint64_t SetExpressionColumns(const TypedSetExpr& expr) {
+    switch (expr.kind) {
+        case Expr::Kind::kLiteral:
+        case Expr::Kind::kSubquery: return 0;
+        case Expr::Kind::kColumn:
+            return expr.column_no < 64 ? std::uint64_t{1} << expr.column_no : kAllColumnsMask;
+        case Expr::Kind::kUnary: return SetExpressionColumns(*expr.lhs);
+        case Expr::Kind::kBinary:
+            return SetExpressionColumns(*expr.lhs) | SetExpressionColumns(*expr.rhs);
+        case Expr::Kind::kCall: {
+            std::uint64_t mask = 0;
+            for (const auto& a : expr.args) mask |= SetExpressionColumns(*a);
+            return mask;
+        }
+    }
+    return kAllColumnsMask;
 }
 
 StatusOr<parser::AstValue> EvaluateSetExpression(const TypedSetExpr& expr,

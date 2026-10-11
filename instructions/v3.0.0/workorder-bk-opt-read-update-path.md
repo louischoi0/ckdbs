@@ -251,6 +251,10 @@ so it needs a bar of its own.
   string parameter becomes bindable; a refusal's byte names a position in
   the `?` text.
 
+**Not built in BK** (BK-Q13, adopted at BK-S3): after BK-S4 and BK-S5 the
+part BK-R1 removes - parse and compile - is 2.2-4.2 µs of a point
+statement's server CPU, reachable only by a client that prepares.
+
 ### BK-R2 — Decode what is read, encode what is written `[quiet-wrong]`
 
 - Stage 2 decodes the union of: the columns the SET list reads and assigns,
@@ -263,6 +267,16 @@ so it needs a bar of its own.
   - every spilled cell re-encoded as today**, so BK-R2 changes nothing about
   var-heap sharing. A cell asserts the new image equals today's whole-row
   encode for every type and NULL, spills excluded.
+
+**As built** (BK-S5 built the encode half, `exec::EncodeAssigned`; BK-S3 the
+decode half). **Revised in one point**: a relation with any hook - a Cabin,
+an index, an assertion - decodes its row whole, rather than the union of the
+columns each hook reads. Each hook takes the row full-width
+(`NoteCabinWrite`, `MaintainIndexes`, `AdmitAndReserveUpdate`), so a union
+would put `kUndecoded` in front of three consumers whose every read would
+then need proving; whole-where-hooked leaves the SET evaluator the only
+reader of a partial row, and it refuses the poison `Corruption`. The decode
+a relation with no hook skips is the one the census measured.
 
 ### BK-R3 — An unassigned spill is carried, and the leak stops `[quiet-wrong]`
 
@@ -289,6 +303,12 @@ and so do the foreign-key reverse walk, the live `Compensate` and
 recovery's undo; each applies ranges newest-first. Redo applies after-ranges.
 A WAL and undo format change and a superblock bump under the standing
 order of 2026-10-07. Last, and only on BK-Q6.
+
+**Discarded at BK-S3's re-profile**: an every-row UPDATE's undo and WAL work
+is per record, not per byte - an `UNDO_WRITE` and a `HEAP_OVERWRITE` a row,
+the undo log's append 28 % of a row and the WAL append 7.5 %, for a 44-byte
+image. BK-Q6's condition, a record's size or copy material, is not met;
+BK-S7 does not open and CN-7's O5 stays open.
 
 ### BK-R6 — Access statistics fold per core
 
@@ -336,12 +356,12 @@ chain. Nothing on disk changes. In BK's scope by BK-Q12.
 |---|---|---|---|
 | BK-S0 | **The order** | This file, its review, `raft-marks-2026-10-11.md`, `index.md`'s row | S |
 | BK-S1 | **The spans, the counters, the census** (BK-R0) | The trace spans `trace.hpp` names and nobody opens, built; a sampled or differential split of a point `SELECT` over `SHOW META`, of a scan row, and of a point `UPDATE`; the request path every statement pays split from the server's side; the schema word's moves per second under load; the driver able to PARSE once and BIND many, both paths measured; `build-release`, a quiet host, results under `bench/v3.0.0/`. No path changes | L |
-| BK-S2 | **Compile once, bind many** (BK-R1), if material and on BK-Q3 | The cache on the statement handle; re-bind per execution; the reviewed list of per-execution decisions with a cell each; fingerprint equality for every bound shape; a DDL and a root move between two executions | L |
-| BK-S3 | **Decode and encode by column** (BK-R2), if material | The decode set, the poison slot, the in-place re-encode; byte equality with today's encode across every type and NULL; BJ's single-write and swap cells green | M |
+| BK-S2 | **Compile once, bind many** (BK-R1), if material and on BK-Q3. **Not built** (BK-Q13) | The cache on the statement handle; re-bind per execution; the reviewed list of per-execution decisions with a cell each; fingerprint equality for every bound shape; a DDL and a root move between two executions | L |
+| BK-S3 | **Decode and encode by column** (BK-R2), if material; **widened at BK-S1 to the every-row UPDATE's per-row parts** (BK-Q13) | The decode set, the poison slot, the in-place re-encode; byte equality with today's encode across every type and NULL; BJ's single-write and swap cells green | M |
 | BK-S4 | **The read path's largest part** (BK-R4), if material | The part BK-S1 ranks first, answers byte-identical | M |
 | BK-S5 | **Carried spills** (BK-R3), on BK-Q4 | The carry, its rollback, purge and recovery cells; the drain's binding rule written into `heap-and-tuple.md` | M |
 | BK-S6 | **Access statistics per core** (BK-R6), if material and on BK-Q7 | BA-S5's done-when. **Discarded at BK-S1** (BK-R6) | S |
-| BK-S7 | **Byte-range records** (BK-R5), on BK-Q6 | The record, every before-image reader, redo, undo, the superblock bump, the sim's crash cells | L |
+| BK-S7 | **Byte-range records** (BK-R5), on BK-Q6. **Discarded** (BK-R5) | The record, every before-image reader, redo, undo, the superblock bump, the sim's crash cells | L |
 | BK-S8 | **The close** | §5's measurement; the specs each stage changed | S |
 | BK-S9 | **The var-heap tail** (BK-R8), added at BK-S1 on BK-Q12 | The hint, its validation, its fallback; an append from a stale or foreign hint lands on the real tail; a chain grown by two cores at once stays one chain; the census's assigned-spill arm flat in the chain's length | M |
 
@@ -366,6 +386,7 @@ S7 last.
 | BK-Q10 | **The letter**, which `workorder-bk-keystone-48.md` also carries: (a) keep BK, cite by file; (b) re-letter this order | process | **(a).** W1 names BK after rejecting BY, so the letter is the operator's; `index.md` already carries a letter in two documents (AN) under the rule "cite the file, never the bare number"; this order's marks go to `raft-marks-2026-10-11-bk-paths.md` so the two sessions do not write one file | adopted (standing go-ahead, 2026-10-11) |
 | BK-Q11 | **BK-S1's two instruments the census replaced** (added at BK-S1): the trace spans `trace.hpp` names, and the schema word's rate under load | process | **Neither built.** The sampler (`tools/kds_sampler.c`) splits a statement's server CPU into the parts BK-R4 asks for without code under `src/` and without per-row clocks (§1.4); the schema word's rate prices only a cached *plan*'s invalidation, and BK-R1's form is decided after BK-S4 and BK-S5 move the denominators | adopted (standing go-ahead, 2026-10-11) |
 | BK-Q12 | **BK-R8 in BK** (added at BK-S1): the var-heap append's walk from the root is per-row work on the update path the census measured, but no ruling of BK named it | scope | **In BK, as BK-S9.** It is the update path's largest part for a row whose spilled cell is assigned once BK-R3 lands, it grows without bound, and it changes nothing on disk or on the wire | adopted (standing go-ahead, 2026-10-11) |
+| BK-Q13 | **What BK-S2 and BK-S3 build, after BK-S4 and BK-S5 moved the denominators** (added at BK-S3) | scope, [quiet-wrong] for (a) | Options for BK-S2: (a) BK-R1 as written, a plan cached on the statement handle; (b) a reduced form, the parse cached and the compile per execution; (c) not built in BK. For BK-S3: the decode half of BK-R2 as written, or widened to the every-row re-profile's per-row parts. **CLA's proposal: BK-S2 (c); BK-S3 widened.** BK-S2: parse and compile are 2.2-4.2 µs of a point statement's server CPU after BK-S4 (7-12 %), material by the bar's letter, but reachable only by a client that prepares - no driver in the tree does - and 2-4 % of the statement a client waits for; either form puts BK-R1's own quiet-wrong surface (every per-execution decision, the fingerprint's argument stream, every DML handler's entry) on the parser and the dispatcher. W2 asks that a proposal that does not pay be discarded; it is recorded in `known-gaps.md` with the census's numbers. BK-S3: the re-profile's per-row parts are the undo log's second fetch of its tail (7 %), the whole-row decode (6.6 %) and, of the read path, `ExecStats::For` out of line (5.5 % of a scan row) - each at or over the bar, each a change no answer can see | adopted (standing go-ahead, 2026-10-11) |
 
 ## 5. Measurement
 
@@ -498,3 +519,81 @@ one-write cell's flake mode named; the purge cell renamed (`PageRelease` is
 idempotent, so "once" was not observable). Rejected: none.
 
 Overhead not measured; measured at the milestone's close.
+
+### BK-S9 — the var-heap tail (BK-R8), 2026-10-11
+
+`varheap::ChainAppend` starts its walk at the chain's last known tail: a
+1,024-slot table of relaxed atomics on `PageStore` (`root << 32 | tail`, one
+table per store, so per instance in production, where peers share core 0's
+store), written when an append lands somewhere new and **forgotten when a root
+is created** (`CreateChain`), so every hint is a page of its own chain; the
+hinted page's type and owner stamp are checked anyway, and anything else - a
+failed fetch included - sends the walk to the root, which is the authority.
+The re-check under the tail's hold is unchanged. `heap-and-tuple.md` §3.4 and
+`rule-fixed-length-tuple.md` state it. Cells (`VarHeapChainTest`): an append
+starts at the last tail and never reads the root; a hint the chain moved past
+is walked forward; a hint at another chain's page, a heap page or a page never
+created sends the walk to the root and writes no other chain; a root is born
+with no hint; two growers from a hinted start stay on one chain. Two mutants -
+the hint never used, the owner not checked - each fail a cell.
+
+**Its review** (one `critics-developer` pass): **one finding that changed the
+design** - a hint survives `DROP TABLE` within a run, a reclaimed root id can
+be reused as a new chain's root, and the stale tail could then be any page of
+any relation, latched shared under the caller's held leaf: a page pair BB-R4's
+census does not cover. No value lands on a wrong chain (the owner check), but
+the latch pair is new. Applied: `CreateChain` resets the root's slot, so a
+hint is only ever a page an append found on this chain, and the walk latches
+only what the walk from the root would. Also applied: the hint written only
+when it moves (a hot relation's appends no longer store the same word into a
+line every core reads); the type test as `RawPageType` (no `Status` built);
+the hash width a named constant; the four restatements of the trust argument
+cut to one; one cell's comment narrowed to what it pins. Rejected: the
+fallback spending one step of the cycle budget (a chain of exactly
+`kMaxChainPages` pages; left as is).
+
+### BK-S3 — the UPDATE row's per-row work (BK-R2, widened by BK-Q13), 2026-10-11
+
+Two cuts, both from the every-row UPDATE's re-profile
+(B1 profile with 1,500 statements of 1,000 rows, archived at the close):
+
+- **Stage 2 decodes what is read** (BK-R2's decode half, as revised): a
+  relation with a Cabin or an index, or one the assertion registry answers for,
+  decodes the row whole; any other decodes only the columns its SET
+  expressions read (`exec::SetExpressionColumns`), into a statement-scoped row
+  whose other slots hold `exec::kUndecoded`, which the SET evaluator refuses
+  `Corruption`. `previous` and the assigned values written into the row exist
+  only where a hook reads them.
+- **The undo log appends through the hold that checked the tail's room**
+  (`UndoLog::TailFor` returns the held `PageRef`), not through a second fetch
+  of the same page - every write statement's undo record, not only UPDATE's.
+
+Cells: `SetExprEvalTest.APartialDecodeReadsEveryColumnTheExpressionsName`
+(CASE, COALESCE, CAST, LENGTH, GREATEST, a subquery, and a literal-only
+statement between two that read), `...AnIndexedRelationDecodesTheKeyColumnsTheSetListDoesNotRead`
+(a composite key whose other column the SET list does not read), and
+`SetExprUndecodedTest.AnExpressionReadingAnUndecodedSlotIsRefused`. Three
+mutants: no relation hooked (Cabin and index cells fail), the assertion ask not
+widening the decode (the assertion cells crash - an assertion hook handed
+`kUndecoded` is not a refusal, which is why the rule is whole-where-hooked),
+and a column reference adding nothing to the mask (eight expression cells
+fail).
+
+**Its review** (one `critics-developer` pass): **one regression, fixed** - the
+first draft asked the assertion registry before the first-updater-wins block,
+which is where the row's writer takes the relation's `IX`; a `CREATE ASSERTION`
+build adopts under `X`, so a build adopting between the ask and the grant
+would have left the row written unchecked. The decode and the ask now come
+after the conflict block, as the ask always did; no cell drives that race (it
+needs a refused `IS`, an adoption on another core and a grant in one window).
+Also applied: the duplicated and stale "asked once" comment; the `Tail` struct
+replaced by the `PageRef` it carried (`PageRef::page_id()`); the poison state
+as one branch; the `kUndecoded` comment no longer claiming the encoder sees
+one; a cross-reference from `hooked` to the two early returns it negates; the
+direct evaluator cell. Noted, not changed: a whole-decoded slot's
+`byte_offset`/`scale`/`dec_hi` are no longer reset by a fresh vector between
+rows - every assigned column is reassigned before a hook reads it, and no
+reader compares those fields.
+
+Full Debug suite green at the end of both stages (3518/3518). Overhead not
+measured; measured at the milestone's close.
