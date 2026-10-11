@@ -482,6 +482,57 @@ TEST(IndexContractTest, AnOldSnapshotKeepsItsRowWhenOnlyTheCoveredColumnMoved) {
         << db.Run("ANALYZE " + sql);
 }
 
+// ---- A backfill that cannot append every version is refused ---------------
+//
+// `CREATE INDEX`'s backfill appends one entry per version of every row - the
+// current one, then each older one down the undo chain - and an append that
+// failed inside that walk used to end the walk quietly: the index was
+// published without that version's entry or any older one. An old snapshot
+// whose version was one of them then reached its row through no entry and an
+// index probe answered without it, the quiet wrong answer index.md §1 forbids.
+// A row whose covered column moved a few hundred times reaches the failure
+// without any fault injection: a run of equal sort keys that the index's
+// separators cannot hold (a-run-of-equal-index-sort-keys-promotes-one-
+// separator-twice.md).
+
+TEST(IndexContractTest, ABackfillThatCannotAppendEveryVersionIsRefusedNotPublishedPartial) {
+    Instance db(/*indexes=*/true);
+    Instance plain(/*indexes=*/true);
+    for (Instance* i : {&db, &plain}) {
+        i->Ok("CREATE TABLE t (id int64, a int64, c int64) BTREE");
+        i->Ok("INSERT INTO t VALUES (2, 0)");
+    }
+    const std::string sql = "SELECT id FROM t WHERE a = 2 AND c = 0";
+    Session db_reader;
+    Session plain_reader;
+    ASSERT_EQ(db.Run(db_reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+    ASSERT_EQ(plain.Run(plain_reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5),
+              "BEGIN");
+    // The snapshots see c = 0 and hold it; one row then moves c 1,500 times.
+    ASSERT_EQ(db.Run(db_reader, sql), "id\\n1");
+    ASSERT_EQ(plain.Run(plain_reader, sql), "id\\n1");
+    for (int c = 1; c <= 1500; ++c) {
+        const std::string update = "UPDATE t SET c = " + std::to_string(c) + " WHERE id = 1";
+        db.Ok(update);
+        plain.Ok(update);
+    }
+
+    const std::string created = db.Run("CREATE INDEX ix ON t (a) COVERING (c)");
+    if (created.rfind("CREATED", 0) == 0) {
+        // Published: it must hold every version, so the old snapshot's row is
+        // reached through it exactly as the unindexed baseline reaches it.
+        EXPECT_EQ(db.Run(db_reader, sql), plain.Run(plain_reader, sql))
+            << "the backfill published an index missing the old snapshot's version";
+    } else {
+        // Refused: and no index was left behind to be used.
+        EXPECT_EQ(created.rfind("ERR", 0), 0u) << created;
+        EXPECT_EQ(db.Run(db_reader, sql), "id\\n1");
+        EXPECT_EQ(db.Run("ANALYZE " + sql).find("IndexProbe"), std::string::npos);
+    }
+    ASSERT_EQ(db.Run(db_reader, "COMMIT").substr(0, 6), "COMMIT");
+    ASSERT_EQ(plain.Run(plain_reader, "COMMIT").substr(0, 6), "COMMIT");
+}
+
 // ---- Damage: a corrupted index page must fail, not mis-answer ------------
 
 TEST(IndexContractTest, ACorruptedIndexPageFailsRatherThanReturningWrongRows) {

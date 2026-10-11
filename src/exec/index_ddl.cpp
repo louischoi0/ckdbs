@@ -191,19 +191,26 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
                 return s;
             }
 
+            // `Walk` reads a `false` from its callback as "stop here" and
+            // returns OK, so a failed append has to leave by its own channel:
+            // lost there, the index was published without that version's entry
+            // or any older one of the row, and an old snapshot reached its row
+            // through no entry.
+            Status append_failed = Status::OK();
             Status walked = undo.Walk(
                 row.undo_ptr, [&](const txn::UndoVersion& version) -> bool {
                     // A delete-mark's image is empty because a mark changes
                     // no tuple bytes - the version it supersedes is the one
                     // already appended, so there is nothing new here.
                     if (version.image.empty()) return true;
-                    if (Status s = AppendVersion(store, access, ix, row.pk, version.image);
-                        !s.ok()) {
-                        return false;
-                    }
-                    return true;
+                    append_failed = AppendVersion(store, access, ix, row.pk, version.image);
+                    return append_failed.ok();
                 });
             if (!walked.ok()) return walked;
+            if (!append_failed.ok()) {
+                return append_failed.WithContext("indexing an older version of the row with pk " +
+                                                 std::to_string(row.pk));
+            }
         }
 
         leaf = next;
