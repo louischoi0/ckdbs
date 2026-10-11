@@ -296,17 +296,17 @@ StatusOr<FunctionPredicate> LowerFunctionConjunct(const Scope& scope,
 }
 
 // The statement's class: the most volatile purity any function conjunct
-// calls, through every sub-chain (AR1 §3).
-DeterminismClass DeterminismOf(const std::vector<Step>& steps) {
+// calls, through every sub-chain, hoisted or placed (AR1 §3).
+DeterminismClass DeterminismOf(const StepChain& chain) {
     DeterminismClass out = DeterminismClass::kD0;
-    for (const Step& step : steps) {
+    ForEachStep(chain, [&](const Step& step) {
         for (const FunctionPredicate& pred : step.fn_residual) {
             for (const FunctionSide* side : {&pred.lhs, &pred.rhs}) {
                 if (side->call.has_value()) out = std::max(out, ClassOf(side->call->fn->purity));
             }
         }
-        for (const SubChain& sub : step.sub_chains) out = std::max(out, DeterminismOf(sub.steps));
-    }
+        return true;
+    });
     return out;
 }
 
@@ -427,7 +427,7 @@ StatusOr<AggregateSpec> CompileAggregate(const Scope& scope, const parser::Selec
         out.type_val = arg.type_val;
         if (arg.type_val == catalog::kTypeValDecimal ||
             arg.type_val == catalog::kTypeValDecimalWide) {
-            out.scale = catalog::DecimalScaleOf(arg.len);
+            out.decimal_len = arg.len;
         }
 
         if (item.is_aggregate) {
@@ -643,6 +643,11 @@ void PropagateEqualities(const Scope& scope, std::vector<StepPredicate>& predica
 std::optional<std::uint64_t> PkBound(const Operand& operand) {
     if (operand.kind != OperandKind::kLiteral) return std::nullopt;
     if (operand.literal.type != parser::ValueType::kInt) return std::nullopt;
+    // A literal past int64 wrapped in the lexer, so `int_val` is not its
+    // value. Coercion refuses every such literal an integer pk cannot hold
+    // before this runs; kept so a bound is never keyed at the number one
+    // wrapped to, whichever caller reaches here.
+    if (parser::IntLiteralWrapped(operand.literal)) return std::nullopt;
     if (operand.literal.int_val < 0) return std::nullopt;
     return static_cast<std::uint64_t>(operand.literal.int_val);
 }
@@ -1199,6 +1204,11 @@ bool ReferencesAnOuterChain(const std::vector<Step>& steps) {
             // A grandchild's reference to *this* level shows up as up==1
             // inside it; anything deeper escapes past us too.
             if (SubChainEscapes(sub)) return true;
+            // Its tested column is written in this block's scope, so an
+            // `up` above 0 is a reference past this block. `SubChainEscapes`
+            // leaves it out for the sub-chain's *own* parent, which is the
+            // wrong scope for this question.
+            if (sub.has_value && sub.lhs.up > 0) return true;
         }
     }
     return false;
@@ -1333,28 +1343,27 @@ std::uint64_t FilterColumnsOf(const Step& step, std::uint16_t index) {
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth, const txn::ReadView* view,
-                                 bool inner_build, PositionSink* declare);
+                                 bool inner_build, PositionSink* declare,
+                                 const StatementContext* context = nullptr);
 
 }  // namespace
 
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
-                            const txn::ReadView* view, PositionSink* declare) {
+                            const txn::ReadView* view, PositionSink* declare,
+                            const StatementContext* context) {
     std::uint32_t next_step_id = 0;
     auto chain = CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
-                              view, /*inner_build=*/true, declare);
+                              view, /*inner_build=*/true, declare, context);
     if (!chain.ok()) return chain;
-    // The class folds over the whole statement - every step, every
-    // sub-chain, hoisted or placed - after compile, from what was lowered.
     StepChain& out = chain.value();
-    out.determinism = DeterminismOf(out.steps);
-    for (const SubChain& sub : out.hoisted) {
-        out.determinism = std::max(out.determinism, DeterminismOf(sub.steps));
-    }
+    out.determinism = DeterminismOf(out);
     return chain;
 }
 
 Status CompileAssignments(const catalog::TableAccess& access,
-                          const std::vector<parser::Assignment>& assignments) {
+                          const std::vector<parser::Assignment>& assignments,
+                          std::vector<CompiledAssignment>* compiled,
+                          const SubqueryResolver* subqueries) {
     // An empty schema cannot happen for a relation the catalog resolved
     // (invariant 11 makes column 0 mandatory), but the pk name is read
     // from `front()` and a check costs nothing against a wrong answer.
@@ -1365,7 +1374,13 @@ Status CompileAssignments(const catalog::TableAccess& access,
     const std::string_view pk_name = catalog::NameView(access.schema.columns.front().name);
 
     std::vector<const catalog::SysColumnRow*> assigned;
-    const parser::Expr* first_expression = nullptr;
+    // A refusal that is only a `NotImplemented` waits until every assignment
+    // has been judged, so a later one's own refusal is not hidden behind it.
+    std::optional<Status> deferred;
+    if (compiled != nullptr) {
+        compiled->clear();
+        compiled->reserve(assignments.size());
+    }
     for (const parser::Assignment& a : assignments) {
         const auto* column = access.schema.FindColumn(a.col_name);
         if (column == nullptr) {
@@ -1391,27 +1406,45 @@ Status CompileAssignments(const catalog::TableAccess& access,
                                        std::to_string(a.byte_offset) +
                                        "; it is the tuple's identity, not a field of it");
         }
-        // BJ-S2 parses a SET expression and BJ-S4 evaluates it. Between the
-        // two, refusing here - before any row is read - is what keeps a
-        // half-built evaluator from writing one: the foreign-key hoist and
-        // the apply loop read `Assignment::val`, which an expression leaves
-        // unset.
-        if (a.expr != nullptr) {
+
+        CompiledAssignment entry;
+        entry.column_no = static_cast<std::size_t>(column - access.schema.columns.data());
+        const catalog::ForeignKeyRef* fk = nullptr;
+        for (const catalog::ForeignKeyRef& candidate : access.fkeys_out) {
+            if (candidate.column_no == entry.column_no) fk = &candidate;
+        }
+        if (a.expr == nullptr) {
+            // A bare literal keeps today's per-row type gate (BJ-Q3 (c)); a
+            // foreign-key column hoists its parent from the value itself.
+            if (fk != nullptr) entry.constant = a.val;
+        } else {
             // Typed first (BJ-S3): a mistyped expression is refused here by
             // what is wrong with it, whether or not a row matches.
-            if (auto typed = TypeSetExpression(access, *a.expr, *column); !typed.ok()) {
-                return typed.status();
+            auto typed = TypeSetExpression(access, *a.expr, *column, subqueries);
+            if (!typed.ok()) return typed.status();
+            entry.expr = std::move(typed.value());
+            if (fk != nullptr) {
+                if (!IsConstantSetExpression(*entry.expr)) {
+                    // BJ-Q10: the parent is a per-row value, and resolving it
+                    // per row under the walk's exclusive leaf is the open
+                    // page-latch cycle (a-write-walks-subquery-reads-pages-
+                    // under-its-exclusive-leaf-hold.md). Refused rather than
+                    // checked against a key the row never gets.
+                    if (!deferred.has_value()) {
+                        deferred = Status::NotImplemented(
+                            "an expression that reads a column or the clock cannot be assigned "
+                            "to foreign-key column '" +
+                            a.col_name + "' yet (BJ-Q10) (byte " +
+                            std::to_string(a.expr->byte_offset) + ")");
+                    }
+                } else if (auto folded = EvaluateSetExpression(*entry.expr, {}, StatementContext{}); folded.ok()) {
+                    entry.constant = std::move(folded.value());
+                }
             }
-            if (first_expression == nullptr) first_expression = a.expr.get();
         }
+        if (compiled != nullptr) compiled->push_back(std::move(entry));
     }
-    // Only after every assignment has been judged, so that a later one's
-    // refusal is not hidden behind this one.
-    if (first_expression != nullptr) {
-        return Status::NotImplemented(
-            "an expression in a SET value is parsed and not yet evaluated (BJ-S4) (byte " +
-            std::to_string(first_expression->byte_offset) + ")");
-    }
+    if (deferred.has_value()) return *deferred;
     return Status::OK();
 }
 
@@ -1451,6 +1484,9 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
                                       view, /*inner_build=*/false, declare);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
+            // What the inner block hoisted travels with it: only the
+            // top-level chain's list is run by the executor itself.
+            sub.hoisted = std::move(inner.value().hoisted);
 
             if (tests_a_column) {
                 if (inner.value().projection.size() != 1) {
@@ -1542,7 +1578,8 @@ namespace {
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth, const txn::ReadView* view,
-                                 bool inner_build, PositionSink* declare) {
+                                 bool inner_build, PositionSink* declare,
+                                 const StatementContext* context) {
     // The execute-time half of spec I15 R3: recursion is bounded at both
     // ends. The parser caps nesting too, but a chain can also be built by
     // something other than a parse, and a bound that only one producer
@@ -1556,7 +1593,8 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // ---- 1. Bind every relation in written order --------------------------
     Scope scope;
     scope.parent = parent;
-    if (parent == nullptr) scope.context = StatementContextNow();
+    // A nested block reads its outermost's through `parent`.
+    if (parent == nullptr) scope.context = context != nullptr ? *context : StatementContextNow();
     std::vector<const parser::RelationRef*> refs;
     refs.push_back(&stmt.from);
     for (const parser::JoinClause& j : stmt.joins) refs.push_back(&j.relation);
@@ -1665,6 +1703,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                              sub_inner_build, declare);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
+            // See CompileWhere's lowering above: a block lowered to a
+            // SubChain keeps the sub-chains it hoisted, or they never run.
+            sub.hoisted = std::move(inner.value().hoisted);
 
             if (tests_a_column) {
                 // IN and the scalar form read a value out of the
@@ -1866,10 +1907,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // consumed rather than refused, and it went with declared
                 // patterns on 2026-08-31; a kParam now falls through this
                 // check like any other non-integer literal.
-                if (candidate->literal.type != parser::ValueType::kInt ||
-                    candidate->literal.int_val < 0) {
-                    continue;
-                }
+                if (!PkBound(*candidate).has_value()) continue;
                 step.kind = AccessKind::kLookup;
                 step.key = candidate;
                 break;

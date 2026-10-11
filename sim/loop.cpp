@@ -74,7 +74,8 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
     if (checkpoints != 0) {
         out += " checkpoints=" + std::to_string(checkpoints) + " recycles=" +
                std::to_string(recycles) + " segments_recycled=" + std::to_string(segments_recycled) +
-               " crashes_reviving_segments=" + std::to_string(crashes_reviving_segments);
+               " crashes_reviving_segments=" + std::to_string(crashes_reviving_segments) +
+               " abandoned_checkpoints=" + std::to_string(abandoned_checkpoints);
     }
     if (fail_stops != 0) {
         out += " fail_stops=" + std::to_string(fail_stops);
@@ -1001,6 +1002,22 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                           (checkpointed.ok() ? std::string("ok") : checkpointed.message()));
         }
 
+        // Half a period later, a run abandoned between its steps (BI-S2): the
+        // crash anywhere after it must recover from the anchor before it.
+        if (config.checkpoint_every > 1 &&
+            (i + 1) % config.checkpoint_every == config.checkpoint_every / 2 &&
+            !it.instance.log_stopped()) {
+            const Status abandoned = it.instance.AbandonCheckpointMidSteps();
+            if (!abandoned.ok() && !it.faults_on()) {
+                Fail(it, "abandoned checkpoint after op " + std::to_string(i) + ": " +
+                             abandoned.message());
+                return false;
+            }
+            if (abandoned.ok()) ++verdict.abandoned_checkpoints;
+            it.trace.Note("abandoned checkpoint after op " + std::to_string(i) + ": " +
+                          (abandoned.ok() ? std::string("ok") : abandoned.message()));
+        }
+
         // **Fail-stop** (`wal/stream.hpp`): after a failed log write or sync the
         // instance refuses every write until it restarts, so the rest of the
         // plan would check nothing but refusals. The iteration ends its ops
@@ -1124,6 +1141,7 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     purges += other.purges;
     purged_keys += other.purged_keys;
     checkpoints += other.checkpoints;
+    abandoned_checkpoints += other.abandoned_checkpoints;
     recycles += other.recycles;
     segments_recycled += other.segments_recycled;
     crashes_reviving_segments += other.crashes_reviving_segments;

@@ -474,6 +474,14 @@ TEST(TypesContract, AWrappedIntegerLiteralIsNotStoredAsADateOrATimestamp) {
         EXPECT_EQ(out.substr(0, 3), "ERR") << sql << " -> " << out;
         EXPECT_NE(out.find("does not fit column"), std::string::npos) << sql << " -> " << out;
     }
+    // Compared, it is refused too: the coercion asks the encoder's list.
+    for (const char* sql : {"SELECT * FROM t WHERE d = 18446744073709551617",
+                            "SELECT * FROM t WHERE ts = 18446744073709551617"}) {
+        const std::string out = db.Run(sql);
+        EXPECT_EQ(out.substr(0, 3), "ERR") << sql << " -> " << out;
+        EXPECT_NE(out.find("outside the range of an int64"), std::string::npos)
+            << sql << " -> " << out;
+    }
     // Only the one good row exists, as written.
     EXPECT_EQ(db.Run("SELECT d, ts FROM t"), "d,ts\\n2000-01-01,2000-01-01 00:00:00");
 }
@@ -492,6 +500,116 @@ TEST(TypesContract, AWrappedIntegerLiteralIsNotStoredAsABool) {
     const std::string out = db.Run("UPDATE b SET f = 18446744073709551617 WHERE f = 0");
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
     EXPECT_EQ(db.Run("SELECT f FROM b"), "f\\n0");
+}
+
+// An integer literal past int64 wraps in the lexer (`18446744073709551621`
+// lexes as 5), so `int_val` is not its value. A WHERE that compared it as
+// the wrap answered, updated or deleted a row the client never named.
+TEST(TypesContract, AWrappedIntegerLiteralInAWhereIsRefusedNotCompared) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, qty int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (5, 1)").substr(0, 8), "INSERTED");
+
+    // 2^64 + 5 wraps to 5, the pk; 2^64 + 1 wraps to 1, the qty.
+    for (const char* sql : {"SELECT * FROM t WHERE id = 18446744073709551621",
+                            "SELECT * FROM t WHERE qty = 18446744073709551617",
+                            "SELECT * FROM t WHERE id >= 18446744073709551621 AND "
+                            "id <= 18446744073709551621",
+                            "UPDATE t SET qty = 9 WHERE qty = 18446744073709551617",
+                            "DELETE FROM t WHERE id = 18446744073709551621",
+                            "DELETE FROM t WHERE qty = 18446744073709551617"}) {
+        const std::string out = db.Run(sql);
+        EXPECT_EQ(out.substr(0, 3), "ERR") << sql;
+        EXPECT_NE(out.find("outside the range of an int64"), std::string::npos)
+            << sql << " -> " << out;
+    }
+    // Nothing was touched by any of them.
+    EXPECT_EQ(db.Run("SELECT * FROM t"), "id,qty\\n5,1");
+
+    // The widest value int64 holds is still an ordinary literal.
+    EXPECT_EQ(db.Run("SELECT * FROM t WHERE id = 9223372036854775807"), "id,qty");
+
+    // An index probe and a pk range are keyed from the coerced literal too.
+    ASSERT_EQ(db.Run("CREATE INDEX t_qty ON t (qty)").substr(0, 7), "CREATED");
+    for (const char* sql : {"SELECT * FROM t WHERE qty = 18446744073709551617",
+                            "SELECT * FROM t WHERE id BETWEEN 18446744073709551621 AND "
+                            "18446744073709551622"}) {
+        const std::string out = db.Run(sql);
+        EXPECT_EQ(out.substr(0, 3), "ERR") << sql;
+        EXPECT_NE(out.find("outside the range of an int64"), std::string::npos)
+            << sql << " -> " << out;
+    }
+    EXPECT_EQ(db.Run("SELECT * FROM t"), "id,qty\\n5,1");
+
+    // The narrowest value int64 holds is not a wrapped literal either.
+    EXPECT_NE(db.Run("SELECT * FROM t WHERE qty = -9223372036854775808").substr(0, 3), "ERR");
+}
+
+TEST(TypesContract, AWrappedIntegerLiteralIsRefusedAgainstABoolColumn) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE f (id int64, flag bool) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO f VALUES (1)").substr(0, 8), "INSERTED");
+    // 2^64 + 1 wraps to 1, the stored flag.
+    for (const char* sql : {"SELECT * FROM f WHERE flag = 18446744073709551617",
+                            "DELETE FROM f WHERE flag = 18446744073709551617"}) {
+        const std::string out = db.Run(sql);
+        EXPECT_EQ(out.substr(0, 3), "ERR") << sql;
+        EXPECT_NE(out.find("outside the range of an int64"), std::string::npos)
+            << sql << " -> " << out;
+    }
+    EXPECT_EQ(db.Run("SELECT * FROM f"), "id,flag\\n1,1");
+}
+
+TEST(TypesContract, AUint64ColumnStillTakesItsFullUnsignedRange) {
+    // The digits of a wrapped literal are the value for a uint64 column.
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE u (id int64, big uint64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO u VALUES (18446744073709551615)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(db.Run("SELECT * FROM u WHERE big = 18446744073709551615"),
+              "id,big\\n1,18446744073709551615");
+    ASSERT_EQ(db.Run("INSERT INTO u VALUES (0)").substr(0, 8), "INSERTED");
+    // One past it, or below zero, is no uint64: refused, not compared. As a
+    // comparison it answered false under every operator, so `!=` and `>`
+    // returned no row where every row is the answer.
+    const auto refused = [&](const char* label) {
+        for (const char* sql : {"SELECT * FROM u WHERE big = 18446744073709551616",
+                                "SELECT * FROM u WHERE big != 18446744073709551621",
+                                "SELECT * FROM u WHERE big > -1",
+                                "DELETE FROM u WHERE big != -1"}) {
+            const std::string out = db.Run(sql);
+            EXPECT_EQ(out.substr(0, 3), "ERR") << label << ": " << sql << " -> " << out;
+            EXPECT_NE(out.find("outside the range of a uint64"), std::string::npos)
+                << label << ": " << sql << " -> " << out;
+        }
+    };
+    refused("walked");
+    ASSERT_EQ(db.Run("CREATE INDEX u_big ON u (big)").substr(0, 7), "CREATED");
+    refused("indexed");
+    EXPECT_EQ(db.Run("SELECT * FROM u"), "id,big\\n1,18446744073709551615\\n2,0");
+    EXPECT_EQ(db.Run("SELECT * FROM u WHERE big = 0"), "id,big\\n2,0");
+}
+
+TEST(TypesContract, AUint64PkIsNotLookedUpAtTheNumberAWrappedLiteralWrapsTo) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE p (id uint64, v int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO p VALUES (5, 7)").substr(0, 8), "INSERTED");
+    // 2^64 + 5 wraps to 5: refused, never row 5.
+    for (const char* sql : {"SELECT * FROM p WHERE id = 18446744073709551621",
+                            "ANALYZE SELECT * FROM p WHERE id = 18446744073709551621"}) {
+        const std::string out = db.Run(sql);
+        EXPECT_NE(out.find("outside the range of a uint64"), std::string::npos)
+            << sql << " -> " << out;
+    }
+}
+
+// A literal on the left is the same comparison and gets the same refusal.
+TEST(TypesContract, AWrappedIntegerLiteralOnTheLeftIsRefusedToo) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, qty int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (5, 1)").substr(0, 8), "INSERTED");
+    const std::string out = db.Run("SELECT * FROM t WHERE 18446744073709551621 = id");
+    EXPECT_EQ(out.find("5,1"), std::string::npos) << out;
+    EXPECT_EQ(out.substr(0, 3), "ERR") << out;
 }
 
 }  // namespace

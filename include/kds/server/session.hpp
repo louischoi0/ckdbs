@@ -10,6 +10,7 @@
 
 #include "kds/base/common.hpp"
 #include "kds/exec/functions.hpp"
+#include "kds/exec/set_expr.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/role.hpp"
 #include "kds/txn/manager.hpp"
@@ -259,6 +260,12 @@ public:
         // `NOW()` is one instant for the whole statement, and the resume
         // compiles it again (AP-S4).
         exec::StatementContext context{};
+        // The answers of the statement's scalar subqueries (BJ-S7), in the order
+        // they were run. A subquery is run once, before the walk; the resume
+        // compiles the statement again and must read what the first run did,
+        // or the rows after the park would be set from another state of the
+        // database than the rows before it.
+        std::vector<exec::SubqueryResult> subqueries{};
     };
 
     const std::optional<ParkedWrite>& parked_write() const noexcept { return parked_write_; }

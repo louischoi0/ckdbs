@@ -176,6 +176,9 @@ enum class TokenType {
     kSlash,
     kPercent,
     kConcat,  // `||`
+    // The reference dialect's cast (BJ-S5): `x::int`. Lexed as kError until
+    // then, so no statement containing one had a fingerprint.
+    kDoubleColon,
 
     kError,  // unrecognized character
 };

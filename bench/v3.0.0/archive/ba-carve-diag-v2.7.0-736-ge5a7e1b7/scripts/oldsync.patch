@@ -1,0 +1,113 @@
+diff --git a/src/server/expeditor.cpp b/src/server/expeditor.cpp
+index f0766bfb..cee277e5 100644
+--- a/src/server/expeditor.cpp
++++ b/src/server/expeditor.cpp
+@@ -1,5 +1,8 @@
+ #include "kds/server/expeditor.hpp"
+ 
++#include <chrono>
++#include <cstdio>
++
+ 
+ #include <pthread.h>
+ #include <sched.h>
+@@ -1272,8 +1275,20 @@ Status Expeditor::PersistSuperBlock() {
+ }
+ 
+ Status Expeditor::PersistTrxIdCeiling() {
++    // DIAG: per-phase timing of the carve's persist.
++    using C = std::chrono::steady_clock;
++    static const auto t_start = C::now();
++    const auto t0 = C::now();
+     if (Status s = EncodeSuperBlock(); !s.ok()) return s;
+-    return store_->PersistPage(kSuperBlockPageId);
++    const auto t1 = C::now();
++    Status s = store_->Sync();  // DIAG: BA-S13 reverted
++    const auto t2 = C::now();
++    auto us = [](auto a, auto b) { return (long long)std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
++    (void)t_start;
++    std::fprintf(stderr, "DIAG carve %lld %lld persist_us=%lld\n",
++                 (long long)std::chrono::duration_cast<std::chrono::milliseconds>(t0.time_since_epoch()).count(),
++                 (long long)std::chrono::duration_cast<std::chrono::milliseconds>(t2.time_since_epoch()).count(), us(t1, t2));
++    return s;
+ }
+ 
+ OptimizerSurface Expeditor::Optimizer() {
+diff --git a/src/storage/device_page_store.cpp b/src/storage/device_page_store.cpp
+index 7c61bea4..56b8c312 100644
+--- a/src/storage/device_page_store.cpp
++++ b/src/storage/device_page_store.cpp
+@@ -1,5 +1,8 @@
+ #include "kds/storage/device_page_store.hpp"
+ 
++#include <chrono>
++#include <cstdio>
++
+ #include <unordered_set>
+ 
+ #include "kds/base/contention.hpp"
+@@ -2233,9 +2236,16 @@ std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn()
+ }
+ 
+ Status DevicePageStore::PersistPage(PageId page_id) {
++    using C = std::chrono::steady_clock;
++    const auto t0 = C::now();
+     const PageId ids[] = {page_id};
+     if (auto written = WriteBack(ids); !written.ok()) return written.status();
+-    return device_.Sync();
++    const auto t1 = C::now();
++    Status s = device_.Sync();
++    const auto t2 = C::now();
++    auto us = [](auto a, auto b) { return (long long)std::chrono::duration_cast<std::chrono::microseconds>(b - a).count(); };
++    std::fprintf(stderr, "DIAG persist-page writeback_us=%lld sync_us=%lld\n", us(t0, t1), us(t1, t2));
++    return s;
+ }
+ 
+ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
+diff --git a/src/wal/checkpointer.cpp b/src/wal/checkpointer.cpp
+index 908727a2..c7658d19 100644
+--- a/src/wal/checkpointer.cpp
++++ b/src/wal/checkpointer.cpp
+@@ -1,4 +1,5 @@
+ #include "kds/wal/checkpointer.hpp"
++#include "kds/base/diag.hpp"
+ 
+ #include <algorithm>
+ #include <string>
+@@ -304,6 +305,8 @@ Status Checkpointer::Complete() {
+ }
+ 
+ Status Checkpointer::RunToCompletion() {
++    const long long diag_t0 = DiagMs();
++    struct DiagEnd { long long t0; ~DiagEnd() { KDS_DIAG("DIAG ckpt %lld %lld\n", t0, DiagMs()); } } diag_end{diag_t0};
+     // **A checkpoint a failed step or completion left running is resumed, not
+     // refused** (BC-S4's review). `Start` refuses a nested one, so calling it
+     // unconditionally wedged the checkpointer for good after one transient
+diff --git a/src/wal/file_log_device.cpp b/src/wal/file_log_device.cpp
+index f3e04e92..fa869688 100644
+--- a/src/wal/file_log_device.cpp
++++ b/src/wal/file_log_device.cpp
+@@ -1,4 +1,5 @@
+ #include "kds/wal/file_log_device.hpp"
++#include "kds/base/diag.hpp"
+ 
+ #include <fcntl.h>
+ #include <stdio.h>
+@@ -337,6 +338,7 @@ void FileLogDevice::RunPreparer() {
+ }
+ 
+ StatusOr<FileDescriptor> FileLogDevice::BuildBody(const std::string& temp) {
++    struct DiagEnd { long long t0 = DiagMs(); ~DiagEnd() { KDS_DIAG("DIAG body %lld %lld\n", t0, DiagMs()); } } diag_end;
+     if (::unlink(temp.c_str()) != 0 && errno != ENOENT) {
+         return ErrnoStatus("FileLogDevice: remove leftover " + temp, errno);
+     }
+@@ -412,7 +414,9 @@ Status FileLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const st
+         fd = BuildBody(temp);
+         if (!fd.ok()) return fd.status();
+     }
++    const long long diag_h = DiagMs();
+     if (Status s = WriteHeaderAndSync(fd.value().get(), header); !s.ok()) return abandon(s);
++    KDS_DIAG("DIAG header %lld %lld\n", diag_h, DiagMs());
+ 
+     // The final name, refused if a file already holds it: segments are
+     // created once. A filesystem that refuses `RENAME_NOREPLACE` (`EINVAL`:

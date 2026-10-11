@@ -438,6 +438,13 @@ struct SubChain {
     // step_id counter.
     std::vector<Step> steps;
 
+    // The uncorrelated EXISTS / NOT EXISTS the nested block hoisted out of
+    // its own row loop, which the top-level `StepChain::hoisted` is for the
+    // outermost block. Each runs once per evaluation of this sub-chain,
+    // before `steps` opens, and one that is not true leaves this sub-chain
+    // with no rows.
+    std::vector<SubChain> hoisted;
+
     // False when every reference inside resolves within the sub-chain.
     bool correlated = false;
 
@@ -663,12 +670,15 @@ struct AggregateItem {
     // rather than through a signed reading that cannot hold it.
     std::uint32_t type_val = 0;
 
-    // A `DECIMAL` column's scale, resolved at compile for the same reason
-    // `type_val` is (types.md §3.2). `SUM` folds unscaled int64 and
-    // the answer's scale is the column's, so `Finish` needs the number and
-    // must not have to ask the catalog for it - the fold sits outside the
-    // executor and has no catalog to ask. Zero for every other type.
-    std::uint8_t scale = 0;
+    // A decimal column's packed `(p, s)` (`catalog::PackDecimalLen`), resolved
+    // at compile for the same reason `type_val` is (types.md §3.2). `SUM`
+    // folds unscaled int64 and the answer's scale is the column's, so
+    // `Finish` needs the scale and must not have to ask the catalog for it -
+    // the fold sits outside the executor and has no catalog to ask. The
+    // precision is the output description's: `MIN`/`MAX` and a grouping
+    // column answer a member of the column, so they are described in its own
+    // `(p, s)`. Zero for every other type.
+    std::uint32_t decimal_len = 0;
 };
 
 struct AggregateSpec {
@@ -802,6 +812,44 @@ struct StepChain {
 
     bool sorted() const noexcept { return !sort_keys.empty(); }
 };
+
+// **The one walk of a step tree.** Every step under a chain, sub-chain or
+// step, in one order: a chain's hoisted sub-chains, then its steps, and each
+// step before the sub-chains it carries. `fn(const Step&)` answers whether to
+// go on, and the walk answers whether it finished. Every walk that needs
+// neither depth nor structure is written over this, so a field added to the
+// tree is followed by all of them or none.
+namespace detail {
+template <typename Fn>
+bool VisitSteps(const std::vector<Step>& steps, Fn& fn);
+
+template <typename Fn>
+bool VisitSubChains(const std::vector<SubChain>& subs, Fn& fn) {
+    for (const SubChain& sub : subs) {
+        if (!VisitSubChains(sub.hoisted, fn) || !VisitSteps(sub.steps, fn)) return false;
+    }
+    return true;
+}
+
+template <typename Fn>
+bool VisitSteps(const std::vector<Step>& steps, Fn& fn) {
+    for (const Step& step : steps) {
+        if (!fn(step) || !VisitSubChains(step.sub_chains, fn)) return false;
+    }
+    return true;
+}
+}  // namespace detail
+
+template <typename Fn>
+bool ForEachStep(const StepChain& chain, Fn fn) {
+    return detail::VisitSubChains(chain.hoisted, fn) && detail::VisitSteps(chain.steps, fn);
+}
+
+template <typename Fn>
+bool ForEachStep(const Step& step, Fn fn) {
+    return fn(step) && detail::VisitSubChains(step.sub_chains, fn);
+}
+
 // Whether any step anywhere in `chain` - sub-chains included - is one a
 // Waystone trail may replace.
 //

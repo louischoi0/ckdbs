@@ -1,11 +1,11 @@
 // **A SET expression is typed at compile** (BJ-S3, BJ-R3, BJ-R4, BJ-R5,
 // BJ-Q2 (b), BJ-Q3).
 //
-// Until BJ-S4 evaluates an expression, a statement whose expression types is
-// refused `NotImplemented (BJ-S4)` and one that does not is refused for what
-// is wrong with it - so each cell reads which of the two it got. The point
-// is the second kind: a mistyped expression is refused whether or not a row
-// matches, naming both types and the byte.
+// Each cell runs its statement over a WHERE that matches no row: one whose
+// expression types answers `UPDATED 0`, and one that does not is refused for
+// what is wrong with it. The point is the second kind: a mistyped expression
+// is refused whether or not a row matches, naming both types and the byte.
+// Evaluation, over rows that do match, is `set_expr_eval_test.cpp`.
 
 #include <optional>
 #include <string>
@@ -39,15 +39,16 @@ protected:
 
     std::string Run(const std::string& line) { return dispatcher_->Dispatch(line).response; }
 
-    // The statement typed and reached BJ-S4's refusal.
+    // The statement typed: it ran over a WHERE that matches no row, so the
+    // answer is `UPDATED 0` and nothing was evaluated or written. Typing is
+    // judged at compile, whether or not a row matches.
     bool Types(const std::string& set) {
-        const std::string out = Run("UPDATE t SET " + set + " WHERE id = 1");
-        return out.find("(BJ-S4)") != std::string::npos;
+        return Run("UPDATE t SET " + set + " WHERE id = 999").rfind("UPDATED 0", 0) == 0;
     }
     // The refusal, or the empty string when the statement typed.
     std::string Refusal(const std::string& set) {
-        const std::string out = Run("UPDATE t SET " + set + " WHERE id = 1");
-        return out.find("(BJ-S4)") != std::string::npos ? "" : out;
+        const std::string out = Run("UPDATE t SET " + set + " WHERE id = 999");
+        return out.rfind("UPDATED 0", 0) == 0 ? "" : out;
     }
 
     storage::InMemoryPageStore store_{kFirstUserPageId};
@@ -123,10 +124,31 @@ TEST_F(SetExprTypingTest, ADecimalProductAddsScalesAndMustBeNarrowedToItsTarget)
     EXPECT_TRUE(Types("d = d * 2"));
     EXPECT_NE(Refusal("d = d * i64").find("decimal(10,2) and int64"), std::string::npos)
         << "only a literal scales a decimal; an int64 column is another type";
-    // Division needs an explicit narrowing, which BJ-S5/S6 build.
-    EXPECT_NE(Run("UPDATE t SET d = d / 2 WHERE id = 1").find("BJ-S5"), std::string::npos);
-    EXPECT_NE(Run("UPDATE t SET d = d / e WHERE id = 1").find("NOT_IMPLEMENTED"),
+    // A quotient has the dividend's scale and 16 more places, and ROUND or
+    // CAST is how the client narrows it (BJ-Q3 (a)).
+    EXPECT_NE(Refusal("d = d / 2").find("decimal(26,18) but column 'd' is decimal(10,2)"),
               std::string::npos);
+    EXPECT_NE(Refusal("d = d / e").find("but column 'd' is decimal(10,2)"), std::string::npos);
+    EXPECT_TRUE(Types("d = ROUND(d / 3, 2)")) << Refusal("d = ROUND(d / 3, 2)");
+    EXPECT_TRUE(Types("d = CAST(d / e AS decimal(10, 2))"));
+}
+
+// A dividend is never a scalar: an integer literal over a decimal takes the
+// divisor's type, as `2.00 / d` does, and the quotient is that decimal's.
+TEST_F(SetExprTypingTest, AnIntegerLiteralOverADecimalTakesTheDivisorsType) {
+    EXPECT_NE(Refusal("d = 2 / d").find("decimal(28,18) but column 'd' is decimal(10,2)"),
+              std::string::npos)
+        << Refusal("d = 2 / d");
+    EXPECT_EQ(Refusal("d = 2 / d"), Refusal("d = 2.00 / d"));
+    EXPECT_TRUE(Types("d = ROUND(2 / d, 2)")) << Refusal("d = ROUND(2 / d, 2)");
+    EXPECT_TRUE(Types("w = ROUND(-3 / w, 4)")) << Refusal("w = ROUND(-3 / w, 4)");
+    EXPECT_TRUE(Types("d = ROUND(NULL / d, 2)")) << Refusal("d = ROUND(NULL / d, 2)");
+    // A literal the divisor's type cannot hold is refused where it is written.
+    EXPECT_FALSE(Refusal("d = ROUND(100000000 / d, 2)").empty());
+    // Only a literal: an int64 column is another type, as under `*`.
+    EXPECT_NE(Refusal("d = ROUND(i64 / d, 2)").find("int64 and decimal(10,2)"), std::string::npos);
+    // A divisor literal is still the scalar it was.
+    EXPECT_NE(Refusal("d = d / 2").find("decimal(26,18)"), std::string::npos);
 }
 
 TEST_F(SetExprTypingTest, TextConcatenatesAcrossVarcharAndChar) {
@@ -143,7 +165,11 @@ TEST_F(SetExprTypingTest, ArithmeticOnTextBoolDateAndTimestampIsRefused) {
     EXPECT_NE(Refusal("s = s + s").find("operator + cannot apply to varchar and varchar"),
               std::string::npos);
     EXPECT_NE(Refusal("s = -s").find("operator -"), std::string::npos);
-    EXPECT_NE(Run("UPDATE t SET dt = dt + 1 WHERE id = 1").find("BJ-S6"), std::string::npos);
+    EXPECT_TRUE(Types("dt = dt + 1")) << "a date and a number of days (BJ-Q4)";
+    EXPECT_NE(Refusal("dt = dt * 2").find("operator * cannot apply to date"), std::string::npos);
+    EXPECT_NE(Refusal("dt = dt + dt").find("operator + cannot apply to date and date"),
+              std::string::npos);
+    EXPECT_NE(Refusal("dt = 1 - dt").find("operator - cannot apply to"), std::string::npos);
     const std::string ts = Run("UPDATE t SET ts = ts + 1 WHERE id = 1");
     EXPECT_NE(ts.find("INTERVAL"), std::string::npos) << ts;
     EXPECT_NE(ts.find("UNSUPPORTED"), std::string::npos) << ts;
@@ -181,12 +207,11 @@ TEST_F(SetExprTypingTest, AnUnknownColumnInAnExpressionIsPositioned) {
     EXPECT_NE(out.find("byte " + std::to_string(sql.find("nope"))), std::string::npos) << out;
 }
 
-TEST_F(SetExprTypingTest, AnExpressionNeverWritesBeforeBjS4) {
-    // The compile refusal is what keeps the foreign-key hoist and the apply
-    // loop, which read `Assignment::val`, from meeting an expression.
+TEST_F(SetExprTypingTest, AMistypedExpressionNeverWritesAnyRow) {
+    // The compile refusal keeps a statement that does not type from reaching
+    // the row loop, so a row that matches is left exactly as it was.
     const std::string before = Run("SELECT i64 FROM t WHERE id = 1");
-    const std::string out = Run("UPDATE t SET i64 = i64 + 1 WHERE id = 1");
-    EXPECT_NE(out.find("NOT_IMPLEMENTED"), std::string::npos) << out;
+    const std::string out = Run("UPDATE t SET i64 = i64 + 'x' WHERE id = 1");
     EXPECT_EQ(out.find("UPDATED"), std::string::npos) << out;
     EXPECT_EQ(Run("SELECT i64 FROM t WHERE id = 1"), before);
 }

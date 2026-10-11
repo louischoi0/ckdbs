@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "kds/catalog/well_known.hpp"
+#include "kds/exec/type_literals.hpp"
 
 namespace kds::exec {
 
@@ -29,10 +30,7 @@ parser::AstValue IntValue(std::int64_t v) {
 // truncation: 1969-12-31 23:00 is day -1, and C++'s `/` would give 0.
 parser::AstValue EvaluateDate(std::span<const parser::AstValue* const> args,
                               const StatementContext&) {
-    const std::int64_t us = args[0]->int_val;
-    std::int64_t days = us / kMicrosPerDay;
-    if (us % kMicrosPerDay < 0) --days;
-    return IntValue(days);
+    return IntValue(FloorEpochDay(args[0]->int_val));
 }
 
 // NOW(): the statement's instant, the same for every call in it.

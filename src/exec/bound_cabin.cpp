@@ -6,6 +6,14 @@ namespace kds::exec {
 
 namespace {
 
+// A key part's kind byte. Persisted: keys are logged and snapshotted as
+// bytes, so these values are a format, and `GroupKeyKinds` reads them back.
+constexpr std::uint8_t kTagNull = 0;
+constexpr std::uint8_t kTagInt = 1;
+constexpr std::uint8_t kTagDecimal = 2;      // + scale:1 + unscaled:8
+constexpr std::uint8_t kTagDecimalWide = 3;  // + scale:1 + high:8 + low:8
+constexpr std::uint8_t kTagStr = 4;          // + length:8 + bytes
+
 void AppendByte(std::string& out, std::uint8_t b) { out.push_back(static_cast<char>(b)); }
 
 void AppendU64(std::string& out, std::uint64_t v) {
@@ -23,22 +31,22 @@ std::string EncodeGroupKey(const std::vector<parser::AstValue>& values) {
                 // one group. That is grouping identity rather than comparison
                 // - `CompareValues` is untouched by this, exactly as the
                 // aggregate fold's key encoding leaves it untouched.
-                AppendByte(out, 0);
+                AppendByte(out, kTagNull);
                 break;
             case parser::ValueType::kInt:
-                AppendByte(out, 1);
+                AppendByte(out, kTagInt);
                 AppendU64(out, static_cast<std::uint64_t>(v.int_val));
                 break;
             case parser::ValueType::kDecimal:
                 // Tagged apart from a plain int and carries its scale: an
                 // unscaled 1234 at scale 2 and a bare 1234 are different
                 // values, and a shared tag would make them one group.
-                AppendByte(out, 2);
+                AppendByte(out, kTagDecimal);
                 AppendByte(out, v.scale);
                 AppendU64(out, static_cast<std::uint64_t>(v.int_val));
                 break;
             case parser::ValueType::kDecimalWide:
-                AppendByte(out, 3);
+                AppendByte(out, kTagDecimalWide);
                 AppendByte(out, v.scale);
                 AppendU64(out, static_cast<std::uint64_t>(v.dec_hi));
                 AppendU64(out, static_cast<std::uint64_t>(v.int_val));
@@ -54,13 +62,58 @@ std::string EncodeGroupKey(const std::vector<parser::AstValue>& values) {
                 // aggregate fold's key encoding follows and for the same
                 // reason. A separator byte would not do: a value may contain
                 // any byte.
-                AppendByte(out, 4);
+                AppendByte(out, kTagStr);
                 AppendU64(out, static_cast<std::uint64_t>(v.str_val.size()));
                 out.append(v.str_val);
                 break;
         }
     }
     return out;
+}
+
+std::optional<std::vector<parser::ValueType>> GroupKeyKinds(std::string_view encoded) {
+    std::vector<parser::ValueType> kinds;
+    std::size_t at = 0;
+    // Whether `n` more bytes follow, so no read below runs off the end.
+    const auto take = [&](std::size_t n) {
+        if (encoded.size() - at < n) return false;
+        at += n;
+        return true;
+    };
+    while (at < encoded.size()) {
+        const auto tag = static_cast<std::uint8_t>(encoded[at++]);
+        switch (tag) {
+            case kTagNull:
+                kinds.push_back(parser::ValueType::kNull);
+                break;
+            case kTagInt:
+                if (!take(8)) return std::nullopt;
+                kinds.push_back(parser::ValueType::kInt);
+                break;
+            case kTagDecimal:
+                if (!take(1 + 8)) return std::nullopt;
+                kinds.push_back(parser::ValueType::kDecimal);
+                break;
+            case kTagDecimalWide:
+                if (!take(1 + 16)) return std::nullopt;
+                kinds.push_back(parser::ValueType::kDecimalWide);
+                break;
+            case kTagStr: {
+                if (encoded.size() - at < 8) return std::nullopt;
+                std::uint64_t len = 0;
+                for (int i = 0; i < 8; ++i) {
+                    len |= std::uint64_t{static_cast<std::uint8_t>(encoded[at + i])} << (i * 8);
+                }
+                at += 8;
+                if (!take(len)) return std::nullopt;
+                kinds.push_back(parser::ValueType::kStr);
+                break;
+            }
+            default:
+                return std::nullopt;
+        }
+    }
+    return kinds;
 }
 
 std::uint64_t HashGroupKey(const std::string& encoded) noexcept {

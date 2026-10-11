@@ -145,6 +145,11 @@ private:
     // `( SELECT ... )` in predicate position. Consumes both parens and
     // enforces kMaxSubqueryDepth.
     StatusOr<std::shared_ptr<SelectStmt>> ParseSubquery(std::uint32_t depth);
+    // The rest of a subquery whose `(` is already consumed and whose `SELECT` is
+    // next, parsed as a block at `select_depth`. `close_at`, when given, gets the
+    // byte of the `)` that ended it.
+    StatusOr<std::shared_ptr<SelectStmt>> ParseSubqueryAfterOpen(std::uint32_t select_depth,
+                                                                 std::uint32_t* close_at = nullptr);
 
     // FROM-list productions (V05). ParseRelationRef takes `<name> [AS
     // <alias>]`; ParseJoins takes zero or more `JOIN <rel> ON <q> = <q>`
@@ -241,17 +246,33 @@ private:
 
     StatusOr<std::string> ParseIdent();
 
-    // A SET value (BJ-S2): one bare literal into `a.val`, anything else
-    // into `a.expr`. The levels below are precedence climbing in
-    // PostgreSQL's order, loosest first: `||`, then `+ -`, then `* / %`,
-    // then a unary sign.
+    // A SET value (BJ-S2, BJ-S5): one bare literal into `a.val`, anything
+    // else into `a.expr`. The levels below are precedence climbing in
+    // PostgreSQL's order, loosest first: OR, AND, NOT, IS, the comparisons,
+    // `||`, `+ -`, `* / %`, a unary sign, then `::`.
     Status ParseSetValue(Assignment& a);
+    Status ParseRowValueAssignments(std::vector<Assignment>& out);
+    StatusOr<std::shared_ptr<const Expr>> ParseExprOr();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprAnd();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprNot();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprIs();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprComparison();
     StatusOr<std::shared_ptr<const Expr>> ParseExprConcat();
     StatusOr<std::shared_ptr<const Expr>> ParseExprAdditive();
     StatusOr<std::shared_ptr<const Expr>> ParseExprMultiplicative(
         std::shared_ptr<const Expr> first);
     StatusOr<std::shared_ptr<const Expr>> ParseExprUnary();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprPostfix();
     StatusOr<std::shared_ptr<const Expr>> ParseExprPrimary();
+    StatusOr<std::shared_ptr<const Expr>> ParseExprCall(const Token& name);
+    StatusOr<std::shared_ptr<const Expr>> ParseExprCase(const Token& kw);
+    // `name ( [expr, ...] )` for a scalar function (BJ-S6); `POSITION(a IN b)`
+    // and `MOD(a, b)` are the two spellings that are not that shape.
+    StatusOr<std::shared_ptr<const Expr>> ParseExprFunction(const Token& name);
+    // A type name with its optional `(width)` or `(precision, scale)`.
+    Status ParseTypeSpec(TypeSpec& out);
+    // Any `::type` after `operand`.
+    StatusOr<std::shared_ptr<const Expr>> ParseCastSuffix(std::shared_ptr<const Expr> operand);
 
     // One argument of a parameterized type - `decimal(10, 2)`'s 10 and 2.
     // `what` names it in the error, so a client is told which of the two
@@ -271,6 +292,13 @@ private:
     // Nesting of parentheses and unary signs in a SET value, bounded so a
     // hostile statement cannot recurse the stack away.
     std::uint32_t expr_depth_ = 0;
+    // Set while a SELECT that is a value inside another statement is parsed:
+    // a `;` is that statement's end, not a way to end the subquery early.
+    bool inside_value_subquery_ = false;
+    // A literal a SET value began with, already read, for the levels above the
+    // primary to carry on from (`ParseSetValue`): when an operator follows it,
+    // the expression chain is entered with the literal as its first primary.
+    std::shared_ptr<const Expr> pending_primary_;
 
 };
 

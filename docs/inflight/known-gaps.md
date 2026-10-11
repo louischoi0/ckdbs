@@ -944,24 +944,115 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
     passes in Debug with `Scheduler::DiscardTasks` removed. The tree has
     no sanitizer build.
 
+## Expressions in `UPDATE ... SET` (BJ)
+
+Written at BJ's close on `worktree-bj-expression-update`. Owned by
+`docs/spec/types.md` §3.2b and `instructions/v3.0.0/workorder-bj-expression-update.md`.
+
+- **Refused by name at their byte, never parsed and dropped:** `IN`, `BETWEEN`,
+  `LIKE`, `EXISTS`, `IS TRUE` and `IS DISTINCT FROM`; a boolean literal
+  (`TRUE`/`FALSE`); `<>` (inequality is `!=`); a correlated subquery; a
+  subquery over a catalog view; the row form `SET (a, b) = (SELECT ...)`;
+  `DEFAULT` and `UPDATE ... FROM`; timestamp arithmetic (there is no
+  `INTERVAL`); a negative count of places in `ROUND`/`TRUNC`; an expression
+  that reads a column or the clock assigned to a foreign-key column.
+- **An expression in `INSERT ... VALUES`, a select list or a WHERE** is not
+  built (BJ-Q8): each is its own order on the same grammar.
+- **Where it differs from the reference dialect, on purpose:**
+  - **Exact types** (BJ-Q2 (b)): `int32 + int64` needs a `CAST`. The one
+    departure is a scaled decimal (`ROUND`/`TRUNC`/`CEIL`/`FLOOR` over a
+    decimal), which takes its context's precision.
+  - `CAST('1.5' AS int64)` is 2; PostgreSQL refuses it. `CAST(18446744073709551615
+    AS uint64)` is refused (a bare integer literal resolves to int64 first); `-128::int8`
+    is admitted through the fused minus where PostgreSQL refuses both spellings.
+  - Strings are bytes: `LENGTH` counts them and `UPPER`/`LOWER` change ASCII
+    letters only.
+  - **A decimal quotient has more places than its operands** and is never
+    narrowed implicitly; whether PostgreSQL's own division rounds twice was
+    not checked, and this engine's does not.
+  - **A scalar subquery is run once, before the walk, wherever it is
+    written**, so one in a `CASE` branch no row takes still runs and its
+    error stands; and a WHERE-position subquery in the same statement is
+    re-run per row and sees the statement's earlier rows.
+  - A simple `CASE x WHEN a` is the searched form with `x` repeated, so a
+    nested one multiplies its operand's size; the parser bounds an
+    expression at 4,096 nodes counting a shared child per reference. Holding
+    the operand once on the node is open.
+- **What the suite does not cover:**
+  - `NOW()` carried across a parked SET (the WHERE-position cell exists; the
+    SET one is covered by reading, the same `ParkedWrite::context`).
+  - **An autocommit UPDATE's two subqueries reading one snapshot.** The fix
+    pins the UPDATE's snapshot; the race it closes needs a commit between two
+    subqueries of one statement and has no cell.
+  - A function's purity is declared nowhere: nothing reads it until AQ
+    evaluates a function on the write path.
+- **What it costs, measured at `e458e272`** (`bench/v3.0.0/results-bj-close-v2.7.0-757-ge458e272.md`):
+  a literal point `UPDATE` is **+0.25 to +0.70 µs (0.5-1.3 %)** and a literal
+  every-row `UPDATE` about +6 to +19 ns a row slower than before BJ; the share
+  between the parser and `UpdateInner` is not attributed (`perf` is locked out).
+  A constant-folding or lazier-allocation second attempt was not made.
+
+## The read and update paths (BK)
+
+Written at BK's close on `worktree-bk-read-update-paths`, verified at `8679367e`. Owned by
+`instructions/v3.0.0/workorder-bk-opt-read-update-path.md` and the specs each
+stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
+
+- **A prepared statement is still substituted into its text and parsed again
+  at every execution** (BK-R1 not built, BK-Q13). Parse and compile are
+  1.1-4.5 µs of a point statement's server CPU after BK (5-15 % of it,
+  `bench/v3.0.0/archive/bk-close-v2.7.0-787-g8679367e/partsB.md`), and a
+  client that prepares is the only one a cached parse would help; no driver
+  in the tree prepares. A text parameter containing a single quote stays
+  unbindable at `C_BIND` for the same reason.
+- **Waystone records a trail for a point `SELECT` by pk**: recording and the
+  replay attempt are 7-9 % of its server CPU (BK-S1's census), for a lookup
+  the descent already answers directly. No BK proposal named it.
+- **The request path's floor is the kernel's**: a `C_PING` round trip costs
+  12 µs of server CPU and 26 µs at p50 on a quiet host at BK's close, 64 % of
+  the CPU in its one `send()` and 33 % in the read and the reactor's wake
+  (BK-Q8: no engine change in BK reaches it).
+- **A spilled value an UPDATE re-assigns is still never released**: BK-R3
+  stopped the copy of a value the SET list does not name, not the
+  superseded one it does. The deferred-release drain stays unbuilt, and
+  `heap-and-tuple.md` §3.4 states the rule it must take: a value goes only
+  once the newest version naming it is reclaimed.
+- **What the suite does not cover:**
+  - the race BK-S3's review found and the order fixed - an assertion adopted
+    on another core between a statement's refused `IS` and its row's `IX` -
+    has no cell; the ask sits after the conflict check, where it always did;
+  - the var-heap tail hint across a `DROP TABLE` reclaim that reuses the
+    dropped chain's root id: the cell (`ARootIsBornWithNoHint`) uses the
+    in-memory store's id order, not a reclaim on `DevicePageStore`.
+- **A scan row costs twice PostgreSQL's, and no single part of it
+  dominates**: 67 ns of server CPU a row net of the statement at BK's close
+  against PostgreSQL 18's 34 ns on one host and driver
+  (`bench/v3.0.0/results-bk-close-v2.7.0-787-g8679367e.md`). BK-S1's
+  re-profile on the busy census host split it between visibility, decode,
+  the residual and the leaf visit, none above a quarter
+  (`archive/bk-s1-census-v2.7.0-769-gb70f79d8/profB1r-reports.txt`).
+
 ## Carve and checkpoint stalls
 
 Verified at `e5a7e1b7` (BA's close,
 `bench/v3.0.0/results-ba-s17-census-v2.7.0-736-ge5a7e1b7.md` and
-`results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`). Owned by `docs/spec/wal.md`
+`results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`; diagnosed in
+`results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`). Owned by `docs/spec/wal.md`
 §11a and, for the checkpoint, BI (`workorder-bi-checkpoint-off-the-reactor.md`).
 
-- **A `relaxed` carve is slower since BA-S13.** Its median is 226-258 ms per
-  server life, against 20-46 ms at BA-S4. Under `group` and `strict` it
-  fell to 3.6-5.9 ms. The candidate cause is the carve's unconditional
-  data-file `fdatasync`, which under `relaxed` flushes every unsynced
-  page write before it. That is untested. BA-S13's exit, a carve under
-  10 ms, is not met.
+- **A `relaxed` carve's longest stall is 226-258 ms per server life**
+  (median), against 20-46 ms at BA-S4; under `group` and `strict` it fell
+  to 3.6-5.9 ms. At `cores = 1` it is not BA-S13's, and at B it reads a
+  data-file `fsync` stall BA-S4's binary also meets; maxima above 300 ms,
+  `cores` 2 and 4, and carves inside the measured span are unexplained or
+  unmeasured (the diagnosis file). BA-S13's exit, a carve under 10 ms, is
+  not met.
 - **The checkpoint holds statements for up to a quarter-second.** At
   10,000 rows, B's longest statement was 62-226 ms in 31 of 32 A/B runs,
   against A's 18-22 ms. The census's checkpoint median rose from 46 to
-  92 ms, with a maximum of 1.5 s. Neither measurement separates "BA made
-  the checkpoint longer" from "BA moved work off the carve". The fix
+  92 ms, with a maximum of 1.5 s. At `relaxed` `cores = 1` the lengthening
+  is BA-S13's, which moved the pool's writeback from the carve to the
+  checkpoint (the diagnosis file); other cells are not separated. The fix
   waits on BI-Q1.
 
 ## Decisions the revision has not taken
