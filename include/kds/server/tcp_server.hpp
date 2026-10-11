@@ -241,6 +241,12 @@ public:
     // Live client connections, for tests and for the shutdown path.
     std::size_t open_connections() const noexcept { return clients_.size(); }
 
+    // `send()` calls that carried bytes, over the listener's life (BK-R7,
+    // `workorder-bk-opt-read-update-path.md`: a
+    // statement's reply leaves in one). Reactor-thread state: read it once
+    // the reactor has stopped.
+    std::uint64_t reply_writes() const noexcept { return reply_writes_; }
+
 private:
     // One client's in-flight buffers. Commands are newline-framed and a
     // read can stop mid-line, so the remainder has to survive until the
@@ -419,6 +425,7 @@ private:
     // a KWP listener and cancelled by `Detach`.
     sched::TimerId idle_sweep_ = sched::kInvalidTimerId;
     std::unordered_map<int, Connection> clients_;
+    std::uint64_t reply_writes_ = 0;  // `reply_writes()`
 };
 
 }  // namespace kds::server

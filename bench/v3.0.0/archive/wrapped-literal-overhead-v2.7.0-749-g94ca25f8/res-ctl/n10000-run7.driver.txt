@@ -1,0 +1,20 @@
+== B rows=10000
+  sel-pk             ops= 6400 p50=     95.5 p99=    122.7 err=0 rows0=1 total=6400 head='id,qty,v\\n1,3,0' fe=None
+  sel-pk-again       ops= 6400 p50=     95.7 p99=    129.4 err=0 rows0=1 total=6400 head='id,qty,v\\n1,3,0' fe=None
+  sel-pk-long        ops= 6400 p50=     86.1 p99=    111.1 err=0 rows0=0 total=0 head='id,qty,v' fe=None
+  sel-nonpk          ops=   64 p50=    819.7 p99=    861.2 err=0 rows0=1 total=64 head='id,qty,v\\n1,3,0' fe=None
+  sel-nonpk-again    ops=   64 p50=    822.5 p99=    841.1 err=0 rows0=1 total=64 head='id,qty,v\\n1,3,0' fe=None
+  upd-pk             ops= 6400 p50=     77.9 p99=    111.4 err=0 rows0=0 total=0 head='UPDATED 1' fe=None
+  del-pk             ops= 6400 p50=     72.4 p99=    102.9 err=0 rows0=0 total=0 head='DELETED 1' fe=None
+  ctl-insert         ops= 6400 p50=     73.4 p99=    103.3 err=0 rows0=0 total=0 head='INSERTED oid=4007 id=1000000 page=134 slot=0' fe=None
+  ctl-ping           ops= 6400 p50=     72.7 p99=     94.5 err=0 rows0=0 total=0 head='version=21 create_time=1791657194 last_mount_time=1791657194' fe=None
+== A rows=10000
+  sel-pk             ops= 6400 p50=     94.0 p99=    119.6 err=0 rows0=1 total=6400 head='id,qty,v\\n1,3,0' fe=None
+  sel-pk-again       ops= 6400 p50=     94.7 p99=    128.6 err=0 rows0=1 total=6400 head='id,qty,v\\n1,3,0' fe=None
+  sel-pk-long        ops= 6400 p50=     85.2 p99=    110.3 err=0 rows0=0 total=0 head='id,qty,v' fe=None
+  sel-nonpk          ops=   64 p50=    796.0 p99=   1474.0 err=0 rows0=1 total=64 head='id,qty,v\\n1,3,0' fe=None
+  sel-nonpk-again    ops=   64 p50=    801.7 p99=    831.0 err=0 rows0=1 total=64 head='id,qty,v\\n1,3,0' fe=None
+  upd-pk             ops= 6400 p50=     77.5 p99=    109.4 err=0 rows0=0 total=0 head='UPDATED 1' fe=None
+  del-pk             ops= 6400 p50=     72.0 p99=     99.5 err=0 rows0=0 total=0 head='DELETED 1' fe=None
+  ctl-insert         ops= 6400 p50=     72.5 p99=    105.2 err=0 rows0=0 total=0 head='INSERTED oid=4007 id=1000000 page=134 slot=0' fe=None
+  ctl-ping           ops= 6400 p50=     72.3 p99=     93.3 err=0 rows0=0 total=0 head='version=21 create_time=1791657194 last_mount_time=1791657194' fe=None

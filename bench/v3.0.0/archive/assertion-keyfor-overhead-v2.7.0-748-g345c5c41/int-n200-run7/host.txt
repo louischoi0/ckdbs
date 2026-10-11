@@ -1,0 +1,4 @@
+loadavg_at_start=1.1
+1.10 3.27 4.34 1/527 3043609
+1278524 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791349054354-3r0s3t.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until [ -f build/tests/kds_tests ] && ! pgrep -f "cmake --build build" >/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-wal-recycling/9e14189c-965e-4890-a2db-29e6c5f9d070/tasks/byepih75a.output' < /dev/null && pwd -P >| /tmp/claude-96a3-cwd
+3043608 /bin/sh -c echo loadavg_at_start=1.1; cat /proc/loadavg; pgrep -a -f 'cc1plus|cmake --build|ctest' || echo no-competing

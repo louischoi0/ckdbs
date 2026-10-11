@@ -1,0 +1,16 @@
+c2-n1000-r0 load 2.44->2.59 gate 3s/0.012 dur 8.4s errs=0 bad=0 verify=ok lit-point:A=53.0/B=53.5 lit-range:A=1279.2/B=1312.9 ping:A=50.0/B=54.2
+c2-n1000-r1 load 2.59->2.57 gate 3s/0.029 dur 8.3s errs=0 bad=0 verify=ok lit-point:A=53.0/B=53.5 lit-range:A=1297.6/B=1310.0 ping:A=50.8/B=50.7
+c2-n1000-r2 load 2.37->2.34 gate 3s/0.017 dur 8.4s errs=0 bad=0 verify=ok lit-point:A=53.5/B=53.5 lit-range:A=1299.9/B=1353.9 ping:A=50.4/B=50.5
+c2-n1000-r3 load 2.15->2.49 gate 3s/0.016 dur 8.1s errs=0 bad=0 verify=ok lit-point:A=52.9/B=54.0 lit-range:A=1304.1/B=1291.0 ping:A=50.5/B=50.7
+c2-n1000-r4 load 2.49->2.66 gate 3s/0.027 dur 8.3s errs=0 bad=0 verify=ok lit-point:A=52.9/B=53.7 lit-range:A=1307.2/B=1306.2 ping:A=51.4/B=50.5
+c2-n1000-r5 load 2.53->2.48 gate 3s/0.011 dur 8.2s errs=0 bad=0 verify=ok lit-point:A=53.0/B=53.2 lit-range:A=1293.5/B=1287.9 ping:A=50.6/B=50.3
+c2-n1000-r6 load 2.28->2.16 gate 3s/0.012 dur 8.3s errs=0 bad=0 verify=ok lit-point:A=51.8/B=53.6 lit-range:A=1300.8/B=1316.0 ping:A=50.4/B=50.4
+c2-n1000-r7 load 2.16->2.13 gate 3s/0.015 dur 8.2s errs=0 bad=0 verify=ok lit-point:A=52.7/B=54.0 lit-range:A=1318.7/B=1312.0 ping:A=50.0/B=50.4
+c2-n1000-r8 load 2.13->1.96 gate 3s/0.022 dur 8.2s errs=0 bad=0 verify=ok lit-point:A=53.2/B=53.0 lit-range:A=1301.8/B=1290.6 ping:A=50.1/B=50.3
+c2-n1000-r9 load 1.80->1.82 gate 3s/0.024 dur 8.4s errs=0 bad=0 verify=ok lit-point:A=53.6/B=53.0 lit-range:A=1292.4/B=1309.4 ping:A=50.4/B=50.3
+c2-n1000-r10 load 1.83->2.10 gate 3s/0.021 dur 8.3s errs=0 bad=0 verify=ok lit-point:A=52.2/B=53.6 lit-range:A=1296.1/B=1297.3 ping:A=50.7/B=50.7
+c2-n1000-r11 load 2.10->1.93 gate 3s/0.023 dur 8.4s errs=0 bad=0 verify=ok lit-point:A=51.8/B=53.6 lit-range:A=1285.1/B=1333.7 ping:A=50.5/B=51.3
+c2-n1000-r12 load 1.77->1.73 gate 3s/0.016 dur 8.4s errs=0 bad=0 verify=ok lit-point:A=53.9/B=53.8 lit-range:A=1303.0/B=1303.7 ping:A=50.5/B=50.7
+c2-n1000-r13 load 1.73->1.77 gate 3s/0.011 dur 8.4s errs=0 bad=0 verify=ok lit-point:A=52.2/B=54.1 lit-range:A=1296.6/B=1306.7 ping:A=50.3/B=50.9
+c2-n1000-r14 load 1.63->1.90 gate 3s/0.009 dur 9.1s errs=0 bad=0 verify=ok lit-point:A=52.4/B=53.0 lit-range:A=1305.5/B=1336.1 ping:A=50.5/B=50.4
+c2-n1000-r15 load 1.83->2.16 gate 3s/0.024 dur 8.6s errs=0 bad=0 verify=ok lit-point:A=53.1/B=53.7 lit-range:A=1279.1/B=1326.6 ping:A=49.8/B=50.2

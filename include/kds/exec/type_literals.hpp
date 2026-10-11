@@ -51,6 +51,15 @@ namespace kds::exec {
 inline constexpr std::int32_t kMinEpochDay = -25567;   // 1900-01-01
 inline constexpr std::int32_t kMaxEpochDay = 376199;   // 2999-12-31
 
+// The day an instant falls in: microseconds since the epoch to days. **Floor**,
+// not truncation - 1969-12-31 23:00 is day -1, and C++'s `/` would give 0.
+inline constexpr std::int64_t FloorEpochDay(std::int64_t epoch_micros) noexcept {
+    constexpr std::int64_t kDay = 86400LL * 1000000LL;
+    std::int64_t days = epoch_micros / kDay;
+    if (epoch_micros % kDay < 0) --days;
+    return days;
+}
+
 // The same window in microseconds, which is what makes a TIMESTAMP's range
 // a restatement of a DATE's rather than a second decision.
 inline constexpr std::int64_t kMinEpochMicros =

@@ -4,40 +4,21 @@
 
 namespace kds::exec {
 
-namespace {
-
-// Every step of a chain by its global step id, sub-chains included.
-//
-// Walked once at build rather than searched per entry: a chain has a
-// handful of steps and a trail has up to 253 entries, so the map is the
-// cheaper direction even at this size - and it makes "the chain does not
-// have this step" a lookup instead of a scan.
-void IndexSteps(const std::vector<Step>& steps,
-                std::unordered_map<std::uint32_t, const Step*>& out);
-
-void IndexSubChains(const std::vector<SubChain>& subs,
-                    std::unordered_map<std::uint32_t, const Step*>& out) {
-    for (const SubChain& sub : subs) IndexSteps(sub.steps, out);
-}
-
-void IndexSteps(const std::vector<Step>& steps,
-                std::unordered_map<std::uint32_t, const Step*>& out) {
-    for (const Step& step : steps) {
-        out.emplace(step.step_id, &step);
-        IndexSubChains(step.sub_chains, out);
-    }
-}
-
-}  // namespace
-
 void TrailReplay::Build(const StepChain& chain,
                         std::span<const stats::WaystoneEntry> entries) {
     by_key_.clear();
     if (entries.empty()) return;
 
+    // Every step of the chain by its global step id, sub-chains included.
+    // Walked once at build rather than searched per entry: a chain has a
+    // handful of steps and a trail has up to 253 entries, so the map is the
+    // cheaper direction even at this size - and it makes "the chain does not
+    // have this step" a lookup instead of a scan.
     std::unordered_map<std::uint32_t, const Step*> steps;
-    IndexSteps(chain.steps, steps);
-    IndexSubChains(chain.hoisted, steps);
+    ForEachStep(chain, [&](const Step& step) {
+        steps.emplace(step.step_id, &step);
+        return true;
+    });
 
     by_key_.reserve(entries.size());
     for (const stats::WaystoneEntry& entry : entries) {

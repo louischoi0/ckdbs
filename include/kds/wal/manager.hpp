@@ -219,6 +219,9 @@ public:
     // The core this manager serves - not the stream's number, which is
     // 0 for the instance's shared stream whichever core appends (AL-R2).
     std::uint32_t core_id() const noexcept { return core_id_; }
+    // The injected clock this manager was built on - the scheduler's - so the
+    // checkpointer times its phases by it rather than threading a second one.
+    const sched::Clock& clock() const noexcept { return clock_; }
     bool attached() const noexcept { return owned_stream_ == nullptr; }
     WalStream* stream() const noexcept { return stream_; }
     WalWriter* writer() const noexcept { return writer_; }

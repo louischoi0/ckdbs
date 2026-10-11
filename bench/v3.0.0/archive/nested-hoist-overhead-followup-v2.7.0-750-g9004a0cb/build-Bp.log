@@ -1,0 +1,9 @@
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/cdkbs/ckdbs/.claude/worktrees/fix-nested-uncorrelated-subquery/build-release
+[  0%] Building CXX object CMakeFiles/kds.dir/src/exec/step_vm.cpp.o
+[  0%] Linking CXX static library libkds.a
+[ 97%] Built target kds
+[100%] Linking CXX executable kds_server
+[100%] Built target kds_server
+exit 0

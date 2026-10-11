@@ -81,7 +81,7 @@ void UndoLog::ReclaimSettledPages() {
     if (settled > 0) pages_.erase(pages_.begin(), pages_.begin() + settled);
 }
 
-StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
+StatusOr<storage::PageRef> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
     // The current page, whoever last wrote to it. `trx_id` decides nothing
     // about *which* page is used - only what goes in the new page's
     // `first_trx_id` and in the PAGE_INIT envelope if one has to be created.
@@ -89,7 +89,7 @@ StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
         auto bytes = store_.Get(tail_);
         if (!bytes.ok()) return bytes.status();
         if (UndoPageFreeSpace(std::span<const std::byte, kPageSize>(bytes.value().bytes())) >= need) {
-            return tail_;
+            return std::move(bytes.value());
         }
     }
 
@@ -127,7 +127,7 @@ StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
         ++pages_recycled_;
         pages_.push_back(TrackedPage{page_id, 0});
         tail_ = page_id;
-        return page_id;
+        return std::move(bytes.value());
     }
 
     auto created = store_.CreateNew();
@@ -148,7 +148,7 @@ StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
     // working before, never at one recovery has not been told about.
     pages_.push_back(TrackedPage{page_id, 0});
     tail_ = page_id;
-    return page_id;
+    return std::move(created.value().second);
 }
 
 StatusOr<std::uint64_t> UndoLog::Append(std::uint64_t trx_id, const UndoRecordFields& fields,
@@ -162,25 +162,22 @@ StatusOr<std::uint64_t> UndoLog::Append(std::uint64_t trx_id, const UndoRecordFi
                                        "-byte undo page capacity");
     }
 
-    auto page_id = TailFor(trx_id, kUndoRecordHeaderSize + image.size());
-    if (!page_id.ok()) return page_id.status();
+    auto tail = TailFor(trx_id, kUndoRecordHeaderSize + image.size());
+    if (!tail.ok()) return tail.status();
+    const PageId page_id = tail.value().page_id();
 
     // The purge bound, raised before the record lands: a failure below
     // leaves the bound conservatively high, never a record above the
     // bound. TailFor guarantees the tail is tracked.
     if (pages_.back().max_trx_id < trx_id) pages_.back().max_trx_id = trx_id;
 
-    auto bytes = store_.Get(page_id.value());
-    if (!bytes.ok()) return bytes.status();
-
-    auto offset = UndoPageAppend(bytes.value().bytes(), fields, image);
+    auto offset = UndoPageAppend(tail.value().bytes(), fields, image);
     if (!offset.ok()) return offset.status();
 
-    if (Status s = LogUndoWrite(trx_id, page_id.value(), offset.value(), fields, image);
-        !s.ok()) {
+    if (Status s = LogUndoWrite(trx_id, page_id, offset.value(), fields, image); !s.ok()) {
         return s;
     }
-    return EncodeUndoPtr(page_id.value(), offset.value());
+    return EncodeUndoPtr(page_id, offset.value());
 }
 
 StatusOr<UndoVersion> UndoLog::Read(std::uint64_t ptr) {

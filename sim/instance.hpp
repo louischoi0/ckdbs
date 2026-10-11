@@ -134,6 +134,14 @@ public:
     // a log whose head is gone.
     Status RunCheckpoint();
 
+    // **A cadence run abandoned mid-steps** (BI-S2): `Start` and one step of
+    // a few pages, and then nothing - no `CHECKPOINT_END`, no publish - which
+    // is the log a crash leaves under a run parked between steps, and what
+    // shutdown's `Checkpointer::Abandon` leaves behind it. The next
+    // `RunCheckpoint` starts fresh; a crash before it recovers from the
+    // previous anchor.
+    Status AbandonCheckpointMidSteps();
+
     // Recycling's counts over the instance's life (BC-S4): advances of the
     // durable redo start the recycler was handed, and segments the log
     // device removed. Both survive a reboot; the device does.

@@ -874,6 +874,61 @@ TEST_F(CommandDispatcherTest, SubqueryPredicatesExecuteAndActuallyFilter) {
     EXPECT_NE(d.Dispatch("SELECT * FROM acct").response.find("alice"), std::string::npos);
 }
 
+// A NULL tested against a non-empty subquery result is UNKNOWN for IN and
+// NOT IN alike, so neither admits the row. `docs/inflight/bugs/a-null-
+// probe-not-in-a-non-empty-subquery-answers-true.md`: NOT IN answers TRUE
+// and admits it. Disabled until the fix lands, as the entry says.
+TEST_F(CommandDispatcherTest, DISABLED_ANullProbeIsUnknownAgainstANonEmptySubquery) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE n (id int64, v int64 NULL)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE s (id int64, x int64)").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO n VALUES (NULL)").response.substr(0, 8), "INSERTED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO n VALUES (1)").response.substr(0, 8), "INSERTED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO s VALUES (2)").response.substr(0, 8), "INSERTED");
+
+    // Row 2 (v = 1) is not in {2}; row 1 (v = NULL) is unknown.
+    EXPECT_EQ(d.Dispatch("SELECT id FROM n WHERE v NOT IN (SELECT x FROM s)").response,
+              "id\\n2");
+    EXPECT_EQ(d.Dispatch("SELECT id FROM n WHERE v IN (SELECT x FROM s)").response, "id");
+}
+
+TEST_F(CommandDispatcherTest, ANestedUncorrelatedExistsFiltersAWriteToo) {
+    // An uncorrelated EXISTS inside a sub-chain was dropped when the block
+    // was lowered, for a write's WHERE exactly as for a SELECT's: the
+    // UPDATE and the DELETE answered as if the inner predicate were absent.
+    // The inner set is empty (no 'NONE' trade), so no row may be touched;
+    // with 'AAPL' it is non-empty and the correlation decides.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE trade (id int32, acct_id int32, sym varchar)")
+                  .response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('alice')").response.substr(0, 8), "INSERTED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('bob')").response.substr(0, 8), "INSERTED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO trade VALUES (1, 'AAPL')").response.substr(0, 8),
+              "INSERTED");
+
+    const std::string none =
+        "EXISTS (SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
+        "AND EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))";
+    const std::string aapl =
+        "EXISTS (SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
+        "AND EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'AAPL'))";
+
+    EXPECT_EQ(d.Dispatch("UPDATE acct SET name = 'x' WHERE " + none).response, "UPDATED 0");
+    EXPECT_EQ(d.Dispatch("DELETE FROM acct WHERE " + none).response, "DELETED 0");
+    EXPECT_NE(d.Dispatch("SELECT * FROM acct").response.find("alice"), std::string::npos);
+
+    // Only alice has a trade, so only she is renamed - and only she is deleted.
+    EXPECT_EQ(d.Dispatch("UPDATE acct SET name = 'x' WHERE " + aapl).response, "UPDATED 1");
+    EXPECT_EQ(d.Dispatch("SELECT * FROM acct").response.find("alice"), std::string::npos);
+    EXPECT_EQ(d.Dispatch("DELETE FROM acct WHERE " + aapl).response, "DELETED 1");
+    const std::string left = d.Dispatch("SELECT * FROM acct").response;
+    EXPECT_NE(left.find("bob"), std::string::npos) << left;
+}
+
 TEST_F(CommandDispatcherTest, WithIsDeclinedByNameRatherThanAsAnUnknownCommand) {
     // Also found by the live-server script. Dispatch() routes on the
     // first word, so WITH fell through to "unknown command" and the

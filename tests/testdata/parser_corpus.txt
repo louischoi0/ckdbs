@@ -430,7 +430,7 @@ InvalidArgument	9660f26161090c96	cbf29ce484222325	5febed2ffc007497	SELECT * FROM
 InvalidArgument	ae06d22736a3755c	cbf29ce484222325	4d5631aa9f8b8127	SELECT * FROM t WHERE id IN ()
 InvalidArgument	e0208a3774f7afe5	cbf29ce484222325	adfb2afe9c63cdc2	SELECT * FROM t WHERE EXISTS (SELECT * FROM u;)
 InvalidArgument	d91afc534d177df6	cbf29ce484222325	d91afc534d177df6	INSERT INTO t VALUES ((SELECT id FROM u))
-NotImplemented	9964d7fce0f74496	cbf29ce484222325	9964d7fce0f74496	UPDATE t SET a = (SELECT id FROM u)
+ok	9964d7fce0f74496	cbf29ce484222325	9964d7fce0f74496	UPDATE t SET a = (SELECT id FROM u)
 #
 # [AG01] Aggregates in a subquery. V07's done-condition asked for
 # Unsupported with a position on these and they used to give a bare syntax
@@ -659,14 +659,44 @@ ok	eb8b616452e2f285	b5d410774c7ffc00	eb8b616452e2f285	UPDATE t SET a = (5)
 InvalidArgument	cc8f6a935f77b8a8	cbf29ce484222325	cc8f6a935f77b8a8	UPDATE t SET a = a + ?
 ok	cc8f6a935f77b8a8	064a8a899bed480c	cc8f6a935f77b8a8	UPDATE t SET a = a + 1.5
 ok	aa83919ff0528ad9	78f78d99c4196c83	aa83919ff0528ad9	UPDATE t SET a = a + 1 WHERE id = 7
-NotImplemented	7b3adf6c34d61c58	cbf29ce484222325	7b3adf6c34d61c58	UPDATE t SET a = abs(a)
-NotImplemented	cc7e6c935f6948db	b5d414774c8002cc	cc7e6c935f6948db	UPDATE t SET a = a = 1
-NotImplemented	232684ff8e5fbf44	b5d414774c8002cc	232684ff8e5fbf44	UPDATE t SET a = CASE WHEN a THEN 1 END
-NotImplemented	cf4cc03d7b43c48f	78f79399c41976b5	cf4cc03d7b43c48f	UPDATE t SET a = 1 + (SELECT 1)
-NotImplemented	d6ae465b2d115910	cbf29ce484222325	d6ae465b2d115910	UPDATE t SET a = NOT a
+ok	7b3adf6c34d61c58	cbf29ce484222325	7b3adf6c34d61c58	UPDATE t SET a = abs(a)
+ok	cc7e6c935f6948db	b5d414774c8002cc	cc7e6c935f6948db	UPDATE t SET a = a = 1
+ok	232684ff8e5fbf44	b5d414774c8002cc	232684ff8e5fbf44	UPDATE t SET a = CASE WHEN a THEN 1 END
+InvalidArgument	cf4cc03d7b43c48f	78f79399c41976b5	cf4cc03d7b43c48f	UPDATE t SET a = 1 + (SELECT 1)
+ok	d6ae465b2d115910	cbf29ce484222325	d6ae465b2d115910	UPDATE t SET a = NOT a
 NotImplemented	5a191fcd278cd65c	cbf29ce484222325	5a191fcd278cd65c	UPDATE t SET a = t.b
 InvalidArgument	27a4d0bdd66f80ba	cbf29ce484222325	27a4d0bdd66f80ba	UPDATE t SET a = a +
 InvalidArgument	f0a52d1c0a2827ec	b5d414774c8002cc	f0a52d1c0a2827ec	UPDATE t SET a = (a + 1
 ok	27a4c5bdd66f6e09	127b6008f08bb8c8	27a4c5bdd66f6e09	UPDATE t SET a = a -9223372036854775808
 ok	b436ec9aacafc194	407acb6038867d5b	8fdb51b8d22bc903	SELECT * FROM t WHERE x BETWEEN -5 AND -1
 ok	3921e0e6c3c75cb1	184a17bf548487ba	c10ff9655be614ee	SELECT * FROM t WHERE x = -7
+ok	b0ed8673aecce4e6	78f79099c419719c	b0ed8673aecce4e6	UPDATE t SET f = a > 1 AND b <= 2 OR NOT c
+ok	58efa3a4107f9e76	cbf29ce484222325	58efa3a4107f9e76	UPDATE t SET a = b IS NULL
+ok	bc594446bea241fa	cbf29ce484222325	bc594446bea241fa	UPDATE t SET f = b IS NOT NULL
+ok	3959361f7dfff8fa	8853bfe0d5c452d5	3959361f7dfff8fa	UPDATE t SET a = CASE WHEN a > 1 THEN 1 ELSE 2 END
+ok	72da07b5242158bf	0149226cd1213137	72da07b5242158bf	UPDATE t SET a = CASE a WHEN 1 THEN 10 WHEN 2 THEN 20 END
+ok	73fba3b22549e528	b5d415774c80047f	73fba3b22549e528	UPDATE t SET a = COALESCE(a, b, 0)
+ok	95a03c5ae5711333	b5d415774c80047f	95a03c5ae5711333	UPDATE t SET a = NULLIF(a, 0)
+ok	f3c1caf59ac3bb05	78f79099c419719c	f3c1caf59ac3bb05	UPDATE t SET a = GREATEST(a, 1) + LEAST(b, 2)
+ok	8e6dae70e0af36ff	cbf29ce484222325	8e6dae70e0af36ff	UPDATE t SET a = CAST(b AS int64)
+ok	5cc1f0379c4febe8	b5d414774c8002cc	5cc1f0379c4febe8	UPDATE t SET a = b::int64 + 1
+ok	677f07108e787eba	6a2931eff68a850b	677f07108e787eba	UPDATE t SET d = CAST(a AS decimal(10, 2))
+ok	e303f42acec25835	cbf29ce484222325	e303f42acec25835	UPDATE t SET (a, b) = (b, a)
+ok	dd7f9356b96771da	90e95572007153ff	dd7f9356b96771da	UPDATE t SET (a, b) = (a + 1, b * 2) WHERE id = 3
+NotImplemented	25def67b4ead9c9e	78f79099c419719c	25def67b4ead9c9e	UPDATE t SET a = a IN (1, 2)
+NotImplemented	2bf96be6c0264082	78f79099c419719c	2bf96be6c0264082	UPDATE t SET a = a BETWEEN 1 AND 2
+NotImplemented	5d48bca78de857b1	cbf29ce484222325	5d48bca78de857b1	UPDATE t SET a = a IS TRUE
+InvalidArgument	45f85ef79e9c279e	cbf29ce484222325	45f85ef79e9c279e	UPDATE t SET a = a < b < c
+InvalidArgument	760a1b5e5eb5171a	b5d414774c8002cc	760a1b5e5eb5171a	UPDATE t SET (a, b) = (1)
+InvalidArgument	b6321892d5f456d4	78f79099c419719c	b6321892d5f456d4	UPDATE t SET (a) = (1, 2)
+ok	b8f0f5dedd381438	cbf29ce484222325	b8f0f5dedd381438	UPDATE t SET a = abs(b) + sign(c)
+ok	15393d6e4b12892e	92551aeebeb7e06e	15393d6e4b12892e	UPDATE t SET d = round(a / 3, 2)
+ok	0ce7476d764897bb	0b2d6aff2942c66a	0ce7476d764897bb	UPDATE t SET s = upper(trim(s)) || lpad(s, 8, '0')
+ok	a97604e8a21657be	84710b9045511414	a97604e8a21657be	UPDATE t SET a = length(s) + position('x' IN s)
+ok	7fb2f471f73dcbb6	b5d412774c7fff66	7fb2f471f73dcbb6	UPDATE t SET dt = dt + 7
+ok	0ecbabcd2bdf2a2a	cbf29ce484222325	0ecbabcd2bdf2a2a	UPDATE t SET ts = now()
+ok	a27ac03666838837	b5d416774c800632	a27ac03666838837	UPDATE t SET a = mod(b, 3)
+InvalidArgument	79d41c37107c3d4e	84710b9045511414	79d41c37107c3d4e	UPDATE t SET a = position('x', s)
+ok	f8a690980db518c8	cbf29ce484222325	f8a690980db518c8	UPDATE t SET a = a + (SELECT SUM(a) FROM t)
+ok	f0cb38943f1b9114	78f79099c419719c	f0cb38943f1b9114	UPDATE t SET a = (SELECT MAX(x) FROM u WHERE y > 1) * 2
+NotImplemented	48790938db579aec	cbf29ce484222325	48790938db579aec	UPDATE t SET (a, b) = (SELECT x, y FROM u)

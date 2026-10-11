@@ -422,14 +422,16 @@ StatusOr<AssertionColumns> ResolveAssertionColumns(const catalog::TableAccess& a
 }  // namespace
 
 // The relation, or §3.1's refusal with the byte the parser recorded. Under
-// `view` when one is given: the dispatcher resolves the target under the
-// session's view, so a relation another session's open transaction created
-// is no relation to this one, and what it fenced is what the build reads.
+// `view` when one is given: the dispatcher resolves the target under a
+// settled view, so a relation an open transaction created is no relation
+// yet, and what it fenced is what the build reads.
 StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
                                           const parser::AssertionStmt& stmt,
                                           const txn::ReadView* view) {
     auto oid = catalog.FindTableOidByName(stmt.table_name, view);
     if (!oid.ok()) {
+        // Only an absent name is §3.1's refusal; a read that failed is itself.
+        if (oid.status().code() != StatusCode::kNotFound) return oid.status();
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
                                 std::to_string(stmt.table_byte_offset) + ")");
     }
@@ -548,8 +550,7 @@ StatusOr<AssertionCabinBuild> BuildAssertionCabin(catalog::Catalog& catalog,
     live.sum_col_name = stmt.sum_column.name;
     for (std::size_t i = 0; i < live.group_cols.size(); ++i) {
         live.group_col_names.push_back(stmt.group_columns[i].name);
-        live.group_type_vals.push_back(
-            access.value()->schema.columns[live.group_cols[i]].type_val);
+        live.group_columns.push_back(access.value()->schema.columns[live.group_cols[i]]);
     }
     live.chain = build.value().chain;
     live.cabin = std::move(build.value().cabin);
@@ -708,7 +709,7 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
     live.sum_col_name = stmt_value.sum_column.name;
     for (std::size_t i = 0; i < group_cols.size(); ++i) {
         live.group_col_names.push_back(stmt_value.group_columns[i].name);
-        live.group_type_vals.push_back(access.value()->schema.columns[group_cols[i]].type_val);
+        live.group_columns.push_back(access.value()->schema.columns[group_cols[i]]);
     }
 
     // The writer takes over the chain the entries are already on; a fresh one

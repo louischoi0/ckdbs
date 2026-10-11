@@ -558,11 +558,14 @@ TEST_F(FixedLengthTupleTest, TheNewTypesStoreAndReadBackAsWritten) {
 }
 
 TEST_F(FixedLengthTupleTest, AStoredValueSurvivesAnUpdateOfAnotherColumn) {
-    // The round trip that matters most in practice: an UPDATE re-encodes
-    // every column its SET list did not touch, from the *decoded* form. So
-    // encode has to accept what decode produces - an epoch integer for a
-    // date, a (unscaled, scale) pair for a decimal - or an untouched column
-    // silently changes when a neighbour is written.
+    // An untouched column must not move when a neighbour is written. Since
+    // BK-R3 (`workorder-bk-opt-read-update-path.md`) an UPDATE carries every
+    // cell its SET list does not assign, so the first UPDATE pins the carry;
+    // the decode-then-encode round trip
+    // this cell was written for is reached now only by an expression that
+    // reads the column it assigns (`SET d = d`), the second. Encode has to
+    // accept what decode produces - an epoch integer for a date, a
+    // (unscaled, scale) pair for a decimal.
     ASSERT_EQ(Run("CREATE TABLE ty4 (id int64, d date, p decimal(8, 3), n int64)").substr(0, 7),
               "CREATED");
     ASSERT_EQ(Run("INSERT INTO ty4 VALUES ('2026-08-07', '1.500', 1)").substr(0, 8), "INSERTED");
@@ -570,6 +573,8 @@ TEST_F(FixedLengthTupleTest, AStoredValueSurvivesAnUpdateOfAnotherColumn) {
     const std::string before = Run("SELECT d, p FROM ty4");
     ASSERT_EQ(Run("UPDATE ty4 SET n = 2 WHERE id = 1").substr(0, 7), "UPDATED");
     EXPECT_EQ(Run("SELECT d, p FROM ty4"), before) << "an untouched column moved";
+    ASSERT_EQ(Run("UPDATE ty4 SET d = d, p = p WHERE id = 1").substr(0, 7), "UPDATED");
+    EXPECT_EQ(Run("SELECT d, p FROM ty4"), before) << "a column re-encoded from its decode moved";
 }
 
 TEST_F(FixedLengthTupleTest, AMalformedLiteralIsRefusedAtTheGate) {

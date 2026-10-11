@@ -1,0 +1,90 @@
+
+### int n=200 runs=7
+errors total 0 show_assertions sample: assertions=1 | assertion_id=1 name=cap rel=ev_a enforcing=1 checks=0 violations=0 reserved=0 aborted=0 def=CREATE ASSERTI
+insert-assert-existing   p50 A=   51.5 B=   52.0 dB-A= +0.00 [ -0.35, +0.85] pos=3/7 | mean dB-A= +0.30 [ +0.10, +1.70] | blockp50 med=+0.19 [-0.26,+1.49] | engine us/op d=+0.72
+insert-assert-newgroup   p50 A=   52.3 B=   52.6 dB-A= +0.10 [ -0.30, +0.70] pos=4/7 | mean dB-A= +0.50 [ -0.55, +1.20] | blockp50 med=+0.21 [-0.33,+1.20] | engine us/op d=+0.09
+insert-none-existing     p50 A=   48.9 B=   49.0 dB-A= +0.20 [ -0.10, +0.20] pos=4/7 | mean dB-A= +0.10 [ -0.55, +0.25] | blockp50 med=+0.12 [-0.08,+0.33] | engine us/op d=-0.14
+insert-none-newgroup     p50 A=   48.8 B=   49.0 dB-A= +0.20 [ -0.15, +0.35] pos=4/7 | mean dB-A= -0.30 [ -0.70, +0.10] | blockp50 med=+0.16 [-0.13,+0.53] | engine us/op d=-0.26
+insert-none-again        p50 A=   48.9 B=   49.0 dB-A= +0.20 [ +0.05, +0.40] pos=5/7 | mean dB-A= -0.10 [ -0.25, +0.30] | blockp50 med=+0.18 [-0.12,+0.45] | engine us/op d=-0.16
+update-assert            p50 A=   52.2 B=   53.1 dB-A= +0.50 [ -0.00, +1.00] pos=5/7 | mean dB-A= -3.60 [ -4.35, +5.25] | blockp50 med=+0.51 [-0.21,+1.04] | engine us/op d=+0.44
+update-none              p50 A=   51.5 B=   51.7 dB-A= +0.20 [ -0.25, +0.55] pos=4/7 | mean dB-A= +0.70 [ -0.15, +1.05] | blockp50 med=+0.03 [-0.38,+0.56] | engine us/op d=+0.18
+update-none-again        p50 A=   51.4 B=   51.7 dB-A= -0.20 [ -0.45, +0.45] pos=3/7 | mean dB-A= -0.30 [ -0.35, +0.10] | blockp50 med=+0.04 [-0.48,+0.57] | engine us/op d=+0.16
+delete-assert            p50 A=   50.8 B=   50.9 dB-A= -0.40 [ -0.55, +0.35] pos=3/7 | mean dB-A= +0.00 [ -0.95, +0.85] | blockp50 med=-0.04 [-0.61,+0.60] | engine us/op d=-0.01
+delete-none              p50 A=   48.6 B=   48.6 dB-A= +0.00 [ -0.25, +0.05] pos=2/7 | mean dB-A= -0.60 [ -1.45, -0.45] | blockp50 med=-0.01 [-0.28,+0.16] | engine us/op d=-0.05
+select                   p50 A=   63.1 B=   63.0 dB-A= -0.30 [ -0.60, +0.05] pos=2/7 | mean dB-A=-23.50 [-34.90,-14.95] | blockp50 med=-0.20 [-0.57,+0.31] | engine us/op d=-0.06
+ping                     p50 A=   50.0 B=   50.4 dB-A= +0.40 [ +0.00, +0.50] pos=4/7 | mean dB-A= +0.30 [ +0.15, +0.50] | blockp50 med=+0.27 [-0.09,+0.52] | engine us/op d=+0.14
+
+### int n=1000 runs=7
+errors total 0 show_assertions sample: assertions=1 | assertion_id=1 name=cap rel=ev_a enforcing=1 checks=0 violations=0 reserved=0 aborted=0 def=CREATE ASSERTI
+insert-assert-existing   p50 A=   51.8 B=   52.1 dB-A= +0.10 [ -0.25, +0.40] pos=4/7 | mean dB-A= -1.30 [ -1.80, -0.80] | blockp50 med=-0.00 [-0.24,+0.42] | engine us/op d=+0.06
+insert-assert-newgroup   p50 A=   52.4 B=   52.6 dB-A= +0.30 [ -0.30, +0.35] pos=4/7 | mean dB-A= -0.70 [ -0.90, -0.45] | blockp50 med=+0.07 [-0.28,+0.47] | engine us/op d=+0.10
+insert-none-existing     p50 A=   49.0 B=   49.0 dB-A= +0.00 [ -0.15, +0.15] pos=3/7 | mean dB-A= -0.20 [ -0.30, +0.05] | blockp50 med=-0.05 [-0.26,+0.13] | engine us/op d=+0.10
+insert-none-newgroup     p50 A=   49.1 B=   49.0 dB-A= +0.00 [ -0.20, +0.10] pos=3/7 | mean dB-A= -0.10 [ -3.10, +0.40] | blockp50 med=-0.02 [-0.24,+0.14] | engine us/op d=+0.01
+insert-none-again        p50 A=   49.0 B=   49.0 dB-A= -0.10 [ -0.15, +0.05] pos=2/7 | mean dB-A= +0.00 [ -0.50, +0.95] | blockp50 med=-0.02 [-0.22,+0.15] | engine us/op d=-0.05
+update-assert            p50 A=   52.1 B=   53.1 dB-A= +0.60 [ +0.50, +0.80] pos=6/7 | mean dB-A= -3.40 [ -4.30, +3.25] | blockp50 med=+0.54 [+0.30,+1.09] | engine us/op d=+0.44
+update-none              p50 A=   51.2 B=   51.5 dB-A= +0.20 [ -0.05, +0.25] pos=4/7 | mean dB-A= -1.00 [ -1.65, -0.30] | blockp50 med=+0.11 [-0.16,+0.39] | engine us/op d=+0.13
+update-none-again        p50 A=   51.2 B=   51.3 dB-A= +0.20 [ -0.10, +0.35] pos=4/7 | mean dB-A= +0.00 [ -0.25, +0.25] | blockp50 med=+0.11 [-0.14,+0.46] | engine us/op d=+0.27
+delete-assert            p50 A=   51.0 B=   51.1 dB-A= +0.50 [ +0.00, +0.70] pos=5/7 | mean dB-A= +0.70 [ +0.05, +1.10] | blockp50 med=+0.44 [-0.10,+0.75] | engine us/op d=+0.42
+delete-none              p50 A=   48.7 B=   48.7 dB-A= +0.00 [ -0.10, +0.10] pos=3/7 | mean dB-A=+45.60 [-11.15,+72.70] | blockp50 med=+0.06 [-0.19,+0.29] | engine us/op d=-0.01
+select                   p50 A=   63.6 B=   63.9 dB-A= +0.40 [ +0.25, +1.20] pos=6/7 | mean dB-A= +5.10 [ +2.55, +9.40] | blockp50 med=+0.27 [-0.21,+1.13] | engine us/op d=+0.37
+ping                     p50 A=   50.2 B=   50.2 dB-A= +0.00 [ -0.15, +0.15] pos=3/7 | mean dB-A= -0.10 [ -0.35, +0.25] | blockp50 med=-0.06 [-0.29,+0.19] | engine us/op d=-0.01
+
+### int n=10000 runs=7
+errors total 0 show_assertions sample: assertions=1 | assertion_id=1 name=cap rel=ev_a enforcing=1 checks=0 violations=0 reserved=0 aborted=0 def=CREATE ASSERTI
+insert-assert-existing   p50 A=   52.9 B=   52.9 dB-A= +0.30 [ -0.20, +0.35] pos=4/7 | mean dB-A= +0.20 [ -0.45, +1.30] | blockp50 med=+0.24 [-0.25,+0.87] | engine us/op d=+0.16
+insert-assert-newgroup   p50 A=   52.6 B=   52.8 dB-A= +0.50 [ +0.05, +1.30] pos=5/7 | mean dB-A= +0.80 [ +0.25, +2.15] | blockp50 med=+0.40 [-0.24,+1.31] | engine us/op d=+0.11
+insert-none-existing     p50 A=   49.1 B=   49.0 dB-A= +0.10 [ -0.20, +0.25] pos=4/7 | mean dB-A= +0.00 [ -1.30, +0.55] | blockp50 med=-0.04 [-0.30,+0.40] | engine us/op d=+0.10
+insert-none-newgroup     p50 A=   49.0 B=   48.9 dB-A= -0.10 [ -0.25, +0.15] pos=3/7 | mean dB-A= +6.70 [ -3.60, +7.35] | blockp50 med=-0.05 [-0.35,+0.25] | engine us/op d=-0.00
+insert-none-again        p50 A=   48.9 B=   49.0 dB-A= +0.10 [ -0.10, +0.20] pos=4/7 | mean dB-A=-31.20 [-31.40, -0.85] | blockp50 med=+0.02 [-0.25,+0.33] | engine us/op d=+0.17
+update-assert            p50 A=   56.0 B=   56.1 dB-A= -0.40 [ -0.65, +0.15] pos=2/7 | mean dB-A=-18.90 [-24.15, -2.90] | blockp50 med=-0.18 [-0.67,+0.36] | engine us/op d=+0.18
+update-none              p50 A=   51.7 B=   51.6 dB-A= -0.10 [ -0.40, +0.75] pos=2/7 | mean dB-A= +1.60 [ +0.25, +2.25] | blockp50 med=-0.21 [-0.73,+0.28] | engine us/op d=-0.02
+update-none-again        p50 A=   51.7 B=   51.4 dB-A= -0.20 [ -0.45, +0.70] pos=2/7 | mean dB-A= +0.20 [ -0.05, +1.15] | blockp50 med=-0.18 [-0.61,+0.37] | engine us/op d=-0.03
+delete-assert            p50 A=   51.5 B=   51.3 dB-A= -0.30 [ -0.45, +0.70] pos=2/7 | mean dB-A= +5.30 [ -3.95, +5.65] | blockp50 med=-0.27 [-0.52,+0.25] | engine us/op d=-0.29
+delete-none              p50 A=   48.7 B=   48.9 dB-A= +0.20 [ -0.05, +0.20] pos=4/7 | mean dB-A= -0.10 [ -0.65, +0.25] | blockp50 med=+0.05 [-0.23,+0.38] | engine us/op d=+0.14
+select                   p50 A=   63.1 B=   63.0 dB-A= -0.10 [ -0.75, +0.15] pos=2/7 | mean dB-A= -0.30 [ -0.90, -0.05] | blockp50 med=-0.30 [-0.85,+0.39] | engine us/op d=-0.35
+ping                     p50 A=   50.1 B=   50.2 dB-A= +0.10 [ -0.10, +0.20] pos=4/7 | mean dB-A= -0.10 [ -0.50, +0.35] | blockp50 med=+0.11 [-0.09,+0.25] | engine us/op d=+0.04
+
+### date n=200 runs=7
+errors total 0 show_assertions sample: assertions=1 | assertion_id=1 name=cap rel=ev_a enforcing=1 checks=0 violations=0 reserved=0 aborted=0 def=CREATE ASSERTI
+insert-assert-existing   p50 A=   52.7 B=   52.7 dB-A= -0.30 [ -0.55, +0.55] pos=3/7 | mean dB-A= +1.40 [ +0.00,+26.50] | blockp50 med=-0.27 [-0.59,+0.40] | engine us/op d=+0.03
+insert-assert-newgroup   p50 A=   53.4 B=   53.6 dB-A= +0.00 [ -0.40, +0.50] pos=3/7 | mean dB-A= -0.10 [ -0.80, +0.50] | blockp50 med=-0.15 [-0.67,+0.57] | engine us/op d=-0.02
+insert-none-existing     p50 A=   49.7 B=   49.8 dB-A= -0.20 [ -0.40, +0.20] pos=2/7 | mean dB-A= -0.80 [ -2.75, -0.30] | blockp50 med=-0.07 [-0.35,+0.37] | engine us/op d=+0.04
+insert-none-newgroup     p50 A=   49.8 B=   49.7 dB-A= -0.10 [ -0.10, +0.40] pos=3/7 | mean dB-A= -0.30 [ -0.75, +0.40] | blockp50 med=+0.09 [-0.27,+0.42] | engine us/op d=-0.01
+insert-none-again        p50 A=   49.8 B=   49.8 dB-A= +0.00 [ -0.20, +0.35] pos=3/7 | mean dB-A= -0.40 [ -0.75, +0.80] | blockp50 med=+0.04 [-0.21,+0.43] | engine us/op d=+0.07
+update-assert            p50 A=   57.2 B=   53.6 dB-A= -3.80 [ -4.35, -3.60] pos=0/7 | mean dB-A= -3.00 [-10.15, +1.85] | blockp50 med=-3.62 [-4.11,-3.16] | engine us/op d=-3.30
+update-none              p50 A=   52.6 B=   52.2 dB-A= -0.50 [ -0.80, -0.15] pos=2/7 | mean dB-A= +0.20 [ -0.55, +0.80] | blockp50 med=-0.36 [-0.74,+0.16] | engine us/op d=-0.10
+update-none-again        p50 A=   52.7 B=   52.4 dB-A= -0.40 [ -0.75, -0.15] pos=2/7 | mean dB-A= +0.10 [ -0.30, +0.80] | blockp50 med=-0.35 [-0.66,+0.22] | engine us/op d=-0.00
+delete-assert            p50 A=   51.5 B=   50.9 dB-A= +0.00 [ -0.70, +0.25] pos=3/7 | mean dB-A= -2.00 [ -3.65, -0.70] | blockp50 med=-0.20 [-0.76,+0.44] | engine us/op d=+0.11
+delete-none              p50 A=   48.9 B=   48.8 dB-A= -0.20 [ -0.30, +0.15] pos=3/7 | mean dB-A=-43.60 [-46.55,-40.25] | blockp50 med=-0.07 [-0.36,+0.21] | engine us/op d=-0.09
+select                   p50 A=   64.8 B=   64.7 dB-A= -0.20 [ -0.80, +0.10] pos=2/7 | mean dB-A= -4.80 [ -5.30, -0.30] | blockp50 med=-0.33 [-0.75,+0.36] | engine us/op d=-0.42
+ping                     p50 A=   50.3 B=   50.6 dB-A= +0.40 [ +0.05, +0.40] pos=5/7 | mean dB-A= +0.50 [ -1.30, +0.90] | blockp50 med=+0.33 [-0.03,+0.50] | engine us/op d=+0.20
+
+### date n=1000 runs=7
+errors total 0 show_assertions sample: assertions=1 | assertion_id=1 name=cap rel=ev_a enforcing=1 checks=0 violations=0 reserved=0 aborted=0 def=CREATE ASSERTI
+insert-assert-existing   p50 A=   53.1 B=   52.4 dB-A= -0.40 [ -1.10, +0.00] pos=2/7 | mean dB-A= -1.40 [ -1.80, -0.55] | blockp50 med=-0.57 [-1.05,+0.21] | engine us/op d=-0.54
+insert-assert-newgroup   p50 A=   53.6 B=   53.1 dB-A= -0.50 [ -0.90, +0.20] pos=2/7 | mean dB-A= -0.80 [ -1.50, -0.65] | blockp50 med=-0.36 [-0.92,+0.28] | engine us/op d=-0.33
+insert-none-existing     p50 A=   49.5 B=   49.5 dB-A= +0.10 [ -0.10, +0.10] pos=4/7 | mean dB-A= +0.00 [ -0.65, +0.15] | blockp50 med=+0.04 [-0.16,+0.27] | engine us/op d=-0.04
+insert-none-newgroup     p50 A=   49.7 B=   49.7 dB-A= +0.00 [ -0.10, +0.05] pos=2/7 | mean dB-A= +0.20 [ +0.00, +0.65] | blockp50 med=+0.02 [-0.22,+0.18] | engine us/op d=+0.03
+insert-none-again        p50 A=   49.6 B=   49.7 dB-A= +0.20 [ -0.15, +0.25] pos=4/7 | mean dB-A= -0.20 [ -1.50, +0.55] | blockp50 med=+0.11 [-0.20,+0.37] | engine us/op d=-0.19
+update-assert            p50 A=   57.3 B=   53.5 dB-A= -3.90 [ -4.15, -3.35] pos=0/7 | mean dB-A= -9.00 [-10.40, -2.40] | blockp50 med=-3.93 [-4.53,-3.12] | engine us/op d=-3.03
+update-none              p50 A=   52.2 B=   51.9 dB-A= -0.20 [ -0.65, +0.15] pos=3/7 | mean dB-A= -0.70 [ -0.85, -0.60] | blockp50 med=-0.18 [-0.73,+0.22] | engine us/op d=-0.14
+update-none-again        p50 A=   52.1 B=   52.0 dB-A= -0.20 [ -0.65, +0.25] pos=3/7 | mean dB-A= -0.40 [ -0.90, +0.95] | blockp50 med=-0.28 [-0.69,+0.29] | engine us/op d=-0.12
+delete-assert            p50 A=   51.3 B=   51.3 dB-A= +0.20 [ -0.20, +0.45] pos=5/7 | mean dB-A=+13.20 [-15.55,+16.00] | blockp50 med=+0.13 [-0.51,+0.59] | engine us/op d=+0.11
+delete-none              p50 A=   48.7 B=   48.8 dB-A= +0.10 [ +0.00, +0.15] pos=4/7 | mean dB-A= +1.40 [ +1.30, +2.05] | blockp50 med=+0.06 [-0.14,+0.29] | engine us/op d=-0.06
+select                   p50 A=   65.4 B=   65.2 dB-A= -0.70 [ -0.70, +0.00] pos=2/7 | mean dB-A=+19.10 [-12.85,+35.80] | blockp50 med=-0.34 [-1.07,+0.04] | engine us/op d=-0.39
+ping                     p50 A=   50.1 B=   50.2 dB-A= +0.30 [ +0.05, +0.50] pos=5/7 | mean dB-A= +0.20 [ +0.00, +0.40] | blockp50 med=+0.31 [-0.01,+0.62] | engine us/op d=+0.00
+
+### date n=10000 runs=7
+errors total 0 show_assertions sample: assertions=1 | assertion_id=1 name=cap rel=ev_a enforcing=1 checks=0 violations=0 reserved=0 aborted=0 def=CREATE ASSERTI
+insert-assert-existing   p50 A=   53.7 B=   53.0 dB-A= -0.30 [ -0.70, -0.20] pos=0/7 | mean dB-A= -0.20 [ -0.65, +0.10] | blockp50 med=-0.43 [-0.85,-0.12] | engine us/op d=-0.13
+insert-assert-newgroup   p50 A=   53.8 B=   53.1 dB-A= -0.40 [ -0.70, -0.20] pos=1/7 | mean dB-A= -0.40 [ -0.45, -0.10] | blockp50 med=-0.48 [-0.96,-0.05] | engine us/op d=-0.45
+insert-none-existing     p50 A=   49.7 B=   49.7 dB-A= +0.00 [ -0.10, +0.05] pos=2/7 | mean dB-A= -0.40 [ -7.75, +6.65] | blockp50 med=+0.02 [-0.19,+0.24] | engine us/op d=-0.11
+insert-none-newgroup     p50 A=   49.7 B=   49.6 dB-A= +0.00 [ -0.15, +0.10] pos=3/7 | mean dB-A= -0.60 [ -0.70, -0.20] | blockp50 med=-0.02 [-0.23,+0.24] | engine us/op d=+0.03
+insert-none-again        p50 A=   49.7 B=   49.6 dB-A= -0.20 [ -0.30, +0.10] pos=2/7 | mean dB-A= -1.60 [ -2.45, -1.15] | blockp50 med=-0.07 [-0.36,+0.16] | engine us/op d=-0.06
+update-assert            p50 A=   57.7 B=   56.9 dB-A= -0.80 [ -1.25, -0.55] pos=0/7 | mean dB-A=-56.10 [-67.50,-15.00] | blockp50 med=-0.79 [-1.46,-0.44] | engine us/op d=-0.75
+update-none              p50 A=   52.5 B=   51.9 dB-A= -0.70 [ -1.15, -0.25] pos=0/7 | mean dB-A= -0.10 [ -0.95, +0.10] | blockp50 med=-0.70 [-1.22,-0.27] | engine us/op d=-0.51
+update-none-again        p50 A=   52.6 B=   51.8 dB-A= -0.70 [ -1.05, -0.30] pos=0/7 | mean dB-A= -5.60 [ -5.85, +4.30] | blockp50 med=-0.76 [-1.18,-0.28] | engine us/op d=-0.49
+delete-assert            p50 A=   51.6 B=   51.4 dB-A= -0.50 [ -0.70, +0.00] pos=0/7 | mean dB-A= +0.10 [ -1.05, +0.40] | blockp50 med=-0.36 [-0.82,+0.04] | engine us/op d=-0.29
+delete-none              p50 A=   48.8 B=   48.7 dB-A= -0.10 [ -0.20, +0.05] pos=2/7 | mean dB-A= -0.70 [ -0.90, -0.40] | blockp50 med=-0.08 [-0.24,+0.14] | engine us/op d=-0.08
+select                   p50 A=   64.2 B=   64.2 dB-A= +0.10 [ -0.10, +0.55] pos=4/7 | mean dB-A= +0.00 [ -0.15, +0.35] | blockp50 med=+0.10 [-0.33,+0.83] | engine us/op d=+0.22
+ping                     p50 A=   49.9 B=   50.0 dB-A= -0.10 [ -0.25, +0.20] pos=3/7 | mean dB-A= +0.00 [ -0.25, +0.40] | blockp50 med=-0.06 [-0.27,+0.23] | engine us/op d=+0.01

@@ -5,6 +5,7 @@
 
 #include "kds/txn/lock_table.hpp"
 
+#include "kds/sched/checkpoint_census.hpp"
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 
@@ -1755,6 +1756,40 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                << " sched_" << kGroupNames[i]
                << "_consumed_us=" << scheduler_view_->consumed_ns(group) / 1000;
         }
+        // BI-S1: how long one iteration held this reactor, apart for the
+        // iterations a checkpoint run of this core overlapped.
+        const auto print_holds = [&os](const char* where, const sched::Scheduler::IterationHolds& h) {
+            os << " sched_hold_" << where << "_longest_us=" << h.longest_ns / 1000
+               << " sched_hold_" << where << "_over_10ms=" << h.over_10ms
+               << " sched_hold_" << where << "_over_100ms=" << h.over_100ms
+               << " sched_hold_" << where << "_over_1s=" << h.over_1s;
+        };
+        print_holds("in_run", scheduler_view_->holds_inside_run());
+        print_holds("out_run", scheduler_view_->holds_outside_run());
+    }
+
+    // BI-S1's run record for this core (`sched/checkpoint_census.hpp`): the
+    // runs it took and its last run whole, per phase.
+    {
+        const CheckpointCensus::Slot& ckpt = CheckpointCensus::Of(core_id_);
+        const auto load = [](const std::atomic<std::uint64_t>& v) {
+            return v.load(std::memory_order_relaxed);
+        };
+        os << " checkpoint_runs=" << load(ckpt.run_edges) / 2
+           << " checkpoint_start_refused=" << load(ckpt.start_refused)
+           << " checkpoint_last_completed=" << (ckpt.last_completed.load(std::memory_order_relaxed) ? 1 : 0)
+           << " checkpoint_last_wall_us=" << load(ckpt.last_wall_ns) / 1000
+           << " checkpoint_last_step_max_us=" << load(ckpt.last_step_max_ns) / 1000
+           << " checkpoint_last_step_page_write_max_us="
+           << load(ckpt.last_step_page_write_max_ns) / 1000
+           << " checkpoint_last_steps=" << load(ckpt.last_steps)
+           << " checkpoint_last_pages=" << load(ckpt.last_pages)
+           << " checkpoint_last_dirty_at_start=" << load(ckpt.last_dirty_at_start);
+        for (std::size_t i = 0; i < kCheckpointPhaseCount; ++i) {
+            os << " checkpoint_last_" << kCheckpointPhaseNames[i]
+               << "_sum_us=" << load(ckpt.last_sum_ns[i]) / 1000 << " checkpoint_last_"
+               << kCheckpointPhaseNames[i] << "_max_us=" << load(ckpt.last_max_ns[i]) / 1000;
+        }
     }
 
     // The last recovery, for the operator who has to answer "what did the
@@ -3089,18 +3124,20 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // and is rolled back when the statement ends, so the relation is
     // released there and a failed `CREATE ASSERTION` poisons nothing - a
     // transaction rather than a minted id because a waiter names its holder.
-    // **The session's own transaction is tested first**, by what it holds
-    // rather than by who the table reports (the review's C7): with it and
-    // another writer both holding the relation, the table may name the
-    // other, and waiting for it would end in the same refusal. Resolved
-    // under the session's view, as `HandleIndex` resolves, **and a name the
-    // view does not resolve is refused here**, once: the oid it names is the
-    // one locked and the one built. `ViewFor` is empty when this core has no
-    // open DDL of its own, which would resolve a relation another core's open
-    // `CREATE TABLE` made, so a settled view stands in for it.
-    std::optional<txn::ReadView> view = ViewFor(session);
-    if (!view.has_value() && txn_ != nullptr) view = txn_->MintCheckView(txn::kNoTrxId);
-    auto target = exec::AssertionTargetOid(catalog_, stmt, view.has_value() ? &*view : nullptr);
+    // **Resolved under a settled view, and a name it does not resolve is
+    // refused here**, once: the oid it names is the one locked and the one
+    // built. Settled and not the session's, because the statement reads
+    // settled state - a relation an open transaction created, the session's
+    // own included, is not there yet - and because a repeatable-read view
+    // minted at `BEGIN` would keep naming a relation dropped and re-created
+    // since, so the re-check below would refuse every retry. A dispatcher
+    // with no manager reads everything, which is the pre-MVCC engine and what
+    // every socket-free test runs on.
+    const auto settled_view = [this] {
+        return txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
+    };
+    const txn::ReadView view = settled_view();
+    auto target = exec::AssertionTargetOid(catalog_, stmt, &view);
     if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
 
     struct BuildLock {
@@ -3113,6 +3150,10 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
         }
     } build_lock;
     if (locks_ != nullptr && txn_ != nullptr) {
+        // **The session's own transaction is tested first**, by what it holds
+        // rather than by who the table reports (the review's C7): with it and
+        // another writer both holding the relation, the table may name the
+        // other, and waiting for it would end in the same refusal.
         const txn::Transaction* own = session.transaction();
         if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(target.value()))) {
             const Status mine = Status::TxnConflict(
@@ -3132,20 +3173,19 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
         }
     }
 
-    // The visibility the build's scan reads under: latest settled state,
-    // minted here exactly as a FK check's view is. A dispatcher with no
-    // manager reads everything, which is the pre-MVCC engine and what every
-    // socket-free test runs on.
-    txn::ReadView check_view = txn::ReadView::Everything();
-    if (txn_ != nullptr) check_view = txn_->MintCheckView(txn::kNoTrxId);
+    // The visibility the build's scan reads under: settled state, minted
+    // after the grant exactly as a FK check's view is.
+    const txn::ReadView check_view = settled_view();
 
     // **The lock was waited for under the view the name resolved by**, and a
     // drop-and-recreate that committed meanwhile leaves that name on another
     // relation. The grant is on the old one, so what is built must be too, or
     // nothing: the settled name is read again and must still be the locked oid.
+    // A name that is gone is the `NotFound` a retry would give.
     if (build_lock.txn != nullptr) {
         auto settled = exec::AssertionTargetOid(catalog_, stmt, &check_view);
-        if (!settled.ok() || settled.value() != target.value()) {
+        if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
+        if (settled.value() != target.value()) {
             const Status moved = Status::TxnConflict(
                 "relation '" + stmt.table_name +
                 "' changed while CREATE ASSERTION waited for it - retry");
@@ -3612,6 +3652,26 @@ std::vector<parser::AstValue> CommandDispatcher::InsertBodyOf(
     return {};
 }
 
+namespace {
+
+// The Keystone id an integer value names, or nothing when it names none: an
+// id is in [kFirstRowId, kMaxKeystoneId] (invariant 11), so a negative value,
+// zero (`-0` too), a value past 2^40 - 1, and a literal past int64 (a uint64
+// above INT64_MAX among them, whose `int_val` has wrapped - `2^64 + 5` must
+// not read as 5) are none. The one answer for a named pk (`OutOfRange`,
+// BD-R5) and a foreign-key value (an absent parent, `FK_VIOLATION`, not
+// looked up); each caller words its own refusal.
+std::optional<std::uint64_t> KeystoneIdOf(const parser::AstValue& value) {
+    if (parser::IntLiteralWrapped(value) ||
+        value.int_val < static_cast<std::int64_t>(catalog::kFirstRowId) ||
+        static_cast<std::uint64_t>(value.int_val) > kMaxKeystoneId) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint64_t>(value.int_val);
+}
+
+}  // namespace
+
 Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& child,
                                                     const std::vector<parser::AstValue>& body,
                                                     exec::FkParentVerdicts& into,
@@ -3621,8 +3681,11 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         const parser::AstValue& value = body[fk.column_no - 1];
         // The same bail `CheckForeignKeyOnWrite` takes, and it must be the
         // same one: a value that is not an id cannot reference one, and
-        // resolving it would put a nonsense pk in the held set.
-        if (value.type != parser::ValueType::kInt || value.int_val < 0) continue;
+        // resolving it would put a nonsense pk in the held set. An integer
+        // that is no id is that check's violation, with nothing to look up.
+        if (value.type != parser::ValueType::kInt) continue;
+        const std::optional<std::uint64_t> id = KeystoneIdOf(value);
+        if (!id.has_value()) continue;
 
         // ---- The one thing this pass does not hoist -------------------
         //
@@ -3641,7 +3704,7 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // the ordering above alone.
         if (fk.rel_oid == child.oid) continue;
 
-        const auto pk = static_cast<std::uint64_t>(value.int_val);
+        const std::uint64_t pk = *id;
         if (into.Find(fk.rel_oid, pk) != nullptr) continue;  // AH-R2's dedup
 
         auto parent = catalog_.InitTableAccess(fk.rel_oid);
@@ -3733,16 +3796,26 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     //     message about the column's declared type, which is the better
     //     error - a type mistake reported as a constraint violation sends
     //     the reader looking at the wrong table.
-    if (value.type != parser::ValueType::kInt || value.int_val < 0) return Status::OK();
+    // An integer is not a type mistake, and one that is no Keystone id -
+    // `-7`, `0`, past 2^40 - 1 - names no parent that can exist: the
+    // violation, with no lock taken and nothing descended. It used to pass
+    // here unchecked when negative, and the codec stored it.
+    if (value.type != parser::ValueType::kInt) return Status::OK();
 
-    const auto parent_pk = static_cast<std::uint64_t>(value.int_val);
+    const std::optional<std::uint64_t> id = KeystoneIdOf(value);
+    // 0 for no id: no `S` is ever held on pk 0, so the release below meets
+    // nothing of it.
+    const std::uint64_t parent_pk = id.value_or(0);
 
     // The held verdict, resolved by `ResolveForeignKeyParents` before any
     // row work (§2a). No descent happens here and none may be added: this
     // call site is inside an open `WriteScope`, which is the place AH-R1
     // exists to keep free of anything that could need to wait.
     exec::FkVerdict resolved{};
-    if (const exec::FkVerdict* found = held.Find(fk.rel_oid, parent_pk); found != nullptr) {
+    if (!id.has_value()) {
+        resolved = exec::FkVerdict::kViolation;
+    } else if (const exec::FkVerdict* found = held.Find(fk.rel_oid, parent_pk);
+               found != nullptr) {
         resolved = *found;
     } else if (fk.rel_oid == child.oid) {
         // The self-referencing arm, the one case the extraction pass
@@ -3840,9 +3913,13 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
                                      *verdict == exec::FkVerdict::kViolation;
                           });
     }
+    // The value as written - a literal's own digits, which a wrapped
+    // `int_val` is not - and its byte (a computed value carries its
+    // expression's).
     return Status::FkViolation("'" + column + "' references row id=" +
-                               std::to_string(value.int_val) + " of '" +
-                               RelationNameOf(fk.rel_oid) + "', which does not exist");
+                               exec::FormatValue(0, value) + " of '" +
+                               RelationNameOf(fk.rel_oid) + "', which does not exist (byte " +
+                               std::to_string(value.byte_offset) + ")");
 }
 
 Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent,
@@ -4755,12 +4832,13 @@ namespace {
 // boundary appeared. It is drawn once, here, for both.
 std::pair<std::uint32_t, std::uint32_t> AggregateOutputType(const exec::AggregateItem& item) {
     const bool wide = item.type_val == catalog::kTypeValDecimalWide;
-    // The precision is the type's maximum rather than the column's: a fold
-    // widens, so the column's precision would understate the answer's
-    // range. The scale is the half a client cannot read the value without.
+    // SUM and AVG: the precision is the type's maximum rather than the
+    // column's, because the fold widens and the column's precision would
+    // understate the answer's range. The scale is the column's.
     const auto decimal_mod = [&](bool as_wide) {
         return catalog::PackDecimalLen(
-            as_wide ? exec::kMaxDecimalPrecisionWide : exec::kMaxDecimalPrecision, item.scale);
+            as_wide ? exec::kMaxDecimalPrecisionWide : exec::kMaxDecimalPrecision,
+            catalog::DecimalScaleOf(item.decimal_len));
     };
     // **`func` is meaningless unless `is_aggregate`** (AG5): a grouping
     // column carried through to the output leaves the field at its default,
@@ -4784,8 +4862,11 @@ std::pair<std::uint32_t, std::uint32_t> AggregateOutputType(const exec::Aggregat
                 break;  // an extreme of a set is a member of it
         }
     }
-    // MIN/MAX, and a grouping column: the column's own type.
-    return {item.type_val, catalog::TypeModOf(item.type_val, decimal_mod(wide))};
+    // MIN/MAX, and a grouping column: the column's own type, its precision
+    // included - the answer is one of its values, so it fits, and a SET
+    // assigning it back to a column of that type needs the exact type
+    // (types.md §3.2b).
+    return {item.type_val, catalog::TypeModOf(item.type_val, item.decimal_len)};
 }
 
 std::vector<std::uint32_t> AggregateOutputTypes(const exec::AggregateSpec& spec) {
@@ -5616,35 +5697,20 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 "' needs an integer literal (byte " + std::to_string(key.byte_offset) + ")");
         }
         // **Exhausted** (BD-R5 2., `instructions/v3.0.0/workorder-bd-sorted-
-        // leaf-named-keys.md`): a key outside `[kFirstRowId, kMaxKeystoneId]`
-        // is one of the two reasons a named key is refused, `OutOfRange` with
-        // its byte - zero, a negative number, one above the 40-bit space, or
-        // a literal the lexer wrapped past 64 bits. Judged from the literal's
-        // own digits (`raw_int_text`), never from `int_val`, which a wrap
-        // makes a different number: `2^64 + 5` must not land as key 5.
+        // leaf-named-keys.md`): a key that is no Keystone id is one of the two
+        // reasons a named key is refused, `OutOfRange` with its byte - zero, a
+        // negative number, one above the 40-bit space, or a literal the lexer
+        // wrapped past 64 bits (`KeystoneIdOf`, the foreign key's test too).
         // Before the foreign-key and assertion steps, either of which can
         // wait.
-        // A value built rather than parsed carries no spelling; its number
-        // is then the spelling.
-        const std::string spelled =
-            key.raw_int_text.empty() ? std::to_string(key.int_val) : key.raw_int_text;
-        const auto exhausted = [&]() -> Status {
+        const std::optional<std::uint64_t> id = KeystoneIdOf(key);
+        if (!id.has_value()) {
             return Status::OutOfRange(
-                "primary key " + spelled + " is outside the Keystone id space [" +
+                "primary key " + exec::FormatValue(0, key) + " is outside the Keystone id space [" +
                 std::to_string(catalog::kFirstRowId) + ", " + std::to_string(kMaxKeystoneId) +
                 "] (byte " + std::to_string(key.byte_offset) + ")");
-        };
-        std::string_view digits = spelled;
-        if (!digits.empty() && digits.front() == '-') {
-            if (digits.find_first_not_of("0-") != std::string_view::npos) return exhausted();
-            digits = "0";  // "-0" is zero, refused below
         }
-        supplied_id = 0;
-        for (char d : digits) {
-            supplied_id = supplied_id * 10 + static_cast<std::uint64_t>(d - '0');
-            if (supplied_id > kMaxKeystoneId) return exhausted();
-        }
-        if (supplied_id < catalog::kFirstRowId) return exhausted();
+        supplied_id = *id;
         body_storage.assign(values.begin() + 1, values.end());
     }
     const std::vector<parser::AstValue>& body = explicit_key ? body_storage : values;
@@ -7182,7 +7248,8 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
 }
 
 DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& session,
-                                                bool analyze) {
+                                                bool analyze, const txn::Snapshot* pinned,
+                                                const exec::StatementContext* context) {
     // The statement boundary. Under READ COMMITTED this is where a new read
     // view is taken - so two SELECTs in one transaction can see different
     // data, which is the level's entire definition.
@@ -7190,7 +7257,9 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // **Everything the statement reads lives on its run** (BA-S15), which
     // the plain path hands on so its walk can outlive this function.
     const auto run = std::make_shared<SelectRun>(*this, session);
-    auto snapshot = SnapshotFor(session);
+    auto snapshot = pinned != nullptr
+                        ? StatusOr<txn::LeasedSnapshot>(txn::LeasedSnapshot{*pinned, {}})
+                        : SnapshotFor(session);
     // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse (a spent
     // transaction-id lease on a peer did, until AT-S10b), and the wire's
     // `retryable=1` is what a client's retry loop reads. The
@@ -7312,7 +7381,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // statement, which is the end of this function.
     ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_);
     auto chain = exec::Compile(catalog_, stmt,
-                               resolve_view.has_value() ? &*resolve_view : nullptr, &borrow);
+                               resolve_view.has_value() ? &*resolve_view : nullptr, &borrow,
+                               context);
     if (!chain.ok()) {
         return {ErrorReply(chain.status()), false, 0, chain.status()};
     }
@@ -7710,6 +7780,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     txn::Snapshot snap;
     WalkCursor resume_from;
     exec::StatementContext context;  // NOW()'s instant, carried across a park (AP-S4)
+    std::vector<exec::SubqueryResult> subquery_answers;  // BJ-S7, carried the same way
 
     // **AO-S3b: a resume re-enters the scope and the view it already had.**
     // Not `BeginWrite` and not `SnapshotFor`: the rows this statement has
@@ -7727,6 +7798,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         // would say this statement had written nothing.
         statement_trail_mark_ = parked.trail_mark;
         context = parked.context;
+        subquery_answers = parked.subqueries;
         // **And so is its statement boundary** (BH-S1, Census A row 5). The
         // re-dispatch cleared it, and a READ COMMITTED transaction would
         // otherwise re-mint its registered view at the next `ViewFor`
@@ -7763,7 +7835,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         snap = snapshot.value().snap;
     }
 
-    DispatchOutcome out = UpdateInner(line, scope, snap, resume_from, context);
+    DispatchOutcome out = UpdateInner(line, scope, snap, resume_from, context, subquery_answers);
 
     // **AO-S3b: parked in the middle of the walk - the scope stays open.**
     // Every other pending arm below ends its scope, because the statement
@@ -7776,7 +7848,8 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     if (out.parked_mid_walk) {
         session.set_parked_write(Session::ParkedWrite{scope.txn, scope.owned, snap,
                                                       out.walk_cursor, statement_trail_mark_,
-                                                      /*is_delete=*/false, context});
+                                                      /*is_delete=*/false, context,
+                                                      std::move(subquery_answers)});
         return out;
     }
 
@@ -7789,10 +7862,154 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     return out;
 }
 
+namespace {
+
+// What a scalar subquery's rows land in: the first column of at most one row.
+class ScalarSubquerySink final : public ResultSink {
+public:
+    Status Describe(std::vector<wire::FieldDescription> fields) override {
+        if (fields.size() != 1) {
+            return Status::InvalidArgument("a subquery used as an expression must return one "
+                                           "column, and this one returns " +
+                                           std::to_string(fields.size()));
+        }
+        field_ = std::move(fields[0]);
+        described_ = true;
+        return Status::OK();
+    }
+    // The row's text is the index of its value, so what `Emit` is handed is the
+    // value that was encoded for it: a sorted statement encodes rows as the top-N
+    // heap admits them and emits the survivors afterwards, in order, and "the
+    // last row encoded" is not the row emitted.
+    Status EncodeProjectedRow(std::span<const exec::ColumnRef> projection,
+                              std::span<const std::uint32_t>, const exec::ChainFrame& frame,
+                              std::string& out) override {
+        rendered_.push_back(projection.empty() ? parser::AstValue{} : frame.Get(projection[0]));
+        out = std::to_string(rendered_.size() - 1);
+        return Status::OK();
+    }
+    Status EncodeValueRow(std::span<const std::uint32_t>, std::span<const parser::AstValue> values,
+                          std::string& out) override {
+        rendered_.push_back(values.empty() ? parser::AstValue{} : values[0]);
+        out = std::to_string(rendered_.size() - 1);
+        return Status::OK();
+    }
+    Status Emit(std::string_view row) override {
+        if (++rows_ > 1) {
+            return Status::InvalidArgument(
+                "more than one row returned by a subquery used as an expression");
+        }
+        value_ = std::move(rendered_[static_cast<std::size_t>(std::stoull(std::string(row)))]);
+        return Status::OK();
+    }
+
+    bool described() const noexcept { return described_; }
+    const wire::FieldDescription& field() const noexcept { return field_; }
+    parser::AstValue TakeValue() { return std::move(value_); }
+
+private:
+    bool described_ = false;
+    wire::FieldDescription field_;
+    std::uint64_t rows_ = 0;
+    std::vector<parser::AstValue> rendered_;
+    parser::AstValue value_;  // NULL until a row arrives
+};
+
+}  // namespace
+
+StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser::Expr& node,
+                                                                    const parser::UpdateStmt& stmt,
+                                                                    WriteScope& scope,
+                                                                    const txn::Snapshot& snapshot,
+                                                                    const exec::StatementContext& context) {
+    const std::string at = " (byte " + std::to_string(node.byte_offset) + ")";
+    Session& session = *scope.session;
+
+    // **Correlated or not**: a subquery that compiles on its own names nothing
+    // outside it. One that does not may name the relation being updated, and
+    // the SELECT compiler says so by compiling it as an `EXISTS` over that
+    // relation, where a reference that resolves outward makes its sub-chain
+    // correlated. Both are compiles of the parsed statement; neither runs.
+    // A subquery that fails both is left for the real run to refuse in its own
+    // words.
+    {
+        const std::optional<txn::ReadView> view = ViewFor(session);
+        const txn::ReadView* const resolve_view = view.has_value() ? &*view : nullptr;
+        if (!exec::Compile(catalog_, *node.subquery, resolve_view).ok()) {
+            parser::SelectStmt probe;
+            probe.from.schema = stmt.schema;
+            probe.from.table_name = stmt.table_name;
+            parser::Condition exists;
+            exists.kind = parser::PredicateKind::kExists;
+            exists.subquery = node.subquery;
+            probe.where.push_back(std::move(exists));
+            auto chain = exec::Compile(catalog_, probe, resolve_view);
+            if (chain.ok()) {
+                for (const exec::Step& step : chain.value().steps) {
+                    for (const exec::SubChain& sub : step.sub_chains) {
+                        if (sub.correlated) {
+                            return Status::NotImplemented(
+                                "a subquery that reads the row being updated is not supported "
+                                "in a SET value yet (BJ-Q6)" + at);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ScalarSubquerySink sink;
+    ResultSink* const previous = session.result_sink();
+    session.set_result_sink(&sink);
+    struct Restore {
+        Session& session;
+        ResultSink* sink;
+        ~Restore() { session.set_result_sink(sink); }
+    } restore{session, previous};
+
+    // The text is padded to where it stood in the statement, so every byte the
+    // SELECT reports is a byte of the UPDATE.
+    const std::string text = std::string(node.byte_offset + 1, ' ') + node.subquery_sql;
+    DispatchOutcome out = HandleSelect(text, session, /*analyze=*/false, &snapshot, &context);
+    // The walk is handed on for a yield; a SET value's subquery is run to its
+    // end here, before the statement's own walk begins.
+    if (out.select_run != nullptr) {
+        const std::shared_ptr<SelectRun> run = std::move(out.select_run);
+        out = run->RunInline();
+    }
+    // The subquery's own refusals carry their byte already; the rest are given
+    // the subquery's.
+    const auto Positioned = [&](const std::string& what) {
+        return what.find("byte ") != std::string::npos ? what : what + at;
+    };
+    if (!out.status.ok()) return out.status.WithMessage(Positioned(out.status.message()));
+    if (out.response.rfind("ERR", 0) == 0) {
+        return Status::InvalidArgument(Positioned(out.response.substr(4)));
+    }
+    if (!sink.described()) {
+        return Status::NotImplemented("a subquery over a catalog view is not supported as a SET "
+                                      "value" + at);
+    }
+
+    const wire::FieldDescription& field = sink.field();
+    if (field.type_oid == 0) {
+        return Status::InvalidArgument("the subquery's column has no type to assign" + at);
+    }
+    exec::SubqueryResult result;
+    result.type.kind = exec::SetType::Kind::kConcrete;
+    result.type.type_val = field.type_oid == catalog::kTypeValChar ? catalog::kTypeValVarchar
+                                                                    : field.type_oid;
+    result.type.len = field.type_mod;
+    result.value = sink.TakeValue();
+    result.value.byte_offset = node.byte_offset;
+    return result;
+}
+
 DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope& scope,
                                                const txn::Snapshot& snapshot,
                                                WalkCursor resume_from,
-                                               const exec::StatementContext& context) {
+                                               const exec::StatementContext& context,
+                                               std::vector<exec::SubqueryResult>& subqueries) {
     // AO-S3b: set by the row callback when it meets a row held by a writer
     // that has not decided and the wait is one this statement may make.
     // The callback cannot park - it runs under a page span, which AO-R2
@@ -7863,8 +8080,39 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // CompileWhere rather than here: the two halves of an UPDATE's compile
     // belong at one layer, and a check the dispatcher owns is one a second
     // write path can be written without.
-    if (Status s = exec::CompileAssignments(ta, stmt.assignments); !s.ok()) {
+    // BJ-S4: the typed expressions come back with it, and a column-reading
+    // expression into a foreign-key column is refused here (BJ-Q10).
+    std::vector<exec::CompiledAssignment> compiled;
+    // Built only for a statement with an expression in it: a capture this wide
+    // is a heap allocation, and most UPDATEs are literals.
+    std::size_t subqueries_asked = 0;
+    exec::SubqueryResolver resolve_subquery;
+    if (std::any_of(stmt.assignments.begin(), stmt.assignments.end(),
+                    [](const parser::Assignment& a) { return a.expr != nullptr; })) {
+        resolve_subquery = [&](const parser::Expr& node) -> StatusOr<exec::SubqueryResult> {
+            const std::size_t index = subqueries_asked++;
+            if (index < subqueries.size()) return subqueries[index];  // a resume: the first run's
+            auto answer = RunScalarSubquery(node, stmt, scope, snapshot, context);
+            if (answer.ok()) subqueries.push_back(answer.value());
+            return answer;
+        };
+    }
+    if (Status s = exec::CompileAssignments(ta, stmt.assignments, &compiled, &resolve_subquery);
+        !s.ok()) {
         return {ErrorReply(s), false, 0, s};
+    }
+    // One value per assignment for the row in hand. A bare literal's slot is
+    // filled once, here; an expression's is overwritten for every row. Owned
+    // by the statement so no row allocates for it after the first.
+    // `assigned` names the cells a row's new image re-encodes, one per
+    // assignment, pointing into `values`; every other cell is carried from
+    // the row's own bytes (`exec::EncodeAssigned`, BK-R3,
+    // `workorder-bk-opt-read-update-path.md`).
+    std::vector<parser::AstValue> values(compiled.size());
+    std::vector<exec::AssignedCell> assigned(compiled.size());
+    for (std::size_t i = 0; i < compiled.size(); ++i) {
+        if (compiled[i].expr == nullptr) values[i] = stmt.assignments[i].val;
+        assigned[i] = {compiled[i].column_no, &values[i]};
     }
 
     // The WHERE clause compiles to the same resolved predicates a chain
@@ -7889,18 +8137,34 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     std::vector<exec::PendingSpill> spills;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
 
+    // Stage 2's decode target and what it decodes (BK-R2): every column
+    // where a Cabin or an index reads the row (an assertion is asked per
+    // row, below), otherwise the columns the SET expressions read.
+    // `row_poisoned` says the slots outside the mask hold `kUndecoded`.
+    std::vector<parser::AstValue> row(ta.schema.columns.size());
+    bool row_poisoned = false;
+    // The negation of `NoteCabinWrite`'s and `MaintainIndexes`' early
+    // returns: loosen either and that hook is handed `kUndecoded`.
+    const bool hooked = (cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty();
+    std::uint64_t set_read_mask = 0;
+    for (const exec::CompiledAssignment& c : compiled) {
+        if (c.expr != nullptr) set_read_mask |= exec::SetExpressionColumns(*c.expr);
+    }
+
     // ---- Which foreign keys this SET list touches (§2) -------------------
     //
     // Resolved once, here: an UPDATE that changes no fk column must cost
     // nothing, and asking per row would mean a name comparison per row per
     // foreign key to answer a question about the *statement*.
-    std::vector<std::pair<const catalog::ForeignKeyRef*, const parser::AstValue*>> fk_assignments;
+    // Each pairs a foreign key with the index of the assignment that sets its
+    // column. BJ-S4: that assignment is a bare literal or an expression, and
+    // `CompileAssignments` already refused one that reads a column.
+    std::vector<std::pair<const catalog::ForeignKeyRef*, std::size_t>> fk_assignments;
     for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
         if (fk.column_no >= ta.schema.columns.size()) continue;
-        const std::string_view column = catalog::NameView(ta.schema.columns[fk.column_no].name);
-        for (const auto& assignment : stmt.assignments) {
-            if (assignment.col_name != column) continue;
-            fk_assignments.emplace_back(&fk, &assignment.val);
+        for (std::size_t i = 0; i < compiled.size(); ++i) {
+            if (compiled[i].column_no != fk.column_no) continue;
+            fk_assignments.emplace_back(&fk, i);
             break;
         }
     }
@@ -7923,12 +8187,16 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // So the verdict is *held* here and *applied* per matched row: an
         // unmatched statement resolves a parent, uses nothing, and reports
         // what it always reported.
-        for (const auto& [fk, value] : fk_assignments) {
+        for (const auto& [fk, index] : fk_assignments) {
+            // A constant expression is folded at compile (BJ-Q10); one whose
+            // fold failed has nothing to resolve, and the row that meets the
+            // failure raises it before any foreign-key check.
+            if (!compiled[index].constant.has_value()) continue;
             std::vector<parser::AstValue> one(ta.schema.columns.size() > 0
                                                   ? ta.schema.columns.size() - 1
                                                   : 0);
             if (fk->column_no == 0 || fk->column_no > one.size()) continue;
-            one[fk->column_no - 1] = *value;
+            one[fk->column_no - 1] = *compiled[index].constant;
             if (Status s = ResolveForeignKeyParents(ta, one, fk_held, scope); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
@@ -8036,16 +8304,6 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
 
-        // ---- Stage 2: the whole row, for a row that qualified -----------
-        //
-        // An owned copy, because UPDATE re-encodes it and hands it to the
-        // write hook; the frame is for evaluation only and is not read
-        // again below. Decoded from `payload_copy`, whose bytes outlive
-        // every page fetch stage 1 may have made.
-        auto row = exec::DecodeRow(ta.schema, ta.layout, payload_copy, &spills);
-        if (!row.ok()) return row.status();
-        if (Status s = exec::ResolveSpills(page_store_, spills, row.value()); !s.ok()) return s;
-
         // ---- First-updater-wins (docs/spec/txn.md section 5) ----------------
         //
         // Checked only once the row has qualified: a conflict is reported
@@ -8119,6 +8377,73 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
         }
 
+        // ---- Stage 2: what the SET list and the hooks read (BK-R2) -------
+        //
+        // Into `row`, the statement's, because the SET expressions and the
+        // write hooks read it (the new image is encoded from `payload_copy`,
+        // BK-R3). Decoded from `payload_copy`, whose bytes outlive every page
+        // fetch stage 1 may have made.
+        //
+        // **Whole only where a hook reads it.** A Cabin, an index and an
+        // assertion each take the row full-width, so a relation with any of
+        // them decodes every column; one with none decodes only the columns
+        // the SET expressions read (`set_read_mask`), and every other slot
+        // holds `kUndecoded`, which the evaluator refuses `Corruption` rather
+        // than read as a value.
+        //
+        // **The registry is asked here, after the conflict check, and only
+        // here** - the answer is the assertion site's too (the AT-S5d review:
+        // an assertion adopted on another core between two asks would send
+        // the check an empty `previous`). After, because the check is where
+        // the row's writer takes the relation's `IX`, and a build adopts its
+        // assertion under `X`: asked before the grant, a build that adopts in
+        // between would leave this row written unchecked.
+        const bool asserted = enforcer_->AnyOn(ta.oid);
+        const bool whole_row = hooked || asserted;
+        if (whole_row) {
+            row_poisoned = false;
+        } else if (!row_poisoned) {
+            for (std::size_t c = 0; c < row.size(); ++c) {
+                if (c >= 64 || (set_read_mask & (std::uint64_t{1} << c)) == 0) {
+                    row[c] = exec::kUndecoded;
+                }
+            }
+            row_poisoned = true;
+        }
+        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy, row,
+                                              whole_row ? exec::kAllColumnsMask : set_read_mask,
+                                              spills);
+            !s.ok()) {
+            return s;
+        }
+
+        // ---- BJ-S4: every expression is evaluated here, against the row as
+        // the walk read it (BJ-R2) ------------------------------------------
+        //
+        // After the row qualified and its conflict was decided, before
+        // anything of it is written and before the no-refuse window opens (an
+        // evaluation can fail, BJ-R10). The values are collected first and
+        // written second, so a later assignment never reads an earlier one's
+        // result. A failure names the expression's first byte and the row's
+        // pk and fails the statement like every mid-statement write failure
+        // (the AS9 resolution). A value that evaluates but does not fit its
+        // target - a NULL into a NOT NULL column, a `char(N)` too long - is
+        // the encode's verdict, further down.
+        for (std::size_t i = 0; i < compiled.size(); ++i) {
+            if (compiled[i].expr == nullptr) continue;
+            const std::uint32_t expression_byte = stmt.assignments[i].expr->byte_offset;
+            auto value = exec::EvaluateSetExpression(*compiled[i].expr, row, context);
+            if (!value.ok()) {
+                return value.status().WithMessage(
+                    value.status().message() + " in the expression at byte " +
+                    std::to_string(expression_byte) + ", row id " + std::to_string(id.value()));
+            }
+            values[i] = std::move(value.value());
+            // A computed value carries no position of its own; the encode's
+            // refusals name this one.
+            values[i].byte_offset = expression_byte;
+        }
+
         // ---- The forward check, for an fk column this SET touches (§2) --
         //
         // Per matched row, after the row has qualified and the cheap
@@ -8128,42 +8453,24 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // this row, which is what keeps an UPDATE matching zero rows
         // answering `UPDATED 0` rather than a violation it never used to
         // report.
-        for (const auto& [fk, value] : fk_assignments) {
-            if (Status s = CheckForeignKeyOnWrite(ta, *fk, *value, fk_held, scope); !s.ok()) {
+        for (const auto& [fk, index] : fk_assignments) {
+            if (Status s = CheckForeignKeyOnWrite(ta, *fk, values[index], fk_held, scope);
+                !s.ok()) {
                 return s;
             }
         }
 
-        // The row as it stands *before* the SET list is applied, kept only
-        // when this relation has a Cabin - it is what tells the write hook
-        // whether a key column actually moved (§5's third row). A relation
-        // with no Cabin copies nothing.
-        // ...and what tells the index hook the same thing (index.md §2).
-        // A relation with neither copies nothing.
-        //
-        // **Asked once, and the answer used at both sites below** (the
-        // AT-S5d review). The registry is the instance's, so an assertion
-        // adopted on another core between two asks would send the check an
-        // empty `previous` - a read past the end of it.
-        const bool asserted = enforcer_->AnyOn(ta.oid);
+        // The row as it stands *before* the SET list is applied - what tells
+        // the Cabin, index and assertion hooks whether a column they read
+        // actually moved (cabin.md §5's third row, index.md §2) - taken only
+        // where a hook reads it, which is where the row was decoded whole.
         std::vector<parser::AstValue> previous;
-        if ((cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty() || asserted) {
-            previous = row.value();
-        }
-
-        for (const auto& assignment : stmt.assignments) {
-            for (std::size_t c = 0; c < ta.schema.columns.size(); ++c) {
-                if (catalog::NameView(ta.schema.columns[c].name) == assignment.col_name) {
-                    row.value()[c] = assignment.val;
-                    break;
-                }
+        if (whole_row) {
+            previous = row;
+            for (std::size_t i = 0; i < compiled.size(); ++i) {
+                row[compiled[i].column_no] = values[i];
             }
         }
-
-        // The pk is unchanged by construction (rejected above), so it was
-        // carried straight from the tuple's own Keystone word above rather
-        // than round-tripped through the decoded row.
-        const std::vector<parser::AstValue> body(row.value().begin() + 1, row.value().end());
 
         // ---- The assertion check, §4.2's delta rules --------------------
         //
@@ -8186,7 +8493,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         if (asserted) {
             std::uint64_t reserver = 0;
             if (Status s = enforcer_->AdmitAndReserveUpdate(page_store_, wal_, WriterId(scope),
-                                                           ta.oid, previous, row.value(),
+                                                           ta.oid, previous, row,
                                                            id.value(), page_id, slot, &reserver);
                 !s.ok()) {
                 // AO-S6e-c, and the INSERT site states the argument. The pk
@@ -8228,8 +8535,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // under the var-heap page's hold - this leaf's hold outside it, the
         // order a reader takes too; `appended_spills` then stays empty.
         const auto log_spill = SpillLogFor(scope, ta.oid, id.value());
-        auto encoded = exec::EncodeRow(
-            ta.schema, ta.layout, id.value(), body,
+        // **Only the assigned cells are encoded** (BK-R3): every other cell
+        // is carried from `payload_copy`, the version this walk read, so a
+        // spilled value the SET list does not name is shared with the new
+        // version rather than appended again - and no longer leaked by every
+        // UPDATE of its row. The pk is the tuple's own Keystone word, never
+        // assignable (rejected above).
+        auto encoded = exec::EncodeAssigned(
+            ta.schema, ta.layout, id.value(), payload_copy, assigned,
             exec::VarHeapSink{&page_store_, ta.varheap_page_id,
                               collect_spills ? &appended_spills : nullptr, ta.oid,
                               log_spill ? &log_spill : nullptr});
@@ -8262,16 +8575,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         std::uint64_t new_trx_id = trx_id;
         std::uint64_t new_undo_ptr = undo_ptr;
         if (scope.txn != nullptr) {
-            // The bytes as they stand, re-read rather than reconstructed:
-            // `row` has already had the SET list applied, and an image
-            // built from it would restore the *new* values.
-            auto live = page_store_.GetForRead(page_id);
-            if (!live.ok()) return live.status();
-            heap::PageView before_page(live.value().bytes());
-            auto before = before_page.ReadTuple(slot);
-            if (!before.ok()) return before.status();
-            const std::vector<std::byte> image(before.value().payload.begin(),
-                                               before.value().payload.end());
+            // The bytes as they stand: `payload_copy`, the version this walk
+            // read - not reconstructed from `row`, which has had the SET list
+            // applied and would restore the *new* values. Nothing has written
+            // the slot since the copy: the walk holds this page's write
+            // `PageRef` and carries no `co_await` (the conflict check's
+            // argument above), and the new image the carry starts from is
+            // the same buffer (BK-R3).
+            const std::vector<std::byte>& image = payload_copy;
 
             txn::UndoRecordFields rec{};
             rec.prior_trx_id = trx_id;
@@ -8302,7 +8613,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
 
         // ---- The Cabin witness, UPDATE half (docs/spec/cabin.md §5) -----
         //
-        // `row.value()` now holds the **new** values, so this appends the pk
+        // `row` now holds the **new** values, so this appends the pk
         // to v′'s set for every cabined column. The old value's set is
         // deliberately left alone: a pre-update snapshot is still entitled
         // to match through it, and for newer readers the stale entry is a
@@ -8312,14 +8623,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // The location is unchanged by construction - an UPDATE is an
         // in-place overwrite under invariant 13 - so the appended hint is
         // the row's real address.
-        NoteCabinWrite(ta, row.value(), /*first_col_pos=*/0, id.value(), page_id, slot, previous);
+        NoteCabinWrite(ta, row, /*first_col_pos=*/0, id.value(), page_id, slot, previous);
 
         // The index half. `previous` is what makes §2's rule work: an UPDATE
         // that moved no key and no covered column appends nothing, which is
         // what keeps an index from growing by an entry per write forever.
         std::vector<exec::IndexWrite> index_writes;
         const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
-        if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row.value(),
+        if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row,
                                               /*first_col_pos=*/0, encoded.value(), id.value(),
                                               previous, log_index ? &log_index : nullptr);
             !s.ok()) {

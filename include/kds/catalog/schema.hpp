@@ -131,7 +131,7 @@ struct RowLayout {
 };
 
 // The bitmap is the sole authority on nullness (null.md §3), and these
-// two are its only readers and writer - explicit shift and mask, invariant
+// three are its only reader and writers - explicit shift and mask, invariant
 // 6, with the byte's address computed in exactly one place. `payload` is
 // the whole tuple payload of exactly `layout.row_size` bytes; a column with
 // kNoNullBit is never NULL by construction, and callers of SetNullBit
@@ -152,6 +152,16 @@ inline void SetNullBit(std::span<std::byte> payload, const RowLayout& layout,
                        std::size_t col) noexcept {
     const std::uint16_t bit = layout.null_bits[col];
     payload[NullByteOf(layout, bit)] |= std::byte{static_cast<unsigned char>(1u << (bit % 8))};
+}
+
+// The bit cleared, for a column re-encoded inside a copied row
+// (`exec::EncodeAssigned`, BK-R3 of `workorder-bk-opt-read-update-path.md`);
+// a column with kNoNullBit has none to clear.
+inline void ClearNullBit(std::span<std::byte> payload, const RowLayout& layout,
+                         std::size_t col) noexcept {
+    const std::uint16_t bit = layout.null_bits[col];
+    if (bit == kNoNullBit) return;
+    payload[NullByteOf(layout, bit)] &= ~std::byte{static_cast<unsigned char>(1u << (bit % 8))};
 }
 
 // True if any column of `schema` can produce a spilled value - i.e. any
