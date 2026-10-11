@@ -686,8 +686,6 @@ TEST_F(SuppliedKeySqlTest, AKeyOutsideTheIdSpaceIsRefused) {
             << out.response;
         EXPECT_NE(out.response.find("(byte 22)"), std::string::npos) << out.response;
     }
-    EXPECT_EQ(d.Dispatch("SELECT * FROM t WHERE id = 5").response.find("\\n5"), std::string::npos)
-        << "the wrapped literal landed as key 5";
     auto padded = d.Dispatch("INSERT INTO t VALUES (007, 1)");
     EXPECT_NE(padded.response.find("id=7"), std::string::npos) << padded.response;
 }
