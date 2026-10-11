@@ -1,0 +1,6 @@
+# probe_threads.sh, captured during an overhead-c2 run (cores = 2, server started as `taskset -c 2,3 kds_server-B --config ...`)
+tid 3656584 kds_server-B psr=3 pid 3656584's current affinity list: 2,3
+tid 3656585 kds_server-B psr=2 pid 3656585's current affinity list: 2,3
+tid 3656587 kds_server-B psr=1 pid 3656587's current affinity list: 1
+tid 3656589 kds_server-B psr=3 pid 3656589's current affinity list: 2,3
+# src/server/expeditor.cpp:1929: PinToCpu(worker, id, reactor_cpus.empty() ? id : reactor_cpus[id]) - core 1 -> CPU 1

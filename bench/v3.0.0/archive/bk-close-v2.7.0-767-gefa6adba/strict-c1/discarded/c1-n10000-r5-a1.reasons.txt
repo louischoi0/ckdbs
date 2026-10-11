@@ -1,0 +1,4 @@
+host_after: ['cc1plus:3885474,3885476,3885480', 'cmake:3885304']
+other-CPU busy (CPUs 6,7 excluded) 51.7% > 10 %
+sibling CPU 3 busy 56% > 15 %
+sibling CPU 5 busy 60% > 15 %

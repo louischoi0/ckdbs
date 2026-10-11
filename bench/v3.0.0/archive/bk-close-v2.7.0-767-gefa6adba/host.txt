@@ -1,0 +1,28 @@
+# host, as read during the session
+2026-10-11 10:02:35 UTC (this file written)
+Linux ckdbs-dev 7.0.0-1014-azure #14~24.04.1-Ubuntu SMP PREEMPT Fri Aug 14 17:35:51 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+CPU(s):                                  8
+Model name:                              AMD EPYC 9V74 80-Core Processor
+Thread(s) per core:                      2
+Core(s) per socket:                      4
+Socket(s):                               1
+L3 cache:                                32 MiB (1 instance)
+NUMA node0 CPU(s):                       0-7
+cpu0 siblings: 0-1
+cpu1 siblings: 0-1
+cpu2 siblings: 2-3
+cpu3 siblings: 2-3
+cpu4 siblings: 4-5
+cpu5 siblings: 4-5
+cpu6 siblings: 6-7
+cpu7 siblings: 6-7
+               total        used        free      shared  buff/cache   available
+Mem:           15982        3516       10562          95        2344       12465
+Filesystem     Type 1K-blocks     Used Available Use% Mounted on
+/dev/root      ext4 258932720 89614392 169301944  35% /
+/dev/root      ext4 258932720 89614392 169301944  35% /
+/dev/root      ext4 258932720 89614392 169301944  35% /
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+cmake version 3.28.3
+perf_event_paranoid: 4
+0.27 0.48 1.17 1/488 3926918

@@ -741,6 +741,29 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   in a row needs a client naming each next id as it is issued. Owner:
   `heap-and-tuple.md` §4.1.
 
+- **The whole-relation walk is 1.2-1.8 % slower at 48 bits between fair
+  placements of the two binaries, and no call accounts for it.** Verified
+  at `efa6adba` (BK-S2) against `5979b5e7`,
+  `bench/v3.0.0/results-bk-close-v2.7.0-767-gefa6adba.md` §3:
+  `COUNT/MIN/MAX` over a 100-id window, which walks every row, reads
+  +1.7 µs [+1.5, +2.2] at 1,000 rows and +12.1 µs [+10.6, +16.0] at 10,000
+  between fresh copies of A and B - 1.2 ns a row of a 74 ns walk, server
+  work - and up to +5.3 % from B's file in its worst placement, while a
+  byte-identical copy of B read 2.1 % faster than B's file and two copies
+  of A agree to 0.05 µs. No write or point read moved (-0.85 to +0.10 µs at
+  p50). B executes one call fewer per decoded row than A (`RowKeystoneId`
+  deleted), so the increment is not the code BK-S2 wrote; the hypothesis
+  that fits is code placement (B's binary is 16 KB larger), which a stage
+  build would price and `perf` (locked out, `perf_event_paranoid` = 4)
+  would attribute - neither was run. Reported, not resolved, and gating
+  nothing (BK-Q4). The next walk measurement needs fresh copies of both
+  sides and a same-bytes copy as the null (the file's "Baseline for the
+  next run"). The merged tree (`a45311b5`, BJ's review code over B) is not
+  measured. Owner: `docs/spec/heap-and-tuple.md` §4 (the Keystone word)
+  and the results file above; BK's order
+  (`instructions/v3.0.0/workorder-bk-keystone-48.md` §6, BK-S4) records how
+  it was found.
+
 ## Locks
 
 - **A write refused by a lock unit waits on that unit's slot, and a wake

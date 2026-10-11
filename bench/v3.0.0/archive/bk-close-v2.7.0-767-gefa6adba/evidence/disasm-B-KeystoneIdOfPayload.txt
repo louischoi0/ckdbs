@@ -1,0 +1,58 @@
+symbol: 000000000017d160 00000000000000f0 T kds::KeystoneIdOfPayload(std::span<std::byte const, 184467440737  size 240 bytes
+17d160:	endbr64
+17d164:	push   %rbx
+17d165:	mov    %rdi,%rbx
+17d168:	cmp    $0x7,%rdx
+17d16c:	jbe    17d200 <kds::KeystoneIdOfPayload(std::span<std::byte const, 18446744073709551615ul>)+0xa0>
+17d172:	movzbl 0x7(%rsi),%edx
+17d176:	movzbl 0x6(%rsi),%ecx
+17d17a:	movzbl (%rsi),%eax
+17d17d:	shl    $0x8,%rdx
+17d181:	or     %rcx,%rdx
+17d184:	movzbl 0x5(%rsi),%ecx
+17d188:	shl    $0x8,%rdx
+17d18c:	or     %rcx,%rdx
+17d18f:	movzbl 0x4(%rsi),%ecx
+17d193:	shl    $0x8,%rdx
+17d197:	or     %rdx,%rcx
+17d19a:	movzbl 0x3(%rsi),%edx
+17d19e:	shl    $0x8,%rcx
+17d1a2:	or     %rcx,%rdx
+17d1a5:	movzbl 0x2(%rsi),%ecx
+17d1a9:	shl    $0x8,%rdx
+17d1ad:	or     %rdx,%rcx
+17d1b0:	movzbl 0x1(%rsi),%edx
+17d1b4:	movl   $0x0,(%rdi)
+17d1ba:	shl    $0x8,%rcx
+17d1be:	movq   $0x0,0x10(%rdi)
+17d1c6:	or     %rcx,%rdx
+17d1c9:	movb   $0x0,0x18(%rdi)
+17d1cd:	shl    $0x8,%rdx
+17d1d1:	movb   $0x1,0x30(%rdi)
+17d1d5:	or     %rdx,%rax
+17d1d8:	movabs $0xffffffffffff,%rdx
+17d1e2:	and    %rdx,%rax
+17d1e5:	lea    0x18(%rdi),%rdx
+17d1e9:	mov    %rax,0x28(%rdi)
+17d1ed:	mov    %rbx,%rax
+17d1f0:	mov    %rdx,0x8(%rdi)
+17d1f4:	pop    %rbx
+17d1f5:	ret
+17d1f6:	cs nopw 0x0(%rax,%rax,1)
+17d200:	mov    $0x30,%edi
+17d205:	call   bf70 <operator new(unsigned long)@plt>
+17d20a:	movdqa 0x2fec8e(%rip),%xmm0        # 47bea0 <typeinfo name for kds::storage::PlainScanFetcher+0x2900>
+17d212:	movl   $0x6,(%rbx)
+17d218:	movb   $0x0,0x2f(%rax)
+17d21c:	movups %xmm0,(%rax)
+17d21f:	movdqa 0x2fec89(%rip),%xmm0        # 47beb0 <typeinfo name for kds::storage::PlainScanFetcher+0x2910>
+17d227:	mov    %rax,0x8(%rbx)
+17d22b:	movups %xmm0,0x10(%rax)
+17d22f:	movdqa 0x2fec89(%rip),%xmm0        # 47bec0 <typeinfo name for kds::storage::PlainScanFetcher+0x2920>
+17d237:	movb   $0x0,0x30(%rbx)
+17d23b:	movups %xmm0,0x1f(%rax)
+17d23f:	movdqa 0x2fd359(%rip),%xmm0        # 47a5a0 <typeinfo name for kds::storage::PlainScanFetcher+0x1000>
+17d247:	mov    %rbx,%rax
+17d24a:	movups %xmm0,0x10(%rbx)
+17d24e:	pop    %rbx
+17d24f:	ret

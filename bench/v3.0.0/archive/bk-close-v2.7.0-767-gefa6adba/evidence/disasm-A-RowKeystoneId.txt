@@ -1,0 +1,57 @@
+symbol: 000000000035ab90 00000000000000e0 T kds::exec::RowKeystoneId(std::span<std::byte const, 184467440737  size 224 bytes
+35ab90:	endbr64
+35ab94:	push   %rbx
+35ab95:	mov    %rdi,%rbx
+35ab98:	cmp    $0x7,%rdx
+35ab9c:	jbe    35ac20 <kds::exec::RowKeystoneId(std::span<std::byte const, 18446744073709551615ul>)+0x90>
+35aba2:	movzbl 0x1(%rsi),%edx
+35aba6:	movzbl 0x2(%rsi),%ecx
+35abaa:	movzbl 0x7(%rsi),%edi
+35abae:	shl    $0x10,%rcx
+35abb2:	shl    $0x8,%rdx
+35abb6:	or     %rcx,%rdx
+35abb9:	movzbl (%rsi),%ecx
+35abbc:	shl    $0x38,%rdi
+35abc0:	or     %rcx,%rdx
+35abc3:	movzbl 0x3(%rsi),%ecx
+35abc7:	shl    $0x18,%rcx
+35abcb:	or     %rdx,%rcx
+35abce:	movzbl 0x4(%rsi),%edx
+35abd2:	shl    $0x20,%rdx
+35abd6:	or     %rcx,%rdx
+35abd9:	movzbl 0x5(%rsi),%ecx
+35abdd:	shl    $0x28,%rcx
+35abe1:	or     %rdx,%rcx
+35abe4:	movzbl 0x6(%rsi),%edx
+35abe8:	shl    $0x30,%rdx
+35abec:	or     %rcx,%rdx
+35abef:	or     %rdx,%rdi
+35abf2:	call   17cec0 <kds::Keystone::Decode(unsigned long)>
+35abf7:	lea    0x18(%rbx),%rdx
+35abfb:	movl   $0x0,(%rbx)
+35ac01:	mov    %rax,0x28(%rbx)
+35ac05:	mov    %rbx,%rax
+35ac08:	mov    %rdx,0x8(%rbx)
+35ac0c:	movq   $0x0,0x10(%rbx)
+35ac14:	movb   $0x0,0x18(%rbx)
+35ac18:	movb   $0x1,0x30(%rbx)
+35ac1c:	pop    %rbx
+35ac1d:	ret
+35ac1e:	xchg   %ax,%ax
+35ac20:	mov    $0x30,%edi
+35ac25:	call   bf70 <operator new(unsigned long)@plt>
+35ac2a:	movdqa 0x11d30e(%rip),%xmm0        # 477f40 <typeinfo name for kds::storage::PlainScanFetcher+0x2920>
+35ac32:	movl   $0x6,(%rbx)
+35ac38:	movb   $0x0,0x2f(%rax)
+35ac3c:	movups %xmm0,(%rax)
+35ac3f:	movdqa 0x11d309(%rip),%xmm0        # 477f50 <typeinfo name for kds::storage::PlainScanFetcher+0x2930>
+35ac47:	mov    %rax,0x8(%rbx)
+35ac4b:	movups %xmm0,0x10(%rax)
+35ac4f:	movdqa 0x11d309(%rip),%xmm0        # 477f60 <typeinfo name for kds::storage::PlainScanFetcher+0x2940>
+35ac57:	movb   $0x0,0x30(%rbx)
+35ac5b:	movups %xmm0,0x1f(%rax)
+35ac5f:	movdqa 0x11b9b9(%rip),%xmm0        # 476620 <typeinfo name for kds::storage::PlainScanFetcher+0x1000>
+35ac67:	mov    %rbx,%rax
+35ac6a:	movups %xmm0,0x10(%rbx)
+35ac6e:	pop    %rbx
+35ac6f:	ret

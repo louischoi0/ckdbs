@@ -25,6 +25,10 @@ this order with CLA's proposal and adopted under W4, recorded as adopted
 and never as the operator's mark. A push, a tag or a version still waits
 for the word.
 
+**CLOSED 2026-10-11 at BK-S4** (§6): every stage landed on
+`worktree-bk-keystone-48`, the close measured at `efa6adba` against
+`5979b5e7`, `origin/main` merged in at `a45311b5`; no tag (BK-Q5 (a)).
+
 **What the words settle, and what they leave open.**
 
 - **W0** asked for 42. CLA answered that 42 is possible and costs the
@@ -808,7 +812,7 @@ since this stage - and its fourteen callers call `KeystoneIdOfPayload`;
 entry word has one codec rather than one layout written twice (the refusal
 stays `InvalidArgument`, the Keystone text behind the entry's prefix); the
 sim's `id > kMaxKeystoneId` check deleted, the decode having masked the id
-so it could never fire. **Declined:** one helper for the nine refusal texts
+so it could never fire. **Declined:** one helper for the refusal texts - the eight changed and the exhausted refusal they were modelled on
 (nine subjects, two forms, and the width already lives in one constant);
 merging the three superblock cells into one table (the 18 and 21 cells
 carry their reason in their names and comments); spelling the
@@ -901,3 +905,83 @@ change; BK restates both lines and leaves the merge to a text pass of its
 own. Noted and left: the wire-defect entry quotes `heap-and-tuple.md:124`
 as it read at `17e03da2`, which is what an entry pinned there should
 quote.
+
+### BK-S4 — the close, 2026-10-11
+
+**The measurement** (§5, BK-Q4; `ck-tester`;
+`bench/v3.0.0/results-bk-close-v2.7.0-767-gefa6adba.md`, raw output under
+`archive/bk-close-v2.7.0-767-gefa6adba/`, 42 MB - three to five times each
+of the BH and BJ closes' archives, for the null pairs, the exchanged slots
+and the copy controls the walk finding rests on). A = `5979b5e7`
+(`v2.7.0-763-g5979b5e7`), the commit BK opened from; B = `efa6adba`
+(`v2.7.0-767-gefa6adba`, BK-S2), the last commit of BK that changes code -
+S3 changes documents only and S4 did not exist when it ran, and the
+merge's BJ review commits (below) are not in it, as the file says. Release
+`kds_server` built from clean detached checkouts of each, interleaved A/B,
+`cores` 1 and 2, 200 / 1,000 / 10,000 rows, relaxed, and strict at
+`cores` 1, run over five hours on a host other sessions were building on,
+gated on a quiet host after the first pass, with discard rules that read
+the host and the control and never a latency.
+**Flat where the order expected flat**: no INSERT, SELECT-by-pk, UPDATE or
+DELETE shape is slower in B in any relaxed cell (-0.85 to +0.10 µs at p50,
+the size of the 0.8 µs two files of one binary differ by on SELECT); a
+named INSERT whose key sits in the upper eight bits costs +0.10 µs over
+one below 2^40 in five of six cells ([+0.10, +0.15] at 10,000 rows,
+`cores = 1`) and +0.25 µs in the sixth (`cores = 2`, 200 rows), every cell
+inside the 0.6 µs floor; A refused 2^40 and 2^48 - 1 in every kept run, B placed
+them and refused 2^48 naming 281474976710655; strict's 950 µs commit wait
+hides anything a write could cost. **One shape moved**: the
+whole-relation walk, +1.2 % (+1.7 µs [+1.5, +2.2]) at 1,000 rows and
++1.5 % (+12.1 µs [+10.6, +16.0]) at 10,000 between fresh copies of the two
+binaries - server work, placement-sensitive, with one call fewer per row
+in B - **reported, not resolved, gating nothing** (BK-Q4); the evidence
+and the hypothesis are the `known-gaps.md` entry's (Keystone ids). **Not
+priced**: the two paths BK-S2 rewrote by hand, the Cabin bound entry's
+word and the trail key, are reached by `CREATE ASSERTION` and by pattern
+replay, which no measured shape exercises - BK-S2's cells pin them, the
+run does not price them. Against the BJ close - whose B' is
+byte-identical to this A - the point shapes drift -0.6 to +1.0 µs in A
+alone, the floor for any cross-close reading.
+
+**The merge.** `origin/main` merged into the branch at `a45311b5` with no
+conflict: BJ's three review commits, eight engine and seven test files,
+274 insertions; the
+two files both sides touched (`step_compiler.cpp`,
+`command_dispatcher.cpp`) merged clean. **The suite on the merged tree**
+(`ctest -j8`, Debug, rebuilt whole at `a45311b5`): **3506 of 3506** - six
+more than BK-S2's 3500, BJ's review cells; **the sim corpus**: 190 runs, 0
+failures.
+
+**What BK carries.** The known-gaps entry above and the wire defect's bug
+entry (BK-S1, BK-Q6 (a)); nothing else. **Put to the operator, not
+adopted**: the measurement's finding that `bench/README.md` rule 3
+("measure a copy of the binary") is not enough for a scan shape - a
+same-bytes copy belongs beside every pair as the null, made with the
+others - is a change to the house measurement rules and outside BK.
+
+**Decisions that surfaced, adopted (W4):** B is BK-S2 rather than the
+closing commit §5 and BK-Q4 name: S3 and S4 change no code, and what else
+the closing tree holds over B is the merge's BJ code, not BK's, left
+unmeasured; the 42 MB archive is kept whole (its reason above).
+
+**Its review** (`critics-developer`, the same day) found no blocking
+defect and corrected eight claims against the results file in place: the
+header named no commit; the archive is three to five times each earlier
+close's, not three to four; B leaves out the merge's BJ code, which the
+row had not said; strict ran at one core only and the first pass ungated;
+the point-shape range is relaxed cells only and is the size of, not inside,
+the 0.8 µs copy spread; the named-key interval is the 10,000-row cell's;
+the merge is eight engine and seven test files; and the W4 reason for B
+was false of the closing tree and now says what that tree holds over B.
+**Applied from its proposals:** the walk's evidence kept in
+`known-gaps.md` alone and this row cut to the fair figure; the entry's
+owner moved from this closed order to `heap-and-tuple.md` §4 and the
+results file, with a clause that the merged tree is not measured; the
+unpriced paths named above; the header's duplicate "push waits" clause
+cut; three internal inconsistencies in the results file handed to the
+measurement's own agent, which fixed them (the merge's file list, §2's
+"at every size" where one `cores = 2` cell reads +0.25 µs, §4's "inside"
+the copy spread where -0.85 is its size) and found a fourth of the same
+kind in §8, fixed in place. **Declined:** shrinking the index row's
+survey text now that BK is closed - the row is the order's history in one
+line, and the BH row's brevity is BH's.

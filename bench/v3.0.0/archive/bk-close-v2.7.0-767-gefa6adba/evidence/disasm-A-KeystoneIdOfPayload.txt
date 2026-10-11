@@ -1,0 +1,58 @@
+symbol: 000000000017cef0 00000000000000f0 T kds::KeystoneIdOfPayload(std::span<std::byte const, 184467440737  size 240 bytes
+17cef0:	endbr64
+17cef4:	push   %rbx
+17cef5:	mov    %rdi,%rbx
+17cef8:	cmp    $0x7,%rdx
+17cefc:	jbe    17cf90 <kds::KeystoneIdOfPayload(std::span<std::byte const, 18446744073709551615ul>)+0xa0>
+17cf02:	movzbl 0x7(%rsi),%edx
+17cf06:	movzbl 0x6(%rsi),%ecx
+17cf0a:	movzbl (%rsi),%eax
+17cf0d:	shl    $0x8,%rdx
+17cf11:	or     %rcx,%rdx
+17cf14:	movzbl 0x5(%rsi),%ecx
+17cf18:	shl    $0x8,%rdx
+17cf1c:	or     %rcx,%rdx
+17cf1f:	movzbl 0x4(%rsi),%ecx
+17cf23:	shl    $0x8,%rdx
+17cf27:	or     %rdx,%rcx
+17cf2a:	movzbl 0x3(%rsi),%edx
+17cf2e:	shl    $0x8,%rcx
+17cf32:	or     %rcx,%rdx
+17cf35:	movzbl 0x2(%rsi),%ecx
+17cf39:	shl    $0x8,%rdx
+17cf3d:	or     %rdx,%rcx
+17cf40:	movzbl 0x1(%rsi),%edx
+17cf44:	movl   $0x0,(%rdi)
+17cf4a:	shl    $0x8,%rcx
+17cf4e:	movq   $0x0,0x10(%rdi)
+17cf56:	or     %rcx,%rdx
+17cf59:	movb   $0x0,0x18(%rdi)
+17cf5d:	shl    $0x8,%rdx
+17cf61:	movb   $0x1,0x30(%rdi)
+17cf65:	or     %rdx,%rax
+17cf68:	movabs $0xffffffffff,%rdx
+17cf72:	and    %rdx,%rax
+17cf75:	lea    0x18(%rdi),%rdx
+17cf79:	mov    %rax,0x28(%rdi)
+17cf7d:	mov    %rbx,%rax
+17cf80:	mov    %rdx,0x8(%rdi)
+17cf84:	pop    %rbx
+17cf85:	ret
+17cf86:	cs nopw 0x0(%rax,%rax,1)
+17cf90:	mov    $0x30,%edi
+17cf95:	call   bf70 <operator new(unsigned long)@plt>
+17cf9a:	movdqa 0x2faf9e(%rip),%xmm0        # 477f40 <typeinfo name for kds::storage::PlainScanFetcher+0x2920>
+17cfa2:	movl   $0x6,(%rbx)
+17cfa8:	movb   $0x0,0x2f(%rax)
+17cfac:	movups %xmm0,(%rax)
+17cfaf:	movdqa 0x2faf99(%rip),%xmm0        # 477f50 <typeinfo name for kds::storage::PlainScanFetcher+0x2930>
+17cfb7:	mov    %rax,0x8(%rbx)
+17cfbb:	movups %xmm0,0x10(%rax)
+17cfbf:	movdqa 0x2faf99(%rip),%xmm0        # 477f60 <typeinfo name for kds::storage::PlainScanFetcher+0x2940>
+17cfc7:	movb   $0x0,0x30(%rbx)
+17cfcb:	movups %xmm0,0x1f(%rax)
+17cfcf:	movdqa 0x2f9649(%rip),%xmm0        # 476620 <typeinfo name for kds::storage::PlainScanFetcher+0x1000>
+17cfd7:	mov    %rbx,%rax
+17cfda:	movups %xmm0,0x10(%rbx)
+17cfde:	pop    %rbx
+17cfdf:	ret
