@@ -3597,13 +3597,14 @@ std::vector<parser::AstValue> CommandDispatcher::InsertBodyOf(
 
 namespace {
 
-// The parent row an integer foreign-key value names, or nothing when it names
-// none: a parent's pk is a Keystone id in [kFirstRowId, kMaxKeystoneId]
-// (invariant 11), so a negative value, zero, a value past 2^40 - 1, and a
-// literal past int64 (a uint64 above INT64_MAX among them, whose `int_val`
-// has wrapped) reference no row that can exist. Such a value is an absent
-// parent - `FK_VIOLATION` - and is not looked up.
-std::optional<std::uint64_t> FkParentIdOf(const parser::AstValue& value) {
+// The Keystone id an integer value names, or nothing when it names none: an
+// id is in [kFirstRowId, kMaxKeystoneId] (invariant 11), so a negative value,
+// zero (`-0` too), a value past 2^40 - 1, and a literal past int64 (a uint64
+// above INT64_MAX among them, whose `int_val` has wrapped - `2^64 + 5` must
+// not read as 5) are none. The one answer for a named pk (`OutOfRange`,
+// BD-R5) and a foreign-key value (an absent parent, `FK_VIOLATION`, not
+// looked up); each caller words its own refusal.
+std::optional<std::uint64_t> KeystoneIdOf(const parser::AstValue& value) {
     if (parser::IntLiteralWrapped(value) ||
         value.int_val < static_cast<std::int64_t>(catalog::kFirstRowId) ||
         static_cast<std::uint64_t>(value.int_val) > kMaxKeystoneId) {
@@ -3626,7 +3627,7 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // resolving it would put a nonsense pk in the held set. An integer
         // that is no id is that check's violation, with nothing to look up.
         if (value.type != parser::ValueType::kInt) continue;
-        const std::optional<std::uint64_t> id = FkParentIdOf(value);
+        const std::optional<std::uint64_t> id = KeystoneIdOf(value);
         if (!id.has_value()) continue;
 
         // ---- The one thing this pass does not hoist -------------------
@@ -3744,7 +3745,7 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     // here unchecked when negative, and the codec stored it.
     if (value.type != parser::ValueType::kInt) return Status::OK();
 
-    const std::optional<std::uint64_t> id = FkParentIdOf(value);
+    const std::optional<std::uint64_t> id = KeystoneIdOf(value);
     // 0 for no id: no `S` is ever held on pk 0, so the release below meets
     // nothing of it.
     const std::uint64_t parent_pk = id.value_or(0);
@@ -4774,12 +4775,13 @@ namespace {
 // boundary appeared. It is drawn once, here, for both.
 std::pair<std::uint32_t, std::uint32_t> AggregateOutputType(const exec::AggregateItem& item) {
     const bool wide = item.type_val == catalog::kTypeValDecimalWide;
-    // The precision is the type's maximum rather than the column's: a fold
-    // widens, so the column's precision would understate the answer's
-    // range. The scale is the half a client cannot read the value without.
+    // SUM and AVG: the precision is the type's maximum rather than the
+    // column's, because the fold widens and the column's precision would
+    // understate the answer's range. The scale is the column's.
     const auto decimal_mod = [&](bool as_wide) {
         return catalog::PackDecimalLen(
-            as_wide ? exec::kMaxDecimalPrecisionWide : exec::kMaxDecimalPrecision, item.scale);
+            as_wide ? exec::kMaxDecimalPrecisionWide : exec::kMaxDecimalPrecision,
+            catalog::DecimalScaleOf(item.decimal_len));
     };
     // **`func` is meaningless unless `is_aggregate`** (AG5): a grouping
     // column carried through to the output leaves the field at its default,
@@ -4803,8 +4805,11 @@ std::pair<std::uint32_t, std::uint32_t> AggregateOutputType(const exec::Aggregat
                 break;  // an extreme of a set is a member of it
         }
     }
-    // MIN/MAX, and a grouping column: the column's own type.
-    return {item.type_val, catalog::TypeModOf(item.type_val, decimal_mod(wide))};
+    // MIN/MAX, and a grouping column: the column's own type, its precision
+    // included - the answer is one of its values, so it fits, and a SET
+    // assigning it back to a column of that type needs the exact type
+    // (types.md §3.2b).
+    return {item.type_val, catalog::TypeModOf(item.type_val, item.decimal_len)};
 }
 
 std::vector<std::uint32_t> AggregateOutputTypes(const exec::AggregateSpec& spec) {
@@ -5635,35 +5640,20 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 "' needs an integer literal (byte " + std::to_string(key.byte_offset) + ")");
         }
         // **Exhausted** (BD-R5 2., `instructions/v3.0.0/workorder-bd-sorted-
-        // leaf-named-keys.md`): a key outside `[kFirstRowId, kMaxKeystoneId]`
-        // is one of the two reasons a named key is refused, `OutOfRange` with
-        // its byte - zero, a negative number, one above the 40-bit space, or
-        // a literal the lexer wrapped past 64 bits. Judged from the literal's
-        // own digits (`raw_int_text`), never from `int_val`, which a wrap
-        // makes a different number: `2^64 + 5` must not land as key 5.
+        // leaf-named-keys.md`): a key that is no Keystone id is one of the two
+        // reasons a named key is refused, `OutOfRange` with its byte - zero, a
+        // negative number, one above the 40-bit space, or a literal the lexer
+        // wrapped past 64 bits (`KeystoneIdOf`, the foreign key's test too).
         // Before the foreign-key and assertion steps, either of which can
         // wait.
-        // A value built rather than parsed carries no spelling; its number
-        // is then the spelling.
-        const std::string spelled =
-            key.raw_int_text.empty() ? std::to_string(key.int_val) : key.raw_int_text;
-        const auto exhausted = [&]() -> Status {
+        const std::optional<std::uint64_t> id = KeystoneIdOf(key);
+        if (!id.has_value()) {
             return Status::OutOfRange(
-                "primary key " + spelled + " is outside the Keystone id space [" +
+                "primary key " + exec::FormatValue(0, key) + " is outside the Keystone id space [" +
                 std::to_string(catalog::kFirstRowId) + ", " + std::to_string(kMaxKeystoneId) +
                 "] (byte " + std::to_string(key.byte_offset) + ")");
-        };
-        std::string_view digits = spelled;
-        if (!digits.empty() && digits.front() == '-') {
-            if (digits.find_first_not_of("0-") != std::string_view::npos) return exhausted();
-            digits = "0";  // "-0" is zero, refused below
         }
-        supplied_id = 0;
-        for (char d : digits) {
-            supplied_id = supplied_id * 10 + static_cast<std::uint64_t>(d - '0');
-            if (supplied_id > kMaxKeystoneId) return exhausted();
-        }
-        if (supplied_id < catalog::kFirstRowId) return exhausted();
+        supplied_id = *id;
         body_storage.assign(values.begin() + 1, values.end());
     }
     const std::vector<parser::AstValue>& body = explicit_key ? body_storage : values;

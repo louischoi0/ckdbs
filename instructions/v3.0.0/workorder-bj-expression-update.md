@@ -1226,11 +1226,23 @@ review of its own.
 **Filed, not fixed:**
 `docs/inflight/bugs/a-set-value-subquery-is-reparsed-behind-padding-as-long-as-its-offset.md`.
 
-**Open for the operator:**
-- **A decimal `MIN`/`MAX` subquery.** It is typed decimal(18,s) or
-  decimal(38,s), the wire's widened precision. So `SET d = (SELECT MAX(d)
-  FROM t)` is refused for a `decimal(10,2)` `d`. §3.2b says "its type is its
-  column's", so making it a scaled decimal (the `ROUND` mechanism) is a spec
-  change, not a fix.
-- **`int / decimal`** (`2 / price`) is refused while `price / 2` is admitted.
-  §3.2b's row reads as covering both orders.
+**Ruled by the operator (2026-10-11):**
+- **A decimal `MIN`/`MAX` subquery: (a).** It was typed decimal(18,s) or
+  decimal(38,s), the wire's widened precision, so `SET d = (SELECT MAX(d)
+  FROM t)` was refused for a `decimal(10,2)` `d`. `MIN`/`MAX` and a grouping
+  column are now described in the column's own `(p, s)`; `SUM`/`AVG` keep the
+  maximum (`types.md` §3.2b). A client reading `SELECT MAX(d)` sees
+  `numeric(10,2)` where it saw `numeric(18,2)`.
+- **`int / decimal`: (a).** `2 / price` was refused while `price / 2` was
+  admitted, though §3.2b's row read as covering both orders: the scalar rule
+  made the dividend an int64 with no `(p, s)` for the quotient's type. A
+  dividend is now never a scalar, so an integer literal (or NULL) over a
+  decimal takes the divisor's type, as `2.00 / price` does and as a literal
+  under `+`/`-` does; a literal the type cannot hold is refused where it is
+  written, and an int64 column is still refused.
+- **`decimal128(p, s)`: (a), the spec follows the code.** `types.md` TY2,
+  §2, its grammar and §2a said the wide type was declarable as
+  `decimal128(p, s)`; the parser refuses it, as H8 (2026-08-29) decided and
+  `types_contract_test` pins. The spec now says `decimal128` is the type's
+  name and DESCRIBE's rendering only, reached by declaring `decimal(p, s)`
+  with `p >= 19`. No code changed.

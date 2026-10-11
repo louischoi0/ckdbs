@@ -1052,6 +1052,8 @@ private:
     // decimal, an integer literal (or an expression of them) stays an int64
     // of scale 0 and a NULL stays NULL, so `price * 2` and `price * NULL`
     // keep the decimal's own scale (BJ-R3); an int64 *column* is never one.
+    // A dividend is never a scalar: the quotient's type is the dividend's,
+    // so `2 / price` takes the divisor's type as `2.00 / price` does.
     StatusOr<SetType> Settle(ExprOp op, std::uint32_t at, TypedSetExpr& l, TypedSetExpr& r,
                              const SetType* ctx) const {
         const bool mul_div = op == ExprOp::kMul || op == ExprOp::kDiv;
@@ -1068,7 +1070,8 @@ private:
         bool r_scalar = false;
         const auto Give = [&](TypedSetExpr& u, const SetType& target, bool& scalar) {
             SetType t = target;
-            if (mul_div && IsDecimal(target.type_val)) {
+            const bool dividend = op == ExprOp::kDiv && &u == &l;
+            if (mul_div && !dividend && IsDecimal(target.type_val)) {
                 if (u.type.kind == SetType::Kind::kInteger) {
                     t = Concrete(kTypeValInt64, 0);
                     scalar = true;

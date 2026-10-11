@@ -147,6 +147,34 @@ TEST_F(SetExprSubqueryTest, TheAnswerHasItsColumnsTypeAndTheAssignmentNeedsIt) {
               std::string::npos);
 }
 
+// An extreme of a decimal column is one of its values, so it is typed in the
+// column's own (p, s) and assigns back to a column of that type; a SUM widens
+// to the type's maximum precision and does not.
+TEST_F(SetExprSubqueryTest, ADecimalExtremeHasItsColumnsPrecisionAndASumDoesNot) {
+    Exec("UPDATE t SET d = (SELECT MAX(dd) FROM u) WHERE id = 1");
+    EXPECT_EQ(At("d", 1), "3.75");
+    Exec("UPDATE t SET d = (SELECT MIN(d) FROM t) - (SELECT MIN(dd) FROM u) WHERE id = 2");
+    EXPECT_EQ(At("d", 2), "-0.75");
+    // A grouping column is a member of the column too.
+    Exec("UPDATE t SET d = (SELECT dd FROM u WHERE id = 1 GROUP BY dd) WHERE id = 3");
+    EXPECT_EQ(At("d", 3), "2.25");
+    for (const char* fold : {"SUM", "AVG"}) {
+        EXPECT_NE(Run(std::string("UPDATE t SET d = (SELECT ") + fold + "(dd) FROM u) WHERE id = 1")
+                      .find("the expression is decimal(18,2) but column 'd' is decimal(10,2)"),
+                  std::string::npos)
+            << fold;
+    }
+    Exec("CREATE TABLE w (id int64, m decimal(12,2), big decimal(30,4), big2 decimal(30,4))");
+    Exec("INSERT INTO w VALUES (1, '4.00', '12345678901234567890.1234', '0')");
+    EXPECT_NE(Run("UPDATE t SET d = (SELECT MAX(m) FROM w) WHERE id = 1")
+                  .find("the expression is decimal(12,2) but column 'd' is decimal(10,2)"),
+              std::string::npos);
+    // The wide type keeps its own precision as well, rather than 38.
+    Exec("UPDATE w SET big2 = (SELECT MIN(big) FROM w) WHERE id = 1");
+    const std::string out = Run("SELECT big2 FROM w WHERE id = 1");
+    EXPECT_NE(out.find("12345678901234567890.1234"), std::string::npos) << out;
+}
+
 TEST_F(SetExprSubqueryTest, ASubqueryTheStatementCannotRunIsRefusedWithItsOwnReason) {
     const std::string missing_sql = "UPDATE t SET v = (SELECT nosuch FROM u WHERE id = 1)";
     const std::string missing = Run(missing_sql);
