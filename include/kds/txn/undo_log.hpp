@@ -8,6 +8,7 @@
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/storage/visit.hpp"
 #include "kds/txn/undo_page.hpp"
 #include "kds/wal/manager.hpp"
 
@@ -115,7 +116,8 @@ inline constexpr std::uint32_t kMaxUndoChainLength = 1u << 16;
 // not viewed: the next step fetches another page, and a store is free to
 // move its frames when it hands one out. That copy is also what keeps the
 // nested-access rule (docs/spec/parser-v2.md I15 R1) satisfiable on the read
-// path - see visibility.hpp, which is the walk's one production caller.
+// path - see visibility.hpp, which reads one step at a time, and
+// `exec::Backfill`, the walk's one production caller.
 struct UndoVersion {
     UndoRecordType type = UndoRecordType::kInvalid;
     std::uint64_t prior_trx_id = 0;
@@ -167,13 +169,18 @@ public:
     StatusOr<UndoVersion> Read(std::uint64_t ptr);
 
     // Walks a version chain newest -> oldest from `ptr`, calling `fn` for
-    // each version until it returns false, the chain ends at kNoUndoPtr, or
-    // kMaxUndoChainLength steps have been taken - the last of which is
-    // Corruption.
+    // each version until it returns `kStop`, the chain ends at kNoUndoPtr,
+    // or kMaxUndoChainLength steps have been taken - the last of which is
+    // Corruption. **A visitor's failure leaves by its Status**, as in every
+    // other walk (`storage/visit.hpp`): a plain `bool` stopped the walk and
+    // answered OK, which is how a failed append inside `CREATE INDEX`'s
+    // backfill went unseen.
     //
-    // A caller that only needs one step calls Read(); this exists for
-    // rollback and for tests that assert a whole chain.
-    Status Walk(std::uint64_t ptr, const std::function<bool(const UndoVersion&)>& fn);
+    // A caller that only needs one step calls Read(); this is for the index
+    // backfill, which indexes every version of a row, and for tests that
+    // assert a whole chain.
+    Status Walk(std::uint64_t ptr,
+                const std::function<StatusOr<storage::VisitControl>(const UndoVersion&)>& fn);
 
     // ---- The purge (header note above) ------------------------------------
 

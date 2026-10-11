@@ -219,10 +219,11 @@ TEST_F(UndoLogTest, AVersionChainWalksNewestToOldestAcrossTransactions) {
     ASSERT_TRUE(v3.ok());
 
     std::vector<std::string> seen;
-    ASSERT_TRUE(log_->Walk(v3.value(), [&](const UndoVersion& v) {
-                        seen.push_back(StringOf(v.image));
-                        return true;
-                    })
+    ASSERT_TRUE(log_->Walk(v3.value(),
+                           [&](const UndoVersion& v) -> StatusOr<storage::VisitControl> {
+                               seen.push_back(StringOf(v.image));
+                               return storage::VisitControl::kContinue;
+                           })
                     .ok());
     EXPECT_EQ(seen, (std::vector<std::string>{"v3", "v2", "v1"}));
 }
@@ -234,10 +235,11 @@ TEST_F(UndoLogTest, AWalkStopsWhenTheVisitorSaysSo) {
     ASSERT_TRUE(v2.ok());
 
     int visits = 0;
-    ASSERT_TRUE(log_->Walk(v2.value(), [&](const UndoVersion&) {
-                        ++visits;
-                        return false;
-                    })
+    ASSERT_TRUE(log_->Walk(v2.value(),
+                           [&](const UndoVersion&) -> StatusOr<storage::VisitControl> {
+                               ++visits;
+                               return storage::VisitControl::kStop;
+                           })
                     .ok());
     EXPECT_EQ(visits, 1);
 }
@@ -255,8 +257,27 @@ TEST_F(UndoLogTest, ASelfReferentialLinkIsCorruptionNotAHang) {
     std::memcpy(page.value().bytes().data() + UndoPtrOffset(ptr.value()) + kUndoRecPriorUndoPtrOffset,
                 &self, sizeof(self));
 
-    Status walked = log_->Walk(ptr.value(), [](const UndoVersion&) { return true; });
+    Status walked = log_->Walk(ptr.value(), [](const UndoVersion&) -> StatusOr<storage::VisitControl> {
+        return storage::VisitControl::kContinue;
+    });
     EXPECT_EQ(walked.code(), StatusCode::kCorruption) << walked.message();
+}
+
+TEST_F(UndoLogTest, AVisitorsFailureEndsTheWalkAndIsTheWalksStatus) {
+    // A visitor that fails says so by its Status; the walk neither swallows it
+    // nor goes on to the older versions.
+    auto v1 = log_->Append(50, Overwrite(41, kNoUndoPtr, 300, 2), BytesOf("v1"));
+    ASSERT_TRUE(v1.ok());
+    auto v2 = log_->Append(50, Overwrite(50, v1.value(), 300, 2), BytesOf("v2"));
+    ASSERT_TRUE(v2.ok());
+
+    int visits = 0;
+    Status walked = log_->Walk(v2.value(), [&](const UndoVersion&) -> StatusOr<storage::VisitControl> {
+        ++visits;
+        return Status::OutOfSpace("the visitor failed");
+    });
+    EXPECT_EQ(walked.code(), StatusCode::kOutOfSpace) << walked.message();
+    EXPECT_EQ(visits, 1);
 }
 
 TEST_F(UndoLogTest, ReadRefusesAnImplausiblePointer) {

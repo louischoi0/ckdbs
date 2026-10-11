@@ -35,7 +35,7 @@ balance is updated about 600 times. `CREATE INDEX`'s backfill, which
 appends one entry per version, reaches the same state - and **refuses the
 `CREATE INDEX`** with that error, naming the row, rather than publishing an
 index without the older versions (it used to drop the failure; the cell is
-`IndexContractTest.ABackfillThatCannotAppendEveryVersionIsRefusedNotPublishedPartial`).
+`IndexContractTest.ABackfillThatCannotAppendEveryVersionIsNeverPublishedPartial`).
 Such a relation cannot be given this index until the run is held.
 
 **A second SQL path since BD-S3: a rolled-back key named again.** By

@@ -198,7 +198,9 @@ StatusOr<UndoVersion> UndoLog::Read(std::uint64_t ptr) {
     return out;
 }
 
-Status UndoLog::Walk(std::uint64_t ptr, const std::function<bool(const UndoVersion&)>& fn) {
+Status UndoLog::Walk(
+    std::uint64_t ptr,
+    const std::function<StatusOr<storage::VisitControl>(const UndoVersion&)>& fn) {
     std::uint32_t steps = 0;
     while (ptr != kNoUndoPtr) {
         if (++steps > kMaxUndoChainLength) {
@@ -208,7 +210,9 @@ Status UndoLog::Walk(std::uint64_t ptr, const std::function<bool(const UndoVersi
         }
         auto version = Read(ptr);
         if (!version.ok()) return version.status();
-        if (!fn(version.value())) return Status::OK();
+        auto control = storage::ResolveVisit(fn(version.value()), "undo chain");
+        if (!control.ok()) return control.status();
+        if (control.value() == storage::VisitControl::kStop) return Status::OK();
         ptr = version.value().prior_undo_ptr;
     }
     return Status::OK();
