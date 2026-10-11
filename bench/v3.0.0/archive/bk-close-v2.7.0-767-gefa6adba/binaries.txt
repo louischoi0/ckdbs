@@ -1,0 +1,15 @@
+# Measured copies: sha256 of the copy every server was started from (run/bin/ under the session scratchpad, on /dev/root ext4).
+# Release builds (CMAKE_BUILD_TYPE read back from CMakeCache.txt), -O3 -DNDEBUG, g++ 13.3.0, cmake 3.28.3,
+# -DKDS_WITH_TLS=ON -DKDS_BUILD_SIM=ON -DKDS_BUILD_TESTS=OFF -DKDS_BUILD_BENCH=OFF, target kds_server only.
+
+A   5979b5e7  v2.7.0-763-g5979b5e7   committed 2026-10-11 01:34:23 UTC; binary mtime 2026-10-11 04:39:56.323186929 +0000
+    source: fresh detached worktree of 5979b5e7 (removed afterwards); copies kds_server-A and kds_server-A2 (null pair)
+164fa531cbb43273feae3aff544fe5625a4231263fae4fd830e7f9d850baa6b7  kds_server-A
+164fa531cbb43273feae3aff544fe5625a4231263fae4fd830e7f9d850baa6b7  kds_server-A2
+
+B   efa6adba  v2.7.0-767-gefa6adba   committed 2026-10-11 04:34:56 UTC; binary mtime 2026-10-11 04:39:56.546192746 +0000
+    source: fresh detached worktree of efa6adba (removed afterwards)
+b4091b79fe0b6563b1c0d2226b3e1e8ebdef382715250168bd57895dd59600ee  kds_server-B
+
+The BJ close's B' (e458e272, v2.7.0-757-ge458e272) binary: 164fa531cbb43273feae3aff544fe5625a4231263fae4fd830e7f9d850baa6b7
+(bench/v3.0.0/archive/bj-close-v2.7.0-757-ge458e272/binaries.txt) - byte-identical to A above.

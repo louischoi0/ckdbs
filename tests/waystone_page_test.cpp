@@ -29,7 +29,7 @@ protected:
 
 WaystoneEntry SampleEntry() {
     WaystoneEntry e{};
-    e.pk = 0x000000FFEEDDCCBBull;  // inside the 40-bit id space
+    e.pk = 0x0000A5FFEEDDCCBBull;  // bits 40-47 set: inside the 48-bit id space
     e.rel_oid = 0x1122334455667788ull;
     e.page_id = 0xAABBCCDDu;
     e.page_epoch = 0x01020304u;

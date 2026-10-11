@@ -219,9 +219,9 @@ shared lookup machinery but different lifecycle contracts:
 
 | Field | Width | Notes |
 |---|---|---|
-| pk | 40 bit | Keystone id, authoritative (K1 invariants: never reused except after a `PURGE` freed it, never changed - `DELETE` writes the departure and `PURGE` writes none) |
+| pk | 48 bit | Keystone id, authoritative (K1 invariants: never reused except after a `PURGE` freed it, never changed - `DELETE` writes the departure and `PURGE` writes none) |
 | flags | 8 bit | includes `RESERVED` for in-flight entries (§6) and `ORPHANED` (bit 3, `kEntryOrphaned`) for an entry whose reservation aborted (AS6b, §7) |
-| reserved | 16 bit | alignment |
+| reserved | 8 bit | alignment; the word is the Keystone word's layout (BK-R2) |
 | location hint: page id / epoch / slot | 64 bit | advisory; shares Waystone validation rules; on hint failure fall back to pk descent and heal in place |
 | aggregate value | 64 bit | the row's `SUM` column value, inline (int64). For COUNT-only assertions this field is written as 1. |
 | `group_id` | 32 bit | **AS6a.** Which group of this cabin the entry belongs to. Authoritative, not advisory: it is what lets recovery rebuild the header→entry linkage by scanning the cabin's own pages. |
@@ -360,6 +360,23 @@ fire-and-forget message to forget the directory until AT-S5d.
 On a checked write (per §4.2), executed inline in the writing statement:
 
 1. Compute the group key from the row; hash into the group directory.
+   **The key is built from each BY value coerced to its column's decoded
+   kind** (`CoerceLiteralToColumn`), so an `INSERT`'s literal (a `date` or
+   `timestamp` as a string, a `decimal` as text), a `SET` literal and a
+   decoded row all key one stored value the same way; the build's backfill
+   keys from decoded rows. **A value that does not coerce refuses the row
+   before its assertion holds or reserves anything** (an `UPDATE`'s earlier
+   assertions are unwound by the statement's abort). Group keys are logged as bytes
+   and replay never recomputes one, so an assertion on a `date`,
+   `timestamp`, `decimal` or `decimal128` column that reserved under the
+   written form before this rule holds groups no later write reaches, and
+   its bound would undercount. **A mount reads every recovered group's key
+   kinds against its BY columns' stored kinds** (`CheckGroupKeyKinds`) and
+   leaves an assertion with any such group that counts a row unenforcing (an
+   empty one - a rolled-back insert's - holds nothing a bound could miss), refusing its
+   relation's writes as §7 does for a directory it cannot base, until `DROP`
+   and `CREATE ASSERTION` rebuild it. No other BY type is affected, and no
+   format changed.
 2. **Admission check:** would `count + Δcount` / `sum + Δsum`, with every
    held contribution to the group counted, exceed the bound? (Checked int64
    arithmetic; overflow ⇒ statement error, AG3.)
@@ -686,8 +703,15 @@ of the same id could cross the create's chunk by chunk, and recovery
 discards both (§7, AS6a). The adoption is safe before the row wherever the
 dispatcher takes the relation `X`, which is held across all of it: no writer
 meets the assertion before it is published. The dispatcher takes none with
-no lock table, and none for a name its session's view does not resolve
-(`docs/inflight/bugs/a-create-assertion-on-a-relation-its-view-cannot-see-builds-unfenced.md`).
+no lock table. **The target is resolved once, under a settled view, and the
+oid it names is the one locked and the one built**: a relation an open
+transaction created - the session's own included - is refused `NotFound`
+with its byte, as is a name dropped while the build waited for the `X`; a
+name that resolves to another oid once the `X` is granted (dropped and
+re-created meanwhile) is refused `TxnConflict`. Settled rather than the
+session's view because the statement reads settled state, and because a
+repeatable-read transaction's view would keep naming a relation dropped and
+re-created since its `BEGIN`, refusing every retry.
 **A publish that is then refused evicts the directory** before its
 `ASSERT_DROP` (a row whose own log fails stays on its page:
 `docs/inflight/bugs/an-assertion-row-whose-log-fails-stays-on-its-page.md`); a refused base adopts nothing and logs the `ASSERT_DROP`

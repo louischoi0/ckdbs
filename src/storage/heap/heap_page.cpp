@@ -1,6 +1,9 @@
 #include "kds/storage/heap/heap_page.hpp"
 
 #include <cstring>
+#include <string>
+
+#include "kds/storage/keystone.hpp"
 
 // rules.md #2: all access to on-disk page bytes goes through field-wise
 // memcpy helpers; reinterpret_cast of struct types onto page buffers is
@@ -10,12 +13,6 @@
 namespace kds::heap {
 
 namespace {
-
-// Matches the Keystone column's 40-bit id width (kKeystoneIdBits in
-// keystone.hpp), duplicated here rather than including that header,
-// to keep the heap page layer decoupled from row-encoding format (see the
-// file-level layering note in heap_page.hpp).
-inline constexpr std::uint64_t kMaxTupleId = (std::uint64_t{1} << 40) - 1;
 
 std::size_t SlotOffset(std::uint16_t idx) {
     return kHeapHeaderOffset + kHeaderSize + static_cast<std::size_t>(idx) * kSlotOnDiskSize;
@@ -70,8 +67,12 @@ StatusOr<PageView> PageView::CreateEmptyAs(std::span<std::byte, kPageSize> page,
     if (type != PageType::kHeap && type != PageType::kBtreeLeaf) {
         return Status::InvalidArgument("only kHeap and kBtreeLeaf pages carry a heap page body");
     }
-    if (min_key > kMaxTupleId) {
-        return Status::InvalidArgument("min_key exceeds 40-bit tuple id range");
+    // The one Keystone constant the page layer reads (BK-R2): a min_key is an
+    // id, and an id's ceiling is spelt in keystone.hpp alone.
+    if (min_key > kMaxKeystoneId) {
+        return Status::InvalidArgument("min_key " + std::to_string(min_key) +
+                                       " exceeds the Keystone id space (max " +
+                                       std::to_string(kMaxKeystoneId) + ")");
     }
 
     // Zeroes the page and writes the common header (the requested page

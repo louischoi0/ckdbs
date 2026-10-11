@@ -193,9 +193,9 @@ key:
     this key was deleted; PURGE frees its key (page <p> slot <s>)
     (byte <n>)`). A key named twice in one statement is a duplicate at its
     second row;
-  - **exhausted**, `OutOfRange`: the key is outside `[1, 2^40 - 1]`
+  - **exhausted**, `OutOfRange`: the key is outside `[1, 2^48 - 1]`
     (`ERR primary key <k> is outside the Keystone id space [1,
-    1099511627775] (byte <n>)`) — zero, negative, too large, or a literal
+    281474976710655] (byte <n>)`) — zero, negative, too large, or a literal
     too long for 64 bits.
 
   **A key whose insert rolled back is free**, and naming it again places
@@ -464,7 +464,7 @@ Registered in `sys.types` (verified in `src/catalog/catalog.cpp`):
 | `date` | int32, days since 1970-01-01 | literal: `'2026-08-09'` |
 | `timestamp` | int64, microseconds since the epoch, UTC | literal: `'2026-08-09 12:00:00'` |
 | `decimal(p,s)`, p ≤ 18 | int64 unscaled + scale | TY01-TY11; both arguments **mandatory** |
-| `decimal(p,s)`, 19 ≤ p ≤ 38 (also spelled `decimal128(p,s)`) | int128 | a separate type, never a widening of the 8-byte one |
+| `decimal(p,s)`, 19 ≤ p ≤ 38 (DESCRIBE shows it as `decimal128(p,s)`, a name only: declare it as `decimal(p,s)`) | int128 | a separate type, never a widening of the 8-byte one |
 
 - **A bare `decimal` is refused, never defaulted** — a default scale is a
   silent decision about someone's money, and only the parser can still tell
@@ -530,7 +530,7 @@ INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
   no column list and no body column may be omitted individually — so a wrong
   length is refused naming both:
   `ERR expected 3 value(s) including primary-key column 'id', or 2 to have it issued; got 4`.
-- **A named pk must be an integer literal** in `[1, 2^40 - 1]` — 0 is
+- **A named pk must be an integer literal** in `[1, 2^48 - 1]` — 0 is
   reserved for "unset". A non-integer is `InvalidArgument`; an integer
   outside the range is `OutOfRange` (exhausted). Both carry the offending
   token's byte and are checked before anything is placed, so a refused row
@@ -576,8 +576,48 @@ INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
 UPDATE accounts SET balance = 99.00 WHERE id = 42;
 ```
 
-- Grammar: `UPDATE <table> SET <col> = <val> [, ...] [WHERE ...]`.
+- Grammar: `UPDATE <table> SET <col> = <value expression> [, ...] [WHERE ...]`,
+  and `SET (<col>, ...) = (<value>, ...)`.
 - The WHERE is the same production SELECT uses, subqueries included.
+- **A SET value is an expression** (BJ). `UPDATE accounts SET balance =
+  balance + 25.00 WHERE id = 42` is one statement and one lost-update-free
+  step, where a client used to `SELECT`, add and `UPDATE`. What a value may
+  be, and how each is typed, is `docs/spec/types.md` §3.2b; in short:
+  - **Operators**: `+ - * / %` over numbers, `||` over text, unary `+ -`;
+    `date + n`, `date - n`, `date - date`; the comparisons `= != < <= > >=`,
+    `AND`, `OR`, `NOT` and `IS [NOT] NULL`, which give a `bool` a `bool` column
+    takes. Precedence is PostgreSQL's. Write inequality `!=`; `<>` is not
+    lexed.
+  - **Forms**: `CASE` (simple and searched), `COALESCE`, `NULLIF`,
+    `GREATEST`, `LEAST`, `CAST(x AS t)` and `x::t`.
+  - **Functions**: `ABS SIGN CEIL FLOOR ROUND TRUNC MOD`, `UPPER LOWER LENGTH
+    SUBSTRING TRIM LTRIM RTRIM POSITION(a IN b) REPLACE LPAD RPAD CONCAT`,
+    `NOW()`, `CURRENT_DATE`, `DATE(ts)`. Strings are bytes.
+  - **A scalar subquery**, `SET v = v + (SELECT SUM(v) FROM t)`: run once,
+    before the first row, so every row is raised by the sum the table had
+    before the statement. Unlike a WHERE subquery it does not see the rows
+    the statement has already written. One column, at most one row (more is
+    an error even when the WHERE matches nothing), no row is NULL, and one
+    that reads the row being updated is refused.
+  - **Every SET expression reads the row as it was before the statement**:
+    `SET a = b, b = a` swaps. A column named twice is refused.
+  - **No implicit conversion**: an operator's operands, a `CASE`'s results
+    and the value assigned are each one exact type, and a literal takes the
+    type its neighbour or its column has. `int32 + int64` needs a `CAST`.
+    A decimal result of another scale is narrowed by `ROUND(x, s)` or `CAST`,
+    which round half away from zero; a quotient is `decimal` with the
+    dividend's scale and up to 16 more places. An integer literal divided
+    by a decimal takes the decimal's type: `2 / price` is `2.00 / price`.
+  - **Arithmetic is checked in its own type at every step**: a result
+    outside it is `OutOfRange` at that row, naming the operator's byte, the
+    expression's first byte and the row's key, and a division by zero is
+    `InvalidArgument`. NULL propagates (`SET n = n + 1` over a NULL leaves
+    it NULL and counts the row); a NULL into a `NOT NULL` column is refused
+    at the row.
+  - **What is not there**: `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `IS TRUE`,
+    boolean literals, a correlated or catalog-view subquery, an expression
+    in `INSERT ... VALUES` or a select list, and an expression that reads a
+    column assigned to a foreign-key column (a constant one is checked).
 - **The primary key cannot be assigned**, and the
   refusal is `Unsupported` with the column's byte — understood and
   declined, not a feature awaiting work (K2). This holds whether the key was
@@ -589,6 +629,10 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
   compile, before any storage is touched, so a refused UPDATE writes
   nothing.
 - An UPDATE never migrates a tuple.
+- A statement whose expression does not type is refused at compile whether or
+  not a row matches, naming both types and the byte. A bare literal keeps its
+  per-row check, so `SET int_col = 'abc'` over a WHERE that matches nothing
+  still answers `UPDATED 0`.
 - Reply: `UPDATED <n>`.
 
 ### DELETE (verified — it exists)
@@ -957,9 +1001,10 @@ and a qualifier naming no relation in the statement is refused in the
 `WHERE` exactly as it is in the projection. A view's integers compare
 **unsigned**, because every one of them is stored as a `uint64` and
 `sys.patterns.fetch_id` really does use the full 64-bit range. One
-consequence, the same one a `uint64` column on an ordinary relation has:
-a negative literal is not a `uint64`, so `WHERE oid > -1` is a non-match
-for every row rather than a comparison that succeeds.
+consequence: a negative literal is not a `uint64`, so on a view `WHERE oid
+> -1` is a non-match for every row rather than a comparison that succeeds.
+A `uint64` column on an ordinary relation refuses such a literal instead -
+a negative one, or one past 2^64 - 1, is `OutOfRange` with its byte.
 
 There is also a legacy non-SQL form: `CREATE TABLE <name>` with **no column
 list** routes to a pre-SQL handler (the dispatcher routes on the presence
@@ -1086,7 +1131,7 @@ in §7 below now carries and which both used to reach a client as a bare
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
 | A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including primary-key column '<name>', or <n-1> to have it issued; got <k>` |
 | A non-integer supplied pk | `InvalidArgument` — `ERR primary-key column '<name>' needs an integer literal (byte <n>)` |
-| A supplied pk outside `[1, 2^40 - 1]` (zero, negative, too large, or past 64 bits) — *exhausted* | `OutOfRange` — `ERR primary key <k> is outside the Keystone id space [1, 1099511627775] (byte <n>)` |
+| A supplied pk outside `[1, 2^48 - 1]` (zero, negative, too large, or past 64 bits) — *exhausted* | `OutOfRange` — `ERR primary key <k> is outside the Keystone id space [1, 281474976710655] (byte <n>)` |
 | A supplied pk already bound on a `BTREE` relation — *duplicate* | `AlreadyExists` — `ERR duplicate primary key <k> already present at page <p> slot <s> (byte <n>)`, or for a `DELETE`d row's key, until a `PURGE` frees it, `ERR duplicate primary key <k>: a row with this key was deleted; PURGE frees its key (page <p> slot <s>) (byte <n>)` |
 | A supplied pk below the high-water mark of a `HEAP` relation (none can be created since SUS-1) | `OutOfRange` — `ERR primary key <k> is below relation <oid>'s high-water mark <m>; a named key must sort above every key the relation has placed or issued, which is what keeps every page's slot order its key order`, or when the key sorts below the chain's tail `ERR primary key <k> is below the relation's high-water mark: the chain's tail, page <p>, opens at <m>, an id already placed; a named key must sort above every key the relation has placed or issued` (neither form carries a byte) |
 | An omitted pk on a `BTREE` relation whose issued id met a concurrently named key 8 times in a row | `AlreadyExists` — `ERR duplicate primary key <k> already present at page <p> slot <s>` (no byte: the key was issued, not written) |

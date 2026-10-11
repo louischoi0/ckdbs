@@ -1,5 +1,7 @@
 #include "kds/exec/tuple_verify.hpp"
 
+#include "kds/storage/keystone.hpp"
+
 #include "kds/exec/row_codec.hpp"
 #include "kds/storage/page_header.hpp"
 
@@ -49,7 +51,7 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
     // about to read this row through the authoritative path anyway, and if
     // the bytes really are damaged that path reports it - with the relation
     // and the schema in hand, which this function does not have.
-    auto found_pk = RowKeystoneId(tuple.value().payload);
+    auto found_pk = KeystoneIdOfPayload(tuple.value().payload);
     if (!found_pk.ok() || found_pk.value() != expected_pk) {
         out.outcome = VerifyOutcome::kPkMismatch;
         return out;

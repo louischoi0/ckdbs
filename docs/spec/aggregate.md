@@ -150,7 +150,7 @@ must never produce — it is wrong in a way no reader can detect, which is
 the same argument the trail trust model rests on.
 
 Constraints, stated as product facts the way `keystoneid-invariant.md`
-states the 40-bit budget: **(a)** `SUM` requires a signed integer column
+states the 48-bit budget: **(a)** `SUM` requires a signed integer column
 (`int8`–`int64`) or a decimal column, whose unscaled value rides the same
 checked adder (`types.md` TY2); **(b)** `SUM` over `uint64` — the pk type —
 is `Unsupported`, because half its range exceeds the accumulator and a sum

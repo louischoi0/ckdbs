@@ -1,0 +1,5 @@
+host_before: ['ctest:3606437']
+host_after: ['ctest:3606437']
+other-CPU busy 14.0% > 10 %
+A ping p50 66.9 > 1.10 x 52.1
+B ping p50 66.6 > 1.10 x 52.1

@@ -1,0 +1,25 @@
+n10000-run1 rc 0 load 2.41 -> 2.38 dur 4s cpu6/7=0.431/0.424 others_max=0.028 comp=no
+n1000-run1 rc 0 load 2.38 -> 2.19 dur 4s cpu6/7=0.409/0.393 others_max=0.026 comp=no
+n200-run1 rc 0 load 2.19 -> 2.01 dur 4s cpu6/7=0.424/0.423 others_max=0.039 comp=no
+n10000-run2 rc 0 load 2.01 -> 1.85 dur 4s cpu6/7=0.408/0.4 others_max=0.034 comp=no
+n1000-run2 rc 0 load 1.85 -> 1.87 dur 4s cpu6/7=0.429/0.417 others_max=0.048 comp=no
+n200-run2 rc 0 load 1.87 -> 1.88 dur 4s cpu6/7=0.415/0.432 others_max=0.022 comp=no
+n10000-run3 rc 0 load 1.88 -> 1.97 dur 4s cpu6/7=0.427/0.411 others_max=0.033 comp=no
+n1000-run3 rc 0 load 1.97 -> 2.05 dur 3s cpu6/7=0.441/0.449 others_max=0.056 comp=no
+n200-run3 rc 0 load 2.05 -> 2.21 dur 4s cpu6/7=0.417/0.412 others_max=0.028 comp=no
+n10000-run4 rc 0 load 2.21 -> 2.19 dur 4s cpu6/7=0.425/0.425 others_max=0.025 comp=no
+n1000-run4 rc 0 load 2.19 -> 2.33 dur 4s cpu6/7=0.423/0.419 others_max=0.033 comp=no
+n200-run4 rc 0 load 2.33 -> 2.23 dur 3s cpu6/7=0.45/0.446 others_max=0.026 comp=no
+n10000-run5 rc 0 load 2.23 -> 2.13 dur 3s cpu6/7=0.456/0.45 others_max=0.032 comp=no
+n1000-run5 rc 0 load 2.13 -> 2.13 dur 3s cpu6/7=0.449/0.451 others_max=0.062 comp=no
+n200-run5 rc 0 load 2.13 -> 1.96 dur 3s cpu6/7=0.462/0.447 others_max=0.032 comp=no
+n10000-run6 rc 0 load 1.96 -> 1.80 dur 3s cpu6/7=0.458/0.448 others_max=0.038 comp=no
+n1000-run6 rc 0 load 1.80 -> 1.82 dur 3s cpu6/7=0.446/0.449 others_max=0.027 comp=no
+n200-run6 rc 0 load 1.82 -> 1.99 dur 3s cpu6/7=0.44/0.45 others_max=0.033 comp=no
+n10000-run7 rc 0 load 1.99 -> 1.99 dur 3s cpu6/7=0.442/0.451 others_max=0.035 comp=no
+n1000-run7 rc 0 load 1.99 -> 1.99 dur 3s cpu6/7=0.451/0.455 others_max=0.041 comp=no
+n200-run7 rc 0 load 1.99 -> 1.91 dur 3s cpu6/7=0.445/0.45 others_max=0.051 comp=no
+n10000-run8 rc 0 load 1.91 -> 1.84 dur 3s cpu6/7=0.45/0.452 others_max=0.023 comp=no
+n1000-run8 rc 0 load 1.84 -> 1.93 dur 3s cpu6/7=0.449/0.465 others_max=0.039 comp=no
+n200-run8 rc 0 load 1.93 -> 1.93 dur 3s cpu6/7=0.445/0.442 others_max=0.027 comp=no
+ALLDONE

@@ -61,6 +61,13 @@ namespace {
 using testing_race::ArmedStore;
 using testing_race::Rendezvous;
 
+// A BY column's schema row, carrying only the type a hand-built assertion needs.
+catalog::SysColumnRow GroupColumn(std::uint32_t type_val) {
+    catalog::SysColumnRow col{};
+    col.type_val = type_val;
+    return col;
+}
+
 inline constexpr catalog::Oid kOid = 4000;
 inline constexpr int kThreads = 2;
 // A record budget no cabin here comes near, for a visit that logs nothing.
@@ -77,7 +84,7 @@ LiveAssertion CountCap(storage::PageStore& store, std::uint64_t id, std::int64_t
     a.aggregate = BoundAggregate::kCount;
     a.group_cols = {1};
     a.group_col_names = {"v"};
-    a.group_type_vals = {catalog::kTypeValInt64};
+    a.group_columns = {GroupColumn(catalog::kTypeValInt64)};
     a.chain = BoundCabinChainWriter(id);
     EXPECT_TRUE(a.chain.EnsureRoot(store, /*wal=*/nullptr).ok());
     a.cabin = BoundCabin(BoundAggregate::kCount, bound);

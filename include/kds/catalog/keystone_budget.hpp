@@ -8,7 +8,7 @@
 // How much of a relation's lifetime id budget has been spent
 // (`docs/rules/keystoneid-invariant.md` K4 and K-M4).
 //
-// K4 turns 2^40 from a live-row bound into a **lifetime issuance budget per
+// K4 turns the id space from a live-row bound into a **lifetime issuance budget per
 // relation**, and that is the whole reason this file exists as arithmetic
 // rather than as a line of `<<` in the dispatcher. Three things follow from
 // it that a caller doing the subtraction inline gets wrong:
@@ -20,7 +20,7 @@
 //      rendering this must say "issued", never "rows".
 //   2. **The budget starts at `kFirstRowId`, not at zero.** Id 0 is
 //      reserved as "unset" (rows.hpp), so the capacity is one short of
-//      2^40 and an off-by-one here is an off-by-one in the warning.
+//      2^kKeystoneIdBits and an off-by-one here is an off-by-one in the warning.
 //   3. **Exhaustion is a real state, not the tail of a percentage.**
 //      `AllocateRowId` refuses with `OutOfRange` rather than wrapping, so
 //      "100% used" and "the next insert fails" are the same event and this

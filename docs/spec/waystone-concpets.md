@@ -116,7 +116,7 @@ Entry — 32 bytes, one per Keystone in the trail:
 
 | Offset | Size | Field | Notes |
 |---|---|---|---|
-| 0 | 8 | `pk` | zero-extended Keystone id, upper 24 bits 0 (invariant 7) |
+| 0 | 8 | `pk` | zero-extended Keystone id, upper 16 bits 0 (invariant 7) |
 | 8 | 8 | `rel_oid` | **the field a per-relation structure did not need.** One page spans relations, so the entry must say which. A full 64-bit `catalog::Oid`: oids are `uint64` at the source, and a narrowed copy that happens to fit today aliases two relations onto one value the day it does not |
 | 16 | 4 | `page_id` | last observed location; advisory |
 | 20 | 4 | `page_epoch` | location trust (§2 rule 2); the page's `relayout_epoch` narrowed to 32 bits |

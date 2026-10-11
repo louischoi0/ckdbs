@@ -14,7 +14,7 @@ unique-constraint semantics (fail-fast, same family),
 Decisions:
 
 - **F1 — FKs reference the parent's Keystone id.** The child fk column
-  holds the parent's engine pk (40-bit id in a u64/int cell), never a
+  holds the parent's engine pk (48-bit id in a u64/int cell), never a
   business key. Consequences bought outright by K1/K2: *ON UPDATE
   CASCADE does not exist* (the referenced key is immutable), and a
   stored reference can dangle but names a different committed parent
@@ -155,6 +155,11 @@ probe parent_rel  key = <fk value being written>
   refuses it by name (`NOT NULL`) — so the NOT NULL refusal is the gate.
   On the reverse side a NULL child cell matches no parent pk, so a NULL
   child never blocks its parent's delete.
+- An integer fk value that is no Keystone id - below 1 (negative or 0),
+  above `2^48 - 1`, or a literal past int64 (a `uint64` above `INT64_MAX`)
+  - names no parent that can exist: `kFkViolation`, with no `S` taken and
+  no probe. A non-integer value stays the codec's refusal. The test is
+  `KeystoneIdOf`, the one a named pk is refused `OutOfRange` by (BD-R5).
 - Probe finds a version → apply **check visibility** (§4): visible
   committed parent → pass; written or delete-marked by an in-flight
   foreign trx → busy (`TxnConflict`, F3); deleted-committed or not found →
@@ -194,6 +199,15 @@ dispatch fork. Two things pay for it, and neither is a ring round trip:
 - **The wait has somewhere to happen.** The per-row check runs inside an
   open `WriteScope`, which is no place to park; the fork is before any row
   is written, so a statement refused there can be re-run whole.
+
+**An expression assigned to a foreign-key column** (BJ-Q10). A SET value that
+is a constant - no column reference, no `NOW()` - is folded at compile, and
+its value is what the hoist resolves and what the per-row check applies. One
+that reads a column, or the clock, is refused `NotImplemented` at its byte:
+resolving its parent per row would descend the parent under the write walk's
+exclusive leaf, the open page-latch cycle
+(`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`).
+A scalar subquery is run once before the walk and is a constant from then on.
 
 **Nothing inside an open `WriteScope` waits or crosses**, which was
 AH-R1's rule and survives it: the per-row check answers from the resolved

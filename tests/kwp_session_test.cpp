@@ -521,8 +521,9 @@ TEST_F(KwpSessionTest, ANegativeValueBoundAfterAMinusIsNotAComment) {
     // `x -?` bound with -5 used to paste as `x --5`, a line comment that ate
     // the rest of the statement - here the WHERE, so a statement meant for one
     // row was a statement for all of them (BJ-S2's review). It is a minus
-    // and a negative literal now: an expression, which BJ-S3 types and
-    // BJ-S4 has not yet built, so nothing is written either way.
+    // and a negative literal now: the expression `100 - -5` under a WHERE
+    // that matches no row, so nothing is written. Without the fix the WHERE
+    // is gone and every row is set to 100.
     Handshake();
     auto Int32 = [](std::int32_t v) {
         std::vector<std::byte> bytes(4);
@@ -545,8 +546,8 @@ TEST_F(KwpSessionTest, ANegativeValueBoundAfterAMinusIsNotAComment) {
     Feed(ClientFrameType::kBind, Bind("p", "s", {a, b}));
     auto frames = Feed(ClientFrameType::kExecute, Execute("p", 0));
     ASSERT_EQ(frames.size(), 1u);
-    EXPECT_EQ(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError))
-        << "the statement kept its WHERE and its expression; nothing ran";
+    EXPECT_NE(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError))
+        << "the statement parses and runs; it kept its WHERE";
     EXPECT_EQ(Run("SELECT id, v FROM t"), before);
 }
 

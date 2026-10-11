@@ -203,6 +203,8 @@ struct SimVerdict {
     // handed, and segments removed. A run where these stay 0 recovered from
     // a whole log, whatever it printed.
     std::size_t checkpoints = 0;
+    // Cadence runs abandoned mid-steps (BI-S2), half a period after each tick.
+    std::size_t abandoned_checkpoints = 0;
     std::size_t recycles = 0;
     std::size_t segments_recycled = 0;
     std::size_t crashes_reviving_segments = 0;

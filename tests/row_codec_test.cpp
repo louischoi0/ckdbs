@@ -74,7 +74,7 @@ TEST(RowCodecKeystoneTest, PayloadStartsWithTheKeystoneWord) {
     EXPECT_EQ(encoded.value().size(), kKeystoneWordSize + storage::kDefaultInlineCellWidth);
     EXPECT_EQ(encoded.value().size(), LayoutFor(TwoColumnSchema()).row_size);
 
-    auto id = RowKeystoneId(encoded.value());
+    auto id = KeystoneIdOfPayload(encoded.value());
     ASSERT_TRUE(id.ok());
     EXPECT_EQ(id.value(), 7u);
 }
@@ -101,7 +101,7 @@ TEST(RowCodecKeystoneTest, ValueListCoversEveryColumnButThePrimaryKey) {
     EXPECT_EQ(missing.status().code(), StatusCode::kInvalidArgument);
 }
 
-TEST(RowCodecKeystoneTest, AnIdBeyondFortyBitsIsRefused) {
+TEST(RowCodecKeystoneTest, AnIdBeyondTheIdSpaceIsRefused) {
     auto out = EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), kMaxKeystoneId + 1, {Str("x")});
     EXPECT_FALSE(out.ok());
     EXPECT_EQ(out.status().code(), StatusCode::kInvalidArgument);
@@ -122,7 +122,7 @@ TEST(RowCodecKeystoneTest, DistinctIdsProduceDistinctPayloads) {
 
 TEST(RowCodecKeystoneTest, APayloadTooShortForTheWordIsCorruption) {
     std::vector<std::byte> stub(4, std::byte{0});
-    auto id = RowKeystoneId(stub);
+    auto id = KeystoneIdOfPayload(stub);
     EXPECT_FALSE(id.ok());
     EXPECT_EQ(id.status().code(), StatusCode::kCorruption);
 }
@@ -157,7 +157,7 @@ TEST(RowCodecKeystoneTest, EveryIntegerWidthIsAcceptedAsAPrimaryKey) {
 }
 
 TEST(RowCodecKeystoneTest, ThePrimaryKeyIsNotConstrainedByItsDeclaredWidth) {
-    // The id lives in the 40-bit Keystone field, not in an int8 column, so
+    // The id lives in the Keystone field, not in an int8 column, so
     // declaring a narrow pk type does not cap the sequence. The declared
     // type is display metadata (DESCRIBE), not the storage.
     catalog::Schema schema;
@@ -545,6 +545,120 @@ TEST(RowCodecNullTest, OnlyTheBitmapByteDistinguishesANullRowFromItsTwin) {
         EXPECT_EQ(with_null.value()[i], with_zero.value()[i]) << "byte " << i;
     }
     EXPECT_NE(with_null.value().back(), with_zero.value().back());
+}
+
+// ---- EncodeAssigned: an UPDATE's image (BK-R2, BK-R3) ----------------------
+//
+// `instructions/v3.0.0/workorder-bk-opt-read-update-path.md`. An UPDATE used
+// to decode the whole row and re-encode it whole; it now copies the row and
+// re-encodes only the assigned cells. For every row that spills nothing the
+// two must agree byte for byte - every type, NULL in both directions, a
+// shorter string over a longer one - or an untouched column would change
+// when a neighbour was written, or an assigned one would keep a stale byte.
+
+catalog::Schema EveryTypeSchema() {
+    catalog::Schema schema;
+    schema.columns.push_back(Col(0, "id", catalog::kTypeValInt64, 8));
+    schema.columns.push_back(NullableCol(1, "i8", catalog::kTypeValInt8, 1));
+    schema.columns.push_back(Col(2, "i16", catalog::kTypeValInt16, 2));
+    schema.columns.push_back(NullableCol(3, "i32", catalog::kTypeValInt32, 4));
+    schema.columns.push_back(Col(4, "i64", catalog::kTypeValInt64, 8));
+    schema.columns.push_back(NullableCol(5, "u64", catalog::kTypeValUint64, 8));
+    schema.columns.push_back(NullableCol(6, "b", catalog::kTypeValBool, 1));
+    schema.columns.push_back(NullableCol(7, "c", catalog::kTypeValChar, 8));
+    schema.columns.push_back(NullableCol(8, "s", catalog::kTypeValVarchar));
+    schema.columns.push_back(NullableCol(9, "d", catalog::kTypeValDate, 4));
+    schema.columns.push_back(NullableCol(10, "ts", catalog::kTypeValTimestamp, 8));
+    schema.columns.push_back(
+        NullableCol(11, "dec", catalog::kTypeValDecimal, catalog::PackDecimalLen(10, 2)));
+    schema.columns.push_back(NullableCol(12, "wide", catalog::kTypeValDecimalWide,
+                                         catalog::PackDecimalLen(30, 4)));
+    schema.columns.push_back(Col(13, "last", catalog::kTypeValVarchar, 0));
+    return schema;
+}
+
+// Two full value lists, every column different between them, and NULL in
+// both directions on the nullable ones.
+std::vector<parser::AstValue> EveryTypeRow(bool second) {
+    if (!second) {
+        return {Int(-7),          Int(300),
+                Int(70000),       Int(1),
+                Null(),           Int(1),
+                Str("abcdefgh"),  Str("a long-ish inline string"),
+                Str("2026-10-11"), Null(),
+                Str("12.34"),     Str("123456789012345678901234.5678"),
+                Str("tail")};
+    }
+    return {Null(),       Int(-2),
+            Null(),       Int(-9),
+            Int(42),      Null(),
+            Str("x"),     Str("short"),
+            Null(),       Str("2026-10-11 09:15:00.250000"),
+            Null(),       Str("-0.0001"),
+            Str("tail two")};
+}
+
+TEST(RowCodecEncodeAssignedTest, EveryAssignmentMatchesAWholeRowEncodeByteForByte) {
+    const catalog::Schema schema = EveryTypeSchema();
+    const catalog::RowLayout layout = LayoutFor(schema);
+    const auto first = EveryTypeRow(false);
+    const auto second = EveryTypeRow(true);
+    auto image_first = EncodeRow(schema, layout, /*id=*/11, first);
+    ASSERT_TRUE(image_first.ok()) << image_first.status().message();
+    auto image_second = EncodeRow(schema, layout, 11, second);
+    ASSERT_TRUE(image_second.ok()) << image_second.status().message();
+
+    // Every single column, in both directions, then every column at once.
+    for (const bool forward : {true, false}) {
+        const auto& from = forward ? first : second;
+        const auto& to = forward ? second : first;
+        const auto& image = forward ? image_first.value() : image_second.value();
+        std::vector<AssignedCell> all;
+        for (std::size_t col = 1; col < schema.columns.size(); ++col) {
+            auto expected_values = from;
+            expected_values[col - 1] = to[col - 1];
+            auto expected = EncodeRow(schema, layout, 11, expected_values);
+            ASSERT_TRUE(expected.ok()) << col << ": " << expected.status().message();
+            const AssignedCell one[] = {{col, &to[col - 1]}};
+            auto got = EncodeAssigned(schema, layout, 11, image, one);
+            ASSERT_TRUE(got.ok()) << col << ": " << got.status().message();
+            EXPECT_EQ(got.value(), expected.value()) << "column " << col << " forward " << forward;
+            all.push_back(one[0]);
+        }
+        auto expected = EncodeRow(schema, layout, 11, to);
+        ASSERT_TRUE(expected.ok());
+        auto got = EncodeAssigned(schema, layout, 11, image, all);
+        ASSERT_TRUE(got.ok()) << got.status().message();
+        EXPECT_EQ(got.value(), expected.value()) << "every column, forward " << forward;
+    }
+}
+
+TEST(RowCodecEncodeAssignedTest, ARefusedValueAndAWrongImageAreRefused) {
+    const catalog::Schema schema = EveryTypeSchema();
+    const catalog::RowLayout layout = LayoutFor(schema);
+    auto image = EncodeRow(schema, layout, 11, EveryTypeRow(false));
+    ASSERT_TRUE(image.ok());
+
+    // The value's own refusal, as EncodeRow gives it: NULL into NOT NULL.
+    const parser::AstValue null = Null();
+    const AssignedCell into_not_null[] = {{2, &null}};
+    auto refused = EncodeAssigned(schema, layout, 11, image.value(), into_not_null);
+    ASSERT_FALSE(refused.ok());
+    EXPECT_NE(refused.status().message().find("NOT NULL"), std::string::npos);
+
+    // An image of the wrong size is never carried into a new version.
+    const parser::AstValue one = Int(1);
+    const AssignedCell cell[] = {{1, &one}};
+    const std::vector<std::byte> short_image(image.value().begin(), image.value().end() - 1);
+    EXPECT_EQ(EncodeAssigned(schema, layout, 11, short_image, cell).status().code(),
+              StatusCode::kCorruption);
+    // Nor is a cell naming the pk or no column at all.
+    for (const std::size_t bad : {std::size_t{0}, schema.columns.size()}) {
+        const AssignedCell wrong[] = {{bad, &one}};
+        EXPECT_EQ(EncodeAssigned(schema, layout, 11, image.value(), wrong).status().code(),
+                  StatusCode::kCorruption)
+            << bad;
+    }
 }
 
 }  // namespace

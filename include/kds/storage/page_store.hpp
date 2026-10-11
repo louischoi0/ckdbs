@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <utility>
@@ -468,6 +471,39 @@ public:
         (void)page_id;
         return Status::NotImplemented("PageStore: this store cannot free a page");
     }
+
+    // ---- A var-heap chain's last tail (BK-R8,
+    // `workorder-bk-opt-read-update-path.md`) --------------------------
+    //
+    // `varheap::ChainAppend` remembers here the page it appended into, so
+    // the next append to the same chain starts its walk there rather than
+    // at the root (`varheap.cpp` says why that is safe). A slot two roots
+    // hash to keeps whichever wrote last, and the other's next append walks
+    // from its root, as every append did before BK. One table per store;
+    // relaxed atomics, because a hint is only ever a start the walk then
+    // re-checks link by link, so no ordering with any other write is owed.
+    PageId VarHeapTailHint(PageId root) const noexcept {
+        const std::uint64_t slot =
+            varheap_tail_hints_[TailHintIndex(root)].load(std::memory_order_relaxed);
+        return static_cast<PageId>(slot >> 32) == root ? static_cast<PageId>(slot)
+                                                       : kInvalidPageId;
+    }
+    void SetVarHeapTailHint(PageId root, PageId tail) noexcept {
+        varheap_tail_hints_[TailHintIndex(root)].store(
+            (static_cast<std::uint64_t>(root) << 32) | tail, std::memory_order_relaxed);
+    }
+
+private:
+    // 2^10 = 1,024 chains before two share a slot (BK-R8); 8 KiB a store.
+    // A slot is `root << 32 | tail`, so a lookup tells its own root from
+    // another's; an empty slot reads as root 0, a page id no chain is rooted
+    // at. The index is the top `kTailHintBits` of a Fibonacci hash.
+    static constexpr unsigned kTailHintBits = 10;
+    static constexpr std::size_t kVarHeapTailHints = std::size_t{1} << kTailHintBits;
+    static std::size_t TailHintIndex(PageId root) noexcept {
+        return (static_cast<std::uint64_t>(root) * 0x9E3779B97F4A7C15ull) >> (64 - kTailHintBits);
+    }
+    std::array<std::atomic<std::uint64_t>, kVarHeapTailHints> varheap_tail_hints_{};
 
 protected:
     // Fetches an already-created page's bytes for reading or in-place

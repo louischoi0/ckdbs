@@ -19,7 +19,7 @@
 //
 // BD-R5's claim, the one this file pins: a named key's `INSERT` is refused
 // because of its pk for exactly two reasons - a duplicate (`AlreadyExists`)
-// or a key outside `[1, 2^40 - 1]` (`OutOfRange`) - and each refusal names
+// or a key outside `[1, 2^48 - 1]` (`OutOfRange`) - and each refusal names
 // the pk token's byte. Everything else about the key is placed: below the
 // relation's mark, in any order, and a key a rollback freed (W8, W12).
 //
@@ -199,12 +199,12 @@ TEST_F(SortedLeafSqlTest, EveryRefusalANamedKeyGetsForItsPkIsDuplicateOrExhauste
         {"1601", StatusCode::kAlreadyExists},                // deleted: bound once (BD-R4)
         {"0", StatusCode::kOutOfRange},                      // R3
         {"-7", StatusCode::kOutOfRange},                     // R2
-        {"1099511627776", StatusCode::kOutOfRange},          // R4: 2^40
+        {"281474976710656", StatusCode::kOutOfRange},        // R4: 2^48
         {"9223372036854775808", StatusCode::kOutOfRange},    // 2^63, the lexer's overflow (R2)
         {"18446744073709551621", StatusCode::kOutOfRange},   // 2^64 + 5, placed as 5 today (§1.4)
         {"1", std::nullopt},                                 // below the mark, absent (L2, S5)
         {"1005", std::nullopt},                              // ...in a leaf with a right sibling (S3)
-        {"1099511627775", std::nullopt},                     // the top of the id space
+        {"281474976710655", std::nullopt},                   // the top of the id space
     };
     for (const Case& c : cases) {
         const DispatchOutcome out = Run(std::string("INSERT INTO t VALUES (") + c.key + ", 1)");
@@ -230,6 +230,24 @@ TEST_F(SortedLeafSqlTest, EveryRefusalANamedKeyGetsForItsPkIsDuplicateOrExhauste
     EXPECT_EQ(std::count(walked.begin(), walked.end(), std::uint64_t{5}), 0);
     EXPECT_EQ(std::count(walked.begin(), walked.end(), std::uint64_t{7}), 0)
         << "a refused statement left its first row";
+}
+
+// ---- BK-S1: the upper eight bits of the id space -------------------------
+
+TEST_F(SortedLeafSqlTest, AKeyInTheUpperEightBitsIsPlacedAndTheFortyEightBitCeilingIsExhausted) {
+    // BK (`instructions/v3.0.0/workorder-bk-keystone-48.md`): the id space is
+    // `[1, 2^48 - 1]`. 2^40, refused `OutOfRange` at 5979b5e7, is a key and
+    // is read back by pk; 2^48 is exhausted, and the refusal names the
+    // ceiling's value, not its width (BK-R5).
+    ASSERT_TRUE(Placed(Run("INSERT INTO t VALUES (1099511627776, 1)")));
+    EXPECT_EQ(EmittedIds(Run("SELECT * FROM t WHERE id = 1099511627776").response),
+              (std::vector<std::uint64_t>{1099511627776ULL}));
+    EXPECT_EQ(Walk(), (std::vector<std::uint64_t>{1099511627776ULL}));
+
+    const DispatchOutcome past = Run("INSERT INTO t VALUES (281474976710656, 1)");
+    EXPECT_EQ(past.status.code(), StatusCode::kOutOfRange) << past.response;
+    EXPECT_NE(past.response.find("281474976710655"), std::string::npos) << past.response;
+    EXPECT_NE(past.response.find("(byte 22)"), std::string::npos) << past.response;
 }
 
 }  // namespace

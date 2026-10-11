@@ -1,0 +1,3 @@
+host_before: ['cmake:3602352,3605140', 'ld:3605143', 'collect2:3605142']
+other-CPU busy 11.6% > 10 %
+sibling CPU 3 busy 47% > 15 %

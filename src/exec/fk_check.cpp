@@ -1,5 +1,7 @@
 #include "kds/exec/fk_check.hpp"
 
+#include "kds/storage/keystone.hpp"
+
 
 #include <optional>
 #include <unordered_set>
@@ -137,7 +139,7 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
             inner = tuple.status();
             return tuple.status();
         }
-        auto id = RowKeystoneId(tuple.value().payload);
+        auto id = KeystoneIdOfPayload(tuple.value().payload);
         if (!id.ok()) {
             inner = id.status();
             return id.status();
@@ -394,7 +396,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
 
         verdict = seen_as == txn::CheckVerdict::kBusy ? FkVerdict::kBusy : FkVerdict::kViolation;
         if (verdict == FkVerdict::kBusy) {
-            auto pk = RowKeystoneId(tuple.value().payload);
+            auto pk = KeystoneIdOfPayload(tuple.value().payload);
             if (!pk.ok()) {
                 inner = pk.status();
                 return pk.status();
@@ -418,7 +420,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     // answers, and a moved row can only turn "no children" into busy.
     for (Moved& row : moved) {
         if (verdict != FkVerdict::kPass) break;
-        auto pk = RowKeystoneId(row.payload);
+        auto pk = KeystoneIdOfPayload(row.payload);
         if (!pk.ok()) return pk.status();
         bool references = true;  // with no log to read, the row may reference it
         if (options.undo != nullptr) {

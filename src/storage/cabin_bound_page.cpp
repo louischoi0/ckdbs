@@ -9,7 +9,7 @@ namespace {
 
 // Offsets inside the entry, named so the static_asserts below can pin them
 // and so nothing reaches into the layout with a literal.
-inline constexpr std::size_t kOffKeystone = 0;   // pk:40 | flags:8 | reserved:16
+inline constexpr std::size_t kOffKeystone = 0;   // the Keystone word's layout (keystone.hpp)
 inline constexpr std::size_t kOffHint = 8;       // page_id:32 | epoch:16 | slot:16
 inline constexpr std::size_t kOffValue = 16;     // int64
 // AS6a: the first 4 bytes of AST04's 8-byte padding word, which was written
@@ -72,20 +72,15 @@ std::uint16_t Load16(std::span<const std::byte> at) noexcept {
 }  // namespace
 
 Status EncodeEntry(const BoundCabinEntry& entry, std::span<std::byte, kEntryBytes> out) {
-    // Refused, never truncated. A truncated pk is a name that means a
-    // *different* row, which is exactly the mis-attribution K1 exists to make
-    // impossible - so a pk that does not fit is a defect to report, not a
-    // value to narrow.
-    if (entry.pk > kMaxEntryPk) {
-        return Status::InvalidArgument("bound cabin entry: pk " + std::to_string(entry.pk) +
-                                        " exceeds the 40-bit Keystone range");
+    // The Keystone word's own codec (BK-R2): one layout, one encoder. A pk
+    // above the id space is refused there, never truncated - a truncated pk
+    // is a name that means a *different* row, which is exactly the
+    // mis-attribution K1 exists to make impossible.
+    auto keystone = Keystone::Encode(entry.pk, entry.flags, /*reserved=*/0);
+    if (!keystone.ok()) {
+        return Status::InvalidArgument("bound cabin entry: " + keystone.status().message());
     }
-
-    // pk:40 | flags:8 | reserved:16, by shift and mask - the same packing
-    // discipline the Keystone word uses (invariant 6).
-    const std::uint64_t keystone =
-        (entry.pk & kMaxEntryPk) | (static_cast<std::uint64_t>(entry.flags) << 40);
-    Store64(out.subspan(kOffKeystone, 8), keystone);
+    Store64(out.subspan(kOffKeystone, 8), keystone.value());
 
     Store32(out.subspan(kOffHint, 4), entry.page_id);
     Store16(out.subspan(kOffHint + 4, 2), entry.page_epoch);
@@ -99,9 +94,9 @@ Status EncodeEntry(const BoundCabinEntry& entry, std::span<std::byte, kEntryByte
 
 BoundCabinEntry DecodeEntry(std::span<const std::byte, kEntryBytes> in) {
     BoundCabinEntry entry;
-    const std::uint64_t keystone = Load64(in.subspan(kOffKeystone, 8));
-    entry.pk = keystone & kMaxEntryPk;
-    entry.flags = static_cast<std::uint8_t>((keystone >> 40) & 0xFF);
+    const Keystone keystone = Keystone::Decode(Load64(in.subspan(kOffKeystone, 8)));
+    entry.pk = keystone.id;
+    entry.flags = keystone.flags;
 
     entry.page_id = Load32(in.subspan(kOffHint, 4));
     entry.page_epoch = Load16(in.subspan(kOffHint + 4, 2));

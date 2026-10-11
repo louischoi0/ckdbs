@@ -359,6 +359,130 @@ TEST_F(ExecSubqueryTest, NestingAtTheDepthCapExecutes) {
     EXPECT_EQ(rows.value().size(), 3u);
 }
 
+// An uncorrelated EXISTS / NOT EXISTS inside a sub-chain is hoisted out of
+// *that* sub-chain's row loop and has to run - it used to be dropped when the
+// enclosing block was lowered to a SubChain, so the statement answered as if
+// the predicate were absent. Answers below are computed by hand: acct has
+// alice (1), bob (2), carol (3); trade has AAPL for alice and MSFT for carol.
+TEST_F(ExecSubqueryTest, AFalseUncorrelatedExistsInsideASubqueryExcludesEveryRow) {
+    EXPECT_TRUE(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                    "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
+                    "  AND EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))")
+                    .empty());
+}
+
+TEST_F(ExecSubqueryTest, ATrueUncorrelatedExistsInsideASubqueryAdmitsTheCorrelatedRows) {
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                  "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
+                  "  AND EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'AAPL'))"),
+              (std::vector<std::string>{"alice", "carol"}));
+}
+
+TEST_F(ExecSubqueryTest, AnUncorrelatedNotExistsInsideASubqueryIsEvaluatedToo) {
+    // The inner set is non-empty, so NOT EXISTS is false for every row.
+    EXPECT_TRUE(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                    "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
+                    "  AND NOT EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'AAPL'))")
+                    .empty());
+    // The inner set is empty, so it is true and the correlation decides.
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                  "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
+                  "  AND NOT EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))"),
+              (std::vector<std::string>{"alice", "carol"}));
+}
+
+TEST_F(ExecSubqueryTest, AnUncorrelatedChainInsideAnUncorrelatedChainIsEvaluated) {
+    // Both levels are hoisted: the middle block is itself uncorrelated, and
+    // its own hoisted EXISTS is the one that decides.
+    EXPECT_TRUE(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                    "  SELECT trade.id FROM trade WHERE EXISTS "
+                    "    (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))")
+                    .empty());
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                  "  SELECT trade.id FROM trade WHERE EXISTS "
+                  "    (SELECT trade.id FROM trade WHERE trade.sym = 'MSFT'))"),
+              (std::vector<std::string>{"alice", "bob", "carol"}));
+}
+
+TEST_F(ExecSubqueryTest, ADepthThreeUncorrelatedExistsIsEvaluated) {
+    EXPECT_TRUE(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                    "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id AND EXISTS ("
+                    "    SELECT trade.id FROM trade WHERE trade.sym = 'AAPL' AND EXISTS ("
+                    "      SELECT trade.id FROM trade WHERE trade.sym = 'NONE')))")
+                    .empty());
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                  "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id AND EXISTS ("
+                  "    SELECT trade.id FROM trade WHERE trade.sym = 'AAPL' AND EXISTS ("
+                  "      SELECT trade.id FROM trade WHERE trade.sym = 'MSFT')))"),
+              (std::vector<std::string>{"alice", "carol"}));
+}
+
+TEST_F(ExecSubqueryTest, ANestedHoistedChainRunsOncePerStatement) {
+    // The enclosing sub-chain is correlated, so it runs once per outer row;
+    // what it hoists refers to nothing outside itself and answers once for
+    // the statement - not once per run of the sub-chain around it, which
+    // made a statement quadratic in the outer rows.
+    ExecStats stats;
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                  "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
+                  "  AND EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'AAPL'))",
+                  &stats),
+              (std::vector<std::string>{"alice", "carol"}));
+    // 3 runs of the correlated sub-chain + 1 of its hoisted one.
+    EXPECT_EQ(stats.Total().sub_chain_runs, 4u);
+
+    // A false answer is kept too: every outer row is answered without the
+    // correlated sub-chain opening a step, and the hoisted chain ran once.
+    ExecStats none;
+    EXPECT_TRUE(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                    "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
+                    "  AND EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))",
+                    &none)
+                    .empty());
+    EXPECT_EQ(none.Total().sub_chain_runs, 4u);
+
+    // And the answer is the statement's, not the plan's: a witness for the
+    // hoisted chain inserted between two runs changes the second one.
+    Insert("trade", {Int(2), Str("NONE")});  // bob
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                  "  SELECT trade.id FROM trade WHERE trade.acct_id = acct.id "
+                  "  AND EXISTS (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))"),
+              (std::vector<std::string>{"alice", "bob", "carol"}));
+}
+
+TEST_F(ExecSubqueryTest, ANestedChainWhoseValueColumnIsTheOutermostRowIsNotHoisted) {
+    // The grandchild's tested column (`acct.id`) is written inside the middle
+    // block but belongs to the outermost row, so the middle block depends on
+    // that row and must run per row. Classified as uncorrelated it was
+    // hoisted and run against an empty frame, where `acct.id` cannot resolve.
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE EXISTS ("
+                  "  SELECT trade.id FROM trade WHERE acct.id IN "
+                  "    (SELECT t2.acct_id FROM trade AS t2))"),
+              (std::vector<std::string>{"alice", "carol"}));
+}
+
+TEST_F(ExecSubqueryTest, AHoistedExistsInsideANotInOrScalarSubqueryIsEvaluated) {
+    // The enclosing sub-chain is a value-bearing kind: a false hoisted
+    // EXISTS must leave it with no rows, which is NOT IN's "matched nothing"
+    // (true for every row) and a scalar's NULL (never true).
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE id NOT IN ("
+                  "  SELECT trade.acct_id FROM trade WHERE EXISTS "
+                  "    (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))"),
+              (std::vector<std::string>{"alice", "bob", "carol"}));
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE id IN ("
+                  "  SELECT trade.acct_id FROM trade WHERE EXISTS "
+                  "    (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))"),
+              (std::vector<std::string>{}));
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE id = ("
+                  "  SELECT trade.acct_id FROM trade WHERE trade.sym = 'AAPL' AND EXISTS "
+                  "    (SELECT trade.id FROM trade WHERE trade.sym = 'NONE'))"),
+              (std::vector<std::string>{}));
+    EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE id = ("
+                  "  SELECT trade.acct_id FROM trade WHERE trade.sym = 'AAPL' AND EXISTS "
+                  "    (SELECT trade.id FROM trade WHERE trade.sym = 'MSFT'))"),
+              (std::vector<std::string>{"alice"}));
+}
+
 TEST_F(ExecSubqueryTest, TheR1GuardStaysUntrippedWithSubChainsInPlay) {
     // The nested case is the one R1 exists for: a sub-chain fetches pages
     // while the outer walk is mid-flight. The outer step must have

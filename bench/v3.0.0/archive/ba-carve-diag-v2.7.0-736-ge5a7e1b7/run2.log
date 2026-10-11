@@ -1,0 +1,6 @@
+kds-insert1-relaxed-k1-s16-r0 load 1.94->3.03 stmts=343152 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=42844.5 p50=293.3
+kds-insert1-relaxed-k1-s16-r0 load 1.93->3.31 stmts=324430 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=40504.1 p50=273.9
+kds-insert1-relaxed-k1-s16-r0 load 1.99->3.59 stmts=346811 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=43449.8 p50=300.6
+kds-insert1-relaxed-k1-s16-r0 load 1.93->3.04 stmts=295881 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=36968.9 p50=301.5
+kds-insert1-relaxed-k1-s16-r0 load 1.98->2.56 stmts=339633 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=42405.3 p50=295.1
+kds-insert1-relaxed-k1-s16-r0 load 1.95->3.69 stmts=323417 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=40378.7 p50=264.6

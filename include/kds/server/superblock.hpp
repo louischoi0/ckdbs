@@ -263,7 +263,15 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // as "nothing owed" and so leak their pages for good; refused with no
 // migration (`raft-marks-2026-10-07.md` §11), so every tombstone on a
 // mountable volume was written by a drop that recorded what it owes.
-inline constexpr std::uint32_t kSuperBlockVersion = 21;
+//
+// 22 (BK, `instructions/v3.0.0/workorder-bk-keystone-48.md` BK-R4): the
+// Keystone word is `id:48 | flags:8 | reserved:8`. A version-21 volume's
+// tuple words would read under that layout - every bit above the old id
+// was written zero - but its Cabin bound entries would not: their live flags
+// sit in the bits that are the id's now, on their pages and inside every
+// `ASSERT_RESERVE`/`ASSERT_BUILD` record. Refused with no migration, the
+// standing order of 2026-10-07 applied once more.
+inline constexpr std::uint32_t kSuperBlockVersion = 22;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

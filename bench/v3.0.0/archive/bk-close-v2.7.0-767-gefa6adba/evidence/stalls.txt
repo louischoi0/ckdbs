@@ -1,0 +1,12 @@
+overhead-c1 n200: 32 runs, mount ckpt median 7,664 us, > 100 ms in 3 runs ([17, 22, 19]) | update-pk d -0.40->-0.40 | select-pk d -0.45->-0.50 | insert d +0.00->+0.00 | range100 d +0.65->+0.80 | ping d +0.05->+0.10 | ping A p50 hot 50.0 vs rest 50.4
+overhead-c1 n1000: 32 runs, mount ckpt median 7,680 us, > 100 ms in 4 runs ([24, 23, 22, 26]) | update-pk d -0.40->-0.35 | select-pk d -0.50->-0.55 | insert d +0.00->+0.10 | range100 d +1.65->+1.55 | ping d +0.10->+0.10 | ping A p50 hot 50.0 vs rest 50.1
+overhead-c1 n10000: 32 runs, mount ckpt median 9,205 us, > 100 ms in 0 runs ([])
+overhead-c2 n200: 16 runs, mount ckpt median 7,334 us, > 100 ms in 0 runs ([])
+overhead-c2 n1000: 16 runs, mount ckpt median 7,448 us, > 100 ms in 0 runs ([])
+overhead-c2 n10000: 16 runs, mount ckpt median 6,048 us, > 100 ms in 0 runs ([])
+null-c1 n200: 15 runs, mount ckpt median 7,770 us, > 100 ms in 0 runs ([])
+null-c1 n1000: 15 runs, mount ckpt median 7,712 us, > 100 ms in 1 runs ([14]) | update-pk d -0.50->-0.50 | select-pk d -0.50->-0.50 | insert d +0.00->+0.00 | range100 d +0.00->+0.15 | ping d +0.00->+0.00 | ping A p50 hot 50.1 vs rest 50.4
+null-c1 n10000: 16 runs, mount ckpt median 9,134 us, > 100 ms in 0 runs ([])
+strict-c1 n200: 6 runs, mount ckpt median 8,898 us, > 100 ms in 0 runs ([])
+strict-c1 n1000: 6 runs, mount ckpt median 8,584 us, > 100 ms in 0 runs ([])
+strict-c1 n10000: 6 runs, mount ckpt median 8,056 us, > 100 ms in 0 runs ([])

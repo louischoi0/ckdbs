@@ -233,6 +233,13 @@ Token Lexer::ScanToken() {
         return tok;
     }
 
+    if (c == ':' && pos_ + 1 < src_.size() && src_[pos_ + 1] == ':') {
+        tok.type = TokenType::kDoubleColon;
+        tok.text = src_.substr(pos_, 2);
+        pos_ += 2;
+        return tok;
+    }
+
     // Single-character tokens. Sliced before `pos_` advances, so this is a
     // view into the source like every other token's text - no exception to
     // reason about later.

@@ -1,0 +1,4 @@
+runs 60 loadavg(1m) at start min/max 2.21 4.95
+competing: 0
+max other CPU busy 1 s before start 0.485, during 0.417
+runs 60 CPUs >0.5 before: {} during: {} runs flagged excluding CPU 2: 0

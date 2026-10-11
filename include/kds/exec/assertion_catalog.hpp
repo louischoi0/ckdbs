@@ -251,8 +251,19 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
 // another core falls into.
 StatusOr<AssertionDdlResult> CreateAssertion(
     catalog::Catalog& catalog, storage::PageStore& store, const parser::AssertionStmt& stmt,
-    const txn::ReadView& check_view, wal::WalManager* wal, AssertionEnforcer& enforcer,
+    catalog::Oid target_oid, const txn::ReadView& check_view, wal::WalManager* wal,
+    AssertionEnforcer& enforcer,
     const std::function<void()>& after_publish_run_for_test = {});
+
+// The statement's target relation, or the §3.1 refusal with its byte. `view`
+// is the catalog visibility the name resolves under (null: every relation).
+// **`CreateAssertion` never resolves the name**: the dispatcher does, once,
+// under a view that cannot see another transaction's relation, takes the
+// relation `X` on that oid and passes it in - so what is fenced is what is
+// built.
+StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
+                                          const parser::AssertionStmt& stmt,
+                                          const txn::ReadView* view = nullptr);
 
 // `DROP ASSERTION`: the catalog row retired, `ASSERT_DROP` logged when
 // `wal` is attached (before the row goes - WAL before data), and the

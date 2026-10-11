@@ -5,6 +5,7 @@
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/storage/page_header.hpp"
 
 // A Bound Cabin's entry page (`docs/spec/assertion.md` §5.1, workplan AST04).
@@ -21,7 +22,7 @@
 //
 // | offset | width | field                                                  |
 // |--------|-------|--------------------------------------------------------|
-// |    0   |   8   | pk (40 bits used) | flags (8) | reserved (16)           |
+// |    0   |   8   | pk (48) | flags (8) | reserved (8) - the Keystone word  |
 // |    8   |   8   | location hint: page_id (32) | epoch (16) | slot (16)    |
 // |   16   |   8   | aggregate value, int64                                  |
 // |   24   |   8   | padding to 32                                           |
@@ -130,7 +131,7 @@ inline constexpr std::uint8_t kEntryOrphaned = 0x8;
 // Keystone word is (invariant 6 - bitfield layout is implementation-defined
 // and this format must be architecture-portable).
 struct BoundCabinEntry {
-    std::uint64_t pk = 0;  // 40 bits used; the upper 24 are always 0
+    std::uint64_t pk = 0;  // kKeystoneIdBits used; the bits above are always 0
     std::uint8_t flags = 0;
 
     // The advisory location. `page_epoch` is written 0 and checked trivially,
@@ -171,14 +172,11 @@ struct BoundCabinEntry {
 
 inline constexpr std::size_t kEntryBytes = 32;
 
-// The largest pk an entry can carry: ids are 40-bit (invariant 5), and the
-// upper 24 bits of a stored id are always zero (invariant 7).
-inline constexpr std::uint64_t kMaxEntryPk = (std::uint64_t{1} << 40) - 1;
-
-// Field-wise codec. `EncodeEntry` fails with InvalidArgument on a pk that does
-// not fit 40 bits - refused rather than truncated, because a truncated pk is a
-// name that means a different row, which is precisely what K1 exists to
-// prevent.
+// Field-wise codec. The entry's first word is packed exactly as the Keystone
+// word is (BK-R2: one layout, keystone.hpp's constants), and `EncodeEntry`
+// fails with InvalidArgument on a pk above `kMaxKeystoneId` - refused rather
+// than truncated, because a truncated pk is a name that means a different
+// row, which is precisely what K1 exists to prevent.
 Status EncodeEntry(const BoundCabinEntry& entry, std::span<std::byte, kEntryBytes> out);
 BoundCabinEntry DecodeEntry(std::span<const std::byte, kEntryBytes> in);
 

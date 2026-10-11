@@ -323,8 +323,12 @@ TEST_F(PurgeKeyTest, AnAbsentKeyPurgesNothingAndARunIsIdempotent) {
     EXPECT_EQ(Run("PURGE FROM t WHERE id = 5"), "PURGED 1");
     EXPECT_EQ(Run("PURGE FROM t WHERE id = 5"), "PURGED 0");
     // A window outside the key space names no key.
-    EXPECT_EQ(Run("PURGE FROM t WHERE id > 1099511627775"), "PURGED 0");
+    EXPECT_EQ(Run("PURGE FROM t WHERE id > 281474976710655"), "PURGED 0");
     EXPECT_EQ(Run("PURGE FROM t WHERE id < 1"), "PURGED 0");
+    // The window past the old ceiling, 2^40 - 1, is a live one since BK: 2^40 is a key.
+    Ok("INSERT INTO t VALUES (1099511627776, 1)", "INSERTED");
+    Ok("DELETE FROM t WHERE id = 1099511627776", "DELETED 1");
+    EXPECT_EQ(Run("PURGE FROM t WHERE id >= 1099511627776"), "PURGED 1");
 }
 
 TEST_F(PurgeKeyTest, AWindowPurgesEveryDeletedKeyAndPassesOverLiveOnes) {

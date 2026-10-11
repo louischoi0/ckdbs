@@ -2294,9 +2294,11 @@ and fast-forwarded to `1a5176ae` (BJ's commits, no BA code). The suite at
     engine.
   - **BA-S13 not met.** The carve's median is 3.6-5.9 ms under `group`
     and `strict`, but **226-258 ms under `relaxed`**, against BA-S4's
-    20-46 ms and the 10 ms exit. The unconditional data-file
-    `fdatasync` flushing the whole unsynced backlog is the candidate;
-    it is untested.
+    20-46 ms and the 10 ms exit. **Corrected 2026-10-11**
+    (`bench/v3.0.0/results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`,
+    `relaxed` `cores = 1`): the `relaxed` carve's number is not BA-S13's,
+    and the `relaxed` checkpoint's lengthening is, since BA-S13 moved the
+    pool's writeback from the carve to the checkpoint.
   - **The `relaxed` path is unchanged**, as BA-S4's verdicts (P1-P5 not
     material) predicted. `cores = 4` still falls below `cores = 2`;
     unresolved.
@@ -2310,8 +2312,8 @@ and fast-forwarded to `1a5176ae` (BJ's commits, no BA code). The suite at
 and findings:
 - **The checkpoint half of P12** waits for the operator's mark on BI-Q1.
   B's 10,000-row checkpoint stall belongs to it.
-- **BA-S13's `relaxed` carve regression**:
-  `known-gaps.md`, "Statement scheduling" and the carve entry.
+- **The `relaxed` carve's and checkpoint's stalls**: `known-gaps.md`,
+  "Carve and checkpoint stalls".
 - **The walk's per-row cost and the pk `SELECT`'s +0.5-0.95 µs**: not
   bisected to a stage.
 - **BA-S15's 64-page slice**: not varied.

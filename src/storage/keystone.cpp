@@ -1,5 +1,7 @@
 #include "kds/storage/keystone.hpp"
 
+#include <string>
+
 namespace kds {
 
 namespace {
@@ -15,9 +17,11 @@ std::uint64_t LoadLe64(const std::byte* in) {
 }  // namespace
 
 StatusOr<std::uint64_t> Keystone::Encode(std::uint64_t id, std::uint8_t flags,
-                                          std::uint16_t reserved) {
+                                          std::uint8_t reserved) {
     if (id > kMaxKeystoneId) {
-        return Status::InvalidArgument("Keystone id exceeds 40-bit range");
+        return Status::InvalidArgument("Keystone id " + std::to_string(id) +
+                                       " exceeds the id space (max " +
+                                       std::to_string(kMaxKeystoneId) + ")");
     }
 
     std::uint64_t word = id;
@@ -27,11 +31,13 @@ StatusOr<std::uint64_t> Keystone::Encode(std::uint64_t id, std::uint8_t flags,
 }
 
 Keystone Keystone::Decode(std::uint64_t word) noexcept {
+    constexpr std::uint64_t kFlagsMask = (std::uint64_t{1} << kKeystoneFlagsBits) - 1;
+    constexpr std::uint64_t kReservedMask = (std::uint64_t{1} << kKeystoneReservedBits) - 1;
     Keystone out;
     out.id = word & kMaxKeystoneId;
-    out.flags = static_cast<std::uint8_t>((word >> kKeystoneIdBits) & 0xFFu);
-    out.reserved = static_cast<std::uint16_t>(
-        (word >> (kKeystoneIdBits + kKeystoneFlagsBits)) & 0xFFFFu);
+    out.flags = static_cast<std::uint8_t>((word >> kKeystoneIdBits) & kFlagsMask);
+    out.reserved = static_cast<std::uint8_t>(
+        (word >> (kKeystoneIdBits + kKeystoneFlagsBits)) & kReservedMask);
     return out;
 }
 

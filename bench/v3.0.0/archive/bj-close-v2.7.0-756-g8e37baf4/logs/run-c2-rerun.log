@@ -1,0 +1,32 @@
+c2-n200-r0 exists, skipped
+c2-n200-r1 exists, skipped
+c2-n200-r2 exists, skipped
+c2-n200-r3 load 2.50->2.46 gate 3s/0.018 dur 6.1s errs=0 bad=0 verify=ok lit-point:A=53.0/B=54.5 lit-range:A=314.6/B=315.4 ping:A=50.4/B=50.2
+c2-n200-r4 exists, skipped
+c2-n200-r5 exists, skipped
+c2-n200-r6 exists, skipped
+c2-n200-r7 exists, skipped
+c2-n200-r8 exists, skipped
+c2-n200-r9 exists, skipped
+c2-n200-r10 exists, skipped
+c2-n200-r11 exists, skipped
+c2-n200-r12 load 2.26->2.40 gate 3s/0.014 dur 6.1s errs=0 bad=0 verify=ok lit-point:A=52.9/B=55.3 lit-range:A=315.7/B=318.9 ping:A=51.1/B=50.9
+c2-n200-r13 exists, skipped
+c2-n200-r14 exists, skipped
+c2-n200-r15 exists, skipped
+c2-n1000-r0 exists, skipped
+c2-n1000-r1 exists, skipped
+c2-n1000-r2 exists, skipped
+c2-n1000-r3 exists, skipped
+c2-n1000-r4 exists, skipped
+c2-n1000-r5 load 2.40->2.19 gate 3s/0.025 dur 8.3s errs=0 bad=0 verify=ok lit-point:A=51.9/B=55.0 lit-range:A=1318.9/B=1327.9 ping:A=50.7/B=51.2
+c2-n1000-r6 exists, skipped
+c2-n1000-r7 exists, skipped
+c2-n1000-r8 exists, skipped
+c2-n1000-r9 exists, skipped
+c2-n1000-r10 exists, skipped
+c2-n1000-r11 exists, skipped
+c2-n1000-r12 exists, skipped
+c2-n1000-r13 exists, skipped
+c2-n1000-r14 exists, skipped
+c2-n1000-r15 exists, skipped

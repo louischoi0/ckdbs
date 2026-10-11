@@ -1,0 +1,11 @@
+== B rows=1000
+  sel-range  ops= 200 p50=   1669.6 p99=   1737.8 err=0 head='id,c1,c2,c3,c4,c5,c6,s,d\\n1,3,4,5,6,7,8,s1,2026-08-09\\n2,6,7' total=40000 fe=None
+  upd-range  ops= 200 p50=    399.3 p99=    529.0 err=0 head='UPDATED 200' total=0 fe=None
+  ins-bulk   ops= 200 p50=    976.5 p99=   2360.6 err=0 head='INSERTED oid=4000 rows=250 first_id=10000000 last_id=1000024' total=0 fe=None
+  verify {'count_w': 'count(*)\\n51000', 'bulk_last': 'id,c1,c2,c3,c4,c5,c6,s,d\\n10049999,249,250,251,252,253,254,s10049999,2026-08-09', 'upd_sum': 'sum(c3)\\n208345'}
+== A rows=1000
+  sel-range  ops= 200 p50=   1669.7 p99=   1742.5 err=0 head='id,c1,c2,c3,c4,c5,c6,s,d\\n1,3,4,5,6,7,8,s1,2026-08-09\\n2,6,7' total=40000 fe=None
+  upd-range  ops= 200 p50=    393.9 p99=    517.9 err=0 head='UPDATED 200' total=0 fe=None
+  ins-bulk   ops= 200 p50=    967.8 p99=   1220.2 err=0 head='INSERTED oid=4000 rows=250 first_id=10000000 last_id=1000024' total=0 fe=None
+  verify {'count_w': 'count(*)\\n51000', 'bulk_last': 'id,c1,c2,c3,c4,c5,c6,s,d\\n10049999,249,250,251,252,253,254,s10049999,2026-08-09', 'upd_sum': 'sum(c3)\\n208345'}
+verify_ok True
