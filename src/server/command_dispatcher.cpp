@@ -4804,8 +4804,12 @@ std::pair<std::uint32_t, std::uint32_t> AggregateOutputType(const exec::Aggregat
                 break;  // an extreme of a set is a member of it
         }
     }
-    // MIN/MAX, and a grouping column: the column's own type.
-    return {item.type_val, catalog::TypeModOf(item.type_val, decimal_mod(wide))};
+    // MIN/MAX, and a grouping column: the column's own type, its precision
+    // included - the answer is one of its values, so it fits, and a SET
+    // assigning it back to a column of that type needs the exact type
+    // (types.md §3.2b).
+    return {item.type_val,
+            catalog::TypeModOf(item.type_val, catalog::PackDecimalLen(item.precision, item.scale))};
 }
 
 std::vector<std::uint32_t> AggregateOutputTypes(const exec::AggregateSpec& spec) {

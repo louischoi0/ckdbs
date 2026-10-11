@@ -147,6 +147,24 @@ TEST_F(SetExprSubqueryTest, TheAnswerHasItsColumnsTypeAndTheAssignmentNeedsIt) {
               std::string::npos);
 }
 
+// An extreme of a decimal column is one of its values, so it is typed in the
+// column's own (p, s) and assigns back to a column of that type; a SUM widens
+// to the type's maximum precision and does not.
+TEST_F(SetExprSubqueryTest, ADecimalExtremeHasItsColumnsPrecisionAndASumDoesNot) {
+    Exec("UPDATE t SET d = (SELECT MAX(dd) FROM u) WHERE id = 1");
+    EXPECT_EQ(At("d", 1), "3.75");
+    Exec("UPDATE t SET d = (SELECT MIN(d) FROM t) - (SELECT MIN(dd) FROM u) WHERE id = 2");
+    EXPECT_EQ(At("d", 2), "-0.75");
+    EXPECT_NE(Run("UPDATE t SET d = (SELECT SUM(dd) FROM u) WHERE id = 1")
+                  .find("the expression is decimal(18,2) but column 'd' is decimal(10,2)"),
+              std::string::npos);
+    Exec("CREATE TABLE w (id int64, m decimal(12,2))");
+    Exec("INSERT INTO w VALUES (1, '4.00')");
+    EXPECT_NE(Run("UPDATE t SET d = (SELECT MAX(m) FROM w) WHERE id = 1")
+                  .find("the expression is decimal(12,2) but column 'd' is decimal(10,2)"),
+              std::string::npos);
+}
+
 TEST_F(SetExprSubqueryTest, ASubqueryTheStatementCannotRunIsRefusedWithItsOwnReason) {
     const std::string missing_sql = "UPDATE t SET v = (SELECT nosuch FROM u WHERE id = 1)";
     const std::string missing = Run(missing_sql);
