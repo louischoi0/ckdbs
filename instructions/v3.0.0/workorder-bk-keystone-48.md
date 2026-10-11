@@ -8,10 +8,16 @@ Written 2026-10-11 on `worktree-bk-keystone-48` from `5979b5e7`
 - **W1:** *"How about changing it to about 48?"*
 - **W2:** *"Do it as 48 bits. Write a new milestone and ask me about the
   parts that need a decision."*
+- **W3** (the same day, after the review): the operator's answers to the
+  four questions CLA put, each the proposed option
+  (`raft-marks-2026-10-11.md` §2).
 
-**Not opened.** BK-Q0 is unmarked. W2 asks to be asked, so no standing
-go-ahead applies to this order: every item in §4 waits for the operator's
-own mark, and nothing is adopted on CLA's proposal.
+**Opened 2026-10-11 by W3** (`raft-marks-2026-10-11.md` §2): BK-Q0..Q6 are
+each marked by the operator, every one as CLA proposed - Q0 yes, Q1 (a),
+Q2 (a), Q3 (a), Q4 as written, Q5 (a), Q6 (a) - so BK-R1..R9 are rulings
+and BK-S1 is the next stage. W2 asked to be asked, so the marks are the
+operator's own and not a standing go-ahead's: a decision that surfaces
+mid-stage goes back to the operator the same way.
 
 **What the words settle, and what they leave open.**
 
@@ -362,7 +368,7 @@ edit:
   10, 46, 48` - a bug entry, verified at its own commit; BK-S3 restates
   its range and keeps its commit.
 
-## 2. Rulings — CLA's proposals, unmarked
+## 2. Rulings — CLA's proposals, marked as proposed (W3)
 
 ### BK-R1 — The layout
 
@@ -505,18 +511,18 @@ on 2026-10-11 and why its reason no longer held (§0).
 
 ## 4. Items for the operator
 
-Every item is **unmarked**. W2 asks that these be asked, and CLA's
-proposal beside each is a proposal.
+W2 asked that these be put to the operator; **W3 marked every one as
+proposed** (`raft-marks-2026-10-11.md` §2).
 
 | item | question | kind | CLA's proposal | mark |
 |---|---|---|---|---|
-| BK-Q0 | **Open BK**, with BK-S0..S4 and BK-R1..R9 as written | process | Yes | |
-| BK-Q1 | **The upper 16 bits.**<br>(a) `id:48 \| flags:8 \| reserved:8` (BK-R1): both named fields kept, each a byte.<br>(b) `id:48 \| flags:16`: `reserved` deleted, `flags` widened; invariant 5 names two fields.<br>(c) `id:48 \| reserved:16`: `flags` deleted, since its one writer passes 0 and nothing reads it; invariant 5 names two fields and `Encode` loses a parameter | design, on-disk | (a). It changes the least: the struct keeps its three fields, `Encode`'s one caller is untouched, the sim's reserved check holds, and CN-3 (`cn3-supersede-and-chain-id-succession.md:196`) still has the flag byte it names beside the id. (c) is the elimination the operator has preferred elsewhere (BA-Q14 (b), BB's `kUnordered`), and it is sound - AO-R3 says no persisted bit lives there - but it closes CN-3's door and rewrites invariant 5 twice over for no capacity. **The Cabin bound entry under each:** (a) keeps the entry word identical to the Keystone word, one layout from one set of constants (BK-R2); under (b) or (c) the two words diverge, because the entry's flags are live (§1.2) and cannot be deleted or widened with the Keystone word's, so the entry keeps `pk:48 \| flags:8 \| reserved:8` from its own constants derived from `kKeystoneIdBits`, and `assertion.md` §5.1 and `cabin.md`'s layout tables say the two words no longer match | |
-| BK-Q2 | **The rules document's stance.** `keystoneid-invariant.md:230-233` rejected widening; §3's partitioning guidance and K5's offline re-key answer the 40-bit budget.<br>(a) The rejection restated as overturned, dated, with its reason; §3's table recomputed; partitioning and K5 kept (BK-R6).<br>(b) As (a), and K5's reservation struck as moot at 48 bits | rules text | (a). K5 reserves semantics nothing has built and costs nothing to keep; at 500,000 inserts per second a relation still exhausts in ~18 years, so the case it answers exists. Striking it is a separate decision the budget does not force | |
-| BK-Q3 | **How a refusal names the ceiling.**<br>(a) The value, `max 281474976710655` (BK-R5), so a width change touches no message.<br>(b) The width in words, "48-bit", as today's "40-bit" | user-visible | (a). The exhausted refusal a client most often meets (`command_dispatcher.cpp:5614-5618`) already names the value, and the manual at `sql.md:1132` quotes it that way; (a) makes the eight others agree with it | |
-| BK-Q4 | **The measurement at the close** (§5): the interleaved A/B in `build-release`, `5979b5e7` against the closing commit, insert and update shapes, expectation flat | process | As written. BK changes the value of a mask and nothing per row; a difference beyond the run-to-run noise is reported, not resolved, and gates nothing | |
-| BK-Q5 | **A tag at the close.** The format version moves (BK-R4), and a tag message is a durability claim (`CLAUDE.md`, Version Management).<br>(a) No tag; `v2.7.0-*` continues, as at every close since AT (AT-close Q3).<br>(b) The operator names a version | process | (a). The operator names versions, and nothing since AT has been tagged; BK is one constant and does not change what the v3.0.0 tag will claim | |
-| BK-Q6 | **A pre-existing wire defect the review found** (read, not run): a pk declared `int8`, `int16` or `int32` - admitted by `IsIntegerTypeVal`, and `row_codec_test.cpp:159-170` stores id 100000 under an `int8` pk - is written to the binary wire at its declared width (`wire/row_codec.cpp:117-118, 183-185`, `PutLE(int_val, width)`), while `protocol.md:93` promises `u64`; an id above the declared width reaches the client cut. It is the same at 40 and 48 bits and is not BK's, but BK restates invariant 11, whose "display metadata" sentence (`heap-and-tuple.md:124`) it contradicts.<br>(a) File it as a `docs/inflight/bugs/` entry in BK-S1 and leave the fix to its own letter.<br>(b) Fix it inside BK as BK-S2b: the pk field is always 8 bytes `u64` on the wire, as the protocol states.<br>(c) Refuse `int8`/`int16`/`int32` as a pk's declared type at `CREATE TABLE` | **`[quiet-wrong]` today**; scope | (a), with (b) as the fix when it is taken. (b) is small and brings the code to the written protocol, but it changes what a client receives for a pk it declared narrow, and `xrock`'s reading of the field descriptor has not been checked (its reports live outside this tree); CLA will not widen a wire field in an order about a storage constant without that read. (c) refuses a declaration the spec calls display metadata and would make existing relations' schemas unspellable | |
+| BK-Q0 | **Open BK**, with BK-S0..S4 and BK-R1..R9 as written | process | Yes | **as proposed**, W3 |
+| BK-Q1 | **The upper 16 bits.**<br>(a) `id:48 \| flags:8 \| reserved:8` (BK-R1): both named fields kept, each a byte.<br>(b) `id:48 \| flags:16`: `reserved` deleted, `flags` widened; invariant 5 names two fields.<br>(c) `id:48 \| reserved:16`: `flags` deleted, since its one writer passes 0 and nothing reads it; invariant 5 names two fields and `Encode` loses a parameter | design, on-disk | (a). It changes the least: the struct keeps its three fields, `Encode`'s one caller is untouched, the sim's reserved check holds, and CN-3 (`cn3-supersede-and-chain-id-succession.md:196`) still has the flag byte it names beside the id. (c) is the elimination the operator has preferred elsewhere (BA-Q14 (b), BB's `kUnordered`), and it is sound - AO-R3 says no persisted bit lives there - but it closes CN-3's door and rewrites invariant 5 twice over for no capacity. **The Cabin bound entry under each:** (a) keeps the entry word identical to the Keystone word, one layout from one set of constants (BK-R2); under (b) or (c) the two words diverge, because the entry's flags are live (§1.2) and cannot be deleted or widened with the Keystone word's, so the entry keeps `pk:48 \| flags:8 \| reserved:8` from its own constants derived from `kKeystoneIdBits`, and `assertion.md` §5.1 and `cabin.md`'s layout tables say the two words no longer match | **as proposed: (a)**, W3 |
+| BK-Q2 | **The rules document's stance.** `keystoneid-invariant.md:230-233` rejected widening; §3's partitioning guidance and K5's offline re-key answer the 40-bit budget.<br>(a) The rejection restated as overturned, dated, with its reason; §3's table recomputed; partitioning and K5 kept (BK-R6).<br>(b) As (a), and K5's reservation struck as moot at 48 bits | rules text | (a). K5 reserves semantics nothing has built and costs nothing to keep; at 500,000 inserts per second a relation still exhausts in ~18 years, so the case it answers exists. Striking it is a separate decision the budget does not force | **as proposed: (a)**, W3 |
+| BK-Q3 | **How a refusal names the ceiling.**<br>(a) The value, `max 281474976710655` (BK-R5), so a width change touches no message.<br>(b) The width in words, "48-bit", as today's "40-bit" | user-visible | (a). The exhausted refusal a client most often meets (`command_dispatcher.cpp:5614-5618`) already names the value, and the manual at `sql.md:1132` quotes it that way; (a) makes the eight others agree with it | **as proposed: (a)**, W3 |
+| BK-Q4 | **The measurement at the close** (§5): the interleaved A/B in `build-release`, `5979b5e7` against the closing commit, insert and update shapes, expectation flat | process | As written. BK changes the value of a mask and nothing per row; a difference beyond the run-to-run noise is reported, not resolved, and gates nothing | **as proposed**, W3 |
+| BK-Q5 | **A tag at the close.** The format version moves (BK-R4), and a tag message is a durability claim (`CLAUDE.md`, Version Management).<br>(a) No tag; `v2.7.0-*` continues, as at every close since AT (AT-close Q3).<br>(b) The operator names a version | process | (a). The operator names versions, and nothing since AT has been tagged; BK is one constant and does not change what the v3.0.0 tag will claim | **as proposed: (a)**, W3 |
+| BK-Q6 | **A pre-existing wire defect the review found** (read, not run): a pk declared `int8`, `int16` or `int32` - admitted by `IsIntegerTypeVal`, and `row_codec_test.cpp:159-170` stores id 100000 under an `int8` pk - is written to the binary wire at its declared width (`wire/row_codec.cpp:117-118, 183-185`, `PutLE(int_val, width)`), while `protocol.md:93` promises `u64`; an id above the declared width reaches the client cut. It is the same at 40 and 48 bits and is not BK's, but BK restates invariant 11, whose "display metadata" sentence (`heap-and-tuple.md:124`) it contradicts.<br>(a) File it as a `docs/inflight/bugs/` entry in BK-S1 and leave the fix to its own letter.<br>(b) Fix it inside BK as BK-S2b: the pk field is always 8 bytes `u64` on the wire, as the protocol states.<br>(c) Refuse `int8`/`int16`/`int32` as a pk's declared type at `CREATE TABLE` | **`[quiet-wrong]` today**; scope | (a), with (b) as the fix when it is taken. (b) is small and brings the code to the written protocol, but it changes what a client receives for a pk it declared narrow, and `xrock`'s reading of the field descriptor has not been checked (its reports live outside this tree); CLA will not widen a wire field in an order about a storage constant without that read. (c) refuses a declaration the spec calls display metadata and would make existing relations' schemas unspellable | **as proposed: (a)**, W3 |
 
 ## 5. Measurement
 
@@ -587,3 +593,6 @@ Two findings went past the text:
 Applied from its duplication findings: the fixed-length bullet left "what
 BK leaves standing" for BK-R7, BK-R9's `CLAUDE.md` sentence left for
 BK-S3, and §1.8's by-name list became a count. Declined: none.
+
+**Opened the same day by W3**, every item as proposed; BK-S1 is next and
+has not started.
