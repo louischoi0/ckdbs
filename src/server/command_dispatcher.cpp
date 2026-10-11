@@ -8049,7 +8049,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // by the statement so no row allocates for it after the first.
     // `assigned` names the cells a row's new image re-encodes, one per
     // assignment, pointing into `values`; every other cell is carried from
-    // the row's own bytes (`exec::EncodeAssigned`, BK-R3).
+    // the row's own bytes (`exec::EncodeAssigned`, BK-R3,
+    // `workorder-bk-opt-read-update-path.md`).
     std::vector<parser::AstValue> values(compiled.size());
     std::vector<exec::AssignedCell> assigned(compiled.size());
     for (std::size_t i = 0; i < compiled.size(); ++i) {

@@ -18,8 +18,9 @@
 // `instructions/v2.5.0/varchar-char-architecture.md` §4).
 //
 // **The model rests on one fact about the code, and the first test here is
-// that fact.** Since BK-R3 an UPDATE re-encodes only the cells it assigns,
-// so a spilled value the SET list never touched is *carried*: the new
+// that fact.** Since BK-R3 (`workorder-bk-opt-read-update-path.md`) an
+// UPDATE re-encodes only the cells it assigns, so a spilled value the SET
+// list never touched is *carried*: the new
 // version points at the old version's slot, and versions of one tuple share
 // it. Until BK it was appended again by every UPDATE of its row, so no two
 // versions shared a slot and every superseded copy leaked. "A version dies,

@@ -226,7 +226,8 @@ public:
 
 private:
     // The page the next record goes on, **held**: the caller appends
-    // through the hold that checked its room (BK-S3), not through a second
+    // through the hold that checked its room (BK-S3,
+    // `workorder-bk-opt-read-update-path.md`), not through a second
     // fetch of the same page.
     StatusOr<storage::PageRef> TailFor(std::uint64_t trx_id, std::size_t need);
     // Appends the PAGE_INIT for a new or reclaimed page and returns its

@@ -472,7 +472,8 @@ public:
         return Status::NotImplemented("PageStore: this store cannot free a page");
     }
 
-    // ---- A var-heap chain's last tail (BK-R8) --------------------------
+    // ---- A var-heap chain's last tail (BK-R8,
+    // `workorder-bk-opt-read-update-path.md`) --------------------------
     //
     // `varheap::ChainAppend` remembers here the page it appended into, so
     // the next append to the same chain starts its walk there rather than

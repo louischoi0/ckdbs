@@ -166,7 +166,8 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
 // a decoder needs no opinion about chains.
 inline constexpr std::uint64_t kAllColumnsMask = ~std::uint64_t{0};
 
-// **A slot a partial decode deliberately left out** (BK-R2): an UPDATE with
+// **A slot a partial decode deliberately left out** (BK-R2,
+// `workorder-bk-opt-read-update-path.md`): an UPDATE with
 // no hook decodes only the columns its SET expressions read and fills every
 // other slot with this, so an expression the mask missed is refused
 // `Corruption` by the SET evaluator rather than handed a default value. A

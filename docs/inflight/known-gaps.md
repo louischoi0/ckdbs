@@ -994,13 +994,14 @@ Written at BJ's close on `worktree-bj-expression-update`. Owned by
 
 ## The read and update paths (BK)
 
-Written at BK's close on `worktree-bk-read-update-paths`. Owned by
+Written at BK's close on `worktree-bk-read-update-paths`, verified at `8679367e`. Owned by
 `instructions/v3.0.0/workorder-bk-opt-read-update-path.md` and the specs each
 stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
 
 - **A prepared statement is still substituted into its text and parsed again
   at every execution** (BK-R1 not built, BK-Q13). Parse and compile are
-  2.2-4.2 µs of a point statement's server CPU after BK (7-12 % of it), and a
+  1.1-4.5 µs of a point statement's server CPU after BK (5-15 % of it,
+  `bench/v3.0.0/archive/bk-close-v2.7.0-787-g8679367e/partsB.md`), and a
   client that prepares is the only one a cached parse would help; no driver
   in the tree prepares. A text parameter containing a single quote stays
   unbindable at `C_BIND` for the same reason.
@@ -1008,9 +1009,9 @@ stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
   replay attempt are 7-9 % of its server CPU (BK-S1's census), for a lookup
   the descent already answers directly. No BK proposal named it.
 - **The request path's floor is the kernel's**: a `C_PING` round trip costs
-  14-25 µs of server CPU on the census host, 59-61 % in its one `send()` and
-  34-37 % in the read and the reactor's wake (BK-Q8: no engine change in BK
-  reaches it).
+  12 µs of server CPU and 26 µs at p50 on a quiet host at BK's close, 64 % of
+  the CPU in its one `send()` and 33 % in the read and the reactor's wake
+  (BK-Q8: no engine change in BK reaches it).
 - **A spilled value an UPDATE re-assigns is still never released**: BK-R3
   stopped the copy of a value the SET list does not name, not the
   superseded one it does. The deferred-release drain stays unbuilt, and
@@ -1023,9 +1024,13 @@ stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
   - the var-heap tail hint across a `DROP TABLE` reclaim that reuses the
     dropped chain's root id: the cell (`ARootIsBornWithNoHint`) uses the
     in-memory store's id order, not a reclaim on `DevicePageStore`.
-- **A scan row's walk has no single dominant part**: about 80 ns of server
-  CPU a row on the census host, split between visibility, decode, the
-  residual and the leaf visit, none above a quarter (BK-S1's re-profile).
+- **A scan row costs twice PostgreSQL's, and no single part of it
+  dominates**: 67 ns of server CPU a row net of the statement at BK's close
+  against PostgreSQL 18's 34 ns on one host and driver
+  (`bench/v3.0.0/results-bk-close-v2.7.0-787-g8679367e.md`). BK-S1's
+  re-profile on the busy census host split it between visibility, decode,
+  the residual and the leaf visit, none above a quarter
+  (`archive/bk-s1-census-v2.7.0-769-gb70f79d8/profB1r-reports.txt`).
 
 ## Carve and checkpoint stalls
 

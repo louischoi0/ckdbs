@@ -3,9 +3,12 @@
 Written 2026-10-11 on `worktree-bk-read-update-paths` from `e623fb5`
 (`git describe` not computed: the session's clone is shallow and does not
 reach `v2.7.0`). It follows the operator's words of 2026-10-11, recorded in
-English (`raft-marks-2026-10-11-bk-paths.md` §1; the day's
-`raft-marks-2026-10-11.md` belongs to `workorder-bk-keystone-48.md`, the other
-order of that day carrying the letter BK - BK-Q10):
+English (`raft-marks-2026-10-11-bk-paths.md` §1). The day's
+`raft-marks-2026-10-11.md` is two files that will meet: `main`'s, written at
+`ab2c46d0` for `workorder-bk-sys-statistics-show-sugar.md` and BL and merged
+into this branch at `8679367e`, and `worktree-bk-keystone-48`'s, for
+`workorder-bk-keystone-48.md` - the two other orders of that day carrying the
+letter BK (BK-Q10):
 
 - **W0:** *"Propose a direction for optimizing the read and update paths
   to be faster."*
@@ -20,7 +23,14 @@ standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone)** as CLA
 proposed it, never marked by the operator per item; BK-Q10 was added for the
 letter. W2's "discard a proposal if it turns out to be useless" is BK-R0's
 rule restated: a stage whose part BK-S1 finds immaterial is not built, and
-§6 records it as discarded with the number that discarded it.
+the order records it as discarded with the number that discarded it (§2's
+ruling, §4's item, §6's entry).
+
+**Closed 2026-10-11** on `worktree-bk-read-update-paths` (code at `8679367e`,
+`v2.7.0-787-g8679367e`; not pushed): BK-S1, S3, S4, S5, S9 built; BK-S2, S6,
+S7 not built, each with its number (§2's BK-R1, BK-R5, BK-R6, §4's BK-Q13,
+§6's "not built" entry); measured once at the close
+(`bench/v3.0.0/results-bk-close-v2.7.0-787-g8679367e.md`).
 
 **Claim tags:**
 - `[source-read]` with `path:line` at `e623fb5`;
@@ -33,9 +43,11 @@ rule restated: a stage whose part BK-S1 finds immaterial is not built, and
 (`workorder-bj-expression-update.md`); no file under `instructions/` and no
 branch on `origin` uses BK. W1 named it. **A second BK exists off `main`**:
 `workorder-bk-keystone-48.md`, the 48-bit Keystone id, written and opened the
-same day on the local branch `worktree-bk-keystone-48`. Item numbers collide
-(BK-Q3 is two different questions), so this order is cited by its file name
-(BK-Q10).
+same day on the local branch `worktree-bk-keystone-48`, and - found when
+`origin/main` was merged at BK's close - `workorder-bk-sys-statistics-show-sugar.md`
+(statistics relations and `SHOW` as sugar), written the same day and on
+`main`. Item numbers collide (BK-Q3 is three different questions), so this
+order is cited by its file name (BK-Q10).
 
 **BK against other orders.**
 - **BA** (closed 2026-10-10) found the contended waits of P1-P4 below 1 %
@@ -89,7 +101,7 @@ request path every statement pays, the point `SELECT`'s extra 17.5 µs, a
 scan's per-row cost, then an UPDATE's row work** - and removes only what
 the measurement finds material.
 
-**BK's proposals, one line each** (each `[design]`, unratified):
+**BK's proposals, one line each** (each `[design]`; adopted on the standing go-ahead, §4):
 
 - **BK-R0.** Measure first, by a bar BK-Q1 marks.
 - **BK-R1.** A prepared statement is compiled once and bound per
@@ -252,8 +264,10 @@ so it needs a bar of its own.
   the `?` text.
 
 **Not built in BK** (BK-Q13, adopted at BK-S3): after BK-S4 and BK-S5 the
-part BK-R1 removes - parse and compile - is 2.2-4.2 µs of a point
-statement's server CPU, reachable only by a client that prepares.
+part BK-R1 removes - parse and compile - is 1.1-4.5 µs of a point
+statement's server CPU, 5-15 % of it (B's profile at the close,
+`bench/v3.0.0/archive/bk-close-v2.7.0-787-g8679367e/partsB.md`), reachable
+only by a client that prepares.
 
 ### BK-R2 — Decode what is read, encode what is written `[quiet-wrong]`
 
@@ -354,10 +368,10 @@ chain. Nothing on disk changes. In BK's scope by BK-Q12.
 
 | stage | what | done when | size |
 |---|---|---|---|
-| BK-S0 | **The order** | This file, its review, `raft-marks-2026-10-11.md`, `index.md`'s row | S |
-| BK-S1 | **The spans, the counters, the census** (BK-R0) | The trace spans `trace.hpp` names and nobody opens, built; a sampled or differential split of a point `SELECT` over `SHOW META`, of a scan row, and of a point `UPDATE`; the request path every statement pays split from the server's side; the schema word's moves per second under load; the driver able to PARSE once and BIND many, both paths measured; `build-release`, a quiet host, results under `bench/v3.0.0/`. No path changes | L |
+| BK-S0 | **The order** | This file, its review, `raft-marks-2026-10-11-bk-paths.md`, `index.md`'s row | S |
+| BK-S1 | **The spans, the counters, the census** (BK-R0) | The trace spans `trace.hpp` names and nobody opens, built; a sampled or differential split of a point `SELECT` over `SHOW META`, of a scan row, and of a point `UPDATE`; the request path every statement pays split from the server's side; the schema word's moves per second under load; the driver able to PARSE once and BIND many, both paths measured; `build-release`, a quiet host, results under `bench/v3.0.0/`. No path changes **Revised by BK-Q11**: neither the spans nor the schema word's rate built | L |
 | BK-S2 | **Compile once, bind many** (BK-R1), if material and on BK-Q3. **Not built** (BK-Q13) | The cache on the statement handle; re-bind per execution; the reviewed list of per-execution decisions with a cell each; fingerprint equality for every bound shape; a DDL and a root move between two executions | L |
-| BK-S3 | **Decode and encode by column** (BK-R2), if material; **widened at BK-S1 to the every-row UPDATE's per-row parts** (BK-Q13) | The decode set, the poison slot, the in-place re-encode; byte equality with today's encode across every type and NULL; BJ's single-write and swap cells green | M |
+| BK-S3 | **Decode and encode by column** (BK-R2), if material; **widened at BK-S3 to the every-row UPDATE's per-row parts** (BK-Q13) | The decode set, the poison slot, the in-place re-encode; byte equality with today's encode across every type and NULL; BJ's single-write and swap cells green | M |
 | BK-S4 | **The read path's largest part** (BK-R4), if material | The part BK-S1 ranks first, answers byte-identical | M |
 | BK-S5 | **Carried spills** (BK-R3), on BK-Q4 | The carry, its rollback, purge and recovery cells; the drain's binding rule written into `heap-and-tuple.md` | M |
 | BK-S6 | **Access statistics per core** (BK-R6), if material and on BK-Q7 | BA-S5's done-when. **Discarded at BK-S1** (BK-R6) | S |
@@ -386,7 +400,7 @@ S7 last.
 | BK-Q10 | **The letter**, which `workorder-bk-keystone-48.md` also carries: (a) keep BK, cite by file; (b) re-letter this order | process | **(a).** W1 names BK after rejecting BY, so the letter is the operator's; `index.md` already carries a letter in two documents (AN) under the rule "cite the file, never the bare number"; this order's marks go to `raft-marks-2026-10-11-bk-paths.md` so the two sessions do not write one file | adopted (standing go-ahead, 2026-10-11) |
 | BK-Q11 | **BK-S1's two instruments the census replaced** (added at BK-S1): the trace spans `trace.hpp` names, and the schema word's rate under load | process | **Neither built.** The sampler (`tools/kds_sampler.c`) splits a statement's server CPU into the parts BK-R4 asks for without code under `src/` and without per-row clocks (§1.4); the schema word's rate prices only a cached *plan*'s invalidation, and BK-R1's form is decided after BK-S4 and BK-S5 move the denominators | adopted (standing go-ahead, 2026-10-11) |
 | BK-Q12 | **BK-R8 in BK** (added at BK-S1): the var-heap append's walk from the root is per-row work on the update path the census measured, but no ruling of BK named it | scope | **In BK, as BK-S9.** It is the update path's largest part for a row whose spilled cell is assigned once BK-R3 lands, it grows without bound, and it changes nothing on disk or on the wire | adopted (standing go-ahead, 2026-10-11) |
-| BK-Q13 | **What BK-S2 and BK-S3 build, after BK-S4 and BK-S5 moved the denominators** (added at BK-S3) | scope, [quiet-wrong] for (a) | Options for BK-S2: (a) BK-R1 as written, a plan cached on the statement handle; (b) a reduced form, the parse cached and the compile per execution; (c) not built in BK. For BK-S3: the decode half of BK-R2 as written, or widened to the every-row re-profile's per-row parts. **CLA's proposal: BK-S2 (c); BK-S3 widened.** BK-S2: parse and compile are 2.2-4.2 µs of a point statement's server CPU after BK-S4 (7-12 %), material by the bar's letter, but reachable only by a client that prepares - no driver in the tree does - and 2-4 % of the statement a client waits for; either form puts BK-R1's own quiet-wrong surface (every per-execution decision, the fingerprint's argument stream, every DML handler's entry) on the parser and the dispatcher. W2 asks that a proposal that does not pay be discarded; it is recorded in `known-gaps.md` with the census's numbers. BK-S3: the re-profile's per-row parts are the undo log's second fetch of its tail (7 %), the whole-row decode (6.6 %) and, of the read path, `ExecStats::For` out of line (5.5 % of a scan row) - each at or over the bar, each a change no answer can see | adopted (standing go-ahead, 2026-10-11) |
+| BK-Q13 | **What BK-S2 and BK-S3 build, after BK-S4 and BK-S5 moved the denominators** (added at BK-S3) | scope, [quiet-wrong] for (a) | Options for BK-S2: (a) BK-R1 as written, a plan cached on the statement handle; (b) a reduced form, the parse cached and the compile per execution; (c) not built in BK. For BK-S3: the decode half of BK-R2 as written, or widened to the every-row re-profile's per-row parts. **CLA's proposal: BK-S2 (c); BK-S3 widened.** BK-S2: parse and compile are 1.1-4.5 µs of a point statement's server CPU after BK-S4 (5-15 %, B's profile at the close), material by the bar's letter, but reachable only by a client that prepares - no driver in the tree does - and 2.5-10 % of the statement a client waits for (B's p50 at the close); either form puts BK-R1's own quiet-wrong surface (every per-execution decision, the fingerprint's argument stream, every DML handler's entry) on the parser and the dispatcher. W2 asks that a proposal that does not pay be discarded; it is recorded in `known-gaps.md` with the census's numbers. BK-S3: the re-profile's per-row parts are the undo log's second fetch of its tail (7 %), the whole-row decode (6.6 %) - both in `archive/bk-s1-census-v2.7.0-769-gb70f79d8/profB1r-reports.txt` - and, of the read path, `ExecStats::For` out of line (5.5 % of a scan row) - each at or over the bar, each a change no answer can see | adopted (standing go-ahead, 2026-10-11) |
 
 ## 5. Measurement
 
@@ -451,6 +465,8 @@ Written on `worktree-bk-read-update-paths` from `e623fb5`. No file under
 
 ### BK-S1 — the census, 2026-10-11
 
+Committed `0d124dec`.
+
 On `worktree-bk-read-update-paths`, A = `b70f79d8` (`v2.7.0-769-gb70f79d8`):
 `bench/v3.0.0/results-bk-s1-census-v2.7.0-769-gb70f79d8.md`. Built, all under
 `tools/`, nothing under `src/`: `kds_sampler.c` (an `LD_PRELOAD` SIGPROF
@@ -464,8 +480,9 @@ quotes on-CPU time and sampled shares of it, never wall time.
 
 **What it ranked**: the socket send, 38-46 % of every point statement, half of
 it a second flush (BK-R7, added; BK-S4 by BK-Q5); the spilled row's re-append
-and the walk from the chain's root it lengthens, 32-60 % of a spilled row's
-UPDATE and growing, 38 pages leaked per 1,000 updates (BK-R3, BK-S5; BK-R8,
+and the walk from the chain's root it lengthens - 37-54 % of an UPDATE of a
+spilled row assigning another column, 32-60 % of one assigning the spilled
+value, each growing with the chain - and 38 pages leaked per 1,000 updates (BK-R3, BK-S5; BK-R8,
 added, BK-S9 by BK-Q12); parse + compile 5-12 % of a point statement (BK-R1,
 form decided after BK-S4/S5); Waystone recording 7-9 % of a point `SELECT`
 (no BK proposal; reported); access statistics 0.7 % (**BK-R6 discarded**). The
@@ -475,6 +492,8 @@ the schema word's rate were not built.
 
 ### BK-S4 — a statement's reply in one write (BK-R7), 2026-10-11
 
+Committed `fd851d32`.
+
 `src/server/tcp_server.cpp`: `OnClientReadable` does not flush while the
 statement it submitted is in flight; `OnStatementComplete` flushes all of it.
 A `reply_writes()` count on `TcpServer` (reactor-thread state, read after the
@@ -483,6 +502,8 @@ reactor stops) and the cell `KwpEndpointTest.APipelinedStatementRepliesInOneWrit
 five before - the cell was run against the change reverted and read 5).
 
 ### BK-S5 — carried spills (BK-R3), 2026-10-11
+
+Committed `ed4a5655`.
 
 `exec::EncodeAssigned` (`src/exec/row_codec.cpp`): an UPDATE's new image is the
 row's own bytes with only the assigned cells zeroed, their NULL bits cleared
@@ -522,6 +543,8 @@ Overhead not measured; measured at the milestone's close.
 
 ### BK-S9 — the var-heap tail (BK-R8), 2026-10-11
 
+Committed `e6b320b4`.
+
 `varheap::ChainAppend` starts its walk at the chain's last known tail: a
 1,024-slot table of relaxed atomics on `PageStore` (`root << 32 | tail`, one
 table per store, so per instance in production, where peers share core 0's
@@ -554,8 +577,11 @@ fallback spending one step of the cycle budget (a chain of exactly
 
 ### BK-S3 — the UPDATE row's per-row work (BK-R2, widened by BK-Q13), 2026-10-11
 
-Two cuts, both from the every-row UPDATE's re-profile
-(B1 profile with 1,500 statements of 1,000 rows, archived at the close):
+Committed `22f07942` and `3a5081e5`.
+
+Three cuts, from the every-row UPDATE's and the scan's re-profile
+(the B1 profile - the tree committed as `fd851d32` and `ed4a5655` - with
+1,500 statements of 1,000 rows: `bench/v3.0.0/archive/bk-s1-census-v2.7.0-769-gb70f79d8/profB1r-reports.txt`):
 
 - **Stage 2 decodes what is read** (BK-R2's decode half, as revised): a
   relation with a Cabin or an index, or one the assertion registry answers for,
@@ -567,6 +593,11 @@ Two cuts, both from the every-row UPDATE's re-profile
 - **The undo log appends through the hold that checked the tail's room**
   (`UndoLog::TailFor` returns the held `PageRef`), not through a second fetch
   of the same page - every write statement's undo record, not only UPDATE's.
+- **`ExecStats::For` inlines** (`3a5081e5`), and a walk's examined row takes
+  its counters once: the read path's own per-row cut, 5.5 % of a scan row in
+  the same profile. Its review (one `critics-developer` pass) found the move
+  correct, the stage tag wrong and a second lookup per row removable; both
+  applied.
 
 Cells: `SetExprEvalTest.APartialDecodeReadsEveryColumnTheExpressionsName`
 (CASE, COALESCE, CAST, LENGTH, GREATEST, a subquery, and a literal-only
@@ -597,3 +628,62 @@ reader compares those fields.
 
 Full Debug suite green at the end of both stages (3518/3518). Overhead not
 measured; measured at the milestone's close.
+
+### BK-S8 — the close, 2026-10-11
+
+**Measured once, interleaved, on a quiet host** (1-minute loadavg 2.6-3.7 at every run's start of the main A/B, 1.1-1.4 for DELETE's and the PostgreSQL twin; a gate at 4):
+A = `b70f79d8` (`v2.7.0-769-gb70f79d8`), B = `8679367e` (`v2.7.0-787-g8679367e`,
+BK's code merged with `origin/main`; later commits are documents),
+`bench/v3.0.0/results-bk-close-v2.7.0-787-g8679367e.md`. Eight A/B runs of every
+shape and both driver paths, six more for DELETE, B's sampled profile, and the
+PostgreSQL twin of the scan. At p50, B - A, the median of the per-run
+differences:
+
+| shape | A p50 | B - A | server CPU, B - A |
+|---|---|---|---|
+| `C_PING` (control, no engine path) | 26.2 µs | +0.0 µs | +0.0 µs |
+| `SHOW META` | 50.5 µs | -4.4 µs | -8.8 µs |
+| point `SELECT` | 65.5 µs | -9.2 µs (-14 %) | -7.4 µs |
+| point `UPDATE`, literal / `v + 1` | 53.8 / 56.6 µs | -7.9 / -8.5 µs (-15 %) | -7.5 / -6.4 µs |
+| point `UPDATE` of a spilled row, cell not assigned | 62.3 µs | -16.6 µs (-27 %) | -16.0 µs |
+| point `UPDATE` assigning a spilled value | 65.0 µs | -14.1 µs (-22 %) | -12.2 µs |
+| `INSERT` / `DELETE` by pk | 52.4 / 50.1 µs | -7.2 / -7.6 µs (-14 / -15 %) | -6.4 / -6.7 µs |
+| every-row `UPDATE`, 1,000 rows | 987 µs | -228 µs (-23 %) | -221 µs |
+| unindexed equality, 10,000 rows | 783 µs | -38 µs (-5 %) | -37 µs |
+
+The prepared path moves the same way (its rows are in the results file).
+1,000 updates of a spilled row, assigning another column, allocated 38
+var-heap pages on A and 0 on B in every run; an UPDATE assigning a spilled
+value costs the same in the arm's last block as in its first on B, where A's
+grows with the chain. A scan row is 67 ns of server CPU net of the statement
+on B, 69.5 on A, and **34 on PostgreSQL 18** (BA-S3's twin, one host, one
+driver): §0's "twice PostgreSQL's" stands after BK, and is `known-gaps.md`'s.
+
+**Where it came from**, by B's profile against A's: the one write is most of
+every point statement's gain (one `send()` instead of two, and one client
+wake); the carried spill and the tail hint are the spilled rows'; the every-row
+UPDATE's is the undo log's single fetch, the before-image taken from the walk's
+copy, the partial decode and no whole-row encode. The results file splits it
+as far as two binaries allow, and finds one premise of §0 wrong: the point
+`SELECT`'s 17.5 µs over `SHOW META` is mostly the client's (on A, +2.2 µs of
+server CPU and +12.5 µs of driver CPU), not the engine's.
+
+**Docs moved to their owners**: `heap-and-tuple.md` §3.4 (carried values, the
+release rule, the tail hint), `rule-fixed-length-tuple.md`, `types.md` §3.2b
+(what an UPDATE decodes and encodes), `protocol.md` §5 and `client-manual.md`
+(one write per pipelined statement), `known-gaps.md`'s BK section, `CLAUDE.md`'s
+var-heap and wire rows, `index.md`'s row. The manual's SQL surface did not
+change. **Synced**: `origin/main` merged at `8679367e` (one conflict, `index.md`,
+three rows kept side by side - this order's, `workorder-bk-sys-statistics-show-sugar.md`'s
+and BL's), the full Debug suite green after it (3521/3521).
+
+### BK-S2, BK-S6, BK-S7 — not built, 2026-10-11
+
+- **BK-S2** (compile once, BK-R1): parse and compile are 1.1-4.5 µs of a point
+  statement's server CPU at the close (5-15 %), reachable only by a client
+  that prepares; BK-Q13. Recorded in `known-gaps.md`.
+- **BK-S6** (access statistics per core, BK-R6): `Catalog::RecordAccess` is
+  0.7 % of a point `SELECT` (BK-S1's census).
+- **BK-S7** (byte-range records, BK-R5): the every-row UPDATE's undo and WAL
+  cost is per record - the undo append 28 % of a row, the WAL append 7.5 % -
+  for a 44-byte image (`profB1r-reports.txt`); BK-Q6's condition is not met.

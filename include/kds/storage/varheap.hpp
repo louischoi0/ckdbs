@@ -32,9 +32,11 @@
 //   - The class is relayout-exempt by construction. The physical optimizer
 //     has no reason to touch a kVarHeap page, so it never will.
 //   - Reclamation is not new machinery: it rides on purge. Versions of one
-//     tuple share every spilled value an UPDATE did not assign (BK-R3,
-//     `exec::EncodeAssigned`), so a value may be released only once **the
-//     newest version naming it** is reclaimed (`heap-and-tuple.md` §3.4).
+//     tuple share every spilled value an UPDATE did not assign
+//     (`exec::EncodeAssigned`, BK-R3 of
+//     `workorder-bk-opt-read-update-path.md`), so a value may be released
+//     only once **the newest version naming it** is reclaimed
+//     (`heap-and-tuple.md` §3.4).
 //
 // ---- The one operation that ends a value: Release() ----------------------
 //

@@ -40,10 +40,10 @@ def arm(conn, sql_of, ops, rows, pid):
     for q in range(ops):
         sql = sql_of(1 + (q * 7919) % rows)
         t0 = time.perf_counter()
-        got = conn.fetch(sql)
+        got, error = conn.fetch(sql)
         lat.append(time.perf_counter() - t0)
-        if len(got) != 1:
-            raise SystemExit(f"{sql!r} answered {len(got)} rows")
+        if error is not None or len(got) != 1:
+            raise SystemExit(f"{sql!r} answered {len(got)} rows, error {error}")
     cpu = (cpu_ns(pid) - s0) / ops / 1e3
     return {"ops": ops, "p0_us": min(lat) * 1e6, "p25_us": pct(lat, 25) * 1e6,
             "p50_us": pct(lat, 50) * 1e6, "p90_us": pct(lat, 90) * 1e6,

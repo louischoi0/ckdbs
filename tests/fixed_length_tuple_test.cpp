@@ -559,8 +559,9 @@ TEST_F(FixedLengthTupleTest, TheNewTypesStoreAndReadBackAsWritten) {
 
 TEST_F(FixedLengthTupleTest, AStoredValueSurvivesAnUpdateOfAnotherColumn) {
     // An untouched column must not move when a neighbour is written. Since
-    // BK-R3 an UPDATE carries every cell its SET list does not assign, so
-    // the first UPDATE pins the carry; the decode-then-encode round trip
+    // BK-R3 (`workorder-bk-opt-read-update-path.md`) an UPDATE carries every
+    // cell its SET list does not assign, so the first UPDATE pins the carry;
+    // the decode-then-encode round trip
     // this cell was written for is reached now only by an expression that
     // reads the column it assigns (`SET d = d`), the second. Encode has to
     // accept what decode produces - an epoch integer for a date, a

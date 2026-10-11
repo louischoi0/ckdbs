@@ -220,7 +220,8 @@ struct ExecStats {
     // The step's counters, growing the vector as needed. Called on the hot
     // path, so it does not check anything a compiled chain guarantees, and
     // is defined here so it inlines: it runs per counter bump on every row a
-    // walk examines (BK-S3).
+    // walk examines (BK-S3,
+    // `workorder-bk-opt-read-update-path.md`).
     StepStats& For(std::uint32_t step_id) {
         if (step_id >= steps.size()) steps.resize(step_id + 1);
         return steps[step_id];

@@ -1,0 +1,1161 @@
+==== noop literal (30000 statements, server CPU 12.2 us per statement)
+samples 322
+
+-- self --
+ 63.66%    205  __libc_send
+ 24.53%     79  epoll_wait
+  8.07%     26  __GI___libc_read
+  1.55%      5  kds::server::TcpServer::OnClientReadable
+  0.62%      2  __GI___pthread_disable_asynccancel
+  0.31%      1  tcache_get_n
+  0.31%      1  kds::sched::Scheduler::RunOnce
+  0.31%      1  std::_Function_handler::_M_invoke
+  0.31%      1  [vdso]+0x9d4
+  0.31%      1  kds::wire::FrameDecoder::PopFrame
+
+-- inclusive --
+100.00%    322  kds::sched::Scheduler::Run
+100.00%    322  __libc_start_main_impl
+100.00%    322  __libc_start_call_main
+100.00%    322  kds::server::Expeditor::RunUntilStopped
+100.00%    322  main
+100.00%    322  _start
+100.00%    322  kds::server::Expeditor::Serve
+ 99.69%    321  kds::sched::Scheduler::RunOnce
+ 74.22%    239  kds::server::TcpServer::OnClientReadable
+ 63.66%    205  kds::server::TcpServer::FlushOutbox
+ 63.66%    205  __libc_send
+ 24.84%     80  kds::sched::EpollIoBackend::PollReady
+ 24.53%     79  epoll_wait
+  8.07%     26  __GI___libc_read
+  0.62%      2  kds::server::TcpServer::DrainFrames
+  0.62%      2  __GI___pthread_disable_asynccancel
+  0.31%      1  kds::server::KwpSession::Send [clone .constprop.0]
+  0.31%      1  kds::server::KwpSession::OnFrame
+  0.31%      1  operator new
+  0.31%      1  tcache_get_n
+  0.31%      1  kds::wire::EncodeFrame
+  0.31%      1  std::_Function_handler::_M_invoke
+  0.31%      1  std::chrono::_V2::steady_clock::now
+  0.31%      1  __GI___clock_gettime
+  0.31%      1  [vdso]+0x9d4
+==== ping literal (30000 statements, server CPU 23.6 us per statement)
+samples 630
+
+-- self --
+ 38.89%    245  __libc_send
+ 15.40%     97  epoll_wait
+  4.44%     28  std::ostream& std::ostream::_M_insert
+  4.29%     27  __GI___libc_read
+  3.97%     25  kds::server::CommandDispatcher::HandleShowMeta
+  3.33%     21  std::basic_streambuf::xsputn
+  3.33%     21  std::basic_ostream& std::__ostream_insert
+  3.33%     21  __memcpy_avx512_unaligned_erms
+  1.90%     12  __strlen_evex
+  1.90%     12  std::ostream::sentry::sentry
+  1.75%     11  std::num_put::do_put const
+  1.43%      9  [vdso]+0x99a
+  0.95%      6  __GI___libc_malloc
+  0.79%      5  std::ostreambuf_iterator std::num_put::_M_insert_int const
+  0.63%      4  unlink_chunk
+  0.63%      4  tcache_get_n
+  0.48%      3  kds::parser::Lexer::ScanToken
+  0.48%      3  kds::server::KwpSession::OnParse
+  0.48%      3  kds::server::TcpServer::OnClientReadable
+  0.48%      3  _int_free
+  0.48%      3  std::__numpunct_cache::_M_cache
+  0.48%      3  _int_malloc
+  0.32%      2  kds::sched::Scheduler::RunOnce
+  0.32%      2  kds::sched::EpollIoBackend::PollReady
+  0.32%      2  kds::server::DispatchOutcome::operator= [clone .isra.0]
+
+-- inclusive --
+100.00%    630  kds::server::Expeditor::RunUntilStopped
+100.00%    630  kds::server::Expeditor::Serve
+100.00%    630  main
+100.00%    630  _start
+100.00%    630  __libc_start_call_main
+100.00%    630  kds::sched::Scheduler::Run
+100.00%    630  __libc_start_main_impl
+ 99.84%    629  kds::sched::Scheduler::RunOnce
+ 73.65%    464  kds::sched::Scheduler::RunReadyTasks
+ 73.17%    461  kds::sched::CoroTask::Poll
+ 41.90%    264  kds::server::TcpServer::OnStatementComplete
+ 38.89%    245  __libc_send
+ 38.73%    244  kds::server::TcpServer::FlushOutbox
+ 30.95%    195  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 30.32%    191  kds::server::CommandDispatcher::DispatchAndStage
+ 29.52%    186  kds::server::CommandDispatcher::DispatchInner
+ 26.83%    169  kds::server::CommandDispatcher::HandleShowMeta
+ 16.03%    101  kds::sched::EpollIoBackend::PollReady
+ 15.40%     97  epoll_wait
+ 10.48%     66  std::ostream& std::ostream::_M_insert
+  8.89%     56  kds::server::TcpServer::OnClientReadable
+  7.78%     49  std::basic_ostream& std::__ostream_insert
+  4.92%     31  kds::server::TcpServer::DrainFrames
+  4.76%     30  std::basic_streambuf::xsputn
+  4.29%     27  __GI___libc_read
+==== ping prepared (30000 statements, server CPU 23.1 us per statement)
+samples 665
+
+-- self --
+ 35.34%    235  __libc_send
+ 11.58%     77  epoll_wait
+  5.56%     37  std::basic_ostream& std::__ostream_insert
+  4.96%     33  std::ostream& std::ostream::_M_insert
+  4.81%     32  kds::server::CommandDispatcher::HandleShowMeta
+  4.51%     30  __GI___libc_read
+  3.46%     23  std::basic_streambuf::xsputn
+  3.31%     22  std::ostream::sentry::sentry
+  2.41%     16  __memcpy_avx512_unaligned_erms
+  2.41%     16  std::ostreambuf_iterator std::num_put::_M_insert_int const
+  2.41%     16  std::num_put::do_put const
+  1.35%      9  __strlen_evex
+  1.20%      8  [vdso]+0x99a
+  1.20%      8  _int_malloc
+  0.90%      6  std::__numpunct_cache::_M_cache
+  0.75%      5  kds::server::CommandDispatcher::DispatchAndStage
+  0.60%      4  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+  0.45%      3  __GI_tolower
+  0.45%      3  kds::server::TcpServer::OnClientReadable
+  0.45%      3  _int_free
+  0.45%      3  void std::vector::_M_range_insert [clone .isra.0]
+  0.45%      3  kds::server::KwpSession::OnBind
+  0.45%      3  kds::server::TcpServer::OnStatementComplete
+  0.45%      3  __GI___libc_malloc
+  0.45%      3  std::_Hashtable::find [clone .isra.0]
+
+-- inclusive --
+100.00%    665  kds::sched::Scheduler::Run
+100.00%    665  kds::server::Expeditor::RunUntilStopped
+100.00%    665  kds::server::Expeditor::Serve
+100.00%    665  main
+100.00%    665  _start
+100.00%    665  __libc_start_call_main
+100.00%    665  __libc_start_main_impl
+ 99.70%    663  kds::sched::Scheduler::RunOnce
+ 79.70%    530  kds::sched::Scheduler::RunReadyTasks
+ 78.80%    524  kds::sched::CoroTask::Poll
+ 39.70%    264  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 38.95%    259  kds::server::CommandDispatcher::DispatchAndStage
+ 38.95%    259  kds::server::TcpServer::OnStatementComplete
+ 36.84%    245  kds::server::CommandDispatcher::DispatchInner
+ 35.79%    238  kds::server::TcpServer::FlushOutbox
+ 35.34%    235  __libc_send
+ 34.14%    227  kds::server::CommandDispatcher::HandleShowMeta
+ 14.44%     96  std::ostream& std::ostream::_M_insert
+ 11.73%     78  kds::sched::EpollIoBackend::PollReady
+ 11.58%     77  epoll_wait
+  9.92%     66  std::basic_ostream& std::__ostream_insert
+  7.22%     48  kds::server::TcpServer::OnClientReadable
+  4.96%     33  std::basic_streambuf::xsputn
+  4.96%     33  std::ostreambuf_iterator std::num_put::_M_insert_int const
+  4.51%     30  __GI___libc_read
+==== select-pk literal (30000 statements, server CPU 26.9 us per statement)
+samples 748
+
+-- self --
+ 35.43%    265  __libc_send
+ 14.04%    105  epoll_wait
+  3.88%     29  __GI___libc_read
+  1.74%     13  tcache_get_n
+  1.34%     10  __GI___libc_free
+  1.34%     10  kds::parser::Lexer::ScanToken
+  1.34%     10  std::_Hashtable::find [clone .isra.0]
+  1.20%      9  kds::server::CommandDispatcher::HandleSelect
+  1.20%      9  __GI___libc_malloc
+  1.20%      9  _int_free
+  1.07%      8  __memcpy_avx512_unaligned_erms
+  1.07%      8  kds::parser::FingerprintAccumulator::Feed
+  1.07%      8  kds::server::SelectRun::RunInline
+  1.07%      8  _int_malloc
+  0.94%      7  kds::server::KwpSession::OnBind
+  0.94%      7  [vdso]+0x99a
+  0.80%      6  std::__cxx11::basic_string::_M_dispose
+  0.67%      5  kds::storage::DevicePageStore::PublishFreshPage
+  0.67%      5  kds::exec::::CompileBlock
+  0.53%      4  kds::server::CommandDispatcher::DispatchAndStage
+  0.53%      4  kds::server::KwpSession::OnParse
+  0.53%      4  kds::txn::LockTable::AcquireInner
+  0.53%      4  kds::sched::Scheduler::RunReadyTasks
+  0.53%      4  std::vector::_M_default_append
+  0.53%      4  kds::parser::Parser::ParseSelect
+
+-- inclusive --
+ 99.87%    747  __libc_start_call_main
+ 99.87%    747  kds::server::Expeditor::RunUntilStopped
+ 99.87%    747  kds::server::Expeditor::Serve
+ 99.87%    747  __libc_start_main_impl
+ 99.87%    747  kds::sched::Scheduler::Run
+ 99.87%    747  _start
+ 99.87%    747  kds::sched::Scheduler::RunOnce
+ 99.87%    747  main
+ 74.60%    558  kds::sched::Scheduler::RunReadyTasks
+ 73.40%    549  kds::sched::CoroTask::Poll
+ 39.57%    296  kds::server::TcpServer::OnStatementComplete
+ 35.56%    266  kds::server::TcpServer::FlushOutbox
+ 35.43%    265  __libc_send
+ 33.29%    249  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 32.75%    245  kds::server::CommandDispatcher::DispatchAndStage
+ 31.28%    234  kds::server::CommandDispatcher::DispatchInner
+ 30.21%    226  kds::server::CommandDispatcher::HandleSelect
+ 14.17%    106  kds::sched::EpollIoBackend::PollReady
+ 14.04%    105  epoll_wait
+ 12.70%     95  kds::server::SelectRun::RunInline
+  9.22%     69  kds::server::TcpServer::OnClientReadable
+  6.68%     50  kds::server::TcpServer::DrainFrames
+  6.15%     46  kds::server::SelectRun::Execute [clone .actor]
+  6.02%     45  kds::parser::Parser::Parse
+  5.61%     42  kds::server::KwpSession::OnFrame
+==== select-pk prepared (30000 statements, server CPU 25.7 us per statement)
+samples 646
+
+-- self --
+ 35.29%    228  __libc_send
+ 12.07%     78  epoll_wait
+  5.42%     35  __GI___libc_read
+  1.70%     11  _int_free
+  1.39%      9  __GI_tolower
+  1.39%      9  __memcpy_avx512_unaligned_erms
+  1.24%      8  std::_Hashtable::find [clone .isra.0]
+  1.24%      8  kds::server::CommandDispatcher::HandleSelect
+  1.08%      7  kds::wire::EncodeRowDescription
+  1.08%      7  __GI___libc_free
+  0.93%      6  kds::server::KwpSession::OnBind
+  0.93%      6  tcache_get_n
+  0.93%      6  __GI___libc_malloc
+  0.93%      6  [vdso]+0x99a
+  0.77%      5  kds::parser::SelectStmt::~SelectStmt
+  0.77%      5  kds::server::SelectRun::Execute [clone .actor]
+  0.77%      5  kds::server::SelectRun::RunInline
+  0.62%      4  kds::StatusOr::~StatusOr
+  0.62%      4  kds::parser::Lexer::ScanToken
+  0.62%      4  _int_malloc
+  0.62%      4  kds::exec::TrailReplay::Build
+  0.46%      3  kds::parser::Condition::Condition
+  0.46%      3  kds::exec::::CompileBlock
+  0.46%      3  operator delete
+  0.46%      3  kds::parser::SelectStmt::SelectStmt
+
+-- inclusive --
+ 99.38%    642  kds::sched::Scheduler::Run
+ 99.38%    642  main
+ 99.38%    642  kds::server::Expeditor::Serve
+ 99.38%    642  kds::sched::Scheduler::RunOnce
+ 99.38%    642  __libc_start_main_impl
+ 99.38%    642  kds::server::Expeditor::RunUntilStopped
+ 99.38%    642  __libc_start_call_main
+ 99.38%    642  _start
+ 76.01%    491  kds::sched::Scheduler::RunReadyTasks
+ 75.54%    488  kds::sched::CoroTask::Poll
+ 40.56%    262  kds::server::TcpServer::OnStatementComplete
+ 35.60%    230  kds::server::TcpServer::FlushOutbox
+ 35.29%    228  __libc_send
+ 34.98%    226  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 34.37%    222  kds::server::CommandDispatcher::DispatchAndStage
+ 32.97%    213  kds::server::CommandDispatcher::DispatchInner
+ 31.58%    204  kds::server::CommandDispatcher::HandleSelect
+ 14.71%     95  kds::server::SelectRun::RunInline
+ 12.07%     78  kds::sched::EpollIoBackend::PollReady
+ 12.07%     78  epoll_wait
+  9.13%     59  kds::server::TcpServer::OnClientReadable
+  6.81%     44  kds::parser::Parser::Parse
+  6.50%     42  kds::server::SelectRun::Execute [clone .actor]
+  5.42%     35  __GI___libc_read
+  5.11%     33  kds::parser::Parser::ParseSelect
+==== update-lit literal (30000 statements, server CPU 24.2 us per statement)
+samples 723
+
+-- self --
+ 37.90%    274  __libc_send
+ 15.63%    113  epoll_wait
+  5.67%     41  __GI___libc_read
+  2.35%     17  __GI_tolower
+  1.11%      8  kds::parser::FingerprintAccumulator::Feed
+  0.97%      7  std::_Hashtable::find [clone .isra.0]
+  0.97%      7  kds::server::KwpSession::OnParse
+  0.97%      7  __memcpy_avx512_unaligned_erms
+  0.83%      6  kds::server::CommandDispatcher::UpdateInner
+  0.83%      6  [vdso]+0x99a
+  0.83%      6  kds::parser::Lexer::ScanToken
+  0.69%      5  __libc_pwrite64
+  0.69%      5  operator delete
+  0.69%      5  kds::exec::CompileWhere
+  0.69%      5  kds::exec::CompileAssignments
+  0.69%      5  kds::server::KwpSession::OnBind
+  0.55%      4  tcache_get_n
+  0.55%      4  kds::StatusOr::~StatusOr
+  0.55%      4  __GI___libc_free
+  0.55%      4  std::vector::~vector
+  0.41%      3  kds::server::TcpServer::DrainFrames
+  0.41%      3  __GI_fdatasync
+  0.41%      3  kds::storage::::HardwareExtend
+  0.41%      3  kds::txn::LockTable::AcquireInner
+  0.41%      3  isalnum
+
+-- inclusive --
+ 99.45%    719  main
+ 99.45%    719  __libc_start_main_impl
+ 99.45%    719  kds::sched::Scheduler::Run
+ 99.45%    719  kds::server::Expeditor::Serve
+ 99.45%    719  _start
+ 99.45%    719  kds::server::Expeditor::RunUntilStopped
+ 99.45%    719  __libc_start_call_main
+ 99.31%    718  kds::sched::Scheduler::RunOnce
+ 67.91%    491  kds::sched::Scheduler::RunReadyTasks
+ 67.08%    485  kds::sched::CoroTask::Poll
+ 40.39%    292  kds::server::TcpServer::OnStatementComplete
+ 37.90%    274  __libc_send
+ 37.90%    274  kds::server::TcpServer::FlushOutbox
+ 25.45%    184  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 24.90%    180  kds::server::CommandDispatcher::DispatchAndStage
+ 24.48%    177  kds::server::CommandDispatcher::DispatchInner
+ 22.68%    164  kds::server::CommandDispatcher::HandleUpdate
+ 19.78%    143  kds::server::CommandDispatcher::UpdateInner
+ 15.77%    114  kds::sched::EpollIoBackend::PollReady
+ 15.63%    113  epoll_wait
+ 12.31%     89  kds::server::TcpServer::OnClientReadable
+  7.05%     51  kds::server::TcpServer::DrainFrames
+  6.09%     44  kds::server::KwpSession::OnFrame
+  5.67%     41  __GI___libc_read
+  5.39%     39  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+==== update-lit prepared (30000 statements, server CPU 23.4 us per statement)
+samples 595
+
+-- self --
+ 44.20%    263  __libc_send
+ 13.61%     81  epoll_wait
+  3.53%     21  __GI___libc_read
+  1.51%      9  __GI_tolower
+  1.34%      8  kds::server::KwpSession::OnBind
+  1.18%      7  std::_Hashtable::find [clone .isra.0]
+  1.18%      7  kds::txn::LockTable::PartitionOf const
+  1.01%      6  tcache_get_n
+  1.01%      6  kds::txn::LockTable::AcquireInner
+  0.84%      5  kds::parser::Lexer::ScanToken
+  0.84%      5  kds::server::CommandDispatcher::UpdateInner
+  0.84%      5  __GI___libc_malloc
+  0.67%      4  kds::btree::::DescendTo
+  0.67%      4  std::vector::~vector
+  0.67%      4  std::__cxx11::basic_string::operator= [clone .isra.0]
+  0.67%      4  _int_free
+  0.67%      4  kds::StatusOr::~StatusOr
+  0.67%      4  __memcpy_avx512_unaligned_erms
+  0.67%      4  [vdso]+0x99a
+  0.50%      3  kds::btree::SearchLeaf
+  0.50%      3  kds::server::DispatchOutcome::DispatchOutcome
+  0.50%      3  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  0.50%      3  kds::server::TcpServer::FlushOutbox
+  0.50%      3  kds::server::TcpServer::OnStatementComplete
+  0.50%      3  kds::server::KwpSession::OnFrame
+
+-- inclusive --
+100.00%    595  __libc_start_call_main
+100.00%    595  _start
+100.00%    595  kds::sched::Scheduler::Run
+100.00%    595  main
+100.00%    595  kds::server::Expeditor::Serve
+100.00%    595  __libc_start_main_impl
+100.00%    595  kds::server::Expeditor::RunUntilStopped
+ 99.66%    593  kds::sched::Scheduler::RunOnce
+ 74.96%    446  kds::sched::Scheduler::RunReadyTasks
+ 74.62%    444  kds::sched::CoroTask::Poll
+ 47.39%    282  kds::server::TcpServer::OnStatementComplete
+ 44.87%    267  kds::server::TcpServer::FlushOutbox
+ 44.20%    263  __libc_send
+ 27.06%    161  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 26.55%    158  kds::server::CommandDispatcher::DispatchAndStage
+ 25.71%    153  kds::server::CommandDispatcher::DispatchInner
+ 24.37%    145  kds::server::CommandDispatcher::HandleUpdate
+ 20.67%    123  kds::server::CommandDispatcher::UpdateInner
+ 13.61%     81  epoll_wait
+ 13.61%     81  kds::sched::EpollIoBackend::PollReady
+  8.57%     51  kds::server::TcpServer::OnClientReadable
+  6.05%     36  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  5.88%     35  kds::server::TcpServer::DrainFrames
+  5.71%     34  kds::parser::Parse
+  5.21%     31  kds::parser::Parser::Parse
+==== update-expr literal (30000 statements, server CPU 31.9 us per statement)
+samples 933
+
+-- self --
+ 28.19%    263  __libc_send
+ 11.68%    109  epoll_wait
+  3.54%     33  __GI___libc_read
+  1.93%     18  tcache_get_n
+  1.93%     18  __libc_pwrite64
+  1.71%     16  kds::parser::Lexer::ScanToken
+  1.39%     13  kds::txn::LockTable::AcquireInner
+  1.07%     10  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  1.07%     10  std::vector::~vector
+  1.07%     10  kds::exec::CompileAssignments
+  0.96%      9  __GI_tolower
+  0.96%      9  [vdso]+0x99a
+  0.86%      8  kds::server::CommandDispatcher::UpdateInner
+  0.75%      7  kds::parser::FingerprintAccumulator::Feed
+  0.75%      7  __GI_fdatasync
+  0.75%      7  kds::server::CommandDispatcher::DispatchInner
+  0.75%      7  _int_free
+  0.64%      6  std::__detail::__variant::__gen_vtable_impl::__visit_invoke
+  0.64%      6  kds::txn::TransactionManager::Begin
+  0.64%      6  kds::server::TcpServer::OnStatementComplete
+  0.64%      6  kds::sched::CoroTask::Poll
+  0.64%      6  __memcpy_avx512_unaligned_erms
+  0.64%      6  kds::parser::AstValue::AstValue
+  0.64%      6  kds::txn::LockTable::PartitionOf const
+  0.54%      5  kds::server::KwpSession::OnParse
+
+-- inclusive --
+ 97.43%    909  kds::server::Expeditor::Serve
+ 97.43%    909  __libc_start_main_impl
+ 97.43%    909  __libc_start_call_main
+ 97.43%    909  kds::sched::Scheduler::Run
+ 97.43%    909  _start
+ 97.43%    909  kds::server::Expeditor::RunUntilStopped
+ 97.43%    909  main
+ 97.32%    908  kds::sched::Scheduler::RunOnce
+ 73.42%    685  kds::sched::Scheduler::RunReadyTasks
+ 72.88%    680  kds::sched::CoroTask::Poll
+ 40.84%    381  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 39.76%    371  kds::server::CommandDispatcher::DispatchAndStage
+ 38.80%    362  kds::server::CommandDispatcher::DispatchInner
+ 37.51%    350  kds::server::CommandDispatcher::HandleUpdate
+ 31.62%    295  kds::server::CommandDispatcher::UpdateInner
+ 30.87%    288  kds::server::TcpServer::OnStatementComplete
+ 28.19%    263  __libc_send
+ 28.19%    263  kds::server::TcpServer::FlushOutbox
+ 12.00%    112  kds::sched::EpollIoBackend::PollReady
+ 11.68%    109  epoll_wait
+ 10.18%     95  kds::server::TcpServer::OnClientReadable
+  8.47%     79  kds::parser::Parse
+  8.15%     76  kds::parser::Parser::Parse
+  8.04%     75  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  7.07%     66  kds::parser::Parser::ParseUpdate
+==== update-expr prepared (30000 statements, server CPU 30.6 us per statement)
+samples 938
+
+-- self --
+ 29.42%    276  __libc_send
+ 12.79%    120  epoll_wait
+  4.16%     39  __GI___libc_read
+  1.60%     15  std::_Hashtable::find [clone .isra.0]
+  1.60%     15  kds::server::KwpSession::OnBind
+  1.28%     12  tcache_get_n
+  1.28%     12  kds::server::CommandDispatcher::UpdateInner
+  1.17%     11  kds::parser::Lexer::ScanToken
+  0.85%      8  std::vector::~vector
+  0.85%      8  kds::StatusOr::~StatusOr
+  0.85%      8  kds::exec::CompileAssignments
+  0.75%      7  __GI___libc_free
+  0.75%      7  kds::server::TcpServer::DrainFrames
+  0.75%      7  [vdso]+0x99a
+  0.75%      7  _int_free
+  0.75%      7  __GI_fdatasync
+  0.64%      6  kds::txn::LockTable::AcquireInner
+  0.64%      6  __memcpy_avx512_unaligned_erms
+  0.64%      6  kds::sched::SystemClock::Now const
+  0.64%      6  kds::btree::SearchLeaf
+  0.64%      6  kds::txn::UndoLog::Append
+  0.64%      6  kds::wal::WalStream::Append
+  0.64%      6  kds::txn::LockTable::PartitionOf const
+  0.64%      6  kds::server::TcpServer::OnStatementComplete
+  0.53%      5  kds::parser::FingerprintAccumulator::Feed
+
+-- inclusive --
+ 99.25%    931  kds::server::Expeditor::RunUntilStopped
+ 99.25%    931  kds::server::Expeditor::Serve
+ 99.25%    931  __libc_start_main_impl
+ 99.25%    931  main
+ 99.25%    931  kds::sched::Scheduler::Run
+ 99.25%    931  _start
+ 99.25%    931  __libc_start_call_main
+ 98.93%    928  kds::sched::Scheduler::RunOnce
+ 74.09%    695  kds::sched::Scheduler::RunReadyTasks
+ 73.45%    689  kds::sched::CoroTask::Poll
+ 40.94%    384  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 40.41%    379  kds::server::CommandDispatcher::DispatchAndStage
+ 39.45%    370  kds::server::CommandDispatcher::DispatchInner
+ 38.27%    359  kds::server::CommandDispatcher::HandleUpdate
+ 33.69%    316  kds::server::CommandDispatcher::UpdateInner
+ 31.88%    299  kds::server::TcpServer::OnStatementComplete
+ 29.64%    278  kds::server::TcpServer::FlushOutbox
+ 29.42%    276  __libc_send
+ 12.90%    121  kds::sched::EpollIoBackend::PollReady
+ 12.79%    120  epoll_wait
+ 10.77%    101  kds::parser::Parse
+  9.91%     93  kds::parser::Parser::Parse
+  9.91%     93  kds::server::TcpServer::OnClientReadable
+  8.64%     81  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  8.42%     79  kds::parser::Parser::ParseUpdate
+==== update-spill literal (30000 statements, server CPU 24.4 us per statement)
+samples 669
+
+-- self --
+ 36.32%    243  __libc_send
+ 13.45%     90  epoll_wait
+  6.28%     42  __GI___libc_read
+  1.35%      9  kds::txn::LockTable::AcquireInner
+  1.20%      8  kds::parser::Parser::ParseOneCondition
+  1.05%      7  __GI_tolower
+  1.05%      7  tcache_get_n
+  1.05%      7  __memcpy_avx512_unaligned_erms
+  0.90%      6  kds::parser::FingerprintAccumulator::Feed
+  0.90%      6  __GI___libc_malloc
+  0.90%      6  operator delete
+  0.90%      6  kds::server::KwpSession::OnBind
+  0.75%      5  std::_Hashtable::find [clone .isra.0]
+  0.75%      5  std::__cxx11::basic_string::basic_string
+  0.75%      5  kds::parser::Lexer::ScanToken
+  0.75%      5  _int_free
+  0.75%      5  kds::exec::CompileAssignments
+  0.75%      5  kds::server::KwpSession::OnParse
+  0.75%      5  kds::parser::Parser::ParseUpdate
+  0.75%      5  kds::btree::::DescendTo
+  0.60%      4  kds::heap::PageView::PayloadAt const
+  0.60%      4  kds::sched::Scheduler::RunReadyTasks
+  0.60%      4  kds::server::TcpServer::OnStatementComplete
+  0.60%      4  kds::parser::Parse
+  0.60%      4  kds::server::KwpSession::OnFrame
+
+-- inclusive --
+ 99.40%    665  kds::server::Expeditor::Serve
+ 99.40%    665  __libc_start_main_impl
+ 99.40%    665  kds::sched::Scheduler::Run
+ 99.40%    665  __libc_start_call_main
+ 99.40%    665  main
+ 99.40%    665  kds::server::Expeditor::RunUntilStopped
+ 99.40%    665  _start
+ 99.25%    664  kds::sched::Scheduler::RunOnce
+ 71.00%    475  kds::sched::Scheduler::RunReadyTasks
+ 70.10%    469  kds::sched::CoroTask::Poll
+ 39.91%    267  kds::server::TcpServer::OnStatementComplete
+ 36.32%    243  kds::server::TcpServer::FlushOutbox
+ 36.32%    243  __libc_send
+ 29.60%    198  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 29.30%    196  kds::server::CommandDispatcher::DispatchAndStage
+ 28.40%    190  kds::server::CommandDispatcher::DispatchInner
+ 27.95%    187  kds::server::CommandDispatcher::HandleUpdate
+ 24.51%    164  kds::server::CommandDispatcher::UpdateInner
+ 13.45%     90  epoll_wait
+ 13.30%     89  kds::sched::EpollIoBackend::PollReady
+ 12.71%     85  kds::server::TcpServer::OnClientReadable
+  9.12%     61  kds::parser::Parse
+  8.37%     56  kds::server::TcpServer::DrainFrames
+  8.07%     54  kds::parser::Parser::Parse
+  7.17%     48  kds::server::KwpSession::OnFrame
+==== update-spill prepared (30000 statements, server CPU 23.4 us per statement)
+samples 597
+
+-- self --
+ 35.01%    209  __libc_send
+ 16.42%     98  epoll_wait
+  6.70%     40  __GI___libc_read
+  2.18%     13  kds::server::KwpSession::OnBind
+  1.17%      7  kds::txn::LockTable::AcquireInner
+  1.17%      7  __GI_tolower
+  1.01%      6  __GI___libc_malloc
+  0.84%      5  kds::btree::::DescendTo
+  0.84%      5  kds::server::TcpServer::OnClientReadable
+  0.84%      5  std::_Hashtable::find [clone .isra.0]
+  0.84%      5  __GI___libc_free
+  0.67%      4  kds::txn::LockTable::PartitionOf const
+  0.67%      4  kds::parser::Parser::Parse
+  0.67%      4  [vdso]+0x99a
+  0.67%      4  __memcpy_avx512_unaligned_erms
+  0.67%      4  kds::parser::FingerprintAccumulator::Feed
+  0.67%      4  kds::parser::Condition::Condition
+  0.67%      4  operator delete
+  0.67%      4  kds::storage::DevicePageStore::Resolve
+  0.67%      4  tcache_get_n
+  0.50%      3  kds::server::KwpSession::OnClose
+  0.50%      3  __GI_fdatasync
+  0.50%      3  kds::server::CommandDispatcher::LogIndexWrites
+  0.50%      3  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  0.50%      3  std::vector::~vector
+
+-- inclusive --
+ 99.16%    592  main
+ 99.16%    592  kds::sched::Scheduler::RunOnce
+ 99.16%    592  kds::server::Expeditor::Serve
+ 99.16%    592  __libc_start_main_impl
+ 99.16%    592  __libc_start_call_main
+ 99.16%    592  kds::server::Expeditor::RunUntilStopped
+ 99.16%    592  _start
+ 99.16%    592  kds::sched::Scheduler::Run
+ 69.18%    413  kds::sched::Scheduler::RunReadyTasks
+ 68.51%    409  kds::sched::CoroTask::Poll
+ 38.02%    227  kds::server::TcpServer::OnStatementComplete
+ 35.01%    209  __libc_send
+ 34.84%    208  kds::server::TcpServer::FlushOutbox
+ 29.98%    179  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 29.31%    175  kds::server::CommandDispatcher::DispatchAndStage
+ 28.14%    168  kds::server::CommandDispatcher::DispatchInner
+ 26.63%    159  kds::server::CommandDispatcher::HandleUpdate
+ 22.95%    137  kds::server::CommandDispatcher::UpdateInner
+ 16.58%     99  kds::sched::EpollIoBackend::PollReady
+ 16.42%     98  epoll_wait
+ 11.39%     68  kds::server::TcpServer::OnClientReadable
+  6.70%     40  __GI___libc_read
+  6.53%     39  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  6.20%     37  kds::parser::Parse
+  5.86%     35  kds::server::TcpServer::DrainFrames
+==== update-spill-assign literal (30000 statements, server CPU 30.1 us per statement)
+samples 837
+
+-- self --
+ 34.29%    287  __libc_send
+ 12.19%    102  epoll_wait
+  3.58%     30  kds::parser::FingerprintAccumulator::Feed
+  3.11%     26  __GI___libc_read
+  2.63%     22  kds::server::KwpSession::OnBind
+  1.91%     16  kds::server::KwpSession::OnParse
+  1.55%     13  kds::parser::Lexer::ScanToken
+  1.31%     11  __GI_fdatasync
+  1.31%     11  __memcpy_avx512_unaligned_erms
+  1.08%      9  std::_Hashtable::find [clone .isra.0]
+  1.08%      9  __GI___libc_free
+  0.96%      8  __libc_pwrite64
+  0.84%      7  __GI_tolower
+  0.84%      7  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  0.84%      7  [vdso]+0x99a
+  0.72%      6  kds::btree::SearchLeaf
+  0.72%      6  kds::server::CommandDispatcher::UpdateInner
+  0.72%      6  kds::sched::Scheduler::RunOnce
+  0.72%      6  std::__cxx11::basic_string::basic_string
+  0.72%      6  kds::txn::LockTable::AcquireInner
+  0.60%      5  __GI___libc_malloc
+  0.60%      5  std::vector::~vector
+  0.60%      5  kds::txn::LockTable::PartitionOf const
+  0.60%      5  kds::txn::UndoLog::Append
+  0.48%      4  operator delete
+
+-- inclusive --
+ 98.57%    825  kds::sched::Scheduler::Run
+ 98.57%    825  main
+ 98.57%    825  kds::server::Expeditor::Serve
+ 98.57%    825  __libc_start_call_main
+ 98.57%    825  __libc_start_main_impl
+ 98.57%    825  kds::server::Expeditor::RunUntilStopped
+ 98.57%    825  _start
+ 98.33%    823  kds::sched::Scheduler::RunOnce
+ 68.82%    576  kds::sched::Scheduler::RunReadyTasks
+ 68.22%    571  kds::sched::CoroTask::Poll
+ 36.32%    304  kds::server::TcpServer::OnStatementComplete
+ 34.41%    288  kds::server::TcpServer::FlushOutbox
+ 34.29%    287  __libc_send
+ 31.90%    267  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 31.30%    262  kds::server::CommandDispatcher::DispatchAndStage
+ 30.11%    252  kds::server::CommandDispatcher::DispatchInner
+ 29.27%    245  kds::server::CommandDispatcher::HandleUpdate
+ 26.16%    219  kds::server::CommandDispatcher::UpdateInner
+ 14.22%    119  kds::server::TcpServer::OnClientReadable
+ 12.54%    105  kds::sched::EpollIoBackend::PollReady
+ 12.19%    102  epoll_wait
+ 11.47%     96  kds::server::TcpServer::DrainFrames
+ 10.87%     91  kds::server::KwpSession::OnFrame
+ 10.51%     88  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  6.33%     53  kds::parser::Parse
+==== update-spill-assign prepared (30000 statements, server CPU 28.2 us per statement)
+samples 816
+
+-- self --
+ 33.33%    272  __libc_send
+ 11.15%     91  epoll_wait
+  5.15%     42  __GI___libc_read
+  2.33%     19  kds::parser::FingerprintAccumulator::Feed
+  1.59%     13  __libc_pwrite64
+  1.47%     12  __memcpy_avx512_unaligned_erms
+  1.47%     12  tcache_get_n
+  1.35%     11  __GI___libc_free
+  1.23%     10  kds::parser::Lexer::ScanToken
+  1.23%     10  kds::server::KwpSession::OnBind
+  1.10%      9  __GI_tolower
+  1.10%      9  std::_Hashtable::find [clone .isra.0]
+  0.98%      8  _int_free
+  0.86%      7  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  0.86%      7  kds::sched::Scheduler::RunReadyTasks
+  0.86%      7  __GI_fdatasync
+  0.86%      7  kds::txn::LockTable::AcquireInner
+  0.74%      6  kds::sched::Scheduler::RunOnce
+  0.74%      6  kds::storage::DevicePageStore::PublishFreshPage
+  0.61%      5  kds::parser::Parser::ParseOptionalWhere
+  0.61%      5  kds::parser::Parser::ParseUpdate
+  0.61%      5  kds::parser::Condition::Condition
+  0.61%      5  kds::txn::UndoPageAppend
+  0.61%      5  kds::txn::LockTable::PartitionOf const
+  0.61%      5  kds::txn::InstanceVisibility::EndCommit
+
+-- inclusive --
+ 97.79%    798  kds::server::Expeditor::RunUntilStopped
+ 97.79%    798  kds::server::Expeditor::Serve
+ 97.79%    798  main
+ 97.79%    798  __libc_start_main_impl
+ 97.79%    798  _start
+ 97.79%    798  kds::sched::Scheduler::Run
+ 97.79%    798  __libc_start_call_main
+ 97.55%    796  kds::sched::Scheduler::RunOnce
+ 73.90%    603  kds::sched::Scheduler::RunReadyTasks
+ 72.92%    595  kds::sched::CoroTask::Poll
+ 36.40%    297  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 35.91%    293  kds::server::CommandDispatcher::DispatchAndStage
+ 35.91%    293  kds::server::TcpServer::OnStatementComplete
+ 34.44%    281  kds::server::CommandDispatcher::DispatchInner
+ 33.46%    273  kds::server::CommandDispatcher::HandleUpdate
+ 33.33%    272  __libc_send
+ 33.21%    271  kds::server::TcpServer::FlushOutbox
+ 29.29%    239  kds::server::CommandDispatcher::UpdateInner
+ 11.27%     92  kds::sched::EpollIoBackend::PollReady
+ 11.15%     91  epoll_wait
+ 10.78%     88  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+ 10.05%     82  kds::server::TcpServer::OnClientReadable
+  9.44%     77  kds::parser::Parse
+  9.07%     74  kds::parser::Parser::Parse
+  7.23%     59  kds::parser::Parser::ParseUpdate
+==== insert literal (30000 statements, server CPU 22.0 us per statement)
+samples 627
+
+-- self --
+ 40.67%    255  __libc_send
+ 15.31%     96  epoll_wait
+  6.06%     38  __GI___libc_read
+  2.71%     17  kds::parser::FingerprintAccumulator::Feed
+  1.28%      8  kds::txn::LockTable::AcquireInner
+  1.28%      8  __GI_tolower
+  0.80%      5  __memcpy_avx512_unaligned_erms
+  0.80%      5  std::_Hashtable::find [clone .isra.0]
+  0.64%      4  std::__cxx11::basic_string::_M_dispose
+  0.64%      4  kds::server::CommandDispatcher::InsertParsed
+  0.64%      4  kds::catalog::SysTableRow::Decode
+  0.64%      4  kds::server::KwpSession::OnBind
+  0.64%      4  bool std::equal [clone .isra.0]
+  0.64%      4  kds::server::KwpSession::OnParse
+  0.64%      4  kds::wal::WalStream::Append
+  0.64%      4  kds::parser::Parser::ParseInsert
+  0.48%      3  void std::vector::_M_range_insert [clone .isra.0]
+  0.48%      3  kds::sched::Scheduler::RunOnce
+  0.48%      3  kds::heap::PageView::ReadTuple const
+  0.48%      3  kds::sched::CoroTask::Poll
+  0.48%      3  kds::catalog::::LogCatRow
+  0.48%      3  ___pthread_mutex_trylock
+  0.48%      3  kds::server::CommandDispatcher::InsertOneRow
+  0.48%      3  kds::txn::LockTable::PartitionOf const
+  0.48%      3  kds::parser::Lexer::Next
+
+-- inclusive --
+ 99.68%    625  __libc_start_call_main
+ 99.68%    625  kds::sched::Scheduler::Run
+ 99.68%    625  _start
+ 99.68%    625  __libc_start_main_impl
+ 99.68%    625  kds::server::Expeditor::RunUntilStopped
+ 99.68%    625  kds::server::Expeditor::Serve
+ 99.68%    625  main
+ 99.68%    625  kds::sched::Scheduler::RunOnce
+ 69.38%    435  kds::sched::Scheduler::RunReadyTasks
+ 69.06%    433  kds::sched::CoroTask::Poll
+ 43.22%    271  kds::server::TcpServer::OnStatementComplete
+ 40.67%    255  __libc_send
+ 40.51%    254  kds::server::TcpServer::FlushOutbox
+ 24.72%    155  kds::server::CommandDispatcher::DispatchAndStage
+ 24.72%    155  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 23.29%    146  kds::server::CommandDispatcher::DispatchInner
+ 21.69%    136  kds::server::CommandDispatcher::HandleInsert
+ 18.34%    115  kds::server::CommandDispatcher::InsertInner
+ 15.63%     98  kds::sched::EpollIoBackend::PollReady
+ 15.31%     96  epoll_wait
+ 13.40%     84  kds::server::CommandDispatcher::InsertParsed
+ 12.76%     80  kds::server::TcpServer::OnClientReadable
+ 10.69%     67  kds::server::CommandDispatcher::InsertOneRow
+  6.86%     43  kds::server::TcpServer::DrainFrames
+  6.06%     38  __GI___libc_read
+==== insert prepared (30000 statements, server CPU 21.3 us per statement)
+samples 589
+
+-- self --
+ 42.44%    250  __libc_send
+ 17.83%    105  epoll_wait
+  5.09%     30  __GI___libc_read
+  1.36%      8  kds::txn::LockTable::AcquireInner
+  1.19%      7  kds::catalog::SysTableRow::Decode
+  1.19%      7  kds::server::CommandDispatcher::InsertOneRow
+  1.02%      6  __GI_tolower
+  1.02%      6  __memcpy_avx512_unaligned_erms
+  1.02%      6  std::__cxx11::basic_string::basic_string
+  0.85%      5  _int_malloc
+  0.85%      5  __GI___libc_free
+  0.85%      5  kds::server::KwpSession::OnBind
+  0.85%      5  kds::parser::FingerprintAccumulator::Feed
+  0.85%      5  __GI_fdatasync
+  0.51%      3  kds::parser::Parser::ExpectToken
+  0.51%      3  kds::parser::Parser::ParseInsert
+  0.51%      3  kds::btree::SearchLeaf
+  0.51%      3  kds::wal::WalManager::Append
+  0.51%      3  void std::vector::_M_range_insert [clone .isra.0]
+  0.51%      3  kds::txn::LockTable::PartitionOf const
+  0.51%      3  _int_free
+  0.51%      3  tcache_get_n
+  0.51%      3  std::_Function_handler::_M_invoke
+  0.51%      3  std::enable_if::type std::optional::emplace [clone .isra.0]
+  0.51%      3  [vdso]+0x99a
+
+-- inclusive --
+ 98.98%    583  kds::sched::Scheduler::Run
+ 98.98%    583  main
+ 98.98%    583  kds::server::Expeditor::RunUntilStopped
+ 98.98%    583  __libc_start_call_main
+ 98.98%    583  _start
+ 98.98%    583  kds::sched::Scheduler::RunOnce
+ 98.98%    583  __libc_start_main_impl
+ 98.98%    583  kds::server::Expeditor::Serve
+ 69.95%    412  kds::sched::Scheduler::RunReadyTasks
+ 69.78%    411  kds::sched::CoroTask::Poll
+ 46.52%    274  kds::server::TcpServer::OnStatementComplete
+ 42.61%    251  kds::server::TcpServer::FlushOutbox
+ 42.44%    250  __libc_send
+ 22.92%    135  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 22.75%    134  kds::server::CommandDispatcher::DispatchAndStage
+ 21.90%    129  kds::server::CommandDispatcher::DispatchInner
+ 21.39%    126  kds::server::CommandDispatcher::HandleInsert
+ 18.51%    109  kds::server::CommandDispatcher::InsertInner
+ 18.00%    106  kds::sched::EpollIoBackend::PollReady
+ 17.83%    105  epoll_wait
+ 12.73%     75  kds::server::CommandDispatcher::InsertParsed
+  9.68%     57  kds::server::CommandDispatcher::InsertOneRow
+  8.32%     49  kds::server::TcpServer::OnClientReadable
+  5.60%     33  kds::parser::Parse
+  5.26%     31  kds::parser::Parser::Parse
+==== delete-pk literal (30000 statements, server CPU 23.6 us per statement)
+samples 646
+
+-- self --
+ 34.06%    220  __libc_send
+ 16.10%    104  epoll_wait
+  3.72%     24  __GI___libc_read
+  2.32%     15  kds::parser::Lexer::ScanToken
+  1.39%      9  kds::server::KwpSession::OnBind
+  1.24%      8  std::_Hashtable::find [clone .isra.0]
+  1.24%      8  kds::txn::LockTable::AcquireInner
+  0.93%      6  kds::btree::SearchLeaf
+  0.77%      5  void std::vector::_M_range_insert [clone .isra.0]
+  0.77%      5  kds::parser::Condition::Condition
+  0.77%      5  kds::exec::ChainFrame::Open
+  0.77%      5  std::__cxx11::basic_string::operator= [clone .isra.0]
+  0.77%      5  [vdso]+0x99a
+  0.77%      5  isspace
+  0.77%      5  __GI_fdatasync
+  0.77%      5  __GI_tolower
+  0.62%      4  kds::server::CommandDispatcher::DeleteInner::{lambda#1}::operator const
+  0.62%      4  __memcpy_avx512_unaligned_erms
+  0.62%      4  std::__cxx11::basic_string::_M_dispose
+  0.62%      4  kds::txn::UndoLog::LogUndoWrite
+  0.62%      4  kds::parser::FingerprintAccumulator::Feed
+  0.62%      4  __GI___libc_free
+  0.62%      4  kds::txn::LockTable::ReleaseHeld
+  0.62%      4  kds::txn::TransactionManager::Commit
+  0.46%      3  std::vector::~vector
+
+-- inclusive --
+ 98.61%    637  main
+ 98.61%    637  __libc_start_call_main
+ 98.61%    637  __libc_start_main_impl
+ 98.61%    637  kds::sched::Scheduler::RunOnce
+ 98.61%    637  _start
+ 98.61%    637  kds::server::Expeditor::RunUntilStopped
+ 98.61%    637  kds::sched::Scheduler::Run
+ 98.61%    637  kds::server::Expeditor::Serve
+ 69.04%    446  kds::sched::Scheduler::RunReadyTasks
+ 67.65%    437  kds::sched::CoroTask::Poll
+ 36.53%    236  kds::server::TcpServer::OnStatementComplete
+ 34.06%    220  __libc_send
+ 33.90%    219  kds::server::TcpServer::FlushOutbox
+ 30.96%    200  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 30.34%    196  kds::server::CommandDispatcher::DispatchAndStage
+ 29.72%    192  kds::server::CommandDispatcher::DispatchInner
+ 28.95%    187  kds::server::CommandDispatcher::HandleDelete
+ 23.37%    151  kds::server::CommandDispatcher::DeleteInner
+ 16.25%    105  kds::sched::EpollIoBackend::PollReady
+ 16.10%    104  epoll_wait
+ 11.46%     74  kds::server::TcpServer::OnClientReadable
+  8.51%     55  kds::server::TcpServer::DrainFrames
+  7.89%     51  kds::server::KwpSession::OnFrame
+  7.12%     46  kds::parser::Parse
+  6.66%     43  kds::parser::Parser::Parse
+==== delete-pk prepared (30000 statements, server CPU 26.0 us per statement)
+samples 781
+
+-- self --
+ 32.78%    256  __libc_send
+ 14.72%    115  epoll_wait
+  3.33%     26  __GI___libc_read
+  1.79%     14  kds::server::KwpSession::OnBind
+  1.15%      9  std::_Hashtable::find [clone .isra.0]
+  1.15%      9  __GI_tolower
+  1.02%      8  [vdso]+0x99a
+  1.02%      8  __GI_fdatasync
+  0.90%      7  __GI___libc_free
+  0.90%      7  std::vector::~vector
+  0.77%      6  kds::txn::LockTable::AcquireInner
+  0.77%      6  kds::parser::Condition::Condition
+  0.77%      6  kds::server::CommandDispatcher::DeleteInner::{lambda#1}::operator const
+  0.77%      6  __memcpy_avx512_unaligned_erms
+  0.77%      6  tcache_get_n
+  0.64%      5  __GI___libc_malloc
+  0.64%      5  kds::parser::Lexer::ScanToken
+  0.64%      5  kds::server::CommandDispatcher::DispatchAndStage
+  0.64%      5  std::__cxx11::basic_string::operator= [clone .isra.0]
+  0.64%      5  kds::txn::TransactionManager::Begin
+  0.51%      4  _int_free
+  0.51%      4  kds::exec::AssertionEnforcer::CommitTxn
+  0.51%      4  kds::btree::SearchLeaf
+  0.51%      4  kds::server::CommandDispatcher::DispatchInner
+  0.51%      4  kds::parser::Lexer::Peek
+
+-- inclusive --
+ 98.72%    771  kds::sched::Scheduler::Run
+ 98.72%    771  _start
+ 98.72%    771  kds::sched::Scheduler::RunOnce
+ 98.72%    771  kds::server::Expeditor::RunUntilStopped
+ 98.72%    771  __libc_start_main_impl
+ 98.72%    771  kds::server::Expeditor::Serve
+ 98.72%    771  main
+ 98.72%    771  __libc_start_call_main
+ 71.57%    559  kds::sched::Scheduler::RunReadyTasks
+ 71.06%    555  kds::sched::CoroTask::Poll
+ 36.36%    284  kds::server::TcpServer::OnStatementComplete
+ 34.06%    266  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 33.80%    264  kds::server::CommandDispatcher::DispatchAndStage
+ 32.78%    256  kds::server::TcpServer::FlushOutbox
+ 32.78%    256  __libc_send
+ 32.52%    254  kds::server::CommandDispatcher::DispatchInner
+ 29.96%    234  kds::server::CommandDispatcher::HandleDelete
+ 22.28%    174  kds::server::CommandDispatcher::DeleteInner
+ 14.72%    115  kds::sched::EpollIoBackend::PollReady
+ 14.72%    115  epoll_wait
+  9.99%     78  kds::server::TcpServer::OnClientReadable
+  8.32%     65  kds::server::TcpServer::DrainFrames
+  7.17%     56  kds::parser::Parse
+  7.04%     55  kds::parser::Parser::Parse
+  6.91%     54  kds::server::KwpSession::OnFrame
+==== update-range literal (1500 statements, server CPU 753.1 us per statement)
+samples 1130
+
+-- self --
+ 13.81%    156  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  4.78%     54  __libc_pwrite64
+  4.60%     52  std::_Hashtable::find [clone .isra.0]
+  3.10%     35  kds::storage::::HardwareExtend
+  2.74%     31  _int_malloc
+  2.57%     29  _int_free
+  2.48%     28  kds::wal::WalStream::Append
+  2.30%     26  kds::exec::DecodeColumnsInto
+  1.86%     21  kds::server::CommandDispatcher::WalkBtreeLeaves::{lambda#1}::operator const
+  1.77%     20  kds::txn::UndoLog::LogUndoWrite
+  1.77%     20  __GI___libc_malloc
+  1.59%     18  kds::exec::EncodeAssigned
+  1.50%     17  __GI___libc_free
+  1.50%     17  kds::exec::::EncodeOneValue
+  1.42%     16  std::_Function_handler::_M_invoke
+  1.42%     16  kds::txn::UndoLog::Append
+  1.33%     15  kds::txn::TransactionManager::NoteOverwrite
+  1.24%     14  __memcpy_avx512_unaligned_erms
+  1.24%     14  kds::exec::::EncodeColumn
+  1.15%     13  __GI_fdatasync
+  1.06%     12  kds::heap::PageView::ReadTuple const
+  1.06%     12  kds::exec::EvaluateConjuncts
+  1.06%     12  kds::StatusOr::~StatusOr
+  1.06%     12  kds::txn::UndoPageAppend
+  1.06%     12  kds::wal::EncodeHeapWrite
+
+-- inclusive --
+ 95.49%   1079  _start
+ 95.49%   1079  kds::server::Expeditor::Serve
+ 95.49%   1079  __libc_start_main_impl
+ 95.49%   1079  kds::server::Expeditor::RunUntilStopped
+ 95.49%   1079  kds::sched::Scheduler::RunOnce
+ 95.49%   1079  kds::sched::Scheduler::Run
+ 95.49%   1079  __libc_start_call_main
+ 95.49%   1079  main
+ 93.10%   1052  kds::sched::Scheduler::RunReadyTasks
+ 93.01%   1051  kds::sched::CoroTask::Poll
+ 91.77%   1037  kds::server::CommandDispatcher::DispatchAndStage
+ 91.77%   1037  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 91.68%   1036  kds::server::CommandDispatcher::DispatchInner
+ 91.59%   1035  kds::server::CommandDispatcher::HandleUpdate
+ 89.12%   1007  kds::server::CommandDispatcher::UpdateInner
+ 89.03%   1006  std::_Function_handler::_M_invoke
+ 88.05%    995  kds::server::CommandDispatcher::VisitRelation
+ 87.96%    994  kds::server::CommandDispatcher::WalkBtreeLeaves
+ 87.79%    992  kds::btree::BtreeVisitLeafPage
+ 86.55%    978  kds::server::CommandDispatcher::WalkBtreeLeaves::{lambda#1}::operator const
+ 79.91%    903  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+ 24.87%    281  kds::txn::TransactionManager::AppendUndo
+ 24.07%    272  kds::txn::UndoLog::Append
+ 12.65%    143  kds::txn::UndoLog::LogUndoWrite
+  8.58%     97  kds::wal::WalManager::Append
+==== update-range prepared (1500 statements, server CPU 733.6 us per statement)
+samples 1087
+
+-- self --
+ 12.14%    132  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  5.24%     57  __libc_pwrite64
+  4.88%     53  std::_Hashtable::find [clone .isra.0]
+  2.85%     31  kds::exec::DecodeColumnsInto
+  2.76%     30  __GI___libc_malloc
+  2.39%     26  _int_free
+  2.30%     25  _int_malloc
+  2.30%     25  kds::storage::::HardwareExtend
+  2.21%     24  kds::wal::WalStream::Append
+  2.21%     24  kds::exec::EncodeAssigned
+  2.12%     23  kds::txn::UndoLog::Append
+  1.93%     21  kds::txn::UndoLog::LogUndoWrite
+  1.84%     20  __GI___libc_free
+  1.66%     18  __memcpy_avx512_unaligned_erms
+  1.56%     17  kds::server::CommandDispatcher::WalkBtreeLeaves::{lambda#1}::operator const
+  1.56%     17  kds::storage::DevicePageStore::Resolve
+  1.47%     16  kds::txn::UndoPageAppend
+  1.38%     15  kds::txn::TransactionManager::NoteOverwrite
+  1.38%     15  std::_Function_handler::_M_invoke
+  1.29%     14  kds::exec::::CheckDecodeInputs [clone .isra.0]
+  1.29%     14  kds::wal::EncodeRecord
+  1.20%     13  kds::exec::::EncodeOneValue
+  1.20%     13  kds::wal::EncodeHeapWrite
+  1.10%     12  __GI_fdatasync
+  1.10%     12  __libc_send
+
+-- inclusive --
+ 95.49%   1038  __libc_start_main_impl
+ 95.49%   1038  __libc_start_call_main
+ 95.49%   1038  kds::server::Expeditor::RunUntilStopped
+ 95.49%   1038  kds::server::Expeditor::Serve
+ 95.49%   1038  main
+ 95.49%   1038  kds::sched::Scheduler::Run
+ 95.49%   1038  _start
+ 95.40%   1037  kds::sched::Scheduler::RunOnce
+ 93.56%   1017  kds::sched::Scheduler::RunReadyTasks
+ 93.38%   1015  kds::sched::CoroTask::Poll
+ 91.90%    999  kds::server::CommandDispatcher::DispatchAndStage
+ 91.90%    999  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 91.81%    998  kds::server::CommandDispatcher::HandleUpdate
+ 91.81%    998  kds::server::CommandDispatcher::DispatchInner
+ 89.14%    969  std::_Function_handler::_M_invoke
+ 88.78%    965  kds::server::CommandDispatcher::UpdateInner
+ 88.13%    958  kds::server::CommandDispatcher::WalkBtreeLeaves
+ 88.13%    958  kds::btree::BtreeVisitLeafPage
+ 88.13%    958  kds::server::CommandDispatcher::VisitRelation
+ 87.21%    948  kds::server::CommandDispatcher::WalkBtreeLeaves::{lambda#1}::operator const
+ 82.24%    894  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+ 25.76%    280  kds::txn::TransactionManager::AppendUndo
+ 24.84%    270  kds::txn::UndoLog::Append
+ 13.34%    145  kds::txn::UndoLog::LogUndoWrite
+  9.20%    100  kds::wal::WalManager::Append
+==== scan literal (2000 statements, server CPU 708.6 us per statement)
+samples 1394
+
+-- self --
+ 16.57%    231  kds::exec::::ChainRunner::AcceptTupleAt
+ 11.33%    158  kds::exec::DecodeColumnsInto
+  9.25%    129  std::_Function_handler::_M_invoke
+  9.18%    128  kds::btree::BtreeVisitLeafPage
+  7.96%    111  kds::exec::DecodeOneValueInto
+  6.03%     84  kds::exec::EvaluatePredicate
+  5.74%     80  kds::heap::PageView::ReadTuple const
+  4.59%     64  kds::exec::DecodeAndResolve
+  4.02%     56  kds::exec::::CheckDecodeInputs [clone .isra.0]
+  3.73%     52  kds::exec::EvaluateAll
+  3.59%     50  kds::exec::CompareValues
+  3.37%     47  kds::exec::EvaluateConjunct
+  2.73%     38  kds::exec::ExecStats::For
+  2.51%     35  __memcpy_avx512_unaligned_erms
+  1.29%     18  __libc_send
+  1.29%     18  std::__cxx11::basic_string::_M_dispose
+  0.72%     10  kds::storage::GetRelayoutEpoch
+  0.72%     10  epoll_wait
+  0.57%      8  kds::catalog::IsIntegerTypeVal
+  0.36%      5  __GI___libc_read
+  0.29%      4  kds::txn::LockTable::AcquireInner
+  0.29%      4  __unlink
+  0.22%      3  kds::server::CommandDispatcher::HandleSelect
+  0.22%      3  kds_server-Bprof-8679367e+0xbf80
+  0.22%      3  std::_Hashtable::find [clone .isra.0]
+
+-- inclusive --
+ 99.71%   1390  __libc_start_main_impl
+ 99.71%   1390  kds::sched::Scheduler::RunOnce
+ 99.71%   1390  kds::sched::Scheduler::Run
+ 99.71%   1390  __libc_start_call_main
+ 99.71%   1390  _start
+ 99.71%   1390  main
+ 99.71%   1390  kds::server::Expeditor::RunUntilStopped
+ 99.71%   1390  kds::server::Expeditor::Serve
+ 97.92%   1365  kds::sched::CoroTask::Poll
+ 97.85%   1364  kds::sched::Scheduler::RunReadyTasks
+ 94.69%   1320  kds::exec::::ChainRunner::RunWalkStep [clone .actor]
+ 92.61%   1291  kds::btree::BtreeVisitLeafPage
+ 84.36%   1176  std::_Function_handler::_M_invoke
+ 68.94%    961  kds::exec::::ChainRunner::AcceptTupleAt
+ 28.12%    392  kds::exec::DecodeAndResolve
+ 22.74%    317  kds::exec::DecodeColumnsInto
+ 16.28%    227  kds::exec::EvaluateAll
+ 12.63%    176  kds::exec::EvaluateConjunct
+  9.33%    130  kds::exec::EvaluatePredicate
+  7.96%    111  kds::exec::DecodeOneValueInto
+  5.74%     80  kds::heap::PageView::ReadTuple const
+  4.02%     56  kds::exec::::CheckDecodeInputs [clone .isra.0]
+  3.59%     50  kds::exec::CompareValues
+  2.73%     38  kds::exec::ExecStats::For
+  2.51%     35  __memcpy_avx512_unaligned_erms
+==== scan prepared (2000 statements, server CPU 697.7 us per statement)
+samples 1396
+
+-- self --
+ 17.55%    245  kds::exec::::ChainRunner::AcceptTupleAt
+ 12.82%    179  kds::exec::DecodeColumnsInto
+ 11.60%    162  std::_Function_handler::_M_invoke
+  8.74%    122  kds::btree::BtreeVisitLeafPage
+  6.59%     92  kds::exec::DecodeOneValueInto
+  5.95%     83  kds::heap::PageView::ReadTuple const
+  5.80%     81  kds::exec::EvaluatePredicate
+  4.44%     62  kds::exec::EvaluateAll
+  4.15%     58  kds::exec::EvaluateConjunct
+  3.51%     49  kds::exec::DecodeAndResolve
+  3.30%     46  kds::exec::::CheckDecodeInputs [clone .isra.0]
+  3.22%     45  kds::exec::CompareValues
+  2.08%     29  kds::exec::ExecStats::For
+  1.50%     21  __libc_send
+  1.50%     21  __memcpy_avx512_unaligned_erms
+  1.00%     14  std::__cxx11::basic_string::_M_dispose
+  0.79%     11  kds::storage::GetRelayoutEpoch
+  0.57%      8  epoll_wait
+  0.50%      7  kds::catalog::IsIntegerTypeVal
+  0.29%      4  kds_server-Bprof-8679367e+0xbf80
+  0.29%      4  std::_Hashtable::find [clone .isra.0]
+  0.29%      4  kds::txn::LockTable::PartitionOf const
+  0.21%      3  kds::txn::LockTable::ReleaseHeld
+  0.14%      2  kds::parser::Parser::ParseOneCondition
+  0.14%      2  __GI___libc_read
+
+-- inclusive --
+100.00%   1396  kds::sched::Scheduler::RunOnce
+100.00%   1396  kds::server::Expeditor::Serve
+100.00%   1396  main
+100.00%   1396  kds::sched::Scheduler::Run
+100.00%   1396  __libc_start_call_main
+100.00%   1396  __libc_start_main_impl
+100.00%   1396  _start
+100.00%   1396  kds::server::Expeditor::RunUntilStopped
+ 98.93%   1381  kds::sched::Scheduler::RunReadyTasks
+ 98.85%   1380  kds::sched::CoroTask::Poll
+ 95.27%   1330  kds::exec::::ChainRunner::RunWalkStep [clone .actor]
+ 93.34%   1303  kds::btree::BtreeVisitLeafPage
+ 85.10%   1188  std::_Function_handler::_M_invoke
+ 68.55%    957  kds::exec::::ChainRunner::AcceptTupleAt
+ 26.50%    370  kds::exec::DecodeAndResolve
+ 22.21%    310  kds::exec::DecodeColumnsInto
+ 17.41%    243  kds::exec::EvaluateAll
+ 13.04%    182  kds::exec::EvaluateConjunct
+  8.81%    123  kds::exec::EvaluatePredicate
+  6.59%     92  kds::exec::DecodeOneValueInto
+  5.95%     83  kds::heap::PageView::ReadTuple const
+  3.30%     46  kds::exec::::CheckDecodeInputs [clone .isra.0]
+  3.22%     45  kds::exec::CompareValues
+  2.08%     29  kds::exec::ExecStats::For
+  1.93%     27  kds::server::TcpServer::OnStatementComplete

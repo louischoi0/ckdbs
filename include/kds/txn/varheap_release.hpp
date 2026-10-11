@@ -15,8 +15,10 @@
 // (`TransactionManager::Compensate`), recovery's undo phase
 // (`txn::RecoveryUndo`), and - when it lands - the deferred-release drain,
 // bound to release a value only once the newest version naming it is
-// reclaimed (BK-R3, `heap-and-tuple.md` §3.4), all do the same five steps: fetch the page, tombstone the slot, encode
-// the record, append it under the right envelope, stamp the page. Written
+// reclaimed (BK-R3 of `workorder-bk-opt-read-update-path.md`,
+// `heap-and-tuple.md` §3.4), all do the same five steps: fetch the page,
+// tombstone the slot, encode the record, append it under the right
+// envelope, stamp the page. Written
 // out three times, the page-type guard or the stamp would eventually be
 // missing from one of them, which is the failure `exec::LogSlotRetire`
 // exists to prevent for its own record and which this file copies.

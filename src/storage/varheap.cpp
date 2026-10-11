@@ -292,7 +292,8 @@ StatusOr<PageId> CreateChain(storage::PageStore& store, std::uint64_t owner_oid)
     const std::span<std::byte, kPageSize> bytes = bytes_ref.bytes();
 
     if (Status s = FormatPage(bytes, owner_oid); !s.ok()) return s;
-    // A root is born with no hint (BK-R8): its id may be a dropped chain's
+    // A root is born with no hint (BK-R8,
+    // `workorder-bk-opt-read-update-path.md`): its id may be a dropped chain's
     // root reused, and that chain's last tail - by now any page of any
     // relation - must never be where this chain's walk starts.
     store.SetVarHeapTailHint(page_id, page_id);

@@ -154,8 +154,9 @@ inline void SetNullBit(std::span<std::byte> payload, const RowLayout& layout,
     payload[NullByteOf(layout, bit)] |= std::byte{static_cast<unsigned char>(1u << (bit % 8))};
 }
 
-// The bit cleared, for a column re-encoded inside a copied row (BK-R3's
-// `exec::EncodeAssigned`); a column with kNoNullBit has none to clear.
+// The bit cleared, for a column re-encoded inside a copied row
+// (`exec::EncodeAssigned`, BK-R3 of `workorder-bk-opt-read-update-path.md`);
+// a column with kNoNullBit has none to clear.
 inline void ClearNullBit(std::span<std::byte> payload, const RowLayout& layout,
                          std::size_t col) noexcept {
     const std::uint16_t bit = layout.null_bits[col];

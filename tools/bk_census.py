@@ -20,9 +20,9 @@ each, then every shape below over both driver paths:
 The shapes: `noop` (a C_PING frame, answered by the session without the
 dispatcher - the request path alone), `ping` (SHOW META, the BJ-era floor),
 point SELECT, point UPDATE (literal, `v + 1`, a row whose `varchar` cell
-spills and is not assigned, and one assigning a spilled value), INSERT, an
-every-row UPDATE of `--rows` rows, and an unindexed equality over
-`--scan-rows`.
+spills and is not assigned, and one assigning a spilled value), INSERT,
+DELETE by pk (its rows inserted untimed before the arm), an every-row UPDATE
+of `--rows` rows, and an unindexed equality over `--scan-rows`.
 
 With `--bin-b`, both servers run side by side (one port each, both pinned to
 `--pin-server`, only one ever busy) and every arm is cut into `--blocks`
@@ -168,6 +168,7 @@ def shapes(a):
          lambda q: [txt(q), i64(key(q))], "UPDATED 1", "point"),
         ("insert", "INSERT INTO i VALUES (?, ?, ?)",
          lambda q: [i64(10_000_000 + q)] * 3, "INSERT", "point"),
+        ("delete-pk", "DELETE FROM d WHERE id = ?", lambda q: [i64(q)], "DELETED 1", "point"),
         ("update-range", "UPDATE r SET v = ? WHERE id >= 1",
          lambda q: [i64(q)], f"UPDATED {n}", "range"),
         ("scan", "SELECT * FROM s WHERE w = ?",
@@ -242,6 +243,15 @@ def setup(a, conn):
         load(conn, name, a.rows, "id int64, v int64, txt varchar",
              lambda i: f"({i}, {i}, '{SPILL}')")
     must(conn, "CREATE TABLE i (id int64, v int64, w int64) BTREE", "CREATE")
+    must(conn, "CREATE TABLE d (id int64, v int64, w int64) BTREE", "CREATE")
+
+
+def preload_deletes(conn, first, count):
+    """The rows `delete-pk` deletes, keys `first..first+count-1`, untimed."""
+    for lo in range(first, first + count, 500):
+        hi = min(first + count, lo + 500)
+        must(conn, "INSERT INTO d VALUES " + ",".join(f"({k}, {k}, {k})" for k in range(lo, hi)),
+             "INSERT")
 
 
 def ops_for(a, kind):
@@ -289,15 +299,20 @@ def one_run(a, r):
         q = 1
         range_last = None
         for sh in shapes(a):
+            if a.only and sh[0] not in a.only.split(","):
+                continue
             ops = ops_for(a, sh[4])
             paths = ["literal", "prepared"] if r % 2 == 0 else ["prepared", "literal"]
             for path in paths:
                 if sh[1] is None and path == "prepared":
                     continue  # C_PING has no statement to prepare
+                per = max(1, ops // a.blocks)
+                if sh[0] == "delete-pk":
+                    for srv in servers:
+                        preload_deletes(srv.conn, q, a.blocks * per)
                 host = host_state()  # bench/README.md rule 4, per cell
                 accs = {s.label: {"lat": [], "bad": 0, "wall": 0.0, "server_ns": 0,
                                   "driver_ns": 0} for s in servers}
-                per = max(1, ops // a.blocks)
                 for b in range(a.blocks):
                     qs = range(q + b * per, q + (b + 1) * per)
                     order = servers if (b + r) % 2 == 0 else list(reversed(servers))
@@ -351,6 +366,8 @@ def profile(a):
                        "range": a.profile_range_ops or max(1, a.profile_ops // 500),
                        "scan": a.profile_scan_ops or max(1, a.profile_ops // 50)}[sh[4]]
                 acc = {"lat": [], "bad": 0, "wall": 0.0, "server_ns": 0, "driver_ns": 0}
+                if sh[0] == "delete-pk":
+                    preload_deletes(srv.conn, q, ops)
                 os.kill(srv.proc.pid, signal.SIGUSR1)
                 run_block(srv, sh, path, range(q, q + ops), acc)
                 os.kill(srv.proc.pid, signal.SIGUSR2)
@@ -389,6 +406,7 @@ def main():
     ap.add_argument("--profile-range-ops", type=int, default=0)
     ap.add_argument("--profile-scan-ops", type=int, default=0)
     ap.add_argument("--profile-only", help="comma-separated shape names")
+    ap.add_argument("--only", help="census: comma-separated shape names (default: every shape)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     os.sched_setaffinity(0, {int(a.pin_driver)})
