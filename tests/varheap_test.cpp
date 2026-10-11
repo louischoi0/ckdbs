@@ -438,6 +438,138 @@ TEST_F(VarHeapChainTest, ATailLinkedOnBetweenTheWalkAndItsHoldIsWalkedOn) {
     EXPECT_EQ(length.value(), 3u) << "a grown page is unreachable from the root";
 }
 
+// ---- The walk starts at the last tail (BK-R8) ------------------------------
+//
+// `instructions/v3.0.0/workorder-bk-opt-read-update-path.md` BK-S9. Every
+// append walked from the root, so a spilled value cost a page fetch per page
+// the chain had. The store now remembers the page the last append landed in;
+// these cells pin that the walk starts there, that a hint the chain moved
+// past is walked forward, that a hint naming anything but this chain's page
+// sends it back to the root, and that the re-check under the tail's hold
+// still keeps two growers on one chain when the walk started from a hint.
+
+// A chain of `pages` pages, one 5,000-byte value each, appended through `on`.
+PageId GrowChain(storage::PageStore& on, storage::PageStore& create, std::uint64_t owner,
+                 int pages) {
+    auto root = CreateChain(create, owner);
+    EXPECT_TRUE(root.ok()) << root.status().message();
+    for (int i = 0; i < pages; ++i) {
+        EXPECT_TRUE(ChainAppend(on, root.value(), Bytes(std::string(5000, 'g')), owner).ok());
+    }
+    return root.value();
+}
+
+// The chain's pages, root first.
+std::vector<PageId> ChainPages(storage::PageStore& store, PageId root) {
+    std::vector<PageId> pages;
+    for (PageId at = root; at != kInvalidPageId;) {
+        pages.push_back(at);
+        at = PageNextPageId(store.GetForRead(at).value().bytes());
+    }
+    return pages;
+}
+
+TEST_F(VarHeapChainTest, AnAppendStartsAtTheLastTailAndNeverReadsTheRoot) {
+    testing_race::ActOnFetchStore store(store_);
+    const PageId root = GrowChain(store, store_, /*owner=*/7, 5);
+    const std::vector<PageId> before = ChainPages(store_, root);
+    ASSERT_EQ(before.size(), 5u);
+
+    store.OnFetch(root, 1, [] {});
+    auto appended = ChainAppend(store, root, Bytes("small"), 7);
+    ASSERT_TRUE(appended.ok()) << appended.status().message();
+    EXPECT_FALSE(store.fired()) << "the append walked from the root";
+    EXPECT_EQ(appended.value().ptr.page_id, before.back());
+    EXPECT_EQ(ChainPages(store_, root), before);
+}
+
+TEST_F(VarHeapChainTest, AHintTheChainHasMovedPastIsWalkedForward) {
+    const PageId root = GrowChain(store_, store_, 7, 5);
+    const std::vector<PageId> before = ChainPages(store_, root);
+    // Another core grew the chain since this store last appended: its hint
+    // names the second page.
+    store_.SetVarHeapTailHint(root, before[1]);
+    auto appended = ChainAppend(store_, root, Bytes(std::string(5000, 'w')), 7);
+    ASSERT_TRUE(appended.ok()) << appended.status().message();
+    EXPECT_EQ(appended.value().linked_page_id, before.back())
+        << "the append grew the chain from a page that was not its tail";
+    std::vector<PageId> after = ChainPages(store_, root);
+    ASSERT_EQ(after.size(), before.size() + 1);
+    EXPECT_EQ(after.back(), appended.value().created_page_id);
+}
+
+TEST_F(VarHeapChainTest, AHintAtAnythingButThisChainsPageSendsTheWalkToTheRoot) {
+    const PageId root = GrowChain(store_, store_, 7, 3);
+    const PageId other = GrowChain(store_, store_, 8, 2);  // another relation's chain
+    auto heap = store_.CreateNew();
+    ASSERT_TRUE(heap.ok());
+    storage::FormatPage(heap.value().second.bytes(), PageType::kHeap, /*owner_oid=*/7);
+    const PageId heap_page = heap.value().first;
+    heap.value().second.Release();
+    const std::vector<PageId> other_before = ChainPages(store_, other);
+
+    for (const PageId hint : {other_before.back(), heap_page, PageId{90000}}) {
+        SCOPED_TRACE(hint);
+        const std::vector<PageId> before = ChainPages(store_, root);
+        store_.SetVarHeapTailHint(root, hint);
+        auto appended = ChainAppend(store_, root, Bytes(std::string(5000, 'f')), 7);
+        ASSERT_TRUE(appended.ok()) << appended.status().message();
+        EXPECT_EQ(appended.value().linked_page_id, before.back());
+        EXPECT_EQ(ChainPages(store_, root).size(), before.size() + 1);
+    }
+    EXPECT_EQ(ChainPages(store_, other), other_before) << "an append wrote another chain";
+}
+
+TEST_F(VarHeapChainTest, ARootIsBornWithNoHint) {
+    // A dropped relation's reclaim frees its chain, and a later CREATE TABLE
+    // can get the old root's id back as its own root: the old chain's tail
+    // - by then any page of any relation - must not be where the new
+    // chain's walk starts. The in-memory store hands out ids in order, so
+    // the slot is set for the id the next chain will get before it exists.
+    auto heap = store_.CreateNew();
+    ASSERT_TRUE(heap.ok());
+    storage::FormatPage(heap.value().second.bytes(), PageType::kHeap, /*owner_oid=*/7);
+    const PageId heap_page = heap.value().first;
+    heap.value().second.Release();
+    const PageId next_root = heap_page + 1;
+    store_.SetVarHeapTailHint(next_root, heap_page);
+
+    auto root = CreateChain(store_, 7);
+    ASSERT_TRUE(root.ok());
+    ASSERT_EQ(root.value(), next_root) << "the cell's premise about id order no longer holds";
+    EXPECT_NE(store_.VarHeapTailHint(root.value()), heap_page)
+        << "a new root inherited a dropped chain's tail";
+}
+
+TEST_F(VarHeapChainTest, TwoGrowersFromAHintedStartStayOnOneChain) {
+    // Exercises `ATailLinkedOnBetweenTheWalkAndItsHoldIsWalkedOn`'s window
+    // with the walk starting from a hint: "another core" grows the chain as
+    // this append takes its tail exclusive, and the re-check under the hold
+    // walks on to the page it created rather than linking over it. (A walk
+    // from the root fetches the tail twice too, so this cell does not by
+    // itself tell the two starts apart; the first cell above does.)
+    testing_race::ActOnFetchStore store(store_);
+    const PageId root = GrowChain(store, store_, 7, 3);
+    const PageId tail = ChainPages(store_, root).back();
+    ASSERT_EQ(store.VarHeapTailHint(root), tail);
+
+    VarHeapPtr theirs{};
+    store.OnFetch(tail, 2, [&] {
+        auto other = ChainAppend(store_, root, Bytes(std::string(5000, 'o')), 7);
+        ASSERT_TRUE(other.ok()) << other.status().message();
+        ASSERT_NE(other.value().created_page_id, kInvalidPageId);
+        theirs = other.value().ptr;
+    });
+    {
+        auto mine = ChainAppend(store, root, Bytes(std::string(5000, 'm')), 7);
+        ASSERT_TRUE(mine.ok()) << mine.status().message();
+        ASSERT_TRUE(store.fired()) << "the window was never opened";
+        EXPECT_EQ(mine.value().linked_page_id, theirs.page_id)
+            << "the append linked from a page that was no longer the tail";
+    }
+    EXPECT_EQ(ChainPages(store_, root).size(), 5u) << "a grown page is unreachable from the root";
+}
+
 TEST_F(VarHeapChainTest, FetchingThroughAPointerAtANonVarHeapPageIsRefused) {
     // A pointer is only as good as the tuple it came from. Reading a heap
     // page's bytes as values would return garbage where this returns a

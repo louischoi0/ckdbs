@@ -292,6 +292,10 @@ StatusOr<PageId> CreateChain(storage::PageStore& store, std::uint64_t owner_oid)
     const std::span<std::byte, kPageSize> bytes = bytes_ref.bytes();
 
     if (Status s = FormatPage(bytes, owner_oid); !s.ok()) return s;
+    // A root is born with no hint (BK-R8): its id may be a dropped chain's
+    // root reused, and that chain's last tail - by now any page of any
+    // relation - must never be where this chain's walk starts.
+    store.SetVarHeapTailHint(page_id, page_id);
     return page_id;
 }
 
@@ -322,7 +326,22 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
     // re-check a second grower overwrote the first one's link and leaked
     // its page - the heap chain's BB-R7 gap, in the var-heap. Bounded so a
     // cycle fails rather than hangs.
+    //
+    // **The walk starts at the chain's last known tail** (BK-R8): the store
+    // remembers the page the last append to this chain landed in, so an
+    // append is a page or two rather than a page per page the chain has.
+    // Every hint names a page some append found on *this* chain - a root is
+    // born with none (`CreateChain`), and a chain loses no page while its
+    // relation exists - so the walk forward from it latches only pages the
+    // walk from the root would have, and reaches the same tail. The page's
+    // type and owner stamp (`page.md` §2a) are checked anyway, as a
+    // backstop: anything else sends the walk back to the root.
     PageId tail_id = root;
+    bool from_hint = false;
+    if (const PageId hint = store.VarHeapTailHint(root); hint != kInvalidPageId && hint != root) {
+        tail_id = hint;
+        from_hint = true;
+    }
     storage::PageRef tail;
     for (std::uint32_t steps = 0;; ++steps) {
         if (steps >= kMaxChainPages) {
@@ -332,6 +351,16 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
         PageId next = kInvalidPageId;
         {
             auto bytes = store.GetForRead(tail_id);
+            if (from_hint) {
+                from_hint = false;
+                if (!bytes.ok() ||
+                    storage::RawPageType(bytes.value().bytes()) !=
+                        static_cast<std::uint8_t>(PageType::kVarHeap) ||
+                    storage::GetOwnerOid(bytes.value().bytes()) != owner_oid) {
+                    tail_id = root;
+                    continue;
+                }
+            }
             if (!bytes.ok()) return bytes.status();
             next = PageNextPageId(bytes.value().bytes());
         }
@@ -349,6 +378,9 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
 
     auto slot = PageAppend(Fixed(tail.bytes()), value);
     if (slot.ok()) {
+        // Written only when it moves: every append to a hot relation would
+        // otherwise store the same word into a line every core reads.
+        if (store.VarHeapTailHint(root) != tail_id) store.SetVarHeapTailHint(root, tail_id);
         // The common case, and the one that needs no structural record: an
         // existing page took the value, and the append record describes it
         // completely.
@@ -383,6 +415,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
     // empty page as the tail. Written through the tail's own hold: the
     // frame is pinned, and a pinned frame is never moved or evicted.
     std::memcpy(tail.bytes().data() + kNextPageIdOffset, &new_id, sizeof(new_id));
+    store.SetVarHeapTailHint(root, new_id);
 
     // Both halves of the growth reported, because neither is described by the
     // append record the caller is about to write (ChainAppendResult).
