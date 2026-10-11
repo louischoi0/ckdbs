@@ -674,6 +674,22 @@ TEST_F(SuppliedKeySqlTest, AKeyOutsideTheIdSpaceIsRefused) {
     auto too_big = d.Dispatch("INSERT INTO t VALUES (1099511627776, 1)");
     EXPECT_EQ(too_big.status.code(), StatusCode::kOutOfRange) << too_big.response;
     EXPECT_NE(too_big.response.find("Keystone id space"), std::string::npos) << too_big.response;
+
+    // One test answers this and a foreign-key value (`KeystoneIdOf`): a
+    // negative key, `-0`, and a literal past 64 bits whose wrap is a key
+    // that could exist (2^64 + 5 is not 5) are refused with their spelling
+    // and byte; leading zeros are the key they spell.
+    for (const char* key : {"-3", "-0", "18446744073709551621"}) {
+        auto out = d.Dispatch(std::string("INSERT INTO t VALUES (") + key + ", 1)");
+        EXPECT_EQ(out.status.code(), StatusCode::kOutOfRange) << key << ": " << out.response;
+        EXPECT_NE(out.response.find(std::string("primary key ") + key + " "), std::string::npos)
+            << out.response;
+        EXPECT_NE(out.response.find("(byte 22)"), std::string::npos) << out.response;
+    }
+    EXPECT_EQ(d.Dispatch("SELECT * FROM t WHERE id = 5").response.find("\\n5"), std::string::npos)
+        << "the wrapped literal landed as key 5";
+    auto padded = d.Dispatch("INSERT INTO t VALUES (007, 1)");
+    EXPECT_NE(padded.response.find("id=7"), std::string::npos) << padded.response;
 }
 
 TEST_F(SuppliedKeySqlTest, ANonIntegerKeyIsRefusedWithItsByte) {

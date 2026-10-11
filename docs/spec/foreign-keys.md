@@ -158,7 +158,8 @@ probe parent_rel  key = <fk value being written>
 - An integer fk value that is no Keystone id - below 1 (negative or 0),
   above `2^40 - 1`, or a literal past int64 (a `uint64` above `INT64_MAX`)
   - names no parent that can exist: `kFkViolation`, with no `S` taken and
-  no probe. A non-integer value stays the codec's refusal.
+  no probe. A non-integer value stays the codec's refusal. The test is
+  `KeystoneIdOf`, the one a named pk is refused `OutOfRange` by (BD-R5).
 - Probe finds a version → apply **check visibility** (§4): visible
   committed parent → pass; written or delete-marked by an in-flight
   foreign trx → busy (`TxnConflict`, F3); deleted-committed or not found →
