@@ -1,0 +1,3 @@
+host_after: ['cmake:3853623,3853670', 'ld:3853673', 'collect2:3853672']
+other-CPU busy (CPUs 6,7 excluded) 13.9% > 10 %
+sibling CPU 5 busy 25% > 15 %

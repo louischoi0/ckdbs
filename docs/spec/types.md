@@ -145,8 +145,12 @@ consumer that reads `int_val` is surfaced by the compiler instead of
 silently truncating; the value is `Int128FromHalves(dec_hi, int_val)`.
 And **an integer literal that wrapped int64 is refused wherever `int_val`
 is the value** — the wide arm reads the preserved digit text, and date,
-timestamp and narrow-decimal coercion refuse a wrapped literal outright
-rather than coercing the value it wrapped to. Purely additive: no format
+timestamp, narrow-decimal, signed-integer and `bool` coercion refuse a
+wrapped literal outright rather than coercing the value it wrapped to. A
+`uint64` column reads the digits and refuses a literal outside
+`[0, 2^64 - 1]` `OutOfRange` - compared, one answered false under every
+operator, `!=` and `>` included - and a pk bounds a range or keys a lookup
+only from a literal that did not wrap. Purely additive: no format
 change, no version bump, one `sys.types` row (`decimal128`, oid 33,
 type_val 13). `p > 38` has no representation and is refused.
 
@@ -212,7 +216,14 @@ zero and `%` takes the dividend's sign, a division by zero is `InvalidArgument`,
 a NULL operand yields NULL before a zero divisor is judged, and `||` yields
 the concatenation (a `char(N)` target's length and a NOT NULL target are the
 row's encode verdicts). Every assignment reads the before-image and the values
-are written together. A failure names the failing operator's byte, the
+are written together. **What a row decodes for it** (BK-R2,
+`workorder-bk-opt-read-update-path.md`): a relation with a Cabin, an index or
+an assertion decodes the row whole for its hooks; any other decodes only the
+columns its SET expressions read (`exec::SetExpressionColumns`), and the
+evaluator refuses `Corruption` a column the decode left out (`exec::kUndecoded`)
+rather than read a default. The new image is the row's own bytes with only the
+assigned cells re-encoded (`exec::EncodeAssigned`, BK-R3, `heap-and-tuple.md`
+§3.4). A failure names the failing operator's byte, the
 expression's first byte and the row's pk. `exec::TypeSetExpression` (`include/kds/exec/set_expr.hpp`) is the
 one place the rules below live. §3.2's "there is none" stands for every other
 position: the grammar admits an expression in a SET value only.

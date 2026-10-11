@@ -1,0 +1,96 @@
+=== corr-exists-scan [A]
+analyze rows=500 class=JoinSelect steps=1 examined=1500 pages=1506 opens=1001 pattern_id=0xcd32dad9b8bfcc7e fetch_id=0x2cc2f644be2d4e17
+class=JoinSelect steps=1 hoisted=0
+step 0 Scan a
+  correlated EXISTS [correlated]
+    step 1 IndexProbe b key=1:0.0
+      filter 0:0.1 = 1:0.0
+project a.id=0:0.0
+step 0 Scan a opens=1 examined=1000 matched=1000 sel=100% pages=6
+step 1 IndexProbe b opens=1000 examined=500 matched=500 sel=100% pages=1500 sub_runs=1000 index_scanned=500 index_resolved=500
+
+=== corr-exists-scan [B]
+analyze rows=500 class=JoinSelect steps=1 examined=1500 pages=1506 opens=1001 pattern_id=0xcd32dad9b8bfcc7e fetch_id=0x2cc2f644be2d4e17
+class=JoinSelect steps=1 hoisted=0
+step 0 Scan a
+  correlated EXISTS [correlated]
+    step 1 IndexProbe b key=1:0.0
+      filter 0:0.1 = 1:0.0
+project a.id=0:0.0
+step 0 Scan a opens=1 examined=1000 matched=1000 sel=100% pages=6
+step 1 IndexProbe b opens=1000 examined=500 matched=500 sel=100% pages=1500 sub_runs=1000 index_scanned=500 index_resolved=500
+
+=== unc-in-scan [A]
+analyze rows=20 class=JoinSelect steps=1 examined=163890 pages=1986 opens=1001 pattern_id=0xb0647b01c81a47a8 fetch_id=0xdc83534dd91d9d27
+class=JoinSelect steps=1 hoisted=0
+step 0 Scan a
+  correlated IN 0:0.0 <- 0:0.1 [uncorrelated]
+    step 1 Range b range=[1, 20]
+      filter 0:0.0 >= 1
+      filter 0:0.0 <= 20
+project a.id=0:0.0
+step 0 Scan a opens=1 examined=1000 matched=1000 sel=100% pages=6
+step 1 Range b opens=1000 examined=162890 matched=19810 sel=12% pages=1980 sub_runs=1000 corr_scans=1000 range_stopped_early=1
+
+=== unc-in-scan [B]
+analyze rows=20 class=JoinSelect steps=1 examined=163890 pages=1986 opens=1001 pattern_id=0xb0647b01c81a47a8 fetch_id=0xdc83534dd91d9d27
+class=JoinSelect steps=1 hoisted=0
+step 0 Scan a
+  correlated IN 0:0.0 <- 0:0.1 [uncorrelated]
+    step 1 Range b range=[1, 20]
+      filter 0:0.0 >= 1
+      filter 0:0.0 <= 20
+project a.id=0:0.0
+step 0 Scan a opens=1 examined=1000 matched=1000 sel=100% pages=6
+step 1 Range b opens=1000 examined=162890 matched=19810 sel=12% pages=1980 sub_runs=1000 corr_scans=1000 range_stopped_early=1
+
+=== unc-exists-scan [A]
+analyze rows=143 class=JoinSelect steps=1 examined=1005 pages=7 opens=2 pattern_id=0x332c2a9dc058a61c fetch_id=0xb9b9c5990ef8a29f
+class=JoinSelect steps=1 hoisted=1
+hoisted EXISTS [uncorrelated]
+  step 1 FilterScan c
+    filter 0:0.1 = 5
+step 0 FilterScan a
+  filter 0:0.1 = 3
+project a.id=0:0.0
+step 1 FilterScan c opens=1 examined=5 matched=1 sel=20% pages=1 sub_runs=1 corr_scans=1
+step 0 FilterScan a opens=1 examined=1000 matched=143 sel=14% pages=6
+
+=== unc-exists-scan [B]
+analyze rows=143 class=JoinSelect steps=1 examined=1005 pages=7 opens=2 pattern_id=0x332c2a9dc058a61c fetch_id=0xb9b9c5990ef8a29f
+class=JoinSelect steps=1 hoisted=1
+hoisted EXISTS [uncorrelated]
+  step 1 FilterScan c
+    filter 0:0.1 = 5
+step 0 FilterScan a
+  filter 0:0.1 = 3
+project a.id=0:0.0
+step 1 FilterScan c opens=1 examined=5 matched=1 sel=20% pages=1 sub_runs=1 corr_scans=1
+step 0 FilterScan a opens=1 examined=1000 matched=143 sel=14% pages=6
+
+=== nested-some-scan [A]
+analyze rows=500 class=JoinSelect steps=1 examined=1500 pages=1506 opens=1001 pattern_id=0xa87d530120dd971f fetch_id=0x974834bb981c4f1a
+class=JoinSelect steps=1 hoisted=0
+step 0 Scan a
+  correlated EXISTS [correlated]
+    step 1 IndexProbe b key=1:0.0
+      filter 0:0.1 = 1:0.0
+project a.id=0:0.0
+step 0 Scan a opens=1 examined=1000 matched=1000 sel=100% pages=6
+step 1 IndexProbe b opens=1000 examined=500 matched=500 sel=100% pages=1500 sub_runs=1000 index_scanned=500 index_resolved=500
+
+=== nested-some-scan [B]
+analyze rows=500 class=JoinSelect steps=1 examined=6500 pages=2506 opens=2001 pattern_id=0xa87d530120dd971f fetch_id=0x974834bb981c4f1a
+class=JoinSelect steps=1 hoisted=0
+step 0 Scan a
+  correlated EXISTS [correlated]
+    hoisted EXISTS [uncorrelated]
+      step 2 FilterScan c
+        filter 0:0.1 = 5
+    step 1 IndexProbe b key=1:0.0
+      filter 0:0.1 = 1:0.0
+project a.id=0:0.0
+step 0 Scan a opens=1 examined=1000 matched=1000 sel=100% pages=6
+step 2 FilterScan c opens=1000 examined=5000 matched=1000 sel=20% pages=1000 sub_runs=1000 corr_scans=1000
+step 1 IndexProbe b opens=1000 examined=500 matched=500 sel=100% pages=1500 sub_runs=1000 index_scanned=500 index_resolved=500
+

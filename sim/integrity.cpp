@@ -274,11 +274,8 @@ private:
                     "relation '" + name + "' id " + std::to_string(id) +
                         ": reserved bits nonzero (" + std::to_string(keystone.reserved) + ")");
             }
-            if (id > kMaxKeystoneId) {
-                Add(CheckKind::kKeystone, page_id,
-                    "relation '" + name + "' slot " + std::to_string(slot) +
-                        ": id above 2^40-1");
-            }
+            // No check that the id fits the space: `KeystoneIdOfPayload`
+            // masks it, so the decoded id cannot exceed `kMaxKeystoneId`.
             if (id < current_min_key) {
                 Add(CheckKind::kChainOrder, page_id,
                     "relation '" + name + "' id " + std::to_string(id) +

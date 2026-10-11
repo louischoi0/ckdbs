@@ -140,7 +140,7 @@ inline constexpr std::uint8_t kSlotFlagDeleted = 0x2;
 // `trx_id` is the *writer* - whichever transaction last stamped this
 // version, whether by insert, overwrite, or delete-mark. It is 48-bit
 // (wal.md 4.2), stored zero-extended in 8 bytes with the upper 16 bits 0,
-// the same convention ids follow outside the tuple header (invariant 6).
+// the same convention ids follow outside the tuple header (invariant 7).
 
 struct TupleHeaderFields {
     std::uint64_t trx_id;
@@ -208,7 +208,7 @@ public:
     // Formats `page` as a brand-new, empty heap page whose min_key is
     // fixed for the rest of the page's lifetime - no method below ever
     // writes header.min_key again. Fails only if `min_key` does not fit
-    // the Keystone column's 40-bit id space (docs/spec/heap-and-tuple.md invariant 7).
+    // the Keystone column's id space, kMaxKeystoneId (docs/spec/heap-and-tuple.md invariant 7).
     // `owner_oid` (page.md §2a) is stamped with the same immutability:
     // the owning relation for a user page, 0 for system callers (catalog).
     static StatusOr<PageView> CreateEmpty(std::span<std::byte, kPageSize> page,
@@ -308,9 +308,10 @@ public:
     //
     // Deliberately returns bytes, not a decoded key: what the leading bytes
     // of a payload *mean* is the row encoding's business, and this layer
-    // does not know that the Keystone column exists (see the layering note
-    // at the top of heap_page.cpp). Callers searching by primary key pair
-    // this with KeystoneIdOfPayload() from storage/keystone.hpp.
+    // reads one Keystone constant - the id ceiling a min_key is checked
+    // against (BK-R2) - and nothing of the word's layout. Callers searching
+    // by primary key pair this with KeystoneIdOfPayload() from
+    // storage/keystone.hpp.
     //
     // Fails with NotFound on exactly the slots ReadTuple() does (out of
     // range, or physically retired), so a search can treat NotFound as "no

@@ -33,18 +33,31 @@ using catalog::kTypeValInt8;
 using catalog::kTypeValUint64;
 using catalog::kTypeValVarchar;
 
+// Whether a column of this type takes an integer's `int_val` as the value
+// itself - the types for which a literal past int64, whose `int_val` is the
+// lexer's wrap, names nothing the column holds. A uint64 reads the digits
+// instead, and every other type refuses an integer by kind. **One list for
+// the encoder and the coercion**, so what stores and what compares cannot
+// come to disagree about a wrapped literal.
+bool TakesIntValAsValue(std::uint32_t type_val) noexcept {
+    switch (type_val) {
+        case kTypeValInt8:
+        case kTypeValInt16:
+        case kTypeValInt32:
+        case kTypeValInt64:
+        case kTypeValBool:
+        case kTypeValDate:
+        case kTypeValTimestamp:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void StoreLe64(std::byte* out, std::uint64_t v) {
     for (int i = 0; i < 8; ++i) {
         out[i] = static_cast<std::byte>((v >> (8 * i)) & 0xFF);
     }
-}
-
-std::uint64_t LoadLe64(const std::byte* in) {
-    std::uint64_t v = 0;
-    for (int i = 0; i < 8; ++i) {
-        v |= static_cast<std::uint64_t>(in[i]) << (8 * i);
-    }
-    return v;
 }
 
 void PutLE(std::span<std::byte> out, std::uint64_t v, int width) {
@@ -131,6 +144,14 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
                                   val.param_name() + "' has no bound value to store");
     }
 
+    // `int_val` is the lexer's wrap, not the value (`TakesIntValAsValue`):
+    // stored, it would be another number. The type is asked first, so a
+    // decoded uint64 above INT64_MAX does not have its digits parsed.
+    if (TakesIntValAsValue(col.type_val) && parser::IntLiteralWrapped(val)) {
+        return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                  " does not fit column '" + NameOf() + "'");
+    }
+
     switch (col.type_val) {
         case kTypeValInt8:
         case kTypeValInt16:
@@ -138,12 +159,6 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
         case kTypeValInt64: {
             if (val.type != parser::ValueType::kInt) {
                 return Status::InvalidArgument("column '" + NameOf() + "' expects an integer");
-            }
-            // A literal past int64 wrapped in the lexer, so `int_val` is not
-            // its value: stored, it would be another number (BJ-S3's review).
-            if (parser::IntLiteralWrapped(val)) {
-                return Status::OutOfRange("integer literal " + val.raw_int_text +
-                                          " does not fit column '" + NameOf() + "'");
             }
             int width = IntWidthFor(col.type_val);
             if (!FitsSigned(val.int_val, width)) {
@@ -662,13 +677,16 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
     // An integer literal wider than int64 **wrapped in the lexer**, which
     // has always been the token's documented behaviour - `int_val` cannot
     // be trusted for a range question, only `raw_int_text` can (token.hpp's
-    // digits() note). The three arms below that read `int_val` as the value
-    // must refuse a wrapped one, or `= 36893488147419103232` coerces as the
-    // 0 it wrapped to and matches rows the client never named. Scoped to
-    // those arms and not hoisted: a uint64 comparison legitimately carries
-    // its upper half in the digits (`ValueAsUint64`), and the wide-decimal
-    // arm reads the digits themselves.
-    const bool int_literal_wrapped = parser::IntLiteralWrapped(val);
+    // digits() note). A type that reads `int_val` as the value refuses a
+    // wrapped one by the encoder's list (`TakesIntValAsValue`), or
+    // `= 36893488147419103232` coerces as the 0 it wrapped to and matches
+    // rows the client never named. A uint64 reads the digits (its arm
+    // below), the wide-decimal arm reads them too, and the narrow one
+    // refuses them.
+    if (TakesIntValAsValue(col.type_val) && parser::IntLiteralWrapped(val)) {
+        return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                  " is outside the range of an int64");
+    }
 
     switch (col.type_val) {
         case catalog::kTypeValDate: {
@@ -676,8 +694,7 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
                 // Already an epoch day. Accepted, and range-checked to the
                 // same bounds the encoder applies - the two sides of the
                 // engine must agree on which integers are dates.
-                if (int_literal_wrapped || val.int_val < kMinEpochDay ||
-                    val.int_val > kMaxEpochDay) {
+                if (val.int_val < kMinEpochDay || val.int_val > kMaxEpochDay) {
                     return Status::OutOfRange("date is outside the supported range");
                 }
                 return Status::OK();
@@ -696,8 +713,7 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
 
         case catalog::kTypeValTimestamp: {
             if (val.type == parser::ValueType::kInt) {
-                if (int_literal_wrapped || val.int_val < kMinEpochMicros ||
-                    val.int_val > kMaxEpochMicros) {
+                if (val.int_val < kMinEpochMicros || val.int_val > kMaxEpochMicros) {
                     return Status::OutOfRange("timestamp is outside the supported range");
                 }
                 return Status::OK();
@@ -755,7 +771,7 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             if (val.type != parser::ValueType::kInt && val.type != parser::ValueType::kStr) {
                 return Status::InvalidArgument("a decimal is written as a string, e.g. '12.34'");
             }
-            if (int_literal_wrapped) {
+            if (parser::IntLiteralWrapped(val)) {
                 // The true digits cannot fit any narrow decimal (p <= 18),
                 // so the precision check would refuse them anyway - but
                 // only if it sees them rather than the wrapped value.
@@ -816,8 +832,19 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             return Status::OK();
         }
 
+        case kTypeValUint64:
+            // The same rule over the unsigned range, which the digits carry
+            // (`ValueAsUint64`): a negative literal or one past 2^64 - 1
+            // names nothing the column holds. Compared, it answered false
+            // under every operator - `!=` and `>` included - and no row.
+            if (val.type == parser::ValueType::kInt && !ValueAsUint64(val).ok()) {
+                return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                          " is outside the range of a uint64");
+            }
+            return Status::OK();
+
         default:
-            // Every other type keeps the behaviour it had before this task.
+            // Every other type is compared as it was written.
             return Status::OK();
     }
 }
@@ -838,60 +865,72 @@ Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::A
     }
 }
 
+namespace {
+
+// One column of a row being encoded into `out`, whose cell for it is zero:
+// a NULL sets the bitmap and leaves the cell's deterministic zeros (or the
+// kNull filler of a tagged cell), anything else is `EncodeOneValue`'s.
+Status EncodeColumn(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                    std::size_t i, const parser::AstValue& value, std::span<std::byte> out,
+                    const VarHeapSink& varheap) {
+    if (value.type == parser::ValueType::kNull) {
+        // The bitmap is the sole authority (null.md §3): the bit
+        // is set here, a fixed cell keeps its deterministic zeros, and
+        // a tagged cell takes the kNull filler so its bytes are
+        // defined rather than stale - but no reader ever consults it.
+        //
+        // Branched on the layout's own null_bits - the field SetNullBit
+        // reads - not on the schema's notnull, so the writer and the
+        // layout cannot disagree about which columns have a bit.
+        if (layout.null_bits[i] == catalog::kNoNullBit) {
+            return Status::InvalidArgument(
+                "column '" + std::string(catalog::NameView(schema.columns[i].name)) +
+                "' is NOT NULL and cannot take NULL (declare it NULL at CREATE TABLE to "
+                "opt in - docs/spec/null.md) (byte " +
+                std::to_string(value.byte_offset) + ")");
+        }
+        catalog::SetNullBit(out, layout, i);
+        if (schema.columns[i].type_val == kTypeValVarchar) {
+            return storage::EncodeNullCell(MutableCellOf(layout, out, i));
+        }
+        return Status::OK();
+    }
+    return EncodeOneValue(schema.columns[i], value, MutableCellOf(layout, out, i), varheap);
+}
+
+// The checks and the Keystone word every encode starts from.
+Status StartRow(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                std::uint64_t id, std::span<std::byte> out) {
+    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
+    if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
+    // The Keystone word leads every tuple (heap-and-tuple.md section 4).
+    // The pk column is therefore *not* encoded into the body: storing it
+    // twice is how the two copies come to disagree.
+    auto word = Keystone::Encode(id, /*flags=*/0, /*reserved=*/0);
+    if (!word.ok()) return word.status();
+    StoreLe64(out.data(), word.value());
+    return Status::OK();
+}
+
+}  // namespace
+
 StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
                                             const catalog::RowLayout& layout, std::uint64_t id,
                                             const std::vector<parser::AstValue>& values,
                                             const VarHeapSink& varheap) {
-    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
-    if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
-
+    // One buffer of exactly the schema constant, zero-filled: every byte of
+    // a tuple is written by this function, including the padding inside a
+    // cell that a short value does not fill (invariant 13).
+    std::vector<std::byte> out(layout.row_size, std::byte{0});
+    if (Status s = StartRow(schema, layout, id, out); !s.ok()) return s;
     const std::size_t expected = schema.columns.size() - 1;
     if (values.size() != expected) {
         return Status::InvalidArgument("expected " + std::to_string(expected) +
                                         " value(s) after the primary key, got " +
                                         std::to_string(values.size()));
     }
-
-    // The Keystone word leads every tuple (heap-and-tuple.md section 4).
-    // The pk column is therefore *not* encoded into the body: storing it
-    // twice is how the two copies come to disagree.
-    auto word = Keystone::Encode(id, /*flags=*/0, /*reserved=*/0);
-    if (!word.ok()) return word.status();
-
-    // One buffer of exactly the schema constant, zero-filled: every byte of
-    // a tuple is written by this function, including the padding inside a
-    // cell that a short value does not fill (invariant 13).
-    std::vector<std::byte> out(layout.row_size, std::byte{0});
-    StoreLe64(out.data(), word.value());
-
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
-        if (values[i - 1].type == parser::ValueType::kNull) {
-            // The bitmap is the sole authority (null.md §3): the bit
-            // is set here, a fixed cell keeps its deterministic zeros, and
-            // a tagged cell takes the kNull filler so its bytes are
-            // defined rather than stale - but no reader ever consults it.
-            //
-            // Branched on the layout's own null_bits - the field SetNullBit
-            // reads - not on the schema's notnull, so the writer and the
-            // layout cannot disagree about which columns have a bit.
-            if (layout.null_bits[i] == catalog::kNoNullBit) {
-                return Status::InvalidArgument(
-                    "column '" + std::string(catalog::NameView(schema.columns[i].name)) +
-                    "' is NOT NULL and cannot take NULL (declare it NULL at CREATE TABLE to "
-                    "opt in - docs/spec/null.md) (byte " +
-                    std::to_string(values[i - 1].byte_offset) + ")");
-            }
-            catalog::SetNullBit(out, layout, i);
-            if (schema.columns[i].type_val == kTypeValVarchar) {
-                if (Status s = storage::EncodeNullCell(MutableCellOf(layout, out, i)); !s.ok()) {
-                    return s;
-                }
-            }
-            continue;
-        }
-        if (Status s = EncodeOneValue(schema.columns[i], values[i - 1],
-                                       MutableCellOf(layout, out, i), varheap);
-            !s.ok()) {
+        if (Status s = EncodeColumn(schema, layout, i, values[i - 1], out, varheap); !s.ok()) {
             return s;
         }
     }
@@ -908,11 +947,37 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
     return out;
 }
 
-StatusOr<std::uint64_t> RowKeystoneId(std::span<const std::byte> payload) {
-    if (payload.size() < kKeystoneWordSize) {
-        return Status::Corruption("tuple payload is shorter than its Keystone word");
+StatusOr<std::vector<std::byte>> EncodeAssigned(const catalog::Schema& schema,
+                                                 const catalog::RowLayout& layout,
+                                                 std::uint64_t id,
+                                                 std::span<const std::byte> before,
+                                                 std::span<const AssignedCell> cells,
+                                                 const VarHeapSink& varheap) {
+    // Checked, not assumed: a disagreeing length is Corruption (invariant
+    // 13), and the copy below would otherwise carry it into the new version.
+    if (before.size() != layout.row_size) {
+        return Status::Corruption("the row being updated is " + std::to_string(before.size()) +
+                                   " bytes for a relation whose row size is " +
+                                   std::to_string(layout.row_size));
     }
-    return Keystone::Decode(LoadLe64(payload.data())).id;
+    std::vector<std::byte> out(before.begin(), before.end());
+    if (Status s = StartRow(schema, layout, id, out); !s.ok()) return s;
+    for (const AssignedCell& cell : cells) {
+        if (cell.column == 0 || cell.column >= schema.columns.size()) {
+            return Status::Corruption("an assignment names column " +
+                                       std::to_string(cell.column) + " of a relation with " +
+                                       std::to_string(schema.columns.size()) + " column(s)");
+        }
+        // The cell and its bit as a fresh encode finds them: zero and clear.
+        auto bytes = MutableCellOf(layout, out, cell.column);
+        std::fill(bytes.begin(), bytes.end(), std::byte{0});
+        catalog::ClearNullBit(out, layout, cell.column);
+        if (Status s = EncodeColumn(schema, layout, cell.column, *cell.value, out, varheap);
+            !s.ok()) {
+            return s;
+        }
+    }
+    return out;
 }
 
 namespace {
@@ -968,7 +1033,7 @@ void SetNullSlot(parser::AstValue& out) {
 
 // Column 0 is not in the body: it lives in the Keystone word.
 Status DecodeKeystoneInto(std::span<const std::byte> payload, parser::AstValue& out) {
-    auto id = RowKeystoneId(payload);
+    auto id = KeystoneIdOfPayload(payload);
     if (!id.ok()) return id.status();
     out.type = parser::ValueType::kInt;
     out.int_val = static_cast<std::int64_t>(id.value());
@@ -1039,14 +1104,14 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     // (CIP/OPT-004-decoderowinto-preconditions/proposal.md).
     if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
 
-    auto id = RowKeystoneId(payload);
+    auto id = KeystoneIdOfPayload(payload);
     if (!id.ok()) return id.status();
 
     // The pk is not in the body: it lives in the Keystone word, which is
     // why the loop below starts at column 1.
     out[0].type = parser::ValueType::kInt;
     out[0].int_val = static_cast<std::int64_t>(id.value());
-    // Same rule as every other integer: a 40-bit id fits int_val exactly, so
+    // Same rule as every other integer: a Keystone id fits int_val exactly, so
     // the text would be a string conversion per row for nothing.
     out[0].raw_int_text.clear();
     out[0].str_val.clear();

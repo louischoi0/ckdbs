@@ -2110,7 +2110,7 @@ DispatchOutcome CommandDispatcher::HandleShowBudget() {
     }
 
     // `capacity` belongs to the summary rather than to every row: it is the
-    // same constant for every relation (K4's per-relation 2^40), and
+    // same constant for every relation (K4's per-relation id space), and
     // repeating it once per line would be the widest column in the listing
     // carrying the least information.
     std::ostringstream os;
@@ -3134,12 +3134,22 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     // and is rolled back when the statement ends, so the relation is
     // released there and a failed `CREATE ASSERTION` poisons nothing - a
     // transaction rather than a minted id because a waiter names its holder.
-    // **The session's own transaction is tested first**, by what it holds
-    // rather than by who the table reports (the review's C7): with it and
-    // another writer both holding the relation, the table may name the
-    // other, and waiting for it would end in the same refusal. Resolved
-    // under the session's view, as `HandleIndex` resolves; a name that does
-    // not resolve takes no borrow and falls to `PrepareAssertionDef`.
+    // **Resolved under a settled view, and a name it does not resolve is
+    // refused here**, once: the oid it names is the one locked and the one
+    // built. Settled and not the session's, because the statement reads
+    // settled state - a relation an open transaction created, the session's
+    // own included, is not there yet - and because a repeatable-read view
+    // minted at `BEGIN` would keep naming a relation dropped and re-created
+    // since, so the re-check below would refuse every retry. A dispatcher
+    // with no manager reads everything, which is the pre-MVCC engine and what
+    // every socket-free test runs on.
+    const auto settled_view = [this] {
+        return txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
+    };
+    const txn::ReadView view = settled_view();
+    auto target = exec::AssertionTargetOid(catalog_, stmt, &view);
+    if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
+
     struct BuildLock {
         txn::TransactionManager* manager = nullptr;
         txn::Transaction* txn = nullptr;
@@ -3150,43 +3160,55 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
         }
     } build_lock;
     if (locks_ != nullptr && txn_ != nullptr) {
-        const std::optional<txn::ReadView> view = ViewFor(session);
-        if (auto rel = catalog_.FindTableOidByName(stmt.table_name,
-                                                   view.has_value() ? &*view : nullptr);
-            rel.ok()) {
-            const txn::Transaction* own = session.transaction();
-            if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(rel.value()))) {
-                const Status mine = Status::TxnConflict(
-                    "relation '" + stmt.table_name +
-                    "' is held by this session's own transaction; CREATE ASSERTION reads "
-                    "settled state - retry when it has ended");
-                return {ErrorReply(mine), false, 0, mine};
-            }
-            auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
-            if (!begun.ok()) return {ErrorReply(begun.status()), false, 0, begun.status()};
-            build_lock.manager = txn_;
-            build_lock.txn = begun.value();
-            if (std::optional<Status> held =
-                    BorrowRelationForDdl(build_lock.txn, rel.value(), /*poisons=*/false);
-                held.has_value()) {
-                return {ErrorReply(*held), false, 0, *held};
-            }
+        // **The session's own transaction is tested first**, by what it holds
+        // rather than by who the table reports (the review's C7): with it and
+        // another writer both holding the relation, the table may name the
+        // other, and waiting for it would end in the same refusal.
+        const txn::Transaction* own = session.transaction();
+        if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(target.value()))) {
+            const Status mine = Status::TxnConflict(
+                "relation '" + stmt.table_name +
+                "' is held by this session's own transaction; CREATE ASSERTION reads "
+                "settled state - retry when it has ended");
+            return {ErrorReply(mine), false, 0, mine};
+        }
+        auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
+        if (!begun.ok()) return {ErrorReply(begun.status()), false, 0, begun.status()};
+        build_lock.manager = txn_;
+        build_lock.txn = begun.value();
+        if (std::optional<Status> held =
+                BorrowRelationForDdl(build_lock.txn, target.value(), /*poisons=*/false);
+            held.has_value()) {
+            return {ErrorReply(*held), false, 0, *held};
         }
     }
 
-    // The visibility the build's scan reads under: latest settled state,
-    // minted here exactly as a FK check's view is. A dispatcher with no
-    // manager reads everything, which is the pre-MVCC engine and what every
-    // socket-free test runs on.
-    txn::ReadView check_view = txn::ReadView::Everything();
-    if (txn_ != nullptr) check_view = txn_->MintCheckView(txn::kNoTrxId);
+    // The visibility the build's scan reads under: settled state, minted
+    // after the grant exactly as a FK check's view is.
+    const txn::ReadView check_view = settled_view();
+
+    // **The lock was waited for under the view the name resolved by**, and a
+    // drop-and-recreate that committed meanwhile leaves that name on another
+    // relation. The grant is on the old one, so what is built must be too, or
+    // nothing: the settled name is read again and must still be the locked oid.
+    // A name that is gone is the `NotFound` a retry would give.
+    if (build_lock.txn != nullptr) {
+        auto settled = exec::AssertionTargetOid(catalog_, stmt, &check_view);
+        if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
+        if (settled.value() != target.value()) {
+            const Status moved = Status::TxnConflict(
+                "relation '" + stmt.table_name +
+                "' changed while CREATE ASSERTION waited for it - retry");
+            return {ErrorReply(moved), false, 0, moved};
+        }
+    }
 
     // Through ErrorReply, not a bare "ERR ": the build can refuse with the
     // two coded spellings - ASSERTION_VIOLATION for data already past the
     // bound, TXN_CONFLICT for an unsettled relation - and both are
     // compatibility surfaces a client switches on.
-    auto created = exec::CreateAssertion(catalog_, page_store_, stmt, check_view, wal_,
-                                         *enforcer_, after_assertion_publish_run_for_test_);
+    auto created = exec::CreateAssertion(catalog_, page_store_, stmt, target.value(), check_view,
+                                         wal_, *enforcer_, after_assertion_publish_run_for_test_);
     if (!created.ok()) {
         return {ErrorReply(created.status()), false, 0, created.status()};
     }
@@ -5687,7 +5709,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // **Exhausted** (BD-R5 2., `instructions/v3.0.0/workorder-bd-sorted-
         // leaf-named-keys.md`): a key that is no Keystone id is one of the two
         // reasons a named key is refused, `OutOfRange` with its byte - zero, a
-        // negative number, one above the 40-bit space, or a literal the lexer
+        // negative number, one above `kMaxKeystoneId`, or a literal the lexer
         // wrapped past 64 bits (`KeystoneIdOf`, the foreign key's test too).
         // Before the foreign-key and assertion steps, either of which can
         // wait.
@@ -6421,7 +6443,7 @@ std::optional<std::uint64_t> CommandDispatcher::PkLiteral(const catalog::TableAc
     // A literal past int64 wrapped in the lexer, so `int_val` is not its
     // value: no window, rather than the one its wrap names (BH-S5's review).
     if (parser::IntLiteralWrapped(cond.val)) return std::nullopt;
-    // Negative ids do not exist (invariant 6 zero-extends the 40-bit id),
+    // Negative ids do not exist (invariant 7 zero-extends the id),
     // so a negative literal is a guaranteed miss - and casting it to
     // uint64 would probe an enormous pk instead.
     if (cond.val.int_val < 0) return std::nullopt;
@@ -8092,9 +8114,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // One value per assignment for the row in hand. A bare literal's slot is
     // filled once, here; an expression's is overwritten for every row. Owned
     // by the statement so no row allocates for it after the first.
+    // `assigned` names the cells a row's new image re-encodes, one per
+    // assignment, pointing into `values`; every other cell is carried from
+    // the row's own bytes (`exec::EncodeAssigned`, BK-R3,
+    // `workorder-bk-opt-read-update-path.md`).
     std::vector<parser::AstValue> values(compiled.size());
+    std::vector<exec::AssignedCell> assigned(compiled.size());
     for (std::size_t i = 0; i < compiled.size(); ++i) {
         if (compiled[i].expr == nullptr) values[i] = stmt.assignments[i].val;
+        assigned[i] = {compiled[i].column_no, &values[i]};
     }
 
     // The WHERE clause compiles to the same resolved predicates a chain
@@ -8118,6 +8146,20 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     std::vector<exec::PendingSpill> frame_spills;
     std::vector<exec::PendingSpill> spills;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
+
+    // Stage 2's decode target and what it decodes (BK-R2): every column
+    // where a Cabin or an index reads the row (an assertion is asked per
+    // row, below), otherwise the columns the SET expressions read.
+    // `row_poisoned` says the slots outside the mask hold `kUndecoded`.
+    std::vector<parser::AstValue> row(ta.schema.columns.size());
+    bool row_poisoned = false;
+    // The negation of `NoteCabinWrite`'s and `MaintainIndexes`' early
+    // returns: loosen either and that hook is handed `kUndecoded`.
+    const bool hooked = (cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty();
+    std::uint64_t set_read_mask = 0;
+    for (const exec::CompiledAssignment& c : compiled) {
+        if (c.expr != nullptr) set_read_mask |= exec::SetExpressionColumns(*c.expr);
+    }
 
     // ---- Which foreign keys this SET list touches (§2) -------------------
     //
@@ -8248,7 +8290,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // memcpy of a schema-constant row size per scanned row and no
         // allocation after the first.
         payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
-        auto id = exec::RowKeystoneId(payload_copy);
+        auto id = KeystoneIdOfPayload(payload_copy);
         if (!id.ok()) return id.status();
         const std::uint64_t trx_id = tuple.value().trx_id;
         const std::uint64_t undo_ptr = tuple.value().undo_ptr;
@@ -8271,16 +8313,6 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                                frame, /*stats=*/nullptr, budget_, &snapshot);
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
-
-        // ---- Stage 2: the whole row, for a row that qualified -----------
-        //
-        // An owned copy, because UPDATE re-encodes it and hands it to the
-        // write hook; the frame is for evaluation only and is not read
-        // again below. Decoded from `payload_copy`, whose bytes outlive
-        // every page fetch stage 1 may have made.
-        auto row = exec::DecodeRow(ta.schema, ta.layout, payload_copy, &spills);
-        if (!row.ok()) return row.status();
-        if (Status s = exec::ResolveSpills(page_store_, spills, row.value()); !s.ok()) return s;
 
         // ---- First-updater-wins (docs/spec/txn.md section 5) ----------------
         //
@@ -8355,6 +8387,46 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
         }
 
+        // ---- Stage 2: what the SET list and the hooks read (BK-R2) -------
+        //
+        // Into `row`, the statement's, because the SET expressions and the
+        // write hooks read it (the new image is encoded from `payload_copy`,
+        // BK-R3). Decoded from `payload_copy`, whose bytes outlive every page
+        // fetch stage 1 may have made.
+        //
+        // **Whole only where a hook reads it.** A Cabin, an index and an
+        // assertion each take the row full-width, so a relation with any of
+        // them decodes every column; one with none decodes only the columns
+        // the SET expressions read (`set_read_mask`), and every other slot
+        // holds `kUndecoded`, which the evaluator refuses `Corruption` rather
+        // than read as a value.
+        //
+        // **The registry is asked here, after the conflict check, and only
+        // here** - the answer is the assertion site's too (the AT-S5d review:
+        // an assertion adopted on another core between two asks would send
+        // the check an empty `previous`). After, because the check is where
+        // the row's writer takes the relation's `IX`, and a build adopts its
+        // assertion under `X`: asked before the grant, a build that adopts in
+        // between would leave this row written unchecked.
+        const bool asserted = enforcer_->AnyOn(ta.oid);
+        const bool whole_row = hooked || asserted;
+        if (whole_row) {
+            row_poisoned = false;
+        } else if (!row_poisoned) {
+            for (std::size_t c = 0; c < row.size(); ++c) {
+                if (c >= 64 || (set_read_mask & (std::uint64_t{1} << c)) == 0) {
+                    row[c] = exec::kUndecoded;
+                }
+            }
+            row_poisoned = true;
+        }
+        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy, row,
+                                              whole_row ? exec::kAllColumnsMask : set_read_mask,
+                                              spills);
+            !s.ok()) {
+            return s;
+        }
+
         // ---- BJ-S4: every expression is evaluated here, against the row as
         // the walk read it (BJ-R2) ------------------------------------------
         //
@@ -8370,7 +8442,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         for (std::size_t i = 0; i < compiled.size(); ++i) {
             if (compiled[i].expr == nullptr) continue;
             const std::uint32_t expression_byte = stmt.assignments[i].expr->byte_offset;
-            auto value = exec::EvaluateSetExpression(*compiled[i].expr, row.value(), context);
+            auto value = exec::EvaluateSetExpression(*compiled[i].expr, row, context);
             if (!value.ok()) {
                 return value.status().WithMessage(
                     value.status().message() + " in the expression at byte " +
@@ -8398,31 +8470,17 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
         }
 
-        // The row as it stands *before* the SET list is applied, kept only
-        // when this relation has a Cabin - it is what tells the write hook
-        // whether a key column actually moved (§5's third row). A relation
-        // with no Cabin copies nothing.
-        // ...and what tells the index hook the same thing (index.md §2).
-        // A relation with neither copies nothing.
-        //
-        // **Asked once, and the answer used at both sites below** (the
-        // AT-S5d review). The registry is the instance's, so an assertion
-        // adopted on another core between two asks would send the check an
-        // empty `previous` - a read past the end of it.
-        const bool asserted = enforcer_->AnyOn(ta.oid);
+        // The row as it stands *before* the SET list is applied - what tells
+        // the Cabin, index and assertion hooks whether a column they read
+        // actually moved (cabin.md §5's third row, index.md §2) - taken only
+        // where a hook reads it, which is where the row was decoded whole.
         std::vector<parser::AstValue> previous;
-        if ((cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty() || asserted) {
-            previous = row.value();
+        if (whole_row) {
+            previous = row;
+            for (std::size_t i = 0; i < compiled.size(); ++i) {
+                row[compiled[i].column_no] = values[i];
+            }
         }
-
-        for (std::size_t i = 0; i < compiled.size(); ++i) {
-            row.value()[compiled[i].column_no] = values[i];
-        }
-
-        // The pk is unchanged by construction (rejected above), so it was
-        // carried straight from the tuple's own Keystone word above rather
-        // than round-tripped through the decoded row.
-        const std::vector<parser::AstValue> body(row.value().begin() + 1, row.value().end());
 
         // ---- The assertion check, §4.2's delta rules --------------------
         //
@@ -8445,7 +8503,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         if (asserted) {
             std::uint64_t reserver = 0;
             if (Status s = enforcer_->AdmitAndReserveUpdate(page_store_, wal_, WriterId(scope),
-                                                           ta.oid, previous, row.value(),
+                                                           ta.oid, previous, row,
                                                            id.value(), page_id, slot, &reserver);
                 !s.ok()) {
                 // AO-S6e-c, and the INSERT site states the argument. The pk
@@ -8487,8 +8545,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // under the var-heap page's hold - this leaf's hold outside it, the
         // order a reader takes too; `appended_spills` then stays empty.
         const auto log_spill = SpillLogFor(scope, ta.oid, id.value());
-        auto encoded = exec::EncodeRow(
-            ta.schema, ta.layout, id.value(), body,
+        // **Only the assigned cells are encoded** (BK-R3): every other cell
+        // is carried from `payload_copy`, the version this walk read, so a
+        // spilled value the SET list does not name is shared with the new
+        // version rather than appended again - and no longer leaked by every
+        // UPDATE of its row. The pk is the tuple's own Keystone word, never
+        // assignable (rejected above).
+        auto encoded = exec::EncodeAssigned(
+            ta.schema, ta.layout, id.value(), payload_copy, assigned,
             exec::VarHeapSink{&page_store_, ta.varheap_page_id,
                               collect_spills ? &appended_spills : nullptr, ta.oid,
                               log_spill ? &log_spill : nullptr});
@@ -8521,16 +8585,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         std::uint64_t new_trx_id = trx_id;
         std::uint64_t new_undo_ptr = undo_ptr;
         if (scope.txn != nullptr) {
-            // The bytes as they stand, re-read rather than reconstructed:
-            // `row` has already had the SET list applied, and an image
-            // built from it would restore the *new* values.
-            auto live = page_store_.GetForRead(page_id);
-            if (!live.ok()) return live.status();
-            heap::PageView before_page(live.value().bytes());
-            auto before = before_page.ReadTuple(slot);
-            if (!before.ok()) return before.status();
-            const std::vector<std::byte> image(before.value().payload.begin(),
-                                               before.value().payload.end());
+            // The bytes as they stand: `payload_copy`, the version this walk
+            // read - not reconstructed from `row`, which has had the SET list
+            // applied and would restore the *new* values. Nothing has written
+            // the slot since the copy: the walk holds this page's write
+            // `PageRef` and carries no `co_await` (the conflict check's
+            // argument above), and the new image the carry starts from is
+            // the same buffer (BK-R3).
+            const std::vector<std::byte>& image = payload_copy;
 
             txn::UndoRecordFields rec{};
             rec.prior_trx_id = trx_id;
@@ -8561,7 +8623,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
 
         // ---- The Cabin witness, UPDATE half (docs/spec/cabin.md §5) -----
         //
-        // `row.value()` now holds the **new** values, so this appends the pk
+        // `row` now holds the **new** values, so this appends the pk
         // to v′'s set for every cabined column. The old value's set is
         // deliberately left alone: a pre-update snapshot is still entitled
         // to match through it, and for newer readers the stale entry is a
@@ -8571,14 +8633,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // The location is unchanged by construction - an UPDATE is an
         // in-place overwrite under invariant 13 - so the appended hint is
         // the row's real address.
-        NoteCabinWrite(ta, row.value(), /*first_col_pos=*/0, id.value(), page_id, slot, previous);
+        NoteCabinWrite(ta, row, /*first_col_pos=*/0, id.value(), page_id, slot, previous);
 
         // The index half. `previous` is what makes §2's rule work: an UPDATE
         // that moved no key and no covered column appends nothing, which is
         // what keeps an index from growing by an entry per write forever.
         std::vector<exec::IndexWrite> index_writes;
         const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
-        if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row.value(),
+        if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row,
                                               /*first_col_pos=*/0, encoded.value(), id.value(),
                                               previous, log_index ? &log_index : nullptr);
             !s.ok()) {
@@ -9890,7 +9952,9 @@ Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Co
             if (parser::IntLiteralWrapped(*v)) {
                 return Status::InvalidArgument(
                     "primary key literal " + v->raw_int_text +
-                    " is outside the Keystone id space [1, 1099511627775] (byte " +
+                    " is outside the Keystone id space [" +
+                    std::to_string(catalog::kFirstRowId) + ", " + std::to_string(kMaxKeystoneId) +
+                    "] (byte " +
                     std::to_string(v->byte_offset) + ")");
             }
             if (v->type == parser::ValueType::kInt && v->int_val < 0) {
@@ -10035,7 +10099,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
                 }
                 return tuple.status();
             }
-            auto pk = exec::RowKeystoneId(tuple.value().payload);
+            auto pk = KeystoneIdOfPayload(tuple.value().payload);
             if (!pk.ok()) return pk.status();
             if (pk.value() < lo) return storage::VisitControl::kContinue;
             if (pk.value() >= hi) return storage::VisitControl::kStop;
@@ -10188,7 +10252,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             return std::optional<std::uint64_t>{};
         }
         payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
-        auto id = exec::RowKeystoneId(payload_copy);
+        auto id = KeystoneIdOfPayload(payload_copy);
         if (!id.ok()) return id.status();
         if (trx_id_out != nullptr) *trx_id_out = tuple.value().trx_id;
         if (undo_ptr_out != nullptr) *undo_ptr_out = tuple.value().undo_ptr;

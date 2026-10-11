@@ -263,7 +263,7 @@ TEST(LexerTest, IntegerLiteralsKeepTheirDigitsAlongsideTheDecodedValue) {
 
 TEST(LexerTest, DigitsSurviveAnIntegerThatOverflowsTheSignedDecode) {
     // The reason the digits are kept at all: int_val wraps, so it cannot
-    // answer "is this literal inside the 40-bit pk range?" - the check at
+    // answer "is this literal inside the pk's id space?" - the check at
     // V30 reads digits() instead. 2^64 - 1 decodes to -1 here.
     auto toks = LexAll("18446744073709551615");
     ASSERT_EQ(toks[0].type, TokenType::kIntLit);

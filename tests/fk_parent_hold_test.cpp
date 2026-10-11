@@ -102,7 +102,7 @@ protected:
         ASSERT_NE(session.transaction(), nullptr);
         EXPECT_TRUE(session.transaction()->borrows().Holds(row))
             << "the violation dropped the row from the transaction's ledger";
-        constexpr std::uint64_t kForeign = std::uint64_t{1} << 40;
+        constexpr std::uint64_t kForeign = txn::kMaxTrxId;  // a holder, not a pk: no session's txn
         txn::LockHoldings scratch;
         auto foreign = locks_->TryAcquire(kForeign, row, txn::LockMode::kExclusive, scratch);
         ASSERT_TRUE(foreign.ok()) << foreign.status().message();

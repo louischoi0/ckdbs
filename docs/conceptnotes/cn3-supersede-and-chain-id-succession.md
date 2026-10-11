@@ -193,7 +193,7 @@ the successor id is exposed is §10-2 — a hidden column visible only under
   no catalog probe on lookup, no new page class — which is the
   zero-overhead rule for `cores = 1` applied to a feature instead.
 - **The closed bit is a Keystone flag.** The Keystone word carries 8
-  flag bits beside the 40-bit id (`include/kds/storage/keystone.hpp:37-38`,
+  flag bits beside the id (`include/kds/storage/keystone.hpp:37-38`,
   `[source-read]`). One of them says *closed*. Which bits are taken today
   is not surveyed here; the note assumes at least one is free and §10-3
   asks.

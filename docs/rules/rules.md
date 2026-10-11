@@ -57,10 +57,10 @@ Normative coding rules for the KDS storage engine. Rules only: design rationale 
 ## 5. On-Disk Format Rules
 
 - Fixed-width integer types only (`uint32_t`, `uint64_t`, ...) in any persisted structure.
-- **Compiler bitfields are forbidden** in on-disk formats. Packed fields (e.g., the Keystone column `id:40 | flags:8 | reserved:16`; see `docs/spec/heap-and-tuple.md` §4) are encoded/decoded with explicit shift/mask `constexpr` helpers.
+- **Compiler bitfields are forbidden** in on-disk formats. Packed fields (e.g., the Keystone column `id:48 | flags:8 | reserved:8`; see `docs/spec/heap-and-tuple.md` §4) are encoded/decoded with explicit shift/mask `constexpr` helpers.
 - Every persisted struct has `static_assert`s for its total size and each field offset.
 - Page IDs are unsigned 32-bit; `0xFFFFFFFF` is the invalid sentinel; page IDs never appear in signed types.
-- Tuple ids stored outside the Keystone column (B+ tree keys, `min_key`, hint entries, metadata back-references) are zero-extended `uint64_t`; upper 24 bits are always 0.
+- Tuple ids stored outside the Keystone column (B+ tree keys, `min_key`, hint entries, metadata back-references) are zero-extended `uint64_t`; upper 16 bits are always 0.
 - Every size/offset constant is a named `constexpr` with its derivation in a comment (e.g., entries-per-page is a power of two for shift/mask addressing).
 - **Tuples are fixed-length** (`docs/spec/heap-and-tuple.md` §3.3, invariant 13). A relation's row size is a schema constant and cell offsets are computed from the schema, never scanned for: no code path may emit a tuple of a different size, and the row codec `static_assert`s or checks the constant rather than trusting a caller. A variable-width value occupies one tagged cell of `kds.inline_cell_width` bytes — tag byte first, never a sentinel value — and spilling to the var-heap changes the cell's *tag*, never the tuple's size.
 - A `length` or `data_len` field that duplicates a schema constant is **checked redundancy**: compare it, report `Corruption` on disagreement, and never compute from it.

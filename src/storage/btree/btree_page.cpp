@@ -3,6 +3,8 @@
 #include <cstring>
 #include <string>
 
+#include "kds/storage/keystone.hpp"
+
 // rules.md #2: all access to on-disk page bytes goes through field-wise
 // memcpy helpers at explicit offsets; the mirror structs are never
 // reinterpret_cast onto the buffer. Same discipline as heap_page.cpp.
@@ -10,11 +12,6 @@
 namespace kds::btree {
 
 namespace {
-
-// Matches the Keystone column's 40-bit id width. Duplicated rather than
-// pulled in from keystone.hpp for the reason heap_page.cpp duplicates it:
-// the page layer stays decoupled from the row-encoding format.
-inline constexpr std::uint64_t kMaxTupleId = (std::uint64_t{1} << 40) - 1;
 
 std::size_t EntryOffset(std::uint16_t idx) {
     return kInternalEntriesOffset + static_cast<std::size_t>(idx) * kInternalEntrySize;
@@ -130,8 +127,12 @@ PageId InternalView::ChildFor(std::uint64_t key) const {
 }
 
 Status InternalView::InsertEntry(std::uint64_t sep_key, PageId child) {
-    if (sep_key > kMaxTupleId) {
-        return Status::InvalidArgument("separator key exceeds 40-bit tuple id range");
+    // A separator is a leaf's min_key, an id (BK-R2: the ceiling is
+    // keystone.hpp's, not a copy of it).
+    if (sep_key > kMaxKeystoneId) {
+        return Status::InvalidArgument("separator key " + std::to_string(sep_key) +
+                                       " exceeds the Keystone id space (max " +
+                                       std::to_string(kMaxKeystoneId) + ")");
     }
 
     BtreeInternalHeaderFields h = ReadHeader();

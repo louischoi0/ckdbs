@@ -197,7 +197,7 @@ TEST_F(KeystoneIdTest, TheAllocatorAlsoIssuesCatalogOidsAndCatalogKeystones) {
 TEST_F(KeystoneIdTest, AnExhaustedSequenceRefusesRatherThanWrapping) {
     // K4's lifetime budget is a hard stop, and this is its one enforcement
     // point. Reached by driving `next_id` to the ceiling in the catalog row
-    // directly - 2^40 inserts is not a test - which is also the only way to
+    // directly - 2^48 inserts is not a test - which is also the only way to
     // touch it, since nothing else may write that field.
     ASSERT_EQ(Run("CREATE TABLE t (id int64, v int64)").substr(0, 7), "CREATED");
     const catalog::Oid oid = OidOf("t");
@@ -320,7 +320,7 @@ protected:
                 }
                 auto decoded = wal::DecodeHeapWrite(record->payload);
                 if (!decoded.ok()) continue;
-                auto id = exec::RowKeystoneId(decoded.value().tuple);
+                auto id = KeystoneIdOfPayload(decoded.value().tuple);
                 if (id.ok()) ids.push_back(id.value());
             }
         }

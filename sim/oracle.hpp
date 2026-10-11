@@ -166,7 +166,7 @@ public:
     // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`): placed
     // where it sorts, refused as a duplicate - a key a committed tuple once
     // carried, live or deleted, or one the open transaction placed - or as
-    // exhausted, outside [1, 2^40 - 1]. `kEither` where the oracle cannot
+    // exhausted, outside [1, kMaxKeystoneId]. `kEither` where the oracle cannot
     // know: the key, or an INSERT whose id was never named, is unchecked.
     enum class NamedOutcome : std::uint8_t { kPlaced, kDuplicate, kExhausted, kEither };
     NamedOutcome Named(const std::string& table, std::uint64_t key) const;

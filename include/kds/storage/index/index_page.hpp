@@ -43,7 +43,7 @@
 // while the key part still matches.
 //
 // Invariant 7 is satisfied by the value, not the byte order: what is stored
-// is a zero-extended `uint64` whose upper 24 bits are 0.
+// is a zero-extended `uint64` whose bits above kKeystoneIdBits are 0.
 //
 // ---- A probe is padded, never shortened ---------------------------------
 //

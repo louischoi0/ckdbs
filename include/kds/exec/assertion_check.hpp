@@ -139,7 +139,10 @@ struct LiveAssertion {
     std::uint16_t sum_col = 0;              // schema position; read for kSum only
     std::string sum_col_name;
     std::vector<std::string> group_col_names;      // for the §4.4 message
-    std::vector<std::uint32_t> group_type_vals;    // for the §4.4 message
+    // The BY columns' schema rows: the §4.4 message's type, and what
+    // `KeyFor` coerces each written value by, so an INSERT's literal keys
+    // the group the build's backfill and a decoded row key it under.
+    std::vector<catalog::SysColumnRow> group_columns;
     BoundCabinChainWriter chain;
     BoundCabin cabin;
 
@@ -164,6 +167,13 @@ struct LiveAssertion {
     LiveAssertion() : cabin(BoundAggregate::kCount, 0) {}
 };
 
+// Whether every group in `a`'s recovered directory was keyed from its BY
+// values as stored. An INSERT once keyed a `date`, `timestamp` or decimal BY
+// value as written (a string), and such a group is one no write reaches any
+// more, so the bound it holds is not the bound enforced
+// (`docs/spec/assertion.md` §6.2). A mount refuses to adopt the assertion on
+// this answer rather than enforce a count that undercounts.
+Status CheckGroupKeyKinds(const LiveAssertion& a);
 
 // The registry, and - since RC07 - the checkpoint's snapshot source: it is what
 // holds the live directories, so it is what can hand their group headers to a

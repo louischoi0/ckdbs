@@ -12,6 +12,8 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/row_codec.hpp"
+#include "kds/exec/set_expr.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
@@ -69,6 +71,55 @@ TEST_F(SetExprEvalTest, AnExpressionIntoAnIndexedColumnMovesItsEntry) {
     EXPECT_EQ(Run("SELECT id, m FROM t WHERE i64 = 2003"), "id,m\\n1,4");
     EXPECT_EQ(Run("SELECT id, m FROM t WHERE i64 = -1996"), "id,m\\n2,5");
     EXPECT_EQ(Run("SELECT id FROM t WHERE i64 = 1000"), "id");
+}
+
+// ---- BK-R2: a row with no hook decodes only what its expressions read ------
+//
+// `instructions/v3.0.0/workorder-bk-opt-read-update-path.md` BK-S3. `t` has no
+// Cabin, index or assertion until a cell adds one, so these statements decode
+// exactly the columns their SET expressions name and leave `kUndecoded` in
+// every other slot - which the evaluator refuses, so a mask that missed a
+// column fails the statement rather than reading a default value.
+
+TEST_F(SetExprEvalTest, APartialDecodeReadsEveryColumnTheExpressionsName) {
+    Exec("UPDATE t SET m = CASE WHEN n IS NULL THEN CAST(i8 AS int64) "
+         "ELSE COALESCE(n, i64) + CAST(LENGTH(s) AS int64) END, "
+         "i64 = GREATEST(CAST(i32 AS int64), m * 2) + (SELECT COUNT(*) FROM t) WHERE id >= 1");
+    EXPECT_EQ(At("m", 1), "7");    // n = 5, LENGTH('ab') = 2
+    EXPECT_EQ(At("m", 2), "-10");  // n IS NULL, so i8
+    EXPECT_EQ(At("i64", 1), "102");  // GREATEST(100, 3 * 2) + 2 rows
+    EXPECT_EQ(At("i64", 2), "10");   // GREATEST(-100, 4 * 2) + 2 rows
+    // A literal reads nothing, and a later expression over the same rows
+    // still finds what it reads.
+    Exec("UPDATE t SET m = 1 WHERE id >= 1");
+    Exec("UPDATE t SET m = m + CAST(i8 AS int64) WHERE id >= 1");
+    EXPECT_EQ(At("m", 1), "11");
+    EXPECT_EQ(At("m", 2), "-9");
+}
+
+TEST(SetExprUndecodedTest, AnExpressionReadingAnUndecodedSlotIsRefused) {
+    // The guard itself, without a statement: a mask that missed a column
+    // fails the row `Corruption`, never reads `kUndecoded` as a value.
+    exec::TypedSetExpr column;
+    column.kind = parser::Expr::Kind::kColumn;
+    column.column_no = 1;
+    std::vector<parser::AstValue> row(2);
+    row[1] = exec::kUndecoded;
+    auto refused = exec::EvaluateSetExpression(column, row, exec::StatementContext{});
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kCorruption);
+    EXPECT_EQ(exec::SetExpressionColumns(column), std::uint64_t{1} << 1);
+    column.column_no = 64;
+    EXPECT_EQ(exec::SetExpressionColumns(column), exec::kAllColumnsMask);
+}
+
+TEST_F(SetExprEvalTest, AnIndexedRelationDecodesTheKeyColumnsTheSetListDoesNotRead) {
+    // The index hook takes the row whole: its key's other column is read
+    // from the decode, so a partial one would hand it `kUndecoded`.
+    Exec("CREATE INDEX by_pair ON t (i8, i32) COVERING (m)");
+    Exec("UPDATE t SET i8 = 9 WHERE id = 1");
+    EXPECT_EQ(Run("SELECT id, m FROM t WHERE i8 = 9 AND i32 = 100"), "id,m\\n1,3");
+    EXPECT_EQ(Run("SELECT id FROM t WHERE i8 = 10 AND i32 = 100"), "id");
 }
 
 TEST_F(SetExprEvalTest, IntegerArithmeticReadsTheRowAndWritesTheResult) {

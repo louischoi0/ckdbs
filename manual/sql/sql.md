@@ -193,9 +193,9 @@ key:
     this key was deleted; PURGE frees its key (page <p> slot <s>)
     (byte <n>)`). A key named twice in one statement is a duplicate at its
     second row;
-  - **exhausted**, `OutOfRange`: the key is outside `[1, 2^40 - 1]`
+  - **exhausted**, `OutOfRange`: the key is outside `[1, 2^48 - 1]`
     (`ERR primary key <k> is outside the Keystone id space [1,
-    1099511627775] (byte <n>)`) — zero, negative, too large, or a literal
+    281474976710655] (byte <n>)`) — zero, negative, too large, or a literal
     too long for 64 bits.
 
   **A key whose insert rolled back is free**, and naming it again places
@@ -530,7 +530,7 @@ INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
   no column list and no body column may be omitted individually — so a wrong
   length is refused naming both:
   `ERR expected 3 value(s) including primary-key column 'id', or 2 to have it issued; got 4`.
-- **A named pk must be an integer literal** in `[1, 2^40 - 1]` — 0 is
+- **A named pk must be an integer literal** in `[1, 2^48 - 1]` — 0 is
   reserved for "unset". A non-integer is `InvalidArgument`; an integer
   outside the range is `OutOfRange` (exhausted). Both carry the offending
   token's byte and are checked before anything is placed, so a refused row
@@ -1001,9 +1001,10 @@ and a qualifier naming no relation in the statement is refused in the
 `WHERE` exactly as it is in the projection. A view's integers compare
 **unsigned**, because every one of them is stored as a `uint64` and
 `sys.patterns.fetch_id` really does use the full 64-bit range. One
-consequence, the same one a `uint64` column on an ordinary relation has:
-a negative literal is not a `uint64`, so `WHERE oid > -1` is a non-match
-for every row rather than a comparison that succeeds.
+consequence: a negative literal is not a `uint64`, so on a view `WHERE oid
+> -1` is a non-match for every row rather than a comparison that succeeds.
+A `uint64` column on an ordinary relation refuses such a literal instead -
+a negative one, or one past 2^64 - 1, is `OutOfRange` with its byte.
 
 There is also a legacy non-SQL form: `CREATE TABLE <name>` with **no column
 list** routes to a pre-SQL handler (the dispatcher routes on the presence
@@ -1130,7 +1131,7 @@ in §7 below now carries and which both used to reach a client as a bare
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
 | A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including primary-key column '<name>', or <n-1> to have it issued; got <k>` |
 | A non-integer supplied pk | `InvalidArgument` — `ERR primary-key column '<name>' needs an integer literal (byte <n>)` |
-| A supplied pk outside `[1, 2^40 - 1]` (zero, negative, too large, or past 64 bits) — *exhausted* | `OutOfRange` — `ERR primary key <k> is outside the Keystone id space [1, 1099511627775] (byte <n>)` |
+| A supplied pk outside `[1, 2^48 - 1]` (zero, negative, too large, or past 64 bits) — *exhausted* | `OutOfRange` — `ERR primary key <k> is outside the Keystone id space [1, 281474976710655] (byte <n>)` |
 | A supplied pk already bound on a `BTREE` relation — *duplicate* | `AlreadyExists` — `ERR duplicate primary key <k> already present at page <p> slot <s> (byte <n>)`, or for a `DELETE`d row's key, until a `PURGE` frees it, `ERR duplicate primary key <k>: a row with this key was deleted; PURGE frees its key (page <p> slot <s>) (byte <n>)` |
 | A supplied pk below the high-water mark of a `HEAP` relation (none can be created since SUS-1) | `OutOfRange` — `ERR primary key <k> is below relation <oid>'s high-water mark <m>; a named key must sort above every key the relation has placed or issued, which is what keeps every page's slot order its key order`, or when the key sorts below the chain's tail `ERR primary key <k> is below the relation's high-water mark: the chain's tail, page <p>, opens at <m>, an id already placed; a named key must sort above every key the relation has placed or issued` (neither form carries a byte) |
 | An omitted pk on a `BTREE` relation whose issued id met a concurrently named key 8 times in a row | `AlreadyExists` — `ERR duplicate primary key <k> already present at page <p> slot <s>` (no byte: the key was issued, not written) |

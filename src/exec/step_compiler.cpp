@@ -296,17 +296,17 @@ StatusOr<FunctionPredicate> LowerFunctionConjunct(const Scope& scope,
 }
 
 // The statement's class: the most volatile purity any function conjunct
-// calls, through every sub-chain (AR1 §3).
-DeterminismClass DeterminismOf(const std::vector<Step>& steps) {
+// calls, through every sub-chain, hoisted or placed (AR1 §3).
+DeterminismClass DeterminismOf(const StepChain& chain) {
     DeterminismClass out = DeterminismClass::kD0;
-    for (const Step& step : steps) {
+    ForEachStep(chain, [&](const Step& step) {
         for (const FunctionPredicate& pred : step.fn_residual) {
             for (const FunctionSide* side : {&pred.lhs, &pred.rhs}) {
                 if (side->call.has_value()) out = std::max(out, ClassOf(side->call->fn->purity));
             }
         }
-        for (const SubChain& sub : step.sub_chains) out = std::max(out, DeterminismOf(sub.steps));
-    }
+        return true;
+    });
     return out;
 }
 
@@ -639,10 +639,15 @@ void PropagateEqualities(const Scope& scope, std::vector<StepPredicate>& predica
 
 // A non-negative integer literal, as a pk bound. Anything else - a string,
 // a NULL, a declared `$param`, a negative number - is not a pk value
-// (invariant 7: ids are zero-extended 40-bit), so it cannot bound a range.
+// (invariant 7: ids are zero-extended, kKeystoneIdBits wide), so it cannot bound a range.
 std::optional<std::uint64_t> PkBound(const Operand& operand) {
     if (operand.kind != OperandKind::kLiteral) return std::nullopt;
     if (operand.literal.type != parser::ValueType::kInt) return std::nullopt;
+    // A literal past int64 wrapped in the lexer, so `int_val` is not its
+    // value. Coercion refuses every such literal an integer pk cannot hold
+    // before this runs; kept so a bound is never keyed at the number one
+    // wrapped to, whichever caller reaches here.
+    if (parser::IntLiteralWrapped(operand.literal)) return std::nullopt;
     if (operand.literal.int_val < 0) return std::nullopt;
     return static_cast<std::uint64_t>(operand.literal.int_val);
 }
@@ -1199,6 +1204,11 @@ bool ReferencesAnOuterChain(const std::vector<Step>& steps) {
             // A grandchild's reference to *this* level shows up as up==1
             // inside it; anything deeper escapes past us too.
             if (SubChainEscapes(sub)) return true;
+            // Its tested column is written in this block's scope, so an
+            // `up` above 0 is a reference past this block. `SubChainEscapes`
+            // leaves it out for the sub-chain's *own* parent, which is the
+            // wrong scope for this question.
+            if (sub.has_value && sub.lhs.up > 0) return true;
         }
     }
     return false;
@@ -1345,13 +1355,8 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
     auto chain = CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
                               view, /*inner_build=*/true, declare, context);
     if (!chain.ok()) return chain;
-    // The class folds over the whole statement - every step, every
-    // sub-chain, hoisted or placed - after compile, from what was lowered.
     StepChain& out = chain.value();
-    out.determinism = DeterminismOf(out.steps);
-    for (const SubChain& sub : out.hoisted) {
-        out.determinism = std::max(out.determinism, DeterminismOf(sub.steps));
-    }
+    out.determinism = DeterminismOf(out);
     return chain;
 }
 
@@ -1479,6 +1484,9 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
                                       view, /*inner_build=*/false, declare);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
+            // What the inner block hoisted travels with it: only the
+            // top-level chain's list is run by the executor itself.
+            sub.hoisted = std::move(inner.value().hoisted);
 
             if (tests_a_column) {
                 if (inner.value().projection.size() != 1) {
@@ -1695,6 +1703,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                              sub_inner_build, declare);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
+            // See CompileWhere's lowering above: a block lowered to a
+            // SubChain keeps the sub-chains it hoisted, or they never run.
+            sub.hoisted = std::move(inner.value().hoisted);
 
             if (tests_a_column) {
                 // IN and the scalar form read a value out of the
@@ -1883,7 +1894,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
 
             if (candidate->kind == OperandKind::kLiteral) {
                 // A negative literal cannot be a pk: ids are zero-extended
-                // 40-bit values (invariant 7), so this equality can never
+                // unsigned values (invariant 7), so this equality can never
                 // hold. Left as a scan with the residual intact, which
                 // returns the correct empty answer rather than probing an
                 // enormous unsigned key.
@@ -1896,10 +1907,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // consumed rather than refused, and it went with declared
                 // patterns on 2026-08-31; a kParam now falls through this
                 // check like any other non-integer literal.
-                if (candidate->literal.type != parser::ValueType::kInt ||
-                    candidate->literal.int_val < 0) {
-                    continue;
-                }
+                if (!PkBound(*candidate).has_value()) continue;
                 step.kind = AccessKind::kLookup;
                 step.key = candidate;
                 break;

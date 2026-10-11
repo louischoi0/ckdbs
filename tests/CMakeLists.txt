@@ -29,6 +29,7 @@ add_executable(kds_tests
     file_page_device_test.cpp
     memory_page_device_test.cpp
     keystone_test.cpp
+    keystone_width_test.cpp
     keystone_id_test.cpp
     keystone_budget_test.cpp
     heap_page_test.cpp
@@ -136,6 +137,7 @@ add_executable(kds_tests
     sorted_leaf_named_keys_test.cpp
     purge_key_test.cpp
     purge_key_crash_test.cpp
+    varheap_carry_crash_test.cpp
     purge_key_rig_test.cpp
     sorted_leaf_crash_test.cpp
     sorted_leaf_rig_test.cpp

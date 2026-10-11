@@ -124,6 +124,12 @@ StatusOr<std::unique_ptr<TypedSetExpr>> TypeSetExpression(const catalog::TableAc
 // at compile so a foreign-key column keeps its hoisted parent.
 bool IsConstantSetExpression(const TypedSetExpr& expr);
 
+// The columns the expression reads, as a decode mask (bit `n` is schema
+// column `n`), or `kAllColumnsMask` when one sits past bit 63 (BK-R2,
+// `workorder-bk-opt-read-update-path.md`). A
+// subquery reads none: it is answered once before the walk.
+std::uint64_t SetExpressionColumns(const TypedSetExpr& expr);
+
 // Evaluates a typed expression against `row`, the decoded before-image of the
 // row being updated (BJ-R2: every assignment reads the row as the walk read
 // it, never an earlier assignment's result). The value is in the form

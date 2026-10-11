@@ -669,9 +669,9 @@ TEST_F(SuppliedKeySqlTest, AKeyOutsideTheIdSpaceIsRefused) {
 
     EXPECT_EQ(zero.status.code(), StatusCode::kOutOfRange) << zero.response;
 
-    // Past the 40-bit Keystone field: 2^40 = 1099511627776. Exhausted, the
-    // one reason besides a duplicate (BD-R5).
-    auto too_big = d.Dispatch("INSERT INTO t VALUES (1099511627776, 1)");
+    // Past the Keystone field: 2^48 = 281474976710656. Exhausted, the one
+    // reason besides a duplicate (BD-R5).
+    auto too_big = d.Dispatch("INSERT INTO t VALUES (281474976710656, 1)");
     EXPECT_EQ(too_big.status.code(), StatusCode::kOutOfRange) << too_big.response;
     EXPECT_NE(too_big.response.find("Keystone id space"), std::string::npos) << too_big.response;
 
