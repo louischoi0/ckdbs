@@ -798,3 +798,48 @@ sync can land before the check, so the count now counts deferrals, which
 the reactor thread takes deterministically (300 repeats, and six
 concurrent copies x 150, clean). Suite and sim at the commit below. Overhead
 not measured; measured at the milestone's close.
+
+### BI-S4 — built 2026-10-11
+
+Every sync of the data file goes through `storage::DataSyncer`
+(`include/kds/storage/data_syncer.hpp`): one at a time, sticky on failure,
+on the instance's one thread once the server starts it (BI-Q2 (a)). A
+checkpoint step and the publish request a ticket and park on it; every
+other caller waits; without the thread a request syncs inline. **A failed
+data-file sync stops the instance** (BI-Q3 (a), `[quiet-wrong]`): the store
+writes nothing back and no sync reports OK again, and the server's handler
+fail-stops the log and aborts the process; the sim's fail-stops the log,
+so the loop crashes and restarts it.
+`docs/inflight/bugs/a-failed-data-file-fsync-leaves-its-pages-clean.md` is
+deleted with this stage. **The publish is paced** (BI-Q5 (a)): every page
+dirty at the end record is written in a step's batches, deferring on the
+log like a step, then the maps, then one parked sync; only then is page 0
+encoded (`SuperBlockCheckpointAnchor::Encode`), written, synced while the
+task parks, and committed (`Commit`: the count, `D`, the recycler). The
+anchor's page therefore reaches the device after a sync of every page it
+stands for, including a snapshot page another core's writeback carried,
+which the old whole-store `Flush` wrote in id order with page 0 first. The
+run record gains the parked wall time on the log and on the data file.
+
+Cells: `tests/checkpoint_data_sync_test.cpp` (four, and two `DataSyncer`
+cells). `SimCase.ACaseFileRoundTripsAndReplays` is re-pinned to 31 ops: its
+injected page-sync fault, met by the first checkpoint, now stops the
+instance where the step used to be retried. **Mutations**, each three
+times, both killed: the ticket completed before its sync returns (the
+held-sync cell and the ticket cell); the anchor's page written before the
+collection's sync (the ordering cell and the carried-page cell).
+
+**Review** (`critics-developer`): fixed `Stop` stranding a `SyncNow`
+waiter, and the failure handler reading a freed `WalManager` during
+`~Expeditor` (the destructor stops the syncer first); applied a
+write-count assertion that makes the held-sync cell kill the order's
+mutation, a direct sticky assertion, the carried-page cell, a
+`Stop`-with-a-waiter cell, the dead sync counter removed, `SyncNow`'s
+fallback shortened, park time in the run record. **Declined**: merging the
+publish's write loop into the step loop (`Step` owns the snapshot cursor,
+the step report and the deferral's cursor rule, which a shared helper
+would have to carry); making `Step` always write-only (the synchronous
+path - mount, shutdown, tests - keeps `FlushPages`' contract and its phase
+timers); one `DataSyncer*` on the target instead of three virtuals (`wal/`
+does not depend on `storage/`). Overhead not measured; measured at the
+milestone's close.

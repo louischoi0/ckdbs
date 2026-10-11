@@ -19,6 +19,7 @@
 
 #include "kds/base/latch.hpp"
 #include "kds/base/log.hpp"
+#include "kds/storage/data_syncer.hpp"
 #include "kds/storage/free_map.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/storage/page_latch.hpp"
@@ -582,9 +583,24 @@ public:
     // as an error - something else may have flushed them since the caller's
     // snapshot. **Writes no map** (BI-Q12): the publish's `Flush` does,
     // after every dirty page.
-    // `defer` as `WriteBack`'s: set, nothing past the deferred run was
-    // written, and the caller re-runs the call once the log is durable.
-    Status FlushPages(std::span<const PageId> page_ids, wal::Lsn* defer = nullptr);
+    Status FlushPages(std::span<const PageId> page_ids);
+
+    // ---- The data file's sync (BI-S4, `storage/data_syncer.hpp`) ---------
+    //
+    // Every sync of the data file in this store goes through `data_sync()`:
+    // one at a time, sticky on failure, and on the instance's thread once
+    // `data_sync().Start()` has run. A checkpoint task requests and parks;
+    // every other caller waits.
+    DataSyncer& data_sync() noexcept { return data_sync_; }
+
+    // A checkpoint task's writes, without the sync (the task asks
+    // `data_sync()` and parks): `WriteBack` with its `defer`, and the
+    // publish's map write, after every dirty page. Each returns what it
+    // wrote.
+    StatusOr<std::size_t> WriteBackPages(std::span<const PageId> page_ids, wal::Lsn* defer) {
+        return WriteBack(page_ids, HeldFrames::kWait, defer);
+    }
+    StatusOr<std::size_t> WriteMaps() { return FlushMaps(); }
 
     // **One page made durable, and nothing else** (BA-S13, BA-R10): written
     // back through `WriteBack`'s claim (AT-S10e) and then the data file
@@ -1610,6 +1626,10 @@ private:
     StatusOr<std::span<std::byte, kPageSize>> EnsureHeaderlessMap(PageId page_id);
 
     PageDevice& device_;
+    // Syncs `device_`. Declared second, so it is destroyed (its thread
+    // joined) after the store's later members; its thread touches only
+    // `device_`, which outlives the store.
+    DataSyncer data_sync_{device_};
     Logger* log_ = nullptr;
     wal::WalDurability* wal_gate_ = nullptr;
     // One slot per core id the page latch can name (SetCoreWalGate); null

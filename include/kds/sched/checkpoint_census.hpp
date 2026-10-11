@@ -78,6 +78,10 @@ struct CheckpointRunReport {
     // park unless the writer's sync landed first.
     std::uint64_t gate_parks = 0;
     std::uint64_t end_parks = 0;
+    // Wall time the task spent parked - not reactor time: the reactor ran
+    // other work meanwhile - on the log and on the data file's sync.
+    std::uint64_t log_park_ns = 0;
+    std::uint64_t data_park_ns = 0;
 };
 
 namespace detail {

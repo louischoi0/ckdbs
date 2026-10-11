@@ -184,13 +184,29 @@ public:
     // have flushed them since the snapshot.
     virtual Status FlushPages(std::span<const PageId> page_ids) = 0;
 
-    // `FlushPages` for the run task (BI-S3, BI-Q4 (a)): where the log is
-    // not yet durable past a page's record, the LSN goes to `*defer` and
-    // nothing from that page on is written, rather than the call waiting
-    // for the log. The default never defers.
-    virtual Status FlushPagesOrDefer(std::span<const PageId> page_ids, Lsn* /*defer*/) {
-        return FlushPages(page_ids);
+    // ---- The run task's halves of `FlushPages` (BI-S3, BI-S4) -----------
+    //
+    // `WritePages` writes and does not sync, returning the pages written;
+    // with `defer`, where the log is not yet durable past a page's record
+    // the LSN goes to `*defer` and nothing from that page on is written
+    // (BI-Q4 (a)). `RequestSync` asks for a sync of everything written so
+    // far and returns a ticket, 0 for nothing to wait on; `SyncDone` and
+    // `SyncResult` answer it. The defaults keep a scripted target whole: its
+    // `FlushPages` is the write and the sync, it never defers, and it hands
+    // out no ticket.
+    virtual StatusOr<std::size_t> WritePages(std::span<const PageId> page_ids, Lsn* /*defer*/) {
+        if (Status s = FlushPages(page_ids); !s.ok()) return s;
+        return std::size_t{0};
     }
+    virtual std::uint64_t RequestSync() { return 0; }
+    virtual bool SyncDone(std::uint64_t /*ticket*/) { return true; }
+    virtual Status SyncResult(std::uint64_t /*ticket*/) { return Status::OK(); }
+
+    // The paced publish (BI-Q5 (a)): every page dirty now, for the task to
+    // write in batches, and the maps, written after all of them. A scripted
+    // target has neither.
+    virtual std::vector<PageId> DirtyPages() { return {}; }
+    virtual Status WriteMaps() { return Status::OK(); }
 };
 
 // What a completed checkpoint publishes. `redo_start_lsn` is where
@@ -214,6 +230,17 @@ public:
     virtual ~CheckpointAnchor() = default;
     // Called only after CHECKPOINT_END is durable (wal.md section 8-3).
     virtual Status Publish(const CheckpointAnchorRecord& anchor) = 0;
+
+    // **The publish in halves, for the run task** (BI-Q5 (a)). `Encode`
+    // records `anchor` and dirties the page that carries it, with no I/O,
+    // and names that page (`kInvalidPageId`: none to write); the task writes
+    // and syncs it, parked, and then `Commit`s what follows a synced
+    // publish. The default is `Publish` whole, for an anchor with no page.
+    virtual StatusOr<PageId> Encode(const CheckpointAnchorRecord& anchor) {
+        if (Status s = Publish(anchor); !s.ok()) return s;
+        return kInvalidPageId;
+    }
+    virtual void Commit() {}
 };
 
 // Holds the last anchor in memory. Correct only for a process that never
@@ -387,9 +414,13 @@ public:
     // every page in it has been written back, at which point Complete()
     // is the next call. A failed step leaves the checkpoint in progress
     // and its remaining pages unflushed, so the next Step() retries them.
-    // With `defer` (the run task's), a step that needs the log further
-    // stores the LSN there and returns false with its cursor unmoved.
-    StatusOr<bool> Step(Lsn* defer = nullptr);
+    // The run task's step writes and does not sync (`write_only`); the
+    // task asks for the sync and parks on it, and `last_step_written()` says
+    // whether there is one to ask for. With `defer`, a step that needs the
+    // log further stores the LSN there and returns false with its cursor
+    // unmoved.
+    StatusOr<bool> Step(Lsn* defer = nullptr, bool write_only = false);
+    std::size_t last_step_written() const noexcept { return last_step_written_; }
 
     // Logs CHECKPOINT_END, makes it durable, and publishes the anchor -
     // in that order. Fails with OutOfRange if the flush phase has not
@@ -455,6 +486,10 @@ private:
     // published once that record is durable - the caller's to ensure.
     StatusOr<Lsn> AppendEnd();
     Status PublishAnchor();
+    // The record this run's publish carries, and the bookkeeping and log
+    // line of a publish that landed.
+    CheckpointAnchorRecord AnchorRecord() const;
+    void Published(const CheckpointAnchorRecord& anchor);
 
     // BI-S1's run record: `BeginRun` points `run_report_` at `report` and
     // marks the run's edge; `EndRun` publishes it to the census and BA's
@@ -481,6 +516,15 @@ private:
     // Parks until the log is durable past `lsn`, registered with the
     // writer's kick; the log's fail-stop answers it.
     sched::Coro ParkOnLog(Lsn lsn, std::uint32_t core_id);
+    // Parks until the data file is synced past everything written so far
+    // (BI-R2's second half). No kick: the data-sync thread has none, and the
+    // drain timer ends an idle block (BI-Q6 (b)).
+    sched::Coro ParkOnDataSync();
+    // Writes `pages` for the publish, deferring on the log and parking as a
+    // step does (BI-Q5 (a)).
+    sched::Coro WriteForPublish(std::span<const PageId> pages, std::uint32_t core_id,
+                                std::uint64_t generation);
+    std::size_t last_step_written_ = 0;
     void LogSkip(std::uint32_t core_id) const;
     bool task_in_flight_ = false;
     // Moved by `Abandon`, so a frame of an abandoned run that is ever polled

@@ -321,7 +321,7 @@ TEST_F(CheckpointLogParkTest, ARunWhoseRecordIsNotDurableIsHandedBackUnwritten) 
     log_device_->Hold();  // nothing the writeback could ask for lands meanwhile
     const std::uint64_t writes_before = checking_->writes;
     wal::Lsn deferred = kNoLsn;
-    ASSERT_TRUE(store_->FlushPages(ids, &deferred).ok());
+    ASSERT_TRUE(store_->WriteBackPages(ids, &deferred).ok());
     store_->SetAfterWritebackCopyForTest({});
 
     EXPECT_EQ(deferred, late) << "the second run's LSN was not handed back";
@@ -333,7 +333,7 @@ TEST_F(CheckpointLogParkTest, ARunWhoseRecordIsNotDurableIsHandedBackUnwritten) 
     log_device_->Release();
     ASSERT_TRUE(peer_->SyncAll().ok());
     deferred = kNoLsn;
-    ASSERT_TRUE(store_->FlushPages(ids, &deferred).ok());
+    ASSERT_TRUE(store_->WriteBackPages(ids, &deferred).ok());
     EXPECT_EQ(deferred, kNoLsn);
     EXPECT_TRUE(store_->DirtyPageIds().empty());
     EXPECT_EQ(checking_->violations, 0u);

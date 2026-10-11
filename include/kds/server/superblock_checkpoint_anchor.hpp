@@ -150,6 +150,14 @@ public:
 
     Status Publish(const wal::CheckpointAnchorRecord& anchor) override;
 
+    // The run task's halves (BI-Q5 (a), `wal::CheckpointAnchor`): the fold
+    // and page 0's image under the latch, naming page 0; then, once the task
+    // has written and synced page 0, what a synced publish does - the count,
+    // `D` and the recycler. One run at a time (`wal::CheckpointGate`), so
+    // one encoded landing is pending at most.
+    StatusOr<PageId> Encode(const wal::CheckpointAnchorRecord& anchor) override;
+    void Commit() override;
+
     // Anchors published through this object since it was constructed. The
     // checkpoint-duration/cadence counterpart of WalStats; also what the
     // tests assert against.
@@ -187,6 +195,13 @@ private:
     // the minimum 0 on every mount, which both pins the warm-up at
     // replay-the-whole-log and writes that zero over the real anchor.
     static wal::CheckpointAnchorRecord MountAnchorOf(const SuperBlock& superblock) noexcept;
+
+    // `Publish` without its sync: the fold, the floor and page 0's image,
+    // under the latch; returns what was encoded.
+    StatusOr<wal::CheckpointAnchorRecord> EncodeLanding(const wal::CheckpointAnchorRecord& anchor);
+    // After page 0's sync: the count, `D` and the recycler.
+    void Landed(const wal::CheckpointAnchorRecord& landing);
+    wal::CheckpointAnchorRecord encoded_landing_{};  // `Encode`'s, for `Commit`
 
     SuperBlock& superblock_;
     storage::PageStore& store_;

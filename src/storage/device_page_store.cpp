@@ -444,7 +444,7 @@ Status DevicePageStore::MarkHeaderlessBeforeInsert(PageId headerless_page) {
             !s.ok()) {
             return s;
         }
-        if (Status s = device_.Sync(); !s.ok()) return s;
+        if (Status s = data_sync_.SyncNow(); !s.ok()) return s;
     }
     // Both map lookups run **before** the hold, because either may reach the
     // device; the region is resident by construction (the claim had to load
@@ -596,7 +596,7 @@ Status DevicePageStore::PersistMaps() {
     // sharing the core that wrote them may be another one - whose write
     // `FlushMaps`' barrier has waited out by the time this syncs (BF-R5).
     if (auto flushed = FlushMaps(); !flushed.ok()) return flushed.status();
-    return device_.Sync();
+    return data_sync_.SyncNow();
 }
 
 bool DevicePageStore::IsAllocated(PageId page_id) const noexcept {
@@ -1874,6 +1874,13 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         return Status::IoError("pagestore: no page is written back after the log fail-stopped; "
                                "restart the instance to recover");
     }
+    // **Nor after a failed data-file sync** (BI-Q3 (a)): the device may have
+    // dropped pages this pool already calls clean, and only a restart, which
+    // replays the log over them, can stand behind what is written next.
+    if (data_sync_.failed()) {
+        return Status::IoError("pagestore: no page is written back after a failed data-file "
+                               "sync; restart the instance to recover");
+    }
     if (Status s = AwaitWalGate(ordered, gate, defer); !s.ok()) return s;
     if (defer != nullptr && *defer != wal::kNoLsn) return std::size_t{0};
 
@@ -2230,7 +2237,7 @@ Status DevicePageStore::Sync() {
     Status s;
     {
         const PhaseTimer timed(CheckpointPhase::kPublishSync);
-        s = device_.Sync();
+        s = data_sync_.SyncNow();
     }
     if (log_ != nullptr) {
         if (!s.ok() && log_->enabled(LogLevel::kError)) {
@@ -2271,13 +2278,13 @@ std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn()
 Status DevicePageStore::PersistPage(PageId page_id) {
     const PageId ids[] = {page_id};
     if (auto written = WriteBack(ids); !written.ok()) return written.status();
-    return device_.Sync();
+    return data_sync_.SyncNow();
 }
 
-Status DevicePageStore::FlushPages(std::span<const PageId> page_ids, wal::Lsn* defer) {
+Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     // The checkpointer's route through the one writeback primitive - §4's
     // "consumer of the machinery, not a parallel implementation".
-    auto written = WriteBack(page_ids, HeldFrames::kWait, defer);
+    auto written = WriteBack(page_ids);
     if (!written.ok()) return written.status();
 
     // **No maps, since BI-S2** (BI-Q12). A step is one slice of a snapshot,
@@ -2303,7 +2310,7 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids, wal::Lsn* d
     Status s;
     {
         const PhaseTimer timed(CheckpointPhase::kDataSync);  // BI-S1
-        s = device_.Sync();
+        s = data_sync_.SyncNow();
     }
     if (log_ != nullptr) {
         if (!s.ok() && log_->enabled(LogLevel::kError)) {

@@ -204,6 +204,7 @@ add_executable(kds_tests
     checkpoint_census_test.cpp
     checkpoint_task_test.cpp
     checkpoint_log_park_test.cpp
+    checkpoint_data_sync_test.cpp
     memory_log_device_test.cpp
     file_log_device_test.cpp
     wal_append_off_latch_test.cpp

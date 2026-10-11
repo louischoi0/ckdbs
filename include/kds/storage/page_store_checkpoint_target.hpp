@@ -45,9 +45,15 @@ public:
         return store_.FlushPages(page_ids);
     }
 
-    Status FlushPagesOrDefer(std::span<const PageId> page_ids, wal::Lsn* defer) override {
-        return store_.FlushPages(page_ids, defer);
+    StatusOr<std::size_t> WritePages(std::span<const PageId> page_ids, wal::Lsn* defer) override {
+        return store_.WriteBackPages(page_ids, defer);
     }
+    std::uint64_t RequestSync() override { return store_.data_sync().Request(); }
+    bool SyncDone(std::uint64_t ticket) override { return store_.data_sync().Done(ticket); }
+    Status SyncResult(std::uint64_t ticket) override { return store_.data_sync().Result(ticket); }
+
+    std::vector<PageId> DirtyPages() override { return store_.DirtyPageIds(); }
+    Status WriteMaps() override { return store_.WriteMaps().status(); }
 
 private:
     DevicePageStore& store_;

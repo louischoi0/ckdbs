@@ -208,7 +208,8 @@ Status Checkpointer::Start() {
     return Status::OK();
 }
 
-StatusOr<bool> Checkpointer::Step(Lsn* defer) {
+StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
+    last_step_written_ = 0;
     if (!in_progress_) {
         return Status::OutOfRange("checkpointer: no checkpoint in progress");
     }
@@ -229,8 +230,13 @@ StatusOr<bool> Checkpointer::Step(Lsn* defer) {
         const sched::MonoTimeNs step_start = wal_.clock().Now();
         const std::size_t write = static_cast<std::size_t>(CheckpointPhase::kPageWrite);
         const std::uint64_t writes_before = run_report_ != nullptr ? run_report_->sum_ns[write] : 0;
-        flushed = defer != nullptr ? target_.FlushPagesOrDefer(pages, defer)
-                                   : target_.FlushPages(pages);
+        if (!write_only) {
+            flushed = target_.FlushPages(pages);
+        } else if (auto wrote = target_.WritePages(pages, defer); wrote.ok()) {
+            last_step_written_ = wrote.value();
+        } else {
+            flushed = wrote.status();
+        }
         if (run_report_ != nullptr) {
             const std::uint64_t held = wal_.clock().Now() - step_start;
             run_report_->step_max_ns = std::max(run_report_->step_max_ns, held);
@@ -309,13 +315,14 @@ Status Checkpointer::Complete() {
     return PublishAnchor();
 }
 
+CheckpointAnchorRecord Checkpointer::AnchorRecord() const {
+    return CheckpointAnchorRecord{wal_.core_id(), begin_lsn_, pending_redo_start_,
+                                  wal_.durable_lsn(), pending_redo_start_ / wal_.segment_size()};
+}
+
 Status Checkpointer::PublishAnchor() {
     const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
-    const CheckpointAnchorRecord anchor{wal_.core_id(),
-                                        begin_lsn_,
-                                        pending_redo_start_,
-                                        wal_.durable_lsn(),
-                                        pending_redo_start_ / wal_.segment_size()};
+    const CheckpointAnchorRecord anchor = AnchorRecord();
     if (Status s = anchor_.Publish(anchor); !s.ok()) {
         // The end record is durable but nothing points at it: recovery
         // will replay from the previous anchor, which is correct and
@@ -326,6 +333,11 @@ Status Checkpointer::PublishAnchor() {
         }
         return s;
     }
+    Published(anchor);
+    return Status::OK();
+}
+
+void Checkpointer::Published(const CheckpointAnchorRecord& anchor) {
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("checkpoint", "anchor published: core=" + std::to_string(anchor.core_id) +
                                      " checkpoint_lsn=" + std::to_string(anchor.checkpoint_lsn) +
@@ -333,14 +345,12 @@ Status Checkpointer::PublishAnchor() {
                                      " durable_lsn=" + std::to_string(anchor.durable_lsn) +
                                      " segment=" + std::to_string(anchor.segment_no));
     }
-
     redo_start_lsn_ = pending_redo_start_;
     last_checkpoint_lsn_ = begin_lsn_;
     in_progress_ = false;
     pending_pages_.clear();
     next_page_ = 0;
     ++stats_.completed;
-    return Status::OK();
 }
 
 Status Checkpointer::RunToCompletion() {
@@ -423,18 +433,20 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
     }
-    // **The log's waits are parks, not syncs on this thread** (BI-R2): a
-    // step that needs the log further hands back the LSN instead of waiting
-    // (BI-Q4 (a)); the task asks the writer for the sync and parks, as a
-    // commit does, counted into the writer's kick so the wake is the
-    // writer's rather than the next drain tick's (BI-Q6, revised). The
-    // reactor polls everything else meanwhile. The step then runs again;
-    // after `kGateParks` parks it waits inline, the counted remainder.
+    // **Every wait is a park** (BI-R2). A step that needs the log further
+    // hands back the LSN instead of waiting (BI-Q4 (a)); the task asks the
+    // writer for the sync and parks, counted into the writer's kick
+    // (BI-Q6-R), and runs the step again, inline after `kGateParks` parks.
+    // A step's own data-file sync is the data-sync thread's
+    // (`storage/data_syncer.hpp`), asked for and parked on. The reactor
+    // polls everything else meanwhile.
     int parks = 0;
+    std::size_t written = 0;  // by this step's attempts, synced before the next
     while (true) {
         Lsn deferred = kNoLsn;
-        auto done = Step(parks < kGateParks ? &deferred : nullptr);
+        auto done = Step(parks < kGateParks ? &deferred : nullptr, /*write_only=*/true);
         if (!done.ok()) co_return FinishTask(core_id, done.status());
+        written += last_step_written_;
         if (deferred != kNoLsn) {
             // A page_lsn at or past the append point names no record, and no
             // sync satisfies a park on it: the next step's inline gate
@@ -453,12 +465,17 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
             continue;
         }
         parks = 0;
+        if (written > 0) {
+            written = 0;
+            if (Status s = co_await ParkOnDataSync(); !s.ok()) co_return FinishTask(core_id, s);
+            if (generation != task_generation_) co_return Status::OK();
+        }
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
         if (done.value()) break;
     }
 
-    // `CHECKPOINT_END`, then the same park for its LSN, then the publish.
+    // `CHECKPOINT_END`, durable before anything points at it.
     auto end_lsn = AppendEnd();
     if (!end_lsn.ok()) co_return FinishTask(core_id, end_lsn.status());
     if (!wal_.IsDurable(end_lsn.value())) ++task_report_.end_parks;
@@ -466,7 +483,47 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
         co_return FinishTask(core_id, s);
     }
     if (generation != task_generation_) co_return Status::OK();
-    co_return FinishTask(core_id, PublishAnchor());
+
+    // **The publish, paced** (BI-Q5 (a)). Every page dirty now, written in a
+    // step's batches with a yield between, then the maps after all of them
+    // (BI-Q12), then one parked sync. Only then is the anchor encoded and its
+    // page written and synced, so the anchor reaches the device after every
+    // page it stands for - a snapshot page another core's writeback carried,
+    // which no step of this run synced, among them.
+    const std::vector<PageId> dirty = target_.DirtyPages();
+    for (std::size_t at = 0; at < dirty.size(); at += config_.pages_per_step) {
+        const std::span<const PageId> batch(
+            dirty.data() + at, std::min(config_.pages_per_step, dirty.size() - at));
+        if (Status s = co_await WriteForPublish(batch, core_id, generation); !s.ok()) {
+            co_return FinishTask(core_id, s);
+        }
+        if (generation != task_generation_) co_return Status::OK();
+        co_await sched::Yield{};
+        if (generation != task_generation_) co_return Status::OK();
+    }
+    {
+        const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+        const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
+        if (Status s = target_.WriteMaps(); !s.ok()) co_return FinishTask(core_id, s);
+    }
+    if (Status s = co_await ParkOnDataSync(); !s.ok()) co_return FinishTask(core_id, s);
+    if (generation != task_generation_) co_return Status::OK();
+
+    const CheckpointAnchorRecord anchor = AnchorRecord();
+    auto anchor_page = anchor_.Encode(anchor);
+    if (!anchor_page.ok()) co_return FinishTask(core_id, anchor_page.status());
+    if (anchor_page.value() != kInvalidPageId) {
+        const PageId page[] = {anchor_page.value()};
+        if (Status s = co_await WriteForPublish(page, core_id, generation); !s.ok()) {
+            co_return FinishTask(core_id, s);
+        }
+        if (generation != task_generation_) co_return Status::OK();
+        if (Status s = co_await ParkOnDataSync(); !s.ok()) co_return FinishTask(core_id, s);
+        if (generation != task_generation_) co_return Status::OK();
+        anchor_.Commit();
+    }
+    Published(anchor);
+    co_return FinishTask(core_id, Status::OK());
 }
 
 namespace {
@@ -479,6 +536,39 @@ Status LogStopped() {
 
 }  // namespace
 
+sched::Coro Checkpointer::ParkOnDataSync() {
+    const std::uint64_t ticket = target_.RequestSync();
+    if (ticket == 0) co_return Status::OK();  // a target with nothing to wait on
+    const std::function<bool()> synced = [this, ticket] { return target_.SyncDone(ticket); };
+    const sched::MonoTimeNs parked = wal_.clock().Now();
+    co_await sched::WaitUntil{&synced};
+    task_report_.data_park_ns += wal_.clock().Now() - parked;
+    co_return target_.SyncResult(ticket);
+}
+
+sched::Coro Checkpointer::WriteForPublish(std::span<const PageId> pages, std::uint32_t core_id,
+                                          std::uint64_t generation) {
+    for (int parks = 0;; ++parks) {
+        Lsn deferred = kNoLsn;
+        StatusOr<std::size_t> wrote = std::size_t{0};
+        {
+            const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+            const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
+            wrote = target_.WritePages(pages,
+                                       parks < kGateParks && !pages.empty() ? &deferred : nullptr);
+        }
+        if (!wrote.ok()) co_return wrote.status();
+        if (deferred == kNoLsn) co_return Status::OK();
+        if (deferred >= wal_.appended_lsn()) {
+            parks = kGateParks - 1;  // the next attempt's inline gate refuses it
+            continue;
+        }
+        ++task_report_.gate_parks;
+        if (Status s = co_await ParkOnLog(deferred, core_id); !s.ok()) co_return s;
+        if (generation != task_generation_) co_return Status::OK();
+    }
+}
+
 sched::Coro Checkpointer::ParkOnLog(Lsn lsn, std::uint32_t core_id) {
     if (wal_.IsDurable(lsn)) co_return Status::OK();
     if (wal_.stopped()) co_return LogStopped();
@@ -488,7 +578,9 @@ sched::Coro Checkpointer::ParkOnLog(Lsn lsn, std::uint32_t core_id) {
     };
     if (!durable()) {
         const WalManager::DurableWait waiting(wal_, core_id);
+        const sched::MonoTimeNs parked = wal_.clock().Now();
         co_await sched::WaitUntil{&durable};
+        task_report_.log_park_ns += wal_.clock().Now() - parked;
     }
     co_return wal_.IsDurable(lsn) ? Status::OK() : LogStopped();
 }
@@ -566,7 +658,9 @@ void Checkpointer::LogRun(std::uint32_t core_id, const CheckpointRunReport& r) c
                        " step_max_us=" + std::to_string(r.step_max_ns / 1000) +
                        " step_page_write_max_us=" + std::to_string(r.step_page_write_max_ns / 1000) +
                        " gate_parks=" + std::to_string(r.gate_parks) +
-                       " end_parks=" + std::to_string(r.end_parks);
+                       " end_parks=" + std::to_string(r.end_parks) +
+                       " log_park_us=" + std::to_string(r.log_park_ns / 1000) +
+                       " data_park_us=" + std::to_string(r.data_park_ns / 1000);
     for (std::size_t i = 0; i < kCheckpointPhaseCount; ++i) {
         line += std::string(" ") + kCheckpointPhaseNames[i] +
                 "_n=" + std::to_string(r.count[i]) + " " + kCheckpointPhaseNames[i] +
