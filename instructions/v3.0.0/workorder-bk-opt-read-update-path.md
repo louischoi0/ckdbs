@@ -27,7 +27,7 @@ the order records it as discarded with the number that discarded it (§2's
 ruling, §4's item, §6's entry).
 
 **Closed 2026-10-11** on `worktree-bk-read-update-paths` (code at `8679367e`,
-`v2.7.0-787-g8679367e`; not pushed): BK-S1, S3, S4, S5, S9 built; BK-S2, S6,
+`v2.7.0-787-g8679367e`; on `main` since `2f4f7c61`, pushed 2026-10-11): BK-S1, S3, S4, S5, S9 built; BK-S2, S6,
 S7 not built, each with its number (§2's BK-R1, BK-R5, BK-R6, §4's BK-Q13,
 §6's "not built" entry); measured once at the close
 (`bench/v3.0.0/results-bk-close-v2.7.0-787-g8679367e.md`).
