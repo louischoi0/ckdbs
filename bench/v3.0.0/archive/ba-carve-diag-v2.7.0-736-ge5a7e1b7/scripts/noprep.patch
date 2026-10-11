@@ -1,0 +1,5 @@
+--- a/src/wal/stream.cpp
++++ b/src/wal/stream.cpp
+@@ -292 +292 @@
+-    if (prepare_asked_ != next && OffsetOf(lsn) > segment_size_ / 2) {
++    if (false && prepare_asked_ != next && OffsetOf(lsn) > segment_size_ / 2) {  // DIAG: no build-ahead

@@ -1,0 +1,12 @@
+server did not listen; see /home/cdkbs/bench-runs/carve-diag/work/kds-insert1-relaxed-k1-s16-r0/s.stderr
+FAILED A 1
+kds-insert1-relaxed-k1-s16-r0 load 1.98->2.43 stmts=335135 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=41845.4 p50=263.8
+kds-insert1-relaxed-k1-s16-r0 load 1.95->2.90 stmts=320867 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=40159.1 p50=262.2
+server did not listen; see /home/cdkbs/bench-runs/carve-diag/work/kds-insert1-relaxed-k1-s16-r0/s.stderr
+FAILED A 2
+kds-insert1-relaxed-k1-s16-r0 load 1.86->2.40 stmts=339182 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=42562.1 p50=261.4
+kds-insert1-relaxed-k1-s16-r0 load 9.05->9.61 stmts=60783 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=8614.1 p50=304.6
+server did not listen; see /home/cdkbs/bench-runs/carve-diag/work/kds-insert1-relaxed-k1-s16-r0/s.stderr
+FAILED A 3
+kds-insert1-relaxed-k1-s16-r0 load 1.99->4.87 stmts=333770 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=3194.1 p50=267.4
+kds-insert1-relaxed-k1-s16-r0 load 1.97->5.21 stmts=315848 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=4374.3 p50=266.0

@@ -569,9 +569,11 @@ public:
     // every logged mutation must call StampPageLsn().
     std::vector<std::pair<PageId, wal::Lsn>> DirtyPagesWithRecLsn() const;
 
-    // Writes back exactly these pages and syncs. Ids that are not dirty,
-    // or not resident, are skipped rather than treated as an error -
-    // something else may have flushed them since the caller's snapshot.
+    // Writes back exactly these pages and syncs - a checkpoint step. Ids
+    // that are not dirty, or not resident, are skipped rather than treated
+    // as an error - something else may have flushed them since the caller's
+    // snapshot. **Writes no map** (BI-Q12): the publish's `Flush` does,
+    // after every dirty page.
     Status FlushPages(std::span<const PageId> page_ids);
 
     // **One page made durable, and nothing else** (BA-S13, BA-R10): written

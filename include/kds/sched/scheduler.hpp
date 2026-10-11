@@ -89,6 +89,14 @@ inline constexpr TimerId kInvalidTimerId = 0;
 
 class Scheduler {
 public:
+    // One reactor's iteration holds (`holds_inside_run`, BI-S1).
+    struct IterationHolds {
+        std::uint64_t longest_ns = 0;
+        std::uint64_t over_10ms = 0;
+        std::uint64_t over_100ms = 0;
+        std::uint64_t over_1s = 0;
+    };
+
     Scheduler(const Clock& clock, IoBackend& io_backend, SchedulerConfig config = {});
 
     Scheduler(const Scheduler&) = delete;
@@ -368,6 +376,10 @@ private:
     // charged to no group *and* spent doing something (sched.md §4's gap),
     // where before it was that plus the sleep in one lump.
     std::uint64_t idle_block_ns_ = 0;
+    IterationHolds holds_inside_run_;
+    IterationHolds holds_outside_run_;
+    void RecordIterationHold(MonoTimeNs start_ns, MonoTimeNs block_ns,
+                             std::uint64_t run_edges_at_entry) noexcept;
 
 public:
     // The wake path, from this reactor's side: iterations that actually
@@ -390,6 +402,15 @@ public:
     // is the idle policy's own time and never a busy reactor's. The
     // denominator `run_wall_ns()` already provides.
     std::uint64_t idle_block_ns() const noexcept { return idle_block_ns_; }
+
+    // **How long one iteration held this reactor** (BI-S1): its span less
+    // its idle block, so a turn that slept 10 ms waiting for work is not a
+    // 10 ms stall. Split by whether a checkpoint run of this core
+    // overlapped the iteration (`sched/checkpoint_census.hpp`), because the
+    // question BI asks is what a run does to the turn and the answer needs
+    // its own baseline. Reactor-thread only, like every plain field here.
+    const IterationHolds& holds_inside_run() const noexcept { return holds_inside_run_; }
+    const IterationHolds& holds_outside_run() const noexcept { return holds_outside_run_; }
     // Wakes written to **this** reactor's eventfd, by any sender. Zero
     // where the wake path is not armed.
     std::uint64_t wakes_received() const noexcept {
