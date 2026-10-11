@@ -865,60 +865,72 @@ Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::A
     }
 }
 
+namespace {
+
+// One column of a row being encoded into `out`, whose cell for it is zero:
+// a NULL sets the bitmap and leaves the cell's deterministic zeros (or the
+// kNull filler of a tagged cell), anything else is `EncodeOneValue`'s.
+Status EncodeColumn(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                    std::size_t i, const parser::AstValue& value, std::span<std::byte> out,
+                    const VarHeapSink& varheap) {
+    if (value.type == parser::ValueType::kNull) {
+        // The bitmap is the sole authority (null.md §3): the bit
+        // is set here, a fixed cell keeps its deterministic zeros, and
+        // a tagged cell takes the kNull filler so its bytes are
+        // defined rather than stale - but no reader ever consults it.
+        //
+        // Branched on the layout's own null_bits - the field SetNullBit
+        // reads - not on the schema's notnull, so the writer and the
+        // layout cannot disagree about which columns have a bit.
+        if (layout.null_bits[i] == catalog::kNoNullBit) {
+            return Status::InvalidArgument(
+                "column '" + std::string(catalog::NameView(schema.columns[i].name)) +
+                "' is NOT NULL and cannot take NULL (declare it NULL at CREATE TABLE to "
+                "opt in - docs/spec/null.md) (byte " +
+                std::to_string(value.byte_offset) + ")");
+        }
+        catalog::SetNullBit(out, layout, i);
+        if (schema.columns[i].type_val == kTypeValVarchar) {
+            return storage::EncodeNullCell(MutableCellOf(layout, out, i));
+        }
+        return Status::OK();
+    }
+    return EncodeOneValue(schema.columns[i], value, MutableCellOf(layout, out, i), varheap);
+}
+
+// The checks and the Keystone word every encode starts from.
+Status StartRow(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                std::uint64_t id, std::span<std::byte> out) {
+    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
+    if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
+    // The Keystone word leads every tuple (heap-and-tuple.md section 4).
+    // The pk column is therefore *not* encoded into the body: storing it
+    // twice is how the two copies come to disagree.
+    auto word = Keystone::Encode(id, /*flags=*/0, /*reserved=*/0);
+    if (!word.ok()) return word.status();
+    StoreLe64(out.data(), word.value());
+    return Status::OK();
+}
+
+}  // namespace
+
 StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
                                             const catalog::RowLayout& layout, std::uint64_t id,
                                             const std::vector<parser::AstValue>& values,
                                             const VarHeapSink& varheap) {
-    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
-    if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
-
+    // One buffer of exactly the schema constant, zero-filled: every byte of
+    // a tuple is written by this function, including the padding inside a
+    // cell that a short value does not fill (invariant 13).
+    std::vector<std::byte> out(layout.row_size, std::byte{0});
+    if (Status s = StartRow(schema, layout, id, out); !s.ok()) return s;
     const std::size_t expected = schema.columns.size() - 1;
     if (values.size() != expected) {
         return Status::InvalidArgument("expected " + std::to_string(expected) +
                                         " value(s) after the primary key, got " +
                                         std::to_string(values.size()));
     }
-
-    // The Keystone word leads every tuple (heap-and-tuple.md section 4).
-    // The pk column is therefore *not* encoded into the body: storing it
-    // twice is how the two copies come to disagree.
-    auto word = Keystone::Encode(id, /*flags=*/0, /*reserved=*/0);
-    if (!word.ok()) return word.status();
-
-    // One buffer of exactly the schema constant, zero-filled: every byte of
-    // a tuple is written by this function, including the padding inside a
-    // cell that a short value does not fill (invariant 13).
-    std::vector<std::byte> out(layout.row_size, std::byte{0});
-    StoreLe64(out.data(), word.value());
-
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
-        if (values[i - 1].type == parser::ValueType::kNull) {
-            // The bitmap is the sole authority (null.md §3): the bit
-            // is set here, a fixed cell keeps its deterministic zeros, and
-            // a tagged cell takes the kNull filler so its bytes are
-            // defined rather than stale - but no reader ever consults it.
-            //
-            // Branched on the layout's own null_bits - the field SetNullBit
-            // reads - not on the schema's notnull, so the writer and the
-            // layout cannot disagree about which columns have a bit.
-            if (layout.null_bits[i] == catalog::kNoNullBit) {
-                return Status::InvalidArgument(
-                    "column '" + std::string(catalog::NameView(schema.columns[i].name)) +
-                    "' is NOT NULL and cannot take NULL (declare it NULL at CREATE TABLE to "
-                    "opt in - docs/spec/null.md) (byte " +
-                    std::to_string(values[i - 1].byte_offset) + ")");
-            }
-            catalog::SetNullBit(out, layout, i);
-            if (schema.columns[i].type_val == kTypeValVarchar) {
-                if (Status s = storage::EncodeNullCell(MutableCellOf(layout, out, i)); !s.ok()) {
-                    return s;
-                }
-            }
-            continue;
-        }
-        if (Status s = EncodeOneValue(schema.columns[i], values[i - 1],
-                                       MutableCellOf(layout, out, i), varheap);
-            !s.ok()) {
+        if (Status s = EncodeColumn(schema, layout, i, values[i - 1], out, varheap); !s.ok()) {
             return s;
         }
     }
@@ -931,6 +943,39 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
         return Status::Corruption("encoded row is " + std::to_string(out.size()) +
                                    " bytes for a relation whose row size is " +
                                    std::to_string(layout.row_size));
+    }
+    return out;
+}
+
+StatusOr<std::vector<std::byte>> EncodeAssigned(const catalog::Schema& schema,
+                                                 const catalog::RowLayout& layout,
+                                                 std::uint64_t id,
+                                                 std::span<const std::byte> before,
+                                                 std::span<const AssignedCell> cells,
+                                                 const VarHeapSink& varheap) {
+    // Checked, not assumed: a disagreeing length is Corruption (invariant
+    // 13), and the copy below would otherwise carry it into the new version.
+    if (before.size() != layout.row_size) {
+        return Status::Corruption("the row being updated is " + std::to_string(before.size()) +
+                                   " bytes for a relation whose row size is " +
+                                   std::to_string(layout.row_size));
+    }
+    std::vector<std::byte> out(before.begin(), before.end());
+    if (Status s = StartRow(schema, layout, id, out); !s.ok()) return s;
+    for (const AssignedCell& cell : cells) {
+        if (cell.column == 0 || cell.column >= schema.columns.size()) {
+            return Status::Corruption("an assignment names column " +
+                                       std::to_string(cell.column) + " of a relation with " +
+                                       std::to_string(schema.columns.size()) + " column(s)");
+        }
+        // The cell and its bit as a fresh encode finds them: zero and clear.
+        auto bytes = MutableCellOf(layout, out, cell.column);
+        std::fill(bytes.begin(), bytes.end(), std::byte{0});
+        catalog::ClearNullBit(out, layout, cell.column);
+        if (Status s = EncodeColumn(schema, layout, cell.column, *cell.value, out, varheap);
+            !s.ok()) {
+            return s;
+        }
     }
     return out;
 }

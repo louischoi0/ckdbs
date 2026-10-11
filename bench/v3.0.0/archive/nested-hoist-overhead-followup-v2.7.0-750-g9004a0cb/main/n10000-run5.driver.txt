@@ -1,0 +1,6 @@
+== B rows=10000
+  corr-exists-scan       ops=   64 p50=  30309.3 p99=  65499.4 err=0 rows0=5000 total=320000
+  ctl-scan-filter        ops=   64 p50=   2638.5 p99=   4186.2 err=0 rows0=1429 total=91456
+== A rows=10000
+  corr-exists-scan       ops=   64 p50=  30863.6 p99=  38133.2 err=0 rows0=5000 total=320000
+  ctl-scan-filter        ops=   64 p50=   2623.6 p99=   2696.1 err=0 rows0=1429 total=91456

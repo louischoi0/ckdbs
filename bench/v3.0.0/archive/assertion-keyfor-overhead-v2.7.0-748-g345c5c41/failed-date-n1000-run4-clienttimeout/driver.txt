@@ -1,0 +1,22 @@
+Traceback (most recent call last):
+  File "/tmp/claude-1000/-home-cdkbs-ckdbs/305b0005-d7d2-422c-b0ed-247e8d0b8e88/scratchpad/drv/assertion_keyfor_ab.py", line 179, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/tmp/claude-1000/-home-cdkbs-ckdbs/305b0005-d7d2-422c-b0ed-247e8d0b8e88/scratchpad/drv/assertion_keyfor_ab.py", line 142, in main
+    m0 = meta(s.conn)
+         ^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-literal-group-key/tools/fk_overhead_benchmark.py", line 80, in meta
+    text = conn.send_command("SHOW META").replace("\\n", " ")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-literal-group-key/tools/ckdbs_cli.py", line 204, in send_command
+    fields, rows, tag, _affected = self._conn.execute(stripped)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-literal-group-key/tools/kwp.py", line 417, in execute
+    ftype, _flags, payload = self._recv_frame()
+                             ^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-literal-group-key/tools/kwp.py", line 309, in _recv_frame
+    self._fill()
+  File "/home/cdkbs/ckdbs/.claude/worktrees/fix-assertion-literal-group-key/tools/kwp.py", line 320, in _fill
+    chunk = self.sock.recv(65536)
+            ^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: timed out

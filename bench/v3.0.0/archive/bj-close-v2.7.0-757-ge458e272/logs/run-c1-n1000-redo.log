@@ -1,0 +1,16 @@
+c1-n1000-r0 load 2.06->1.98 gate 249s/0.017 dur 8.4s errs=0 bad=0 verify=ok lit-point:A=51.8/B=51.6 lit-range:A=1009.0/B=987.2 ping:A=50.6/B=49.9
+c1-n1000-r1 load 1.98->2.20 gate 3s/0.033 dur 8.2s errs=0 bad=0 verify=ok lit-point:A=51.3/B=52.4 lit-range:A=974.0/B=977.5 ping:A=50.2/B=50.6
+c1-n1000-r2 exists, skipped
+c1-n1000-r3 exists, skipped
+c1-n1000-r4 exists, skipped
+c1-n1000-r5 exists, skipped
+c1-n1000-r6 exists, skipped
+c1-n1000-r7 exists, skipped
+c1-n1000-r8 exists, skipped
+c1-n1000-r9 exists, skipped
+c1-n1000-r10 exists, skipped
+c1-n1000-r11 exists, skipped
+c1-n1000-r12 exists, skipped
+c1-n1000-r13 exists, skipped
+c1-n1000-r14 exists, skipped
+c1-n1000-r15 exists, skipped

@@ -12,13 +12,13 @@ is refused at CREATE TABLE. Consistent with
 | # | Decision | Choice |
 |---|---|---|
 | TY1 | Types | **`DATE`, `TIMESTAMP`, `DECIMAL(p,s)`** — all fixed-width, so invariant 13 is untouched. `FLOAT64` is out (`Unsupported` at CREATE TABLE, reserved `kTypeValFloat = 6` unchanged): IEEE comparison and aggregation semantics conflict with the engine's exactness discipline. `TIME`, `INTERVAL`, `timestamptz`: not reserved, not parsed |
-| TY2 | DECIMAL representation | **Scaled int64**: the unscaled value in 8 bytes, `1 ≤ p ≤ 18`, `0 ≤ s ≤ p`. Comparison, grouping and SUM reuse the checked-int64 machinery verbatim (`aggregate.md` AG3). A variable-width numeric violates invariant 13 by construction; `p > 18` is a *separate type* (int128, 16 bytes — a different schema constant, so the two coexist), never a widening of this one: `decimal(p, s)` with `19 ≤ p ≤ 38` selects `kTypeValDecimalWide` at the one DDL site, also declarable as `decimal128(p, s)` (§2a) |
+| TY2 | DECIMAL representation | **Scaled int64**: the unscaled value in 8 bytes, `1 ≤ p ≤ 18`, `0 ≤ s ≤ p`. Comparison, grouping and SUM reuse the checked-int64 machinery verbatim (`aggregate.md` AG3). A variable-width numeric violates invariant 13 by construction; `p > 18` is a *separate type* (int128, 16 bytes — a different schema constant, so the two coexist), never a widening of this one: `decimal(p, s)` with `19 ≤ p ≤ 38` selects `kTypeValDecimalWide` at the one DDL site, and only that declaration does: `decimal128` is the type's name, never a spelling a declaration takes (§2a) |
 | TY3 | Literals | **Quoted string literals** — `'2026-08-06'`, `'12.34'` — and a bare `12.34`, which is sugar for the quoted string of its spelling (§2). The column's `type_val` decides the interpretation. There is no decimal-point token and no date token beyond the fused `digits . digits`, and `kFingerprintVersion` did not move for either form |
 | TY4 | Time encoding | `DATE` = **days since 1970-01-01, int32** (4 bytes). `TIMESTAMP` = **microseconds since the epoch, UTC, int64** (8 bytes). **Storage is always UTC**; there is no session time zone, no conversion, no `timestamptz` — rendering what UTC means locally is the client's act, and this is a documented product constraint, not a gap |
 | TY5 | Value model | `DATE`/`TIMESTAMP` **reuse `AstValue` kInt** — the value *is* an integer; only its rendering differs, and rendering happens at the emission boundary (§3.3), not in the value. **`DECIMAL` alone adds a kind**: `kDecimal` carrying the unscaled int64 plus its scale (and `kDecimalWide` for the 16-byte type, §2a). One new kind per representation, not three, is what keeps every switch over `ValueType` from growing arms that behave identically |
 | TY6 | Mixed-scale comparison | Column–literal: the literal is normalized **to the column's scale at compile time**, and digits beyond `s` are a positioned statement error — rounding a literal to make it match is a silent wrong answer. Column–column (a join residual): **same `(p, s)` only**; differing scales answer `Unsupported`. Rescaling under overflow semantics is not offered |
 | TY7 | Validation | `EncodeOneValue` is the **only gate**: it parses `YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS[.ffffff]` and decimal strings, rejects out-of-range and malformed input as a positioned statement error, and range-checks against the type's width. The valid `DATE` range is **1900-01-01 .. 2999-12-31** and `TIMESTAMP`'s is its microsecond equivalent; outside is a positioned encode error. Decode never re-validates — stored bytes were proven at the gate, same principle the codec already runs on |
-| TY8 | Value functions | `NOW()`, `CURRENT_DATE`, arithmetic on dates: **none**. A value function imports an evaluation-time question (once per statement? per row?) that "the query is the plan" has no slot for. Clients send literals |
+| TY8 | Value functions | `NOW()`, `CURRENT_DATE`, arithmetic on dates: **none in a predicate, a select list or an `INSERT` value** (AP-S4's `DATE()` and `NOW()` in a WHERE comparison apart, §3.2a). A value function imports an evaluation-time question (once per statement? per row?) that "the query is the plan" has no slot for. **A `SET` value is the exception since BJ**, and the question has an answer there: `NOW()` and `CURRENT_DATE` are one value per statement (`StatementContext`), and date arithmetic is `date +/- days` and `date - date` (§3.2b) |
 | TY9 | Catalog | Purely additive `type_val`s: `kTypeValDate = 11`, `kTypeValTimestamp = 12`, `kTypeValDecimalWide = 13`; DECIMAL reuses the reserved `kTypeValDecimal = 7`. No existing relation changes meaning. `(p, s)` persists **packed into `SysColumnRow::len`** (§4a): no format change, no version bump |
 
 ---
@@ -38,7 +38,7 @@ it that way:
 | `DATE` | 4 | int32 LE, epoch days | signed int |
 | `TIMESTAMP` | 8 | int64 LE, UTC micros | signed int |
 | `DECIMAL(p,s)`, `p ≤ 18` | 8 | int64 LE, unscaled | signed int (same-scale, TY6) |
-| `DECIMAL(p,s)`, `19 ≤ p ≤ 38` / `DECIMAL128(p,s)` | 16 | int128 as two LE uint64 halves | signed int128 (same-scale, same-width, §2a) |
+| `DECIMAL(p,s)`, `19 ≤ p ≤ 38` (named `decimal128`) | 16 | int128 as two LE uint64 halves | signed int128 (same-scale, same-width, §2a) |
 
 All compare as signed integers, which means **every ordered structure in
 the engine works on them unmodified**: a BTREE clustered on nothing new, a
@@ -49,10 +49,10 @@ is the selection criterion TY2 and TY4 applied.
 ## 2. Grammar & DDL `[CONFIRMED]`
 
 ```
-type ::= ... existing ... | DATE | TIMESTAMP | DECIMAL ( int , int ) | DECIMAL128 ( int , int )
+type ::= ... existing ... | DATE | TIMESTAMP | DECIMAL ( int , int )
 ```
 
-`DATE`/`TIMESTAMP`/`DECIMAL`/`DECIMAL128` are type names in the DDL
+`DATE`/`TIMESTAMP`/`DECIMAL` are type names in the DDL
 position only — unreserved, like every keyword this parser matches, so
 columns named `date` remain legal. `DECIMAL(p, s)` requires both arguments
 (no `DECIMAL`, no `DECIMAL(p)` — a default scale is a silent decision about
@@ -129,9 +129,14 @@ wire's 16 LE bytes with `(p, s)` in `type_mod`.
 
 Four rules. **The declared precision selects the width at the one DDL
 site**: `decimal(p ≤ 18, s)` is the 8-byte type, `decimal(19 ≤ p ≤ 38, s)`
-the 16-byte one, and `decimal128(p, s)` names the wide type directly with
-bounds exclusive of the narrow ones — one declaration selects exactly one
-type, and DESCRIBE renders the type a column *got* (`decimal128(24,6)`).
+the 16-byte one — one declaration selects exactly one type, by precision
+and only by precision. `decimal128` is the wide type's name (its `sys.types`
+row), not a declaration: the parser takes a type-argument list for
+`DECIMAL`, `CHAR` and `VARCHAR` alone, so `decimal128(24, 6)`, in a column
+or a `CAST`, is refused *"type 'decimal128' takes no arguments"*, and a bare
+`decimal128` column is refused for having no precision or scale. DESCRIBE renders
+the type a column *got* (`decimal128(24,6)`); that rendering is output only,
+and the declaration that reaches it is `decimal(24, 6)`.
 **Cross-width comparison is refused at compile** like cross-scale, and
 must be: at run time the pair is a kind mismatch answering false per row —
 zero rows wearing a right answer's shape. **`kDecimalWide` is a
@@ -165,8 +170,10 @@ positioned error at compile, not a row-by-row false.
 
 ### 3.2 DECIMAL arithmetic
 
-There is none — no `+`, no `*`, no expressions (the grammar has none).
-What exists is comparison (TY6) and aggregation: `SUM` over `DECIMAL(p,s)`
+**In a predicate, a select list or an `INSERT` value there is none** - no `+`,
+no `*`, no expressions (the grammar has none there). **A `SET` value is an
+expression** since BJ, and §3.2b states it. What exists everywhere else is
+comparison (TY6) and aggregation: `SUM` over `DECIMAL(p,s)`
 folds unscaled int64 through the checked adder and yields `DECIMAL(18,s)`
 semantics — overflow is a statement error exactly as AG3 states, and the
 answer's scale is the column's. `MIN`/`MAX` are int comparisons. `SUM`
@@ -196,13 +203,28 @@ Two scalar functions, in a WHERE comparison only (`parser-v2.md` I10;
 Both sides of a comparison must be of one type: `v = NOW()` over an
 `int64` column is refused `InvalidArgument` at the call's byte.
 
-### 3.2b A SET value is typed at compile (BJ-S3)
+### 3.2b A SET value is typed at compile and evaluated per row (BJ-S3, BJ-S4)
 
-**Built: parsing and typing. Not built: evaluation** - a statement whose SET
-value is an expression that types is refused `NotImplemented` until BJ-S4
-(`instructions/v3.0.0/workorder-bj-expression-update.md`), and one that does
-not type is refused for what is wrong with it, at compile, whether or not a
-row matches. `exec::TypeSetExpression` (`include/kds/exec/set_expr.hpp`) is the
+**Built: parsing, typing and evaluation of the core family (BJ-S2..S4)** - a
+SET value that is an expression is typed at compile and evaluated per row
+against the row's before-image (`instructions/v3.0.0/workorder-bj-expression-update.md`),
+and one that does not type is refused for what is wrong with it, at compile,
+whether or not a row matches. **Evaluation**: integer, uint64 and decimal
+arithmetic is checked in its own type at every node, so a result outside the
+type is `OutOfRange` at that row (never a wrap), integer `/` truncates toward
+zero and `%` takes the dividend's sign, a division by zero is `InvalidArgument`,
+a NULL operand yields NULL before a zero divisor is judged, and `||` yields
+the concatenation (a `char(N)` target's length and a NOT NULL target are the
+row's encode verdicts). Every assignment reads the before-image and the values
+are written together. **What a row decodes for it** (BK-R2,
+`workorder-bk-opt-read-update-path.md`): a relation with a Cabin, an index or
+an assertion decodes the row whole for its hooks; any other decodes only the
+columns its SET expressions read (`exec::SetExpressionColumns`), and the
+evaluator refuses `Corruption` a column the decode left out (`exec::kUndecoded`)
+rather than read a default. The new image is the row's own bytes with only the
+assigned cells re-encoded (`exec::EncodeAssigned`, BK-R3, `heap-and-tuple.md`
+§3.4). A failure names the failing operator's byte, the
+expression's first byte and the row's pk. `exec::TypeSetExpression` (`include/kds/exec/set_expr.hpp`) is the
 one place the rules below live. §3.2's "there is none" stands for every other
 position: the grammar admits an expression in a SET value only.
 
@@ -226,13 +248,109 @@ lexer wrapped it to.
 | `+` `-` `%` | two `decimal(p,s)` of one `(p,s)` | that decimal | a different `(p,s)` |
 | `*` | two decimals of one `(p,s)` | `decimal(min(p1+p2,38), s1+s2)`, which must be the target's | a different `(p,s)` |
 | `*` | a decimal and an integer **literal** | that decimal | an `int64` column |
-| `/` | a decimal | `NotImplemented` (needs `ROUND`/`CAST`, BJ-S5/S6) | |
+| `/` | two decimals of one `(p,s)`, or a decimal and an integer literal in either order - a literal divisor is a scalar, a literal dividend takes the divisor's `(p,s)` (`2 / price` is `2.00 / price`) | `decimal(P, S)` of the dividend's `(p,s)`: with `I = p-s+s2` integer digits, `S = max(s, min(s+16, 38-I))` and `P = min(I+S, 38)` - up to 16 more places than the dividend, as many as leave room for the integer digits | a different `(p,s)`; the result is never narrowed implicitly - `ROUND` or `CAST` does it (BJ-Q3 (a)) |
 | `||` | `varchar`/`char` and string literals | `varchar` | any other type |
 | unary `-` | a signed integer or a decimal | that type | `uint64` ("an unsigned value has no negation"), text, `bool` |
 | unary `+` | an integer or a decimal | that type | text, `bool` |
-| binary arithmetic | `date` | `NotImplemented` (BJ-S6) | |
+| `date + n`, `n + date`, `date - n` | `date` and an integer type or literal (days) | `date` | a decimal or text operand, `date + date`, `n - date` |
+| `date - date` | two dates | `int32` (days) | |
+| any other binary operator | `date` | `InvalidArgument` | |
 | binary arithmetic | `timestamp` | `Unsupported` (there is no `INTERVAL`) | |
 | unary `-` `+` | `date`, `timestamp` | `InvalidArgument` | |
+| `=` `!=` `<` `<=` `>` `>=` | two of one type (the text family counts as one), or a literal and a column | `bool` | two types, a bare number with a point beside another literal |
+| `AND` `OR` `NOT` | `bool`, or a `NULL` | `bool`, three-valued | any other type |
+| `IS [NOT] NULL` | any type | `bool`, never NULL | |
+| `CASE`, `COALESCE`, `GREATEST`, `LEAST` | every result one type (the text family counts as one) | that type | two types; a `CASE` condition that is not `bool` |
+| `NULLIF(a, b)` | `a` and `b` of one type | `a`'s type | two types |
+| `CAST(x AS T)`, `x::T` | an integer or a decimal to an integer, a decimal or text; text to an integer, a decimal, a date or a timestamp; a date or a timestamp to text, a date or a timestamp; `bool` to `bool` | `T` | every other pair; `float`; `varchar(N)` (a column's cell width) |
+
+**Boolean values, CASE, null handling and CAST (BJ-S5).** A comparison, `AND`,
+`OR`, `NOT` and `IS [NOT] NULL` yield a `bool`, which a `bool` column takes
+and nothing else does; `AND` and `OR` are three-valued and evaluate left to
+right, skipping the right operand once the left decides, so `b != 0 AND a / b
+> 1` is safe. A comparison does not chain (`a < b < c` is refused). The
+precedence is PostgreSQL's. A simple `CASE x WHEN a` is the searched form
+`WHEN x = a`; no matching branch and no `ELSE` is NULL, and a NULL condition
+is not true. `GREATEST` and `LEAST` skip NULLs. `CAST` narrows a scale by
+rounding half away from zero and refuses a result its target cannot hold
+(`OutOfRange`), a string that is not a number (`InvalidArgument`) and a
+`char(N)` too long - nothing is truncated or wrapped. A timestamp cast to a
+date floors to its day. `SET (a, b) = (x, y)` is `a = x, b = y`, both read from
+the before-image. `IN`, `BETWEEN`, `LIKE`, `EXISTS`, `IS TRUE`, `<>` and a
+boolean literal are not in the grammar.
+
+**Scalar functions (BJ-S6, BJ-Q5).** A name that is not in the table is refused
+`unknown function` at its byte; an argument that is the wrong type is refused
+naming the function, what it needs and what it was given. Every function is
+NULL for a NULL argument except `CONCAT`, which skips them.
+
+| function | arguments | result |
+|---|---|---|
+| `ABS(x)`, `SIGN(x)` | an integer or a decimal | the argument's type (`SIGN` of a decimal is `-1`, `0` or `1` at its scale) |
+| `CEIL(x)`, `FLOOR(x)` | an integer or a decimal | an integer: itself; a decimal: scale 0 (see below) |
+| `ROUND(x [, n])`, `TRUNC(x [, n])` | a number, and `n` a whole-number **literal** 0..38 | an integer: itself; a decimal: scale `n` (see below). `ROUND` rounds half away from zero |
+| `MOD(a, b)` | as `%` | as `%` |
+| `UPPER`, `LOWER` | text | `varchar`; ASCII letters only, other bytes are left as they are |
+| `LENGTH(s)` | text | `int32`, in **bytes** (as `char(N)` and `varchar` widths are) |
+| `SUBSTRING(s, from [, count])` | text, whole numbers | `varchar`; 1-based, a position before the first counts against `count`, a negative `count` is refused |
+| `TRIM`, `LTRIM`, `RTRIM(s [, chars])` | text | `varchar`; strips spaces, or any of `chars` |
+| `POSITION(sub IN s)` | text, text | `int32`, 0 when absent |
+| `REPLACE(s, from, to)` | text | `varchar`; an empty `from` replaces nothing |
+| `LPAD`, `RPAD(s, n [, fill])` | text, a whole number, text | `varchar` of `n` bytes: a longer `s` is cut on the right, as the reference dialect does; refused past 1 MiB |
+| `CONCAT(a, b, ...)` | text | `varchar` |
+| `NOW()` | none | `timestamp`: **one value per statement**, the statement's clock (`StatementContext`), carried across a park |
+| `CURRENT_DATE` | none, written without parentheses | `date`; a column of that name wins, so the function is unreachable on a relation that has one (BJ-Q4) |
+| `DATE(ts)` | a timestamp | `date`, the day it falls in |
+
+**A scaled decimal.** `ROUND`, `TRUNC`, `CEIL`, `FLOOR` and, for a decimal,
+`SIGN` yield a decimal of a fixed scale and **no precision of their own**,
+and so do `ABS` and a nested `ROUND` over one: it takes the precision of the
+column it is assigned to, or of the decimal it is added to, and is refused if
+that is another scale. So `SET price = ROUND(price / 3, 2)` is a
+`decimal(10, 2)` whatever the quotient's width; a value too wide for the
+precision it lands in is `OutOfRange` at the row. In a **comparison** it takes
+the wider of its own and the other side's precision, so what is compared never
+fails to fit; two of one scale keep the wider, whichever is written first.
+Used with nothing to take a precision from it is the argument's own precision
+at that scale. An untyped scaled decimal under `*` or `/`, or two of different
+scales, needs a `CAST`. **A quotient is divided once**: `ROUND(a / b, n)`,
+`TRUNC`, `CEIL`, `FLOOR` and `CAST(a / b AS decimal(p, s))` take the exact
+quotient to `n` (or `s`) places in one division with their own rounding, never
+a quotient already rounded to its natural scale; `ROUND(ROUND(x, 4), 2)` is two
+roundings because it says two. `ROUND` and `TRUNC` over a NULL, and `ABS(NULL)`,
+are NULL of whatever type the context wants. Nothing in the engine reads a function's purity yet
+(`functions.hpp` declares it for the WHERE catalog, whose entries are not
+these), so none is declared for them: `NOW()` and `CURRENT_DATE` are the two
+stable ones, and the rest are pure.
+
+**A scalar subquery (BJ-S7, BJ-Q6).** A `(SELECT ...)` is a value of the SET,
+and it is **run once, before the walk**, through the SELECT path in the
+statement's own view: inside `BEGIN` it sees the transaction's writes, and a
+statement that parks keeps its first answer across the park. It returns one
+column and at most one row - more is `InvalidArgument`, **even over a WHERE
+that matches no row**, because the answer is taken before any row is - and no
+row is NULL. Its type is its column's, and the assignment needs it to be the
+target's like any other value. An aggregated column's type is its
+function's: `MIN`/`MAX` and a grouping column answer one of the column's
+values, so they are typed in its own `(p, s)` and `SET d = (SELECT MAX(d) FROM
+t)` assigns, while a decimal `SUM` or `AVG` is typed at the type's maximum
+precision (18, or 38 for `decimal128`) at the column's scale, and needs a
+`CAST` to a narrower column. So `SET v = v + (SELECT SUM(v) FROM t)` raises
+every row by the sum the table had before the statement, not by a sum that
+grows as the walk writes: **a WHERE-position subquery is re-run per row and
+sees the statement's earlier rows; a SET-position one does not.** A subquery
+that reads the row being updated (a correlated one) is `NotImplemented`, as is
+one over a catalog view and the row form `SET (a, b) = (SELECT ...)`: a per-row
+sub-chain under the write walk's exclusive leaf is the open page-latch cycle
+(`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`),
+and a view always sees its own transaction's writes.
+
+It is **run wherever it is written**: a subquery inside a `CASE` branch no row
+takes, or after a `COALESCE` that settles, still runs, and its error (more than
+one row) fails the statement. It reads at the UPDATE's own snapshot, so the
+statement sees one state of the database, and it is also an ordinary SELECT to
+the engine: it records a Waystone trail and `SHOW ACCESS` statistics as one.
+Its errors name bytes of the UPDATE.
 
 `NULL` types as its context's type, and a NULL operand yields NULL (BJ-R4).
 Whether a NULL result fits a `NOT NULL` target is the row's verdict. The

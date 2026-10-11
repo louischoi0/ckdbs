@@ -1763,6 +1763,9 @@ Status Expeditor::Start() {
         // branch was waiting for. The one pool was opened at the whole
         // `buffer_pool_frames` (`Open`, BE-R3); nothing divides it.
 
+        // The gate rotates the cadence's runs over one period (BI-Q7 (a),
+        // `wal::CheckpointGate`), set before any reactor can ask it.
+        checkpoint_gate_.SetRotation(config_.checkpoint_interval_ns);
         for (std::uint32_t core_id = 1; core_id < config_.cores; ++core_id) {
             // **No extent for a core that borrows the pool** (AM-S2 step 3).
             CoreRuntime::Config core_config;
@@ -1981,14 +1984,15 @@ Status Expeditor::Start() {
         }
     }
 
-    // The `system`-group cadence of wal.md section 11. A failed checkpoint
-    // is not fatal and does not disarm the timer: the pages it did not
-    // flush stay dirty and the next tick retries them, which is the same
-    // recovery the paced Step() path already relies on. Reporting it needs
-    // the observability path that does not exist yet - the failure is
-    // visible in checkpoint_stats(), where started outruns completed.
+    // The `system`-group cadence of wal.md section 11. **The callback only
+    // submits** (BI-R1): the run is a task on this reactor, one step per
+    // poll (`Checkpointer::SubmitRun`). A failed run is not fatal and does
+    // not disarm the timer: the pages it did not flush stay dirty and the
+    // next tick's task resumes it.
     if (config_.checkpoint_interval_ns > 0) {
-        scheduler.SubmitEvery(config_.checkpoint_interval_ns, [this] { (void)Checkpoint(); });
+        scheduler.SubmitEvery(config_.checkpoint_interval_ns, [this, &scheduler] {
+            checkpointer_->SubmitRun(scheduler, &checkpoint_gate_, /*core_id=*/0);
+        });
         logger_->Info("expeditor", "checkpoint cadence " +
                                        std::to_string(config_.checkpoint_interval_ns / 1'000'000) +
                                        "ms");
@@ -2168,6 +2172,14 @@ Status Expeditor::RunUntilStopped() {
     // above already has.
     for (auto& core : cores_) {
         core->CloseListener();
+    }
+    // **Every core's cadence run is abandoned before the first shutdown
+    // checkpoint, core 0's included** (BI-R4): a parked run holds the
+    // instance's gate, so any one left would make every shutdown checkpoint
+    // skip; and each shutdown checkpoint must start from its own snapshot.
+    checkpointer_->Abandon();
+    for (auto& core : cores_) {
+        core->AbandonCheckpoint();
     }
     for (auto& core : cores_) {
         if (Status s = core->Sync(); !s.ok()) {

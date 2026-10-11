@@ -56,6 +56,8 @@ std::string Render(const Expr& e) {
             return "(" + Render(*e.lhs) + " " + kOps[static_cast<int>(e.op)] + " " +
                    Render(*e.rhs) + ")";
         }
+        case Expr::Kind::kCall: return "(call)";
+        case Expr::Kind::kSubquery: return "(subquery)";
     }
     return "?";
 }
@@ -206,17 +208,11 @@ TEST(SetExpressionParseTest, AFormALaterStageBuildsIsRefusedByNameAtItsByte) {
     };
     const std::string head = "UPDATE t SET a = ";
     const std::vector<Case> cases = {
-        {"abs(a)", "BJ-S6", 0},          {"a + abs(b)", "BJ-S6", 4},
-        {"a = 1", "BJ-S5", 2},           {"a < 1", "BJ-S5", 2},
-        {"a AND b", "BJ-S5", 2},         {"a IS NULL", "BJ-S5", 2},
-        {"NOT a", "BJ-S5", 0},           {"CASE WHEN a THEN 1 END", "BJ-S5", 0},
-        {"(SELECT 1)", "BJ-S7", 0},      {"1 + (SELECT 1)", "BJ-S7", 4},
         {"t.b", "qualified", 0},
-        {"CAST(a AS int)", "BJ-S5", 0},  {"COALESCE(a, 1)", "BJ-S5", 0},
-        {"a + GREATEST(a, 1)", "BJ-S5", 4},
-        {"a IN (1)", "BJ-S5", 2},        {"a BETWEEN 1 AND 2", "BJ-S5", 2},
-        {"a::int", "BJ-S5", 1},          {"CASE 1 WHEN 1 THEN 2 END", "BJ-S5", 0},
-        {"CASE -1 WHEN 1 THEN 2 END", "BJ-S5", 0},
+        // The comparison forms BJ leaves out (BJ-R1 family 2).
+        {"a IN (1)", "not supported", 2}, {"a BETWEEN 1 AND 2", "not supported", 2},
+        {"a NOT IN (1)", "not supported", 2}, {"a LIKE 'x'", "not supported", 2},
+        {"a IS TRUE", "IS [NOT] NULL", 5}, {"EXISTS (SELECT 1)", "EXISTS", 0},
     };
     for (const Case& c : cases) {
         auto parsed = Parse(head + c.value);
@@ -229,6 +225,203 @@ TEST(SetExpressionParseTest, AFormALaterStageBuildsIsRefusedByNameAtItsByte) {
                   std::string::npos)
             << c.value << ": " << parsed.status().message();
     }
+}
+
+TEST(SetExpressionParseTest, TheBooleanLevelsBindInPostgresOrder) {
+    // OR loosest, then AND, NOT, IS, the comparisons, `||`, `+ -`, `* / %`.
+    auto a = SetOf("a > 1 + 2 * 3 AND NOT b IS NULL OR c");
+    ASSERT_TRUE(a.ok()) << a.status().message();
+    const Expr& or_node = *a.value().expr;
+    EXPECT_EQ(or_node.op, ExprOp::kOr);
+    EXPECT_EQ(or_node.rhs->column, "c");
+    const Expr& and_node = *or_node.lhs;
+    EXPECT_EQ(and_node.op, ExprOp::kAnd);
+    EXPECT_EQ(and_node.lhs->op, ExprOp::kGt);
+    EXPECT_EQ(and_node.lhs->rhs->op, ExprOp::kAdd);
+    EXPECT_EQ(and_node.lhs->rhs->rhs->op, ExprOp::kMul);
+    // NOT covers the IS test, not just `b`.
+    EXPECT_EQ(and_node.rhs->op, ExprOp::kNot);
+    EXPECT_EQ(and_node.rhs->lhs->op, ExprOp::kIsNull);
+    // `||` binds tighter than a comparison.
+    auto concat = SetOf("s || 'x' = t");
+    ASSERT_TRUE(concat.ok());
+    EXPECT_EQ(concat.value().expr->op, ExprOp::kEq);
+    EXPECT_EQ(concat.value().expr->lhs->op, ExprOp::kConcat);
+}
+
+TEST(SetExpressionParseTest, AComparisonDoesNotChain) {
+    auto chained = SetOf("a < b < c");
+    ASSERT_FALSE(chained.ok());
+    EXPECT_EQ(chained.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_TRUE(SetOf("(a < b) = (c < d)").ok());
+}
+
+TEST(SetExpressionParseTest, ACaseIsASearchedCaseWhateverItWasWrittenAs) {
+    auto simple = SetOf("CASE a WHEN 1 THEN 10 WHEN 2 THEN 20 ELSE 30 END");
+    ASSERT_TRUE(simple.ok()) << simple.status().message();
+    const Expr& c = *simple.value().expr;
+    ASSERT_EQ(c.kind, Expr::Kind::kCall);
+    ASSERT_EQ(c.op, ExprOp::kCase);
+    ASSERT_EQ(c.args.size(), 5u);  // when, then, when, then, else
+    EXPECT_EQ(c.args[0]->op, ExprOp::kEq) << "WHEN a = 1";
+    EXPECT_EQ(c.args[0]->lhs->column, "a");
+    auto empty = SetOf("CASE a END");
+    ASSERT_FALSE(empty.ok());
+    EXPECT_NE(empty.status().message().find("at least one WHEN"), std::string::npos)
+        << empty.status().message();
+    EXPECT_FALSE(SetOf("CASE WHEN a THEN 1").ok());
+    EXPECT_FALSE(SetOf("CASE WHEN a 1 END").ok());
+}
+
+TEST(SetExpressionParseTest, TheNaryFormsAndTheCastsParse) {
+    for (const char* v : {"COALESCE(a, b, 1)", "NULLIF(a, 0)", "GREATEST(a, b)", "LEAST(1, a, 2)",
+                          "CAST(a AS int64)", "a::int64", "CAST(a AS decimal(10, 2))",
+                          "-a::int64", "CAST(a + 1 AS varchar)"}) {
+        EXPECT_TRUE(SetOf(v).ok()) << v << ": " << SetOf(v).status().message();
+    }
+    auto cast = SetOf("a::decimal(10, 2)");
+    ASSERT_TRUE(cast.ok());
+    EXPECT_EQ(cast.value().expr->op, ExprOp::kCast);
+    EXPECT_EQ(cast.value().expr->cast_to.name, "decimal");
+    EXPECT_EQ(cast.value().expr->cast_to.precision, 10u);
+    EXPECT_EQ(cast.value().expr->cast_to.scale, 2u);
+    // `::` binds tighter than a unary minus.
+    EXPECT_EQ(SetOf("-a::int64").value().expr->op, ExprOp::kNeg);
+    for (const char* v : {"NULLIF(a)", "NULLIF(a, b, c)", "COALESCE()", "CAST(a int64)",
+                          "a::", "a::int64(3)"}) {
+        EXPECT_FALSE(SetOf(v).ok()) << v;
+    }
+}
+
+TEST(SetExpressionParseTest, ASignedLiteralBeforeACastIsStillCast) {
+    // `m -1::int64` is `m - (1::int64)`: the fused minus is the literal's sign,
+    // and the `::` that follows belongs to its magnitude (BJ-S5's review).
+    auto a = SetOf("m -1::int64");
+    ASSERT_TRUE(a.ok()) << a.status().message();
+    EXPECT_EQ(a.value().expr->op, ExprOp::kSub);
+    EXPECT_EQ(a.value().expr->rhs->op, ExprOp::kCast);
+    EXPECT_TRUE(SetOf("d -1.5::decimal(10, 2)").ok());
+    EXPECT_TRUE(SetOf("m -1::int64 * 2").ok());
+}
+
+TEST(SetExpressionParseTest, AColumnNamedCaseTakesACastAndAKeywordAfterIt) {
+    auto a = SetOf("CAST(case AS int64)");
+    ASSERT_TRUE(a.ok()) << a.status().message();
+    EXPECT_EQ(a.value().expr->lhs->column, "case");
+    EXPECT_TRUE(SetOf("case::int64").ok());
+    EXPECT_TRUE(SetOf("case = 1").ok());
+}
+
+TEST(SetExpressionParseTest, ANestedSimpleCaseIsBoundedBySizeNotOnlyHeight) {
+    // A simple CASE puts its operand in every WHEN, so nesting one inside
+    // another's operand is exponential in the text while the tree stays
+    // short (BJ-S5's review: 700 bytes took 35 s to compile). The parser
+    // counts a shared child once per reference and refuses past 4096 nodes.
+    const auto Nested = [](int depth) {
+        std::string v = "x";
+        for (int i = 0; i < depth; ++i) {
+            v = "CASE " + v + " WHEN 1 THEN 1 WHEN 2 THEN 2 WHEN 3 THEN 3 WHEN 4 THEN 4 END";
+        }
+        return v;
+    };
+    EXPECT_TRUE(SetOf(Nested(3)).ok());
+    auto big = SetOf(Nested(12));
+    ASSERT_FALSE(big.ok());
+    EXPECT_EQ(big.status().code(), StatusCode::kUnsupported);
+    EXPECT_NE(big.status().message().find("nodes"), std::string::npos) << big.status().message();
+}
+
+TEST(SetExpressionParseTest, AValueThatStartsWithALiteralContinuesAsAnExpression) {
+    // The literal is read ahead of the expression chain (BJ's close: the
+    // literal path was 1.6 us slower for building a tree it threw away). What
+    // follows it must still be an operator of the chain, at the right level.
+    EXPECT_EQ(Render(*SetOf("5 + a * 2").value().expr), "(5 + (a * 2))");
+    EXPECT_EQ(Render(*SetOf("'x' || a || 'y'").value().expr), "(('x' || a) || 'y')");
+    EXPECT_EQ(Render(*SetOf("-5 + a").value().expr), "(-5 + a)");
+    EXPECT_EQ(Render(*SetOf("2 * 3 - 1").value().expr), "((2 * 3) - 1)");
+    EXPECT_EQ(SetOf("1 = a AND b").value().expr->op, ExprOp::kAnd);
+    EXPECT_EQ(SetOf("NULL IS NULL").value().expr->op, ExprOp::kIsNull);
+    EXPECT_EQ(SetOf("5::int64 + 1").value().expr->op, ExprOp::kAdd);
+    EXPECT_EQ(SetOf("1.5 * a").value().expr->op, ExprOp::kMul);
+    // A lone literal is still a bare value, and ends at every terminator.
+    EXPECT_EQ(SetOf("7").value().expr, nullptr);
+    auto row = Parse("UPDATE t SET (a, b) = (1, 2) WHERE id = 3");
+    ASSERT_TRUE(row.ok()) << row.status().message();
+    EXPECT_EQ(std::get<UpdateStmt>(row.value()).assignments[1].val.int_val, 2);
+    EXPECT_TRUE(Parse("UPDATE t SET a = 1;").ok());
+    EXPECT_TRUE(Parse("UPDATE t SET a = 1, b = 2").ok());
+    // What cannot follow a literal is refused as before, by its own code.
+    auto negated = SetOf("1 NOT IN (1)");
+    ASSERT_FALSE(negated.ok());
+    EXPECT_EQ(negated.status().code(), StatusCode::kNotImplemented);
+    EXPECT_FALSE(SetOf("1 2").ok());
+    EXPECT_FALSE(SetOf("5 +").ok());
+}
+
+TEST(SetExpressionParseTest, AScalarSubqueryKeepsItsTextAndItsStatement) {
+    const std::string sql = "UPDATE t SET a = 1 + (SELECT SUM(x) FROM u WHERE y > 2) * 3";
+    auto parsed = Parse(sql);
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto& stmt = std::get<UpdateStmt>(parsed.value());
+    const Expr& add = *stmt.assignments[0].expr;
+    ASSERT_EQ(add.op, ExprOp::kAdd);
+    const Expr& sub = *add.rhs->lhs;
+    ASSERT_EQ(sub.kind, Expr::Kind::kSubquery);
+    EXPECT_EQ(sub.byte_offset, sql.find("(SELECT"));
+    EXPECT_EQ(sub.subquery_sql, "SELECT SUM(x) FROM u WHERE y > 2");
+    ASSERT_NE(sub.subquery, nullptr);
+    EXPECT_EQ(sub.subquery->from.table_name, "u");
+    // The subquery is the whole value, nested, and bounded by the SELECT grammar's own depth.
+    EXPECT_TRUE(Parse("UPDATE t SET a = (SELECT x FROM u WHERE id IN (SELECT id FROM u WHERE y > 1))").ok());
+    for (const char* bad : {"UPDATE t SET a = (SELECT x FROM u", "UPDATE t SET a = (SELECT)",
+                            "UPDATE t SET a = (SELECT x FROM u) (SELECT 1)"}) {
+        EXPECT_FALSE(Parse(bad).ok()) << bad;
+    }
+    // A row of subquery values stays refused by name.
+    auto row = Parse("UPDATE t SET (a, b) = (SELECT 1, 2)");
+    ASSERT_FALSE(row.ok());
+    EXPECT_EQ(row.status().code(), StatusCode::kNotImplemented);
+}
+
+TEST(SetExpressionParseTest, AFunctionCallParsesByNameAndTheTyperJudgesTheName) {
+    auto abs = SetOf("abs(a) + 1");
+    ASSERT_TRUE(abs.ok()) << abs.status().message();
+    EXPECT_EQ(abs.value().expr->lhs->kind, Expr::Kind::kCall);
+    EXPECT_EQ(abs.value().expr->lhs->op, ExprOp::kFunction);
+    EXPECT_EQ(abs.value().expr->lhs->function, "abs");
+    EXPECT_EQ(abs.value().expr->lhs->args.size(), 1u);
+    // No arguments, several, nested, and the two spellings that are not f(a, b).
+    for (const char* v : {"NOW()", "substring(s, 2, 3)", "upper(trim(s))", "concat(a, b, 'x')",
+                          "POSITION('a' IN s)", "MOD(a, 3)", "nosuchfunction(a)"}) {
+        EXPECT_TRUE(SetOf(v).ok()) << v << ": " << SetOf(v).status().message();
+    }
+    auto mod = SetOf("MOD(a, 3)");
+    EXPECT_EQ(mod.value().expr->kind, Expr::Kind::kBinary) << "MOD(a, b) is a % b";
+    EXPECT_EQ(mod.value().expr->op, ExprOp::kMod);
+    auto position = SetOf("POSITION('a' IN s)");
+    EXPECT_EQ(position.value().expr->args.size(), 2u);
+    for (const char* v : {"abs(", "abs(a,)", "POSITION('a', s)", "POSITION('a' IN)", "now(1"}) {
+        EXPECT_FALSE(SetOf(v).ok()) << v;
+    }
+}
+
+TEST(SetExpressionParseTest, ARowValueIsOneAssignmentPerColumn) {
+    auto parsed = Parse("UPDATE t SET (a, b) = (b, a + 1), c = 2 WHERE id = 1");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto& stmt = std::get<UpdateStmt>(parsed.value());
+    ASSERT_EQ(stmt.assignments.size(), 3u);
+    EXPECT_EQ(stmt.assignments[0].col_name, "a");
+    EXPECT_EQ(stmt.assignments[0].expr->column, "b");
+    EXPECT_EQ(stmt.assignments[1].col_name, "b");
+    EXPECT_EQ(stmt.assignments[1].expr->op, ExprOp::kAdd);
+    EXPECT_EQ(stmt.assignments[2].col_name, "c");
+    for (const char* sql : {"UPDATE t SET (a, b) = (1)", "UPDATE t SET (a) = (1, 2)",
+                            "UPDATE t SET (a, b) = 1", "UPDATE t SET (a, b) = (b, a"}) {
+        EXPECT_FALSE(Parse(sql).ok()) << sql;
+    }
+    auto sub = Parse("UPDATE t SET (a, b) = (SELECT 1, 2)");
+    ASSERT_FALSE(sub.ok());
+    EXPECT_EQ(sub.status().code(), StatusCode::kNotImplemented);
 }
 
 TEST(SetExpressionParseTest, AColumnNamedCaseIsStillAColumn) {
@@ -280,6 +473,51 @@ TEST(SetExpressionParseTest, ALongChainIsBoundedByItsHeightNotOnlyItsNesting) {
     }
     EXPECT_EQ(Parse(Chain(1000000, "+")).status().code(), StatusCode::kUnsupported)
         << "a megabyte of operators must be refused, not walked";
+}
+
+TEST(SetExpressionParseTest, AColumnNamedCaseBeforeAFusedMinusIsASubtraction) {
+    auto a = SetOf("case -1");
+    ASSERT_TRUE(a.ok()) << a.status().message();
+    ASSERT_NE(a.value().expr, nullptr);
+    EXPECT_EQ(Render(*a.value().expr), "(case - 1)");
+    // A negative operand is written in parentheses: `CASE (` is never a call.
+    auto simple = SetOf("CASE (-1) WHEN b THEN 2 ELSE 3 END");
+    ASSERT_TRUE(simple.ok()) << simple.status().message();
+    EXPECT_EQ(simple.value().expr->op, ExprOp::kCase);
+    // A comparison form BJ leaves out is named, not read as a CASE.
+    for (const char* v : {"case IN (1)", "case BETWEEN 1 AND 2", "case LIKE 'a'"}) {
+        auto refused = SetOf(v);
+        ASSERT_FALSE(refused.ok()) << v;
+        EXPECT_EQ(refused.status().code(), StatusCode::kNotImplemented)
+            << v << ": " << refused.status().message();
+    }
+}
+
+TEST(SetExpressionParseTest, NotOpensAComparisonsRightOperand) {
+    // `a = NOT b AND c` is `(a = (NOT b)) AND c`, as in PostgreSQL.
+    auto a = SetOf("x = NOT y AND z");
+    ASSERT_TRUE(a.ok()) << a.status().message();
+    const Expr& e = *a.value().expr;
+    ASSERT_EQ(e.op, ExprOp::kAnd);
+    ASSERT_EQ(e.lhs->op, ExprOp::kEq);
+    EXPECT_EQ(e.lhs->rhs->op, ExprOp::kNot);
+    EXPECT_EQ(e.lhs->rhs->lhs->column, "y");
+}
+
+TEST(SetExpressionParseTest, ARowValueNamesWhatIsWrongWithIt) {
+    auto fewer = Parse("UPDATE t SET (a, b) = (1)");
+    ASSERT_FALSE(fewer.ok());
+    EXPECT_NE(fewer.status().message().find("fewer entries"), std::string::npos)
+        << fewer.status().message();
+    auto junk = Parse("UPDATE t SET (a, b) = (x y, 1)");
+    ASSERT_FALSE(junk.ok());
+    EXPECT_EQ(junk.status().message().find("fewer entries"), std::string::npos)
+        << "junk between values is not an arity error: " << junk.status().message();
+    auto row_subquery = Parse("UPDATE t SET (a, b) = (SELECT x, y FROM u)");
+    ASSERT_FALSE(row_subquery.ok());
+    EXPECT_EQ(row_subquery.status().code(), StatusCode::kNotImplemented);
+    EXPECT_EQ(row_subquery.status().message().find("BJ-S7"), std::string::npos)
+        << row_subquery.status().message();
 }
 
 TEST(SetExpressionShapeTest, ALiteralIsAValueButAnOperatorIsShape) {

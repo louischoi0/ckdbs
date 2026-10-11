@@ -1,5 +1,6 @@
 #include "kds/sched/scheduler.hpp"
 
+#include "kds/sched/checkpoint_census.hpp"
 #include "kds/base/current_core.hpp"
 
 #include <atomic>
@@ -315,10 +316,17 @@ bool Scheduler::RunOnce() {
     // member.
     SetCurrentCore(core_id_);
     ++iterations_;
+    // BI-S1's hold measure (scheduler.hpp's `holds_inside_run`): this
+    // iteration's span less its idle block, and whether a checkpoint run of
+    // this core overlapped it.
+    const MonoTimeNs iteration_start_ns = clock_.Now();
+    const std::uint64_t run_edges_at_entry =
+        CheckpointCensus::Of(core_id_).run_edges.load(std::memory_order_relaxed);
+    MonoTimeNs iteration_block_ns = 0;
     // The wall-clock origin for group accounting (scheduler.hpp's
     // run_wall_ns): the first iteration, not construction.
     if (!run_started_) {
-        run_start_ns_ = clock_.Now();
+        run_start_ns_ = iteration_start_ns;
         run_started_ = true;
     }
     bool did_work = false;
@@ -369,7 +377,8 @@ bool Scheduler::RunOnce() {
     Status io_status = io_backend_.PollReady(timeout_ms, io_events_scratch_);
     if (timeout_ms != 0) {
         const MonoTimeNs now = clock_.Now();
-        if (now > block_entry_ns) idle_block_ns_ += static_cast<std::uint64_t>(now - block_entry_ns);
+        if (now > block_entry_ns) iteration_block_ns = now - block_entry_ns;
+        idle_block_ns_ += static_cast<std::uint64_t>(iteration_block_ns);
     }
     // Cleared the moment the block ends, so a wake written from here on is
     // one this reactor did not need - which costs a syscall, never a
@@ -445,7 +454,26 @@ bool Scheduler::RunOnce() {
     // exactly one place it can block, and adding a second would be a
     // second source of latency.
 
+    RecordIterationHold(iteration_start_ns, iteration_block_ns, run_edges_at_entry);
     return did_work;
+}
+
+void Scheduler::RecordIterationHold(MonoTimeNs start_ns, MonoTimeNs block_ns,
+                                    std::uint64_t run_edges_at_entry) noexcept {
+    const MonoTimeNs now = clock_.Now();
+    const MonoTimeNs span = now > start_ns ? now - start_ns : 0;
+    const std::uint64_t hold = span > block_ns ? span - block_ns : 0;
+    // Inside a run: one was in flight at entry (an odd edge count) or one
+    // began or ended during the iteration (the count moved).
+    const std::uint64_t edges =
+        CheckpointCensus::Of(core_id_).run_edges.load(std::memory_order_relaxed);
+    IterationHolds& h = (run_edges_at_entry % 2 == 1 || edges != run_edges_at_entry)
+                            ? holds_inside_run_
+                            : holds_outside_run_;
+    if (hold > h.longest_ns) h.longest_ns = hold;
+    if (hold > 10'000'000) ++h.over_10ms;
+    if (hold > 100'000'000) ++h.over_100ms;
+    if (hold > 1'000'000'000) ++h.over_1s;
 }
 
 void Scheduler::Run() {

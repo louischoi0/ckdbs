@@ -412,5 +412,54 @@ TEST_F(KwpEndpointTest, AServedPortalIdleBeyondTheTimeoutIsReleased) {
     server.join();
 }
 
+TEST_F(KwpEndpointTest, APipelinedStatementRepliesInOneWrite) {
+    // BK-R7 (`workorder-bk-opt-read-update-path.md`): the frames a pipelined
+    // PARSE/BIND/EXECUTE/SYNC earns leave in one `send()` at the statement's
+    // completion. Flushing `S_PARSE_OK`/`S_BIND_OK` when the read submitted
+    // the statement was a second write and a second client wake per
+    // statement. Every batch below is one client write of under 200 bytes,
+    // which loopback hands the server's read whole (a split read would count
+    // one more write, and is the one way this cell could flake): the
+    // handshake's reply, the statement's and STOP's are one write each - five
+    // before BK-R7.
+    constexpr std::uint16_t kPort = 25459;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+    std::thread server([&] { RunReactor(listener.value()); });
+
+    int fd = Connect(kPort);
+    ASSERT_GE(fd, 0);
+    wire::FrameDecoder decoder;
+    ASSERT_TRUE(Handshake(fd, decoder));
+
+    const auto batch = [&](std::string_view sql, std::string_view name) {
+        std::vector<std::byte> out;
+        for (const auto& [type, payload] :
+             {std::pair{ClientFrameType::kParse, ParsePayload(name, sql)},
+              std::pair{ClientFrameType::kBind, BindPayload(name, name)},
+              std::pair{ClientFrameType::kExecute, ExecutePayload(name, 0)},
+              std::pair{ClientFrameType::kSync, std::vector<std::byte>{}}}) {
+            const auto frame = wire::EncodeFrame(static_cast<std::uint8_t>(type), 0, payload);
+            out.insert(out.end(), frame.begin(), frame.end());
+        }
+        ASSERT_EQ(::write(fd, out.data(), out.size()), static_cast<ssize_t>(out.size()));
+    };
+
+    batch("SELECT id, v FROM t", "s");
+    for (ServerFrameType want : {ServerFrameType::kParseOk, ServerFrameType::kBindOk,
+                                 ServerFrameType::kRowDesc, ServerFrameType::kRowBatch,
+                                 ServerFrameType::kComplete, ServerFrameType::kReady}) {
+        auto frame = ReadFrame(fd, decoder);
+        ASSERT_TRUE(frame.has_value());
+        EXPECT_EQ(frame->type, static_cast<std::uint8_t>(want));
+    }
+
+    batch("STOP", "stop");
+    (void)ReadFrame(fd, decoder);
+    ::close(fd);
+    server.join();
+    EXPECT_EQ(listener.value().reply_writes(), 3u);
+}
+
 }  // namespace
 }  // namespace kds::server

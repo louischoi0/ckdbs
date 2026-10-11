@@ -1,0 +1,8 @@
+== B rows=1000
+  corr-exists-point      ops= 6400 p50=    110.5 p99=    147.8 err=0 rows0=0 total=3200
+  corr-exists-scan       ops=  640 p50=   3082.8 p99=   3337.1 err=0 rows0=500 total=320000
+  ctl-select-pk          ops= 6400 p50=     97.0 p99=    134.6 err=0 rows0=1 total=6400
+== A rows=1000
+  corr-exists-point      ops= 6400 p50=    108.7 p99=    147.1 err=0 rows0=0 total=3200
+  corr-exists-scan       ops=  640 p50=   3064.9 p99=   3283.8 err=0 rows0=500 total=320000
+  ctl-select-pk          ops= 6400 p50=     95.5 p99=    132.2 err=0 rows0=1 total=6400

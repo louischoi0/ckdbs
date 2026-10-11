@@ -1,0 +1,4 @@
+== B rows=1000
+  corr-exists-scan       ops=  640 p50=   3095.8 p99=   3443.5 err=0 rows0=500 total=320000
+== A rows=1000
+  corr-exists-scan       ops=  640 p50=   3057.0 p99=   3291.0 err=0 rows0=500 total=320000

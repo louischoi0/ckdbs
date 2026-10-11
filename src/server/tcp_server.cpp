@@ -149,7 +149,8 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
       next_identity_(other.next_identity_),
       server_info_(std::move(other.server_info_)),
       stop_handler_(std::move(other.stop_handler_)),
-      clients_(std::move(other.clients_)) {
+      clients_(std::move(other.clients_)),
+      reply_writes_(other.reply_writes_) {
     if (host_ != nullptr) host_->server = this;
     other.listen_fd_ = -1;
     other.scheduler_ = nullptr;
@@ -180,6 +181,7 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         identity_source_ = std::move(other.identity_source_);
         cancels_ = other.cancels_;
         next_identity_ = other.next_identity_;
+        reply_writes_ = other.reply_writes_;
         server_info_ = std::move(other.server_info_);
         stop_handler_ = std::move(other.stop_handler_);
         clients_ = std::move(other.clients_);
@@ -518,6 +520,19 @@ void TcpServer::OnClientReadable(int client_fd) {
     } else if (!DrainCommands(client_fd, conn)) {
         return;  // closed or server stopping
     }
+    // **A statement this read started replies at its completion, in one
+    // write with everything queued ahead of it** (BK-R7,
+    // `workorder-bk-opt-read-update-path.md`). A pipelined
+    // PARSE/BIND/EXECUTE leaves `S_PARSE_OK` and `S_BIND_OK` in the outbox
+    // when the statement is submitted; flushing them here was a second
+    // `send()` per statement and a second wake of a client that had nothing
+    // to do with them but read on (BK-S1's census ranked it first). Nothing
+    // waits on those frames: a client that wanted them before executing
+    // would not have sent the EXECUTE - one that blocks on them while its
+    // other connection holds a lock this statement waits for is broken by
+    // the lock family's 1 s fault net, as any such cycle is.
+    // `OnStatementComplete` flushes the whole outbox.
+    if (conn.in_flight) return;
     if (!FlushOutbox(client_fd, conn)) return;
     SyncWriteInterest(client_fd, conn);
 }
@@ -636,6 +651,7 @@ bool TcpServer::FlushOutbox(int client_fd, Connection& conn) {
                            MSG_NOSIGNAL);
         if (n > 0) {
             sent += static_cast<std::size_t>(n);
+            ++reply_writes_;
             continue;
         }
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {

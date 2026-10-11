@@ -1,0 +1,9 @@
+loadavg_start=5.20 3.75 3.70 5/556 3097421
+loadavg_end=4.73 3.88 3.75 1/548 3098126
+competing=3096979 cmake --build /home/cdkbs/bench-runs/carve-diag/src-7fa2bd96/build -j4 --target kds_server
+3097376 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/bench-runs/carve-diag/src-7fa2bd96/include -i
+3097393 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/bench-runs/carve-diag/src-7fa2bd96/include -i
+3097399 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/bench-runs/carve-diag/src-7fa2bd96/include -i
+3097417 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/bench-runs/carve-diag/src-7fa2bd96/include -i
+duration_s=50.2
+cpu_busy={0: 0.609, 1: 0.411, 2: 0.566, 3: 0.529, 4: 0.432, 5: 0.591, 6: 0.828, 7: 0.297}

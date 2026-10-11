@@ -418,6 +418,49 @@ TEST_F(ForeignKeyCheckTest, AChildReferencingNoParentIsRefused) {
     EXPECT_EQ(RowCount("SELECT * FROM trades"), 0u);
 }
 
+// A parent's pk is a Keystone id in [1, 2^40 - 1], so an integer outside it
+// names no parent that can exist: an absent parent, refused like any other.
+// A negative one used to pass unchecked and be stored.
+TEST_F(ForeignKeyCheckTest, AnIntegerThatIsNoKeystoneIdReferencesNoParent) {
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (1, 10)").substr(0, 8), "INSERTED");
+    for (const char* sql : {"INSERT INTO trades VALUES (-9, 10)",
+                            "INSERT INTO trades VALUES (0, 10)",
+                            "INSERT INTO trades VALUES (1099511627776, 10)",
+                            "INSERT INTO trades VALUES (-9223372036854775808, 10)",
+                            "UPDATE trades SET account_id = -7 WHERE id = 1",
+                            "UPDATE trades SET account_id = 0 - 5 WHERE id = 1",
+                            "UPDATE trades SET account_id = 0 WHERE id = 1"}) {
+        const std::string out = Run(sql);
+        EXPECT_EQ(out.substr(0, 16), "ERR FK_VIOLATION") << sql << " -> " << out;
+    }
+    const std::string named = Run("INSERT INTO trades VALUES (-9, 10)");
+    EXPECT_NE(named.find("row id=-9 "), std::string::npos)
+        << "the message names the value as written: " << named;
+    EXPECT_NE(named.find("(byte 27)"), std::string::npos) << "and its byte: " << named;
+    const std::string computed = Run("UPDATE trades SET account_id = 0 - 5 WHERE id = 1");
+    EXPECT_NE(computed.find("row id=-5 "), std::string::npos) << computed;
+    EXPECT_NE(computed.find("(byte 31)"), std::string::npos)
+        << "a computed value names its expression's byte: " << computed;
+    EXPECT_EQ(RowCount("SELECT * FROM trades"), 1u);
+    EXPECT_EQ(RowCount("SELECT * FROM trades WHERE account_id = 1"), 1u)
+        << "the refused UPDATEs wrote nothing";
+}
+
+TEST_F(ForeignKeyCheckTest, AUint64ValuePastInt64ReferencesNoParent) {
+    ASSERT_EQ(Run("CREATE TABLE fills (id int64, account_id uint64 REFERENCES accounts) BTREE")
+                  .substr(0, 7),
+              "CREATED");
+    const std::string out = Run("INSERT INTO fills VALUES (18446744073709551615)");
+    EXPECT_EQ(out.substr(0, 16), "ERR FK_VIOLATION") << out;
+    EXPECT_NE(out.find("18446744073709551615"), std::string::npos) << out;
+    // 2^64 + 2: past uint64 too, and its `int_val` wraps to 2 - a live
+    // parent ('grace'). It names no row.
+    EXPECT_EQ(Run("INSERT INTO fills VALUES (18446744073709551618)").substr(0, 16),
+              "ERR FK_VIOLATION");
+    EXPECT_EQ(Run("INSERT INTO fills VALUES (2)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(RowCount("SELECT * FROM fills"), 1u);
+}
+
 // ---- AH-T1: the hoist changes no answer (§2a, H-AH1) --------------------
 //
 // The forward check's descent moved out of the write scope to an extraction

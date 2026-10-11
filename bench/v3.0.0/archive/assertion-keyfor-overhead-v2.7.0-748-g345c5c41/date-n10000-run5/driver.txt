@@ -1,0 +1,26 @@
+== B gtype=date preload=10000 create_assertion_ms=8.4 enforcing=True
+  insert-assert-existing   p50=    53.2 p99=    82.8 qps=   17059 err=0
+  insert-assert-newgroup   p50=    53.4 p99=    86.1 qps=   16947 err=0
+  insert-none-existing     p50=    49.2 p99=    77.1 qps=   18626 err=0
+  insert-none-newgroup     p50=    49.2 p99=    75.5 qps=   16217 err=0
+  insert-none-again        p50=    49.4 p99=    89.4 qps=   18141 err=0
+  update-assert            p50=    56.5 p99=    84.4 qps=   16104 err=0
+  update-none              p50=    51.7 p99=    79.2 qps=   17545 err=0
+  update-none-again        p50=    51.8 p99=    76.9 qps=   15948 err=0
+  delete-assert            p50=    50.9 p99=    80.4 qps=   18273 err=0
+  delete-none              p50=    48.4 p99=    72.3 qps=   19604 err=0
+  select                   p50=    64.8 p99=    87.6 qps=   14814 err=0
+  ping                     p50=    49.6 p99=    67.6 qps=   19164 err=0
+== A gtype=date preload=10000 create_assertion_ms=7.7 enforcing=True
+  insert-assert-existing   p50=    53.2 p99=    84.1 qps=   17090 err=0
+  insert-assert-newgroup   p50=    53.3 p99=    82.6 qps=   17010 err=0
+  insert-none-existing     p50=    49.5 p99=    77.4 qps=   18470 err=0
+  insert-none-newgroup     p50=    49.6 p99=    79.3 qps=   18396 err=0
+  insert-none-again        p50=    49.8 p99=   102.5 qps=   17424 err=0
+  update-assert            p50=    58.0 p99=    85.3 qps=    7749 err=0
+  update-none              p50=    52.8 p99=    81.4 qps=   16889 err=0
+  update-none-again        p50=    52.7 p99=    79.7 qps=   17316 err=0
+  delete-assert            p50=    51.7 p99=    82.3 qps=   17792 err=0
+  delete-none              p50=    48.6 p99=    72.6 qps=   19296 err=0
+  select                   p50=    64.2 p99=    87.9 qps=   14814 err=0
+  ping                     p50=    49.9 p99=    66.3 qps=   19301 err=0

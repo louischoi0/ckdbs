@@ -410,14 +410,14 @@ Status Aggregator::Finish(const AggregateSink& emit) {
                     // running total and becomes a decimal again.
                     if (item.type_val == catalog::kTypeValDecimalWide) {
                         out.type = parser::ValueType::kDecimalWide;
-                        out.scale = item.scale;
+                        out.scale = catalog::DecimalScaleOf(item.decimal_len);
                         out.int_val = Int128Low(state.sum_wide);
                         out.dec_hi = Int128High(state.sum_wide);
                         break;
                     }
                     if (item.type_val == catalog::kTypeValDecimal) {
                         out.type = parser::ValueType::kDecimal;
-                        out.scale = item.scale;
+                        out.scale = catalog::DecimalScaleOf(item.decimal_len);
                     } else {
                         out.type = parser::ValueType::kInt;
                     }
@@ -472,7 +472,7 @@ Status Aggregator::Finish(const AggregateSink& emit) {
                         out.type = parser::ValueType::kDecimal;
                         out.int_val = divide(state.sum);
                     }
-                    out.scale = item.scale;
+                    out.scale = catalog::DecimalScaleOf(item.decimal_len);
                     break;
                 }
             }

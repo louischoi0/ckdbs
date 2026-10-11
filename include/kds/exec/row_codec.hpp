@@ -166,6 +166,22 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
 // a decoder needs no opinion about chains.
 inline constexpr std::uint64_t kAllColumnsMask = ~std::uint64_t{0};
 
+// **A slot a partial decode deliberately left out** (BK-R2,
+// `workorder-bk-opt-read-update-path.md`): an UPDATE with
+// no hook decodes only the columns its SET expressions read and fills every
+// other slot with this, so an expression the mask missed is refused
+// `Corruption` by the SET evaluator rather than handed a default value. A
+// hook (Cabin, index, assertion) never sees one, because a relation with any
+// of them decodes whole, and the encoder never does since BK-R3 encodes only
+// the assigned values. A `kParam`, because no other one reaches a decoded
+// row since declared patterns were withdrawn.
+inline const parser::AstValue kUndecoded = [] {
+    parser::AstValue v;
+    v.type = parser::ValueType::kParam;
+    v.str_val = "undecoded";
+    return v;
+}();
+
 // Decode `columns` of one row into `out`, then resolve whatever spilled.
 //
 // **One rule, one place.** Every walker that filters before it completes a
@@ -244,6 +260,35 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
                                             const catalog::RowLayout& layout, std::uint64_t id,
                                             const std::vector<parser::AstValue>& values,
                                             const VarHeapSink& varheap = {});
+
+// One assignment `EncodeAssigned` writes: a column of the schema (never the
+// pk, column 0) and the value it takes.
+struct AssignedCell {
+    std::size_t column = 0;
+    const parser::AstValue* value = nullptr;
+};
+
+// **An UPDATE's new image: the row's own bytes with only its assigned cells
+// re-encoded** (BK-R2, BK-R3, `instructions/v3.0.0/workorder-bk-opt-read-update-path.md`).
+// `before` is the version being replaced, whole; each assigned cell is
+// zeroed, its NULL bit cleared, and encoded as `EncodeRow` would encode it,
+// spilling through `varheap` if it must. **Every other cell is carried as
+// it stands** - an inline value byte for byte, and a spilled cell as the
+// pointer it holds, so the new version names the old version's var-heap
+// value rather than a copy of it. Two versions then share that value, which
+// is what binds every release of a superseded value: it may go only once
+// the newest version naming it is reclaimed (`docs/spec/heap-and-tuple.md`
+// §3.4). The Keystone word is rewritten as `EncodeRow` writes it.
+//
+// Fails with Corruption if `before` is not exactly `layout.row_size` bytes
+// or a cell names no body column, and otherwise as `EncodeRow` fails for
+// the assigned values.
+StatusOr<std::vector<std::byte>> EncodeAssigned(const catalog::Schema& schema,
+                                                 const catalog::RowLayout& layout,
+                                                 std::uint64_t id,
+                                                 std::span<const std::byte> before,
+                                                 std::span<const AssignedCell> cells,
+                                                 const VarHeapSink& varheap = {});
 
 // Reads just the primary key out of a tuple payload, without decoding the
 // body. This is what a duplicate-key scan compares, and it is why the pk
