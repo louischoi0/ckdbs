@@ -364,11 +364,19 @@ On a checked write (per §4.2), executed inline in the writing statement:
    kind** (`CoerceLiteralToColumn`), so an `INSERT`'s literal (a `date` or
    `timestamp` as a string, a `decimal` as text), a `SET` literal and a
    decoded row all key one stored value the same way; the build's backfill
-   keys from decoded rows. Group keys are logged as bytes and replay never
-   recomputes one, so an assertion on a `date`, `timestamp` or `decimal`
-   column that reserved under the written form before this rule holds
-   groups no later write reaches - `DROP` and `CREATE ASSERTION` rebuilds
-   them. No other BY type is affected, and no format changed.
+   keys from decoded rows. **A value that does not coerce refuses the row
+   before its assertion holds or reserves anything** (an `UPDATE`'s earlier
+   assertions are unwound by the statement's abort). Group keys are logged as bytes
+   and replay never recomputes one, so an assertion on a `date`,
+   `timestamp`, `decimal` or `decimal128` column that reserved under the
+   written form before this rule holds groups no later write reaches, and
+   its bound would undercount. **A mount reads every recovered group's key
+   kinds against its BY columns' stored kinds** (`CheckGroupKeyKinds`) and
+   leaves an assertion with any such group that counts a row unenforcing (an
+   empty one - a rolled-back insert's - holds nothing a bound could miss), refusing its
+   relation's writes as §7 does for a directory it cannot base, until `DROP`
+   and `CREATE ASSERTION` rebuild it. No other BY type is affected, and no
+   format changed.
 2. **Admission check:** would `count + Δcount` / `sum + Δsum`, with every
    held contribution to the group counted, exceed the bound? (Checked int64
    arithmetic; overflow ⇒ statement error, AG3.)

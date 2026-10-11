@@ -374,6 +374,17 @@ TEST_F(AssertionEnforceTest, ADecimalGroupKeyedFromALiteralMeetsTheBackfilledCou
     EXPECT_EQ(Run("INSERT INTO px VALUES ('2.50')").substr(0, 8), "INSERTED");
 }
 
+TEST_F(AssertionEnforceTest, AWideDecimalGroupKeyedFromALiteralMeetsTheBackfilledCount) {
+    ASSERT_EQ(Run("CREATE TABLE px (id int64, p decimal(30,2)) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO px VALUES ('12345678901234567890.50')").substr(0, 8),
+              "INSERTED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON px GROUP BY (p) CHECK COUNT(*) <= 1").substr(0, 7),
+              "CREATED");
+    EXPECT_EQ(Run("INSERT INTO px VALUES ('12345678901234567890.50')").substr(0, 23),
+              "ERR ASSERTION_VIOLATION");
+    EXPECT_EQ(Run("INSERT INTO px VALUES ('1.50')").substr(0, 8), "INSERTED");
+}
+
 TEST_F(AssertionEnforceTest, ADeleteAndAnUpdateOnADateGroupAgreeWithTheInsertKey) {
     ASSERT_EQ(Run("CREATE TABLE ev (id int64, d date) BTREE").substr(0, 7), "CREATED");
     ASSERT_EQ(Run("CREATE ASSERTION cap ON ev GROUP BY (d) CHECK COUNT(*) <= 2").substr(0, 7),

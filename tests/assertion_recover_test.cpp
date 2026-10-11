@@ -708,6 +708,67 @@ TEST(AssertionSnapshotDoorTest, AKeyPastItsRecordsLengthFieldIsRefusedAtAdmissio
     EXPECT_TRUE(admit(1000).ok());
 }
 
+// **A group keyed from a value as written is found at mount.** Before `KeyFor`
+// coerced, an INSERT keyed a date as its string and a decimal as its text;
+// such a group survives in the log as bytes and no write reaches it again, so
+// the bound it holds would undercount.
+TEST(AssertionGroupKeyKindsTest, AKeyFromTheWrittenFormIsFoundAndTheStoredFormPasses) {
+    const auto with_key = [](std::uint32_t type_val, const parser::AstValue& value,
+                             std::int64_t rows = 1) {
+        LiveAssertion a;
+        a.name = "cap";
+        a.group_cols = {1};
+        a.group_col_names = {"d"};
+        a.group_columns = {GroupColumn(type_val)};
+        a.cabin = BoundCabin(BoundAggregate::kCount, /*bound=*/10);
+        const std::string key = EncodeGroupKey({value});
+        a.cabin.EnsureGroupId(key);
+        for (std::int64_t r = 0; r < rows; ++r) {
+            EXPECT_TRUE(a.cabin.Apply(key, 1, /*page_id=*/100, static_cast<std::uint16_t>(r)).ok());
+        }
+        return CheckGroupKeyKinds(a);
+    };
+    parser::AstValue written;
+    written.type = parser::ValueType::kStr;
+    written.str_val = "2026-01-01";
+    parser::AstValue epoch_day;
+    epoch_day.type = parser::ValueType::kInt;
+    epoch_day.int_val = 20454;
+    parser::AstValue null_value;
+    null_value.type = parser::ValueType::kNull;
+    parser::AstValue unscaled;
+    unscaled.type = parser::ValueType::kDecimal;
+    unscaled.int_val = 150;
+    unscaled.scale = 2;
+
+    EXPECT_EQ(with_key(catalog::kTypeValDate, written).code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(with_key(catalog::kTypeValDate, written, /*rows=*/0).ok())
+        << "an empty group - a rolled-back insert's - counts no row a bound could miss";
+    EXPECT_TRUE(with_key(catalog::kTypeValDate, epoch_day).ok());
+    EXPECT_TRUE(with_key(catalog::kTypeValDate, null_value).ok()) << "NULL keys as NULL";
+    EXPECT_EQ(with_key(catalog::kTypeValDecimal, epoch_day).code(), StatusCode::kUnsupported)
+        << "any kind but the stored one is refused";
+    EXPECT_TRUE(with_key(catalog::kTypeValDecimal, unscaled).ok());
+    EXPECT_TRUE(with_key(catalog::kTypeValVarchar, written).ok()) << "unaffected type";
+}
+
+TEST(AssertionGroupKeyKindsTest, TheKindsReadBackWhatTheEncoderWroteAndRefuseATornKey) {
+    std::vector<parser::AstValue> values(4);
+    values[0].type = parser::ValueType::kNull;
+    values[1].type = parser::ValueType::kStr;
+    values[1].str_val = "ab";
+    values[2].type = parser::ValueType::kDecimalWide;
+    values[3].type = parser::ValueType::kInt;
+    const std::string key = EncodeGroupKey(values);
+    const auto kinds = GroupKeyKinds(key);
+    ASSERT_TRUE(kinds.has_value());
+    EXPECT_EQ(*kinds, (std::vector<parser::ValueType>{
+                          parser::ValueType::kNull, parser::ValueType::kStr,
+                          parser::ValueType::kDecimalWide, parser::ValueType::kInt}));
+    EXPECT_FALSE(GroupKeyKinds(std::string_view(key).substr(0, key.size() - 1)).has_value());
+    EXPECT_FALSE(GroupKeyKinds(std::string(1, '\x09')).has_value()) << "an unknown tag";
+}
+
 TEST_F(AssertionRecoverTest, ASecondCheckpointsSnapshotInRangeDoesNotFailThePass) {
     // The anchor is published at Complete(), so a crash *during* a later
     // checkpoint leaves that checkpoint's snapshot records inside the range the
@@ -1272,6 +1333,38 @@ TEST_F(AssertionResumeTest, AnAssertionCreatedAfterTheLastCheckpointStillRecover
     };
     EXPECT_EQ(admit(50).code(), StatusCode::kAssertionViolation) << "70 + 50 > 100";
     EXPECT_TRUE(admit(30).ok()) << "70 + 30 == 100";
+}
+
+// A date group across a restart: the revived assertion's BY columns are the
+// schema's, so a literal written after the mount keys the group the inserts
+// before it reserved - and the mount's key-kind check passes it.
+TEST_F(AssertionResumeTest, ADateGroupKeyedFromALiteralMeetsItsCountAcrossARestart) {
+    ASSERT_EQ(Run("CREATE TABLE ev (id int64, d date)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01')").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON ev GROUP BY (d) CHECK COUNT(*) <= 2").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01')").substr(0, 8), "INSERTED");
+    ASSERT_TRUE(wal_->Flush().ok());
+
+    AssertionEnforcer fresh;
+    const server::MountRecovery report = server::ResumeAssertionsAfterRecovery(
+        boot_->catalog, *store_, *log_device_, /*stream_core=*/0, /*from_lsn=*/0, fresh,
+        server::MountRecovery{}, /*log=*/nullptr);
+    ASSERT_EQ(report.assertions_enforcing, 1u);
+    EXPECT_EQ(report.assertions_unrecovered, 0u);
+
+    const auto admit = [&](const std::string& day) {
+        std::vector<parser::AstValue> row(1);
+        row[0].type = parser::ValueType::kStr;
+        row[0].str_val = day;
+        AssertionEnforcer::Hold hold;
+        return fresh.AdmitInsert(4000, row, /*writer_txn=*/0, hold);
+    };
+    EXPECT_EQ(admit("2026-01-01").code(), StatusCode::kAssertionViolation)
+        << "one backfilled row and one inserted, both under the stored key";
+    EXPECT_TRUE(admit("2026-01-02").ok());
+    EXPECT_EQ(admit("2026-02-30").code(), StatusCode::kInvalidArgument)
+        << "a literal that does not coerce is refused, not keyed as written";
 }
 
 TEST_F(AssertionResumeTest, AGroupKeyNoRecordCanCarryIsRefusedAtAdmission) {

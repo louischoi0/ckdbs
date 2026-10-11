@@ -167,6 +167,13 @@ struct LiveAssertion {
     LiveAssertion() : cabin(BoundAggregate::kCount, 0) {}
 };
 
+// Whether every group in `a`'s recovered directory was keyed from its BY
+// values as stored. An INSERT once keyed a `date`, `timestamp` or decimal BY
+// value as written (a string), and such a group is one no write reaches any
+// more, so the bound it holds is not the bound enforced
+// (`docs/spec/assertion.md` §6.2). A mount refuses to adopt the assertion on
+// this answer rather than enforce a count that undercounts.
+Status CheckGroupKeyKinds(const LiveAssertion& a);
 
 // The registry, and - since RC07 - the checkpoint's snapshot source: it is what
 // holds the live directories, so it is what can hand their group headers to a
