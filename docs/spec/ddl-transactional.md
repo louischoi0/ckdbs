@@ -190,6 +190,10 @@ membership is a decision:
   `UPDATE`, `DELETE`, `DESCRIBE`, `SHOW TABLES`, `SHOW INDEXES`, `ALTER`,
   `DROP TABLE`, and a foreign key's parent lookup. These decide what a
   statement may touch, so they answer under the session's view.
+  **`CREATE ASSERTION` is filtered under a settled view instead** (§5f,
+  `assertion.md` §8.1): it reads settled state, so a relation an open
+  transaction created - the session's own too - is not its target, and
+  under repeatable read it may target a relation committed after `BEGIN`.
 - **Unfiltered by design — "does this name already exist".** The
   duplicate-name check in both `CREATE TABLE` forms. Filtering it would
   hide another transaction's uncommitted relation of the same name, both

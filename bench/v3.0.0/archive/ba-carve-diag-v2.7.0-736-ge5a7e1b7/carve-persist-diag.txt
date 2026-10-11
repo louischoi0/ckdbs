@@ -1,0 +1,2 @@
+n 308 wb p50 13 max 29
+sync p50 3171 p90 7879 max 251841 over 50ms 11

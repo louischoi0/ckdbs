@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <utility>
 
 namespace kds::parser {
 
@@ -130,6 +131,61 @@ Status Parser::ParseQualifiedName(std::string& schema, std::string& name,
     return Status::OK();
 }
 
+// A type name and its optional arguments. Recognized by the paren rather
+// than by the name, so a type that takes no arguments refuses them here
+// instead of each type name needing its own production - and the arity is
+// decided by the name *inside* that branch, so `char(8, 1)` fails on the
+// comma with a byte rather than on a count nobody wrote. A bare `decimal`
+// is the caller's to refuse, because the message that is useful differs: a
+// column names itself, a CAST names its own byte.
+Status Parser::ParseTypeSpec(TypeSpec& out) {
+    out.byte_offset = lexer_.Peek().byte_offset;
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    out.name = std::move(name.value());
+
+    if (lexer_.Peek().type == TokenType::kLParen) {
+        const std::uint32_t paren_at = lexer_.Peek().byte_offset;
+        const bool takes_precision = IEquals(out.name, "DECIMAL");
+        const bool takes_width = IEquals(out.name, "CHAR") || IEquals(out.name, "VARCHAR");
+        if (!takes_precision && !takes_width) {
+            return Status::InvalidArgument("type '" + out.name + "' takes no arguments (byte " +
+                                           std::to_string(paren_at) + ")");
+        }
+        lexer_.Next();  // consume '('
+        out.arg_byte_offset = lexer_.Peek().byte_offset;
+
+        if (takes_width) {
+            auto width = ParseTypeArgument("width");
+            if (!width.ok()) return width.status();
+            if (Status s = ExpectToken(TokenType::kRParen, "')' after a character type's width");
+                !s.ok()) {
+                return s;
+            }
+            out.has_width = true;
+            out.width = width.value();
+        } else {
+            auto precision = ParseTypeArgument("precision");
+            if (!precision.ok()) return precision.status();
+            if (Status s = ExpectToken(TokenType::kComma,
+                                       "',' between a decimal's precision and scale");
+                !s.ok()) {
+                return s;
+            }
+            auto scale = ParseTypeArgument("scale");
+            if (!scale.ok()) return scale.status();
+            if (Status s = ExpectToken(TokenType::kRParen, "')' after a decimal's scale");
+                !s.ok()) {
+                return s;
+            }
+            out.has_precision = true;
+            out.precision = precision.value();
+            out.scale = scale.value();
+        }
+    }
+    return Status::OK();
+}
+
 StatusOr<std::uint32_t> Parser::ParseTypeArgument(std::string_view what) {
     const Token tok = lexer_.Next();
     if (tok.type != TokenType::kIntLit || tok.negative) {
@@ -148,6 +204,7 @@ StatusOr<std::uint32_t> Parser::ParseTypeArgument(std::string_view what) {
 }
 
 void Parser::ConsumeOptionalSemicolon() {
+    if (inside_value_subquery_) return;
     if (lexer_.Peek().type == TokenType::kSemicolon) {
         lexer_.Next();
     }
@@ -225,7 +282,7 @@ StatusOr<AstValue> Parser::ParseValue() {
             // name rather than as a malformed value.
             if (tok.type == TokenType::kIdent && lexer_.Peek().type == TokenType::kLParen) {
                 return Status::NotImplemented(
-                    "a function call is supported in a WHERE comparison only (byte " +
+                    "a function call is supported only in a WHERE comparison and a SET value (byte " +
                     std::to_string(tok.byte_offset) + ")");
             }
             return Status::InvalidArgument(
@@ -234,13 +291,19 @@ StatusOr<AstValue> Parser::ParseValue() {
     }
 }
 
-// ---- A SET value (BJ-S2) --------------------------------------------------
+// ---- A SET value (BJ-S2, BJ-S5) -------------------------------------------
 //
-// Family 1 of BJ-R1 only: column references to the target relation,
-// literals, parentheses, unary `+`/`-`, binary `+ - * / %` and `||`.
+// Families 1-3 of BJ-R1: column references to the target relation,
+// literals, parentheses, unary `+`/`-`, binary `+ - * / %` and `||`; the
+// comparisons, `AND`, `OR`, `NOT` and `IS [NOT] NULL` as boolean values;
+// `CASE`, `COALESCE`, `NULLIF`, `GREATEST`, `LEAST`; `CAST` and `::`; the
+// scalar functions (BJ-S6) and an uncorrelated scalar subquery (BJ-S7).
 // Every other form is refused `NotImplemented` at its byte, never parsed
-// and dropped: a call (BJ-S6), a comparison, `AND`/`OR`/`NOT`, `CASE`
-// (BJ-S5), a subquery (BJ-S7).
+// and dropped: a row subquery and the comparison forms BJ leaves out (`IN`,
+// `BETWEEN`, `LIKE`, `EXISTS`).
+// Precedence is PostgreSQL's, tightest first: `::`, unary sign, `* / %`,
+// `+ -`, `||`, the comparisons (which do not chain), `IS`, `NOT`, `AND`,
+// `OR`.
 
 namespace {
 
@@ -249,13 +312,32 @@ constexpr std::uint32_t kMaxExprDepth = 64;
 // nesting depth above does not see. Every stage that walks the tree - the
 // destructor included - recurses once per level.
 constexpr std::uint32_t kMaxExprHeight = 256;
+// The nodes a typed tree holds, a shared child counted per reference
+// (`Expr::size`): what typing and every row's evaluation cost.
+constexpr std::uint32_t kMaxExprSize = 4096;
 
 Status ExprTooDeep(std::uint32_t byte) {
     return Status::Unsupported("an expression nested deeper than " +
-                               std::to_string(kMaxExprDepth) + " levels or taller than " +
-                               std::to_string(kMaxExprHeight) + " is not supported (byte " +
+                               std::to_string(kMaxExprDepth) + " levels, taller than " +
+                               std::to_string(kMaxExprHeight) + " or larger than " +
+                               std::to_string(kMaxExprSize) + " nodes is not supported (byte " +
                                std::to_string(byte) + ")");
 }
+
+bool TooBig(const Expr& e) { return e.height > kMaxExprHeight || e.size > kMaxExprSize; }
+
+// A sum that cannot wrap: past the bound the exact figure does not matter.
+std::uint32_t AddSize(std::uint32_t a, std::uint32_t b) {
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(a) + b, static_cast<std::uint64_t>(kMaxExprSize) + 1));
+}
+
+// Holds one level of the parser's nesting count for its scope.
+struct DepthScope {
+    std::uint32_t& depth;
+    explicit DepthScope(std::uint32_t& d) : depth(d) { ++depth; }
+    ~DepthScope() { --depth; }
+};
 
 std::shared_ptr<const Expr> MakeLiteral(AstValue v, bool bare_numeric) {
     auto e = std::make_shared<Expr>();
@@ -276,9 +358,97 @@ std::shared_ptr<const Expr> MakeBinary(ExprOp op, std::uint32_t op_at,
     e->op_byte_offset = op_at;
     e->op = op;
     e->height = std::max(lhs->height, rhs->height) + 1;
+    e->size = AddSize(AddSize(lhs->size, rhs->size), 1);
     e->lhs = std::move(lhs);
     e->rhs = std::move(rhs);
     return e;
+}
+
+std::shared_ptr<const Expr> MakeCall(ExprOp op, std::uint32_t at, std::uint32_t op_at,
+                                     std::vector<std::shared_ptr<const Expr>> args) {
+    auto e = std::make_shared<Expr>();
+    e->kind = Expr::Kind::kCall;
+    e->byte_offset = at;
+    e->op_byte_offset = op_at;
+    e->op = op;
+    std::uint32_t tallest = 0;
+    std::uint32_t size = 1;
+    for (const auto& a : args) {
+        tallest = std::max(tallest, a->height);
+        size = AddSize(size, a->size);
+    }
+    e->height = tallest + 1;
+    e->size = size;
+    e->args = std::move(args);
+    return e;
+}
+
+std::shared_ptr<const Expr> MakeUnary(ExprOp op, std::uint32_t at, std::uint32_t op_at,
+                                      std::shared_ptr<const Expr> operand) {
+    auto e = std::make_shared<Expr>();
+    e->kind = Expr::Kind::kUnary;
+    e->byte_offset = at;
+    e->op_byte_offset = op_at;
+    e->op = op;
+    e->height = operand->height + 1;
+    e->size = AddSize(operand->size, 1);
+    e->lhs = std::move(operand);
+    return e;
+}
+
+std::shared_ptr<const Expr> MakeCast(std::uint32_t at, std::uint32_t op_at,
+                                     std::shared_ptr<const Expr> operand, TypeSpec to) {
+    auto e = std::make_shared<Expr>();
+    e->kind = Expr::Kind::kUnary;
+    e->byte_offset = at;
+    e->op_byte_offset = op_at;
+    e->op = ExprOp::kCast;
+    e->height = operand->height + 1;
+    e->size = AddSize(operand->size, 1);
+    e->lhs = std::move(operand);
+    e->cast_to = std::move(to);
+    return e;
+}
+
+// A comparison operator's token, or nothing: the one list of them.
+std::optional<ExprOp> ComparisonOf(TokenType t) {
+    switch (t) {
+        case TokenType::kEq: return ExprOp::kEq;
+        case TokenType::kNeq: return ExprOp::kNe;
+        case TokenType::kLt: return ExprOp::kLt;
+        case TokenType::kLte: return ExprOp::kLe;
+        case TokenType::kGt: return ExprOp::kGt;
+        case TokenType::kGte: return ExprOp::kGe;
+        default: return std::nullopt;
+    }
+}
+
+// The n-ary calls that are BJ-S5's, by name (CAST has its own production).
+std::optional<ExprOp> NaryOf(std::string_view name) {
+    if (IEquals(name, "COALESCE")) return ExprOp::kCoalesce;
+    if (IEquals(name, "NULLIF")) return ExprOp::kNullif;
+    if (IEquals(name, "GREATEST")) return ExprOp::kGreatest;
+    if (IEquals(name, "LEAST")) return ExprOp::kLeast;
+    return std::nullopt;
+}
+
+// The most arguments one call or CASE takes, so a statement cannot make the
+// parser build a list as wide as its text is long.
+constexpr std::size_t kMaxExprArgs = 128;
+
+// A token after which a SET value is complete: the next assignment, the
+// statement's end, a row value's `)`, or the WHERE.
+bool EndsSetValue(const Token& t) {
+    return t.type == TokenType::kComma || t.type == TokenType::kEof ||
+           t.type == TokenType::kSemicolon || t.type == TokenType::kRParen ||
+           (t.type == TokenType::kIdent && IEquals(t.text, "WHERE"));
+}
+
+// `IN`, `BETWEEN`, `LIKE`: comparison forms BJ does not build (BJ-R1 family
+// 2), refused by name. None can open a value, so none starts a CASE operand.
+bool IsUnbuiltComparison(const Token& t) {
+    return (t.type == TokenType::kKeyword && (t.kw == Keyword::kIn || t.kw == Keyword::kBetween)) ||
+           (t.type == TokenType::kIdent && IEquals(t.text, "LIKE"));
 }
 
 // A `-` the lexer fused into the literal that follows it (`v -1`) is, in
@@ -310,53 +480,34 @@ std::shared_ptr<const Expr> MagnitudeOf(const Token& tok) {
 }  // namespace
 
 Status Parser::ParseSetValue(Assignment& a) {
-    auto expr = ParseExprConcat();
-    if (!expr.ok()) return expr.status();
-
-    // What may follow a SET value is `,`, `WHERE`, `;` or the end. A
-    // comparison or a boolean word is a form this stage does not build, and
-    // saying so by name beats the generic complaint the caller would make.
-    const Token& next = lexer_.Peek();
-    switch (next.type) {
-        case TokenType::kEq:
-        case TokenType::kNeq:
-        case TokenType::kLt:
-        case TokenType::kLte:
-        case TokenType::kGt:
-        case TokenType::kGte:
-            return Status::NotImplemented(
-                "a comparison in a SET value is not supported yet (BJ-S5) (byte " +
-                std::to_string(next.byte_offset) + ")");
-        case TokenType::kKeyword:
-            if (next.kw == Keyword::kIn || next.kw == Keyword::kBetween ||
-                next.kw == Keyword::kNot) {
-                return Status::NotImplemented(
-                    "'" + std::string(next.text) +
-                    "' in a SET value is not supported yet (BJ-S5) (byte " +
-                    std::to_string(next.byte_offset) + ")");
+    // **A bare literal is nearly every SET value**, and it should not pay for the
+    // expression grammar: eleven nested levels and a heap node to read one
+    // token and throw the node away (BJ's close measured the literal path
+    // 1.6 µs slower). The literal is read here, and if nothing continues it
+    // that is the answer; if an operator does, it is handed to the chain as its
+    // first primary.
+    switch (lexer_.Peek().type) {
+        case TokenType::kIntLit:
+        case TokenType::kNumLit:
+        case TokenType::kStrLit:
+        case TokenType::kNullLit:
+        case TokenType::kParam:
+        case TokenType::kNamedParam: {
+            const bool bare_numeric = lexer_.Peek().type == TokenType::kNumLit;
+            auto literal = ParseValue();
+            if (!literal.ok()) return literal.status();
+            const Token& next = lexer_.Peek();
+            if (EndsSetValue(next)) {
+                a.val = std::move(literal.value());
+                return Status::OK();
             }
+            pending_primary_ = MakeLiteral(std::move(literal.value()), bare_numeric);
             break;
-        case TokenType::kError:
-            // `a::int`, the cast PostgreSQL spells with two colons (BJ-R1
-            // family 3).
-            if (next.text == ":") {
-                return Status::NotImplemented(
-                    "a '::' cast in a SET value is not supported yet (BJ-S5) (byte " +
-                    std::to_string(next.byte_offset) + ")");
-            }
-            break;
-        case TokenType::kIdent:
-            if (IEquals(next.text, "AND") || IEquals(next.text, "OR") ||
-                IEquals(next.text, "IS")) {
-                return Status::NotImplemented(
-                    "'" + std::string(next.text) +
-                    "' in a SET value is not supported yet (BJ-S5) (byte " +
-                    std::to_string(next.byte_offset) + ")");
-            }
-            break;
-        default:
-            break;
+        }
+        default: break;
     }
+    auto expr = ParseExprOr();
+    if (!expr.ok()) return expr.status();
 
     const Expr& e = *expr.value();
     // One bare literal keeps today's shape and today's gate. A parenthesised
@@ -370,6 +521,114 @@ Status Parser::ParseSetValue(Assignment& a) {
     return Status::OK();
 }
 
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprOr() {
+    auto lhs = ParseExprAnd();
+    if (!lhs.ok()) return lhs;
+    std::shared_ptr<const Expr> acc = std::move(lhs.value());
+    while (lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, "OR")) {
+        const Token op = lexer_.Next();
+        auto rhs = ParseExprAnd();
+        if (!rhs.ok()) return rhs;
+        acc = MakeBinary(ExprOp::kOr, op.byte_offset, std::move(acc), std::move(rhs.value()));
+        if (TooBig(*acc)) return ExprTooDeep(acc->op_byte_offset);
+    }
+    return acc;
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprAnd() {
+    auto lhs = ParseExprNot();
+    if (!lhs.ok()) return lhs;
+    std::shared_ptr<const Expr> acc = std::move(lhs.value());
+    while (lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, "AND")) {
+        const Token op = lexer_.Next();
+        auto rhs = ParseExprNot();
+        if (!rhs.ok()) return rhs;
+        acc = MakeBinary(ExprOp::kAnd, op.byte_offset, std::move(acc), std::move(rhs.value()));
+        if (TooBig(*acc)) return ExprTooDeep(acc->op_byte_offset);
+    }
+    return acc;
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprNot() {
+    const Token& t = lexer_.Peek();
+    if (pending_primary_ != nullptr || t.type != TokenType::kKeyword || t.kw != Keyword::kNot) {
+        return ParseExprIs();
+    }
+    if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(t.byte_offset);
+    const Token op = lexer_.Next();
+    StatusOr<std::shared_ptr<const Expr>> operand = Status::OK();
+    {
+        DepthScope scope(expr_depth_);
+        operand = ParseExprNot();
+    }
+    if (!operand.ok()) return operand;
+    auto e = MakeUnary(ExprOp::kNot, op.byte_offset, op.byte_offset, std::move(operand.value()));
+    if (TooBig(*e)) return ExprTooDeep(op.byte_offset);
+    return e;
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprIs() {
+    auto lhs = ParseExprComparison();
+    if (!lhs.ok()) return lhs;
+    std::shared_ptr<const Expr> acc = std::move(lhs.value());
+    while (lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, "IS")) {
+        const Token is = lexer_.Next();
+        bool negated = false;
+        if (lexer_.Peek().type == TokenType::kKeyword && lexer_.Peek().kw == Keyword::kNot) {
+            lexer_.Next();
+            negated = true;
+        }
+        if (lexer_.Peek().type != TokenType::kNullLit) {
+            // `IS [NOT] TRUE`, `IS DISTINCT FROM`: the standard's other
+            // tests, outside BJ's list (BJ-R1 family 2).
+            return Status::NotImplemented(
+                "only IS [NOT] NULL is supported in a SET value (byte " +
+                std::to_string(lexer_.Peek().byte_offset) + ")");
+        }
+        lexer_.Next();
+        const std::uint32_t at = acc->byte_offset;  // read before acc is moved from
+        acc = MakeUnary(negated ? ExprOp::kIsNotNull : ExprOp::kIsNull, at, is.byte_offset,
+                        std::move(acc));
+        if (TooBig(*acc)) return ExprTooDeep(acc->op_byte_offset);
+    }
+    return acc;
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprComparison() {
+    auto lhs = ParseExprConcat();
+    if (!lhs.ok()) return lhs;
+    const Token& t = lexer_.Peek();
+    const std::optional<ExprOp> compare = ComparisonOf(t.type);
+    if (!compare.has_value()) {
+        // The comparison forms BJ does not build, named at their byte rather
+        // than left to a generic complaint about what follows.
+        const bool not_form = t.type == TokenType::kKeyword && t.kw == Keyword::kNot;
+        if (IsUnbuiltComparison(t) || not_form) {
+            return Status::NotImplemented("'" + std::string(t.text) +
+                                          "' in a SET value is not supported (byte " +
+                                          std::to_string(t.byte_offset) + ")");
+        }
+        return lhs;
+    }
+    const ExprOp op = *compare;
+    const Token tok = lexer_.Next();
+    // `a = NOT b`: NOT binds looser than a comparison but may still open its
+    // right operand, as in PostgreSQL - `a = NOT (b)`, and `a = NOT b AND c`
+    // is `(a = NOT b) AND c`.
+    const Token& after = lexer_.Peek();
+    auto rhs = after.type == TokenType::kKeyword && after.kw == Keyword::kNot ? ParseExprNot()
+                                                                               : ParseExprConcat();
+    if (!rhs.ok()) return rhs;
+    if (ComparisonOf(lexer_.Peek().type).has_value()) {
+        return Status::InvalidArgument("comparison operators do not chain; parenthesise one "
+                                       "(byte " +
+                                       std::to_string(lexer_.Peek().byte_offset) + ")");
+    }
+    auto e = MakeBinary(op, tok.byte_offset, std::move(lhs.value()), std::move(rhs.value()));
+    if (TooBig(*e)) return ExprTooDeep(e->op_byte_offset);
+    return e;
+}
+
 StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprConcat() {
     auto lhs = ParseExprAdditive();
     if (!lhs.ok()) return lhs;
@@ -379,7 +638,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprConcat() {
         auto rhs = ParseExprAdditive();
         if (!rhs.ok()) return rhs;
         acc = MakeBinary(ExprOp::kConcat, op.byte_offset, std::move(acc), std::move(rhs.value()));
-        if (acc->height > kMaxExprHeight) return ExprTooDeep(acc->op_byte_offset);
+        if (TooBig(*acc)) return ExprTooDeep(acc->op_byte_offset);
     }
     return acc;
 }
@@ -396,16 +655,18 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprAdditive() {
             if (!rhs.ok()) return rhs;
             acc = MakeBinary(op.type == TokenType::kPlus ? ExprOp::kAdd : ExprOp::kSub,
                              op.byte_offset, std::move(acc), std::move(rhs.value()));
-            if (acc->height > kMaxExprHeight) return ExprTooDeep(acc->op_byte_offset);
+            if (TooBig(*acc)) return ExprTooDeep(acc->op_byte_offset);
         } else if (IsSignedLiteral(t)) {
             // `v -1`: the minus is the literal's sign, and what follows it
             // is the left operand of any `*` that comes next.
             const Token lit = lexer_.Next();
-            auto rhs = ParseExprMultiplicative(MagnitudeOf(lit));
+            auto magnitude = ParseCastSuffix(MagnitudeOf(lit));
+            if (!magnitude.ok()) return magnitude;
+            auto rhs = ParseExprMultiplicative(std::move(magnitude.value()));
             if (!rhs.ok()) return rhs;
             acc = MakeBinary(ExprOp::kSub, lit.byte_offset, std::move(acc),
                              std::move(rhs.value()));
-            if (acc->height > kMaxExprHeight) return ExprTooDeep(acc->op_byte_offset);
+            if (TooBig(*acc)) return ExprTooDeep(acc->op_byte_offset);
         } else {
             return acc;
         }
@@ -436,32 +697,229 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprMultiplicative(
         auto rhs = ParseExprUnary();
         if (!rhs.ok()) return rhs;
         acc = MakeBinary(op, tok.byte_offset, std::move(acc), std::move(rhs.value()));
-        if (acc->height > kMaxExprHeight) return ExprTooDeep(acc->op_byte_offset);
+        if (TooBig(*acc)) return ExprTooDeep(acc->op_byte_offset);
     }
 }
 
 StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprUnary() {
     const Token& t = lexer_.Peek();
-    if (t.type != TokenType::kPlus && t.type != TokenType::kMinus) return ParseExprPrimary();
+    if (pending_primary_ != nullptr || (t.type != TokenType::kPlus && t.type != TokenType::kMinus)) {
+        return ParseExprPostfix();
+    }
 
     if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(t.byte_offset);
     const Token op = lexer_.Next();
-    ++expr_depth_;
-    auto operand = ParseExprUnary();
-    --expr_depth_;
+    StatusOr<std::shared_ptr<const Expr>> operand = Status::OK();
+    {
+        DepthScope scope(expr_depth_);
+        operand = ParseExprUnary();
+    }
     if (!operand.ok()) return operand;
-    auto e = std::make_shared<Expr>();
-    e->kind = Expr::Kind::kUnary;
-    e->byte_offset = op.byte_offset;
-    e->op_byte_offset = op.byte_offset;
-    e->op = op.type == TokenType::kMinus ? ExprOp::kNeg : ExprOp::kPos;
-    e->height = operand.value()->height + 1;
-    if (e->height > kMaxExprHeight) return ExprTooDeep(op.byte_offset);
-    e->lhs = std::move(operand.value());
-    return std::shared_ptr<const Expr>(std::move(e));
+    auto e = MakeUnary(op.type == TokenType::kMinus ? ExprOp::kNeg : ExprOp::kPos, op.byte_offset,
+                       op.byte_offset, std::move(operand.value()));
+    if (TooBig(*e)) return ExprTooDeep(op.byte_offset);
+    return e;
+}
+
+// `x::type`, the reference dialect's cast, binding tighter than a unary sign.
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPostfix() {
+    auto operand = ParseExprPrimary();
+    if (!operand.ok()) return operand;
+    return ParseCastSuffix(std::move(operand.value()));
+}
+
+// Any `::type` that follows `operand`. Also taken by the magnitude of a
+// signed literal (`v -1::int64`), which never passes through the postfix level.
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseCastSuffix(
+    std::shared_ptr<const Expr> operand) {
+    std::shared_ptr<const Expr> acc = std::move(operand);
+    while (lexer_.Peek().type == TokenType::kDoubleColon) {
+        const Token op = lexer_.Next();
+        TypeSpec spec;
+        if (Status s = ParseTypeSpec(spec); !s.ok()) return s;
+        const std::uint32_t at = acc->byte_offset;  // read before acc is moved from
+        acc = MakeCast(at, op.byte_offset, std::move(acc), std::move(spec));
+        if (TooBig(*acc)) return ExprTooDeep(acc->op_byte_offset);
+    }
+    return acc;
+}
+
+// `NAME ( expr [, expr ...] )` for the n-ary forms (COALESCE, NULLIF,
+// GREATEST, LEAST) and `CAST ( expr AS type )`. The keyword and its `(` are
+// already consumed.
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprCall(const Token& name) {
+    if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(name.byte_offset);
+    DepthScope scope(expr_depth_);
+
+    if (IEquals(name.text, "CAST")) {
+        auto operand = ParseExprOr();
+        if (!operand.ok()) return operand;
+        if (lexer_.Peek().type != TokenType::kKeyword || lexer_.Peek().kw != Keyword::kAs) {
+            return Status::InvalidArgument("expected AS in CAST (byte " +
+                                           std::to_string(lexer_.Peek().byte_offset) + ")");
+        }
+        lexer_.Next();
+        TypeSpec spec;
+        if (Status s = ParseTypeSpec(spec); !s.ok()) return s;
+        if (Status s = ExpectToken(TokenType::kRParen, "')' after a CAST's type"); !s.ok()) {
+            return s;
+        }
+        auto cast = MakeCast(name.byte_offset, name.byte_offset, std::move(operand.value()),
+                             std::move(spec));
+        if (TooBig(*cast)) return ExprTooDeep(name.byte_offset);
+        return cast;
+    }
+
+    const ExprOp op = *NaryOf(name.text);  // the caller dispatched on this
+    std::vector<std::shared_ptr<const Expr>> args;
+    for (;;) {
+        auto arg = ParseExprOr();
+        if (!arg.ok()) return arg;
+        args.push_back(std::move(arg.value()));
+        if (args.size() > kMaxExprArgs) {
+            return Status::Unsupported("more than " + std::to_string(kMaxExprArgs) +
+                                       " arguments (byte " + std::to_string(name.byte_offset) + ")");
+        }
+        if (lexer_.Peek().type == TokenType::kComma) {
+            lexer_.Next();
+            continue;
+        }
+        break;
+    }
+    if (Status s = ExpectToken(TokenType::kRParen, "')' closing the argument list"); !s.ok()) {
+        return s;
+    }
+    // At least one argument: an empty list was refused at its `)`.
+    if (op == ExprOp::kNullif && args.size() != 2) {
+        return Status::InvalidArgument("'" + std::string(name.text) +
+                                       "' takes exactly 2 argument(s) (byte " +
+                                       std::to_string(name.byte_offset) + ")");
+    }
+    auto call = MakeCall(op, name.byte_offset, name.byte_offset, std::move(args));
+    if (TooBig(*call)) return ExprTooDeep(name.byte_offset);
+    return call;
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprFunction(const Token& name) {
+    if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(name.byte_offset);
+    DepthScope scope(expr_depth_);
+
+    std::vector<std::shared_ptr<const Expr>> args;
+    const bool position = IEquals(name.text, "POSITION");
+    if (lexer_.Peek().type != TokenType::kRParen) {
+        for (;;) {
+            // `POSITION(sub IN string)`: the first operand stops before `IN`,
+            // which a comparison would otherwise refuse.
+            auto arg = position && args.empty() ? ParseExprConcat() : ParseExprOr();
+            if (!arg.ok()) return arg;
+            args.push_back(std::move(arg.value()));
+            if (args.size() > kMaxExprArgs) {
+                return Status::Unsupported("more than " + std::to_string(kMaxExprArgs) +
+                                           " arguments (byte " + std::to_string(name.byte_offset) +
+                                           ")");
+            }
+            if (position && args.size() == 1) {
+                if (lexer_.Peek().type != TokenType::kKeyword || lexer_.Peek().kw != Keyword::kIn) {
+                    return Status::InvalidArgument("expected IN in POSITION (byte " +
+                                                   std::to_string(lexer_.Peek().byte_offset) + ")");
+                }
+                lexer_.Next();
+                continue;
+            }
+            if (!position && lexer_.Peek().type == TokenType::kComma) {
+                lexer_.Next();
+                continue;
+            }
+            break;
+        }
+    }
+    if (Status s = ExpectToken(TokenType::kRParen, "')' closing the argument list"); !s.ok()) {
+        return s;
+    }
+    // `MOD(a, b)` is `a % b`.
+    if (IEquals(name.text, "MOD") && args.size() != 2) {
+        return Status::InvalidArgument("'" + std::string(name.text) +
+                                       "' takes 2 argument(s) (byte " +
+                                       std::to_string(name.byte_offset) + ")");
+    }
+    if (IEquals(name.text, "MOD")) {
+        auto e = std::make_shared<Expr>(*MakeBinary(ExprOp::kMod, name.byte_offset,
+                                                    std::move(args[0]), std::move(args[1])));
+        e->byte_offset = name.byte_offset;  // the expression starts at `MOD`
+        if (TooBig(*e)) return ExprTooDeep(name.byte_offset);
+        return std::shared_ptr<const Expr>(std::move(e));
+    }
+    auto call = std::make_shared<Expr>(
+        *MakeCall(ExprOp::kFunction, name.byte_offset, name.byte_offset, std::move(args)));
+    call->function = std::string(name.text);
+    if (TooBig(*call)) return ExprTooDeep(name.byte_offset);
+    return std::shared_ptr<const Expr>(std::move(call));
+}
+
+// `CASE [operand] WHEN a THEN b [WHEN ...] [ELSE e] END`. The `CASE` keyword
+// is consumed. A simple CASE becomes the searched form, `WHEN operand = a`.
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprCase(const Token& kw) {
+    if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(kw.byte_offset);
+    DepthScope scope(expr_depth_);
+
+    const auto IsWord = [&](std::string_view w) {
+        return lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, w);
+    };
+    std::shared_ptr<const Expr> operand;
+    if (!IsWord("WHEN")) {
+        auto o = ParseExprOr();
+        if (!o.ok()) return o;
+        operand = std::move(o.value());
+    }
+    std::vector<std::shared_ptr<const Expr>> args;
+    while (IsWord("WHEN")) {
+        const Token when = lexer_.Next();
+        auto cond = ParseExprOr();
+        if (!cond.ok()) return cond;
+        if (!IsWord("THEN")) {
+            return Status::InvalidArgument("expected THEN in CASE (byte " +
+                                           std::to_string(lexer_.Peek().byte_offset) + ")");
+        }
+        lexer_.Next();
+        auto result = ParseExprOr();
+        if (!result.ok()) return result;
+        std::shared_ptr<const Expr> test = std::move(cond.value());
+        if (operand != nullptr) {
+            test = MakeBinary(ExprOp::kEq, when.byte_offset, operand, std::move(test));
+        }
+        args.push_back(std::move(test));
+        args.push_back(std::move(result.value()));
+        if (args.size() > kMaxExprArgs) {
+            return Status::Unsupported("a CASE with more than " + std::to_string(kMaxExprArgs / 2) +
+                                       " branches (byte " + std::to_string(kw.byte_offset) + ")");
+        }
+    }
+    if (args.empty()) {
+        return Status::InvalidArgument("CASE needs at least one WHEN (byte " +
+                                       std::to_string(lexer_.Peek().byte_offset) + ")");
+    }
+    if (IsWord("ELSE")) {
+        lexer_.Next();
+        auto other = ParseExprOr();
+        if (!other.ok()) return other;
+        args.push_back(std::move(other.value()));
+    }
+    if (!IsWord("END")) {
+        return Status::InvalidArgument("expected WHEN, ELSE or END in CASE (byte " +
+                                       std::to_string(lexer_.Peek().byte_offset) + ")");
+    }
+    lexer_.Next();
+    auto call = MakeCall(ExprOp::kCase, kw.byte_offset, kw.byte_offset, std::move(args));
+    if (TooBig(*call)) return ExprTooDeep(kw.byte_offset);
+    return call;
 }
 
 StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
+    if (pending_primary_ != nullptr) {
+        std::shared_ptr<const Expr> literal = std::move(pending_primary_);
+        pending_primary_ = nullptr;
+        return literal;
+    }
     const Token tok = lexer_.Peek();
     switch (tok.type) {
         case TokenType::kIntLit:
@@ -478,16 +936,18 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
             lexer_.Next();
             const Token& after = lexer_.Peek();
             if (after.type == TokenType::kLParen) {
-                // The conditional, null-handling and conversion forms are
-                // BJ-S5's; every other call is a scalar function, BJ-S6's.
-                const bool family2_3 = IEquals(tok.text, "CAST") || IEquals(tok.text, "COALESCE") ||
-                                       IEquals(tok.text, "NULLIF") ||
-                                       IEquals(tok.text, "GREATEST") || IEquals(tok.text, "LEAST");
-                return Status::NotImplemented(
-                    std::string(family2_3 ? "'" + std::string(tok.text) + "' in a SET value"
-                                          : "a function call in a SET value") +
-                    " is not supported yet (" + (family2_3 ? "BJ-S5" : "BJ-S6") + ") (byte " +
-                    std::to_string(tok.byte_offset) + ")");
+                // `CASE (b) WHEN ...`: no function is named `case` and no
+                // column is followed by `(`, so this is a simple CASE whose
+                // operand opens with a parenthesis - the one way to write a
+                // negative operand, since `case -1` is a column's subtraction.
+                if (IEquals(tok.text, "CASE")) return ParseExprCase(tok);
+                if (IEquals(tok.text, "CAST") || NaryOf(tok.text).has_value()) {
+                    lexer_.Next();  // the '('
+                    return ParseExprCall(tok);
+                }
+                // Every other call is a scalar function, BJ-S6's.
+                lexer_.Next();  // the '('
+                return ParseExprFunction(tok);
             }
             if (after.type == TokenType::kDot) {
                 return Status::NotImplemented(
@@ -495,20 +955,22 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
                     std::to_string(tok.byte_offset) + ")");
             }
             // `CASE` is not reserved, so a column may be named `case`; it
-            // opens an expression only when a word follows that is not the
-            // statement's own next clause.
-            const bool case_ends_value =
-                after.type == TokenType::kEof || after.type == TokenType::kComma ||
-                after.type == TokenType::kRParen || after.type == TokenType::kSemicolon ||
+            // opens an expression only when what follows is not something
+            // that ends or continues a value.
+            const bool case_is_a_column =
+                EndsSetValue(after) || IsSignedLiteral(after) ||
                 after.type == TokenType::kPlus || after.type == TokenType::kMinus ||
                 after.type == TokenType::kStar || after.type == TokenType::kSlash ||
                 after.type == TokenType::kPercent || after.type == TokenType::kConcat ||
-                (after.type == TokenType::kIdent && IEquals(after.text, "WHERE"));
-            if (IEquals(tok.text, "CASE") && !case_ends_value) {
-                return Status::NotImplemented(
-                    "CASE in a SET value is not supported yet (BJ-S5) (byte " +
-                    std::to_string(tok.byte_offset) + ")");
-            }
+                ComparisonOf(after.type).has_value() || after.type == TokenType::kDoubleColon ||
+                IsUnbuiltComparison(after) ||
+                (after.type == TokenType::kKeyword && after.kw == Keyword::kAs) ||
+                (after.type == TokenType::kIdent &&
+                 (IEquals(after.text, "AND") ||
+                  IEquals(after.text, "OR") || IEquals(after.text, "IS") ||
+                  IEquals(after.text, "THEN") || IEquals(after.text, "ELSE") ||
+                  IEquals(after.text, "END")));
+            if (IEquals(tok.text, "CASE") && !case_is_a_column) return ParseExprCase(tok);
             auto e = std::make_shared<Expr>();
             e->kind = Expr::Kind::kColumn;
             e->byte_offset = tok.byte_offset;
@@ -520,13 +982,27 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
             lexer_.Next();
             const Token& inner = lexer_.Peek();
             if (inner.type == TokenType::kIdent && IEquals(inner.text, "SELECT")) {
-                return Status::NotImplemented(
-                    "a subquery in a SET value is not supported yet (BJ-S7) (byte " +
-                    std::to_string(tok.byte_offset) + ")");
+                // A scalar subquery (BJ-S7). It runs as a SELECT of its own, so
+                // it is parsed as an outermost block (an aggregate is allowed);
+                // what it nests is counted from here.
+                std::uint32_t close_at = 0;
+                const bool was_inside = std::exchange(inside_value_subquery_, true);
+                auto sub = ParseSubqueryAfterOpen(0, &close_at);
+                inside_value_subquery_ = was_inside;
+                if (!sub.ok()) return sub.status();
+                auto node = std::make_shared<Expr>();
+                node->kind = Expr::Kind::kSubquery;
+                node->byte_offset = tok.byte_offset;
+                node->subquery = std::move(sub.value());
+                node->subquery_sql =
+                    std::string(sql_.substr(tok.byte_offset + 1, close_at - tok.byte_offset - 1));
+                return std::shared_ptr<const Expr>(std::move(node));
             }
-            ++expr_depth_;
-            auto e = ParseExprConcat();
-            --expr_depth_;
+            StatusOr<std::shared_ptr<const Expr>> e = Status::OK();
+            {
+                DepthScope scope(expr_depth_);
+                e = ParseExprOr();
+            }
             if (!e.ok()) return e;
             if (Status s = ExpectToken(TokenType::kRParen, "')'"); !s.ok()) return s;
             // The node is re-stamped to start at the '(' so a parenthesised
@@ -536,10 +1012,9 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
             return std::shared_ptr<const Expr>(std::move(copy));
         }
         case TokenType::kKeyword:
-            if (tok.kw == Keyword::kNot || tok.kw == Keyword::kExists) {
+            if (tok.kw == Keyword::kExists) {
                 return Status::NotImplemented(
-                    "'" + std::string(tok.text) +
-                    "' in a SET value is not supported yet (BJ-S5) (byte " +
+                    "'EXISTS' in a SET value is not supported (byte " +
                     std::to_string(tok.byte_offset) + ")");
             }
             [[fallthrough]];
@@ -579,11 +1054,16 @@ StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubquery(std::uint32_t depth)
     }
 
     if (Status s = ExpectToken(TokenType::kLParen, "'(' before a subquery"); !s.ok()) return s;
+    return ParseSubqueryAfterOpen(depth + 1);
+}
 
+StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubqueryAfterOpen(std::uint32_t select_depth,
+                                                                      std::uint32_t* close_at) {
     // One token of lookahead is enough to know a subquery from anything
-    // else here, because this grammar has no parenthesized expressions
-    // (spec I10) - a '(' in predicate position can only open a SELECT or
-    // a value list, and the value list is V08's.
+    // else here, because a predicate has no parenthesized expressions (spec
+    // I10; a SET value tells its own `(` apart before calling this) - a '('
+    // in predicate position can only open a SELECT or a value list, and the
+    // value list is V08's.
     const Token& head = lexer_.Peek();
     if (head.type != TokenType::kIdent || !IEquals(head.text, "SELECT")) {
         return Status::InvalidArgument("expected a subquery `(SELECT ...)`, got '" +
@@ -592,9 +1072,10 @@ StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubquery(std::uint32_t depth)
     }
     lexer_.Next();  // consume SELECT
 
-    auto inner = ParseSelect(depth + 1);
+    auto inner = ParseSelect(select_depth);
     if (!inner.ok()) return inner.status();
 
+    if (close_at != nullptr) *close_at = lexer_.Peek().byte_offset;
     if (Status s = ExpectToken(TokenType::kRParen, "')' closing a subquery"); !s.ok()) return s;
     return std::make_shared<SelectStmt>(std::move(inner.value()));
 }
@@ -901,62 +1382,20 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         if (!col_name.ok()) return col_name.status();
         col.name = std::move(col_name.value());
 
-        col.type_byte_offset = lexer_.Peek().byte_offset;
-        auto type_name = ParseIdent();
-        if (!type_name.ok()) return type_name.status();
-        col.type_name = std::move(type_name.value());
-
-        // The types whose declaration carries arguments: `DECIMAL(p, s)`
-        // takes two (docs/spec/types.md §2), `CHAR(n)` and `VARCHAR(n)` one
+        // The type, with its arguments: `DECIMAL(p, s)` takes two
+        // (docs/spec/types.md §2), `CHAR(n)` and `VARCHAR(n)` one
         // (`instructions/v2.5.0/varchar-char-architecture.md` §3).
-        // Recognized by the paren rather than by the name, so a type that
-        // takes no arguments refuses them here instead of each type name
-        // needing its own production - and the arity is decided by the name
-        // *inside* that branch, so `char(8, 1)` fails on the comma with a
-        // byte rather than on a count nobody wrote.
-        if (lexer_.Peek().type == TokenType::kLParen) {
-            const std::uint32_t paren_at = lexer_.Peek().byte_offset;
-            const bool takes_precision = IEquals(col.type_name, "DECIMAL");
-            const bool takes_width =
-                IEquals(col.type_name, "CHAR") || IEquals(col.type_name, "VARCHAR");
-            if (!takes_precision && !takes_width) {
-                return Status::InvalidArgument("type '" + col.type_name +
-                                                "' takes no arguments (byte " +
-                                                std::to_string(paren_at) + ")");
-            }
-            lexer_.Next();  // consume '('
-            col.type_arg_byte_offset = lexer_.Peek().byte_offset;
-
-            if (takes_width) {
-                auto width = ParseTypeArgument("width");
-                if (!width.ok()) return width.status();
-                if (Status s = ExpectToken(TokenType::kRParen,
-                                           "')' after a character type's width");
-                    !s.ok()) {
-                    return s;
-                }
-                col.has_width = true;
-                col.width = width.value();
-            } else {
-                auto precision = ParseTypeArgument("precision");
-                if (!precision.ok()) return precision.status();
-                if (Status s = ExpectToken(TokenType::kComma,
-                                           "',' between a decimal's precision and scale");
-                    !s.ok()) {
-                    return s;
-                }
-                auto scale = ParseTypeArgument("scale");
-                if (!scale.ok()) return scale.status();
-                if (Status s = ExpectToken(TokenType::kRParen, "')' after a decimal's scale");
-                    !s.ok()) {
-                    return s;
-                }
-
-                col.has_precision = true;
-                col.precision = precision.value();
-                col.scale = scale.value();
-            }
-        } else if (IEquals(col.type_name, "DECIMAL")) {
+        TypeSpec spec;
+        if (Status s = ParseTypeSpec(spec); !s.ok()) return s;
+        col.type_name = std::move(spec.name);
+        col.type_byte_offset = spec.byte_offset;
+        col.type_arg_byte_offset = spec.arg_byte_offset;
+        col.has_precision = spec.has_precision;
+        col.precision = spec.precision;
+        col.scale = spec.scale;
+        col.has_width = spec.has_width;
+        col.width = spec.width;
+        if (IEquals(col.type_name, "DECIMAL") && !col.has_precision) {
             // **A bare `decimal` is refused, never defaulted.** A default
             // scale is a silent decision about someone's money, and the
             // parser is the only layer that can still tell the difference
@@ -1794,7 +2233,7 @@ StatusOr<SelectItem> Parser::ParseSelectItem() {
     if (!col.value().qualified() && lexer_.Peek().type == TokenType::kLParen &&
         !AggFuncOf(col.value().name, func)) {
         return Status::NotImplemented(
-            "a function call is supported in a WHERE comparison only (byte " +
+            "a function call is supported only in a WHERE comparison and a SET value (byte " +
             std::to_string(col.value().byte_offset) + ")");
     }
     if (col.value().qualified() || lexer_.Peek().type != TokenType::kLParen ||
@@ -2454,6 +2893,65 @@ StatusOr<PurgeStmt> Parser::ParsePurge() {
     return stmt;
 }
 
+Status Parser::ParseRowValueAssignments(std::vector<Assignment>& out) {
+    const std::uint32_t open_at = lexer_.Peek().byte_offset;
+    lexer_.Next();  // '('
+    std::vector<Assignment> targets;
+    for (;;) {
+        Assignment a;
+        a.byte_offset = lexer_.Peek().byte_offset;
+        auto name = ParseIdent();
+        if (!name.ok()) return name.status();
+        a.col_name = std::move(name.value());
+        targets.push_back(std::move(a));
+        if (lexer_.Peek().type == TokenType::kComma) {
+            lexer_.Next();
+            continue;
+        }
+        break;
+    }
+    if (Status s = ExpectToken(TokenType::kRParen, "')' closing the column list"); !s.ok()) {
+        return s;
+    }
+    if (Status s = ExpectToken(TokenType::kEq, "'='"); !s.ok()) return s;
+    if (lexer_.Peek().type != TokenType::kLParen) {
+        return Status::InvalidArgument("expected '(' opening the row of values (byte " +
+                                       std::to_string(lexer_.Peek().byte_offset) + ")");
+    }
+    lexer_.Next();
+    if (lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, "SELECT")) {
+        return Status::NotImplemented(
+            "a row subquery in a SET value is not implemented (byte " +
+            std::to_string(lexer_.Peek().byte_offset) + ")");
+    }
+    for (std::size_t i = 0; i < targets.size(); ++i) {
+        if (Status s = ParseSetValue(targets[i]); !s.ok()) return s;
+        if (i + 1 < targets.size()) {
+            if (lexer_.Peek().type == TokenType::kRParen) {
+                return Status::InvalidArgument(
+                    "the row of values has fewer entries than the " +
+                    std::to_string(targets.size()) + " columns before '=' (byte " +
+                    std::to_string(open_at) + ")");
+            }
+            if (Status s = ExpectToken(TokenType::kComma, "',' between the row's values");
+                !s.ok()) {
+                return s;
+            }
+        }
+    }
+    if (lexer_.Peek().type == TokenType::kComma) {
+        return Status::InvalidArgument("the row of values has more entries than the " +
+                                       std::to_string(targets.size()) +
+                                       " columns before '=' (byte " +
+                                       std::to_string(lexer_.Peek().byte_offset) + ")");
+    }
+    if (Status s = ExpectToken(TokenType::kRParen, "')' closing the row of values"); !s.ok()) {
+        return s;
+    }
+    for (Assignment& a : targets) out.push_back(std::move(a));
+    return Status::OK();
+}
+
 StatusOr<UpdateStmt> Parser::ParseUpdate() {
     UpdateStmt stmt;
 
@@ -2465,6 +2963,17 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
     if (Status s = ExpectKeyword("SET"); !s.ok()) return s;
 
     for (;;) {
+        // The row-value form (BJ-Q7): `SET (a, b) = (x, y)` is `SET a = x,
+        // b = y`, every value read from the before-image (BJ-R2).
+        if (lexer_.Peek().type == TokenType::kLParen) {
+            if (Status s = ParseRowValueAssignments(stmt.assignments); !s.ok()) return s;
+            if (lexer_.Peek().type == TokenType::kComma) {
+                lexer_.Next();
+                continue;
+            }
+            break;
+        }
+
         Assignment a;
 
         // Taken before the ident is consumed: the compiler reports the
@@ -2490,8 +2999,8 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
 
     // Depth 0: an UPDATE's WHERE is an outermost query block, and a
     // subquery in it is `[OPEN: revisit]` in spec section 2 only for the
-    // *value* position (`SET a = (SELECT ...)`), which SET refuses
-    // by name (BJ-S7). A predicate-position subquery here nests exactly as a
+    // *value* position (`SET a = (SELECT ...)`), which BJ-S7 built as an
+    // uncorrelated scalar subquery. A predicate-position subquery here nests exactly as a
     // SELECT's does.
     auto where = ParseOptionalWhere(/*depth=*/0);
     if (!where.ok()) return where.status();

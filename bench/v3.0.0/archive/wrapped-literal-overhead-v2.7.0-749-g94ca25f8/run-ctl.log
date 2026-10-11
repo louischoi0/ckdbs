@@ -1,0 +1,17 @@
+n10000-run1 rc 0 load 1.96 -> 2.27 dur 10s cpu6/7=0.522/0.517 others_max=0.311 comp=no
+n1000-run1 rc 0 load 2.27 -> 2.24 dur 10s cpu6/7=0.553/0.55 others_max=0.546 comp=no
+n10000-run2 rc 0 load 2.24 -> 2.04 dur 9s cpu6/7=0.563/0.539 others_max=0.214 comp=no
+n1000-run2 rc 0 load 2.04 -> 1.96 dur 10s cpu6/7=0.553/0.546 others_max=0.033 comp=no
+n10000-run3 rc 0 load 1.96 -> 2.04 dur 9s cpu6/7=0.556/0.541 others_max=0.041 comp=no
+n1000-run3 rc 0 load 2.04 -> 1.96 dur 10s cpu6/7=0.554/0.546 others_max=0.035 comp=no
+n10000-run4 rc 0 load 1.96 -> 2.19 dur 9s cpu6/7=0.558/0.543 others_max=0.028 comp=no
+n1000-run4 rc 0 load 2.19 -> 2.16 dur 10s cpu6/7=0.548/0.553 others_max=0.107 comp=no
+n10000-run5 rc 0 load 2.16 -> 1.90 dur 9s cpu6/7=0.555/0.545 others_max=0.163 comp=no
+n1000-run5 rc 0 load 1.90 -> 1.72 dur 10s cpu6/7=0.554/0.55 others_max=0.062 comp=no
+n10000-run6 rc 0 load 1.72 -> 1.60 dur 9s cpu6/7=0.552/0.547 others_max=0.035 comp=no
+n1000-run6 rc 0 load 1.60 -> 1.73 dur 10s cpu6/7=0.551/0.544 others_max=0.038 comp=no
+n10000-run7 rc 0 load 1.73 -> 1.62 dur 9s cpu6/7=0.561/0.538 others_max=0.032 comp=no
+n1000-run7 rc 0 load 1.62 -> 1.60 dur 10s cpu6/7=0.556/0.549 others_max=0.051 comp=no
+n10000-run8 rc 0 load 1.60 -> 1.67 dur 9s cpu6/7=0.563/0.539 others_max=0.028 comp=no
+n1000-run8 rc 0 load 1.67 -> 1.79 dur 10s cpu6/7=0.548/0.546 others_max=0.037 comp=no
+ALLDONE

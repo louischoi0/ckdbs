@@ -716,9 +716,9 @@ Bound, 32 B (`BoundCabinEntry`, `include/kds/storage/cabin_bound_page.hpp`,
 
 | Field | Width | Notes |
 |---|---|---|
-| pk | 40 bit of a u64 | Keystone id. **Authoritative**, under K1: it may dangle, and names another row only after a `PURGE` freed it - harmless, because no bound entry's pk is resolved to read a row, and `DELETE` wrote the old row's departure first - and an aborted reservation's entry is removed and marked `kEntryOrphaned` before the undo frees its key (AS6b) |
+| pk | 48 bit of a u64 | Keystone id. **Authoritative**, under K1: it may dangle, and names another row only after a `PURGE` freed it - harmless, because no bound entry's pk is resolved to read a row, and `DELETE` wrote the old row's departure first - and an aborted reservation's entry is removed and marked `kEntryOrphaned` before the undo frees its key (AS6b) |
 | flags | 8 bit | includes the `RESERVED` bit for an in-flight entry (assertion §6) |
-| reserved | 16 bit | written 0, ignored |
+| reserved | 8 bit | written 0, ignored; the word is the Keystone word's layout (BK-R2) |
 | location hint (page id / epoch / slot) | 64 bit | **advisory**, verified through the one verifier `exec/tuple_verify.hpp`; on failure fall back to a pk descent and heal in place |
 | aggregate value | 64 bit | the row's `SUM` column value, inline (int64). For a `COUNT(*)` assertion it is written **1** |
 

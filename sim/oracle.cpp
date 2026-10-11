@@ -2,6 +2,8 @@
 
 #include <charconv>
 
+#include "kds/storage/keystone.hpp"
+
 namespace kds::sim {
 
 namespace {
@@ -83,7 +85,7 @@ std::vector<std::uint64_t> Oracle::Matching(const std::string& table,
 }
 
 Oracle::NamedOutcome Oracle::Named(const std::string& table, std::uint64_t key) const {
-    constexpr std::uint64_t kMaxKeystoneId = (std::uint64_t{1} << 40) - 1;
+    // The engine's own ceiling (BK-R8), not a copy of it.
     if (key == 0 || key > kMaxKeystoneId) return NamedOutcome::kExhausted;
     const auto holds = [&](const std::map<std::string, std::set<std::uint64_t>>& keys) {
         const auto it = keys.find(table);

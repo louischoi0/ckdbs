@@ -68,7 +68,10 @@ StatusOr<std::size_t> EncodePageInit(std::span<std::byte> out, const PageInitPay
         return s;
     }
     if (fields.min_key > kMaxKeystoneId) {
-        return Status::InvalidArgument("wal payload: PAGE_INIT min_key exceeds the 40-bit id space");
+        return Status::InvalidArgument("wal payload: PAGE_INIT min_key " +
+                                       std::to_string(fields.min_key) +
+                                       " exceeds the Keystone id space (max " +
+                                       std::to_string(kMaxKeystoneId) + ")");
     }
     if (!IsKnownPageType(fields.page_type)) {
         return Status::InvalidArgument("wal payload: PAGE_INIT page_type is unassigned");
@@ -103,7 +106,10 @@ StatusOr<PageInitPayload> DecodePageInit(std::span<const std::byte> in) {
         fields.owner_oid = Load<std::uint64_t>(in, kPageInitOwnerOidOffset);
     }
     if (fields.min_key > kMaxKeystoneId) {
-        return Status::Corruption("wal payload: PAGE_INIT min_key exceeds the 40-bit id space");
+        return Status::Corruption("wal payload: PAGE_INIT min_key " +
+                                  std::to_string(fields.min_key) +
+                                  " exceeds the Keystone id space (max " +
+                                  std::to_string(kMaxKeystoneId) + ")");
     }
     if (!IsKnownPageType(fields.page_type)) {
         // A page type this build does not know is the same hard error an

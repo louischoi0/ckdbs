@@ -1,0 +1,27 @@
+# nm -S -C and objdump -d on the measured copies (run/bin/kds_server-A, kds_server-B); scripts callees.sh and disasm.sh
+
+## A (5979b5e7): DecodeRowInto, call targets inside the function
+symbol: 0000000000366ea0 00000000000006a8 T kds::exec::DecodeRowInto(kds::catalog::Schema const&, 
+size: 1704 bytes
+      4 <operator delete(void*, unsigned long)@plt>
+      2 <kds::exec::DecodeOneValueInto(kds::catalog::SysColumnRow const&, std::span<std::byte const, 18446744073709551
+      1 <std::__throw_length_error(char const*)@plt>
+      1 <std::__throw_bad_alloc()@plt>
+      1 <operator new(unsigned long)@plt>
+      1 <memcpy@plt>
+      1 <kds::exec::RowKeystoneId(std::span<std::byte const, 18446744073709551615ul>)>
+      1 <kds::exec::(anonymous namespace)::CheckDecodeInputs(kds::catalog::Schema const&, kds::catalog::RowLayout cons
+      1 <__stack_chk_fail@plt>
+
+## B (efa6adba): DecodeRowInto, call targets inside the function
+symbol: 0000000000369670 00000000000006a8 T kds::exec::DecodeRowInto(kds::catalog::Schema const&, 
+size: 1704 bytes
+      4 <operator delete(void*, unsigned long)@plt>
+      2 <kds::exec::DecodeOneValueInto(kds::catalog::SysColumnRow const&, std::span<std::byte const, 18446744073709551
+      1 <std::__throw_length_error(char const*)@plt>
+      1 <std::__throw_bad_alloc()@plt>
+      1 <operator new(unsigned long)@plt>
+      1 <memcpy@plt>
+      1 <kds::exec::(anonymous namespace)::CheckDecodeInputs(kds::catalog::Schema const&, kds::catalog::RowLayout cons
+      1 <kds::KeystoneIdOfPayload(std::span<std::byte const, 18446744073709551615ul>)>
+      1 <__stack_chk_fail@plt>

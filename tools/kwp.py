@@ -358,16 +358,17 @@ class Connection:
 
     # -- statements ---------------------------------------------------------
 
-    def execute(self, sql, params=None, max_rows=0):
+    def execute(self, sql, params=None, max_rows=0, statement=None):
         """Runs one statement. Returns `(fields, rows, tag, rows_affected)`.
 
         `fields` is empty for a statement with no result set, and `rows`
         holds raw field bytes (None for NULL) - rendering is `render_value`'s
-        and stays a client concern (§6).
+        and stays a client concern (§6). With `statement`, `sql` is ignored
+        and the named statement a `prepare` parsed is bound instead.
         """
         portal = "p%d" % self._next_portal
         self._next_portal += 1
-        b = _Writer().s(portal).s("")
+        b = _Writer().s(portal).s(statement or "")
         params = params or []
         b.u16(len(params))
         for type_oid, type_mod, value in params:
@@ -404,7 +405,7 @@ class Connection:
         # `portals_.erase` on an absent name is silent.
         #
         # One write, four frames, one round trip.
-        batch = frame(C_PARSE, _Writer().s("").text(sql).take())
+        batch = b"" if statement else frame(C_PARSE, _Writer().s("").text(sql).take())
         batch += frame(C_BIND, b.take())
         batch += frame(C_EXECUTE, _Writer().s(portal).u32(max_rows).take())
         batch += frame(C_CLOSE, _Writer().u8(2).s(portal).take())
@@ -450,6 +451,36 @@ class Connection:
         if error is not None:
             raise error
         return fields, rows, tag, affected
+
+    def prepare(self, name, sql):
+        """Parses `sql` once under the statement name `name` (§5's named
+        statement, held until `C_CLOSE` or disconnect). Returns its
+        `pattern_id`. A later `execute_prepared(name, params)` binds and runs
+        it without sending its text again (BK-S1: the PARSE-once path)."""
+        self.sock.sendall(frame(C_PARSE, _Writer().s(name).text(sql).take()) + frame(C_SYNC))
+        pattern_id, error = 0, None
+        while True:
+            ftype, _, payload = self._recv_frame()
+            if ftype == S_PARSE_OK:
+                pattern_id = _Reader(payload).u64()
+            elif ftype == S_ERROR:
+                error = self._error(payload)
+            elif ftype == S_READY:
+                break
+        if error is not None:
+            raise error
+        return pattern_id
+
+    def execute_prepared(self, name, params=None, max_rows=0):
+        """`execute` without the `C_PARSE`: one BIND of the named statement,
+        then EXECUTE, CLOSE and SYNC in the same write. `params` as for
+        `execute`. Returns `(fields, rows, tag, rows_affected)`."""
+        return self.execute(None, params, max_rows, statement=name)
+
+    @staticmethod
+    def int64(v):
+        """A `T_INT64` parameter for `params`."""
+        return (T_INT64, 0, struct.pack("<q", v))
 
     @staticmethod
     def _row_desc(payload):

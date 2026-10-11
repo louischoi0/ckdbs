@@ -1,0 +1,2 @@
+other-CPU busy (CPUs 6,7 excluded) 22.6% > 10 %
+sibling CPU 0 busy 43% > 15 %

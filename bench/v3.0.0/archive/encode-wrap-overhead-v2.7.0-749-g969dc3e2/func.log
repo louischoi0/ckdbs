@@ -1,0 +1,12 @@
+A 'INSERT INTO t VALUES (1, 18446744073709551616, 7)' -> 'INSERTED oid=4000 id=1 page=129 slot=0'
+A "INSERT INTO t VALUES (2, '2026-08-09', 18446744073709551621)" -> "ERR integer literal 18446744073709551621 does not fit column 'q'"
+A "INSERT INTO t VALUES (3, '2026-08-09', 9)" -> 'INSERTED oid=4000 id=3 page=129 slot=1'
+A 'UPDATE t SET q = 18446744073709551621 WHERE id = 3' -> "ERR integer literal 18446744073709551621 does not fit column 'q'"
+B 'INSERT INTO t VALUES (1, 18446744073709551616, 7)' -> "ERR integer literal 18446744073709551616 does not fit column 'd'"
+B "INSERT INTO t VALUES (2, '2026-08-09', 18446744073709551621)" -> "ERR integer literal 18446744073709551621 does not fit column 'q'"
+B "INSERT INTO t VALUES (3, '2026-08-09', 9)" -> 'INSERTED oid=4000 id=3 page=129 slot=0'
+B 'UPDATE t SET q = 18446744073709551621 WHERE id = 3' -> "ERR integer literal 18446744073709551621 does not fit column 'q'"
+C 'INSERT INTO t VALUES (1, 18446744073709551616, 7)' -> 'INSERTED oid=4000 id=1 page=129 slot=0'
+C "INSERT INTO t VALUES (2, '2026-08-09', 18446744073709551621)" -> "ERR integer literal 18446744073709551621 does not fit column 'q'"
+C "INSERT INTO t VALUES (3, '2026-08-09', 9)" -> 'INSERTED oid=4000 id=3 page=129 slot=1'
+C 'UPDATE t SET q = 18446744073709551621 WHERE id = 3' -> "ERR integer literal 18446744073709551621 does not fit column 'q'"

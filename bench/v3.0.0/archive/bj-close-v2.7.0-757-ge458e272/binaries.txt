@@ -1,0 +1,11 @@
+# Measured copies: sha256 of the copy every server was started from (under /home/cdkbs/bench-runs/bj-close/bin/).
+# Release builds (CMAKE_BUILD_TYPE read back from CMakeCache.txt), -DKDS_BUILD_TESTS=OFF -DKDS_BUILD_SIM=OFF, target kds_server.
+
+A   e5a7e1b7  v2.7.0-736-ge5a7e1b7   the first file's A, same hash (not rebuilt)
+d2a6977f220a32147b6a2df985aec10b60ee7411fe3fca3381b78e46e525223e  kds_server-A
+
+B   8e37baf4  v2.7.0-756-g8e37baf4   the first file's B, same hash (not rebuilt); used by the two B-against-B' pairs
+69733b1bb373ca6ef034ed4d391685c8bd908cfc86f861909c78d983c6bfe99d  kds_server-B
+
+B'  e458e272  v2.7.0-757-ge458e272   committed 2026-10-10 18:52:34 UTC; binary mtime 2026-10-10 18:54:13 UTC; fresh detached worktree bj-measure-b2
+164fa531cbb43273feae3aff544fe5625a4231263fae4fd830e7f9d850baa6b7  kds_server-B2

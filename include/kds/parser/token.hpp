@@ -176,6 +176,9 @@ enum class TokenType {
     kSlash,
     kPercent,
     kConcat,  // `||`
+    // The reference dialect's cast (BJ-S5): `x::int`. Lexed as kError until
+    // then, so no statement containing one had a fingerprint.
+    kDoubleColon,
 
     kError,  // unrecognized character
 };
@@ -212,7 +215,7 @@ struct Token {
     // client used.
     //
     // `int_val` is a signed decode that silently wraps past 64 bits, so it
-    // cannot judge whether a literal is inside the 40-bit pk range - the
+    // cannot judge whether a literal is inside the pk's id space - the
     // range check at V30 needs the digits themselves, and so does anything
     // else that must distinguish "large" from "wrapped to small". Keeping
     // both is cheaper than deciding here which one every future caller

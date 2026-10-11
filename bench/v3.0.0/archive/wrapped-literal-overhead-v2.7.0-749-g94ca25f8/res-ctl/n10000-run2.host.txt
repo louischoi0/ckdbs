@@ -1,0 +1,8 @@
+start_utc=2026-10-10 18:31:28
+loadavg_start=2.24 2.60 3.87 2/528 3152657
+loadavg_end=2.04 2.54 3.84 1/521 3152718
+competing_compile_or_ctest=none
+waited_s=0
+duration_s=9.4
+cpu_busy_1s_before={0: 1.0, 1: 0.01, 2: 0.04, 3: 0.0, 4: 0.02, 5: 0.03, 6: 0.02, 7: 0.02}
+cpu_busy_during={0: 0.214, 1: 0.138, 2: 0.026, 3: 0.026, 4: 0.033, 5: 0.035, 6: 0.563, 7: 0.539}

@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "kds/exec/assertion_violation.hpp"
+#include "kds/exec/row_codec.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/payload.hpp"
 
@@ -29,11 +30,25 @@ const parser::AstValue& ValueAt(std::span<const parser::AstValue> values,
     return values[schema_pos - first_col_pos];
 }
 
-std::string KeyFor(const LiveAssertion& a, std::span<const parser::AstValue> values,
-                   std::size_t first_col_pos) {
+// **Coerced first, and this is load-bearing.** An INSERT hands the values as
+// written - a `date` or `timestamp` as a string, a `decimal` as text - while
+// the build's backfill and the DELETE/UPDATE paths hand decoded rows, and
+// `EncodeGroupKey` tags each kind apart. Left alone, one stored value had two
+// keys: the backfilled count was never met by a later insert, and a delete
+// departed from a group no insert had used. Through the codec's one coercion
+// (`NoteCabinWrite` does the same for Cabins), so every path keys on the
+// decoded kind. A value that does not coerce refuses the row before this
+// assertion holds or reserves anything under a key no stored row could have;
+// an UPDATE's earlier assertions are unwound by the statement's abort.
+StatusOr<std::string> KeyFor(const LiveAssertion& a, std::span<const parser::AstValue> values,
+                             std::size_t first_col_pos) {
     std::vector<parser::AstValue> group(a.group_cols.size());
     for (std::size_t i = 0; i < a.group_cols.size(); ++i) {
         group[i] = ValueAt(values, first_col_pos, a.group_cols[i]);
+        if (Status s = CoerceLiteralToColumn(a.group_columns[i], group[i]); !s.ok()) {
+            return s.WithContext("assertion \"" + a.name + "\" group column '" +
+                                 a.group_col_names[i] + "'");
+        }
     }
     return EncodeGroupKey(group);
 }
@@ -54,7 +69,7 @@ Status Refuse(const LiveAssertion& a, std::span<const parser::AstValue> values,
     std::vector<GroupKeyPart> parts(a.group_cols.size());
     for (std::size_t i = 0; i < a.group_cols.size(); ++i) {
         parts[i].column = a.group_col_names[i];
-        parts[i].type_val = a.group_type_vals[i];
+        parts[i].type_val = a.group_columns[i].type_val;
         parts[i].value = ValueAt(values, first_col_pos, a.group_cols[i]);
     }
     return Status::AssertionViolation(AssertionViolationMessage(
@@ -76,7 +91,57 @@ wal::AssertionCabinSnapshot SnapshotOf(std::uint64_t assertion_id, const BoundCa
     return out;
 }
 
+// The kind a stored value of this column decodes to, for the types whose
+// written form keyed differently before `KeyFor` coerced; `nullopt` for every
+// other type, whose written and stored kinds were always one.
+std::optional<parser::ValueType> StoredKeyKind(std::uint32_t type_val) {
+    switch (type_val) {
+        case catalog::kTypeValDate:
+        case catalog::kTypeValTimestamp:
+            return parser::ValueType::kInt;
+        case catalog::kTypeValDecimal:
+            return parser::ValueType::kDecimal;
+        case catalog::kTypeValDecimalWide:
+            return parser::ValueType::kDecimalWide;
+        default:
+            return std::nullopt;
+    }
+}
+
 }  // namespace
+
+Status CheckGroupKeyKinds(const LiveAssertion& a) {
+    // Only these types ever keyed as written, so the usual mount reads nothing.
+    if (std::none_of(a.group_columns.begin(), a.group_columns.end(),
+                     [](const catalog::SysColumnRow& c) {
+                         return StoredKeyKind(c.type_val).has_value();
+                     })) {
+        return Status::OK();
+    }
+    for (const BoundCabin::GroupSnapshot& group : a.cabin.SnapshotGroups()) {
+        // A header is never removed, and a group no committed row is counted
+        // in - a rolled-back insert's - holds nothing a bound could miss.
+        if (group.count == 0 && group.sum == 0) continue;
+        const auto kinds = GroupKeyKinds(group.key);
+        if (!kinds.has_value() || kinds->size() != a.group_columns.size()) {
+            return Status::Corruption("assertion \"" + a.name + "\" group " +
+                                      std::to_string(group.group_id) +
+                                      " holds a key that is not one of its BY values");
+        }
+        for (std::size_t i = 0; i < kinds->size(); ++i) {
+            const auto stored = StoredKeyKind(a.group_columns[i].type_val);
+            const parser::ValueType kind = (*kinds)[i];
+            if (stored.has_value() && kind != *stored && kind != parser::ValueType::kNull) {
+                return Status::Unsupported(
+                    "assertion \"" + a.name + "\" group " + std::to_string(group.group_id) +
+                    " was keyed from column '" + a.group_col_names[i] +
+                    "' as written rather than as stored, so no write reaches it; DROP and "
+                    "CREATE ASSERTION rebuilds it (docs/spec/assertion.md §6.2)");
+            }
+        }
+    }
+    return Status::OK();
+}
 
 // ---- The latched surface ------------------------------------------------
 //
@@ -439,8 +504,11 @@ Status AssertionEnforcer::AdmitInsert(catalog::Oid oid,
     for (const std::uint64_t id : on->second) {
         LiveAssertion& a = live_.at(id)->a;
         const std::int64_t contribution = ContributionOf(a, values, /*first_col_pos=*/1);
-        auto serial = AdmitLocked(a, KeyFor(a, values, 1), contribution, contribution,
-                                  writer_txn, values, 1, reserver);
+        const StatusOr<std::string> key = KeyFor(a, values, /*first_col_pos=*/1);
+        const StatusOr<std::uint64_t> serial =
+            key.ok() ? AdmitLocked(a, key.value(), contribution, contribution, writer_txn,
+                                   values, 1, reserver)
+                     : StatusOr<std::uint64_t>(key.status());
         if (!serial.ok()) {
             for (std::size_t i = before; i < hold.items_.size(); ++i) {
                 ReleaseHoldLocked(hold.items_[i].serial);
@@ -539,23 +607,30 @@ Status AssertionEnforcer::ReserveInsert(storage::PageStore& store, wal::WalManag
         if (unenforceable_.count(oid) != 0) return CannotEnforceRefusal();
         for (std::shared_ptr<Live>& live : OnLocked(oid)) {
             LiveAssertion& a = live->a;
-            Work w{live, KeyFor(a, values, 1), ContributionOf(a, values, 1), 0};
             const auto covered =
                 std::find_if(hold.items_.begin(), hold.items_.end(),
                              [&](const Hold::Item& item) { return item.assertion_id == a.assertion_id; });
-            if (hold.owner_ == this && covered != hold.items_.end()) {
-                w.serial = covered->serial;
-            } else {
-                // Adopted after this row's admission: admitted here, and
-                // held in `hold` so a failure below gives it back too. Not
-                // waitable - the row is placed by now.
-                auto serial = AdmitLocked(a, w.key, w.value, w.value, txn_id, values, 1,
-                                          /*reserver=*/nullptr);
-                if (!serial.ok()) return serial.status();
-                w.serial = serial.value();
-                hold.owner_ = this;
-                hold.items_.push_back(Hold::Item{w.serial, a.assertion_id});
+            const auto held = hold.owner_ == this && covered != hold.items_.end()
+                                  ? holds_.find(covered->serial)
+                                  : holds_.end();
+            if (held != holds_.end()) {
+                // The admission keyed this row already: its key and value,
+                // not a second coercion and encode of the same values.
+                work.push_back(Work{live, held->second.key, held->second.value, covered->serial});
+                continue;
             }
+            StatusOr<std::string> key = KeyFor(a, values, 1);
+            if (!key.ok()) return key.status();
+            Work w{live, std::move(key.value()), ContributionOf(a, values, 1), 0};
+            // Adopted after this row's admission: admitted here, and held in
+            // `hold` so a failure below gives it back too. Not waitable - the
+            // row is placed by now.
+            auto serial = AdmitLocked(a, w.key, w.value, w.value, txn_id, values, 1,
+                                      /*reserver=*/nullptr);
+            if (!serial.ok()) return serial.status();
+            w.serial = serial.value();
+            hold.owner_ = this;
+            hold.items_.push_back(Hold::Item{w.serial, a.assertion_id});
             work.push_back(std::move(w));
         }
     }
@@ -613,8 +688,12 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
     bool reserved_any = false;
     for (const std::shared_ptr<Live>& live : lives) {
         LiveAssertion& a = live->a;
-        const std::string old_key = KeyFor(a, old_row, 0);
-        const std::string new_key = KeyFor(a, new_row, 0);
+        const StatusOr<std::string> old_keyed = KeyFor(a, old_row, 0);
+        if (!old_keyed.ok()) return old_keyed.status();
+        const StatusOr<std::string> new_keyed = KeyFor(a, new_row, 0);
+        if (!new_keyed.ok()) return new_keyed.status();
+        const std::string& old_key = old_keyed.value();
+        const std::string& new_key = new_keyed.value();
         const std::int64_t old_contrib = ContributionOf(a, old_row, 0);
         const std::int64_t new_contrib = ContributionOf(a, new_row, 0);
         // §4.2 row 2: the aggregate is invariant - nothing at all.
@@ -682,7 +761,9 @@ Status AssertionEnforcer::ReserveDelete(storage::PageStore& store, wal::WalManag
         return OnLocked(oid);
     }();
     for (const std::shared_ptr<Live>& live : lives) {
-        if (Status s = ReserveOne(store, wal, txn_id, *live, KeyFor(live->a, old_row, 0),
+        const StatusOr<std::string> key = KeyFor(live->a, old_row, 0);
+        if (!key.ok()) return key.status();
+        if (Status s = ReserveOne(store, wal, txn_id, *live, key.value(),
                                   /*departure=*/true, ContributionOf(live->a, old_row, 0), pk,
                                   row_page, row_slot, /*serial=*/0);
             !s.ok()) {

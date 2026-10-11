@@ -1,0 +1,5 @@
+host_before: ['cc1plus:3638613,3638696,3638722,3638741,3638746,3638751', 'cmake:3638209']
+host_after: ['cc1plus:3639057,3639085,3639091,3639096,3639102,3639108', 'cmake:3638209']
+other-CPU busy 69.1% > 10 %
+sibling CPU 3 busy 100% > 15 %
+sibling CPU 5 busy 100% > 15 %

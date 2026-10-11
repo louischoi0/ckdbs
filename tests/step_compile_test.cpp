@@ -216,7 +216,7 @@ TEST_F(StepCompileTest, AProbeKeyMustComeFromAnEarlierStepNotALaterOne) {
 }
 
 TEST_F(StepCompileTest, ANegativeLiteralPkIsAScanRatherThanAProbeIntoAHugeKey) {
-    // Ids are zero-extended 40-bit values (invariant 7), so `id = -1` can
+    // Ids are zero-extended unsigned values (invariant 7), so `id = -1` can
     // never hold. Compiling it to a lookup would cast the literal to an
     // enormous unsigned key; as a scan with the residual intact it
     // returns the correct empty answer.

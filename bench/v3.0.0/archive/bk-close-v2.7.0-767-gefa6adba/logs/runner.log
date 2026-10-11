@@ -1,0 +1,516 @@
+06:07:14 c2 c2-n10000-r6 attempt 0 quiet=True waited=9s
+ setup: 'CREATE TABLE be_a (id int64, v int64, w int64) BTREE' -> 'EXISTS oid=4000'
+06:07:37 c2 c2-n10000-r6 attempt 1 quiet=True waited=19s
+c2-n10000-r6 load 1.75->1.86 other_busy=0.22 gate=3.0s errs=0 insert:A=49.2/B=48.7 insert-named:A=49.6/B=49.0 update-pk:A=54.3/B=54.1 select-pk:A=65.4/B=65.5 ping:A=49.7/B=50.2 
+06:08:00 c2 c2-n10000-r7 attempt 0 quiet=True waited=9s
+c2-n10000-r7 load 1.81->1.91 other_busy=0.082 gate=3.0s errs=0 insert:A=48.9/B=49.2 insert-named:A=49.6/B=50.3 update-pk:A=54.2/B=53.7 select-pk:A=65.6/B=65.4 ping:A=50.7/B=50.8 
+06:08:24 c2 c2-n10000-r8 attempt 0 quiet=True waited=9s
+c2-n10000-r8 load 1.71->1.98 other_busy=0.2 gate=3.0s errs=0 insert:A=49.6/B=48.6 insert-named:A=50.2/B=48.7 update-pk:A=54.5/B=53.0 select-pk:A=66.7/B=64.7 ping:A=50.2/B=50.1 
+06:08:48 c2 c2-n10000-r9 attempt 0 quiet=True waited=9s
+c2-n10000-r9 load 1.61->2.05 other_busy=0.29 gate=3.0s errs=0 insert:A=48.7/B=48.9 insert-named:A=49.8/B=49.8 update-pk:A=53.5/B=53.7 select-pk:A=66.5/B=65.0 ping:A=51.1/B=51.6 
+06:09:11 c2 c2-n10000-r10 attempt 0 quiet=True waited=9s
+c2-n10000-r10 load 1.97->2.20 other_busy=0.319 gate=3.0s errs=0 insert:A=49.3/B=49.1 insert-named:A=49.8/B=49.5 update-pk:A=54.6/B=54.4 select-pk:A=65.8/B=65.6 ping:A=50.3/B=51.5 
+06:09:35 c2 c2-n10000-r11 attempt 0 quiet=True waited=9s
+c2-n10000-r11 load 2.32->2.65 other_busy=0.171 gate=3.0s errs=0 insert:A=49.3/B=49.1 insert-named:A=49.9/B=49.5 update-pk:A=54.1/B=54.1 select-pk:A=65.7/B=65.2 ping:A=50.8/B=50.7 
+06:09:58 c2 c2-n10000-r12 attempt 0 quiet=True waited=9s
+c2-n10000-r12 load 2.29->2.39 other_busy=0.257 gate=3.0s errs=0 insert:A=49.2/B=49.4 insert-named:A=50.1/B=49.7 update-pk:A=54.3/B=53.9 select-pk:A=66.6/B=65.3 ping:A=49.9/B=50.5 
+06:10:22 c2 c2-n10000-r13 attempt 0 quiet=True waited=9s
+c2-n10000-r13 load 2.23->2.19 other_busy=0.227 gate=3.0s errs=0 insert:A=49.9/B=49.2 insert-named:A=51.1/B=49.7 update-pk:A=55.5/B=54.1 select-pk:A=67.0/B=65.8 ping:A=50.6/B=50.4 
+06:10:45 c2 c2-n10000-r14 attempt 0 quiet=True waited=9s
+c2-n10000-r14 load 2.15->2.13 other_busy=0.311 gate=3.0s errs=0 insert:A=49.3/B=48.9 insert-named:A=50.1/B=49.7 update-pk:A=54.1/B=53.8 select-pk:A=65.9/B=65.2 ping:A=50.2/B=50.3 
+06:11:09 c2 c2-n10000-r15 attempt 0 quiet=True waited=9s
+c2-n10000-r15 load 2.03->2.10 other_busy=0.331 gate=3.0s errs=0 insert:A=49.0/B=48.8 insert-named:A=49.2/B=49.0 update-pk:A=52.7/B=53.1 select-pk:A=65.0/B=64.6 ping:A=49.6/B=50.1 
+06:11:32 c1r c1-n200-r16 attempt 0 quiet=True waited=9s
+c1-n200-r16 load 2.01->2.09 other_busy=0.213 gate=3.0s errs=0 insert:A=49.0/B=48.8 insert-named:A=49.1/B=49.5 update-pk:A=53.0/B=52.3 select-pk:A=65.6/B=65.0 ping:A=50.0/B=50.4 
+06:11:50 c1r c1-n200-r17 attempt 0 quiet=True waited=9s
+c1-n200-r17 load 1.91->2.08 other_busy=0.037 gate=3.0s errs=0 insert:A=49.2/B=49.3 insert-named:A=48.9/B=48.5 update-pk:A=51.9/B=51.8 select-pk:A=64.7/B=64.9 ping:A=50.0/B=50.1 
+06:12:09 c1r c1-n200-r18 attempt 0 quiet=True waited=9s
+c1-n200-r18 load 1.77->1.87 other_busy=0.046 gate=3.0s errs=0 insert:A=49.2/B=49.0 insert-named:A=49.4/B=49.2 update-pk:A=51.4/B=52.3 select-pk:A=64.8/B=64.3 ping:A=49.8/B=49.9 
+06:12:27 c1r c1-n200-r19 attempt 0 quiet=True waited=9s
+c1-n200-r19 load 1.70->1.72 other_busy=0.047 gate=3.0s errs=0 insert:A=49.1/B=48.9 insert-named:A=49.0/B=49.0 update-pk:A=52.4/B=51.4 select-pk:A=64.9/B=64.9 ping:A=49.7/B=49.6 
+06:12:46 c1r c1-n200-r20 attempt 0 quiet=True waited=9s
+c1-n200-r20 load 1.54->1.65 other_busy=0.019 gate=3.0s errs=0 insert:A=47.8/B=46.5 insert-named:A=48.9/B=48.8 update-pk:A=52.2/B=51.4 select-pk:A=65.3/B=64.7 ping:A=50.1/B=50.3 
+06:13:03 c1r c1-n200-r21 attempt 0 quiet=True waited=9s
+c1-n200-r21 load 1.36->1.41 other_busy=0.042 gate=3.0s errs=0 insert:A=49.9/B=49.6 insert-named:A=49.0/B=48.7 update-pk:A=52.3/B=51.5 select-pk:A=65.1/B=64.4 ping:A=49.8/B=50.7 
+06:13:21 c1r c1-n200-r22 attempt 0 quiet=True waited=9s
+c1-n200-r22 load 1.43->1.67 other_busy=0.049 gate=3.0s errs=0 insert:A=48.0/B=48.1 insert-named:A=48.9/B=49.0 update-pk:A=52.1/B=51.3 select-pk:A=65.1/B=64.5 ping:A=50.5/B=50.3 
+06:13:40 c1r c1-n200-r23 attempt 0 quiet=True waited=9s
+c1-n200-r23 load 1.64->1.59 other_busy=0.049 gate=3.0s errs=0 insert:A=49.1/B=49.2 insert-named:A=49.4/B=48.9 update-pk:A=52.3/B=51.6 select-pk:A=66.1/B=65.3 ping:A=50.0/B=50.2 
+06:13:58 c1r c1-n200-r24 attempt 0 quiet=True waited=9s
+c1-n200-r24 load 1.47->1.43 other_busy=0.018 gate=3.0s errs=0 insert:A=49.2/B=49.1 insert-named:A=49.0/B=48.8 update-pk:A=52.9/B=51.7 select-pk:A=64.5/B=64.9 ping:A=49.8/B=50.1 
+06:14:15 c1r c1-n200-r25 attempt 0 quiet=True waited=9s
+c1-n200-r25 load 1.37->1.34 other_busy=0.036 gate=3.0s errs=0 insert:A=49.1/B=49.2 insert-named:A=49.1/B=48.9 update-pk:A=51.6/B=51.7 select-pk:A=65.0/B=64.9 ping:A=50.4/B=50.5 
+06:14:34 c1r c1-n200-r26 attempt 0 quiet=True waited=9s
+c1-n200-r26 load 1.19->1.41 other_busy=0.127 gate=3.0s errs=0 insert:A=49.1/B=49.4 insert-named:A=49.2/B=49.1 update-pk:A=51.9/B=51.5 select-pk:A=65.2/B=64.5 ping:A=50.1/B=50.2 
+06:14:51 c1r c1-n200-r27 attempt 0 quiet=True waited=9s
+c1-n200-r27 load 1.50->1.50 other_busy=0.035 gate=3.0s errs=0 insert:A=49.0/B=49.4 insert-named:A=49.1/B=48.7 update-pk:A=52.9/B=51.9 select-pk:A=65.6/B=65.2 ping:A=50.4/B=50.3 
+06:15:10 c1r c1-n200-r28 attempt 0 quiet=True waited=9s
+c1-n200-r28 load 1.42->1.55 other_busy=0.128 gate=3.0s errs=0 insert:A=49.1/B=48.8 insert-named:A=49.2/B=49.0 update-pk:A=52.1/B=52.1 select-pk:A=67.5/B=66.9 ping:A=50.4/B=50.8 
+06:15:28 c1r c1-n200-r29 attempt 0 quiet=True waited=9s
+c1-n200-r29 load 1.65->1.76 other_busy=0.226 gate=3.0s errs=0 insert:A=49.0/B=48.8 insert-named:A=49.2/B=48.4 update-pk:A=52.7/B=51.4 select-pk:A=66.2/B=64.4 ping:A=50.3/B=50.3 
+06:15:46 c1r c1-n200-r30 attempt 0 quiet=True waited=9s
+c1-n200-r30 load 1.79->1.97 other_busy=0.217 gate=3.0s errs=0 insert:A=49.2/B=49.1 insert-named:A=49.3/B=49.0 update-pk:A=52.5/B=52.2 select-pk:A=66.5/B=65.7 ping:A=50.6/B=50.0 
+06:16:04 c1r c1-n200-r31 attempt 0 quiet=True waited=9s
+c1-n200-r31 load 1.91->2.00 other_busy=0.221 gate=3.0s errs=0 insert:A=49.2/B=48.9 insert-named:A=49.0/B=49.3 update-pk:A=52.5/B=51.9 select-pk:A=65.8/B=65.8 ping:A=50.6/B=51.0 
+06:16:21 c1r c1-n1000-r16 attempt 0 quiet=True waited=9s
+c1-n1000-r16 load 1.99->2.15 other_busy=0.217 gate=3.0s errs=0 insert:A=48.8/B=49.2 insert-named:A=49.1/B=49.1 update-pk:A=52.7/B=52.6 select-pk:A=68.0/B=67.7 ping:A=50.1/B=50.1 
+06:16:40 c1r c1-n1000-r17 attempt 0 quiet=True waited=9s
+c1-n1000-r17 load 2.20->2.27 other_busy=0.215 gate=3.0s errs=0 insert:A=48.7/B=48.9 insert-named:A=48.9/B=49.0 update-pk:A=52.4/B=52.0 select-pk:A=67.0/B=67.3 ping:A=50.3/B=50.3 
+06:16:58 c1r c1-n1000-r18 attempt 0 quiet=True waited=9s
+c1-n1000-r18 load 2.36->2.25 other_busy=0.227 gate=3.0s errs=0 insert:A=49.0/B=49.0 insert-named:A=49.2/B=49.2 update-pk:A=52.0/B=52.4 select-pk:A=68.3/B=68.3 ping:A=50.1/B=50.5 
+06:17:16 c1r c1-n1000-r19 attempt 0 quiet=True waited=9s
+c1-n1000-r19 load 2.14->2.50 other_busy=0.229 gate=3.0s errs=0 insert:A=48.7/B=48.9 insert-named:A=48.6/B=48.8 update-pk:A=53.0/B=52.0 select-pk:A=67.8/B=66.8 ping:A=50.3/B=50.4 
+06:17:35 c1r c1-n1000-r20 attempt 0 quiet=True waited=9s
+c1-n1000-r20 load 2.65->2.76 other_busy=0.221 gate=3.0s errs=0 insert:A=48.6/B=48.7 insert-named:A=48.7/B=48.8 update-pk:A=52.3/B=51.8 select-pk:A=68.1/B=67.3 ping:A=50.1/B=50.0 
+06:17:53 c1r c1-n1000-r21 attempt 0 quiet=True waited=9s
+c1-n1000-r21 load 2.45->2.41 other_busy=0.044 gate=3.0s errs=0 insert:A=48.9/B=48.9 insert-named:A=49.2/B=49.0 update-pk:A=52.6/B=51.5 select-pk:A=71.4/B=69.6 ping:A=50.3/B=50.5 
+06:18:12 c1r c1-n1000-r22 attempt 0 quiet=True waited=9s
+c1-n1000-r22 load 2.02->1.94 other_busy=0.042 gate=3.0s errs=0 insert:A=48.9/B=48.6 insert-named:A=49.2/B=48.9 update-pk:A=53.3/B=52.3 select-pk:A=68.0/B=67.8 ping:A=48.6/B=49.5 
+06:18:31 c1r c1-n1000-r23 attempt 0 quiet=True waited=9s
+c1-n1000-r23 load 1.80->1.99 other_busy=0.05 gate=3.0s errs=0 insert:A=49.4/B=49.2 insert-named:A=48.8/B=49.3 update-pk:A=52.1/B=52.9 select-pk:A=66.6/B=67.6 ping:A=50.4/B=50.4 
+06:18:51 c1r c1-n1000-r24 attempt 0 quiet=True waited=9s
+c1-n1000-r24 load 1.76->1.87 other_busy=0.043 gate=3.0s errs=0 insert:A=49.1/B=49.0 insert-named:A=48.8/B=48.8 update-pk:A=52.2/B=51.7 select-pk:A=67.6/B=68.1 ping:A=50.3/B=50.2 
+06:19:11 c1r c1-n1000-r25 attempt 0 quiet=True waited=9s
+c1-n1000-r25 load 1.89->1.98 other_busy=0.05 gate=3.0s errs=0 insert:A=49.3/B=49.1 insert-named:A=49.1/B=48.8 update-pk:A=52.5/B=51.9 select-pk:A=67.1/B=68.1 ping:A=50.1/B=50.8 
+06:19:30 c1r c1-n1000-r26 attempt 0 quiet=True waited=9s
+c1-n1000-r26 load 1.75->1.85 other_busy=0.042 gate=3.0s errs=0 insert:A=49.0/B=48.9 insert-named:A=49.1/B=49.1 update-pk:A=51.7/B=51.2 select-pk:A=68.4/B=67.2 ping:A=49.7/B=49.9 
+06:19:49 c1r c1-n1000-r27 attempt 0 quiet=True waited=9s
+c1-n1000-r27 load 1.58->1.54 other_busy=0.029 gate=3.0s errs=0 insert:A=49.4/B=49.5 insert-named:A=48.9/B=48.8 update-pk:A=52.6/B=51.5 select-pk:A=68.1/B=66.8 ping:A=49.7/B=50.6 
+06:20:07 c1r c1-n1000-r28 attempt 0 quiet=True waited=9s
+c1-n1000-r28 load 1.20->1.18 other_busy=0.019 gate=3.0s errs=0 insert:A=47.4/B=47.5 insert-named:A=48.6/B=48.4 update-pk:A=53.1/B=52.4 select-pk:A=67.6/B=67.2 ping:A=49.9/B=49.9 
+06:20:26 c1r c1-n1000-r29 attempt 0 quiet=True waited=9s
+c1-n1000-r29 load 1.00->1.08 other_busy=0.019 gate=3.0s errs=0 insert:A=48.7/B=48.5 insert-named:A=48.6/B=48.6 update-pk:A=52.0/B=51.6 select-pk:A=67.5/B=66.7 ping:A=49.9/B=50.0 
+06:20:44 c1r c1-n1000-r30 attempt 0 quiet=True waited=9s
+c1-n1000-r30 load 0.84->0.85 other_busy=0.021 gate=3.0s errs=0 insert:A=49.4/B=49.3 insert-named:A=48.6/B=48.9 update-pk:A=51.9/B=51.9 select-pk:A=66.8/B=66.4 ping:A=49.7/B=50.0 
+06:21:02 c1r c1-n1000-r31 attempt 0 quiet=True waited=9s
+c1-n1000-r31 load 0.74->0.84 other_busy=0.032 gate=3.0s errs=0 insert:A=49.1/B=48.8 insert-named:A=49.2/B=49.0 update-pk:A=52.6/B=52.8 select-pk:A=68.3/B=66.8 ping:A=50.1/B=50.3 
+06:21:20 c1r c1-n10000-r16 attempt 0 quiet=True waited=9s
+c1-n10000-r16 load 1.02->1.24 other_busy=0.02 gate=3.0s errs=0 insert:A=49.0/B=49.0 insert-named:A=48.6/B=48.8 update-pk:A=52.4/B=52.6 select-pk:A=65.1/B=65.1 ping:A=50.1/B=50.3 
+06:21:43 c1r c1-n10000-r17 attempt 0 quiet=True waited=9s
+c1-n10000-r17 load 1.19->1.68 other_busy=0.033 gate=3.0s errs=0 insert:A=47.4/B=48.1 insert-named:A=48.7/B=48.8 update-pk:A=52.5/B=51.8 select-pk:A=63.8/B=63.8 ping:A=49.9/B=49.9 
+06:22:08 c1r c1-n10000-r18 attempt 0 quiet=True waited=9s
+c1-n10000-r18 load 1.45->1.46 other_busy=0.03 gate=3.0s errs=0 insert:A=48.4/B=48.4 insert-named:A=48.7/B=48.6 update-pk:A=52.5/B=52.3 select-pk:A=65.1/B=64.0 ping:A=50.3/B=50.2 
+06:22:31 c1r c1-n10000-r19 attempt 0 quiet=True waited=9s
+c1-n10000-r19 load 1.39->1.51 other_busy=0.03 gate=3.0s errs=0 insert:A=48.9/B=48.8 insert-named:A=49.0/B=49.2 update-pk:A=52.0/B=52.3 select-pk:A=65.0/B=64.9 ping:A=49.9/B=50.1 
+06:22:55 c1r c1-n10000-r20 attempt 0 quiet=True waited=9s
+c1-n10000-r20 load 1.51->1.88 other_busy=0.023 gate=3.0s errs=0 insert:A=49.1/B=49.0 insert-named:A=48.8/B=48.9 update-pk:A=52.0/B=51.8 select-pk:A=64.6/B=64.9 ping:A=49.7/B=50.3 
+06:23:18 c1r c1-n10000-r21 attempt 0 quiet=True waited=9s
+c1-n10000-r21 load 1.61->1.67 other_busy=0.037 gate=3.0s errs=0 insert:A=49.3/B=49.1 insert-named:A=49.3/B=49.0 update-pk:A=53.4/B=52.7 select-pk:A=65.5/B=64.8 ping:A=50.3/B=50.4 
+06:23:42 c1r c1-n10000-r22 attempt 0 quiet=True waited=9s
+c1-n10000-r22 load 1.60->1.66 other_busy=0.029 gate=3.0s errs=0 insert:A=49.0/B=49.1 insert-named:A=48.4/B=48.5 update-pk:A=51.6/B=52.0 select-pk:A=64.1/B=64.2 ping:A=49.9/B=50.0 
+06:24:05 c1r c1-n10000-r23 attempt 0 quiet=True waited=9s
+c1-n10000-r23 load 1.72->1.91 other_busy=0.034 gate=3.0s errs=0 insert:A=48.9/B=48.8 insert-named:A=49.1/B=48.7 update-pk:A=52.8/B=52.0 select-pk:A=65.0/B=64.2 ping:A=49.8/B=49.9 
+06:35:56 c1r c1-n10000-r24 attempt 0 quiet=True waited=697s
+c1-n10000-r24 load 1.27->1.30 other_busy=0.04 gate=3.0s errs=0 insert:A=48.9/B=48.9 insert-named:A=48.5/B=48.9 update-pk:A=51.8/B=52.6 select-pk:A=64.3/B=64.5 ping:A=50.0/B=50.2 
+06:36:19 c1r c1-n10000-r25 attempt 0 quiet=True waited=9s
+c1-n10000-r25 load 1.40->1.72 other_busy=0.043 gate=3.0s errs=0 insert:A=48.8/B=48.9 insert-named:A=49.3/B=49.3 update-pk:A=52.0/B=53.2 select-pk:A=64.2/B=64.8 ping:A=50.2/B=50.3 
+06:36:43 c1r c1-n10000-r26 attempt 0 quiet=True waited=9s
+c1-n10000-r26 load 1.71->1.75 other_busy=0.048 gate=3.0s errs=0 insert:A=49.5/B=49.1 insert-named:A=48.9/B=49.1 update-pk:A=53.1/B=52.3 select-pk:A=65.8/B=65.1 ping:A=50.0/B=50.5 
+06:37:07 c1r c1-n10000-r27 attempt 0 quiet=True waited=9s
+c1-n10000-r27 load 1.63->1.56 other_busy=0.038 gate=3.0s errs=0 insert:A=49.0/B=48.6 insert-named:A=48.8/B=48.8 update-pk:A=52.8/B=52.7 select-pk:A=65.0/B=64.2 ping:A=50.5/B=49.8 
+06:37:30 c1r c1-n10000-r28 attempt 0 quiet=True waited=9s
+c1-n10000-r28 load 1.54->1.76 other_busy=0.036 gate=3.0s errs=0 insert:A=49.1/B=49.4 insert-named:A=48.9/B=49.2 update-pk:A=52.7/B=52.7 select-pk:A=64.9/B=64.7 ping:A=50.0/B=50.4 
+06:37:54 c1r c1-n10000-r29 attempt 0 quiet=True waited=9s
+c1-n10000-r29 load 1.51->1.59 other_busy=0.029 gate=3.0s errs=0 insert:A=48.8/B=48.4 insert-named:A=49.4/B=49.4 update-pk:A=53.7/B=53.3 select-pk:A=65.7/B=64.9 ping:A=50.4/B=50.3 
+06:38:18 c1r c1-n10000-r30 attempt 0 quiet=True waited=9s
+c1-n10000-r30 load 1.31->1.42 other_busy=0.023 gate=3.0s errs=0 insert:A=49.0/B=49.1 insert-named:A=49.3/B=48.9 update-pk:A=53.2/B=52.9 select-pk:A=64.2/B=64.5 ping:A=50.4/B=50.2 
+06:38:41 c1r c1-n10000-r31 attempt 0 quiet=True waited=9s
+c1-n10000-r31 load 1.44->1.52 other_busy=0.03 gate=3.0s errs=0 insert:A=49.0/B=48.9 insert-named:A=48.7/B=48.8 update-pk:A=52.3/B=51.8 select-pk:A=64.7/B=64.6 ping:A=50.5/B=50.0 
+06:39:04 strict c1-n200-r0 attempt 0 quiet=True waited=9s
+c1-n200-r0 load 1.26->1.47 other_busy=0.078 gate=3.0s errs=0 insert:A=980.9/B=994.6 insert-named:A=998.4/B=995.9 update-pk:A=1002.4/B=1010.1 select-pk:A=69.1/B=67.9 ping:A=50.3/B=52.3 
+06:39:35 strict c1-n200-r1 attempt 0 quiet=True waited=9s
+c1-n200-r1 load 1.47->1.97 other_busy=0.093 gate=3.0s errs=0 insert:A=1004.7/B=1002.5 insert-named:A=1026.1/B=1022.3 update-pk:A=1029.1/B=1022.0 select-pk:A=71.3/B=67.0 ping:A=50.5/B=51.8 
+06:45:10 strict c1-n200-r2 attempt 0 quiet=True waited=312s
+c1-n200-r2 load 2.16->1.90 other_busy=0.034 gate=3.0s errs=0 insert:A=1003.8/B=994.5 insert-named:A=998.0/B=998.9 update-pk:A=1005.3/B=1003.2 select-pk:A=69.1/B=67.7 ping:A=52.0/B=51.1 
+06:45:35 strict c1-n200-r3 attempt 0 quiet=True waited=9s
+c1-n200-r3 load 1.61->1.55 other_busy=0.024 gate=3.0s errs=0 insert:A=1009.9/B=1011.0 insert-named:A=998.6/B=1001.4 update-pk:A=1017.4/B=1011.4 select-pk:A=70.6/B=71.0 ping:A=52.2/B=51.5 
+06:46:00 strict c1-n200-r4 attempt 0 quiet=True waited=9s
+c1-n200-r4 load 1.31->1.47 other_busy=0.023 gate=3.0s errs=0 insert:A=998.0/B=1001.3 insert-named:A=1014.4/B=1008.0 update-pk:A=1003.7/B=999.6 select-pk:A=67.2/B=69.2 ping:A=51.6/B=51.1 
+07:12:32 null c1-n200-r6 attempt 0 quiet=True waited=793s
+c1-n200-r6 load 8.73->8.19 other_busy=0.086 gate=3.0s errs=3000 insert:A=52.6/B=49.8 insert-named:A=49.5/B=49.4 update-pk:A=52.9/B=52.6 select-pk:A=65.4/B=65.8 ping:A=49.6/B=50.4 
+07:28:19 null c1-n200-r14 attempt 0 quiet=True waited=938s
+c1-n200-r14 load 1.75->1.93 other_busy=0.276 gate=3.0s errs=3000 insert:A=48.5/B=48.6 insert-named:A=48.6/B=48.6 update-pk:A=79.7/B=79.7 select-pk:A=66.8/B=67.1 ping:A=77.6/B=77.8 
+   discarded: host_after: ['cc1plus:3774961', 'cmake:3774932,3775059', 'ld:3775062', 'collect2:3775061']; other-CPU busy (CPUs 6,7 excluded) 33.3% > 10 %; sibling CPU 3 busy 
+08:12:44 strict c1-n200-r5 attempt 0 quiet=True waited=470s
+c1-n200-r5 load 8.83->7.70 other_busy=0.022 gate=3.0s errs=0 insert:A=1018.7/B=1014.5 insert-named:A=1017.8/B=1018.9 update-pk:A=1037.3/B=1035.6 select-pk:A=69.5/B=68.7 ping:A=51.4/B=51.3 
+08:13:09 strict c1-n1000-r0 attempt 0 quiet=True waited=9s
+c1-n1000-r0 load 5.99->5.23 other_busy=0.02 gate=3.0s errs=0 insert:A=1004.6/B=1010.7 insert-named:A=1017.4/B=1008.1 update-pk:A=1036.9/B=1042.6 select-pk:A=64.8/B=64.8 ping:A=51.9/B=50.7 
+08:13:34 strict c1-n1000-r1 attempt 0 quiet=True waited=9s
+c1-n1000-r1 load 4.58->4.03 other_busy=0.02 gate=3.0s errs=0 insert:A=1006.3/B=1007.2 insert-named:A=1003.8/B=1011.6 update-pk:A=1005.8/B=1001.8 select-pk:A=65.9/B=65.8 ping:A=52.0/B=51.2 
+08:14:06 strict c1-n1000-r2 attempt 0 quiet=True waited=15s
+c1-n1000-r2 load 2.89->2.55 other_busy=0.017 gate=3.0s errs=0 insert:A=1020.7/B=1033.5 insert-named:A=1014.6/B=1025.6 update-pk:A=1030.2/B=1032.2 select-pk:A=66.1/B=65.8 ping:A=52.9/B=51.8 
+08:14:31 strict c1-n1000-r3 attempt 0 quiet=True waited=9s
+c1-n1000-r3 load 2.16->2.13 other_busy=0.022 gate=3.0s errs=0 insert:A=1012.6/B=1002.6 insert-named:A=1010.4/B=1013.8 update-pk:A=1020.1/B=1026.6 select-pk:A=65.5/B=65.7 ping:A=52.4/B=51.6 
+08:14:57 strict c1-n1000-r4 attempt 0 quiet=True waited=9s
+c1-n1000-r4 load 1.95->1.82 other_busy=0.022 gate=3.0s errs=0 insert:A=1008.5/B=1016.0 insert-named:A=1012.0/B=1002.7 update-pk:A=1006.4/B=994.4 select-pk:A=65.8/B=65.0 ping:A=51.9/B=51.6 
+08:18:00 strict c1-n1000-r5 attempt 0 quiet=True waited=167s
+c1-n1000-r5 load 5.60->4.87 other_busy=0.177 gate=3.0s errs=0 insert:A=1006.1/B=1003.5 insert-named:A=1042.2/B=1030.5 update-pk:A=1048.4/B=1052.6 select-pk:A=72.9/B=72.3 ping:A=62.8/B=59.9 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 20.1% > 10 %; sibling CPU 3 busy 74% > 15 %
+08:18:42 strict c1-n1000-r5 attempt 1 quiet=True waited=22s
+c1-n1000-r5 load 3.48->3.14 other_busy=0.016 gate=3.0s errs=0 insert:A=990.5/B=1008.0 insert-named:A=993.5/B=1002.5 update-pk:A=999.3/B=1007.6 select-pk:A=66.0/B=65.2 ping:A=51.7/B=51.6 
+08:19:07 strict c1-n10000-r0 attempt 0 quiet=True waited=9s
+c1-n10000-r0 load 2.65->2.37 other_busy=0.105 gate=3.0s errs=0 insert:A=1002.2/B=985.2 insert-named:A=1008.3/B=1019.1 update-pk:A=1092.1/B=1072.2 select-pk:A=89.3/B=89.3 ping:A=51.2/B=51.2 
+   discarded: host_after: ['cmake:3853623,3853670', 'ld:3853673', 'collect2:3853672']; other-CPU busy (CPUs 6,7 excluded) 13.9% > 10 %; sibling CPU 5 busy 25% > 15 %
+08:19:38 strict c1-n10000-r0 attempt 1 quiet=True waited=12s
+c1-n10000-r0 load 1.84->1.88 other_busy=0.142 gate=3.0s errs=0 insert:A=1035.2/B=1016.2 insert-named:A=1044.9/B=1038.3 update-pk:A=1043.6/B=1045.5 select-pk:A=66.1/B=65.5 ping:A=57.4/B=56.6 
+   discarded: host_before: ['cc1plus:3853825', 'cmake:3853790']; host_after: ['cmake:3853921,3853975', 'ld:3853978', 'collect2:3853977']; other-CPU busy (CPUs 6,7 excluded) 2
+08:20:12 strict c1-n10000-r0 attempt 2 quiet=True waited=12s
+c1-n10000-r0 load 1.67->1.85 other_busy=0.165 gate=3.0s errs=0 insert:A=992.7/B=1003.2 insert-named:A=996.5/B=1005.2 update-pk:A=1017.0/B=1006.1 select-pk:A=66.3/B=65.6 ping:A=58.4/B=57.9 
+   discarded: host_before: ['cc1plus:3854141', 'cmake:3854124']
+08:20:54 strict c1-n10000-r0 attempt 3 quiet=True waited=19s
+c1-n10000-r0 load 1.61->1.78 other_busy=0.179 gate=3.0s errs=0 insert:A=1023.7/B=1027.2 insert-named:A=1026.1/B=1026.2 update-pk:A=1033.9/B=1038.3 select-pk:A=75.2/B=74.4 ping:A=59.1/B=57.6 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 26.2% > 10 %; sibling CPU 5 busy 97% > 15 %
+08:21:33 strict c1-n10000-r0 attempt 4 quiet=True waited=19s
+c1-n10000-r0 load 1.56->1.68 other_busy=0.174 gate=3.0s errs=0 insert:A=1003.4/B=1001.5 insert-named:A=1015.5/B=1002.2 update-pk:A=1004.9/B=999.5 select-pk:A=66.1/B=65.9 ping:A=50.9/B=51.7 
+08:23:19 strict c1-n10000-r1 attempt 0 quiet=True waited=87s
+c1-n10000-r1 load 1.44->1.77 other_busy=0.174 gate=3.0s errs=0 insert:A=1003.8/B=1006.9 insert-named:A=994.5/B=996.2 update-pk:A=1024.6/B=1007.6 select-pk:A=65.9/B=65.7 ping:A=51.5/B=51.6 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 24.9% > 10 %; sibling CPU 5 busy 15% > 15 %
+08:24:35 strict c1-n10000-r1 attempt 1 quiet=True waited=56s
+c1-n10000-r1 load 1.59->1.86 other_busy=0.16 gate=3.0s errs=0 insert:A=1076.4/B=1075.6 insert-named:A=1042.5/B=1048.3 update-pk:A=1012.6/B=1004.9 select-pk:A=65.9/B=66.0 ping:A=59.2/B=58.4 
+   discarded: host_before: ['cmake:3856364,3856378']; other-CPU busy (CPUs 6,7 excluded) 16.8% > 10 %; sibling CPU 3 busy 36% > 15 %
+08:25:14 strict c1-n10000-r1 attempt 2 quiet=True waited=12s
+c1-n10000-r1 load 1.74->1.80 other_busy=0.174 gate=3.0s errs=0 insert:A=1004.3/B=1004.6 insert-named:A=992.1/B=995.9 update-pk:A=1018.5/B=1006.6 select-pk:A=66.7/B=65.7 ping:A=51.8/B=50.6 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 24.9% > 10 %
+08:25:50 strict c1-n10000-r1 attempt 3 quiet=True waited=15s
+c1-n10000-r1 load 1.70->1.83 other_busy=0.174 gate=3.0s errs=0 insert:A=1022.6/B=1022.5 insert-named:A=1016.4/B=1024.7 update-pk:A=1037.4/B=1036.4 select-pk:A=67.2/B=66.3 ping:A=56.7/B=55.7 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 10.1% > 10 %; sibling CPU 5 busy 34% > 15 %
+08:27:49 strict c1-n10000-r1 attempt 4 quiet=True waited=99s
+c1-n10000-r1 load 1.24->1.55 other_busy=0.17 gate=3.0s errs=0 insert:A=1014.4/B=1019.1 insert-named:A=1011.5/B=1011.1 update-pk:A=1042.4/B=1042.0 select-pk:A=66.4/B=66.0 ping:A=51.0/B=51.0 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 16.3% > 10 %; sibling CPU 3 busy 34% > 15 %
+08:28:20 strict c1-n10000-r1 attempt 5 quiet=True waited=9s
+c1-n10000-r1 load 1.65->1.67 other_busy=0.103 gate=3.0s errs=0 insert:A=1011.8/B=1000.2 insert-named:A=1042.5/B=1045.3 update-pk:A=1028.5/B=1022.3 select-pk:A=66.6/B=66.8 ping:A=52.2/B=53.4 
+08:33:43 strict c1-n10000-r2 attempt 0 quiet=True waited=300s
+c1-n10000-r2 load 8.75->8.35 other_busy=0.388 gate=3.0s errs=0 insert:A=1685.7/B=1446.6 insert-named:A=1283.9/B=1363.0 update-pk:A=1051.5/B=1050.3 select-pk:A=112.2/B=111.5 ping:A=52.6/B=50.7 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 39.7% > 10 %; sibling CPU 3 busy 37% > 15 %; sibling CPU 5 busy 46% > 15 %
+08:34:30 strict c1-n10000-r2 attempt 1 quiet=True waited=9s
+c1-n10000-r2 load 6.50->5.28 other_busy=0.019 gate=3.0s errs=0 insert:A=1013.9/B=1014.2 insert-named:A=1019.2/B=1009.1 update-pk:A=1011.6/B=1019.8 select-pk:A=65.6/B=65.8 ping:A=50.6/B=50.8 
+08:37:29 strict c1-n10000-r3 attempt 0 quiet=True waited=160s
+c1-n10000-r3 load 5.07->4.39 other_busy=0.168 gate=3.0s errs=0 insert:A=1009.3/B=1014.5 insert-named:A=1023.9/B=1019.2 update-pk:A=1034.0/B=1030.1 select-pk:A=66.4/B=66.4 ping:A=50.9/B=52.3 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 24.1% > 10 %; sibling CPU 5 busy 40% > 15 %
+08:38:31 strict c1-n10000-r3 attempt 1 quiet=True waited=40s
+c1-n10000-r3 load 2.86->2.61 other_busy=0.151 gate=3.0s errs=0 insert:A=1023.8/B=1026.5 insert-named:A=1043.5/B=1036.5 update-pk:A=1031.3/B=1029.9 select-pk:A=65.9/B=65.8 ping:A=50.6/B=50.8 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 21.4% > 10 %; sibling CPU 5 busy 26% > 15 %
+08:41:47 strict c1-n10000-r3 attempt 2 quiet=True waited=174s
+c1-n10000-r3 load 8.92->8.84 other_busy=0.295 gate=3.0s errs=0 insert:A=1659.3/B=1643.9 insert-named:A=1381.5/B=1371.4 update-pk:A=1089.3/B=1084.7 select-pk:A=114.2/B=110.1 ping:A=52.9/B=51.3 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 30.6% > 10 %; sibling CPU 3 busy 31% > 15 %; sibling CPU 5 busy 31% > 15 %
+08:42:44 strict c1-n10000-r3 attempt 3 quiet=True waited=9s
+c1-n10000-r3 load 6.88->5.64 other_busy=0.021 gate=3.0s errs=0 insert:A=1011.8/B=1015.8 insert-named:A=997.8/B=1003.5 update-pk:A=1001.2/B=1007.5 select-pk:A=72.5/B=72.2 ping:A=51.3/B=50.9 
+08:43:12 strict c1-n10000-r4 attempt 0 quiet=True waited=9s
+c1-n10000-r4 load 4.78->4.02 other_busy=0.022 gate=3.0s errs=0 insert:A=1001.9/B=994.4 insert-named:A=996.6/B=993.1 update-pk:A=1001.1/B=999.0 select-pk:A=65.7/B=65.9 ping:A=50.8/B=50.9 
+08:48:34 strict c1-n10000-r5 attempt 0 quiet=True waited=303s
+c1-n10000-r5 load 9.09->8.15 other_busy=0.337 gate=3.0s errs=0 insert:A=1377.5/B=1641.6 insert-named:A=1416.5/B=1321.5 update-pk:A=1112.8/B=1120.7 select-pk:A=114.5/B=109.7 ping:A=52.5/B=51.4 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 33.4% > 10 %; sibling CPU 3 busy 37% > 15 %; sibling CPU 5 busy 34% > 15 %
+08:50:36 strict c1-n10000-r5 attempt 1 quiet=True waited=79s
+c1-n10000-r5 load 6.14->5.96 other_busy=0.509 gate=3.0s errs=0 insert:A=1245.0/B=1235.5 insert-named:A=1453.2/B=1411.7 update-pk:A=1487.6/B=1488.7 select-pk:A=332.4/B=300.2 ping:A=78.2/B=77.7 
+   discarded: host_after: ['cc1plus:3885474,3885476,3885480', 'cmake:3885304']; other-CPU busy (CPUs 6,7 excluded) 51.7% > 10 %; sibling CPU 3 busy 56% > 15 %; sibling CPU 5 
+08:55:26 strict c1-n10000-r5 attempt 2 quiet=True waited=263s
+c1-n10000-r5 load 9.12->9.30 other_busy=0.273 gate=3.0s errs=0 insert:A=1990.6/B=1990.1 insert-named:A=1293.4/B=1379.8 update-pk:A=1425.3/B=1357.2 select-pk:A=109.0/B=112.2 ping:A=53.1/B=52.2 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 26.6% > 10 %; sibling CPU 3 busy 26% > 15 %; sibling CPU 5 busy 28% > 15 %
+08:57:17 strict c1-n10000-r5 attempt 3 quiet=True waited=53s
+c1-n10000-r5 load 5.87->4.79 other_busy=0.023 gate=3.0s errs=0 insert:A=1012.0/B=1017.8 insert-named:A=999.6/B=1009.2 update-pk:A=1015.5/B=1011.0 select-pk:A=66.5/B=64.7 ping:A=50.8/B=50.6 
+08:57:45 flip c1-n1000-r0 attempt 0 quiet=True waited=9s
+c1-n1000-r0 load 3.73->3.59 other_busy=0.022 gate=3.0s errs=3000 insert:A=49.0/B=48.9 insert-named:A=49.3/B=49.1 update-pk:A=64.5/B=59.9 select-pk:A=74.6/B=74.9 ping:A=63.4/B=58.5 
+08:58:04 flip c1-n1000-r1 attempt 0 quiet=True waited=9s
+c1-n1000-r1 load 3.09->3.08 other_busy=0.031 gate=3.0s errs=3000 insert:A=63.3/B=57.1 insert-named:A=49.1/B=49.5 update-pk:A=51.9/B=52.2 select-pk:A=77.3/B=80.4 ping:A=61.8/B=56.6 
+08:58:24 flip c1-n1000-r2 attempt 0 quiet=True waited=9s
+c1-n1000-r2 load 2.76->3.02 other_busy=0.023 gate=3.0s errs=3000 insert:A=69.0/B=70.2 insert-named:A=52.5/B=54.0 update-pk:A=59.4/B=57.0 select-pk:A=87.3/B=90.0 ping:A=51.4/B=51.0 
+08:58:45 flip c1-n1000-r3 attempt 0 quiet=True waited=9s
+c1-n1000-r3 load 2.79->3.05 other_busy=0.019 gate=3.0s errs=3000 insert:A=72.1/B=60.7 insert-named:A=73.9/B=74.8 update-pk:A=66.0/B=69.4 select-pk:A=111.5/B=87.8 ping:A=50.0/B=50.5 
+08:59:05 flip c1-n1000-r4 attempt 0 quiet=True waited=9s
+c1-n1000-r4 load 2.60->2.63 other_busy=0.025 gate=3.0s errs=3000 insert:A=61.3/B=60.9 insert-named:A=64.4/B=64.6 update-pk:A=74.2/B=74.7 select-pk:A=84.3/B=88.6 ping:A=50.6/B=50.4 
+08:59:26 flip c1-n1000-r5 attempt 0 quiet=True waited=9s
+c1-n1000-r5 load 2.27->2.33 other_busy=0.02 gate=3.0s errs=3000 insert:A=60.5/B=58.5 insert-named:A=61.7/B=60.3 update-pk:A=52.4/B=51.8 select-pk:A=71.4/B=70.5 ping:A=50.4/B=50.1 
+08:59:46 flip c1-n1000-r6 attempt 0 quiet=True waited=9s
+c1-n1000-r6 load 2.02->2.10 other_busy=0.019 gate=3.0s errs=3000 insert:A=51.6/B=50.7 insert-named:A=49.4/B=48.9 update-pk:A=58.0/B=58.1 select-pk:A=79.0/B=79.4 ping:A=52.2/B=51.5 
+09:00:06 flip c1-n1000-r7 attempt 0 quiet=True waited=9s
+c1-n1000-r7 load 2.09->2.15 other_busy=0.026 gate=3.0s errs=3000 insert:A=49.4/B=48.9 insert-named:A=64.7/B=63.7 update-pk:A=58.1/B=55.6 select-pk:A=77.3/B=78.6 ping:A=51.1/B=51.6 
+09:00:30 flip c1-n1000-r8 attempt 0 quiet=True waited=9s
+c1-n1000-r8 load 1.67->1.62 other_busy=0.033 gate=3.0s errs=3000 insert:A=48.8/B=48.7 insert-named:A=48.4/B=48.7 update-pk:A=52.5/B=53.3 select-pk:A=66.7/B=66.9 ping:A=50.3/B=50.2 
+09:00:48 flip c1-n1000-r9 attempt 0 quiet=True waited=9s
+c1-n1000-r9 load 1.37->1.26 other_busy=0.025 gate=3.0s errs=3000 insert:A=48.6/B=48.8 insert-named:A=49.1/B=49.0 update-pk:A=52.4/B=51.9 select-pk:A=67.5/B=67.6 ping:A=50.0/B=49.5 
+09:01:06 flip c1-n1000-r10 attempt 0 quiet=True waited=9s
+c1-n1000-r10 load 1.42->1.47 other_busy=0.02 gate=3.0s errs=3000 insert:A=48.7/B=49.0 insert-named:A=49.3/B=49.1 update-pk:A=51.9/B=51.8 select-pk:A=67.4/B=66.9 ping:A=50.0/B=50.3 
+09:01:30 flip c1-n1000-r11 attempt 0 quiet=True waited=15s
+c1-n1000-r11 load 1.26->1.32 other_busy=0.037 gate=3.0s errs=3000 insert:A=49.3/B=49.7 insert-named:A=49.3/B=49.5 update-pk:A=63.9/B=66.4 select-pk:A=81.1/B=84.1 ping:A=51.0/B=50.7 
+09:01:49 flip c1-n1000-r12 attempt 0 quiet=True waited=9s
+c1-n1000-r12 load 1.10->1.09 other_busy=0.021 gate=3.0s errs=3000 insert:A=50.8/B=53.3 insert-named:A=56.3/B=59.3 update-pk:A=52.1/B=52.1 select-pk:A=71.3/B=70.0 ping:A=53.1/B=53.8 
+09:02:09 flip c1-n1000-r13 attempt 0 quiet=True waited=9s
+c1-n1000-r13 load 0.85->0.94 other_busy=0.019 gate=3.0s errs=3000 insert:A=48.5/B=49.0 insert-named:A=48.8/B=49.1 update-pk:A=51.9/B=52.2 select-pk:A=67.4/B=68.2 ping:A=50.1/B=50.0 
+09:02:36 flip c1-n1000-r14 attempt 0 quiet=True waited=19s
+c1-n1000-r14 load 0.73->0.76 other_busy=0.02 gate=3.0s errs=3000 insert:A=48.1/B=48.3 insert-named:A=48.2/B=48.0 update-pk:A=51.8/B=51.7 select-pk:A=66.4/B=66.4 ping:A=49.5/B=49.5 
+09:02:54 flip c1-n1000-r15 attempt 0 quiet=True waited=9s
+c1-n1000-r15 load 0.74->0.84 other_busy=0.024 gate=3.0s errs=3000 insert:A=48.5/B=48.5 insert-named:A=48.7/B=49.1 update-pk:A=52.5/B=52.6 select-pk:A=66.9/B=66.4 ping:A=52.7/B=52.5 
+09:03:12 flip c1-n10000-r0 attempt 0 quiet=True waited=9s
+c1-n10000-r0 load 0.71->1.05 other_busy=0.036 gate=3.0s errs=3000 insert:A=47.8/B=48.2 insert-named:A=48.7/B=49.1 update-pk:A=52.8/B=53.1 select-pk:A=64.8/B=64.9 ping:A=50.5/B=50.1 
+09:03:35 flip c1-n10000-r1 attempt 0 quiet=True waited=9s
+c1-n10000-r1 load 0.82->0.99 other_busy=0.024 gate=3.0s errs=3000 insert:A=48.3/B=48.5 insert-named:A=48.6/B=48.6 update-pk:A=52.5/B=52.4 select-pk:A=64.0/B=64.2 ping:A=49.9/B=49.9 
+09:03:58 flip c1-n10000-r2 attempt 0 quiet=True waited=9s
+c1-n10000-r2 load 0.84->0.87 other_busy=0.034 gate=3.0s errs=3000 insert:A=49.1/B=48.7 insert-named:A=48.7/B=48.9 update-pk:A=52.9/B=52.8 select-pk:A=65.2/B=64.7 ping:A=50.0/B=50.0 
+09:04:21 flip c1-n10000-r3 attempt 0 quiet=True waited=9s
+c1-n10000-r3 load 0.75->0.94 other_busy=0.024 gate=3.0s errs=3000 insert:A=49.0/B=48.7 insert-named:A=49.7/B=48.6 update-pk:A=54.1/B=53.0 select-pk:A=65.1/B=64.6 ping:A=50.5/B=50.4 
+09:04:44 flip c1-n10000-r4 attempt 0 quiet=True waited=9s
+c1-n10000-r4 load 0.81->0.99 other_busy=0.018 gate=3.0s errs=3000 insert:A=48.6/B=48.8 insert-named:A=48.9/B=49.0 update-pk:A=52.9/B=53.3 select-pk:A=64.8/B=65.2 ping:A=50.0/B=49.7 
+09:05:07 flip c1-n10000-r5 attempt 0 quiet=True waited=9s
+c1-n10000-r5 load 0.84->1.09 other_busy=0.023 gate=3.0s errs=3000 insert:A=48.8/B=48.9 insert-named:A=49.0/B=48.7 update-pk:A=52.8/B=52.7 select-pk:A=64.6/B=65.0 ping:A=50.2/B=50.7 
+09:05:30 flip c1-n10000-r6 attempt 0 quiet=True waited=9s
+c1-n10000-r6 load 0.99->0.99 other_busy=0.019 gate=3.0s errs=3000 insert:A=48.3/B=48.8 insert-named:A=48.5/B=48.4 update-pk:A=52.7/B=52.8 select-pk:A=64.2/B=64.3 ping:A=49.7/B=49.8 
+09:05:53 flip c1-n10000-r7 attempt 0 quiet=True waited=9s
+c1-n10000-r7 load 0.84->0.87 other_busy=0.022 gate=3.0s errs=3000 insert:A=48.9/B=48.8 insert-named:A=49.2/B=49.1 update-pk:A=53.8/B=53.1 select-pk:A=64.9/B=64.6 ping:A=50.1/B=49.9 
+09:06:16 flip c1-n10000-r8 attempt 0 quiet=True waited=9s
+c1-n10000-r8 load 0.74->0.86 other_busy=0.02 gate=3.0s errs=3000 insert:A=48.7/B=48.5 insert-named:A=48.9/B=48.8 update-pk:A=52.3/B=53.4 select-pk:A=64.2/B=64.9 ping:A=49.8/B=49.9 
+09:06:39 flip c1-n10000-r9 attempt 0 quiet=True waited=9s
+c1-n10000-r9 load 0.75->1.09 other_busy=0.019 gate=3.0s errs=3000 insert:A=49.0/B=48.7 insert-named:A=49.1/B=49.0 update-pk:A=52.5/B=52.7 select-pk:A=64.8/B=64.7 ping:A=50.2/B=50.3 
+09:07:02 flip c1-n10000-r10 attempt 0 quiet=True waited=9s
+c1-n10000-r10 load 0.92->1.39 other_busy=0.021 gate=3.0s errs=3000 insert:A=49.2/B=49.5 insert-named:A=49.2/B=49.1 update-pk:A=53.3/B=52.7 select-pk:A=65.2/B=65.5 ping:A=50.3/B=50.4 
+09:07:25 flip c1-n10000-r11 attempt 0 quiet=True waited=9s
+c1-n10000-r11 load 1.22->1.19 other_busy=0.017 gate=3.0s errs=3000 insert:A=49.0/B=49.3 insert-named:A=49.4/B=49.2 update-pk:A=53.4/B=52.4 select-pk:A=65.4/B=65.5 ping:A=50.4/B=50.6 
+09:07:48 flip c1-n10000-r12 attempt 0 quiet=True waited=9s
+c1-n10000-r12 load 1.01->1.24 other_busy=0.018 gate=3.0s errs=3000 insert:A=48.6/B=48.6 insert-named:A=48.9/B=49.0 update-pk:A=52.5/B=53.3 select-pk:A=64.9/B=65.6 ping:A=50.1/B=50.1 
+09:08:11 flip c1-n10000-r13 attempt 0 quiet=True waited=9s
+c1-n10000-r13 load 0.96->0.97 other_busy=0.022 gate=3.0s errs=3000 insert:A=48.9/B=48.8 insert-named:A=48.9/B=48.9 update-pk:A=53.2/B=53.0 select-pk:A=64.2/B=65.3 ping:A=50.5/B=50.7 
+09:08:34 flip c1-n10000-r14 attempt 0 quiet=True waited=9s
+c1-n10000-r14 load 0.75->1.02 other_busy=0.022 gate=3.0s errs=3000 insert:A=48.6/B=48.3 insert-named:A=49.0/B=48.7 update-pk:A=52.7/B=53.3 select-pk:A=65.1/B=64.6 ping:A=49.8/B=50.0 
+09:08:57 flip c1-n10000-r15 attempt 0 quiet=True waited=9s
+c1-n10000-r15 load 0.86->1.18 other_busy=0.022 gate=3.0s errs=3000 insert:A=48.9/B=48.9 insert-named:A=48.9/B=49.1 update-pk:A=52.4/B=53.2 select-pk:A=64.8/B=64.8 ping:A=50.0/B=50.3 
+runner done
+09:09:32 null2 c2-n200-r0 attempt 0 quiet=True waited=9s
+c2-n200-r0 load 0.97->1.06 other_busy=0.113 gate=3.0s errs=3000 insert:A=49.1/B=49.0 insert-named:A=49.6/B=49.8 update-pk:A=53.7/B=54.1 select-pk:A=66.3/B=66.6 ping:A=50.5/B=50.1 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 22.6% > 10 %; sibling CPU 0 busy 43% > 15 %
+09:09:50 null2 c2-n200-r0 attempt 1 quiet=True waited=9s
+c2-n200-r0 load 1.05->1.13 other_busy=0.024 gate=3.0s errs=3000 insert:A=49.1/B=48.9 insert-named:A=49.8/B=49.5 update-pk:A=54.0/B=54.5 select-pk:A=67.2/B=66.6 ping:A=50.2/B=49.6 
+09:10:07 null2 c2-n200-r1 attempt 0 quiet=True waited=9s
+c2-n200-r1 load 0.95->1.04 other_busy=0.068 gate=3.0s errs=3000 insert:A=49.1/B=49.1 insert-named:A=49.7/B=49.6 update-pk:A=53.5/B=53.2 select-pk:A=65.9/B=65.8 ping:A=50.8/B=50.6 
+09:10:25 null2 c2-n200-r2 attempt 0 quiet=True waited=9s
+c2-n200-r2 load 0.81->0.90 other_busy=0.069 gate=3.0s errs=3000 insert:A=49.2/B=49.1 insert-named:A=50.6/B=50.5 update-pk:A=53.3/B=54.0 select-pk:A=66.3/B=66.0 ping:A=50.4/B=50.3 
+09:10:43 null2 c2-n200-r3 attempt 0 quiet=True waited=9s
+c2-n200-r3 load 0.92->0.84 other_busy=0.026 gate=3.0s errs=3000 insert:A=48.8/B=48.8 insert-named:A=49.2/B=49.3 update-pk:A=53.3/B=53.6 select-pk:A=66.2/B=66.3 ping:A=50.3/B=50.1 
+09:11:00 null2 c2-n200-r4 attempt 0 quiet=True waited=9s
+c2-n200-r4 load 0.66->0.76 other_busy=0.021 gate=3.0s errs=3000 insert:A=49.2/B=49.7 insert-named:A=49.4/B=50.5 update-pk:A=53.8/B=54.5 select-pk:A=66.3/B=66.9 ping:A=50.2/B=50.4 
+09:11:18 null2 c2-n200-r5 attempt 0 quiet=True waited=9s
+c2-n200-r5 load 0.65->0.59 other_busy=0.069 gate=3.0s errs=3000 insert:A=50.0/B=49.1 insert-named:A=50.6/B=49.9 update-pk:A=53.7/B=53.8 select-pk:A=67.5/B=67.9 ping:A=50.8/B=49.6 
+09:11:36 null2 c2-n200-r6 attempt 0 quiet=True waited=9s
+c2-n200-r6 load 0.46->0.59 other_busy=0.074 gate=3.0s errs=3000 insert:A=49.6/B=49.4 insert-named:A=51.0/B=49.7 update-pk:A=55.5/B=53.6 select-pk:A=66.9/B=66.2 ping:A=51.1/B=50.7 
+09:11:54 null2 c2-n200-r7 attempt 0 quiet=True waited=9s
+c2-n200-r7 load 0.49->0.57 other_busy=0.076 gate=3.0s errs=3000 insert:A=49.4/B=49.0 insert-named:A=50.2/B=49.6 update-pk:A=53.3/B=53.6 select-pk:A=68.0/B=66.5 ping:A=50.3/B=49.9 
+09:12:11 null2 c2-n200-r8 attempt 0 quiet=True waited=9s
+c2-n200-r8 load 0.48->0.61 other_busy=0.072 gate=3.0s errs=3000 insert:A=49.0/B=48.9 insert-named:A=49.2/B=49.3 update-pk:A=53.4/B=53.6 select-pk:A=65.6/B=65.2 ping:A=50.3/B=50.0 
+09:12:29 null2 c2-n200-r9 attempt 0 quiet=True waited=9s
+c2-n200-r9 load 0.55->0.67 other_busy=0.07 gate=3.0s errs=3000 insert:A=49.1/B=49.2 insert-named:A=49.6/B=49.5 update-pk:A=54.0/B=54.1 select-pk:A=67.1/B=66.2 ping:A=50.1/B=49.9 
+09:12:47 null2 c2-n200-r10 attempt 0 quiet=True waited=9s
+c2-n200-r10 load 0.72->0.82 other_busy=0.067 gate=3.0s errs=3000 insert:A=49.3/B=50.3 insert-named:A=50.8/B=51.0 update-pk:A=55.2/B=54.1 select-pk:A=66.0/B=66.9 ping:A=50.2/B=50.4 
+09:13:05 null2 c2-n200-r11 attempt 0 quiet=True waited=9s
+c2-n200-r11 load 0.64->0.75 other_busy=0.065 gate=3.0s errs=3000 insert:A=49.4/B=49.6 insert-named:A=49.7/B=50.2 update-pk:A=54.2/B=54.3 select-pk:A=66.5/B=67.4 ping:A=50.7/B=50.5 
+09:13:22 null2 c2-n200-r12 attempt 0 quiet=True waited=9s
+c2-n200-r12 load 0.63->0.74 other_busy=0.027 gate=3.0s errs=3000 insert:A=49.1/B=49.2 insert-named:A=49.7/B=49.5 update-pk:A=53.4/B=53.4 select-pk:A=65.7/B=66.2 ping:A=50.2/B=50.2 
+09:13:40 null2 c2-n200-r13 attempt 0 quiet=True waited=9s
+c2-n200-r13 load 0.65->0.68 other_busy=0.109 gate=3.0s errs=3000 insert:A=48.6/B=49.2 insert-named:A=49.1/B=50.1 update-pk:A=53.1/B=53.4 select-pk:A=65.8/B=65.7 ping:A=49.9/B=50.3 
+09:13:58 null2 c2-n200-r14 attempt 0 quiet=True waited=9s
+c2-n200-r14 load 0.58->0.61 other_busy=0.117 gate=3.0s errs=3000 insert:A=48.9/B=48.7 insert-named:A=49.4/B=49.0 update-pk:A=53.8/B=53.5 select-pk:A=66.0/B=65.7 ping:A=49.8/B=49.8 
+09:14:40 null2 c2-n200-r15 attempt 0 quiet=True waited=34s
+c2-n200-r15 load 0.57->0.68 other_busy=0.036 gate=3.0s errs=3000 insert:A=50.6/B=49.8 insert-named:A=51.3/B=50.4 update-pk:A=54.5/B=54.2 select-pk:A=66.8/B=67.3 ping:A=50.6/B=50.1 
+09:14:58 null2 c2-n1000-r0 attempt 0 quiet=True waited=9s
+c2-n1000-r0 load 0.58->0.61 other_busy=0.031 gate=3.0s errs=3000 insert:A=48.9/B=48.9 insert-named:A=49.3/B=49.7 update-pk:A=53.5/B=54.1 select-pk:A=69.2/B=68.9 ping:A=50.6/B=50.3 
+09:15:22 null2 c2-n1000-r1 attempt 0 quiet=True waited=15s
+c2-n1000-r1 load 0.44->0.48 other_busy=0.077 gate=3.0s errs=3000 insert:A=49.6/B=49.6 insert-named:A=49.7/B=49.7 update-pk:A=54.0/B=54.0 select-pk:A=68.4/B=68.3 ping:A=50.6/B=50.2 
+09:15:40 null2 c2-n1000-r2 attempt 0 quiet=True waited=9s
+c2-n1000-r2 load 0.38->0.43 other_busy=0.078 gate=3.0s errs=3000 insert:A=49.0/B=49.4 insert-named:A=51.3/B=51.3 update-pk:A=53.8/B=53.5 select-pk:A=67.9/B=68.1 ping:A=50.4/B=50.6 
+09:15:58 null2 c2-n1000-r3 attempt 0 quiet=True waited=9s
+c2-n1000-r3 load 0.36->0.33 other_busy=0.077 gate=3.0s errs=3000 insert:A=49.2/B=49.7 insert-named:A=49.4/B=50.5 update-pk:A=53.4/B=53.7 select-pk:A=68.6/B=68.1 ping:A=50.1/B=50.4 
+09:16:16 null2 c2-n1000-r4 attempt 0 quiet=True waited=9s
+c2-n1000-r4 load 0.46->0.66 other_busy=0.068 gate=3.0s errs=3000 insert:A=48.8/B=48.5 insert-named:A=49.6/B=48.9 update-pk:A=54.1/B=53.9 select-pk:A=68.8/B=68.1 ping:A=51.5/B=50.5 
+09:16:35 null2 c2-n1000-r5 attempt 0 quiet=True waited=9s
+c2-n1000-r5 load 0.66->0.69 other_busy=0.074 gate=3.0s errs=3000 insert:A=49.3/B=49.1 insert-named:A=49.7/B=49.6 update-pk:A=53.7/B=53.5 select-pk:A=69.2/B=67.7 ping:A=50.9/B=50.4 
+09:16:53 null2 c2-n1000-r6 attempt 0 quiet=True waited=9s
+c2-n1000-r6 load 0.65->0.76 other_busy=0.07 gate=3.0s errs=3000 insert:A=49.0/B=49.3 insert-named:A=49.4/B=49.6 update-pk:A=53.8/B=53.5 select-pk:A=68.5/B=68.9 ping:A=50.8/B=50.0 
+09:17:11 null2 c2-n1000-r7 attempt 0 quiet=True waited=9s
+c2-n1000-r7 load 1.14->1.21 other_busy=0.125 gate=3.0s errs=3000 insert:A=48.9/B=48.8 insert-named:A=49.2/B=49.1 update-pk:A=53.3/B=53.0 select-pk:A=68.0/B=68.2 ping:A=50.3/B=49.8 
+09:17:29 null2 c2-n1000-r8 attempt 0 quiet=True waited=9s
+c2-n1000-r8 load 0.94->0.95 other_busy=0.026 gate=3.0s errs=3000 insert:A=49.1/B=49.2 insert-named:A=49.5/B=49.9 update-pk:A=54.1/B=54.2 select-pk:A=68.5/B=67.8 ping:A=50.8/B=50.0 
+09:17:47 null2 c2-n1000-r9 attempt 0 quiet=True waited=9s
+c2-n1000-r9 load 0.80->0.90 other_busy=0.039 gate=3.0s errs=3000 insert:A=49.2/B=49.3 insert-named:A=50.0/B=49.9 update-pk:A=54.0/B=54.0 select-pk:A=68.1/B=68.6 ping:A=50.8/B=50.4 
+09:18:05 null2 c2-n1000-r10 attempt 0 quiet=True waited=9s
+c2-n1000-r10 load 0.70->0.80 other_busy=0.029 gate=3.0s errs=3000 insert:A=49.0/B=49.0 insert-named:A=49.7/B=49.3 update-pk:A=53.6/B=53.9 select-pk:A=68.6/B=68.5 ping:A=50.3/B=50.2 
+09:18:23 null2 c2-n1000-r11 attempt 0 quiet=True waited=9s
+c2-n1000-r11 load 0.83->0.93 other_busy=0.122 gate=3.0s errs=3000 insert:A=49.0/B=48.9 insert-named:A=49.1/B=48.9 update-pk:A=54.0/B=53.9 select-pk:A=67.7/B=66.8 ping:A=50.0/B=50.0 
+09:18:41 null2 c2-n1000-r12 attempt 0 quiet=True waited=9s
+c2-n1000-r12 load 0.79->0.81 other_busy=0.122 gate=3.0s errs=3000 insert:A=49.5/B=48.8 insert-named:A=50.7/B=49.1 update-pk:A=53.7/B=54.2 select-pk:A=68.4/B=68.6 ping:A=49.9/B=50.0 
+09:19:00 null2 c2-n1000-r13 attempt 0 quiet=True waited=9s
+c2-n1000-r13 load 0.63->0.66 other_busy=0.122 gate=3.0s errs=3000 insert:A=49.5/B=49.1 insert-named:A=50.2/B=49.6 update-pk:A=53.8/B=53.0 select-pk:A=68.7/B=67.8 ping:A=49.9/B=50.7 
+09:19:18 null2 c2-n1000-r14 attempt 0 quiet=True waited=9s
+c2-n1000-r14 load 0.64->0.66 other_busy=0.027 gate=3.0s errs=3000 insert:A=49.2/B=49.3 insert-named:A=49.4/B=50.3 update-pk:A=52.7/B=54.1 select-pk:A=68.0/B=68.0 ping:A=49.8/B=50.1 
+09:19:36 null2 c2-n1000-r15 attempt 0 quiet=True waited=9s
+c2-n1000-r15 load 0.58->0.62 other_busy=0.028 gate=3.0s errs=3000 insert:A=49.4/B=49.5 insert-named:A=49.8/B=50.7 update-pk:A=54.2/B=54.1 select-pk:A=69.5/B=69.5 ping:A=50.3/B=50.0 
+09:19:54 null2 c2-n10000-r0 attempt 0 quiet=True waited=9s
+c2-n10000-r0 load 0.48->0.56 other_busy=0.085 gate=3.0s errs=3000 insert:A=48.7/B=50.1 insert-named:A=49.0/B=50.0 update-pk:A=53.9/B=54.5 select-pk:A=66.4/B=65.3 ping:A=50.7/B=50.4 
+09:20:17 null2 c2-n10000-r1 attempt 0 quiet=True waited=9s
+c2-n10000-r1 load 0.63->0.99 other_busy=0.09 gate=3.0s errs=3000 insert:A=49.4/B=50.4 insert-named:A=49.4/B=50.9 update-pk:A=53.9/B=54.8 select-pk:A=65.5/B=66.2 ping:A=49.9/B=51.1 
+09:20:40 null2 c2-n10000-r2 attempt 0 quiet=True waited=9s
+c2-n10000-r2 load 0.77->0.88 other_busy=0.024 gate=3.0s errs=3000 insert:A=49.0/B=48.8 insert-named:A=50.0/B=49.8 update-pk:A=54.1/B=54.1 select-pk:A=65.0/B=64.9 ping:A=49.9/B=50.2 
+09:21:04 null2 c2-n10000-r3 attempt 0 quiet=True waited=9s
+c2-n10000-r3 load 0.74->0.95 other_busy=0.093 gate=3.0s errs=3000 insert:A=48.8/B=49.9 insert-named:A=49.8/B=49.6 update-pk:A=54.1/B=54.5 select-pk:A=66.2/B=66.0 ping:A=50.2/B=50.4 
+09:21:27 null2 c2-n10000-r4 attempt 0 quiet=True waited=9s
+c2-n10000-r4 load 0.88->1.12 other_busy=0.099 gate=3.0s errs=3000 insert:A=49.0/B=49.7 insert-named:A=49.9/B=50.2 update-pk:A=54.1/B=54.5 select-pk:A=66.1/B=66.4 ping:A=50.7/B=50.4 
+09:21:50 null2 c2-n10000-r5 attempt 0 quiet=True waited=9s
+c2-n10000-r5 load 0.95->0.96 other_busy=0.159 gate=3.0s errs=3000 insert:A=49.0/B=48.9 insert-named:A=49.2/B=49.2 update-pk:A=53.4/B=54.0 select-pk:A=65.5/B=65.7 ping:A=49.9/B=50.0 
+09:22:13 null2 c2-n10000-r6 attempt 0 quiet=True waited=9s
+c2-n10000-r6 load 1.05->1.12 other_busy=0.087 gate=3.0s errs=3000 insert:A=49.0/B=48.8 insert-named:A=49.4/B=49.7 update-pk:A=53.8/B=54.3 select-pk:A=65.9/B=65.5 ping:A=50.3/B=50.4 
+09:22:37 null2 c2-n10000-r7 attempt 0 quiet=True waited=9s
+c2-n10000-r7 load 1.01->1.08 other_busy=0.162 gate=3.0s errs=3000 insert:A=49.3/B=48.9 insert-named:A=50.0/B=49.1 update-pk:A=54.2/B=53.8 select-pk:A=66.0/B=65.2 ping:A=50.1/B=50.1 
+09:23:00 null2 c2-n10000-r8 attempt 0 quiet=True waited=9s
+c2-n10000-r8 load 0.84->1.01 other_busy=0.023 gate=3.0s errs=3000 insert:A=48.7/B=49.3 insert-named:A=50.2/B=50.4 update-pk:A=53.9/B=54.1 select-pk:A=65.5/B=65.2 ping:A=50.1/B=50.4 
+09:23:23 null2 c2-n10000-r9 attempt 0 quiet=True waited=9s
+c2-n10000-r9 load 0.86->0.88 other_busy=0.095 gate=3.0s errs=3000 insert:A=49.6/B=49.2 insert-named:A=50.6/B=49.8 update-pk:A=54.3/B=54.5 select-pk:A=66.3/B=66.4 ping:A=50.3/B=50.3 
+09:23:46 null2 c2-n10000-r10 attempt 0 quiet=True waited=9s
+c2-n10000-r10 load 0.68->0.81 other_busy=0.163 gate=3.0s errs=3000 insert:A=48.5/B=49.4 insert-named:A=49.2/B=50.2 update-pk:A=53.7/B=54.1 select-pk:A=65.5/B=65.9 ping:A=49.9/B=50.1 
+09:24:09 null2 c2-n10000-r11 attempt 0 quiet=True waited=9s
+c2-n10000-r11 load 0.85->0.95 other_busy=0.09 gate=3.0s errs=3000 insert:A=49.7/B=49.7 insert-named:A=49.8/B=50.2 update-pk:A=54.3/B=54.1 select-pk:A=65.9/B=66.0 ping:A=50.0/B=50.4 
+09:24:32 null2 c2-n10000-r12 attempt 0 quiet=True waited=9s
+c2-n10000-r12 load 0.80->1.05 other_busy=0.031 gate=3.0s errs=3000 insert:A=49.3/B=49.3 insert-named:A=49.6/B=50.1 update-pk:A=54.0/B=53.9 select-pk:A=65.7/B=65.7 ping:A=50.4/B=50.4 
+09:24:55 null2 c2-n10000-r13 attempt 0 quiet=True waited=9s
+c2-n10000-r13 load 0.98->1.06 other_busy=0.16 gate=3.0s errs=3000 insert:A=50.8/B=49.5 insert-named:A=59.4/B=49.4 update-pk:A=58.7/B=62.6 select-pk:A=76.0/B=75.8 ping:A=50.7/B=50.6 
+   discarded: other-CPU busy (CPUs 6,7 excluded) 10.7% > 10 %
+09:25:18 null2 c2-n10000-r13 attempt 1 quiet=True waited=9s
+c2-n10000-r13 load 0.97->1.05 other_busy=0.035 gate=3.0s errs=3000 insert:A=49.7/B=49.7 insert-named:A=50.1/B=50.1 update-pk:A=54.3/B=54.3 select-pk:A=65.7/B=65.4 ping:A=50.2/B=50.2 
+09:25:41 null2 c2-n10000-r14 attempt 0 quiet=True waited=9s
+c2-n10000-r14 load 1.02->1.09 other_busy=0.097 gate=3.0s errs=3000 insert:A=48.8/B=48.7 insert-named:A=50.9/B=50.1 update-pk:A=53.9/B=55.1 select-pk:A=65.2/B=65.6 ping:A=50.3/B=50.4 
+09:26:05 null2 c2-n10000-r15 attempt 0 quiet=True waited=9s
+c2-n10000-r15 load 1.07->1.20 other_busy=0.035 gate=3.0s errs=3000 insert:A=49.5/B=48.9 insert-named:A=50.3/B=49.8 update-pk:A=54.3/B=53.9 select-pk:A=66.0/B=64.9 ping:A=50.6/B=50.2 
+runner done
+09:26:30 strict c1-n10000-r1 attempt 0 quiet=True waited=9s
+c1-n10000-r1 load 1.01->1.01 other_busy=0.024 gate=3.0s errs=0 insert:A=1002.9/B=1009.8 insert-named:A=1008.6/B=1019.2 update-pk:A=1021.5/B=1019.1 select-pk:A=65.0/B=66.1 ping:A=51.4/B=51.5 
+09:26:58 flip c1-n1000-r0 attempt 0 quiet=True waited=9s
+c1-n1000-r0 load 0.85->0.86 other_busy=0.033 gate=3.0s errs=3000 insert:A=49.2/B=49.3 insert-named:A=49.3/B=49.4 update-pk:A=52.2/B=52.4 select-pk:A=72.3/B=73.3 ping:A=50.5/B=50.2 
+09:27:16 flip c1-n1000-r1 attempt 0 quiet=True waited=9s
+c1-n1000-r1 load 0.82->2.71 other_busy=0.865 gate=3.0s errs=3000 insert:A=49.0/B=49.0 insert-named:A=49.7/B=49.7 update-pk:A=185.1/B=173.9 select-pk:A=205.0/B=196.0 ping:A=168.9/B=168.6 
+   discarded: host_after: ['cc1plus:3907617,3907630,3907636,3907684,3907688,3907695,3907707,3907713', 'cmake:3907450']; other-CPU busy (CPUs 6,7 excluded) 86.3% > 10 %; sibli
+09:32:28 flip c1-n1000-r1 attempt 1 quiet=True waited=295s
+09:33:28 nullB c1-n10000-r0 attempt 0 quiet=True waited=34s
+c1-n10000-r0 load 8.54->7.53 other_busy=0.03 gate=3.0s errs=0 insert:A=49.5/B=46.7 insert-named:A=50.6/B=48.4 update-pk:A=54.1/B=53.0 select-pk:A=65.4/B=64.0 ping:A=50.4/B=49.8 
+09:33:51 nullB c1-n10000-r1 attempt 0 quiet=True waited=9s
+c1-n10000-r1 load 6.16->5.45 other_busy=0.022 gate=3.0s errs=0 insert:A=49.1/B=49.5 insert-named:A=49.1/B=49.0 update-pk:A=53.4/B=52.8 select-pk:A=65.3/B=64.1 ping:A=50.6/B=49.9 
+09:34:14 nullB c1-n10000-r2 attempt 0 quiet=True waited=9s
+c1-n10000-r2 load 4.61->3.89 other_busy=0.017 gate=3.0s errs=0 insert:A=48.7/B=48.8 insert-named:A=48.8/B=48.8 update-pk:A=52.6/B=52.9 select-pk:A=64.7/B=63.9 ping:A=50.1/B=50.2 
+09:34:37 nullB c1-n10000-r3 attempt 0 quiet=True waited=9s
+c1-n10000-r3 load 3.29->3.31 other_busy=0.017 gate=3.0s errs=0 insert:A=48.6/B=48.8 insert-named:A=49.0/B=48.6 update-pk:A=53.2/B=52.8 select-pk:A=64.5/B=64.4 ping:A=50.3/B=50.1 
+09:35:00 nullB c1-n10000-r4 attempt 0 quiet=True waited=9s
+c1-n10000-r4 load 2.65->2.40 other_busy=0.015 gate=3.0s errs=0 insert:A=49.0/B=49.1 insert-named:A=48.9/B=49.0 update-pk:A=52.9/B=52.1 select-pk:A=64.8/B=63.7 ping:A=50.4/B=50.2 
+09:35:23 nullB c1-n10000-r5 attempt 0 quiet=True waited=9s
+c1-n10000-r5 load 2.03->2.17 other_busy=0.015 gate=3.0s errs=0 insert:A=49.3/B=49.2 insert-named:A=49.0/B=48.9 update-pk:A=52.6/B=52.1 select-pk:A=64.7/B=63.9 ping:A=51.0/B=50.1 
+09:35:46 nullB c1-n10000-r6 attempt 0 quiet=True waited=9s
+c1-n10000-r6 load 1.98->1.83 other_busy=0.014 gate=3.0s errs=0 insert:A=48.8/B=48.8 insert-named:A=48.9/B=48.8 update-pk:A=52.9/B=53.0 select-pk:A=64.7/B=64.2 ping:A=49.8/B=49.8 
+09:36:09 nullB c1-n10000-r7 attempt 0 quiet=True waited=9s
+c1-n10000-r7 load 1.55->1.54 other_busy=0.015 gate=3.0s errs=0 insert:A=48.5/B=48.9 insert-named:A=48.8/B=48.3 update-pk:A=52.7/B=51.8 select-pk:A=64.4/B=63.7 ping:A=50.7/B=50.3 
+09:36:32 nullB c1-n10000-r8 attempt 0 quiet=True waited=9s
+c1-n10000-r8 load 1.33->1.65 other_busy=0.015 gate=3.0s errs=0 insert:A=49.1/B=49.0 insert-named:A=48.8/B=48.9 update-pk:A=51.8/B=53.1 select-pk:A=64.7/B=63.0 ping:A=50.2/B=49.7 
+09:36:55 nullB c1-n10000-r9 attempt 0 quiet=True waited=9s
+c1-n10000-r9 load 1.28->1.31 other_busy=0.014 gate=3.0s errs=0 insert:A=48.9/B=48.9 insert-named:A=49.0/B=49.0 update-pk:A=52.7/B=52.3 select-pk:A=64.8/B=64.2 ping:A=50.6/B=50.1 
+09:37:18 nullB c1-n10000-r10 attempt 0 quiet=True waited=9s
+c1-n10000-r10 load 1.19->1.24 other_busy=0.014 gate=3.0s errs=0 insert:A=49.0/B=48.8 insert-named:A=49.3/B=48.7 update-pk:A=53.4/B=51.7 select-pk:A=64.6/B=63.8 ping:A=50.3/B=50.7 
+09:37:41 nullB c1-n10000-r11 attempt 0 quiet=True waited=9s
+c1-n10000-r11 load 1.18->1.23 other_busy=0.017 gate=3.0s errs=0 insert:A=48.7/B=48.7 insert-named:A=48.4/B=48.6 update-pk:A=52.9/B=52.1 select-pk:A=64.9/B=63.5 ping:A=49.9/B=50.4 
+09:38:04 nullB c1-n10000-r12 attempt 0 quiet=True waited=9s
+c1-n10000-r12 load 1.04->1.03 other_busy=0.016 gate=3.0s errs=0 insert:A=48.9/B=49.2 insert-named:A=48.9/B=48.7 update-pk:A=53.2/B=52.9 select-pk:A=64.5/B=63.3 ping:A=50.1/B=50.1 
+09:38:27 nullB c1-n10000-r13 attempt 0 quiet=True waited=9s
+c1-n10000-r13 load 0.87->1.04 other_busy=0.015 gate=3.0s errs=0 insert:A=49.0/B=48.9 insert-named:A=48.9/B=48.8 update-pk:A=52.8/B=52.5 select-pk:A=64.4/B=64.3 ping:A=50.4/B=49.8 
+09:38:50 nullB c1-n10000-r14 attempt 0 quiet=True waited=9s
+c1-n10000-r14 load 0.81->0.92 other_busy=0.016 gate=3.0s errs=0 insert:A=48.6/B=48.7 insert-named:A=48.7/B=48.9 update-pk:A=53.0/B=53.5 select-pk:A=64.2/B=64.2 ping:A=51.0/B=51.0 
+09:39:13 nullB c1-n10000-r15 attempt 0 quiet=True waited=9s
+c1-n10000-r15 load 0.78->1.11 other_busy=0.015 gate=3.0s errs=0 insert:A=48.5/B=48.4 insert-named:A=48.7/B=48.5 update-pk:A=52.8/B=52.1 select-pk:A=64.4/B=63.6 ping:A=50.0/B=49.6 
+09:39:36 nullA c1-n10000-r0 attempt 0 quiet=True waited=9s
+c1-n10000-r0 load 1.09->1.15 other_busy=0.015 gate=3.0s errs=3000 insert:A=48.6/B=48.6 insert-named:A=48.7/B=48.9 update-pk:A=52.7/B=52.4 select-pk:A=64.8/B=64.9 ping:A=50.1/B=50.3 
+09:40:08 nullA c1-n10000-r1 attempt 0 quiet=True waited=19s
+c1-n10000-r1 load 0.91->1.07 other_busy=0.02 gate=3.0s errs=3000 insert:A=49.1/B=49.2 insert-named:A=49.0/B=49.1 update-pk:A=53.2/B=53.2 select-pk:A=64.6/B=64.8 ping:A=50.5/B=50.2 
+09:40:31 nullA c1-n10000-r2 attempt 0 quiet=True waited=9s
+c1-n10000-r2 load 0.83->0.86 other_busy=0.017 gate=3.0s errs=3000 insert:A=48.9/B=48.6 insert-named:A=49.1/B=48.8 update-pk:A=53.6/B=53.1 select-pk:A=65.4/B=65.5 ping:A=50.5/B=50.4 
+09:40:53 nullA c1-n10000-r3 attempt 0 quiet=True waited=9s
+c1-n10000-r3 load 0.72->0.77 other_busy=0.017 gate=3.0s errs=3000 insert:A=48.9/B=49.0 insert-named:A=49.0/B=49.0 update-pk:A=52.7/B=53.0 select-pk:A=65.7/B=64.6 ping:A=50.4/B=50.2 
+09:41:16 nullA c1-n10000-r4 attempt 0 quiet=True waited=9s
+c1-n10000-r4 load 0.74->0.93 other_busy=0.014 gate=3.0s errs=3000 insert:A=48.8/B=48.9 insert-named:A=48.9/B=48.6 update-pk:A=52.4/B=51.5 select-pk:A=64.5/B=64.3 ping:A=50.1/B=50.0 
+09:41:39 nullA c1-n10000-r5 attempt 0 quiet=True waited=9s
+c1-n10000-r5 load 0.79->1.05 other_busy=0.015 gate=3.0s errs=3000 insert:A=48.8/B=49.0 insert-named:A=49.3/B=49.3 update-pk:A=53.5/B=53.7 select-pk:A=66.0/B=65.4 ping:A=50.2/B=50.2 
+09:42:02 nullA c1-n10000-r6 attempt 0 quiet=True waited=9s
+c1-n10000-r6 load 0.96->1.34 other_busy=0.018 gate=3.0s errs=3000 insert:A=48.4/B=49.0 insert-named:A=49.0/B=49.2 update-pk:A=53.1/B=53.4 select-pk:A=64.8/B=65.2 ping:A=50.1/B=50.3 
+09:42:25 nullA c1-n10000-r7 attempt 0 quiet=True waited=9s
+c1-n10000-r7 load 1.04->1.11 other_busy=0.015 gate=3.0s errs=3000 insert:A=48.8/B=48.9 insert-named:A=49.1/B=48.7 update-pk:A=55.1/B=52.6 select-pk:A=65.4/B=64.9 ping:A=49.9/B=50.0 
+09:42:48 nullA c1-n10000-r8 attempt 0 quiet=True waited=9s
+c1-n10000-r8 load 0.94->1.03 other_busy=0.014 gate=3.0s errs=3000 insert:A=49.1/B=48.8 insert-named:A=49.0/B=49.2 update-pk:A=52.8/B=53.4 select-pk:A=64.7/B=64.9 ping:A=50.2/B=50.5 
+09:43:11 nullA c1-n10000-r9 attempt 0 quiet=True waited=9s
+c1-n10000-r9 load 0.80->0.98 other_busy=0.016 gate=3.0s errs=3000 insert:A=48.8/B=48.6 insert-named:A=49.8/B=48.4 update-pk:A=54.1/B=52.7 select-pk:A=65.7/B=64.7 ping:A=49.9/B=49.8 
+09:43:34 nullA c1-n10000-r10 attempt 0 quiet=True waited=9s
+c1-n10000-r10 load 0.83->0.86 other_busy=0.015 gate=3.0s errs=3000 insert:A=48.6/B=48.9 insert-named:A=48.7/B=48.6 update-pk:A=52.5/B=52.9 select-pk:A=64.7/B=64.5 ping:A=50.0/B=50.2 
+09:43:57 nullA c1-n10000-r11 attempt 0 quiet=True waited=9s
+c1-n10000-r11 load 0.82->0.92 other_busy=0.016 gate=3.0s errs=3000 insert:A=48.6/B=48.8 insert-named:A=49.1/B=48.8 update-pk:A=53.4/B=53.7 select-pk:A=65.4/B=64.9 ping:A=49.9/B=50.1 
+09:44:19 nullA c1-n10000-r12 attempt 0 quiet=True waited=9s
+c1-n10000-r12 load 0.72->0.83 other_busy=0.014 gate=3.0s errs=3000 insert:A=49.0/B=48.8 insert-named:A=48.9/B=48.8 update-pk:A=53.7/B=53.6 select-pk:A=65.0/B=65.3 ping:A=50.0/B=50.4 
+09:44:43 nullA c1-n10000-r13 attempt 0 quiet=True waited=9s
+c1-n10000-r13 load 0.70->0.97 other_busy=0.015 gate=3.0s errs=3000 insert:A=48.8/B=48.7 insert-named:A=49.2/B=49.1 update-pk:A=52.7/B=52.7 select-pk:A=64.9/B=64.7 ping:A=50.1/B=50.3 
+09:45:06 nullA c1-n10000-r14 attempt 0 quiet=True waited=9s
+c1-n10000-r14 load 0.76->0.87 other_busy=0.015 gate=3.0s errs=3000 insert:A=48.8/B=49.0 insert-named:A=48.6/B=48.6 update-pk:A=52.7/B=53.1 select-pk:A=64.8/B=64.1 ping:A=50.1/B=50.4 
+09:45:29 nullA c1-n10000-r15 attempt 0 quiet=True waited=9s
+c1-n10000-r15 load 0.89->0.91 other_busy=0.015 gate=3.0s errs=3000 insert:A=48.4/B=48.7 insert-named:A=48.8/B=48.8 update-pk:A=53.1/B=53.0 select-pk:A=65.3/B=65.2 ping:A=49.9/B=50.1 
+runner done
+09:45:52 fresh c1-n1000-r0 attempt 0 quiet=True waited=9s
+c1-n1000-r0 load 0.86->0.95 other_busy=0.017 gate=3.0s errs=0 insert:A=48.9/B=48.7 insert-named:A=49.2/B=48.8 update-pk:A=52.6/B=51.9 select-pk:A=67.0/B=65.4 ping:A=50.3/B=50.1 
+09:46:10 fresh c1-n1000-r1 attempt 0 quiet=True waited=9s
+c1-n1000-r1 load 0.74->0.84 other_busy=0.015 gate=3.0s errs=0 insert:A=47.9/B=47.7 insert-named:A=48.7/B=48.5 update-pk:A=51.8/B=51.4 select-pk:A=66.9/B=66.3 ping:A=49.9/B=49.6 
+09:46:28 fresh c1-n1000-r2 attempt 0 quiet=True waited=9s
+c1-n1000-r2 load 0.78->0.80 other_busy=0.016 gate=3.0s errs=0 insert:A=48.8/B=49.0 insert-named:A=48.6/B=48.7 update-pk:A=52.3/B=52.2 select-pk:A=67.0/B=66.8 ping:A=49.8/B=49.9 
+09:46:47 fresh c1-n1000-r3 attempt 0 quiet=True waited=9s
+c1-n1000-r3 load 0.69->0.80 other_busy=0.014 gate=3.0s errs=0 insert:A=49.2/B=49.0 insert-named:A=49.1/B=49.0 update-pk:A=51.8/B=51.4 select-pk:A=66.7/B=66.1 ping:A=50.0/B=49.8 
+09:47:05 fresh c1-n1000-r4 attempt 0 quiet=True waited=9s
+c1-n1000-r4 load 0.62->0.73 other_busy=0.017 gate=3.0s errs=0 insert:A=48.9/B=49.0 insert-named:A=48.7/B=48.8 update-pk:A=51.7/B=51.3 select-pk:A=66.4/B=66.3 ping:A=50.1/B=50.6 
+09:47:23 fresh c1-n1000-r5 attempt 0 quiet=True waited=9s
+c1-n1000-r5 load 0.77->0.87 other_busy=0.012 gate=3.0s errs=0 insert:A=48.5/B=48.5 insert-named:A=48.9/B=48.9 update-pk:A=52.2/B=51.7 select-pk:A=67.6/B=66.9 ping:A=50.3/B=49.7 
+09:47:40 fresh c1-n1000-r6 attempt 0 quiet=True waited=9s
+c1-n1000-r6 load 0.68->0.78 other_busy=0.015 gate=3.0s errs=0 insert:A=48.7/B=48.9 insert-named:A=48.5/B=48.4 update-pk:A=51.8/B=51.4 select-pk:A=66.9/B=67.0 ping:A=49.8/B=49.7 
+09:47:58 fresh c1-n1000-r7 attempt 0 quiet=True waited=9s
+c1-n1000-r7 load 0.81->0.83 other_busy=0.014 gate=3.0s errs=0 insert:A=48.9/B=48.8 insert-named:A=48.8/B=49.2 update-pk:A=52.3/B=53.1 select-pk:A=67.6/B=68.1 ping:A=50.2/B=50.1 
+09:48:16 fresh c1-n1000-r8 attempt 0 quiet=True waited=9s
+c1-n1000-r8 load 0.78->0.80 other_busy=0.013 gate=3.0s errs=0 insert:A=48.9/B=48.9 insert-named:A=48.7/B=48.7 update-pk:A=51.8/B=51.5 select-pk:A=67.6/B=67.0 ping:A=49.9/B=49.8 
+09:48:35 fresh c1-n1000-r9 attempt 0 quiet=True waited=9s
+c1-n1000-r9 load 0.62->0.65 other_busy=0.018 gate=3.0s errs=0 insert:A=48.6/B=48.5 insert-named:A=49.0/B=48.7 update-pk:A=52.4/B=52.0 select-pk:A=67.7/B=66.6 ping:A=50.3/B=50.0 
+09:48:53 fresh c1-n1000-r10 attempt 0 quiet=True waited=9s
+c1-n1000-r10 load 0.55->0.67 other_busy=0.013 gate=3.0s errs=0 insert:A=49.4/B=49.3 insert-named:A=49.4/B=49.5 update-pk:A=52.6/B=52.7 select-pk:A=68.5/B=67.4 ping:A=50.5/B=50.5 
+09:49:10 fresh c1-n1000-r11 attempt 0 quiet=True waited=9s
+c1-n1000-r11 load 0.74->0.84 other_busy=0.017 gate=3.0s errs=0 insert:A=48.6/B=48.6 insert-named:A=48.8/B=48.8 update-pk:A=52.1/B=51.7 select-pk:A=66.1/B=66.7 ping:A=50.1/B=49.8 
+09:49:28 fresh c1-n1000-r12 attempt 0 quiet=True waited=9s
+c1-n1000-r12 load 0.71->0.90 other_busy=0.015 gate=3.0s errs=0 insert:A=49.0/B=49.0 insert-named:A=49.1/B=48.8 update-pk:A=52.1/B=51.2 select-pk:A=67.8/B=66.6 ping:A=50.1/B=50.4 
+09:49:47 fresh c1-n1000-r13 attempt 0 quiet=True waited=9s
+c1-n1000-r13 load 0.83->0.93 other_busy=0.017 gate=3.0s errs=0 insert:A=49.3/B=49.1 insert-named:A=49.2/B=49.4 update-pk:A=52.3/B=53.8 select-pk:A=66.9/B=67.5 ping:A=50.3/B=50.1 
+09:50:05 fresh c1-n1000-r14 attempt 0 quiet=True waited=9s
+c1-n1000-r14 load 0.72->0.82 other_busy=0.015 gate=3.0s errs=0 insert:A=49.0/B=49.0 insert-named:A=48.9/B=49.1 update-pk:A=52.1/B=52.9 select-pk:A=67.7/B=67.6 ping:A=50.3/B=50.3 
+09:50:23 fresh c1-n1000-r15 attempt 0 quiet=True waited=9s
+c1-n1000-r15 load 0.70->0.88 other_busy=0.018 gate=3.0s errs=0 insert:A=49.1/B=49.0 insert-named:A=48.6/B=49.0 update-pk:A=52.7/B=51.9 select-pk:A=67.0/B=67.1 ping:A=50.1/B=50.5 
+09:50:41 fresh c1-n10000-r0 attempt 0 quiet=True waited=9s
+c1-n10000-r0 load 0.68->0.81 other_busy=0.016 gate=3.0s errs=0 insert:A=50.9/B=51.0 insert-named:A=50.6/B=50.7 update-pk:A=53.5/B=54.2 select-pk:A=69.0/B=68.6 ping:A=52.3/B=52.3 
+09:51:04 fresh c1-n10000-r1 attempt 0 quiet=True waited=9s
+c1-n10000-r1 load 0.76->1.03 other_busy=0.015 gate=3.0s errs=0 insert:A=49.0/B=48.8 insert-named:A=49.3/B=49.0 update-pk:A=52.9/B=53.2 select-pk:A=65.0/B=64.5 ping:A=50.2/B=50.0 
+09:51:27 fresh c1-n10000-r2 attempt 0 quiet=True waited=9s
+c1-n10000-r2 load 0.95->1.03 other_busy=0.015 gate=3.0s errs=0 insert:A=48.8/B=48.8 insert-named:A=48.9/B=49.1 update-pk:A=51.9/B=53.4 select-pk:A=63.9/B=64.3 ping:A=49.5/B=49.7 
+09:51:50 fresh c1-n10000-r3 attempt 0 quiet=True waited=9s
+c1-n10000-r3 load 0.80->0.76 other_busy=0.017 gate=3.0s errs=0 insert:A=47.1/B=46.2 insert-named:A=48.7/B=48.6 update-pk:A=51.7/B=51.8 select-pk:A=64.2/B=63.4 ping:A=50.0/B=49.9 
+09:52:13 fresh c1-n10000-r4 attempt 0 quiet=True waited=9s
+c1-n10000-r4 load 0.64->0.92 other_busy=0.015 gate=3.0s errs=0 insert:A=48.8/B=49.1 insert-named:A=49.0/B=49.1 update-pk:A=52.6/B=52.0 select-pk:A=64.4/B=64.6 ping:A=50.2/B=50.2 
+09:52:36 fresh c1-n10000-r5 attempt 0 quiet=True waited=9s
+c1-n10000-r5 load 0.72->0.76 other_busy=0.017 gate=3.0s errs=0 insert:A=49.2/B=48.8 insert-named:A=48.7/B=49.1 update-pk:A=52.6/B=52.3 select-pk:A=64.2/B=64.0 ping:A=50.3/B=50.0 
+09:52:59 fresh c1-n10000-r6 attempt 0 quiet=True waited=9s
+c1-n10000-r6 load 0.72->0.91 other_busy=0.018 gate=3.0s errs=0 insert:A=48.9/B=48.6 insert-named:A=49.3/B=48.9 update-pk:A=52.4/B=52.8 select-pk:A=64.8/B=65.1 ping:A=50.1/B=49.7 
+09:53:21 fresh c1-n10000-r7 attempt 0 quiet=True waited=9s
+c1-n10000-r7 load 0.71->0.83 other_busy=0.016 gate=3.0s errs=0 insert:A=48.3/B=49.0 insert-named:A=48.5/B=48.8 update-pk:A=52.4/B=52.6 select-pk:A=64.2/B=64.0 ping:A=49.7/B=49.9 
+09:53:44 fresh c1-n10000-r8 attempt 0 quiet=True waited=9s
+c1-n10000-r8 load 0.64->0.78 other_busy=0.015 gate=3.0s errs=0 insert:A=48.7/B=48.9 insert-named:A=49.1/B=48.8 update-pk:A=53.7/B=52.9 select-pk:A=65.5/B=64.4 ping:A=50.1/B=50.3 
+09:54:07 fresh c1-n10000-r9 attempt 0 quiet=True waited=9s
+c1-n10000-r9 load 0.74->0.85 other_busy=0.016 gate=3.0s errs=0 insert:A=48.9/B=49.0 insert-named:A=49.2/B=48.8 update-pk:A=53.4/B=52.8 select-pk:A=64.5/B=64.7 ping:A=50.3/B=50.0 
+09:54:30 fresh c1-n10000-r10 attempt 0 quiet=True waited=9s
+c1-n10000-r10 load 0.66->0.79 other_busy=0.016 gate=3.0s errs=0 insert:A=49.2/B=48.8 insert-named:A=49.3/B=49.1 update-pk:A=54.0/B=53.7 select-pk:A=65.7/B=65.1 ping:A=50.2/B=50.0 
+09:54:53 fresh c1-n10000-r11 attempt 0 quiet=True waited=9s
+c1-n10000-r11 load 0.75->1.08 other_busy=0.015 gate=3.0s errs=0 insert:A=48.7/B=48.8 insert-named:A=48.6/B=48.8 update-pk:A=52.3/B=52.6 select-pk:A=64.9/B=64.3 ping:A=49.9/B=50.0 
+09:55:16 fresh c1-n10000-r12 attempt 0 quiet=True waited=9s
+c1-n10000-r12 load 0.92->0.93 other_busy=0.017 gate=3.0s errs=0 insert:A=48.7/B=48.8 insert-named:A=48.5/B=48.7 update-pk:A=53.0/B=52.1 select-pk:A=64.5/B=63.9 ping:A=49.9/B=49.7 
+09:55:39 fresh c1-n10000-r13 attempt 0 quiet=True waited=9s
+c1-n10000-r13 load 0.86->1.04 other_busy=0.017 gate=3.0s errs=0 insert:A=48.8/B=48.8 insert-named:A=49.1/B=49.0 update-pk:A=53.1/B=52.9 select-pk:A=64.3/B=64.6 ping:A=50.1/B=50.3 
+09:56:02 fresh c1-n10000-r14 attempt 0 quiet=True waited=9s
+c1-n10000-r14 load 0.87->0.89 other_busy=0.017 gate=3.0s errs=0 insert:A=48.6/B=48.5 insert-named:A=48.8/B=48.8 update-pk:A=52.8/B=52.6 select-pk:A=64.4/B=64.6 ping:A=48.8/B=49.7 
+09:56:25 fresh c1-n10000-r15 attempt 0 quiet=True waited=9s
+c1-n10000-r15 load 0.70->0.89 other_busy=0.016 gate=3.0s errs=0 insert:A=48.4/B=48.7 insert-named:A=48.7/B=49.1 update-pk:A=52.6/B=53.6 select-pk:A=64.5/B=64.9 ping:A=50.4/B=49.9 
+runner done

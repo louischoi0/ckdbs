@@ -81,7 +81,7 @@ way to tell "expired" from "never seen" (§3's retention).
   pk already in use — a deleted row's included — *"is refused as a
   duplicate"* (`manual/sql/sql.md:198-200`): TigerBeetle's shape, with two
   gaps — the retry gets an error rather than the first result, and the key
-  must be a 40-bit id.
+  must be a 48-bit id.
 - **Durability of an acknowledged commit.** `strict` and `group` both have
   zero loss: *"a D1/D2 commit is acknowledged … only after its commit
   record is durable"* (`docs/spec/wal.md:26-27`, `:128`). Only `relaxed`

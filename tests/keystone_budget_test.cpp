@@ -39,8 +39,8 @@ TEST(KeystoneBudgetTest, AFreshRelationHasSpentNothingAndCanIssueEverything) {
     EXPECT_FALSE(budget.exhausted);
 }
 
-TEST(KeystoneBudgetTest, TheCapacityIsOneShortOfTwoToTheFortyBecauseZeroIsReserved) {
-    // Id 0 means "unset" (rows.hpp), so the budget is [1, 2^40-1] and an
+TEST(KeystoneBudgetTest, TheCapacityIsOneShortOfTheIdSpaceBecauseZeroIsReserved) {
+    // Id 0 means "unset" (rows.hpp), so the budget is [1, 2^48-1] and an
     // off-by-one here is an off-by-one in the warning threshold.
     EXPECT_EQ(catalog::kKeystoneBudgetCapacity, kMaxKeystoneId);
     EXPECT_EQ(catalog::kFirstRowId, 1u);
@@ -112,7 +112,7 @@ protected:
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
 
     // Drives `acct`'s sequence to `next_id` by writing the catalog row -
-    // 2^40 inserts is not a test, and the surface only reads the number.
+    // 2^48 inserts is not a test, and the surface only reads the number.
     void SetNextId(std::uint64_t next_id) {
         auto oid = boot_->catalog.FindTableOidByName("acct");
         ASSERT_TRUE(oid.ok()) << oid.status().message();
@@ -149,7 +149,7 @@ TEST_F(KeystoneBudgetSurfaceTest, DescribeReportsConsumptionBesideTheSequence) {
     // Two ids spent, and the remaining count is stated rather than left to
     // be worked out from the ceiling - which is K-M4's whole acceptance.
     EXPECT_NE(out.find("ids_issued=2"), std::string::npos) << out;
-    EXPECT_NE(out.find("ids_remaining=1099511627773"), std::string::npos) << out;
+    EXPECT_NE(out.find("ids_remaining=281474976710653"), std::string::npos) << out;
     EXPECT_NE(out.find("budget_used=0.000%"), std::string::npos) << out;
     EXPECT_EQ(out.find("budget_warning"), std::string::npos) << out;
 }
@@ -166,6 +166,8 @@ TEST_F(KeystoneBudgetSurfaceTest, ShowBudgetListsEveryRelationIncludingTheCatalo
     // The threshold is stated, so the listing explains its own warn column.
     EXPECT_NE(out.find("warn_at=90.000%"), std::string::npos) << out;
     EXPECT_NE(out.find("warning=0"), std::string::npos) << out;
+    // K4's per-relation budget, 2^48 - 1, stated once in the summary.
+    EXPECT_NE(out.find("capacity=281474976710655"), std::string::npos) << out;
 }
 
 TEST_F(KeystoneBudgetSurfaceTest, CrossingTheThresholdIsVisibleInTheSummaryLine) {

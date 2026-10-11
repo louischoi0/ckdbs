@@ -1,5 +1,7 @@
 #include "sim/workload.hpp"
 
+#include "kds/storage/keystone.hpp"
+
 namespace kds::sim {
 
 const char* ProfileName(Profile profile) {
@@ -196,7 +198,7 @@ Op Workload::InsertNamed(Table& table) {
         } else if (roll < 96) {
             key = FreshKey(table);
         } else {
-            key = rng_.Chance(50) ? 0 : (std::uint64_t{1} << 40);  // exhausted
+            key = rng_.Chance(50) ? 0 : kIdSpaceEnd;  // exhausted
         }
     }
     Op op;

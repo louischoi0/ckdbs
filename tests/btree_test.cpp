@@ -1438,7 +1438,7 @@ TEST(InternalViewTest, ARepeatedSeparatorIsRefusedBecauseTwoSubtreesCannotShareA
     EXPECT_EQ(again.code(), StatusCode::kAlreadyExists);
 }
 
-TEST(InternalViewTest, ASeparatorOutsideThe40BitIdRangeIsRefused) {
+TEST(InternalViewTest, ASeparatorOutsideTheIdSpaceIsRefused) {
     storage::InMemoryPageStore store(128);
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
@@ -1446,8 +1446,8 @@ TEST(InternalViewTest, ASeparatorOutsideThe40BitIdRangeIsRefused) {
                                           /*leftmost=*/10, /*owner_oid=*/0);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
-    // Invariant 6: an id stored outside the tuple header is a zero-extended
-    // uint64 whose upper 24 bits are 0.
+    // Invariant 7: an id stored outside the tuple header is a zero-extended
+    // uint64 whose bits above kKeystoneIdBits are 0.
     auto too_wide = node.value().InsertEntry(kMaxKeystoneId + 1, 11);
     EXPECT_FALSE(too_wide.ok());
     EXPECT_EQ(too_wide.code(), StatusCode::kInvalidArgument);

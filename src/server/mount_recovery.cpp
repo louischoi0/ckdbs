@@ -335,6 +335,17 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
             ++report.assertions_unrecovered;
             continue;
         }
+        // Whole, but a group keyed from a value as written is one no write
+        // reaches, so its bound would not be the one enforced: refused the
+        // same way, until DROP and CREATE ASSERTION rebuild it.
+        if (Status keyed = exec::CheckGroupKeyKinds(revived[i]); !keyed.ok()) {
+            enforcer.NoteUnenforceable(revived[i].target_oid, revived[i].assertion_id);
+            ++report.assertions_unrecovered;
+            if (log != nullptr) {
+                log->Error("recovery", keyed.message() + ", so it will not enforce");
+            }
+            continue;
+        }
         enforcer.Adopt(std::move(revived[i]));
         ++report.assertions_enforcing;
     }

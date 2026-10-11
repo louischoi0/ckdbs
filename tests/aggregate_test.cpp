@@ -980,7 +980,7 @@ parser::AstValue DecVal(std::int64_t unscaled, std::uint8_t scale) {
 
 AggregateItem AvgItem(std::uint16_t col_pos, std::uint8_t scale, bool distinct = false) {
     AggregateItem item = Agg(parser::AggFunc::kAvg, col_pos, catalog::kTypeValDecimal);
-    item.scale = scale;
+    item.decimal_len = catalog::PackDecimalLen(18, scale);
     item.distinct = distinct;
     return item;
 }
@@ -1128,7 +1128,7 @@ parser::AstValue DecWideVal(std::int64_t hi, std::int64_t lo, std::uint8_t scale
 AggregateItem WideItem(parser::AggFunc func, std::uint16_t col_pos, std::uint8_t scale,
                        bool distinct = false) {
     AggregateItem item = Agg(func, col_pos, catalog::kTypeValDecimalWide);
-    item.scale = scale;
+    item.decimal_len = catalog::PackDecimalLen(38, scale);
     item.distinct = distinct;
     return item;
 }

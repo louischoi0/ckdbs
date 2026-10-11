@@ -1,0 +1,7 @@
+== B rows=10000  create p50=6873.1 drop p50=869.6
+  select-cr                ops=16000 p50=94.2 p99=119.1 err=0
+  ping                     ops=16000 p50=70.9 p99=92.5 err=0
+== A rows=10000  create p50=6812.8 drop p50=831.8
+  select-cr                ops=16000 p50=94.3 p99=120.0 err=0
+  ping                     ops=16000 p50=71.2 p99=93.0 err=0
+verify_ok True

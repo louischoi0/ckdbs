@@ -211,7 +211,7 @@ struct UndoRecordFields {
     std::uint64_t txn_prev_undo_ptr;
 
     // The Keystone id of the row this record is about, zero-extended
-    // (invariant 7 - the upper 24 bits are always 0).
+    // (invariant 7 - the bits above kKeystoneIdBits are always 0).
     //
     // Here because compensation must prove it is writing the row it means
     // to before it writes: a btree leaf division moves tuples and renumbers

@@ -2567,7 +2567,7 @@ Status CheckNamedRowIdSpellable(std::uint64_t id) {
     }
     if (id > kMaxKeystoneId) {
         return Status::OutOfRange("primary key " + std::to_string(id) +
-                                  " does not fit the 40-bit Keystone id space (max " +
+                                  " does not fit the Keystone id space (max " +
                                        std::to_string(kMaxKeystoneId) + ")");
     }
     return Status::OK();

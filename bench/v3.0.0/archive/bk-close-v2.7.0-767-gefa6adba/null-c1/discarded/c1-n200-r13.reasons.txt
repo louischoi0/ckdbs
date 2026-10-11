@@ -1,0 +1,6 @@
+host_after: ['cc1plus:3605466,3605467,3605468,3605470,3605473,3605474', 'cmake:3605435']
+other-CPU busy 44.3% > 10 %
+sibling CPU 3 busy 43% > 15 %
+sibling CPU 5 busy 44% > 15 %
+A ping p50 80.3 > 1.10 x 50.8
+B ping p50 81.9 > 1.10 x 50.8

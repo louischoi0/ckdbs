@@ -1,0 +1,3 @@
+host_after: ['ctest:3624602']
+other-CPU busy 22.7% > 10 %
+sibling CPU 5 busy 35% > 15 %

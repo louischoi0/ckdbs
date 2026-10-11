@@ -35,10 +35,10 @@
 // has one immutable per-page low key and adding a second, differently
 // derived boundary is how a descent lands one page off.
 //
-// ---- Why the keys are uint64 and not the tuples' 40-bit ids ------------
+// ---- Why the keys are uint64 and not the tuples' narrower ids ----------
 //
-// Invariant 6: an id stored outside the tuple header is a zero-extended
-// uint64 with the upper 24 bits 0. Same convention as min_key, so no
+// Invariant 7: an id stored outside the tuple header is a zero-extended
+// uint64 with the bits above kKeystoneIdBits 0. Same convention as min_key, so no
 // separate width to reason about.
 //
 // Concurrency: InternalView is a thin view over caller-owned bytes with no
@@ -161,7 +161,7 @@ public:
     // Inserts (sep_key -> child) in sorted position. Fails with OutOfSpace
     // if the node is full, AlreadyExists if `sep_key` is already a
     // separator here (two subtrees cannot share a low key), and
-    // InvalidArgument if `sep_key` exceeds the 40-bit id range.
+    // InvalidArgument if `sep_key` exceeds kMaxKeystoneId.
     Status InsertEntry(std::uint64_t sep_key, PageId child);
 
 private:

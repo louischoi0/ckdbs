@@ -102,7 +102,7 @@ protected:
         ASSERT_NE(session.transaction(), nullptr);
         EXPECT_TRUE(session.transaction()->borrows().Holds(row))
             << "the violation dropped the row from the transaction's ledger";
-        constexpr std::uint64_t kForeign = std::uint64_t{1} << 40;
+        constexpr std::uint64_t kForeign = txn::kMaxTrxId;  // a holder, not a pk: no session's txn
         txn::LockHoldings scratch;
         auto foreign = locks_->TryAcquire(kForeign, row, txn::LockMode::kExclusive, scratch);
         ASSERT_TRUE(foreign.ok()) << foreign.status().message();
@@ -385,6 +385,22 @@ TEST_F(FkParentHoldTest, AFailedStatementGivesBackEveryAbsentParentItResolved) {
     EXPECT_EQ(unreached.rfind("INSERTED", 0), 0u)
         << "the failed statement still holds the parent of a row it never reached: "
         << unreached;
+    ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+}
+
+TEST_F(FkParentHoldTest, AValueThatIsNoIdFailsAndStillGivesBackTheAbsentParents) {
+    // The first row's value names no row that can exist, so it fails with no
+    // hold of its own; the hoist resolved the second row's absent parent,
+    // and that `S` goes with the violation as any absent parent's does.
+    Session child;
+    ASSERT_EQ(Run(child, "BEGIN").rfind("BEGIN", 0), 0u);
+    const std::string failed = Run(child, "INSERT INTO c VALUES (-9), (99)");
+    ASSERT_NE(failed.find("FK_VIOLATION"), std::string::npos) << failed;
+    EXPECT_NE(failed.find("row id=-9 "), std::string::npos) << failed;
+
+    const std::string parent = Other("INSERT INTO p VALUES (99, 0)");
+    EXPECT_EQ(parent.rfind("INSERTED", 0), 0u)
+        << "a violation on a value that is no id kept another absent parent's hold: " << parent;
     ASSERT_EQ(Run(child, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
 }
 

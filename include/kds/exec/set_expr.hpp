@@ -2,11 +2,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/functions.hpp"
 #include "kds/parser/ast.hpp"
 
 // **Typing a SET value expression at compile** (BJ-S3,
@@ -30,9 +33,7 @@
 // literal), and an integer literal scaling a decimal is scale 0 (BJ-R3).
 //
 // Pure: no page is read, no state is kept. The tree it returns is what
-// BJ-S4's evaluator walks; until then `CompileAssignments` types an
-// assignment's expression for the refusals alone and still refuses it
-// `NotImplemented` (BJ-S2's rule).
+// BJ-S4's evaluator walks (`EvaluateSetExpression`), once per qualifying row.
 
 namespace kds::exec {
 
@@ -45,6 +46,11 @@ struct SetType {
         kInteger,   // an integer literal
         kNumeric,   // a bare number with a point, `1.5`
         kString,    // a quoted string
+        // A decimal of a fixed scale whose precision its context gives: what
+        // `ROUND(x, 2)` yields, so `SET price = ROUND(price / 3, 2)` is a
+        // `decimal(10, 2)` whatever precision the quotient had (BJ-Q3 (a)).
+        // `type_val` and `len` carry the natural type a context-free use takes.
+        kScaled,
         kConcrete,  // a column's type: `type_val`, and `len` for char and decimal
     };
     Kind kind = Kind::kNull;
@@ -57,6 +63,17 @@ struct SetType {
 // `int64`, `decimal(10,2)`, `char(8)`, `integer literal`, ... - what a
 // refusal names.
 std::string SetTypeName(const SetType& t);
+
+// The scalar functions a SET value may call (BJ-Q5, BJ-Q4). All are pure
+// functions of their arguments except `NOW()` and `CURRENT_DATE`, which are
+// stable - one value per statement (`StatementContext`). **No purity is
+// declared in `functions.hpp`'s catalog**: that catalog's entries are what a
+// WHERE conjunct compiles, and its own rule is that a field nothing reads is a
+// promise nothing checks; an UPDATE has no determinism class until AQ.
+enum class SetFunction : std::uint8_t {
+    kNone, kAbs, kSign, kCeil, kFloor, kRound, kTrunc, kUpper, kLower, kLength, kSubstring,
+    kTrim, kLtrim, kRtrim, kPosition, kReplace, kLpad, kRpad, kConcat, kNow, kCurrentDate, kDate,
+};
 
 struct TypedSetExpr {
     parser::Expr::Kind kind = parser::Expr::Kind::kLiteral;
@@ -71,15 +88,61 @@ struct TypedSetExpr {
     // kColumn: the position in the relation's schema (0 is the pk, which an
     // expression may read, BJ-R5).
     std::size_t column_no = 0;
+    // kCall with kFunction: which one, and ROUND/TRUNC's number of places.
+    SetFunction function = SetFunction::kNone;
+    std::uint32_t places = 0;
 
     std::unique_ptr<TypedSetExpr> lhs;  // kUnary's operand, kBinary's left
     std::unique_ptr<TypedSetExpr> rhs;
+    // kCall: `kCase`'s `[when, then, ..., else?]`, or the n-ary forms' operands.
+    std::vector<std::unique_ptr<TypedSetExpr>> args;
 };
 
+// A scalar subquery's answer (BJ-S7): the single value it returned, or NULL
+// for no row, and the type of its one column.
+struct SubqueryResult {
+    SetType type;
+    parser::AstValue value;
+};
+
+// Runs one `(SELECT ...)` of a SET value and answers it. The dispatcher's,
+// because running a query needs the catalog, the pages and a snapshot, none of
+// which a typer has; null where a caller has none, and a subquery is then
+// refused `NotImplemented`.
+using SubqueryResolver = std::function<StatusOr<SubqueryResult>(const parser::Expr& node)>;
+
 // Types `expr` for assignment to `target`. The result is concrete and
-// assignable to `target`, or the status says why not.
+// assignable to `target`, or the status says why not. **A subquery is run
+// here, once, and its answer is a constant of the tree** (BJ-Q6): every row
+// reads the value the statement's snapshot gave before the walk began.
 StatusOr<std::unique_ptr<TypedSetExpr>> TypeSetExpression(const catalog::TableAccess& access,
                                                           const parser::Expr& expr,
-                                                          const catalog::SysColumnRow& target);
+                                                          const catalog::SysColumnRow& target,
+                                                          const SubqueryResolver* subqueries = nullptr);
+
+// Whether the expression reads no column - a constant, which BJ-Q10 folds
+// at compile so a foreign-key column keeps its hoisted parent.
+bool IsConstantSetExpression(const TypedSetExpr& expr);
+
+// The columns the expression reads, as a decode mask (bit `n` is schema
+// column `n`), or `kAllColumnsMask` when one sits past bit 63 (BK-R2,
+// `workorder-bk-opt-read-update-path.md`). A
+// subquery reads none: it is answered once before the walk.
+std::uint64_t SetExpressionColumns(const TypedSetExpr& expr);
+
+// Evaluates a typed expression against `row`, the decoded before-image of the
+// row being updated (BJ-R2: every assignment reads the row as the walk read
+// it, never an earlier assignment's result). The value is in the form
+// `EncodeOneValue` takes for the expression's type: `kInt`, `kDecimal`,
+// `kDecimalWide`, `kStr` or `kNull`.
+//
+// Arithmetic is checked (BJ-R3): a result outside its type's range is
+// `OutOfRange`, never a wrap, and a division by zero is `InvalidArgument`;
+// each names the failing operator's byte. A NULL operand yields NULL (BJ-R4).
+// Whether a NULL fits a `NOT NULL` target is the row's verdict, not this
+// function's. Pure: no page is read.
+StatusOr<parser::AstValue> EvaluateSetExpression(const TypedSetExpr& expr,
+                                                 const std::vector<parser::AstValue>& row,
+                                                 const StatementContext& context);
 
 }  // namespace kds::exec

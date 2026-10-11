@@ -1,0 +1,19 @@
+c3c-n200-t1-A rc 0 0 load 0.93 dur 20s cpu4-7=[0.398, 0.08, 0.067, 0.037] others_mean_max=0.031 comp=0
+c3c-n200-t1-B rc 0 0 load 0.97 dur 21s cpu4-7=[0.118, 0.075, 0.059, 0.038] others_mean_max=0.031 comp=0
+c3c-n200-t1-A2 rc 0 0 load 1.00 dur 20s cpu4-7=[0.398, 0.081, 0.06, 0.046] others_mean_max=0.032 comp=0
+c3c-n200-t2-A rc 0 0 load 1.89 dur 20s cpu4-7=[0.385, 0.077, 0.07, 0.053] others_mean_max=0.03 comp=0
+c3c-n200-t2-A2 rc 0 0 load 1.72 dur 21s cpu4-7=[0.395, 0.081, 0.069, 0.032] others_mean_max=0.038 comp=0
+c3c-n200-t2-B rc 0 0 load 1.85 dur 20s cpu4-7=[0.122, 0.08, 0.066, 0.048] others_mean_max=0.028 comp=0
+c3c-n200-t3-B rc 0 0 load 1.62 dur 21s cpu4-7=[0.119, 0.071, 0.064, 0.04] others_mean_max=0.037 comp=0
+c3c-n200-t3-A rc 0 0 load 1.53 dur 21s cpu4-7=[0.394, 0.078, 0.07, 0.034] others_mean_max=0.036 comp=0
+c3c-n200-t3-A2 rc 0 0 load 1.66 dur 20s cpu4-7=[0.387, 0.081, 0.064, 0.041] others_mean_max=0.037 comp=0
+c3c-n200-t4-B rc 0 0 load 1.98 dur 21s cpu4-7=[0.118, 0.073, 0.065, 0.039] others_mean_max=0.035 comp=0
+c3c-n200-t4-A2 rc 0 0 load 1.64 dur 21s cpu4-7=[0.383, 0.088, 0.067, 0.034] others_mean_max=0.035 comp=0
+c3c-n200-t4-A rc 0 0 load 1.89 dur 20s cpu4-7=[0.397, 0.082, 0.079, 0.034] others_mean_max=0.037 comp=0
+c3c-n200-t5-A2 rc 0 0 load 1.87 dur 21s cpu4-7=[0.394, 0.084, 0.067, 0.032] others_mean_max=0.036 comp=0
+c3c-n200-t5-A rc 0 0 load 1.80 dur 21s cpu4-7=[0.385, 0.079, 0.071, 0.034] others_mean_max=0.03 comp=0
+c3c-n200-t5-B rc 0 0 load 2.35 dur 21s cpu4-7=[0.114, 0.072, 0.063, 0.04] others_mean_max=0.032 comp=0
+c3c-n200-t6-A2 rc 0 0 load 1.90 dur 21s cpu4-7=[0.392, 0.082, 0.068, 0.036] others_mean_max=0.042 comp=0
+c3c-n200-t6-B rc 0 0 load 1.81 dur 21s cpu4-7=[0.12, 0.076, 0.066, 0.04] others_mean_max=0.034 comp=0
+c3c-n200-t6-A rc 0 0 load 1.79 dur 20s cpu4-7=[0.393, 0.085, 0.078, 0.037] others_mean_max=0.028 comp=0
+ALLDONE

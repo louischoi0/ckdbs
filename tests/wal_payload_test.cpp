@@ -71,7 +71,7 @@ TEST(WalPayloadTest, PageInitRoundTripsThroughTheEnvelope) {
     EXPECT_EQ(decoded.value().page_type, fields.page_type);
 }
 
-TEST(WalPayloadTest, PageInitRejectsAnIdBeyondFortyBits) {
+TEST(WalPayloadTest, PageInitRejectsAnIdBeyondTheIdSpace) {
     PageInitPayload fields{};
     fields.min_key = kMaxKeystoneId + 1;
     fields.page_type = static_cast<std::uint8_t>(PageType::kHeap);

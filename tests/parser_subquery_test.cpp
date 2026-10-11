@@ -224,12 +224,13 @@ TEST(ParserSubqueryTest, ACteIsNotImplementedRatherThanAnUnknownKeyword) {
         << parsed.status().message();
 }
 
-TEST(ParserSubqueryTest, ASubqueryInAnInsertOrUpdateValuePositionIsRejected) {
-    // Spec section 2 lists these as out of scope, `[OPEN: revisit]`. They
-    // are refused because no value production reaches a SELECT - which is
-    // the same structural rule, and keeps the option open.
+TEST(ParserSubqueryTest, ASubqueryInAnInsertValuePositionIsRejectedAndAnUpdatesIsAnExpression) {
+    // Spec section 2 lists value positions as out of scope, `[OPEN: revisit]`.
+    // An INSERT value is refused because no value production reaches a SELECT.
+    // **An UPDATE's SET value is the one exception since BJ-S7**: a scalar
+    // subquery is an expression there, run once before the walk (BJ-Q6).
     EXPECT_FALSE(Parse("INSERT INTO t VALUES ((SELECT id FROM u))").ok());
-    EXPECT_FALSE(Parse("UPDATE t SET a = (SELECT id FROM u)").ok());
+    EXPECT_TRUE(Parse("UPDATE t SET a = (SELECT id FROM u)").ok());
 }
 
 // ---- Malformed subqueries -------------------------------------------------
