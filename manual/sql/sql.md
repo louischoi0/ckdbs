@@ -957,9 +957,10 @@ and a qualifier naming no relation in the statement is refused in the
 `WHERE` exactly as it is in the projection. A view's integers compare
 **unsigned**, because every one of them is stored as a `uint64` and
 `sys.patterns.fetch_id` really does use the full 64-bit range. One
-consequence, the same one a `uint64` column on an ordinary relation has:
-a negative literal is not a `uint64`, so `WHERE oid > -1` is a non-match
-for every row rather than a comparison that succeeds.
+consequence: a negative literal is not a `uint64`, so on a view `WHERE oid
+> -1` is a non-match for every row rather than a comparison that succeeds.
+A `uint64` column on an ordinary relation refuses such a literal instead -
+a negative one, or one past 2^64 - 1, is `OutOfRange` with its byte.
 
 There is also a legacy non-SQL form: `CREATE TABLE <name>` with **no column
 list** routes to a pre-SQL handler (the dispatcher routes on the presence

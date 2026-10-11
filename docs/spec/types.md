@@ -142,7 +142,9 @@ And **an integer literal that wrapped int64 is refused wherever `int_val`
 is the value** — the wide arm reads the preserved digit text, and date,
 timestamp, narrow-decimal, signed-integer and `bool` coercion refuse a
 wrapped literal outright rather than coercing the value it wrapped to. A
-`uint64` column reads the digits, and a pk bounds a range or keys a lookup
+`uint64` column reads the digits and refuses a literal outside
+`[0, 2^64 - 1]` `OutOfRange` - compared, one answered false under every
+operator, `!=` and `>` included - and a pk bounds a range or keys a lookup
 only from a literal that did not wrap. Purely additive: no format
 change, no version bump, one `sys.types` row (`decimal128`, oid 33,
 type_val 13). `p > 38` has no representation and is refused.

@@ -832,6 +832,17 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             }
             return Status::OK();
 
+        case kTypeValUint64:
+            // The same rule over the unsigned range, which the digits carry
+            // (`ValueAsUint64`): a negative literal or one past 2^64 - 1
+            // names nothing the column holds. Compared, it answered false
+            // under every operator - `!=` and `>` included - and no row.
+            if (val.type == parser::ValueType::kInt && !ValueAsUint64(val).ok()) {
+                return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                          " is outside the range of a uint64");
+            }
+            return Status::OK();
+
         default:
             // Every other type is compared as it was written.
             return Status::OK();

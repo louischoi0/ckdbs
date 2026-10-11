@@ -644,8 +644,9 @@ std::optional<std::uint64_t> PkBound(const Operand& operand) {
     if (operand.kind != OperandKind::kLiteral) return std::nullopt;
     if (operand.literal.type != parser::ValueType::kInt) return std::nullopt;
     // A literal past int64 wrapped in the lexer, so `int_val` is not its
-    // value. A uint64 pk keeps one through coercion, and it must not bound a
-    // range or key a lookup at the number it wrapped to.
+    // value. Coercion refuses every such literal an integer pk cannot hold
+    // before this runs; kept so a bound is never keyed at the number one
+    // wrapped to, whichever caller reaches here.
     if (parser::IntLiteralWrapped(operand.literal)) return std::nullopt;
     if (operand.literal.int_val < 0) return std::nullopt;
     return static_cast<std::uint64_t>(operand.literal.int_val);
