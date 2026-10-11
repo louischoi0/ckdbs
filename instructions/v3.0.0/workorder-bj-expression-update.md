@@ -1162,3 +1162,75 @@ reproduced alone on the same loaded host (2 of 5, 1 of 8) and passing on a quiet
 one; BJ does not touch `INSERT` or the descent. `IdAllocationAcrossCores` failed
 under `-j8` in about half the plain runs and never alone (memory
 `suite-parallel-ctest`); the pre-push gate runs ctest serially.
+
+### BJ — the post-close review (2026-10-11)
+
+After the close, the operator asked: "Review the BJ milestone's work, find
+what to improve and what to fix, and improve it." Three `critics-developer`
+reviews ran on `5979b5e7`, over the typer and evaluator, the parser, and the
+UPDATE path. Their findings were applied on `worktree-bj-review-fixes` in
+`a1b06d5a` and `fdf882a9` and the commit after them, and each commit had a
+review of its own.
+
+**Fixed:**
+- **Quiet-wrong: an operation of literals beside a decimal.** Under a decimal
+  context `Resolve` gives `2 * 3` the type int64 and `1.5 * 1.5` the type
+  decimal(20,4). `Unify`, a comparison of two literals, and the value positions
+  of `CASE`/`COALESCE`/`NULLIF`/`GREATEST`/`LEAST` then compared or chose them
+  as unscaled numbers. `d = 2 * 3` was false for `d = 6.00`, and
+  `GREATEST(2 * 3, 1.5)` stored `1.50`. These are now refused
+  (`ResolveExactly`), as the top-level assignment already refused them.
+- **One `NOW()` per statement:** a SET-value subquery compiles under its
+  UPDATE's `StatementContext` (`HandleSelect`, `exec::Compile`). Before this it
+  took a reading of its own. No cell covers it: the statement clock cannot be
+  moved between the UPDATE's reading and the subquery's compile.
+- **Memory:** `||`, `CONCAT` and `REPLACE`'s last append are bounded by the
+  1 MiB `kMaxStringBytes` that `LPAD`/`RPAD` already had.
+- **Valid input that was refused:**
+  - `SET v = case -1` (a column named `case`).
+  - `a = NOT b`, which is now as in PostgreSQL.
+  - `CASE (expr) WHEN ...`, a simple CASE whose operand opens with a parenthesis.
+- **Wrong messages:**
+  - `case IN/BETWEEN/LIKE` is named `NotImplemented`.
+  - Junk in a row value is no longer called an arity error.
+  - The row-subquery and function-call messages no longer say "yet (BJ-S7)" or
+    "WHERE only".
+- **Simplifications:**
+  - Cut: dead argument-count checks, and `Rescale`'s second rounding switch
+    (it now drops places through `DivideAt`).
+  - Made one helper each: `Assignable`, `EndsSetValue`, `IsUnbuiltComparison`,
+    `ModeOf`, `DecimalType`, `CannotApply`.
+  - Other: the resolver is built on `any_of`.
+- **Tests:**
+  - An expression into an indexed covered column.
+  - The string caps.
+  - A subquery refusal that carries one byte.
+  - The single-write rig's comment no longer claims a divide it never makes.
+
+**Rejected:**
+- **`decimal128(p, s)` in CAST.** The parser takes no arguments for
+  `decimal128` in DDL either (`command_dispatcher.cpp`), so CAST agrees with
+  DDL. `types.md` TY2 and §2a still say "also declarable as `decimal128(p, s)`".
+  That conflict is older than BJ and is left for the operator.
+- **Expression factories returning a mutable node.** `StatusOr` cannot take
+  the two-step conversion, so every `return e;` would change to save one copy
+  per parsed `MOD` or function node.
+- **A literal argument of a numeric function taking its context's type**
+  (`SET i32 = ABS(-5)`). Only a function of a constant reaches this, and
+  `CAST` covers it.
+- **A null-session guard in `RunScalarSubquery`.** The state cannot be reached
+  from any caller.
+- **The first review's narrowing of `Positioned` to `"(byte "`.** It gave
+  "at byte N" refusals a second byte, and was restored by the following commit.
+
+**Filed, not fixed:**
+`docs/inflight/bugs/a-set-value-subquery-is-reparsed-behind-padding-as-long-as-its-offset.md`.
+
+**Open for the operator:**
+- **A decimal `MIN`/`MAX` subquery.** It is typed decimal(18,s) or
+  decimal(38,s), the wire's widened precision. So `SET d = (SELECT MAX(d)
+  FROM t)` is refused for a `decimal(10,2)` `d`. §3.2b says "its type is its
+  column's", so making it a scaled decimal (the `ROUND` mechanism) is a spec
+  change, not a fix.
+- **`int / decimal`** (`2 / price`) is refused while `price / 2` is admitted.
+  §3.2b's row reads as covering both orders.

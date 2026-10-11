@@ -7897,7 +7897,7 @@ StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser
     // The subquery's own refusals carry their byte already; the rest are given
     // the subquery's.
     const auto Positioned = [&](const std::string& what) {
-        return what.find("(byte ") != std::string::npos ? what : what + at;
+        return what.find("byte ") != std::string::npos ? what : what + at;
     };
     if (!out.status.ok()) return out.status.WithMessage(Positioned(out.status.message()));
     if (out.response.rfind("ERR", 0) == 0) {

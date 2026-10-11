@@ -310,7 +310,8 @@ TEST_F(SetExprFunctionsTest, TextFunctions) {
     // cannot build what one of them may not.
     for (const char* set : {"s = LPAD('x', 1048576) || 'y'",
                             "s = CONCAT(LPAD('x', 600000), LPAD('y', 600000))",
-                            "s = REPLACE(LPAD('x', 600000, 'x'), 'x', 'xy')"}) {
+                            "s = REPLACE(LPAD('x', 600000, 'x'), 'x', 'xy')",
+                            "s = REPLACE('x' || LPAD('y', 1048570, 'y'), 'x', 'zzzzzzzzzz')"}) {
         EXPECT_NE(Run(std::string("UPDATE t SET ") + set + " WHERE id = 1").find("builds more than"),
                   std::string::npos)
             << set;

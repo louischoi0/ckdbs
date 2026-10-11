@@ -31,9 +31,9 @@ still make one statement cost far more than its size.
 
 A base byte offset in the lexer (`Lexer(sql, base)`, `Parser(sql, base)`)
 that the parser adds to every position it reports, so the subquery text is
-passed without padding. The parser slices `sql_` by byte offset in two places
-(`subquery_sql`, and the assertion text a `CREATE ASSERTION` stores), so those
-slices subtract the base. The other option is to hand `HandleSelect` the
+passed without padding. The parser slices `sql_` by byte offset once
+(`subquery_sql`; a `CREATE ASSERTION` stores the whole input), so that
+slice subtracts the base. The other option is to hand `HandleSelect` the
 already-parsed `node.subquery` instead of its text. Cells: a subquery at a large
 offset reports the UPDATE's byte, and N subqueries at offset L do not allocate
 N x L bytes.
