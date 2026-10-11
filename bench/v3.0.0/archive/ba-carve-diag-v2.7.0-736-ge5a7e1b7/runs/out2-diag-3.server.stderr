@@ -1,0 +1,220 @@
+DIAG body 923593212 923593515
+DIAG header 923593515 923593516
+DIAG ckpt 923593587 923593623
+ckdbs on /home/cdkbs/bench-runs/carve-diag/work/kds-insert1-relaxed-k1-s16-r0/d.db: 13 pages, superblock version 21
+logging to /home/cdkbs/bench-runs/carve-diag/work/kds-insert1-relaxed-k1-s16-r0/s.log at level WARN
+listening on 127.0.0.1:15651
+DIAG persist-page writeback_us=21 sync_us=2824
+DIAG carve 923593675 923593678 persist_us=2867
+DIAG persist-page writeback_us=17 sync_us=2907
+DIAG carve 923596801 923596803 persist_us=2935
+DIAG persist-page writeback_us=13 sync_us=13206
+DIAG carve 923596874 923596887 persist_us=13234
+DIAG persist-page writeback_us=13 sync_us=3019
+DIAG carve 923596974 923596977 persist_us=3041
+DIAG persist-page writeback_us=16 sync_us=2829
+DIAG carve 923597074 923597077 persist_us=2855
+DIAG persist-page writeback_us=12 sync_us=2947
+DIAG carve 923597161 923597164 persist_us=2969
+DIAG persist-page writeback_us=13 sync_us=4404
+DIAG carve 923597249 923597254 persist_us=4427
+DIAG persist-page writeback_us=18 sync_us=2933
+DIAG carve 923597324 923597327 persist_us=2963
+DIAG persist-page writeback_us=12 sync_us=5044
+DIAG carve 923597424 923597429 persist_us=5066
+DIAG persist-page writeback_us=13 sync_us=8662
+DIAG carve 923597524 923597533 persist_us=8687
+DIAG persist-page writeback_us=10 sync_us=2853
+DIAG carve 923597624 923597627 persist_us=2873
+DIAG persist-page writeback_us=12 sync_us=3316
+DIAG carve 923597712 923597715 persist_us=3339
+DIAG persist-page writeback_us=12 sync_us=4016
+DIAG carve 923597801 923597805 persist_us=4039
+DIAG persist-page writeback_us=11 sync_us=12109
+DIAG carve 923597874 923597886 persist_us=12130
+DIAG persist-page writeback_us=14 sync_us=2992
+DIAG carve 923597974 923597977 persist_us=3019
+DIAG persist-page writeback_us=14 sync_us=9101
+DIAG carve 923598074 923598083 persist_us=9126
+DIAG persist-page writeback_us=14 sync_us=239335
+DIAG carve 923598174 923598414 persist_us=240192
+DIAG body 923598120 923598418
+DIAG persist-page writeback_us=12 sync_us=3244
+DIAG carve 923598511 923598515 persist_us=3268
+DIAG persist-page writeback_us=12 sync_us=2959
+DIAG carve 923598599 923598602 persist_us=2982
+DIAG ckpt 923598624 923598667
+DIAG persist-page writeback_us=11 sync_us=2929
+DIAG carve 923598724 923598727 persist_us=2951
+DIAG persist-page writeback_us=16 sync_us=3049
+DIAG carve 923598815 923598818 persist_us=3081
+DIAG persist-page writeback_us=15 sync_us=3119
+DIAG carve 923598902 923598905 persist_us=3144
+DIAG persist-page writeback_us=11 sync_us=2896
+DIAG carve 923598974 923598977 persist_us=2918
+DIAG persist-page writeback_us=14 sync_us=2696
+DIAG carve 923599074 923599077 persist_us=2721
+DIAG persist-page writeback_us=11 sync_us=3318
+DIAG carve 923599165 923599168 persist_us=3342
+DIAG persist-page writeback_us=12 sync_us=11970
+DIAG carve 923599253 923599265 persist_us=11994
+DIAG persist-page writeback_us=13 sync_us=2882
+DIAG carve 923599349 923599352 persist_us=2906
+DIAG persist-page writeback_us=15 sync_us=2820
+DIAG carve 923599424 923599427 persist_us=2845
+DIAG persist-page writeback_us=16 sync_us=3220
+DIAG carve 923599524 923599527 persist_us=3246
+DIAG persist-page writeback_us=12 sync_us=3012
+DIAG carve 923599613 923599616 persist_us=3035
+DIAG persist-page writeback_us=12 sync_us=2780
+DIAG carve 923599701 923599704 persist_us=2804
+DIAG header 923599772 923599773
+DIAG persist-page writeback_us=14 sync_us=5768
+DIAG carve 923599777 923599783 persist_us=5791
+DIAG persist-page writeback_us=11 sync_us=3503
+DIAG carve 923599874 923599877 persist_us=3525
+DIAG persist-page writeback_us=14 sync_us=2739
+DIAG carve 923599974 923599977 persist_us=2764
+DIAG persist-page writeback_us=12 sync_us=3365
+DIAG carve 923600063 923600066 persist_us=3388
+DIAG persist-page writeback_us=16 sync_us=2782
+DIAG carve 923600150 923600153 persist_us=2809
+DIAG persist-page writeback_us=16 sync_us=3547
+DIAG carve 923600224 923600227 persist_us=3574
+DIAG persist-page writeback_us=11 sync_us=3039
+DIAG carve 923600324 923600327 persist_us=3063
+DIAG persist-page writeback_us=15 sync_us=4608
+DIAG carve 923600416 923600420 persist_us=4635
+DIAG persist-page writeback_us=14 sync_us=3132
+DIAG carve 923600505 923600508 persist_us=3157
+DIAG persist-page writeback_us=10 sync_us=2759
+DIAG carve 923600574 923600577 persist_us=2780
+DIAG persist-page writeback_us=10 sync_us=3137
+DIAG carve 923600674 923600677 persist_us=3157
+DIAG persist-page writeback_us=14 sync_us=5544
+DIAG carve 923600771 923600776 persist_us=5571
+DIAG persist-page writeback_us=12 sync_us=2894
+DIAG carve 923600862 923600865 persist_us=2917
+DIAG persist-page writeback_us=13 sync_us=3171
+DIAG carve 923600949 923600952 persist_us=3195
+DIAG persist-page writeback_us=14 sync_us=2648
+DIAG carve 923601024 923601027 persist_us=2674
+DIAG persist-page writeback_us=13 sync_us=2488
+DIAG carve 923601124 923601126 persist_us=2511
+DIAG persist-page writeback_us=16 sync_us=251841
+DIAG carve 923601224 923601476 persist_us=252786
+DIAG body 923601140 923601480
+DIAG persist-page writeback_us=12 sync_us=2812
+DIAG carve 923601562 923601565 persist_us=2835
+DIAG persist-page writeback_us=8 sync_us=2999
+DIAG carve 923601649 923601652 persist_us=3019
+DIAG persist-page writeback_us=14 sync_us=2808
+DIAG carve 923601724 923601727 persist_us=2839
+DIAG persist-page writeback_us=12 sync_us=3652
+DIAG carve 923601824 923601828 persist_us=3676
+DIAG persist-page writeback_us=10 sync_us=3195
+DIAG carve 923601917 923601920 persist_us=3216
+DIAG persist-page writeback_us=11 sync_us=4153
+DIAG carve 923602005 923602009 persist_us=4180
+DIAG persist-page writeback_us=10 sync_us=3077
+DIAG carve 923602074 923602077 persist_us=3098
+DIAG persist-page writeback_us=16 sync_us=3239
+DIAG carve 923602174 923602177 persist_us=3269
+DIAG persist-page writeback_us=11 sync_us=16527
+DIAG carve 923602270 923602287 persist_us=16552
+DIAG persist-page writeback_us=13 sync_us=3498
+DIAG carve 923602372 923602376 persist_us=3536
+DIAG persist-page writeback_us=11 sync_us=3036
+DIAG carve 923602461 923602464 persist_us=3059
+DIAG persist-page writeback_us=13 sync_us=3055
+DIAG carve 923602550 923602553 persist_us=3079
+DIAG persist-page writeback_us=12 sync_us=2975
+DIAG carve 923602624 923602627 persist_us=2998
+DIAG persist-page writeback_us=14 sync_us=3648
+DIAG carve 923602724 923602728 persist_us=3673
+DIAG header 923602782 923602789
+DIAG persist-page writeback_us=18 sync_us=8993
+DIAG carve 923602824 923602833 persist_us=9023
+DIAG persist-page writeback_us=11 sync_us=4693
+DIAG carve 923602924 923602929 persist_us=4715
+DIAG persist-page writeback_us=13 sync_us=3220
+DIAG carve 923603017 923603020 persist_us=3246
+DIAG persist-page writeback_us=12 sync_us=3077
+DIAG carve 923603105 923603108 persist_us=3100
+DIAG persist-page writeback_us=14 sync_us=2714
+DIAG carve 923603174 923603177 persist_us=2739
+DIAG persist-page writeback_us=10 sync_us=2916
+DIAG carve 923603274 923603277 persist_us=2936
+DIAG persist-page writeback_us=11 sync_us=3285
+DIAG carve 923603367 923603371 persist_us=3307
+DIAG persist-page writeback_us=16 sync_us=17715
+DIAG carve 923603456 923603474 persist_us=17744
+DIAG persist-page writeback_us=12 sync_us=3066
+DIAG carve 923603560 923603563 persist_us=3090
+DIAG ckpt 923603624 923603745
+DIAG persist-page writeback_us=13 sync_us=3079
+DIAG carve 923603768 923603771 persist_us=3103
+DIAG persist-page writeback_us=15 sync_us=2977
+DIAG carve 923603857 923603860 persist_us=3002
+DIAG persist-page writeback_us=15 sync_us=2965
+DIAG carve 923603947 923603950 persist_us=2989
+DIAG persist-page writeback_us=14 sync_us=2771
+DIAG carve 923604024 923604027 persist_us=2797
+DIAG persist-page writeback_us=11 sync_us=3729
+DIAG carve 923604121 923604125 persist_us=3751
+DIAG persist-page writeback_us=11 sync_us=2803
+DIAG carve 923604210 923604213 persist_us=2823
+DIAG persist-page writeback_us=18 sync_us=149469
+DIAG carve 923604309 923604459 persist_us=149500
+DIAG persist-page writeback_us=15 sync_us=64542
+DIAG carve 923604545 923604611 persist_us=65506
+DIAG body 923604292 923604614
+DIAG persist-page writeback_us=15 sync_us=2686
+DIAG carve 923604674 923604677 persist_us=2711
+DIAG persist-page writeback_us=10 sync_us=2825
+DIAG carve 923604774 923604777 persist_us=2845
+DIAG persist-page writeback_us=19 sync_us=3101
+DIAG carve 923604869 923604872 persist_us=3138
+DIAG persist-page writeback_us=10 sync_us=2695
+DIAG carve 923604957 923604960 persist_us=2715
+DIAG persist-page writeback_us=11 sync_us=3269
+DIAG carve 923605024 923605027 persist_us=3290
+DIAG persist-page writeback_us=11 sync_us=7885
+DIAG carve 923605124 923605132 persist_us=7907
+DIAG persist-page writeback_us=11 sync_us=3011
+DIAG carve 923605224 923605227 persist_us=3031
+DIAG persist-page writeback_us=11 sync_us=3388
+DIAG carve 923605313 923605316 persist_us=3409
+DIAG persist-page writeback_us=12 sync_us=3415
+DIAG carve 923605401 923605405 persist_us=3441
+DIAG persist-page writeback_us=13 sync_us=2772
+DIAG carve 923605474 923605477 persist_us=2794
+DIAG persist-page writeback_us=15 sync_us=3076
+DIAG carve 923605574 923605577 persist_us=3102
+DIAG persist-page writeback_us=14 sync_us=2700
+DIAG carve 923605665 923605668 persist_us=2724
+DIAG persist-page writeback_us=12 sync_us=3290
+DIAG carve 923605754 923605757 persist_us=3312
+DIAG persist-page writeback_us=16 sync_us=2649
+DIAG carve 923605824 923605827 persist_us=2689
+DIAG header 923605878 923605879
+DIAG persist-page writeback_us=10 sync_us=3073
+DIAG carve 923605924 923605927 persist_us=3093
+DIAG persist-page writeback_us=13 sync_us=3413
+DIAG carve 923606024 923606027 persist_us=3437
+DIAG persist-page writeback_us=12 sync_us=2608
+DIAG carve 923606115 923606117 persist_us=2629
+DIAG persist-page writeback_us=14 sync_us=3102
+DIAG carve 923606202 923606205 persist_us=3126
+DIAG persist-page writeback_us=15 sync_us=2724
+DIAG carve 923606274 923606277 persist_us=2749
+DIAG persist-page writeback_us=11 sync_us=3275
+DIAG carve 923606374 923606377 persist_us=3300
+DIAG persist-page writeback_us=11 sync_us=4594
+DIAG carve 923606465 923606470 persist_us=4616
+DIAG persist-page writeback_us=15 sync_us=3262
+DIAG carve 923606555 923606559 persist_us=3287
+DIAG persist-page writeback_us=14 sync_us=3196
+DIAG carve 923606624 923606627 persist_us=3222
+DIAG ckpt 923607400 923607405
+stopped; 2532 pages persisted

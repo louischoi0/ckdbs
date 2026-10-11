@@ -948,20 +948,23 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 
 Verified at `e5a7e1b7` (BA's close,
 `bench/v3.0.0/results-ba-s17-census-v2.7.0-736-ge5a7e1b7.md` and
-`results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`). Owned by `docs/spec/wal.md`
+`results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`; diagnosed in
+`results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`). Owned by `docs/spec/wal.md`
 §11a and, for the checkpoint, BI (`workorder-bi-checkpoint-off-the-reactor.md`).
 
-- **A `relaxed` carve is slower since BA-S13.** Its median is 226-258 ms per
-  server life, against 20-46 ms at BA-S4. Under `group` and `strict` it
-  fell to 3.6-5.9 ms. The candidate cause is the carve's unconditional
-  data-file `fdatasync`, which under `relaxed` flushes every unsynced
-  page write before it. That is untested. BA-S13's exit, a carve under
-  10 ms, is not met.
+- **A `relaxed` carve's longest stall is 226-258 ms per server life**
+  (median), against 20-46 ms at BA-S4; under `group` and `strict` it fell
+  to 3.6-5.9 ms. At `cores = 1` it is not BA-S13's, and at B it reads a
+  data-file `fsync` stall BA-S4's binary also meets; maxima above 300 ms,
+  `cores` 2 and 4, and carves inside the measured span are unexplained or
+  unmeasured (the diagnosis file). BA-S13's exit, a carve under 10 ms, is
+  not met.
 - **The checkpoint holds statements for up to a quarter-second.** At
   10,000 rows, B's longest statement was 62-226 ms in 31 of 32 A/B runs,
   against A's 18-22 ms. The census's checkpoint median rose from 46 to
-  92 ms, with a maximum of 1.5 s. Neither measurement separates "BA made
-  the checkpoint longer" from "BA moved work off the carve". The fix
+  92 ms, with a maximum of 1.5 s. At `relaxed` `cores = 1` the lengthening
+  is BA-S13's, which moved the pool's writeback from the carve to the
+  checkpoint (the diagnosis file); other cells are not separated. The fix
   waits on BI-Q1.
 
 ## Decisions the revision has not taken
