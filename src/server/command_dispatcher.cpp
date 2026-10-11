@@ -4775,12 +4775,13 @@ namespace {
 // boundary appeared. It is drawn once, here, for both.
 std::pair<std::uint32_t, std::uint32_t> AggregateOutputType(const exec::AggregateItem& item) {
     const bool wide = item.type_val == catalog::kTypeValDecimalWide;
-    // The precision is the type's maximum rather than the column's: a fold
-    // widens, so the column's precision would understate the answer's
-    // range. The scale is the half a client cannot read the value without.
+    // SUM and AVG: the precision is the type's maximum rather than the
+    // column's, because the fold widens and the column's precision would
+    // understate the answer's range. The scale is the column's.
     const auto decimal_mod = [&](bool as_wide) {
         return catalog::PackDecimalLen(
-            as_wide ? exec::kMaxDecimalPrecisionWide : exec::kMaxDecimalPrecision, item.scale);
+            as_wide ? exec::kMaxDecimalPrecisionWide : exec::kMaxDecimalPrecision,
+            catalog::DecimalScaleOf(item.decimal_len));
     };
     // **`func` is meaningless unless `is_aggregate`** (AG5): a grouping
     // column carried through to the output leaves the field at its default,
@@ -4808,8 +4809,7 @@ std::pair<std::uint32_t, std::uint32_t> AggregateOutputType(const exec::Aggregat
     // included - the answer is one of its values, so it fits, and a SET
     // assigning it back to a column of that type needs the exact type
     // (types.md §3.2b).
-    return {item.type_val,
-            catalog::TypeModOf(item.type_val, catalog::PackDecimalLen(item.precision, item.scale))};
+    return {item.type_val, catalog::TypeModOf(item.type_val, item.decimal_len)};
 }
 
 std::vector<std::uint32_t> AggregateOutputTypes(const exec::AggregateSpec& spec) {

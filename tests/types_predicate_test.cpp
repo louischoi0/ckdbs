@@ -275,7 +275,7 @@ TEST_F(TypesPredicateTest, SumOverADecimalCompilesAndCarriesTheScale) {
     EXPECT_EQ(chain.aggregate->items[0].type_val, catalog::kTypeValDecimal);
     // Carried at compile because the fold sits outside the executor and
     // has no catalog to ask when it re-attaches the scale.
-    EXPECT_EQ(chain.aggregate->items[0].scale, 2);
+    EXPECT_EQ(chain.aggregate->items[0].decimal_len, catalog::PackDecimalLen(10, 2));
 }
 
 TEST_F(TypesPredicateTest, MinAndMaxOverEveryNewTypeCompile) {

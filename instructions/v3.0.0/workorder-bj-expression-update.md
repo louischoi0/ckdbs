@@ -1226,14 +1226,14 @@ review of its own.
 **Filed, not fixed:**
 `docs/inflight/bugs/a-set-value-subquery-is-reparsed-behind-padding-as-long-as-its-offset.md`.
 
+**Ruled by the operator (2026-10-11):**
+- **A decimal `MIN`/`MAX` subquery: (a).** It was typed decimal(18,s) or
+  decimal(38,s), the wire's widened precision, so `SET d = (SELECT MAX(d)
+  FROM t)` was refused for a `decimal(10,2)` `d`. `MIN`/`MAX` and a grouping
+  column are now described in the column's own `(p, s)`; `SUM`/`AVG` keep the
+  maximum (`types.md` §3.2b). A client reading `SELECT MAX(d)` sees
+  `numeric(10,2)` where it saw `numeric(18,2)`.
+
 **Open for the operator:**
-- **A decimal `MIN`/`MAX` subquery** - ruled (a) by the operator on
-  2026-10-11. It was typed decimal(18,s) or decimal(38,s), the wire's widened
-  precision, so `SET d = (SELECT MAX(d) FROM t)` was refused for a
-  `decimal(10,2)` `d`. The operator's (a): `MIN`/`MAX` and a grouping column
-  are described in the column's own `(p, s)`, as `AggregateOutputType`'s
-  comment already said; `SUM`/`AVG` keep the maximum. `types.md` §3.2b states
-  it. A client reading `SELECT MAX(d)` now sees `numeric(10,2)` where it saw
-  `numeric(18,2)`.
 - **`int / decimal`** (`2 / price`) is refused while `price / 2` is admitted.
   §3.2b's row reads as covering both orders.

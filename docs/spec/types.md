@@ -314,11 +314,12 @@ statement that parks keeps its first answer across the park. It returns one
 column and at most one row - more is `InvalidArgument`, **even over a WHERE
 that matches no row**, because the answer is taken before any row is - and no
 row is NULL. Its type is its column's, and the assignment needs it to be the
-target's like any other value. An aggregate column's type is its function's:
-`MIN`/`MAX` answer one of the column's values, so they are typed in its own
-`(p, s)` and `SET d = (SELECT MAX(d) FROM t)` assigns, while a decimal `SUM` or
-`AVG` is typed at the type's maximum precision (18, or 38 for `decimal128`) and
-the column's scale, and needs a `CAST` to a narrower column. So `SET v = v + (SELECT SUM(v) FROM t)` raises
+target's like any other value. An aggregated column's type is its
+function's: `MIN`/`MAX` and a grouping column answer one of the column's
+values, so they are typed in its own `(p, s)` and `SET d = (SELECT MAX(d) FROM
+t)` assigns, while a decimal `SUM` or `AVG` is typed at the type's maximum
+precision (18, or 38 for `decimal128`) at the column's scale, and needs a
+`CAST` to a narrower column. So `SET v = v + (SELECT SUM(v) FROM t)` raises
 every row by the sum the table had before the statement, not by a sum that
 grows as the walk writes: **a WHERE-position subquery is re-run per row and
 sees the statement's earlier rows; a SET-position one does not.** A subquery

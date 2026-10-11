@@ -663,18 +663,15 @@ struct AggregateItem {
     // rather than through a signed reading that cannot hold it.
     std::uint32_t type_val = 0;
 
-    // A `DECIMAL` column's scale, resolved at compile for the same reason
-    // `type_val` is (types.md §3.2). `SUM` folds unscaled int64 and
-    // the answer's scale is the column's, so `Finish` needs the number and
-    // must not have to ask the catalog for it - the fold sits outside the
-    // executor and has no catalog to ask. Zero for every other type.
-    std::uint8_t scale = 0;
-
-    // The same column's declared precision, zero for every other type. Read
-    // only by the output description: `MIN`/`MAX` and a grouping column
-    // answer a member of the column, so they are described in its own
-    // `(p, s)`, while `SUM`/`AVG` widen to the type's maximum.
-    std::uint8_t precision = 0;
+    // A decimal column's packed `(p, s)` (`catalog::PackDecimalLen`), resolved
+    // at compile for the same reason `type_val` is (types.md §3.2). `SUM`
+    // folds unscaled int64 and the answer's scale is the column's, so
+    // `Finish` needs the scale and must not have to ask the catalog for it -
+    // the fold sits outside the executor and has no catalog to ask. The
+    // precision is the output description's: `MIN`/`MAX` and a grouping
+    // column answer a member of the column, so they are described in its own
+    // `(p, s)`. Zero for every other type.
+    std::uint32_t decimal_len = 0;
 };
 
 struct AggregateSpec {
