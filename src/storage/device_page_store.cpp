@@ -2260,46 +2260,27 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     // "consumer of the machinery, not a parallel implementation".
     auto written = WriteBack(page_ids);
     if (!written.ok()) return written.status();
-    bool wrote_any = written.value() > 0;
 
-    // The maps go out with them, and after them: a page is only reachable
-    // once the map says its id is allocated, so publishing the map first
-    // would let a crash expose a page whose bytes never landed. A bit
-    // `FreePage` cleared needs no order: no replay names the id (BF-R4).
+    // **No maps, since BI-S2** (BI-Q12). A step is one slice of a snapshot,
+    // and the maps it would write carry the bit of every page allocated so
+    // far - snapshot pages a later step has not reached among them. A crash
+    // after such a step left a page the map calls allocated whose bytes
+    // never landed; a logged page's redo re-creates it, but an unlogged one
+    // (a Waystone page) stayed allocated and unreadable for good. Found by
+    // the simulation corpus once a run could be abandoned between steps.
+    // The maps go out with the publish's whole-store `Flush`, after every
+    // dirty page, which is the order a map needs; a step's page reaching the
+    // device ahead of its bit is the state an eviction writeback leaves
+    // every time, and recovery's floor and redo already answer it.
     //
-    // **One walk, not two** (AM-S3). This asked `maps_dirty()` first and
-    // then let `FlushMaps` walk the map again; under sharing the two
-    // answers can differ, because another core's flush can take the work
-    // in between - and this caller would then sync for a write nobody
-    // made. The count `FlushMaps` returns is the same answer taken once,
-    // and under the hold.
-    StatusOr<std::size_t> flushed = std::size_t{0};
-    {
-        const PhaseTimer timed(CheckpointPhase::kMapWrite);  // BI-S1
-        flushed = FlushMaps();
-    }
-    if (!flushed.ok()) return flushed.status();
-    if (flushed.value() > 0) wrote_any = true;
-
-    // **Why a zero count may skip the sync, and where that stops being
-    // enough.** Under sharing this call can write nothing because another
-    // core's flush already copied the dirty regions and is between its copy
-    // and its own sync. For the checkpointer - this function's reason to
-    // exist (`wal/checkpointer.cpp`) - that is covered: a checkpoint's
-    // durability point is the anchor publish, and
+    // **Why a zero count may skip the sync.** Under sharing this call can
+    // write nothing because another core's writeback already copied the
+    // pages and is between its copy and its own sync. That is covered: a
+    // checkpoint's durability point is the anchor publish, and
     // `SuperBlockCheckpointAnchor::Publish` syncs the store itself, after
-    // every step. The contract above already tolerates the same shape for
-    // *pages*: "something else may have flushed them since the snapshot".
-    //
-    // The one caller that reaches no anchor publish - `expeditor.cpp`'s
-    // catalog flush, since AT-S9 retired the range allocator's handoff
-    // flush - does not have that cover, and the skip is unchanged in shape
-    // from before AM-S3, where
-    // `maps_dirty()` read false in the same window. `PersistMaps` syncs
-    // unconditionally for exactly this reason and this does not; the
-    // asymmetry is deliberate, because a checkpoint step that synced on
-    // every round would pay an `fsync` per step for a map it did not write.
-    if (!wrote_any) return Status::OK();  // nothing written, nothing to sync
+    // every step - the same cover the contract above already relies on for
+    // pages "something else may have flushed since the snapshot".
+    if (written.value() == 0) return Status::OK();
     Status s;
     {
         const PhaseTimer timed(CheckpointPhase::kDataSync);  // BI-S1

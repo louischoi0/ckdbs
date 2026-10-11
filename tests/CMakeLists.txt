@@ -202,6 +202,7 @@ add_executable(kds_tests
     page_mgr_wal_gate_test.cpp
     wal_checkpointer_test.cpp
     checkpoint_census_test.cpp
+    checkpoint_task_test.cpp
     memory_log_device_test.cpp
     file_log_device_test.cpp
     wal_append_off_latch_test.cpp

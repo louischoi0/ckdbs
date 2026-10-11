@@ -360,38 +360,103 @@ Status Checkpointer::RunToCompletion() {
 }
 
 Status Checkpointer::RunGated(CheckpointGate* gate, std::uint32_t core_id) {
-    const std::string who = "core " + std::to_string(core_id) + ": ";
-    const CheckpointGate::Hold run(gate);
-    if (!run.entered()) {
-        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-            log_->Debug("checkpoint", who + "skipped: another core's checkpoint is running");
-        }
+    // A run task of this checkpointer is queued or parked: a synchronous run
+    // now would finish its snapshot under it. Shutdown abandons the task
+    // first (BI-R4); any other caller skips, as at a held gate.
+    if (task_in_flight_) {
+        LogSkip(core_id);
         return Status::OK();
     }
-
-    // The stats are cumulative over the process, so this run's contribution
-    // is the delta: logging the total would read as "this checkpoint flushed
-    // 5 pages" on every tick after the first one that did.
-    const std::uint64_t flushed_before = stats_.pages_flushed;
-    // BI-S1's run record: from the gate's entry to the publish's return, the
-    // phases inside it, and the edges a reactor iteration reads to tell
-    // whether it overlapped a run (`sched/checkpoint_census.hpp`).
+    const CheckpointGate::Hold run(gate);
+    if (!run.entered()) {
+        LogSkip(core_id);
+        return Status::OK();
+    }
     CheckpointRunReport report;
     BeginRun(core_id, report);
     const Status ran = RunToCompletion();
     EndRun(core_id, ran);
-    if (!ran.ok()) {
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("checkpoint", who + "checkpoint failed: " + ran.message());
-        }
-        return ran;
+    return ran;
+}
+
+void Checkpointer::SubmitRun(sched::Scheduler& scheduler, CheckpointGate* gate,
+                             std::uint32_t core_id) {
+    // A tick during a run submits nothing; `SubmitEvery` already coalesces
+    // the periods a run outlasts.
+    if (task_in_flight_) return;
+    task_in_flight_ = true;
+    scheduler.Submit(sched::MakeCoroTask(sched::SchedulingGroup::kSystem,
+                                         RunTask(gate, core_id, task_generation_)));
+}
+
+sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
+                                  std::uint64_t generation) {
+    // Abandoned before its first poll (BI-R4): nothing of this checkpointer
+    // is its own any more.
+    if (generation != task_generation_) co_return Status::OK();
+    task_core_ = core_id;
+    task_hold_.emplace(gate, core_id, wal_.clock().Now());
+    if (!task_hold_->entered()) {
+        task_hold_.reset();
+        task_in_flight_ = false;
+        LogSkip(core_id);
+        co_return Status::OK();
     }
+    task_report_ = CheckpointRunReport{};
+    BeginRun(core_id, task_report_);
+
+    // **One synchronous call per poll** (BI-R1): `Start`, each `Step`, and
+    // `Complete`, a yield after each. A failed one ends the task with the
+    // run left in progress; the next tick's task resumes it.
+    if (!in_progress_) {
+        if (Status s = Start(); !s.ok()) co_return FinishTask(core_id, s);
+        co_await sched::Yield{};
+        if (generation != task_generation_) co_return Status::OK();
+    }
+    while (true) {
+        auto done = Step();
+        if (!done.ok()) co_return FinishTask(core_id, done.status());
+        co_await sched::Yield{};
+        if (generation != task_generation_) co_return Status::OK();
+        if (done.value()) break;
+    }
+    co_return FinishTask(core_id, Complete());
+}
+
+Status Checkpointer::FinishTask(std::uint32_t core_id, const Status& ran) {
+    EndRun(core_id, ran);
+    // A timer-driven run has no caller to return a status to, so a failure
+    // unlogged is a silently widening loss window. A synchronous caller logs
+    // its own, with what the failure costs it.
+    if (!ran.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
+        log_->Error("checkpoint",
+                    "core " + std::to_string(core_id) + ": checkpoint failed: " + ran.message());
+    }
+    task_hold_.reset();
+    task_in_flight_ = false;
+    return ran;
+}
+
+void Checkpointer::Abandon() noexcept {
+    if (run_report_ == &task_report_) {
+        // The run's census edge is closed as a run's end would close it, and
+        // its record is not published: it did not finish.
+        CheckpointCensus::RunEdge(task_core_);
+        run_report_ = nullptr;
+    }
+    ++task_generation_;  // a frame that is ever polled again returns at once
+    task_hold_.reset();
+    task_in_flight_ = false;
+    in_progress_ = false;
+    pending_pages_.clear();
+    next_page_ = 0;
+}
+
+void Checkpointer::LogSkip(std::uint32_t core_id) const {
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("checkpoint", who + "checkpoint complete: redo_start=" +
-                                      std::to_string(redo_start_lsn()) + " pages_flushed=" +
-                                      std::to_string(stats_.pages_flushed - flushed_before));
+        log_->Debug("checkpoint", "core " + std::to_string(core_id) +
+                                      ": skipped: another core's checkpoint is running or due");
     }
-    return Status::OK();
 }
 
 void Checkpointer::BeginRun(std::uint32_t core_id, CheckpointRunReport& report) {

@@ -1,9 +1,11 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -11,6 +13,8 @@
 #include "kds/sched/checkpoint_census.hpp"
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
+#include "kds/sched/coro.hpp"
+#include "kds/sched/scheduler.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
@@ -233,18 +237,31 @@ private:
 // A skip costs a later redo start for that core's contribution to the fold,
 // never an answer. The instance owns one; a fixture that builds none runs
 // ungated.
+//
+// **The gate rotates since BI-S2** (BI-Q7 (a)). A first-come gate let the
+// same cores win every period once a run outlasted `period / cores`: the
+// stagger puts one tick per slot, a long run swallows the next core's tick,
+// and those cores skipped for good while the fold held their old anchors and
+// `D` stopped. A cadence attempt names its core and the time; the gate admits
+// it only if, among the cores that asked within the last period, it is the
+// one whose last *entry* is oldest. Keyed on entry rather than completion,
+// so a core whose runs fail does not hold the rest back; and on recent asks,
+// so a core that stopped asking does not either. An attempt that names no
+// core - shutdown's, mount's, a test's - is first-come, as before.
 class CheckpointGate {
 public:
+    static constexpr std::uint32_t kAnyCore = ~std::uint32_t{0};
+    static constexpr std::uint32_t kCores = CheckpointCensus::kSlots;
+
     // One attempt at the run, released at scope end if it was taken. A null
     // gate always enters. Acquire on entry, so a run that follows another
     // sees every write-back the previous one made.
     class Hold {
     public:
-        explicit Hold(CheckpointGate* gate) noexcept
-            : gate_(gate),
-              entered_(gate == nullptr || !gate->running_.exchange(true, std::memory_order_acquire)) {
-            if (!entered_) gate_->skipped_.fetch_add(1, std::memory_order_relaxed);
-        }
+        explicit Hold(CheckpointGate* gate) noexcept : Hold(gate, kAnyCore, 0) {}
+        // A cadence attempt by `core` at `now`, rotated when the gate is.
+        Hold(CheckpointGate* gate, std::uint32_t core, std::uint64_t now) noexcept
+            : gate_(gate), entered_(gate == nullptr || gate->TryEnter(core, now)) {}
         ~Hold() {
             if (entered_ && gate_ != nullptr) gate_->running_.store(false, std::memory_order_release);
         }
@@ -258,13 +275,53 @@ public:
         bool entered_;
     };
 
-    // Attempts that found the run held, over the process. A test's evidence
-    // that two cores met the gate; nothing else reads it.
+    // Rotates the cadence's attempts over a window of `period_ns`; 0, the
+    // default, leaves the gate first-come. Set once, before any reactor runs.
+    void SetRotation(std::uint64_t period_ns) noexcept { period_ns_ = period_ns; }
+
+    // Attempts that found the run held, or another core's turn, over the
+    // process. A test's evidence that two cores met the gate; nothing else
+    // reads it.
     std::uint64_t skipped() const noexcept { return skipped_.load(std::memory_order_relaxed); }
 
 private:
+    bool TryEnter(std::uint32_t core, std::uint64_t now) noexcept {
+        const bool rotated = core < kCores && period_ns_ != 0;
+        // `now + 1`: an injected clock may read 0, and 0 is "never".
+        if (rotated) last_ask_[core].store(now + 1, std::memory_order_relaxed);
+        if ((rotated && !Turn(core, now)) || running_.exchange(true, std::memory_order_acquire)) {
+            skipped_.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        if (rotated) last_entry_[core].store(now + 1, std::memory_order_relaxed);
+        return true;
+    }
+
+    // Whether `core` is the asking core with the oldest entry. Advisory and
+    // relaxed: two cores reading at once can both think it their turn, and
+    // `running_` still lets one in.
+    bool Turn(std::uint32_t core, std::uint64_t now) const noexcept {
+        std::uint32_t chosen = core;
+        std::uint64_t oldest = last_entry_[core].load(std::memory_order_relaxed);
+        for (std::uint32_t c = 0; c < kCores; ++c) {
+            const std::uint64_t asked = last_ask_[c].load(std::memory_order_relaxed);
+            // An ask stamped after `now` - another core read the clock later
+            // - is recent, not one that wrapped to "stale".
+            if (asked == 0 || (asked <= now + 1 && now + 1 - asked > period_ns_)) continue;
+            const std::uint64_t entry = last_entry_[c].load(std::memory_order_relaxed);
+            if (entry < oldest || (entry == oldest && c < chosen)) {
+                chosen = c;
+                oldest = entry;
+            }
+        }
+        return chosen == core;
+    }
+
     std::atomic<bool> running_{false};
     std::atomic<std::uint64_t> skipped_{0};
+    std::uint64_t period_ns_ = 0;
+    std::array<std::atomic<std::uint64_t>, kCores> last_ask_{};
+    std::array<std::atomic<std::uint64_t>, kCores> last_entry_{};
 };
 
 struct CheckpointerConfig {
@@ -335,14 +392,44 @@ public:
     // shutdown).
     Status RunToCompletion();
 
-    // **The cadence's one body, core 0's and every peer's** (AT-S8): one
-    // attempt at `gate` (null runs ungated), then `RunToCompletion`, with the
-    // only log lines a timer-driven checkpoint has - it has no caller to
-    // return a status to, so a failure unlogged is a silently widening loss
-    // window. A skip returns OK. `core_id` names the core in those lines.
-    // Not fatal and it disarms nothing: pages a failed run did not flush
-    // stay dirty and the next tick retries them.
+    // **One synchronous attempt at `gate`** (null runs ungated), then
+    // `RunToCompletion`, with the run record and log lines a cadence run
+    // has. First-come at the gate. Shutdown's and the tests' caller since
+    // BI-S2; the cadence submits `RunTask` instead. A skip returns OK.
+    // `core_id` names the core in the log lines. Not fatal and it disarms
+    // nothing: pages a failed run did not flush stay dirty and the next run
+    // retries them.
     Status RunGated(CheckpointGate* gate, std::uint32_t core_id);
+
+    // ---- The cadence's run, as a task (BI-S2, BI-R1) --------------------
+    //
+    // **The cadence callback only submits.** A timer callback runs inline in
+    // the reactor's phase 2 (`scheduler.hpp`), so a run there held its core
+    // for its whole length, charged to no group. `SubmitRun` puts one
+    // `system`-group task on `scheduler` unless one is already in flight on
+    // this checkpointer, and returns. The task takes the gate, runs `Start`,
+    // then one `Step` per poll with a yield between, then `Complete`.
+    //
+    // **The gate's hold lives here, never in the task's frame** (BI-R4): a
+    // frame parked on a stopped reactor is not resumed and is destroyed only
+    // with its scheduler, after the shutdown checkpoints - so a hold in it
+    // would make every core's shutdown checkpoint skip. `Abandon` releases
+    // it. Across a yield the task holds nothing else (BI-R3): every page,
+    // latch and claim is taken and given back inside one synchronous call.
+    void SubmitRun(sched::Scheduler& scheduler, CheckpointGate* gate, std::uint32_t core_id);
+
+    // A run task is queued or parked on this checkpointer.
+    bool run_in_flight() const noexcept { return task_in_flight_; }
+
+    // **Shutdown's first act, for every core, before any shutdown checkpoint**
+    // (BI-R4): releases a parked run's gate hold and drops its snapshot and
+    // cursor, logging nothing - what a crash mid-run leaves. The shutdown
+    // checkpoint then starts fresh, so its redo start is its own
+    // `CHECKPOINT_BEGIN`; resuming the parked snapshot would publish an old
+    // recLSN under a new `checkpoint_lsn`, the record shape the assertion
+    // floor's defect needs (`known-gaps.md`). The parked frame, if any, is
+    // never resumed. Called with the core's reactor stopped and joined.
+    void Abandon() noexcept;
 
 private:
     Status LogBegin(std::span<const CheckpointActiveTxn> active_txns,
@@ -365,6 +452,18 @@ private:
     // `sched/checkpoint_census.hpp`), so a direct caller - mount, a test -
     // records nothing.
     CheckpointRunReport* run_report_ = nullptr;
+
+    // The run task's body, and what it keeps outside its frame (BI-R4).
+    sched::Coro RunTask(CheckpointGate* gate, std::uint32_t core_id, std::uint64_t generation);
+    Status FinishTask(std::uint32_t core_id, const Status& ran);
+    void LogSkip(std::uint32_t core_id) const;
+    bool task_in_flight_ = false;
+    // Moved by `Abandon`, so a frame of an abandoned run that is ever polled
+    // returns without touching this checkpointer.
+    std::uint64_t task_generation_ = 0;
+    std::uint32_t task_core_ = 0;
+    std::optional<CheckpointGate::Hold> task_hold_;
+    CheckpointRunReport task_report_;
 
     WalManager& wal_;
     CheckpointTarget& target_;

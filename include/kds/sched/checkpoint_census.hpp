@@ -38,7 +38,7 @@ enum class CheckpointPhase : std::uint8_t {
     kLogGateBatch,      // `AwaitWalGate`'s `EnsureDurable` for a batch
     kLogGateRun,        // `WriteBack`'s per-run `EnsureDurable`
     kPageWrite,         // a device page write or run write
-    kMapWrite,          // `FlushMaps` after a step's pages
+    kMapWrite,          // a step's `FlushMaps`; none since BI-S2 (BI-Q12), kept so A and B read alike
     kClaimWait,         // waiting out another writeback's claim
     kDataSync,          // a step's data-file `fsync`
     kEndWait,           // `CHECKPOINT_END`'s `EnsureDurable`

@@ -588,6 +588,7 @@ otherwise.
 | BI-Q9 | **BI-S1's premise gate, and `pages_per_step`.** BI stops for a ruling when either:<br>(i) no cell shows a run holding its reactor over 10 ms in one iteration; or<br>(ii) the per-phase split puts one step's page writes (64 pages, which W1 and W2 do not move) over 10 ms.<br>`pages_per_step` stays 64 unless (ii) holds, in which case its new value is part of the ruling | process | As written. (i) is BA's P12 bar. (ii) says the decisions would not reach the stall at 64 pages a step || As written: adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone) |
 | BI-Q10 | **The bar for BI-S5**, with A = BI-S1's instrumented commit and B = the close:<br>(i) the longest reactor iteration inside a run under 10 ms in every cell, the publish included;<br>(ii) the same-core probe's p99 inside runs within 2× its p99 outside;<br>(iii) the OLTP overhead A/B within its own run-to-run noise;<br>(iv) run length, per-core and instance-wide anchor gaps, and `D`'s lag reported for A and B, with no bar | measurement | As written. (iv) has no bar because W1 accepts longer runs; it is reported so that cost can be seen || As written: adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone) |
 | BI-Q11 | **The measurement** (§5.2), at BI's close, per `CLAUDE.md`'s Session Workflow step 3 | process | As written || As written: adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone) |
+| BI-Q12 | **A checkpoint step's map write** (surfaced at BI-S2). `[source-read]` A step's `FlushPages` wrote every dirty free-map region after its own pages (`device_page_store.cpp`, `FlushMaps`), and those regions carry the bit of every page allocated so far, snapshot pages a later step has not reached among them. `[measured]` BI-S2's sim cell (a run abandoned after one step, then a crash) found it on committed seed 1, `--mode crash --ops 1500 --iterations 3`: a Waystone page (type 9, created unlogged, recLSN 0) left allocated and all zero after recovery, which no redo re-creates. A logged page is re-created by its `PAGE_INIT`. The shape is live before BI for any crash between two steps; BI-R1 lengthens the window from one call to the whole run.<br>(a) A step writes no map; the publish's whole-store `Flush` writes the maps after every dirty page. A step's page then reaches the device ahead of its bit, the state every eviction writeback already leaves and recovery's floor and redo already answer.<br>(b) A step writes the maps only once no snapshot page is left unwritten, i.e. at its last step.<br>(c) Unchanged | design | (a). (b) still writes the bit of a page allocated after the snapshot whose bytes are not out, which is the same hazard by another door; (a) removes the only writer of maps that runs ahead of its pages, and adds no state the engine does not already reach. (c) leaves the sim cell red | (a): adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone), written into the order at BI-S2 |
 
 ## 5. Measurement
 
@@ -696,3 +697,56 @@ about 100 citations and found about 95 right. Applied, in the text above:
 - **Merging BI-Q8 into BI-R1.** The rule states the reading, and the item
   asks the operator to confirm it. That is the house shape, in which §0,
   §2 and §4 each state a rule once.
+
+### BI-S1 — built 2026-10-11
+
+Built on `worktree-bi-checkpoint-off-the-reactor` at `55ee8370`
+(`v2.7.0-779-g55ee8370`): the run record and its phases
+(`include/kds/sched/checkpoint_census.hpp`), per-step holds for BI-Q9 (ii),
+per-reactor iteration holds split inside/outside a run, one Info line per
+run, `SHOW META`'s `checkpoint_*` and `sched_hold_*` fields, and
+`tools/bi_checkpoint_stall.py` (§5.1's driver). BA's checkpoint tally is fed
+from the record (BI-Q1 (a)). No behaviour change. Suite 3511/3511 (Debug).
+**Review** (`critics-developer`): fixed the driver's nearest-rank
+percentile (Python's banker's rounding put p99 of 1..100 at 100), a refused
+`Start` counted outside a run, a stale comment; applied the per-step max (the
+per-occurrence max could not answer BI-Q9 (ii)), BA's timer fed from the
+record, the slot slimmed (`runs` = `run_edges / 2`), the header moved from
+`base/` to `sched/` (it includes the injected clock), a sink-leak cell and a
+publish-phase cell, a `resumed` flag. **Declined**: folding the "anchor
+published" Info line into the run line, because mount's completion
+checkpoint logs it with no run line; one formatting helper for the phase
+list, because the two C++ printers write different formats (the driver's
+copy was removed: it reads the names off the line). The measurement is
+recorded with BI-S5's, below, under the binary archived at
+`/home/cdkbs/bench-runs/bi-s1-v2.7.0-779-g55ee8370/`.
+
+### BI-S2 — built 2026-10-11
+
+The cadence callback submits a `system` task (`Checkpointer::SubmitRun`),
+which takes the gate and runs `Start`, one `Step` per poll and `Complete`,
+a yield after each; the hold lives in the checkpointer; shutdown abandons
+every core's run, core 0's included, before the first shutdown checkpoint,
+and each shutdown checkpoint starts fresh. The gate rotates cadence
+attempts (BI-Q7 (a)); an attempt naming no core is first-come. The sim
+abandons a run after one step half a period after each cadence checkpoint.
+**What the sim found**, now BI-Q12: a step's map write ran ahead of its
+pages, so a crash between steps left an unlogged Waystone page allocated
+and never written (committed seed 1, `--mode crash`). A step writes no map
+now. Cells: `tests/checkpoint_task_test.cpp` (seven, and four rotation
+cells), `CoreRuntimeTest.ACadenceRunIsASystemTaskNotATimerCallback`.
+**Mutations**, each repeated three times, all killed: `RunGated` in
+`SubmitRun` (seven cells) and `Checkpoint()` in the peer's timer lambda (the
+cadence cell); the in-flight check removed (the second-tick cell, by a
+segfault: the second task's `EndRun` dereferences a cleared record); the
+hold surviving `Abandon` and `Abandon` keeping the snapshot (the two
+shutdown cells). Suite 3524/3524 (Debug); sim sweep 180/180 with 1,728
+abandoned runs. **Review** (`critics-developer`): fixed the rotation's
+unsigned wrap when another core's ask is stamped after this core's reading;
+applied a `RunGated` guard against a task in flight, the cadence cell, three
+rotation cells, the sim's assertion source, `kCores` from the census, the
+failure logged once (the task's line; a synchronous caller logs its own).
+**Not covered by a cell**: `Expeditor::RunUntilStopped`'s abandon-first
+order with a run parked at stop; the unit cell pins the checkpointer's half
+and BI-S5's measurement reads the shutdown lines of every stop. Overhead not
+measured; measured at the milestone's close.
