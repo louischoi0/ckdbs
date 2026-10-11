@@ -948,21 +948,28 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 
 Verified at `e5a7e1b7` (BA's close,
 `bench/v3.0.0/results-ba-s17-census-v2.7.0-736-ge5a7e1b7.md` and
-`results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`). Owned by `docs/spec/wal.md`
+`results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`; diagnosed in
+`results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`). Owned by `docs/spec/wal.md`
 §11a and, for the checkpoint, BI (`workorder-bi-checkpoint-off-the-reactor.md`).
 
-- **A `relaxed` carve is slower since BA-S13.** Its median is 226-258 ms per
-  server life, against 20-46 ms at BA-S4. Under `group` and `strict` it
-  fell to 3.6-5.9 ms. The candidate cause is the carve's unconditional
-  data-file `fdatasync`, which under `relaxed` flushes every unsynced
-  page write before it. That is untested. BA-S13's exit, a carve under
-  10 ms, is not met.
-- **The checkpoint holds statements for up to a quarter-second.** At
-  10,000 rows, B's longest statement was 62-226 ms in 31 of 32 A/B runs,
-  against A's 18-22 ms. The census's checkpoint median rose from 46 to
-  92 ms, with a maximum of 1.5 s. Neither measurement separates "BA made
-  the checkpoint longer" from "BA moved work off the carve". The fix
-  waits on BI-Q1.
+- **A `relaxed` carve's longest stall is a device stall.** Its median is
+  226-258 ms per server life, against 20-46 ms at BA-S4; under `group` and
+  `strict` it fell to 3.6-5.9 ms. A carve's time is its data-file `fsync`
+  (median 3.2 ms; page 0's write is 13 µs), and the data file meets one
+  250-300 ms `fsync` stall about once a run at BA-S4 as at B. The counter
+  is a maximum over the server's life, so it reads that stall whenever it
+  lands in a carve. **It is not BA-S13's**: with BA-S13's persist reverted
+  the carve still reads 277-620 ms, and BA-S12 already reads 258-886 ms.
+  Carves inside the measured span were not compared, so whether they got
+  slower is unknown. BA-S13's exit, a carve under 10 ms, is not met.
+- **The checkpoint holds statements for up to a quarter-second, longer
+  since BA-S13.** At 10,000 rows, B's longest statement was 62-226 ms in 31
+  of 32 A/B runs, against A's 18-22 ms. The census's checkpoint median
+  rose from 46 to 92 ms, with a maximum of 1.5 s. BA-S13 moved the pool's
+  writeback from the carve, which synced the whole pool, to the
+  checkpoint: at `relaxed` `cores = 1` it reads 9.4-18.0 ms before BA-S13,
+  87-124 ms at B, and 13-19 ms at B with the carve's whole-pool sync
+  restored. The fix waits on BI-Q1.
 
 ## Decisions the revision has not taken
 

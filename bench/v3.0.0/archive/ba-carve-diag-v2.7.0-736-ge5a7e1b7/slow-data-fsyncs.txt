@@ -1,0 +1,14 @@
+out4-7fa2bd96-1    life= 40.4s slow data fsyncs (offset s, ms): 0.5/469, 5.6/96, 15.4/62, 35.7/300
+out4-7fa2bd96-2    life= 41.1s slow data fsyncs (offset s, ms): 4.8/293, 5.3/599, 5.9/152, 6.7/61, 10.1/236, 12.3/141, 13.0/244, 14.1/64, 20.9/262, 41.1/202
+out4-7fa2bd96-3    life= 40.5s slow data fsyncs (offset s, ms): 8.2/62, 8.4/52, 8.6/90
+out4-91a14db0-1    life= 40.4s slow data fsyncs (offset s, ms): 11.9/222, 12.4/163
+out4-91a14db0-2    life= 41.1s slow data fsyncs (offset s, ms): 0.3/364, 1.0/68, 6.9/191, 14.0/143
+out4-91a14db0-3    life= 40.4s slow data fsyncs (offset s, ms): 40.4/109
+out5-66bb11b2-1    life= 40.6s slow data fsyncs (offset s, ms): 
+out5-66bb11b2-2    life= 40.5s slow data fsyncs (offset s, ms): 0.6/297
+out5-66bb11b2-3    life= 40.5s slow data fsyncs (offset s, ms): 20.5/274
+out5-66bb11b2-4    life= 40.4s slow data fsyncs (offset s, ms): 20.6/298
+out5-B-1           life= 43.0s slow data fsyncs (offset s, ms): 2.3/482, 3.1/142, 8.9/643, 9.8/187, 10.1/93, 13.5/393, 13.9/344, 14.2/558, 15.0/96, 18.0/399, 18.6/298, 23.1/98, 28.2/97
+out5-B-2           life= 40.4s slow data fsyncs (offset s, ms): 4.8/290
+out5-B-3           life= 40.6s slow data fsyncs (offset s, ms): 0.7/242
+out5-B-4           life= 41.3s slow data fsyncs (offset s, ms): 1.1/184, 7.2/435, 21.6/124
