@@ -639,7 +639,7 @@ void PropagateEqualities(const Scope& scope, std::vector<StepPredicate>& predica
 
 // A non-negative integer literal, as a pk bound. Anything else - a string,
 // a NULL, a declared `$param`, a negative number - is not a pk value
-// (invariant 7: ids are zero-extended 40-bit), so it cannot bound a range.
+// (invariant 7: ids are zero-extended, kKeystoneIdBits wide), so it cannot bound a range.
 std::optional<std::uint64_t> PkBound(const Operand& operand) {
     if (operand.kind != OperandKind::kLiteral) return std::nullopt;
     if (operand.literal.type != parser::ValueType::kInt) return std::nullopt;
@@ -1879,7 +1879,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
 
             if (candidate->kind == OperandKind::kLiteral) {
                 // A negative literal cannot be a pk: ids are zero-extended
-                // 40-bit values (invariant 7), so this equality can never
+                // unsigned values (invariant 7), so this equality can never
                 // hold. Left as a scan with the residual intact, which
                 // returns the correct empty answer rather than probing an
                 // enormous unsigned key.

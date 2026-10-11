@@ -7,6 +7,7 @@
 #include "kds/base/common.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/stats/waystone.hpp"
+#include "kds/storage/keystone.hpp"
 
 // A recorded trail, indexed for replay (docs/inflight/in-progress/waystone-workplan.md P11/P13).
 //
@@ -120,12 +121,15 @@ public:
     std::size_t size() const noexcept { return by_key_.size(); }
 
 private:
-    // `(step_id, pk)` packed into one key. The pk is a 40-bit Keystone id
-    // (invariant 5) and step ids are 16-bit in the entry format, so the
-    // pair fits a uint64 with room to spare - which keeps the map's hash a
-    // single integer rather than a pair.
-    static constexpr std::uint64_t PackKey(std::uint32_t step_id, std::uint64_t pk) noexcept {
-        return (static_cast<std::uint64_t>(step_id) << 40) | (pk & 0xFF'FFFF'FFFFull);
+    // `(step_id, pk)` packed into one key: the pk in the id's bits, the step
+    // id above them. Step ids are 16-bit in the entry format and the id is
+    // kKeystoneIdBits wide (invariant 5), so the pair fits a uint64 exactly
+    // - which keeps the map's hash a single integer rather than a pair.
+    // `Find` answers null for a step id the entry format cannot hold, so
+    // nothing wider than 16 bits reaches this (BK-R3).
+    static_assert(16 + kKeystoneIdBits <= 64);
+    static constexpr std::uint64_t PackKey(std::uint16_t step_id, std::uint64_t pk) noexcept {
+        return (static_cast<std::uint64_t>(step_id) << kKeystoneIdBits) | (pk & kMaxKeystoneId);
     }
 
     std::unordered_map<std::uint64_t, TrailLocation> by_key_;

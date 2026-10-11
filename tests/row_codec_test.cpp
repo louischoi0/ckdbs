@@ -74,7 +74,7 @@ TEST(RowCodecKeystoneTest, PayloadStartsWithTheKeystoneWord) {
     EXPECT_EQ(encoded.value().size(), kKeystoneWordSize + storage::kDefaultInlineCellWidth);
     EXPECT_EQ(encoded.value().size(), LayoutFor(TwoColumnSchema()).row_size);
 
-    auto id = RowKeystoneId(encoded.value());
+    auto id = KeystoneIdOfPayload(encoded.value());
     ASSERT_TRUE(id.ok());
     EXPECT_EQ(id.value(), 7u);
 }
@@ -101,7 +101,7 @@ TEST(RowCodecKeystoneTest, ValueListCoversEveryColumnButThePrimaryKey) {
     EXPECT_EQ(missing.status().code(), StatusCode::kInvalidArgument);
 }
 
-TEST(RowCodecKeystoneTest, AnIdBeyondFortyBitsIsRefused) {
+TEST(RowCodecKeystoneTest, AnIdBeyondTheIdSpaceIsRefused) {
     auto out = EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), kMaxKeystoneId + 1, {Str("x")});
     EXPECT_FALSE(out.ok());
     EXPECT_EQ(out.status().code(), StatusCode::kInvalidArgument);
@@ -122,7 +122,7 @@ TEST(RowCodecKeystoneTest, DistinctIdsProduceDistinctPayloads) {
 
 TEST(RowCodecKeystoneTest, APayloadTooShortForTheWordIsCorruption) {
     std::vector<std::byte> stub(4, std::byte{0});
-    auto id = RowKeystoneId(stub);
+    auto id = KeystoneIdOfPayload(stub);
     EXPECT_FALSE(id.ok());
     EXPECT_EQ(id.status().code(), StatusCode::kCorruption);
 }
@@ -157,7 +157,7 @@ TEST(RowCodecKeystoneTest, EveryIntegerWidthIsAcceptedAsAPrimaryKey) {
 }
 
 TEST(RowCodecKeystoneTest, ThePrimaryKeyIsNotConstrainedByItsDeclaredWidth) {
-    // The id lives in the 40-bit Keystone field, not in an int8 column, so
+    // The id lives in the Keystone field, not in an int8 column, so
     // declaring a narrow pk type does not cap the sequence. The declared
     // type is display metadata (DESCRIBE), not the storage.
     catalog::Schema schema;

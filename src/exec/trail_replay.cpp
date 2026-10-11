@@ -73,7 +73,10 @@ void TrailReplay::Build(const StepChain& chain,
 }
 
 const TrailLocation* TrailReplay::Find(std::uint32_t step_id, std::uint64_t pk) const noexcept {
-    auto found = by_key_.find(PackKey(step_id, pk));
+    // BK-R3: the entry format holds 16-bit step ids, so no wider one was
+    // ever recorded - a miss, never a narrowing onto another step's key.
+    if (step_id > 0xFFFF) return nullptr;
+    auto found = by_key_.find(PackKey(static_cast<std::uint16_t>(step_id), pk));
     return found == by_key_.end() ? nullptr : &found->second;
 }
 

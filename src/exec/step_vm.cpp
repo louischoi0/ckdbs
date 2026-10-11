@@ -140,7 +140,7 @@ StatusOr<std::uint64_t> KeyFromOperand(const Operand& operand, const ChainFrame&
     }
     if (Status s = RefuseUnboundParam(*value); !s.ok()) return s;
     if (value->type != parser::ValueType::kInt || value->int_val < 0) {
-        // Not a pk-shaped value. Ids are zero-extended 40-bit (invariant
+        // Not a pk-shaped value. Ids are zero-extended and unsigned (invariant
         // 7), so this cannot match anything - reported so the caller can
         // treat it as a miss rather than probing a wrapped key.
         return Status::NotFound("probe key is not a non-negative integer");
@@ -2101,20 +2101,20 @@ private:
     //
     // **The pk comes out of the Keystone word, not out of a column
     // decode.** The id sits at a fixed offset precisely so finding it
-    // costs no schema walk (`RowKeystoneId`, row_codec.hpp), and an entry
+    // costs no schema walk (`KeystoneIdOfPayload`, keystone.hpp), and an entry
     // wants the id - not an AstValue holding it. The decode this replaced
     // measured **11.6 ns of the build's 83.7 ns/row constant** on the
     // walked join at 10,000 inner rows (the JB5 gate's follow-up), which
     // is what the recording walk paid per recorded row too. It also drops
     // a signed-to-unsigned guard that could only ever have hidden a
-    // corrupt decode: a Keystone id is 40 bits and unsigned by
+    // corrupt decode: a Keystone id is kKeystoneIdBits wide and unsigned by
     // construction.
     //
     // The epoch was captured under this row's span - the hint names the
     // page as it was at observation (R4).
     StatusOr<stats::CabinEntry> EntryForRow(PageId page_id, std::uint16_t slot,
                                             std::uint64_t observed_epoch) {
-        auto pk = RowKeystoneId(version_);
+        auto pk = KeystoneIdOfPayload(version_);
         if (!pk.ok()) return pk.status();
         stats::CabinEntry entry;
         entry.pk = pk.value();

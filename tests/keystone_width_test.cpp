@@ -8,7 +8,6 @@
 #include <gtest/gtest.h>
 
 #include "kds/storage/btree/btree_page.hpp"
-#include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
@@ -21,7 +20,8 @@
 // the tree refuses the value, the old layout where it computes one - and
 // BK-S2 turns them green. The trail cells are in waystone_replay_test.cpp
 // and the named-key cell in sorted_leaf_named_keys_test.cpp, beside the
-// harnesses they need.
+// harnesses they need; the Cabin bound entry's is bound_cabin_test.cpp's
+// round trip, at kMaxKeystoneId since BK-S2.
 
 namespace kds {
 namespace {
@@ -73,23 +73,6 @@ TEST(KeystoneWidthTest, FlagsIsByteSixAndReservedByteSeven) {
     auto id = KeystoneIdOfPayload(bytes);
     ASSERT_TRUE(id.ok()) << id.status().message();
     EXPECT_EQ(id.value(), 7u);
-}
-
-TEST(KeystoneWidthTest, ACabinBoundEntryKeepsTheUpperEightBitsOfItsPk) {
-    // Flags 0x3 beside a pk whose bits 40-47 are 0x01: the half move that
-    // widens `kMaxEntryPk` and leaves the flags shift at 40 ORs the flags
-    // into the pk's upper byte, so pk and flags are both compared. The other
-    // fields are `bound_cabin_test.cpp`'s round trip's.
-    storage::cabin::BoundCabinEntry in;
-    in.pk = kBit40 + 1;
-    in.flags = storage::cabin::kEntryReserved | storage::cabin::kEntryHintValid;
-
-    std::array<std::byte, storage::cabin::kEntryBytes> buf{};
-    const Status s = storage::cabin::EncodeEntry(in, buf);
-    ASSERT_TRUE(s.ok()) << s.message();
-    const storage::cabin::BoundCabinEntry out = storage::cabin::DecodeEntry(buf);
-    EXPECT_EQ(out.pk, in.pk);
-    EXPECT_EQ(out.flags, in.flags);
 }
 
 TEST(KeystoneWidthTest, APageInitInTheUpperEightBitsRoundTripsAndFormatsItsLeaf) {

@@ -19,7 +19,8 @@
 //                   walks alike).
 //   kBtreeStructure separators: an internal entry's sep_key equals its
 //                   child page's min_key, entries ascend, levels descend.
-//   kKeystone       invariants 5 and 7: id <= 2^40-1, reserved bits zero.
+//   kKeystone       invariant 5: reserved bits zero (the decode masks the id,
+//                   so "id <= kMaxKeystoneId" is not a check that can fire).
 //   kRowSize        invariant 13: payload length equals the relation's
 //                   RowLayout row_size, exactly.
 //   kTrxId          a stored trx_id at or above the superblock's persisted

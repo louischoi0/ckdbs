@@ -305,9 +305,11 @@ TEST_F(SimIntegrityCorruption, AValidInstancePassesWithCoverage) {
 TEST_F(SimIntegrityCorruption, NonzeroKeystoneReservedBitsAreAKeystoneFinding) {
     MakeTables();
     const InsertedAt at = Insert("h", 7, "short");
-    // reserved is the top 16 bits of the word: bytes 6-7 little-endian.
+    // reserved is the top byte of the word (BK-R1: `id:48 | flags:8 |
+    // reserved:8`), byte 7 little-endian; byte 6 is flags, which the check
+    // does not judge.
     std::byte* keystone = TupleBase(at) + heap::kTupleHeaderOnDiskSize;
-    keystone[6] = std::byte{0xAB};
+    keystone[7] = std::byte{0xAB};
     ExpectOnly(Check(), CheckKind::kKeystone);
 }
 

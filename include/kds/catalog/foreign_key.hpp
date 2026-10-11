@@ -42,7 +42,7 @@ namespace kds::catalog {
 //                    child's identity, not a field of it (invariant 11), so
 //                    a reference stored *in* it would make one row's
 //                    identity a statement about another row; or a column
-//                    whose declared type cannot hold a 40-bit Keystone id,
+//                    whose declared type cannot hold a Keystone id,
 //                    which is a reference that can never be written.
 //   Unsupported      a **heap** parent. F1 puts the reference on the
 //                    parent's pk, and a heap relation has no pk index: a

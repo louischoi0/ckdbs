@@ -39,14 +39,6 @@ void StoreLe64(std::byte* out, std::uint64_t v) {
     }
 }
 
-std::uint64_t LoadLe64(const std::byte* in) {
-    std::uint64_t v = 0;
-    for (int i = 0; i < 8; ++i) {
-        v |= static_cast<std::uint64_t>(in[i]) << (8 * i);
-    }
-    return v;
-}
-
 void PutLE(std::span<std::byte> out, std::uint64_t v, int width) {
     for (int i = 0; i < width; ++i) {
         out[i] = static_cast<std::byte>((v >> (8 * i)) & 0xFF);
@@ -908,13 +900,6 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
     return out;
 }
 
-StatusOr<std::uint64_t> RowKeystoneId(std::span<const std::byte> payload) {
-    if (payload.size() < kKeystoneWordSize) {
-        return Status::Corruption("tuple payload is shorter than its Keystone word");
-    }
-    return Keystone::Decode(LoadLe64(payload.data())).id;
-}
-
 namespace {
 
 // The shared front half of both decoders: everything that has to be true
@@ -968,7 +953,7 @@ void SetNullSlot(parser::AstValue& out) {
 
 // Column 0 is not in the body: it lives in the Keystone word.
 Status DecodeKeystoneInto(std::span<const std::byte> payload, parser::AstValue& out) {
-    auto id = RowKeystoneId(payload);
+    auto id = KeystoneIdOfPayload(payload);
     if (!id.ok()) return id.status();
     out.type = parser::ValueType::kInt;
     out.int_val = static_cast<std::int64_t>(id.value());
@@ -1039,14 +1024,14 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     // (CIP/OPT-004-decoderowinto-preconditions/proposal.md).
     if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
 
-    auto id = RowKeystoneId(payload);
+    auto id = KeystoneIdOfPayload(payload);
     if (!id.ok()) return id.status();
 
     // The pk is not in the body: it lives in the Keystone word, which is
     // why the loop below starts at column 1.
     out[0].type = parser::ValueType::kInt;
     out[0].int_val = static_cast<std::int64_t>(id.value());
-    // Same rule as every other integer: a 40-bit id fits int_val exactly, so
+    // Same rule as every other integer: a Keystone id fits int_val exactly, so
     // the text would be a string conversion per row for nothing.
     out[0].raw_int_text.clear();
     out[0].str_val.clear();

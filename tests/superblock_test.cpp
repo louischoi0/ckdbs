@@ -267,6 +267,27 @@ TEST(SuperBlockTest, DecodeRefusesAnyVersionButThisBuilds) {
     }
 }
 
+// BK-R4: a version-21 volume's Cabin bound entries carry their flags in the
+// bits that are the id's since BK, so it does not mount
+// (`instructions/v3.0.0/workorder-bk-keystone-48.md` §1.7). Spelt rather
+// than left to the loop above, whose `- 1` stops meaning 21 at the next bump.
+TEST(SuperBlockTest, AVersion21VolumeDoesNotMount) {
+    constexpr std::uint32_t kBeforeTheWiderId = 21;
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    std::memcpy(buf.data() + kSuperBlockBodyOffset + kVersionOffset, &kBeforeTheWiderId,
+                sizeof(kBeforeTheWiderId));
+
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+    for (const std::uint32_t named : {kBeforeTheWiderId, kSuperBlockVersion}) {
+        EXPECT_NE(decoded.status().message().find(std::to_string(named)), std::string::npos)
+            << decoded.status().message();
+    }
+}
+
 // AY-Q6 (C): a version-18 volume's log may hold an ASSERT_SNAPSHOT with no
 // chunk count, which this build does not read (`raft-marks-2026-09-30.md`
 // §13). Named rather than left to the loop above, whose `- 1` would stop

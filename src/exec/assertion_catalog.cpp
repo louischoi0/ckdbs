@@ -69,7 +69,7 @@ struct StagedRow {
 
 AssertionDef ToAssertionDef(const std::vector<parser::AstValue>& values) {
     AssertionDef def{};
-    // The pk arrives as a plain signed decode; ids are 40-bit, so it cannot
+    // The pk arrives as a plain signed decode; ids fit int64, so it cannot
     // be negative and the cast is total.
     def.id = static_cast<std::uint64_t>(values[kColId].int_val);
     def.target_oid = static_cast<catalog::Oid>(values[kColTargetOid].int_val);

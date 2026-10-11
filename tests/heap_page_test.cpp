@@ -1,4 +1,5 @@
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/keystone.hpp"
 
 #include <array>
 #include <cstring>
@@ -53,9 +54,9 @@ TEST(HeapPageTest, CreateEmptyInitializesHeader) {
     EXPECT_TRUE(storage::ValidatePageHeader(page, PageType::kHeap).ok());
 }
 
-TEST(HeapPageTest, CreateEmptyRejectsMinKeyBeyond40Bits) {
+TEST(HeapPageTest, CreateEmptyRejectsMinKeyPastTheIdSpace) {
     PageBuf buf{};
-    auto view = PageView::CreateEmpty(AsSpan(buf), (std::uint64_t{1} << 40));
+    auto view = PageView::CreateEmpty(AsSpan(buf), kIdSpaceEnd);
     EXPECT_FALSE(view.ok());
     EXPECT_EQ(view.status().code(), StatusCode::kInvalidArgument);
 }

@@ -60,7 +60,10 @@ std::string Key(std::vector<parser::AstValue> values) { return EncodeGroupKey(va
 
 TEST(BoundCabinEntryTest, ThirtyTwoBytesRoundTripEveryField) {
     BoundCabinEntry in;
-    in.pk = 0xFFFFFFFFFFULL;  // the largest 40-bit id
+    // Every id bit set beside flags 0x3: with the flags shift left at 40
+    // (BK-R2's half move) the flags land inside the pk's bits and decode as
+    // something other than 0x3, which the flags compare catches.
+    in.pk = kMaxKeystoneId;
     in.flags = kEntryReserved | kEntryHintValid;
     in.page_id = 4242;
     in.page_epoch = 7;
@@ -81,18 +84,19 @@ TEST(BoundCabinEntryTest, ThirtyTwoBytesRoundTripEveryField) {
     EXPECT_TRUE(out.hint_valid());
 }
 
-TEST(BoundCabinEntryTest, APkPastFortyBitsIsRefusedRatherThanTruncated) {
+TEST(BoundCabinEntryTest, APkPastTheIdSpaceIsRefusedRatherThanTruncated) {
     // A truncated pk is a name that means a *different* row, which is exactly
     // the mis-attribution K1 exists to make impossible. Refusing is the only
     // safe answer; narrowing would be silent corruption of an identity.
     BoundCabinEntry in;
-    in.pk = (std::uint64_t{1} << 40);  // one past the range
+    in.pk = kIdSpaceEnd;  // one past the range
 
     std::array<std::byte, kEntryBytes> buf{};
     Status s = storage::cabin::EncodeEntry(in, buf);
     EXPECT_FALSE(s.ok());
     EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
-    EXPECT_NE(s.message().find("40-bit"), std::string::npos) << s.message();
+    EXPECT_NE(s.message().find(std::to_string(kMaxKeystoneId)), std::string::npos)
+        << s.message();
 }
 
 TEST(BoundCabinEntryTest, AnEntryWithNoHintIsStillAValidEntry) {

@@ -119,8 +119,8 @@ static_assert(sizeof(WaystoneHeader) == kWaystoneHeaderSize);
 // One Keystone the recorded execution touched, and where it was found.
 
 struct WaystoneEntry {
-    // The tuple's Keystone id, zero-extended (invariant 7: upper 24 bits
-    // are 0). Never 5-byte-packed.
+    // The tuple's Keystone id, zero-extended (invariant 7: the bits above
+    // kKeystoneIdBits are 0). Never packed narrower than its eight bytes.
     std::uint64_t pk;
 
     // **The field that makes a cross-relation trail possible.** One page

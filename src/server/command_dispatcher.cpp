@@ -2065,7 +2065,7 @@ DispatchOutcome CommandDispatcher::HandleShowBudget() {
     }
 
     // `capacity` belongs to the summary rather than to every row: it is the
-    // same constant for every relation (K4's per-relation 2^40), and
+    // same constant for every relation (K4's per-relation id space), and
     // repeating it once per line would be the widest column in the listing
     // carrying the least information.
     std::ostringstream os;
@@ -5601,7 +5601,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // **Exhausted** (BD-R5 2., `instructions/v3.0.0/workorder-bd-sorted-
         // leaf-named-keys.md`): a key outside `[kFirstRowId, kMaxKeystoneId]`
         // is one of the two reasons a named key is refused, `OutOfRange` with
-        // its byte - zero, a negative number, one above the 40-bit space, or
+        // its byte - zero, a negative number, one above kMaxKeystoneId, or
         // a literal the lexer wrapped past 64 bits. Judged from the literal's
         // own digits (`raw_int_text`), never from `int_val`, which a wrap
         // makes a different number: `2^64 + 5` must not land as key 5.
@@ -6350,7 +6350,7 @@ std::optional<std::uint64_t> CommandDispatcher::PkLiteral(const catalog::TableAc
     // A literal past int64 wrapped in the lexer, so `int_val` is not its
     // value: no window, rather than the one its wrap names (BH-S5's review).
     if (parser::IntLiteralWrapped(cond.val)) return std::nullopt;
-    // Negative ids do not exist (invariant 6 zero-extends the 40-bit id),
+    // Negative ids do not exist (invariant 7 zero-extends the id),
     // so a negative literal is a guaranteed miss - and casting it to
     // uint64 would probe an enormous pk instead.
     if (cond.val.int_val < 0) return std::nullopt;
@@ -8177,7 +8177,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // memcpy of a schema-constant row size per scanned row and no
         // allocation after the first.
         payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
-        auto id = exec::RowKeystoneId(payload_copy);
+        auto id = KeystoneIdOfPayload(payload_copy);
         if (!id.ok()) return id.status();
         const std::uint64_t trx_id = tuple.value().trx_id;
         const std::uint64_t undo_ptr = tuple.value().undo_ptr;
@@ -9819,7 +9819,9 @@ Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Co
             if (parser::IntLiteralWrapped(*v)) {
                 return Status::InvalidArgument(
                     "primary key literal " + v->raw_int_text +
-                    " is outside the Keystone id space [1, 1099511627775] (byte " +
+                    " is outside the Keystone id space [" +
+                    std::to_string(catalog::kFirstRowId) + ", " + std::to_string(kMaxKeystoneId) +
+                    "] (byte " +
                     std::to_string(v->byte_offset) + ")");
             }
             if (v->type == parser::ValueType::kInt && v->int_val < 0) {
@@ -9964,7 +9966,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
                 }
                 return tuple.status();
             }
-            auto pk = exec::RowKeystoneId(tuple.value().payload);
+            auto pk = KeystoneIdOfPayload(tuple.value().payload);
             if (!pk.ok()) return pk.status();
             if (pk.value() < lo) return storage::VisitControl::kContinue;
             if (pk.value() >= hi) return storage::VisitControl::kStop;
@@ -10117,7 +10119,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             return std::optional<std::uint64_t>{};
         }
         payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
-        auto id = exec::RowKeystoneId(payload_copy);
+        auto id = KeystoneIdOfPayload(payload_copy);
         if (!id.ok()) return id.status();
         if (trx_id_out != nullptr) *trx_id_out = tuple.value().trx_id;
         if (undo_ptr_out != nullptr) *undo_ptr_out = tuple.value().undo_ptr;

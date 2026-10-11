@@ -19,7 +19,7 @@
 //
 // BD-R5's claim, the one this file pins: a named key's `INSERT` is refused
 // because of its pk for exactly two reasons - a duplicate (`AlreadyExists`)
-// or a key outside `[1, 2^40 - 1]` (`OutOfRange`) - and each refusal names
+// or a key outside `[1, 2^48 - 1]` (`OutOfRange`) - and each refusal names
 // the pk token's byte. Everything else about the key is placed: below the
 // relation's mark, in any order, and a key a rollback freed (W8, W12).
 //
@@ -199,12 +199,12 @@ TEST_F(SortedLeafSqlTest, EveryRefusalANamedKeyGetsForItsPkIsDuplicateOrExhauste
         {"1601", StatusCode::kAlreadyExists},                // deleted: bound once (BD-R4)
         {"0", StatusCode::kOutOfRange},                      // R3
         {"-7", StatusCode::kOutOfRange},                     // R2
-        {"1099511627776", StatusCode::kOutOfRange},          // R4: 2^40
+        {"281474976710656", StatusCode::kOutOfRange},        // R4: 2^48
         {"9223372036854775808", StatusCode::kOutOfRange},    // 2^63, the lexer's overflow (R2)
         {"18446744073709551621", StatusCode::kOutOfRange},   // 2^64 + 5, placed as 5 today (§1.4)
         {"1", std::nullopt},                                 // below the mark, absent (L2, S5)
         {"1005", std::nullopt},                              // ...in a leaf with a right sibling (S3)
-        {"1099511627775", std::nullopt},                     // the top of the id space
+        {"281474976710655", std::nullopt},                   // the top of the id space
     };
     for (const Case& c : cases) {
         const DispatchOutcome out = Run(std::string("INSERT INTO t VALUES (") + c.key + ", 1)");

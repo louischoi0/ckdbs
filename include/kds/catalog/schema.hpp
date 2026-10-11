@@ -22,7 +22,7 @@ struct Schema {
 
 // True for the integer types a Keystone id can be declared as. Float,
 // decimal, bool, char and varchar are not among them: none can represent a
-// 40-bit id, and a pk that cannot hold its own value is a table no row can
+// Keystone id, and a pk that cannot hold its own value is a table no row can
 // be written to.
 bool IsIntegerTypeVal(std::uint32_t type_val) noexcept;
 

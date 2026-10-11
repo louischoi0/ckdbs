@@ -86,7 +86,7 @@ protected:
                                           -> StatusOr<storage::VisitControl> {
             auto tuple = page.ReadTuple(slot);
             if (tuple.ok() && !tuple.value().deleted) {
-                auto id = exec::RowKeystoneId(tuple.value().payload);
+                auto id = KeystoneIdOfPayload(tuple.value().payload);
                 if (id.ok()) out[id.value()] = {page_id, slot};
             }
             return storage::VisitControl::kContinue;

@@ -236,7 +236,7 @@ Status CheckKeystoneColumn(const catalog::Schema& schema);
 //
 // Fails with InvalidArgument if the schema has no usable Keystone column,
 // values.size() != schema.columns.size() - 1, `id` exceeds the Keystone
-// word's 40-bit range, any value is NULL, any int value doesn't fit its
+// word's id space, any value is NULL, any int value doesn't fit its
 // column's width, or a string value doesn't fit a fixed-width `char`
 // column; and with Unsupported for a varchar value too long to store
 // inline (see the file comment).
@@ -244,11 +244,6 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
                                             const catalog::RowLayout& layout, std::uint64_t id,
                                             const std::vector<parser::AstValue>& values,
                                             const VarHeapSink& varheap = {});
-
-// Reads just the primary key out of a tuple payload, without decoding the
-// body. This is what a duplicate-key scan compares, and it is why the pk
-// lives in a fixed-offset word: finding it costs no schema walk.
-StatusOr<std::uint64_t> RowKeystoneId(std::span<const std::byte> payload);
 
 // Decodes a tuple payload back into one value per `schema.columns` entry,
 // pk first, in the same order EncodeRow() wrote them. Fails with

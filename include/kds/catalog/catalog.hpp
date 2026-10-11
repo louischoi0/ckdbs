@@ -77,7 +77,7 @@ class WalManager;
 namespace kds::catalog {
 
 // **Can this caller-named key be stored at all?** Within [kFirstRowId,
-// kMaxKeystoneId], since 0 means "unset" and the Keystone field is 40 bits
+// kMaxKeystoneId], since 0 means "unset" and the Keystone field is kKeystoneIdBits
 // wide; `OutOfRange` otherwise - BD-R5's "exhausted", one of the two reasons
 // a named key is refused (`instructions/v3.0.0/workorder-bd-sorted-leaf-
 // named-keys.md`). The insert path judges its literal before it reaches
@@ -635,7 +635,7 @@ public:
     // T3's contiguous id range (docs/inflight/in-progress/workplan-t3.md T3-3): one catalog
     // write bumps next_id by `count` and returns the first id - issuance
     // inside the range is monotone by construction. Refused whole when it
-    // would cross the 40-bit ceiling; an aborted statement burns the whole
+    // would cross kMaxKeystoneId; an aborted statement burns the whole
     // range (K3: a burned id is free). Never cached, like every sequence.
     StatusOr<std::uint64_t> AllocateRowIdRange(Oid table_oid, std::uint64_t count);
 
@@ -682,7 +682,7 @@ public:
     // insert after a successful allocation burns one.
     //
     // Fails with NotFound if no sys.tables row names `table_oid`, and with
-    // OutOfRange once the relation has issued its 40-bit id space -
+    // OutOfRange once the relation has issued its whole id space -
     // reclamation policy is an open decision, so exhaustion is reported
     // rather than wrapped.
     //
@@ -724,7 +724,7 @@ public:
     //
     // `next_id` is a ceiling on what has been *placed*, which is what makes
     // it the uniqueness proof for an id at or above it and what keeps K4's
-    // lifetime budget and the 40-bit exhaustion refusal truthful - DESCRIBE
+    // lifetime budget and the exhaustion refusal truthful - DESCRIBE
     // and SHOW BUDGET both read it. Advanced, never lowered, and persisted
     // before the caller places anything: a crash between here and the insert
     // leaves a ceiling that is too high (K3 calls a burned id free) rather
