@@ -108,8 +108,8 @@ ColumnRef { uint8 up; uint8 rel_slot; uint16 col_pos; }   // 4 bytes, no arena r
 
 This lives in the **step compiler**, not the parser — `Compile(AST) → StepChain` resolves names against the catalog and emits `ColumnRef`s. A compiled `StepChain` contains no identifier on any execute path; execution performs zero catalog name lookups.
 
-**I6 — Enforce the 40-bit pk range at the front door (invariant 7).**
-Any literal or parameter destined for a pk position is range-checked `< 2^40`, judged on the raw digit text rather than a signed decode, rejected with `InvalidArgument` and the exact position. Nothing downstream re-checks. A probe key taken from a producing row needs no check — it came out of a Keystone word and is in range by construction. Out-of-range pk literals fail at parse, out-of-range pk binds fail at BIND with the exact parameter index.
+**I6 — The pk's id space is enforced where a key is named (invariant 11).**
+A named `INSERT` key is checked against `[1, 2^48 − 1]` on its raw digit text rather than a signed decode, before anything is placed, and refused `OutOfRange` at the token's byte (BD-R5's "exhausted", `heap-and-tuple.md` §4.1); a bound parameter is the literal `C_BIND` substituted for it, judged the same way at execution. A `PURGE` window is clamped to the id space instead, and a pk literal in it that is negative or wraps past int64 is refused `InvalidArgument` (`heap-and-tuple.md` §4.1c). A probe key taken from a producing row needs no check — it came out of a Keystone word and is in range by construction.
 
 **I18 — The error codes this language requires.**
 `StatusCode::kUnsupported`, `kNotImplemented` and `kCardinalityViolation` exist (`include/kds/base/status.hpp`), each mapped to its own `wire::ErrorCategory` with `retryable = 0`; `kTxnConflict` remains the only retryable code. Every J2 form and every over-cardinality scalar returns its own code, never a generic `InvalidArgument`: a client cannot fix a cardinality violation by fixing its arguments.

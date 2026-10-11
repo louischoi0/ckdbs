@@ -8,10 +8,10 @@ phrase here is that section's rule. BD
 (`instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`) restated K1
 and K3 on 2026-10-07; BH (`instructions/v3.0.0/workorder-bh-purge-key.md`)
 gave K1 its one named exception, `PURGE`, on 2026-10-08
-(`heap-and-tuple.md` §4.1c).
-Depends on: Keystone super-column contract (40-bit id + 8-bit flags +
-16-bit meta id), per-relation catalog metadata, WAL, core-ownership
-dispatch.
+(`heap-and-tuple.md` §4.1c); BK (`instructions/v3.0.0/workorder-bk-keystone-48.md`)
+widened the id to 48 bits on 2026-10-11 (K4, §3).
+Depends on: Keystone super-column contract (48-bit id + 8-bit flags +
+8-bit reserved), per-relation catalog metadata, WAL.
 This document deliberately covers the engine-level id contract only;
 features that *consume* the invariant keep their own specs.
 
@@ -53,7 +53,7 @@ Decisions fixed here:
   duplicate check. Monotonicity is a **per-relation,
   per-history property, not an engine-wide one**: the ids of two
   relations, or of one relation across a re-key (K5), are not comparable.
-- **K4 — Lifetime budget is a documented product constraint.** 2^40
+- **K4 — Lifetime budget is a documented product constraint.** 2^48
   ids per relation is the relation's lifetime insert budget, stated
   openly in product docs rather than engineered around.
 - **K5 — Offline re-key reserved.** The one sanctioned way to reset
@@ -205,32 +205,38 @@ Rules:
 
 ## 3. Lifetime budget (K4) — the honest math
 
-Issue-once converts 2^40 (≈ 1.10 × 10^12) from a live-row bound into a
+Issue-once converts 2^48 (≈ 2.81 × 10^14) from a live-row bound into a
 **lifetime issuance budget per relation**, consumed by every insert,
 including rolled-back ones and bump-ahead gaps.
 
 | sustained insert rate (one relation) | budget exhausted in |
 |---|---|
-| 1,000 /s | ~35 years |
-| 5,000 /s | ~7 years |
-| 50,000 /s | ~8 months |
-| 500,000 /s | ~25 days |
+| 1,000 /s | ~8,900 years |
+| 5,000 /s | ~1,800 years |
+| 50,000 /s | ~180 years |
+| 500,000 /s | ~18 years |
+| 5,000,000 /s | ~1.8 years |
 
 Product-doc stance: for master/account-class relations the budget is
-effectively unlimited; for high-rate ingest relations (trade/event
-logs) it is reachable and must be planned for. The sanctioned
-patterns, in order:
+effectively unlimited; for the highest-rate ingest relations (trade/event
+logs sustaining hundreds of thousands of inserts per second for years) it
+is reachable and must be planned for. The sanctioned patterns, in order:
 
 1. **Relation partitioning by period** (monthly/quarterly log
    relations) — already standard OLTP operational practice; each
-   partition gets its own 2^40.
+   partition gets its own 2^48.
 2. **Offline re-key** (K5) as the escape hatch when partitioning was
    not applied in time.
 
-Widening the id beyond 40 bits was considered and rejected: it
-forfeits the fixed 64-bit super-column word (40+8+16) that the tuple
-header, meta-pool handle, and page arithmetic are built on. The
-constraint is cheaper than the redesign.
+Widening the id beyond 40 bits was considered and rejected before BK, on
+the ground that it would forfeit the fixed 64-bit super-column word
+(40+8+16) the tuple header, meta-pool handle and page arithmetic were
+built on. **Overturned on 2026-10-11 by the operator** (BK, W2,
+`instructions/v3.0.0/raft-marks-2026-10-11.md` §1): the word stays 64
+bits (48+8+8), the meta-pool handle had already been retired, and nothing
+in page arithmetic read the id's width (`workorder-bk-keystone-48.md`
+§1.7), so the reason no longer held and the id took eight bits of the
+reserved field. K5 stays reserved (BK-Q2 (a)).
 
 ## 4. Offline re-key (K5) — reserved semantics
 
@@ -329,7 +335,7 @@ integer rather than a line of `<<` in the dispatcher, so the *source* can
 change and none of the arithmetic moves. Three things it settles that an
 inline subtraction gets wrong: **issued counts ids spent, not rows
 living** (a burned id is spent, and a renderer saying "rows" would be
-lying); capacity is `kMaxKeystoneId − kFirstRowId + 1`, one short of 2^40
+lying); capacity is `kMaxKeystoneId − kFirstRowId + 1`, one short of 2^48
 because id 0 is reserved; and exhaustion is a flag rather than the tail of
 a rounded percentage, since `AllocateRowId` refuses rather than wrapping.
 

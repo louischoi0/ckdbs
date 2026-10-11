@@ -14,7 +14,7 @@ unique-constraint semantics (fail-fast, same family),
 Decisions:
 
 - **F1 — FKs reference the parent's Keystone id.** The child fk column
-  holds the parent's engine pk (40-bit id in a u64/int cell), never a
+  holds the parent's engine pk (48-bit id in a u64/int cell), never a
   business key. Consequences bought outright by K1/K2: *ON UPDATE
   CASCADE does not exist* (the referenced key is immutable), and a
   stored reference can dangle but names a different committed parent

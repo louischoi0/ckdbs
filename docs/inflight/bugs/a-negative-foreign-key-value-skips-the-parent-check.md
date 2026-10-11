@@ -7,7 +7,7 @@ core, nothing concurrent. Older than BJ: the two sites below predate it.
 ## What is wrong
 
 A foreign key references the parent's primary key, a unique id in
-`[1, 2^40 - 1]`. Both places that check a child's value against the parent
+`[1, 2^48 - 1]`. Both places that check a child's value against the parent
 let a value through unchecked when it is not a non-negative integer:
 
 - `CommandDispatcher::CheckForeignKeyOnWrite` (`src/server/command_dispatcher.cpp`)
@@ -43,9 +43,9 @@ foreign-key column.
 ## The fix it wants
 
 At both sites, only `kNull` passes without a check (MATCH SIMPLE's vacuous
-pass). Any other value that is not an integer in `[1, 2^40 - 1]` is an absent
+pass). Any other value that is not an integer in `[1, 2^48 - 1]` is an absent
 parent, `FK_VIOLATION` at the value's byte, and a non-integer type stays the
-codec's refusal. Cells: a negative and a zero value and a value above `2^40`
+codec's refusal. Cells: a negative and a zero value and a value above `2^48`
 through `INSERT`, `UPDATE`, a constant expression, and a `uint64` column.
 
 Outside BJ-S4's scope (`instructions/v3.0.0/workorder-bj-expression-update.md`

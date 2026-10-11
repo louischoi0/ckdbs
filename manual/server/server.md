@@ -56,8 +56,9 @@ mounts has **one WAL stream for the instance**, whatever `cores` says, and
 `SHOW META`'s `wal_topology` field says so. A volume written before that
 change has one stream per core and **no longer mounts**: there is no
 migration, and the refusal names it. Recreate the database. The same holds
-for every volume older than superblock version 20 (2026-10-07), the format
-in which a B+ tree leaf is kept in key order by placement.
+for every volume older than superblock version 22 (2026-10-11): 20 keeps a
+B+ tree leaf in key order by placement, 21 records a dropped relation's
+roots in its tombstone, and 22 carries the 48-bit Keystone id.
 
 The listener is **loopback only** (`127.0.0.1`), plain TCP, no TLS, no
 authentication — a development/inspection surface, not a production API.

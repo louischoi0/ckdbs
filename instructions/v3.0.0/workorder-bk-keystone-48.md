@@ -635,7 +635,7 @@ The suite's width-naming lines were 44 in 19 files before this stage.
 |---|---|
 | `KeystoneWidthTest.TheIdIsFortyEightBitsAndTheMaxRoundTrips` (`tests/keystone_width_test.cpp`, new, registered) | `kKeystoneIdBits` 40, `kKeystoneReservedBits` 16, `kMaxKeystoneId` 1099511627775; `Encode(2^48 - 1)` *"Keystone id exceeds 40-bit range"* |
 | `KeystoneWidthTest.FlagsIsByteSixAndReservedByteSeven` | byte 5 = 0xA5, byte 6 = 0x5A, byte 7 = 0 - the 40-bit layout, read as bytes |
-| `KeystoneWidthTest.ACabinBoundEntryKeepsTheUpperEightBitsOfItsPk` | *"bound cabin entry: pk 1099511627777 exceeds the 40-bit Keystone range"* |
+| `KeystoneWidthTest.ACabinBoundEntryKeepsTheUpperEightBitsOfItsPk` (deleted at BK-S2: `bound_cabin_test.cpp`'s round trip at `kMaxKeystoneId` pins the same property, its review found) | *"bound cabin entry: pk 1099511627777 exceeds the 40-bit Keystone range"* |
 | `KeystoneWidthTest.APageInitInTheUpperEightBitsRoundTripsAndFormatsItsLeaf` | *"wal payload: PAGE_INIT min_key exceeds the 40-bit id space"*; the leaf's format stands behind it |
 | `KeystoneWidthTest.AHeapPageAndASeparatorTakeAnIdInTheUpperEightBits` | *"min_key exceeds 40-bit tuple id range"* at the heap page; the separator stands behind it |
 | `WaystoneReplayTest.ATrailEntryKeepsTheUpperEightBitsOfItsPk` (`tests/waystone_replay_test.cpp`) | `replay.size()` 1 of 2: the 40-bit mask folded two pks into one key |
@@ -709,3 +709,195 @@ the width cell's round trip do too.
 of 3501 pass; the seven failures are the seven red cells and nothing else.
 Not a gate - the stage's cells are red by design - and stated so BK-S2 has
 the baseline.
+
+### BK-S2 — the word, 2026-10-11
+
+Built on `worktree-bk-keystone-48` from `aa73d7f4` (BK-S1).
+
+**Code.** `keystone.hpp`: `kKeystoneIdBits` 48, `kKeystoneReservedBits`
+8, `Keystone::reserved` and `Encode`'s parameter `uint8_t`, the header
+comment restated (its `id:40` and its "system-generated, callers do not
+supply it" sentence, stale since BD); `keystone.cpp`: `Decode`'s masks
+derived from the constants, the refusal naming the value (BK-R1, BK-R5).
+`heap_page.cpp` and `btree_page.cpp` delete their `kMaxTupleId` and read
+`kMaxKeystoneId`, each including `keystone.hpp`; `cabin_bound_page.hpp`
+deletes `kMaxEntryPk` and `cabin_bound_page.cpp` packs and unpacks the
+entry word with `kKeystoneIdBits` and `kMaxKeystoneId` (BK-R2).
+`trail_replay.hpp`: `PackKey(uint16_t, uint64_t)` shifting by
+`kKeystoneIdBits`, `static_assert(16 + kKeystoneIdBits <= 64)`;
+`trail_replay.cpp`: `Find` answers null above `0xFFFF` and narrows only
+then (BK-R3). `superblock.hpp`: 22, with the reason beside it (BK-R4).
+The eight messages name `kMaxKeystoneId`'s value: `keystone.cpp`,
+`heap_page.cpp`, `btree_page.cpp`, `cabin_bound_page.cpp`, `catalog.cpp`,
+`payload.cpp` twice, `command_dispatcher.cpp`'s `PurgeConjunctRefusal`
+(BK-R5). `sim/oracle.cpp` reads the engine's constant, `sim/workload.cpp`
+names `kIdSpaceEnd`, `sim/integrity.cpp`'s finding names the value
+(BK-R8). §1.4's comments restated, `heap_page.hpp`'s layering note among
+them (the page layer now reads one Keystone constant). **Two cuts**:
+`RowKeystoneId` forwards to `KeystoneIdOfPayload` and its private
+`LoadLe64` copy is deleted; `keystone_test.cpp`'s `MaxValuesRoundTrip` is
+deleted, the width cell's round trip being the same cell at 8-bit
+`reserved`.
+
+**Cells.** BK-S1's seven red cells green. §1.8's table applied: the seven
+names that spelt forty renamed to the property, the boundary literals at
+`2^48`, `keystone_budget_test.cpp:152` at `ids_remaining=281474976710653`,
+`waystone_page_test.cpp`'s pk with bits 40-47 set, `fk_parent_hold_test`'s
+never-a-parent key `kIdSpaceEnd`, `bound_cabin_test`'s round trip at
+`kMaxKeystoneId` and its refusal matching the number. **New**:
+`SuperBlockTest.AVersion21VolumeDoesNotMount`, spelt rather than left to
+the `± 1` loop (§6's BK-S1 review). **One site the census missed**:
+`sim_loop_test.cpp`'s `NonzeroKeystoneReservedBitsAreAKeystoneFinding`
+wrote byte 6 of a tuple's Keystone word to put a bit in `reserved` - the
+one reader-by-byte-offset in the tree, in a test the §1.1 grep over the
+engine did not cover - and under BK-R1 byte 6 is `flags`, which the
+integrity check does not judge; the cell writes byte 7 now.
+
+**The suite.** `ctest -j8`, Debug, at the stage's code before that one
+fix: 3500 of 3501, the failure that cell. After the fix the nine BK cells
+and it pass together; the whole suite is re-run after the review (below).
+**The sim corpus** (`scripts/sim.sh`, Debug): 190 runs, 0 failures.
+
+**The closing grep** (`<< ?40|>> ?40|40-bit|upper 24|1099511627775` over
+`include src sim tests`): `decay.hpp:218`, `relayout_planner_test.cpp:60`,
+`waystone_dir_test.cpp:115` (§1.5) and BK-S1's own `keystone_width_test.
+cpp:29`, `waystone_replay_test.cpp:465, 499` - nothing else.
+
+**Decisions that surfaced, adopted on the standing go-ahead (W4):**
+
+- The reserved-bits integrity cell moves to byte 7 rather than the check
+  learning to judge `flags`: the check's subject is `reserved`, which
+  writers set 0 and readers ignore; `flags` is written 0 too, but AO-R3
+  left it a field and CN-3 names it, so a check on it would be a rule BK
+  does not make.
+- `Find` keeps its `uint32_t` parameter and guards (BK-R3 as written);
+  `PackKey` alone narrows to `uint16_t`.
+- The cross-step and guard cells make the guard **required**, not kept:
+  at 48 bits `0x10000 << 48` wraps to 0 even through a `uint32_t`
+  `PackKey`, so an unguarded `Find(65536, pk)` would read step 0's entry
+  (the review's trace).
+
+**Its review** (`critics-developer`, the same day) found no engine defect
+and corrected the stage in place. **The sharpest correction is to BK-S1's
+census**: `fk_parent_hold_test.cpp:105`'s `kForeign` is
+`LockTable::TryAcquire`'s **txn** argument - a holder, not a pk - so
+§1.8's row misread it and BK-S2 had carried the misreading into the code;
+it is `txn::kMaxTrxId` now and the `keystone.hpp` include went back out
+(the cell passed either way). The v21 refusal cell asserts both versions
+named; two done-condition cells were missing and are added -
+`SHOW BUDGET`'s `capacity=281474976710655`, and the live window above
+2^40 (a row placed at 1099511627776 and purged by `PURGE ... WHERE id >=
+1099511627776`, spelt `>=` because the old ceiling's value is what this
+order's own closing grep forbids - a contradiction between two of BK-S2's
+done-conditions, resolved in the grep's favour); `keystone_test.cpp` gains
+two `static_assert`s - `reserved`'s digits equal `kKeystoneReservedBits`,
+`Encode`'s signature is `(uint64_t, uint8_t, uint8_t)` - the "cannot be
+passed by type" cell §1.8 asked for, which no runtime cell can be; two
+stale comments (`keystone.hpp`'s reader list named a `KeystoneIdAt` that
+does not exist, `row_codec.cpp`'s forward called itself a fifth copy) and
+two wrong invariant citations (`btree_page.hpp:40`, `heap_page.hpp:143`:
+zero-extension is invariant 7, not 6). It **deleted**
+`KeystoneWidthTest.ACabinBoundEntryKeepsTheUpperEightBitsOfItsPk` - §6's
+BK-S1 table names it - because `bound_cabin_test.cpp`'s round trip at
+`kMaxKeystoneId` with flags `0x3` kills every entry-codec mutant on its own
+(the half move encodes `kMax | 3 << 40` = `kMax` and reads flags back as
+`0xFF`), and that cell's comment now says why its values are load-bearing.
+**Applied from its proposals:** `RowKeystoneId` deleted - a pure forwarder
+since this stage - and its fourteen callers call `KeystoneIdOfPayload`;
+`EncodeEntry`/`DecodeEntry` go through `Keystone::Encode`/`Decode`, so the
+entry word has one codec rather than one layout written twice (the refusal
+stays `InvalidArgument`, the Keystone text behind the entry's prefix); the
+sim's `id > kMaxKeystoneId` check deleted, the decode having masked the id
+so it could never fire. **Declined:** one helper for the nine refusal texts
+(nine subjects, two forms, and the width already lives in one constant);
+merging the three superblock cells into one table (the 18 and 21 cells
+carry their reason in their names and comments); spelling the
+`static_assert`'s 16 as `numeric_limits` (it is the entry format's width,
+named as such). **Pre-existing, left:** `undo_page.hpp:310` and
+`undo_page_test.cpp:266` cite invariant 6 for zero-extension.
+
+**Mutants, by reasoning** (§3's list and the review's): `PackKey` at 40 -
+the first trail cell's `size()` is 1; the half move - the cross-step pair
+packs `(1, 3)` and `(0, 3 + 2^40)` to one key; `Find` narrowed or
+unguarded - the `Find(0x10000, pk)` check; the entry codec's half moves -
+`bound_cabin_test`'s flags compare; the widths left at 40/16 - the width
+cell and the new `static_assert`; `reserved` or `Encode`'s parameter left
+`uint16_t` - the `static_assert`s, a compile failure; `kSuperBlockVersion`
+left at 21 - the v21 cell's decode succeeds. `Decode`'s reserved mask is
+not a mutant (§1.1).
+
+**The suite after the review's and these edits** (`ctest -j8`, Debug, the
+tree rebuilt whole): **3500 of 3500**, one fewer than BK-S1's count for the
+deleted Cabin entry cell; **the sim corpus** (`scripts/sim.sh`, Debug): 190
+runs, 0 failures. Overhead not measured; measured at the milestone's close
+(BK-S4).
+
+### BK-S3 — the text, 2026-10-11
+
+Built on `worktree-bk-keystone-48` beside BK-S2's code, committed after it.
+
+§1.9's every line restated. `docs/rules/keystoneid-invariant.md`: the
+dependency line, K4's number, §3's capacity (2^48 ≈ 2.81 × 10^14), the
+rate table recomputed at 48 bits alone (the 40-bit column stays in this
+order's BK-R6, not in the rules document, which states the contract),
+the partitioning sentence, and **the rejection at the end of §3 kept and
+restated as overturned on 2026-10-11 by the operator, with the reason it
+no longer held and K5 kept** (BK-Q2 (a)) - the one place history stands
+in `docs/`, as BK-R9 allows. `heap-and-tuple.md`: the field table (48
+bits, 8 bits, byte positions), §4's sentences, §4.1's exhausted range and
+the mark's ceiling, K4's bullet, PURGE's window clamp, §8's invariants 5,
+7 and 11; and :124's "display metadata" sentence now says where it holds -
+in storage - and points at the wire defect's entry (BK-Q6). `rules.md`'s
+two lines; `assertion.md` §5.1's and `cabin.md`'s entry tables (48 bit, 8
+bit, the Keystone word's layout); `parser-v2.md` I6, whose refusal code is
+corrected on the way - `OutOfRange` for a named `INSERT` key since BD-R5,
+`InvalidArgument` for a `PURGE` window's wrapped literal; `aggregate.md`,
+`foreign-keys.md`, `bulkinsert.md` BI9 (whose "K1 40-bit budget" becomes
+K4's), `waystone-concpets.md`; the manual's four lines with the new
+ceiling spelt; CN-3 and CN-5; the negative-foreign-key bug entry's range.
+`CLAUDE.md`: invariants 5, 7 and 11 and the pk row, no new milestone row.
+
+**History removed where the rule forbids it**: the first draft left the
+old layout and capacity in parentheses beside the new in
+`heap-and-tuple.md`'s field table and invariant 5 and in `CLAUDE.md`'s
+invariant 5, and a 40-bit column in the rules document's rate table; a
+spec states the contract, so all of it went, and the overturn paragraph
+alone carries the history.
+
+**The closing grep** (`2\^40|40-bit|40 bits|id:40|upper 24|1099511627775`
+over `docs manual CLAUDE.md`): the overturn paragraph
+(`keystoneid-invariant.md:232`) only; the other spellings the grep misses
+("40 bit", "5-byte", "16 bit(s)", `reserved:16`, `pk:40`, "1.1 × 10^12",
+"forty") have no Keystone hit, and the three sites it cannot see
+(`heap-and-tuple.md:107`, `assertion.md:222-224`, `cabin.md:719-721`) read
+48 and 8.
+
+**Its review** (`critics-developer`, the same day) found four wrong
+sentences and fixed them in place: `parser-v2.md` I6 had claimed every pk
+literal is checked at parse or BIND and that nothing downstream re-checks,
+which was wrong before BK - a named `INSERT` key is judged at dispatch on
+its raw digits (`OutOfRange`), a bound parameter is the literal `C_BIND`
+pasted in and judged the same way at execution, a `PURGE` window's
+negative or wrapped literal is `InvalidArgument`, and `AdmitExplicitRowId`
+checks again; `heap-and-tuple.md` PU8 and `CLAUDE.md`'s issue-once row
+said "the superblock stays 21", false at 22; `heap-and-tuple.md:124`'s
+"today" read as a plan and now names the filed defect; CN-3's source-read
+line was pinned at a commit where the id was 40 bits, so its width went
+rather than changed. **History it removed** beyond the first draft's own
+sweep: `CLAUDE.md:74`'s date, the rules document's "40 + 8 + 16 before
+it", the field table's order citation. **Applied from its proposals:**
+"22 since BK" appended to `CLAUDE.md`'s three rows that chain the
+superblock versions (the B+ tree, assertions and ranges rows); a sentence
+in `heap-and-tuple.md` §4 that superblock 22 refuses every 21 volume and
+why, modelled on BD's; `manual/server/server.md`'s mount refusal names 22
+with what 20, 21 and 22 each carry; the rules document's dependency line
+loses "core-ownership dispatch" (gone at AT-S9) and its overturn paragraph
+the eighteen-years clause the table above it already gives;
+`heap-and-tuple.md:130`'s "never packed narrower than eight bytes", which
+repeated "zero-extended `uint64_t`". **Declined:** merging `assertion.md`
+§5.1's and `cabin.md` §12.2's entry tables into one - the duplication
+predates BK and the two documents' structure is not this order's to
+change; BK restates both lines and leaves the merge to a text pass of its
+own. Noted and left: the wire-defect entry quotes `heap-and-tuple.md:124`
+as it read at `17e03da2`, which is what an entry pinned there should
+quote.
