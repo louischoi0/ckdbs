@@ -18,15 +18,17 @@
 // `instructions/v2.5.0/varchar-char-architecture.md` §4).
 //
 // **The model rests on one fact about the code, and the first test here is
-// that fact.** An UPDATE re-encodes the whole row, so a spilled value the
-// SET list never touched is appended *again* and the new version points at
-// the copy - which means no two versions of a tuple share a var-heap slot.
-// "A version dies, so its slots die" is exact only while that holds, and an
-// optimisation that reused the old slot would silently make the release
-// wrong. So it is pinned, not assumed.
+// that fact.** Since BK-R3 an UPDATE re-encodes only the cells it assigns,
+// so a spilled value the SET list never touched is *carried*: the new
+// version points at the old version's slot, and versions of one tuple share
+// it. Until BK it was appended again by every UPDATE of its row, so no two
+// versions shared a slot and every superseded copy leaked. "A version dies,
+// so its slots die" is therefore wrong now; the rule is "a value may be
+// released only once the newest version naming it is reclaimed"
+// (`docs/spec/heap-and-tuple.md` §3.4). So it is pinned, not assumed.
 //
 // Everything else here is the consequence: a rolled-back write releases
-// exactly what it wrote, and a committed one releases nothing.
+// exactly what it appended, and a committed one releases nothing.
 //
 // The unlogged path throughout (no WalManager): what is under test is the
 // live rollback and the page state it leaves. The record-level half -
@@ -108,26 +110,86 @@ protected:
 
 // ---- The premise the whole model rests on --------------------------------
 
-TEST_F(VarHeapLifetimeTest, AnUpdateOfAnotherColumnGivesTheSpilledValueANewSlot) {
-    // **Do not "optimise" this away without replacing the lifetime model.**
-    // An UPDATE re-encodes the whole row, so an untouched spilled value is
-    // copied to a fresh slot and the new version points at the copy. That
-    // exclusivity is what makes "the version died, so release its slots"
-    // exact; sharing a slot between versions would make it a double free.
+TEST_F(VarHeapLifetimeTest, AnUpdateOfAnotherColumnCarriesTheSpilledValue) {
+    // **The premise since BK-R3** (`workorder-bk-opt-read-update-path.md`,
+    // BK-Q4 (a)): an UPDATE re-encodes only the cells it assigns, so a
+    // spilled value the SET list does not name is carried - the new version
+    // points at the old version's slot. Until BK it was copied to a fresh
+    // slot by every UPDATE of its row and the copy it superseded leaked. Two
+    // versions now share one value, which is what binds every release of a
+    // superseded value: only once the newest version naming it is reclaimed
+    // (`heap-and-tuple.md` §3.4). The releasers that exist honour that by
+    // construction - rollback releases only its own appends, `PURGE` only
+    // the tombstone's cells: the rollback cells are below, the recovery and
+    // `PURGE` cells `varheap_carry_crash_test.cpp`.
     Session s;
     ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, note varchar, n int64)").substr(0, 7), "CREATED");
     ASSERT_EQ(Run(s, "INSERT INTO t VALUES ('" + Spilling('a') + "', 1)").substr(0, 8),
               "INSERTED");
     ASSERT_EQ(Census("t").slots, 1u);
 
-    // `note` is not in the SET list, and it still gets a second slot.
+    // A reader whose snapshot predates the update reads the old version
+    // through undo, which names the same slot.
+    Session old_reader;
+    ASSERT_EQ(Run(old_reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+    ASSERT_NE(Run(old_reader, "SELECT n FROM t WHERE id = 1").find("\\n1"), std::string::npos);
+
+    for (int n = 2; n <= 5; ++n) {
+        ASSERT_EQ(Run(s, "UPDATE t SET n = " + std::to_string(n) + " WHERE id = 1").substr(0, 7),
+                  "UPDATED");
+    }
+    EXPECT_EQ(Census("t").slots, 1u) << "an unassigned spilled value was appended again";
+    EXPECT_EQ(Census("t").live, 1u);
+    const std::string now = Run(s, "SELECT note, n FROM t WHERE id = 1");
+    EXPECT_NE(now.find(Spilling('a') + ",5"), std::string::npos) << now;
+    const std::string then = Run(old_reader, "SELECT note, n FROM t WHERE id = 1");
+    EXPECT_NE(then.find(Spilling('a') + ",1"), std::string::npos) << then;
+    ASSERT_EQ(Run(old_reader, "COMMIT").substr(0, 6), "COMMIT");
+
+    // Assigning the spilled column itself still appends its new value.
+    ASSERT_EQ(Run(s, "UPDATE t SET note = '" + Spilling('b') + "' WHERE id = 1").substr(0, 7),
+              "UPDATED");
+    EXPECT_EQ(Census("t").slots, 2u);
+}
+
+TEST_F(VarHeapLifetimeTest, ARolledBackCarryingUpdateLeavesTheSharedValue) {
+    // The carrying version appended nothing, so its rollback releases
+    // nothing: the restored version still names the value.
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, note varchar, n int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "INSERT INTO t VALUES ('" + Spilling('r') + "', 1)").substr(0, 8),
+              "INSERTED");
+
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
     ASSERT_EQ(Run(s, "UPDATE t SET n = 2 WHERE id = 1").substr(0, 7), "UPDATED");
-    EXPECT_EQ(Census("t").slots, 2u)
-        << "an untouched spilled value was not re-appended; the lifetime model's "
-           "exclusive-ownership premise no longer holds";
-    // Both are live: the old version is still reachable by a snapshot that
-    // predates the update, and nothing has settled below the horizon.
-    EXPECT_EQ(Census("t").live, 2u);
+    ASSERT_EQ(Run(s, "UPDATE t SET n = 3 WHERE id = 1").substr(0, 7), "UPDATED");
+    ASSERT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    const ChainCensus after = Census("t");
+    EXPECT_EQ(after.slots, 1u);
+    EXPECT_EQ(after.live, 1u) << "a rollback released a value it never appended";
+    const std::string row = Run(s, "SELECT note, n FROM t WHERE id = 1");
+    EXPECT_NE(row.find(Spilling('r') + ",1"), std::string::npos) << row;
+}
+
+TEST_F(VarHeapLifetimeTest, ARolledBackInsertReleasesTheValueItsOwnUpdatesCarried) {
+    // One transaction inserts a spilled row and updates it twice: the value
+    // is the insert's append, carried by both updates, and the rollback
+    // releases it exactly once - through the insert's undo entry, the only
+    // one that names it as an append.
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, note varchar, n int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "INSERT INTO t VALUES ('" + Spilling('i') + "', 1)").substr(0, 8),
+              "INSERTED");
+    ASSERT_EQ(Run(s, "UPDATE t SET n = 2 WHERE id = 1").substr(0, 7), "UPDATED");
+    ASSERT_EQ(Run(s, "UPDATE t SET n = 3 WHERE id = 1").substr(0, 7), "UPDATED");
+    ASSERT_EQ(Census("t").slots, 1u);
+    ASSERT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    const ChainCensus after = Census("t");
+    EXPECT_EQ(after.slots, 1u);
+    EXPECT_EQ(after.live, 0u) << "the rolled-back insert's value outlived it";
 }
 
 // ---- Rollback releases exactly what it wrote -----------------------------

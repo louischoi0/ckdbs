@@ -245,6 +245,35 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
                                             const std::vector<parser::AstValue>& values,
                                             const VarHeapSink& varheap = {});
 
+// One assignment `EncodeAssigned` writes: a column of the schema (never the
+// pk, column 0) and the value it takes.
+struct AssignedCell {
+    std::size_t column = 0;
+    const parser::AstValue* value = nullptr;
+};
+
+// **An UPDATE's new image: the row's own bytes with only its assigned cells
+// re-encoded** (BK-R2, BK-R3, `instructions/v3.0.0/workorder-bk-opt-read-update-path.md`).
+// `before` is the version being replaced, whole; each assigned cell is
+// zeroed, its NULL bit cleared, and encoded as `EncodeRow` would encode it,
+// spilling through `varheap` if it must. **Every other cell is carried as
+// it stands** - an inline value byte for byte, and a spilled cell as the
+// pointer it holds, so the new version names the old version's var-heap
+// value rather than a copy of it. Two versions then share that value, which
+// is what binds every release of a superseded value: it may go only once
+// the newest version naming it is reclaimed (`docs/spec/heap-and-tuple.md`
+// §3.4). The Keystone word is rewritten as `EncodeRow` writes it.
+//
+// Fails with Corruption if `before` is not exactly `layout.row_size` bytes
+// or a cell names no body column, and otherwise as `EncodeRow` fails for
+// the assigned values.
+StatusOr<std::vector<std::byte>> EncodeAssigned(const catalog::Schema& schema,
+                                                 const catalog::RowLayout& layout,
+                                                 std::uint64_t id,
+                                                 std::span<const std::byte> before,
+                                                 std::span<const AssignedCell> cells,
+                                                 const VarHeapSink& varheap = {});
+
 // Reads just the primary key out of a tuple payload, without decoding the
 // body. This is what a duplicate-key scan compares, and it is why the pk
 // lives in a fixed-offset word: finding it costs no schema walk.

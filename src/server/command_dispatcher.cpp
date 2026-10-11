@@ -8057,9 +8057,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // One value per assignment for the row in hand. A bare literal's slot is
     // filled once, here; an expression's is overwritten for every row. Owned
     // by the statement so no row allocates for it after the first.
+    // `assigned` names the cells a row's new image re-encodes, one per
+    // assignment, pointing into `values`; every other cell is carried from
+    // the row's own bytes (`exec::EncodeAssigned`, BK-R3).
     std::vector<parser::AstValue> values(compiled.size());
+    std::vector<exec::AssignedCell> assigned(compiled.size());
     for (std::size_t i = 0; i < compiled.size(); ++i) {
         if (compiled[i].expr == nullptr) values[i] = stmt.assignments[i].val;
+        assigned[i] = {compiled[i].column_no, &values[i]};
     }
 
     // The WHERE clause compiles to the same resolved predicates a chain
@@ -8239,9 +8244,9 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
 
         // ---- Stage 2: the whole row, for a row that qualified -----------
         //
-        // An owned copy, because UPDATE re-encodes it and hands it to the
-        // write hook; the frame is for evaluation only and is not read
-        // again below. Decoded from `payload_copy`, whose bytes outlive
+        // An owned copy, because the SET expressions and the write hooks
+        // read it (the new image is encoded from `payload_copy`, BK-R3); the
+        // frame is for evaluation only and is not read again below. Decoded from `payload_copy`, whose bytes outlive
         // every page fetch stage 1 may have made.
         auto row = exec::DecodeRow(ta.schema, ta.layout, payload_copy, &spills);
         if (!row.ok()) return row.status();
@@ -8384,11 +8389,6 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             row.value()[compiled[i].column_no] = values[i];
         }
 
-        // The pk is unchanged by construction (rejected above), so it was
-        // carried straight from the tuple's own Keystone word above rather
-        // than round-tripped through the decoded row.
-        const std::vector<parser::AstValue> body(row.value().begin() + 1, row.value().end());
-
         // ---- The assertion check, §4.2's delta rules --------------------
         //
         // Before the undo record and the overwrite, so a refused row is a
@@ -8452,8 +8452,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // under the var-heap page's hold - this leaf's hold outside it, the
         // order a reader takes too; `appended_spills` then stays empty.
         const auto log_spill = SpillLogFor(scope, ta.oid, id.value());
-        auto encoded = exec::EncodeRow(
-            ta.schema, ta.layout, id.value(), body,
+        // **Only the assigned cells are encoded** (BK-R3): every other cell
+        // is carried from `payload_copy`, the version this walk read, so a
+        // spilled value the SET list does not name is shared with the new
+        // version rather than appended again - and no longer leaked by every
+        // UPDATE of its row. The pk is the tuple's own Keystone word, never
+        // assignable (rejected above).
+        auto encoded = exec::EncodeAssigned(
+            ta.schema, ta.layout, id.value(), payload_copy, assigned,
             exec::VarHeapSink{&page_store_, ta.varheap_page_id,
                               collect_spills ? &appended_spills : nullptr, ta.oid,
                               log_spill ? &log_spill : nullptr});
@@ -8486,16 +8492,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         std::uint64_t new_trx_id = trx_id;
         std::uint64_t new_undo_ptr = undo_ptr;
         if (scope.txn != nullptr) {
-            // The bytes as they stand, re-read rather than reconstructed:
-            // `row` has already had the SET list applied, and an image
-            // built from it would restore the *new* values.
-            auto live = page_store_.GetForRead(page_id);
-            if (!live.ok()) return live.status();
-            heap::PageView before_page(live.value().bytes());
-            auto before = before_page.ReadTuple(slot);
-            if (!before.ok()) return before.status();
-            const std::vector<std::byte> image(before.value().payload.begin(),
-                                               before.value().payload.end());
+            // The bytes as they stand: `payload_copy`, the version this walk
+            // read - not reconstructed from `row`, which has had the SET list
+            // applied and would restore the *new* values. Nothing has written
+            // the slot since the copy: the walk holds this page's write
+            // `PageRef` and carries no `co_await` (the conflict check's
+            // argument above), and the new image the carry starts from is
+            // the same buffer (BK-R3).
+            const std::vector<std::byte>& image = payload_copy;
 
             txn::UndoRecordFields rec{};
             rec.prior_trx_id = trx_id;

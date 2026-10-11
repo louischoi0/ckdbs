@@ -106,7 +106,13 @@ the measurement finds material.
 - **BK-R5.** An UPDATE's undo and WAL records carry changed byte ranges
   rather than whole row images. A format change; last, and only on BK-Q6.
 - **BK-R6.** The read path's access statistics fold per core (BA-R2), only
-  if BK-S1 finds them material where BA's census did not.
+  if BK-S1 finds them material where BA's census did not. **Discarded at
+  BK-S1**: 0.7 % of a point `SELECT`.
+- **BK-R7** (added at BK-S1). A statement's reply leaves in one write: the
+  frames a pipelined PARSE/BIND/EXECUTE earns are flushed at its completion,
+  not partly when the read submits it.
+- **BK-R8** (added at BK-S1). A var-heap append starts its walk at the
+  chain's last known tail, not at its root.
 
 **BK does not do:** intra-query parallelism, a new index kind, the
 checkpoint (BI) or the carve, the driver itself (BK-Q8 asks), or any change
@@ -289,7 +295,40 @@ order of 2026-10-07. Last, and only on BK-Q6.
 BA-R2 as written, only if BK-S1 finds `RecordAccess` material. BA-R2
 carries BA-Q4's freshness change - counts up to 100 ms late, CC13's
 sentence struck - which changes `SHOW ACCESS`'s answers and needs its own
-mark (BK-Q7).
+mark (BK-Q7). **Discarded at BK-S1** (`bench/v3.0.0/results-bk-s1-census-v2.7.0-769-gb70f79d8.md`
+§3): `Catalog::RecordAccess` is 0.7 % of a point `SELECT`'s server CPU, under
+the bar; BK-S6 does not open and BK-Q7's freshness change is not made.
+
+### BK-R7 — A statement's reply leaves in one write (added at BK-S1)
+
+`[measured]` The census's largest part of every point statement is the
+socket send, 38-46 % of its server CPU, and it splits evenly between two
+flushes: `TcpServer::OnClientReadable` sends `S_PARSE_OK`/`S_BIND_OK` as soon
+as the read has submitted the statement, and `OnStatementComplete` sends the
+rest. Two `send()` calls and two client wakeups per statement, the first
+carrying nothing a client acts on. **The ruling**: while a statement this
+read submitted is in flight, the read does not flush; the completion
+flushes everything queued, in order. No frame changes and no frame moves
+relative to another; what changes is that the first two leave with the
+rest. A client that blocks reading `S_PARSE_OK` before sending its EXECUTE
+never had a statement in flight, so it is answered at once as before. Given
+to BK-S4 by BK-Q5 (the part BK-S1 ranks first), so it needs no item of its
+own.
+
+### BK-R8 — A var-heap append starts at the chain's tail (added at BK-S1)
+
+`[measured]` `varheap::ChainAppend` walks the relation's chain from its root
+to the tail on every append (`src/storage/varheap.cpp:325-348`), so each
+spilled value written costs a page fetch per page the chain already has.
+The census put the walk at 32-60 % of an UPDATE assigning a spilled value
+after 30,000 updates of that relation, and growing; it is the same walk
+under every INSERT of a spilled value. **The ruling**: the append starts
+from the chain's last known tail, a hint kept per relation in memory and
+validated before use - a `kVarHeap` page stamped with the relation's oid
+(`page.md` §2a) - falling back to the root when it is not one. The walk's
+existing re-check (a tail that links on is not the tail) is what makes a
+stale hint safe: it only ever moves the start forward along the same
+chain. Nothing on disk changes. In BK's scope by BK-Q12.
 
 ## 3. Stages
 
@@ -301,9 +340,10 @@ mark (BK-Q7).
 | BK-S3 | **Decode and encode by column** (BK-R2), if material | The decode set, the poison slot, the in-place re-encode; byte equality with today's encode across every type and NULL; BJ's single-write and swap cells green | M |
 | BK-S4 | **The read path's largest part** (BK-R4), if material | The part BK-S1 ranks first, answers byte-identical | M |
 | BK-S5 | **Carried spills** (BK-R3), on BK-Q4 | The carry, its rollback, purge and recovery cells; the drain's binding rule written into `heap-and-tuple.md` | M |
-| BK-S6 | **Access statistics per core** (BK-R6), if material and on BK-Q7 | BA-S5's done-when | S |
+| BK-S6 | **Access statistics per core** (BK-R6), if material and on BK-Q7 | BA-S5's done-when. **Discarded at BK-S1** (BK-R6) | S |
 | BK-S7 | **Byte-range records** (BK-R5), on BK-Q6 | The record, every before-image reader, redo, undo, the superblock bump, the sim's crash cells | L |
 | BK-S8 | **The close** | §5's measurement; the specs each stage changed | S |
+| BK-S9 | **The var-heap tail** (BK-R8), added at BK-S1 on BK-Q12 | The hint, its validation, its fallback; an append from a stale or foreign hint lands on the real tail; a chain grown by two cores at once stays one chain; the census's assigned-spill arm flat in the chain's length | M |
 
 **Order.** S1 first; then the fix stages in the order BK-S1 ranks them.
 S5 waits on BK-Q4 alone, since it fixes a leak whatever the census says;
@@ -324,6 +364,8 @@ S7 last.
 | BK-Q8 | **The request path's ~50 µs** if BK-S1 puts it in the driver or the client rather than the server | scope | **Out of BK**: reported, and its own order if wanted, since no engine change reaches it | adopted (standing go-ahead, 2026-10-11) |
 | BK-Q9 | **The measurement** (§5), at BK's close | process | As written | adopted (standing go-ahead, 2026-10-11) |
 | BK-Q10 | **The letter**, which `workorder-bk-keystone-48.md` also carries: (a) keep BK, cite by file; (b) re-letter this order | process | **(a).** W1 names BK after rejecting BY, so the letter is the operator's; `index.md` already carries a letter in two documents (AN) under the rule "cite the file, never the bare number"; this order's marks go to `raft-marks-2026-10-11-bk-paths.md` so the two sessions do not write one file | adopted (standing go-ahead, 2026-10-11) |
+| BK-Q11 | **BK-S1's two instruments the census replaced** (added at BK-S1): the trace spans `trace.hpp` names, and the schema word's rate under load | process | **Neither built.** The sampler (`tools/kds_sampler.c`) splits a statement's server CPU into the parts BK-R4 asks for without code under `src/` and without per-row clocks (§1.4); the schema word's rate prices only a cached *plan*'s invalidation, and BK-R1's form is decided after BK-S4 and BK-S5 move the denominators | adopted (standing go-ahead, 2026-10-11) |
+| BK-Q12 | **BK-R8 in BK** (added at BK-S1): the var-heap append's walk from the root is per-row work on the update path the census measured, but no ruling of BK named it | scope | **In BK, as BK-S9.** It is the update path's largest part for a row whose spilled cell is assigned once BK-R3 lands, it grows without bound, and it changes nothing on disk or on the wire | adopted (standing go-ahead, 2026-10-11) |
 
 ## 5. Measurement
 
@@ -385,3 +427,74 @@ Written on `worktree-bk-read-update-paths` from `e623fb5`. No file under
 - **§5**: the driver's literal-PARSE path and a PARSE-once path both.
 - Citation precision and the summary's 0.60x as a geometric mean on
   `9a0525d`.
+
+### BK-S1 — the census, 2026-10-11
+
+On `worktree-bk-read-update-paths`, A = `b70f79d8` (`v2.7.0-769-gb70f79d8`):
+`bench/v3.0.0/results-bk-s1-census-v2.7.0-769-gb70f79d8.md`. Built, all under
+`tools/`, nothing under `src/`: `kds_sampler.c` (an `LD_PRELOAD` SIGPROF
+sampler - `perf` is refused on the host, `perf_event_paranoid = 4`) with
+`kds_sampler_report.py` and the part list `bk_parts.json`; `bk_census.py`
+(per statement, the client's wall time and both processes' on-CPU time, both
+driver paths, an interleaved A/B mode for the close) with `bk_census_table.py`;
+`kwp.py`'s `prepare`/`execute_prepared`, the PARSE-once path. **The host was
+busy** (loadavg 13-20, other sessions' builds in every run), so the census
+quotes on-CPU time and sampled shares of it, never wall time.
+
+**What it ranked**: the socket send, 38-46 % of every point statement, half of
+it a second flush (BK-R7, added; BK-S4 by BK-Q5); the spilled row's re-append
+and the walk from the chain's root it lengthens, 32-60 % of a spilled row's
+UPDATE and growing, 38 pages leaked per 1,000 updates (BK-R3, BK-S5; BK-R8,
+added, BK-S9 by BK-Q12); parse + compile 5-12 % of a point statement (BK-R1,
+form decided after BK-S4/S5); Waystone recording 7-9 % of a point `SELECT`
+(no BK proposal; reported); access statistics 0.7 % (**BK-R6 discarded**). The
+every-row UPDATE's and the scan row's split were too coarse in that pass (92-99
+and 450-526 samples) and are re-profiled. BK-Q11 adopted: the trace spans and
+the schema word's rate were not built.
+
+### BK-S4 — a statement's reply in one write (BK-R7), 2026-10-11
+
+`src/server/tcp_server.cpp`: `OnClientReadable` does not flush while the
+statement it submitted is in flight; `OnStatementComplete` flushes all of it.
+A `reply_writes()` count on `TcpServer` (reactor-thread state, read after the
+reactor stops) and the cell `KwpEndpointTest.APipelinedStatementRepliesInOneWrite`
+(three writes for a handshake, a statement and STOP, each one client write;
+five before - the cell was run against the change reverted and read 5).
+
+### BK-S5 — carried spills (BK-R3), 2026-10-11
+
+`exec::EncodeAssigned` (`src/exec/row_codec.cpp`): an UPDATE's new image is the
+row's own bytes with only the assigned cells zeroed, their NULL bits cleared
+(`catalog::ClearNullBit`, new beside `SetNullBit`) and encoded as `EncodeRow`
+encodes them; every other cell, spilled or not, is carried. `EncodeRow` and it
+share `EncodeColumn`/`StartRow`. `UpdateInner` encodes through it from
+`payload_copy`, and its undo before-image is `payload_copy` too, where it was
+re-read from the page (one fetch and one copy a row fewer; the walk holds the
+page's write `PageRef` and does not suspend, the premise the conflict check
+already states). The release rule BK-Q4 (a) binds is written into
+`heap-and-tuple.md` §3.4, `rule-fixed-length-tuple.md`, `varheap.hpp` and
+`varheap_release.hpp`. Cells: `RowCodecEncodeAssignedTest` (byte equality with
+`EncodeRow` for every column of every type, NULL both ways, a shorter string
+over a longer, every column at once; two mutants - the cell not zeroed, the bit
+not cleared - each fail it), `VarHeapLifetimeTest`'s premise rewritten
+(`AnUpdateOfAnotherColumnCarriesTheSpilledValue`, with a repeatable-read reader
+holding the old version through it) and two rollback cells,
+`varheap_carry_crash_test.cpp` (a carrying UPDATE cut at every record it logs,
+an undecided one undone at mount, a `PURGE` after carries), and
+`FixedLengthTupleTest.AStoredValueSurvivesAnUpdateOfAnotherColumn` extended with
+`SET d = d, p = p`, the one route left to the decode-encode round trip.
+
+**The review of BK-S4 and BK-S5** (one `critics-developer` pass over the diff):
+no correctness defect in either. Applied: the release rule stated wrongly in
+`varheap.hpp` (it still read "when a version dies its values die with it") and
+in `varheap_release.hpp`'s drain sentence; BK-R7 cited from the code before the
+order carried it (this entry and §2 now do; the code keeps only the citation);
+`heap-and-tuple.md` §3.4's "what releases is rollback" missing `PURGE`; a second
+writer of the NULL bitmap (now `ClearNullBit`); three stale comments and the
+fixed-length cell's premise; the undo image from `payload_copy`; the two loops
+over the assignments merged; an unreachable null-pointer test dropped; the
+write count moved by the move operations like every other member; the
+one-write cell's flake mode named; the purge cell renamed (`PageRelease` is
+idempotent, so "once" was not observable). Rejected: none.
+
+Overhead not measured; measured at the milestone's close.

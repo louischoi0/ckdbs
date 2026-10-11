@@ -31,8 +31,10 @@
 //     can move.
 //   - The class is relayout-exempt by construction. The physical optimizer
 //     has no reason to touch a kVarHeap page, so it never will.
-//   - Reclamation is not new machinery: it rides on purge. When a version
-//     dies its values die with it.
+//   - Reclamation is not new machinery: it rides on purge. Versions of one
+//     tuple share every spilled value an UPDATE did not assign (BK-R3,
+//     `exec::EncodeAssigned`), so a value may be released only once **the
+//     newest version naming it** is reclaimed (`heap-and-tuple.md` §3.4).
 //
 // ---- The one operation that ends a value: Release() ----------------------
 //
@@ -41,11 +43,14 @@
 // line above it - its contract is stated once, on its own declaration
 // below.
 //
-// **Who may release, and when, is not this layer's decision.** A version's
-// slots die when the version does: at rollback, or when the writer that
-// superseded or deleted it falls below `ReadHorizon()`. This file only
-// performs it, exactly as it performs an append without deciding what
-// spills. `docs/spec/txn.md` §3.3 and §6 own the lifetime.
+// **Who may release, and when, is not this layer's decision.** A value dies
+// with the newest version naming it: at the rollback of the transaction
+// that appended it, or at the `PURGE` of the tombstone that names it - not
+// when an older version that also names it dies, since an UPDATE carries
+// every spilled cell it does not assign (BK-R3). This file only performs
+// it, exactly as it performs an append without deciding what spills.
+// `docs/spec/txn.md` §3.3 and §6 and `heap-and-tuple.md` §3.4 own the
+// lifetime.
 //
 // A page whose every slot is a tombstone holds nothing reachable and is
 // **reformatted in place** to become an append target again - which is why
