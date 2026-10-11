@@ -1,0 +1,13 @@
+== B rows 200 count(*)\n32200
+  select         ops=16000 p50=96.4 p99=127.3
+  insert         ops=16000 p50=72.8 p99=104.5
+  insert-again   ops=16000 p50=72.7 p99=102.2
+  update         ops=16000 p50=76.5 p99=106.3
+  ping           ops=16000 p50=51.8 p99=74.6
+== A rows 200 count(*)\n32200
+  select         ops=16000 p50=97.7 p99=130.0
+  insert         ops=16000 p50=72.3 p99=105.1
+  insert-again   ops=16000 p50=72.3 p99=102.2
+  update         ops=16000 p50=76.3 p99=105.5
+  ping           ops=16000 p50=51.6 p99=75.5
+verify_ok True

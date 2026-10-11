@@ -79,8 +79,12 @@ std::string Response(const Script& s, std::size_t i) {
 
 // **The shape every cell here runs.** Core 0 commits `strict` and is held
 // inside its sync. Core 1's session runs `writes`, the last of which commits
-// `relaxed` and is acknowledged, and then `SELECT`s the row it wrote.
-void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync) {
+// `relaxed` and is acknowledged, and then `SELECT`s the row it wrote - or,
+// with `other_session`, a second session on core 1 that has committed nothing
+// does, once the writer is acknowledged: the statement that began after the
+// commit was acknowledged must see it, whoever told its client.
+void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync,
+                      bool other_session = false) {
     TwoCoreRig::Options options;
     options.gated_log_sync = true;
     auto opened = TwoCoreRig::Open(options);
@@ -102,13 +106,23 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync) 
     Script strict{&strict_session, {"INSERT INTO t VALUES (101, 1)"}};
     Session relaxed_session;
     relaxed_session.set_durability(wal::DurabilityClass::kRelaxed);
-    Script relaxed{&relaxed_session, writes, select_sync};
-    relaxed.lines.push_back("SELECT id FROM t WHERE id = 102");
-    const std::size_t select = relaxed.lines.size() - 1;
+    Script relaxed{&relaxed_session, writes, select_sync && !other_session};
+    Session reader_session;
+    Script reader{&reader_session, {"SELECT id FROM t WHERE id = 102"}, select_sync};
+    if (!other_session) relaxed.lines.push_back("SELECT id FROM t WHERE id = 102");
+    // The statement under test is the writer's own last line, or the reader's
+    // only one; `writes_done` is how many of the writer's lines are writes.
+    Script& asker = other_session ? reader : relaxed;
+    const std::size_t select = other_session ? 0 : relaxed.lines.size() - 1;
+    const std::size_t writes_done = other_session ? relaxed.lines.size() : select;
     rig->core(0).scheduler().Submit(
         sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunScript(d0, strict)));
     rig->core(1).scheduler().Submit(
         sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunScript(d1, relaxed)));
+    if (other_session) {
+        rig->core(1).scheduler().Submit(
+            sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunScript(d1, reader)));
+    }
     // A failed assertion below must neither leave core 0 inside its sync,
     // whose reactor the teardown would then never join, nor leave both
     // reactors running over the scripts this scope destroys before the rig.
@@ -122,9 +136,10 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync) 
     rig->log_gate().Hold();
     rig->Start();
 
-    // Core 0's `strict` commit is inside its sync: its marker is set, its
-    // reactor blocked in the device. Both, because another sync parked at
-    // the gate - a drain tick, the writer - would satisfy the first alone.
+    // Core 0's `strict` commit is inside its sync: its marker is set, and a
+    // sync is parked at the gate - the WAL writer's, since at two cores the
+    // commit is deferred (BA-S7). Both, because another sync parked at the
+    // gate - a drain tick - would satisfy the first alone.
     const txn::CoreVisibilitySlot& core0_slot = rig->visibility().slot(0);
     strict.go.store(true, std::memory_order_release);
     ASSERT_TRUE(KickUntil(*rig, 0, [&] {
@@ -137,40 +152,57 @@ void SeesItsOwnCommit(const std::vector<std::string>& writes, bool select_sync) 
 
     // Core 1 commits `relaxed` and is acknowledged.
     relaxed.go.store(true, std::memory_order_release);
-    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return relaxed.done.load() >= select; }))
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return relaxed.done.load() >= writes_done; }))
         << "core 1's writes never finished";
-    for (std::size_t i = 0; i < select; ++i) {
+    for (std::size_t i = 0; i < writes_done; ++i) {
         ASSERT_FALSE(StartsWith(Response(relaxed, i), "ERR")) << Response(relaxed, i);
     }
     // The race this shape is about: the acknowledged commit sits above every
     // snapshot a mint could take now. Ordered by `done`'s acquire.
     ASSERT_LT(rig->visibility().SnapshotCeiling(), relaxed_session.acknowledged_commit_lsn());
+    // The other session asks only now, after the commit was acknowledged.
+    if (other_session) reader.go.store(true, std::memory_order_release);
 
-    // Its next statement waits for core 0's marker rather than read under it,
-    // counted into core 1's ceiling waiters - parked, or holding its reactor
-    // on the synchronous path.
+    // The session's own next statement waits for core 0's marker rather than
+    // read under it, counted into core 1's ceiling waiters - parked, or
+    // holding its reactor on the synchronous path. **Another session's is
+    // held to the answer alone**, checked below: a design that closes it
+    // without a wait (BA-Q3 (c), snapshots carrying their in-flight set)
+    // answers at once, and must answer the row. A design that waits must
+    // count itself into `ceiling_waiters` (`TransactionManager::CeilingWait`)
+    // - the condition below is what keeps a cell that has not yet asked
+    // from passing, and a plain "started" flag would race the lift.
     const txn::CoreVisibilitySlot& peer_slot = rig->visibility().slot(1);
-    ASSERT_TRUE(Within(2000ms, [&] {
-        return relaxed.done.load() > select || peer_slot.ceiling_waiters.load() >= 1;
-    }));
-    EXPECT_EQ(relaxed.done.load(), select)
-        << "core 1's SELECT did not wait for the marker; it answered " << Response(relaxed, select);
+    const auto answered_or_waiting = [&] {
+        return asker.done.load() > select || peer_slot.ceiling_waiters.load() >= 1;
+    };
+    // The reader was released just now and its reactor may be idle: kick it.
+    ASSERT_TRUE(other_session ? KickUntil(*rig, 1, answered_or_waiting)
+                              : Within(2000ms, answered_or_waiting));
+    if (!other_session) {
+        EXPECT_EQ(asker.done.load(), select)
+            << "core 1's SELECT did not wait for the marker; it answered "
+            << Response(asker, select);
+    }
 
     // The sync lands, the marker lifts, and the lift kicks core 1.
     rig->log_gate().Release();
-    ASSERT_TRUE(Within(1000ms, [&] { return relaxed.done.load() > select; }))
+    ASSERT_TRUE(Within(1000ms, [&] { return asker.done.load() > select; }))
         << "core 1's SELECT did not proceed at the marker's lift";
-    EXPECT_EQ(Response(relaxed, select), "id\\n102")
-        << "the session missed its own acknowledged commit";
+    EXPECT_EQ(Response(asker, select), "id\\n102")
+        << "the statement missed a commit acknowledged before it began";
     ASSERT_TRUE(Within(2000ms, [&] { return strict.done.load() >= 1; }));
     EXPECT_TRUE(StartsWith(Response(strict, 0), "INSERTED")) << Response(strict, 0);
     // No waiter outlives its statement.
     EXPECT_EQ(peer_slot.ceiling_waiters.load(), 0u);
-    // **And the wait is counted** (BA-S2): one statement waited, for at
-    // least the time this thread held the gate after it registered.
-    const Contention::Snapshot after = Contention::Read();
-    EXPECT_GE(after.of(Tally::kCeilingWaits) - before.of(Tally::kCeilingWaits), 1u);
-    EXPECT_GT(after.of(Tally::kCeilingWaitNs), before.of(Tally::kCeilingWaitNs));
+    // **And the session's own wait is counted** (BA-S2): one statement
+    // waited, for at least the time this thread held the gate after it
+    // registered.
+    if (!other_session) {
+        const Contention::Snapshot after = Contention::Read();
+        EXPECT_GE(after.of(Tally::kCeilingWaits) - before.of(Tally::kCeilingWaits), 1u);
+        EXPECT_GT(after.of(Tally::kCeilingWaitNs), before.of(Tally::kCeilingWaitNs));
+    }
 }
 
 // **Mutations**, each run repeatedly (BA-S1c): the bound never recorded -
@@ -195,6 +227,55 @@ TEST(StrictMarkerSnapshotRigTest, ASynchronousDispatchWaitsForTheBoundToo) {
     // The synchronous path cannot park: it holds its reactor until the lift,
     // as its own group commit blocks.
     SeesItsOwnCommit({"INSERT INTO t VALUES (102, 2)"}, /*select_sync=*/true);
+}
+
+// **Another session's commit** (the half BA-S1c left): a statement that
+// began after a commit was acknowledged to someone else must see it too,
+// whatever the session it ran in, because `READ COMMITTED` promises a
+// statement everything committed before it began - a promise `txn.md`'s
+// level table carries this case as a disclosed exception to.
+//
+// **Disabled, and red when enabled** - on every run at `6b0d8412`, which is
+// the reproduction `docs/inflight/bugs/a-strict-commits-marker-caps-every-
+// cores-snapshot-across-its-sync.md` records. The fix that turns them green
+// - the statement boundary waiting for the instance's published commit
+// ceiling, as it waits for the session's own - was built and measured
+// (`bench/v3.0.0/results-boundary-wait-overhead-v2.7.0-749-ga80de010.md`)
+// and not landed: a read-only session beside a `strict` committer and a
+// `relaxed` one lost 89 percent of its throughput. The cells stay for the
+// design that closes it - snapshots that carry their in-flight set (BA-Q3
+// (c)), or a wait scoped to the relations the statement bound (the entry's
+// interim option) - and assert the answer alone, never whether the
+// statement waited; enable them with it.
+TEST(StrictMarkerSnapshotRigTest, DISABLED_AnotherSessionsAcknowledgedCommitIsSeenByAStatementThatBeganAfter) {
+    SeesItsOwnCommit({"INSERT INTO t VALUES (102, 2)"}, /*select_sync=*/false,
+                     /*other_session=*/true);
+}
+
+TEST(StrictMarkerSnapshotRigTest, DISABLED_AnotherSessionsExplicitCommitIsSeenByTheSynchronousPathToo) {
+    SeesItsOwnCommit({"BEGIN", "INSERT INTO t VALUES (102, 2)", "COMMIT"}, /*select_sync=*/true,
+                     /*other_session=*/true);
+}
+
+TEST(StrictMarkerSnapshotRigTest, WithNoMarkerHeldNoStatementWaitsForAnyCommit) {
+    // The cost is only where a marker is held: with none, another session's
+    // acknowledged commit is already under the ceiling, the statement reads it
+    // at once, and nothing is counted as a ceiling wait.
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+
+    Session writer;
+    writer.set_durability(wal::DurabilityClass::kRelaxed);
+    const Contention::Snapshot before = Contention::Read();
+    ASSERT_TRUE(StartsWith(d1.Dispatch("INSERT INTO t VALUES (7, 1)", &writer).response, "INSERTED"));
+    Session reader;
+    EXPECT_EQ(d0.Dispatch("SELECT id FROM t WHERE id = 7", &reader).response, "id\\n7");
+    const Contention::Snapshot after = Contention::Read();
+    EXPECT_EQ(after.of(Tally::kCeilingWaits), before.of(Tally::kCeilingWaits));
 }
 
 }  // namespace

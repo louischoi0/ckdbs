@@ -1,0 +1,12 @@
+c1-main      runs=24  2026-10-10 21:25:56 .. 21:32:11  load1 0.62-1.94 waited_s=0 competing_runs=0
+c1-swap      runs=15  2026-10-10 21:32:13 .. 21:36:07  load1 1.57-1.98 waited_s=0 competing_runs=0
+c2-n1000     runs=36  2026-10-10 21:36:08 .. 21:42:08  load1 0.15-1.70 waited_s=0 competing_runs=0
+c2-n10000    runs=18  2026-10-10 22:28:59 .. 22:31:55  load1 0.46-2.10 waited_s=0 competing_runs=0
+c2-n200      runs=18  2026-10-10 22:13:27 .. 22:16:23  load1 0.79-1.89 waited_s=0 competing_runs=0
+c3-n1000     runs=36  2026-10-10 21:42:09 .. 21:54:20  load1 0.19-1.48 waited_s=0 competing_runs=0
+c3-n10000    runs=18  2026-10-10 22:31:57 .. 22:37:59  load1 0.63-1.38 waited_s=0 competing_runs=0
+c3-n200      runs=18  2026-10-10 22:16:25 .. 22:22:26  load1 1.00-1.88 waited_s=0 competing_runs=0
+c3b-n1000    runs=36  2026-10-10 22:07:32 .. 22:13:25  load1 0.39-1.64 waited_s=0 competing_runs=0
+c3c-n1000    runs=36  2026-10-10 21:54:21 .. 22:07:31  load1 1.14-2.10 waited_s=0 competing_runs=0
+c3c-n10000   runs=18  2026-10-10 22:38:00 .. 22:44:23  load1 0.92-2.06 waited_s=0 competing_runs=0
+c3c-n200     runs=18  2026-10-10 22:22:28 .. 22:28:57  load1 0.93-2.35 waited_s=0 competing_runs=0
