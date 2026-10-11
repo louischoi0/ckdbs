@@ -262,13 +262,13 @@ protected:
     InMemoryCheckpointAnchor anchor_;
 };
 
-TEST_F(CheckpointLogParkTest, APeersStepParksWhileItsReactorRuns) {
+TEST_F(CheckpointLogParkTest, APeersRunParksWhileItsReactorRuns) {
     LoggedPages(*peer_, 6);
     auto reactor = ReactorAs(1);
     ParksWhileTheReactorRuns(*reactor, *peer_, 1);
 }
 
-TEST_F(CheckpointLogParkTest, CoreZerosStepParksThroughTheWriter) {
+TEST_F(CheckpointLogParkTest, CoreZerosRunParksThroughTheWriter) {
     LoggedPages(*owner_, 6);
     auto reactor = ReactorAs(0);
     const std::uint64_t inline_before = owner_->stats().syncs;

@@ -209,7 +209,6 @@ Status Checkpointer::Start() {
 }
 
 StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
-    last_step_written_ = 0;
     if (!in_progress_) {
         return Status::OutOfRange("checkpointer: no checkpoint in progress");
     }
@@ -232,10 +231,14 @@ StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
         const std::uint64_t writes_before = run_report_ != nullptr ? run_report_->sum_ns[write] : 0;
         if (!write_only) {
             flushed = target_.FlushPages(pages);
-        } else if (auto wrote = target_.WritePages(pages, defer); wrote.ok()) {
-            last_step_written_ = wrote.value();
-        } else {
+        } else if (auto wrote = target_.WritePages(pages, defer); !wrote.ok()) {
             flushed = wrote.status();
+        } else if (wrote.value() > 0) {
+            // Asked for and not waited on (BI-Q13): the data-sync thread
+            // keeps the unsynced backlog near one step, so a synchronous sync
+            // landing mid-run - a carve's page 0, the reclaimer's maps - does
+            // not inherit a run's worth of writeback; only the publish parks.
+            (void)target_.RequestSync();
         }
         if (run_report_ != nullptr) {
             const std::uint64_t held = wal_.clock().Now() - step_start;
@@ -433,20 +436,28 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
     }
+    // **One park for the whole snapshot first** (BI-S5): every recLSN in it
+    // is ahead of `CHECKPOINT_BEGIN`, so once the log is durable through
+    // that record a step defers only for a page changed since - where a park per step cost each of a run's steps a
+    // reactor iteration, and under load an iteration is a statement long.
+    if (!wal_.IsDurable(begin_lsn_)) ++task_report_.gate_parks;
+    if (Status s = co_await ParkOnLog(begin_lsn_, core_id); !s.ok()) {
+        co_return FinishTask(core_id, s);
+    }
+    if (generation != task_generation_) co_return Status::OK();
     // **Every wait is a park** (BI-R2). A step that needs the log further
     // hands back the LSN instead of waiting (BI-Q4 (a)); the task asks the
     // writer for the sync and parks, counted into the writer's kick
     // (BI-Q6-R), and runs the step again, inline after `kGateParks` parks.
-    // A step's own data-file sync is the data-sync thread's
-    // (`storage/data_syncer.hpp`), asked for and parked on. The reactor
-    // polls everything else meanwhile.
+    // **A step asks for no data-file sync** (BI-Q13): the publish's sync of
+    // its collection follows every step's writes and precedes the anchor's
+    // page, which is the order the anchor needs, and a sync per step cost
+    // each step a park. The reactor polls everything else meanwhile.
     int parks = 0;
-    std::size_t written = 0;  // by this step's attempts, synced before the next
     while (true) {
         Lsn deferred = kNoLsn;
         auto done = Step(parks < kGateParks ? &deferred : nullptr, /*write_only=*/true);
         if (!done.ok()) co_return FinishTask(core_id, done.status());
-        written += last_step_written_;
         if (deferred != kNoLsn) {
             // A page_lsn at or past the append point names no record, and no
             // sync satisfies a park on it: the next step's inline gate
@@ -465,11 +476,6 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
             continue;
         }
         parks = 0;
-        if (written > 0) {
-            written = 0;
-            if (Status s = co_await ParkOnDataSync(); !s.ok()) co_return FinishTask(core_id, s);
-            if (generation != task_generation_) co_return Status::OK();
-        }
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
         if (done.value()) break;

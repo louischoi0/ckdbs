@@ -1,5 +1,6 @@
 #include "kds/storage/data_syncer.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -173,7 +174,7 @@ protected:
     std::vector<PageId> pages_;
 };
 
-TEST_F(CheckpointDataSyncTest, AStepParksWhileItsDataSyncIsHeld) {
+TEST_F(CheckpointDataSyncTest, TheRunParksWhileItsDataSyncIsHeld) {
     store_->data_sync().Start();
     wal::InMemoryCheckpointAnchor anchor;
     wal::Checkpointer c(*wal_, *target_, txns_, anchor, wal::CheckpointerConfig{.pages_per_step = 4});
@@ -198,9 +199,19 @@ TEST_F(CheckpointDataSyncTest, AStepParksWhileItsDataSyncIsHeld) {
         for (const auto& [kind, id] : held_->trace()) n += kind == 'w' ? 1 : 0;
         return n;
     };
-    const std::size_t writes_at_hold = writes();
     for (int i = 0; i < 50; ++i) reactor_.RunOnce();
-    EXPECT_EQ(writes(), writes_at_hold) << "the next step wrote before the held sync returned";
+    // BI-Q13: no step waits for the data file - every snapshot page is
+    // written while the first sync is still held - and the run then parks on
+    // the publish's sync and writes nothing past it.
+    const auto trace = held_->trace();
+    for (PageId id : pages_) {
+        EXPECT_TRUE(std::any_of(trace.begin(), trace.end(),
+                                [id](const auto& e) { return e.first == 'w' && e.second == id; }))
+            << "page " << id << " waited for a held sync before it was written";
+    }
+    const std::size_t writes_after_steps = writes();
+    for (int i = 0; i < 50; ++i) reactor_.RunOnce();
+    EXPECT_EQ(writes(), writes_after_steps) << "the run wrote on past a sync that had not returned";
     EXPECT_GE(polls - polls_at_hold, 50u) << "the reactor waited for the data file's sync";
     EXPECT_TRUE(c.run_in_flight());
     EXPECT_EQ(anchor.publishes(), 0u) << "the run went on past a sync that had not returned";
@@ -215,7 +226,7 @@ TEST_F(CheckpointDataSyncTest, AStepParksWhileItsDataSyncIsHeld) {
         << "a step synced the data file on the reactor";
 }
 
-TEST_F(CheckpointDataSyncTest, AFailedDataSyncFailsItsStepPublishesNothingAndSticks) {
+TEST_F(CheckpointDataSyncTest, AFailedDataSyncFailsTheRunPublishesNothingAndSticks) {
     store_->data_sync().Start();
     Status handed;
     int handler_calls = 0;

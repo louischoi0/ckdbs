@@ -73,8 +73,9 @@ struct CheckpointRunReport {
     std::array<std::uint64_t, kCheckpointPhaseCount> sum_ns{};
     std::array<std::uint64_t, kCheckpointPhaseCount> max_ns{};  // one occurrence's longest
     std::array<std::uint64_t, kCheckpointPhaseCount> count{};   // occurrences timed
-    // BI-S3: the task's asks of the log - a step handed back for an LSN not
-    // yet durable, and an end record not yet durable - each answered by a
+    // BI-S3: the task's asks of the log - the snapshot's one park after
+    // `Start` and each step handed back for an LSN not yet durable
+    // (`gate_parks`), and the end record (`end_parks`) - each answered by a
     // park unless the writer's sync landed first.
     std::uint64_t gate_parks = 0;
     std::uint64_t end_parks = 0;

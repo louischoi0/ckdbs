@@ -416,13 +416,11 @@ public:
     // every page in it has been written back, at which point Complete()
     // is the next call. A failed step leaves the checkpoint in progress
     // and its remaining pages unflushed, so the next Step() retries them.
-    // The run task's step writes and does not sync (`write_only`); the
-    // task asks for the sync and parks on it, and `last_step_written()` says
-    // whether there is one to ask for. With `defer`, a step that needs the
+    // The run task's step writes and does not sync (`write_only`): the
+    // publish's sync covers it (BI-Q13). With `defer`, a step that needs the
     // log further stores the LSN there and returns false with its cursor
     // unmoved.
     StatusOr<bool> Step(Lsn* defer = nullptr, bool write_only = false);
-    std::size_t last_step_written() const noexcept { return last_step_written_; }
 
     // Logs CHECKPOINT_END, makes it durable, and publishes the anchor -
     // in that order. Fails with OutOfRange if the flush phase has not
@@ -511,8 +509,8 @@ private:
     sched::Coro RunTask(CheckpointGate* gate, std::uint32_t core_id, std::uint64_t generation);
     Status FinishTask(std::uint32_t core_id, const Status& ran);
     // Parks on the log for one step, at most, before the step's own inline
-    // gate takes what is left (BI-R2's bound). Each park after the first is
-    // a page re-dirtied while the sync ran. A bound, not a tuned number: the
+    // gate takes what is left (BI-R2's bound). After the snapshot's one park
+    // (BI-Q13), each is a page of the batch changed since `CHECKPOINT_BEGIN`. A bound, not a tuned number: the
     // remainder is counted (`log_gate_batch_n`, `log_gate_run_n`) and BI-S5
     // reports it.
     static constexpr int kGateParks = 16;
@@ -527,7 +525,6 @@ private:
     // step does (BI-Q5 (a)).
     sched::Coro WriteForPublish(std::span<const PageId> pages, std::uint32_t core_id,
                                 std::uint64_t generation);
-    std::size_t last_step_written_ = 0;
     void LogSkip(std::uint32_t core_id) const;
     bool task_in_flight_ = false;
     // Moved by `Abandon`, so a frame of an abandoned run that is ever polled
