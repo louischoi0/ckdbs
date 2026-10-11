@@ -149,6 +149,8 @@ Status Checkpointer::Start() {
     if (in_progress_) {
         return Status::AlreadyExists("checkpointer: a checkpoint is already in progress");
     }
+    const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+    const PhaseTimer timed(CheckpointPhase::kStart);
 
     // Both tables are snapshotted before the record is written, so what
     // BEGIN carries is exactly what recovery's analysis phase will see.
@@ -156,6 +158,11 @@ Status Checkpointer::Start() {
     const std::vector<CheckpointDirtyPage> dirty = target_.DirtyTable();
 
     if (Status s = LogBegin(active_txns, dirty); !s.ok()) {
+        // BI-S1 counts it: the BEGIN ceiling refuses here, at the append.
+        // Only a gated run's, like every other census field.
+        if (run_report_ != nullptr) {
+            CheckpointCensus::Of(wal_.core_id()).start_refused.fetch_add(1, std::memory_order_relaxed);
+        }
         return s;
     }
 
@@ -191,6 +198,7 @@ Status Checkpointer::Start() {
     next_page_ = 0;
     in_progress_ = true;
     ++stats_.started;
+    if (run_report_ != nullptr) run_report_->dirty_at_start = pending_pages_.size();
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("checkpoint", "started: begin_lsn=" + std::to_string(begin_lsn_) +
                                       " dirty_pages=" + std::to_string(pending_pages_.size()) +
@@ -205,14 +213,31 @@ StatusOr<bool> Checkpointer::Step() {
         return Status::OutOfRange("checkpointer: no checkpoint in progress");
     }
     ++stats_.steps;
+    if (run_report_ != nullptr) ++run_report_->steps;
     if (next_page_ >= pending_pages_.size()) {
         return true;
     }
+    const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
 
     const std::size_t batch =
         std::min(config_.pages_per_step, pending_pages_.size() - next_page_);
     const std::span<const PageId> pages(pending_pages_.data() + next_page_, batch);
-    if (Status s = target_.FlushPages(pages); !s.ok()) {
+    Status flushed;
+    {
+        // BI-Q9 (ii)'s quantities: the step's whole hold, and its page writes
+        // summed, each maxed over the run.
+        const sched::MonoTimeNs step_start = wal_.clock().Now();
+        const std::size_t write = static_cast<std::size_t>(CheckpointPhase::kPageWrite);
+        const std::uint64_t writes_before = run_report_ != nullptr ? run_report_->sum_ns[write] : 0;
+        flushed = target_.FlushPages(pages);
+        if (run_report_ != nullptr) {
+            const std::uint64_t held = wal_.clock().Now() - step_start;
+            run_report_->step_max_ns = std::max(run_report_->step_max_ns, held);
+            run_report_->step_page_write_max_ns = std::max(
+                run_report_->step_page_write_max_ns, run_report_->sum_ns[write] - writes_before);
+        }
+    }
+    if (Status s = std::move(flushed); !s.ok()) {
         // The cursor does not move: these pages are still the
         // checkpoint's responsibility, and the next Step() retries them.
         // Logged because the retry makes this survivable and therefore
@@ -228,6 +253,7 @@ StatusOr<bool> Checkpointer::Step() {
     }
     next_page_ += batch;
     stats_.pages_flushed += batch;
+    if (run_report_ != nullptr) run_report_->pages += batch;
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
         log_->Trace("checkpoint", "flushed " + std::to_string(batch) + " page(s), " +
                                       std::to_string(pending_pages_.size() - next_page_) +
@@ -250,6 +276,7 @@ Status Checkpointer::Complete() {
             " pages of the checkpoint's dirty table are still unflushed");
     }
 
+    const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
     payload_scratch_.assign(kCheckpointEndPayloadSize, std::byte{0});
     const CheckpointEndPayload fields{pending_redo_start_};
     auto encoded = EncodeCheckpointEnd(payload_scratch_, fields);
@@ -267,8 +294,11 @@ Status Checkpointer::Complete() {
     // anchor naming a redo start that a crash then erases is worse than no
     // checkpoint at all, because recovery would skip records it still
     // needs.
-    if (Status s = wal_.EnsureDurable(end_lsn.value()); !s.ok()) {
-        return s;
+    {
+        const PhaseTimer timed(CheckpointPhase::kEndWait);
+        if (Status s = wal_.EnsureDurable(end_lsn.value()); !s.ok()) {
+            return s;
+        }
     }
 
     const CheckpointAnchorRecord anchor{wal_.core_id(),
@@ -343,13 +373,13 @@ Status Checkpointer::RunGated(CheckpointGate* gate, std::uint32_t core_id) {
     // is the delta: logging the total would read as "this checkpoint flushed
     // 5 pages" on every tick after the first one that did.
     const std::uint64_t flushed_before = stats_.pages_flushed;
-    Status ran;
-    {
-        // BA-R0's checkpoint count and longest run, on the periodic path:
-        // the run a reactor is held for, not mount's.
-        const StallTimer stall(Tally::kCheckpointRuns, Longest::kCheckpointNs);
-        ran = RunToCompletion();
-    }
+    // BI-S1's run record: from the gate's entry to the publish's return, the
+    // phases inside it, and the edges a reactor iteration reads to tell
+    // whether it overlapped a run (`sched/checkpoint_census.hpp`).
+    CheckpointRunReport report;
+    BeginRun(core_id, report);
+    const Status ran = RunToCompletion();
+    EndRun(core_id, ran);
     if (!ran.ok()) {
         if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
             log_->Error("checkpoint", who + "checkpoint failed: " + ran.message());
@@ -362,6 +392,50 @@ Status Checkpointer::RunGated(CheckpointGate* gate, std::uint32_t core_id) {
                                       std::to_string(stats_.pages_flushed - flushed_before));
     }
     return Status::OK();
+}
+
+void Checkpointer::BeginRun(std::uint32_t core_id, CheckpointRunReport& report) {
+    report.start_ns = wal_.clock().Now();
+    report.resumed = in_progress_;
+    run_report_ = &report;
+    CheckpointCensus::RunEdge(core_id);
+}
+
+void Checkpointer::EndRun(std::uint32_t core_id, const Status& ran) {
+    CheckpointRunReport& r = *run_report_;
+    run_report_ = nullptr;
+    r.end_ns = wal_.clock().Now();
+    r.completed = ran.ok();
+    CheckpointCensus::Publish(core_id, r);
+    CheckpointCensus::RunEdge(core_id);
+    // BA-R0's checkpoint count and longest run, on the periodic path - fed
+    // from this record, so a run has one timing source (BI-Q1 (a)).
+    Contention::Add(Tally::kCheckpointRuns);
+    Contention::Max(Longest::kCheckpointNs, r.end_ns - r.start_ns);
+    LogRun(core_id, r);
+}
+
+void Checkpointer::LogRun(std::uint32_t core_id, const CheckpointRunReport& r) const {
+    // One line per run at Info, which the server logs by default: what a
+    // probe sample is classed against (BI-S1, §5.1). `start_ns`/`end_ns` are
+    // the injected monotonic clock's, CLOCK_MONOTONIC on a real instance.
+    if (log_ == nullptr || !log_->enabled(LogLevel::kInfo)) return;
+    std::string line = "run: core=" + std::to_string(core_id) +
+                       " completed=" + (r.completed ? "1" : "0") +
+                       " resumed=" + (r.resumed ? "1" : "0") +
+                       " start_ns=" + std::to_string(r.start_ns) +
+                       " end_ns=" + std::to_string(r.end_ns) +
+                       " wall_us=" + std::to_string((r.end_ns - r.start_ns) / 1000) +
+                       " steps=" + std::to_string(r.steps) + " pages=" + std::to_string(r.pages) +
+                       " dirty_at_start=" + std::to_string(r.dirty_at_start) +
+                       " step_max_us=" + std::to_string(r.step_max_ns / 1000) +
+                       " step_page_write_max_us=" + std::to_string(r.step_page_write_max_ns / 1000);
+    for (std::size_t i = 0; i < kCheckpointPhaseCount; ++i) {
+        line += std::string(" ") + kCheckpointPhaseNames[i] +
+                "_sum_us=" + std::to_string(r.sum_ns[i] / 1000) + " " +
+                kCheckpointPhaseNames[i] + "_max_us=" + std::to_string(r.max_ns[i] / 1000);
+    }
+    log_->Info("checkpoint", line);
 }
 
 }  // namespace kds::wal

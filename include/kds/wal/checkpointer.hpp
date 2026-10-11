@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "kds/sched/checkpoint_census.hpp"
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/wal/manager.hpp"
@@ -351,6 +352,19 @@ private:
     // segment. Emitted immediately after CHECKPOINT_BEGIN, which is what puts
     // the base ahead of every record folded onto it.
     Status LogAssertionSnapshots();
+
+    // BI-S1's run record: `BeginRun` points `run_report_` at `report` and
+    // marks the run's edge; `EndRun` publishes it to the census and BA's
+    // tallies and logs its Info line.
+    void BeginRun(std::uint32_t core_id, CheckpointRunReport& report);
+    void EndRun(std::uint32_t core_id, const Status& ran);
+    void LogRun(std::uint32_t core_id, const CheckpointRunReport& report) const;
+
+    // The run `RunGated` is timing, or null: `Start`, `Step` and `Complete`
+    // install it as their thread's phase sink for their own length (BI-S1,
+    // `sched/checkpoint_census.hpp`), so a direct caller - mount, a test -
+    // records nothing.
+    CheckpointRunReport* run_report_ = nullptr;
 
     WalManager& wal_;
     CheckpointTarget& target_;

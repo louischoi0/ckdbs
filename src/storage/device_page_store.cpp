@@ -2,6 +2,7 @@
 
 #include <unordered_set>
 
+#include "kds/sched/checkpoint_census.hpp"
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 
@@ -1806,6 +1807,7 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids, wal::WalD
     }
     if (highest == wal::kNoLsn) return Status::OK();  // nothing logged in this batch
 
+    const PhaseTimer timed(CheckpointPhase::kLogGateBatch);  // BI-S1
     if (Status s = gate->EnsureDurable(highest); !s.ok()) {
         // Refusing the flush is the whole point: writing the page anyway
         // would put data on disk ahead of the log that describes it.
@@ -1819,6 +1821,7 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids, wal::WalD
 }
 
 void DevicePageStore::AwaitWritebackClaim(PageId page_id) {
+    const PhaseTimer timed(CheckpointPhase::kClaimWait);  // BI-S1
     // A writeback's claim spans a device write and, at worst, a WAL sync -
     // milliseconds, not the nanoseconds a page latch is held for - so the
     // spin is brief and the rest of the wait sleeps rather than yields
@@ -2059,6 +2062,7 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         // round trip; this is the arm that catches a page whose record
         // arrived after it.
         if (gate != nullptr && run_lsn != wal::kNoLsn && !gate->IsDurable(run_lsn)) {
+            const PhaseTimer timed(CheckpointPhase::kLogGateRun);  // BI-S1
             if (Status s = gate->EnsureDurable(run_lsn); !s.ok()) {
                 if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                     log_->Error("pagestore", "WAL gate refused a writeback up to page_lsn " +
@@ -2071,11 +2075,14 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         // (3) write: one device call for a run, per page otherwise, and
         // best-effort by spec §4 - a device without a real scatter write
         // still sees the pages land in file order.
-        const Status wrote =
-            run > 1 ? device_.WritePageRun(ordered[i], static_cast<std::uint32_t>(run),
-                                           std::span<const std::byte>(scratch))
-                    : device_.WritePage(ordered[i], std::span<const std::byte, kPageSize>(
-                                                        scratch.data(), kPageSize));
+        Status wrote;
+        {
+            const PhaseTimer timed(CheckpointPhase::kPageWrite);  // BI-S1
+            wrote = run > 1 ? device_.WritePageRun(ordered[i], static_cast<std::uint32_t>(run),
+                                                   std::span<const std::byte>(scratch))
+                            : device_.WritePage(ordered[i], std::span<const std::byte, kPageSize>(
+                                                                scratch.data(), kPageSize));
+        }
         if (!wrote.ok()) {
             if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 log_->Error("pagestore", "write failed for page " +
@@ -2194,8 +2201,18 @@ Status DevicePageStore::Flush() {
 }
 
 Status DevicePageStore::Sync() {
-    if (Status s = Flush(); !s.ok()) return s;
-    Status s = device_.Sync();
+    // Inside a checkpoint run this is the anchor publish's (BI-S1): its whole
+    // writeback is one phase, so the gate and write timers in it record
+    // nothing of their own.
+    {
+        const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
+        if (Status s = Flush(); !s.ok()) return s;
+    }
+    Status s;
+    {
+        const PhaseTimer timed(CheckpointPhase::kPublishSync);
+        s = device_.Sync();
+    }
     if (log_ != nullptr) {
         if (!s.ok() && log_->enabled(LogLevel::kError)) {
             log_->Error("pagestore", "device sync failed: " + s.message());
@@ -2256,7 +2273,11 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     // in between - and this caller would then sync for a write nobody
     // made. The count `FlushMaps` returns is the same answer taken once,
     // and under the hold.
-    auto flushed = FlushMaps();
+    StatusOr<std::size_t> flushed = std::size_t{0};
+    {
+        const PhaseTimer timed(CheckpointPhase::kMapWrite);  // BI-S1
+        flushed = FlushMaps();
+    }
     if (!flushed.ok()) return flushed.status();
     if (flushed.value() > 0) wrote_any = true;
 
@@ -2279,7 +2300,11 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     // asymmetry is deliberate, because a checkpoint step that synced on
     // every round would pay an `fsync` per step for a map it did not write.
     if (!wrote_any) return Status::OK();  // nothing written, nothing to sync
-    Status s = device_.Sync();
+    Status s;
+    {
+        const PhaseTimer timed(CheckpointPhase::kDataSync);  // BI-S1
+        s = device_.Sync();
+    }
     if (log_ != nullptr) {
         if (!s.ok() && log_->enabled(LogLevel::kError)) {
             log_->Error("pagestore", "checkpoint sync failed: " + s.message());
