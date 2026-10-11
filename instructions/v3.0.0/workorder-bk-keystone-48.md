@@ -29,12 +29,16 @@ for the word.
 `worktree-bk-keystone-48`, the close measured at `efa6adba` against
 `5979b5e7`, `origin/main` merged in at `a45311b5`; no tag (BK-Q5 (a)).
 
-**The letter collides.** Two orders opened on `main` the same day carry
-BK too - `workorder-bk-opt-read-update-path.md` and
-`workorder-bk-sys-statistics-show-sugar.md` - found when `main` was merged
-again for the push. Cite the file, never the bare letter (`index.md`'s
-rule); this order's marks are `raft-marks-2026-10-11-keystone-48.md`, and
-`raft-marks-2026-10-11.md` is another session's record of the same day.
+**The letter collided and was resolved.** Two orders opened on `main` the
+same day were lettered BK too, found when `main` was merged again for the
+push; on the operator's word of 2026-10-11 (W5,
+`raft-marks-2026-10-11-keystone-48.md` §4) they are BM
+(`workorder-bm-opt-read-update-path.md`) and BN
+(`workorder-bn-sys-statistics-show-sugar.md`), and this order, written
+first that day (02:11 UTC), keeps BK. Every reference followed the
+letters, file names included. This order's marks are
+`raft-marks-2026-10-11-keystone-48.md`; `raft-marks-2026-10-11.md` is
+another session's record of the same day.
 
 **What the words settle, and what they leave open.**
 

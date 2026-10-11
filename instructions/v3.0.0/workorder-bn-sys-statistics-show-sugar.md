@@ -1,4 +1,11 @@
-# Work order BK — four statistics relations, and `SHOW` as sugar over `SELECT`
+# Work order BN — four statistics relations, and `SHOW` as sugar over `SELECT`
+
+**Lettered BK at its writing and relettered BN on 2026-10-11 on the
+operator's word** (`raft-marks-2026-10-11-keystone-48.md` §4), when three
+orders of the day were found to carry BK: `workorder-bk-keystone-48.md`,
+written first, keeps the letter; `workorder-bm-opt-read-update-path.md` is
+BM. This order's items read BN-*, and its marks stay in
+`raft-marks-2026-10-11.md` §1-§3 under the new letter.
 
 Written 2026-10-11 **in the main checkout on `main` at `ab2c46d0`**
 (`v2.7.0-771-gab2c46d0`), with no worktree: the operator directed that the
@@ -21,9 +28,9 @@ follows the operator's words of 2026-10-11, recorded in English
   well. And push it."*
 
 **Written, not opened.** W2 and W3 are the operator's decisions and stand
-here as BK-R1 and BK-R2. What they leave open is §5, BK-Q0..Q13, each with
-CLA's proposal and none marked. **Not reviewed**: BK-S0's
-`critics-developer` review of this order is owed before BK-Q0 is put to
+here as BN-R1 and BN-R2. What they leave open is §5, BN-Q0..Q13, each with
+CLA's proposal and none marked. **Not reviewed**: BN-S0's
+`critics-developer` review of this order is owed before BN-Q0 is put to
 the operator (§7).
 
 **Claim tags:**
@@ -38,29 +45,29 @@ than claims, so they carry no tag.
 
 **The letter.** `[source-read]` BJ is the last order on `main`
 (`workorder-bj-expression-update.md`); no branch on `origin` and no file
-under `instructions/` or `docs/` uses BK. BK is the next free letter.
+under `instructions/` or `docs/` uses BN. BN is the next free letter.
 
-**BK against other orders.** No order on `main` touches the `SHOW`
+**BN against other orders.** No order on `main` touches the `SHOW`
 surface or `src/exec/catalog_view.cpp`. **BI**
 (`workorder-bi-checkpoint-off-the-reactor.md`, not opened) changes how a
 checkpoint run is stepped and where its syncs wait; `sys.checkpoints`
 (§3.4) records a run's outcome and must be written by whatever shape BI
-leaves, so BK-S7 follows BI's S2 if BI is opened first. **AQ** and **BJ**
-share the expression evaluator; BK reads no expression. Not part of AR0
+leaves, so BN-S7 follows BI's S2 if BI is opened first. **AQ** and **BJ**
+share the expression evaluator; BN reads no expression. Not part of AR0
 §8's chain.
 
 ---
 
-## 0. What BK is
+## 0. What BN is
 
 Two things, one dependent on the other.
 
-1. **`SHOW` becomes sugar** (BK-R2). Every `SHOW` target is one `SELECT`
+1. **`SHOW` becomes sugar** (BN-R2). Every `SHOW` target is one `SELECT`
    over one `sys` view, rewritten at parse and run through the `SELECT`
    path, so nothing an operator can read through `SHOW` is out of reach
    of `SELECT`, `WHERE` and `LIMIT`. Today that holds for none of the 15
    targets (§1.1).
-2. **Four new relations** (BK-R1): `sys.statement_stats`,
+2. **Four new relations** (BN-R1): `sys.statement_stats`,
    `sys.relation_stats`, `sys.lock_waits` and `sys.checkpoints`, each
    readable by `SELECT` from the stage that builds it. They are what the
    engine does not record anywhere today: the cost of a statement shape,
@@ -108,11 +115,11 @@ among them `next_id` and the budget fields `BudgetOf` derives
   installed`.** `SetTraceSink` (`include/kds/server/command_dispatcher.hpp:1746`)
   has no caller in `src/`, `tests/`, `sim/` or `tools/`, so `traces_`
   stays null, and `TRACE ON` is refused for the same reason (`:3415-3437`).
-  The surface is reachable and does nothing (BK-Q9).
+  The surface is reachable and does nothing (BN-Q9).
 - **`manual/sql/sql.md:975` states `catalog_recovered=0`; the code writes
   `catalog_recovered=1`** (`command_dispatcher.cpp:1810`). The manual's
   introspection table (`sql.md:23`, `:975-990`) also omits `TRACES`,
-  `TRACE` and `CABIN_OPTIMIZER`. BK-S8 rewrites the section, so both are
+  `TRACE` and `CABIN_OPTIMIZER`. BN-S8 rewrites the section, so both are
   corrected there rather than separately.
 
 ### 1.2 What `SELECT ... FROM sys.<name>` reaches
@@ -156,9 +163,9 @@ classified there, and they do not filter: `TablesView`, `ObjectsView` and
 So, by reading and not by a run, `SHOW TABLES` and `SELECT * FROM
 sys.tables` already answer differently inside a transaction while another
 transaction's `CREATE TABLE` is open, and §5a's own opening sentence
-names the one that answers differently as the leak. BK-R2 cannot hold
-while the two disagree, so BK must pick one answer for every view
-(BK-Q2).
+names the one that answers differently as the leak. BN-R2 cannot hold
+while the two disagree, so BN must pick one answer for every view
+(BN-Q2).
 
 ### 1.4 What the four relations would draw on
 
@@ -231,14 +238,14 @@ memory-resident view costs no format change.
 
 ## 2. Rulings
 
-### BK-R1 — Four relations (W2, W3)
+### BN-R1 — Four relations (W2, W3)
 
-BK adds `sys.statement_stats`, `sys.relation_stats`, `sys.lock_waits` and
-`sys.checkpoints`. `sys.sessions` is not part of BK.
+BN adds `sys.statement_stats`, `sys.relation_stats`, `sys.lock_waits` and
+`sys.checkpoints`. `sys.sessions` is not part of BN.
 
-### BK-R2 — `SHOW` is sugar over `SELECT` (W3)
+### BN-R2 — `SHOW` is sugar over `SELECT` (W3)
 
-Restated as four rules, which BK-S8 lands in the spec that owns the
+Restated as four rules, which BN-S8 lands in the spec that owns the
 `sys` views:
 
 - **SV1 — one `SELECT`, one view.** Every `SHOW <target> [<argument>]`
@@ -252,20 +259,20 @@ Restated as four rules, which BK-S8 lands in the spec that owns the
   byte position.
 - **SV3 — nothing only `SHOW` can read.** No value is reported by a
   `SHOW` that `SELECT` over a view cannot read. A counter a `SHOW` prints
-  today is a column of a view after BK, or it is deleted.
+  today is a column of a view after BN, or it is deleted.
 - **SV4 — a view is the only place the data logic lives.** A `SHOW`
   target is added by adding a view and one rewrite entry; no `SHOW`
   handler reads a source. The handlers of §1.1 are deleted as their
   targets move.
 
-How a reply is rendered under SV2 is BK-Q1; what a view filters is BK-Q2.
+How a reply is rendered under SV2 is BN-Q1; what a view filters is BN-Q2.
 
 ---
 
 ## 3. The four relations — CLA's proposal `[design]`
 
 Common to all four: each is a view in the registry of §1.2 from the
-stage that builds it; its columns are typed (BK-Q3); its timestamps are
+stage that builds it; its columns are typed (BN-Q3); its timestamps are
 UTC wall-clock nanoseconds, because an operator correlates these rows
 with events outside the engine (the logical `last_seen` of
 `sys.access_stats` and `sys.patterns` is not reused); a write into any of
@@ -278,7 +285,7 @@ column of `sys.meta` (SV3).
 - **Answers:** which shapes run most, cost most in total, and cost most
   per call; which are refused and how.
 - **Key:** `(fetch_id, kind)`, where `kind` is the statement class
-  (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `PURGE`, DDL). BK-Q6.
+  (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `PURGE`, DDL). BN-Q6.
 - **Columns:** `fetch_id`, `kind`, `calls`, `ok`, `refused_conflict`
   (`TxnConflict`, deadlock, fault net), `refused_other`, `rows_returned`,
   `rows_written`, `pages_touched` (from `ExecStats`), `total_ns`,
@@ -292,14 +299,14 @@ column of `sys.meta` (SV3).
   one page from every core is the contention point this table exists to
   find. The view therefore lags by at most one tick, stated in the spec.
 - **Bound:** `kMaxStatementShapes` rows (4096 proposed, `access_stats`'
-  number); a new shape past it is dropped and counted (BK-Q7).
-- **Persistence and CR6:** persisted, unlogged (BK-Q5). The test: no
+  number); a new shape past it is dropped and counted (BN-Q7).
+- **Persistence and CR6:** persisted, unlogged (BN-Q5). The test: no
   engine reader acts on it - the relayout planner reads
   `sys.access_stats` and Waystone reads `sys.patterns`, and nothing would
   read this - so its content is
   only a statistic. If a reader ever acts on it, it leaves CR6.
 - **Switch:** `statement_statistics`, a new key, since no existing
-  setting expresses this quantity (BK-Q8).
+  setting expresses this quantity (BN-Q8).
 
 ### 3.2 `sys.relation_stats` — a relation's activity and budget
 
@@ -316,9 +323,9 @@ column of `sys.meta` (SV3).
   the counters started from (a format, a discarded damaged page, or a
   reset). The counters say *since `stats_since`* and nothing more.
 - **Writer:** the same per-core accumulation and tick fold as §3.1.
-- **Not in BK:** page counts and delete-marked slot counts, which would
+- **Not in BN:** page counts and delete-marked slot counts, which would
   have to be exact to be acted on (a `PURGE` decision) and therefore could
-  not be a statistic under CR6 (BK-Q13).
+  not be a statistic under CR6 (BN-Q13).
 - **Persistence and CR6:** the statistic columns persisted, unlogged; the
   exact columns are never stored.
 
@@ -359,7 +366,7 @@ column of `sys.meta` (SV3).
   later; the spec says so.
 - **Bound:** a ring of `kCheckpointHistoryRows` (1024 proposed) in the
   relation, a row's slot being `seq mod N`.
-- **Persistence and CR6:** persisted, unlogged (BK-Q5). The test: no
+- **Persistence and CR6:** persisted, unlogged (BN-Q5). The test: no
   reader acts on it - recovery reads the anchor and the log, never this.
   The mount's recovery block stays in `sys.meta`, which is where `SHOW
   META` prints it today.
@@ -368,53 +375,53 @@ column of `sys.meta` (SV3).
 
 | `SHOW` spelling | rewritten into |
 |---|---|
-| `META` | `SELECT * FROM sys.meta` (BK-Q4) |
+| `META` | `SELECT * FROM sys.meta` (BN-Q4) |
 | `TABLES` | `SELECT * FROM sys.tables` |
 | `NAMESPACES` | `SELECT * FROM sys.namespaces` (new) |
-| `PAGE <id> [VALUES]` | `SELECT <cols> FROM sys.page_slots WHERE page_id = <id>`; `VALUES` adds the payload column (BK-Q12) |
+| `PAGE <id> [VALUES]` | `SELECT <cols> FROM sys.page_slots WHERE page_id = <id>`; `VALUES` adds the payload column (BN-Q12) |
 | `PATTERNS` | `SELECT * FROM sys.patterns`; the view's rendering is the one kept |
 | `ACCESS` | `SELECT * FROM sys.access_stats` (new view over the existing relation) |
-| `BUDGET` | `SELECT oid, name, next_id, ids_issued, ids_remaining, budget_used, budget_warning, budget_exhausted FROM sys.relation_stats`; the summary line becomes a query the operator writes (BK-Q3) |
+| `BUDGET` | `SELECT oid, name, next_id, ids_issued, ids_remaining, budget_used, budget_warning, budget_exhausted FROM sys.relation_stats`; the summary line becomes a query the operator writes (BN-Q3) |
 | `CABINS` | `SELECT * FROM sys.cabins` (new view: the relation and the store's counters) |
 | `INDEXES` | `SELECT * FROM sys.indexes` (new view) |
 | `FKEYS` | `SELECT * FROM sys.fkeys` (new view) |
 | `ASSERTIONS` | `SELECT * FROM sys.assertions` (new view: the relation and the enforcer's counters) |
 | `RELAYOUT [<table>]` | `SELECT * FROM sys.relayout [WHERE name = <table>]` (new view, planned at read) |
 | `CABIN_OPTIMIZER` | `SELECT * FROM sys.cabin_optimizer` (new view) |
-| `TRACES`, `TRACE <id>` | BK-Q9 |
-| `DESCRIBE <table>` | BK-Q11 |
+| `TRACES`, `TRACE <id>` | BN-Q9 |
+| `DESCRIBE <table>` | BN-Q11 |
 
-The four relations of §3.1-§3.4 get no `SHOW` spelling (BK-Q10).
+The four relations of §3.1-§3.4 get no `SHOW` spelling (BN-Q10).
 
 ---
 
 ## 4. Stages
 
-- **BK-S0** — this order, `raft-marks-2026-10-11.md` and `index.md`'s BK
-  row. Its `critics-developer` review, then BK-Q0..Q13 put to the
+- **BN-S0** — this order, `raft-marks-2026-10-11.md` and `index.md`'s BN
+  row. Its `critics-developer` review, then BN-Q0..Q13 put to the
   operator.
-- **BK-S1** — red first: a contract suite, `show_sugar`, that runs every
+- **BN-S1** — red first: a contract suite, `show_sugar`, that runs every
   `SHOW` spelling and the `SELECT` it is rewritten into on one instance
   and compares the two replies byte for byte (SV2), failing for every
-  target at the start. Then the view registry gains typed columns (BK-Q3)
-  and the filter class of each view (BK-Q2).
-- **BK-S2** — the rewrite at parse, and the existing targets moved onto
+  target at the start. Then the view registry gains typed columns (BN-Q3)
+  and the filter class of each view (BN-Q2).
+- **BN-S2** — the rewrite at parse, and the existing targets moved onto
   views one at a time, each handler deleted as its target turns green in
   `show_sugar` (SV4). `sys.meta` last, as the largest. Every test and
   tool that parses a `SHOW` reply is migrated in the stage that changes
-  it (BK-Q1).
-- **BK-S3** — `sys.lock_waits`: the ring and the two park sites. No
+  it (BN-Q1).
+- **BN-S3** — `sys.lock_waits`: the ring and the two park sites. No
   format change.
-- **BK-S4** — the format, if BK-Q5 is (a): oids and root pages for the
+- **BN-S4** — the format, if BN-Q5 is (a): oids and root pages for the
   three persisted relations, `kCatalogOverflowFirst` moved, superblock 22
   refusing 21, the mount's discard of a damaged statistic page
   generalized from `sys.access_stats` to the four, and CR6 amended to
   name them.
-- **BK-S5** — `sys.statement_stats`: the per-core accumulator, the tick
+- **BN-S5** — `sys.statement_stats`: the per-core accumulator, the tick
   fold, the switch.
-- **BK-S6** — `sys.relation_stats`.
-- **BK-S7** — `sys.checkpoints` (after BI-S2 if BI is opened first).
-- **BK-S8** — the close: the overhead measured once (§6); the spec
+- **BN-S6** — `sys.relation_stats`.
+- **BN-S7** — `sys.checkpoints` (after BI-S2 if BI is opened first).
+- **BN-S8** — the close: the overhead measured once (§6); the spec
   landed - a new `docs/spec/sys-views.md` owning SV1-SV4, every view and
   its filter class, and the four relations; `docs/rules/rules.md` CR6;
   `docs/spec/ddl-transactional.md` §5a; `manual/sql/sql.md` §6
@@ -431,28 +438,28 @@ None is marked. The proposal is CLA's.
 
 | item | question | options | CLA proposes |
 |---|---|---|---|
-| **BK-Q0** | Open BK? | (a) open as written; (b) open with items changed; (c) hold | - |
-| **BK-Q1** | How is a `SHOW` reply rendered? | (a) it **is** the `SELECT`'s reply, byte for byte (CSV header and rows); the `key=value` form retires and every parser of it migrates; (b) a renderer keeps `key=value` over the same rows - same data, a second rendering | **(a)**: W3 says only sugar, and a second renderer is a second code path SV2 would have to police |
-| **BK-Q2** `[quiet-wrong]` | What does each view filter? | (a) §5a's line applied to views: schema-object views (`tables`, `objects`, `columns`, `namespaces`, `indexes`, `fkeys`) answer under the session's view, engine-state views do not; (b) none filters, and `SHOW TABLES`/`INDEXES`/`NAMESPACES` lose their filter; (c) every view filters | **(a)**: (b) removes the filter from three surfaces that have it, making §1.3's disagreement the rule; (c) hides an uncommitted relation from the diagnostics that exist to show what the instance holds |
-| **BK-Q3** | Do views get typed columns, admitting `ORDER BY` and aggregation? | (a) yes, both admitted; a join stays refused; (b) no, AG12 and the `ORDER BY` refusal stand | **(a)**: the refusal's stated reason is that a view has no schema to resolve a key against (`catalog_view.hpp`); a typed column list is that schema, and `ORDER BY total_ns DESC` is the first query anyone runs on §3.1 |
-| **BK-Q4** | `sys.meta`'s shape | (a) tall: `(core, section, field, value)`, one row per field per core, every core; (b) wide: one row per core, one column per field | **(a)**: the field list changes often and a tall row needs no schema change for it; (a) also makes `SHOW META` report every core, where today it reports the session's own. Reading a peer's counters needs each to be readable from another core, which the survey did not check field by field |
-| **BK-Q5** | What is persisted? | (a) `statement_stats`, `relation_stats`' statistic columns and `checkpoints` persisted unlogged under CR6, superblock 22 refusing 21; `lock_waits` memory-resident; (b) all four memory-resident, no format change, all history lost at a restart | **(a)**: the history most worth reading is the one before a crash |
-| **BK-Q6** | A statement's identity in §3.1 | (a) `fetch_id` with `kind`, so one key names a shape across `sys.patterns`, its trails and this; (b) `pattern_id`, which also splits by select list | **(a)** |
-| **BK-Q7** | Bounds and saturation | (a) 4096 shapes, new ones dropped and counted; rings of 4096 lock waits and 1024 checkpoint runs, overwritten and counted; (b) other numbers | **(a)** |
-| **BK-Q8** | Switches | (a) `statement_statistics`, default on; `lock_waits` and `checkpoints` always on (a wait already parks; a run is rare); (b) one switch for all four | **(a)** |
-| **BK-Q9** | `SHOW TRACES` / `SHOW TRACE` / `TRACE ON` | (a) retired with the sink, since nothing installs one (§1.1); (b) the sink installed and two views, `sys.traces` and `sys.trace_spans` | **(a)**: a surface that has answered `ERR` since it was wired off is not one anyone reads; §3.1 answers most of what a trace was for |
-| **BK-Q10** | `SHOW` spellings for the four relations | (a) none: they are read by `SELECT`; (b) `SHOW STATEMENTS`, `LOCK_WAITS`, `CHECKPOINTS` | **(a)**: sugar adds a name and nothing else |
-| **BK-Q11** | `DESCRIBE` | (a) in scope: `SELECT * FROM sys.columns WHERE table_name = <t>`, its table-level fields moving to `sys.tables` and `sys.relation_stats`; (b) out of scope, not being a `SHOW` | **(a)**: W3 says keywords *such as* these, and `DESCRIBE` is the same kind of surface |
-| **BK-Q12** | `SHOW PAGE` | (a) `sys.page_slots`, one row per slot with the page header repeated on each, refusing a read with no `page_id = <id>`; (b) `SHOW PAGE` kept as a named exception, a debugging surface over raw bytes | **(a)** |
-| **BK-Q13** | `relation_stats`' page and delete-marked counts | (a) not in BK; (b) maintained exactly and logged, outside CR6; (c) filled by an explicit walk statement | **(a)**: (b) puts a logged write on every data write, and (c) needs a statement nobody has asked for |
+| **BN-Q0** | Open BN? | (a) open as written; (b) open with items changed; (c) hold | - |
+| **BN-Q1** | How is a `SHOW` reply rendered? | (a) it **is** the `SELECT`'s reply, byte for byte (CSV header and rows); the `key=value` form retires and every parser of it migrates; (b) a renderer keeps `key=value` over the same rows - same data, a second rendering | **(a)**: W3 says only sugar, and a second renderer is a second code path SV2 would have to police |
+| **BN-Q2** `[quiet-wrong]` | What does each view filter? | (a) §5a's line applied to views: schema-object views (`tables`, `objects`, `columns`, `namespaces`, `indexes`, `fkeys`) answer under the session's view, engine-state views do not; (b) none filters, and `SHOW TABLES`/`INDEXES`/`NAMESPACES` lose their filter; (c) every view filters | **(a)**: (b) removes the filter from three surfaces that have it, making §1.3's disagreement the rule; (c) hides an uncommitted relation from the diagnostics that exist to show what the instance holds |
+| **BN-Q3** | Do views get typed columns, admitting `ORDER BY` and aggregation? | (a) yes, both admitted; a join stays refused; (b) no, AG12 and the `ORDER BY` refusal stand | **(a)**: the refusal's stated reason is that a view has no schema to resolve a key against (`catalog_view.hpp`); a typed column list is that schema, and `ORDER BY total_ns DESC` is the first query anyone runs on §3.1 |
+| **BN-Q4** | `sys.meta`'s shape | (a) tall: `(core, section, field, value)`, one row per field per core, every core; (b) wide: one row per core, one column per field | **(a)**: the field list changes often and a tall row needs no schema change for it; (a) also makes `SHOW META` report every core, where today it reports the session's own. Reading a peer's counters needs each to be readable from another core, which the survey did not check field by field |
+| **BN-Q5** | What is persisted? | (a) `statement_stats`, `relation_stats`' statistic columns and `checkpoints` persisted unlogged under CR6, superblock 22 refusing 21; `lock_waits` memory-resident; (b) all four memory-resident, no format change, all history lost at a restart | **(a)**: the history most worth reading is the one before a crash |
+| **BN-Q6** | A statement's identity in §3.1 | (a) `fetch_id` with `kind`, so one key names a shape across `sys.patterns`, its trails and this; (b) `pattern_id`, which also splits by select list | **(a)** |
+| **BN-Q7** | Bounds and saturation | (a) 4096 shapes, new ones dropped and counted; rings of 4096 lock waits and 1024 checkpoint runs, overwritten and counted; (b) other numbers | **(a)** |
+| **BN-Q8** | Switches | (a) `statement_statistics`, default on; `lock_waits` and `checkpoints` always on (a wait already parks; a run is rare); (b) one switch for all four | **(a)** |
+| **BN-Q9** | `SHOW TRACES` / `SHOW TRACE` / `TRACE ON` | (a) retired with the sink, since nothing installs one (§1.1); (b) the sink installed and two views, `sys.traces` and `sys.trace_spans` | **(a)**: a surface that has answered `ERR` since it was wired off is not one anyone reads; §3.1 answers most of what a trace was for |
+| **BN-Q10** | `SHOW` spellings for the four relations | (a) none: they are read by `SELECT`; (b) `SHOW STATEMENTS`, `LOCK_WAITS`, `CHECKPOINTS` | **(a)**: sugar adds a name and nothing else |
+| **BN-Q11** | `DESCRIBE` | (a) in scope: `SELECT * FROM sys.columns WHERE table_name = <t>`, its table-level fields moving to `sys.tables` and `sys.relation_stats`; (b) out of scope, not being a `SHOW` | **(a)**: W3 says keywords *such as* these, and `DESCRIBE` is the same kind of surface |
+| **BN-Q12** | `SHOW PAGE` | (a) `sys.page_slots`, one row per slot with the page header repeated on each, refusing a read with no `page_id = <id>`; (b) `SHOW PAGE` kept as a named exception, a debugging surface over raw bytes | **(a)** |
+| **BN-Q13** | `relation_stats`' page and delete-marked counts | (a) not in BN; (b) maintained exactly and logged, outside CR6; (c) filled by an explicit walk statement | **(a)**: (b) puts a logged write on every data write, and (c) needs a statement nobody has asked for |
 
 ---
 
 ## 6. Measurement
 
-The overhead is measured once, at BK-S8, per the Session Workflow:
+The overhead is measured once, at BN-S8, per the Session Workflow:
 interleaved A/B in `build-release`, server CPU per statement, the commit
-BK opened from against the commit that closes it, and
+BN opened from against the commit that closes it, and
 `statement_statistics` on against off at the close. The shapes are those
 of the last close (`bench/v3.0.0/`), single-row point reads and writes
 first, because §3.1's two clock reads and one table update per statement
@@ -463,13 +470,13 @@ lands with "overhead not measured; measured at the milestone's close".
 
 ## 7. Row status
 
-### BK-S0 — written 2026-10-11
+### BN-S0 — written 2026-10-11
 
 Written in the main checkout on `main` at `ab2c46d0`
 (`v2.7.0-771-gab2c46d0`) and pushed to `main` on the operator's W0 and
 W3, with the pre-push hook skipped because the change is documents only
 (`scripts/githooks/pre-push`'s own exemption); no build or suite ran.
 **Not reviewed**: the `critics-developer` review of this order is owed.
-**Not opened**: BK-Q0 is unmarked. The survey (§1) is read, not run;
+**Not opened**: BN-Q0 is unmarked. The survey (§1) is read, not run;
 §1.3's filter split in particular is a reading of three call sites and
 has no reproduction yet.

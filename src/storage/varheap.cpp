@@ -292,8 +292,8 @@ StatusOr<PageId> CreateChain(storage::PageStore& store, std::uint64_t owner_oid)
     const std::span<std::byte, kPageSize> bytes = bytes_ref.bytes();
 
     if (Status s = FormatPage(bytes, owner_oid); !s.ok()) return s;
-    // A root is born with no hint (BK-R8,
-    // `workorder-bk-opt-read-update-path.md`): its id may be a dropped chain's
+    // A root is born with no hint (BM-R8,
+    // `workorder-bm-opt-read-update-path.md`): its id may be a dropped chain's
     // root reused, and that chain's last tail - by now any page of any
     // relation - must never be where this chain's walk starts.
     store.SetVarHeapTailHint(page_id, page_id);
@@ -328,7 +328,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
     // its page - the heap chain's BB-R7 gap, in the var-heap. Bounded so a
     // cycle fails rather than hangs.
     //
-    // **The walk starts at the chain's last known tail** (BK-R8): the store
+    // **The walk starts at the chain's last known tail** (BM-R8): the store
     // remembers the page the last append to this chain landed in, so an
     // append is a page or two rather than a page per page the chain has.
     // Every hint names a page some append found on *this* chain - a root is

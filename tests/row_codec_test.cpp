@@ -547,9 +547,9 @@ TEST(RowCodecNullTest, OnlyTheBitmapByteDistinguishesANullRowFromItsTwin) {
     EXPECT_NE(with_null.value().back(), with_zero.value().back());
 }
 
-// ---- EncodeAssigned: an UPDATE's image (BK-R2, BK-R3) ----------------------
+// ---- EncodeAssigned: an UPDATE's image (BM-R2, BM-R3) ----------------------
 //
-// `instructions/v3.0.0/workorder-bk-opt-read-update-path.md`. An UPDATE used
+// `instructions/v3.0.0/workorder-bm-opt-read-update-path.md`. An UPDATE used
 // to decode the whole row and re-encode it whole; it now copies the row and
 // re-encodes only the assigned cells. For every row that spills nothing the
 // two must agree byte for byte - every type, NULL in both directions, a

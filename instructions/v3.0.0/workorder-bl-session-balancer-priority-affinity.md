@@ -49,9 +49,10 @@ reactor as a measured input rather than an assumption (§1.6).
 The operator's words, and a rule that restates them, are decisions rather
 than claims, so they carry no tag.
 
-**The letter.** `[source-read]` BK is the last order on `main`
-(`workorder-bk-sys-statistics-show-sugar.md`); no file under
-`instructions/` or `docs/` uses BL. BL is the next free letter.
+**The letter.** `[source-read]` At writing, the last order on `main` was
+lettered BK (`workorder-bn-sys-statistics-show-sugar.md`, relettered BN on
+2026-10-11 when three orders were found to carry BK); no file under
+`instructions/` or `docs/` used BL, the next free letter.
 
 **BL against other orders and notes.**
 - **BI**, the premise above. BL builds nothing in the checkpointer.
@@ -73,8 +74,9 @@ than claims, so they carry no tag.
   `[design]` BL builds §3.4's carrier (BL-S2) with a load trigger instead
   of an admission trigger, and leaves §3.5's admission queue to CN-10.
   BL-Q11 asks whether BL's build marks U6.
-- **BK** (`workorder-bk-sys-statistics-show-sugar.md`, not opened). The
-  operator excluded `sys.sessions` from BK (`raft-marks-2026-10-11.md`
+- **BN** (`workorder-bn-sys-statistics-show-sugar.md`, not opened; lettered
+  BK until 2026-10-11). The operator excluded `sys.sessions` from it
+  (`raft-marks-2026-10-11.md`
   §2). BL needs per-session counters somewhere (BL-R8); BL-Q10 asks where.
 - Not part of AR0 §8's chain.
 
@@ -461,7 +463,7 @@ All unmarked. Every proposal is `[design]` unless a cell says otherwise.
 | BL-Q7 | **`debug_text_port` sessions**: (a) movable like any other; (b) stay on core 0 | scope | (a). W0 says no session is pinned; the connection type is the same | |
 | BL-Q8 | **Are the settings user-visible in v0?**<br>(a) Yes: per-session settings after the handshake, raising priority gated by the administrative role.<br>(b) No: the mechanisms ship with defaults only, observable but not settable, and the surface waits for a workload that asks.<br>(c) Engine-derived: priority from the statement's class (point read vs walk vs load) | user-visible | (a), narrowly: three priority levels and three affinity levels, so the weighted pick has a consumer from its first day ("no structure without a consumer"). (b) is what CLA told the operator leans less toward over-engineering (§0.2), but it leaves BL-S4's pick with no input other than defaults. (c) is recorded as a later direction, not v0 | |
 | BL-Q9 | **The name** (§1.8).<br>(a) `session_affinity` for W1's axis; the namespace's stays `affinity` in NS1-NS10.<br>(b) Another word for W1's axis (`mobility`) | naming | (a). The operator's word is kept and qualified; the namespace's quantity has no reader and is not renamed | |
-| BL-Q10 | **Where the per-session counters are read.**<br>(a) `SHOW META` for the asking session and per-core totals only.<br>(b) A `sys` view of every session, which the operator excluded from BK (`raft-marks-2026-10-11.md` §2) | scope | (a). (b) reverses an operator mark, which only the operator can do | |
+| BL-Q10 | **Where the per-session counters are read.**<br>(a) `SHOW META` for the asking session and per-core totals only.<br>(b) A `sys` view of every session, which the operator excluded from BN (`raft-marks-2026-10-11.md` §2) | scope | (a). (b) reverses an operator mark, which only the operator can do | |
 | BL-Q11 | **CN-10.** BL builds §3.4's carrier with a load trigger, not §3.5's admission. (a) BL's close marks U6 as built by BL, with the trigger noted as BL-R4's; (b) U6 stays open until §3.5 exists | process | (a) | |
 | BL-Q12 | **Priority inversion.**<br>(a) None in v0; a counter of waits whose holder's share is below the waiter's.<br>(b) Inheritance: a holder's session is polled at its highest waiter's share until the release | design | (a), with (b) taken up only if §5.2 counts inversions on more than 1 % of lock waits in its mixed cell | |
 | BL-Q13 | **Yielding writes and index walks** (BL-R7's remainder). (a) Out of BL, named in the close; (b) in BL | scope | (a). It is a suspension-safety argument over locks and borrows, an order of its own | |

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Tables from a `tools/bk_census.py` output file (BK-S1, BK-S8).
+"""Tables from a `tools/bm_census.py` output file (BM-S1, BM-S8).
 
-    bk_census_table.py OUT.json
+    bm_census_table.py OUT.json
 
 Per (shape, path): each binary's median over runs of p0/p25/p50/p90/p99,
 the mean, the server's and the driver's CPU per statement. With two binaries
 (`--bin-b`), B - A per run and its median and min..max over runs - the
-run-to-run spread BK-Q1's bar compares a predicted win against - for p50
+run-to-run spread BM-Q1's bar compares a predicted win against - for p50
 and for the server's CPU.
 """
 import json, statistics, sys

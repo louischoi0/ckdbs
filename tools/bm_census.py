@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""BK's census and its A/B: where a statement's time goes, from both ends.
+"""BM's census and its A/B: where a statement's time goes, from both ends.
 
-    bk_census.py --bin A [--bin-b B] --workdir DIR [--port P] [--pin-server 2]
+    bm_census.py --bin A [--bin-b B] --workdir DIR [--port P] [--pin-server 2]
                  [--pin-driver 4] [--rows 1000] [--scan-rows 10000]
                  [--ops 3000] [--scan-ops 200] [--range-ops 60] [--blocks 12]
                  [--runs 3] [--sampler SO --sampler-dir D --profile-ops N]
                  --out OUT.json
 
-`instructions/v3.0.0/workorder-bk-opt-read-update-path.md` §3 (BK-S1) and §5
+`instructions/v3.0.0/workorder-bm-opt-read-update-path.md` §3 (BM-S1) and §5
 (the close). Per run a fresh server per binary (`cores = 1`,
 `durability = relaxed`, a fresh data file), the same relations loaded into
 each, then every shape below over both driver paths:

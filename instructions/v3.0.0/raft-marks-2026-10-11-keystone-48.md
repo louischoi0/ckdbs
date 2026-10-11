@@ -5,10 +5,8 @@ recorded by CLA on `worktree-bk-keystone-48` (`v2.7.0-*`; the v3.0.0 tag is
 not cut). Every word is recorded **in English**, translated where it was
 typed in Korean. `raft-marks-2026-10-11.md` beside this file is another
 session's record of the same day, kept under the day's name; the two
-sessions ran concurrently and each opened an order lettered BK
-(`workorder-bk-keystone-48.md` here, `workorder-bk-sys-statistics-show-sugar.md`
-and `workorder-bk-opt-read-update-path.md` there), so a citation to "BK"
-or to this day's marks names the file, never the bare letter.
+sessions ran concurrently and each opened an order lettered BK, and §4
+records the word that resolved it (BM and BN).
 
 ## 1. The pk width asked about, 42 then 48; BK's order written
 
@@ -36,3 +34,12 @@ or to this day's marks names the file, never the bare letter.
 | **Mark** | The standing go-ahead of `go-ahead-achieving-milestone`, for BK: every stage to the close in this session; a decision that surfaces mid-stage is written into the order with CLA's proposal and adopted under this word, recorded as *adopted on the operator's standing go-ahead of 2026-10-11* and never as the operator's own mark. BK-S1 started |
 | **Does not settle** | Any push, merge to `main`, tag or version; a decision CLA cannot propose from the tree; anything outside BK |
 | **Recorded at** | `workorder-bk-keystone-48.md`'s header (W4) and §6's BK-S1 row; `index.md`'s BK row |
+
+## 4. The BK letter collision resolved
+
+| | |
+|---|---|
+| **Word** | *"Clean up the BK letter collision."* (W5, after BK had been pushed to `main` and three orders were found to carry the letter) |
+| **Mark** | The first written keeps the letter: `workorder-bk-keystone-48.md` (BK-S0 at 02:11 UTC) stays BK. `workorder-bk-opt-read-update-path.md` (opened 07:01 UTC; its own W1 had named BK after rejecting BY) is **BM**, its order and marks renamed (`workorder-bm-opt-read-update-path.md`, `raft-marks-2026-10-11-bm-paths.md`), its items BM-R*/Q*/S*, its tools `tools/bm_census.py`, `bm_census_table.py`, `bm_pg_scan.py`, its results files and archives `results-bm-close-v2.7.0-787-g8679367e.md`, `results-bm-s1-census-v2.7.0-769-gb70f79d8.md` and their archive directories. `workorder-bk-sys-statistics-show-sugar.md` (07:19 UTC) is **BN**, renamed `workorder-bn-sys-statistics-show-sugar.md`, its items BN-*, its marks staying in `raft-marks-2026-10-11.md` §1-§3 under the new letter. Every reference followed - `CLAUDE.md`'s rows, the specs, `known-gaps.md`'s section, the code comments, `index.md`'s rows, BL's citations. Commit messages and worktree names keep the letters they had; a BK in git history before this mark is read by the file it names |
+| **Does not settle** | Which order should have kept BK: the rule applied is CLA's (first written), and the read/update order's letter was the operator's own choice (its W1), so the assignment is the operator's to reverse - every step is mechanical and recorded here |
+| **Recorded at** | This file; the three orders' headers (`workorder-bk-keystone-48.md`, `workorder-bm-opt-read-update-path.md` §0 and BM-Q10, `workorder-bn-sys-statistics-show-sugar.md`); `index.md`'s three rows |

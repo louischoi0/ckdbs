@@ -125,8 +125,8 @@ StatusOr<std::unique_ptr<TypedSetExpr>> TypeSetExpression(const catalog::TableAc
 bool IsConstantSetExpression(const TypedSetExpr& expr);
 
 // The columns the expression reads, as a decode mask (bit `n` is schema
-// column `n`), or `kAllColumnsMask` when one sits past bit 63 (BK-R2,
-// `workorder-bk-opt-read-update-path.md`). A
+// column `n`), or `kAllColumnsMask` when one sits past bit 63 (BM-R2,
+// `workorder-bm-opt-read-update-path.md`). A
 // subquery reads none: it is answered once before the walk.
 std::uint64_t SetExpressionColumns(const TypedSetExpr& expr);
 

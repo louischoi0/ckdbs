@@ -166,13 +166,13 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
 // a decoder needs no opinion about chains.
 inline constexpr std::uint64_t kAllColumnsMask = ~std::uint64_t{0};
 
-// **A slot a partial decode deliberately left out** (BK-R2,
-// `workorder-bk-opt-read-update-path.md`): an UPDATE with
+// **A slot a partial decode deliberately left out** (BM-R2,
+// `workorder-bm-opt-read-update-path.md`): an UPDATE with
 // no hook decodes only the columns its SET expressions read and fills every
 // other slot with this, so an expression the mask missed is refused
 // `Corruption` by the SET evaluator rather than handed a default value. A
 // hook (Cabin, index, assertion) never sees one, because a relation with any
-// of them decodes whole, and the encoder never does since BK-R3 encodes only
+// of them decodes whole, and the encoder never does since BM-R3 encodes only
 // the assigned values. A `kParam`, because no other one reaches a decoded
 // row since declared patterns were withdrawn.
 inline const parser::AstValue kUndecoded = [] {
@@ -269,7 +269,7 @@ struct AssignedCell {
 };
 
 // **An UPDATE's new image: the row's own bytes with only its assigned cells
-// re-encoded** (BK-R2, BK-R3, `instructions/v3.0.0/workorder-bk-opt-read-update-path.md`).
+// re-encoded** (BM-R2, BM-R3, `instructions/v3.0.0/workorder-bm-opt-read-update-path.md`).
 // `before` is the version being replaced, whole; each assigned cell is
 // zeroed, its NULL bit cleared, and encoded as `EncodeRow` would encode it,
 // spilling through `varheap` if it must. **Every other cell is carried as

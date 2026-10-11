@@ -1,6 +1,6 @@
-# BK-S1's census: where a statement's server time goes, at the commit BK opens from
+# BM-S1's census: where a statement's server time goes, at the commit BM opens from
 
-**Thesis.** At `v2.7.0-769-gb70f79d8` (`b70f79d8`, BK's opening commit, engine code identical to `ac04b84e`),
+**Thesis.** At `v2.7.0-769-gb70f79d8` (`b70f79d8`, BM's opening commit, engine code identical to `ac04b84e`),
 **the largest single part of every point statement's server CPU is the socket send, and half of it is a second
 `send()` the server need not make**: a pipelined PARSE/BIND/EXECUTE gets `S_PARSE_OK`/`S_BIND_OK` flushed the moment
 the read submits the statement, then the rest at completion - two writes and two client wakeups per statement. The
@@ -13,27 +13,27 @@ cost is the walk itself - visibility, decode, residual - at 92 %.
 
 - **A** = `b70f79d8`, `v2.7.0-769-gb70f79d8`. Release, `-DKDS_BUILD_TESTS=OFF -DKDS_BUILD_SIM=OFF`, target
   `kds_server`; the profiled copy is the same commit built with `-DCMAKE_CXX_FLAGS=-fno-omit-frame-pointer`. Hashes
-  in `archive/bk-s1-census-v2.7.0-769-gb70f79d8/binaries.txt`; every server ran from a copy under
+  in `archive/bm-s1-census-v2.7.0-769-gb70f79d8/binaries.txt`; every server ran from a copy under
   `/home/cdkbs/bench-runs/bk/bin/`.
-- Drivers: `tools/bk_census.py` (this commit's), `tools/kds_sampler.c` (an `LD_PRELOAD` SIGPROF sampler: `perf` is
-  refused on this host, `perf_event_paranoid = 4`), `tools/kds_sampler_report.py`, `tools/bk_parts.json` (the part
-  regular expressions), `tools/bk_census_table.py`.
-- Raw output: `archive/bk-s1-census-v2.7.0-769-gb70f79d8/` - the A/B census JSON (`ab-wip.json`, whose B side is a
-  work-in-progress binary of BK-S4 and BK-S5 and is **not** quoted here), the profile JSON, the parts table and each
+- Drivers: `tools/bm_census.py` (this commit's), `tools/kds_sampler.c` (an `LD_PRELOAD` SIGPROF sampler: `perf` is
+  refused on this host, `perf_event_paranoid = 4`), `tools/kds_sampler_report.py`, `tools/bm_parts.json` (the part
+  regular expressions), `tools/bm_census_table.py`.
+- Raw output: `archive/bm-s1-census-v2.7.0-769-gb70f79d8/` - the A/B census JSON (`ab-wip.json`, whose B side is a
+  work-in-progress binary of BM-S4 and BM-S5 and is **not** quoted here), the profile JSON, the parts table and each
   profiled arm's top-25 report.
 
 | Item | Value |
 |---|---|
 | Executed | 2026-10-11, census 07:58-08:07 UTC, profile 08:09-08:15 UTC |
-| Worktree | `worktree-bk-read-update-paths`; A built from `b70f79d8` before any `src/` change of BK |
+| Worktree | `worktree-bk-read-update-paths`; A built from `b70f79d8` before any `src/` change of BM |
 | Host / device | 8 vCPU AMD EPYC 9V74, Linux 7.0.0-1014-azure; server pinned to CPU 2, driver to CPU 4; data and WAL under `/home/cdkbs/bench-runs/bk/` on `/dev/root`, **ext4** (`df -T`), not tmpfs |
 | Server config | `cores = 1`, `durability = relaxed`, `buffer_pool_frames = 65536`, `log_level = warn`; fresh server and data file per run; ports 31931/31932 (census), 31931 (profile) |
 | Host load | **Busy.** Loadavg (1 min) 13-20 throughout; 7-18 competing `cc1plus`/`cmake --build`/`ctest` processes from other sessions in every run's before and after list (per run and, from this commit's driver on, per cell, in the JSON). Wall-clock latencies from this run are **not** quoted as engine numbers: a point statement read 150-180 µs at p50 against ~50 µs on a quiet host (BJ's close). What is quoted is **on-CPU time** - the server's from every thread's `schedstat`, per statement - which a busy host inflates less, and sampled shares of it |
-| Suite | Not part of a measurement; BK-S1 changes no engine code |
+| Suite | Not part of a measurement; BM-S1 changes no engine code |
 
 ## Method
 
-Per run, `tools/bk_census.py` loads `t`, `r` (1,000 rows each), `s` (10,000), `sp` and `sa` (1,000 rows, a 300-byte
+Per run, `tools/bm_census.py` loads `t`, `r` (1,000 rows each), `s` (10,000), `sp` and `sa` (1,000 rows, a 300-byte
 `varchar` cell each, spilled), then runs each shape over both driver paths - `literal` (an unnamed `C_PARSE` of the
 statement's text per execution, what every driver in `tools/` does) and `prepared` (one named `C_PARSE`, then
 BIND/EXECUTE per execution, `tools/kwp.py`'s new `execute_prepared`) - 3,000 point statements, 60 every-row UPDATEs
@@ -43,7 +43,7 @@ into the client's socket and wakes it inside the sender's syscall).
 
 The profile pass ran A's frame-pointer build under the sampler at 1 kHz of process CPU time, 30,000 statements per
 point arm (60 every-row, 600 scans), the sampling armed and dumped per arm by signal. Each sample is assigned to the
-first part in `tools/bk_parts.json` any frame of its chain matches; the shares are of samples, and the µs beside each
+first part in `tools/bm_parts.json` any frame of its chain matches; the shares are of samples, and the µs beside each
 are that share of the arm's measured server CPU.
 
 ## 1. Server CPU per statement (A, median of five runs)
@@ -95,7 +95,7 @@ append, and every UPDATE of a spilled row appended a copy whatever it assigned, 
 next one walked: the prepared arm, run after the literal one, spends 47-64 µs a statement where the literal spent
 19-28.
 
-## 3. What BK-Q1's bar says of each proposal
+## 3. What BM-Q1's bar says of each proposal
 
 The bar (adopted): a part is material when it is at least 5 % of its statement's or row's server time in a clean
 cell and the predicted win exceeds the run-to-run spread. On this host the server's CPU per point statement moved
@@ -104,25 +104,25 @@ per-run difference moves far less (the close's file states it per cell).
 
 | proposal | the part it cuts | share | verdict |
 |---|---|---|---|
-| **BK-R7** (new): a statement's reply leaves in one write | the early flush, half of `send` | 19-23 % of every point statement (≈ 12 µs) | **Material, ranked first** - BK-Q5 gives BK-S4 to it |
-| BK-R3: an unassigned spill is carried | the re-append, and the walk it lengthens | 37-54 % of a spilled row's UPDATE, growing; 38 pages per 1,000 updates | **Material** (BK-S5 was due on BK-Q4 alone) |
-| **BK-R8** (new): an append starts at the chain's tail | the walk from the root | 32-60 % of an UPDATE assigning a spilled value, growing with the chain | **Material** |
-| BK-R2: decode and encode by column | decode/encode on a point UPDATE; every-row UPDATE's per-row work | 1-3 % of a point UPDATE; the every-row arm's split is too coarse here - re-profiled after BK-S5 | Point: not material. Every-row: decided on the re-profile |
-| BK-R1: compile once, bind many | parse + compile (+ the PARSE frame's fingerprint) | 5-12 % of a point statement | Material by the bar on the prepared path; its form is decided after BK-S4 and BK-S5 move the denominators |
-| BK-R4: the read path's largest part | for a point `SELECT`, the double send (BK-R7); for a scan row, the walk | as above | BK-S4 = BK-R7. The scan row's walk is one undivided 92 % at this resolution |
-| BK-R5: byte-range undo and WAL records | the size of undo and WAL records | the every-row arm's 41 % is per-record work, not bytes: a 3-column row's image is 44 bytes | Decided on the every-row re-profile |
-| BK-R6: access statistics per core | `Catalog::RecordAccess` | **0.7 %** of a point `SELECT` | **Not material - discarded** |
+| **BM-R7** (new): a statement's reply leaves in one write | the early flush, half of `send` | 19-23 % of every point statement (≈ 12 µs) | **Material, ranked first** - BM-Q5 gives BM-S4 to it |
+| BM-R3: an unassigned spill is carried | the re-append, and the walk it lengthens | 37-54 % of a spilled row's UPDATE, growing; 38 pages per 1,000 updates | **Material** (BM-S5 was due on BM-Q4 alone) |
+| **BM-R8** (new): an append starts at the chain's tail | the walk from the root | 32-60 % of an UPDATE assigning a spilled value, growing with the chain | **Material** |
+| BM-R2: decode and encode by column | decode/encode on a point UPDATE; every-row UPDATE's per-row work | 1-3 % of a point UPDATE; the every-row arm's split is too coarse here - re-profiled after BM-S5 | Point: not material. Every-row: decided on the re-profile |
+| BM-R1: compile once, bind many | parse + compile (+ the PARSE frame's fingerprint) | 5-12 % of a point statement | Material by the bar on the prepared path; its form is decided after BM-S4 and BM-S5 move the denominators |
+| BM-R4: the read path's largest part | for a point `SELECT`, the double send (BM-R7); for a scan row, the walk | as above | BM-S4 = BM-R7. The scan row's walk is one undivided 92 % at this resolution |
+| BM-R5: byte-range undo and WAL records | the size of undo and WAL records | the every-row arm's 41 % is per-record work, not bytes: a 3-column row's image is 44 bytes | Decided on the every-row re-profile |
+| BM-R6: access statistics per core | `Catalog::RecordAccess` | **0.7 %** of a point `SELECT` | **Not material - discarded** |
 
 Waystone's recording and replay attempt (`RecordExecution`, `TryReplay`) are 7-9 % of a point `SELECT` by pk, a
-part no BK proposal names; it is reported, not cut (`known-gaps.md`).
+part no BM proposal names; it is reported, not cut (`known-gaps.md`).
 
 ## 4. What this census did not do
 
-- **No wall-clock number from this host is an engine number.** The close re-measures A against BK's last commit,
+- **No wall-clock number from this host is an engine number.** The close re-measures A against BM's last commit,
   interleaved, and states the host it got.
 - **The trace spans `trace.hpp` names were not built**: the sampler splits the same parts without code under
-  `src/` and without the per-row clocks §1.4 of the order rules out (BK-Q11).
+  `src/` and without the per-row clocks §1.4 of the order rules out (BM-Q11).
 - **The schema version word's rate under load was not counted**: it prices the invalidation of a cached plan, and
-  whether BK-R1 caches one is what §3 leaves open.
+  whether BM-R1 caches one is what §3 leaves open.
 - The request path's remaining floor - `noop`'s 25 µs of server CPU, 61 % in its one `send()` and 34 % in the read
-  and the wake - is the kernel's loopback work and the reactor's wake, which no BK proposal reaches (BK-Q8).
+  and the wake - is the kernel's loopback work and the reactor's wake, which no BM proposal reaches (BM-Q8).
