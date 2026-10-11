@@ -1151,7 +1151,9 @@ sessions' builds throughout and every discarded run kept in the archive):
 - **A finding that is not BJ's**: a 0.2-0.45 s carve stall hits every server in
   every run, A and B alike, and lands in the `INSERT` arm more often in B (13 of
   16 runs against 3 of 16 at 1,000 rows) for a reason the file could not
-  establish; it is BA-S13's area (`known-gaps.md`, "Carve and checkpoint stalls").
+  establish; it is BA's record, not BJ's (`known-gaps.md`, "Carve and checkpoint stalls", which the
+  diagnosis at `e5a7e1b7` has since corrected: at `cores = 1` the relaxed carve's stall is a data-file
+  `fsync` stall the pre-BA binary also meets).
 
 **The suite at the closing code** (`e458e272`): 3492 of 3493 passed under
 `ctest -j8`; the one failure, `SortedLeafRigTest.AppendsFromTwoCoresKeepTheTreeWholeAndDense`,
