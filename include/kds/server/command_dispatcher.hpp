@@ -549,7 +549,10 @@ public:
     //                            by its hex fetch_id and carrying
     //                            `origin=` and `pinned=`, both of which
     //                            read `auto` / `no` on every row since
-    //                            declared patterns were withdrawn.
+    //                            declared patterns were withdrawn, and
+    //                            `uses=` / `last_seen=`, which read 0
+    //                            since BL-S4's ruling 1 deleted their
+    //                            writer (rows.hpp).
     //                            An inspection surface: it lists rows from
     //                            older fingerprint revisions too, marked
     //                            `stale=v<n>`, because those are the dead

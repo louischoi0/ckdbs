@@ -992,12 +992,10 @@ until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
 `docs/spec/sched.md` §5.
 
 - **A bulk writer stalls point readers on every core for 0.25-0.8 s, and
-  no placement isolates them.** Two couplings, both through the one WAL:
-  - **a repeated pk point `SELECT` makes a logged catalog write**: from the
-    second sighting of a `{fetch_id, arg_hash}`, `TrailRecorder` calls
-    `Catalog::TouchPattern`, which overwrites the pattern's `use_count` and
-    `last_seen` - "best-effort" fields (`waystone-concpets.md` §4) - through
-    `OverwriteLogged` with the WAL, so every such read appends a record;
+  no placement isolates them.** Two couplings through the one WAL were
+  found; the first is gone since W11 deleted `Catalog::TouchPattern`
+  (a repeated point `SELECT` made a logged rewrite of its pattern's heat),
+  and the second stands:
   - **a segment roll holds the stream latch across device I/O**:
     `WalStream::Append`'s roll seals, flushes and runs `StartSegment`'s
     device sync, which waits out the writer thread's sync of every live
@@ -1010,8 +1008,8 @@ until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
   latch in 10 s; with Waystone recording off and the readers off core 0,
   their schedule p99 fell from about 500 ms to 0.57-0.76 ms in two runs and
   41-102 ms in two more (a checkpoint turn on a reader core). **BL-S4's partition
-  waits on this**; the fixes are a ruling outside BL (the trace and its
-  options are in the results file's archive, `wal-coupling.md`).
+  waits on the roll**, whose fix is the order's §6 ruling 3, unmarked (the
+  trace and its options are in the results file's archive, `wal-coupling.md`).
 - **`TRACE ON` is per core, not per session** (`CommandDispatcher::tracing_`).
   It always was; since BL-S3 moves sessions, a session's trace stops when it
   moves and another session landing on the traced core is traced instead.

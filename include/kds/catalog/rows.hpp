@@ -506,7 +506,10 @@ static_assert(offsetof(SysIndexRow, covered_cols) == SysIndexRow::kCoveredColsOf
 // (`fetch_id` + `fingerprint_version`), the *location* of its waystones
 // (`waystone_root` + `dir_depth`), and its *heat* (`use_count`,
 // `last_seen`). Only the first is stable; the second changes when the
-// directory deepens, and the third on every execution.
+// directory deepens. The third is reserved: written 0 at registration and
+// advanced by nothing since BL-S4's ruling 1 deleted the logged bump a
+// recorded execution made (`instructions/v3.0.0/raft-marks-2026-10-12.md`
+// §11) - read as zero, like `origin`/`flags`.
 //
 // Field order below is by descending alignment so that the on-disk offsets
 // and the struct's own offsets coincide, which is what lets every field
@@ -521,9 +524,8 @@ struct SysPatternRow {
     // key every lookup arrives with.
     std::uint64_t fetch_id;
 
-    // Truncated logical timestamp of the last execution observed.
-    // Best-effort, like use_count: it feeds retention, and nothing may
-    // depend on it being exact.
+    // Reserved: written 0, advanced by nothing (the heat note above). It
+    // was the last execution's timestamp.
     std::uint64_t last_seen;
 
     // Which revision of the fingerprinting algorithm produced
@@ -541,9 +543,8 @@ struct SysPatternRow {
     // sends every walk to the wrong leaf.
     PageId waystone_root;
 
-    // Executions observed. Best-effort - events may be dropped under
-    // pressure - and it exists to rank patterns for retention, not to
-    // count anything anyone reports.
+    // Reserved: written 0, advanced by nothing (the heat note above). It
+    // was the count of recorded executions.
     std::uint32_t use_count;
 
     // The parser's execution-class tag for this shape (docs/parser.md I2).
@@ -756,8 +757,8 @@ inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 // and never its observed set, which is neither.
 //
 // `observed_ct` is the one field that describes runtime state, and it is
-// therefore **best-effort**, in the same sense sys.patterns' `use_count`
-// is: nothing reads it back to make a decision, and a stale value costs an
+// therefore **best-effort**: nothing reads it back to make a decision,
+// and a stale value costs an
 // inaccurate `SHOW CABINS` line and never an answer. v1 does not write it
 // at all - the runtime store owns the live count - and it is present so
 // that persisting the sets (phase 2) does not need a row format change,

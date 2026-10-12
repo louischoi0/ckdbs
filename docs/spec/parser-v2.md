@@ -175,7 +175,7 @@ NULL is storable (`docs/spec/null.md`), and comparison is three-valued. The eval
 
 ## 6. Trail integration
 
-- **Recording (J5, n = 2):** the first execution of an instance `(fetch_id, arg_hash)` only counts; the second records. Sightings live in a bounded, core-local in-memory table; eviction merely restarts the count, which is a performance event. `sys.patterns.use_count` continues independently for retention.
+- **Recording (J5, n = 2):** the first execution of an instance `(fetch_id, arg_hash)` only counts; the second records. Sightings live in a bounded, core-local in-memory table; eviction merely restarts the count, which is a performance event. A recording writes the trail and nothing to the pattern's `sys.patterns` row (`docs/spec/waystone-concpets.md` §4).
 - **Per-step recording:** `Lookup`/`Probe` steps append entries in execution order with their `step_id` and per-entry `rel_oid` — the existing 32-byte format, unchanged. `Exists` steps record the witnessing row only. `Range`/`Scan`/`NotExists` record nothing.
 - **Replay** consults the instance's trail for entries with the step's `step_id` and applies `docs/spec/waystone-concpets.md` §2 per entry; any miss falls through to the authoritative path *for that step alone*. Search-class steps use the trail only as a prefetch batch.
 - **`Exists` replay is positive-only**, and the asymmetry is the whole point: a validated witness *proves* non-emptiness, because presence has a witness. A missing or invalid witness proves nothing and the probe runs. A trail can never conclude absence.

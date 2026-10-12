@@ -95,3 +95,12 @@ Korean it was typed in.
 | **Mark** | **BL-Q0 opened**, BI-S5 having closed at `083ab01d`; **BL-Q1 (a)**, read from "per transaction"; the four stages are BL-S1..S4, each kept or dropped by measurement |
 | **Does not settle** | BL-S4's three rulings, which BL-S4's stop puts to the operator (`workorder-bl-session-balancer-priority-affinity.md` §6): the read path's logged Waystone write, core 0's role in the partition, and the WAL roll's latch; every other unmarked BL-Q item |
 | **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` §4 (BL-Q0, BL-Q1, BL-Q3, BL-Q14), §6; `index.md`'s BL row |
+
+## 11. BL-S4's first ruling marked: `TouchPattern` deleted
+
+| | |
+|---|---|
+| **Word** | *"What effect would deleting TouchPattern bring? The authoritative character must stay as it is, component by component."*, then, on CLA's answer: *"I will mark it (a), deletion."* (W11; recorded on `worktree-bl-touchpattern-delete` from `d1b88b70`) |
+| **Mark** | **BL-S4's ruling 1 is (a)**: `Catalog::TouchPattern` and its one call on the read path are deleted, so a repeated point `SELECT` makes no logged write. `sys.patterns`' `use_count` and `last_seen` stay on disk, written at registration and advanced by nothing. **The constraint is the operator's**: each component keeps its authority class - `sys.patterns` stays wholly logged, with no unlogged field inside a logged page; Waystone stays advisory (invariants 8 and 9); `sys.access_stats` stays the one unlogged catalog relation `rules.md` §5 admits. That constraint is why (b), two unlogged heat fields inside a logged page, is not taken |
+| **Does not settle** | BL-S4's rulings 2 (core 0's role under the partition) and 3 (whether a WAL segment roll keeps the stream latch across its device I/O); whether a tool that pins sessions needs a balancer off-switch (`known-gaps.md`'s BL section) |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` §6; `docs/spec/waystone-concpets.md` §4; `docs/spec/parser-v2.md` (J5); `docs/inflight/known-gaps.md`'s BL section; `manual/sql/sql.md` (`SHOW PATTERNS`) |

@@ -2005,7 +2005,9 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
         // read the same on every row today - `auto` and `no` - because
         // withdrawing declared patterns took away the only writer of
         // kOriginUser and of kPatternPinned; the fields stay on disk and
-        // this prints what they hold rather than what it assumes.
+        // this prints what they hold rather than what it assumes. `uses`
+        // and `last_seen` likewise read 0 since BL-S4's ruling 1 deleted
+        // their writer (rows.hpp).
         os << " origin=" << (row.origin == catalog::kOriginUser ? "user" : "auto")
            << " pinned=" << ((row.flags & catalog::kPatternPinned) != 0 ? "yes" : "no")
            << " class=" << static_cast<int>(row.stmt_class)

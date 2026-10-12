@@ -2798,8 +2798,7 @@ StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t fetch_id,
     // insert under it are a read-then-write that two cores would both
     // pass. The loser's row is a duplicate `GetSysPatternRow` never
     // returns - it answers at the first match - so one shape would own two
-    // rows, one of which collects every later `use_count` bump and the
-    // other of which holds a `waystone_root` nothing walks.
+    // rows, one of which holds a `waystone_root` nothing walks.
     auto held = store_.Get(kCatalogPagePatterns);
     if (!held.ok()) return held.status();
 
@@ -2909,18 +2908,6 @@ StatusOr<std::pair<PageId, std::uint8_t>> Catalog::ClaimPatternWaystoneRoot(
                                    " depth=" + std::to_string(depth_in_force));
     }
     return std::make_pair(in_force, depth_in_force);
-}
-
-Status Catalog::TouchPattern(std::uint64_t fetch_id, std::uint64_t last_seen) {
-    return MutatePatternRow(fetch_id, [last_seen](SysPatternRow& row) {
-        // Saturating, not wrapping: a use_count that rolled over would make
-        // the hottest pattern in the database look like the coldest, which
-        // is the one reading retention must never be handed.
-        if (row.use_count != std::numeric_limits<std::uint32_t>::max()) ++row.use_count;
-        row.last_seen = last_seen;
-    });
-    // No cache update: heat is not a cached fact (catalog.hpp), so there is
-    // nothing to keep coherent.
 }
 
 Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,

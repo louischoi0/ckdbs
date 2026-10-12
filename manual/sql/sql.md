@@ -439,7 +439,9 @@ the statement's shape with its select list left out, so `SELECT a ...` and
 trail. `ANALYZE` prints a statement's `pattern_id` (its whole shape) and its
 `fetch_id`, the second being the one to look for in `SHOW PATTERNS`. A row
 marked `stale=v1` was recorded by a build before this keying, is listed
-under the `pattern_id=` it was keyed by, and is never used.
+under the `pattern_id=` it was keyed by, and is never used. A row's
+`uses=` and `last_seen=` read 0: executing a pattern writes its trail and
+nothing to its row, so a repeated read makes no logged write.
 
 `CREATE PATTERN ...` now answers the ordinary refusal for an unknown
 `CREATE` target, and `$name` parameters are refused wherever they are

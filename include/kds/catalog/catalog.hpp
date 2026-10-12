@@ -851,23 +851,12 @@ public:
     // (rows.hpp says why), so a re-designed declaration would restore a
     // writer rather than change the row.
 
-    // Records that a pattern was executed: bumps `use_count` and stamps
-    // `last_seen`. The trail recorder's catalog half.
-    //
-    // **Deliberately not cached, and it must not become so.** Both fields
-    // move on every execution, which is not DDL - so a cached copy would be
-    // stale the moment it was taken and no invalidation could fix it. That
-    // is exactly why `PatternAccess` omits them (schema.hpp), and this
-    // writes the page without touching the cache at all.
-    //
-    // Best-effort by contract (rows.hpp): these counters rank patterns for
-    // retention and nothing reports them, so a caller that drops a failure
-    // here loses a statistic, never a result. `use_count` saturates rather
-    // than wrapping - a wrapped count would make the hottest pattern look
-    // cold.
-    //
-    // Fails with NotFound when no current-version row carries `fetch_id`.
-    Status TouchPattern(std::uint64_t fetch_id, std::uint64_t last_seen);
+    // A `TouchPattern()` stood here - the trail recorder's catalog half,
+    // which bumped `use_count` and stamped `last_seen` on every recorded
+    // execution. It went with BL-S4's ruling 1 (2026-10-12, rows.hpp): it
+    // was a logged catalog write on the read path, so a repeated point
+    // `SELECT` waited on the one WAL behind any bulk writer. The two fields
+    // stay on disk, written 0 at registration and advanced by nothing.
 
     // A `RetirePattern()` stood here - `DROP PATTERN`'s catalog half, and
     // the first path in the engine that removed a catalog row. It went with
@@ -899,10 +888,11 @@ public:
     // The pattern's row straight off the page, never from the cache.
     //
     // The counterpart of GetSysTableRow(): it exists for the fields
-    // PatternAccess deliberately omits - `use_count` and `last_seen` -
-    // which change on every execution and so are not cacheable facts
-    // (schema.hpp). A caller that wants heat calls this; a caller that
-    // wants identity or location calls FindPattern().
+    // PatternAccess deliberately omits - `use_count` and `last_seen`, heat
+    // that moves without DDL and so is not a cacheable fact (schema.hpp;
+    // reserved since BL-S4's ruling 1, rows.hpp). A caller that wants heat
+    // calls this; a caller that wants identity or location calls
+    // FindPattern().
     //
     // **Rows from another fingerprint revision are invisible here**, and
     // this is the single place that filter lives. A version bump leaves
@@ -1351,13 +1341,11 @@ private:
     // lives in the cache.
     StatusOr<const std::vector<SysTypeRow>*> EnsureTypes();
 
-    // The in-place rewrite behind ClaimPatternWaystoneRoot() and
-    // TouchPattern(): finds the current-version sys.patterns row for
-    // `fetch_id`, hands it to `mutate`, and writes it back over the same
-    // slot. One scan and one version filter for every writer, so no two can
-    // come to disagree about which row is "this pattern".
+    // The in-place rewrite behind ClaimPatternWaystoneRoot(): finds the
+    // current-version sys.patterns row for `fetch_id`, hands it to
+    // `mutate`, and writes it back over the same slot.
     //
-    // Does not touch the cache - each caller publishes its own field set,
+    // Does not touch the cache - the caller publishes its own field set,
     // because a blanket "re-read the row into the cache" would republish
     // fields the caller did not write and had no lock on.
     Status MutatePatternRow(std::uint64_t fetch_id,

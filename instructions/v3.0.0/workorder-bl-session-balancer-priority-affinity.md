@@ -938,7 +938,14 @@ rulings, none of them BL's to make:
    (b) make the two heat fields unlogged, a second exception to CR6 inside a
    logged page; (c) keep it logged but coalesce per core in memory and fold
    it on a `system` tick, which still meets a roll once per tick. CLA
-   proposes (a).
+   proposes (a). **Marked (a) by W11** (2026-10-12, `raft-marks-2026-10-12.md`
+   §11), under the operator's constraint that each component keeps its
+   authority class - `sys.patterns` wholly logged, Waystone advisory,
+   `sys.access_stats` the one unlogged relation `rules.md` §5 admits -
+   which is what rules out (b). **(a)'s reader list above is corrected**:
+   the relayout planner reads `sys.access_stats`' heat, not
+   `sys.patterns`'; the pattern heat's only readers were `SHOW PATTERNS`
+   and the `sys.patterns` view, which now print zero.
 2. **Core 0's role under a partition** (BL-R2 says core 0 is never a batch
    core): the measurement says it is the best one, since its drain meets
    every roll. CLA proposes that the batch partition be core 0 first.

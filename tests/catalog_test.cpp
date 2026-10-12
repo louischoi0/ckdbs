@@ -1364,9 +1364,9 @@ TEST_F(PatternCatalogTest, RegisteringAPatternDoesNotInvalidateTableAccess) {
 TEST_F(PatternCatalogTest, HeatIsReadFromThePageNotTheCache) {
     ASSERT_TRUE(catalog_.RegisterPattern(21, kStmtClassUnclassified).ok());
 
-    // PatternAccess deliberately has no use_count/last_seen to read: they
-    // change on every execution, which is not DDL, so they are not
-    // cacheable facts. The row is where they live.
+    // PatternAccess deliberately has no use_count/last_seen to read: heat
+    // moves without DDL, so it is not a cacheable fact (schema.hpp). The
+    // row is where they live, reserved and 0 (rows.hpp).
     auto row = catalog_.GetSysPatternRow(21);
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(row.value().use_count, 0u);
