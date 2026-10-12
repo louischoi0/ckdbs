@@ -68,3 +68,21 @@ Korean it was typed in.
 | **Mark** | Marked per item, as CLA proposed: **BL-Q19 (a)** - the partition is an engine constant, `max(1, cores / 4)` batch cores, the highest-numbered, never core 0, sized by BL-S5, and not a setting; **BL-Q20 (a)** - an interactive session does not borrow an idle batch core in v0, taken up only if §5.2 shows the idle capacity material. Written on `worktree-bl-drop-session-affinity` on top of `f9f0c6fa` |
 | **Does not settle** | The partition's size as a number, `[provisional]` until BL-S5; BL-Q0 and the other unmarked items; BL still not opened |
 | **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` header (W9), §4, §6; `index.md`'s BL row |
+
+## 8. What shared-nothing left, asked for
+
+| | |
+|---|---|
+| **Word** | *"Sync the current repo and find what is left over from the shared-nothing era, and the overhead those leftovers cause."* (W0 of BP) |
+| **Mark** | None: a question answered. CLA synced the main checkout to `fe248d94` and reported a survey in four groups: cost `cores = 1` pays, structure costing above one core, dead code, and comment and naming residue. Recorded in the main checkout on `main` at `fe248d94`, with no worktree |
+| **Does not settle** | Anything |
+| **Recorded at** | `workorder-bp-shared-nothing-residue.md` header (W0) and §1 |
+
+## 9. BP written and pushed
+
+| | |
+|---|---|
+| **Word** | *"Write a work order for that issue: hypothesis, verification, code change, measurement, and re-exploration or rejection where needed."* (W1 of BP) |
+| **Mark** | BP-S0: the order written (`workorder-bp-shared-nothing-residue.md`), with W1's five words as its per-hypothesis loop (BP-R0). It was pushed to `main` directly from the main checkout at `fe248d94`, with no worktree and no work branch, as a document-only change, under the standing practice for documents written in a claude.ai session. The pre-push hook did not run, because it is not enabled in this clone; no build and no suite ran. **Not opened**: BP-Q0..Q13 are unmarked. The letter BP is CLA's choice (BP-Q12) |
+| **Does not settle** | BP-Q0..Q13, among them the memo's option (BP-Q4, `[quiet-wrong]` under (a), (b) and (d)), the three ratified structures (BP-Q5..Q7) and the sequencing (BP-Q13) |
+| **Recorded at** | `workorder-bp-shared-nothing-residue.md`; `index.md`'s BP row |
