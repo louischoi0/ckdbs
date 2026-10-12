@@ -39,6 +39,14 @@
 //               ROLLBACK / ABORT / SYNC / STOP / PING are admitted until
 //               the client rolls back.
 //
+// **kFailedTxn has two shapes.** Poisoned by a failed statement, it still
+// holds its transaction, and the client's ROLLBACK is what undoes it.
+// Expired by the lifetime sweep (`Expire`, AN-R14, docs/spec/txn.md §1),
+// the server has already rolled it back and holds nothing; the state stays
+// failed so the client learns it at its next statement and its ROLLBACK
+// ends nothing but the state. One wire state for both (`S_READY.txn_state`
+// is this enum's numbering), because the client's next move is the same.
+//
 // **Failure atomicity is per transaction, not per statement** (section 6).
 // An UPDATE that fails on row 7 of 10 inside an explicit transaction leaves
 // rows 1-6 written and the session in kFailedTxn; the client must ROLLBACK,
@@ -127,6 +135,10 @@ public:
     State state() const noexcept { return state_; }
     bool in_explicit_txn() const noexcept { return state_ != State::kIdle; }
     bool failed() const noexcept { return state_ == State::kFailedTxn; }
+    // The id of the transaction the lifetime sweep rolled back, or 0 when
+    // the session was not expired. Non-zero only in kFailedTxn, with no
+    // transaction held.
+    std::uint64_t expired_trx_id() const noexcept { return expired_trx_id_; }
 
     // The level the *next* BEGIN will use. Set from the server config at
     // construction and by `SET ISOLATION LEVEL`; a `BEGIN ISOLATION LEVEL`
@@ -285,6 +297,7 @@ public:
         txn::Transaction* ended = txn_;
         txn_ = nullptr;
         state_ = State::kIdle;
+        expired_trx_id_ = 0;
         // The class this transaction was begun under belongs to the
         // transaction, not the connection: `BEGIN ... DURABILITY strict`
         // binds one transaction, and a session whose next statement is
@@ -293,6 +306,17 @@ public:
         // or, worse, a laxer one.
         txn_durability_.reset();
         return ended;
+    }
+
+    // The lifetime sweep rolled the transaction back
+    // (`TcpServer::ExpireOverdueTransactions`). Failed, not idle: an idle
+    // session would run the client's next statement in autocommit, and the
+    // writes it believes pending would be silently missing from its COMMIT.
+    void Expire(std::uint64_t trx_id) noexcept {
+        txn_ = nullptr;
+        state_ = State::kFailedTxn;
+        expired_trx_id_ = trx_id;
+        txn_durability_.reset();
     }
 
     // **No home core since AT-S9.** A transaction's writes bound to the
@@ -342,6 +366,7 @@ private:
     wal::Lsn acknowledged_commit_lsn_ = wal::kNoLsn;      // BA-R1c
     Role role_ = Role::kAdmin;
     txn::Transaction* txn_ = nullptr;
+    std::uint64_t expired_trx_id_ = 0;  // AN-R14's sweep; see `Expire`
     // AO-S3b. Absent on every session that is not parked mid-walk, which
     // is every session almost all of the time.
     std::optional<ParkedWrite> parked_write_ = std::nullopt;

@@ -1243,6 +1243,21 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // a whitelist, so a statement added later is refused by default rather
     // than admitted by omission.
     if (session.failed() && !Session::AdmittedWhileFailed(cmd)) {
+        if (const std::uint64_t expired = session.expired_trx_id(); expired != 0) {
+            // **Already rolled back, and the client has to be told so**
+            // (AN-R14, docs/spec/txn.md §1): the generic text below says
+            // "aborted" and leaves a reader to assume ROLLBACK will undo
+            // something. Its own detail, because the fix is a shorter
+            // transaction - COMMIT included, which must never quietly
+            // succeed over writes that are already gone.
+            Status s = Status::ResourceExhausted(
+                "transaction trx_id=" + std::to_string(expired) +
+                " exceeded the transaction lifetime ceiling (txn_lifetime_ceiling_ms) and was "
+                "rolled back by the server; its writes are undone. ROLLBACK to end it");
+            last_refusal_detail_ =
+                static_cast<std::uint16_t>(wire::ResourceDetail::kTxnLifetimeCeiling);
+            return {ErrorReply(s), false, 0, s};
+        }
         return {"ERR current transaction is aborted; commands are ignored until ROLLBACK",
                 false};
     }
@@ -9006,6 +9021,12 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
 DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     if (!session.in_explicit_txn()) {
         return {"ERR no transaction is open", false};
+    }
+    if (const std::uint64_t expired = session.expired_trx_id(); expired != 0) {
+        // The lifetime sweep already rolled it back (`Session::Expire`);
+        // what is left to end is the session's failed state.
+        session.Finish();
+        return {"ROLLBACK trx_id=" + std::to_string(expired), false};
     }
 
     DispatchOutcome out = RollbackLocal(session);
