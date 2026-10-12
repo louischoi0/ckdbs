@@ -328,7 +328,8 @@ Status LogCatPageInit(wal::WalManager* wal, std::uint64_t trx_id, PageId page_id
 // formatted page - its roots are body content (the 3f07eda review's
 // C3). Replay stays safe without ordering care because the redo range
 // is a suffix: a replayed PAGE_INIT that wipes the body is necessarily
-// followed in-range by every ANCHOR_UPDATE that refills it.
+// followed in-range by every ANCHOR_UPDATE that refills it, and by every
+// BTREE_SPLIT that carries the page whole after a root growth.
 Status LogCatAnchorUpdate(wal::WalManager* wal, storage::PageStore& store, std::uint64_t trx_id,
                           PageId anchor_page, std::uint64_t index_oid, PageId root) {
     if (trx_id == kBootstrapXid) trx_id = wal::kNoTxnId;
@@ -948,7 +949,7 @@ void Catalog::BumpWord() {
     const std::uint64_t prev = schema_word_->fetch_add(1, std::memory_order_acq_rel);
     // Adopt the bump only if this cache was current. A writer whose cache
     // `BumpVersion()` just dropped, or a root move keeping its entry in
-    // place (`UpdateRelationDescPage`, `UpdateIndexRoot`), has
+    // place (`AdoptRoot`), has
     // `cache_built_at_ == prev` and moves with the word. A bump from
     // another core this cache has not yet revalidated against leaves it
     // behind, so the next boundary still drops - otherwise this write would
@@ -1134,6 +1135,19 @@ Status Catalog::CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_o
 
 Status Catalog::WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
                                 std::uint64_t index_oid, PageId root, std::uint64_t trx_id) {
+    auto staged = StageAnchorRoot(anchor_page, expected_owner_oid, index_oid, root);
+    if (!staged.ok()) return staged.status();
+    return LogCatAnchorUpdate(wal_, store_, trx_id, anchor_page, index_oid, root);
+}
+
+StatusOr<storage::PageRef> Catalog::StageAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
+                                                    std::uint64_t index_oid, PageId root) {
+    // A system relation has no anchor and never grows a level - its fixed
+    // catalog page does not - so an anchorless root move is a defect.
+    if (anchor_page == kInvalidPageId) {
+        return Status::InvalidArgument("relation oid " + std::to_string(expected_owner_oid) +
+                                       " has no anchor page; a system relation's root cannot move");
+    }
     auto anchor = store_.Get(anchor_page);
     if (!anchor.ok()) return anchor.status().WithContext("faulting anchor for a root move");
     // The write is where the damage is created, so it checks what the
@@ -1157,7 +1171,7 @@ Status Catalog::WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
                !s.ok()) {
         return s;
     }
-    return LogCatAnchorUpdate(wal_, store_, trx_id, anchor_page, index_oid, root);
+    return std::move(anchor.value());
 }
 
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
@@ -2292,7 +2306,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     // could not hold them. Found by AT-S5c's coverage check refusing it.
     // The first ground is answered too, and by a different stage: one frame
     // table serves every core since AM-S2 step 3, and the schema word is
-    // bumped at the repoint (`UpdateRelationDescPage`), so a stale memo is
+    // bumped at the repoint (`AdoptRoot`), so a stale memo is
     // dropped at the next task boundary rather than never.
     // Held for the whole fill (the 96b0343 review's C2): the first form
     // dropped the ref and re-fetched per index row - an N+1 that, under a
@@ -2650,54 +2664,46 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
     return Status::OK();
 }
 
-Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
-                                       PageId anchor_page_id) {
-    // PW2-3/PW2-4: a root move writes the **anchor alone** - the
-    // sys.tables row is CREATE-fixed, which is the whole point of the
-    // indirection (a growth writes a relation page, never a catalog page).
-    // The anchor id
-    // comes from the caller's own TableAccess, UpdateIndexRoot's S2 rule -
-    // no catalog scan inside a level-grow - and the cached entry updates
-    // **in place**: the pre-anchor BumpVersion here destroyed the entry
-    // the running INSERT was holding. Same one-field license as the index
-    // root's in-place update - and since
-    // AT-S5c the *word* is bumped beside it, which is not the same thing:
-    // it drops nothing here and drops every other core's memo there. A
-    // system relation (no anchor) cannot reach this function - its fixed catalog
-    // page never grows a level - so an anchorless call is a defect.
-    if (anchor_page_id == kInvalidPageId) {
-        return Status::InvalidArgument(
-            "relation oid " + std::to_string(table_oid) +
-            " has no anchor page; a system relation's root cannot move");
-    }
-    if (Status s = WriteAnchorRoot(anchor_page_id, table_oid, /*index_oid=*/0,
-                                   new_desc_page_id, wal::kNoTxnId);
+Status Catalog::PublishRoot(Oid rel_oid, std::uint64_t index_oid, PageId new_root,
+                           PageId anchor_page_id) {
+    if (Status s = WriteAnchorRoot(anchor_page_id, rel_oid, index_oid, new_root, wal::kNoTxnId);
         !s.ok()) {
         return s;
     }
-    cache_.UpdateDescPage(table_oid, new_desc_page_id);
-    // **And every other core is told** (AT-S5c). The in-place update above
-    // is this core's; until AT-S5 that was the whole story, because a
-    // relation's writes all ran on its owner and no other core's memo of
-    // the root was ever used to descend. A write runs where the session is
-    // now, so a peer holding the pre-growth root descends into what is now
-    // the *leftmost subtree* and writes a row into a leaf that cannot hold
-    // it - the same wrong answer AT-S5c's coverage check refuses, one level
-    // up. `BumpWord` and not `BumpVersion`: this core's entry is correct
-    // and was just repaired in place, so it adopts the bump and keeps it,
-    // while every other core drops its memo at its next task boundary and
-    // re-reads the root from the anchor (`catalog.md` CT2). What covers the
-    // window between the bump and that boundary is the descent's own
-    // refusal, which is retryable.
+    AdoptRoot(rel_oid, index_oid, new_root);
+    return Status::OK();
+}
+
+void Catalog::AdoptRoot(Oid rel_oid, std::uint64_t index_oid, PageId new_root) {
+    // PW2-3/PW2-4: a root move writes the **anchor alone** - the sys.tables
+    // and sys.indexes rows are CREATE-fixed, which is the whole point of the
+    // indirection (a growth writes a relation page, never a catalog page) -
+    // and this core's cached entry updates **in place**, so the running
+    // statement's TableAccess, and MaintainIndexes' `ix` inside it, stay
+    // valid (catalog_cache.hpp's one-field license).
+    if (index_oid == 0) {
+        cache_.UpdateDescPage(rel_oid, new_root);
+    } else {
+        cache_.UpdateIndexRoot(rel_oid, index_oid, new_root);
+    }
+    // **And every other core is told** (AT-S5c). A write runs where the
+    // session is, so every core's TableAccess memoizes this root, and a
+    // peer holding the pre-growth one descends into what is now the new
+    // root's *leftmost subtree*. Since AT-S15/AT-S16 that costs a retryable
+    // refusal rather than a misplaced row or a second root - the coverage
+    // checks and the grown-over mark - and this bump is what bounds those
+    // refusals to one task. `BumpWord` and not `BumpVersion`: this core's
+    // entry was just repaired and adopts the bump, while every other core
+    // drops its memo at its next task boundary and re-reads the anchor
+    // (`catalog.md` CT2).
     BumpWord();
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        // A relation's entry page moving is a structural change to the
-        // relation, rare enough to deserve Debug rather than Trace.
-        log_->Debug("catalog", "table oid " + std::to_string(table_oid) + " root -> " +
-                                   std::to_string(new_desc_page_id) + " (anchor " +
-                                   std::to_string(anchor_page_id) + ")");
+        // Rare and structural, so Debug rather than Trace.
+        log_->Debug("catalog", "relation oid " + std::to_string(rel_oid) +
+                                   (index_oid == 0 ? std::string()
+                                                   : " index oid " + std::to_string(index_oid)) +
+                                   " root -> " + std::to_string(new_root));
     }
-    return Status::OK();
 }
 
 // ---- sys.patterns ----------------------------------------------------
@@ -3570,60 +3576,6 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
         marked.page_id = acted_page;  // known only once the walk found it
         *change = std::move(marked);
     }
-    return Status::OK();
-}
-
-Status Catalog::UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root,
-                                PageId anchor_page_id) {
-    // PW2-4, the 96b0343 review's C1: the ForFirstRow scan that lived here
-    // fetched sys.indexes through the *write* accessor - dirtying a
-    // catalog page per index root split on core 0, and refusing outright
-    // on a peer, so half of PW-B2's blocker survived the retirement. The
-    // scan yielded only rel_oid and an existence proof, both of which the
-    // caller holds (MaintainIndexes iterates access.indexes) - so this is
-    // now UpdateRelationDescPage's exact mirror: anchor write, in-place
-    // cache update, no catalog touch. The in-place license is
-    // catalog_cache.hpp's: a root belongs to one index and is read by
-    // nothing else, and a drop would dangle the running statement's
-    // TableAccess.
-    //
-    // **"read by nothing else" was AT-S5's routing, and the word is bumped
-    // for the same reason the clustered root's is** (AT-S5c's review). A
-    // write runs where the session is now, so every core walks this index
-    // and every core's `TableAccess::IndexRef::root_page_id` is a memo of
-    // it. A peer that kept the pre-growth root descends into what is now
-    // the new root's *leftmost subtree*: the entry lands in a page no
-    // descent from the current root reaches, so the row is lost to every
-    // later probe - and if that peer's own insert then grows a level from
-    // the stale root, its `UpdateIndexRoot` republishes a root whose
-    // subtree does not contain the other core's entries at all. The
-    // clustered root's twin has carried this since AT-S5c; the index root
-    // is the same defect one structure over. **Since AT-S15 the index has
-    // the coverage check underneath too** (`index_tree.cpp`'s
-    // `LeafStillCoversKey`): a key outside the stale subtree is refused
-    // retryable instead of placed, **and since AT-S16 a level growth from a
-    // stale root is refused as well** - the old root carries a grown-over
-    // mark (`SecureParents`). So a stale memo costs refusals, never a second
-    // root; this bump is what bounds those refusals to one task.
-    //
-    // `BumpWord` and not `BumpVersion`, for `UpdateRelationDescPage`'s
-    // reason exactly: this core's entry was just repaired in place and
-    // adopts the bump, so `MaintainIndexes`' loop keeps the `access` and
-    // `ix` it is iterating; every other core drops its memo at its next
-    // task boundary and re-reads the root from the anchor, which
-    // `InitTableAccess` reads on every core since AT-S5c.
-    if (anchor_page_id == kInvalidPageId) {
-        return Status::InvalidArgument(
-            "relation oid " + std::to_string(rel_oid) +
-            " has no anchor page; a system relation carries no secondary index");
-    }
-    if (Status s =
-            WriteAnchorRoot(anchor_page_id, rel_oid, index_oid, new_root, wal::kNoTxnId);
-        !s.ok()) {
-        return s;
-    }
-    cache_.UpdateIndexRoot(rel_oid, index_oid, new_root);
-    BumpWord();  // every other core re-reads; this one keeps its entry
     return Status::OK();
 }
 

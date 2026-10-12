@@ -535,7 +535,7 @@ TEST(IndexTreeTest, ALeafDividedBeforeTheDescentReadsItIsNotWrittenPast) {
 }
 
 TEST(IndexTreeTest, AnInsertFromARootThatHasSinceGrownIsRefusedOutsideItsSubtree) {
-    // **A stale root** (`Catalog::UpdateIndexRoot`'s note): a core whose
+    // **A stale root** (`Catalog::AdoptRoot`'s note): a core whose
     // memo still names the pre-growth root descends into what is now the
     // new root's leftmost subtree. For a key that subtree no longer covers,
     // the coverage check refuses the insert retryable rather than placing

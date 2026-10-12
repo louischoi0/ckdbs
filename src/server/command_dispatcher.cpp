@@ -4585,18 +4585,24 @@ Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& wr
     return Status::OK();
 }
 
+// An index split's record holds every page it wrote and the anchor, under
+// the stream's bound (`storage::LogBtreeSplit`'s size rule, for the index's
+// own cap).
+static_assert(wal::BtreeSplitSize(index::kMaxIndexChanges + 1) + wal::kRecordHeaderSize <=
+              wal::kDefaultRingCapacity);
+
 Status CommandDispatcher::LogIndexWrite(const exec::IndexWrite& write, std::uint64_t txn_id) {
     if (wal_ == nullptr) return Status::OK();
-    // A split's pages take full page images and **no** INDEX_INSERT: the
+    // A split's pages take one BTREE_SPLIT and **no** INDEX_INSERT: the
     // images are taken after the entry is in, so emitting both would apply
-    // it twice. Same instrument the clustered tree's internal nodes take,
-    // and for the same reason - no record type describes an entry-array
-    // division (wal/record.hpp).
+    // it twice. The clustered tree's record, for the clustered tree's
+    // reason - one record replays whole or not at all, where a run of
+    // FULL_PAGE_IMAGEs could end between a divided leaf and the parent that
+    // routes to its new half - and a root the split grew rides in it
+    // (`LogTreeSplit`).
     if (!write.restructured.empty()) {
-        for (PageId page_id : write.restructured) {
-            if (Status s = LogFullPageImage(page_id, txn_id); !s.ok()) return s;
-        }
-        return Status::OK();
+        return LogTreeSplit(write.restructured, txn_id, write.rel_oid, write.index_oid,
+                            write.new_root, write.anchor_page_id);
     }
 
     std::vector<std::byte> buf(wal::kIndexInsertFixedSize + write.entry.size());
@@ -4632,8 +4638,24 @@ exec::IndexWriteLog CommandDispatcher::IndexWriteLogFor(const WriteScope& scope,
             return LogIndexWrite(write, txn_id);
         };
     }
-    return [&pending](const exec::IndexWrite& write) {
+    // Collected for `LogInsert`, which logs them under the transaction it
+    // opens - but not every exit reaches it (an UPDATE never does, and an
+    // INSERT's take-back exits before it), so a root a split grew is
+    // published here with its own ANCHOR_UPDATE, as it was before the root
+    // rode in the split's record, and the copy kept carries none.
+    return [this, &pending](const exec::IndexWrite& write) -> Status {
+        if (write.new_root == kInvalidPageId) {
+            pending.push_back(write);
+            return Status::OK();
+        }
+        if (Status s = catalog_.PublishRoot(write.rel_oid, write.index_oid, write.new_root,
+                                            write.anchor_page_id);
+            !s.ok()) {
+            return s.WithContext("republishing the root of index " +
+                                 std::to_string(write.index_oid));
+        }
         pending.push_back(write);
+        pending.back().new_root = kInvalidPageId;
         return Status::OK();
     };
 }
@@ -4685,11 +4707,18 @@ Status CommandDispatcher::NoteSpills(const WriteScope& scope, std::uint32_t rel_
 
 Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType leaf_type,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
-                                    std::uint64_t owner_oid,
+                                    std::uint64_t owner_oid, PageId anchor_page_id,
                                     const std::vector<exec::AppendedSpill>& spills,
                                     const std::vector<exec::IndexWrite>& index_writes,
                                     bool own_txn) {
-    if (wal_ == nullptr) return Status::OK();
+    const bool btree = leaf_type == PageType::kBtreeLeaf;
+    if (wal_ == nullptr) {
+        // Nothing to log, and a root the split grew is published all the
+        // same.
+        return btree && placed.restructured()
+                   ? LogSplit(placed, wal::kNoTxnId, owner_oid, anchor_page_id)
+                   : Status::OK();
+    }
 
     // `own_txn` is false once a TransactionManager runs the transaction:
     // it already appended TXN_BEGIN at Begin() and will append TXN_COMMIT
@@ -4708,7 +4737,6 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
     // whichever leaf took it, or a BTREE_INSERT naming the slot the row was
     // placed at. Either comes after the row's spills and index entries, the
     // order the heap's HEAP_INSERT keeps below.
-    const bool btree = leaf_type == PageType::kBtreeLeaf;
 
     // Every page a heap insert restructured, in the order the storage layer
     // says redo has to apply it, and all of it before the tuple's own
@@ -4748,7 +4776,7 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
     if (btree && placed.restructured()) {
         // The split's one record, which carries the row: no insert record
         // follows it, as an index split logs no INDEX_INSERT.
-        if (Status s = storage::LogBtreeSplit(wal_, page_store_, txn_id, placed.changes());
+        if (Status s = LogSplit(placed, txn_id, owner_oid, anchor_page_id);
             !s.ok()) {
             return s;
         }
@@ -4791,6 +4819,55 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
         !wal_->IsDurable(commit.value())) {
         pending_commit_lsn_ = commit.value();
     }
+    return Status::OK();
+}
+
+Status CommandDispatcher::LogSplit(const storage::InsertPlacement& placed, std::uint64_t txn_id,
+                                   catalog::Oid oid, PageId anchor_page_id) {
+    std::vector<PageId> pages;
+    pages.reserve(placed.changes().size());
+    for (const storage::StructuralChange& change : placed.changes()) {
+        pages.push_back(change.page_id);
+    }
+    return LogTreeSplit(pages, txn_id, oid, /*index_oid=*/0, placed.new_root, anchor_page_id);
+}
+
+Status CommandDispatcher::LogTreeSplit(std::span<const PageId> pages, std::uint64_t txn_id,
+                                       catalog::Oid rel_oid, std::uint64_t index_oid,
+                                       PageId new_root, PageId anchor_page_id) {
+    // The anchor is taken after every page the split wrote and dropped
+    // first. The pages it then latches beside it are ones the split created,
+    // which nothing reaches but through a page already held.
+    std::optional<storage::PageRef> anchor;
+    Status refused = Status::OK();
+    if (new_root != kInvalidPageId) {
+        auto staged = catalog_.StageAnchorRoot(anchor_page_id, rel_oid, index_oid, new_root);
+        if (staged.ok()) {
+            anchor.emplace(std::move(staged.value()));
+        } else {
+            refused = staged.status();
+        }
+    }
+    // A refused staging still logs the split: its pages are written either
+    // way, and a split no record describes refuses the next mount
+    // (`wal.md` §6). Only the root goes unpublished, and the error says so.
+    if (Status s = storage::LogBtreeSplit(wal_, page_store_, txn_id, pages,
+                                          anchor.has_value() ? &*anchor : nullptr);
+        !s.ok()) {
+        return s;
+    }
+    if (!refused.ok()) {
+        if (logging(LogLevel::kError)) {
+            log_->Error("btree", "relation oid " + std::to_string(rel_oid) + " index oid " +
+                                     std::to_string(index_oid) +
+                                     " grew a level but its root could not be repointed at page " +
+                                     std::to_string(new_root) + ": " + refused.message());
+        }
+        return refused;
+    }
+    if (!anchor.has_value()) return Status::OK();
+    anchor.reset();
+    catalog_.AdoptRoot(rel_oid, index_oid, new_root);
     return Status::OK();
 }
 
@@ -6069,34 +6146,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         return placed.status();
     }
 
-    // The tree grew a level, so the relation's root moved. Published only
-    // once the new root's contents are logged: a root published before the
-    // pages under it are described is a root recovery cannot follow. Since
-    // PW2-4 the move writes the anchor and updates the cached entry **in
-    // place** - `ta` stays valid, no invalidation broadcast, no catalog
-    // write. Both the success path below and E5's take-back of a split run
-    // it, after the holds the placement handed out are gone.
-    const auto publish_root = [&]() -> Status {
-        if (placed.value().new_root == kInvalidPageId) return Status::OK();
-        if (Status s = catalog_.UpdateRelationDescPage(oid, placed.value().new_root,
-                                                       ta.anchor_page_id);
-            !s.ok()) {
-            if (logging(LogLevel::kError)) {
-                log_->Error("btree", "table oid " + std::to_string(oid) +
-                                         " grew a level but its root could not be repointed at "
-                                         "page " +
-                                         std::to_string(placed.value().new_root) + ": " +
-                                         s.message());
-            }
-            return s;
-        }
-        if (logging(LogLevel::kInfo)) {
-            log_->Info("btree", "table oid " + std::to_string(oid) +
-                                    " grew a level; root is now page " +
-                                    std::to_string(placed.value().new_root));
-        }
-        return Status::OK();
-    };
+    // A level the tree grew is published inside the split's own record
+    // (`LogSplit`), on the success path below and on E5's take-back alike.
 
     // ---- E5: a placement no record will describe is taken back ----------
     //
@@ -6121,13 +6172,12 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             if (!placed.value().restructured()) return leaf.UnInsertTuple(placed.value().slot);
             if (Status s = leaf.RetireSlot(placed.value().slot); !s.ok()) return s;
             page.value().Release();
-            if (Status s = storage::LogBtreeSplit(wal_, page_store_, wal::kNoTxnId,
-                                                  placed.value().changes());
+            if (Status s = LogSplit(placed.value(), wal::kNoTxnId, oid, ta.anchor_page_id);
                 !s.ok()) {
                 return s;
             }
             placed.value().held.clear();
-            return publish_root();
+            return Status::OK();
         }();
         if (!undone.ok() && logging(LogLevel::kError)) {
             log_->Error("btree", "taking back the unlogged placement of id " +
@@ -6157,7 +6207,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // **fails the statement** where the hook above absorbs.
     //
     // `ta` survives this call even when a split republishes an index root:
-    // Catalog::UpdateIndexRoot updates the cached entry in place rather than
+    // Catalog::AdoptRoot updates the cached entry in place rather than
     // invalidating it (catalog_cache.hpp), which is exactly what the
     // desc-page relink below does *not* do.
     // Collected only when there is a log to write to, so the unlogged path
@@ -6239,7 +6289,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // is answered - this class's header's ordering note (AT-S21).
     if (Status s = LogInsert(placed.value(),
                              is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded,
-                             WriterId(scope), oid, spills, index_writes,
+                             WriterId(scope), oid, ta.anchor_page_id, spills, index_writes,
                              /*own_txn=*/scope.txn == nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
@@ -6248,8 +6298,6 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         }
         return s;
     }
-
-    if (Status s = publish_root(); !s.ok()) return s;
 
     // A relation growing a page is rare and structural - the closest thing
     // this engine has to a file extending - so it is Debug, above the
@@ -8735,7 +8783,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                 !s.ok()) {
                 return s;
             }
-            if (Status s = LogIndexWrites(index_writes, scope.txn->id()); !s.ok()) return s;
+            // The index entries were logged as maintenance made them, under
+            // this transaction (`IndexWriteLogFor`).
 
             std::vector<std::byte> buf(wal::kHeapWriteFixedSize + encoded.value().size());
             const wal::HeapWritePayload fields{
