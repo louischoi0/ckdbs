@@ -100,12 +100,12 @@ protected:
             // `btree.cpp`'s append path calls unsurvivable (H9) - and a
             // scan of a relation this fixture filled read its rows out of
             // key order. The dispatcher has adopted the new root since
-            // PW2-4 (`command_dispatcher.cpp`, `UpdateRelationDescPage`);
+            // PW2-4 (`command_dispatcher.cpp`, `Catalog::PublishRoot`);
             // this is that line, and it is what makes a fixture-built
             // relation the same shape as a served one.
             if (placed.value().new_root != kInvalidPageId) {
                 ASSERT_TRUE(boot_->catalog
-                                .UpdateRelationDescPage(oid.value(), placed.value().new_root,
+                                .PublishRoot(oid.value(), /*index_oid=*/0, placed.value().new_root,
                                                         access.value()->anchor_page_id)
                                 .ok());
             }
@@ -668,7 +668,7 @@ TEST_F(ExecChainTest, AResumedPrefixCoversEveryInnerRowAcrossADivideThatDropsARe
         ASSERT_TRUE(heap::PageView(at.value().leaf.bytes()).RetireSlot(at.value().slot).ok());
     }
     ASSERT_TRUE(boot_->catalog
-                    .UpdateRelationDescPage(tr_oid.value(), root, tr.value()->anchor_page_id)
+                    .PublishRoot(tr_oid.value(), /*index_oid=*/0, root, tr.value()->anchor_page_id)
                     .ok());
 
     DivideAtTheBoundary sink;

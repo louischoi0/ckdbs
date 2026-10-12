@@ -1319,7 +1319,7 @@ TEST_F(CoreRuntimeTest, TheAnchorNotTheRowIsTheClusteredRootsTruth) {
     // Through the real mover (PW2-3): the anchor slot moves, the row does
     // not - the retirement's whole contract in one call.
     ASSERT_TRUE(core0_->catalog
-                    .UpdateRelationDescPage(oid.value(), moved_root,
+                    .PublishRoot(oid.value(), /*index_oid=*/0, moved_root,
                                             row.value().anchor_page_id)
                     .ok());
 

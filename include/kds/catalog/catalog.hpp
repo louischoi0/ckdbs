@@ -912,15 +912,23 @@ public:
     // makes that impossible rather than merely unlikely.
     StatusOr<SysPatternRow> GetSysPatternRow(std::uint64_t fetch_id);
 
-    // Updates the desc_page_id field of table_oid's sys.tables row in
-    // place - for a future btree root split/collapse to repoint at a new
-    // root page. Uses an in-place overwrite (row size is unchanged), not
-    // delete+insert, since the row size is unchanged.
-    // The anchor id comes from the caller's TableAccess (S2's rule); the
-    // move writes the anchor alone and updates the cached entry in place -
-    // no row write, no invalidation, no catalog scan (PW2-3/PW2-4).
-    Status UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
-                                  PageId anchor_page_id);
+    // A root move - the clustered tree's when `index_oid` is 0, otherwise
+    // that index's - written to the relation's anchor alone, never a
+    // catalog row (PW2-3/PW2-4), with the anchor id from the caller's own
+    // TableAccess (no catalog scan inside a level growth).
+    //
+    // A root a split grew is published in two halves, so the anchor rides
+    // in the split's own record (`storage::LogBtreeSplit`): `StageAnchorRoot`
+    // before the record, `AdoptRoot` after it. `PublishRoot` is both with
+    // its own ANCHOR_UPDATE, for a growth no split record carries - one
+    // made where nothing logs index writes as they happen.
+    Status PublishRoot(Oid rel_oid, std::uint64_t index_oid, PageId new_root,
+                       PageId anchor_page_id);
+
+    // The in-memory half of a root move whose anchor slot is already
+    // written and logged: this core's cached entry in place, and the schema
+    // word bumped so every other core re-reads the anchor.
+    void AdoptRoot(Oid rel_oid, std::uint64_t index_oid, PageId new_root);
 
     // ---- sys.access_stats (docs/spec/heap-and-tuple.md §7) --------------------
 
@@ -1072,6 +1080,17 @@ public:
     Status WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid, std::uint64_t index_oid,
                            PageId root, std::uint64_t trx_id);
 
+    // WriteAnchorRoot's checks and slot write, **unlogged**, the page handed
+    // back still held exclusive: for a root a split grew, whose caller
+    // images the anchor into the split's one record before the hold drops
+    // (`storage::LogBtreeSplit`), so the slot and the root it names are
+    // replayed together or not at all. A record that fails to append for a
+    // device fault fail-stops the log (wal.md §6), so its staged slot is
+    // never written back; one refused for its size does not
+    // (`known-gaps.md`, WAL).
+    StatusOr<storage::PageRef> StageAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
+                                               std::uint64_t index_oid, PageId root);
+
     // What WriteAnchorRoot would refuse for `index_oid`, asked without
     // writing anything: the same page validation, then
     // storage::CheckAnchorRoomForIndex, which says why it is worth asking.
@@ -1186,16 +1205,6 @@ public:
     // (catalog_cache.hpp's absence rule).
     StatusOr<SysIndexRow> FindIndexOnColumn(Oid table_oid, std::uint32_t col_pos);
 
-    // Republishes an index's root after a split grew the tree a level.
-    // The counterpart of UpdateRelationDescPage(), and it exists for the
-    // same reason: the storage layer has no catalog, so it reports a new
-    // root and someone above it records one.
-    // `rel_oid` and `anchor_page_id` come from the caller's own
-    // TableAccess (the f5686f8 review's S2, extended by 96b0343's C1: the
-    // sys.indexes scan that used to live here fetched a catalog page
-    // through the write accessor - dirtying it per split on core 0,
-    // refusing outright on a peer - for two values MaintainIndexes holds).
-    Status UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root, PageId anchor_page_id);
 
     const SysObjectRegistry& sys_objects() const noexcept { return sys_objects_; }
 

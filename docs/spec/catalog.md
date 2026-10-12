@@ -51,7 +51,7 @@ transaction bump again through `InvalidateAfterCompensation()` — a
 rollback because the rows were compensated behind the cache's back, a
 commit because a delete-mark starts counting then (`ddl-transactional.md`
 §5b). The writes that keep their own cached entry across a bump are the
-in-place root moves (`UpdateRelationDescPage`, `UpdateIndexRoot`), because
+in-place root moves (`AdoptRoot`), because
 the `INSERT` doing one holds the relation's `TableAccess*`; each bumps the
 word, and other cores re-read the root from the anchor.
 
