@@ -378,6 +378,12 @@ private:
     std::uint64_t idle_block_ns_ = 0;
     IterationHolds holds_inside_run_;
     IterationHolds holds_outside_run_;
+    std::array<std::uint64_t, kNumSchedulingGroups> longest_poll_ns_{};
+    std::array<std::uint64_t, kNumSchedulingGroups> polls_over_10ms_{};
+    std::array<std::uint64_t, kNumSchedulingGroups> polls_over_100ms_{};
+    std::uint64_t iteration_polled_ns_ = 0;
+    std::uint64_t longest_unpolled_ns_ = 0;
+    std::uint64_t unpolled_over_100ms_ = 0;
     void RecordIterationHold(MonoTimeNs start_ns, MonoTimeNs block_ns,
                              std::uint64_t run_edges_at_entry) noexcept;
 
@@ -411,6 +417,21 @@ public:
     // its own baseline. Reactor-thread only, like every plain field here.
     const IterationHolds& holds_inside_run() const noexcept { return holds_inside_run_; }
     const IterationHolds& holds_outside_run() const noexcept { return holds_outside_run_; }
+    // **Who held it** (BI-S5): one task poll's longest, per group, and the
+    // longest stretch of one iteration no poll accounts for - timer
+    // callbacks, the post-task drain, io handlers - with how many passed
+    // 100 ms. Reactor-thread only.
+    std::uint64_t longest_poll_ns(SchedulingGroup group) const noexcept {
+        return longest_poll_ns_[static_cast<std::size_t>(SchedulingGroupIndex(group))];
+    }
+    std::uint64_t polls_over_10ms(SchedulingGroup group) const noexcept {
+        return polls_over_10ms_[static_cast<std::size_t>(SchedulingGroupIndex(group))];
+    }
+    std::uint64_t polls_over_100ms(SchedulingGroup group) const noexcept {
+        return polls_over_100ms_[static_cast<std::size_t>(SchedulingGroupIndex(group))];
+    }
+    std::uint64_t longest_unpolled_ns() const noexcept { return longest_unpolled_ns_; }
+    std::uint64_t unpolled_over_100ms() const noexcept { return unpolled_over_100ms_; }
     // Wakes written to **this** reactor's eventfd, by any sender. Zero
     // where the wake path is not armed.
     std::uint64_t wakes_received() const noexcept {

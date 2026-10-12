@@ -273,6 +273,10 @@ bool Scheduler::RunReadyTasks(bool& advanced) {
         // The undecayed pair; scheduler.hpp's accessors say why.
         polled_ns_total_[idx] += spent;
         ++polls_total_[idx];
+        if (spent > longest_poll_ns_[idx]) longest_poll_ns_[idx] = spent;
+        if (spent > 10'000'000) ++polls_over_10ms_[idx];
+        if (spent > 100'000'000) ++polls_over_100ms_[idx];
+        iteration_polled_ns_ += spent;
         ran_any = true;
         ++polled;
 
@@ -323,6 +327,7 @@ bool Scheduler::RunOnce() {
     const std::uint64_t run_edges_at_entry =
         CheckpointCensus::Of(core_id_).run_edges.load(std::memory_order_relaxed);
     MonoTimeNs iteration_block_ns = 0;
+    iteration_polled_ns_ = 0;
     // The wall-clock origin for group accounting (scheduler.hpp's
     // run_wall_ns): the first iteration, not construction.
     if (!run_started_) {
@@ -474,6 +479,11 @@ void Scheduler::RecordIterationHold(MonoTimeNs start_ns, MonoTimeNs block_ns,
     if (hold > 10'000'000) ++h.over_10ms;
     if (hold > 100'000'000) ++h.over_100ms;
     if (hold > 1'000'000'000) ++h.over_1s;
+    // The part of the hold no task poll accounts for: timer callbacks, the
+    // post-task drain, io handlers (BI-S5's attribution).
+    const std::uint64_t unpolled = hold > iteration_polled_ns_ ? hold - iteration_polled_ns_ : 0;
+    if (unpolled > longest_unpolled_ns_) longest_unpolled_ns_ = unpolled;
+    if (unpolled > 100'000'000) ++unpolled_over_100ms_;
 }
 
 void Scheduler::Run() {

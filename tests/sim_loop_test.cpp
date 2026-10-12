@@ -896,11 +896,13 @@ TEST(SimCase, ACaseFileRoundTripsAndReplays) {
     EXPECT_TRUE(replayed.ok) << replayed.Summary(loaded.value().config);
     // Not the whole plan: this case's injections fail a log write, the log
     // fail-stops, and the iteration ends its ops there and restarts
-    // (`wal/stream.hpp`). Pinned, because the case is deterministic: 115
-    // since BF-S4, whose `drop-table` op adds one to this seed's stream from
-    // a stream of its own (114 before).
+    // (`wal/stream.hpp`). Pinned, because the case is deterministic: 31
+    // since BI-S4, where a failed data-file sync stops the instance as a
+    // failed log write does (BI-Q3 (a)) - the first checkpoint, after op 31,
+    // meets this case's injected sync fault and stops it there, where the
+    // step used to fail, be retried, and run on to the log's failure at 115.
     EXPECT_EQ(replayed.fail_stops, 1u);
-    EXPECT_EQ(replayed.ops_run, 115u);
+    EXPECT_EQ(replayed.ops_run, 31u);
 }
 
 TEST(SimCase, AMalformedCaseFileIsRefusedRatherThanGuessedAt) {

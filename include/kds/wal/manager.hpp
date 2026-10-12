@@ -272,10 +272,13 @@ public:
     bool stopped() const noexcept override { return stream_->stopped(); }
 
     // Starts the WAL writer thread, which from then on performs the syncs
-    // **nobody is waiting on** - D3's loss-window tick in DrainOnce(), and
-    // nothing else. Every waited-on sync stays on the reactor, by the
-    // decision Sync() states: a parked committer, a client's SYNC and the
-    // checkpoint gate all pay a hand-off if their sync is handed away.
+    // **nobody is waiting on** - D3's loss-window tick in DrainOnce() - and
+    // the ones a parked task asked for through `RequestSyncNow`: a `group`
+    // commit's above one core (BA-R4 part 1) and a cadence checkpoint's
+    // (BI-S3). Every other waited-on sync stays on the reactor, by the
+    // decision Sync() states: a client's SYNC, a `strict` commit at one core
+    // and a checkpoint's inline remainder pay a hand-off if theirs is handed
+    // away.
     //
     // Off by default and started by the server, deliberately: a test or a
     // tool that drives a WalManager on one thread wants its syncs to have
@@ -426,6 +429,14 @@ public:
     // on this stack.
     Status SyncAll();
 
+    // **Non-blocking**: stages the bytes and asks the writer for a sync,
+    // without waiting for one. The drain's path on an attached manager,
+    // where a tick may not hold the reactor, and a checkpoint task's on any
+    // core, core 0 included, which then parks on `IsDurable` (BI-R2). On a
+    // manager with no writer (tests, tools) there is nobody to ask, so this
+    // is `Sync()`.
+    Status RequestSyncNow();
+
 private:
     WalManager(WalStream* stream, std::unique_ptr<WalStream> owned_stream, WalWriter* writer,
                const sched::Clock& clock, std::uint32_t core_id, WalManagerConfig config);
@@ -439,11 +450,6 @@ private:
     // commit, `EnsureDurable`'s gate, and `SyncAll`.
     Status Sync();
 
-    // **Non-blocking**: stages the bytes and asks for a sync, without
-    // waiting for one. The drain's path on an attached manager, where a
-    // tick may not hold the reactor. On an owning manager there is nobody
-    // to ask, so this is `Sync()`.
-    Status RequestSyncNow();
 
     // The batch, closed against the durable watermark. Called after every sync this manager performs and, on an
     // attached manager, on every drain tick - because there the watermark
