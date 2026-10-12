@@ -322,11 +322,17 @@ out.
 | `&*I` | the issue currently in progress in this session |
 | `*B` | bug |
 | `*P` | progress gate: what must be resolved before the named work can proceed. "Resolving the thread-contamination `*I` is the `*P` of the BK `*M`" means the BK milestone cannot be closed until that issue is resolved |
-| `<-:` | blocked by: `B <-: A` means A blocks B (the blocked item on the left, the blocker on the right) |
-| `:>>` | the `*P` relation written as an arrow: `A :>> B` means A must be met before B can proceed (A is B's `*P`); the same relation as `<-:`, written the other way: `A :>> B` is `B <-: A` |
+| `:>>` | the `*P` relation written as an arrow: `A :>> B` means A must be met before B can proceed (A is B's `*P`) |
 | `<::` | grounded in: `A <:: B` means A rests on B - B is the ground, A the conclusion ("judged on the basis of B, A"; "A, because B"; "following B, A") |
 | `{…}` | a set of items: `{A, B, C} :>> D` means A, B and C must all be met before D can proceed |
 | `(…)` | any of a set of items: `(A, B, C) :>> D` means any one of A, B or C being met lets D proceed |
+
+**A relation symbol mirrored reverses its direction** (operator,
+2026-10-12): written back to front with each `<` and `>` swapped, a
+relation reads from its other term and means the same thing, so either
+term may stand on the left. `B <<: A` is `A :>> B` (B cannot proceed until
+A is met), and `B ::> A` is `A <:: B` (B is the ground of A). A set
+`{…}` or `(…)` may stand on either side of a mirrored relation.
 
 ## Open Decisions — DO NOT assume or silently pick
 
