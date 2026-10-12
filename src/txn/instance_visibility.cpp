@@ -88,7 +88,7 @@ std::uint64_t InstanceVisibility::BeginCommit(std::uint32_t core) {
     // **An earlier open marker keeps the slot** (BA-S7 part 2): its bound
     // is at or below this one, so it already caps every mint below this
     // commit's LSN, and the slot publishes the lowest open bound.
-    LatchGuard guard(&window_latch_);
+    LatchGuard guard(window_latch_);
     CoreVisibilitySlot& slot = slots_[core];
     const std::uint64_t bound = commit_ceiling_.load();
     slot.open_bounds.push_back(bound);
@@ -290,7 +290,7 @@ std::uint32_t InstanceVisibility::InFlightCount(std::uint32_t core) const noexce
 std::uint64_t InstanceVisibility::PublishCommit(std::uint64_t trx_id, std::uint64_t commit_lsn) {
     bool reclaim = false;
     {
-        LatchGuard guard(&window_latch_);
+        LatchGuard guard(window_latch_);
         // The unlogged order: one past the highest published. Under the
         // hold, so two unlogged managers over one instance never take the
         // same position.
@@ -324,7 +324,7 @@ InstanceVisibility::CommitLookup InstanceVisibility::LookupCommit(std::uint64_t 
     // floor under this same latch, so what this returns is either wholly
     // before that pass or wholly after it - never the half-and-half that
     // answers "not committed" for a reclaimed winner.
-    LatchGuard guard(&window_latch_);
+    LatchGuard guard(window_latch_);
     CommitLookup found;
     auto it = window_.find(trx_id);
     if (it != window_.end()) found.commit_lsn = it->second;
@@ -333,7 +333,7 @@ InstanceVisibility::CommitLookup InstanceVisibility::LookupCommit(std::uint64_t 
 }
 
 std::size_t InstanceVisibility::window_size() const {
-    LatchGuard guard(&window_latch_);
+    LatchGuard guard(window_latch_);
     return window_.size();
 }
 
@@ -344,7 +344,7 @@ std::size_t InstanceVisibility::Reclaim() {
     // raising it on no evidence at all.
     if (candidate == kUnboundedBound) return 0;
 
-    LatchGuard guard(&window_latch_);
+    LatchGuard guard(window_latch_);
 
     // **The bound, read under the hold** (the header's "reclamation"
     // note): the oldest published snapshot, capped by every pending

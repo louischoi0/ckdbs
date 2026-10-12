@@ -915,7 +915,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->database_->catalog.SetWal(expeditor->wal_.get());
 
     if (expeditor->config_.cabins) {
-        expeditor->cabin_store_.emplace(expeditor->config_.CabinLimitsOf());
+        // BP-H3: latched above one core only.
+        expeditor->cabin_store_.emplace(expeditor->config_.CabinLimitsOf(),
+                                        /*shared=*/expeditor->config_.cores > 1);
     }
     if (expeditor->config_.waystone_recording) {
         expeditor->trail_recorder_.emplace(expeditor->database_->catalog, *expeditor->store_,
@@ -1070,7 +1072,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // `visibility_` is therefore always engaged, and the
     // null the manager still accepts is for the embedded callers that
     // build one directly.
-    expeditor->visibility_.emplace();
+    expeditor->visibility_.emplace(/*shared=*/expeditor->config_.cores > 1);
     // **The instance's lock table** (AO-S5), before the manager that takes
     // it. Sized by the instance's core count, so its partitions are latched
     // exactly where a second reactor can reach them and latchless at one

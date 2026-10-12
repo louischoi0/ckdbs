@@ -314,7 +314,10 @@ struct CoreInFlightTable {
 
 class InstanceVisibility {
 public:
-    InstanceVisibility() = default;
+    // `shared` arms the window latch (BP-H2): false only where every caller
+    // runs on one reactor thread, which `Expeditor` passes at `cores = 1`.
+    explicit InstanceVisibility(bool shared = true) noexcept
+        : window_latch_(shared ? &window_latch_storage_ : nullptr) {}
     InstanceVisibility(const InstanceVisibility&) = delete;
     InstanceVisibility& operator=(const InstanceVisibility&) = delete;
 
@@ -604,7 +607,8 @@ public:
     std::size_t window_size() const;
     // The window latch: what BA-S2's cell holds to make a reader wait under
     // its kind (`base/contention.hpp`).
-    Latch& WindowLatchForTest() const noexcept { return window_latch_; }
+    // Null when the latch is unarmed.
+    Latch* WindowLatchForTest() const noexcept { return window_latch_; }
 
     const CoreVisibilitySlot& slot(std::uint32_t core) const noexcept { return slots_[core]; }
 
@@ -632,7 +636,9 @@ private:
     // Monotone: a core never detaches.
     std::atomic<std::uint32_t> slots_in_use_{0};
 
-    mutable Latch window_latch_{LatchKind::kWindow};
+    mutable Latch window_latch_storage_{LatchKind::kWindow};
+    // Armed above one core only (BP-H2; census in workorder-bp section 7).
+    Latch* const window_latch_;
     std::unordered_map<std::uint64_t, std::uint64_t> window_;
 
     // Amortises `Reclaim`'s O(window) pass: it runs when the window reaches

@@ -1,3 +1,4 @@
+#include "kds/base/contention.hpp"
 #include "kds/server/expeditor.hpp"
 
 #include <arpa/inet.h>
@@ -388,6 +389,42 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     // The shutdown tail cleared them, so a caller that asks afterwards sees
     // an instance with no cores rather than dangling ones.
     EXPECT_TRUE(db.cores().empty());
+}
+
+// BP-R1's arming cells (BP-H1, H2, H3): each structure the instance shares
+// latches or fences above one core and not at one, where its every caller
+// runs on the reactor thread (the census is in each header).
+TEST_F(ExpeditorTest, TheSharedStructuresAreArmedAboveOneCoreOnly) {
+    for (const std::uint32_t cores : {1u, 2u}) {
+        Expeditor::Config config = ConfigAt(cores);
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        const Expeditor& db = *opened.value();
+        const bool shared = cores > 1;
+        EXPECT_EQ(db.statement_epochs().shared(), shared) << "cores = " << cores;
+        EXPECT_EQ(db.visibility().WindowLatchForTest() != nullptr, shared) << "cores = " << cores;
+        ASSERT_NE(db.cabin_store(), nullptr);
+        EXPECT_EQ(db.cabin_store()->shared(), shared) << "cores = " << cores;
+    }
+}
+
+// BP-S1's census: a synchronous checkpoint's step counts the pages it wrote
+// back, and its publish's data-file sync is counted at the syncer.
+TEST_F(ExpeditorTest, ACheckpointsPagesAndDataSyncsAreCounted) {
+    Expeditor::Config config = ConfigAt(1);
+    config.checkpoint_interval_ns = 0;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    const std::string created =
+        db.dispatcher().Dispatch("CREATE TABLE census_ck (id int64, v int64)").response;
+    ASSERT_EQ(created.rfind("ERR", 0), std::string::npos) << created;
+
+    const Contention::Snapshot before = Contention::Read();
+    ASSERT_TRUE(db.Checkpoint().ok());
+    const Contention::Snapshot after = Contention::Read();
+    EXPECT_GT(after.of(Tally::kCheckpointPagesWritten), before.of(Tally::kCheckpointPagesWritten));
+    EXPECT_GT(after.of(Tally::kDataSyncs), before.of(Tally::kDataSyncs));
 }
 
 TEST_F(ExpeditorTest, APoolBelowTheVolumesFloorIsRefusedAtMountNamingBothNumbers) {

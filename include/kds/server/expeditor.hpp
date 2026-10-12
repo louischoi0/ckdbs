@@ -649,6 +649,12 @@ public:
     const SuperBlock& superblock() const noexcept { return database_->superblock; }
     catalog::Catalog& catalog() noexcept { return database_->catalog; }
     storage::DevicePageStore& store() noexcept { return *store_; }
+    // What BP-S3's arming cells read: which instance structures latch.
+    const txn::InstanceVisibility& visibility() const noexcept { return *visibility_; }
+    const stats::CabinStore* cabin_store() const noexcept {
+        return cabin_store_ ? &*cabin_store_ : nullptr;
+    }
+    const StatementEpochs& statement_epochs() const noexcept { return *statement_epochs_; }
     CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
     const Config& config() const noexcept { return config_; }
     const wal::CheckpointStats& checkpoint_stats() const noexcept {

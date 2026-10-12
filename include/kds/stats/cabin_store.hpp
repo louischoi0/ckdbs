@@ -330,7 +330,13 @@ public:
         std::uint64_t appends = 0;
     };
 
-    explicit CabinStore(CabinLimits limits = CabinLimits()) noexcept : limits_(limits) {}
+    // **`shared` arms the latches** (BP-H3; census in
+    // workorder-bp-per-core-residue.md section 7): `Expeditor` passes
+    // `cores > 1`. Armed by default, for the embedded callers and rigs.
+    explicit CabinStore(CabinLimits limits = CabinLimits(), bool shared = true) noexcept
+        : shared_(shared), limits_(limits) {}
+
+    bool shared() const noexcept { return shared_; }
 
     // ---- Read path ------------------------------------------------------
 
@@ -603,6 +609,11 @@ private:
     // are the instance's totals and every partition writes them, so folding
     // them into one partition would make that partition every core's.
     mutable Latch stats_latch_{LatchKind::kCabinStats};
+
+    // `latch` when the store is shared, null otherwise: what every
+    // acquisition passes to `LatchGuard`, which takes nothing for a null.
+    Latch* Armed(Latch& latch) const noexcept { return shared_ ? &latch : nullptr; }
+    bool shared_;
 
     CabinLimits limits_;
     std::array<Partition, kPartitions> partitions_;

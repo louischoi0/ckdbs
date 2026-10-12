@@ -405,7 +405,8 @@ TEST(ContentionCountersTest, TheWindowAndTheLockTableCountUnderTheirOwnKinds) {
     ASSERT_NE(rig, nullptr);
 
     const std::uint64_t window = WaitsOf(LatchKind::kWindow);
-    HoldWhile(rig->visibility().WindowLatchForTest(), [&] {
+    ASSERT_NE(rig->visibility().WindowLatchForTest(), nullptr);
+    HoldWhile(*rig->visibility().WindowLatchForTest(), [&] {
         (void)rig->visibility().window_size();
     });
     EXPECT_EQ(WaitsOf(LatchKind::kWindow) - window, 1u);
