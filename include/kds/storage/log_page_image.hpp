@@ -62,11 +62,11 @@ inline Status LogFullPageImage(wal::WalManager* wal, PageStore& store, std::uint
 //
 // **The record fits the stream whole** (BD-R12's size rule): a split writes
 // at most `kMaxStructuralChanges` pages (`index::kMaxIndexChanges` for an
-// index, asserted where it is logged), one more for the anchor, and their
-// images are under the default ring, the smaller of the two bounds
-// `WalStream::Append` holds a record to (`WalManager::usable_payload_bytes`).
-static_assert(wal::BtreeSplitSize(kMaxStructuralChanges + 1) + wal::kRecordHeaderSize <=
-              wal::kDefaultRingCapacity);
+// index, asserted where it is logged), one more for the anchor, and that is
+// `wal::kMaxBtreeSplitPages`, which every stream's ring and segment floors
+// hold (`stream.hpp`) - so the append is never refused for its size after
+// the pages changed.
+static_assert(kMaxStructuralChanges + 1 <= wal::kMaxBtreeSplitPages);
 inline Status LogBtreeSplit(wal::WalManager* wal, PageStore& store, std::uint64_t txn_id,
                             std::span<const PageId> pages, const PageRef* anchor = nullptr) {
     if (wal == nullptr) return Status::OK();

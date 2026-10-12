@@ -61,7 +61,7 @@ using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryBytes;
 using storage::cabin::kEntryHintValid;
 
-constexpr std::uint64_t kSegmentSize = 64 * 1024;
+constexpr std::uint64_t kSegmentSize = wal::kMinSegmentSize;
 constexpr std::uint64_t kAssertionId = 77;
 constexpr PageId kCabinPage = 300;
 
@@ -286,11 +286,18 @@ protected:
             wal_->Append({wal::RecordType::kTxnCommit, /*txn_id=*/41, kInvalidPageId}).ok());
     }
 
-    // A cabin whose snapshot takes several records - 700 and not 600, which
-    // fell 302 bytes short of chunking (`ManyGroupsChunkAcrossRecords...`).
-    static void FillToChunk(BoundCabin& live) {
-        for (int i = 0; i < 700; ++i) {
-            live.EnsureGroupId(Key("group-" + std::string(60, 'k') + std::to_string(i)));
+    // Adds more group bytes than one record carries, so the snapshot takes
+    // one more record. Sized by bytes against the segment, which bounds the
+    // budget from above (`usable_payload_bytes`), and never by a count: a
+    // count of 600 once fell 302 bytes short of chunking
+    // (`ManyGroupsChunkAcrossRecords...`), and a count stops chunking at all
+    // when the stream's floor moves. Call it twice for a third chunk.
+    static void FillToChunk(BoundCabin& live, const std::string& prefix = "group-") {
+        std::size_t bytes = 0;
+        for (int i = 0; bytes <= kSegmentSize; ++i) {
+            const std::string key = Key(prefix + std::string(300, 'k') + std::to_string(i));
+            bytes += wal::AssertSnapshotGroupBytes(key.size());
+            live.EnsureGroupId(key);
         }
     }
 
@@ -410,14 +417,12 @@ TEST_F(AssertionRecoverTest, ManyGroupsChunkAcrossRecordsAndAllOfThemComeBack) {
     // would need a chain of pages (one holds 254), so the linkage rebuild is left
     // to the test above that is about it.
     //
-    // **700 and not 600.** At 600 the payload came to 61,106 bytes against a
-    // 61,408-byte budget - 302 bytes short of chunking, so the test asserted the
-    // boundary without reaching it. The record count below is what keeps that
-    // from happening silently again.
+    // A fixed group count once came 302 bytes short of chunking, so the test
+    // asserted the boundary without reaching it (`FillToChunk`). The record
+    // count below is what keeps that from happening silently again.
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
     FillToChunk(live);
     const std::size_t groups = live.group_count();
-    ASSERT_EQ(groups, 700u);
     const wal::Lsn checkpoint_lsn = Checkpoint(live);
     ASSERT_GT(SnapshotRecords(checkpoint_lsn), 1u) << "this cabin fits one record, so the "
                                                      "chunking path is not under test at all";
@@ -435,8 +440,8 @@ TEST_F(AssertionRecoverTest, ManyGroupsChunkAcrossRecordsAndAllOfThemComeBack) {
 // the segment is one the ring refuses whole, so a cabin with more than a
 // ring's worth of headers had every run refused at its first chunk: every
 // core-0 checkpoint after it failed, and so did the next mount's completion
-// checkpoint. The fixture's 64 KiB segment is smaller than any ring, which
-// is why no other cell here reached it. A 4 MiB segment has the production
+// checkpoint. The fixture's segment is the stream's floor, no larger than
+// any ring, which is why no other cell here reached it. A 4 MiB segment has the production
 // shape - larger than the default ring - at a sixteenth of the scan.
 TEST_F(AssertionRecoverTest, ACabinPastOneRingOfHeadersIsCutToChunksTheRingCanStage) {
     constexpr std::uint64_t kSegmentPastTheRing = 4 * 1024 * 1024;
@@ -942,9 +947,7 @@ TEST_F(AssertionRecoverTest, ARunWhoseStartPrecedesTheScanIsSkippedAndTheNextWho
 TEST_F(AssertionRecoverTest, AChunkOutOfSequenceDiscardsItsRun) {
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
     FillToChunk(live);
-    for (int i = 0; i < 700; ++i) {  // a third chunk, so chunk 1 is not the last
-        live.EnsureGroupId(Key("more-" + std::string(60, 'k') + std::to_string(i)));
-    }
+    FillToChunk(live, "more-");  // a third chunk, so chunk 1 is not the last
     const auto chunks = SnapshotChunks(live);
     ASSERT_GT(chunks.size(), 2u) << "needs a chunk 1 that is not the last";
 
@@ -979,9 +982,7 @@ TEST_F(AssertionRecoverTest, AChunkOutOfSequenceDiscardsItsRun) {
 TEST_F(AssertionRecoverTest, ACreatesPublishRunAndACheckpointsRunOfItNeverInterleave) {
     BoundCabin cabin(BoundAggregate::kSum, /*bound=*/1'000'000);
     FillToChunk(cabin);
-    for (int i = 0; i < 700; ++i) {  // a third chunk, so a run has a middle
-        cabin.EnsureGroupId(Key("more-" + std::string(60, 'k') + std::to_string(i)));
-    }
+    FillToChunk(cabin, "more-");  // a third chunk, so a run has a middle
     const auto chunks = SnapshotChunks(cabin);
     ASSERT_GT(chunks.size(), 2u) << "a run of two chunks has no middle to cross at";
     const std::size_t groups = cabin.group_count();
@@ -1369,15 +1370,19 @@ TEST_F(AssertionResumeTest, ADateGroupKeyedFromALiteralMeetsItsCountAcrossAResta
 
 TEST_F(AssertionResumeTest, AGroupKeyNoRecordCanCarryIsRefusedAtAdmission) {
     // **The survey's question, answered by SQL** (AZ-S3): a `GROUP BY` over
-    // spilled `varchar`s reaches a key past one record - eight values of
-    // 8,000 bytes against this fixture's 61 KiB record. The row is refused at
+    // spilled `varchar`s reaches a key past one record - seventy values of
+    // 8,000 bytes against this fixture's record, which the stream's floor
+    // (`kMinSegmentSize`) holds at about 508 KiB. The row is refused at
     // admission, before anything is placed, and `NOT_IMPLEMENTED` says
     // why: the bound is the log format's, not the data's fault.
+    constexpr int kColumns = 70;
+    ASSERT_GT(kColumns * 8000u, wal_->usable_payload_bytes());
     std::string columns;
     std::string group;
-    for (char c = 'a'; c <= 'h'; ++c) {
-        columns += std::string(", ") + c + " varchar";
-        group += std::string(group.empty() ? "" : ", ") + c;
+    for (int i = 0; i < kColumns; ++i) {
+        const std::string c = "c" + std::to_string(i);
+        columns += ", " + c + " varchar";
+        group += (group.empty() ? "" : ", ") + c;
     }
     ASSERT_EQ(Run("CREATE TABLE wide (id int64" + columns + ")").substr(0, 7), "CREATED");
     ASSERT_EQ(Run("CREATE ASSERTION cap ON wide GROUP BY (" + group + ") CHECK COUNT(*) <= 5")
@@ -1386,15 +1391,16 @@ TEST_F(AssertionResumeTest, AGroupKeyNoRecordCanCarryIsRefusedAtAdmission) {
 
     const std::string huge = "'" + std::string(8000, 'v') + "'";
     std::string values;
-    for (int i = 0; i < 8; ++i) values += std::string(i == 0 ? "" : ", ") + huge;
+    for (int i = 0; i < kColumns; ++i) values += std::string(i == 0 ? "" : ", ") + huge;
     const std::string refused = Run("INSERT INTO wide VALUES (" + values + ")");
     EXPECT_NE(refused.find("NOT_IMPLEMENTED"), std::string::npos) << refused.substr(0, 300);
     EXPECT_NE(refused.find("cap"), std::string::npos) << refused.substr(0, 300);
     EXPECT_EQ(Run("SELECT COUNT(*) FROM wide"), "count(*)\\n0") << "the refused row was placed";
 
     // A key that fits is admitted as before.
-    EXPECT_EQ(Run("INSERT INTO wide VALUES ('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h')").substr(0, 8),
-              "INSERTED");
+    std::string small;
+    for (int i = 0; i < kColumns; ++i) small += std::string(i == 0 ? "'" : ", '") + "v'";
+    EXPECT_EQ(Run("INSERT INTO wide VALUES (" + small + ")").substr(0, 8), "INSERTED");
 }
 
 TEST_F(AssertionResumeTest, WithNoBaseInRangeTheAssertionIsNotAdoptedAtAll) {

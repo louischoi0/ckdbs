@@ -431,6 +431,25 @@ TEST(WalPayloadTest, FullPageImageRejectsAShortPayload) {
     EXPECT_EQ(DecodeFullPageImage(short_payload).status().code(), StatusCode::kCorruption);
 }
 
+// ---- BTREE_SPLIT ---------------------------------------------------------
+
+// The stream's floors hold a split of kMaxBtreeSplitPages and no more, so the
+// codec is the door: one page past it is refused at encode and is Corruption
+// at decode, whose length otherwise agrees with the count.
+TEST(WalPayloadTest, BtreeSplitPastItsPageBoundIsRefusedBothWays) {
+    const std::vector<std::byte> page(kPageSize, std::byte{0x5A});
+    std::vector<BtreeSplitImage> images(kMaxBtreeSplitPages, BtreeSplitImage{1, page});
+    std::vector<std::byte> payload(BtreeSplitSize(kMaxBtreeSplitPages + 1));
+    ASSERT_TRUE(EncodeBtreeSplit(payload, images).ok());
+
+    images.push_back({2, page});
+    EXPECT_EQ(EncodeBtreeSplit(payload, images).status().code(), StatusCode::kInvalidArgument);
+
+    const std::uint32_t over = kMaxBtreeSplitPages + 1;
+    std::memcpy(payload.data(), &over, sizeof(over));
+    EXPECT_EQ(DecodeBtreeSplit(payload).status().code(), StatusCode::kCorruption);
+}
+
 // ---- CHECKPOINT ----------------------------------------------------------
 
 TEST(WalPayloadTest, CheckpointBeginRoundTripsBothTables) {

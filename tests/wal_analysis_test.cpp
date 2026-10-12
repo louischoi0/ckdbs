@@ -31,7 +31,7 @@
 namespace kds::wal {
 namespace {
 
-constexpr std::uint64_t kSegmentSize = 16 * 1024;
+constexpr std::uint64_t kSegmentSize = kMinSegmentSize;  // the stream's floor (`stream.hpp`)
 
 // Appends a CHECKPOINT_BEGIN carrying the two tables, as the checkpointer
 // does, and returns its LSN.

@@ -31,7 +31,7 @@
 namespace kds::wal {
 namespace {
 
-constexpr std::uint64_t kSegmentSize = 16 * 1024;
+constexpr std::uint64_t kSegmentSize = kMinSegmentSize;  // the stream's floor (`stream.hpp`)
 constexpr PageId kPage = server::kFirstUserPageId;
 
 std::vector<std::byte> Bytes(std::size_t n, unsigned char fill) {

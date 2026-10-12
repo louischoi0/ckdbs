@@ -33,12 +33,13 @@ StatusOr<std::unique_ptr<WalStream>> WalStream::Open(LogDevice* device, std::uin
     }
 
     const std::uint64_t segment_size = device->segment_size();
-    // A segment has to hold its header plus at least one record, and every
-    // record is 8-byte aligned, so the segment boundary must be too - an
-    // unaligned size would put a record at an unaligned LSN.
-    if (segment_size <= kSegmentHeaderSize + kRecordHeaderSize) {
+    // A segment has to hold its header plus the largest split (`stream.hpp`'s
+    // floors), and every record is 8-byte aligned, so the segment boundary
+    // must be too - an unaligned size would put a record at an unaligned LSN.
+    if (segment_size < kMinSegmentSize) {
         return Status::InvalidArgument("WalStream: segment size " + std::to_string(segment_size) +
-                                       " leaves no room for records after the header block");
+                                       " is below the " + std::to_string(kMinSegmentSize) +
+                                       "-byte minimum");
     }
     if ((segment_size % kRecordAlignment) != 0) {
         return Status::InvalidArgument("WalStream: segment size " + std::to_string(segment_size) +
@@ -247,6 +248,7 @@ Status WalStream::SealLocked() {
 
 StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byte> payload) {
     const std::size_t total = EncodedRecordSize(payload.size());
+    // Neither refusal meets a BTREE_SPLIT: `Open`'s floors hold the largest.
     if (total > usable_segment_bytes()) {
         return Status::InvalidArgument("WalStream: record of " + std::to_string(total) +
                                        " bytes cannot fit a segment; records never span segments");

@@ -39,7 +39,7 @@
 namespace kds::wal {
 namespace {
 
-constexpr std::uint64_t kSegmentSize = 16 * 1024;
+constexpr std::uint64_t kSegmentSize = kMinSegmentSize;  // the stream's floor (`stream.hpp`)
 constexpr PageId kPage = server::kFirstUserPageId;
 
 std::vector<std::byte> Bytes(std::size_t n, unsigned char fill) {
@@ -721,9 +721,6 @@ TEST_F(RedoTest, ABtreeSplitReplaysEveryPageItNamesAndAnalysisDirtiesEach) {
         ASSERT_TRUE(r.ok());
         ASSERT_TRUE(r.value().InsertTuple(Row(20), 7).ok());
     }
-    // Two images do not fit the fixture's 16 KiB segment; a record must fit
-    // one (the default segment is 64 MiB).
-    device_ = std::move(MemoryLogDevice::Create(1 << 20).value());
     const BtreeSplitImage images[] = {{kNew, right}, {kPage, left}};
     std::vector<std::byte> payload(BtreeSplitSize(2));
     ASSERT_TRUE(EncodeBtreeSplit(payload, images).ok());
