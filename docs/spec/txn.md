@@ -38,8 +38,9 @@ sized:
   (`TcpServer::Connection::txn_began_at_ns`). Nothing is read per
   statement, and `txn/manager.hpp` still has no clock - the transaction
   is the session's, and the session is the connection's.
-- **The sweep.** Every listener, on both protocols, walks its own
-  connections every quarter of the ceiling
+- **The sweep.** Every `TcpServer` listener, on both protocols, walks its
+  own connections every quarter of the ceiling - the KWP load listener has
+  none (exemption 4 below)
   (`TcpServer::ExpireOverdueTransactions`), so a transaction ends between
   1x and 1.25x its lifetime. Busy or idle, poisoned (`kFailedTxn`) or
   not: a poisoned transaction still holds its undo and its place in the
@@ -63,7 +64,8 @@ sized:
   takes the same `ROLLBACK`. **An ordinary abort**, in that §4.1 stays
   literally true: no reader is ever told its snapshot expired.
 - **What it does not bound.** An autocommit statement is its own
-  transaction and is not swept. A statement that never ends - a write does
+  transaction and is not swept, and a KWP load session is exempt
+  (exemption 4 below). A statement that never ends - a write does
   not yield (`sched.md` §3) - defers the sweep for as long as it runs.
 
 **What it costs, stated rather than discovered**: a long *busy*
@@ -71,8 +73,8 @@ transaction is aborted, where a bound on *idleness* accepted it. That was
 the earlier proposal, and the operator's numbers say this engine does not
 serve that shape.
 
-**Two exemptions were proposed and one stands; the third went with
-AT-S6:**
+**Four exemptions have been raised: one ruled out, one proposed, one gone
+with AT-S6, one ruled in:**
 
 1. **DDL inside an explicit transaction is not exempt** (the operator's
    ruling of 2026-10-12, which overrides AN-R14's proposal of "no
@@ -93,6 +95,15 @@ AT-S6:**
    prepared it could not unilaterally abort. **Gone at AT-S6** with the
    protocol that made a context prepared; there is no exclusion to
    inherit, because there is no participant.
+4. **A KWP load session is exempt** (the operator's ruling of 2026-10-12:
+   "exclude load sessions from the ceiling too"). A load stream is one
+   explicit transaction from `C_LOAD_BEGIN` to its end
+   (`KwpLoadServer::HandleLoadBegin`, KW5, BI11), and a bulk load can
+   honestly run past 60 s, so it is not swept: the load listener has no
+   sweep and its sessions are never expired. **What the exemption costs**:
+   a loader that stops mid-stream and keeps its connection open holds the
+   instance's read horizon and its undo until the connection closes, whose
+   path rolls the load back.
 
 **The participant sweep it replaces** existed over cross-owner
 *participant* contexts alone (`ShippedStatementExecutor::ExpireEnrolled`)

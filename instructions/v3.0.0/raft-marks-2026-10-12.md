@@ -113,3 +113,21 @@ Korean it was typed in.
 | **Mark** | **BL is paused, not closed and not abandoned.** BL-S1..S3 and BL-S4's ruling 1 (a) stay built; BL-S4 stays stopped; the ruling 1 re-measurement was stopped with 2 of 18 cells taken and is reported nowhere |
 | **Does not settle** | BL-S4's rulings 2 and 3; BL-S5; BL's close and its overhead A/B; when BL resumes |
 | **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` §6 ("BL paused 2026-10-12"); `index.md`'s BL row; `docs/inflight/known-gaps.md`'s BL section; `CLAUDE.md`'s cross-core row |
+
+## 13. BQ written: the WAL segment roll
+
+| | |
+|---|---|
+| **Word** | *"Explain the WAL segment roll, and why you proposed writing it as a separate work order."* (W0 of BQ), *"Isn't it enough to just make the segment file larger?"* (W1), then *"For now, write the work order for the WAL segment roll: experiment, hypothesis verification, measurement, re-exploration, rejection."* (W2; recorded on `worktree-wal-segment-roll-order` from `59c4139f`) |
+| **Mark** | **BQ-S0**: `workorder-bq-wal-segment-roll.md` written. W0 and W1 were questions, answered in the session and recorded in the order (§0.2, §1.3, H2). W2 sets the order's method. BQ takes BL-S4's ruling 3 out of BL as its subject |
+| **Does not settle** | BL-S4's ruling 3 itself, which BQ answers by measurement; BQ's opening (BQ-Q0) and BQ-Q1..Q5; BL-S4's ruling 2; when BL resumes |
+| **Recorded at** | `workorder-bq-wal-segment-roll.md`; `index.md`'s BQ row; `workorder-bl-session-balancer-priority-affinity.md` §6 ("BL paused 2026-10-12") |
+
+## 14. BR written: backup and restore
+
+| | |
+|---|---|
+| **Word** | *"ckdbs has no backup feature yet. What approach should we take?"* (W0 of BR, a question, answered in the session with candidates A-E), then *"First implement B and D as the minimum, and write the work order in the direction of developing them from there. When the milestone ends it must have the completeness of a semi-production feature."* (W1), then *"Push it, and check the milestone id for duplicates."* (W2; recorded in the main checkout on `main` at `dbff867b`) |
+| **Mark** | **Written**: `workorder-br-backup-restore.md` written and pushed to `main` as a document-only change. W1 fixes the scope: path D (volume snapshot) and path B (base backup plus WAL archive) as the minimum, raised within BR to the bar of its §6. W2's check: no `BR` in any work-order name, any remote head, or any `BR` token in the tree's documents, sources or scripts at `dbff867b`; the last letter assigned was BQ |
+| **Does not settle** | BR's opening (BR-Q0) and BR-Q1..Q5; the admin tool's name (BR-S2); whether the stop LSN lives in the superblock (BR-S0) |
+| **Recorded at** | `workorder-br-backup-restore.md`; `index.md`'s BR row |

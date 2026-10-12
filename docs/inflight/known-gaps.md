@@ -410,13 +410,6 @@ statement about an engine that no longer exists; re-verify or strike it.
     transaction keeps its sealed batches after the rollback, as it does
     after a client's own `ROLLBACK`; the rows it delivers were read under a
     transaction that no longer exists.
-  - **A KWP load session is an explicit transaction the sweep does not
-    reach.** `KwpLoadServer::HandleLoadBegin` dispatches the same `BEGIN`
-    (KW5, BI11) and holds it across the stream's frames, on a listener of
-    its own with no sweep, so a loader that stops mid-stream holds the
-    horizon until its connection closes. Not bounded by decision rather
-    than by omission: a bulk load can honestly run past 60 s, and whether
-    the ceiling applies to one is the operator's question.
 
   Owner: `docs/spec/txn.md` §1.
 
