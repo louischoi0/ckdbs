@@ -1,4 +1,5 @@
 #include "kds/storage/data_syncer.hpp"
+#include "kds/base/contention.hpp"
 
 namespace kds::storage {
 
@@ -74,6 +75,7 @@ Status DataSyncer::SyncOnce() {
         return failure_;
     }
     Status s = device_.Sync();
+    Contention::Add(Tally::kDataSyncs);
     if (s.ok()) return s;
     Status failure = Status::IoError(
         "pagestore: the data file's sync failed (" + s.message() +

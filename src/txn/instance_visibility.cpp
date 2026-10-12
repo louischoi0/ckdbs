@@ -271,13 +271,14 @@ bool InstanceVisibility::InFlight(std::uint64_t trx_id, std::uint32_t first_core
     // permutation of `[0, in_use)` whatever `first_core` is.
     const std::uint32_t in_use = slots_in_use_.load(std::memory_order_acquire);
     Contention::Add(Tally::kInFlightAsks);
+    std::uint64_t ids_read = 0;
     for (std::uint32_t k = 0; k < in_use; ++k) {
         const CoreInFlightTable* table = in_flight_table((first_core + k) % in_use);
         if (table == nullptr) continue;
-        Contention::Add(Tally::kInFlightTablesRead);
-        if (HoldsIn(*table, trx_id, [](std::uint32_t) {})) return true;
+        if (HoldsIn(*table, trx_id, [&ids_read](std::uint32_t) { ++ids_read; })) return true;
     }
     Contention::Add(Tally::kInFlightMisses);
+    Contention::Add(Tally::kInFlightMissIdsRead, ids_read);
     return false;
 }
 

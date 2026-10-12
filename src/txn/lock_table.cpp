@@ -609,7 +609,6 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t
     // not run this at all.
     Contention::Add(Tally::kFenceWalks);
     for (Partition& part : partitions_) {
-        Contention::Add(Tally::kFencePartitionsRead);
         LatchGuard guard(part.latch);
         for (Entry& e : part.entries) {
             if (e.key.rel_oid != rel || !e.key.IsFenceUnit()) continue;

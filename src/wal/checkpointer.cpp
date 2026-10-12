@@ -231,9 +231,11 @@ StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
         const std::uint64_t writes_before = run_report_ != nullptr ? run_report_->sum_ns[write] : 0;
         if (!write_only) {
             flushed = target_.FlushPages(pages);
+            if (flushed.ok()) Contention::Add(Tally::kCheckpointPagesWritten, pages.size());
         } else if (auto wrote = target_.WritePages(pages, defer); !wrote.ok()) {
             flushed = wrote.status();
         } else if (wrote.value() > 0) {
+            Contention::Add(Tally::kCheckpointPagesWritten, wrote.value());
             // Asked for and not waited on (BI-Q13): the data-sync thread
             // keeps the unsynced backlog near one step, so a synchronous sync
             // landing mid-run - a carve's page 0, the reclaimer's maps - does
@@ -545,7 +547,6 @@ Status LogStopped() {
 sched::Coro Checkpointer::ParkOnDataSync() {
     const std::uint64_t ticket = target_.RequestSync();
     if (ticket == 0) co_return Status::OK();  // a target with nothing to wait on
-    Contention::Add(Tally::kCheckpointDataSyncs);
     const std::function<bool()> synced = [this, ticket] { return target_.SyncDone(ticket); };
     const sched::MonoTimeNs parked = wal_.clock().Now();
     co_await sched::WaitUntil{&synced};

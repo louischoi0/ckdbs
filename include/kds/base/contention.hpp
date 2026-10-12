@@ -12,10 +12,12 @@
 // BA-R0, BA-S2): where one core waited for another, how often, and for how
 // long. `SHOW META`'s `contention` block prints it.
 //
-// **Counted only on the contended branch.** A `Latch` tries first and reads
-// the clock only when the try failed (`latch.hpp`); the other tallies sit on
-// paths that already waited, refused or ran a carve or a checkpoint. An
-// uncontended acquisition costs what it cost before.
+// **Waits are counted only on the contended branch.** A `Latch` tries first
+// and reads the clock only when the try failed (`latch.hpp`), so an
+// uncontended acquisition costs what it cost before. Most tallies sit on
+// paths that already waited, refused or ran a carve or a checkpoint; BP-S1's
+// census tallies (below) are the exception, counted once per call on paths
+// that run uncontended, a few per row at most.
 //
 // **Per core, summed when read.** Each slot is one cache-line-aligned block
 // written by its own core's thread, so the instrument adds no line two cores
@@ -84,18 +86,26 @@ enum class Tally : std::uint8_t {
     kRefusalIndexSecure,
     kStructuralReruns,    // a statement re-run after a structural refusal (BA-S14)
     // BP-S1's census (`workorder-bp-per-core-residue.md` §6.1).
-    kCatalogMemoDrops,    // a catalog memo dropped whole at a statement head
+    kCatalogMemoDrops,    // a catalog memo dropped whole: a statement head's
+                          // revalidation, or the Cabin optimizer's tick
     kWordMovesRoot,       // a schema-word move for a root a level grew over
     kWordMovesCabin,      // ... for a Cabin's create or drop
     kWordMovesSchema,     // ... for any other catalog write
-    kWordMovesResolve,    // ... for a catalog-writing transaction's resolution
-    kInFlightAsks,        // an `InstanceVisibility::InFlight` question
+    kWordMovesResolve,    // ... for a catalog-writing transaction's
+                          // resolution: two per DDL (the manager's, and the
+                          // catalog's own invalidation)
+    kInFlightAsks,        // an `InstanceVisibility::InFlight` question, from
+                          // any caller (row checks, polls, catalog reads)
     kInFlightMisses,      // ... answered "no", having read every table
-    kInFlightTablesRead,  // the per-core tables those questions read
-    kCheckpointPagesWritten,  // pages a checkpoint run's publish wrote back
-    kCheckpointDataSyncs,     // data-file syncs a checkpoint run parked on
-    kFenceWalks,          // a `FenceCoversKey` walk (a fence was held)
-    kFencePartitionsRead, // the lock partitions those walks latched
+    kInFlightMissIdsRead, // the ids those misses scanned
+    kCheckpointPagesWritten,  // pages a checkpoint step or the run task's
+                              // publish wrote back (the cadence's path); a
+                              // synchronous run counts the pages its step
+                              // asked for and its publish's flush none
+    kDataSyncs,           // data-file device syncs, every caller
+    kFenceWalks,          // a `FenceCoversKey` walk (a fence was held); each
+                          // latches every partition but on a conflict, so
+                          // partitions read is the walks times the count
     kCount,
 };
 
@@ -110,8 +120,8 @@ inline constexpr std::array<const char*, kTallyCount> kTallyNames = {
     "refused_index_secure",   "structural_reruns",      "catalog_memo_drops",
     "word_moves_root",        "word_moves_cabin",       "word_moves_schema",
     "word_moves_resolve",     "inflight_asks",          "inflight_misses",
-    "inflight_tables_read",   "checkpoint_pages_written", "checkpoint_data_syncs",
-    "fence_walks",            "fence_partitions_read",
+    "inflight_miss_ids_read", "checkpoint_pages_written", "data_syncs",
+    "fence_walks",
 };
 static_assert(kTallyNames.back() != nullptr, "a Tally without a name");
 
