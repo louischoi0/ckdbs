@@ -2025,6 +2025,9 @@ Status Expeditor::Start() {
     });
 
     scheduler.SubmitEvery(kWritebackIntervalNs, [this] {
+        // The delete-mark purge (BP-H11): a predicate and a return unless a
+        // mark is pending and its settlement moved.
+        dispatcher_->SweepSettledDeleteMarks();
         (void)store_->MaintainFreeReserve();
         auto drained = store_->DrainDirtyEvictionQueue();
         if (!drained.ok() && logger_->enabled(LogLevel::kWarn)) {

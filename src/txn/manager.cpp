@@ -841,6 +841,12 @@ std::uint64_t TransactionManager::ReadHorizon() const noexcept {
     return visibility_->HorizonLsn();
 }
 
+TransactionManager::Settlement TransactionManager::SettlementNow() const noexcept {
+    return {visibility_->Floor(),
+            std::min(visibility_->HorizonLsn(), visibility_->SnapshotCeiling()),
+            visibility_->PendingCommitBound()};
+}
+
 bool TransactionManager::ResolvedForEveryReader(std::uint64_t trx_id) const {
     if (trx_id == kAlwaysVisibleTrxId) return true;
     if (trx_id < visibility_->Floor()) return true;

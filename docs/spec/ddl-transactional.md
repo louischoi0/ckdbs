@@ -314,15 +314,16 @@ the walk, so one pass suffices. A crash mid-sweep leaves exactly the
 state it started from, which the next mount sweeps again. `SHOW META`
 reports `catalog_marks_finalized`; zero is what a clean shutdown produces.
 
-### 5d. Delete-marks purge at DDL resolution, horizon-gated
+### 5d. Delete-marks purge on core 0's tick, horizon-gated
 
 The in-mount sibling of §5c's sweep: `Catalog::PurgeSettledDeleteMarks()`
 retires every delete-marked row whose deleter is **resolved for every
 reader** — below the instance's floor, or committed at or below every live
 and future snapshot (`TransactionManager::ResolvedForEveryReader()`,
-`txn.md` §4.1). `CommandDispatcher::EndDdlScope` runs it at every DDL
-resolution — both endings, before the cache invalidation so the flush
-carries the retirements too.
+`txn.md` §4.1). **Core 0's 50 ms `system` tick runs it**
+(`CommandDispatcher::SweepSettledDeleteMarks`, BP-H11), since BP-S4; it
+rode core 0's own DDL resolution before, so a peer's `DROP` left its marks
+until core 0 next ran DDL or the next mount.
 
 **Why the horizon licenses what §5c's mount-only rule forbade.** After
 mount a mark may belong to a transaction that is still open — or to a
@@ -339,20 +340,24 @@ the same comparison. A
 rollback clears its own marks synchronously, so no aborted transaction's
 mark survives to be asked about.
 
-**Why at DDL resolution and nowhere hotter.** DDL resolution is the only
-event that creates or settles a mark (an autocommit DDL's implicit
-transaction creates and settles its own in one statement), it is rare
-enough that a catalog page sweep costs nothing
-worth measuring, and the core is between resolutions there — so no
-unregistered synchronous view is live, which is the exemption `txn.md`
-§4.1's registration rule leans on. A mark whose deleter has not cleared
-the horizon survives to the next resolution or to §5c at the next mount;
-there is deliberately **no** background cadence. **One core sweeps**, by an
-explicit gate at the call site, and that is a **placement and not an
-authority**: two cores walking the same chains at once is what it
-prevents, and core 0 is the one because it is always present. What makes a
-single sweeper sound is AN-S2: the predicate is instance-wide, so any
-core's sweep judges every mark by the same floor and horizon.
+**Why on the tick, and when it sweeps.** Placement is not what makes it
+sound: every view that can read a superseded version is registered, and a
+check view needs no lease by proof (`txn.md` §4.1), so the predicate holds
+on any core at any moment, for peers' running statements as for core 0's. A
+sweep write-fetches every catalog page even when it retires nothing, so the
+tick sweeps only while a mark is pending, and only when the pending count
+or the settlement has moved since the last sweep
+(`TransactionManager::SettlementNow`: the floor, the pending-commit bound,
+and the horizon capped at the commit ceiling). Under an open older reader
+the horizon stands still, so commits elsewhere do not make it sweep; with
+no reader the bound follows the commit ceiling, and a committed deleter
+settles on the next tick. A mark whose deleter has not cleared the horizon
+survives to a later sweep or to §5c at the next mount. **One core sweeps**,
+a **placement and not an authority**: two cores walking the same chains at
+once is what it prevents, and core 0 is the one because it is always
+present. What makes a single sweeper sound is AN-S2: the predicate is
+instance-wide, so any core's sweep judges every mark by the same floor and
+horizon.
 
 **Because one core sweeps, the gate it reads is the instance's**
 (AT-S5b): a counter per `Catalog` would hold a mark another core's `DROP
@@ -369,7 +374,7 @@ this instance's bound statements for nothing. A crash mid-sweep leaves
 the state it started from.
 
 **Observability.** `SHOW META` prints `catalog_marks_purged` — this
-mount's own retirements — beside the recovery report's
+mount's own retirements — and `catalog_purge_sweeps`, the sweeps that ran — beside the recovery report's
 `catalog_marks_finalized`, which counts a previous mount's leftovers.
 
 **What it bounds.** `marks` is bounded; the sweep's cost is not: retired

@@ -187,41 +187,6 @@ TEST(ReadBorrowRigTest, TwoCoresCreatingRelationsIssueDistinctOids) {
     }
 }
 
-TEST(ReadBorrowRigTest, APeersDeleteMarksAreSweptByTheCoreThatSweeps) {
-    // D7, found by AT-S5's review. The purge runs on one core - a placement
-    // since AT-S5, so two cores do not walk the same chains at once - and
-    // its gate was a counter *per catalog*. A peer's `DROP TABLE` raised its
-    // own core's counter, core 0's stayed at zero, its gate returned early
-    // and the marks waited for the next mount. The counter is the
-    // instance's now (`Catalog::SetMarkCounter`).
-    //
-    // **Mutation**: drop `config.mark_counter` from the rig's config and
-    // core 0 purges nothing.
-    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
-    ASSERT_TRUE(opened.ok()) << opened.status().message();
-    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
-    Session on_peer;
-    CommandDispatcher& d1 = rig->core(1).dispatcher();
-    ASSERT_EQ(d1.Dispatch("CREATE TABLE swept (id int64, v int64) BTREE", &on_peer)
-                  .response.rfind("CREATED", 0),
-              0u);
-    const std::string dropped = d1.Dispatch("DROP TABLE swept", &on_peer).response;
-    ASSERT_NE(dropped.rfind("ERR", 0), 0u) << dropped;
-
-    // Core 0's own DDL is what reaches `EndDdlScope`, which is where the
-    // sweep runs. Nothing about this statement touches the peer's rows; it
-    // is the gate that has to see them.
-    Session on_zero;
-    CommandDispatcher& d0 = rig->core(0).dispatcher();
-    ASSERT_EQ(d0.Dispatch("CREATE TABLE sweeper (id int64, v int64) BTREE", &on_zero)
-                  .response.rfind("CREATED", 0),
-              0u);
-    const std::string meta = d0.Dispatch("SHOW META", &on_zero).response;
-    EXPECT_NE(meta.find("catalog_marks_purged="), std::string::npos) << meta;
-    EXPECT_EQ(meta.find("catalog_marks_purged=0"), std::string::npos)
-        << "core 0's sweep did not see the peer's marks: " << meta;
-}
-
 TEST(ReadBorrowRigTest, ADropOnCoreZeroWaitsForAPositionedReaderOnAPeer) {
     TwoCoreRig::Options options;
     auto opened = TwoCoreRig::Open(options);

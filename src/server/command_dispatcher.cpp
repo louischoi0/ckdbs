@@ -1457,7 +1457,8 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        // *this* mount. Its sibling `catalog_marks_finalized` below counts a
        // previous mount's leftovers, and is part of the recovery report;
        // this one is live dispatcher state and prints unconditionally.
-       << " catalog_marks_purged=" << catalog_marks_purged_;
+       << " catalog_marks_purged=" << catalog_marks_purged_
+       << " catalog_purge_sweeps=" << catalog_purge_sweeps_;
 
     // FM10 (docs/inflight/in-progress/workplan-multi-free-map.md): what the allocation map
     // costs, printed unconditionally because a one-region database's `1`
@@ -6566,6 +6567,34 @@ std::optional<DispatchOutcome> CommandDispatcher::ExistingRelationReply(
     return DispatchOutcome{"EXISTS oid=" + std::to_string(existing.value()), false};
 }
 
+void CommandDispatcher::SweepSettledDeleteMarks() {
+    // **System core only, as a placement, not an authority.** The sweep
+    // judges every mark by the instance's floor and horizon
+    // (`ResolvedForEveryReader`, AN-S2), and every core writes the catalog
+    // and takes DDL (AT-S5): one core sweeps so two do not walk the same
+    // chains at once, and core 0 is the one because it is always present.
+    // Sound on any core at any moment, as at the DDL resolution it used to
+    // ride: every view that can read a superseded version is registered,
+    // and a check view needs no lease by proof (`txn.md` §4.1) - the
+    // predicate is instance-wide, so peers' running statements are covered
+    // the same way.
+    if (core_id_ != catalog::kSystemCore || txn_ == nullptr) return;
+    const std::uint64_t marks = catalog_.MarkCount();
+    if (marks == 0) return;
+    const txn::TransactionManager::Settlement settlement = txn_->SettlementNow();
+    if (purge_seen_ == PurgeSeen{settlement, marks}) return;
+    auto purged = catalog_.PurgeSettledDeleteMarks();
+    ++catalog_purge_sweeps_;
+    // The count after the sweep, so its own retirements do not read as a
+    // change; the settlement from before it, so a move during it does.
+    purge_seen_ = PurgeSeen{settlement, catalog_.MarkCount()};
+    if (purged.ok()) {
+        catalog_marks_purged_ += purged.value();
+    } else if (log_ != nullptr) {
+        log_->Warn("catalog", "delete-mark purge failed: " + purged.status().message());
+    }
+}
+
 void CommandDispatcher::EndDdlScope(const Session& session, wal::Lsn committed_lsn) {
     const txn::Transaction* txn = session.transaction();
     if (txn == nullptr) return;
@@ -6594,34 +6623,7 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
     // anything?") is one more thing to keep true, and a DDL transaction
     // ending is rare enough that a cache clear it did not strictly need
     // costs nothing worth measuring.
-    if (held_ddl) {
-        // The first purge consumer (workplan-reader-registration.md D5).
-        // Here and nowhere hotter: DDL resolution is the only event that
-        // creates or settles a mark, the core is between resolutions so no
-        // unregistered synchronous view is live, and the resolved
-        // transaction is already inactive so its own marks are fair game
-        // the moment no older reader holds a lease. **Before** the
-        // invalidation below, so its flush carries the retirements too.
-        // A failed sweep is a maintenance failure, not the statement's:
-        // the marks it left are exactly as reachable as before, so it is
-        // logged and the reply stands.
-        //
-        // **System core only, as a placement, not an authority.** The
-        // sweep judges every mark by the instance's floor and horizon
-        // (`ResolvedForEveryReader`, AN-S2), and every core writes the
-        // catalog and takes DDL (AT-S5): one core sweeps so two do not walk
-        // the same chains at once, and core 0 is the one because it is
-        // always present (spec §5d).
-        if (core_id_ == catalog::kSystemCore) {
-            auto purged = catalog_.PurgeSettledDeleteMarks();
-            if (purged.ok()) {
-                catalog_marks_purged_ += purged.value();
-            } else if (log_ != nullptr) {
-                log_->Warn("catalog", "delete-mark purge failed: " + purged.status().message());
-            }
-        }
-        catalog_.InvalidateAfterCompensation();
-    }
+    if (held_ddl) catalog_.InvalidateAfterCompensation();
     // **A committed drop is queued with the word the commit moved to**
     // (BF-R9): read after the move above, so every statement whose memo
     // could hold the relation revalidated below it. Any other ending

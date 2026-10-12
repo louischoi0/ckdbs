@@ -738,6 +738,19 @@ public:
     // snapshot. The catalog's delete-mark purge is the caller.
     bool ResolvedForEveryReader(std::uint64_t trx_id) const;
 
+    // **What `ResolvedForEveryReader` can change its answer on** (BP-H11):
+    // the floor, the pending-commit bound, and the horizon capped at the
+    // commit ceiling - so the bound moves with commits only while no reader
+    // holds it, and stands still under an open older reader. A purge that
+    // left a mark has nothing to retire until one of these moves.
+    struct Settlement {
+        std::uint64_t floor;
+        std::uint64_t horizon;
+        std::uint64_t pending;
+        bool operator==(const Settlement&) const = default;
+    };
+    Settlement SettlementNow() const noexcept;
+
 private:
     friend class ReaderLease;
 

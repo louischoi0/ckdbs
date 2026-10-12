@@ -1260,3 +1260,60 @@ here; `CabinStore::shared_`'s duplicated default; a dead include in
 **Suite:** 3603/3603 (`ctest -j8`, Debug) at the stack's head; the four commits were not built one by one. **Mutations** (`~/bench-runs/bp-s1/mut_s3.sh`, each built and run three times): H1 (fences forced off), H2 (window latch forced off), H3 (Cabin latches forced off), H4 (`Begin`'s publication removed) and H5 (redo restamping a formatted page) each killed 3/3.
 **BP-G1 cells' A/B:** reported at the close per BP-R6 (BP-R1: it gates
 nothing). Overhead not measured; measured at the milestone's close.
+
+### BP-S4 — the purge's trigger (BP-H11)
+
+Worked on `worktree-bp-per-core-residue` from `ffe7d4b8`.
+
+**V** `[source-read]` at `ffe7d4b8`: the only caller of
+`Catalog::PurgeSettledDeleteMarks` outside the tests was
+`CommandDispatcher::EndDdlScopeById`, gated on `core_id_ ==
+catalog::kSystemCore` - so a peer's `DROP` left its marks until core 0
+next resolved a DDL, or the next mount. The rig cell
+`PurgeTriggerRigTest.APeersDropIsSweptByCoreZerosTickWithNoDdlOnCoreZero`
+states the premise before its sweep: after a peer's create and drop, with
+nothing on core 0, the instance's mark count is above 0 and core 0 has
+purged nothing. **Held.**
+
+**C** (BP-Q8): `CommandDispatcher::SweepSettledDeleteMarks`, called from
+core 0's 50 ms `system` tick (the writeback tick); the sweep left
+`EndDdlScopeById`. **The progress gate**: a sweep runs only while a mark is
+pending and only when the pending count or
+`TransactionManager::SettlementNow()` - the floor, the horizon capped at the
+commit ceiling, the pending-commit bound - differs from what the last sweep
+saw. Under an open older reader the horizon stands still, so commits
+elsewhere do not make it sweep; with no reader the cap follows the ceiling,
+so a committed deleter settles on the next tick. `SHOW META` gains
+`catalog_purge_sweeps`. `Catalog::MarkCount` is public (one name, no
+alias). `ddl-transactional.md` §5d rewritten.
+
+**Cells:** the V cell above, now purged by core 0's tick and a peer's tick a
+return; `AMarkHeldByAnOlderReaderIsSweptAgainOnlyWhenTheHorizonMoves`;
+`AnOpenDeletersMarkWaitsForItsCommit`;
+`ExpeditorTest.TheTickRetiresADropsMarksWithNoFurtherDdl` (a serving
+instance, through its own tick); `TxnSessionTest`'s two purge cells through
+the trigger, the second being H11's `cores = 1` cell. The old
+`ReadBorrowRigTest.APeersDeleteMarksAreSweptByTheCoreThatSweeps` is deleted:
+it is the new V cell's first half, and its mutation (the rig's
+`config.mark_counter` dropped) fails the new cell.
+
+**Suite:** 3612/3613 (`ctest -j8`, Debug); the one failure is the filed
+flake `SortedLeafRigTest.AppendsFromTwoCoresKeepTheTreeWholeAndDense`, 5/5
+green repeated alone. **Mutations** (`~/bench-runs/bp-s1/mut_s4.sh`, each built and run three
+times): the progress gate removed, the core-0 placement removed, and the
+tick's call removed, each killed 3/3.
+
+**Review** (`critics-developer`): no correctness bug; the gate verified
+live (no case found where a mark becomes retirable with nothing in the key
+moving) and the tick placement sound. **Applied:** the unresolved-deleter
+cell; the soundness wording in `SweepSettledDeleteMarks` and §5d (placement
+is not what makes it sound - every view that can read a superseded version
+is registered, `txn.md` §4.1); `TxnSessionTest`'s cell through the trigger;
+`MarksPending` dropped for a public `MarkCount`; a comment narrating
+history. **Not changed:** a failed sweep still records what it saw, so it
+retries on the next progress rather than every tick (which would repeat the
+warning 20 times a second); the reviewer proposed no change either.
+
+**M:** the idle tick is one acquire load (`MarkCount() == 0`); with marks
+pending, `SettlementNow` reads at most 64 slots three times, 20 times a
+second. Not measured separately; measured at the milestone's close.

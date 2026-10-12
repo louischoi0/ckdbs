@@ -391,6 +391,32 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     EXPECT_TRUE(db.cores().empty());
 }
 
+// BP-S4 (BP-H11): core 0's `system` tick runs the delete-mark purge, so a
+// drop's marks are retired on a serving instance with no further DDL.
+TEST_F(ExpeditorTest, TheTickRetiresADropsMarksWithNoFurtherDdl) {
+    Expeditor::Config config = ConfigAt(1);
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(db.Start().ok());
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run()) << "the debug text port never accepted";
+    const int c = running.client();
+    ASSERT_NE(SendLine(c, "CREATE TABLE gone (id int64, v int64)").rfind("ERR", 0), 0u);
+    ASSERT_NE(SendLine(c, "DROP TABLE gone").rfind("ERR", 0), 0u);
+
+    std::uint64_t purged = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (purged == 0 && std::chrono::steady_clock::now() < deadline) {
+        const std::string meta = SendLine(c, "SHOW META");
+        const std::size_t at = meta.find(" catalog_marks_purged=");
+        if (at != std::string::npos) purged = std::stoull(meta.substr(at + 22));
+        if (purged == 0) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_GE(purged, 1u) << "no tick retired the drop's marks within 5 s";
+    EXPECT_TRUE(running.Stop().ok());
+}
+
 // BP-R1's arming cells (BP-H1, H2, H3): each structure the instance shares
 // latches or fences above one core and not at one, where its every caller
 // runs on the reactor thread (the census is in each header).

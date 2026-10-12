@@ -1162,15 +1162,15 @@ TEST_F(TxnSessionTest, ATransactionMayDropAndRecreateOneNameItself) {
     EXPECT_NE(Run(other, "DESCRIBE mine").find("w"), std::string::npos);
 }
 
-// ---- §5d: the horizon-gated purge at DDL resolution --------------------
+// ---- §5d: the horizon-gated purge ----------------------------------------
 //
-// docs/workplan-reader-registration.md D5. DDL resolution is the only
-// event that creates or settles a catalog delete-mark, so EndDdlScope
-// attempts the purge there; the read horizon is what proves no live view
-// can still see a marked row, and a reader that holds the horizon simply
-// holds the marks - to the next resolution, or to the mount sweep above.
+// docs/workplan-reader-registration.md D5, triggered by core 0's `system`
+// tick since BP-S4 (`SweepSettledDeleteMarks`; the fixture runs no reactor,
+// so a cell calls it). The read horizon is what proves no live view can
+// still see a marked row, and a reader that holds the horizon simply holds
+// the marks - to a later sweep, or to the mount sweep above.
 
-TEST_F(TxnSessionTest, ACommittedDropsMarksArePurgedAtItsOwnResolution) {
+TEST_F(TxnSessionTest, ACommittedDropsMarksArePurgedByTheNextTick) {
     Session s;
     ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
     ASSERT_EQ(Run(s, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
@@ -1178,15 +1178,16 @@ TEST_F(TxnSessionTest, ACommittedDropsMarksArePurgedAtItsOwnResolution) {
     ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
     ASSERT_EQ(Run(s, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
     ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+    dispatcher_->SweepSettledDeleteMarks();
 
-    // The commit's own resolution took the marks: nothing is left for a
-    // manual pass, nothing for the next mount, and SHOW META counted it.
+    // The tick took the marks: nothing is left for a manual pass, nothing
+    // for the next mount, and SHOW META counted it.
     auto again = boot_->catalog.PurgeSettledDeleteMarks();
     ASSERT_TRUE(again.ok()) << again.status().message();
     EXPECT_EQ(again.value(), 0u);
     auto mount = boot_->catalog.FinalizeDeleteMarksAtMount();
     ASSERT_TRUE(mount.ok()) << mount.status().message();
-    EXPECT_EQ(mount.value(), 0u) << "the resolution-time purge left marks for the mount sweep";
+    EXPECT_EQ(mount.value(), 0u) << "the tick's purge left marks for the mount sweep";
     const std::string meta = Run(s, "SHOW META");
     EXPECT_NE(meta.find("catalog_marks_purged="), std::string::npos) << meta;
     EXPECT_EQ(meta.find("catalog_marks_purged=0"), std::string::npos) << meta;
@@ -1244,12 +1245,11 @@ TEST_F(TxnSessionTest, AnOlderOpenTransactionHoldsTheMarksUntilItResolves) {
     ASSERT_TRUE(held.ok()) << held.status().message();
     EXPECT_EQ(held.value(), 0u) << "the purge retired marks an open older transaction could see";
 
-    // b resolves without DDL, so nothing triggers automatically - the
-    // marks wait for the next resolution or the mount, by design.
+    // b resolves without DDL, and core 0's next tick sweeps (BP-H11's
+    // `cores = 1` cell, through the trigger itself).
     ASSERT_EQ(Run(b, "COMMIT").substr(0, 6), "COMMIT");
-    auto freed = boot_->catalog.PurgeSettledDeleteMarks();
-    ASSERT_TRUE(freed.ok()) << freed.status().message();
-    EXPECT_GE(freed.value(), 1u);
+    dispatcher_->SweepSettledDeleteMarks();
+    EXPECT_EQ(boot_->catalog.MarkCount(), 0u) << "the tick left marks b no longer held";
 }
 
 // The undo purge's SHOW META pair (docs/inflight/in-progress/workplan-undo-purge.md UP3):

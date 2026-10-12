@@ -19,6 +19,7 @@ add_executable(kds_tests
     waystone_across_cores_test.cpp
     cabin_serve_across_cores_test.cpp
     read_borrow_rig_test.cpp
+    purge_trigger_rig_test.cpp
     current_core_test.cpp
     alloc_race_test.cpp
     free_map_race_test.cpp

@@ -1336,11 +1336,32 @@ private:
     // are removed when the transaction resolves, by `EndDdlScope`.
     std::vector<std::uint64_t> ddl_txns_;
     void EndDdlScope(const Session& session, wal::Lsn committed_lsn = wal::kNoLsn);
+
+public:
+    // **The delete-mark purge's trigger** (BP-H11, ddl-transactional.md
+    // §5d): core 0's 50 ms `system` tick. A sweep write-fetches every
+    // catalog page even when it retires nothing, so it runs only while a
+    // mark is pending and only when the pending count or the settlement
+    // (`TransactionManager::SettlementNow`) moved since the last sweep. Core
+    // 0 only, a placement. A failed sweep is logged; its marks stay exactly
+    // as reachable as before.
+    void SweepSettledDeleteMarks();
+
+private:
     // Delete-marked catalog rows retired since mount by the horizon-gated
-    // purge EndDdlScope runs (ddl-transactional.md §5d). SHOW META
-    // prints it beside `catalog_marks_finalized`, whose count is the
-    // previous mount's leftovers - this one is this mount's own.
+    // purge (ddl-transactional.md §5d), and the sweeps that ran. SHOW META
+    // prints both; `catalog_marks_finalized` beside them counts the
+    // previous mount's leftovers - these are this mount's own.
     std::uint64_t catalog_marks_purged_ = 0;
+    std::uint64_t catalog_purge_sweeps_ = 0;
+    // What the last sweep saw: a sweep runs again only when the settlement
+    // or the pending count differs (`SweepSettledDeleteMarks`).
+    struct PurgeSeen {
+        txn::TransactionManager::Settlement settlement;
+        std::uint64_t marks;
+        bool operator==(const PurgeSeen&) const = default;
+    };
+    std::optional<PurgeSeen> purge_seen_;
     // Records that this transaction now holds uncommitted catalog rows,
     // which is what turns on `ViewFor`'s filtering.
     void MarkHoldsDdl(txn::Transaction& txn);

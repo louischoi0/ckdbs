@@ -351,15 +351,22 @@ public:
     // instance's floor and horizon since AN-S2), and answers how many.
     // Callable while the listener is bound; no version
     // bump, unlogged like every catalog write; a held-back mark survives
-    // to the next call or to the mount sweep. The caller is DDL resolution
-    // (`CommandDispatcher::EndDdlScope`), on **one** core - a placement, so
-    // that two cores do not walk the same chains at once, not an authority
-    // (AT-S5). Which is why the gate it reads is the
+    // to the next call or to the mount sweep. The caller is core 0's
+    // `system` tick (`CommandDispatcher::SweepSettledDeleteMarks`, BP-H11),
+    // on **one** core - a placement, so that two cores do not walk the same
+    // chains at once, not an authority (AT-S5). Which is why the gate it reads is the
     // instance's (`SetMarkCounter`, AT-S5b): the sweeping core has to see
     // a mark another core wrote, or a peer's `DROP` would wait for the
     // next mount. The soundness proof lives once, in
     // `ddl-transactional.md` §5d.
     StatusOr<std::uint64_t> PurgeSettledDeleteMarks();
+    // Marks written this run and not yet retired - the instance's count
+    // where one is wired (`SetMarkCounter`), the local one for a bare
+    // catalog. Public for the purge trigger's first test (BP-H11).
+    std::uint64_t MarkCount() const noexcept {
+        return mark_counter_ != nullptr ? mark_counter_->load(std::memory_order_acquire)
+                                        : pending_marks_;
+    }
 
     // Registers the fixed namespace/type sys-objects in the in-memory
     // registry (no disk I/O - these are well-known constants, not stored
@@ -1210,14 +1217,10 @@ private:
     //
     // Two shapes: `mark_counter_` when an instance named one
     // (`SetMarkCounter`), the local `pending_marks_` for a bare catalog.
-    // Nothing outside these three touches either, which is what keeps the
-    // two from diverging. The word is `acq_rel` because a mark's *row* is
-    // a page write another core reads and the count is what tells that
-    // core to look.
-    std::uint64_t MarkCount() const noexcept {
-        return mark_counter_ != nullptr ? mark_counter_->load(std::memory_order_acquire)
-                                        : pending_marks_;
-    }
+    // Nothing outside these two and the public `MarkCount` touches either,
+    // which is what keeps the two from diverging. The word is `acq_rel`
+    // because a mark's *row* is a page write another core reads and the
+    // count is what tells that core to look.
     void NoteMark() noexcept {
         if (mark_counter_ != nullptr) {
             mark_counter_->fetch_add(1, std::memory_order_acq_rel);
