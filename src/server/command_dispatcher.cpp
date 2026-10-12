@@ -4941,9 +4941,9 @@ std::vector<std::uint32_t> AggregateOutputTypeMods(const exec::AggregateSpec& sp
 }
 
 // One result-set description from three positional lists. The `type_len`
-// is derived rather than passed - it is a function of the type and nothing
-// else (`wire::WireTypeLen`), so a caller that supplied one could only ever
-// agree with it or be wrong.
+// is derived rather than passed - it is a function of the type and of
+// whether the field is a relation's column 0 (`wire::WireValueType`), so a
+// caller that supplied one could only ever agree with it or be wrong.
 std::vector<wire::FieldDescription> DescribeFields(
     std::span<const std::string> names, std::span<const std::uint32_t> type_vals,
     std::span<const std::uint32_t> type_mods,
@@ -4954,7 +4954,11 @@ std::vector<wire::FieldDescription> DescribeFields(
         wire::FieldDescription f;
         f.name = names[i];
         f.type_oid = i < type_vals.size() ? type_vals[i] : 0;
-        f.type_len = wire::WireTypeLen(f.type_oid);
+        // Any relation's column 0 is its Keystone id and travels as u64,
+        // the joined relation's included (`wire::WireValueType`).
+        f.type_len = wire::WireTypeLen(
+            i < projection.size() ? wire::WireValueType(f.type_oid, projection[i].col_pos)
+                                  : f.type_oid);
         f.type_mod = i < type_mods.size() ? type_mods[i] : 0;
         // **`kFieldFlagKeystone` marks the relation's own column 0**, not
         // the first field of whatever was projected (`wire/row_codec.hpp`:
@@ -7109,10 +7113,23 @@ DispatchOutcome CommandDispatcher::RunAggregated(
         return {ErrorReply(s), false, 0, s};
     }
 
-    if (Status s = sink.Describe(DescribeFields(chain.column_names,
-                                               AggregateOutputTypes(*chain.aggregate),
-                                               AggregateOutputTypeMods(*chain.aggregate)));
-        !s.ok()) {
+    // A MIN/MAX or a group key over a relation's column 0 is a Keystone id,
+    // written as one whatever the column declares (`wire::WireValueType`).
+    // Widened for the wire only: `AggregateOutputType` stays the column's
+    // type, which `UPDATE ... SET` typing reads. Not through
+    // `DescribeFields`' projection, which would flag a `COUNT(*)` - whose
+    // ref is `{0, 0, 0}` too - as a Keystone; its int64 is unchanged here.
+    const std::vector<std::uint32_t> out_types = AggregateOutputTypes(*chain.aggregate);
+    std::vector<std::uint32_t> wire_types(out_types.size());
+    for (std::size_t i = 0; i < out_types.size(); ++i) {
+        wire_types[i] = wire::WireValueType(out_types[i], chain.aggregate->items[i].ref.col_pos);
+    }
+    std::vector<wire::FieldDescription> fields = DescribeFields(
+        chain.column_names, out_types, AggregateOutputTypeMods(*chain.aggregate));
+    for (std::size_t i = 0; i < fields.size() && i < wire_types.size(); ++i) {
+        fields[i].type_len = wire::WireTypeLen(wire_types[i]);
+    }
+    if (Status s = sink.Describe(std::move(fields)); !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
 
@@ -7140,10 +7157,9 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     // Through the one sink every row path emits by: two formatters for a
     // folded row is how one of them comes to forget an item's `type_val`.
     std::string row_scratch;
-    const std::vector<std::uint32_t> out_types = AggregateOutputTypes(*chain.aggregate);
     Status emitted = aggregator_.Finish(
         [&](std::span<const parser::AstValue> row) -> Status {
-            if (Status s = sink.EncodeValueRow(out_types, row, row_scratch); !s.ok()) return s;
+            if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) return s;
             return sink.Emit(row_scratch);
         });
     if (!emitted.ok()) {

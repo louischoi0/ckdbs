@@ -14,6 +14,14 @@ inline constexpr PageId kInvalidPageId = 0xFFFFFFFFu;
 
 inline constexpr std::size_t kPageSize = 8192;
 
+// Whether `v` fits a two's-complement integer `width` bytes wide (1..8).
+// One test for every narrow integer write - a stored cell and a wire field.
+constexpr bool FitsSigned(std::int64_t v, int width) noexcept {
+    if (width >= 8) return true;
+    const std::int64_t bound = std::int64_t{1} << (width * 8 - 1);
+    return v >= -bound && v < bound;
+}
+
 // Design ceiling from docs/spec/page.md section 4: page_id is u32 with 2^31
 // target pages, i.e. half the u32 space, giving a 16 TiB single-file
 // ceiling. Asserted rather than merely documented so the arithmetic
