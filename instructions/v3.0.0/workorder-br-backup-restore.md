@@ -3,8 +3,10 @@
 **Written 2026-10-12** in the main checkout on `main` at `dbff867b`
 (`v2.7.0-907-gdbff867b`), on the operator's words W0-W2
 (`raft-marks-2026-10-12.md` §14), and pushed to `main` as a document-only
-change. **Written, not opened**: BR-Q0 asks for the opening, and no stage
-starts before it is marked.
+change. **Opened 2026-10-12** on the operator's word (BR-Q0 (a), §10) on
+`br-backup-restore`; BR-Q1..Q6 adopted on the operator's standing go-ahead
+of 2026-10-12 (go-ahead-achieving-milestone), §10. BR-S0's census is
+`br-s0-census.md`; where it restates a rule of §2, the census governs.
 
 The operator's words, translated:
 
@@ -418,3 +420,22 @@ defects in the order"*:
 5. **BR-S3's exit** required LVM in a VM whose `sudo` needs a password. H9
    added, and the exit names a process-freeze copy as the substrate where
    LVM cannot run.
+
+## 10. Marks
+
+BR-Q0 was answered by the operator's own word: *"fix the five defects in the
+order and /go-ahead-achieving-milestone"* (2026-10-12), which opens BR whole
+- option (a). Every other item below is **adopted on the operator's standing
+go-ahead of 2026-10-12 (go-ahead-achieving-milestone)**, not marked by the
+operator item by item; each is CLA's proposal, revised against the tree
+where BR-S0 found its premise false (`br-s0-census.md`).
+
+| ID | Mark | How |
+|---|---|---|
+| BR-Q0 | (a) open now, all stages | the operator's word |
+| BR-Q1 | **(c), refined and revised from (a)**: the copier reads under a device-level write fence; no window images | adopted, revised: (a)'s premise - an image decided at one site and re-checkable where the LSN is assigned - is false (census H5), and redo's heal is refused for an allocated page (H4, `docs/inflight/bugs/a-full-page-image-cannot-heal-a-checksum-failed-allocated-page.md`) |
+| BR-Q2 | (a) fail-closed | adopted as proposed |
+| BR-Q3 | (a) no forced checkpoint; start at `D` | adopted as proposed; with BR-R5 replaced, nothing else needs one |
+| BR-Q4 | (a) one backup at a time | adopted as proposed |
+| BR-Q5 | **(b) LSN only** | adopted as proposed: the commit record carries no time (census) |
+| BR-Q6 | (a) a base backup carries its own log | adopted as proposed, and extended to D (census §2: D's log comes from the backup) |

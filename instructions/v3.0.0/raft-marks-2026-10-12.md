@@ -131,3 +131,12 @@ Korean it was typed in.
 | **Mark** | **Written**: `workorder-br-backup-restore.md` written and pushed to `main` as a document-only change. W1 fixes the scope: path D (volume snapshot) and path B (base backup plus WAL archive) as the minimum, raised within BR to the bar of its §6. W2's check: no `BR` in any work-order name, any remote head, or any `BR` token in the tree's documents, sources or scripts at `dbff867b`; the last letter assigned was BQ |
 | **Does not settle** | BR's opening (BR-Q0) and BR-Q1..Q5; the admin tool's name (BR-S2); whether the stop LSN lives in the superblock (BR-S0) |
 | **Recorded at** | `workorder-br-backup-restore.md`; `index.md`'s BR row |
+
+## 15. BR opened, its order corrected, its items adopted
+
+| | |
+|---|---|
+| **Word** | *"fix the five defects in the order and /go-ahead-achieving-milestone"* (recorded on `br-backup-restore` from `fb953f07`) |
+| **Mark** | **BR-Q0 (a)**, the operator's word: BR is open, every stage. The five defects of the order are corrected (`workorder-br-backup-restore.md` §9, `3b9d5550`). BR-Q1..Q6 are **adopted on the operator's standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone)**, not marked item by item: Q1 revised to a fenced copy with no window images (census H4, H5), Q2 (a), Q3 (a), Q4 (a), Q5 (b), Q6 (a) extended to D |
+| **Does not settle** | Anything outside BR; the version a close would carry |
+| **Recorded at** | `workorder-br-backup-restore.md` §9, §10; `br-s0-census.md`; `index.md`'s BR row |
