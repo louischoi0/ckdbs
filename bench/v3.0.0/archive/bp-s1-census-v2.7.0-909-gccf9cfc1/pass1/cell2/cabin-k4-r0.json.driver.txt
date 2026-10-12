@@ -1,0 +1,110 @@
+
+ckdbs benchmark - id int64, symbol varchar, qty int64, price int64 columns, boards 2x10000, tapes 200/1000/10000 rows resident, BTREE-clustered, 1 connection
+server 127.0.0.1:31991/31992  table board_*/tape_*_b0
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+load[off]                31200    13,924      71.8     39.8     57.9     65.8    113.2    131.9     506.0     0
+load[on]                 31200    14,969      66.8     42.0     59.4     64.1     88.5    107.2    1155.7     0
+d1-open[off]               240       632    1581.8   1142.4   1269.9   1332.3   2930.3   8396.3   11077.7     0
+d1-open[on]                240       683    1465.0   1088.3   1240.8   1318.7   2161.7   4026.0   10556.1     0
+d1-board[off]             2400       616    1623.2   1173.3   1403.4   1602.9   2026.5   2080.0    2280.3     0
+d1-tape200[off]            396     5,425     184.3    136.5    173.1    179.5    229.4    247.0     261.0     0
+d1-tape1k[off]             396     3,364     297.3    233.4    260.7    290.1    378.1    411.5     432.6     0
+d1-tape10k[off]            396       606    1649.1   1147.0   1486.6   1695.0   1950.3   2052.1    3876.1     0
+d1-pk[off]                 240     8,445     118.4     69.7    102.6    114.9    157.0    172.6     294.1     0
+d1-board[on]              2400     1,772     564.5    115.0    229.8    254.3   1667.0   1793.2    2012.0     0
+d1-tape200[on]             396     6,532     153.1    120.6    142.4    151.4    184.3    205.1     226.3     0
+d1-tape1k[on]              396     5,546     180.3    120.7    140.9    154.2    308.7    340.1     588.7     0
+d1-tape10k[on]             396     1,995     501.2    119.4    140.3    156.1   1624.9   1827.1    5852.4     0
+d1-pk[on]                  240     9,950     100.5     77.8     91.4     96.9    122.6    138.0     312.3     0
+d1-close[off]               12       392    2548.7   1275.5   1363.9   1477.2   6926.6   6926.6    6926.6     0
+d1-close[on]                12       422    2371.1    998.7   1346.0   1559.1   5443.7   5443.7    5443.7     0
+d2-open[off]               240       646    1546.9   1149.3   1264.9   1319.6   2400.6   6992.8    8741.7     0
+d2-open[on]                240       680    1470.5   1097.5   1262.6   1326.1   1859.6   4748.1   14703.9     0
+d2-board[off]             2400       584    1713.5   1178.3   1447.0   1798.5   2051.4   2105.8    3277.1     0
+d2-tape200[off]            396     5,549     180.2    133.6    162.7    177.9    223.7    246.9     283.1     0
+d2-tape1k[off]             396     3,340     299.4    209.1    261.4    290.2    388.1    434.2     478.6     0
+d2-tape10k[off]            396       608    1646.0   1152.1   1494.9   1700.7   1936.1   2071.0    2241.9     0
+d2-pk[off]                 240     8,436     118.5     74.9    103.3    114.7    160.7    174.4     230.6     0
+d2-board[on]              2400     1,812     551.8    132.9    223.7    251.0   1706.5   1810.4    2108.0     0
+d2-tape200[on]             396     6,578     152.0    111.7    134.4    146.3    178.7    205.9    1389.8     0
+d2-tape1k[on]              396     6,314     158.4    124.6    133.7    146.6    297.4    329.2     342.1     0
+d2-tape10k[on]             396     2,964     337.4    124.9    138.3    151.5   1606.2   1789.1    1805.9     0
+d2-pk[on]                  240     9,795     102.1     63.9     92.0     97.9    125.8    159.0     240.8     0
+d2-close[off]               12       417    2400.4   1036.5   1357.2   1529.0   5724.9   5724.9    5724.9     0
+d2-close[on]                12       452    2211.8   1140.6   1254.5   1470.6   5650.0   5650.0    5650.0     0
+d3-open[off]               240       579    1726.4   1108.3   1300.0   1399.5   3264.5   8558.6   15581.1     0
+d3-open[on]                240       603    1658.3   1109.0   1241.9   1313.7   3841.9   9456.5   15679.8     0
+d3-board[off]             2400       559    1787.8   1195.9   1668.9   1856.8   2059.8   2116.0    2388.2     0
+d3-tape200[off]            396     5,612     178.2    135.9    159.5    174.8    228.5    252.8     261.2     0
+d3-tape1k[off]             396     3,461     288.9    231.5    258.5    273.7    376.5    396.6     406.0     0
+d3-tape10k[off]            396       605    1651.9   1147.8   1484.2   1716.4   1928.4   2083.6    2160.9     0
+d3-pk[off]                 240     8,612     116.1     70.5     96.8    113.0    160.2    185.7     197.3     0
+d3-board[on]              2400     2,537     394.1    130.8    213.8    238.7   1666.2   1840.3    2308.5     0
+d3-tape200[on]             396     6,783     147.4    123.5    135.5    145.9    176.1    189.6     232.5     0
+d3-tape1k[on]              396     6,422     155.7    122.0    134.5    145.1    246.9    341.2     604.6     0
+d3-tape10k[on]             396     3,003     333.0    111.5    138.1    150.1   1537.4   1795.9    1865.2     0
+d3-pk[on]                  240    10,095      99.1     64.3     90.6     96.8    122.9    136.1     138.2     0
+d3-close[off]               12       402    2488.0   1359.3   1396.7   1596.3   5620.7   5620.7    5620.7     0
+d3-close[on]                12       464    2153.8   1013.1   1194.4   1389.0   5214.8   5214.8    5214.8     0
+
+  load[off]: setup, txn batches of 500
+  load[on]: setup, txn batches of 500
+  d1-open[off]: 240 inserts, board_a_b0
+  d1-open[on]: 240 inserts, board_a_b0
+  d1-board[off]: hot equality on board_a_b0, 8 hot syms
+  d1-tape200[off]: 200 rows, rotating hot values
+  d1-tape1k[off]: 1000 rows, rotating hot values
+  d1-tape10k[off]: 10000 rows, rotating hot values
+  d1-pk[off]: control: touches no Cabin
+  d1-board[on]: hot equality on board_a_b0, 8 hot syms
+  d1-tape200[on]: 200 rows, rotating hot values
+  d1-tape1k[on]: 1000 rows, rotating hot values
+  d1-tape10k[on]: 10000 rows, rotating hot values
+  d1-pk[on]: control: touches no Cabin
+  d1-close[off]: COUNT/SUM/GROUP BY full scans
+  d1-close[on]: COUNT/SUM/GROUP BY full scans
+  d2-open[off]: 240 inserts, board_b_b0
+  d2-open[on]: 240 inserts, board_b_b0
+  d2-board[off]: hot equality on board_b_b0, 8 hot syms
+  d2-tape200[off]: 200 rows, rotating hot values
+  d2-tape1k[off]: 1000 rows, rotating hot values
+  d2-tape10k[off]: 10000 rows, rotating hot values
+  d2-pk[off]: control: touches no Cabin
+  d2-board[on]: hot equality on board_b_b0, 8 hot syms
+  d2-tape200[on]: 200 rows, rotating hot values
+  d2-tape1k[on]: 1000 rows, rotating hot values
+  d2-tape10k[on]: 10000 rows, rotating hot values
+  d2-pk[on]: control: touches no Cabin
+  d2-close[off]: COUNT/SUM/GROUP BY full scans
+  d2-close[on]: COUNT/SUM/GROUP BY full scans
+  d3-open[off]: 240 inserts, board_a_b0
+  d3-open[on]: 240 inserts, board_a_b0
+  d3-board[off]: hot equality on board_a_b0, 8 hot syms
+  d3-tape200[off]: 200 rows, rotating hot values
+  d3-tape1k[off]: 1000 rows, rotating hot values
+  d3-tape10k[off]: 10000 rows, rotating hot values
+  d3-pk[off]: control: touches no Cabin
+  d3-board[on]: hot equality on board_a_b0, 8 hot syms
+  d3-tape200[on]: 200 rows, rotating hot values
+  d3-tape1k[on]: 1000 rows, rotating hot values
+  d3-tape10k[on]: 10000 rows, rotating hot values
+  d3-pk[on]: control: touches no Cabin
+  d3-close[off]: COUNT/SUM/GROUP BY full scans
+  d3-close[on]: COUNT/SUM/GROUP BY full scans
+
+per-arm busy-time TPS (timed ops / summed latencies):
+  day 1 [off      ]  ops=  4080  busy=   5.18s  tps=     788
+  day 2 [off      ]  ops=  4080  busy=   5.38s  tps=     758
+  day 3 [off      ]  ops=  4080  busy=   5.60s  tps=     728
+  day 1 [on       ]  ops=  4080  busy=   2.09s  tps=    1953
+  day 2 [on       ]  ops=  4080  busy=   1.98s  tps=    2056
+  day 3 [on       ]  ops=  4080  busy=   1.65s  tps=    2480
+
+verify (byte-identical replies across arms, per day): PASS PASS PASS
+json -> /home/cdkbs/bench-runs/bp-s1/out/cell2/cabin-k4-r0.json.driver.json
+
+--- stderr
+/home/cdkbs/ckdbs/.claude/worktrees/bp-per-core-residue/tools/scenario4_cabinopt_days.py:581: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  "started_utc": datetime.datetime.utcfromtimestamp(run_t0)

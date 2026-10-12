@@ -1,0 +1,51 @@
+samples 695
+
+-- self --
+ 51.22%    356  kds::heap::PageView::PayloadAt const
+ 17.84%    124  kds::btree::SearchLeaf
+ 14.24%     99  __memcpy_avx512_unaligned_erms
+ 10.94%     76  kds::btree::::SlotKeystoneId
+  1.15%      8  kds::storage::DevicePageStore::PinResidentAndRelease
+  1.01%      7  std::_Hashtable::find [clone .isra.0]
+  0.86%      6  ___pthread_mutex_trylock
+  0.43%      3  kds_server+0xcec0
+  0.29%      2  kds::storage::DevicePageStore::UnpinFrame
+  0.29%      2  kds::storage::DevicePageStore::Resolve
+  0.29%      2  kds::storage::DevicePageStore::FetchAndPin
+  0.14%      1  kds::txn::InstanceVisibility::InFlight const
+  0.14%      1  kds::KeystoneIdOfPayload
+  0.14%      1  std::_Function_handler::_M_invoke
+  0.14%      1  kds::btree::::DescendTo
+  0.14%      1  kds::exec::LogSlotRetire
+  0.14%      1  kds::storage::SetPageStreamStamp
+  0.14%      1  kds::storage::PageStore::Get
+  0.14%      1  kds::storage::DevicePageStore::FetchPinned
+  0.14%      1  kds::wal::EncodeRecord
+  0.14%      1  lll_mutex_unlock_optimized
+
+-- inclusive --
+ 51.22%    356  kds::heap::PageView::PayloadAt const
+ 33.38%    232  [unmapped]
+ 17.84%    124  kds::btree::SearchLeaf
+ 14.24%     99  __memcpy_avx512_unaligned_erms
+ 10.94%     76  kds::btree::::SlotKeystoneId
+  1.15%      8  kds::storage::DevicePageStore::PinResidentAndRelease
+  1.01%      7  std::_Hashtable::find [clone .isra.0]
+  0.86%      6  ___pthread_mutex_trylock
+  0.58%      4  kds::storage::DevicePageStore::UnpinFrame
+  0.43%      3  kds_server+0xcec0
+  0.43%      3  kds::storage::DevicePageStore::Resolve
+  0.29%      2  kds::Latch::lock
+  0.29%      2  kds::storage::DevicePageStore::FetchAndPin
+  0.29%      2  kds::wal::WalManager::Append
+  0.29%      2  kds::wal::WalStream::Append
+  0.14%      1  kds::txn::InstanceVisibility::InFlight const
+  0.14%      1  kds::KeystoneIdOfPayload
+  0.14%      1  std::_Function_handler::_M_invoke
+  0.14%      1  kds::btree::::DescendTo
+  0.14%      1  kds::exec::LogSlotRetire
+  0.14%      1  kds::storage::SetPageStreamStamp
+  0.14%      1  kds::storage::PageStore::Get
+  0.14%      1  kds::storage::DevicePageStore::FetchPinned
+  0.14%      1  kds::wal::EncodeRecord
+  0.14%      1  lll_mutex_unlock_optimized

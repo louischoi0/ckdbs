@@ -1,0 +1,131 @@
+{
+ "cores": 4,
+ "run": 2,
+ "durability": "relaxed",
+ "bin_sha256": "a6fc3c04ef2bf2e19e3715ca1943c689959c97e9aa59a57a205029da1aea111f",
+ "loadavg_before": "1.44 2.59 4.08 2/335 662843",
+ "session_core": 2,
+ "data_device": "/dev/root      ext4 258932720 128584420 130331916  50% /",
+ "load_s": 0.3,
+ "delete": {
+  "reply": "DELETED 100000",
+  "wall_ms": 64.5,
+  "server_cpu_ms": 66.2,
+  "inflight": {
+   "contention_inflight_asks": 0,
+   "contention_inflight_misses": 0,
+   "contention_inflight_miss_ids_read": 0
+  }
+ },
+ "purge": {
+  "reply": "PURGED 100000",
+  "wall_ms": 698.4,
+  "server_cpu_ms": 717.6,
+  "inflight": {
+   "contention_inflight_asks": 100000,
+   "contention_inflight_misses": 100000,
+   "contention_inflight_miss_ids_read": 100000
+  },
+  "contention": {
+   "contention_frame_table_waits": 2,
+   "contention_window_waits": 2,
+   "contention_syncs_writer": 66,
+   "contention_inflight_asks": 100000,
+   "contention_inflight_misses": 100000,
+   "contention_inflight_miss_ids_read": 100000
+  }
+ },
+ "named_fresh": {
+  "statements": 20000,
+  "errors": 0,
+  "first_error": null,
+  "wall_s": 1.261,
+  "stmt_per_s": 15866.6,
+  "server_cpu_us_per_stmt": 35.03,
+  "lat": {
+   "n": 20000,
+   "p0_us": 54.0,
+   "p25_us": 57.4,
+   "p50_us": 58.1,
+   "p95_us": 76.4,
+   "p99_us": 90.1
+  },
+  "inflight": {
+   "contention_inflight_asks": 0,
+   "contention_inflight_misses": 0,
+   "contention_inflight_miss_ids_read": 0
+  },
+  "contention": {
+   "contention_frame_table_waits": 91,
+   "contention_frame_table_wait_us": 740,
+   "contention_window_waits": 8,
+   "contention_window_wait_us": 191,
+   "contention_wal_stream_waits": 6,
+   "contention_wal_stream_wait_us": 1,
+   "contention_syncs_inline": 4,
+   "contention_syncs_writer": 147,
+   "contention_carves": 11,
+   "contention_checkpoint_runs": 1,
+   "contention_word_moves_root": 1,
+   "contention_checkpoint_pages_written": 1709,
+   "contention_data_syncs": 17
+  }
+ },
+ "named_duplicate": {
+  "statements": 20000,
+  "errors": 20000,
+  "first_error": "ERR duplicate primary key 1 already present at page 1724 slot 0 (byte 22)",
+  "wall_s": 1.441,
+  "stmt_per_s": 13874.8,
+  "server_cpu_us_per_stmt": 38.63,
+  "lat": {
+   "n": 20000,
+   "p0_us": 63.0,
+   "p25_us": 65.7,
+   "p50_us": 66.7,
+   "p95_us": 89.7,
+   "p99_us": 146.3
+  },
+  "inflight": {
+   "contention_inflight_asks": 0,
+   "contention_inflight_misses": 0,
+   "contention_inflight_miss_ids_read": 0
+  },
+  "contention": {
+   "contention_frame_table_waits": 5,
+   "contention_frame_table_wait_us": 171,
+   "contention_page_latch_waits": 1,
+   "contention_page_latch_spin_turns": 31,
+   "contention_syncs_writer": 138,
+   "contention_carves": 5,
+   "contention_checkpoint_runs": 1,
+   "contention_checkpoint_pages_written": 110,
+   "contention_data_syncs": 9
+  }
+ },
+ "named_vs_undecided": {
+  "waits": 20,
+  "hold_ms": 200,
+  "results": [
+   [
+    200.4,
+    "INSERTED oid=4006 id=1 page=1854 slot=1"
+   ],
+   [
+    200.4,
+    "INSERTED oid=4006 id=2 page=1854 slot=3"
+   ],
+   [
+    200.3,
+    "INSERTED oid=4006 id=3 page=1854 slot=5"
+   ]
+  ],
+  "inflight": {
+   "contention_inflight_asks": 20,
+   "contention_inflight_misses": 0,
+   "contention_inflight_miss_ids_read": 0
+  },
+  "server_cpu_ms_total": 126.3
+ },
+ "loadavg_after": "1.33 2.51 4.03 2/341 662885"
+}

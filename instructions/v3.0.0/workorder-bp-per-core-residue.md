@@ -930,10 +930,10 @@ Marked 2026-10-12 by W2 (`raft-marks-2026-10-12.md` §13). Every proposal is `[d
 | BP-Q1 | **BP-R1: a BP-G1 break is cut on proof, its measurement gates nothing** | process | As written. BP-G1 is a standing rule (ways of working: zero overhead for single-core configurations). Keeping a break because it is cheap would make the rule a threshold | W2, as proposed |
 | BP-Q2 | **Re-exploration's bound.** One `BP-Hn.k` per hypothesis without a word; a second needs the operator | process | As written | W2, as proposed |
 | BP-Q3 | **The page stream stamp** (BP-H5). (a) Stop writing it; `SHOW PAGE` drops it. (b) Keep it as a diagnostic | user-visible (`SHOW PAGE`) | (a). It names a stream that no longer exists. A diagnostic that answers a retired question is noise in every page dump | W2: (a) |
-| BP-Q4 | **The memo** (BP-H6), only if BP-S1 holds it. (a) ~~Per-entry invalidation through a ring of recent moves~~, struck at the S0 review (§7). (b) No memoized roots: a bind reads the anchor page. (c) Keep. (d) Root moves stop bumping the word; a structural refusal refreshes that relation's root | design, **[quiet-wrong] under (a), (b) and (d)** | Decided by BP-S1's counters and BP-H6's descent census. CLA leans (d), with the index-side refresh the S0 review found missing (BP-H6), if the census shows every descent from a stale root either complete or refused: it removes the root-move bumps without adding a classifier, and a missed refresh costs a refusal, not a row. (b) adds a page access to every statement on every core, which is a cost at `cores = 1` that BP-G1 forbids unless armed | W2: decided by BP-S1; the option is adopted from the census on the standing go-ahead |
-| BP-Q5 | **The checkpoint** (BP-H7), against AT-S8. (a) Keep. (b) One instance-wide run, with undo heads published beside AX's in-flight ids, in an order of its own | design, ratified, **[quiet-wrong] under (b)** | Decided by BP-S1. Recovery needs every live transaction's undo head inside the replay range, so (b) is a recovery-correctness change | W2: decided by BP-S1; the option is adopted from the census on the standing go-ahead |
-| BP-Q6 | **The id window** (BP-H8), against AT-R4. Report only; any change is a later order | design, ratified | Report only | W2: report only |
-| BP-Q7 | **The in-flight table** (BP-H9), against AX. (a) Keep. (b) An instance pool of slots. (c) A per-core min/max summary word in front of the scan | design, ratified, **[quiet-wrong] under (b) and (c)** | Decided by BP-S1. If material, (c) first. (b) bears on BL-Q1 (b), a transaction moving between cores, and is BL's question as much as BP's | W2: decided by BP-S1; the option is adopted from the census on the standing go-ahead |
+| BP-Q4 | **The memo** (BP-H6), only if BP-S1 holds it. (a) ~~Per-entry invalidation through a ring of recent moves~~, struck at the S0 review (§7). (b) No memoized roots: a bind reads the anchor page. (c) Keep. (d) Root moves stop bumping the word; a structural refusal refreshes that relation's root | design, **[quiet-wrong] under (a), (b) and (d)** | Decided by BP-S1's counters and BP-H6's descent census. CLA leans (d), with the index-side refresh the S0 review found missing (BP-H6), if the census shows every descent from a stale root either complete or refused: it removes the root-move bumps without adding a classifier, and a missed refresh costs a refusal, not a row. (b) adds a page access to every statement on every core, which is a cost at `cores = 1` that BP-G1 forbids unless armed | W2: decided by BP-S1; (c) keep - H6 rejected (BP-S1, §7), adopted from the census on the operator's standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone) |
+| BP-Q5 | **The checkpoint** (BP-H7), against AT-S8. (a) Keep. (b) One instance-wide run, with undo heads published beside AX's in-flight ids, in an order of its own | design, ratified, **[quiet-wrong] under (b)** | Decided by BP-S1. Recovery needs every live transaction's undo head inside the replay range, so (b) is a recovery-correctness change | W2: decided by BP-S1; (a) keep - H7 rejected (BP-S1, §7), adopted from the census on the operator's standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone) |
+| BP-Q6 | **The id window** (BP-H8), against AT-R4. Report only; any change is a later order | design, ratified | Report only | W2: report only - unmeasured at BP-S1: no counter for the window, burns or `LookupCommit` exists, and no skew cell ran (§7) |
+| BP-Q7 | **The in-flight table** (BP-H9), against AX. (a) Keep. (b) An instance pool of slots. (c) A per-core min/max summary word in front of the scan | design, ratified, **[quiet-wrong] under (b) and (c)** | Decided by BP-S1. If material, (c) first. (b) bears on BL-Q1 (b), a transaction moving between cores, and is BL's question as much as BP's | W2: decided by BP-S1; (a) keep - H9 rejected (BP-S1, §7), adopted from the census on the operator's standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone) |
 | BP-Q8 | **The purge's trigger** (BP-H11): core 0's 50 ms `system` tick, gated on the instance mark counter | design | As written. It keeps one sweeping core, a placement and not an authority, as `command_dispatcher.cpp:6690-6696` states | W2, as proposed |
 | BP-Q9 | **Retired WAL kinds** (BP-R4): refused `Corruption`, numbers reserved | design, **[quiet-wrong] if skipped** | As written | W2, as proposed |
 | BP-Q10 | **Tombstones.** (a) Correct false statements only. (b) Also prune tombstones of machinery retired before AT closed, keeping one line per retired mechanism that names the commit to read. (c) Prune all | scope | (b). A one-line pointer keeps the warning and the history's address, and drops the essay | W2: (b) |
@@ -941,6 +941,7 @@ Marked 2026-10-12 by W2 (`raft-marks-2026-10-12.md` §13). Every proposal is `[d
 | BP-Q12 | **The letter** BP, chosen by CLA | naming | BP | W2: BP |
 | BP-Q13 | **Sequencing.** (a) BP opens now in its own worktree; BP-S2 first, since it needs no census; BP-S1 then gates S5 and S6. (b) BP waits for BM's close | process | (a). BP-S2 and BP-S3 touch the statement head, the mint and `wal/`; BM touches the walk. The two meet only in `command_dispatcher.cpp`, and in different functions | W2: (a) |
 | BP-Q14 | **The reach of W2's citation sweep.** (a) Live documents only: `CLAUDE.md`, `overview.md`, `docs/`, `manual/`, and source comments as BP-Q10 marks; dated records under `instructions/` and `bench/` stay as written, except this order's own title and file name. (b) Also rewrite the dated records | scope | (a). A work order, a raft-marks entry and a results file are records of what was decided and measured when; rewriting them falsifies the record, and the operator's quoted words stay as said. A live document states the current contract, where a citation of the retired model is the noise W2 removes. `docs/spec/cross-owner-txn.md`, a retired spec of a retired mechanism, is deleted | adopted on the operator's standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone): (a) |
+| BP-Q15 | **The lock partitions** (BP-H10, held at `cores = 8`: one held fence costs +12 % of server CPU per statement, every fence run above every plain run, because a tuple ask walks `64 x cores` latched partitions).<br>(a) A fixed count, 64 - the count `cores = 1` already has - at every core count.<br>(b) A per-relation fence list that `FenceCoversKey` reads instead of the partitions.<br>(c) A relation's fence units in one partition chosen by the relation | design, **[quiet-wrong] under (b) and (c)** | (a). It changes no protocol, only the count AO-S7 sized under ownership, and partition contention at `cores = 8` is 0.015 us of latch wait per statement, so 8x more of it stays under 0.15 us. (b) adds a second index of fences that must be published before its taker's verify and kept in step with every release, a drift being a fence a writer passes; it keeps AY-S2's rule that a refusal's wake is registered under the latch that saw its holder only by re-latching each listed fence's partition and re-checking its holder there, so it is a protocol change where (a) is a constant; (c) puts every positioned read's `IS` slice of a hot relation on one latch, since a slice is a fence unit | adopted on the operator's standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone): (a) |
 
 ---
 
@@ -1317,3 +1318,56 @@ warning 20 times a second); the reviewer proposed no change either.
 **M:** the idle tick is one acquire load (`MarkCount() == 0`); with marks
 pending, `SettlementNow` reads at most 64 slots three times, 20 times a
 second. Not measured separately; measured at the milestone's close.
+
+### BP-S1 (census) and BP-S7 - every Group B premise measured, the ratified three reported
+
+Measured twice in release builds; the results are
+`bench/v3.0.0/results-bp-s1-census-v2.7.0-909-gccf9cfc1.md`, which keeps
+both passes. The first pass ran at `1592007e`
+(`v2.7.0-904-g1592007e`), whose H7, H9 and H10 counters were flawed (tables
+read instead of ids, publish-only pages, parks counted as syncs, and a
+per-partition tally on the fence walk's hot path); the S1 counter fixes
+(`676d1d7d`) corrected them and the second pass ran at `ccf9cfc1`
+(`v2.7.0-909-gccf9cfc1`). Three runs a cell, not §6.1's eight, and the
+cores-8 cell shares four physical cores with its client: both stated in the
+results file.
+
+- **BP-H6 - rejected** (`[measured]`). Memo drops are root moves times
+  (cores - 1); at most 2.7e-4 drops per statement (group, cores 4) and 0
+  structural reruns in 66 cells. A drop costs 30-97 us, so the worst-case
+  share of statement CPU is 0.08 % (0.8 % even at 1 ms per drop), against
+  BP-R2's 3 %. **BP-Q4: (c) keep; BP-S5 does not run.** The growth cell's
+  reader leg was not run; the order's fallback is cited.
+- **BP-H7 - rejected** (`[measured]`; ratified AT-S8, measured not changed,
+  BP-R3). Runs per 5 s period are 1.00 / 1.98 / 3.94 at cores 1 / 2 / 4, as
+  the hypothesis says, but pages written per 1,000 rows rise only 11-18 %
+  from cores 1 to 4, and four times fewer runs cost 1.5 % of throughput with
+  p99 inside the repeat spread. **BP-Q5: (a) keep.** The second pass's
+  cores-1 checkpoint cells were stalled by host I/O and are not read.
+- **BP-H8 - unmeasured.** `SHOW META` carries no window-size, burn or
+  `LookupCommit` counter and no skew cell ran; the order's fallback applies
+  and BP-Q6 (report only) is reported as unmeasured.
+- **BP-H9 - rejected** (`[measured]`; ratified AX). Each miss reads 1.00 id
+  at cores 1 and 4, and `InFlight` is 1 profile sample of 695. `PURGE` is
+  5.3-5.7 % slower at cores 4 than at 1, but a `DELETE`, which asks the
+  in-flight tables nothing, steps up 34-39 % the same way: the step is the
+  multi-core write path, not the scan. The 1,024-slot cap was not
+  approached; the skew case that would settle it was not run. **BP-Q7: (a)
+  keep.**
+- **BP-H10 - held at cores 8** (`[measured]`). One held fence costs +12 % of
+  server CPU per statement at `relaxed` (46.8 to 52.4 us, every fence run
+  above every plain run, +5.4 to +5.7 us per pair, about 17 ns per latch of
+  the 512 walked), against BP-R2's 3 %; throughput and p99 move inside the
+  noise floor. Not seen at cores 4 or 1 in the second pass; the first
+  pass's +11 % at cores 4 is split between the passes and is not attributed
+  to the counter alone. **BP-S6 runs**, with BP-Q15 (a) (§5).
+
+**Found beside the hypotheses:** on the insert path the frame table's latch
+is 4.5 % of core-seconds at cores 4, against 0.002 % for the lock
+partitions (the results file's waits section). Not a BP structure; recorded
+for whoever takes the buffer pool next.
+
+**BP-S7** is this entry: each ratified structure's number stands beside its
+ruling above (AT-S8 for H7, AT-R4 for H8, AX for H9), and BP-Q5..Q7's
+options are adopted from the census on the standing go-ahead rather than
+put to the operator, as W2's mark for them says.

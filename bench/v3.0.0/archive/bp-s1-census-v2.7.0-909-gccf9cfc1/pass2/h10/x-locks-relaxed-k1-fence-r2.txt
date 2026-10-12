@@ -1,0 +1,20 @@
+
+sessions=8 rows=256 ops/arm/session=2000 blocks=4
+  B: cores accepted on = 0
+host before: 1.52 1.81 3.18 3/371 701439   competing: none
+host after : 2.36 1.97 3.23 2/365 701654   competing: none
+
+arm                                                      B
+                            p50us    p99us      qps    err
+update-hot                  248.4    501.1    30071      0
+update-disjoint             251.1    516.4    21241      0
+update-disjoint-again       250.0    534.1    19143      0
+insert-omitted              246.2    509.2    30174      0
+select-hot                  393.7    758.6    19946      0
+ping                        237.9    522.0    27704      0
+
+B: noise floor (disjoint vs its repeat) p50 = 1.1 us; hot - disjoint p50 = -2.7 us
+
+raw summaries: /home/cdkbs/bench-runs/bp-s1/v2/out/h10/x-locks-relaxed-k1-fence-r2.bench.json
+
+--- stderr

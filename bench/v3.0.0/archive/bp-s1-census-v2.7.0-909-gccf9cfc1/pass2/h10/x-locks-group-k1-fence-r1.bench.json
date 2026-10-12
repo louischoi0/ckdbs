@@ -1,0 +1,136 @@
+{
+  "driver": "lock_contention_benchmark.py",
+  "prove_run": false,
+  "sessions": 8,
+  "rows": 256,
+  "ops_per_session_per_arm": 2000,
+  "blocks": 4,
+  "host_before": {
+    "loadavg": "1.54 2.08 4.05 1/357 698133",
+    "competing": []
+  },
+  "host_after": {
+    "loadavg": "1.78 2.09 4.00 1/362 698419",
+    "competing": []
+  },
+  "show_meta_before": {
+    "B": {
+      "0": "version=22 create_time=1791821215 last_mount_time=1791821215 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 pages_allocated=19 pages_freed=0 pages_reused=0 reclaim_pending=0 reclaim_deferred=0 reclaim_skipped=0 reclaim_refused=0 pool_budget=65536 pool_resident=18 pool_slots=1024 pool_hits=1215 pool_misses=18 pool_reclaimed_inline=0 pool_reclaimed_background=0 pool_batches_inline=0 pool_batches_background=0 pool_batches_partial=0 pool_batch_steps=0 pool_batch_steps_background=0 pool_dirty_queued=0 pool_dirty_drained=0 pool_refused=0 undo_pages_live=2 undo_pages_recycled=0 wal_syncs=260 wal_interval_syncs=1 wal_sync_failures=0 wal_first_segment=0 wal_segments_removed=0 wal_remove_failures=0 wal_group_commits=257 wal_group_batches=257 wal_mean_group_batch=1.000 wal_group_batch_max=1 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 sched_wall_us=408163 sched_iterations=629 sched_idle_blocks=0 sched_parked_idle_blocks=0 sched_idle_block_us=82815 sched_wakes_sent=0 sched_wakes_received=0 sched_foreground_polled_us=9476 sched_foreground_polls=532 sched_foreground_consumed_us=9476 sched_foreground_longest_poll_us=95 sched_foreground_polls_over_10ms=0 sched_foreground_polls_over_100ms=0 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_maintenance_longest_poll_us=0 sched_maintenance_polls_over_10ms=0 sched_maintenance_polls_over_100ms=0 sched_system_polled_us=0 sched_system_polls=0 sched_system_consumed_us=0 sched_system_longest_poll_us=0 sched_system_polls_over_10ms=0 sched_system_polls_over_100ms=0 sched_hold_in_run_longest_us=0 sched_hold_in_run_over_10ms=0 sched_hold_in_run_over_100ms=0 sched_hold_in_run_over_1s=0 sched_hold_out_run_longest_us=7839 sched_hold_out_run_over_10ms=0 sched_hold_out_run_over_100ms=0 sched_hold_out_run_over_1s=0 sched_longest_unpolled_us=7826 sched_unpolled_over_100ms=0 checkpoint_runs=0 checkpoint_start_refused=0 checkpoint_last_completed=0 checkpoint_last_wall_us=0 checkpoint_last_step_max_us=0 checkpoint_last_step_page_write_max_us=0 checkpoint_last_steps=0 checkpoint_last_pages=0 checkpoint_last_dirty_at_start=0 checkpoint_last_gate_parks=0 checkpoint_last_end_parks=0 checkpoint_last_start_sum_us=0 checkpoint_last_start_max_us=0 checkpoint_last_log_gate_batch_sum_us=0 checkpoint_last_log_gate_batch_max_us=0 checkpoint_last_log_gate_run_sum_us=0 checkpoint_last_log_gate_run_max_us=0 checkpoint_last_page_write_sum_us=0 checkpoint_last_page_write_max_us=0 checkpoint_last_map_write_sum_us=0 checkpoint_last_map_write_max_us=0 checkpoint_last_claim_wait_sum_us=0 checkpoint_last_claim_wait_max_us=0 checkpoint_last_data_sync_sum_us=0 checkpoint_last_data_sync_max_us=0 checkpoint_last_end_wait_sum_us=0 checkpoint_last_end_wait_max_us=0 checkpoint_last_publish_writeback_sum_us=0 checkpoint_last_publish_writeback_max_us=0 checkpoint_last_publish_sync_sum_us=0 checkpoint_last_publish_sync_max_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=35999 recovery_redo_us=33857 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=8075 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 contention_other_waits=0 contention_other_wait_us=0 contention_frame_table_waits=0 contention_frame_table_wait_us=0 contention_free_map_waits=0 contention_free_map_wait_us=0 contention_free_map_flush_waits=0 contention_free_map_flush_wait_us=0 contention_window_waits=0 contention_window_wait_us=0 contention_lock_partition_waits=0 contention_lock_partition_wait_us=0 contention_lock_wait_for_waits=0 contention_lock_wait_for_wait_us=0 contention_wal_stream_waits=0 contention_wal_stream_wait_us=0 contention_wal_sync_gate_waits=1 contention_wal_sync_gate_wait_us=981 contention_assertion_dir_waits=0 contention_assertion_dir_wait_us=0 contention_optimizer_waits=0 contention_optimizer_wait_us=0 contention_superblock_waits=0 contention_superblock_wait_us=0 contention_cabin_partition_waits=0 contention_cabin_partition_wait_us=0 contention_cabin_stats_waits=0 contention_cabin_stats_wait_us=0 contention_handoff_waits=0 contention_handoff_wait_us=0 contention_page_latch_waits=0 contention_page_latch_spin_turns=0 contention_syncs_inline=259 contention_syncs_writer=1 contention_drain_passes_pending=257 contention_ceiling_waits=0 contention_ceiling_wait_us=0 contention_carves=1 contention_checkpoint_runs=0 contention_refused_btree_descend=0 contention_refused_btree_parent=0 contention_refused_btree_secure=0 contention_refused_btree_lookup=0 contention_refused_index_descend=0 contention_refused_index_parent=0 contention_refused_index_secure=0 contention_structural_reruns=0 contention_catalog_memo_drops=1 contention_word_moves_root=1 contention_word_moves_cabin=0 contention_word_moves_schema=4 contention_word_moves_resolve=2 contention_inflight_asks=0 contention_inflight_misses=0 contention_inflight_miss_ids_read=0 contention_checkpoint_pages_written=12 contention_data_syncs=4 contention_fence_walks=0 contention_carve_longest_us=4643 contention_checkpoint_longest_us=0"
+    }
+  },
+  "show_meta_after": {
+    "B": {
+      "0": "version=22 create_time=1791821215 last_mount_time=1791821215 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=2 map_coverage_ids=65280 headerless_pages=1 pages_allocated=543 pages_freed=0 pages_reused=0 reclaim_pending=0 reclaim_deferred=0 reclaim_skipped=0 reclaim_refused=0 pool_budget=65536 pool_resident=541 pool_slots=1024 pool_hits=513577 pool_misses=541 pool_reclaimed_inline=0 pool_reclaimed_background=0 pool_batches_inline=0 pool_batches_background=0 pool_batches_partial=0 pool_batch_steps=0 pool_batch_steps_background=0 pool_dirty_queued=0 pool_dirty_drained=0 pool_refused=0 undo_pages_live=442 undo_pages_recycled=2 wal_syncs=16267 wal_interval_syncs=2 wal_sync_failures=0 wal_first_segment=0 wal_segments_removed=0 wal_remove_failures=0 wal_group_commits=64257 wal_group_batches=16259 wal_mean_group_batch=3.952 wal_group_batch_max=7 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 sched_wall_us=23707018 sched_iterations=36143 sched_idle_blocks=0 sched_parked_idle_blocks=0 sched_idle_block_us=412853 sched_wakes_sent=0 sched_wakes_received=0 sched_foreground_polled_us=2394535 sched_foreground_polls=160536 sched_foreground_consumed_us=894508 sched_foreground_longest_poll_us=447 sched_foreground_polls_over_10ms=0 sched_foreground_polls_over_100ms=0 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_maintenance_longest_poll_us=0 sched_maintenance_polls_over_10ms=0 sched_maintenance_polls_over_100ms=0 sched_system_polled_us=3648 sched_system_polls=60 sched_system_consumed_us=648 sched_system_longest_poll_us=718 sched_system_polls_over_10ms=0 sched_system_polls_over_100ms=0 sched_hold_in_run_longest_us=9599 sched_hold_in_run_over_10ms=0 sched_hold_in_run_over_100ms=0 sched_hold_in_run_over_1s=0 sched_hold_out_run_longest_us=226151 sched_hold_out_run_over_10ms=51 sched_hold_out_run_over_100ms=6 sched_hold_out_run_over_1s=0 sched_longest_unpolled_us=226017 sched_unpolled_over_100ms=6 checkpoint_runs=4 checkpoint_start_refused=0 checkpoint_last_completed=1 checkpoint_last_wall_us=26047 checkpoint_last_step_max_us=314 checkpoint_last_step_page_write_max_us=180 checkpoint_last_steps=3 checkpoint_last_pages=131 checkpoint_last_dirty_at_start=131 checkpoint_last_gate_parks=0 checkpoint_last_end_parks=1 checkpoint_last_start_sum_us=41 checkpoint_last_start_max_us=41 checkpoint_last_log_gate_batch_sum_us=0 checkpoint_last_log_gate_batch_max_us=0 checkpoint_last_log_gate_run_sum_us=0 checkpoint_last_log_gate_run_max_us=0 checkpoint_last_page_write_sum_us=359 checkpoint_last_page_write_max_us=35 checkpoint_last_map_write_sum_us=0 checkpoint_last_map_write_max_us=0 checkpoint_last_claim_wait_sum_us=0 checkpoint_last_claim_wait_max_us=0 checkpoint_last_data_sync_sum_us=0 checkpoint_last_data_sync_max_us=0 checkpoint_last_end_wait_sum_us=0 checkpoint_last_end_wait_max_us=0 checkpoint_last_publish_writeback_sum_us=327 checkpoint_last_publish_writeback_max_us=301 checkpoint_last_publish_sync_sum_us=0 checkpoint_last_publish_sync_max_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=35999 recovery_redo_us=33857 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=8075 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 contention_other_waits=0 contention_other_wait_us=0 contention_frame_table_waits=0 contention_frame_table_wait_us=0 contention_free_map_waits=0 contention_free_map_wait_us=0 contention_free_map_flush_waits=0 contention_free_map_flush_wait_us=0 contention_window_waits=0 contention_window_wait_us=0 contention_lock_partition_waits=0 contention_lock_partition_wait_us=0 contention_lock_wait_for_waits=0 contention_lock_wait_for_wait_us=0 contention_wal_stream_waits=0 contention_wal_stream_wait_us=0 contention_wal_sync_gate_waits=5 contention_wal_sync_gate_wait_us=4966 contention_assertion_dir_waits=0 contention_assertion_dir_wait_us=0 contention_optimizer_waits=0 contention_optimizer_wait_us=0 contention_superblock_waits=0 contention_superblock_wait_us=0 contention_cabin_partition_waits=0 contention_cabin_partition_wait_us=0 contention_cabin_stats_waits=0 contention_cabin_stats_wait_us=0 contention_handoff_waits=0 contention_handoff_wait_us=0 contention_page_latch_waits=0 contention_page_latch_spin_turns=0 contention_syncs_inline=16261 contention_syncs_writer=6 contention_drain_passes_pending=16259 contention_ceiling_waits=0 contention_ceiling_wait_us=0 contention_carves=16 contention_checkpoint_runs=4 contention_refused_btree_descend=0 contention_refused_btree_parent=0 contention_refused_btree_secure=0 contention_refused_btree_lookup=0 contention_refused_index_descend=0 contention_refused_index_parent=0 contention_refused_index_secure=0 contention_structural_reruns=0 contention_catalog_memo_drops=1 contention_word_moves_root=1 contention_word_moves_cabin=0 contention_word_moves_schema=4 contention_word_moves_resolve=2 contention_inflight_asks=0 contention_inflight_misses=0 contention_inflight_miss_ids_read=0 contention_checkpoint_pages_written=491 contention_data_syncs=33 contention_fence_walks=63856 contention_carve_longest_us=7621 contention_checkpoint_longest_us=35358"
+    }
+  },
+  "pools": {
+    "B": {
+      "port": 32051,
+      "pin_core": null,
+      "opened": 8,
+      "cores": [
+        "0"
+      ]
+    }
+  },
+  "arms": {
+    "B": {
+      "update-hot": {
+        "phase": "update-hot",
+        "detail": "every session on one row - the tuple X, fought over",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 5.166531,
+        "qps": 3096.9,
+        "mean_us": 2580.2,
+        "p0_us": 1048.9,
+        "p25_us": 2125.1,
+        "p50_us": 2197.9,
+        "p95_us": 4323.3,
+        "p99_us": 9822.8,
+        "max_us": 24134.8
+      },
+      "update-disjoint": {
+        "phase": "update-disjoint",
+        "detail": "one row each - R3's relation IX, alone",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 5.777627,
+        "qps": 2769.3,
+        "mean_us": 2885.7,
+        "p0_us": 1132.8,
+        "p25_us": 2154.4,
+        "p50_us": 2230.2,
+        "p95_us": 4655.4,
+        "p99_us": 9563.3,
+        "max_us": 282114.7
+      },
+      "update-disjoint-again": {
+        "phase": "update-disjoint-again",
+        "detail": "the noise floor: the row above, repeated",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 5.77536,
+        "qps": 2770.4,
+        "mean_us": 2884.7,
+        "p0_us": 1119.4,
+        "p25_us": 2158.2,
+        "p50_us": 2238.2,
+        "p95_us": 4546.4,
+        "p99_us": 9494.4,
+        "max_us": 286724.6
+      },
+      "insert-omitted": {
+        "phase": "insert-omitted",
+        "detail": "pk omitted: one mark, one tail, every session (D20)",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 5.192155,
+        "qps": 3081.6,
+        "mean_us": 2593.0,
+        "p0_us": 1084.9,
+        "p25_us": 2133.8,
+        "p50_us": 2214.8,
+        "p95_us": 4433.5,
+        "p99_us": 8686.5,
+        "max_us": 18797.6
+      },
+      "select-hot": {
+        "phase": "select-hot",
+        "detail": "control: a read takes no borrow",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.808435,
+        "qps": 19791.3,
+        "mean_us": 400.1,
+        "p0_us": 69.4,
+        "p25_us": 362.3,
+        "p50_us": 397.1,
+        "p95_us": 551.8,
+        "p99_us": 770.8,
+        "max_us": 1865.6
+      },
+      "ping": {
+        "phase": "ping",
+        "detail": "control: SHOW META resolves no relation",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.561032,
+        "qps": 28518.9,
+        "mean_us": 253.5,
+        "p0_us": 60.8,
+        "p25_us": 211.4,
+        "p50_us": 234.7,
+        "p95_us": 475.4,
+        "p99_us": 493.5,
+        "max_us": 824.9
+      }
+    }
+  }
+}

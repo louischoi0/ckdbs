@@ -1,0 +1,20 @@
+
+sessions=8 rows=256 ops/arm/session=2000 blocks=4
+  B: cores accepted on = 0, 1, 2, 3
+host before: 2.39 2.05 3.15 1/341 494586   competing: none
+host after : 2.82 2.17 3.16 2/350 494827   competing: none
+
+arm                                                      B
+                            p50us    p99us      qps    err
+update-hot                 2707.7  11780.4     2532     99
+update-disjoint            2673.0  11809.4     2570      0
+update-disjoint-again      2600.7   9548.6     2699      0
+insert-omitted             2523.4  10279.4     2706      0
+select-hot                  252.0    613.1    29247      0
+ping                        230.5    466.7    33593      0
+
+B: noise floor (disjoint vs its repeat) p50 = 72.3 us; hot - disjoint p50 = 34.7 us
+
+raw summaries: /home/cdkbs/bench-runs/bp-s1/out/cell5/x-locks-group-k4-plain-r0.bench.json
+
+--- stderr

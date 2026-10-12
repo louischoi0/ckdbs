@@ -1,0 +1,13 @@
+BP-S1 census: the binaries every server in this directory ran from (sha256, path, mtime UTC).
+
+pass 1  commit 1592007e  (git describe --tags: v2.7.0-904-g1592007e, committed 2026-10-12 08:42:17 UTC)
+  44b7c2e5e2bcd4093b62c83201e65d17bc17afb8add9264e6ed0d5abc22dfd8a  /home/cdkbs/bench-runs/bp-s1/bin/kds_server  2026-10-12 08:42:54 UTC
+  44b7c2e5e2bcd4093b62c83201e65d17bc17afb8add9264e6ed0d5abc22dfd8a  /home/cdkbs/bench-runs/bp-s1/v2/build-1592007e/kds_server  (rebuilt from the export v2/1592007e.tar; identical hash)
+  profiled copy: /home/cdkbs/bench-runs/bp-s1/bin/kds_server_prof = LD_PRELOAD libkdssampler.so (tools/kds_sampler.c, 1 kHz) around the file above
+
+pass 2  commit ccf9cfc1  (git describe --tags ccf9cfc1 in the worktree: v2.7.0-909-gccf9cfc1, committed 2026-10-12 13:46:17 UTC)
+  a6fc3c04ef2bf2e19e3715ca1943c689959c97e9aa59a57a205029da1aea111f  /home/cdkbs/bench-runs/bp-s1/v2/bin/kds_server.b  2026-10-12 14:11:04 UTC
+  a6fc3c04ef2bf2e19e3715ca1943c689959c97e9aa59a57a205029da1aea111f  /home/cdkbs/bench-runs/bp-s1/v2/build-ccf9cfc1/kds_server  2026-10-12 14:09:30 UTC (built from the export v2/ccf9cfc1.tar)
+
+Both: CMAKE_BUILD_TYPE=Release (-O3 -DNDEBUG), KDS_BUILD_BENCH=OFF.
+The pass-2 chain's A side, v2/bin/kds_server.a (sha256 44b7c2e5..., the pass-1 binary again), ran only in BP-S3's A/B cells, which are not in this file or this archive.

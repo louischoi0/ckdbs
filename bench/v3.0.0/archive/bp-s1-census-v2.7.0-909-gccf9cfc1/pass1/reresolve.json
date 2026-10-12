@@ -1,0 +1,162 @@
+{
+ "loadavg": "1.57 2.16 3.38 1/344 493677",
+ "bin_sha256": null,
+ "stmts": {
+  "point SELECT (1 relation)": {
+   "bump_cold": {
+    "n": 300,
+    "p0_us": 94.4,
+    "p25_us": 110.7,
+    "p50_us": 123.8,
+    "p95_us": 157.8,
+    "p99_us": 186.6
+   },
+   "bump_warm": {
+    "n": 300,
+    "p0_us": 72.1,
+    "p25_us": 75.4,
+    "p50_us": 78.5,
+    "p95_us": 90.4,
+    "p99_us": 117.6
+   },
+   "control_first": {
+    "n": 300,
+    "p0_us": 86.4,
+    "p25_us": 95.9,
+    "p50_us": 99.5,
+    "p95_us": 121.9,
+    "p99_us": 138.1
+   },
+   "control_rest": {
+    "n": 300,
+    "p0_us": 74.0,
+    "p25_us": 82.1,
+    "p50_us": 85.9,
+    "p95_us": 101.2,
+    "p99_us": 115.3
+   },
+   "bump_cold_minus_warm_median_us": 43.1,
+   "control_first_minus_rest_median_us": 14.6,
+   "server_cpu_cold_minus_warm_median_us": 41.7,
+   "control_server_cpu_first_minus_rest_median_us": 11.4,
+   "server_cpu_warm_median_us": 29.8,
+   "memo_drops_total_cumulative": 604,
+   "bump_cold_minus_warm_median_us_by_third": [
+    27.6,
+    43.5,
+    59.8
+   ],
+   "control_first_minus_rest_median_us_by_third": [
+    14.9,
+    15.1,
+    13.4
+   ]
+  },
+  "point UPDATE (1 relation)": {
+   "bump_cold": {
+    "n": 300,
+    "p0_us": 122.1,
+    "p25_us": 142.0,
+    "p50_us": 153.7,
+    "p95_us": 195.3,
+    "p99_us": 218.5
+   },
+   "bump_warm": {
+    "n": 300,
+    "p0_us": 58.4,
+    "p25_us": 61.2,
+    "p50_us": 63.9,
+    "p95_us": 72.7,
+    "p99_us": 81.2
+   },
+   "control_first": {
+    "n": 300,
+    "p0_us": 66.6,
+    "p25_us": 70.5,
+    "p50_us": 73.0,
+    "p95_us": 89.9,
+    "p99_us": 109.1
+   },
+   "control_rest": {
+    "n": 300,
+    "p0_us": 56.7,
+    "p25_us": 59.1,
+    "p50_us": 61.3,
+    "p95_us": 74.3,
+    "p99_us": 92.4
+   },
+   "bump_cold_minus_warm_median_us": 90.6,
+   "control_first_minus_rest_median_us": 11.9,
+   "server_cpu_cold_minus_warm_median_us": 87.4,
+   "control_server_cpu_first_minus_rest_median_us": 8.4,
+   "server_cpu_warm_median_us": 28.4,
+   "memo_drops_total_cumulative": 1204,
+   "bump_cold_minus_warm_median_us_by_third": [
+    73.3,
+    87.5,
+    109.9
+   ],
+   "control_first_minus_rest_median_us_by_third": [
+    11.5,
+    11.9,
+    12.5
+   ]
+  },
+  "pk join SELECT (2 relations)": {
+   "bump_cold": {
+    "n": 300,
+    "p0_us": 63.0,
+    "p25_us": 69.9,
+    "p50_us": 72.0,
+    "p95_us": 89.0,
+    "p99_us": 102.8
+   },
+   "bump_warm": {
+    "n": 300,
+    "p0_us": 57.4,
+    "p25_us": 60.7,
+    "p50_us": 63.8,
+    "p95_us": 74.6,
+    "p99_us": 79.8
+   },
+   "control_first": {
+    "n": 300,
+    "p0_us": 66.8,
+    "p25_us": 69.9,
+    "p50_us": 72.0,
+    "p95_us": 90.9,
+    "p99_us": 106.9
+   },
+   "control_rest": {
+    "n": 300,
+    "p0_us": 56.6,
+    "p25_us": 60.5,
+    "p50_us": 62.8,
+    "p95_us": 73.8,
+    "p99_us": 77.3
+   },
+   "bump_cold_minus_warm_median_us": 9.6,
+   "control_first_minus_rest_median_us": 10.0,
+   "server_cpu_cold_minus_warm_median_us": 6.9,
+   "control_server_cpu_first_minus_rest_median_us": 6.2,
+   "server_cpu_warm_median_us": 22.0,
+   "memo_drops_total_cumulative": 1804,
+   "bump_cold_minus_warm_median_us_by_third": [
+    9.8,
+    9.6,
+    9.5
+   ],
+   "control_first_minus_rest_median_us_by_third": [
+    10.3,
+    10.2,
+    9.0
+   ]
+  }
+ },
+ "junk_tables_created": 900,
+ "memo_drops_final": 1804,
+ "word_moves": {
+  "contention_word_moves_schema": 3612,
+  "contention_word_moves_resolve": 1806
+ }
+}
