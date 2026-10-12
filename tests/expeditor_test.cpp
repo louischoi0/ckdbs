@@ -1188,5 +1188,181 @@ TEST_F(ExpeditorTest, APipelinedStatementTravelsWithTheConnectionThatMoved) {
     EXPECT_TRUE(running.Stop().ok());
 }
 
+// ---- AN-R14: the transaction lifetime ceiling, instance-wide ---------------
+//
+// `docs/spec/txn.md` §1. An explicit transaction older than
+// `txn_lifetime_ceiling_ms`, counted from its `BEGIN`, is rolled back by
+// the listener's sweep, and the client learns it at its next statement. Run
+// on a real instance over the debug text port because the sweep is the
+// listener's and the key is the Expeditor's: a dispatcher-level cell would
+// test neither.
+//
+// **Two bounds, and the ceiling is sized for the tighter one.** Each cell's
+// setup - at most three statement round trips after its `BEGIN`, in the
+// in-flight cell - must finish inside one ceiling, or a setup assertion
+// meets the refusal; 1 s is that budget on a loaded `-j8` Debug host. Every
+// assertion after it is a lower bound the sweep cannot beat (it never fires
+// before the ceiling) or an outcome three ceilings on, where the sweep has
+// had eight ticks to act.
+
+constexpr std::uint64_t kCellCeilingMs = 1000;
+constexpr auto kWellPastTheCeiling = std::chrono::milliseconds(3 * kCellCeilingMs);
+
+bool Refused(const std::string& reply) {
+    return reply.rfind("ERR", 0) == 0 && reply.find("lifetime ceiling") != std::string::npos;
+}
+
+TEST_F(ExpeditorTest, AnIdleTransactionPastItsLifetimeIsRolledBackAndItsNextStatementIsTold) {
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.txn_lifetime_ceiling_ns = kCellCeilingMs * 1'000'000ULL;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(Started(opened.value()->Start()));
+    RunningInstance running(*opened.value(), config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    const int fd = running.client();
+
+    ASSERT_EQ(SendLine(fd, "CREATE TABLE t (id int64, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(SendLine(fd, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(SendLine(fd, "INSERT INTO t VALUES (1, 10)").rfind("INSERTED", 0), 0u);
+    std::this_thread::sleep_for(kWellPastTheCeiling);
+
+    // Every statement but the way out is refused, and says why.
+    const std::string next = SendLine(fd, "SELECT * FROM t");
+    EXPECT_TRUE(Refused(next)) << next;
+    // **COMMIT above all**: answering it OK over writes the server already
+    // undid would be a wrong answer, not a refusal.
+    const std::string commit = SendLine(fd, "COMMIT");
+    EXPECT_TRUE(Refused(commit)) << commit;
+    EXPECT_EQ(SendLine(fd, "ROLLBACK").rfind("ROLLBACK trx_id=", 0), 0u);
+
+    // The insert is gone, and the session is in autocommit again.
+    const std::string gone = SendLine(fd, "SELECT * FROM t WHERE id = 1");
+    ASSERT_EQ(gone.rfind("ERR", 0), std::string::npos) << gone;
+    EXPECT_EQ(gone.find("10"), std::string::npos)
+        << "the swept transaction's insert survived its rollback: " << gone;
+    EXPECT_EQ(SendLine(fd, "INSERT INTO t VALUES (2, 20)").rfind("INSERTED", 0), 0u);
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+TEST_F(ExpeditorTest, ABusyTransactionIsRolledBackAtItsLifetimeNotItsIdleness) {
+    // AN-R14's cost, stated in `txn.md` §1: a transaction that keeps
+    // issuing statements is still ended at its lifetime. **The mutation**:
+    // stamp the connection on every statement completion rather than once
+    // per transaction, which is a bound on idleness, and this cell's
+    // statements - 30 ms apart - are never refused.
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.txn_lifetime_ceiling_ns = kCellCeilingMs * 1'000'000ULL;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(Started(opened.value()->Start()));
+    RunningInstance running(*opened.value(), config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    // A second connection for the transaction, closed without a ROLLBACK
+    // once it is swept, so the close path meets an expired session; the
+    // PING after it shows only that the instance survived, not that the
+    // close was handled first.
+    const int fd = ConnectToLoopback(config.debug_text_port);
+    ASSERT_GE(fd, 0);
+
+    ASSERT_EQ(SendLine(fd, "CREATE TABLE t (id int64, v int64)").rfind("CREATED", 0), 0u);
+    const auto began = std::chrono::steady_clock::now();
+    ASSERT_EQ(SendLine(fd, "BEGIN").rfind("BEGIN", 0), 0u);
+    std::string reply;
+    int statements = 0;
+    while (std::chrono::steady_clock::now() - began < std::chrono::seconds(10)) {
+        reply = SendLine(fd, "SELECT * FROM t");
+        if (Refused(reply)) break;
+        ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
+        ++statements;
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+    const auto refused_after = std::chrono::steady_clock::now() - began;
+    ASSERT_TRUE(Refused(reply)) << "a transaction issuing a statement every 30 ms ran for 10 s "
+                                   "under a " << kCellCeilingMs << " ms lifetime ceiling ("
+                                << statements << " statements): " << reply;
+    EXPECT_GE(refused_after, std::chrono::milliseconds(kCellCeilingMs))
+        << "the sweep ended the transaction before its lifetime";
+    ::close(fd);
+
+    EXPECT_EQ(SendLine(running.client(), "PING"), "PONG");
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+TEST_F(ExpeditorTest, ADdlInsideAnExplicitTransactionIsRolledBackWithIt) {
+    // The operator's ruling of 2026-10-12: AN-R14's DDL exemption does not
+    // cover an explicit transaction. Such a transaction holds its relation
+    // `X`, so left open it blocks every writer of it, which is the case the
+    // ceiling exists for. The relation is gone after the sweep, and its
+    // name is free.
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.txn_lifetime_ceiling_ns = kCellCeilingMs * 1'000'000ULL;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(Started(opened.value()->Start()));
+    RunningInstance running(*opened.value(), config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    const int fd = running.client();
+
+    ASSERT_EQ(SendLine(fd, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(SendLine(fd, "CREATE TABLE d (id int64, v int64)").rfind("CREATED", 0), 0u);
+    std::this_thread::sleep_for(kWellPastTheCeiling);
+
+    const std::string next = SendLine(fd, "INSERT INTO d VALUES (1, 1)");
+    EXPECT_TRUE(Refused(next)) << next;
+    EXPECT_EQ(SendLine(fd, "ROLLBACK").rfind("ROLLBACK trx_id=", 0), 0u);
+    const std::string created = SendLine(fd, "CREATE TABLE d (id int64, v int64)");
+    EXPECT_EQ(created.rfind("CREATED", 0), 0u)
+        << "the swept transaction's CREATE TABLE still holds its name: " << created;
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+TEST_F(ExpeditorTest, AStatementInFlightPastTheCeilingRunsToItsEnd) {
+    // The sweep defers a connection with a statement in flight; it does
+    // not interrupt it. B begins first and parks on a row A holds, so B is
+    // past its ceiling while in flight; A, past its own a moment later and
+    // idle, is swept, which releases the row; B's UPDATE then completes
+    // normally, and B is swept at the next tick after it. **The mutation**:
+    // drop the `in_flight` skip, and the sweep rolls B back under its
+    // parked statement.
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.txn_lifetime_ceiling_ns = kCellCeilingMs * 1'000'000ULL;
+    // Far past the ceiling, so B's wait ends at A's rollback and never at
+    // the lock family's fault net.
+    config.lock_wait_fault_net_ns = 30ULL * 1'000'000'000ULL;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(Started(opened.value()->Start()));
+    RunningInstance running(*opened.value(), config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    const int a = ConnectToLoopback(config.debug_text_port);
+    const int b = ConnectToLoopback(config.debug_text_port);
+    ASSERT_GE(a, 0);
+    ASSERT_GE(b, 0);
+
+    ASSERT_EQ(SendLine(a, "CREATE TABLE t (id int64, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(SendLine(a, "INSERT INTO t VALUES (1, 10)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(SendLine(b, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(SendLine(a, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(SendLine(a, "UPDATE t SET v = 11 WHERE id = 1").rfind("UPDATED 1", 0), 0u);
+
+    // Parks on A's row until A is swept, so its reply is the whole proof.
+    const std::string parked = SendLine(b, "UPDATE t SET v = 12 WHERE id = 1");
+    EXPECT_EQ(parked.rfind("UPDATED 1", 0), 0u)
+        << "the sweep interrupted a statement in flight: " << parked;
+    std::this_thread::sleep_for(kWellPastTheCeiling);
+    const std::string after = SendLine(b, "SELECT * FROM t");
+    EXPECT_TRUE(Refused(after)) << "B was not swept once its statement ended: " << after;
+    EXPECT_TRUE(Refused(SendLine(a, "SELECT * FROM t")));
+    EXPECT_EQ(SendLine(a, "ROLLBACK").rfind("ROLLBACK trx_id=", 0), 0u);
+    EXPECT_EQ(SendLine(b, "ROLLBACK").rfind("ROLLBACK trx_id=", 0), 0u);
+    // Both rolled back: the row is as it was before either.
+    const std::string row = SendLine(a, "SELECT * FROM t WHERE id = 1");
+    EXPECT_NE(row.find("10"), std::string::npos) << row;
+    ::close(a);
+    ::close(b);
+    EXPECT_TRUE(running.Stop().ok());
+}
+
 }  // namespace
 }  // namespace kds::server

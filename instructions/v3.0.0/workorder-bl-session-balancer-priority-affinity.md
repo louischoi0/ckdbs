@@ -847,7 +847,7 @@ rather than changed, since W8 adopted the slice.
 
 ### BL opened 2026-10-12 (W10) - BL-S1, BL-S2, BL-S3 landed; BL-S4 stopped
 
-**W10** (2026-10-12, `raft-marks-2026-10-12.md` §8) opened BL and set how it
+**W10** (2026-10-12, `raft-marks-2026-10-12.md` §10) opened BL and set how it
 runs: *"Work according to the BL milestone. Split it into work units; if a
 work unit has no utility, explore alternatives thoroughly, and if none is
 found, reject it, report and stop. The purpose of this milestone is to place

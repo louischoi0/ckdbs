@@ -70,6 +70,13 @@ inline constexpr std::uint32_t kDefaultTcpKeepaliveS = 60;
 // rather than clamped.
 inline constexpr std::uint32_t kMaxTcpKeepaliveS = 32767;
 
+// The default of `txn_lifetime_ceiling_ms` (AN-R14, docs/spec/txn.md §1):
+// an explicit transaction older than this, counted from its `BEGIN`, is
+// rolled back by the listener's sweep. The operator's number, provisional
+// until AS-E measures the lifetime distribution; 60 s is six times the
+// 10 s envelope the engine is built for.
+inline constexpr sched::MonoTimeNs kDefaultTxnLifetimeCeilingNs = 60ull * 1000 * 1000 * 1000;
+
 // **The accept queue's depth** (CN-10 §3.1). A handshake completes into
 // this queue whether or not the server has called accept yet, and past its
 // depth the kernel drops the SYN and the client retransmits a second later -
@@ -242,11 +249,15 @@ public:
         // offered, only beside an identity source: a counter's key is no
         // authorization.
         CancelRegistry* cancels = nullptr;
+        // `txn_lifetime_ceiling_ms` (AN-R14). Never 0; the Expeditor
+        // refuses it (docs/spec/txn.md §1).
+        sched::MonoTimeNs txn_lifetime_ceiling_ns = kDefaultTxnLifetimeCeilingNs;
     };
     void Configure(const ClientSetup& setup) {
         protocol_ = setup.protocol;
         durability_ = setup.durability;
         keepalive_s_ = setup.keepalive_s;
+        txn_lifetime_ceiling_ns_ = setup.txn_lifetime_ceiling_ns;
         if (setup.identity) identity_source_ = setup.identity;
         if (setup.cancels != nullptr) cancels_ = setup.cancels;
         if (setup.channel) channel_factory_ = setup.channel;
@@ -325,6 +336,16 @@ private:
         // owed an `Unregister` when the connection goes.
         bool cancel_registered = false;
 
+        // **When this connection's open transaction began**, for the
+        // lifetime sweep (AN-R14), and which transaction that was. Stamped
+        // at the first statement completion that finds a transaction the
+        // stamp does not name - the `BEGIN`'s own - so a clock is read once
+        // per transaction and never per statement (AW's H2). Keyed on the
+        // id rather than a flag so a `COMMIT` and the next `BEGIN` cannot
+        // leave one transaction timed from another's start.
+        sched::MonoTimeNs txn_began_at_ns = 0;
+        std::uint64_t txn_stamped_id = 0;
+
         // The finished statement's reply, waiting to be appended to the
         // outbox. Owned by the connection because the coroutine writes
         // through a pointer to it and may outlive the call that started it.
@@ -401,6 +422,11 @@ private:
     // The other half: a statement finished, so append its reply, honour
     // STOP, and continue draining.
     void OnStatementComplete(int client_fd);
+
+    // **The transaction lifetime sweep** (AN-R14; docs/spec/txn.md §1 is
+    // the contract). Rolls back each idle connection's overdue explicit
+    // transaction and leaves its session expired (`Session::Expire`).
+    void ExpireOverdueTransactions();
     // Appends one reply line to the outbox, through the wire channel if
     // one is installed. Returns false if the connection was closed (a
     // channel Send failure).
@@ -468,6 +494,10 @@ private:
     // The portal-idle sweep's timer (§10, KW-D3), registered by `Attach` on
     // a KWP listener and cancelled by `Detach`.
     sched::TimerId idle_sweep_ = sched::kInvalidTimerId;
+    // The transaction lifetime sweep's (AN-R14), registered by `Attach` on
+    // every listener and cancelled by `Detach`.
+    sched::MonoTimeNs txn_lifetime_ceiling_ns_ = kDefaultTxnLifetimeCeilingNs;
+    sched::TimerId txn_sweep_ = sched::kInvalidTimerId;
     Clients clients_;
     std::uint64_t reply_writes_ = 0;  // `reply_writes()`
 };

@@ -38,12 +38,29 @@ corrected on `main` after `9a0525d`, and its last version is at `a59da9c`.
 
 **A citation to a `bench/v3.0.0/` path that does not exist in the working
 tree resolves against `9a0525d`** (the AY-S11 overhead file against
-`a59da9c`) — `known-gaps.md`, the concept notes and
+`a59da9c`, the rebaseline's own files against `36449d28`) — `known-gaps.md`, the concept notes and
 `instructions/v3.0.0/` cite several. The rebaseline's files are the
 comparator for every later delta of the same driver and shape; a delta
 against a deleted file names `9a0525d` and states how far apart the two
 runs are, in commits and milestones (the rebaseline's own deltas against
 the `f6ed10c` BTREE pair say 374 commits).
+
+## Scenario results deleted on 2026-10-12
+
+On the operator's word, the 2026-09-30 rebaseline's results were deleted:
+every `results-scenario*` file and `archive/scenario*` directory under
+`bench/v3.0.0/` (the KDS runs at `9a0525d`, the PostgreSQL 18 runs at
+`f2f1ee7`), with `results-rebaseline-summary-v2.7.0-531-g9a0525d.md` and
+`results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md`. The last commit
+holding them is `36449d28`:
+
+    git ls-tree -r --name-only 36449d28 bench/v3.0.0   # what was here
+    git show 36449d28:bench/v3.0.0/<path>              # any one file
+
+A citation to one of those paths resolves against `36449d28`, not
+`9a0525d`. They remain the comparator for a later delta of the same driver
+and shape until a scenario is re-run; such a delta names `36449d28` as
+where the file is held and `9a0525d` / `f2f1ee7` as what it measured.
 
 ## Where a result goes
 

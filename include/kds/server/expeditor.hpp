@@ -451,6 +451,12 @@ public:
         // `ConfigureAcceptedSocket` (tcp_server.hpp).
         std::uint32_t tcp_keepalive_s = kDefaultTcpKeepaliveS;
 
+        // `txn_lifetime_ceiling_ms` (AN-R14), for every listener:
+        // milliseconds in the file, for `lock_wait_fault_net_ms`'s reason.
+        // 0 is refused. The semantics have one home, `TcpServer`'s
+        // `ExpireOverdueTransactions` (tcp_server.hpp).
+        sched::MonoTimeNs txn_lifetime_ceiling_ns = kDefaultTxnLifetimeCeilingNs;
+
 
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a

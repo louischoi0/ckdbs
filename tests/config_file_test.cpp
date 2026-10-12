@@ -581,5 +581,28 @@ TEST(ExpeditorConfigTest, TcpKeepaliveDefaultsOnAndRefusesWhatTheKernelWouldNot)
     EXPECT_EQ(config.tcp_keepalive_s, kMaxTcpKeepaliveS) << "a refused value changes nothing";
 }
 
+TEST(ExpeditorConfigTest, TheTransactionLifetimeCeilingDefaultsTo60sAndHasNoOffSwitch) {
+    // AN-R14 (docs/spec/txn.md §1): the operator's 60 s, milliseconds in
+    // the file, and 0 refused rather than read as "off".
+    Expeditor::Config config;
+    EXPECT_EQ(config.txn_lifetime_ceiling_ns, kDefaultTxnLifetimeCeilingNs);
+    EXPECT_EQ(kDefaultTxnLifetimeCeilingNs, 60ULL * 1'000'000'000ULL);
+
+    ASSERT_TRUE(config.ApplyFile(WithPool("txn_lifetime_ceiling_ms = 250\n")).ok());
+    EXPECT_EQ(config.txn_lifetime_ceiling_ns, 250ULL * 1'000'000ULL);
+
+    Status zero = config.ApplyFile(WithPool("txn_lifetime_ceiling_ms = 0\n"));
+    EXPECT_EQ(zero.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(zero.message().find("no off-switch"), std::string::npos) << zero.message();
+    EXPECT_EQ(config.txn_lifetime_ceiling_ns, 250ULL * 1'000'000ULL)
+        << "a refused value changes nothing";
+
+    // 18446744073710 ms is 448,384 ns past 2^64: unrefused, it would wrap
+    // to a sub-millisecond ceiling that ends every transaction at once.
+    Status wraps = config.ApplyFile(WithPool("txn_lifetime_ceiling_ms = 18446744073710\n"));
+    EXPECT_EQ(wraps.code(), StatusCode::kInvalidArgument) << wraps.message();
+    EXPECT_EQ(config.txn_lifetime_ceiling_ns, 250ULL * 1'000'000ULL);
+}
+
 }  // namespace
 }  // namespace kds::server
