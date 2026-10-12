@@ -873,10 +873,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
 
     // **The idle sync stops touching the reactor here.** D3's loss-window
     // tick moves to the WAL writer thread (wal/writer.hpp) - and only it.
-    // A commit's sync, a prepare's, a client `SYNC`'s and the checkpoint
-    // gate's all stay on the reactor, by the decision `WalManager::Sync()`
-    // states: every one of them has somebody parked on the result, and a
-    // hand-off adds a wake-up to a latency somebody is measuring. This
+    // A client `SYNC`'s and a synchronous checkpoint's stay on the reactor,
+    // by the decision `WalManager::Sync()` states: somebody is parked on the
+    // result, and a hand-off adds a wake-up to a latency somebody is
+    // measuring. A `group` commit above one core (BA-R4 part 1) and a
+    // cadence checkpoint's gate (BI-S3) are handed to it and parked on. This
     // comment claimed the opposite until XD0 read the code
     // (`instructions/v2.7.1/measurement-xd.md`). The server starts one and
     // an in-process caller does not, because a test that drives a
@@ -1440,6 +1441,14 @@ Expeditor::~Expeditor() {
     // the ordinary path and not an exotic one. Null after `RunUntilStopped`
     // and after a failed `Start`, both of which have already unwound it.
     if (running_ != nullptr) StopStartedCores();
+    // **The data-sync thread, before `wal_` goes** (BI-S4): the failure
+    // handler `Start` installed dereferences it, and members die in reverse
+    // order - `wal_` before `store_`, whose syncer would otherwise still be
+    // running.
+    if (store_ != nullptr) {
+        store_->data_sync().Stop();
+        store_->data_sync().SetFailureHandler({});
+    }
     // **And the suspend audit `Start` installed on the calling thread.**
     // `InstallSuspendAudit` is thread-local and points at this instance's
     // store; only `RunUntilStopped`'s tail withdrew it, so an instance
@@ -1480,6 +1489,22 @@ Status Expeditor::Start() {
     // defect the split introduced; it is one the split had to face, because
     // `Start()` promises a caller that a failed start leaves nothing
     // running. `StopStartedCores` is that promise.
+    // **The data file's sync thread** (BI-Q2 (a), `storage/data_syncer.hpp`):
+    // one for the instance, before any reactor runs, so a checkpoint step and
+    // the anchor publish park on it rather than wait in `fsync`. **A failed
+    // sync stops the instance** (BI-Q3 (a)): the log is fail-stopped first,
+    // so nothing acknowledged after this point claims durability, and the
+    // process aborts, because frames this pool calls clean may hold bytes
+    // the device has dropped and only a restart replays the log over them.
+    store_->data_sync().SetFailureHandler([this](const Status& failure) {
+        logger_->Error("pagestore", failure.message() +
+                                        "; stopping the instance (the next mount recovers from "
+                                        "the last durable anchor)");
+        (void)wal_->stream()->FailStop(failure);
+        std::abort();
+    });
+    store_->data_sync().Start();
+
     running_ = std::make_unique<ServeRuntime>();
     struct DropOnFailure {
         Expeditor* owner;

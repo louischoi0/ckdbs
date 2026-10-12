@@ -444,7 +444,7 @@ Status DevicePageStore::MarkHeaderlessBeforeInsert(PageId headerless_page) {
             !s.ok()) {
             return s;
         }
-        if (Status s = device_.Sync(); !s.ok()) return s;
+        if (Status s = data_sync_.SyncNow(); !s.ok()) return s;
     }
     // Both map lookups run **before** the hold, because either may reach the
     // device; the region is resident by construction (the claim had to load
@@ -596,7 +596,7 @@ Status DevicePageStore::PersistMaps() {
     // sharing the core that wrote them may be another one - whose write
     // `FlushMaps`' barrier has waited out by the time this syncs (BF-R5).
     if (auto flushed = FlushMaps(); !flushed.ok()) return flushed.status();
-    return device_.Sync();
+    return data_sync_.SyncNow();
 }
 
 bool DevicePageStore::IsAllocated(PageId page_id) const noexcept {
@@ -1769,9 +1769,7 @@ wal::WalDurability* DevicePageStore::GateForCaller() const noexcept {
     return wal_gate_;
 }
 
-Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids, wal::WalDurability* gate) {
-    if (gate == nullptr) return Status::OK();
-
+wal::Lsn DevicePageStore::HighestDirtyPageLsn(std::span<const PageId> page_ids) {
     // **The scan under the hold, the wait outside it** (AM-S2 step 3f), and
     // this one was owed rather than noticed: `device_page_store.hpp`'s
     // acquisition-order block already said "whatever latch that scan comes
@@ -1805,7 +1803,21 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids, wal::WalD
         if (page_lsn > highest) highest = page_lsn;
     }
     }
-    if (highest == wal::kNoLsn) return Status::OK();  // nothing logged in this batch
+    return highest;
+}
+
+Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids, wal::WalDurability* gate,
+                                     wal::Lsn* defer) {
+    if (gate == nullptr) return Status::OK();
+    const wal::Lsn highest = HighestDirtyPageLsn(page_ids);
+    // Nothing logged in this batch, or the log already past it: no wait.
+    // Asked here rather than left to `EnsureDurable`'s own no-op, so the
+    // phase below counts only the waits a reactor really paid (BI-S3).
+    if (highest == wal::kNoLsn || gate->IsDurable(highest)) return Status::OK();
+    if (defer != nullptr) {
+        *defer = highest;  // the caller parks and asks again (BI-Q4 (a))
+        return Status::OK();
+    }
 
     const PhaseTimer timed(CheckpointPhase::kLogGateBatch);  // BI-S1
     if (Status s = gate->EnsureDurable(highest); !s.ok()) {
@@ -1841,7 +1853,7 @@ void DevicePageStore::AwaitWritebackClaim(PageId page_id) {
 }
 
 StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_ids,
-                                                  HeldFrames held) {
+                                                  HeldFrames held, wal::Lsn* defer) {
     // Ascending and unique: id order is file order (page.md section 13),
     // and the queue this drains may name a page twice across sweeps.
     std::vector<PageId> ordered(page_ids.begin(), page_ids.end());
@@ -1862,7 +1874,15 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         return Status::IoError("pagestore: no page is written back after the log fail-stopped; "
                                "restart the instance to recover");
     }
-    if (Status s = AwaitWalGate(ordered, gate); !s.ok()) return s;
+    // **Nor after a failed data-file sync** (BI-Q3 (a)): the device may have
+    // dropped pages this pool already calls clean, and only a restart, which
+    // replays the log over them, can stand behind what is written next.
+    if (data_sync_.failed()) {
+        return Status::IoError("pagestore: no page is written back after a failed data-file "
+                               "sync; restart the instance to recover");
+    }
+    if (Status s = AwaitWalGate(ordered, gate, defer); !s.ok()) return s;
+    if (defer != nullptr && *defer != wal::kNoLsn) return std::size_t{0};
 
     // **Three phases per run, and the device call is the one between the
     // holds** (AM-S2 step 3f). The run detection, the checksum stamp and the
@@ -2062,6 +2082,12 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         // round trip; this is the arm that catches a page whose record
         // arrived after it.
         if (gate != nullptr && run_lsn != wal::kNoLsn && !gate->IsDurable(run_lsn)) {
+            if (defer != nullptr) {
+                // Unwritten: `claims` gives the run's frames back still
+                // dirty, and the caller re-runs once the log is past it.
+                *defer = run_lsn;
+                return written;
+            }
             const PhaseTimer timed(CheckpointPhase::kLogGateRun);  // BI-S1
             if (Status s = gate->EnsureDurable(run_lsn); !s.ok()) {
                 if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
@@ -2211,7 +2237,7 @@ Status DevicePageStore::Sync() {
     Status s;
     {
         const PhaseTimer timed(CheckpointPhase::kPublishSync);
-        s = device_.Sync();
+        s = data_sync_.SyncNow();
     }
     if (log_ != nullptr) {
         if (!s.ok() && log_->enabled(LogLevel::kError)) {
@@ -2252,7 +2278,7 @@ std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn()
 Status DevicePageStore::PersistPage(PageId page_id) {
     const PageId ids[] = {page_id};
     if (auto written = WriteBack(ids); !written.ok()) return written.status();
-    return device_.Sync();
+    return data_sync_.SyncNow();
 }
 
 Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
@@ -2276,15 +2302,17 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
     // **Why a zero count may skip the sync.** Under sharing this call can
     // write nothing because another core's writeback already copied the
     // pages and is between its copy and its own sync. That is covered: a
-    // checkpoint's durability point is the anchor publish, and
-    // `SuperBlockCheckpointAnchor::Publish` syncs the store itself, after
-    // every step - the same cover the contract above already relies on for
-    // pages "something else may have flushed since the snapshot".
+    // checkpoint's durability point is the anchor publish, which syncs the
+    // data file after every step and before it writes the anchor's page -
+    // `SuperBlockCheckpointAnchor::Publish`'s store sync for a synchronous
+    // run, and the run task's parked sync of its collection for a cadence
+    // one (BI-Q5 (a)) - the same cover the contract above already relies on
+    // for pages "something else may have flushed since the snapshot".
     if (written.value() == 0) return Status::OK();
     Status s;
     {
         const PhaseTimer timed(CheckpointPhase::kDataSync);  // BI-S1
-        s = device_.Sync();
+        s = data_sync_.SyncNow();
     }
     if (log_ != nullptr) {
         if (!s.ok() && log_->enabled(LogLevel::kError)) {

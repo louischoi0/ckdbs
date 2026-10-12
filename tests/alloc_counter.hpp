@@ -19,9 +19,13 @@
 
 namespace kds::test_support {
 
-extern std::size_t g_allocations;
-extern bool g_counting;
+extern thread_local std::size_t g_allocations;
+extern thread_local bool g_counting;
 
+// **Per thread**: the counters are thread-local, so a count or a failure is
+// the arming thread's own, whatever a writer or reactor thread allocates
+// meanwhile.
+//
 // Counts allocations for as long as it is alive. Not nestable - the inner
 // scope's destructor stops counting for the outer one too, which no caller
 // needs and which a flag rather than a depth makes obvious.
@@ -36,6 +40,23 @@ struct CountAllocations {
     CountAllocations& operator=(const CountAllocations&) = delete;
 
     std::size_t count() const { return g_allocations; }
+};
+
+// Makes the Nth allocation made while it is alive throw `std::bad_alloc`, once
+// (N counted from construction, 1 is the next). For a test of what a
+// statement does when the allocator refuses - run it in a death test when the
+// engine is meant to stop, since the process is not left usable.
+extern thread_local std::size_t g_fail_after;
+extern thread_local std::size_t g_fail_seen;
+struct FailNthAllocation {
+    explicit FailNthAllocation(std::size_t n) {
+        g_fail_seen = 0;
+        g_fail_after = n;
+    }
+    ~FailNthAllocation() { g_fail_after = 0; }
+
+    FailNthAllocation(const FailNthAllocation&) = delete;
+    FailNthAllocation& operator=(const FailNthAllocation&) = delete;
 };
 
 }  // namespace kds::test_support

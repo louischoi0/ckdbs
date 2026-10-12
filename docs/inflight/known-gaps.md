@@ -1061,7 +1061,8 @@ Verified at `e5a7e1b7` (BA's close,
 `bench/v3.0.0/results-ba-s17-census-v2.7.0-736-ge5a7e1b7.md` and
 `results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`; diagnosed in
 `results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`). Owned by `docs/spec/wal.md`
-§11a and, for the checkpoint, BI (`workorder-bi-checkpoint-off-the-reactor.md`).
+§11a and, for the checkpoint, BI (`workorder-bi-checkpoint-off-the-reactor.md`,
+closed 2026-10-11 at `ec827a19`).
 
 - **A `relaxed` carve's longest stall is 226-258 ms per server life**
   (median), against 20-46 ms at BA-S4; under `group` and `strict` it fell
@@ -1070,13 +1071,24 @@ Verified at `e5a7e1b7` (BA's close,
   `cores` 2 and 4, and carves inside the measured span are unexplained or
   unmeasured (the diagnosis file). BA-S13's exit, a carve under 10 ms, is
   not met.
-- **The checkpoint holds statements for up to a quarter-second.** At
-  10,000 rows, B's longest statement was 62-226 ms in 31 of 32 A/B runs,
-  against A's 18-22 ms. The census's checkpoint median rose from 46 to
-  92 ms, with a maximum of 1.5 s. At `relaxed` `cores = 1` the lengthening
-  is BA-S13's, which moved the pool's writeback from the carve to the
-  checkpoint (the diagnosis file); other cells are not separated. The fix
-  waits on BI-Q1.
+- **The checkpoint still holds its reactor past 10 ms, for writes** -
+  restated at BI's close (`ec827a19`,
+  `results-bi-s5-checkpoint-stall-v2.7.0-784-gec827a19.md`). Since BI a run
+  is a `system` task that parks for every sync, and its reactor time fell
+  about tenfold; what remains on the reactor is a step's and a publish
+  batch's `pwrite`s (single writes up to about 300 ms in the kernel's
+  writeback throttle) and the inline log gate after 16 deferrals at
+  `relaxed`. Under `relaxed` a run is 4-8x longer than before at `cores = 1`.
+  `docs/inflight/bugs/a-checkpoint-run-holds-its-cores-reactor-for-its-whole-length.md`
+  carries the numbers and what a fix needs.
+- **A paced publish's map write can carry the bit of a page another core
+  created unlogged after the collection** (BI-S4, `[source-read]`). The
+  publish collects the dirty pages, writes them, then writes the maps; a
+  Waystone page another core creates between the collection and the map
+  write has its bit on the device without its bytes, and a crash before the
+  next flush leaves it allocated and never written. The whole-store `Flush`
+  had the same window before BI; BI-Q12 closed the step's, which was a
+  whole run long. Not measured.
 
 ## Decisions the revision has not taken
 

@@ -1,0 +1,29 @@
+bd8ffa1fa32b12e731eb346cdc54943a4e7158d5dd6ccd168a0a2abc7254ce18  kds_server-A
+2b45db5bd560e73133058bafc0a142d41737f8eee0d1d68f6b34704e0bba8ab5  kds_server-B
+
+A: 55ee8370 (v2.7.0-779-g55ee8370, committed 2026-10-11 12:05:22 UTC; BI-S1, instrumentation only).
+   Release build (CMAKE_BUILD_TYPE=Release, KDS_BUILD_TESTS=ON, KDS_BUILD_SIM=ON, KDS_BUILD_BENCH=OFF) of an export of the commit in a session
+   scratch directory; `diff -rq` of its src/, include/ and CMakeLists.txt against `git archive 55ee8370` is empty; source binary mtime
+   2026-10-11 12:12:22 UTC; its hash equals the hash above.
+B: ec827a19 (v2.7.0-784-gec827a19, committed 2026-10-11 17:30:13 UTC; BI closed in code).
+   Same flags, export of the commit; `diff -rq` against `git archive ec827a19` is empty; source binary mtime 2026-10-11 17:31:04 UTC; its hash
+   equals the hash above. The worktree's own build-release/kds_server (sha256 b855de3c902096d7b24521dcb4b4c5abb4cee0a88f696941a09aeaecce67d9b6,
+   mtime 2026-10-11 17:14:27 UTC) is older than three files ec827a19 changed and was NOT used.
+
+Measured copies: ~/bench-runs/bi-close-overhead-v2.7.0-784-gec827a19/bin/kds_server-A and -B (copied with cp -p from the BI-S5 stall run's archived copies,
+mtime 2026-10-11 17:31:10 UTC, the time of that copy). Both re-hashed at 21:02 UTC, after the last cell: unchanged. Every server of every cell started from them.
+
+Driver: drivers/bi_overhead_ab.py sha256 09abd5054b857c6c08dbae79c355ac7dbc2ef73b6d4d3c21526bb8c23ac98899
+  (BA's close ba_overhead_ctrl.py, sha256 of the archived BA copy not recomputed here, plus: TOOLS path, --ckpt-ms and an explicit
+  checkpoint_interval_ms in the config, SHOW META snapshots after every arm, checkpoint/scheduler/WAL counters at the end of a run).
+Frozen tools it imports (copied from tools/ at ec827a19, no tracked change):
+  373cbc4a45ae3f4ec6220b3ef659bd604ad292071fb3adfecaaa3d032a195fbd  bb_overhead_benchmark.py
+  1e4bcec625710777ab3093b4b92dde8d4ab78fc97aa432ec08ccb0add614aa1f  bench_common.py
+  69992380e60e33370d0652eabcd56cbb05c3e7eec4c8b0f78333b42a0e2e9623  ckdbs_cli.py
+  d52236d6b62ba9fb7fe2d4efff7fcfbdbcad4956681052c668b40f2c053266df  kwp.py
+
+Layout: out/<cell>/n<rows>-r<run>.json (per-run summaries; the raw per-statement files are not archived), logs/ (driver logs, cells.log,
+host-samples*.jsonl), drivers/ (the driver, the sampler, the analysis scripts, run_all.sh and run_extra.sh).
+The analysis scripts carry the run directory /home/cdkbs/bench-runs/bi-close-overhead-v2.7.0-784-gec827a19 in their paths; pass the archive's out/ as the first argument.
+Cells: relaxed-c1, relaxed-c2 (cadence 5000 ms), group-c1, group-c2, dense-c1, dense-c2, dense200-c1, dense200-c2 (cadence 1000 ms),
+aa-c1, aa-c2 (A against a second copy of A, cadence 5000 ms), aadense-c1 (A against A, cadence 1000 ms). -cN is the server's cores.

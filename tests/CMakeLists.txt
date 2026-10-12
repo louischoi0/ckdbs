@@ -169,6 +169,7 @@ add_executable(kds_tests
     kwp_load_server_test.cpp
     aggregate_contract_test.cpp
     aggregate_test.cpp
+    bad_alloc_death_test.cpp
     type_literals_test.cpp
     parser_subquery_test.cpp
     parser_fuzz_test.cpp
@@ -205,6 +206,8 @@ add_executable(kds_tests
     wal_checkpointer_test.cpp
     checkpoint_census_test.cpp
     checkpoint_task_test.cpp
+    checkpoint_log_park_test.cpp
+    checkpoint_data_sync_test.cpp
     memory_log_device_test.cpp
     file_log_device_test.cpp
     wal_append_off_latch_test.cpp

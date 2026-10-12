@@ -1754,7 +1754,13 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                << " sched_" << kGroupNames[i]
                << "_polls=" << scheduler_view_->polls_total(group)
                << " sched_" << kGroupNames[i]
-               << "_consumed_us=" << scheduler_view_->consumed_ns(group) / 1000;
+               << "_consumed_us=" << scheduler_view_->consumed_ns(group) / 1000
+               << " sched_" << kGroupNames[i]
+               << "_longest_poll_us=" << scheduler_view_->longest_poll_ns(group) / 1000
+               << " sched_" << kGroupNames[i]
+               << "_polls_over_10ms=" << scheduler_view_->polls_over_10ms(group)
+               << " sched_" << kGroupNames[i]
+               << "_polls_over_100ms=" << scheduler_view_->polls_over_100ms(group);
         }
         // BI-S1: how long one iteration held this reactor, apart for the
         // iterations a checkpoint run of this core overlapped.
@@ -1766,6 +1772,8 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         };
         print_holds("in_run", scheduler_view_->holds_inside_run());
         print_holds("out_run", scheduler_view_->holds_outside_run());
+        os << " sched_longest_unpolled_us=" << scheduler_view_->longest_unpolled_ns() / 1000
+           << " sched_unpolled_over_100ms=" << scheduler_view_->unpolled_over_100ms();
     }
 
     // BI-S1's run record for this core (`sched/checkpoint_census.hpp`): the
@@ -1784,7 +1792,9 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << load(ckpt.last_step_page_write_max_ns) / 1000
            << " checkpoint_last_steps=" << load(ckpt.last_steps)
            << " checkpoint_last_pages=" << load(ckpt.last_pages)
-           << " checkpoint_last_dirty_at_start=" << load(ckpt.last_dirty_at_start);
+           << " checkpoint_last_dirty_at_start=" << load(ckpt.last_dirty_at_start)
+           << " checkpoint_last_gate_parks=" << load(ckpt.last_gate_parks)
+           << " checkpoint_last_end_parks=" << load(ckpt.last_end_parks);
         for (std::size_t i = 0; i < kCheckpointPhaseCount; ++i) {
             os << " checkpoint_last_" << kCheckpointPhaseNames[i]
                << "_sum_us=" << load(ckpt.last_sum_ns[i]) / 1000 << " checkpoint_last_"

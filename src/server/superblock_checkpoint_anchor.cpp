@@ -63,7 +63,8 @@ wal::CheckpointAnchorRecord SuperBlockCheckpointAnchor::FoldedAnchor() const noe
     return lowest == nullptr ? mount_anchor_ : *lowest;
 }
 
-Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& anchor) {
+StatusOr<wal::CheckpointAnchorRecord> SuperBlockCheckpointAnchor::EncodeLanding(
+    const wal::CheckpointAnchorRecord& anchor) {
     // **Always the fold into slot 0** (the header's fold section);
     // unconditional since AM-S4(d), where the per-core arm that wrote
     // `anchor.core_id`'s own slot left with the topology it belonged to.
@@ -128,6 +129,22 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
                                       std::to_string(folded) + " of " +
                                       std::to_string(superblock_.core_count()) + " cores)");
     }
+    return landing;
+}
+
+StatusOr<PageId> SuperBlockCheckpointAnchor::Encode(const wal::CheckpointAnchorRecord& anchor) {
+    auto landing = EncodeLanding(anchor);
+    if (!landing.ok()) return landing.status();
+    encoded_landing_ = landing.value();
+    return kSuperBlockPageId;
+}
+
+void SuperBlockCheckpointAnchor::Commit() { Landed(encoded_landing_); }
+
+Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& anchor) {
+    auto encoded = EncodeLanding(anchor);
+    if (!encoded.ok()) return encoded.status();
+    const wal::CheckpointAnchorRecord landing = encoded.value();
 
     if (Status s = store_.Sync(); !s.ok()) {
         if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
@@ -142,6 +159,11 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
         return s;
     }
 
+    Landed(landing);
+    return Status::OK();
+}
+
+void SuperBlockCheckpointAnchor::Landed(const wal::CheckpointAnchorRecord& landing) {
     ++publishes_;
 
     // `D` moves only on a sync that returned OK, and only forward: two
@@ -158,7 +180,6 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
         }
     }
     if (advanced && recycler_) recycler_(landing.redo_start_lsn);
-    return Status::OK();
 }
 
 }  // namespace kds::server

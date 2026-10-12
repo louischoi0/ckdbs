@@ -43,6 +43,10 @@ Status SimInstance::Boot() {
     if (!store.ok()) return store.status();
     store_ = std::move(store.value());
     store_->SetWalGate(wal_.get());
+    // A failed data-file sync stops the instance (BI-Q3 (a)); here, as the
+    // log's fail-stop does, and the loop crashes and restarts it.
+    store_->data_sync().SetFailureHandler(
+        [this](const Status& failure) { (void)wal_->stream()->FailStop(failure); });
 
     auto boot = bootstrap::BootstrapDatabase(*store_, kMountTime);
     if (!boot.ok()) return boot.status();

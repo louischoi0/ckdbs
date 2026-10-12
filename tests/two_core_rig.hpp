@@ -159,6 +159,12 @@ public:
         // a cell can bring the copy up through production's mount
         // (`Expeditor::Open`; `insert_log_crash_rig_test.cpp`'s `Mount`).
         bool file_backed = false;
+        // The rig's directory, when a cell names one - and then the cell's to
+        // remove, not the rig's; empty, a fresh one under the system temp
+        // dir the rig removes. Named by a death test's child, stopped
+        // mid-statement, so the parent can mount what it left
+        // (`bad_alloc_death_test.cpp`).
+        std::filesystem::path dir;
         // **The stream's syncs through a `GatedLogDevice`** (BA-S1c), which
         // `log_gate()` then holds and releases.
         bool gated_log_sync = false;
@@ -200,8 +206,11 @@ public:
         // the device.
         wal_.reset();
         log_device_.reset();
-        std::error_code ec;
-        std::filesystem::remove_all(dir_, ec);
+        // A directory the cell named is the cell's to remove.
+        if (options_.dir.empty()) {
+            std::error_code ec;
+            std::filesystem::remove_all(dir_, ec);
+        }
     }
 
     CoreRuntime& core(std::uint32_t id) noexcept { return *cores_[id]; }
@@ -302,9 +311,11 @@ private:
 
     Status Build() {
         static std::atomic<int> counter{0};
-        dir_ = std::filesystem::temp_directory_path() /
-               ("kds_two_core_rig_" + std::to_string(::getpid()) + "_" +
-                std::to_string(counter.fetch_add(1)));
+        dir_ = !options_.dir.empty()
+                   ? options_.dir
+                   : std::filesystem::temp_directory_path() /
+                         ("kds_two_core_rig_" + std::to_string(::getpid()) + "_" +
+                          std::to_string(counter.fetch_add(1)));
         std::filesystem::create_directories(dir_);
 
         // ---- The volume: `Expeditor::Open`'s stack, over memory --------

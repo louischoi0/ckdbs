@@ -1004,8 +1004,11 @@ runs dry. Both still run on a reactor; what shrinks is the stall.
 
 *The checkpoint runs through its own `Step()`*, `pages_per_step` at a time,
 one per reactor iteration, instead of `RunToCompletion`. The anchor is
-published after the last step. This paragraph is BI's if BI-Q1 is marked
-(a) (BA-Q1).
+published after the last step. **This paragraph is BI's** (BI-Q1 (a),
+adopted 2026-10-11 on the operator's standing go-ahead): BI-S2 built it as a
+`system` task, BI-S3 and BI-S4 parked its log and data-file waits, and BI-S5
+measured it (`workorder-bi-checkpoint-off-the-reactor.md`). BA keeps the
+carve.
 
 **BA-R11 — the rightmost leaf (P9).**
 
@@ -1095,7 +1098,7 @@ census.
 | BA-S10 | **The relation borrow** (BA-R7) | for (1): an N-row insert takes the partition once, not N times. For (2), if marked: the fast-path and strong-ask race forced and repeated, and a DDL `X` waiting on a fast-path `IX` held on another core. The lock suites green | M, or L with (2) |
 | BA-S11 | **The pk cursor** (BA-R8) | the Keystone suites green. A sim crash between a ceiling raise and the placement reissues no id and burns at most 32. Two cores issuing into one relation: one sequence, and every leaf in key order. An issue that draws an id a named key inside [cursor, ceiling) placed first is re-drawn, never placed. A btree named key below the cursor takes no page 7 (BA-Q8). **Mutation**: the ceiling logged after the placement, killed | M |
 | BA-S12 | **The WAL append** (BA-R9), first half | sim crash cells across a prepared roll and across a buffer swap. The stream latch's wait in the census shape. The second half only on BA-Q9's mark | M |
-| BA-S13 | **The periodic stalls** (BA-R10; the checkpoint half BI's if BI-Q1 is marked (a), BA-Q1) | the stall counters under 10 ms in the census shape. A crash between a carve's persist and its first issue reissues no trx id, with another core's writeback racing the page-0 write. A crash mid-steps replays from the previous anchor | M |
+| BA-S13 | **The periodic stalls** (BA-R10; the checkpoint half is BI's - BI-Q1 (a), adopted 2026-10-11 - and so is this row's mid-steps crash, which BI-S2's simulation cell pins) | the carve's stall counter under 10 ms in the census shape. A crash between a carve's persist and its first issue reissues no trx id, with another core's writeback racing the page-0 write | M |
 | BA-S14 | **The rightmost leaf** (BA-R11) | the survey's table, with a reason per step. Scenario 0's `c8-s` cell with no refusal. A forced root grown over is re-run and succeeds. **Mutation**: the re-run removed, killed | M |
 | BA-S15 | **The walk-boundary yield** (BA-R12) | `sched.md:42` true. A point read sharing a core with a long walk is bounded by one slice. A root growth on another core during a suspension frees no memo the walk holds. A split between two slices misses and repeats no row. Cancel cells | L |
 | BA-S16 | **Placement by load** (BA-R13) | 8 connections at `cores = 4` land 2 per core. The census's per-core session counts | S |

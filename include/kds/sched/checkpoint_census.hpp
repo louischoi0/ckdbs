@@ -72,6 +72,17 @@ struct CheckpointRunReport {
     std::uint64_t step_page_write_max_ns = 0;
     std::array<std::uint64_t, kCheckpointPhaseCount> sum_ns{};
     std::array<std::uint64_t, kCheckpointPhaseCount> max_ns{};  // one occurrence's longest
+    std::array<std::uint64_t, kCheckpointPhaseCount> count{};   // occurrences timed
+    // BI-S3: the task's asks of the log - the snapshot's one park after
+    // `Start` and each step handed back for an LSN not yet durable
+    // (`gate_parks`), and the end record (`end_parks`) - each answered by a
+    // park unless the writer's sync landed first.
+    std::uint64_t gate_parks = 0;
+    std::uint64_t end_parks = 0;
+    // Wall time the task spent parked - not reactor time: the reactor ran
+    // other work meanwhile - on the log and on the data file's sync.
+    std::uint64_t log_park_ns = 0;
+    std::uint64_t data_park_ns = 0;
 };
 
 namespace detail {
@@ -117,6 +128,7 @@ public:
         const std::uint64_t ns = now > start_ ? now - start_ : 0;
         const auto i = static_cast<std::size_t>(phase_);
         sink_->report->sum_ns[i] += ns;
+        ++sink_->report->count[i];
         if (ns > sink_->report->max_ns[i]) sink_->report->max_ns[i] = ns;
         sink_->in_phase = false;
     }
@@ -151,6 +163,9 @@ public:
         std::atomic<bool> last_completed{false};
         std::array<std::atomic<std::uint64_t>, kCheckpointPhaseCount> last_sum_ns{};
         std::array<std::atomic<std::uint64_t>, kCheckpointPhaseCount> last_max_ns{};
+        std::array<std::atomic<std::uint64_t>, kCheckpointPhaseCount> last_count{};
+        std::atomic<std::uint64_t> last_gate_parks{0};
+        std::atomic<std::uint64_t> last_end_parks{0};
     };
 
     static Slot& Of(std::uint32_t core) noexcept { return slots()[core % kSlots]; }
@@ -172,7 +187,10 @@ public:
         for (std::size_t i = 0; i < kCheckpointPhaseCount; ++i) {
             s.last_sum_ns[i].store(r.sum_ns[i], std::memory_order_relaxed);
             s.last_max_ns[i].store(r.max_ns[i], std::memory_order_relaxed);
+            s.last_count[i].store(r.count[i], std::memory_order_relaxed);
         }
+        s.last_gate_parks.store(r.gate_parks, std::memory_order_relaxed);
+        s.last_end_parks.store(r.end_parks, std::memory_order_relaxed);
     }
 
 private:

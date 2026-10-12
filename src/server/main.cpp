@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 
+#include "kds/base/fail_stop.hpp"
 #include "kds/server/config_file.hpp"
 #include "kds/server/expeditor.hpp"
 #include "kds/server/stop_signal.hpp"
@@ -301,6 +302,11 @@ bool ParseArgs(int argc, char** argv, kds::server::Expeditor::Config& config, Cl
 }  // namespace
 
 int main(int argc, char** argv) {
+    // First: every allocation from here on stops the process at the failure
+    // rather than throwing `std::bad_alloc` into a statement that cannot be
+    // continued (`kds/base/fail_stop.hpp`).
+    kds::base::InstallAllocationFailStop();
+
     kds::server::Expeditor::Config config;
     CliMode mode;
     if (!ParseArgs(argc, argv, config, mode)) {

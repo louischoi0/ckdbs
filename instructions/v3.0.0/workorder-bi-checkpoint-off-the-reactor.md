@@ -588,7 +588,12 @@ otherwise.
 | BI-Q9 | **BI-S1's premise gate, and `pages_per_step`.** BI stops for a ruling when either:<br>(i) no cell shows a run holding its reactor over 10 ms in one iteration; or<br>(ii) the per-phase split puts one step's page writes (64 pages, which W1 and W2 do not move) over 10 ms.<br>`pages_per_step` stays 64 unless (ii) holds, in which case its new value is part of the ruling | process | As written. (i) is BA's P12 bar. (ii) says the decisions would not reach the stall at 64 pages a step || As written: adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone) |
 | BI-Q10 | **The bar for BI-S5**, with A = BI-S1's instrumented commit and B = the close:<br>(i) the longest reactor iteration inside a run under 10 ms in every cell, the publish included;<br>(ii) the same-core probe's p99 inside runs within 2× its p99 outside;<br>(iii) the OLTP overhead A/B within its own run-to-run noise;<br>(iv) run length, per-core and instance-wide anchor gaps, and `D`'s lag reported for A and B, with no bar | measurement | As written. (iv) has no bar because W1 accepts longer runs; it is reported so that cost can be seen || As written: adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone) |
 | BI-Q11 | **The measurement** (§5.2), at BI's close, per `CLAUDE.md`'s Session Workflow step 3 | process | As written || As written: adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone) |
+| BI-Q9-R | **BI-Q9's gate, as it tripped** (written at BI-S1). `[measured]` BI-S1's cells at `v2.7.0-779-g55ee8370` (`bench/v3.0.0/results-bi-s1-checkpoint-stall-v2.7.0-779-g55ee8370.md`): (i) does not hold - every cell shows a run holding its reactor for hundreds of milliseconds in one iteration, to 1.9 s. (ii) holds by its letter: in 0 to 23 runs per cell one step's page writes passed 10 ms, the worst 505.9 ms, while the per-run maximum of a step's page writes is 0.21-4.1 ms at p90 in eleven cells. The twelfth, `c4-relaxed-r3`, overlapped another session's load (1-minute load 13 at its end) and reads 97.6 ms at p90. The outliers are one device call each (`page_write_max_us` equals the step's sum where checked), a run of at most 8 pages stalled in the kernel's writeback throttle, which a smaller step would not shorten.<br>(a) `pages_per_step` stays 64 and BI proceeds; the outliers are reported at the close beside the iteration holds.<br>(b) Lower `pages_per_step` (16 would put the p90 near 0.1 ms and leave the outliers as they are) | process | (a). (ii) exists to catch a step size the decisions cannot reach; the p90 is under the bar in every uncontended cell and the outliers are not a function of the step | (a): adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone), written into the order at BI-S1 |
+| BI-Q10-R | **BI-Q10 (i)'s reading, and `kGateParks`** (written at BI-S5). `[measured]` Three diagnostic runs, 120 s each at `cores = 4`, `relaxed`, of `df1b2e09` (`v2.7.0-782-gdf1b2e09`) plus uncommitted per-group attribution in the scheduler (`SHOW META`'s `sched_<group>_longest_poll_us`, `_polls_over_10ms`, `_polls_over_100ms`, `sched_longest_unpolled_us`; counters cumulative from boot, so they include the probe fill and warm-up), on a host whose 1-minute load from other sessions was 10-17: `foreground` polls - the load's own `INSERT`s - reached about 3 s on every core; core 0's longest stretch outside any poll reached 2.5 s (`[inferred]`: the post-task drain's inline sync, W4, though the counter cannot tell it from a timer callback); and with `kGateParks` = 4 the run record showed `log_gate_batch` and `log_gate_run` single waits of 1.3-1.6 s, the inline fallback after four deferrals, other cores re-dirtying the batch faster than a sync lands. (i) as written - *"the longest reactor iteration inside a run under 10 ms"* - counts every iteration a run overlaps, so it measures the load's statements as much as the run, and nothing BI changes can meet it under this load.<br>(a) (i) reads the checkpoint's own holds: the `system` group's longest poll and its polls over 10 ms and 100 ms (the checkpoint task, where `SO_REUSEPORT` binds and no connection handoff runs as `system`), and the run record's single-call maxima (`start`, a step, a publish batch), against A, whose every run is one hold; the iteration holds stay reported. `kGateParks` rises from 4 to 16: in the third run the inline gate waits fell to 3 in 120 s, the `system` group's longest poll was 260 ms, and that run's largest single phase was a step's page writes (`step_page_write_max_us` 259.5 ms, against a 259.7 ms step), BI-R5's first remainder.<br>(b) (i) as written, failed | measurement | (a). The bar exists to price what BI changed; a statement held 3 s by its own I/O is outside W1 and W2, and the iteration holds remain in the report beside it | (a): adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone), written into the order at BI-S5 |
+| BI-Q13 | **A run's length under parks** (surfaced at BI-S5). `[measured]` B at `cc432881` (`v2.7.0-783-gcc432881`), first two cells of the close matrix: at `cores = 1`, `relaxed` 28 runs completed in 600 s against A's 120, so the anchor moved a quarter as often. Each of a run's ~160 steps paid two parks - the log's and its own data-file sync - and a park costs at least one reactor iteration, which under this load includes a 15 ms+ `INSERT`. W1 accepts longer runs; a fourfold one was not what §5 priced.<br>(a) One log park for the whole snapshot after `Start` (every snapshot page was last changed ahead of `CHECKPOINT_BEGIN`, so a step then defers only for a page re-dirtied since), and no data-file sync per step: the publish's parked sync of its collection follows every step's writes and precedes the anchor's page, which is the order the anchor needs (`wal.md` §8-3).<br>(b) A larger `pages_per_step`, fewer steps, each holding the reactor longer.<br>(c) Accept | design | (a). It removes parks without moving any write onto the reactor; `[measured]` a 120 s diagnostic of it (`cores = 1`, `relaxed`) completed 22 runs at 3.7 s p50 with an 11 s worst anchor gap. A step's per-sync was never what made the anchor honest - the publish's sync is, before page 0 - so dropping it moves only page-cache pressure, which the publish's batches then carry | (a): adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone), written into the order at BI-S5 |
 | BI-Q12 | **A checkpoint step's map write** (surfaced at BI-S2). `[source-read]` A step's `FlushPages` wrote every dirty free-map region after its own pages (`device_page_store.cpp`, `FlushMaps`), and those regions carry the bit of every page allocated so far, snapshot pages a later step has not reached among them. `[measured]` BI-S2's sim cell (a run abandoned after one step, then a crash) found it on committed seed 1, `--mode crash --ops 1500 --iterations 3`: a Waystone page (type 9, created unlogged, recLSN 0) left allocated and all zero after recovery, which no redo re-creates. A logged page is re-created by its `PAGE_INIT`. The shape is live before BI for any crash between two steps; BI-R1 lengthens the window from one call to the whole run.<br>(a) A step writes no map; the publish's whole-store `Flush` writes the maps after every dirty page. A step's page then reaches the device ahead of its bit, the state every eviction writeback already leaves and recovery's floor and redo already answer.<br>(b) A step writes the maps only once no snapshot page is left unwritten, i.e. at its last step.<br>(c) Unchanged | design | (a). (b) still writes the bit of a page allocated after the snapshot whose bytes are not out, which is the same hazard by another door; (a) removes the only writer of maps that runs ahead of its pages, and adds no state the engine does not already reach. (c) leaves the sim cell red | (a): adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone), written into the order at BI-S2 |
+| BI-Q6-R | **BI-Q6's premise, re-read at BI-S3.** `[source-read]` BI-Q6 (b) rested on §1.4's *"the writer wakes only threads blocked in its own `EnsureDurable`, never a reactor"*. That is stale: since BA-R4 part 1 the writer kicks every core counted in by a `WalManager::DurableWait` (`include/kds/wal/manager.hpp`), which commits already construct around their park (`command_dispatcher.cpp`), and the kick's lifetime is the commit's, already solved. Found by BI-S3's review.<br>(a') A log park constructs a `DurableWait`: the writer's existing kick wakes it, with no new kicking thread; the data-file park (BI-S4), whose thread has no kick, keeps (b).<br>(b) As adopted | design | (a'). It costs nothing new, and (b)'s ~1 ms a park was the price of a missing mechanism that is not missing | (a'): adopted on the standing go-ahead of 2026-10-11 (go-ahead-achieving-milestone), revising BI-Q6 (b) against the tree at BI-S3 |
+| BI-Q4-T | **BI-Q4's trigger, met at BI-S1.** BI-Q4 (b) was adopted with *"(a) is written only if S1 or BI-S3 counts it non-zero under load"*. `[measured]` BI-S1 counted the per-run arm at 68-98 s of inline wait per 10-minute cell at `cores = 4`, `relaxed` (`log_gate_run`), against 0 at `cores = 1`: another core's sessions re-dirty a batch's page between the batch gate and its run's copy. So (a) is written, as the adopted mark says: `WriteBack` takes an optional `defer`, and where either gate needs the log past an LSN not yet durable it stops before that run, gives back its claims with the frames dirty and returns the LSN; the task parks and re-runs the step, inline after `kGateParks` parks. `[quiet-wrong]` under (a) was the risk of a run written before its LSN is durable: the deferring arm returns before the device call, and `CheckpointLogParkTest.ARunWhoseRecordIsNotDurableIsHandedBackUnwritten` writes through a device that counts any page written ahead of its record | process | (a), as the mark conditions | (a): the adopted BI-Q4 mark's own condition, met; recorded at BI-S3 |
 
 ## 5. Measurement
 
@@ -750,3 +755,145 @@ failure logged once (the task's line; a synchronous caller logs its own).
 order with a run parked at stop; the unit cell pins the checkpointer's half
 and BI-S5's measurement reads the shutdown lines of every stop. Overhead not
 measured; measured at the milestone's close.
+
+### BI-S1's measurement — taken 2026-10-11
+
+`bench/v3.0.0/results-bi-s1-checkpoint-stall-v2.7.0-779-g55ee8370.md`,
+twelve 600 s cells at `55ee8370`. A run holds its core's reactor for its
+whole length: at `cores = 4`, `group`, the same-core probe answers in
+0.51-0.62 ms at p50 outside a run and 315-502 ms inside one. The data
+file's per-step `fsync` is 37-89 % of a run; page writes are under 1 %. At
+`cores = 4`, `relaxed` the bug entry reproduces - 82-114 s anchor gaps, a
+starved gate (4/20/2/42 runs per core in ten minutes) - and the per-run log
+gate costs 68-98 s per cell, which met BI-Q4's condition (BI-Q4-T). BI-Q9's
+gate tripped on (ii) by its letter and is ruled at BI-Q9-R. The run also
+found an engine defect outside BI, filed as
+`docs/inflight/bugs/a-rollback-whose-pk-descent-is-refused-leaves-its-keys-bound.md`.
+
+### BI-S3 — built 2026-10-11
+
+A step that needs the log further no longer waits for it on the reactor:
+`WriteBack` takes an optional `defer` and, at either gate, returns the LSN
+it needs with the run unwritten and its frames dirty (BI-Q4 (a), by
+BI-Q4-T); the task asks the writer (`RequestSyncNow`, now public) and parks
+counted into the writer's kick (`WalManager::DurableWait`, BI-Q6-R), then
+re-runs the step, inline after `kGateParks` parks (4 at BI-S3, 16 since BI-S5, BI-Q10-R). `Complete` is split
+into `AppendEnd` and `PublishAnchor`, and the task parks for the end record
+the same way. On core 0 the checkpoint's log syncs are the writer's.
+Cells: `tests/checkpoint_log_park_test.cpp` (five: a peer's and core 0's
+park while the reactor polls a foreground task, through a log device the
+test holds and a page device that counts any page written ahead of its
+record; a page re-dirtied during the park re-gated by another deferral; a
+run whose record is not durable handed back unwritten; a fail-stopped log
+answering a parked step). **Mutations**, each three times, all killed: the
+deferral and the store's gate both removed (all five cells); the re-step
+after a park removed (the re-dirty cell); the `stopped()` disjunct removed
+(the fail-stop cell, by its 10 s bound); the per-run gate waiting instead
+of deferring (the hand-back cell, by a hang at the 60 s timeout). **Review**
+(`critics-developer`): fixed a park that could never wake - a `page_lsn` at
+or past the append point names no record, so the task now leaves it to the
+step's inline gate, which refuses it as before; found BI-Q6's premise stale
+(BI-Q6-R); applied the park counters to `SHOW META`, `LogStopped` made
+file-local, the batch helper removed. The re-dirty cell failed once in the
+suite under load: the counter counted suspended parks, and the writer's
+sync can land before the check, so the count now counts deferrals, which
+the reactor thread takes deterministically (300 repeats, and six
+concurrent copies x 150, clean). Suite and sim at the commit below. Overhead
+not measured; measured at the milestone's close.
+
+### BI-S4 — built 2026-10-11
+
+Every sync of the data file goes through `storage::DataSyncer`
+(`include/kds/storage/data_syncer.hpp`): one at a time, sticky on failure,
+on the instance's one thread once the server starts it (BI-Q2 (a)). A
+checkpoint step and the publish request a ticket and park on it; every
+other caller waits; without the thread a request syncs inline. **A failed
+data-file sync stops the instance** (BI-Q3 (a), `[quiet-wrong]`): the store
+writes nothing back and no sync reports OK again, and the server's handler
+fail-stops the log and aborts the process; the sim's fail-stops the log,
+so the loop crashes and restarts it.
+`docs/inflight/bugs/a-failed-data-file-fsync-leaves-its-pages-clean.md` is
+deleted with this stage. **The publish is paced** (BI-Q5 (a)): every page
+dirty at the end record is written in a step's batches, deferring on the
+log like a step, then the maps, then one parked sync; only then is page 0
+encoded (`SuperBlockCheckpointAnchor::Encode`), written, synced while the
+task parks, and committed (`Commit`: the count, `D`, the recycler). The
+anchor's page therefore reaches the device after a sync of every page it
+stands for, including a snapshot page another core's writeback carried,
+which the old whole-store `Flush` wrote in id order with page 0 first. The
+run record gains the parked wall time on the log and on the data file.
+
+Cells: `tests/checkpoint_data_sync_test.cpp` (four, and two `DataSyncer`
+cells). `SimCase.ACaseFileRoundTripsAndReplays` is re-pinned to 31 ops: its
+injected page-sync fault, met by the first checkpoint, now stops the
+instance where the step used to be retried. **Mutations**, each three
+times, both killed: the ticket completed before its sync returns (the
+held-sync cell and the ticket cell); the anchor's page written before the
+collection's sync (the ordering cell and the carried-page cell).
+
+**Review** (`critics-developer`): fixed `Stop` stranding a `SyncNow`
+waiter, and the failure handler reading a freed `WalManager` during
+`~Expeditor` (the destructor stops the syncer first); applied a
+write-count assertion that makes the held-sync cell kill the order's
+mutation, a direct sticky assertion, the carried-page cell, a
+`Stop`-with-a-waiter cell, the dead sync counter removed, `SyncNow`'s
+fallback shortened, park time in the run record. **Declined**: merging the
+publish's write loop into the step loop (`Step` owns the snapshot cursor,
+the step report and the deferral's cursor rule, which a shared helper
+would have to carry); making `Step` always write-only (the synchronous
+path - mount, shutdown, tests - keeps `FlushPages`' contract and its phase
+timers); one `DataSyncer*` on the target instead of three virtuals (`wal/`
+does not depend on `storage/`). Overhead not measured; measured at the
+milestone's close.
+
+### BI-S5 — the close, 2026-10-11
+
+**Code.** BI-S5 began as text and became two code commits, each written into
+§4 and adopted on the standing go-ahead. `cc432881`: the scheduler says who
+held it (per group the longest poll and polls over 10 ms and 100 ms, and the
+longest stretch of an iteration no poll accounts for), because B's first
+smoke run showed 3 s holds that were the load's own statements; `kGateParks`
+4 → 16 (BI-Q10-R). `ec827a19`: one log park per snapshot after `Start`, and a
+step asks for its data-file sync without waiting, because B's first close
+cells completed a quarter of A's runs at `cores = 1`, `relaxed` (BI-Q13).
+Each was reviewed (`critics-developer`): the first's review fixed a leaked
+probe connection set in the driver and corrected BI-Q10-R's text (the
+counters are per group and cumulative; two attributions were inferences);
+the second's found no bug and named the unsynced backlog a carve's sync
+would inherit, answered by the unawaited per-step request; declined:
+dropping the synchronous path's per-step sync (it bounds mount's and
+shutdown's backlog the same way), and narrowing `WritePages` to `Status`
+(the step reads its count). A mutant restoring the per-step park was killed
+3/3 by the held-sync cell. Suite 3535/3535 and sim 180/180 at `ec827a19`.
+
+**Measurement.** `bench/v3.0.0/results-bi-s5-checkpoint-stall-v2.7.0-784-gec827a19.md`
+(A = `55ee8370`, B = `ec827a19`, twelve cells each, plus two idle-core cells
+of A) and `results-bi-close-overhead-v2.7.0-784-gec827a19.md` (`ck-tester`,
+296 runs). Against BI-Q10:
+
+- **(i), as BI-Q10-R reads it - not met.** The checkpoint's longest own hold
+  fell from 1.1-79 s to 0.15-4.2 s and its reactor time about tenfold, but it
+  still holds past 10 ms: a `pwrite` stalled in the kernel's writeback
+  throttle (up to about 300 ms), the inline log gate after 16 deferrals at
+  `relaxed`, and publish batches. W2 moved the syncs, not the writes.
+- **(ii) - met in 10 of 12 cells**; `c4-group` r1 2.06x and r2 3.6x, against
+  A's 30x and 11x in that shape.
+- **(iii) - met.** Per-statement p50s flat within run-to-run noise (53 of 54
+  `relaxed` cells, every OLTP cell resolved slower: none); the longest
+  statement falls where a checkpoint lands in the measured arm (45.8 → 2.1 ms
+  at `cores = 1`, 10,000 rows).
+- **(iv), reported.** `group`: runs and anchor gaps unchanged at `cores = 1`.
+  `relaxed`: at `cores = 1` runs 3.5-6.2 s against 0.66-0.83 s and the worst
+  anchor gap 11-16 s against 6 s; at `cores = 4` 72-113 s against 83-289 s.
+  An idle core's run: 37-64 ms at p50 against 39-40 ms.
+
+**Docs.** `wal.md` §8-1 and §11, `sched.md` §4 and §9, the stale comments
+§3's row names, `CLAUDE.md`'s WAL row, `known-gaps.md`'s checkpoint entry
+and a new one for the publish's map window, BA-R10 and BA-S13 per BI-Q1
+(a). The stall's bug entry is restated with the numbers, not deleted, since
+the bar is not met; the data-file `fsync` entry was deleted at BI-S4.
+`page.md` §13 is not edited: `wal.md` §11-2 no longer cites it.
+
+**What the bar's miss leaves for the operator**: moving the checkpoint's page
+writes off the reactor (outside W2), and the inline remainder's fix, which
+touches the recLSN rule (`[quiet-wrong]`) - both in the bug entry.

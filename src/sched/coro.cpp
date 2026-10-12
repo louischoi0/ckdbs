@@ -1,6 +1,30 @@
 #include "kds/sched/coro.hpp"
 
+#include <cstdio>
+#include <exception>
+#include <string>
+
+#include "kds/base/fail_stop.hpp"
+
 namespace kds::sched {
+
+void StopOnEscapedException() noexcept {
+    // Named when it can be: the type of what escaped is most of the diagnosis
+    // (`std::bad_alloc` is an allocator that refused). Rethrown only to be
+    // caught - it is the one way to reach the in-flight exception's message.
+    // The message lives in a fixed buffer: this may be the out-of-memory path.
+    char what[160] = "unknown exception";
+    try {
+        throw;
+    } catch (const std::exception& e) {
+        std::snprintf(what, sizeof what, "%s", e.what());
+    } catch (...) {
+    }
+    char message[256];
+    std::snprintf(message, sizeof message, "exception escaped a coroutine (%s)", what);
+    base::FailStop(message);
+}
+
 namespace {
 
 // Core-local rather than atomic, for the reason step_vm.cpp's page-span

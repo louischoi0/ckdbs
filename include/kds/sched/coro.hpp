@@ -67,6 +67,11 @@
 
 namespace kds::sched {
 
+// What `Coro::promise_type::unhandled_exception` does: names the exception on
+// stderr and aborts the process. Called from inside the catch handler, which
+// is how it reaches the in-flight exception.
+[[noreturn]] void StopOnEscapedException() noexcept;
+
 // A coroutine that runs on a reactor and finishes with a Status.
 //
 // Lazily started: `initial_suspend` suspends, so calling a `Coro` function
@@ -123,12 +128,10 @@ public:
 
         void return_value(Status s) { result = std::move(s); }
 
-        // rules.md forbids exceptions in engine logic, so nothing should
-        // ever reach this. It cannot be omitted - the language requires the
-        // member - and it deliberately does nothing rather than calling
-        // std::terminate: a build that does enable exceptions should fail
-        // at the throw site, not here.
-        void unhandled_exception() {}
+        // **An exception that escapes the body stops the process**
+        // (`docs/spec/sched.md` §3): returning here would complete the
+        // statement as `Status::OK()`.
+        [[noreturn]] void unhandled_exception() noexcept { StopOnEscapedException(); }
     };
 
     Coro() noexcept = default;

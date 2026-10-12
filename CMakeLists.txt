@@ -13,6 +13,7 @@ add_compile_options(-Wall -Wextra)
 
 add_library(kds
     src/base/log.cpp
+    src/base/fail_stop.cpp
     src/base/crash_point.cpp
     src/storage/crc32c.cpp
     src/storage/page_header.cpp
@@ -41,6 +42,7 @@ add_library(kds
     src/txn/manager.cpp
     src/storage/in_memory_page_store.cpp
     src/storage/cabin_bound_page.cpp
+    src/storage/data_syncer.cpp
     src/storage/device_page_store.cpp
     src/storage/page_mgr/page_mgr.cpp
     src/server/superblock.cpp
