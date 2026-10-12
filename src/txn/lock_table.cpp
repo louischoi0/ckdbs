@@ -1,5 +1,6 @@
 #include "kds/txn/lock_table.hpp"
 
+#include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 #include "kds/sched/waker_table.hpp"
 
@@ -606,7 +607,9 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t
     // relation's fence counter is nonzero (AO-R3), which is why a scan is
     // the right shape and an interval index is not: the common case does
     // not run this at all.
+    Contention::Add(Tally::kFenceWalks);
     for (Partition& part : partitions_) {
+        Contention::Add(Tally::kFencePartitionsRead);
         LatchGuard guard(part.latch);
         for (Entry& e : part.entries) {
             if (e.key.rel_oid != rel || !e.key.IsFenceUnit()) continue;

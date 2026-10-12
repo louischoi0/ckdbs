@@ -8,6 +8,7 @@
 #include <cctype>
 #include <string>
 
+#include "kds/base/contention.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/txn/varheap_release.hpp"  // a rolled-back spill is released, not retired
@@ -295,6 +296,7 @@ void TransactionManager::NoteDeleteMark(Transaction& txn, std::uint32_t rel_oid,
 
 void TransactionManager::MoveSchemaWordIfCatalogWriter(const Transaction& txn) noexcept {
     if (txn.wrote_catalog_ && schema_word_ != nullptr) {
+        Contention::Add(Tally::kWordMovesResolve);
         schema_word_->fetch_add(1, std::memory_order_acq_rel);
     }
 }

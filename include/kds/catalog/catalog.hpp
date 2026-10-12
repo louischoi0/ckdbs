@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "kds/base/contention.hpp"
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog_cache.hpp"
@@ -1353,7 +1354,7 @@ private:
     // DDL-invalidatable cache entry. `what` names the mutation for the
     // Debug line. Call it *after* the page write succeeds - a failed
     // mutation staled nothing.
-    void BumpVersion(std::string_view what);
+    void BumpVersion(std::string_view what, Tally cause = Tally::kWordMovesSchema);
 
     storage::PageStore& store_;
 
@@ -1415,7 +1416,7 @@ private:
     // The word and the value this cache was built at (`SetSchemaWord`,
     // `Revalidate()`). `BumpWord()` runs at every DDL write; its adopt-only-
     // if-current rule is stated where it is decided, in `catalog.cpp`.
-    void BumpWord();
+    void BumpWord(Tally cause);
     std::atomic<std::uint64_t>* schema_word_ = nullptr;
     std::uint64_t cache_built_at_ = 0;
 };

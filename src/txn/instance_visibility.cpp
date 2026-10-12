@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "kds/base/contention.hpp"
 #include "kds/sched/waker_table.hpp"
 
 namespace kds::txn {
@@ -269,10 +270,14 @@ bool InstanceVisibility::InFlight(std::uint64_t trx_id, std::uint32_t first_core
     // Every attached core once, starting at `first_core`: the rotation is a
     // permutation of `[0, in_use)` whatever `first_core` is.
     const std::uint32_t in_use = slots_in_use_.load(std::memory_order_acquire);
+    Contention::Add(Tally::kInFlightAsks);
     for (std::uint32_t k = 0; k < in_use; ++k) {
         const CoreInFlightTable* table = in_flight_table((first_core + k) % in_use);
-        if (table != nullptr && HoldsIn(*table, trx_id, [](std::uint32_t) {})) return true;
+        if (table == nullptr) continue;
+        Contention::Add(Tally::kInFlightTablesRead);
+        if (HoldsIn(*table, trx_id, [](std::uint32_t) {})) return true;
     }
+    Contention::Add(Tally::kInFlightMisses);
     return false;
 }
 

@@ -320,6 +320,29 @@ TEST(ContentionCountersTest, TwoCoresInsertingIntoOneRelationContendWhatAnInsert
     }
 }
 
+// BP-S1's census tallies: a schema-word move is counted under its cause,
+// and another core's memo drop at its next statement head is counted too.
+TEST(ContentionCountersTest, AWordMoveCountsUnderItsCauseAndAPeersMemoDropCounts) {
+    std::unique_ptr<TwoCoreRig> rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    auto run = [&](std::uint32_t core, const std::string& sql) {
+        const std::string reply = rig->core(core).dispatcher().Dispatch(sql).response;
+        EXPECT_FALSE(StartsWith(reply, "ERR")) << sql << ": " << reply;
+    };
+    run(1, "CREATE TABLE census (id int64, sym int64)");
+    run(1, "INSERT INTO census VALUES (1, 7)");
+
+    const std::uint64_t schema = Of(Tally::kWordMovesSchema);
+    const std::uint64_t cabin = Of(Tally::kWordMovesCabin);
+    run(0, "CREATE CABIN ON census(sym)");
+    EXPECT_GT(Of(Tally::kWordMovesCabin), cabin) << "a Cabin create moved the word as schema";
+    EXPECT_EQ(Of(Tally::kWordMovesSchema), schema) << "a Cabin create counted as schema";
+
+    const std::uint64_t drops = Of(Tally::kCatalogMemoDrops);
+    run(1, "SELECT * FROM census WHERE id = 1");
+    EXPECT_GT(Of(Tally::kCatalogMemoDrops), drops) << "core 1 kept a memo the word left";
+}
+
 TEST(ContentionCountersTest, TheWindowAndTheLockTableCountUnderTheirOwnKinds) {
     std::unique_ptr<TwoCoreRig> rig = OpenRig();
     ASSERT_NE(rig, nullptr);

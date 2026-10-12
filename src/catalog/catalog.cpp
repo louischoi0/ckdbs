@@ -922,7 +922,7 @@ StatusOr<Oid> Catalog::GenerateUserOid() {
     return (*next_user_oid_)++;
 }
 
-void Catalog::BumpVersion(std::string_view what) {
+void Catalog::BumpVersion(std::string_view what, Tally cause) {
     ++catalog_version_;
     cache_.Invalidate();
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
@@ -934,11 +934,12 @@ void Catalog::BumpVersion(std::string_view what) {
     // would be reading a catalog its own writer disagrees with. The word
     // is bumped at the write, which is before the DDL's relation `X` is
     // released at its decide - D21's order.
-    BumpWord();
+    BumpWord(cause);
 }
 
-void Catalog::BumpWord() {
+void Catalog::BumpWord(Tally cause) {
     if (schema_word_ == nullptr) return;
+    Contention::Add(cause);
     const std::uint64_t prev = schema_word_->fetch_add(1, std::memory_order_acq_rel);
     // Adopt the bump only if this cache was current. A writer whose cache
     // `BumpVersion()` just dropped, or a root move keeping its entry in
@@ -957,6 +958,7 @@ void Catalog::Revalidate(const std::function<void()>& after_read) {
     const std::uint64_t now = schema_word_->load(std::memory_order_acquire);
     if (after_read) after_read();
     if (now == cache_built_at_) return;
+    Contention::Add(Tally::kCatalogMemoDrops);
     cache_.Invalidate();
     cache_built_at_ = now;
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
@@ -965,7 +967,7 @@ void Catalog::Revalidate(const std::function<void()>& after_read) {
 }
 
 void Catalog::InvalidateAfterCompensation() {
-    BumpVersion("a transaction that wrote catalog rows resolved");
+    BumpVersion("a transaction that wrote catalog rows resolved", Tally::kWordMovesResolve);
 }
 
 StatusOr<std::uint64_t> Catalog::RetireDeleteMarks(
@@ -2672,7 +2674,7 @@ void Catalog::AdoptRoot(Oid rel_oid, std::uint64_t index_oid, PageId new_root) {
     // entry was just repaired and adopts the bump, while every other core
     // drops its memo at its next task boundary and re-reads the anchor
     // (`catalog.md` CT2).
-    BumpWord();
+    BumpWord(Tally::kWordMovesRoot);
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         // Rare and structural, so Debug rather than Trace.
         log_->Debug("catalog", "relation oid " + std::to_string(rel_oid) +
@@ -3077,7 +3079,7 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     // nothing cached; a Cabin appearing stales `TableAccess::cabin_mask` on
     // every held entry for this relation, which is a fact the compiler
     // reads. That is what makes this DDL and not a statement-path write.
-    BumpVersion("sys.cabins create");
+    BumpVersion("sys.cabins create", Tally::kWordMovesCabin);
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("catalog", "created cabin " + std::to_string(row.cabin_id) + " on relation oid " +
                                   std::to_string(rel_oid) + " column " + std::to_string(col_pos));
@@ -3104,7 +3106,7 @@ Status Catalog::DropCabin(std::uint64_t cabin_id) {
             return s;
         }
 
-        BumpVersion("sys.cabins drop");
+        BumpVersion("sys.cabins drop", Tally::kWordMovesCabin);
         if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
             log_->Info("catalog", "dropped cabin " + std::to_string(cabin_id));
         }

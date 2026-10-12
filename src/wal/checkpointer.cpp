@@ -545,6 +545,7 @@ Status LogStopped() {
 sched::Coro Checkpointer::ParkOnDataSync() {
     const std::uint64_t ticket = target_.RequestSync();
     if (ticket == 0) co_return Status::OK();  // a target with nothing to wait on
+    Contention::Add(Tally::kCheckpointDataSyncs);
     const std::function<bool()> synced = [this, ticket] { return target_.SyncDone(ticket); };
     const sched::MonoTimeNs parked = wal_.clock().Now();
     co_await sched::WaitUntil{&synced};
@@ -564,6 +565,7 @@ sched::Coro Checkpointer::WriteForPublish(std::span<const PageId> pages, std::ui
                                        parks < kGateParks && !pages.empty() ? &deferred : nullptr);
         }
         if (!wrote.ok()) co_return wrote.status();
+        Contention::Add(Tally::kCheckpointPagesWritten, wrote.value());
         if (deferred == kNoLsn) co_return Status::OK();
         if (deferred >= wal_.appended_lsn()) {
             parks = kGateParks - 1;  // the next attempt's inline gate refuses it

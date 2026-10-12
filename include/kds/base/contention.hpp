@@ -83,6 +83,19 @@ enum class Tally : std::uint8_t {
     kRefusalIndexParent,
     kRefusalIndexSecure,
     kStructuralReruns,    // a statement re-run after a structural refusal (BA-S14)
+    // BP-S1's census (`workorder-bp-per-core-residue.md` §6.1).
+    kCatalogMemoDrops,    // a catalog memo dropped whole at a statement head
+    kWordMovesRoot,       // a schema-word move for a root a level grew over
+    kWordMovesCabin,      // ... for a Cabin's create or drop
+    kWordMovesSchema,     // ... for any other catalog write
+    kWordMovesResolve,    // ... for a catalog-writing transaction's resolution
+    kInFlightAsks,        // an `InstanceVisibility::InFlight` question
+    kInFlightMisses,      // ... answered "no", having read every table
+    kInFlightTablesRead,  // the per-core tables those questions read
+    kCheckpointPagesWritten,  // pages a checkpoint run's publish wrote back
+    kCheckpointDataSyncs,     // data-file syncs a checkpoint run parked on
+    kFenceWalks,          // a `FenceCoversKey` walk (a fence was held)
+    kFencePartitionsRead, // the lock partitions those walks latched
     kCount,
 };
 
@@ -94,7 +107,11 @@ inline constexpr std::array<const char*, kTallyCount> kTallyNames = {
     "ceiling_wait_us",        "carves",                 "checkpoint_runs",
     "refused_btree_descend",  "refused_btree_parent",   "refused_btree_secure",
     "refused_btree_lookup",   "refused_index_descend",  "refused_index_parent",
-    "refused_index_secure",   "structural_reruns",
+    "refused_index_secure",   "structural_reruns",      "catalog_memo_drops",
+    "word_moves_root",        "word_moves_cabin",       "word_moves_schema",
+    "word_moves_resolve",     "inflight_asks",          "inflight_misses",
+    "inflight_tables_read",   "checkpoint_pages_written", "checkpoint_data_syncs",
+    "fence_walks",            "fence_partitions_read",
 };
 static_assert(kTallyNames.back() != nullptr, "a Tally without a name");
 
