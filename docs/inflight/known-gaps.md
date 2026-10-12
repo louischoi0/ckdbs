@@ -412,22 +412,38 @@ statement about an engine that no longer exists; re-verify or strike it.
   been running against a volume they contradicted. See the fixture entry
   under Testing.
 
-- **No transaction has a lifetime ceiling any more, and the sweep that
-  enforced one is gone.** Verified at AT-S6 (2026-09-23) on
-  `at-s6-2pc-retired`. AN-R14 ruled a 10 s envelope and a 60 s ceiling for
-  every transaction, and what was built enforced it over **cross-owner
-  participant contexts alone** (`ShippedStatementExecutor::ExpireEnrolled`)
-  - AW-S3's record already said the instance-wide half was unbuilt and
-  unlettered. AT-S6 retired the executor with the protocol, so the narrow
-  half went too: `txn/manager.hpp` has no clock, no transaction carries a
-  start time, and **an abandoned explicit transaction holds the instance's
-  read horizon and its undo for the life of the process**.
+- **The transaction lifetime ceiling bounds explicit transactions only, and
+  defers to a statement that is running.** Verified on
+  `worktree-txn-lifetime-ceiling` from `1aebdfe8`, 2026-10-12. The entry
+  that stood here - *no transaction has a lifetime ceiling, so an abandoned
+  explicit transaction holds the instance's read horizon and its undo for
+  the life of the process* - closed with the listener's sweep
+  (`txn_lifetime_ceiling_ms`, `docs/spec/txn.md` §1): an explicit
+  transaction, idle or busy, poisoned or not, DDL inside it included, is
+  rolled back between 1x and 1.25x its lifetime. What it leaves:
+  - **An autocommit statement is not bounded.** It is its own transaction
+    and the sweep reaches only a session's explicit one; a long autocommit
+    `SELECT` holds its view for as long as it walks.
+  - **A statement in flight defers the sweep for as long as it runs.** It
+    is never interrupted, and a write does not yield (Statement
+    scheduling, below), so one that never ends holds its transaction past
+    the ceiling.
+  - **Background read views are not reached** (`txn.md` §1, exemption 2,
+    `[PROPOSED]`): the sweep walks connections, and the re-mint it would
+    need is unbuilt.
+  - **A swept KWP session's portals are kept.** A portal bound inside the
+    transaction keeps its sealed batches after the rollback, as it does
+    after a client's own `ROLLBACK`; the rows it delivers were read under a
+    transaction that no longer exists.
+  - **A KWP load session is an explicit transaction the sweep does not
+    reach.** `KwpLoadServer::HandleLoadBegin` dispatches the same `BEGIN`
+    (KW5, BI11) and holds it across the stream's frames, on a listener of
+    its own with no sweep, so a loader that stops mid-stream holds the
+    horizon until its connection closes. Not bounded by decision rather
+    than by omission: a bulk load can honestly run past 60 s, and whether
+    the ceiling applies to one is the operator's question.
 
-  A client that opens a transaction and stops talking is what reaches it,
-  and nothing refuses or reclaims. It is a widening of AW-S3's gap rather
-  than a new one, and it is now the whole of that rule. Owner:
-  `instructions/v3.0.0/workorder-aw-m1-close.md` §11.2, which sized the
-  instance-wide half and ruled it its own letter.
+  Owner: `docs/spec/txn.md` §1.
 
 - **A core that stops is not an idle core, and it pins the instance's
   commit-order floor for good.** Verified at AN-S2 on

@@ -581,5 +581,23 @@ TEST(ExpeditorConfigTest, TcpKeepaliveDefaultsOnAndRefusesWhatTheKernelWouldNot)
     EXPECT_EQ(config.tcp_keepalive_s, kMaxTcpKeepaliveS) << "a refused value changes nothing";
 }
 
+TEST(ExpeditorConfigTest, TheTransactionLifetimeCeilingDefaultsTo60sAndHasNoOffSwitch) {
+    // AN-R14 (docs/spec/txn.md §1): the operator's 60 s, milliseconds in
+    // the file. 0 is refused rather than read as "off", because a ceiling a
+    // 0 silently disables is how AW-S3's sweep went dark.
+    Expeditor::Config config;
+    EXPECT_EQ(config.txn_lifetime_ceiling_ns, kDefaultTxnLifetimeCeilingNs);
+    EXPECT_EQ(kDefaultTxnLifetimeCeilingNs, 60ULL * 1'000'000'000ULL);
+
+    ASSERT_TRUE(config.ApplyFile(WithPool("txn_lifetime_ceiling_ms = 250\n")).ok());
+    EXPECT_EQ(config.txn_lifetime_ceiling_ns, 250ULL * 1'000'000ULL);
+
+    Status zero = config.ApplyFile(WithPool("txn_lifetime_ceiling_ms = 0\n"));
+    EXPECT_EQ(zero.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(zero.message().find("no off-switch"), std::string::npos) << zero.message();
+    EXPECT_EQ(config.txn_lifetime_ceiling_ns, 250ULL * 1'000'000ULL)
+        << "a refused value changes nothing";
+}
+
 }  // namespace
 }  // namespace kds::server

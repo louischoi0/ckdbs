@@ -608,6 +608,25 @@ join_build_max_rows = 65536
 # can be measured against each other.
 lock_wait_fault_net_ms = 1000
 
+# The **transaction lifetime ceiling** (`txn_lifetime_ceiling_ms`): an
+# explicit transaction older than this, counted from its `BEGIN`, is rolled
+# back by the server - busy or idle, poisoned or not, DDL inside it
+# included. A client that opens a transaction and stops talking would
+# otherwise hold the instance's read horizon and its undo for good.
+#
+# The client learns it at its next statement: everything but ROLLBACK is
+# refused `RESOURCE_EXHAUSTED` (detail: transaction lifetime ceiling), and
+# that includes COMMIT, because the writes are already gone. A statement
+# that is running is never interrupted; the transaction is rolled back at
+# the first sweep after it ends. The sweep runs every quarter of the
+# ceiling, so a transaction ends between 1x and 1.25x of it. Autocommit
+# statements are not transactions this bounds.
+#
+# 60 s is the operator's provisional number: the engine serves
+# transactions that complete within 10 s. `0` is refused - the ceiling has
+# no off-switch.
+txn_lifetime_ceiling_ms = 60000
+
 # Insert spreading and `range_size_ids` are retired (v3.0.0's M3, AT-S9):
 # no range of a relation is opened any more, and a file that sets the key
 # is refused. A relation split before it keeps its ranges and is read and

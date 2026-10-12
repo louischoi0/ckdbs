@@ -1380,6 +1380,42 @@ TEST_F(TxnSessionTest, RepeatableReadStillHoldsOneViewAcrossTheseRoutes) {
     ASSERT_EQ(Run(holder, "ROLLBACK").substr(0, 8), "ROLLBACK");
 }
 
+// ---- AN-R14: what an expired session answers -------------------------------
+//
+// The sweep is the listener's (`TcpServer::ExpireOverdueTransactions`,
+// driven end to end in `expeditor_test.cpp`); what it leaves behind is a
+// session the dispatcher must answer, and that is pinned here without a
+// socket: the sweep's two steps, its `ROLLBACK` and `Session::Expire`.
+
+TEST_F(TxnSessionTest, AnExpiredSessionRefusesWithTheLifetimeDetailUntilItsRollback) {
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "INSERT INTO t VALUES (1, 10)").substr(0, 8), "INSERTED");
+    const std::uint64_t id = s.transaction()->id();
+    ASSERT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    s.Expire(id);
+
+    // Failed on the wire (`S_READY.txn_state` 2), holding nothing.
+    EXPECT_EQ(s.state(), Session::State::kFailedTxn);
+    EXPECT_EQ(s.transaction(), nullptr);
+    for (const char* sql : {"COMMIT", "SELECT * FROM t", "BEGIN"}) {
+        const DispatchOutcome out = dispatcher_->Dispatch(sql, &s);
+        EXPECT_EQ(out.status.code(), StatusCode::kResourceExhausted) << sql << ": " << out.response;
+        EXPECT_EQ(out.resource_detail,
+                  static_cast<std::uint16_t>(wire::ResourceDetail::kTxnLifetimeCeiling))
+            << sql;
+        EXPECT_NE(out.response.find("trx_id=" + std::to_string(id)), std::string::npos)
+            << out.response;
+    }
+    EXPECT_EQ(Run(s, "ROLLBACK"), "ROLLBACK trx_id=" + std::to_string(id));
+    EXPECT_EQ(s.state(), Session::State::kIdle);
+    EXPECT_EQ(s.expired_trx_id(), 0u);
+    EXPECT_EQ(Run(s, "ROLLBACK").rfind("ERR no transaction is open", 0), 0u)
+        << "the expiry outlived the ROLLBACK that ended it";
+    EXPECT_EQ(Run(s, "INSERT INTO t VALUES (2, 20)").substr(0, 8), "INSERTED");
+}
+
 // **AJ-T1's six `FkPendingDeleteClearTest` cells went at AT-S5f**, with
 // the table they registered into: they pinned that a session's
 // pending-delete registrations ended when its transaction did, whatever
