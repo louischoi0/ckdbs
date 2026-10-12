@@ -28,9 +28,9 @@
 //
 // ---- The rule this bends, and how far ------------------------------------
 //
-// `docs/rules/rules.md` §3 makes the engine thread-per-core, shared-nothing, and
-// permits a lock only at a partition boundary with a justification naming
-// what it protects and its acquisition order. This is that boundary - the
+// `docs/rules/rules.md` §3 keeps state core-local unless a spec declares it
+// shared, and admits a lock only with a justification naming what it
+// protects and its acquisition order. This is such a boundary - the
 // engine on one side, the device on the other - and this comment is that
 // justification.
 //
@@ -176,7 +176,7 @@ private:
     void Reclaim();
     void KickDurableWaiters() const noexcept;
 
-    // `kMaxWalCores` (superblock.hpp, which this layer does not include):
+    // `kMaxCores` (superblock.hpp, which this layer does not include):
     // no instance has more cores, and `CheckCoreCount` refuses one that
     // would, so a core always has its own slot.
     static constexpr std::uint32_t kWaitSlots = 64;

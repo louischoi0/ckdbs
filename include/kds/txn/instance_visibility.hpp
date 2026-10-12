@@ -25,9 +25,8 @@ class WakeRegistry;
 // Until AN-S2, `ReadView::Visible` decided visibility from a bound on
 // transaction ids and `TransactionManager::ReadHorizon()` walked one core's
 // live set. Both were sound only while a reader read its own core's
-// versions, which held only because a peer reached another core's rows by
-// shipping the statement. A shared buffer pool ends that, and the failure
-// is a dirty read rather than an error.
+// versions; a shared buffer pool ends that, and the failure is a dirty
+// read rather than an error.
 //
 // **A bound on trx ids cannot be repaired into an instance-wide one.** Ids
 // are carved by each core in disjoint blocks of `kTrxIdBlockSize`
@@ -587,7 +586,7 @@ public:
     //
     // False at one attached core, always: the floor then tracks that core's
     // own cursor, which rises with its own work, so the window drains and
-    // there is nothing to burn for. That is the shipped `cores = 1` case.
+    // there is nothing to burn for. That is the `cores = 1` case.
     bool PinsFloor(std::uint32_t core) const noexcept;
 
     // Raises the floor as far as the candidate and the readers allow, and
@@ -612,14 +611,14 @@ public:
 private:
     void NoteSlot(std::uint32_t core) noexcept;
 
-    std::array<CoreVisibilitySlot, server::kMaxWalCores> slots_{};
+    std::array<CoreVisibilitySlot, server::kMaxCores> slots_{};
 
     // The in-flight tables: owned here, each written by its core alone,
     // which is also the only writer of its pointer - so the owning array is
     // touched by one thread per index and never read by another, and a
     // reader reaches a table only through `in_flight_`.
-    std::array<std::unique_ptr<CoreInFlightTable>, server::kMaxWalCores> in_flight_owned_{};
-    std::array<std::atomic<const CoreInFlightTable*>, server::kMaxWalCores> in_flight_{};
+    std::array<std::unique_ptr<CoreInFlightTable>, server::kMaxCores> in_flight_owned_{};
+    std::array<std::atomic<const CoreInFlightTable*>, server::kMaxCores> in_flight_{};
 
     // How many cores report an unresolved transaction, maintained by
     // `PublishOldestUnresolved` alone: only the owning core writes a slot,
@@ -628,8 +627,8 @@ private:
     std::atomic<std::uint32_t> cores_with_unresolved_{0};
 
     // One past the highest core that has published anything. Every walk
-    // over the slots stops here rather than at `kMaxWalCores`, so the
-    // shipped `cores = 1` pays one slot per mint and not sixty-four.
+    // over the slots stops here rather than at `kMaxCores`, so
+    // `cores = 1` pays one slot per mint and not sixty-four.
     // Monotone: a core never detaches.
     std::atomic<std::uint32_t> slots_in_use_{0};
 

@@ -19,9 +19,9 @@ namespace kds::catalog {
 
 // Core 0: the core the instance's mount runs on and its few placements go
 // to - the delete-mark purge's sweep, the checkpoint cadence's phase 0.
-// **A placement, never an authority** since AT-S5 (every core writes the
-// superblock, the free map and the catalog), and no relation is placed on
-// it or anywhere since AT-S9 retired `core_placement.hpp` with ownership.
+// **A placement, never an authority**: every core writes the superblock,
+// the free map and the catalog (AT-S5), and no relation is placed on any
+// core (AT-S9).
 inline constexpr std::uint32_t kSystemCore = 0;
 
 inline constexpr Oid kNamespaceSys = 0;
@@ -347,16 +347,12 @@ inline constexpr PageId kCatalogPagePatterns = 9;
 // and recorded in sys.tables, where it is DDL-immutable and therefore
 // cacheable (rows.hpp's note on varheap_page_id). That split is intended,
 // not incidental - operator ratification 2026-08-31, crosscore.md
-// CC12/CR1. The cost CC12 named - a page outside the reserved range was not
-// peer-readable, so `CoreRuntime::Open` granted those pages one at a time -
-// went with the fault grants at AW-S1b: one frame table serves every core,
-// so no core needs a right to read a page another loaded.
+// CC12/CR1. One frame table serves every core, so no core needs a right to
+// read a page another loaded.
 inline constexpr PageId kCatalogPagePatternDefs = 10;
-// sys.access_stats is pinned here, inside the reserved range. CC11 made that
-// range core-0-write-only until AT-S5, and `Catalog::RecordAccess` runs per
-// *statement*, so a peer had nowhere to write (CR7's batch to core 0 stood
-// in until AT-S7). Every core writes it under its root page latch now; the
-// per-core copy CC12/CR3 left open was declined (`core_runtime.hpp`).
+// sys.access_stats is pinned here, inside the reserved range. Every core
+// writes it under its root page latch (AT-S7); the per-core copy CC12/CR3
+// left open was declined (`core_runtime.hpp`).
 inline constexpr PageId kCatalogPageAccessStats = 11;
 inline constexpr PageId kCatalogPageCabins = 12;
 inline constexpr PageId kCatalogPageFkeys = 13;
@@ -368,13 +364,10 @@ inline constexpr PageId kCatalogPageFkeys = 13;
 // rather than incidental, and binding on any catalog relation that gains a
 // var-heap: crosscore.md CC12/CR1 (operator ratification 2026-08-31).
 //
-// This is the one catalog var-heap a peer reads today, and since AW-S1b it
-// reads it the way it reads anything else: the frame table is the
-// instance's, so a page's id decides nothing about who may fault it. A peer
-// used to grant itself the individual pages a row named, never the extent
-// around them; CC12 never ratified that as the general mechanism, and CR3
-// (a grown catalog page managed outside the reserved range, on the ordinary
-// relation rules) is what governs.
+// A peer reads this var-heap the way it reads anything else: the frame
+// table is the instance's, so a page's id decides nothing about who may
+// fault it. CR3 (a grown catalog page managed outside the reserved range,
+// on the ordinary relation rules) is what governs.
 inline constexpr PageId kCatalogPageAssertions = 14;
 
 // Page 15 was `sys.ranges`' root until the split relation was retired
@@ -386,9 +379,7 @@ inline constexpr PageId kCatalogPageAssertions = 14;
 // One list, because two places now need "all of them at once" and a
 // hand-written second copy is how a page added later gets left out of one
 // of them: `Catalog::Bootstrap()` creates them and `RetireDeleteMarks`
-// walks them. The flush before telling peers to re-read
-// (docs/inflight/in-progress/workplan-crosscore.md P6) was the other user
-// until AT-S2 (`kEveryCatalogPage` below).
+// walks them.
 //
 // **These are roots, not the whole relation.** A catalog relation is a
 // chain of heap pages linked through `next_page_id`, exactly as a user
@@ -410,12 +401,8 @@ inline constexpr PageId kAllCatalogPages[] = {
 // **this reserved range**, never from the free map's general supply, and
 // that is a correctness requirement rather than tidiness.
 //
-// Two rules depended on a catalog page's id being low, and one still does.
-// A peer core could fault any page below `first_evictable_page_id_`
-// read-only and nothing else it was not leased - so a catalog page at an id
-// above that limit was one a peer could not read at all. That rule went
-// with the fault grants at AW-S1b (every core faults every page now). And
-// a flush of "every catalog page" has to be able to name them; a bounded
+// One rule depends on a catalog page's id being low: a flush of "every
+// catalog page" has to be able to name them; a bounded
 // range can be named, an arbitrary set of general-supply ids cannot without
 // storing it somewhere durable.
 //
@@ -464,9 +451,8 @@ static_assert(CatalogRootsAreDistinctAndBelowOverflow(),
 // Every page a catalog relation can occupy: the roots, then the whole
 // overflow range.
 //
-// Its callers were the flush that preceded the catalog broadcast and a
-// peer's eviction of its stale copy; both went at AT-S2, when one pool and
-// a schema word made them moves of bytes nobody re-read. What remains is
+// The catalog broadcast's flush and eviction callers retired (AT-S2); their
+// history is at cf889b63. What remains is
 // a fixture's flush for a second store opened over the device (the writes
 // themselves are WAL-logged, `ddl-transactional.md` §7), which needs "all
 // of them" and tolerates an id that is not resident (`FlushPages` skips a

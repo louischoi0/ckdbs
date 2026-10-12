@@ -71,18 +71,11 @@ struct BootstrapResult {
 // **Every volume this build creates is `kSingleStream`** (AR0 M0, AL-S1c's
 // flip), chosen once here and pinned for the life of the volume.
 //
-// **There is no longer a parameter for the other topology** (AM-R4a, D14).
-// One existed, defaulted, so a test could build the one thing nothing else
-// could: a genuine pre-M0 volume, since `wal.md` §3 kept per-core streams
-// as a live branch that still mounted. D14 ends that - a v3 build mounts
-// only volumes it created - and `superblock.cpp`'s `Decode` refuses any
-// image that is not `kSuperBlockVersion`. Keeping a way to *create* a per-core-stream
-// volume would have left the branch reachable from tests alone, which is
-// the state AM-R4a calls "refusing the volume without deleting the
-// machinery": the refusal is what made the lease, the CC7 fault grants and
-// the stamp claim unreachable, and a bootstrap parameter that reopened them
-// would have made the refusal a formality. AW-S1b then deleted all three,
-// which is the other half AM-R4a asks to arrive with it.
+// **There is no parameter for the other topology** (AM-R4a, D14): a v3
+// build mounts only volumes it created, and `superblock.cpp`'s `Decode`
+// refuses any image that is not `kSuperBlockVersion`. The per-core-stream
+// topology, the lease, the CC7 fault grants and the stamp claim retired
+// (AM-S4(d), AW-S1b); their history is at cf889b63.
 //
 // `kPerCoreStreams` survives as a *value* `Decode` still names, because a
 // field it cannot read is a field it must refuse rather than assume.

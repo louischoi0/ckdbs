@@ -41,8 +41,8 @@
 // stated as such.** Once the `IS` is *granted*, no DDL can take the
 // relation `X` until the statement ends - a reader that has resolved a
 // schema is not overtaken, which since AT-S1 covers a join's inner
-// relation, every subquery relation, a write's own relation and the stage a
-// remote step executes, not only the outermost walk. When the ask is
+// relation, every subquery relation and a write's own relation, not only
+// the outermost walk. When the ask is
 // *refused* the DDL was there first,
 // and the three facts above are what make the reader's answer right; the
 // lock does not, and `ar0-5-amendment-uniformity.md` §8's "a stale parse
@@ -159,11 +159,9 @@ private:
 
 // The holder id a read borrow is taken under, and the one spelling of its
 // layout: bit 63 is `kReadHolderBit` (`lock_table.hpp`), bits 32-61 the
-// core, bits 0-31 the dispatcher's sequence. **Bit 62 is always 0 since
-// AT-S10**: it named the minter while a second one lived on a core - the
-// remote-step server, with a counter of its own - so two holders on one
-// core could not share an id. One minter per core cannot collide with
-// itself. A wait names a holder "a positioned reader" rather than a
+// core, bits 0-31 the dispatcher's sequence. **Bit 62 is always 0**: one
+// minter per core cannot collide with itself. The remote-step minter it
+// named retired (AT-S10); its history is at cf889b63. A wait names a holder "a positioned reader" rather than a
 // transaction that never existed. `seq` is 32 bits so the field cannot
 // alias a core's.
 constexpr std::uint64_t ReadHolderId(std::uint32_t core_id, std::uint32_t seq) noexcept {

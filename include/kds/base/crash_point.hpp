@@ -30,16 +30,12 @@
 //
 // Cost when unarmed - which is every production process - is an
 // out-of-line call, the once-guard's acquire load, and an `empty()` test.
-// Stated exactly rather than as "one cached load", because every call site
-// is on the cross-owner commit path and none is hot enough for the
-// difference to matter. **No crash point sits on the one-owner path**,
-// which is what keeps D1's fast path free of this facility as well as of
-// the protocol.
+// Its call sites on the cross-owner commit path retired with 2PC (AT-S6);
+// their history is at cf889b63.
 //
 // Syntax: `KDS_CRASH_POINT=<name>` fires at the first hit of `<name>`;
 // `KDS_CRASH_POINT=<name>:<n>` fires at the n-th (1-based). The ordinal is
-// what lets a two-participant transaction be killed after the *second*
-// participant reached a point rather than the first.
+// what lets a process be killed at a point's n-th hit rather than its first.
 namespace kds::base {
 
 // What one `KDS_CRASH_POINT` spelling means. `name` empty is "nothing

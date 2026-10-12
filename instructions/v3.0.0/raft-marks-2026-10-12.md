@@ -76,16 +76,16 @@ Korean it was typed in.
 | **Word** | *"Sync the current repo and find what is left over from the shared-nothing era, and the overhead those leftovers cause."* (W0 of BP) |
 | **Mark** | None: a question answered. CLA synced the main checkout to `fe248d94` and reported a survey in four groups: cost `cores = 1` pays, structure costing above one core, dead code, and comment and naming residue. Recorded in the main checkout on `main` at `fe248d94`, with no worktree |
 | **Does not settle** | Anything |
-| **Recorded at** | `workorder-bp-shared-nothing-residue.md` header (W0) and §1 |
+| **Recorded at** | `workorder-bp-per-core-residue.md` header (W0) and §1 |
 
 ## 9. BP written and pushed
 
 | | |
 |---|---|
 | **Word** | *"Write a work order for that issue: hypothesis, verification, code change, measurement, and re-exploration or rejection where needed."* (W1 of BP) |
-| **Mark** | BP-S0: the order written (`workorder-bp-shared-nothing-residue.md`), with W1's five words as its per-hypothesis loop (BP-R0). It was pushed to `main` directly from the main checkout at `fe248d94`, with no worktree and no work branch, as a document-only change, under the standing practice for documents written in a claude.ai session. The pre-push hook did not run, because it is not enabled in this clone; no build and no suite ran. **Not opened**: BP-Q0..Q13 are unmarked. The letter BP is CLA's choice (BP-Q12) |
+| **Mark** | BP-S0: the order written (`workorder-bp-per-core-residue.md`), with W1's five words as its per-hypothesis loop (BP-R0). It was pushed to `main` directly from the main checkout at `fe248d94`, with no worktree and no work branch, as a document-only change, under the standing practice for documents written in a claude.ai session. The pre-push hook did not run, because it is not enabled in this clone; no build and no suite ran. **Not opened**: BP-Q0..Q13 are unmarked. The letter BP is CLA's choice (BP-Q12) |
 | **Does not settle** | BP-Q0..Q13, among them the memo's option (BP-Q4, `[quiet-wrong]` under (a), (b) and (d)), the three ratified structures (BP-Q5..Q7) and the sequencing (BP-Q13) |
-| **Recorded at** | `workorder-bp-shared-nothing-residue.md`; `index.md`'s BP row |
+| **Recorded at** | `workorder-bp-per-core-residue.md`; `index.md`'s BP row |
 
 ## 10. BL opened, and how it runs
 
@@ -113,3 +113,12 @@ Korean it was typed in.
 | **Mark** | **BL is paused, not closed and not abandoned.** BL-S1..S3 and BL-S4's ruling 1 (a) stay built; BL-S4 stays stopped; the ruling 1 re-measurement was stopped with 2 of 18 cells taken and is reported nowhere |
 | **Does not settle** | BL-S4's rulings 2 and 3; BL-S5; BL's close and its overhead A/B; when BL resumes |
 | **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` §6 ("BL paused 2026-10-12"); `index.md`'s BL row; `docs/inflight/known-gaps.md`'s BL section; `CLAUDE.md`'s cross-core row |
+
+## 13. BP opened
+
+| | |
+|---|---|
+| **Word** | *"Open BP, adopt CLA's proposals, S2 first, and remove every citation of the shared-nothing concept (CLAUDE.md and other documents)."* (W2 of BP), with the go-ahead-achieving-milestone skill invoked on it |
+| **Mark** | **BP-Q0 opened**, on `worktree-bp-per-core-residue` from `cf889b63`. BP-Q1..Q3, Q6, Q8..Q13 marked as CLA proposed: Q3 (a), Q10 (b), Q11 `kMaxCores`, Q13 (a), BP-S2 first. BP-Q4, Q5 and Q7 marked "decided by BP-S1": their option is adopted from the census on the operator's standing go-ahead. **BP-Q14**, the citation sweep's reach, written after W2 and adopted on the standing go-ahead as (a): live documents and source comments, not dated records. The order is renamed `workorder-bp-per-core-residue.md` |
+| **Does not settle** | Any option the census decides, until BP-S1 has run; a push, a merge to `main`, a tag or a version |
+| **Recorded at** | `workorder-bp-per-core-residue.md` header (W2), §5; `index.md`'s BP row |

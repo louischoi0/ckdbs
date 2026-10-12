@@ -1,6 +1,6 @@
 # KDS Transactions & MVCC
 
-How KDS isolates concurrent statements and what a reader sees. `[PROPOSED]` marks a default to confirm or amend before the affected part is built; `[OPEN]` must not be assumed. Companion specs: `docs/spec/wal.md`, `docs/spec/heap-and-tuple.md` (§3.2, the tuple MVCC header), `docs/spec/cross-owner-txn.md` (retired at AT-S6: no transaction touches more than one core).
+How KDS isolates concurrent statements and what a reader sees. `[PROPOSED]` marks a default to confirm or amend before the affected part is built; `[OPEN]` must not be assumed. Companion specs: `docs/spec/wal.md`, `docs/spec/heap-and-tuple.md` (§3.2, the tuple MVCC header). No transaction touches more than one core.
 
 ---
 
@@ -16,19 +16,13 @@ is the input every retention-sized quantity is derived from — undo
 retention, the visibility window, the lock-wait fault nets, and later the
 WAL-replication ack timeout.
 
-**The 10 seconds existed under another name** until AT-S6:
-`kShippedStatementDeadlineNs` (`statement_ship_service.hpp`, retired with
-statement shipping), the point past which a shipped statement's reply was
-presumed lost rather than slow. AN-R14 made that coincidence a statement —
-the per-statement deadline *is* the envelope — and the envelope survives
-the shipping as scope, with no constant of its own.
+**The 10 seconds are scope, with no constant of their own.**
 
 **The 60 seconds are the mechanism, and it is the listener's sweep**,
 `txn_lifetime_ceiling_ms` (default 60,000; `kDefaultTxnLifetimeCeilingNs`,
 `tcp_server.hpp`), **provisional**: set by the operator, not measured, and
 re-read when AS-E measures the lifetime distribution. `0` is refused at
-startup: a ceiling that a value can silently switch off is how the
-participant sweep below went dark. Built on 2026-10-12
+startup: a ceiling has no off-switch. Built on 2026-10-12
 (`worktree-txn-lifetime-ceiling`) as the instance-wide half AW-S3 §11.2
 sized:
 
@@ -71,8 +65,7 @@ transaction is aborted, where a bound on *idleness* accepted it. That was
 the earlier proposal, and the operator's numbers say this engine does not
 serve that shape.
 
-**Two exemptions were proposed and one stands; the third went with
-AT-S6:**
+**Two exemptions were proposed and one stands:**
 
 1. **DDL inside an explicit transaction is not exempt** (the operator's
    ruling of 2026-10-12, which overrides AN-R14's proposal of "no
@@ -89,16 +82,8 @@ AT-S6:**
    sweep walks connections and reaches no read view, and no task re-mints
    on a ceiling's account; this is a second mechanism on a different
    object, not this one.
-3. **Prepared contexts** — D4's exclusion: after a participant replied
-   prepared it could not unilaterally abort. **Gone at AT-S6** with the
-   protocol that made a context prepared; there is no exclusion to
-   inherit, because there is no participant.
-
-**The participant sweep it replaces** existed over cross-owner
-*participant* contexts alone (`ShippedStatementExecutor::ExpireEnrolled`)
-and went with that executor at AT-S6. It rode `wal_drain_interval_ns`, so
-`wal_drain_interval_ns = 0` disabled the ceiling entirely; the listener's
-sweep has a timer of its own, and its one key has no off-switch.
+**The sweep has a timer of its own**, independent of
+`wal_drain_interval_ns`, and its one key has no off-switch.
 
 ### The levels
 
@@ -518,16 +503,13 @@ id is its floor term and is not that bound.
 **Readers are registered.** Two records together name every reader on a
 core: live transactions in the manager's `live_`, and every other snapshot
 that can read a superseded version across a park — an autocommit
-statement's (and a remote pipeline stage's, until AT-S10 deleted the
-protocol) — through a move-only `ReaderLease`
+statement's — through a move-only `ReaderLease`
 that `txn::AutocommitSnapshot` returns beside the snapshot, so registering
 is structural rather than disciplinary. Each core publishes the oldest
 `snapshot_lsn` over both into its slot, and a held mint lowers that slot
 *before* it reads the ceiling, so a pass on another core can never outrun a
-view in the gap between its mint and its registration. A snapshot was also **adopted** rather than minted until AT-S6 — a
-cross-owner REPEATABLE READ participant taking its coordinator's — and
-lowered the slot the same way before the view moved; nothing adopts now,
-because no transaction reaches a second core.
+view in the gap between its mint and its registration. No snapshot is
+adopted from another transaction; every view is minted.
 `TransactionManager::ReadHorizon()` is the minimum over cores: **the
 instance's oldest live snapshot**, not this core's. A version superseded by
 a transaction below the floor, or committed at or below every live and
@@ -606,7 +588,7 @@ page reaching the platter reissues the block; that is the exposure
 with recovery. This mirrors PostgreSQL's `FrozenTransactionId`, which is what
 `kBootstrapXid`'s own comment says.
 
-**Every core carves its own block from the one ceiling since AT-S10b.**
+**Every core carves its own block from the one ceiling.**
 Each core's `TrxIdSequence` is built over the instance's one `SuperBlock`,
 the superblock latch and one persist callback, which encodes page 0 under
 the latch and writes page 0 alone through `WriteBack`'s claim, then syncs
@@ -622,9 +604,7 @@ the ceiling and raises it **in one step under the latch** - two cores
 carving at once get two disjoint blocks - and the raised ceiling is durable
 before the block is issued from, because a mount refuses a log naming an id
 above it. A spent window is another carve: no grant, no refill, no
-refusal. Until AT-S10b only core 0 carved, and a peer drew windows from
-blocks core 0 carved for it and sent over the ring (the transaction-id
-lease), refused retryable `TxnConflict` while its refill was in flight.
+refusal.
 The row-id sequence keeps no per-core block (`heap-and-tuple.md` §4.1a).
 
 **An idle core burns its window** (AN-R13): `TransactionManager::MaybeBurnIdleBlock`,
@@ -816,7 +796,7 @@ level: **can the re-run answer differently once this holder decides?**
   does not enter: the holder's commit makes the
   parent visible to the re-run, and its abort makes the answer a terminal
   `FkViolation` instead of a retryable conflict. **One wait, whichever
-  core the holder is on** since AT-S5f: the check asks the instance's
+  core the holder is on**: the check asks the instance's
   lock table for the parent row and parks on the slot, which the holder's
   release flips and kicks across - a wake the `IsInFlight` poll does not
   have (AX-S2b's row wait is the same shape).
@@ -842,9 +822,7 @@ every subquery block, and a write's own relation — and its outermost walk
 declares **where it is**, `IS` on the slice it has reached, moved at every
 page boundary. The scope is **the statement**, not the transaction, so two
 `SELECT`s in one transaction declare twice and hold nothing between them.
-(A stage executing on another core declared for itself in its own frame
-until AT-S10 deleted the remote-step protocol; every step of a statement
-runs under the session's borrow now.)
+Every step of a statement runs under the session's borrow.
 
 - **It is a position, never a permission.** Visibility is the snapshot's
   and nothing here changes it. A borrow the table refuses leaves the reader
@@ -902,9 +880,8 @@ runs under the session's borrow now.)
 - **The holder is not a transaction.** An autocommit `SELECT` has no
   transaction, so a read borrow holds under an id from a space of its own
   (bit 63, which no 48-bit trx id reaches, `read_borrow.hpp`'s
-  `ReadHolderId`). Bit 62 told the dispatcher's holders from the
-  remote-step server's on the same core; since AT-S10 the dispatcher is the
-  one minter and nothing sets it.
+  `ReadHolderId`). The dispatcher is the one minter; bit 62 is set by
+  nothing.
   A refusal naming one says "a positioned reader".
 - **What declares the relation and no slice**: a nested step's walk (the
   per-page cost would be the page count times the outer cardinality), a
@@ -913,7 +890,7 @@ runs under the session's borrow now.)
   walk's alone, and each of the three reads falls through to that walk when
   its own path cannot answer. **What takes none: the foreign-key check
   family** - an `INSERT`'s or `UPDATE`'s parent and a `DELETE`'s children,
-  both read on the core the statement runs on since AT-S5f - because
+  both read on the core the statement runs on - because
   those checks are helpers beside the executor and not steps
   (`fk_check.hpp`: "`exec::Compile()` is SELECT-only"), so none of them
   passes the compiler seam AT-S1 threaded. The following letter's, with
@@ -925,7 +902,7 @@ declared in the spec that owns the subsystem, and this is that spec:
 
 > The **lock table** is the lock family's partitioned table, **one for the
 > instance** — built by the `Expeditor` for every core count, borrowed by
-> every peer's transaction manager, and taken by every dispatcher. It is
+> every core's transaction manager, and taken by every dispatcher. It is
 > `64 × cores` partitions keyed by `(rel_oid, unit kind, lo)`, so a
 > relation's entry and its tuples hash apart. Each partition carries a
 > `base/latch.hpp` latch, **null at `cores = 1`**. One thing is read
@@ -991,8 +968,7 @@ because the key that conflicted may be any of them.
 **One refusal in this family is not retryable and is not a conflict**: a
 transaction that reaches `max_locks_per_txn` is refused `ResourceExhausted`
 carrying `wire::ResourceDetail::kLockCap` (AO-R10, AO-S6c-c). The cap is
-65,536 per transaction across cores - one `Transaction` per transaction
-since AT-S6 retired the participants (AT-0 item 3, marked 2026-09-28). A retry meets
+65,536 per transaction across cores - one `Transaction` per transaction. A retry meets
 the same cap, so the bit is 0 and the client's fix is a shorter transaction
 rather than a later one.
 
@@ -1054,7 +1030,7 @@ fault net.
 A commit record that reached the platter under a failed sync is followed in
 the log by the compensations and by `TXN_ABORT`, and analysis reads that as
 aborted rather than as a winner (`wal.md` §12) — `kAborted` overwrites
-`kWinner`, which neither `kLoser` nor `kPrepared` may do. **What that does not
+`kWinner`, which `kLoser` may not do. **What that does not
 cover is a crash inside the unwind**: `TXN_ABORT` is appended without a
 durability wait, so a stream whose `TXN_COMMIT` bytes reached the device
 while the compensations and the abort record did not replays the

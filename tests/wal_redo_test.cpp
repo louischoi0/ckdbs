@@ -439,49 +439,6 @@ TEST_F(RedoTest, RedoLeavesTheOwningCoresStampAlone) {
     EXPECT_GT(storage::GetPageLsn(page.value().bytes()), 0u);
 }
 
-TEST_F(RedoTest, APageWithAHandoffInItsWindowReplaysTheRecordsAfterIt) {
-    // A→B→A with one stream (AM-S4(d)): the handoff erases nothing, so the
-    // page keeps the recLSN its pre-handoff record gave it, and the record
-    // after the handoff passes the ordinary RV5 gate against the page_lsn
-    // the first pass wrote - no bypass, no special case. The handoff itself
-    // names a page but touches none, so redo never loads it.
-    WriteHeapStream(1);
-    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
-    Lsn first_pass_lsn = 0;
-    {
-        auto page = store_.Get(kPage);
-        ASSERT_TRUE(page.ok());
-        first_pass_lsn = storage::GetPageLsn(page.value().bytes());
-    }
-    Lsn returned = 0;
-    {
-        auto s = WalStream::Open(device_.get(), 0);
-        ASSERT_TRUE(s.ok());
-        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
-        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
-        ASSERT_TRUE(
-            s.value()->Append({RecordType::kPageHandoff, kNoTxnId, kPage}, handoff).ok());
-        returned = AppendHeapInsert(*s.value(), /*slot=*/1, 0xC5);
-        ASSERT_NE(returned, 0u);
-        ASSERT_TRUE(s.value()->Sync().ok());
-    }
-    ASSERT_GT(returned, first_pass_lsn);
-
-    const AnalysisResult analysis = Analyzed();
-    ASSERT_EQ(analysis.dirty_pages.count(kPage), 1u);
-    EXPECT_LT(analysis.dirty_pages.at(kPage), returned)
-        << "the handoff neither erased the entry nor re-seeded it at its own LSN";
-
-    auto r = Redo((*device_), 0, store_, analysis);
-    ASSERT_TRUE(r.ok()) << r.status().message();
-    EXPECT_EQ(r.value().applied, 1u) << "only the record after the handoff replays";
-    EXPECT_EQ(r.value().no_page, 1u) << "the handoff must reach redo as touching no page";
-
-    auto page = store_.Get(kPage);
-    ASSERT_TRUE(page.ok());
-    EXPECT_EQ(storage::GetPageLsn(page.value().bytes()), returned);
-}
-
 // ---- The UNDO_WRITE gap, asserted rather than worked around -------------
 
 TEST_F(RedoTest, RedoOfUndoWriteRebuildsARecordThatNamesItsTuple) {

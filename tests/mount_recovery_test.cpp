@@ -1,10 +1,12 @@
 #include "kds/server/mount_recovery.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -78,29 +80,18 @@ protected:
         ASSERT_TRUE(s.value()->Sync().ok());
     }
 
-    // What a pre-AT-S6 volume holds after a cross-owner transaction: the
-    // participant's insert and its TXN_PREPARE naming `coordinator_txn`,
-    // then - unless `decision` is kPad - the coordinator's own terminal
-    // record, in the same stream. The prepare's bytes are the retired
-    // emitter's: the participant's id on the envelope, the coordinator's in
-    // the payload.
-    void WritePreparedParticipant(std::uint64_t participant_txn, std::uint64_t coordinator_txn,
-                                  wal::RecordType decision) {
+    // A log carrying a retired TXN_PREPARE after one committed insert: what
+    // a volume written before superblock 22 could hold. Its payload is all
+    // zero, because the refusal reads the kind and nothing else.
+    void WriteRetiredPrepare(std::uint64_t txn_id) {
         auto s = wal::WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok()) << s.status().message();
-        AppendInsert(*s.value(), participant_txn);
-
-        std::vector<std::byte> prepare(wal::kTxnPreparePayloadSize, std::byte{0});
-        const wal::TxnPreparePayload fields{/*coordinator_session_id=*/42, coordinator_txn,
-                                            /*coordinator_core=*/1};
-        ASSERT_TRUE(wal::EncodeTxnPrepare(prepare, fields).ok());
-        ASSERT_TRUE(s.value()
-                        ->Append({wal::RecordType::kTxnPrepare, participant_txn, kInvalidPageId},
-                                 prepare)
-                        .ok());
-        if (decision != wal::RecordType::kPad) {
-            ASSERT_TRUE(s.value()->Append({decision, coordinator_txn, kInvalidPageId}).ok());
-        }
+        AppendInsert(*s.value(), txn_id);
+        ASSERT_TRUE(s.value()->Append({wal::RecordType::kTxnCommit, txn_id, kInvalidPageId}).ok());
+        std::array<std::byte, 24> prepare{};
+        ASSERT_TRUE(
+            s.value()->Append({wal::RecordType::kTxnPrepare, txn_id + 1, kInvalidPageId}, prepare)
+                .ok());
         ASSERT_TRUE(s.value()->Sync().ok());
     }
 
@@ -235,51 +226,21 @@ TEST_F(MountRecoveryTest, ADurableAbortOwesUndoNothing) {
     EXPECT_EQ(r.value().transactions_rolled_back, 0u);
 }
 
-// ---- A pre-AT volume's TXN_PREPARE (AT-S6's third done-condition) --------
+// ---- A retired record kind refuses the mount (BP-R4) --------------------
 //
-// **What replaced the prepared state: nothing, because nothing prepares.**
-// 2PC retired at AT-S6 and the emitter, the runtime prepared flag and the
-// checkpoint's prepare floor at AT-S18, so this engine never writes the
-// record and never holds a prepared transaction live. A volume written
-// before AT-S6 can still carry one, and **this pass resolves it before the
-// mount serves anything** - a coordinator's commit makes the participant a
-// winner, no decision makes it a loser (`recovery.cpp` says why absence is
-// sound). After the pass no prepared transaction exists, which is why the
-// floor could go.
+// No build that writes superblock 22 appends TXN_PREPARE, so a log carrying
+// one is refused `Corruption` at analysis, before redo runs: never skipped, and
+// never resolved as the two-phase engine once did.
 
-TEST_F(MountRecoveryTest, APreAtPrepareWhoseCoordinatorCommittedMountsAsAWinner) {
-    WritePreparedParticipant(/*participant_txn=*/7, /*coordinator_txn=*/9,
-                             wal::RecordType::kTxnCommit);
+TEST_F(MountRecoveryTest, ARetiredPrepareRefusesTheMount) {
+    WriteRetiredPrepare(/*txn_id=*/7);
 
     auto r = Recover(WalAnchorFields{});
-    ASSERT_TRUE(r.ok()) << "a pre-AT prepare refused the mount: " << r.status().message();
-    EXPECT_EQ(r.value().prepared, 1u);
-    EXPECT_EQ(r.value().prepared_committed, 1u);
-    EXPECT_EQ(r.value().prepared_aborted, 0u);
-    // Two winners: the coordinator's own commit is a record of this log
-    // too, and the participant joins it. A loser verdict would leave one.
-    EXPECT_EQ(r.value().winners, 2u) << "the verdict, which the page below cannot tell apart";
-    EXPECT_EQ(r.value().losers, 0u);
-    EXPECT_EQ(r.value().transactions_rolled_back, 0u) << "a committed participant owes no rollback";
-
-    // Redo ran. The row is on the page in the rollback cell too: its
-    // insert predates RV10's undo record, so no compensation removes it
-    // (`ALoserRecoversInsteadOfRefusingTheMount`).
-    auto page = store_.GetUnpinned(kPage);
-    ASSERT_TRUE(page.ok()) << page.status().message();
-    EXPECT_EQ(heap::PageView(page.value()).slot_count(), 1u);
-}
-
-TEST_F(MountRecoveryTest, APreAtPrepareWithNoDecisionMountsAsARollback) {
-    WritePreparedParticipant(/*participant_txn=*/7, /*coordinator_txn=*/9, wal::RecordType::kPad);
-
-    auto r = Recover(WalAnchorFields{});
-    ASSERT_TRUE(r.ok()) << "a pre-AT prepare refused the mount: " << r.status().message();
-    EXPECT_EQ(r.value().prepared, 1u);
-    EXPECT_EQ(r.value().prepared_committed, 0u);
-    EXPECT_EQ(r.value().prepared_aborted, 1u);
-    EXPECT_EQ(r.value().losers, 1u);
-    EXPECT_EQ(r.value().transactions_rolled_back, 1u) << "an undecided participant is rolled back";
+    ASSERT_FALSE(r.ok()) << "a retired TXN_PREPARE was skipped";
+    EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
+    EXPECT_NE(r.status().message().find("TXN_PREPARE"), std::string::npos)
+        << r.status().message();
+    EXPECT_FALSE(store_.GetUnpinned(kPage).ok()) << "redo ran before the refusal";
 }
 
 // ---- The caller's two obligations come back as numbers -------------------

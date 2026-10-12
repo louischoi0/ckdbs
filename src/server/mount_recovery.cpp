@@ -26,23 +26,12 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     start.anchor_durable_lsn = anchor.durable_lsn;
 
     txn::RecoveryUndo undo(undo_log, wal);
-    // **R6-4's cross-stream resolver is gone** (AM-S4(d)). It was built
-    // here rather than in `wal/` because this is the layer that knows where
-    // a log directory lives, and its job was to open the *coordinator's*
-    // stream - another file - to learn a prepared transaction's verdict.
-    // With one stream that verdict is in the pass's own table, so
-    // `RecoverCore` resolves it inline and there is no second file to open,
-    // no `wal_dir` to open it from and no peer anchor to bound the scan of
-    // it. The `NotImplemented` refusal that fired when no resolver was
-    // installed went with it: nothing can now reach a mount that cannot
-    // decide its own prepares.
-    //
     // **The whole pass writes without claiming** (AR0 M0, AL-R6). Redo
     // takes no restamp, but undo's compensations reach the store through
     // the ordinary mutation path, so the suppression is set here - around
     // both phases - rather than at either. A guard, so a refused mount
-    // leaves the store as it found it. Unconditional since AM-S4(d): the
-    // topology it tested for is the only one that mounts.
+    // leaves the store as it found it. Unconditional (AM-S4(d)): one
+    // topology mounts.
     class StampSuppression {
     public:
         explicit StampSuppression(storage::PageStore& store) noexcept {
@@ -84,9 +73,6 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     out.scan_end = report.value().analysis.end_lsn;
     out.transactions_rolled_back = undo.transactions();
     out.compensations = undo.compensations();
-    out.prepared = report.value().prepared;
-    out.prepared_committed = report.value().prepared_committed;
-    out.prepared_aborted = report.value().prepared_aborted;
     out.page_floor = report.value().high_water.page_floor;
     out.page_floor_raised = report.value().high_water.page_floor_raised;
     out.next_trx_id = report.value().high_water.next_trx_id;
@@ -110,13 +96,6 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
                           ", skipped-not-dirty " + std::to_string(out.redo_skipped_not_dirty) +
                           ", healed " + std::to_string(out.pages_healed) + " page(s); undo wrote " +
                           std::to_string(out.compensations) + " compensation(s)" +
-                          (out.prepared != 0
-                               ? "; " + std::to_string(out.prepared) +
-                                     " prepared transaction(s) resolved against their "
-                                     "coordinators (" +
-                                     std::to_string(out.prepared_committed) + " committed, " +
-                                     std::to_string(out.prepared_aborted) + " aborted)"
-                               : "") +
                           (out.torn_tail ? "; tail was torn" : "") +
                           (out.timings.timed
                                ? "; analysis " + std::to_string(out.timings.analysis_ns / 1000) +
@@ -267,13 +246,8 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
             }
             continue;
         }
-        // **The writability test that stood here went with the lease**
-        // (AW-S1b). It asked whether this core may append to the Bound
-        // Cabin it had just revived, and refused the relation's writes
-        // where the answer was no - the PW1c-6c case, a cabin core 0 built
-        // for a relation a peer owns, which is every such assertion in a
-        // file written before owner-built cabins. Every core writes every
-        // page since AT-S5, so the case cannot arise: the
+        // The writability test retired with the lease (AW-S1b); its history
+        // is at cf889b63. Every core writes every page (AT-S5): the
         // writing core appends to the chain core 0 built, through the frame
         // table they share, and the assertion enforces. `assertion.md` §6.1 carries the fact.
         //

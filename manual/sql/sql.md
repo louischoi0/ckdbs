@@ -51,8 +51,7 @@ DROP   NAMESPACE <name>;
 It is not a separate storage area, it does not scope a transaction, it does
 not scope a *name* — see "Qualified names" below — and since v3.0.0's M3 it
 decides nothing about cores: every statement runs on the core its session
-is on, whatever namespaces its relations are in. (Until then a namespace
-chose the core that owned its relations.)
+is on, whatever namespaces its relations are in.
 
 **Put relations that are joined, foreign-keyed or read together in one
 namespace.** That is the grouping the engine records for a future use
@@ -947,7 +946,7 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   it from any core waits for the DDL to commit or roll back and then runs
   against the index list it left. It was refused inside a transaction
   between 2026-08-16 and 2026-08-18, for the wrong result that fix
-  closes, and again for a relation another core owned until AT-S5e. Two limits on all of the above, both deliberate:
+  closes. Two limits on all of the above, both deliberate:
   - **Not crash-durable.** Catalog writes are still unlogged and the
     catalog is not recovered, so a committed `CREATE TABLE` survives a
     crash only if its page reached the device. "Transactional" here means

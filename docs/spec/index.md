@@ -423,11 +423,8 @@ What it deliberately does not change:
   descriptor makes that the encoding the index was built from. Any decline,
   at compile or per row, takes the walk and returns identical rows by the
   residual.
-- **Cross-core — nothing ships.** An index step runs on the session's
-  core with the rest of its statement (`crosscore.md` CC1). Until AT-S10 a
-  step shipped to a remote stage was downgraded at encode to the walk it
-  would fall back to (`ShippedForm`); the step descriptor and the
-  downgrade went with the remote-step protocol.
+- **Cross-core.** An index step runs on the session's core with the rest
+  of its statement (`crosscore.md` CC1).
 
 ---
 
@@ -720,9 +717,8 @@ is the code it always was. Redo of these records is `docs/spec/wal.md`'s.
 > **IX14 — every core writes one index, and an insert's descent re-checks
 > the leaf it lands on (AT-S15).**
 
-An index hangs off its relation's catalog row and has no owner field; since
-AT-S5 a write runs where its session is, and since AT-S5e `CREATE INDEX`
-does too, so two cores maintain one index concurrently. The pages carry the
+An index hangs off its relation's catalog row; a write runs where its
+session is, and `CREATE INDEX` does too (AT-S5e), so two cores maintain one index concurrently. The pages carry the
 page latch (`page.md` §6). A descent is not latch-coupled - it releases a
 parent before reading the child, and a write descent drops the leaf's shared
 hold before taking it exclusive - so another core's divide can run inside
@@ -799,6 +795,5 @@ off is a catalog act: `DROP INDEX`.
 The decisions this spec leaves unsettled — `kIndexStringKeyBytes`, the leaf
 split point and fill factor, the column caps, reclamation of superseded
 entries, an index-only scan, `UNIQUE`, descending/partial/expression
-indexes, index cost as a `CABIN AUTO` input, and per-range against global
-indexes under range ownership — are unrecorded here; the refusals that stand
+indexes, and index cost as a `CABIN AUTO` input — are unrecorded here; the refusals that stand
 in their place are §11's.

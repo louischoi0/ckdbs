@@ -35,8 +35,8 @@ The **schema version word** saves a re-parse and nothing else. One
 memory-resident and never persisted — every cache is empty at mount, so no
 value survives one. Every core's `Catalog` holds a pointer to it
 (`Catalog::SetSchemaWord`). **It is not `Catalog::catalog_version()`**,
-which is one core's counter (`catalog.hpp`) that a peer's drop never
-advanced — so nothing shared may be validated against it — and the two
+which is one core's counter (`catalog.hpp`) that another core's drop does
+not advance — so nothing shared may be validated against it — and the two
 are not merged:
 the word is bumped by every invalidation that can stale another core's
 memo. (Two that cannot do not bump it: the mount's post-redo `DropCache()`
@@ -57,18 +57,14 @@ word, and other cores re-read the root from the anchor.
 
 **Asked at a task boundary, and never inside one.** `Catalog::Revalidate()`
 is one acquire load; on a mismatch the cache is dropped and the value
-adopted. It runs where the broadcast's handler used to — between tasks, at
-two sites: `CommandDispatcher::DispatchAndStage`'s head and the Cabin
-optimizer's tick (`CabinOptimizerExecutor::Tick`). The other seven went
-with their handlers: the two foreign-key probe handlers at AT-S5f, the two
-build request handlers at AT-S5d/AT-S5e, the refill's completion when range
-opening retired at AT-S9, the remote-step open (`OnStepOpen`) at AT-S10,
-and the peer's id-lease refill tick at AT-S10b.
+adopted. It runs between tasks, at two sites:
+`CommandDispatcher::DispatchAndStage`'s head and the Cabin optimizer's
+tick (`CabinOptimizerExecutor::Tick`).
 **It is never called from a cached read**, because a drop frees every
 `const TableAccess*` and `Schema&` a running statement holds
 (`catalog_cache.hpp`'s entries are reference-stable *until the next
 drop*), and a drop inside a statement is a read through freed memory —
-a peer's join binding its second relation, an FK loop over a borrowed
+a join binding its second relation, an FK loop over a borrowed
 `fkeys` vector. Every public dispatcher entry is therefore a
 cache-dropping boundary, and nothing may hold a catalog borrow across one
 (`command_dispatcher.hpp`'s contract on `DispatchAndStage`). A borrow
@@ -84,20 +80,14 @@ it.
 ## CT3 — What a task that asks nothing serves
 
 A task that reads the catalog without a boundary serves a memo as fresh
-as its last boundary — what a peer served while a broadcast was in flight,
-which bounded nothing either. Stale, never wrong, by CT1's three facts.
+as its last boundary. Stale, never wrong, by CT1's three facts.
 Where staleness has a cost the task asks: the Cabin optimizer's tick.
 
 ## CT4 — Why a drop of the memo is enough
 
 One frame table serves every core (AM-S2 step 3, `page.md` §6): the
 re-read after a drop finds the bytes the writer wrote, under the page
-latch. On a per-core pool it would re-read the same stale frame and
-conclude the same nothing, which is why the broadcast's handler evicted
-frames as well as dropping facts. The flush that preceded the broadcast
-carried the pages to the *device* for such a re-read; with one pool it
-moved bytes nobody re-read from there, and it is gone with the broadcast.
-Catalog writes are WAL-logged like every other (`ddl-transactional.md`
+latch. Catalog writes are WAL-logged like every other (`ddl-transactional.md`
 §7), so no page-level force is owed at a DDL's commit — redo carries the
 page; a fixture that opens a second store over the device still flushes,
 the engine does not.
@@ -106,12 +96,9 @@ the engine does not.
 
 Two things, neither an authority (AR0-5 §2, AT-R11): their frames are
 pinned, and page 0's address with the fixed catalog page numbers is
-bootstrap layout. Until AT-S5 the pages had one writer, core 0, and
-`Revalidate()` was a no-op there — the single writer's `cache_built_at_`
-always tracked the word. Every core writes them since AT-S5, so every
-core's cache can now be behind the word and `BumpWord`'s adopt-only-if-
-current rule (CT2) is live on every core rather than latent; nothing else
-in this file changed for it, which was the point of writing it first.
+bootstrap layout. Every core writes them, so every core's cache can be
+behind the word, and `BumpWord`'s adopt-only-if-current rule (CT2) is live
+on every core.
 
 **A catalog row is not a lock unit** (AT-S3, E13 answered no). A named
 key's admission writes the relation's `sys.tables` row - the mark -
@@ -123,11 +110,10 @@ read-modify-write is atomic because **no task parks under a page span**
 re-entrant for the owning core, so within one core it is the no-park rule
 and nothing else. A transaction-length `X` would
 serialise every named-key `INSERT` into a relation for the length of each
-transaction and protect nothing. A peer refused a named key until AT-S5
-(`catalog_read_only_`); it admits one now, the page write being every
-core's. An omitted key's issue (`AllocateRowId`) is the same
-read-modify-write of the same row, and every core has made it since
-AT-S10b, with no per-core cache (`heap-and-tuple.md` §4.1a). `rules.md` §3
+transaction and protect nothing. Every core admits a named key, the page
+write being every core's. An omitted key's issue (`AllocateRowId`) is the
+same read-modify-write of the same row, made by every core with no
+per-core cache (`heap-and-tuple.md` §4.1a). `rules.md` §3
 declares the pages, not the rows.
 
 **Placing a *new* catalog page is every core's too, since AT-S5b.** The
@@ -136,19 +122,14 @@ past them into the reserved overflow range (`kCatalogOverflowFirst` ..
 `kCatalogOverflowLimit`, `include/kds/catalog/well_known.hpp`; the rule that
 a catalog page may be managed past the fixed ones is `crosscore.md` CC12
 CR3), and `AllocateCatalogPage`
-walks that range id by id, taking the first that is free. `CreateAtUnpinned`
-refused a chosen id below the resident limit to every core but 0 until
-AT-S5b - the last core-0 write predicate the store had, written as
-unreachable and made reachable by AT-S5, and in the wrong direction: the
-probe loop treats only `AlreadyExists` as "try the next id", so on a peer
-the *first* probe failed and every catalog chain that had to grow failed
-permanently. What admits exactly one caller per id is the claim itself -
+walks that range id by id, taking the first that is free; the probe loop
+treats only `AlreadyExists` as "try the next id". What admits exactly one caller per id is the claim itself -
 `ClaimNamedIdLocked` under the structure latch and the map latch, which
 answers every loser `AlreadyExists` - and that is a property of the claim
 and not of the asking core (`page.md` §5). **Two cells between them, and
 neither alone**: `free_map_race_test.cpp`'s
-`OnlyOneCallerEverPlacesAPageAtAChosenId` races eight cores for one id and
-never touched the retired arm, its ids being in the user range;
+`OnlyOneCallerEverPlacesAPageAtAChosenId` races eight cores for one id in
+the user range;
 `device_page_store_test.cpp`'s
 `APeerPlacesAPageAtAChosenIdInTheSystemRange` reads the system half and is
 single-threaded.
@@ -158,7 +139,7 @@ single-threaded.
 `Expeditor` owns three atomics and hands each to every core's catalog. They
 arrived one stage apart, and each keeps its own rule in the table below.
 What they share is the shape `CoreRuntime::Config` already carries for the
-lock table and the instance read view - the owner builds it, every core
+lock table and the instance read view - `Expeditor` builds it, every core
 borrows a pointer, and a null pointer leaves a bare catalog on its own
 local copy, which is what a fixture and the sim hold.
 
@@ -186,9 +167,8 @@ from a struct is one deletion rather than three.
 CAS from zero to `HighestIssuedUserOid() + 1`; zero is the unseeded value
 and no oid can be zero, so one word carries both states. Two cores seeding
 at once agree - one CAS wins and the loser's read is the winner's. A
-per-catalog counter was sound while core 0 alone created objects and issued
-one oid twice the moment a peer ran `CREATE TABLE`: each catalog seeds
-*lazily*, so the first create on each core reads the other's rows and the
+per-catalog counter would issue one oid twice once a second core runs
+`CREATE TABLE`: each catalog seeds *lazily*, so the first create on each core reads the other's rows and the
 **second** issues from a counter seeded before they existed.
 
 **The mark count is a delta at the sweep, not an assignment.** The purge
@@ -205,11 +185,10 @@ the direction that would strand a mark until the next mount.
 **Every write that gives a catalog row a name makes its binding check and
 its write under one hold of that relation's root page, taken exclusive**
 (AT-S17; the AT-close order's Q2, marked 2026-09-26: the held page, no
-name lock unit). The check was a read and the write a second latch hold,
-which was one act while every DDL ran on core 0; AT-S5 made a DDL run where
-its session is, and two cores then both found a name free and both wrote
-it — two rows claiming one name, and resolution answering whichever it met
-first. Every *new* row of a catalog relation enters its chain at the root,
+name lock unit). A DDL runs where its session is, so a check that was a
+read and a write that was a second latch hold would let two cores both find
+a name free and both write it — two rows claiming one name, and resolution
+answering whichever it met first. Every *new* row of a catalog relation enters its chain at the root,
 so a writer holding the root is the only one adding a row; an in-place
 rewrite (a rename, a retype, a rollback's compensation by page and slot)
 does not pass through it, and what keeps those from admitting a name is

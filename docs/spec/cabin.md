@@ -4,8 +4,8 @@ Status: **DECIDED** — C1–C7 fixed; items marked `[PROPOSED]` / `[OPEN]`
 are not.
 Depends on: **`docs/rules/keystoneid-invariant.md` (K1–K5, adopted)**,
 Keystone pk contract (super column), B+tree pk facade (B1–B3), patterns +
-fingerprint (P-series), waystone trail model, core-ownership dispatch
-(D3), thread-per-core cooperative scheduling, MVCC undo-chain model.
+fingerprint (P-series), waystone trail model, thread-per-core
+cooperative scheduling, MVCC undo-chain model.
 Related docs: `waystone-concpets.md`, `pattern-tracking-levels.md`,
 `physical-optimizer.md` Part II (the cabin optimizer), `assertion.md`
 (the Bound class, §12).
@@ -199,8 +199,7 @@ after the literal Cabin (a compile-time key needs no per-row read), and
 only across an identical `(type_val, len)` descriptor — the write hook
 observes values coerced to the cabin column's type, so only an identical
 descriptor makes the outer row's decoded value the form the set was keyed
-on. Cross-core, the kind ships as its walk (the ship-time downgrade)
-exactly as the literal form does.
+on.
 
 The economics are §8's per key, multiplied by the outer side's key
 distribution. **The correlated form earns observation per key at
@@ -262,41 +261,19 @@ pk order — a page's slot order is its key order (`heap-and-tuple.md`
 ### 4b. What a set speaks for, and what a step may answer from it
 
 **A set is authoritative for the observed value across the instance, and
-every walk covers the whole relation.** The first half is AT-S7's: one
-store for the instance, into which every core appends, so the per-core
-scope rule that stood here - *"(observed value × the ranges its core
-owns)"*, resting on a write hook that appended only on the writing core -
-is struck with the per-core store that forced it. The second is AT-S10's:
-no step is assigned a slice of a relation, so a step banks from and serves
-to a walk of the whole relation and there is nothing for a set to answer
-short or twice. §1's promise holds unqualified.
-
-**The span rule that followed is retired at AT-S10.** It read: a step may
-bank only from a walk that would have reached every qualifying row, and
-answer from a set only what its own walk would have answered - asked once
-at the serve site as `CabinScopeCovers`, falling through to the walk when
-it did not hold. The one walk narrower than its relation was a remote
-stage's assigned slice (`StepChain::walk_span`), and the protocol that
-assigned it is deleted, so the predicate, the slice and the fall-through
-went together. A walk that *stops* early is a different matter and stays
-C1's: its set is partial and never commits (§4a).
-
-**The transition rule was the discard**, `crosscore.md` CC10's pre-grant
-drop of sets banked while a relation was whole. No relation is split (CC8),
-so there is no transition to guard.
+every walk covers the whole relation.** The store is one for the instance,
+into which every core appends (AT-S7), and no step is assigned a slice of
+a relation, so a step banks from and serves to a walk of the whole relation
+and there is nothing for a set to answer short or twice. §1's promise
+holds unqualified. A walk that *stops* early is C1's: its set is partial
+and never commits (§4a). A relation is one structure (`crosscore.md` CC8),
+so there is no transition for a set to be discarded across.
 
 ### 4c. What the serve path reports
 
-**No counter of its own since AT-S10.** A Cabin's serve is read from
+**The serve keeps no counter of its own.** A Cabin's serve is read from
 `SHOW CABINS`' per-cabin `observed=`, `entries=`, `hits=` and `misses=`
 and from `ANALYZE`'s per-step `cabin_hits=`/`cabin_misses=` (§7).
-
-- **`cabin_scope_fallthroughs` on `SHOW META`, `scope_declines` per cabin
-  on `SHOW CABINS`, and `ANALYZE`'s per-step `cabin_scope_declines=` are
-  retired** (AT-S10) with §4b's span rule, whose fall-throughs they
-  counted; a client reading any of them reads its absence.
-- **`cabin_split_discard` is retired** (AT-S9) with the discard it
-  counted: nothing splits a relation.
 
 ## 5. Write path — the witness
 
@@ -341,18 +318,12 @@ price of authority. Relations with no Cabin pay nothing.
 ## 6. Why this is sound in KDS specifically
 
 The classic hazard of build-by-observation is the write that slips
-between the recording scan and activation. **KDS used to delete it
-structurally and no longer does.** Statements for a relation ran on its
-owning core (D3) to completion, with no mid-statement interleaving, so
-*scan + record + mark observed* was atomic with respect to every other
-statement that could touch the relation — no build locks, no double-scan
-protocols. A write runs where the session is (AT-S5), a read too
-(AT-S6), and one store serves every core (AT-S7): two reactors reach one
-set, and the atomicity that argument rested on is gone. This section said
-*"if either changes, §4–§5 must be redesigned, not relaxed"*, and §6a is
-that redesign.
+between the recording scan and activation. A write runs where the session
+is, a read too, and one store serves every core (AT-S7): two reactors
+reach one set, so *scan + record + mark observed* is not atomic with
+respect to other statements that touch the relation.
 
-**The announce is what replaces it**, for both builds - the serve path's
+**The announce is what closes it**, for both builds - the serve path's
 and the controller's (`BuildSeededSets`, since AY-S6). A walk that intends to bank does
 not walk and then mark; it marks first, with an **empty set `Find`
 refuses to serve**, and merges its matches into that set at the end. The
@@ -409,10 +380,8 @@ then announces the build, and only then asks the instance again:
     !visibility->AnyUnresolved() &&
     visibility->CommitCeiling() == view.snapshot_lsn
 
-**`in_flight_at_mint` is the instance's fact since AT-S7.** It was the
-minting core's own `live_` list, which was the whole question while a
-Cabin store was a core's own; one store serves every core, so a
-transaction in flight on a peer writes rows this view cannot see and
+**`in_flight_at_mint` is the instance's fact** (AT-S7). One store serves
+every core, so a transaction in flight on another core writes rows this view cannot see and
 commits them the moment it ends. The mint asks both — its own list, and
 `InstanceVisibility::AnyUnresolved`. There is no "no instance" case: a
 manager handed none builds its own, on which `AnyUnresolved` *is* the
@@ -524,13 +493,10 @@ Distinct trust classes, cooperative operation; none replaces another:
   descent. Correctness never depends on any of them.
 - **ANALYZE narrates all three.** Per step: cabin hit/miss, trail
   replay/fallback, and the recording events themselves.
-- **And the Cabin layer is no longer one of the scoped ones** (AT-S7).
-  Its sets are the instance's and speak for the observed value whole,
-  and since AT-S10 no step reading one is scoped either (§4b): what is
-  still scoped is Waystone's trail by invariant 8 and the clustered
-  tree's range. The layers degrade independently, and a split
-  relation's ranges are put back together by the walk itself, which
-  covers every one.
+- **The Cabin layer is not a scoped one** (AT-S7). Its sets are the
+  instance's and speak for the observed value whole, and no step reading
+  one is scoped either (§4b): what is scoped is Waystone's trail by
+  invariant 8 and the clustered tree's range.
 
 ## 8. Materialization policy and the full-coverage limit (C5)
 
@@ -575,7 +541,7 @@ same sentence `fk_check`'s reverse check reasons by, that a value asked
 once must not buy a standing write-hook cost.
 
 **`auto` is consumed by the cabin optimizer**
-(`docs/spec/physical-optimizer.md` Part II): a per-core background
+(`docs/spec/physical-optimizer.md` Part II): the instance's one background
 controller that CREATEs, EXTENDs, HEALs and DROPs Observational Cabins
 under a fixed-point cost-benefit core — its threshold is the θ_create
 hysteresis margin over measured scan cost and frequency. It creates
@@ -587,13 +553,12 @@ declared — and is **off by default** (`cabin_optimizer`). With the
 controller off, a column declared `auto` behaves exactly as an undeclared
 one.
 
-**Its input is the instance's since AT-S8.** A Cabin *probe* on any
-core reaches the signals, because the store that forwards to them is the
+**Its input is the instance's** (AT-S8). A Cabin *probe* on any core
+reaches the signals, because the store that forwards to them is the
 instance's (AT-S7); the **scan-shape** signal is recorded by every core's
 dispatcher, each handed the one collector through `OptimizerSurface`
-(AT-S8 step 3). So a relation read only from peers feeds CREATE as well
-as EXTEND. It was core 0's alone between the two stages, and "a
-peer-owned relation earns no `CABIN AUTO`" before either.
+(AT-S8 step 3). So a relation read only from cores other than core 0
+feeds CREATE as well as EXTEND.
 
 A policy on the **primary-key column is refused**, not ignored: the pk's
 Cabin is the clustered tree (§2), so any of the three would be a statement
@@ -647,11 +612,7 @@ engine may drop on its own judgement.
 
 Expression and predicate-scoped cabins (C3), multi-column keys, range
 observation, budgets and demotion of write-hot values, pruning cadence,
-the controller's tuning, and a Cabin's fate under a migrated relation are
-decisions unrecorded here. Facts that stand in their place: a Bound Cabin
-keeps `crosscore.md` §6a's gate on split and migration both; an
-Observational Cabin's sets are discarded on migration, not carried, and
-traffic rebuilds them.
+and the controller's tuning are decisions unrecorded here.
 
 ---
 
@@ -688,11 +649,10 @@ not**.
 
 **The scope of the two classes differs and §4b is where the
 Observational one is stated.** An Observational set is authoritative for
-the observed value across the instance since AT-S7, and every step
-reading one walks the whole relation since AT-S10; a Bound Cabin's coverage contract is 100% of the target relation's live
-rows, and a scope narrower than the relation would be a contract change
-rather than an authority one — which is why `crosscore.md` §6a gates it
-from split and migration both.
+the observed value across the instance, and every step reading one walks
+the whole relation; a Bound Cabin's coverage contract is 100% of the
+target relation's live rows, and a scope narrower than the relation would
+be a contract change rather than an authority one.
 
 **Observational Cabin semantics are untouched by this section.** Every
 property §§1-11 of this document states — the superset invariant, append-only

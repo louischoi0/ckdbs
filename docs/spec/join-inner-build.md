@@ -198,11 +198,8 @@ row count may decline a build, are decisions unrecorded here.
 
 ## 8. Cross-core, and the other exclusions
 
-A build is core-local execution state, and nothing needs to ship it: a
-statement runs whole on its session's core (`crosscore.md` CC1). The
-question this section left open - whether a peer's consuming stage may
-build for its own stage - went with the stage, when AT-S10 deleted the
-remote-step protocol and its descriptor.
+A build is core-local execution state: a statement runs whole on its
+session's core (`crosscore.md` CC1), so no other core reads it.
 
 Out of scope, by decision: multi-column join keys (the Cabin's scope
 rule, `cabin.md` §2); non-equality joins; spill-to-disk; building for a

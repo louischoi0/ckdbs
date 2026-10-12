@@ -281,9 +281,7 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                     queued->slot->ready.store(false, std::memory_order_release);
                     queued->mode = mode;
                     // And the core, so a re-ask parks where it will be
-                    // polled rather than where it first asked. (The
-                    // cross-owner transaction that would have re-asked from
-                    // another reactor went at AT-S6.)
+                    // polled rather than where it first asked.
                     queued->core = CurrentCore();
                     result.wake = LockWake{key, queued->slot};
                     // **A wake is not a queue position** (AO-S6e-b). Only a
@@ -376,7 +374,8 @@ bool LockTable::NoteWaitFor(std::uint64_t waiter, std::uint64_t holder) {
     // Walk from the holder along the edges already recorded. If the walk
     // reaches the waiter, the edge about to be added closes a cycle and the
     // waiter is the victim (AO-R7). The walk is bounded by the edge count,
-    // which is bounded by the live transactions on this core, and it cannot
+    // which is bounded by the instance's live transactions (the wait-for
+    // graph is the instance's), and it cannot
     // loop forever: an existing cycle would have been refused at the
     // registration that closed it, so the graph is acyclic on entry.
     std::uint64_t at = holder;
@@ -411,12 +410,9 @@ void LockTable::ClearWaitFor(std::uint64_t waiter) {
     // so an ungated clear would put one instance-wide lock on the commit
     // path of every reactor for a graph that is empty whenever nothing
     // waits. Sound without the latch because every edge is its waiter's
-    // own since AT-S6: a transaction is one core's, so its registrations
-    // and its decide run in order on one reactor, and a zero read here
-    // cannot miss an edge its own statements added. (From AO-S4b until
-    // AT-S6 an owner registered a coordinator's edge from its own thread,
-    // and the argument was that the owner's `Finish` cleared it; the
-    // spurious refusal that window allowed went with the ship.)
+    // own: a transaction is one core's, so its registrations and its decide
+    // run in order on one reactor, and a zero read here cannot miss an edge
+    // its own statements added.
     if (wait_edge_count_.load(std::memory_order_acquire) == 0) return;
     LatchGuard guard(wait_latch_.get());
     auto gone = std::remove_if(wait_edges_.begin(), wait_edges_.end(),

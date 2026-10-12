@@ -14,10 +14,8 @@
 // The kick carries no meaning; a woken reactor learns why from the structure
 // it parks on, never from a payload (AR0-6-R1).
 //
-// It exists because the pair it needs - the destination's `sleeping` flag and
-// its `Waker` - lived on `RingTransport` as `WakeTarget`, reachable only
-// through a transport that AT-S10d retired. Both halves belong to the
-// destination's reactor.
+// It holds the pair a kick needs - the destination's `sleeping` flag and its
+// `Waker`. Both halves belong to the destination's reactor.
 //
 // **This is the instance's only wake registry** (AU-S1b), and since AT-S10d
 // the only cross-core path there is: a stop, a lock-table decide and a
@@ -96,10 +94,8 @@ public:
     // is level-triggered, re-polled after the block, so this is slow and
     // never wrong. Closing the window would take a `seq_cst` fence here, one
     // after the flag's store, and the reactor re-polling its parked tasks
-    // after raising the flag. The ring had that third leg for its own queue
-    // in `HasPending`; AT-S10d retired it with the ring rather than
-    // generalise it, so the fences ordered nothing and went too, and the
-    // flag is a hint read and written relaxed.
+    // after raising the flag. No fence is built, and the flag is a hint
+    // read and written relaxed.
     void Kick(std::uint32_t core) const noexcept override {
         if (core >= entries_.size()) return;
         const Entry& entry = entries_[core];

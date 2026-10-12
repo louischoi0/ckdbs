@@ -46,16 +46,19 @@
 // AllocateRowId() bumps no version.
 //
 // Concurrency: core-local, no internal synchronization (rules.md #3). One
-// Catalog owns one cache; DDL cannot interleave with a statement because
-// the reactor is single-threaded (sched/scheduler.hpp). Two Catalog
-// instances over one PageStore therefore each cache independently, and
-// neither observes the other's DDL - a pattern tests use, and one that is
-// only safe while a single instance owns DDL.
+// Catalog owns one cache, used on its core's reactor thread only. A
+// `SELECT` that yields between slices (BA-S15, `server::SelectRun`) holds a
+// pin on the memo across the yield, so DDL run meanwhile cannot free an
+// entry it reads. Each core's Catalog
+// caches independently over the one store, and one observes another's DDL
+// only through the instance schema word `Catalog::Revalidate` reads at a
+// statement's head (`catalog.cpp`), which drops the whole cache when the
+// word moved.
 //
 // Not here, deliberately:
 //   - No eviction and no size bound. Entries scale with the number of
-//     relations, not the number of pages, and there is no DROP TABLE to
-//     retire one. A bound would be a policy invented for a population of
+//     relations, not the number of pages, and a DROP TABLE's word move
+//     empties the cache at the next statement head (above). A bound would be a policy invented for a population of
 //     tens (compare device_page_store.hpp, which says the same about
 //     frames for a different reason).
 //   - No negative caching. A lookup for a name that does not exist is an

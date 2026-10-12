@@ -165,19 +165,12 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                                                   Budget* budget) {
     // ---- Scope: this check answers for the whole child (AT-S5f) ---------
     //
-    // **There is no scope question left to ask.** What stood here was a
-    // refusal - a child whose ranges this core did not own was answered by
-    // nobody, because the walk below covered the chains this core owned
-    // (RD6: one chain per range) and would have reported *"no children"*
-    // for a child row in another core's range, which is not a slow answer
-    // but a **dropped constraint**, the one degraded mode
-    // `foreign-keys.md` §1 says a constraint may not have. The fan-out
-    // that replaced the refusal (AJ-T2) asked each range owner in turn.
-    //
-    // Both are gone with the route, and the split relation with them.
-    // Every core reads every page through the one pool since AM-S2 step 3,
-    // so the walk below covers the child's one structure, and an answer
-    // from this core is an answer for the whole relation. The Cabin is handled where
+    // **There is no scope question left to ask**: every core reads every
+    // page through the one pool (AM-S2 step 3), so the walk below covers
+    // the child's one structure, and an answer
+    // from this core is an answer for the whole relation. The range-scope
+    // refusal and its fan-out retired with the split relation; their
+    // history is at cf889b63. The Cabin is handled where
     // it is read rather than by a guard over the whole function: a set may
     // *find* a child and, since AY-S6, *clear* a parent (below).
 

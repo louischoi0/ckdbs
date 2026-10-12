@@ -26,7 +26,7 @@ constexpr int kRingDrainAttempts = 4;
 // two append sites: a mount that cannot work should fail at the door, not
 // degrade into a core that logs an error every checkpoint interval
 // forever. Unreachable through the server, which bounds `cores` at
-// `kMaxWalCores` long before here.
+// `kMaxCores` long before here.
 Status CheckLoggableCoreId(std::uint32_t core_id) noexcept {
     if (core_id > 0xFF) {
         return Status::InvalidArgument(
@@ -486,8 +486,8 @@ Status WalManager::DrainOnce() {
     if (pending_group_commits_ > 0) {
         // Someone is parked on this. On an owning manager it is performed
         // here, on the reactor, for the reason Sync() gives: a waiter pays
-        // for a hand-off. R6-3's second disjunct - a prepare nobody
-        // committed and somebody waited on - went with the prepare at AT-S18.
+        // for a hand-off. R6-3's prepare disjunct retired with 2PC; its
+        // history is at cf889b63.
         //
         // **On an attached manager it is asked for and not waited on.**
         // The waiter is a parked task polling `IsDurable`, not this tick,

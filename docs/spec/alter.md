@@ -126,8 +126,7 @@ names are load-bearing for bootstrap and are nobody's to change).
   for good, so a drop's rollback would restore the name beside it; that
   holds for the renaming transaction's own open drop too. The check and the
   rewrite are one hold of `sys.objects`' root page, which is what makes
-  them one act across cores (`catalog.md` CT7, AT-S17); until AT-S5 the
-  event loop did, DDL being core 0's.
+  them one act across cores (`catalog.md` CT7, AT-S17).
 - New column name: same checks against the relation's own columns, under
   one hold of `sys.columns`' root page (CT7).
 - **The pk column may be renamed.** Identity is the Keystone word and

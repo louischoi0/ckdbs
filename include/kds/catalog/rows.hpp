@@ -104,13 +104,11 @@ struct SysTableRow {
     // says may not be cached, and this one is cached on every TableAccess.
     PageId varheap_page_id;
 
-    // **No `owner_core` since AT-S9** (D17). The four bytes after
-    // `varheap_page_id` held the core that owned this relation and are
-    // `kReservedOffset` now: written 0, never read, so a pre-AT volume's
-    // value is ignored where it lies and the row keeps its size. Catalog
-    // rows are fixed-length tuples (invariant 13), so removing the bytes
-    // would have been a rewrite of every row at mount rather than a format
-    // event. Nothing on this row names a core any more.
+    // **No `owner_core`** (AT-S9, D17). The four bytes after
+    // `varheap_page_id` are `kReservedOffset`: written 0, never read, so the
+    // row keeps its size. Catalog rows are fixed-length tuples (invariant
+    // 13), so removing the bytes would be a rewrite of every row at mount
+    // rather than a format event. Nothing on this row names a core.
 
     // **The retired key-order byte**: written 0 and never read. BB-R11's
     // mount refusal of a relation still marked out of key order read it

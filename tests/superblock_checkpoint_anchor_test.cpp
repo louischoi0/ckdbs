@@ -432,7 +432,7 @@ TEST_F(SuperBlockAnchorTest, AFailedSyncIsReportedAndLeavesTheOldAnchorOnDisk) {
 
 TEST_F(SuperBlockAnchorTest, PublishingForACoreBeyondTheTableIsRefused) {
     SuperBlockCheckpointAnchor anchor(superblock_, store_);
-    Status s = anchor.Publish({kMaxWalCores, 100, 200, 300, 0});
+    Status s = anchor.Publish({kMaxCores, 100, 200, 300, 0});
     EXPECT_FALSE(s.ok());
     EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
     EXPECT_EQ(anchor.publishes(), 0u);

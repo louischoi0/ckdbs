@@ -13,17 +13,10 @@
 
 // Which var-heap slots a catalog relation's rows point at.
 //
-// **One consumer since AW-S1b**, the mount sweep (`varheap_sweep.hpp`),
-// which compares what the pages hold against what the rows point at and
-// collects the difference. This header opened "the one walk two unrelated
-// mechanisms both need": the second was a peer's fault grant, which read
-// the page ids its rows name and granted itself read rights over exactly
-// those, because a catalog relation's var-heap sits *outside* the reserved
-// range and was therefore not covered by the system-range arm of the fault
-// predicate (`crosscore.md` CC12/CR1: the root page is reserved so
-// bootstrap can find it, the var-heap is not). One frame table serves every
-// core now, so there is no right to grant, and `CatalogSpillPages` - the
-// walk-every-relation wrapper that existed for it - went with it.
+// **One consumer**, the mount sweep (`varheap_sweep.hpp`), which compares
+// what the pages hold against what the rows point at and collects the
+// difference. The fault-grant consumer and its `CatalogSpillPages` wrapper
+// retired (AW-S1b); their history is at cf889b63.
 
 namespace kds::exec {
 

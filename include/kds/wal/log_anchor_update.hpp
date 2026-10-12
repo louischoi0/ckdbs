@@ -8,8 +8,8 @@
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
-// The one ANCHOR_UPDATE emitter (PW2; log_page_handoff.hpp's shape, for
-// its reason). One anchor slot moved: index_oid 0 is the clustered root,
+// The one ANCHOR_UPDATE emitter (PW2; log_page_init.hpp's shape, for its
+// reason). One anchor slot moved: index_oid 0 is the clustered root,
 // anything else that index's root. The caller stamps the page through
 // StampPageLsn with the returned LSN, like every logged mutation.
 //

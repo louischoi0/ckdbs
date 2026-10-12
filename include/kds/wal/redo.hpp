@@ -62,8 +62,7 @@ struct RedoStats {
     std::uint64_t records = 0;        // records the scan handed to redo
     std::uint64_t applied = 0;        // records whose effect was written
     std::uint64_t skipped_by_lsn = 0; // already reflected on the page (RV5)
-    // The PW1c-2 not-dirty filter (redo.cpp carries the argument). Zero
-    // on any stream with no PAGE_HANDOFF.
+    // The PW1c-2 not-dirty filter (redo.cpp carries the argument).
     std::uint64_t skipped_not_dirty = 0;
     std::uint64_t page_images = 0;    // FULL_PAGE_IMAGEs restored
     std::uint64_t pages_created = 0;  // pages the log named and the store lacked
@@ -90,10 +89,8 @@ struct RedoStats {
 // is why the FPI exists.
 //
 // Redo neither refuses a foreign stream stamp nor restamps what it applies:
-// both were per-core-stream rules and there is one stream (AM-S4(d),
-// `analysis.hpp`). A page-formatting record still stamps the page for the
-// core the record itself names, which is a statement of ownership rather
-// than of topology.
+// there is one stream (AM-S4(d)). A page-formatting record still stamps the
+// page for the core the record itself names, a diagnostic (`page_header.hpp`).
 StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::PageStore& store,
                          const AnalysisResult& analysis);
 

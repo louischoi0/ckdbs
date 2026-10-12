@@ -168,10 +168,9 @@ public:
     // seam a store implements is the raw fetch (below) plus the three
     // frame hooks. Nothing can evict between the fetch and the pin - a
     // core is single-threaded and nothing here suspends - so the pair is
-    // atomic in the only sense that matters. **That sentence is true of
-    // per-core pools** (through AR0 M1's AM-S1); the shared pool AM-S2
-    // builds must latch the frame table across the pair, and this comment
-    // is where that obligation is recorded.
+    // atomic in the only sense that matters. **That sentence is true of one
+    // core's pool only**; the shared pool latches the frame table across the
+    // pair (AM-S2, below).
 
     // ---- The fetch-and-pin pair (AM-S2) -------------------------------
     //

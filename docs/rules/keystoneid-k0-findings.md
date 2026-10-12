@@ -61,9 +61,8 @@ issued by a scan-and-overwrite of that row. Pinned by
 Per issued id, `AllocateRowId` fetches `sys.tables` **for write**
 (dirtying the frame), decodes rows until the oid matches, and overwrites
 one — O(relations) across the chained catalog pages (§5), one dirtied
-catalog page per insert, and §4's logged write. Every core pays it since
-AT-S10b, under the catalog page's latch; until then a peer issued from a
-block core 0 leased to it and touched no catalog page.
+catalog page per insert, and §4's logged write. Every core pays it, under
+the catalog page's latch.
 
 ## 4. A ceiling persisted outside the log does not survive a crash
 
@@ -113,10 +112,7 @@ so the instance's ceiling is roughly 7,800 column rows. The range is
 reserved rather than unbounded because "every catalog page" has to be
 nameable — the flush that preceded the catalog broadcast needed it, and a
 fixture's flush for a second store over the device still does — and a bounded range can
-be named where an arbitrary set of general-supply ids cannot. (It was also
-because a catalog page above the first user page was one a peer could not
-fault at all — `DevicePageStore::MayFault`, which went with the fault grants
-at AW-S1b.) §3's scan is genuinely O(relations) across
+be named where an arbitrary set of general-supply ids cannot. §3's scan is genuinely O(relations) across
 pages, and that scaling belongs to whoever owns the catalog's lookup path.
 
 ## 6. The oid half of (oid, pk)

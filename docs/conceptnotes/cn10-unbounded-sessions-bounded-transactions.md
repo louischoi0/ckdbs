@@ -206,8 +206,8 @@ unbounded unauthenticated connections.
 ### 3.4 Sessions move between cores at a transaction boundary
 
 This is Oracle's shared server, scoped to what this engine pins to a core.
-A statement runs where its session is, and since AT-S9 no relation has an
-owner core, so any core may run a session's next transaction. What is
+A statement runs where its session is, and no relation is tied to a core,
+so any core may run a session's next transaction. What is
 pinned is the *transaction*: its in-flight slot is in its core's table, and
 its waits and commit run on that core's reactor. So:
 

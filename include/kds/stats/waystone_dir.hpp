@@ -79,8 +79,7 @@
 //
 // Concurrency: none of its own; the caller holds whatever pin/latch
 // discipline applies, exactly as with PageView. Every core records into a
-// pattern's directory since AT-S7, where the pattern's owning core did
-// until then.
+// pattern's directory (AT-S7).
 
 namespace kds::stats {
 

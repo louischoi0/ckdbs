@@ -58,16 +58,6 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         if (inserted || outcome == TxnOutcome::kLoser) {
             return;
         }
-        // **`kPrepared` is the one outcome that may not overwrite**, and
-        // the asymmetry is the point: a terminal record is this stream's
-        // own decision and outranks a promise made before it. The scan is
-        // forward, so a prepare cannot legally follow a commit for the same
-        // id - it could only arrive that way through id reuse, which the
-        // persisted trx-id ceiling forecloses - and this is what keeps a
-        // decided transaction from being re-opened if it ever did.
-        if (outcome == TxnOutcome::kPrepared && it->second.outcome != TxnOutcome::kLoser) {
-            return;
-        }
         it->second.outcome = outcome;
     };
 
@@ -84,64 +74,24 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
     };
 
     const auto visit = [&](const DecodedRecord& record) -> Status {
+        // **A retired kind is refused, never skipped** (BP-R4): no build that
+        // writes superblock 22 appends one, so a log carrying one is not this
+        // build's (`IsRetiredRecordType`).
+        if (IsRetiredRecordType(record.type())) {
+            return RetiredRecordRefusal("wal analysis", record.type(), record.header.lsn);
+        }
+
         // Every record whose envelope names a transaction implies that
         // transaction existed, even if its TXN_BEGIN is below the scan
         // start or its id came from a checkpoint's active list.
         note_txn(record.header.txn_id, TxnOutcome::kLoser);
 
-        // Non-transactional by contract (a handoff is an ownership event,
-        // log_page_handoff.hpp) - a nonzero txn_id has already minted a
-        // phantom loser on the line above, so it is refused as the
-        // corruption it is, never interpreted. Keyed on the *type* alone
-        // and placed here rather than inside the page branch below: the
-        // hazard is the transaction id, not the page, so a handoff naming
-        // no page - itself malformed, since the page is the record's whole
-        // subject - would otherwise carry the phantom through unrefused.
-        if (record.type() == RecordType::kPageHandoff && record.header.txn_id != kNoTxnId) {
-            return Status::Corruption(
-                "analysis: PAGE_HANDOFF at lsn " + std::to_string(record.header.lsn) +
-                " carries txn " + std::to_string(record.header.txn_id) +
-                "; a handoff is an ownership event and belongs to no transaction");
-        }
-
         // A page mutation dirties its page as of *this* LSN, unless the
         // page is already known dirty from earlier - the recLSN is the
         // oldest record that must be replayed, so the first nonzero one wins
         // (`note_dirty`).
-        //
-        // **PAGE_HANDOFF dirties nothing and undirties nothing.** It is an
-        // ownership fact rather than a mutation, so it must not become a
-        // page's recLSN; and the *removal* it used to perform (PW1c-2, PL
-        // §9 rule 3) was a per-core-stream rule that does not survive one
-        // stream (AM-S4(d), and AL-R6 before it). What licensed the removal
-        // was rule 1(a)'s **flush**, which covers *one core's page store*,
-        // pools being per core: under per-core streams the erase reached
-        // exactly as far, because it dropped only the appending stream's
-        // entries. With one log the erase would speak for **every core's**
-        // records while the flush still speaks for one core's frames - and
-        // a handoff is appended by a core that need not be the page's
-        // writer at all (the retired range allocator appended one from core 0
-        // for a range head another core would own). It would drop that peer's
-        // entry and redo's not-dirty filter would skip its record: a lost
-        // update, not slow work. Keeping the entry costs redo re-applying
-        // what the durable image may already hold, which the `page_lsn`
-        // gate makes idempotent.
-        //
-        // max_page_id takes the handoff's page all the same, deliberately:
-        // the durable record of which pages exist is the unlogged free map,
-        // so "the page existed here" is exactly what may not survive the
-        // crash - if the ordinary records for it fell below the scan start
-        // and the incoming core never wrote it, this record is the one
-        // durable proof the id is in use, and the high-water must rise past
-        // it (RV4's hazard, reopened for exactly the handed-off page;
-        // raising it is monotone and free).
         if (record.header.page_id != kInvalidPageId) {
-            if (record.type() == RecordType::kPageHandoff) {
-                // Neither erased nor seeded - only `max_page_id` below
-                // takes it.
-            } else {
-                note_dirty(record.header.page_id, record.header.lsn);
-            }
+            note_dirty(record.header.page_id, record.header.lsn);
             out.max_page_id = (out.max_page_id == kInvalidPageId)
                                   ? record.header.page_id
                                   : std::max(out.max_page_id, record.header.page_id);
@@ -190,36 +140,6 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
                 // redo will replay them. Not a loser (analysis.hpp).
                 note_txn(record.header.txn_id, TxnOutcome::kAborted);
                 break;
-            case RecordType::kTxnPrepare: {
-                // **R6-4: this core promised not to decide.** The outcome
-                // is provisional and stays so until `RecoverCore` looks
-                // the coordinator's transaction id up in this same table
-                // (AM-S4(d)); a TXN_COMMIT or TXN_ABORT later in *this*
-                // scan overrides it first, which is the participant's own
-                // decided end and needs no resolution at all.
-                if (record.header.txn_id == kNoTxnId) {
-                    // The envelope's id is the participant's own local
-                    // transaction (D2) and is what everything downstream
-                    // keys on. A prepare that names none describes no
-                    // transaction to resolve.
-                    return Status::Corruption(
-                        "wal analysis: TXN_PREPARE at lsn " +
-                        std::to_string(record.header.lsn) +
-                        " belongs to no transaction; a prepare is a promise about a "
-                        "transaction this stream holds");
-                }
-                auto decoded = DecodeTxnPrepare(record.payload);
-                if (!decoded.ok()) {
-                    return decoded.status();
-                }
-                note_txn(record.header.txn_id, TxnOutcome::kPrepared);
-                PreparedTxn& prepared = out.prepared_txns[record.header.txn_id];
-                prepared.coordinator_core = decoded.value().coordinator_core;
-                prepared.coordinator_session_id = decoded.value().coordinator_session_id;
-                prepared.coordinator_txn_id = decoded.value().coordinator_txn_id;
-                prepared.prepare_lsn = record.header.lsn;
-                break;
-            }
             case RecordType::kCheckpointBegin: {
                 // The seed: both tables as they stood when the checkpoint
                 // began. This is why the record is written at all, and why
@@ -291,21 +211,6 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
             case TxnOutcome::kWinner: ++out.winners; break;
             case TxnOutcome::kAborted: ++out.aborted; break;
             case TxnOutcome::kLoser: ++out.losers; break;
-            case TxnOutcome::kPrepared: ++out.prepared; break;
-        }
-    }
-    // A transaction whose scan ended in a terminal record is decided, and
-    // its prepare is then history rather than an open question - so the
-    // entry goes, and `prepared_txns` holds exactly the `kPrepared` set
-    // that `RecoverCore` must resolve. Erasing here rather than at the
-    // terminal record keeps the scan a single forward pass with no
-    // look-behind.
-    for (auto it = out.prepared_txns.begin(); it != out.prepared_txns.end();) {
-        auto state = out.transactions.find(it->first);
-        if (state != out.transactions.end() && state->second.outcome == TxnOutcome::kPrepared) {
-            ++it;
-        } else {
-            it = out.prepared_txns.erase(it);
         }
     }
     return out;

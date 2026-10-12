@@ -138,11 +138,8 @@ public:
     // callers that never store a varchar (the bootstrap catalog itself,
     // and tests).
     //
-    // **No core count and no core id since AT-S9**: the count was here for
-    // `CreateTable` to assign `sys.tables.owner_core`, and the id for the
-    // executor's walk-what-you-own rule and an anchor refusal keyed on
-    // ownership - all three are gone. Two arguments, so a call written
-    // against the old four-argument signature does not compile.
+    // The core-count and core-id parameters retired with ownership (AT-S9);
+    // their history is at cf889b63.
     explicit Catalog(storage::PageStore& store,
                      std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth) noexcept
         : store_(store), inline_cell_width_(inline_cell_width) {}
@@ -207,8 +204,7 @@ public:
     // §2.1, D21). One `std::atomic` for the instance, owned by `Expeditor`
     // and handed to every core's catalog; `BumpVersion()` - the single DDL
     // choke point - advances it, and `Revalidate()` below drops this
-    // cache when it has moved. That replaces the `kCatalogInvalidate`
-    // broadcast: a peer no longer waits to be told, it asks. **Bumped by
+    // cache when it has moved: a peer is not told, it asks. **Bumped by
     // every invalidation that can stale another core's memo** (AT-R2):
     // this core's `catalog_version_` is not - a peer's drop never advanced
     // it - which is why the word is a second thing and not that counter
@@ -222,11 +218,9 @@ public:
     // waits for; `read_borrow.hpp` states the defence and its direction.
     void SetSchemaWord(std::atomic<std::uint64_t>* word) noexcept { schema_word_ = word; }
 
-    // **The instance's object-oid sequence** (AT-S5b). `GenerateUserOid()`
-    // was one in-memory counter *per catalog*, recovered once from the
-    // pages - sound while core 0 alone created objects, and two catalogs
-    // issuing the same oid the moment a peer runs `CREATE TABLE` (AT-S5).
-    // One atomic for the instance, owned by `Expeditor` beside the schema
+    // **The instance's object-oid sequence** (AT-S5b). A counter per
+    // catalog would let two catalogs issue the same oid, since every core
+    // runs `CREATE TABLE` (AT-S5). One atomic for the instance, owned by `Expeditor` beside the schema
     // word and handed down the same way: whichever catalog first needs an
     // oid seeds it by CAS from `HighestIssuedUserOid()`, and every issue
     // after that is a `fetch_add`. Null keeps the per-catalog counter,
@@ -357,9 +351,9 @@ public:
     // Callable while the listener is bound; no version
     // bump, unlogged like every catalog write; a held-back mark survives
     // to the next call or to the mount sweep. The caller is DDL resolution
-    // (`CommandDispatcher::EndDdlScope`), on **one** core - a placement
-    // since AT-S5, so that two cores do not walk the same chains at once,
-    // and no longer an authority. Which is why the gate it reads is the
+    // (`CommandDispatcher::EndDdlScope`), on **one** core - a placement, so
+    // that two cores do not walk the same chains at once, not an authority
+    // (AT-S5). Which is why the gate it reads is the
     // instance's (`SetMarkCounter`, AT-S5b): the sweeping core has to see
     // a mark another core wrote, or a peer's `DROP` would wait for the
     // next mount. The soundness proof lives once, in
@@ -438,8 +432,8 @@ public:
     // ---- Namespaces (AF-T1) ---------------------------------------------
     //
     // A namespace is a **logical grouping** that declares the affinity of
-    // its relations - a hint nothing reads since AT-S9 retired placement,
-    // which is what it decided until then (AF-P1, AF-T2). It partitions
+    // its relations - a hint nothing reads since placement retired
+    // (AT-S9). It partitions
     // nothing and bounds no transaction
     // (`instructions/v2.8.0/ratification-af-namespace.md` AF-2).
     //
@@ -690,9 +684,7 @@ public:
     // in-place write of the relation's `sys.tables` row under its page
     // latch, so two cores issuing into one relation are serialised by the
     // latch and the ids stay a sequence in issue order - invariant 11 with
-    // spreading off. Until AT-S10b a peer issued from a block core 0 carved
-    // and leased to it, which broke that order across cores and could be
-    // refused `OutOfRange` by a heap chain whose tail had passed the block.
+    // spreading off.
     StatusOr<std::uint64_t> AllocateRowId(Oid table_oid);
 
     // What an `INSERT` that **supplies** the pk calls (docs/spec/heap-and-tuple.md
@@ -1055,8 +1047,8 @@ public:
     Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name,
                             std::uint64_t trx_id = kBootstrapXid,
                             CatalogRowRef* where = nullptr);
-    // There is no owner-core parameter since AT-S9 (the row's word is
-    // reserved and written 0), and no key-mode parameter: the row's retired
+    // There is no owner-core parameter (the row's word is reserved and
+    // written 0), and no key-mode parameter: the row's retired
     // key-order byte is written 0 here as on every row (BB-R10), never passed
     // in.
     // `anchor_page_id` defaults to kInvalidPageId, the bootstrap value -
@@ -1124,11 +1116,8 @@ public:
         std::uint8_t flags = 0;
     };
 
-    // `AnchorSeed` stood here until AT-S5e: who seeds the relation's anchor
-    // slot with a new index root - this core (`kHere`), or the relation's
-    // owner, which built the tree in its own pages (`kByOwner`, PW1c-6b).
-    // The owner-built path went with the per-core structures it served, so
-    // the creating core always seeds.
+    // `AnchorSeed` retired with the owner-built index path (AT-S5e); its
+    // history is at cf889b63. The creating core always seeds.
 
     // Writes the sys.indexes row and returns its `index_oid`.
     //

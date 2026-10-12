@@ -82,7 +82,6 @@ add_executable(kds_tests
     index_compile_test.cpp
     index_contract_test.cpp
     superblock_test.cpp
-    prepared_recovery_test.cpp
     core_runtime_test.cpp
     expeditor_test.cpp
     coro_test.cpp

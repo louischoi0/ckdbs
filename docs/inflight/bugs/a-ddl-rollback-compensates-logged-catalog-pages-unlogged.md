@@ -31,3 +31,27 @@ this survey, which is why the entry says "may".
 Verify first. If the consequence holds: drop the `unlogged_page` arm so a
 catalog compensation logs like any other, and rewrite the comment.
 Unscheduled.
+
+## Reproduced by the sim, 2026-10-12
+
+`scripts/sim.sh`'s fresh seed `20261012003` with `--faults io` fails in
+all nine mode and profile cells, identically at `cf889b63` (a base build)
+and on `worktree-bp-per-core-residue` (BP-S2): "after restart, relation
+'t3' is gone". `--minimize` shrinks it to seven ops:
+
+```
+CREATE TABLE t3 (id int64, v int64, name varchar) BTREE   -- autocommit
+BEGIN
+DROP TABLE t3
+ROLLBACK
+INSERT INTO t1 ...                                        -- t1's HEAP create was refused
+fault log-fail-sync
+SYNC                                                      -- the log fail-stops; restart
+```
+
+The shape is this entry's: a rolled-back DDL whose forward catalog writes
+were logged and whose compensation was not, so redo replays the drop's
+tombstone and nothing replays its undoing. **The causal link is inferred
+from the shape, not traced.** Committed corpus seeds pass. Replay:
+`ckdbs-sim --seed 20261012003 --ops 1500 --iterations 2 --mode clean
+--profile uniform --faults io --fault-rate 40`.

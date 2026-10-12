@@ -28,8 +28,7 @@
 namespace kds::catalog {
 
 // The overflow range must end exactly where the user pages begin: the
-// invalidation flush names every catalog page by this range, and a page at
-// or above it was one a peer could not fault until AW-S1b (well_known.hpp).
+// invalidation flush names every catalog page by this range (well_known.hpp).
 static_assert(kCatalogOverflowLimit == server::kFirstUserPageId,
               "the catalog overflow range must end at the first user page");
 
@@ -43,11 +42,6 @@ namespace {
 // actually wrote (page_store.hpp) - so every catalog lookup used to dirty a
 // catalog page, and every checkpoint wrote every one of them back having
 // changed none.
-//
-// Multicore turned that waste into a refusal while a peer could read the
-// catalog pages and never write one (workplan-crosscore.md P6, until
-// AT-S5): a read that dirtied was a read a peer could not do at all. The
-// ownership check was doing its job - the bug predates it by a long way.
 //
 // **`view`, when given, is the reader's visibility** (DT3): a catalog row
 // stamped by a transaction that this view cannot see is not there for this
@@ -153,7 +147,7 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
 //
 // **kWrite**, unconditionally: every caller of this writes. A reader uses
 // ScanAll, which fetches read-only so a lookup does not dirty a catalog
-// page (the bug multicore's ownership check surfaced).
+// page.
 // `acted_page`, when given, receives the page the accepted row was on -
 // which is not `root` once a catalog relation has overflowed onto a
 // chained page, and is what a rollback needs to address the row again
@@ -212,8 +206,7 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
 //
 // **From the reserved low range, never from the free map's general
 // supply** (well_known.hpp says why: the invalidation flush has to be able
-// to name every catalog page; that a peer could fault only low pages was
-// the other reason, until AW-S1b). The
+// to name every catalog page). The
 // range is probed rather than tracked, because `CreateAt` already answers
 // "is this id taken" durably through the free map - a second record of it
 // here would be a second thing to keep true across a crash.
@@ -1272,10 +1265,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     const Oid new_oid = generated_oid.value();
 
     // The root's PageRef is scoped so its pin drops before the rest of this
-    // function. It was for CC7's publish hook at the tail, which
-    // EvictCleaned a rotated relation's departed pages and refused a pinned
-    // frame (the 25059bf review's C-1); the hook went with the grants at
-    // AW-S1b, and the scope stays - a pin held no longer than its use.
+    // function - a pin held no longer than its use.
     PageId root_id = kInvalidPageId;
     {
         auto created = store_.CreateNew();
@@ -2293,21 +2283,15 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     // the same license the in-place root updates always had. A system
     // relation (no anchor) keeps the row's value: its fixed-page root
     // never moves.
-    // **Every core, since AT-S5c.** This was scoped to the core that owned
-    // the relation (PW2-4, the C3 decision taken as "owner-readable") on
-    // two grounds, and AT-S5 falsified the second: *"the anchor lives above
-    // kCatalogOverflowLimit, outside the invalidation set, so a cross-core
-    // reader's frame would never refresh - and a foreign relation's root is
-    // never walked here anyway, execution ships to the owner."* A write
-    // runs where the session is now, so every core walks every relation's
-    // tree, and a core that skipped this kept the **CREATE-time** root out
-    // of the `sys.tables` row: after any level growth it descended into
-    // what had become the leftmost subtree and wrote rows into a leaf that
-    // could not hold them. Found by AT-S5c's coverage check refusing it.
-    // The first ground is answered too, and by a different stage: one frame
-    // table serves every core since AM-S2 step 3, and the schema word is
-    // bumped at the repoint (`AdoptRoot`), so a stale memo is
-    // dropped at the next task boundary rather than never.
+    // **Every core** (AT-S5c): a write runs where the session is, so every
+    // core walks every relation's tree, and a core that skipped this would
+    // keep the **CREATE-time** root out of the `sys.tables` row: after any
+    // level growth it would descend into what had become the leftmost
+    // subtree and write rows into a leaf that could not hold them. One
+    // frame table serves every core (AM-S2 step 3), and the schema word is
+    // bumped at the repoint (`AdoptRoot`), so a stale memo is dropped at
+    // the next task boundary.
+    // The owner-scoped fill retired (AT-S5c); its history is at cf889b63.
     // Held for the whole fill (the 96b0343 review's C2): the first form
     // dropped the ref and re-fetched per index row - an N+1 that, under a
     // sized pool, could fail mid-fill and leave the access half-anchored
@@ -2336,17 +2320,9 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
             access.desc_page_id = storage::AnchorClusteredRoot(anchor.value().bytes());
             anchor_held.emplace(std::move(anchor.value()));
         } else {
-            // **An unfaultable anchor is a refusal now, not a fall-through**
-            // (AT-S5c's review, C3). What stood here read: *"an own
-            // relation's unfaultable anchor is the pre-grant window ... it
-            // falls back to the CREATE-time row - safe because nothing can
-            // have moved a root the owner could not yet write, and
-            // self-healing because the grant receiver drops this cache when
-            // the rights land"*. Both halves of that are gone: AW-S1b
-            // deleted the grants, and AT-S5c removed the `owner_core` gate
-            // above because every core walks every tree. So the fall-back
-            // no longer lands on a root nobody could have moved - it lands
-            // on the **CREATE-time** root of a relation another core may
+            // **An unfaultable anchor is a refusal, not a fall-through**
+            // (AT-S5c's review, C3): a fall-back would land on the
+            // **CREATE-time** root of a relation another core may
             // have grown, which is exactly the silent wrong answer this
             // stage exists to remove, and for the *index* roots filled from
             // this same anchor the coverage check underneath (AT-S15)
@@ -2923,9 +2899,8 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
     }
 
     // **The relation's root page, held exclusive across the whole call**
-    // (AT-S7, `crosscore.md` CC13). Every core records its own accesses
-    // now - the fold a peer sent to core 0 is gone with the ring kind that
-    // carried it - so the walk below, the increment it makes and the
+    // (AT-S7, `crosscore.md` CC13). Every core records its own accesses,
+    // so the walk below, the increment it makes and the
     // admission of a shape nobody has seen have to be one act against a
     // relation two reactors reach. Page 11 is the door: `ForFirstRow` and
     // `InsertRow` both enter the chain here, so a core holding it exclusive
@@ -3040,9 +3015,8 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     // nothing and be invisible until someone read the catalog by hand.
     auto access = InitTableAccess(rel_oid);
     if (!access.ok()) return access.status();
-    // **§6a's converse was here and is gone** (SB3,
-    // `instructions/v2.7.1/workorder-sb.md`), and the split relation it
-    // guarded went on 2026-09-30 (`crosscore.md` CC8): a set is
+    // §6a's converse and the split relation it guarded retired (SB3,
+    // 2026-09-30); their history is at cf889b63. A set is
     // authoritative for the observed value (`docs/spec/cabin.md` §4b as
     // rewritten at AT-S7), and every walk that banks one covers the whole
     // relation. The **auto** path came through here
@@ -3451,8 +3425,7 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
     // PW2-3: the anchor slot is seeded at creation, so the anchor is the
     // index root's whole truth from birth - without this the row would
     // stay a second source forever ("slot absent, fall back") instead of
-    // for the transition alone. The creating core seeds it (the relation's
-    // owner seeded its own until AT-S5e).
+    // for the transition alone. The creating core seeds it.
     {
         auto rel = GetSysTableRow(def.table_oid);
         if (!rel.ok()) {

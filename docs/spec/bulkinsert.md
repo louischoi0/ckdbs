@@ -26,12 +26,12 @@ How rows arrive in KDS in quantity. Three tiers exist by design: **Tier 1**
 | BI3 | T1 grammar | `INSERT INTO t VALUES (…), (…) [, …]` — comma-separated row lists; per-statement row cap `max_insert_rows` (config key, default **1024**, `parser::kDefaultMaxInsertRows`) |
 | BI4 | Atomicity | A bulk statement (T1) and a load session (T2) are **atomic**: all rows or none, unwound by the existing transaction scope. Any per-row refusal fails the whole statement with the 1-based row ordinal in the message. No partial-accept mode, no error table, no slow path |
 | BI5 | Fingerprint | An N-row INSERT fingerprints **identically to the 1-row INSERT** on the same relation — row count is not part of the template. Existing 1-row fingerprints are byte-stable (cf. `types.md` TY3). T2 never parses, so it never fingerprints |
-| BI6 | T2 protocol | KWP frames `C_LOAD_BEGIN / C_LOAD_CHUNK / C_LOAD_END / C_LOAD_ABORT` and `S_LOAD_READY / S_LOAD_ACK`, gated by the `BULK_LOAD` capability bit (`wire::kCapBulkLoad`) — no version break. Chunk rows use the D5 row encoding of `wire/row_codec`, the same codec below `S_ROW_BATCH` (crosscore's `STEP_BATCH` was its third reader until AT-S10 deleted the remote-step protocol) |
+| BI6 | T2 protocol | KWP frames `C_LOAD_BEGIN / C_LOAD_CHUNK / C_LOAD_END / C_LOAD_ABORT` and `S_LOAD_READY / S_LOAD_ACK`, gated by the `BULK_LOAD` capability bit (`wire::kCapBulkLoad`) — no version break. Chunk rows use the D5 row encoding of `wire/row_codec`, the same codec below `S_ROW_BATCH` |
 | BI7 | Flow control | Windowed chunk acknowledgment: at most `window` unacknowledged chunks in flight (server-announced in `S_LOAD_READY`, **4**), chunk payload ≤ the announced byte cap (**256 KiB**). Explicit and deterministic, in the spirit of `protocol.md` §7 portal suspension — no TCP-buffer guesswork |
 | BI8 | Durability | Orthogonal, unchanged: the transaction's WAL class applies. **D3 relaxed is the documented recommendation for bulk load** — the use `wal.md` §1 named for it. No new class |
 | BI9 | Keystone budget | Per-row `AllocateRowId`; a refused row burns no id (admission precedes allocation, per row). An **aborted** bulk statement burns the ids of rows placed before the failure — a documented K4 budget consumption, the same class of product constraint as the budget itself. No id pre-reservation |
 | BI10 | WAL records | Per-row redo records exactly as for a single-row `INSERT`; there is no batched multi-row record type, and recovery (`wal.md` §12) sees nothing new |
-| BI11 | T2 transactions | A load is one implicit transaction: `C_LOAD_BEGIN` runs the session's `BEGIN`, `C_LOAD_END` commits, `C_LOAD_ABORT` (or connection loss mid-load) rolls back. Cross-core: the load runs on the core its session is on, whole, as every transaction does since AT-S6 (`crosscore.md` CC3); it ran on the target relation's home core until AT-S9 retired home cores |
+| BI11 | T2 transactions | A load is one implicit transaction: `C_LOAD_BEGIN` runs the session's `BEGIN`, `C_LOAD_END` commits, `C_LOAD_ABORT` (or connection loss mid-load) rolls back. Cross-core: the load runs on the core its session is on, whole, as every transaction does (`crosscore.md` CC3) |
 | BI13 | Observability | `S_COMPLETE` tag `LOAD` (or `ABORT`) with `rows_affected` |
 | BI14 | Resume / dedup | **None.** A load has no resume token, `chunk_seq` must arrive strictly increasing from 0, and the engine deduplicates nothing — replaying chunks after a crash duplicates rows. Restart-safety is the client's (truncate-and-reload) |
 | BI15 | T2 keys | **Every column is announced and encoded, the pk first** (field 0, `kFieldFlagKeystone`). Per row, a **NULL pk field** asks the engine to issue the id and a value names it — T1's per-row arity, spelled on a fixed-width row. One chunk may mix the two. The pk is never NULL in a relation, so the NULL has no second reading. A named key is admitted or refused exactly as on T1, and the refusal reaches the client with its code (`AlreadyExists`, `OutOfRange`) |
@@ -136,8 +136,7 @@ do not change; `tests/bulk_insert_test.cpp` pins it.
 The parser is the remaining per-row cost T1 cannot shed, and the migration
 tool should not be paying text-encoding costs to talk to a binary protocol.
 T2 is `COPY`-shaped: a framed binary row stream, decoded by the same
-`wire/row_codec` that encodes result rows — one codec, two readers (the
-cross-core step batch was a third until AT-S10), knowing nothing about
+`wire/row_codec` that encodes result rows — one codec, two readers, knowing nothing about
 frames or cores.
 
 **Where it listens.** The load stream is served by `KwpLoadServer`, a

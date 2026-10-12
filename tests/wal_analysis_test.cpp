@@ -1,5 +1,6 @@
 #include "kds/wal/analysis.hpp"
 
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <utility>
@@ -144,113 +145,38 @@ TEST_F(AnalysisTest, TheCheckpointSeedsBothTables) {
         << "the checkpoint's recLSN must survive, not be replaced by the record's LSN";
 }
 
-// **A handoff neither seeds an entry nor removes one** (AM-S4(d), and
-// AL-R6 before it). What licensed the removal per core is that a handoff is
-// logged by the *receiver*, whose stream held nothing for the page below
-// it. One stream holds the giver's records for that page in the same log,
-// so dropping the entry would make redo's not-dirty filter skip every one
-// of them. Keeping it costs redo re-applying records the image may already
-// hold, which the page_lsn gate makes idempotent - slower at worst, where
-// the erase is wrong at worst.
-TEST_F(AnalysisTest, AHandoffLeavesTheDirtyPageTableAlone) {
-    Lsn givers_lsn = 0;
+// **A retired record kind is refused, never skipped** (BP-R4). No build
+// that writes superblock 22 appends TXN_PREPARE or PAGE_HANDOFF, so a log
+// carrying either is not this build's to replay. Both cells write the kind
+// under a transaction id of 0 with an all-zero payload: the refusal keys on
+// the kind alone, before any payload is read or any transaction is noted.
+class RetiredKindTest : public AnalysisTest,
+                        public ::testing::WithParamInterface<RecordType> {};
+
+TEST_P(RetiredKindTest, ARetiredKindIsCorruptionNamingIt) {
     {
         auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
-        // The giver's record, then the receiver's acquisition, then the
-        // receiver's own - all in the one log, which is the whole point.
-        auto givers = s.value()->Append({RecordType::kHeapOverwrite, 5, 800});
-        ASSERT_TRUE(givers.ok());
-        givers_lsn = givers.value();
-        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
-        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
-        ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, kNoTxnId, 800}, handoff).ok());
-        ASSERT_TRUE(s.value()->Append({RecordType::kHeapOverwrite, 6, 800}).ok());
-        // And a page the log names only by its handoff.
-        ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, kNoTxnId, 900}, handoff).ok());
-        ASSERT_TRUE(s.value()->Sync().ok());
-    }
-
-    auto r = Analyze(*device_, 0, AnalysisStart{});
-    ASSERT_TRUE(r.ok()) << r.status().message();
-
-    // The giver's record still seeds the page, so redo will replay from it.
-    ASSERT_EQ(r.value().dirty_pages.count(800), 1u)
-        << "the giver's records were dropped from the one pass that must replay them";
-    // And the recLSN is the *giver's* record, not the handoff's: a handoff
-    // is an ownership fact, not a mutation, and redo must replay from the
-    // write rather than from the transfer.
-    const auto seeded = r.value().dirty_pages.find(800);
-    ASSERT_NE(seeded, r.value().dirty_pages.end());
-    EXPECT_EQ(seeded->second, givers_lsn);
-
-    // A page named only by a handoff is still not dirty - nothing to redo.
-    EXPECT_EQ(r.value().dirty_pages.count(900), 0u);
-    // But the high-water still takes it, which the erase never governed.
-    EXPECT_GE(r.value().max_page_id, 900u);
-}
-
-// The entry a *checkpoint* seeded survives a later handoff too, at the
-// checkpoint's own recLSN. It is the same rule as the cell above and worth
-// its own cell because it is the entry analysis never saw dirtied in the
-// scanned range: the giver's record for the page may lie below the scan
-// start entirely, and dropping the seed would leave redo nothing to replay
-// it from.
-TEST_F(AnalysisTest, AHandoffLeavesACheckpointSeededEntryAlone) {
-    Lsn checkpoint_lsn = 0;
-    {
-        auto s = WalStream::Open(device_.get(), 0);
-        ASSERT_TRUE(s.ok());
-        WalStream& w = *s.value();
-        const CheckpointDirtyPage dirty[] = {{700, 4096 + 64}};
-        checkpoint_lsn = AppendCheckpointBegin(w, {}, dirty);
-        ASSERT_NE(checkpoint_lsn, 0u);
-        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
-        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{2}).ok());
-        ASSERT_TRUE(w.Append({RecordType::kPageHandoff, kNoTxnId, 700}, handoff).ok());
-        ASSERT_TRUE(w.Sync().ok());
-    }
-    auto r = Run(checkpoint_lsn);
-    ASSERT_TRUE(r.ok()) << r.status().message();
-    ASSERT_EQ(r.value().dirty_pages.count(700), 1u);
-    EXPECT_EQ(r.value().dirty_pages.at(700), 4096u + 64u)
-        << "the handoff dropped the checkpoint's entry";
-}
-
-TEST_F(AnalysisTest, ATransactionalPageHandoffIsCorruption) {
-    // A handoff is an ownership event and belongs to no transaction
-    // (log_page_handoff.hpp hardcodes 0); a nonzero txn_id would mint a
-    // phantom loser, so it is refused as corruption, never interpreted.
-    {
-        auto s = WalStream::Open(device_.get(), 0);
-        ASSERT_TRUE(s.ok());
-        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
-        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
-        ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, /*txn=*/7, 800}, handoff).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kHeapOverwrite, 5, 800}).ok());
+        std::array<std::byte, 24> payload{};
+        ASSERT_TRUE(s.value()->Append({GetParam(), kNoTxnId, 800}, payload).ok());
         ASSERT_TRUE(s.value()->Sync().ok());
     }
     auto r = Run();
-    ASSERT_FALSE(r.ok());
+    ASSERT_FALSE(r.ok()) << "a retired kind was skipped";
     EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
+    EXPECT_NE(r.status().message().find(RecordTypeName(GetParam())), std::string::npos)
+        << r.status().message();
+    EXPECT_NE(r.status().message().find("retired"), std::string::npos) << r.status().message();
 }
 
-TEST_F(AnalysisTest, ATransactionalPageHandoffNamingNoPageIsCorruptionToo) {
-    // The 25059bf review's pin for the hoist: the phantom loser is minted
-    // from the transaction id, not the page, so the refusal must fire even
-    // when the handoff names no page at all.
-    {
-        auto s = WalStream::Open(device_.get(), 0);
-        ASSERT_TRUE(s.ok());
-        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
-        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
-        ASSERT_TRUE(
-            s.value()->Append({RecordType::kPageHandoff, /*txn=*/7, kInvalidPageId}, handoff).ok());
-        ASSERT_TRUE(s.value()->Sync().ok());
-    }
-    auto r = Run();
-    ASSERT_FALSE(r.ok());
-    EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
-}
+INSTANTIATE_TEST_SUITE_P(BothRetiredKinds, RetiredKindTest,
+                         ::testing::Values(RecordType::kTxnPrepare, RecordType::kPageHandoff),
+                         [](const ::testing::TestParamInfo<RecordType>& info) {
+                             return std::string(info.param == RecordType::kTxnPrepare
+                                                    ? "TxnPrepare"
+                                                    : "PageHandoff");
+                         });
 
 TEST_F(AnalysisTest, ARecLsnIsTheFirstTimeAPageWasDirtiedNotTheLast) {
     std::vector<Lsn> lsns;

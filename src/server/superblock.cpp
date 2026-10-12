@@ -15,11 +15,11 @@ Status CheckCoreCount(std::uint32_t cores) {
     if (cores == 0) {
         return Status::InvalidArgument("cores must be at least 1");
     }
-    if (cores > kMaxWalCores) {
+    if (cores > kMaxCores) {
         return Status::InvalidArgument("cores " + std::to_string(cores) +
-                                       " is above kMaxWalCores (" +
-                                       std::to_string(kMaxWalCores) +
-                                       "), the number of superblock WAL anchor slots");
+                                       " is above kMaxCores (" +
+                                       std::to_string(kMaxCores) +
+                                       "), the most cores an instance runs");
     }
     return Status::OK();
 }
@@ -33,12 +33,7 @@ SuperBlock SuperBlock::CreateFresh(std::uint64_t now_unix_seconds,
     f.magic = kSuperBlockMagic;
     f.version = kSuperBlockVersion;
     // **One stream, and there is no parameter for the other** (AM-S4(d),
-    // AM-R4a). The parameter that stood here defaulted to
-    // `kPerCoreStreams`, so every superblock built outside `bootstrap.cpp`
-    // - fifty-odd of them, all in tests - claimed a topology `Decode` now
-    // refuses. A default that no volume this build can mount is worse than
-    // no default: it is the shape the fixtures were quietly written
-    // against.
+    // AM-R4a).
     f.log_topology = kSingleStream;
     f.create_time = now_unix_seconds;
     f.last_mount_time = now_unix_seconds;
@@ -72,11 +67,10 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
         // instead.
         //
         // **Since 17 that is D14 rather than caution** (AM-R4): a
-        // version-16 image's *pages* carry PL-C's stream stamp, a field this
-        // build neither writes nor reads, and its `page_lsn` is an offset
-        // into one of several per-core streams. Nothing could be migrated -
-        // those LSNs are not comparable across cores - so the refusal is the
-        // migration story, not a placeholder for one.
+        // version-16 image's `page_lsn` is an offset into one of several
+        // log streams, and those LSNs are not comparable, so nothing could be
+        // migrated - the refusal is the migration story, not a placeholder
+        // for one.
         return Status::Corruption("superblock version " + std::to_string(f.version) +
                                   " is not this build's (" +
                                   std::to_string(kSuperBlockVersion) + ")");
@@ -89,14 +83,8 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
         // writes `kSingleStream` and has no way to write anything else -
         // so reaching here means a version-17 image whose topology word
         // was corrupted or hand-edited, and the honest answer is the same
-        // refusal a bad version gets.
-        //
-        // **This is the door the collapse is proved against.** Every
-        // per-core-stream branch in the engine was reachable only through
-        // this word; refusing the word is what makes deleting them a
-        // deletion of dead code rather than of a live arm. `kPerCoreStreams`
-        // survives as the value named here, because a field this build
-        // cannot read is one it must refuse by name rather than assume.
+        // refusal a bad version gets. A field this build cannot read is one
+        // it must refuse by name rather than assume.
         return Status::Corruption("superblock: log topology " +
                                   std::to_string(f.log_topology) + " is not single (" +
                                   std::to_string(kSingleStream) +
@@ -136,7 +124,7 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
     }
 
     SuperBlock sb(f);
-    for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
+    for (std::uint32_t core = 0; core < kMaxCores; ++core) {
         const std::byte* entry = base + kWalAnchorTableOffset + core * kWalAnchorEntrySize;
         WalAnchorFields& a = sb.wal_anchors_[core];
         std::memcpy(&a.checkpoint_lsn, entry + kWalAnchorCheckpointLsnOffset,
@@ -185,7 +173,7 @@ void SuperBlock::Encode(std::span<std::byte, kPageSize> page) const {
     // slot's zeroes are meaningful (superblock.hpp), and writing only the
     // used prefix would leave the rest to the memset above by accident
     // rather than by contract.
-    for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
+    for (std::uint32_t core = 0; core < kMaxCores; ++core) {
         std::byte* entry = base + kWalAnchorTableOffset + core * kWalAnchorEntrySize;
         const WalAnchorFields& a = wal_anchors_[core];
         std::memcpy(entry + kWalAnchorCheckpointLsnOffset, &a.checkpoint_lsn,
@@ -198,13 +186,13 @@ void SuperBlock::Encode(std::span<std::byte, kPageSize> page) const {
 }
 
 std::vector<WalAnchorFields> SuperBlock::wal_anchors() const {
-    // Sized by the recorded core count (the running one, since AT-S9
-    // unpinned it) rather than by `wal_anchor_count`,
+    // Sized by the recorded core count (the running one) rather than by
+    // `wal_anchor_count`,
     // which is only the highest core that ever *published*: a core that has
     // not checkpointed yet still exists, and its all-zero anchor is the
     // right answer for it ("no checkpoint yet", so nothing to fall short
     // of). Bounded by the array, so a corrupt count cannot read past it.
-    const std::uint32_t cores = std::min(fields_.core_count, kMaxWalCores);
+    const std::uint32_t cores = std::min(fields_.core_count, kMaxCores);
     std::vector<WalAnchorFields> out;
     out.reserve(cores);
     for (std::uint32_t core = 0; core < cores; ++core) out.push_back(wal_anchors_[core]);
@@ -212,22 +200,21 @@ std::vector<WalAnchorFields> SuperBlock::wal_anchors() const {
 }
 
 WalAnchorFields SuperBlock::wal_anchor(std::uint32_t core_id) const noexcept {
-    if (core_id >= kMaxWalCores) {
+    if (core_id >= kMaxCores) {
         return WalAnchorFields{};
     }
     return wal_anchors_[core_id];
 }
 
 Status SuperBlock::SetWalAnchor(std::uint32_t core_id, const WalAnchorFields& anchor) noexcept {
-    if (core_id >= kMaxWalCores) {
+    if (core_id >= kMaxCores) {
         return Status::InvalidArgument("superblock: WAL anchor core_id " +
-                                       std::to_string(core_id) + " is at or above kMaxWalCores");
+                                       std::to_string(core_id) + " is at or above kMaxCores");
     }
     if (core_id != 0) {
-        // superblock.hpp's SetWalAnchor comment carries the rule. **No
-        // longer conditional** (AM-S4(d)): the topology this tested for is
-        // the only one `Decode` admits, so slot 0 is the only slot, full
-        // stop. The 64-slot array stays in the on-disk layout because
+        // superblock.hpp's SetWalAnchor comment carries the rule: `Decode`
+        // admits one topology (AM-S4(d)), so slot 0 is the only slot. The
+        // 64-slot array stays in the on-disk layout because
         // shrinking it would be a second format event no reader wants.
         return Status::InvalidArgument(
             "superblock: this database has one WAL stream, so core " + std::to_string(core_id) +

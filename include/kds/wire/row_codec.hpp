@@ -18,11 +18,9 @@
 //
 // ---- Below the wire path ------------------------------------------------
 //
-// This is deliberately **not** part of the wire path; it is below it. It
-// was written for two consumers - the wire and the cross-core step
-// pipeline's `STEP_BATCH`, which `docs/spec/crosscore.md` CC2 bound to "one
-// encoder, two consumers; no second row format" - and the pipeline retired
-// at AT-S10, so the wire is the one consumer left.
+// This is deliberately **not** part of the wire path; it is below it. Its
+// one consumer is the wire; the step pipeline, its second, retired
+// (AT-S10), and its history is at cf889b63.
 //
 // So: nothing here knows about frames, sockets, cores or rings. It turns a
 // schema into a row description and decoded values into bytes, and back.

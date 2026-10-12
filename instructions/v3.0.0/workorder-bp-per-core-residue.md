@@ -1,4 +1,4 @@
-# Work order BP — what shared-nothing left: per-core structures the shared engine still pays for
+# Work order BP — what the per-core engine left: per-core structures the shared engine still pays for
 
 Written 2026-10-12 **in the main checkout on `main` at `fe248d94`**
 (`git describe` not computed: the session's clone is shallow and reaches no
@@ -15,12 +15,20 @@ session. It follows the operator's words of 2026-10-12, recorded in English
 - **W1:** *"Write a work order for that issue: hypothesis, verification,
   code change, measurement, and re-exploration or rejection where needed."*
 
-**Written, not opened.** Every ruling in §2 is CLA's proposal, adopted only
-with BP-Q0. Every BP-Q item in §5 is unmarked.
+**Opened 2026-10-12** on `worktree-bp-per-core-residue` from `cf889b63`, on
+the operator's word W2, recorded in English (`raft-marks-2026-10-12.md`
+§13): *"Open BP, adopt CLA's proposals, S2 first, and remove every citation
+of the shared-nothing concept (CLAUDE.md and other documents)."*
+- **Marked by W2, as CLA proposed:** BP-Q0..Q3, Q6, Q8..Q13 and every
+  ruling in §2. BP-Q4, Q5 and Q7 are marked "decided by BP-S1": their
+  option is taken from the census, on CLA's proposal, under the operator's
+  standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone).
+- **BP-Q14**, the reach of W2's citation sweep, was written after W2 and
+  adopted on the same standing go-ahead (§5).
+- The order was renamed from `workorder-bp-shared-nothing-residue.md` under
+  W2; its W0 quotation above is the operator's words and stays as said.
 
-**Not reviewed by `critics-developer`.** BP-S0 had one independent
-source-check review before the push (§7). The `critics-developer` review is
-owed before BP-Q0 is put to the operator.
+**The `critics-developer` review owed at BP-S0** ran at the opening (§7).
 
 **Claim tags:**
 - `[source-read]`, with `path:line` at `fe248d94`: read, not run.
@@ -332,8 +340,10 @@ The survey ran over `src/` and `include/` in two passes:
 - `TableAccess::AnyCabin()` (`include/kds/catalog/schema.hpp:282`) has no
   caller.
 - `Catalog::catalog_version()` (`catalog.hpp:1214`) has no reader in
-  `src/`; two tests read it (`tests/catalog_test.cpp:603`,
-  `tests/txn_session_test.cpp:964`).
+  `src/`; about six test cells read it (`tests/catalog_test.cpp:603`,
+  `:608`, `:797`, `:982`, `:1011`, `:1349`, `tests/txn_session_test.cpp:964`),
+  and `:608` pins "a root move must not drop the cache". By BP-H13's own R
+  it stays.
 - `Expeditor::BroadcastShutdown`'s scheduler argument is unused
   (`expeditor.cpp:1346`).
 - `SuperBlockFields::wal_anchor_count` is written
@@ -370,8 +380,13 @@ The survey ran over `src/` and `include/` in two passes:
   - `superblock.cpp:74-77` (A5);
   - `include/kds/catalog/catalog_cache.hpp:47-52` ("only safe while a
     single instance owns DDL");
-  - `include/kds/txn/manager.hpp:49-51` ("One manager, one core, one WAL
-    stream; a transaction spanning cores is not representable");
+  - `include/kds/txn/manager.hpp:49-51`: "No cross-core protocol" and its
+    `wal.md` §3 pointer (S0 review: "a transaction spanning cores is not
+    representable" is still true, BL-R1);
+  - `catalog_cache.hpp`'s "there is no DROP TABLE to retire one" and "DDL
+    cannot interleave with a statement because the reactor is
+    single-threaded", which a yielded `SELECT` has broken since BA-S15
+    (S0 review);
   - `src/txn/lock_table.cpp:379` ("bounded by the live transactions on this
     core": the wait-for graph is the instance's).
 - **Tombstones.** `[source-read]` 281 comment lines in `src/` and 311 in
@@ -381,11 +396,13 @@ The survey ran over `src/` and `include/` in two passes:
   - `expeditor.cpp` (40);
   - `command_dispatcher.hpp` (30).
 
-  That count is a lower bound: a tombstone block runs past its keyword line.
+  That count is noisy in both directions (S0 review): a tombstone block
+  runs past its keyword line, and `AT-S5`, `coordinator` and `participant`
+  also match live text.
 
 ---
 
-## 2. Rulings — CLA's proposals, not marked
+## 2. Rulings — CLA's proposals, marked by W2
 
 ### BP-R0 — One loop per hypothesis, and a rejection is recorded
 
@@ -541,14 +558,21 @@ measurement, and `R` the re-exploration or rejection.
 - **V.** The census above, re-read at the stage's commit and extended to
   every caller of `LookupCommit` and `window_size`.
 - **C.** `window_latch_` becomes armed-or-null, like the lock table's
-  latches (`lock_table.cpp:64`). The commit marker's `open_bounds` stays:
-  it is per-commit state, not synchronization.
+  latches (`lock_table.cpp:64`), **armed by default**: the Expeditor
+  disarms it at `cores = 1`. A default-constructed `InstanceVisibility`
+  stays armed because `tests/instance_visibility_test.cpp:980`
+  (`AReclaimedWinnerIsNeverAnsweredUncommitted`) runs `LookupCommit`
+  against `Reclaim` on two threads over one. `WindowLatchForTest()`
+  returns `Latch&` (`instance_visibility.hpp:608`, used at
+  `tests/contention_counters_test.cpp:328`) and changes with the seam. The
+  commit marker's `open_bounds` stays: it is per-commit state, not
+  synchronization.
 - **Cells:**
   - **arming:** armed at `cores = 2`, null at `cores = 1`;
   - the visibility, commit and recovery suites green at both core counts;
   - `inflight_publication_rig_test.cpp` unchanged.
-- **Mutation:** the latch null at `cores = 2`, killed by the arming cell.
-  As with H1, a race above one core is argued, not tested (BP-R1).
+- **Mutation:** the latch null at `cores = 2`, killed by the arming cell,
+  and probabilistically by the two-thread cell above (S0 review).
 - **M.** §6.1's BP-G1 cells, plus the `group` and `strict` commit loops at
   `cores = 1`.
 - **R.** If V finds an off-reactor caller, H2 is rejected with its call
@@ -569,8 +593,7 @@ measurement, and `R` the re-exploration or rejection.
   armed-or-null, as `expeditor.cpp:1120` already does for the assertion
   registry.
 - **Cells:** the Cabin contract suite byte-identical at `cores = 1` and
-  `cores = 2`.
-- **Cells:** arming, armed at `cores = 2` and null at `cores = 1`.
+  `cores = 2`; arming, armed at `cores = 2` and null at `cores = 1`.
 - **Mutation:** the latches null at `cores = 2`, killed by the arming cell.
   The race the latch prevents, one core serving a set while another heals
   an entry of it (`cabin_store.cpp:91-93`), is argued, not tested
@@ -602,8 +625,8 @@ measurement, and `R` the re-exploration or rejection.
     0 has `in_flight_at_mint` true;
   - after A commits and is released, a new view has it false when no other
     core has an unresolved transaction.
-- **Mutation:** `Begin`'s `PublishCoreBounds()` moved after the return, so
-  the bounds publish lazily. It is killed by the first cell once the walk
+- **Mutation:** `Begin`'s `PublishCoreBounds()` removed, so the bounds
+  publish lazily. It is killed by the first cell once the walk
   is gone.
 - **M.** §6.1's point `SELECT` and point `UPDATE` at `cores = 1` (one mint
   per statement).
@@ -620,7 +643,13 @@ measurement, and `R` the re-exploration or rejection.
   header says no branch reads the stamp. Verification adds the tests that
   assert the stamp through `GetPageStreamStamp`, not by its printed name:
   `tests/device_page_store_test.cpp:103-106`, `:981`, `:1008` and
-  `tests/wal_redo_test.cpp:388`. Under BP-Q3 (a) they change in C.
+  `tests/wal_redo_test.cpp:388`, and (S0 review) `page_header_test.cpp:41-50`,
+  `wal_redo_test.cpp:402`, `:421-435` and `wal_checkpointer_test.cpp:445`.
+  Under BP-Q3 (a) they change in C. **The envelope's logging-core byte
+  dies with the stamp**: its one reader is `LoggingCoreOf`
+  (`redo.cpp:93`), and it is written at `checkpointer.cpp:28-29` and
+  `log_page_init.hpp:40`; `payload.hpp:526-540`'s "a dirty table belongs
+  to one core's pool" is false since AM-S2 step 3.
 - **C.** Per BP-Q3:
   - (a) stop writing it: the field stays, written 0 by a new page, and
     `SHOW PAGE` drops it;
@@ -645,13 +674,16 @@ measurement, and `R` the re-exploration or rejection.
   stale root is refused, not answered wrongly (§1.B B1). The bump buys
   only the refresh.
 - **V.**
-  - `[measured]` at BP-S1, by three new counters per core in `SHOW META`:
-    - `catalog_memo_drops`;
-    - `catalog_memo_rebuilds`: entries re-resolved;
-    - `first_intention_reruns`: the `:9380` path.
-
-    The resolution's time is in the sampler's parts. The premise holds if
-    §6.1's growth cell shows the rebuilds and re-runs above BP-R2's bar.
+  - `[measured]` at BP-S1, by **one word-move counter per cause** in
+    `SHOW META` (S0 review: a root move happens only on a level growth,
+    about three or four times in a relation's life at an internal fanout
+    near 600, so the frequent movers are CABIN AUTO's create and drop and
+    catalog-writing resolutions): `catalog_word_moves_root`,
+    `catalog_word_moves_cabin`, `catalog_word_moves_ddl`. The premise holds
+    if §6.1's CABIN AUTO or growth cell shows the moves, and the
+    resolution time the sampler attributes to them, above BP-R2's bar.
+    Since `fe248d94` the two `BumpWord` sites merged into `AdoptRoot`
+    (`catalog.cpp:2677-2699`).
   - `[source-read]` for options (a) and (d): every read and write descent
     that can start from a memoized root, clustered and index, shown either
     to cover the whole key space from a stale root or to refuse. The known
@@ -661,37 +693,38 @@ measurement, and `R` the re-exploration or rejection.
     leaf chain. A descent that answers from a subtree without refusing
     rejects (a) and (d).
 - **C** (only on BP-Q4's mark). The options:
-  - (a) **Per-entry invalidation for structural moves.** A root move
-    publishes `(word, rel_oid)` into a small instance ring of recent moves.
-    `Revalidate` drops only the named entries when every move between its
-    word and the current one is in the ring and is structural. Otherwise
-    it drops all, as today.
+  - (a) **Struck at the S0 review**: a ring of recent moves with a
+    `[quiet-wrong]` classifier, aimed at the rarest mover.
   - (b) **No memoized roots.** A bind reads the root from the relation's
     anchor page, one page access per relation per statement, and root
     moves stop bumping the word.
   - (c) **Keep it.**
   - (d) **Root moves stop bumping the word.** A structural refusal
-    (`NoteStructuralRefusal`) refreshes that one relation's root from its
-    anchor before the statement's retry.
+    refreshes that one relation's root from its anchor before the
+    statement's retry. **The index tree needs the same hook** (S0 review):
+    `NoteStructuralRefusal` is called only from `btree.cpp:235`, `:455`,
+    `:482`, `:1201`; the index tree's refusals (`index_tree.cpp:197`, `:257`)
+    rely on the word bump (`index_tree.cpp:192-194`), and an index refusal
+    reaches the client rather than re-running. Without an index-side
+    refresh, (d) refuses a stale index root forever.
 - **Why `[quiet-wrong]`.** The danger is not the stale root. It is a word
   that stops moving, or a move classified as structural that was not.
   Either way a memo survives a `CREATE INDEX` or `CREATE ASSERTION`, and a
   write lands without the index entry or the assertion check
   (`command_dispatcher.cpp:9368-9379`). The cells aim there:
-  - **(a), (d):** after core 1 commits `CREATE INDEX i ON t(v)`, core 0's
+  - **(d):** after core 1 commits `CREATE INDEX i ON t(v)`, core 0's
     next `INSERT INTO t` writes an entry into `i`; likewise for
     `CREATE ASSERTION`, which core 0's next write checks;
-  - **(a), (d):** after core 1 grows a level, core 0's next `SELECT` of a
+  - **(d):** after core 1 grows a level, core 0's next `SELECT` of a
     key the old root does not reach returns it, within the retry budget
     and without a client-visible `TxnConflict`;
-  - **(a):** a ring overflow falls back to a whole drop.
+  - **(d):** after core 1 grows an index root, core 0's next `INSERT`
+    succeeds.
 - **Mutations, each repeated:**
-  - **(a):** a `CREATE INDEX`'s bump classified as structural (killed by
-    the index cell);
-  - **(a):** the ring's overflow not detected (killed by the overflow
-    cell);
   - **(d):** the refresh skipped on a structural refusal (killed by the
-    level cell, as a refusal reaching the client).
+    level cell, as a refusal reaching the client);
+  - **(d):** the index-side refresh skipped (killed by the index-root
+    cell).
 - **M.** §6.1's growth cell and CABIN AUTO cell, A/B.
 - **R.**
   - Under the bar, rejected with its counters.
@@ -725,11 +758,11 @@ measurement, and `R` the re-exploration or rejection.
   to a block (4,096 ids) until it burns. While it does, every visibility
   decision above the floor goes through `LookupCommit` (A2's latch), and
   `Reclaim` walks a larger window.
-- **V.** `[measured]` at BP-S1, in a skew cell (§6.1) with one core idle:
-  - the window's size over time;
-  - burns per minute;
-  - `LookupCommit` calls per statement. BM-S1 proposes a per-core count of
-    them, `visibility_window_lookups`. BP-S1 builds it if BM-S1 has not.
+- **V.** `[measured]` at BP-S1 from counters that already exist, with no
+  new instrumentation (S0 review: BP-Q6 is report only, so a counter built
+  here has no outlet): the window's size and burns, if `SHOW META` carries
+  them, in the skew cell (§6.1). Otherwise BP-S7 reports H8 as unmeasured
+  and leaves it to the later order BP-Q6 names.
 - **C.** None in BP. BP-Q6 puts the number beside AT-R4.
 - **R.** Under the bar, rejected.
 
@@ -788,17 +821,25 @@ measurement, and `R` the re-exploration or rejection.
     counter.
 
   H11 holds if the mark is still there after a bound `[provisional]` of
-  1 s.
+  1 s. A second V cell at `cores = 1` (S0 review): core 0's own last DDL
+  leaves its marks until the next DDL whenever readers had not settled at
+  its scope end.
 - **C.** The purge moves from "core 0's DDL scope end" to core 0's
-  existing 50 ms `system` tick. It runs when the instance mark counter is
-  nonzero (`catalog.hpp:356-366`), so it stays one sweeping core and a
-  placement, as the comment at `command_dispatcher.cpp:6690-6696` requires.
+  existing 50 ms `system` tick. **It runs only on progress** (S0 review): a
+  sweep is a write fetch of every catalog page even when it retires nothing
+  (`catalog.cpp:1063-1065`), so a mark held back by a long reader would
+  otherwise dirty the whole catalog twenty times a second. The tick sweeps
+  when the instance mark counter is nonzero (`catalog.hpp:356-366`) and the
+  read horizon has moved since the last sweep that left a mark. It stays
+  one sweeping core and a placement, as the comment at
+  `command_dispatcher.cpp:6690-6696` requires.
 - **Cells:**
   - the V cell, now purged within the bound;
   - a mark whose deleter is unresolved is not purged.
-- **Mutation:** the tick's counter test removed, killed by a cell reading
-  a new `SHOW META` counter, `catalog_purge_sweeps`, which stays at 0 while
-  the mark counter is 0.
+- **Mutation:** the tick's progress gate removed, killed by a cell holding
+  a mark back under an open reader and reading `catalog_purge_sweeps` (a
+  new `SHOW META` counter), which must not rise while the horizon stands
+  still.
 - **M.** The idle tick cost at `cores = 1`, by the reclaim tick's existing
   shape (a predicate and a return).
 - **R.** If V shows a purge that this survey missed, rejected with its call
@@ -815,9 +856,10 @@ measurement, and `R` the re-exploration or rejection.
     reading BK's bump (`superblock.hpp:267-274`) against AT-S18's date in
     `workorder-at-close-ar0-5-left-open.md`.
 - **C.** BP-R4's deletion:
-  - `IsAssignedRecordType` keeps both kinds assigned, so the scanner hands
-    them to analysis (the pins at `tests/wal_payload_test.cpp:538-563`
-    stay), and analysis refuses both `Corruption`, naming them retired;
+  - both kinds stay assigned, so no later kind reuses their numbers and
+    a cell can still encode one (the pins at
+    `tests/wal_payload_test.cpp:538-563` stay), and analysis refuses both
+    `Corruption`, naming them retired;
   - `LogPageHandoff` (`log_page_handoff.hpp:34`) and the handoff payload
     codec go;
   - the resolution loop, `prepared_txns`, `PreparedTxn`, the payload
@@ -867,11 +909,11 @@ measurement, and `R` the re-exploration or rejection.
 | stage | what | done when | size |
 |---|---|---|---|
 | BP-S0 | **The order** | <ul><li>This file</li><li>Its review (§7)</li><li>The index row</li><li>`raft-marks-2026-10-12.md` §8-§9</li></ul> | S |
-| BP-S1 | **The census** (BP-R6): every Group B premise, and the BP-G1 cells' baseline | <ul><li>**Code: instrumentation only, no behaviour change:**<ul><li>BP-H6's three counters;</li><li>BP-H9's `InFlight` calls, misses and slots read;</li><li>BP-H8's window-size sample and burn count;</li><li>`visibility_window_lookups` if BM-S1 has not built it;</li><li>checkpoint runs and data syncs per core in `SHOW META`'s checkpoint block.</li></ul></li><li>**The drivers:** §6.1's cells in `tools/ba_census.py` and `tools/multicore_benchmark.py`.</li><li>**The measurement**, into `bench/v3.0.0/results-bp-s1-census-<describe>.md`.</li><li>**Each Group B hypothesis** marked held or rejected against BP-R2's bar in §6.</li><li>**The suite green.**</li></ul> | M |
+| BP-S1 | **The census** (BP-R6): every Group B premise, and the BP-G1 cells' baseline | <ul><li>**Code: instrumentation only, no behaviour change:**<ul><li>BP-H6's word-move counters, one per cause;</li><li>BP-H9's `InFlight` calls, misses and slots read;</li><li>checkpoint runs and data syncs per core in `SHOW META`'s checkpoint block.</li></ul></li><li>**The drivers:** §6.1's cells in `tools/ba_census.py` and `tools/multicore_benchmark.py`.</li><li>**The measurement**, into `bench/v3.0.0/results-bp-s1-census-<describe>.md`.</li><li>**Each Group B hypothesis** marked held or rejected against BP-R2's bar in §6.</li><li>**The suite green.**</li></ul> | M |
 | BP-S2 | **Dead code and prose** (BP-H12, H13, H14) | <ul><li>Each hypothesis's V written into §7.</li><li>The deletions.</li><li>BP-R4's refusal cells.</li><li>The suite and the sim corpus green.</li><li>Independent of BP-S1: may run first.</li></ul> | M |
 | BP-S3 | **BP-G1** (BP-H1..H5), one commit per hypothesis | <ul><li>Per hypothesis:<ul><li>V in §7;</li><li>C with its cells and mutations, each mutation repeated;</li><li>the BP-G1 cells' A/B, reported;</li><li>a rejected hypothesis recorded with its call site.</li></ul></li><li>An arming cell for every fence or latch made conditional, and its call-site census in §7 (BP-R1).</li><li>The suite green.</li></ul> | M |
 | BP-S4 | **The purge's trigger** (BP-H11) | V's rig cell first; then C, `catalog_purge_sweeps`, cells, mutation; the suite green | S |
-| BP-S5 | **The memo** (BP-H6), **only if BP-S1 holds it and BP-Q4 marks (a) or (b)** | C with the descent cells and mutations; §6.1's growth and CABIN AUTO cells A/B; the sim corpus | M |
+| BP-S5 | **The memo** (BP-H6), **only if BP-S1 holds it and BP-Q4 takes (b) or (d)** | C with the descent cells and mutations; §6.1's growth and CABIN AUTO cells A/B; the sim corpus | M |
 | BP-S6 | **Locks** (BP-H10), **only if BP-S1 holds it** | C; the lock contention cells A/B; the deadlock and fence suites | S |
 | BP-S7 | **The ratified three, reported** (BP-H7, H8, H9) | §7 carries each number beside its ruling; BP-Q5..Q7 put to the operator; no code | S |
 | BP-S8 | **The close** | <ul><li>§6.2's measurement.</li><li>**Text:**<ul><li>`statement_epoch.hpp`, `instance_visibility.hpp`, `cabin_store.hpp` and `latch.hpp` for what is armed where;</li><li>`wal.md` for the retired kinds;</li><li>`catalog.md` CT2 if BP-S5 landed;</li><li>CLAUDE.md's rows: WAL, Transactions, Cabin, Transactional DDL;</li><li>`known-gaps.md` for each rejected hypothesis whose cost stays.</li></ul></li></ul> | S |
@@ -880,24 +922,25 @@ measurement, and `R` the re-exploration or rejection.
 
 ## 5. Items for the operator
 
-All unmarked. Every proposal is `[design]` unless a cell says otherwise.
+Marked 2026-10-12 by W2 (`raft-marks-2026-10-12.md` §13). Every proposal is `[design]` unless a cell says otherwise.
 
 | item | question | kind | CLA's proposal | mark |
 |---|---|---|---|---|
-| BP-Q0 | **Open BP**, with BP-S0..S8 and BP-R0..R6 as written | process | Yes, sequenced as BP-Q13 marks | |
-| BP-Q1 | **BP-R1: a BP-G1 break is cut on proof, its measurement gates nothing** | process | As written. BP-G1 is a standing rule (ways of working: zero overhead for single-core configurations). Keeping a break because it is cheap would make the rule a threshold | |
-| BP-Q2 | **Re-exploration's bound.** One `BP-Hn.k` per hypothesis without a word; a second needs the operator | process | As written | |
-| BP-Q3 | **The page stream stamp** (BP-H5). (a) Stop writing it; `SHOW PAGE` drops it. (b) Keep it as a diagnostic | user-visible (`SHOW PAGE`) | (a). It names a stream that no longer exists. A diagnostic that answers a retired question is noise in every page dump | |
-| BP-Q4 | **The memo** (BP-H6), only if BP-S1 holds it. (a) Per-entry invalidation for structural moves, through a ring of recent moves. (b) No memoized roots: a bind reads the anchor page. (c) Keep. (d) Root moves stop bumping the word; a structural refusal refreshes that relation's root | design, **[quiet-wrong] under (a), (b) and (d)** | Decided by BP-S1's counters and BP-H6's descent census. CLA leans (d) if the census shows every descent from a stale root either complete or refused: it removes the root-move bumps without adding a classifier, and a missed refresh costs a refusal, not a row. (b) adds a page access to every statement on every core, which is a cost at `cores = 1` that BP-G1 forbids unless armed | |
-| BP-Q5 | **The checkpoint** (BP-H7), against AT-S8. (a) Keep. (b) One instance-wide run, with undo heads published beside AX's in-flight ids, in an order of its own | design, ratified, **[quiet-wrong] under (b)** | Decided by BP-S1. Recovery needs every live transaction's undo head inside the replay range, so (b) is a recovery-correctness change | |
-| BP-Q6 | **The id window** (BP-H8), against AT-R4. Report only; any change is a later order | design, ratified | Report only | |
-| BP-Q7 | **The in-flight table** (BP-H9), against AX. (a) Keep. (b) An instance pool of slots. (c) A per-core min/max summary word in front of the scan | design, ratified, **[quiet-wrong] under (b) and (c)** | Decided by BP-S1. If material, (c) first. (b) bears on BL-Q1 (b), a transaction moving between cores, and is BL's question as much as BP's | |
-| BP-Q8 | **The purge's trigger** (BP-H11): core 0's 50 ms `system` tick, gated on the instance mark counter | design | As written. It keeps one sweeping core, a placement and not an authority, as `command_dispatcher.cpp:6690-6696` states | |
-| BP-Q9 | **Retired WAL kinds** (BP-R4): refused `Corruption`, numbers reserved | design, **[quiet-wrong] if skipped** | As written | |
-| BP-Q10 | **Tombstones.** (a) Correct false statements only. (b) Also prune tombstones of machinery retired before AT closed, keeping one line per retired mechanism that names the commit to read. (c) Prune all | scope | (b). A one-line pointer keeps the warning and the history's address, and drops the essay | |
-| BP-Q11 | **`kMaxWalCores`'s new name** | naming | `kMaxCores` | |
-| BP-Q12 | **The letter** BP, chosen by CLA | naming | BP | |
-| BP-Q13 | **Sequencing.** (a) BP opens now in its own worktree; BP-S2 first, since it needs no census; BP-S1 then gates S5 and S6. (b) BP waits for BM's close | process | (a). BP-S2 and BP-S3 touch the statement head, the mint and `wal/`; BM touches the walk. The two meet only in `command_dispatcher.cpp`, and in different functions | |
+| BP-Q0 | **Open BP**, with BP-S0..S8 and BP-R0..R6 as written | process | Yes, sequenced as BP-Q13 marks || W2, as proposed (S2 first, per BP-Q13) |
+| BP-Q1 | **BP-R1: a BP-G1 break is cut on proof, its measurement gates nothing** | process | As written. BP-G1 is a standing rule (ways of working: zero overhead for single-core configurations). Keeping a break because it is cheap would make the rule a threshold || W2, as proposed |
+| BP-Q2 | **Re-exploration's bound.** One `BP-Hn.k` per hypothesis without a word; a second needs the operator | process | As written || W2, as proposed |
+| BP-Q3 | **The page stream stamp** (BP-H5). (a) Stop writing it; `SHOW PAGE` drops it. (b) Keep it as a diagnostic | user-visible (`SHOW PAGE`) | (a). It names a stream that no longer exists. A diagnostic that answers a retired question is noise in every page dump || W2: (a) |
+| BP-Q4 | **The memo** (BP-H6), only if BP-S1 holds it. (a) ~~Per-entry invalidation through a ring of recent moves~~, struck at the S0 review (§7). (b) No memoized roots: a bind reads the anchor page. (c) Keep. (d) Root moves stop bumping the word; a structural refusal refreshes that relation's root | design, **[quiet-wrong] under (a), (b) and (d)** | Decided by BP-S1's counters and BP-H6's descent census. CLA leans (d), with the index-side refresh the S0 review found missing (BP-H6), if the census shows every descent from a stale root either complete or refused: it removes the root-move bumps without adding a classifier, and a missed refresh costs a refusal, not a row. (b) adds a page access to every statement on every core, which is a cost at `cores = 1` that BP-G1 forbids unless armed || W2: decided by BP-S1; the option is adopted from the census on the standing go-ahead |
+| BP-Q5 | **The checkpoint** (BP-H7), against AT-S8. (a) Keep. (b) One instance-wide run, with undo heads published beside AX's in-flight ids, in an order of its own | design, ratified, **[quiet-wrong] under (b)** | Decided by BP-S1. Recovery needs every live transaction's undo head inside the replay range, so (b) is a recovery-correctness change || W2: decided by BP-S1; the option is adopted from the census on the standing go-ahead |
+| BP-Q6 | **The id window** (BP-H8), against AT-R4. Report only; any change is a later order | design, ratified | Report only || W2: report only |
+| BP-Q7 | **The in-flight table** (BP-H9), against AX. (a) Keep. (b) An instance pool of slots. (c) A per-core min/max summary word in front of the scan | design, ratified, **[quiet-wrong] under (b) and (c)** | Decided by BP-S1. If material, (c) first. (b) bears on BL-Q1 (b), a transaction moving between cores, and is BL's question as much as BP's || W2: decided by BP-S1; the option is adopted from the census on the standing go-ahead |
+| BP-Q8 | **The purge's trigger** (BP-H11): core 0's 50 ms `system` tick, gated on the instance mark counter | design | As written. It keeps one sweeping core, a placement and not an authority, as `command_dispatcher.cpp:6690-6696` states || W2, as proposed |
+| BP-Q9 | **Retired WAL kinds** (BP-R4): refused `Corruption`, numbers reserved | design, **[quiet-wrong] if skipped** | As written || W2, as proposed |
+| BP-Q10 | **Tombstones.** (a) Correct false statements only. (b) Also prune tombstones of machinery retired before AT closed, keeping one line per retired mechanism that names the commit to read. (c) Prune all | scope | (b). A one-line pointer keeps the warning and the history's address, and drops the essay || W2: (b) |
+| BP-Q11 | **`kMaxWalCores`'s new name** | naming | `kMaxCores` || W2: `kMaxCores` |
+| BP-Q12 | **The letter** BP, chosen by CLA | naming | BP || W2: BP |
+| BP-Q13 | **Sequencing.** (a) BP opens now in its own worktree; BP-S2 first, since it needs no census; BP-S1 then gates S5 and S6. (b) BP waits for BM's close | process | (a). BP-S2 and BP-S3 touch the statement head, the mint and `wal/`; BM touches the walk. The two meet only in `command_dispatcher.cpp`, and in different functions || W2: (a) |
+| BP-Q14 | **The reach of W2's citation sweep.** (a) Live documents only: `CLAUDE.md`, `overview.md`, `docs/`, `manual/`, and source comments as BP-Q10 marks; dated records under `instructions/` and `bench/` stay as written, except this order's own title and file name. (b) Also rewrite the dated records | scope | (a). A work order, a raft-marks entry and a results file are records of what was decided and measured when; rewriting them falsifies the record, and the operator's quoted words stay as said. A live document states the current contract, where a citation of the retired model is the noise W2 removes. `docs/spec/cross-owner-txn.md`, a retired spec of a retired mechanism, is deleted | adopted on the operator's standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone): (a) |
 
 ---
 
@@ -923,8 +966,7 @@ All unmarked. Every proposal is `[design]` unless a cell says otherwise.
 - **Growth** (BP-H6): every core inserting into its own btree relation from
   an empty start, so levels grow throughout, while one core runs point
   `SELECT`s over a fifth relation. Reported:
-  - memo drops and rebuilds per core;
-  - first-intention re-runs;
+  - word moves per cause;
   - the reader's p99 against the same cell with no inserting cores.
 - **CABIN AUTO** (BP-H6): `cabin_optimizer = on` over scenario 4's
   shape (`tools/scenario4_cabinopt_days.py`), with the same counters.
@@ -1041,5 +1083,104 @@ and CLA re-read each cited line before applying it.
 After the review, CLA found BI's measured run counts (§1.B B2) and
 replaced a `[design]` sentence with them.
 
-**Owed:** the `critics-developer` review of this order, before BP-Q0 is
-put to the operator.
+**The `critics-developer` review, run at the opening** (2026-10-12, on
+`worktree-bp-per-core-residue` at `cf889b63`, read-only): no blocker;
+every load-bearing `[source-read]` claim held, and B1's lines drifted (the
+two `BumpWord` sites merged into `AdoptRoot`). It confirmed H12's V by
+ancestry: the prepare emitter left at AT-S6 `ac4bd646` (leftovers at
+AT-S18 `854aefe3`), the handoff at AT-S9 `94b3b96e`, and both are ancestors
+of BK's bump to 22, `efa6adba`. **Applied:**
+- H6 (d) gains the index-side refresh and its cell; option (a) struck;
+  V becomes one word-move counter per cause (should-fix 1, 2);
+- H11's tick runs only on progress, with a `cores = 1` V cell (3);
+- H2's latch stays armed by default, the Expeditor disarming it (4);
+- H5's inventory gains the logging-core byte and four tests (5);
+- §1.E corrected: `manager.hpp`'s spanning claim is true, and
+  `catalog_cache.hpp` carries two more false statements (6);
+- D2: `catalog_version()` stays (its test readers), and the config fields
+  are D3's (7);
+- H12's list names the state that dies with the arms (8; already in C);
+- the nits: H3's doubled bullet, H4's mutation wording, the count's noise.
+
+**Applied in part:** H8 keeps its report but builds no counter (BP-Q6 is
+report only, so a counter here has no outlet). **Rejected:** cutting H7's
+measurement, because BI counted runs but not bytes written back per run,
+which is H7's premise; and citing `walk_slice_rig_test.cpp` in place of
+H1's behaviour cell, which stays a `cores = 1` cell where those rigs run
+two cores.
+
+### BP-S2 — dead code and prose
+
+Worked on `worktree-bp-per-core-residue` from `cf889b63`, first of BP's
+stages per BP-Q13 (a).
+
+**BP-H12, V** `[source-read]` at `cf889b63`: no file under `src/` appends
+kind 25 or 27 - `LogPageHandoff` had no caller and `EncodeTxnPrepare` was
+called only from `tests/`; `Decode` mounts version 22 alone; 22 is BK's
+bump at `efa6adba` (2026-10-11), and AT-S6 `ac4bd646`, AT-S9 `94b3b96e`
+and AT-S18 `854aefe3` (2026-09-26) are its ancestors. No `sim/` or
+`tools/` path writes a WAL record. **Held.** **C:** analysis refuses both
+kinds `Corruption`, naming the kind and "retired", before it notes a
+transaction; both numbers stay assigned and named (`record.hpp`,
+`wal_payload_test.cpp`'s pins). Deleted: `log_page_handoff.hpp`, both
+payload codecs, `TxnOutcome::kPrepared`, `PreparedTxn`, `prepared_txns`,
+the resolution phase in `RecoverCore`, the `prepared*` counts in
+`AnalysisResult`, `RecoveryReport` and `MountRecovery`, the mount log's
+clause, `SHOW META`'s `recovery_prepared*`, redo's two `TouchesNoPage`
+arms (redo refuses a retired kind too, through the same
+`IsRetiredRecordType` and `RetiredRecordRefusal`, after the S2 review
+found TXN_PREPARE would otherwise pass redo as a no-page record),
+`tests/prepared_recovery_test.cpp`, and the prepare and handoff cases of
+`wal_analysis_test.cpp`, `wal_payload_test.cpp`, `wal_redo_test.cpp`,
+`wal_recovery_test.cpp` and `mount_recovery_test.cpp`. **Cells:**
+`RetiredKindTest.ARetiredKindIsCorruptionNamingIt/{TxnPrepare,PageHandoff}`
+and `MountRecoveryTest.ARetiredPrepareRefusesTheMount`. **Mutation:** the
+refusal turned into a skip.
+
+**BP-H13, V** `[source-read]`: `TableAccess::AnyCabin()` has no caller -
+deleted; `BroadcastShutdown`'s scheduler argument was `(void)` - removed;
+`wal_anchor_count` stays written, its field comment saying no branch reads
+it. **Dropped from the list by R:** `Catalog::catalog_version()` (six test
+cells read it, one pinning "a root move must not drop the cache"), and
+`CoreRuntime::Config`'s `cabins`, `cabin_limits`, `buffer_pool_frames` and
+`anchor`, read on the fixture path (`core_runtime.cpp:186`, `:333-334`,
+`:432`). **D3's fixture arms stay**: the suite builds those fixtures
+through `CoreRuntime::Open` with no instance structure, and the rig's
+wiring does not cover them; their comments already name them
+fixture-only.
+
+**BP-H14:** `kMaxWalCores` is `kMaxCores` (BP-Q11), its comment naming
+what it bounds and its refusal saying "the most cores an instance runs";
+two test names that said "anchor table" follow. Corrected:
+`superblock.cpp`'s stamp sentence, `catalog_cache.hpp`'s three
+statements, `manager.hpp`'s "No cross-core protocol" paragraph,
+`lock_table.cpp`'s walk bound, and `expeditor.cpp`'s "each core's log is
+its own" at shutdown. Every literal "shared-nothing" left the code's
+comments (W2). Tombstones pruned per BP-Q10 (b).
+
+**Review** (`critics-developer`, on the uncommitted S2 diff from
+`cf889b63`): no blocker and no correctness bug; the refusal's placement,
+every replay path and every switch checked. **Applied:** one
+`IsRetiredRecordType` and `RetiredRecordRefusal`, used by analysis and by
+redo (TXN_PREPARE would otherwise pass redo as a no-page record); the false
+"the scanner hands them here" sentence; `RecoverCore`'s and `Analyze`'s
+refusal lists; the `CREATE/DROP INDEX` hold's reason, which the prune had
+lost; `device_page_store.hpp`'s unlatched-writeback and future-tense
+claims; `kwp_session.hpp`'s "no walk parks"; `static_assert`s tying
+`kContentionSlots`, `CheckpointCensus::kSlots` and `CoreLoad::kSlots` to
+`kMaxCores`; the mount cell's assertion that redo never ran; the test
+name lambda; the nits (a dead comment, a pointer's form, the error
+prefix). **Rejected:** `WalWriter::kWaitSlots`' assert, because `wal/`
+sits below `server/` and the assert would need the include the layering
+forbids; reflowing eight comment lines past 100 columns, which no rule
+or tool in the tree enforces.
+
+**Sim corpus:** 190 runs, 9 failures, all fresh seed `20261012003` with
+`--faults io`, and identical at a base build of `cf889b63`: not S2's.
+Recorded in `docs/inflight/bugs/a-ddl-rollback-compensates-logged-catalog-pages-unlogged.md`
+with its seven-op minimization. Committed seeds all pass.
+
+**Suite:** 3604/3604 (`ctest -j8`, Debug), before and after the review's
+fixes. **Mutation:** the refusal turned into a skip fails all three
+retired-kind cells, three runs of three. Overhead not measured; measured
+at the milestone's close.

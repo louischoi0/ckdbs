@@ -164,16 +164,12 @@ before it commits".
 for: a relation that is a join's inner side, a subquery's relation, or the
 target of an `INSERT`/`UPDATE`/`DELETE` holds the `IS` for the whole
 statement - from the bind to the end - where only a scan's outermost walk
-held it before. (A remote stage declared its own from its resolve until
-AT-S10 deleted the remote-step protocol.) Under a
+held it before. Under a
 continuous stream of such statements a drop reaches the lock family's
 fault net and is refused where it used to succeed, which is the sentence
-above with a larger population of readers behind it. **The net is 1 s
-since AT-S6** - it was 11 s while a holder could sit inside a
-coordinator's phase deadline, and no holder waits on another core now -
-so that refusal is roughly eleven times easier to reach than when this
-paragraph was written, and `lock_wait_fault_net_ms` is what an operator
-who wants the old bound sets.
+above with a larger population of readers behind it. **The net is 1 s**
+(AT-S6), and `lock_wait_fault_net_ms` is what an operator who wants a
+longer bound sets.
 
 **And it is not only readers.** A relation `X` is refused by the `IX`
 every writer of the relation holds, so a drop also waits for a transaction

@@ -449,10 +449,9 @@ namespace {
 // ---- `CREATE ASSERTION` in its three steps -----------------------------
 //
 // Validate, build, publish (`assertion.md` §8.1), split at the index build's
-// seams (`exec::PrepareIndexDef` / `exec::BuildIndexTree`, PW1c-6b-1) so a
-// relation another core owned could have its Bound Cabin built there. That
-// caller went at AT-S5d with the per-core registry it served, so the two
-// halves are this file's own and `CreateAssertion` runs them back to back.
+// seams (`exec::PrepareIndexDef` / `exec::BuildIndexTree`, PW1c-6b-1);
+// `CreateAssertion` runs the two halves back to back. The owner-core build
+// that split them retired (AT-S5d); its history is at cf889b63.
 
 // The relation, and the id the build's `ASSERT_BUILD` records will carry.
 struct AssertionPrepared {
@@ -564,7 +563,7 @@ StatusOr<AssertionDdlResult> CreateAssertion(
     catalog::Oid target_oid, const txn::ReadView& check_view, wal::WalManager* wal,
     AssertionEnforcer& enforcer, const std::function<void()>& after_publish_run_for_test) {
     // **The order is validate -> build -> publish** (§8.1): the three entry
-    // points a cross-core create split across until AT-S5d, back to back.
+    // points, back to back.
     // **One oid for all three**: the caller resolved the target and took the
     // relation `X` on it, and a second lookup here could name another.
     auto prepared = PrepareAssertionDef(catalog, store, stmt, target_oid);

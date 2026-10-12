@@ -274,18 +274,6 @@ statement about an engine that no longer exists; re-verify or strike it.
   reaches an unlinked page (`page.md` §5, `drop-table.md` DT1). This
   predates AZ-S1: the page used to hold the row. **No owner.**
 
-- **`PAGE_HANDOFF` is neither written nor read, and its record type
-  stays.** Verified at AT-S9, 2026-09-24. Its reader was the receiving
-  core's write grant, struck at AW-S1b, and since AM-S4(d) analysis neither
-  erases nor seeds on it and redo skips it. Its last writer was
-  `range_alloc.cpp`'s range opening, retired at AT-S9 with insert
-  spreading, so the durability cost the entry used to price (one
-  `FlushPages` and one device sync per range opening) is gone too. What
-  remains is the record type, which a pre-AT log can still carry and
-  recovery must still decode, and `wal::LogPageHandoff`, whose only callers
-  are the cells that build such a log. Retiring the type is a format
-  decision of its own. Owner: `docs/spec/wal.md` §5.2.
-
 - **Two cuts AM-S4(d) made possible and did not take.** Named by that
   stage's `critics-developer` pass, verified by it by trace and exhaustive
   grep, and deferred because the operator called for the push before they
@@ -372,7 +360,7 @@ statement about an engine that no longer exists; re-verify or strike it.
   wrong zero — the WAL anchor, `next_trx_id` (PW1), `log_topology`
   (AL-7e) — and the AL-S9 review found **the next three already live**:
   `version`, `create_time` and `last_mount_time`, which a peer's
-  `SHOW META` printed as `0` and as the epoch under `peer_listeners = on`,
+  `SHOW META` printed as `0` and as the epoch,
   against `docs/spec/crosscore.md` CC11's *every core reads with the same
   authority*.
 
@@ -539,16 +527,6 @@ answered "no children" over a child an undecided `UPDATE` had moved off it,
 the rollback then restoring the reference - closed in the same stage, the
 reverse check reading such a row's earlier version (AY-Q8); its bug entry
 went with it.
-
-The entry before that - a transaction whose
-participant was deleting the parent answered `busy` across cores where one
-core answered `violation`, and could not clear inside an explicit
-transaction (AO-S5(b) C1, verified on `ao-s5b-c1c2` over `25c5849`) -
-**closed at AT-S5f** with the two things it needed: a `DELETE` that
-shipped to the parent's owner, which went at AT-S5, and
-`FkPendingDeleteTable`'s pre-gate ahead of the visibility read, which went
-with the probe protocol. Both checks read the rows themselves now, so
-there is no second core's registration to be answered by.
 
 ## Multi-core state, continued
 
@@ -803,10 +781,8 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   and AT's quiet-wrong defence is sequenced as though it covered every
   read.** Verified 2026-09-09 on `ao-m2-close` at `cf3d0d0` by reading the
   sites: `src/exec/step_vm.cpp:1960` and `:2030` guard the position report on
-  `index == 0`, and `src/server/remote_step_service.cpp` passes no
-  `PositionSink` at any of its three execution sites (`:458`, `:886`, `:1080`).
-  So a nested step's walk — a join's inner relation — and every remote step
-  declare no position and hold no relation `IS`.
+  `index == 0`. So a nested step's walk — a join's inner relation —
+  declares no position and holds no relation `IS`.
 
   **A point, index or Cabin read declares nothing only where its own path
   serves it**, which is narrower than `txn.md` §5 and AO-S6e-b's list both
@@ -839,10 +815,8 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   `e6d9098`), and `ar0-5-amendment-uniformity.md` §7 and §8.
 
   **Closed at AT-S1 on `m3-at`** for every shape above: the compiler
-  declares each relation it binds (`step_compiler.cpp`), the three write
-  verbs declare at resolve, and a remote-step producer took its own `IS`
-  in its frame (`remote_step_service.cpp`, deleted at AT-S10 with the
-  protocol). **What stays open is the
+  declares each relation it binds (`step_compiler.cpp`), and the three write
+  verbs declare at resolve. **What stays open is the
   direction, and it is a correction to AR0-5 §8 rather than a gap**: the
   ask is a non-blocking `TryAcquire`, so a reader arriving while a DDL holds
   `X` is refused and reads on - sound by catalog MVCC, catalog-only DDL and,
@@ -1140,8 +1114,8 @@ closed 2026-10-11 at `ec827a19`).
   table of the D-items *"taken as ratified for M0's scope"* — **D3, D4, D14
   and D15** — of which only D15 was explicitly stamped (as AL-R8, 2026-09-03).
 
-  **D3 is the one to know about.** AR0 proposed *(a) a dedicated log core,
-  other cores fan in via ring*. AL-R1 built something else — every core
+  **D3 is the one to know about.** AR0 proposed *(a) a dedicated log
+  core*. AL-R1 built something else — every core
   appends under one latch, with a single writer thread — and the work order
   says so outright: *"every core still appends, which is where AL-R1
   departs from D3(a)."* That is a D-item settled in practice, against the

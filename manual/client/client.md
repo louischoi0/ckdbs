@@ -118,8 +118,8 @@ could resolve. The
 correct response, always: `ROLLBACK`, then retry the whole transaction.
 After a conflict inside an explicit transaction the session is **failed**
 and answers only `ROLLBACK`/`ABORT`/`SYNC`/`STOP`/`PING` until rolled
-back. The same token (retryable) is used for writes refused by cross-core
-affinity and for constraint checks that met an in-flight writer.
+back. The same token (retryable) is used for constraint checks that met
+an in-flight writer.
 
 Not retryable — retrying will fail identically:
 

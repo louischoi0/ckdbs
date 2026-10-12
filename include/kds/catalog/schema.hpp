@@ -185,8 +185,7 @@ struct ForeignKeyRef {
 struct TableAccess {
     // Filled from the `sys.tables` row. Its one reader is
     // `Catalog::CheckRelationQualifier`, which asks whether a qualified
-    // name's namespace is the relation's own; placement keyed on it
-    // (AF-T2) retired with ownership at AT-S9.
+    // name's namespace is the relation's own.
     Oid namespace_oid;
     Oid oid;
     Schema schema;
@@ -212,9 +211,9 @@ struct TableAccess {
     // through the pages' own links, never by moving the root.
     PageId varheap_page_id = kInvalidPageId;
 
-    // **No `owner_core` since AT-S9** (D17): nothing reads a relation's
-    // core any more, because every read and write runs where its session is
-    // and every page is every core's to fault.
+    // **No `owner_core`** (AT-S9, D17): nothing reads a relation's core,
+    // because every read and write runs where its session is and every page
+    // is every core's to fault.
 
     // The relation's anchor page - rows.hpp owns what it is and the
     // system-relation sentinel. Cacheable for varheap_page_id's reason
@@ -268,22 +267,6 @@ struct TableAccess {
     // re-derives the relationship between the mask and the vector.
     CabinRef CabinOn(std::uint16_t col_pos) const noexcept {
         return col_pos < cabin_ids.size() ? cabin_ids[col_pos] : CabinRef{};
-    }
-
-    // Whether any column carries a live Cabin — the **live-id** test, and
-    // deliberately neither of the two tests that look right: not
-    // `cabin_mask != 0` (a Cabin on a column past 64 folds into no bit,
-    // per the mask's own comment above) and not `!cabin_ids.empty()`
-    // (the vector is column-parallel and non-empty on every relation the
-    // cache fills). One accessor for CabinOn's reason: the id-0 rule
-    // lives here, not re-derived per caller. **No caller**: it was written
-    // for `CheckWriteAffinity`'s cabin gate, which AT-S9 reduced to
-    // `CheckWriteAdmission`'s one assertion question.
-    bool AnyCabin() const noexcept {
-        for (const CabinRef& cabin : cabin_ids) {
-            if (cabin.id != 0) return true;
-        }
-        return false;
     }
 
     // ---- Foreign keys at both ends (docs/spec/foreign-keys.md §1) -------

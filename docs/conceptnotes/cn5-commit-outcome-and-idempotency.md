@@ -88,13 +88,11 @@ way to tell "expired" from "never seen" (§3's retention).
   acknowledges on entry to the WAL ring, with loss bounded by the flush
   interval (`wal.md:28`).
 - **`UNKNOWN_OUTCOME` has no producer.** Every remaining occurrence is a
-  declaration, decoder, mapping, test or comment; its producers were all on
-  the statement-shipping path and the last went at AT-S6 (`ac4bd64`, found
-  with `git log -S'UnknownOutcome('`). Text still describing it as live:
-  `docs/spec/client-manual.md:273-280`, the comments at
-  `include/kds/base/status.hpp:104-108` and
-  `src/server/command_dispatcher.cpp:196-201`, and CLAUDE.md's cross-core
-  row. Recorded here, not fixed by this note.
+  declaration, decoder, mapping, test or comment; the last producer went at
+  `ac4bd64` (found with `git log -S'UnknownOutcome('`). Text still
+  describing it as live: the comments at `include/kds/base/status.hpp:104-108` and
+  `src/server/command_dispatcher.cpp:196-201`. Recorded here, not fixed by
+  this note.
 
 ## 3. The mechanism
 

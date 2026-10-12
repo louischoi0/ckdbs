@@ -66,19 +66,6 @@ enum class TxnOutcome : std::uint8_t {
     kAborted = 1,
     // No terminal record. Undo owes this transaction a rollback.
     kLoser = 2,
-    // **A durable TXN_PREPARE and no terminal record** (R6-3/R6-4, D4):
-    // this core is a participant in a cross-owner transaction whose
-    // outcome it does not hold. It is emphatically **not** a loser - it may
-    // have been committed by its coordinator, and rolling it back would
-    // make two streams disagree durably, which is the one failure
-    // two-phase commit exists to prevent - and it is not a winner either.
-    // The verdict is the coordinator's, and with one stream for the
-    // instance (AM-S4(d)) it is a record of *this* log: `RecoverCore`
-    // resolves the outcome by looking the coordinator's transaction id up
-    // in the table this scan built, and absence of a decision is abort.
-    // Nothing downstream may treat this outcome as either of the other
-    // three before that resolution has run.
-    kPrepared = 3,
 };
 
 // What analysis knows about one transaction: its verdict, and - for a loser
@@ -109,25 +96,6 @@ struct TxnState {
     std::uint64_t last_undo_ptr = 0;  // txn::kNoUndoPtr, not named here: wal/ sits below txn/
 };
 
-// One prepared-but-undecided transaction, and the handle its verdict is
-// reachable by (R6-4). The participant's own id is the map key.
-// `coordinator_txn_id` is the one field the resolution reads: with one
-// stream for the instance (AM-S4(d)) it names a transaction of *this* log,
-// and `RecoverCore` looks it up in `transactions` (D4).
-//
-// `coordinator_core`, `coordinator_session_id` and `prepare_lsn` are the
-// prepare's remaining facts, carried but unread - `coordinator_core`
-// routed the resolver to a second core's log, and nothing has routed on
-// any of them since that log stopped existing. No LSN here is compared
-// against anything: the resolution is a **lookup of one id in one table**,
-// never an ordering.
-struct PreparedTxn {
-    std::uint32_t coordinator_core = 0;
-    std::uint64_t coordinator_session_id = 0;
-    std::uint64_t coordinator_txn_id = 0;
-    Lsn prepare_lsn = 0;
-};
-
 struct AnalysisResult {
     // Where the scan began and where the stream actually ended.
     Lsn scan_start_lsn = 0;
@@ -139,26 +107,12 @@ struct AnalysisResult {
     // seeded from CHECKPOINT_BEGIN's table. Redo replays a page from its
     // recLSN; the page_lsn gate does the rest (wal.md §9).
     //
-    // **A PAGE_HANDOFF neither seeds an entry nor removes one**: only
-    // `max_page_id` takes its page. An entry therefore stands from the
-    // first record that dirtied the page to the end of the scan, and no
-    // per-page departure is remembered because none happens. The removal
-    // per-core streams performed here went with them (AM-S4(d));
-    // `analysis.cpp` carries why it had no licence left.
-    //
     // Ordered containers throughout, not hashed ones: sched.md §8 requires
     // deterministic iteration, and a recovery whose page visit order
     // varies between runs cannot be replayed from a seed.
     std::map<PageId, Lsn> dirty_pages;
 
     std::map<std::uint64_t, TxnState> transactions;
-
-    // The `kPrepared` subset, with what each one needs to be resolved
-    // (R6-4). Keyed by the **participant's** transaction id - this stream's
-    // own - so the entry and `transactions[id]` name the same transaction.
-    // Empty on every stream that never took part in a cross-owner
-    // transaction, which is every stream before R6-8 opens that path.
-    std::map<std::uint64_t, PreparedTxn> prepared_txns;
 
     // The oldest recLSN in `dirty_pages`, or `end_lsn` when nothing was
     // dirtied - "the earliest point redo must actually touch", which is at
@@ -195,12 +149,6 @@ struct AnalysisResult {
     std::uint64_t winners = 0;
     std::uint64_t aborted = 0;
     std::uint64_t losers = 0;
-    // Transactions this stream prepared and held no outcome for at the
-    // end of the scan. `RecoverCore` resolves every one of them against
-    // this same log (AM-S4(d)): the coordinator's decision is a record of
-    // the instance's one stream, so the resolution is a lookup rather than
-    // a second file to open, and absence of a decision is abort.
-    std::uint64_t prepared = 0;
 };
 
 // wal.md §11-3's rule, in one place: the redo start is the checkpoint's own
@@ -227,17 +175,11 @@ struct AnalysisStart {
     // anchor was published. The scan must reach it. Zero disables the
     // check, which is the same "no anchor yet" case.
     Lsn anchor_durable_lsn = 0;
-
-    // No topology field: there is one stream for the instance (AM-S4(d)),
-    // and the superblock refuses a volume written any other way. So a page
-    // carrying another core's stamp inside this scan's scope is that core
-    // owning its page, not a crossing that lost its handoff record - every
-    // core's records are in this log by construction. Redo's foreign-stamp
-    // refusal and its restamp went with the topology they asked about.
 };
 
 // One forward pass. Fails with Corruption when the stream ends before the
-// anchor's durable point (above), and passes through the scanner's own
+// anchor's durable point (above) and when a record is of a retired kind
+// (`IsRetiredRecordType`, BP-R4), and passes through the scanner's own
 // failures - a foreign segment header, a device error - unchanged. A torn
 // tail is not a failure; it is `stopped_early` on the result.
 StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,

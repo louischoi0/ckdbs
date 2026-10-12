@@ -17,8 +17,7 @@
 // per-type `flags` byte, for the reason `payload.hpp` gives: under one
 // stream a page redo has to create would otherwise be stamped with the
 // recovering core rather than the core that wrote it. The stamp decides
-// nothing since AW-S1b (`page_header.hpp`); it used to decide which core
-// could claim the page. The one
+// nothing (`page_header.hpp`). The one
 // caller that needs the LSN anyway (the undo log's reclaim arm stamps
 // *before* the wipe) takes it from the return.
 //

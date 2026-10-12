@@ -129,7 +129,7 @@ struct alignas(64) ContentionSlot {
     std::array<std::atomic<std::uint64_t>, kTallyCount> tallies{};
     std::array<std::atomic<std::uint64_t>, kLongestCount> longest_ns{};
 };
-// `kMaxWalCores` (superblock.hpp): no instance has more cores than that.
+// `kMaxCores` (superblock.hpp): no instance has more cores than that.
 inline constexpr std::uint32_t kContentionSlots = 64;
 inline std::array<ContentionSlot, kContentionSlots> g_contention{};
 }  // namespace detail

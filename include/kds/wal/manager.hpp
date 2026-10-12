@@ -77,9 +77,8 @@
 // ---- What this layer does not do ----------------------------------------
 //
 // Checkpointing (section 11), recovery (section 12), and segment recycling
-// are separate subsystems that use this one. A cross-owner transaction is
-// `docs/spec/cross-owner-txn.md`'s, not this layer's: a manager knows one
-// core's commits, whichever stream they land in.
+// are separate subsystems that use this one. A manager knows one core's
+// commits.
 
 namespace kds::wal {
 

@@ -60,12 +60,11 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
             return mismatch;
         }
 
-        // **The core count is not pinned since AT-S9** (E9's withdrawal gave
-        // AT the question). Two reasons pinned it and both are gone: WAL
-        // streams were per core until AM-S4(d), and `owner_core` named cores
-        // until D17 dropped it. Nothing on the volume names a core now, so a
-        // mount at another count records the running one and says so - the
-        // mount is not a refusal and not silent.
+        // **The core count is not pinned** (AT-S9; E9's withdrawal gave AT
+        // the question): nothing on the volume names a core, so a mount at
+        // another count records the running one and says so - the mount is
+        // not a refusal and not silent. The core-count pin retired (AT-S9);
+        // its history is at cf889b63.
         if (sb.core_count() != cores) {
             const std::uint32_t was = sb.core_count();
             if (Status s = sb.SetCoreCount(cores); !s.ok()) return s;
@@ -108,15 +107,9 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
 
     // **One WAL stream for the instance, and no way to ask for another**
     // (AR0 M0, AL-S1c's flip; AM-R4a, D14). Chosen here and pinned for the
-    // life of the volume: recovery reads it to know how many streams to
-    // look for, and no later mount may change it. The `log_topology`
-    // parameter that let a caller ask for `kPerCoreStreams` is gone - under
-    // D14 a v3 build mounts only volumes it created, so leaving a way to
-    // create a per-core-stream one would have kept the whole per-core store
-    // arrangement reachable from tests after the refusal was supposed to
-    // have made it dead. **`CreateFresh` no longer takes the topology at
-    // all** (AM-S4(d)): it writes `kSingleStream` because that is the only
-    // thing this build's `Decode` will read back.
+    // life of the volume. **`CreateFresh` takes no topology** (AM-S4(d)):
+    // it writes `kSingleStream` because that is the only thing this
+    // build's `Decode` will read back.
     server::SuperBlock sb =
         server::SuperBlock::CreateFresh(now_unix_seconds, inline_cell_width, cores);
     sb.Encode(created.value().bytes());

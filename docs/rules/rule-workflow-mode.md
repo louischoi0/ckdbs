@@ -168,8 +168,8 @@ aspects it actually touches, because a single reviewer reading for
 correctness will not notice a broken durability claim or a doc left
 stale. The aspects, applied where they apply: correctness against the
 Hard Invariants; conformance to the spec the change claims to implement;
-crash, recovery and restart behaviour; concurrency, cross-core and
-ownership; performance and per-statement overhead; and the doc trail the
+crash, recovery and restart behaviour; concurrency and cross-core
+behaviour; performance and per-statement overhead; and the doc trail the
 task owes. **An aspect that does not apply is named as not applying** —
 "no on-disk format touched, so no recovery aspect" — never dropped in
 silence, since silence and unexamined read identically in a report. Where

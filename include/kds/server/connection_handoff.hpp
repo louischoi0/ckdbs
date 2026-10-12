@@ -15,8 +15,8 @@
 // kernel spreads connections (AT-S8). Where the option is refused, core 0
 // alone can bind; D19's mark is that it accepts and hands off, and that
 // the handoff is "a ring consumer AU-S5 must list, not one it may strike".
-// It is built as AR0-6-R1 builds every cross-core wake since the ring's
-// retirement began: **the shared state under its own latch, then a kick**.
+// It is built as AR0-6-R1 builds every cross-core wake: **the shared state
+// under its own latch, then a kick**.
 // Core 0 places the accepted socket in the destination's inbox and kicks it;
 // the destination's reactor, woken, finds it there (`TcpServer::Host`). A
 // kick carries no payload, which is why the socket travels in the inbox and

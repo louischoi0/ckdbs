@@ -47,17 +47,15 @@
 // it borrows from core 0 (AM-S2 step 3; `Config::shared_store`). It
 // resolves a relation and runs a statement exactly as core 0 does.
 //
-// **No asymmetry against core 0 is left in what a statement may do.** P6
-// had three, and each is struck: the catalog was read-only here until
-// AT-S5 (every core writes its pages under the page latch, the DDL's
-// relation `X` and the schema word, `catalog.md` CT5); allocation came
-// from a per-core extent lease until AW-S1b (every core reaches the one
-// free map under its structure latch); and Waystone recorded nothing here,
-// with `access_statistics` forced off and a Cabin store per core, until
-// AT-S7 (every core records and replays trails, writes `sys.access_stats`
-// itself under the relation's root page latch, and observes into the
-// instance's one `stats::CabinStore` - `cabin.md` §6's announce is what
-// replaced the owner argument that store per core stood on).
+// **No asymmetry against core 0 is left in what a statement may do**:
+// every core writes the catalog's pages under the page latch, the DDL's
+// relation `X` and the schema word (`catalog.md` CT5); every core reaches
+// the one free map under its structure latch; and every core records and
+// replays trails, writes `sys.access_stats` itself under the relation's
+// root page latch, and observes into the instance's one
+// `stats::CabinStore` (`cabin.md` §6's announce).
+// The read-only peer catalog, the per-core extent lease and the per-core
+// Cabin store retired (AT-S5, AW-S1b, AT-S7); their history is at cf889b63.
 //
 // The superblock, the free map, the catalog pages and the store are the
 // instance's, not core 0's: every core reads and writes them under their
@@ -75,10 +73,8 @@
 // synchronized (rules.md #3), and nothing outside that worker may touch it
 // once `Run()` has begun - **with one exception, and only one**:
 // `scheduler().Stop()` and `WakerTable::Kick`, both of which are atomic and
-// both of which core 0 uses on the way down (AU-S3). Stopping a peer was a
-// `kShutdown` ring message until then, for the single reason that
-// `Scheduler::stopped_` was a plain bool; the kind is struck and the
-// exception is stated here rather than left to be inferred from the call.
+// both of which core 0 uses on the way down (AU-S3). The exception is
+// stated here rather than left to be inferred from the call.
 
 namespace kds::server {
 
@@ -86,11 +82,8 @@ class CoreRuntime {
 public:
     struct Config {
         std::uint32_t core_id = 0;
-        // **No `wal_dir`** (AM-S4(d)). A peer opened no log file even
-        // before this stage; the directory was still handed over because
-        // `RecoverCoreAtMount` needed it to find a *coordinator's* stream
-        // for the cross-stream prepared resolver. That resolver is gone,
-        // and with it the last thing on this core that named a path.
+        // No `wal_dir`: the cross-stream prepared resolver that needed one
+        // retired (AM-S4(d)); its history is at cf889b63.
         sched::MonoTimeNs checkpoint_interval_ns = 0;
         sched::MonoTimeNs wal_drain_interval_ns = 0;
 
@@ -103,18 +96,13 @@ public:
         // **The instance's one buffer pool** (AM-S2 step 3). Non-null means
         // this core does not open a store: it borrows core 0's, which is
         // what "shared pool" means and what makes a page faulted on one core
-        // serve every other. Null keeps the arrangement every build had
-        // before - a frame table per core over the same device.
+        // serve every other. Null opens a frame table of this runtime's own
+        // over the same device - a fixture's shape.
         //
-        // **It used to be conditional on one WAL stream, and that was not a
-        // detail.** The store's writeback gate is a `wal::WalDurability`,
-        // which is a property of the *log*: under AR0 M0 every core's
-        // manager attaches to core 0's stream, so any of them answers for
-        // all. A pre-M0 volume mounted per-core, and a shared store there
-        // would check a page logged in core 1's stream against core 0's
-        // watermark and could write it back ahead of the record describing
-        // it. AM-S4(d) made `SuperBlock::Decode` refuse such a volume, so
-        // `Expeditor` passes this unconditionally now.
+        // The store's writeback gate is a `wal::WalDurability`, which is a
+        // property of the *log*: every core's manager attaches to core 0's
+        // stream, so any of them answers for all, and `SuperBlock::Decode`
+        // refuses a volume with more than one stream (AM-S4(d)).
         storage::DevicePageStore* shared_store = nullptr;
 
         // The capacity of a store this runtime opens for itself - a
@@ -168,17 +156,14 @@ public:
 
         // Whether this core records access shapes at all. **The
         // instance's own `access_statistics` setting**, passed down rather
-        // than re-decided here - core 0 has always read it, and a peer had
-        // it forced off because it had nowhere to write. It writes
-        // `sys.access_stats` itself since AT-S7, so the operator's one
-        // switch means the same thing on every core.
+        // than re-decided here. Every core writes `sys.access_stats` itself
+        // (AT-S7), so the operator's one switch means the same thing on
+        // every core.
         bool access_statistics = true;
 
         // **Waystone's two switches, on the same terms** (AT-S7,
-        // `waystone_recording` and `waystone_replay`). A peer recorded no
-        // trail and replayed none, because `sys.patterns` is a catalog page
-        // and a peer could not write one; every core writes them under the
-        // page latch since AT-S5, and `Catalog::ClaimPatternWaystoneRoot`
+        // `waystone_recording` and `waystone_replay`). Every core writes
+        // `sys.patterns` under the page latch (AT-S5), and `Catalog::ClaimPatternWaystoneRoot`
         // is what keeps two cores that build one pattern's directory from
         // keeping two. Off leaves this core exactly as it was.
         bool waystone_recording = true;
@@ -201,13 +186,6 @@ public:
         // names segment 15`, and a mount that refuses because of a
         // caller's stack contents.
         WalAnchorFields anchor{};
-
-        // **`anchors` - every core's, for R6-4 - is gone** (AM-S4(d)). It
-        // fed one thing: the cross-stream resolver, which read a
-        // *coordinator's* own stream and needed that core's anchor to bound
-        // the scan honestly. With one stream a prepare's verdict is in core
-        // 0's own mount pass, so there is no second stream to scan and no
-        // second anchor to bound it.
 
         // **The volume's superblock, and it is required** — `Open` refuses
         // without it. Copied wholesale into `superblock_` below, which is
@@ -243,9 +221,7 @@ public:
         // **The instance's log, and it is required** (AR0 M0, AL-R1/AL-S1c;
         // AM-S4(d)). Core 0 owns them and this core attaches: it appends
         // through the shared stream's latch and asks the writer for every
-        // sync, touching the device itself never. `Open` refuses a null,
-        // because the arm that opened a device of this core's own left with
-        // the topology that had one.
+        // sync, touching the device itself never. `Open` refuses a null.
         //
         // Borrowed and outliving every peer.
         wal::WalStream* shared_stream = nullptr;
@@ -254,11 +230,9 @@ public:
         // **The instance's visibility state** (AN-R1), borrowed from the
         // expeditor on the same terms as the two above: it records commit
         // order as a commit record's LSN, which one stream is what makes
-        // comparable across cores. Every instance hands one over since
-        // AM-S4(d), where the per-core arm that could not have supplied one
-        // went. Null is still every *fixture's* answer - a `CoreRuntime`
-        // built without one keeps the per-core `ReadView`, which at AN-S1
-        // is what every core is still reading anyway.
+        // comparable across cores. Every instance hands one over. Null is
+        // every *fixture's* answer - a `CoreRuntime` built without one keeps
+        // the per-core `ReadView`.
         txn::InstanceVisibility* visibility = nullptr;
 
         // **This core's reactor configuration** (AV-S1). `Expeditor` leaves
@@ -288,11 +262,7 @@ public:
 
         // **The instance's Cabin store** (AT-S7), borrowed on the same
         // terms: `Expeditor` owns one and every core observes into it and
-        // serves from it. It was this core's own until AT-S7, on the rule
-        // that a relation's owner was the core every write to it landed on
-        // and every read of it ran on - which AT-S5 ended for the write and
-        // AT-S6 for the read, leaving each store holding the half its core
-        // happened to write. Null builds this runtime its own, which is a
+        // serves from it. Null builds this runtime its own, which is a
         // fixture's shape and the only place a per-core store remains.
         stats::CabinStore* cabins_store = nullptr;
         // **The instance's object-oid sequence** (AT-S5b), borrowed the same
@@ -356,10 +326,7 @@ public:
     // member that borrows it, so it is destroyed after them - and the
     // scheduler owns coroutine frames (`sched::CoroTask` destroys a
     // suspended one), so a frame it destroys at teardown may reach only
-    // members declared above it, which is why `owned_locks_` is. The frame
-    // that used to break this, a pipeline stage parked at a credit gate
-    // with a `txn::ReaderLease` whose destructor reached `txn_manager_`,
-    // retired at AT-S10.
+    // members declared above it, which is why `owned_locks_` is.
     //
     // One member is dropped by hand *before* the scheduler in the body:
     // `listener_` (PW5), whose `~TcpServer` unregisters its fds from the
@@ -455,17 +422,8 @@ public:
     // reactor joined.
     void AbandonCheckpoint() noexcept;
 
-    // **`MaybeFlushAccessStats` rode this tick and is gone** (AT-S7). It
-    // sent CR7's folded access shapes to core 0 at `wal_drain_interval_ns`,
-    // because a peer could not write `sys.access_stats`; it writes the row
-    // where the statement ran now, so there is nothing to flush and no
-    // cadence to pick.
-
-    // **CC7's grant receivers went with the grants** (AW-S1b):
-    // `GrantRelationFault`, `GrantRelationWrite` and the `AdmitWritePages`
-    // that carried PL §9 rule 6's acquisition restamp. Each answered "may
-    // this core reach that page", which a frame table shared by every core
-    // does not ask.
+    // The access-stats flush (AT-S7) and CC7's grant receivers (AW-S1b)
+    // retired; their history is at cf889b63.
 
     std::uint32_t core_id() const noexcept { return config_.core_id; }
     // What this core was opened with. Immutable after `Open`, so readable
@@ -476,9 +434,8 @@ public:
     // **How a peer stops the instance** (AU-S3). A client's `STOP` accepted
     // on this core must stop the *instance*, not this reactor - a stopped
     // peer still takes its kernel share of new connections while core 0
-    // reports healthy. That used to route a `kShutdown` to the system core
-    // so that core 0's own thread would flip its stop flag; the flag is
-    // atomic now, so this is a direct call plus a kick.
+    // reports healthy. The stop flag is atomic, so this is a direct call
+    // plus a kick.
     //
     // One callback rather than a pair of pointers to core 0's scheduler and
     // to the waker table: the peer has no business knowing either, and what
@@ -530,9 +487,7 @@ private:
     // **Declared above the scheduler, so it outlives every frame that
     // releases into it** - `expeditor.hpp`'s rule for its own table: a
     // parked frame's borrow (`read_borrow.hpp`) releases in its destructor,
-    // which runs when the scheduler drops the frame at teardown. The frames
-    // that made this reachable were the remote step producer's and
-    // consumer's, retired at AT-S10; the order keeps it unreachable.
+    // which runs when the scheduler drops the frame at teardown.
     // The pointer is the table this core uses, owned or borrowed (AO-S5).
     std::unique_ptr<txn::LockTable> owned_locks_;
     txn::LockTable* locks_ = nullptr;
@@ -540,8 +495,7 @@ private:
     std::unique_ptr<sched::IoBackend> io_backend_;
     std::optional<sched::Scheduler> scheduler_;
     // **No `log_device_`** (AM-S4(d)): the device is core 0's and this core
-    // reaches it only through the borrowed stream. The member was always
-    // null under one stream and only ever written by the per-core arm.
+    // reaches it only through the borrowed stream.
     std::unique_ptr<wal::WalManager> wal_;
 
     // AU-S3. Empty on a single-core instance and in every fixture that
@@ -597,18 +551,14 @@ private:
     // **The dispatcher takes it on every core since AO-S4b.** Its use of
     // the table is the wait-for graph and the admission it gates: with a
     // table, a transaction holding rows may wait because the detector
-    // catches the cycle it could close (AO-S4a). Across cores that was not
-    // complete at AO-S5(a) - a cycle could pass through a wait that
-    // registered no edge, the shipped-statement park - so the dispatcher
-    // kept AO-S3's narrow rule above one core until AO-S4b recorded that
-    // edge at enrolment and lifted it. Both edgeless parks are gone since:
-    // the shipped statement's with its ship (AT-S6), the FK probe's with
-    // the probe protocol (AT-S5f).
+    // catches the cycle it could close (AO-S4a). The edgeless parks, the
+    // shipped statement's and the FK probe's, retired (AT-S6, AT-S5f);
+    // their history is at cf889b63.
     std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;
 
-    // The client listener this core accepts on, when per-core listeners are
-    // configured (PW5). It borrows the scheduler and the dispatcher, and
+    // The client listener this core accepts on (PW5, AT-S8). It borrows
+    // the scheduler and the dispatcher, and
     // `~TcpServer` calls back into the scheduler to unregister its fds - so
     // it is dropped explicitly at the top of `~CoreRuntime`, ahead of the
     // scheduler. Declaration order alone would not do it: that destructor's

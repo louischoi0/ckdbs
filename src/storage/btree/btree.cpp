@@ -136,10 +136,8 @@ using storage::kMaxDescentRestarts;
 // A write descent cannot hold what it found. The page latch is never
 // upgraded (AM-S1, `page_latch.hpp`), so the leaf's shared hold has to go
 // before the exclusive one is asked for, and in between the leaf is held by
-// nobody. Until AT-S5 that window could not be entered: a relation's writes
-// all ran on its owner core, the reactor serialised them, and nothing
-// between the two lines suspends. AT-S5 made a write run where the session
-// is, so two cores now reach one relation's leaves and the window is real.
+// nobody. A write runs where the session is (AT-S5), so two cores reach one
+// relation's leaves and the window is real.
 //
 // **And the window is wider than that re-fetch**, which is the correction
 // this stage's own cell forced. There is no latch coupling here: an
@@ -364,8 +362,8 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store,
 //
 // **The window.** A split puts its separator into the parents its descent
 // recorded, and the descent held none of them: it releases each node
-// before reading the child. Until AT-S5 nothing could run in between. Since
-// then another core can divide a recorded parent first - which moves the
+// before reading the child, and another core can divide a recorded parent
+// first - which moves the
 // upper half of its children, and possibly the one this split came from,
 // to a new node - and a separator put into the recorded parent then lands
 // in the half that no longer routes to its subtree. The append path is no

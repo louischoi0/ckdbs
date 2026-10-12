@@ -101,12 +101,10 @@ enum class StatusCode {
     // a bound exists for. A violation against committed state answers the
     // same way forever, kFkViolation's argument exactly.
     kAssertionViolation,
-    // **A statement whose outcome nobody can state.** A shipped statement
-    // was sent to its relation's owner and no reply arrived before the
-    // deadline (`git show c63e49f:docs/spec/crosscore.md` §6, the work order's D4): it may
-    // have committed, it may never have run, and this core could not tell
-    // which. **No producer since AT-S6**, which retired the ship; the code
-    // stays because the wire pins it (`kwp.hpp`'s categories).
+    // **A statement whose outcome nobody can state**: it may have
+    // committed, it may never have run. Statement shipping, its only
+    // producer, retired (AT-S6); its history is at cf889b63. The code stays
+    // because the wire pins it (`kwp.hpp`'s categories).
     //
     // **Its whole reason for existing is that it is not retryable.** Every
     // other refusal in this enum means "nothing happened" - a retry is at
@@ -156,11 +154,7 @@ enum class StatusCode {
 // **One code, by decision** (docs/spec/protocol.md section 11: the bit is a
 // compatibility surface). Everything the engine means by "wait and retry"
 // spells itself kTxnConflict - a lost write race, a lock wait past the fault
-// net. From 2026-08-25 a peer's **spent lease** was one too (row-id,
-// transaction-id and page-id), until the page-id lease went at AW-S1b and
-// the other two at AT-S10b; they had been kResourceExhausted, whose message
-// promised a retry the wire never carried, so a client retrying on the bit
-// lost rows (PW6). kResourceExhausted stays for what a retry cannot fix: a
+// net. kResourceExhausted stays for what a retry cannot fix: a
 // cap, a budget, a ring's backpressure.
 constexpr bool IsRetryable(StatusCode code) noexcept { return code == StatusCode::kTxnConflict; }
 

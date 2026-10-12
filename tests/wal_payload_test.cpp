@@ -158,34 +158,6 @@ TEST(WalPayloadTest, PageInitRejectsAPayloadShorterThanTheLegacyForm) {
     EXPECT_EQ(DecodePageInit(stub).status().code(), StatusCode::kCorruption);
 }
 
-// ---- PAGE_HANDOFF --------------------------------------------------------
-
-TEST(WalPayloadTest, PageHandoffRoundTripsThroughTheEnvelope) {
-    // Through the envelope, because that is the only way this record is ever
-    // read: the four-byte payload comes back as the record's eight-byte
-    // aligned tail. PW1c-1's decoder tested `!= 4` and refused exactly this -
-    // every real record - and passed only because its test handed the codec a
-    // bare 4-byte buffer.
-    const auto record = ThroughEnvelope(RecordType::kPageHandoff,
-                                        [](std::span<std::byte> out) {
-                                            return EncodePageHandoff(out, PageHandoffPayload{3});
-                                        });
-    const auto payload = PayloadOf(record);
-    ASSERT_EQ(payload.size(), 8u);  // never 4: the alignment is the point
-
-    auto decoded = DecodePageHandoff(payload);
-    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
-    EXPECT_EQ(decoded.value().incoming_core, 3u);
-}
-
-TEST(WalPayloadTest, PageHandoffRejectsABufferShorterThanTheCore) {
-    std::array<std::byte, 2> stub{};
-    EXPECT_EQ(EncodePageHandoff(stub, PageHandoffPayload{1}).status().code(),
-              StatusCode::kInvalidArgument);
-    EXPECT_EQ(DecodePageHandoff(std::span<const std::byte>(stub)).status().code(),
-              StatusCode::kCorruption);
-}
-
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
 
 TEST(WalPayloadTest, HeapWriteRoundTripsTupleBytesExactly) {
@@ -621,30 +593,6 @@ TEST(WalPayloadTest, AnchorUpdateRoundTripsThroughTheEnvelope) {
     ASSERT_TRUE(decoded.ok()) << decoded.status().message();
     EXPECT_EQ(decoded.value().index_oid, 9001u);
     EXPECT_EQ(decoded.value().root, 310u);
-}
-
-// ---- TXN_PREPARE ---------------------------------------------------------
-
-TEST(WalPayloadTest, TxnPrepareRoundTripsThroughTheEnvelope) {
-    const auto record = ThroughEnvelope(RecordType::kTxnPrepare, [](std::span<std::byte> out) {
-        return EncodeTxnPrepare(out, TxnPreparePayload{/*session=*/77, /*txn=*/4242, /*core=*/3});
-    });
-    auto decoded = DecodeTxnPrepare(PayloadOf(record));
-    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
-    EXPECT_EQ(decoded.value().coordinator_session_id, 77u);
-    EXPECT_EQ(decoded.value().coordinator_txn_id, 4242u);
-    EXPECT_EQ(decoded.value().coordinator_core, 3u);
-}
-
-TEST(WalPayloadTest, ATxnPrepareNamingNoCoordinatorTransactionIsCorruption) {
-    // 0 is the id no transaction has, so recovery could never find a
-    // decision for it - refused rather than left in doubt for ever.
-    std::array<std::byte, kTxnPreparePayloadSize> buf{};
-    ASSERT_TRUE(EncodeTxnPrepare(buf, TxnPreparePayload{/*session=*/77, /*txn=*/0, /*core=*/3})
-                    .ok());
-    auto decoded = DecodeTxnPrepare(buf);
-    EXPECT_FALSE(decoded.ok());
-    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
 }
 
 // ---- INDEX_INSERT --------------------------------------------------------

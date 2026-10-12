@@ -37,7 +37,7 @@ namespace kds::sched {
 
 class CoreLoad {
 public:
-    static constexpr std::uint32_t kSlots = 64;  // `kMaxWalCores` (superblock.hpp), the most cores an instance runs
+    static constexpr std::uint32_t kSlots = 64;  // `kMaxCores` (superblock.hpp), the most cores an instance runs
 
     // **The window the fractions are taken over.** A reactor publishes once
     // its iterations since the last publish span this much wall time, so a

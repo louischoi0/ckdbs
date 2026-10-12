@@ -77,8 +77,6 @@ namespace kds::wal {
 // consumers outside this function need the numbers: the superblock owes the
 // transaction ceiling (above), and the store's allocation floor is raised
 // past `page_floor` so no allocation hands out an id the log already names.
-// The multicore shape of that hazard - core 0 carving an extent over pages
-// redo had written - went with the extent leases at AW-S1b.
 struct HighWaterRepair {
     // First page id an allocation may hand out: one past the largest id any
     // record in the replayed range named. `kInvalidPageId` when the log

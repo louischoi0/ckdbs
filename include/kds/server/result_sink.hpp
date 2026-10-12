@@ -25,8 +25,7 @@
 // rendering a DATE as an epoch day because one of two copies forgot
 // `projection_types`", `RenderProjectedRow`). KWP is a second output form
 // and would have been that second copy at every emission point: the local
-// walk, the sorted drain and the aggregate fold (and the cross-core fan-in
-// until AT-S9 retired it).
+// walk, the sorted drain and the aggregate fold.
 //
 // So it is not a copy - it is the same call sites, calling a sink. The
 // text form is `TextResultSink` below, is installed by default, and does

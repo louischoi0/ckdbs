@@ -170,10 +170,8 @@ Status CheckBufferPoolFrames(std::size_t frames) {
 
 std::vector<std::pair<std::string, std::string>> Expeditor::Config::RetiredConfigKeys() {
     return {
-        // AT-0 item 7. `in_doubt_ceiling_ms` bounded a writer's wait on a
-        // row this core had prepared and was in doubt about; nothing
-        // prepares since AT-S6, and the quantity the key named is the lock
-        // family's fault net.
+        // AT-0 item 7: 2PC's in-doubt ceiling retired (AT-S6); the quantity
+        // the key named is the lock family's fault net.
         {"in_doubt_ceiling_ms",
          "in_doubt_ceiling_ms was the cross-owner in-doubt ceiling and there is no "
          "cross-owner transaction since v3.0.0's M3; the wait it bounded is the lock "
@@ -184,14 +182,12 @@ std::vector<std::pair<std::string, std::string>> Expeditor::Config::RetiredConfi
          "peer_listeners is retired since v3.0.0's M3: every core accepts on the port "
          "(SO_REUSEPORT above one core) and a session runs on the core that accepted it, "
          "or where the port cannot be shared on the core core 0 hands it to; remove the key"},
-        // AT-S9 (D17, D18). Placement chose the core that owned a relation,
-        // and nothing owns one.
+        // AT-S9 (D17, D18): nothing owns a relation.
         {"placement",
          "placement is retired since v3.0.0's M3: no relation is owned by a core, so there "
          "is nothing to place - every statement runs on the core its session is on, and a "
          "namespace is a name; remove the key"},
-        // AT-S9, on the operator's ruling: insert spreading retired with
-        // ownership, and this key was its arming bit.
+        // AT-S9: insert spreading's arming bit.
         {"range_size_ids",
          "range_size_ids is retired since v3.0.0's M3: insert spreading went with range "
          "ownership, so no range is opened and a relation is one structure; remove the key"},
@@ -786,15 +782,12 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     auto store = storage::DevicePageStore::Open(
         *device.value(), storage::FrameCapacity{config.buffer_pool_frames}, kFirstUserPageId);
     if (!store.ok()) return store.status();
-    // **EV3's floor, which core 0's store never had** (AM-S2). Everything
+    // **EV3's floor** (AM-S2). Everything
     // below `kFirstUserPageId` is a fixed system structure - the superblock,
     // the two bitmaps, the catalog's pages - and EV3 says that class is
-    // never an eviction candidate at any pressure. Every *peer* got this
-    // from the call that installed its lease, and core 0 got it nowhere, so
-    // the protection depended on whether a lease was installed. That was an
-    // accident of where the call sat: the floor is a property of the
-    // volume's layout, not of a core's arrangement, and this is the one
-    // install site since AW-S1b took the other.
+    // never an eviction candidate at any pressure. The floor is a property
+    // of the volume's layout, not of a core's arrangement, and this is its
+    // one install site.
     store.value()->SetResidentLimit(kFirstUserPageId);
     // BE-Q6's floor, asked once now - its system-page half is known before
     // the mount, so a pool too small to bootstrap or recover is refused with
@@ -856,17 +849,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // latch, and every peer appends through it rather than opening one of
     // its own.
     //
-    // **The core count is the whole predicate now** (AM-S4(d)). It used to
-    // carry a `single_stream()` conjunct beside it, which was true of every
-    // database this build creates; the topology test moved to `Decode`,
-    // where a volume that is not one stream is refused rather than mounted
-    // down a second path. What the count still decides stands: at
+    // **The core count is the whole predicate** (AM-S4(d)): a volume that
+    // is not one stream is refused at `Decode`. What the count decides: at
     // `cores = 1` arming the latch would put a mutex on every logged page
     // mutation for a section no second thread can reach. AR0's G2 is that
     // `cores = 1` pays nothing, and `latch.hpp` calls it a property of the
     // code rather than of a build flag; this test is where that stays true.
     // `core_count` is the running count - bootstrap records it at every
-    // mount since AT-S9 unpinned it - so it cannot disagree with the peers
+    // mount - so it cannot disagree with the peers
     // that actually exist, and
     // `WalManager::Attach` refuses an unshared stream - so getting this
     // wrong fails the mount loudly rather than racing.
@@ -883,9 +873,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // runs on this thread with no reactor alive, so its every page access
     // exercises the armed primitive contention-free, a self-test the mount
     // pays nothing for. At one core the word is never touched.
-    static_assert(kMaxWalCores - 1 <= storage::kPageLatchMaxCoreId,
+    static_assert(kMaxCores - 1 <= storage::kPageLatchMaxCoreId,
                   "the latch word's owner field must name every core the superblock admits");
-    // The pinner count as well as the arm - core_runtime.cpp'''s site states
+    // The per-core arrays sized by their own literal, each tied to the one
+    // ceiling here (BP-S2 review).
+    static_assert(detail::kContentionSlots == kMaxCores);
+    static_assert(CheckpointCensus::kSlots == kMaxCores);
+    static_assert(sched::CoreLoad::kSlots == kMaxCores);
+    // The pinner count as well as the arm - core_runtime.cpp's site states
     // the argument (AM-S2: kPinCeiling is per-operation, and live_pins_ is a
     // proxy for it only while one thread reaches this store).
     expeditor->store_->SetLatchArmed(expeditor->database_->superblock.core_count() > 1,
@@ -952,11 +947,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     //   - **nothing has allocated yet**, because a search must start above
     //     the floor recovery establishes (RC04's obligation 1, which
     //     `RaiseAllocationFloor` applies to the store every core allocates
-    //     through - it was the extent allocator's search hint until AW-S1b).
+    //     through).
     // **This pass is the whole instance's** (AL-R5/R6): one stream holds
-    // every core's records. The `wal_dir` and per-core anchor vector that
-    // used to go in here were the cross-stream prepared resolver's (R6-4),
-    // and it left at AM-S4(d); the prepare itself went with 2PC at AT-S6.
+    // every core's records.
     // **Recovery runs in drain mode** (BE-Q11): it is not a row's mutation,
     // it holds no page latch between records, and the log it replays is
     // durable - so at the cap it writes dirty frames back and goes on,
@@ -1072,10 +1065,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->trx_ids_.emplace(expeditor->database_->superblock,
                                 [self] { return self->PersistTrxIdCeiling(); });
     expeditor->trx_ids_->SetLatch(&expeditor->superblock_latch_);
-    // Before the manager that publishes into it. **Unconditional since
-    // AM-S4(d)**: the arm that skipped it was per-core streams, where
-    // there is no comparable commit order to record (AN-R1), and no such
-    // volume mounts. `visibility_` is therefore always engaged, and the
+    // Before the manager that publishes into it. **Unconditional**
+    // (AM-S4(d)): a volume with more than one stream does not mount.
+    // `visibility_` is therefore always engaged, and the
     // null the manager still accepts is for the embedded callers that
     // build one directly.
     expeditor->visibility_.emplace();
@@ -1146,8 +1138,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // there finds no base, and no base is not a slow scan: it is
     // `NoteUnenforceable` for every assertion there is. The field the
     // fold does bound is `redo_start_lsn` — at or below every core's redo
-    // start, which is at or below every core's own `CHECKPOINT_BEGIN`. The
-    // `checkpoint_lsn` arm beside this one was the per-core anchor's.
+    // start, which is at or below every core's own `CHECKPOINT_BEGIN`.
     expeditor->recovery_ = ResumeAssertionsAfterRecovery(
         expeditor->database_->catalog, *expeditor->store_, *expeditor->log_device_,
         /*stream_core=*/0, expeditor->database_->superblock.wal_anchor(0).redo_start_lsn,
@@ -1344,19 +1335,10 @@ void PinToCpu(pthread_t thread, std::uint32_t core_id, std::uint32_t cpu, Logger
 
 }  // namespace
 
-void Expeditor::BroadcastShutdown(sched::Scheduler& core0_scheduler) {
-    // **AU-S3: a flag and a kick, not a message.** This sent every peer a
-    // `kShutdown` and then hand-pumped core 0's ready queue for up to a
-    // thousand turns, because core 0's reactor had already left `Run()` and
-    // nothing was draining the sends. The comment there conceded the shape's
-    // weakness outright: a peer whose ring was full and whose reactor had
-    // already stopped would otherwise hang the shutdown.
-    //
-    // `Scheduler::stopped_` is atomic since AU-S3, so `Stop()` crosses
-    // threads directly - which is the entire reason the message existed, and
-    // therefore the entire reason it can go. A flag has no queue to be full,
-    // so the bound, the retry task and the pump all go with it.
-    (void)core0_scheduler;
+void Expeditor::BroadcastShutdown() {
+    // **AU-S3: a flag and a kick.** `Scheduler::stopped_` is atomic, so
+    // `Stop()` crosses threads directly, and a flag has no queue to be full.
+    // The ring's `kShutdown` message retired (AU-S3); its history is at cf889b63.
     for (const auto& core : cores_) {
         // Write, then kick (AR0-6-R1). The flag ends the loop; the kick ends
         // the block the loop is sitting in. A kick that races a reactor which
@@ -1378,8 +1360,7 @@ void Expeditor::BroadcastShutdown(sched::Scheduler& core0_scheduler) {
 
 // **The reactor-borrow guard** (`expeditor.hpp`'s `ServeRuntime`). One
 // member holds a pointer into the serving reactor - the dispatcher's
-// scheduler view; the statement-shipping and index-build clients were the
-// other two until AT-S6 and AT-S5e - and the reactor outlives it. A guard rather than a line at the
+// scheduler view - and the reactor outlives it. A guard rather than a line at the
 // bottom of `Start`: there are twenty early returns above it, and a path
 // that missed one would leave the dispatcher pointing at a destroyed
 // reactor, so `SHOW META` through the public `dispatcher()` accessor would
@@ -1621,7 +1602,7 @@ Status Expeditor::Start() {
     // **D19's fallback** (AT-S10c, AT-R12): where the platform refuses the
     // option, core 0 binds alone and hands each accepted connection to the
     // core it is placed on (`connection_handoff.hpp`), shared state and a
-    // kick rather than a ring kind. `force_listener_handoff` takes this arm
+    // kick. `force_listener_handoff` takes this arm
     // on Linux, which never refuses.
     bool handoff = config_.cores > 1 && config_.force_listener_handoff;
     {
@@ -1640,9 +1621,7 @@ Status Expeditor::Start() {
     // peer's (`TcpServer::ClientSetup`). The TLS context and the credential
     // store are `ServeRuntime`'s, read-only after this point and outliving
     // every peer (`cores_` is cleared before `running_` is reset), so the
-    // factories below are safe to call from any core - which is what the
-    // refusal of per-core listeners with TLS or SCRAM said they were not,
-    // when both lived on core 0's stack.
+    // factories below are safe to call from any core.
     //
     // **The cut-over** (KW-D6, protocol-wp.md P13): the default port speaks
     // KWP/1. The newline protocol is not deleted - it is `debug_text_port`
@@ -1725,9 +1704,6 @@ Status Expeditor::Start() {
     // the public `dispatcher()` accessor would then read freed memory.
     // Declared after `scheduler`, so reverse order clears the view first.
     dispatcher_->set_scheduler_view(&scheduler);
-    // (The statement-shipping and index-build clients were the same shape
-    // of borrow, cleared by the same guard, until AT-S6 and AT-S5e retired
-    // them.)
     live.clear_reactor_borrows.emplace(&*dispatcher_);
 
     // Core-local, and installed before any statement runs: from here on a
@@ -1776,10 +1752,9 @@ Status Expeditor::Start() {
             return s;
         }
 
-        // **The receiving half of a peer's STOP, no longer a message**
-        // (AU-S3). A peer used to send `kShutdown` here so that core 0's own
-        // thread would flip its stop flag; the flag is atomic now, so the
-        // peer calls this hook directly and kicks core 0 awake. Serve's tail
+        // **The receiving half of a peer's STOP** (AU-S3): the flag is
+        // atomic, so the peer calls this hook directly and kicks core 0
+        // awake. Serve's tail
         // then broadcasts shutdown to every peer and joins - the same
         // sequence a STOP on core 0's own listener has always produced.
         sched::Scheduler* core0_sched = &scheduler;
@@ -1792,31 +1767,17 @@ Status Expeditor::Start() {
             wakers->Kick(0);
         };
 
-        // **No anchor handler** (AT-S8): a peer's checkpointer publishes into
-        // `checkpoint_anchor_` itself, under `superblock_latch_`, so
-        // `kAnchorWrite` and `RemoteCheckpointAnchor` are gone.
+        // No anchor handler (AT-S8): a peer's checkpointer publishes into
+        // `checkpoint_anchor_` itself, under `superblock_latch_`.
+        // The extent carving and its recovery hint retired (AW-S1b); their
+        // history is at cf889b63. `mount_recovery` raises the floor every
+        // core allocates from.
 
-        // **Recovery's page floor is the store's own now** (AW-S1b). A
-        // hint was computed here so that an extent carved for a peer could
-        // not cover pages redo had just written - the free map is unlogged,
-        // so a crash can revert it while the log still names pages above it,
-        // and an extent was carved from the map rather than through the
-        // store's allocation floor. Nothing carves extents any more, and
-        // `mount_recovery` raises the floor every core now allocates from.
-
-        // **One pool for the instance** (AM-S2 step 3), unconditionally
-        // since AM-S4(d).
-        //
-        // The gate that stood here was `single_stream()`, and its subject
-        // was the writeback path rather than the pool: the store's gate is
+        // **One pool for the instance** (AM-S2 step 3): the store's gate is
         // a `wal::WalDurability` - a property of the log, not of a core -
-        // and under AR0 M0 every core's manager attaches to core 0's
-        // stream, so any core's gate answers for all. A pre-M0 volume mounted
-        // per-core, where one gate would check a page logged in core 1's
-        // stream against core 0's watermark and could write it out ahead of
-        // the record that describes it. `SuperBlock::Decode` now refuses
-        // such a volume, which is what AM-S2 step 3's own comment said this
-        // branch was waiting for. The one pool was opened at the whole
+        // and every core's manager attaches to core 0's stream, so any
+        // core's gate answers for all; `SuperBlock::Decode` refuses a volume
+        // with more than one stream. The one pool was opened at the whole
         // `buffer_pool_frames` (`Open`, BE-R3); nothing divides it.
 
         // The gate rotates the cadence's runs over one period (BI-Q7 (a),
@@ -1844,8 +1805,6 @@ Status Expeditor::Start() {
             // AK-S2: and the Cabin's (the store is the instance's since
             // AT-S7, handed over below).
             core_config.cabins = config_.cabins;
-            // Waystone's two switches, which a peer honoured as "off" until
-            // AT-S7 because it could not write `sys.patterns`.
             core_config.waystone_recording = config_.waystone_recording;
             core_config.waystone_replay = config_.waystone_replay;
             core_config.cabin_limits = config_.CabinLimitsOf();
@@ -1854,12 +1813,9 @@ Status Expeditor::Start() {
             // replaces, so a page faulted on one core is served from the
             // frame another core loaded.
             core_config.shared_store = store_.get();
-            // This peer's own anchor, copied out of the superblock core 0
-            // decoded. A peer's `SuperBlock` member is a default-constructed
-            // one whose anchor slots are all zero, and a peer's checkpointer
-            // publishes into the instance's anchor rather than its own - so
-            // without this copy every peer would recover from the head of its
-            // stream while core 0 recovered from its checkpoint.
+            // The instance's anchor, copied out of the superblock core 0
+            // decoded: a peer's `SuperBlock` member is a default-constructed
+            // one whose anchor slots are all zero.
             //
             // **Slot 0, which is the only slot** (AL-R3/AL-R4; AM-S4(d)).
             // The fold puts every core's checkpoint there and
@@ -1868,24 +1824,13 @@ Status Expeditor::Start() {
             // the assertion resume scanning from the head of the whole log
             // at every mount. The anchor a peer needs is the instance's.
             core_config.anchor = database_->superblock.wal_anchor(0);
-            // `anchors` - every core's, for R6-4's cross-stream resolver -
-            // went with that resolver at AM-S4(d): a peer recovers nothing
-            // and a prepare resolves in core 0's own scan (AL-R5).
-            // And the ceiling this peer's recovery must not sit above (PW1).
-            // Same copy, same thread, same reason as the anchor.
-            // The third field copied off core 0's superblock because a
-            // peer's own copy is default-constructed and a zero here is
-            // legal, silent and wrong (core_runtime.hpp). It decides
-            // whether this core recovers a stream of its own at all.
             // The whole image, which is what a peer answers `SHOW META`
             // from and what every topology test on that core reads
             // (`core_runtime.hpp`'s `Config::superblock`).
             core_config.superblock = &database_->superblock;
             // The instance's log. Core 0's manager owns both and outlives
-            // every peer, so these are borrowed rather than shared. Handed
-            // over unconditionally since AM-S4(d) - `CoreRuntime::Open`
-            // refuses a peer that arrives without them, there being no
-            // second topology in which it could open one of its own.
+            // every peer, so these are borrowed rather than shared.
+            // `CoreRuntime::Open` refuses a peer that arrives without them.
             core_config.shared_stream = wal_->stream();
             core_config.shared_writer = wal_->writer();
             // Borrowed on the same terms and for the same reason (AN-R1):
@@ -1898,8 +1843,8 @@ Status Expeditor::Start() {
             core_config.schema_word = &schema_version_;
             // **The instance's Cabin store** (AT-S7): every peer observes
             // into core 0's and serves from it, which is what makes a set
-            // a superset of every pk carrying its value again now that two
-            // cores write one relation (AT-S5) and read it (AT-S6).
+            // a superset of every pk carrying its value when every core
+            // writes and reads one relation.
             core_config.cabins_store = cabin_store_ ? &*cabin_store_ : nullptr;
             core_config.oid_sequence = &oid_sequence_;
             core_config.mark_counter = &delete_mark_count_;
@@ -1941,46 +1886,10 @@ Status Expeditor::Start() {
             cores_.push_back(std::move(core.value()));
         }
 
-        // **Core 0's half of the page-id lease service went with the
-        // leases** (AW-S1b), and the `Sync()` that stood here with it: it
-        // made the reservations above durable before a peer could allocate
-        // into one, and there are no reservations.
-
-        // **Core 0 wires no step server and no step client since AT-S10**,
-        // as no peer does: AT-S9 retired the last statement that opened a
-        // stage, and the kinds are struck.
-
-        // **Core 0 wires neither statement shipping nor 2PC since AT-S6**,
-        // because neither exists: it built its own shipped-statement
-        // executor and ship server here, and both halves of the
-        // cross-owner commit, on the rule that core 0 is an owner and a
-        // coordinator like any other core. A read runs where the session
-        // is now, as a write has since AT-S5.
-
-        // **The two id-lease grant handlers went at AT-S10b** (AT-S4's
-        // allocators, folded in): core 0 carved a transaction-id block or a
-        // relation's row-id block for a peer that asked over the ring,
-        // because page 0 and the catalog pages were core 0's. Every core
-        // carves its own window from the one ceiling now, and bumps a
-        // relation's mark in place under its page latch.
-
-        // **CR7's receiving half stood here and is gone** (AT-S7): a peer
-        // folded its access shapes and sent them to this core to apply,
-        // because `sys.access_stats` sat in the reserved range and only
-        // core 0 could write it. Every core writes it now, under the
-        // relation's root page latch, so there is no handler to register
-        // and no applied counters to report (`crosscore.md` CC13).
-
-        // **CC7's publish hook went with the grants** (AW-S1b). It ran at
-        // every DDL that placed a relation on a peer: flush the creation
-        // pages, log a PAGE_HANDOFF per page, send the owner fault rights
-        // over the relation's extent and write rights over its exact pages,
-        // then evict core 0's now-foreign frames. Every step of it answered
-        // "can the owner reach these bytes", and one frame table serves
-        // every core - the owner reads the frame core 0 formatted, from the
-        // same table, with no flush, no grant and no eviction in between.
-        // PW1c-7's re-delivery service went with it for the same reason:
-        // there is nothing to re-deliver.
+        // Core 0's page-id lease service, step server, statement shipping,
+        // 2PC, id-lease grants, access-batch receiver and page-handoff
+        // publish hook retired (AW-S1b, AT-S6, AT-S7, AT-S10, AT-S10b);
+        // their history is at cf889b63.
 
         // Spawned only after every core is built, so a failure above leaves
         // no thread to unwind.
@@ -2187,7 +2096,7 @@ void Expeditor::StopStartedCores() {
     // block leaves it, and one that has not reached the block yet sees the
     // flag on its next turn.
     if (running_ != nullptr && !running_->workers.empty()) {
-        BroadcastShutdown(*running_->scheduler);
+        BroadcastShutdown();
         for (auto& worker : running_->workers) {
             if (worker.joinable()) worker.join();
         }
@@ -2225,13 +2134,12 @@ Status Expeditor::RunUntilStopped() {
     // Every peer is told to stop, then joined. A flag and a kick since
     // AU-S3: `Scheduler::stopped_` is atomic, so this thread writes it
     // directly and the kick only ends the idle block the peer is sitting in.
-    BroadcastShutdown(scheduler);
+    BroadcastShutdown();
     for (auto& worker : workers) {
         if (worker.joinable()) worker.join();
     }
-    // After the join, so nothing is still appending to a stream being
-    // synced. Each core's log is its own, so this is N independent syncs
-    // and not a barrier.
+    // After the join, so nothing is still appending to the stream being
+    // synced.
     // The review's BUG 4: a peer's listener teardown rolls back open
     // sessions and can append CLRs, so it must run *before* this core's
     // final sync - detach-then-sync, the order core 0's own teardown

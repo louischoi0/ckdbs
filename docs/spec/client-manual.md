@@ -111,8 +111,8 @@ defaults → config file (`--config <path>`) → command-line flags.** See
 | `durability` | — | `group` | Durability class for every **logged** statement — `INSERT`, `UPDATE` and `DELETE` (`docs/spec/wal.md` §1). It is applied at `COMMIT`, so inside an explicit transaction one wait covers every statement in it rather than one per statement. `strict`/`d1` fsyncs before replying; `group`/`d2` is the same durability point with the fsync amortized over concurrent committers; `relaxed`/`d3` replies immediately and syncs on the drain below. Names are case-insensitive. |
 | `wal_drain_interval_us` | — | `1000` | How often the WAL drain runs. Bounds a `relaxed` commit's loss window; a tick with nothing staged does no I/O. `0` disables it. |
 | `inline_cell_width` | — | `64` | How many bytes a variable-width value (`varchar`) occupies inside a tuple (`docs/spec/heap-and-tuple.md` §3.3), unless the column declared its own width as `varchar(N)` (`docs/spec/types.md` §2b). A longer value still stores fine — it spills to the var-heap and the cell holds a pointer — so this is a **performance** knob, not a limit: raising it keeps more values in the tuple at the cost of padding every short one. Read **once**, at the bootstrap of a new database, and pinned into the superblock; every later mount validates the running value against the pinned one and refuses to start on a disagreement, naming both. Changing it for existing data is a rebuild, which is `Unsupported` — there is no migration. Legal range 16..4096. |
-| `cores` | — | `1` | How many reactor cores this instance runs. **Not pinned since AT-S9**: the superblock records the count, and a mount under a different one records the new count and logs the change rather than refusing - nothing on disk names a core any more, and one stream publishes the anchor's slot 0 alone. A value above 1 spawns that many pinned reactor threads, which **share one WAL stream**: core 0 owns the log and every peer appends through it. (A volume written with one stream per core, before AR0 M0, no longer mounts at all — there is no migration.) Bounded above by 64 (the superblock's WAL anchor slots, indexed by `core_id`) and by the machine's reported core count — pinned reactors never block, so overcommitting them serializes whole workloads behind each other. |
-| `reactor_cpus` | — | *(absent)* | The CPU each reactor is pinned to, core 0 first: `0,2` puts reactor 0 on CPU 0 and reactor 1 on CPU 2 (BA-S2). It must name exactly `cores` distinct CPUs, each one the machine reports, or the server refuses to start. Absent, a peer reactor `k` runs on CPU `k` and core 0 runs unpinned - which, on a host numbering SMT siblings adjacently, puts reactors 0 and 1 on one physical core. A measurement at `cores > 1` names the map it ran under. |
+| `cores` | — | `1` | How many reactor cores this instance runs. **Not pinned**: the superblock records the count, and a mount under a different one records the new count and logs the change rather than refusing - nothing on disk names a core, and one stream publishes the anchor's slot 0 alone. A value above 1 spawns that many pinned reactor threads, which **share one WAL stream**: core 0 owns the log and every other core appends through it. (A volume written at an older superblock version, a multi-stream one among them, does not mount — there is no migration.) Bounded above by 64 (the superblock's WAL anchor slots, indexed by `core_id`) and by the machine's reported core count — pinned reactors never block, so overcommitting them serializes whole workloads behind each other. |
+| `reactor_cpus` | — | *(absent)* | The CPU each reactor is pinned to, core 0 first: `0,2` puts reactor 0 on CPU 0 and reactor 1 on CPU 2 (BA-S2). It must name exactly `cores` distinct CPUs, each one the machine reports, or the server refuses to start. Absent, each reactor `k` above 0 runs on CPU `k` and core 0 runs unpinned - which, on a host numbering SMT siblings adjacently, puts reactors 0 and 1 on one physical core. A measurement at `cores > 1` names the map it ran under. |
 | `indexes` | — | `on` | Whether a secondary index may be **read** (`docs/spec/index.md` §12.3). Off makes a statement on an indexed column take the walk it would have taken had the index not existed. It does **not** change the compiled plan — `ANALYZE` still reports `IndexProbe`, and the switch steers the branch inside that step — so replies are byte-identical either way and the difference is work, not planning. **There is deliberately no key for index maintenance**: an index that stops being maintained is *wrong* rather than slow, and a config key that can produce a wrong answer is not a config key. Turning the write cost off is `DROP INDEX`. |
 | `physical_optimizer` | — | `shadow` | `off` or `shadow` (`docs/spec/physical-optimizer.md` R3). Shadow costs nothing at rest — the planner is pull-only, computed when `SHOW RELAYOUT` asks — which is why on-by-default is safe where a background optimizer would not be; `off` makes `SHOW RELAYOUT` answer a one-line disabled notice. **`on` is refused at startup naming §6's three gates** — compact blocked on the reader horizon, cluster on ordered-between pruning, defrag on cross-relation page reuse. |
 | `cabin_optimizer` | — | `off` | Part II of `docs/spec/physical-optimizer.md`: the background controller over Observational Cabins. **Off by default, experimental** — the opposite default from `physical_optimizer`, because a controller that acts is not a report. `SET CABIN_OPTIMIZER ON\|OFF` flips it at runtime (non-destructive both ways), and `SHOW META` reports it. The consumer is the controller's cadence task, which reads it at every batch boundary — before a tick's snapshot, between actions, and between a build's pages — so an `off` lands mid-build and the build discards cleanly. `SHOW CABIN_OPTIMIZER` is the view. |
@@ -272,18 +272,13 @@ hold on the debug port too (Appendix A gives the text spellings).
 - **`TXN_CONFLICT` with `retryable = 1` is the one error worth a retry
   loop.** Another transaction wrote a row this one wanted; there is no lock
   to wait on and no partial recovery, so the whole transaction is rolled
-  back and retried. Until AT-S10b the same code also answered a statement
-  on a peer core whose id lease was spent while its refill was in flight;
-  every core issues its own ids since, so a peer's first write runs.
-  **Every other code is not retryable**, and
+  back and retried. **Every other code is not retryable**, and
   the bit is the compatibility surface: read the bit, not the message.
   After a conflict the session is in a failed transaction and answers only
   `C_TXN_ABORT` and `C_SYNC` until it is rolled back.
 - **`UNKNOWN_OUTCOME` means the statement may have run, and must not be
-  retried.** The code stays in the pinned registry, and **nothing produces
-  it since AT-S6**: it answered a statement carried to the core that owned
-  its relation when no answer came back within ten seconds, and every
-  statement runs on its session's core now. A client should still handle
+  retried.** The code stays in the pinned registry, and **nothing in this
+  engine produces it**. A client should still handle
   it as the contract says - this engine issues primary keys, so a retry
   would insert a *second* row rather than replay an idempotent one; **read
   the data back**. It is not a `TXN_CONFLICT` and never carries
@@ -381,11 +376,6 @@ the server's own `STOP` command instead shuts the whole server down, and
 the REPL detects that and exits automatically since there is nothing left
 to talk to.
 
-**`SHOW META` lost two fields at AT-S10d**: `sched_wake_race_skips` and
-`sched_spurious_wakes`, which measured the cross-core ring transport the
-engine no longer has (`docs/spec/sched.md` §7). A tool that parses them
-finds them absent, not zero; the rest of the wake block is unchanged.
-
 **`SHOW META` gained the log's recycling at BC** (`docs/spec/wal.md`
 §11-4), on core 0 only: `wal_first_segment` (the oldest segment the log
 still holds), `wal_segments_removed` and `wal_remove_failures`. A failed
@@ -403,8 +393,8 @@ session. Per latch kind - `other`, `frame_table`, `free_map`, `free_map_flush`, 
 `cabin_stats`, `handoff` - `contention_<kind>_waits` and `contention_<kind>_wait_us`
 count only the acquisitions that found the latch held, and the time they
 waited. Beside them: `contention_page_latch_waits` and
-`contention_page_latch_spin_turns`; `contention_syncs_inline` (a sync run on
-the owning core's reactor) and `contention_syncs_writer` (the writer
+`contention_page_latch_spin_turns`; `contention_syncs_inline` (a sync run
+inline on a reactor) and `contention_syncs_writer` (the writer
 thread's); `contention_drain_passes_pending`; `contention_ceiling_waits` and
 `contention_ceiling_wait_us` (a statement waiting for another core's commit
 marker, BA-S1c); `contention_carves`, `contention_checkpoint_runs`,

@@ -156,29 +156,9 @@ enum class RecordType : std::uint8_t {
     // BTREE_INSERT/BTREE_SPLIT (wal.md section 5.2) were not assigned here:
     // they are appended as 29 and 30 below, once BD gave them a payload.
     //
-    // The PL handoff (`docs/spec/page.md` §2b, workplan-peer-writer.md
-    // PW1c-1): *this page left this stream at this LSN*, appended by the
-    // outgoing owner after the page is flushed durable and before the
-    // incoming owner is granted write rights. The envelope's page_id names
-    // the page; the payload names the incoming core; the handoff LSN is
-    // the record's own.
-    //
-    // **Nothing reads it any more.** Its consumer was the receiver's write
-    // grant, struck at AW-S1b; analysis neither erases nor seeds on it and
-    // redo skips it (AM-S4(d)). Its last writer, the range allocator,
-    // retired at AT-S9, so nothing appends one either; the type stays
-    // because a pre-AT log can carry it and removing a record type is a
-    // format decision of its own (`docs/inflight/known-gaps.md`).
-    //
-    // Redo applies nothing for it and must not even load the page - it
-    // describes no mutation, so faulting the page to discover that is
-    // work for nothing. Analysis was its real consumer, and no longer
-    // is: PW1c-2 had analysis *remove* the page from the dirty table at
-    // the handoff so redo's not-dirty filter would skip its earlier
-    // records, and what licensed that removal was a flush covering one
-    // core's frames. With one log the removal would speak for every
-    // core's records, so it neither erases nor seeds and only
-    // `max_page_id` still takes the page (AM-S4(d), `wal/analysis.cpp`).
+    // **Retired** (BP-R4): a page leaving one core's log stream. No build
+    // that writes superblock 22 appends it, and analysis refuses it
+    // `Corruption`. The number stays assigned so no later kind reuses it.
     kPageHandoff = 25,
     // One anchor-page slot update (storage/anchor_page.hpp; PW2,
     // workplan-peer-writer.md §7a): the clustered root (index_oid 0) or
@@ -192,31 +172,9 @@ enum class RecordType : std::uint8_t {
     // rides in that split's BTREE_SPLIT instead, so the two cannot be cut
     // apart (`Catalog::StageAnchorRoot`).
     kAnchorUpdate = 26,
-    // **The participant's prepare** (R6-3, `instructions/v2.4.0/2pc.md` D4),
-    // **written only by a pre-AT engine**: 2PC retired at AT-S6 and the
-    // emitter at AT-S18, and recovery still resolves one a log written
-    // before then carries. It said this core had made a cross-owner
-    // transaction's work durable in *its own* stream and could no longer
-    // abort it unilaterally. The envelope's txn_id is this core's
-    // **own** transaction id - D2 gave every participant a local id from
-    // its own window, so no foreign id entered this stream - and the payload names the coordinator's
-    // `(core, session_id, transaction_id)`, which is the only handle
-    // recovery has for asking what was decided.
-    //
-    // **It is not a decision and it is not a commit.** The decision lives
-    // in exactly one stream, the coordinator's, as its ordinary TXN_COMMIT
-    // (D4): a decision assembled from several streams would be a
-    // cross-stream ordering question and `wal.md` guideline 3 forbids one.
-    // What this record says is narrower and is the whole of what a
-    // participant may say about itself: *everything below this LSN is
-    // durable, and this transaction's outcome is now someone else's to
-    // state*.
-    //
-    // Redo applies nothing for it (`TouchesNoPage` - it names no page).
-    // Its consumer is analysis, at R6-4: a transaction with a PREPARE and
-    // no TXN_COMMIT or TXN_ABORT after it is **in doubt**, not a loser,
-    // and is resolved against the coordinator's record (one stream since
-    // AM-S4(d), so the record is in this same scan).
+    // **Retired** (BP-R4): a two-phase participant's prepare. No build that
+    // writes superblock 22 appends it, and analysis refuses it
+    // `Corruption`. The number stays assigned so no later kind reuses it.
     kTxnPrepare = 27,
     // A spilled value released: the slot it occupied is tombstoned, and its
     // bytes are dead (`varheap::PageRelease`). The var-heap's counterpart
@@ -282,6 +240,16 @@ inline constexpr std::uint8_t kMaxAssignedRecordType =
     static_cast<std::uint8_t>(RecordType::kBtreeSplit);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
+
+// TXN_PREPARE and PAGE_HANDOFF (BP-R4): assigned, so no later kind reuses
+// their numbers and a cell can still encode one, and refused `Corruption`
+// wherever a log is replayed - analysis first, redo behind it.
+constexpr bool IsRetiredRecordType(RecordType type) noexcept {
+    return type == RecordType::kTxnPrepare || type == RecordType::kPageHandoff;
+}
+
+// The refusal both replay passes return for a retired kind.
+Status RetiredRecordRefusal(const char* pass, RecordType type, Lsn lsn);
 const char* RecordTypeName(RecordType type) noexcept;
 
 // ---- Record header -------------------------------------------------------

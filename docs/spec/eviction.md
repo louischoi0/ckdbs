@@ -15,34 +15,18 @@ The buffer pool without an eviction path is a memory-bounded cache that
 eventually exhausts its frames. This document closes that path with a design
 that follows directly from standing engine contracts:
 
-- **This design was built on per-core pools, and AR0 M1 gave that up.** The
-  argument is kept rather than deleted, because it is the price now being
-  paid and a spec that quietly drops an argument it used to make cannot be
-  audited (AM-R7). It read: per-core pools plus thread-per-core ⇒ the entire
-  replacement mechanism is core-local, no latches, no lock-free tricks, no
-  cross-core coordination anywhere, which is the structural advantage over
-  shared-pool engines — PostgreSQL's buffer mapping and clock sweep contend
-  on locks; KDS simply had nothing to contend on.
+- **One pool for the instance** (EV4): one frame table serves every core,
+  so a peer reads a page core 0 already faulted instead of faulting its own
+  copy, and `buffer_pool_frames` is an undivided instance total. What
+  synchronizes it is a structure latch on every frame-table operation and a
+  per-frame latch word, both armed only at `cores > 1`. **The armed cost is
+  not a number**: AM-S1's `cores = 1` A/B bounded the compile-out at −1.9%
+  group and +2.4% strict, and the armed cost is not measured.
 
-  **What replaced it, and what it bought.** Since AM-S2 step 3 (`2663001`)
-  one frame table serves every core, and the contention the argument
-  avoided is now real: a structure latch on every frame-table operation and
-  a per-frame latch word, both armed only at `cores > 1`. What that buys is
-  the thing per-core pools could not do — a peer reads a page core 0 already
-  faulted instead of faulting its own copy, so `buffer_pool_frames` is an
-  undivided instance total rather than `total / cores` per core, and the
-  asymmetry the old split had (core 0 alone carrying the listener, the
-  catalog and every session, on `1/cores` of the pool) is gone. **The cost
-  is not yet a number**: AM-S1's `cores = 1` A/B bounded the compile-out at
-  −1.9% group and +2.4% strict, and the armed cost has been carried as "not
-  measured" since. AM-S6 measures it against AL-S8's baseline on AL-S8's
-  host, and until that file exists this bullet states a trade whose second
-  column is empty.
-
-  **G2 is what keeps the trade honest at one core**: unarmed, the structure
-  latch is a null pointer and the guard is a branch, the latch word is never
-  touched, and the sharing is not wired at all — so a single-core instance
-  pays none of this and reads the paragraph above as history.
+  **G2 keeps a single core free of it**: unarmed, the structure latch is a
+  null pointer and the guard is a branch, the latch word is never touched,
+  and the sharing is not wired at all — so a single-core instance pays none
+  of this.
 - **Cooperative event loop** ⇒ blocking is not an available primitive.
   Exhaustion is handled by a bounded retry and a truthful error,
   never by waiting (consistent with fail-fast semantics elsewhere).
@@ -57,12 +41,12 @@ that follows directly from standing engine contracts:
 | EV1 | Replacement policy: **CLOCK (second-chance) with a per-frame usage counter**. Access bumps the counter (saturating); the sweep hand decrements and reclaims frames at zero. No LRU lists. A temperature-model variant reusing the physical-optimizer lazy-decay score (`docs/spec/physical-optimizer.md` R1) is an **experimental hook only**, gated behind the same experimental status as the physical optimizer itself. |
 | EV2 | Dirty handling: a **background writeback task** (background scheduling group) keeps a supply of clean frames; eviction prefers clean frames. Forced synchronous writeback is the fallback only. **Flush-before-evict** is mandatory: WAL durable up to the page LSN before the frame is reused. Page checksums (S9) are computed at writeback. |
 | EV3 | Pinning is a **page-class attribute**, not a per-page runtime flag. v1 pinned classes: **fixed catalog pages** and **Bound Cabin pages** (`docs/spec/assertion.md` §5). Waystone/trail pages and meta-pool pages are evictable (Waystone is advisory — loss is a performance event, never a correctness event; the meta pool has its own entry-level eviction and is not double-pinned at page level). Debug builds assert on any eviction attempt against a pinned class. PageRef (S2) pins are, as always, absolute: a frame with a live pin is never a sweep candidate. |
-| EV4 | **One pool for the instance** (AR0 M1, AM-S2 step 3, `2663001`), where this row read *strict per-core pools, no cross-core frame stealing, no rebalancing in v1* — the rationale being that any stealing path reintroduces cross-core synchronization and forfeits the lock-free property. That property was given up deliberately (§1): the pool is one frame table under a structure latch, `kds.buffer_pool_frames` is an undivided total rather than a per-core share, and "stealing" is not a mechanism because there is nothing to steal from. Sharing **was** conditional on the volume having one WAL stream, since the writeback gate is a property of the log; AM-S4(d) refused the volume that had more than one, so it is unconditional and this row's original text describes no arrangement the engine can be in. What is still per core: the *owner* of a relation's pages (`crosscore.md` CC7) and the write routing that follows from it — M1 shared the cache, not the ownership. |
+| EV4 | **One pool for the instance** (AR0 M1): one frame table under a structure latch (§1), `kds.buffer_pool_frames` an undivided total rather than a per-core share, and no frame stealing or rebalancing because there is nothing to steal from. The sharing rests on the volume having one WAL stream, since the writeback gate is a property of the log; a volume with more than one is refused at mount, so it is unconditional. No core owns a relation's pages (`crosscore.md` CC7). |
 | EV5 | Eviction trigger: **low-watermark background sweep with an on-demand fallback**. The background task keeps the free-frame reserve above a configured low watermark; foreground allocation takes frames from the free list in O(1). If allocation finds the free list empty, it runs the sweep inline (on-demand fallback). **Built at BE-S3**: the reserve is the instance's one pool, kept between capacity / 16 and capacity / 8 on core 0's writeback tick, and the inline fallback runs in bounded batches (§3.2, §4). |
 | EV6 | Scan resistance: bulk sequential scans in the background group (CREATE ASSERTION builder, aggregate full scans, maintenance scans) run through a **small dedicated ring buffer** of frames, cycling within it and **not bumping usage counters**, so foreground OLTP working sets are never displaced by a scan. |
 | EV7 | No page-kind priorities in v1: **uniform CLOCK** across all evictable classes. B+tree inner nodes are protected naturally by their access frequency. No artificial weighting (e.g., elevated initial usage counts for index pages) without a measurement that justifies it. |
 | EV8 | Pool exhaustion (every frame pinned or un-flushable): **bounded cooperative retry, then a truthful statement error.** The allocating step yields to the event loop up to a configured retry budget, giving writeback a chance to produce clean frames; on budget exhaustion the statement fails with `ResourceExhausted`. No waiting, ever. Occurrences are counted in production stats; the operational meaning is documented as "pool undersized for the workload." **Built at BE-S4, with three differences from this row** (§3.3): the retry re-walks without yielding, since a fault has no event loop to yield to; a refusal is admitted only before a mutation's first write (the no-refuse window, BE-Q11); and drain mode - recovery, rollback, the assertion loops - writes back on the fault path, waiting on the log's durability, rather than be refused. |
-| EV9 | Observability: production counters for the pool (per store since AM-S2 step 3; `SHOW META`'s `pool_*`, BE-S3) — hits, misses, evictions, dirty writebacks, sweep rotations, ring-buffer scan frames served, `ResourceExhausted` occurrences. ANALYZE statements report page-cache hit/miss for their execution (per the standing ANALYZE goals). Sweep timing histograms are dev-mode only (dev/production profiling split). |
+| EV9 | Observability: production counters for the pool (per store; `SHOW META`'s `pool_*`, BE-S3) — hits, misses, evictions, dirty writebacks, sweep rotations, ring-buffer scan frames served, `ResourceExhausted` occurrences. ANALYZE statements report page-cache hit/miss for their execution (per the standing ANALYZE goals). Sweep timing histograms are dev-mode only (dev/production profiling split). |
 | EV10 | Deterministic testing: a **tiny-pool test profile** (built as `KDS_TEST_FRAME_BUDGET`, which lowers every debug store's capacity to its value but never below the 256-frame working minimum, and the mount floor raises it to the floor, BE-R3; the simulation harness picks a cap per seed) makes every CI run exercise eviction, writeback, ring-buffer, and exhaustion paths. Crash matrix gains "immediately before / after dirty-evict writeback" points. The integrity sweep gains a flush-before-evict oracle. |
 
 ---
@@ -146,7 +130,7 @@ reservation at the limit. Both are the same code under the frame table's
 structure latch, and `FreePage` (which replaced `EvictClean` at BF) erases
 under it too. **Two cores' sweeps do not race because both run under
 that latch**, not because they share an event loop: one pool serves every
-core since AM-S2 step 3.
+core.
 
 ### 3.3 Exhaustion protocol (EV8)
 
@@ -233,10 +217,7 @@ implementation (single code path, deterministic tests cover both callers).
 Bulk sequential readers declare ring mode on their scan handle:
 
 - Frames come from a small ring, one per `OpenScanRing` call and not per
-  core — the wording said "per-core" until 2026-09-06, and the pool it
-  drew that from stopped being per-core when the frame table became one
-  table for the instance (`kds.scan_ring_frames`, PROPOSED
-  32), reused cyclically; pages read through the ring bypass the page table
+  core (`kds.scan_ring_frames`, PROPOSED 32), reused cyclically; pages read through the ring bypass the page table
   insert-for-retention path (they are mapped while in the ring, then
   dropped) and never bump usage counters.
 - **The ring holds a shared pin, and the page latch, on exactly the page
@@ -288,7 +269,6 @@ Bulk sequential readers declare ring mode on their scan handle:
 
 ## 7. Non-goals (v1, documented)
 
-- Cross-core frame stealing / dynamic rebalancing (EV4).
 - Page-kind priority weighting (EV7).
 - Temperature-unified eviction via decay scores (`docs/spec/physical-optimizer.md` R1) — experimental hook only;
   the hook is a single policy seam in the sweep's victim test, nothing more.

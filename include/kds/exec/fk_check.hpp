@@ -116,13 +116,9 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
 // why a thousand-row insert against one parent costs one descent rather
 // than a thousand.
 //
-// **Filled in one place since AT-S5f**: the extraction pass, from a
-// descent this core makes. A second filler stood beside it - a
-// `kFkProbeRequest` reply for a parent another core owned - and a
-// *parent*-side counterpart remembered what a probe had been promised
-// (`server/fk_intent.hpp`), so a parent's own DELETE could answer busy.
-// Both went with the protocol; this holds answers, and there are no
-// promises left to confuse them with.
+// **Filled in one place**: the extraction pass, from a descent this core
+// makes; this holds answers, and nothing else. The FK probe reply and the
+// parent-side intent retired (AT-S5f); their history is at cf889b63.
 class FkParentVerdicts {
 public:
     // The verdict for a parent pk this statement needs, or nullptr when it

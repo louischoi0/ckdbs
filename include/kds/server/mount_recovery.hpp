@@ -65,12 +65,10 @@
 //      `SuperBlock::SetNextTrxId` plus a persist *before* it builds the
 //      sequence, not after. Raising it afterwards changes a field nothing
 //      reads again.
-//   2. RC04's named obligation 1, **seeding the extent allocator above
-//      `page_floor`**, went with the extent leases at AW-S1b: an extent was
-//      carved from the free map rather than through the store's allocation
-//      floor, so a run could cover a page the log named - RV4's hazard
-//      wearing the multicore shape. Every core allocates through the floor
-//      now, which obligation 1 above raises.
+//   2. RC04's named obligation 1: every core allocates through the store's
+//      allocation floor, which this pass raises past `page_floor`. Its
+//      extent-allocator form retired with the extent leases (AW-S1b); its
+//      history is at cf889b63.
 //
 // The first is not done here, because page 0's image and its persist are the
 // caller's (`Expeditor::Open` holds them): this function reports the
@@ -104,9 +102,8 @@ struct MountRecovery {
     // ---- What redo wrote ----
     std::uint64_t redo_applied = 0;
     std::uint64_t redo_skipped_by_lsn = 0;  // already on the page (RV5)
-    // The PW1c-2 not-dirty filter's count - zero on any stream with no
-    // PAGE_HANDOFF, and lifted here so that claim is checkable at a real
-    // mount, not only in gtest (the f19ead1 review's deferred item).
+    // The PW1c-2 not-dirty filter's count, lifted here so it is checkable
+    // at a real mount, not only in gtest (the f19ead1 review's deferred item).
     std::uint64_t redo_skipped_not_dirty = 0;
     std::uint64_t pages_healed = 0;         // checksum detected, an FPI healed
     // Redo's start and, when its floor raised it (BC-R2), what analysis had
@@ -124,16 +121,6 @@ struct MountRecovery {
     // ---- What undo rolled back ----
     std::uint64_t transactions_rolled_back = 0;
     std::uint64_t compensations = 0;
-
-    // ---- What the cross-owner resolution decided (R6-4) ----
-    //
-    // `prepared` is what analysis found; the two below are how they
-    // resolved and sum to it. All three are 0 on every stream written
-    // since AT-S6 retired 2PC - so a nonzero one is the mount saying it
-    // finished a two-phase commit a pre-AT engine started.
-    std::uint64_t prepared = 0;
-    std::uint64_t prepared_committed = 0;
-    std::uint64_t prepared_aborted = 0;
 
     // ---- The caller's two obligations ----
     PageId page_floor = kInvalidPageId;
@@ -191,10 +178,7 @@ struct MountRecovery {
     std::uint32_t assertions_enforcing = 0;
     std::uint32_t assertions_unrecovered = 0;
 
-    // `assertions_foreign` stood here until AT-S5d: the declarations a core
-    // read and left to the relation's owner. The registry is the instance's
-    // and core 0's mount resumes every assertion into it, so nothing is
-    // another core's, and a counter nothing can move went with it.
+    // `assertions_foreign` retired (AT-S5d); its history is at cf889b63.
 
     // Nothing to recover: an unwritten log, or one whose whole range the
     // last clean shutdown's checkpoint already covers. The common mount,
@@ -218,18 +202,6 @@ struct MountRecovery {
 // (`txn/recovery_undo.hpp`).
 // `clock`, when given, times the phases into `MountRecovery::timings` (RC09).
 //
-// **A prepared transaction is resolved inside this pass** (AR0 M0, AL-R5;
-// AM-S4(d)). The participant's TXN_PREPARE and its coordinator's decision
-// are records of the same log, so the scan that found the first found the
-// second, and absence of a decision is abort - sound because the engine
-// that wrote the prepare floored its redo start at the oldest live one.
-// Only a volume written before AT-S6 carries one: nothing prepares since.
-//
-// `wal_dir` and `anchors` stood here for the other topology: they named
-// the coordinator's *own* stream, another file in that directory, and the
-// anchor that said how far a scan of it must reach. There is one stream,
-// so there is no second file and no second anchor, and both parameters
-// left with `CoordinatorStreamResolver`.
 StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAnchorFields& anchor,
                                           wal::LogDevice& device, storage::PageStore& store,
                                           txn::UndoLog& undo_log, wal::WalManager* wal,

@@ -75,9 +75,10 @@ filter.
   `CREATE TABLE` consumes its oid and its Keystone id permanently. This
   is not a leak to be fixed later; it is the issue-once contract, and
   DDL gets no exemption.
-- **A peer may not write the catalog** (crosscore.md P6). DDL runs on
-  core 0, and a peer's view of the catalog is "drop the cache and
-  re-read".
+- **Every core writes the catalog**, under the page latch, and a DDL runs
+  where its session is (`catalog.md` CT5); every other core's view of the
+  catalog is "drop the cache and re-read" at its next boundary
+  (`catalog.md` CT2).
 - **Bootstrap rows keep `kBootstrapXid`.** The well-known types,
   namespaces and the catalog's own descriptors are not transactional and
   must remain visible to every view, including a view minted before any
@@ -267,15 +268,11 @@ ask about, and may have one that is not its own (the transaction-id
 ceiling is unlogged, `txn/trx_id.hpp`, so a crash can reissue the block);
 §5c removes the question by retiring every such mark at mount.
 
-**The predicate is the instance's since AX-S2**
-(`instructions/v3.0.0/workorder-ax-inflight-publication.md`, AX-Q2). Until
-AX-S1 `IsInFlight` answered about one core's `live_` list, and until AX-S2
-the scan's bound was that core's oldest running id — `UINT64_MAX` on a core
-running nothing — so a mark another core's open drop had written read as
-settled on every other core. Now a peer resolves the index an open
-`DROP INDEX` marked, as the dropping core does, and stops resolving it at
-the commit. What made the cross-core drop sound before this is unchanged
-and still needed for a writer: it holds the relation `X` and moves the
+**The predicate is the instance's** (AX-S2,
+`instructions/v3.0.0/workorder-ax-inflight-publication.md`, AX-Q2): every
+core resolves the index an open `DROP INDEX` marked, as the dropping core
+does, and stops resolving it at the commit. A writer needs more: the drop
+holds the relation `X` and moves the
 schema word before releasing it (§5e), so a writer that resolved the
 relation while the drop was open writes nothing until the decide and
 re-resolves after it.
@@ -285,7 +282,7 @@ catalog cache unconditionally when a DDL-holding transaction resolves,
 commit or rollback: commit is the moment a delete-mark starts counting, and
 a cache filled during an open `DROP INDEX` holds the index deliberately —
 holding it past the commit would keep maintaining an index that is gone,
-and never tell a peer to re-read.
+and never tell another core to re-read.
 
 ### 5c. Delete-marks are finalized at mount
 
@@ -309,8 +306,7 @@ reclaim.
 log restored is included; before the transaction stack exists, so no live
 transaction can own a mark it retires — which is what makes "retire every
 mark" safe here and catastrophic anywhere else. The system core's alone:
-a peer may not write a catalog page (P6), and by the time a peer mounts,
-core 0 has done it.
+by the time any other core starts, core 0 has done it.
 
 **What it costs.** One forward pass over the catalog root chains.
 `RetireSlot` sets the dead flag in place and never renumbers slots behind
@@ -352,25 +348,17 @@ unregistered synchronous view is live, which is the exemption `txn.md`
 §4.1's registration rule leans on. A mark whose deleter has not cleared
 the horizon survives to the next resolution or to §5c at the next mount;
 there is deliberately **no** background cadence. **One core sweeps**, by an
-explicit gate at the call site, and since AT-S5 that is a **placement and
-not an authority**: two cores walking the same chains at once is what it
-prevents, and core 0 is the one because it is always present. Both reasons
-it used to give are gone - the catalog's pages are every core's since
-AT-S5 (`MayWrite`'s arm), and a peer takes DDL since the same stage
-(`PeerDdlRefused`) - and what makes a single sweeper sound is AN-S2: the
-predicate is instance-wide, so any core's sweep judges every mark by the
-same floor and horizon. Until AN-S2 the gate carried the soundness
-argument itself: `ReadHorizon()` walked one core's readers, so a peer's —
-no transactions, no leases — answered `UINT64_MAX` and would have retired
-a mark whose deleter was live on core 0.
+explicit gate at the call site, and that is a **placement and not an
+authority**: two cores walking the same chains at once is what it
+prevents, and core 0 is the one because it is always present. What makes a
+single sweeper sound is AN-S2: the predicate is instance-wide, so any
+core's sweep judges every mark by the same floor and horizon.
 
 **Because one core sweeps, the gate it reads is the instance's**
-(AT-S5b). `pending_marks_` was a counter per `Catalog`, so a peer's `DROP
-TABLE` raised a number the sweeping core never read: its gate returned
-early and the marks waited for the next mount's §5c sweep, while a sweep
-core 0 *did* run retired the peer's marks and left the peer's counter
-overstated. One atomic on `Expeditor`, `fetch_add` at the mark and a delta
-at the resettle; `catalog.md` CT6 carries the counter's own rule. A failed sweep is a maintenance
+(AT-S5b): a counter per `Catalog` would hold a mark another core's `DROP
+TABLE` raised where the sweeping core never reads it. The gate is one
+atomic on `Expeditor`, `fetch_add` at the mark and a delta at the
+resettle; `catalog.md` CT6 carries the counter's own rule. A failed sweep is a maintenance
 failure, not the statement's: the marks it left are exactly as reachable as
 before, so it is logged and the reply stands.
 
@@ -432,31 +420,11 @@ AX-S2), and in any case writes nothing until the drop decides, and the
 decide moves the word before it releases, so the writer re-resolves and
 maintains the index a rollback restored.
 
-**What it replaced**, briefly, because the citations outlive it. From
-PW1c-6b until AT-S5e a relation another core owned had its index built
-**by the owner**, core 0 publishing the row and parking between the two
-phases, behind a write-refusal window only the owner could see; AO-S6e-a
-turned the refusal into a wait. A local build opened no window at all, which
-was sound only while every write to a relation ran on its owner. AT-S5 made
-a write run where its session is, so a row written on another core during a
-backfill was missing from the finished index (D6). A core-0 `DROP INDEX` on
-a peer-owned relation was refused inside a transaction for §5b's reason.
-The ship, the window (`PendingIndexBuilds`, `IndexBuildPending`,
-`kIndexWindowWaitNs`), `SHOW META`'s `index_build_windows` and
-`index_build_window_age_max_us`, the reply's `built_by_core=` and that
-refusal all went with it. AO-S6e-a declined this same `X` because the
-owner's window close, its cache drop and its next admitted write were one
-ordered event a lock released on core 0 could not reproduce; AT-S2's schema
-word is that ordering, so the objection had expired.
-
 ### 5f. `CREATE ASSERTION`, built where its session is
 
-**Since AT-S5d the statement runs where its session is**, whoever owns the
-relation: the checks and the id, the build, the publish and the adoption
-into the instance's one assertion registry (`assertion.md` §6.1). From
-PW1c-6c until then a relation another core owned had its Bound Cabin built
-by that owner - §5e's shape, core 0 publishing and parking between the two
-phases - because the owner's registry was the only one its writes asked.
+**The statement runs where its session is**: the checks and the id, the
+build, the publish and the adoption into the instance's one assertion
+registry (`assertion.md` §6.1).
 
 **Admitted inside an explicit transaction**: `InsertAssertion` writes
 under no transaction, so the assertion enforces before `COMMIT` and a

@@ -2,8 +2,8 @@
 
 Decisions NS1–NS10. **A namespace is a name, and it declares the affinity
 of the relations created in it** (NS10) — a statement about which relations
-belong together, which since AT-S9 nothing reads: no relation is owned by a
-core, so a qualifier **declares grouping, never identity and never
+belong together, which nothing reads: no relation is bound to a core, so a
+qualifier **declares grouping, never identity and never
 placement** — relation names stay instance-global (NS5, NS6).
 
 This spec **ratifies and completes** something the engine already carries
@@ -35,9 +35,8 @@ layer and this engine deliberately does not:
 - It does not select a file, extent, or device. Physical placement is the
   free map's and (if multi-file ever lands) the file model's concern, on an
   axis orthogonal to this one.
-- It is **not a unit of ownership, and nothing is one** since AT-S9: a
-  statement runs on the core its session is on, whatever namespace its
-  relations are in. It selected an owner core until then (NS10's history).
+- It is **not an execution unit**: a statement runs on the core its
+  session is on, whatever namespace its relations are in (NS10).
 - It does not scope the WAL, a checkpoint, or a snapshot. The instance has
   one log (`docs/spec/wal.md` §3); checkpoints are per core and one runs at
   a time; nothing about namespaces changes either.
@@ -45,8 +44,8 @@ layer and this engine deliberately does not:
 
 The one-line test for anything else proposed for this layer: **if removing
 every namespace and renaming objects to be unique would change the answer,
-it does not belong here** — and since AT-S9 the affinity declaration passes
-that test too, because nothing reads it.
+it does not belong here** — and the affinity declaration passes that test
+too, because nothing reads it.
 
 ## NS2 — Oids are globally unique; the namespace never enters the identity
 
@@ -97,10 +96,10 @@ one catalog, so the restriction would buy nothing. The two things users
 actually want from separation are name-collision avoidance and access
 control — refusing queries serves neither while breaking legitimate joins.
 
-**Nothing refuses on cores any more, and a refusal never names a
-namespace.** A transaction writing two relations in two namespaces is one
-core's transaction like any other (AT-S5, AT-S6), and no statement is sent
-anywhere by the namespace its relations are in (AT-S9).
+**Nothing refuses on cores, and a refusal never names a namespace.** A
+transaction writing two relations in two namespaces is one core's
+transaction like any other, and no statement is sent anywhere by the
+namespace its relations are in.
 
 ## NS5 — Resolution
 
@@ -161,8 +160,7 @@ name is free for reuse — the same rule DROP TABLE already follows.
   **names the relation** that blocked it, because the user's next act is to
   drop or move that relation. The row is **retyped to
   `kTypeDroppedNamespace` and never retired**: it is `GenerateUserOid()`'s
-  floor evidence. (It was also the evidence a namespace's placement rank was
-  derived from until AT-S9 retired placement.)
+  floor evidence.
 - `CREATE TABLE [ns.]name` — unqualified creates in `public`, there being
   no session current namespace (NS8). A named namespace must already
   exist.
@@ -181,8 +179,8 @@ name is free for reuse — the same rule DROP TABLE already follows.
   `SELECT` shape, and one `CommandDispatcher::QualifierRefusal` per other
   statement.
 
-A namespace DDL runs where its session is, as every DDL has since AT-S5:
-every core writes the catalog's pages under the page latch.
+A namespace DDL runs where its session is, as every DDL does: every core
+writes the catalog's pages under the page latch.
 
 ## NS8 — Session state: none
 
@@ -195,31 +193,18 @@ core.
 
 ## NS10 — The namespace declares the affinity of its relations
 
-**The rule, since AT-S9** (AR0-5 D17 and D18, AR2 E8's verb). A relation
-created in a namespace is *declared* to belong with the namespace's other
-relations, and that declaration is all a namespace says about execution.
-**Nothing reads it today**: D18 keeps affinity as a statistic and an
-optimizer hint at weight 0 (AR0 D10) until AS-E, and no statistic is
-stored — `sys.tables.owner_core`, the column that carried the placement
-this rule used to make, was dropped at AT-S9 (its bytes are reserved,
-written 0 and ignored on read, so a pre-AT volume mounts unchanged). When a
-consumer arrives, the declaration it reads is the namespace a relation was
-created in, which is already on the relation's row.
+**The rule** (AR0-5 D17 and D18, AR2 E8's verb). A relation created in a
+namespace is *declared* to belong with the namespace's other relations, and
+that declaration is all a namespace says about execution. **Nothing reads
+it today**: D18 keeps affinity as a statistic and an optimizer hint at
+weight 0 (AR0 D10) until AS-E, and no statistic is stored —
+`sys.tables.owner_core` is a reserved word, written 0 and never read. When
+a consumer arrives, the declaration it reads is the namespace a relation
+was created in, which is already on the relation's row. A namespace selects
+no core: every core reads every page, and the `placement` config key is
+refused by name.
 
-**What it was, and why it went.** Until AT-S9 this read *"the namespace
-selects the owner core"*: `PlacementPolicy::kNamespace`, the shipped default,
-placed a relation on its namespace's core — fixed by the namespace's first
-relation, rotated on declaration order before that — and every write to it
-ran there. AT-S5 made a write run where its session is and AT-S6 a read, so
-the owner stopped deciding where anything ran; AT-S9 retired the owner, the
-policy (`core_placement.hpp`, the `placement` config key, refused by name
-now) and the derivation (`DeriveNamespacePlacement`). The write-side cost
-co-location was measured to carry (against the `bench/` tree at `1769487`)
-went with it, and so did the reason relations had to be grouped to make a
-join or a foreign key core-local: every core reads every page.
-
-**The best practice survives as a statement of intent, not a performance
-rule.** Relations that are joined, foreign-keyed or read together belong in
+**The best practice is a statement of intent, not a performance rule.** Relations that are joined, foreign-keyed or read together belong in
 one namespace: that is the grouping a future affinity consumer will read,
 and it is the grouping a reader of the catalog sees. A foreign key across
 namespaces is admitted and costs what one inside a namespace costs
@@ -236,7 +221,7 @@ No new catalog relation is introduced. `SHOW NAMESPACES` reads
 `kTypeTable`.
 
 **Nothing outside the catalog changes.** No page format, no WAL record, no
-ring message, no index key, no free-map structure. If an implementation
+index key, no free-map structure. If an implementation
 finds itself adding `namespace_oid` to any of those, NS1 has been violated
 and the design is wrong.
 

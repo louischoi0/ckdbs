@@ -140,11 +140,8 @@ std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page);
 // that last wrote the page; **0 means never stamped**, which is what
 // every pre-PW1c-3 page reads - the owner_oid no-backfill precedent.
 //
-// **It decides nothing.** It existed because `page_lsn` was a byte offset
-// into *one stream's* file, so after a handoff the number was meaningless
-// to the other stream and the stamp was what let redo tell "mine" from
-// "incomparable". There is one stream (AR0 M0) and one owner of the fact
-// (AW-S1b took the ownership reading), so what is left is a diagnostic:
+// **It decides nothing.** There is one stream (AR0 M0), so what is left is
+// a diagnostic:
 // `SHOW PAGE` prints it, every logged mutation writes it, and redo's
 // full-page-image restore keeps it truthful. No branch reads it.
 //
@@ -158,11 +155,8 @@ void SetPageStreamStamp(std::span<std::byte, kPageSize> page, std::uint16_t stam
 constexpr std::uint16_t StreamStampFor(std::uint32_t core_id) noexcept {
     return static_cast<std::uint16_t>(core_id + 1);
 }
-// `StampIsForeign` stood here - stamped, and by some other stream - and
-// went at AM-S4(d) with its one caller, redo's refusal of a page carrying
-// another stream's stamp inside this scan's scope. There is one stream, so
-// there is no other stream to have crossed from and the question has no
-// answer to give.
+// `StampIsForeign` retired with per-core streams (AM-S4(d)); its history is
+// at cf889b63.
 
 // ---- Relayout epoch (docs/spec/physical-optimizer.md R4) ----------------
 //
