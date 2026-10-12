@@ -1,0 +1,32 @@
+{
+ "cores": 4,
+ "blocks": 20,
+ "per_block": 2000,
+ "bin_sha256": "8e274baf1ab1eadd455adb79bb8838674b310cac7b1f0eb5a93b7af3f7507b80",
+ "data_device": "/dev/root ext4",
+ "host_before": {
+  "loadavg": "2.07 3.93 4.48 1/533 356983",
+  "competing": []
+ },
+ "host_after": {
+  "loadavg": "1.98 3.88 4.47 1/524 356991",
+  "competing": []
+ },
+ "stay": {
+  "p0_us": 38.0,
+  "p25_us": 48.2,
+  "p50_us": 50.2,
+  "p95_us": 74.9,
+  "p99_us": 89.7,
+  "n": 40000
+ },
+ "move": {
+  "p0_us": 71.1,
+  "p25_us": 80.8,
+  "p50_us": 89.3,
+  "p95_us": 115.4,
+  "p99_us": 144.1,
+  "n": 40000
+ },
+ "move_minus_stay_p50_us": 39.1
+}

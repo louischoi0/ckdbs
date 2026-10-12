@@ -14,6 +14,7 @@ add_executable(kds_tests
     shipped_read_own_write_test.cpp
     id_allocation_across_cores_test.cpp
     connection_handoff_test.cpp
+    load_placer_test.cpp
     access_stats_across_cores_test.cpp
     waystone_across_cores_test.cpp
     cabin_serve_across_cores_test.cpp

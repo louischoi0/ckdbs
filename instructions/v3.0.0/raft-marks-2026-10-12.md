@@ -68,3 +68,30 @@ Korean it was typed in.
 | **Mark** | Marked per item, as CLA proposed: **BL-Q19 (a)** - the partition is an engine constant, `max(1, cores / 4)` batch cores, the highest-numbered, never core 0, sized by BL-S5, and not a setting; **BL-Q20 (a)** - an interactive session does not borrow an idle batch core in v0, taken up only if §5.2 shows the idle capacity material. Written on `worktree-bl-drop-session-affinity` on top of `f9f0c6fa` |
 | **Does not settle** | The partition's size as a number, `[provisional]` until BL-S5; BL-Q0 and the other unmarked items; BL still not opened |
 | **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` header (W9), §4, §6; `index.md`'s BL row |
+
+## 8. What shared-nothing left, asked for
+
+| | |
+|---|---|
+| **Word** | *"Sync the current repo and find what is left over from the shared-nothing era, and the overhead those leftovers cause."* (W0 of BP) |
+| **Mark** | None: a question answered. CLA synced the main checkout to `fe248d94` and reported a survey in four groups: cost `cores = 1` pays, structure costing above one core, dead code, and comment and naming residue. Recorded in the main checkout on `main` at `fe248d94`, with no worktree |
+| **Does not settle** | Anything |
+| **Recorded at** | `workorder-bp-shared-nothing-residue.md` header (W0) and §1 |
+
+## 9. BP written and pushed
+
+| | |
+|---|---|
+| **Word** | *"Write a work order for that issue: hypothesis, verification, code change, measurement, and re-exploration or rejection where needed."* (W1 of BP) |
+| **Mark** | BP-S0: the order written (`workorder-bp-shared-nothing-residue.md`), with W1's five words as its per-hypothesis loop (BP-R0). It was pushed to `main` directly from the main checkout at `fe248d94`, with no worktree and no work branch, as a document-only change, under the standing practice for documents written in a claude.ai session. The pre-push hook did not run, because it is not enabled in this clone; no build and no suite ran. **Not opened**: BP-Q0..Q13 are unmarked. The letter BP is CLA's choice (BP-Q12) |
+| **Does not settle** | BP-Q0..Q13, among them the memo's option (BP-Q4, `[quiet-wrong]` under (a), (b) and (d)), the three ratified structures (BP-Q5..Q7) and the sequencing (BP-Q13) |
+| **Recorded at** | `workorder-bp-shared-nothing-residue.md`; `index.md`'s BP row |
+
+## 10. BL opened, and how it runs
+
+| | |
+|---|---|
+| **Word** | *"Work according to the BL milestone. Split it into work units; if a work unit has no utility, explore alternatives thoroughly, and if none is found, reject it, report and stop. The purpose of this milestone is to place cores per transaction rather than per session, to optimize scheduling, and to handle each finely by its character. Establish the four stages, but choose the detailed implementation by experiment and measurement. Not every concept in the order needs to be developed; what experiment and measurement show to be meaningless may be skipped."* (W10; given three times in one session, the last with "explore alternatives thoroughly" added, which is the form recorded) |
+| **Mark** | **BL-Q0 opened**, BI-S5 having closed at `083ab01d`; **BL-Q1 (a)**, read from "per transaction"; the four stages are BL-S1..S4, each kept or dropped by measurement |
+| **Does not settle** | BL-S4's three rulings, which BL-S4's stop puts to the operator (`workorder-bl-session-balancer-priority-affinity.md` §6): the read path's logged Waystone write, core 0's role in the partition, and the WAL roll's latch; every other unmarked BL-Q item |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` §4 (BL-Q0, BL-Q1, BL-Q3, BL-Q14), §6; `index.md`'s BL row |

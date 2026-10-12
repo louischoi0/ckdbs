@@ -1,6 +1,7 @@
 #include "kds/sched/scheduler.hpp"
 
 #include "kds/sched/checkpoint_census.hpp"
+#include "kds/sched/core_load.hpp"
 #include "kds/base/current_core.hpp"
 
 #include <atomic>
@@ -75,6 +76,7 @@ Status Scheduler::AttachWakerTable(WakeRegistry* table, std::uint32_t core_id) {
     core_id_ = core_id;
     wakers_ = table;
     if (table == nullptr) return Status::OK();
+    CoreLoad::Reset(core_id_);  // this reactor's slot from here on (core_load.hpp)
     if (Status s = ArmWaker(); !s.ok()) return s;
     // Published last, so no peer can find a half-registered entry. Safe
     // unsynchronised: this runs on the startup thread before this core's
@@ -484,6 +486,34 @@ void Scheduler::RecordIterationHold(MonoTimeNs start_ns, MonoTimeNs block_ns,
     const std::uint64_t unpolled = hold > iteration_polled_ns_ ? hold - iteration_polled_ns_ : 0;
     if (unpolled > longest_unpolled_ns_) longest_unpolled_ns_ = unpolled;
     if (unpolled > 100'000'000) ++unpolled_over_100ms_;
+
+    // The load another core reads (core_load.hpp, BL-S1): no clock read of
+    // its own, only the span and hold this function already has, and only
+    // where another core exists to read it (BL-R9).
+    if (wakers_ == nullptr) return;
+    const auto kFg = static_cast<std::size_t>(SchedulingGroupIndex(SchedulingGroup::kForeground));
+    CoreLoad::Slot& load = CoreLoad::Of(core_id_);
+    load.queued_foreground.store(static_cast<std::uint32_t>(ready_queues_[kFg].size()),
+                                 std::memory_order_relaxed);
+    load_window_span_ns_ += span;
+    load_window_hold_ns_ += hold;
+    if (load_window_span_ns_ >= CoreLoad::kWindowNs) {
+        const std::uint64_t fg = polled_ns_total_[kFg] - load_window_fg_mark_ns_;
+        load.busy_ppm.store(
+            static_cast<std::uint32_t>(load_window_hold_ns_ * 1'000'000 / load_window_span_ns_),
+            std::memory_order_relaxed);
+        load.foreground_ppm.store(
+            static_cast<std::uint32_t>(std::min(fg, load_window_span_ns_) * 1'000'000 /
+                                       load_window_span_ns_),
+            std::memory_order_relaxed);
+        load_window_fg_mark_ns_ = polled_ns_total_[kFg];
+        load.window_end_ns.store(now, std::memory_order_relaxed);
+        load.active_sessions.store(load.active_now.load(std::memory_order_relaxed),
+                                   std::memory_order_relaxed);
+        load.active_now.store(0, std::memory_order_relaxed);
+        load_window_span_ns_ = 0;
+        load_window_hold_ns_ = 0;
+    }
 }
 
 void Scheduler::Run() {

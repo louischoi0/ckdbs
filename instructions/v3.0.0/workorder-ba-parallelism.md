@@ -22,7 +22,7 @@ per stage, and a question a stage raises is settled by CLA's proposal,
 recorded as adopted (`raft-marks-2026-10-09.md` §2).
 
 **Where the items came from.** The starting point was
-`bench/v3.0.0/results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md`, plus a
+`bench/v3.0.0/results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` (at `36449d28`), plus a
 spec-level reading of what serialises. §1 re-reads every claim in the code
 at `d3d90b5`. Two of the spec-level claims were wrong:
 
@@ -77,9 +77,9 @@ so every session on that core waits with it.
 - **Scenario 0** (eight traders, four autocommit statements a transaction).
   Going from `cores = 1` to `cores = 8` takes `group` from 626.0 to 661.0
   tps (1.06x) and `strict` from 169.4 to 331.7 tps. PostgreSQL reads 710.8
-  tps (`results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` §2). At
+  tps (`results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` §2, at `36449d28`). At
   `cores = 1`, `strict` makes 678 durable statements a second, one every
-  1.5 ms (`results-scenario0-stockmarket-v2.7.0-531-g9a0525d.md` §5): the
+  1.5 ms (`results-scenario0-stockmarket-v2.7.0-531-g9a0525d.md` §5, at `36449d28`): the
   arithmetic of one sync per commit (P7).
 - **Refusals under contention.** Every `s0-c8-s` run had one trade insert
   refused `TXN_CONFLICT` by the btree's bounded re-descent (same file, §6)
