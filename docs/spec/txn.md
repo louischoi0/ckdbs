@@ -23,59 +23,82 @@ presumed lost rather than slow. AN-R14 made that coincidence a statement —
 the per-statement deadline *is* the envelope — and the envelope survives
 the shipping as scope, with no constant of its own.
 
-**The 60 seconds are the mechanism AN-R14 names and nothing builds**,
-`kds.txn_lifetime_ceiling` (60 s, **provisional**: set by the operator,
-not measured, and re-read when AS-E measures the lifetime distribution;
-no `kTxnLifetimeCeilingNs` exists in the tree). Wall-clock from `BEGIN`. A
-transaction past it would be aborted by a sweep and the abort would
-surface at its next statement **as an ordinary abort** — §4.1 stays
-literally true, because no reader is ever told its snapshot expired.
+**The 60 seconds are the mechanism, and it is the listener's sweep**,
+`txn_lifetime_ceiling_ms` (default 60,000; `kDefaultTxnLifetimeCeilingNs`,
+`tcp_server.hpp`), **provisional**: set by the operator, not measured, and
+re-read when AS-E measures the lifetime distribution. `0` is refused at
+startup: a ceiling that a value can silently switch off is how the
+participant sweep below went dark. Built on 2026-10-12
+(`worktree-txn-lifetime-ceiling`) as the instance-wide half AW-S3 §11.2
+sized:
+
+- **The clock.** Wall-clock from `BEGIN`, read once per transaction: the
+  connection is stamped at the first statement completion that finds a
+  transaction its stamp does not name, which is the `BEGIN`'s own
+  (`TcpServer::Connection::txn_began_at_ns`). Nothing is read per
+  statement, and `txn/manager.hpp` still has no clock - the transaction
+  is the session's, and the session is the connection's.
+- **The sweep.** Every listener, on both protocols, walks its own
+  connections every quarter of the ceiling
+  (`TcpServer::ExpireOverdueTransactions`), so a transaction ends between
+  1x and 1.25x its lifetime. Busy or idle, poisoned (`kFailedTxn`) or
+  not: a poisoned transaction still holds its undo and its place in the
+  horizon until its `ROLLBACK`.
+- **The abort.** The connection-close path's own `ROLLBACK`, dispatched on
+  the session's core, so the sweep adds no second way to end a
+  transaction. A rollback refused before it ends the transaction leaves it
+  open, and the next tick tries again.
+- **A statement in flight is deferred, never interrupted.** It holds the
+  session, and the first tick after it ends reaches the transaction. So a
+  statement that runs past the ceiling completes, and its reply is
+  followed by the refusal at the next one.
+- **What the client sees.** The session is left failed with no
+  transaction (`Session::Expire`; `S_READY.txn_state` 2, the same as a
+  poisoned one). Every statement but `ROLLBACK`/`ABORT`/`SYNC`/`STOP`/`PING`
+  is refused `RESOURCE_EXHAUSTED` with `ResourceDetail::kTxnLifetimeCeiling`,
+  naming the transaction and saying its writes are undone - **`COMMIT`
+  included**, which must never answer OK over writes the server already
+  rolled back. The `ROLLBACK` that follows answers `ROLLBACK trx_id=<id>`
+  and returns the session to autocommit. A connection that closes instead
+  takes the same `ROLLBACK`. **An ordinary abort**, in that §4.1 stays
+  literally true: no reader is ever told its snapshot expired.
+- **What it does not bound.** An autocommit statement is its own
+  transaction and is not swept. A statement that never ends - a write does
+  not yield (`sched.md` §3) - defers the sweep for as long as it runs.
 
 **What it costs, stated rather than discovered**: a long *busy*
 transaction is aborted, where a bound on *idleness* accepted it. That was
 the earlier proposal, and the operator's numbers say this engine does not
 serve that shape.
 
-**Three exemptions**, each with its reason so none is later struck as a
-special case. **None is built**: 1 and 2 are `[PROPOSED]` and described
-here so the instance-wide sweep is not written without them, and 3 went
-with AT-S6:
+**Two exemptions were proposed and one stands; the third went with
+AT-S6:**
 
-1. **DDL** — a single statement holding relation `X`. Aborting a
-   `CREATE INDEX` at 60 s gains nothing and forbids large indexes. No
-   ceiling. `[PROPOSED]` — nothing exempts it today because no sweep
-   exists to reach it.
+1. **DDL inside an explicit transaction is not exempt** (the operator's
+   ruling of 2026-10-12, which overrides AN-R14's proposal of "no
+   ceiling"). Such a transaction holds its relation `X` (`ddl-transactional.md`),
+   so left open it blocks every writer of that relation, which is the case
+   the ceiling exists for; it is rolled back like any other. A DDL
+   **statement** is never cut short, by the in-flight rule above, and an
+   autocommit DDL has no transaction the sweep can reach.
 2. **Background read views** (the Cabin build, the checkpoint, the
    relayout survey) — they hold undo like any view, so the ceiling would
    apply, but the response is not abort: the task **re-mints its view and
    resumes** at its next resumable point. A background task that cannot
-   resume is a task defect, not a ceiling exemption. `[PROPOSED]` — no
-   sweep reaches a read view, and no task re-mints on a ceiling's account;
-   this is a second mechanism on a different object, not this one.
+   resume is a task defect, not a ceiling exemption. `[PROPOSED]` — the
+   sweep walks connections and reaches no read view, and no task re-mints
+   on a ceiling's account; this is a second mechanism on a different
+   object, not this one.
 3. **Prepared contexts** — D4's exclusion: after a participant replied
    prepared it could not unilaterally abort. **Gone at AT-S6** with the
    protocol that made a context prepared; there is no exclusion to
    inherit, because there is no participant.
 
-**Where it is enforced today, which is narrower than the rule**: nowhere.
-The sweep existed over cross-owner *participant* contexts alone
-(`ShippedStatementExecutor::ExpireEnrolled`), and that executor went with
-the protocol at AT-S6 — so no transaction carries a start time and nothing
-sweeps one; `txn/manager.hpp` has no clock. The rule above is the engine's
-scope and **none of it is enforced**, which is a widening of the gap AW-S3
-recorded rather than a new one: its instance-wide half was already
-unbuilt, and AT-S6 removed the narrow half that was.
-
-**What the retired participant sweep did, for whoever builds the instance
-sweep.** It rode `wal_drain_interval_ns` (1 ms by default), so a context
-was swept on the first tick after its lifetime on which no statement or
-phase was in flight on it - an in-flight statement deferred the sweep, it
-did not exempt the context - and `wal_drain_interval_ns = 0` disabled the
-ceiling entirely, because that was the registration it was on.
-
-**`kds.txn_lifetime_ceiling` is a name, not yet a key.** AN-R14 asks for
-the config key; it is not registered in `Expeditor`'s key set, and since
-AT-S6 no compiled constant carries the number either.
+**The participant sweep it replaces** existed over cross-owner
+*participant* contexts alone (`ShippedStatementExecutor::ExpireEnrolled`)
+and went with that executor at AT-S6. It rode `wal_drain_interval_ns`, so
+`wal_drain_interval_ns = 0` disabled the ceiling entirely; the listener's
+sweep has a timer of its own, and its one key has no off-switch.
 
 ### The levels
 

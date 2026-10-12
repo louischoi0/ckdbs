@@ -149,6 +149,7 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
       next_identity_(other.next_identity_),
       server_info_(std::move(other.server_info_)),
       stop_handler_(std::move(other.stop_handler_)),
+      txn_lifetime_ceiling_ns_(other.txn_lifetime_ceiling_ns_),
       clients_(std::move(other.clients_)),
       reply_writes_(other.reply_writes_) {
     if (host_ != nullptr) host_->server = this;
@@ -184,6 +185,7 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         reply_writes_ = other.reply_writes_;
         server_info_ = std::move(other.server_info_);
         stop_handler_ = std::move(other.stop_handler_);
+        txn_lifetime_ceiling_ns_ = other.txn_lifetime_ceiling_ns_;
         clients_ = std::move(other.clients_);
         other.listen_fd_ = -1;
         other.scheduler_ = nullptr;
@@ -248,6 +250,15 @@ Status TcpServer::Attach(sched::Scheduler& scheduler, CommandDispatcher& dispatc
             }
         });
     }
+
+    // **The transaction lifetime ceiling's caller** (AN-R14, txn.md §1), on
+    // both protocols. A quarter of the ceiling for the portal sweep's
+    // reason, and never under a millisecond, so a ceiling of a few
+    // milliseconds cannot turn the timer into a spin.
+    constexpr sched::MonoTimeNs kMinTxnSweepPeriodNs = 1'000'000;
+    txn_sweep_ = scheduler_->SubmitEvery(
+        std::max(txn_lifetime_ceiling_ns_ / 4, kMinTxnSweepPeriodNs),
+        [this] { ExpireOverdueTransactions(); });
     return Status::OK();
 }
 
@@ -259,6 +270,10 @@ void TcpServer::Detach() noexcept {
         if (idle_sweep_ != sched::kInvalidTimerId) {
             scheduler_->CancelTimer(idle_sweep_);
             idle_sweep_ = sched::kInvalidTimerId;
+        }
+        if (txn_sweep_ != sched::kInvalidTimerId) {
+            scheduler_->CancelTimer(txn_sweep_);
+            txn_sweep_ = sched::kInvalidTimerId;
         }
         // Copied first: CloseClient mutates clients_.
         std::vector<int> fds;
@@ -760,11 +775,55 @@ bool TcpServer::DrainCommands(int client_fd, Connection& conn) {
     return true;
 }
 
+void TcpServer::ExpireOverdueTransactions() {
+    const sched::MonoTimeNs now = scheduler_->clock().Now();
+    for (auto& [fd, conn] : clients_) {
+        // In flight: the statement holds the session, so ending its
+        // transaction under it would pull state from under a coroutine.
+        // Deferred to a tick after it ends, not exempted.
+        if (conn.in_flight) continue;
+        const txn::Transaction* open = conn.session.transaction();
+        // Autocommit, or already expired and waiting for its ROLLBACK.
+        if (open == nullptr || open->id() != conn.txn_stamped_id) continue;
+        if (now - conn.txn_began_at_ns < txn_lifetime_ceiling_ns_) continue;
+
+        const std::uint64_t id = open->id();
+        // The connection-close path's own rollback (`CloseClient`), so the
+        // sweep adds no second way to end a transaction.
+        const DispatchOutcome rolled = dispatcher_->Dispatch("ROLLBACK", &conn.session);
+        // A failure is logged whichever side of the transaction's end it
+        // fell on: the client's refusal will say its writes are undone,
+        // and this line is where an operator learns when that is untrue.
+        if (!rolled.status.ok() && logging(LogLevel::kWarn)) {
+            log_->Warn("txn", "fd=" + std::to_string(fd) + " trx_id=" + std::to_string(id) +
+                                  " is past the lifetime ceiling and its rollback failed: " +
+                                  rolled.response);
+        }
+        // Refused before it ended the transaction (an assertion
+        // reservation's unwind): still open, and the next tick tries again.
+        if (conn.session.transaction() != nullptr) continue;
+        conn.session.Expire(id);
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("txn", "fd=" + std::to_string(fd) + " trx_id=" + std::to_string(id) +
+                                  " rolled back at the lifetime ceiling of " +
+                                  std::to_string(txn_lifetime_ceiling_ns_ / 1'000'000) + " ms");
+        }
+    }
+}
+
 void TcpServer::OnStatementComplete(int client_fd) {
     auto it = clients_.find(client_fd);
     if (it == clients_.end()) return;  // nothing left to reply to
     Connection& conn = it->second;
     conn.in_flight = false;
+    // The lifetime sweep's stamp (`Connection::txn_began_at_ns`). Here
+    // because every statement either protocol runs ends here, so the
+    // `BEGIN` that opened a transaction is the first completion to see it.
+    if (const txn::Transaction* open = conn.session.transaction();
+        open != nullptr && open->id() != conn.txn_stamped_id) {
+        conn.txn_stamped_id = open->id();
+        conn.txn_began_at_ns = scheduler_->clock().Now();
+    }
     // Cleared whatever happens next: the sink belongs to the portal that
     // asked for it, and a portal closed while its statement ran must not
     // leave the next statement encoding into a dead one.
