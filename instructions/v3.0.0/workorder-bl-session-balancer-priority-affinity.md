@@ -1,5 +1,8 @@
 # Work order BL — no session is pinned: a balancer between connection and core, and one session axis, priority
 
+**Paused 2026-10-12 (W12)** with BL-S1..S3 and BL-S4's ruling 1 built and
+BL-S4 stopped; §6's last row says where it stands and how it resumes.
+
 **Amended 2026-10-12**: session affinity struck (W4); priority's values
 set as four context levels (W5, W6), served in v0 by placement and a
 per-level walk slice, with a weighted pick deferred to the last rung
@@ -956,3 +959,38 @@ rulings, none of them BL's to make:
 
 **Not measured**: the overhead A/B (§5.2 bar (i)), owed at BL's close; BL
 does not close while BL-S4 waits. Nothing here is a tag or a push.
+
+### BL paused 2026-10-12 (W12) - ruling 1 built, BL-S4 still stopped
+
+**W11** (`raft-marks-2026-10-12.md` §11) marked BL-S4's ruling 1 (a), and
+it is built on `worktree-bl-touchpattern-delete` at `05cd011f`
+(`v2.7.0-883-g05cd011f`): `Catalog::TouchPattern` and its call are deleted,
+`sys.patterns`' `use_count`/`last_seen` stay on disk at 0, and the suite
+read 3608/3608 (Debug, `-LE heap-suspended`) there. **W12**
+(`raft-marks-2026-10-12.md` §12) then paused BL: *"Stop this milestone here
+for now; I will resume it later."*
+
+**Where BL stands at the pause.**
+- **Built and kept**: BL-S1, BL-S2, BL-S3 (rows above); ruling 1 (a).
+- **Stopped**: BL-S4, on rulings 2 (core 0's role under the partition) and
+  3 (whether a WAL segment roll keeps the stream latch across its device
+  I/O), both unmarked. BL-S5 and BL's close wait on BL-S4.
+- **Not measured**: ruling 1's effect on the committed build. The
+  interleaved re-measurement (`bl_mixed.py --cores 4 --arm mixed`,
+  `segregated-no0` / `spread` / `batch0`, three runs each, `05cd011f`
+  against `3338cf0c`) was stopped at the pause with 2 of 18 cells taken,
+  both `segregated-no0` - too few to report, and no results file is
+  written for them. The evidence for (a) stays the experiment at `3338cf0c`
+  with a measurement build (the call removed, three runs each): reader
+  service p99 244-361 ms to 0.9-2.4 ms, readers off the batch core and core
+  0 at a schedule p99 of 547-691 ms to 19-125 ms, and the reader cores'
+  WAL stream waits from 0.8-4.2 s to about 0. That build was not the
+  committed one, so those numbers are `[measured-on-a-variant]`, not this
+  commit's.
+- **Owed at the close**: the overhead A/B (§5.2 bar (i)).
+- **Unasked**: whether a tool that pins sessions needs a balancer
+  off-switch (`known-gaps.md`'s BL section).
+
+**To resume**: re-run the ruling 1 re-measurement on a quiet host, write
+it as a results file named by `git describe`, and correct `known-gaps.md`'s
+BL headline from it; then BL-S4 proceeds only if rulings 2 and 3 are marked.

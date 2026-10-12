@@ -104,3 +104,12 @@ Korean it was typed in.
 | **Mark** | **BL-S4's ruling 1 is (a)**: `Catalog::TouchPattern` and its one call on the read path are deleted, so a repeated point `SELECT` makes no logged write. `sys.patterns`' `use_count` and `last_seen` stay on disk, written at registration and advanced by nothing. **The constraint is the operator's**: each component keeps its authority class - `sys.patterns` stays wholly logged, with no unlogged field inside a logged page; Waystone stays advisory (invariants 8 and 9); `sys.access_stats` stays the one unlogged catalog relation `rules.md` §5 admits. That constraint is why (b), two unlogged heat fields inside a logged page, is not taken |
 | **Does not settle** | BL-S4's rulings 2 (core 0's role under the partition) and 3 (whether a WAL segment roll keeps the stream latch across its device I/O); whether a tool that pins sessions needs a balancer off-switch (`known-gaps.md`'s BL section) |
 | **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` §6; `docs/spec/waystone-concpets.md` §4; `docs/spec/parser-v2.md` (J5); `docs/inflight/known-gaps.md`'s BL section; `manual/sql/sql.md` (`SHOW PATTERNS`) |
+
+## 12. BL paused
+
+| | |
+|---|---|
+| **Word** | *"Stop this milestone here for now; I will resume it later. Reflect it in the documents."* (W12; recorded on `worktree-bl-touchpattern-delete` at `05cd011f`) |
+| **Mark** | **BL is paused, not closed and not abandoned.** BL-S1..S3 and BL-S4's ruling 1 (a) stay built; BL-S4 stays stopped; the ruling 1 re-measurement was stopped with 2 of 18 cells taken and is reported nowhere |
+| **Does not settle** | BL-S4's rulings 2 and 3; BL-S5; BL's close and its overhead A/B; when BL resumes |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` §6 ("BL paused 2026-10-12"); `index.md`'s BL row; `docs/inflight/known-gaps.md`'s BL section; `CLAUDE.md`'s cross-core row |

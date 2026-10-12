@@ -986,16 +986,21 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 ## Placement per transaction (BL)
 
 Verified on `worktree-bl-session-balancer` at BL-S3's commit, measured in
-`bench/v3.0.0/results-bl-s1-placement-premise-v2.7.0-857-g3552a03c.md`.
+`bench/v3.0.0/results-bl-s1-placement-premise-v2.7.0-857-g3552a03c.md`;
+the first bullet re-read on `worktree-bl-touchpattern-delete` at `05cd011f`.
+BL is paused (the order's §6, "BL paused 2026-10-12").
 Owned by `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
 until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
 `docs/spec/sched.md` §5.
 
-- **A bulk writer stalls point readers on every core for 0.25-0.8 s, and
-  no placement isolates them.** Two couplings through the one WAL were
-  found; the first is gone since W11 deleted `Catalog::TouchPattern`
-  (a repeated point `SELECT` made a logged rewrite of its pattern's heat),
-  and the second stands:
+- **A bulk writer stalled point readers on every core for 0.25-0.8 s at
+  BL-S3's commit, and no placement isolated them.** Two couplings through
+  the one WAL were found. The first is gone at `05cd011f`: BL-S4's ruling 1
+  (`raft-marks-2026-10-12.md` §11) deleted `Catalog::TouchPattern`, whose
+  logged rewrite of a pattern's heat every repeated point `SELECT` made.
+  **The stall has not been re-measured since** (the re-measurement stopped
+  at BL's pause), so the headline numbers describe the engine with both
+  couplings. The second stands:
   - **a segment roll holds the stream latch across device I/O**:
     `WalStream::Append`'s roll seals, flushes and runs `StartSegment`'s
     device sync, which waits out the writer thread's sync of every live
