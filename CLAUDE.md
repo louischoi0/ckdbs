@@ -182,6 +182,14 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
 - **Measure in `build-release`, never `./build` (Debug)** — Debug has
   reported the wrong sign. Per-statement fixed costs: server CPU,
   interleaved A/B. **Re-measure a premise before building the fix.**
+- **A running measurement is watched every minute** (operator,
+  2026-10-12: "once a benchmark or measurement is started, check its
+  state every minute, and if it has fallen into an orphaned state, resume
+  the measurement"). Every benchmark or measurement CLA starts gets a
+  60 s watchdog - polled by a file it writes, never by a process pattern
+  the watcher's own argv can match - and one found orphaned (stalled,
+  its driver gone, its parent session gone) is resumed at once, not
+  reported and left.
 - Every refusal carries the byte position of the offending token, and
   "understood and declined" is **two** codes: `Unsupported` is what the
   architecture cannot admit, `NotImplemented` is what nobody built, and
