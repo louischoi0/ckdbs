@@ -1,0 +1,68 @@
+===== relaxed
+c1-batch0 r1 n50ms 1657 ovl_roll 93% end<=20ms of roll end(or in roll) 93% ovl_ckpt 48% roll cover 41% ckpt cover 32%
+c1-batch0 r2 n50ms 981 ovl_roll 95% end<=20ms of roll end(or in roll) 95% ovl_ckpt 45% roll cover 39% ckpt cover 30%
+c1-batch0 r3 n50ms 954 ovl_roll 92% end<=20ms of roll end(or in roll) 92% ovl_ckpt 67% roll cover 37% ckpt cover 49%
+c1-batch0 rolls in window [36, 35, 33] sum 104
+c1-iso-batch0 rolls in window [0, 0, 0] sum 0
+c1-iso-segregated-no0 rolls in window [0, 0, 0] sum 0
+c1-iso-spread rolls in window [0, 0, 0] sum 0
+c1-segregated-no0 r1 n50ms 970 ovl_roll 90% end<=20ms of roll end(or in roll) 90% ovl_ckpt 37% roll cover 39% ckpt cover 27%
+c1-segregated-no0 r2 n50ms 632 ovl_roll 89% end<=20ms of roll end(or in roll) 89% ovl_ckpt 40% roll cover 36% ckpt cover 29%
+c1-segregated-no0 r3 n50ms 840 ovl_roll 89% end<=20ms of roll end(or in roll) 85% ovl_ckpt 31% roll cover 40% ckpt cover 23%
+c1-segregated-no0 rolls in window [35, 35, 37] sum 107
+c1-spread r1 n50ms 293 ovl_roll 78% end<=20ms of roll end(or in roll) 78% ovl_ckpt 76% roll cover 35% ckpt cover 32%
+c1-spread r2 n50ms 796 ovl_roll 89% end<=20ms of roll end(or in roll) 89% ovl_ckpt 58% roll cover 40% ckpt cover 27%
+c1-spread r3 n50ms 1136 ovl_roll 99% end<=20ms of roll end(or in roll) 99% ovl_ckpt 43% roll cover 42% ckpt cover 30%
+c1-spread rolls in window [35, 35, 34] sum 104
+c2 r1 n50ms 10336 ovl_roll 97% end<=20ms of roll end(or in roll) 97% ovl_ckpt 60% roll cover 47% ckpt cover 51%
+c2 r2 n50ms 10665 ovl_roll 97% end<=20ms of roll end(or in roll) 89% ovl_ckpt 61% roll cover 47% ckpt cover 50%
+c2 r3 n50ms 10053 ovl_roll 97% end<=20ms of roll end(or in roll) 94% ovl_ckpt 58% roll cover 45% ckpt cover 50%
+c2 rolls in window [33, 33, 34] sum 100
+c2-iso rolls in window [0, 0, 0] sum 0
+c3 rolls in window [36, 36, 36] sum 108
+pooled rolls 523 p50 330814 p90 492108 p99 788238 max 1210247
+ share sync_gate_us 95.6%
+ share sync_us 1.0%
+ share create_us 3.1%
+ share body_wait_us 0.6%
+ share dirsync_us 1.1%
+ share header_us 1.4%
+ share seal_us 0.2%
+ share flush_us 0.0%
+ body {'hit': 484, 'waited': 39}
+ corr hold~sync_segs 0.060 hold~waited_sync_tail 0.557
+ sync_segs range 3 39
+===== group
+c1-batch0 r1 n50ms 2 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 0% roll cover 1% ckpt cover 4%
+c1-batch0 r2 n50ms 0 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 0% roll cover 1% ckpt cover 4%
+c1-batch0 r3 n50ms 0 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 0% roll cover 1% ckpt cover 7%
+c1-batch0 rolls in window [25, 24, 24] sum 73
+c1-iso-batch0 rolls in window [0, 0, 0] sum 0
+c1-iso-segregated-no0 rolls in window [0, 0, 0] sum 0
+c1-iso-spread rolls in window [0, 0, 0] sum 0
+c1-segregated-no0 r1 n50ms 0 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 0% roll cover 1% ckpt cover 4%
+c1-segregated-no0 r2 n50ms 0 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 0% roll cover 1% ckpt cover 3%
+c1-segregated-no0 r3 n50ms 1 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 0% roll cover 1% ckpt cover 5%
+c1-segregated-no0 rolls in window [24, 24, 23] sum 71
+c1-spread r1 n50ms 0 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 0% roll cover 1% ckpt cover 4%
+c1-spread r2 n50ms 3 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 0% roll cover 1% ckpt cover 4%
+c1-spread r3 n50ms 0 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 0% roll cover 1% ckpt cover 4%
+c1-spread rolls in window [24, 24, 24] sum 72
+c2 r1 n50ms 9871 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 24% roll cover 1% ckpt cover 21%
+c2 r2 n50ms 9906 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 40% roll cover 1% ckpt cover 24%
+c2 r3 n50ms 10064 ovl_roll 0% end<=20ms of roll end(or in roll) 0% ovl_ckpt 39% roll cover 1% ckpt cover 25%
+c2 rolls in window [23, 23, 23] sum 69
+c2-iso rolls in window [0, 0, 0] sum 0
+c3 rolls in window [25, 25, 25] sum 75
+pooled rolls 360 p50 6060 p90 11520 p99 20617 max 28738
+ share sync_gate_us 12.2%
+ share sync_us 28.5%
+ share create_us 59.0%
+ share body_wait_us 0.0%
+ share dirsync_us 39.8%
+ share header_us 18.6%
+ share seal_us 0.4%
+ share flush_us 0.0%
+ body {'hit': 360}
+ corr hold~sync_segs -0.064 hold~waited_sync_tail 0.361
+ sync_segs range 2 6

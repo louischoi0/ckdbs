@@ -483,6 +483,8 @@ Every proposal is `[design]` unless a cell says otherwise.
 | BQ-Q3 | **The `wal_roll_*` counters after BQ.**<br>(a) Kept as `SHOW META` fields. `wal.md` §13 lists flush latency and ring-full stall time as product observability, and a roll's hold belongs beside them.<br>(b) Removed at BQ-S5 | user-visible | (a), and not a `sys` relation: those are BO's | **(a)**, as proposed, on W3 (§15) |
 | BQ-Q4 | **If H2 lands, how the size changes.**<br>(a) The size recorded on the volume and read at mount, with the superblock bumped and every older volume refused.<br>(b) A new constant, with the superblock bumped and every older volume refused.<br>(c) A setting | format | (b). (a) adds a field that pays only if a later change wants a second size. (c) widens the scope to a tuning surface no workload has asked for. Under the standing order, none of the three mounts an older volume | **(b)**, as proposed, on W3 (§15) |
 | BQ-Q5 | **Rung 4's license.** H6 rewrites `wal.md` §6 step 1 and crosses AL-R1.<br>(a) BQ-S4 may build it if rungs 1-3 miss, with its review before the code.<br>(b) BQ stops at rung 3 and reports, and H6 needs its own word | process, **[quiet-wrong]** | (b). AL-R1 was the operator's ruling, and H6's proof is the largest in the order | **(b)**, as proposed, on W3 (§15): BQ stops at rung 3 |
+| BQ-Q6 | **May a bound from BQ-S1 record a rung as unable to meet the bar?** BQ-R2 builds a rung only after every cheaper one "has been measured and has missed".<br>(a) Record H4 options 1-2, H5 and H3 as unable to meet the relaxed bar from BQ-S1's bounds, each bound in §7; build only H4 option 3 and H2, whose bounds rest on premises BQ-S1 did not measure. If both miss, BQ closes on §0.4's row 4 and stops before rung 4.<br>(b) Build every rung as written.<br>(c) Bound everything, H2 and option 3 included, and close now | process | (a). The H5 and H3 bounds remove the very stalls each rung targets and still miss: H3's by 590x or more (every non-tail sync removed leaves hold p99 at 652-780 ms), H5's with C1 reader p99 at 2.6-145 ms against an isolated 0.21-0.56 ms; H3's build carries a `[quiet-wrong]` proof that would buy nothing. H2 and option 3 are cheap, change no protocol, and their bounds rest on an unmeasured flat hold and on device contention | **(a)**, as proposed, adopted by CLA under the operator's standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone, §16), not marked by the operator |
+| BQ-Q7 | **Group C2's miss has a holder no rung touches.** Its writer p99 is 28-30x its isolated arm, and 0 of about 240 samples at or above p99 line up with a roll: it is commit-sync queueing behind the bulk writer (half the syncs, about 3x service p50).<br>(a) Name that holder in `known-gaps.md` and judge the group bar on C1 only.<br>(b) Keep the bar as written, so every rung misses at group | measurement | (a), by H0's own rule: a stall with another cause is named by its holder | **(a)**, as proposed, adopted by CLA under the operator's standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone, §16), not marked by the operator |
 
 ## 7. Row status
 
@@ -591,3 +593,69 @@ times out of three:
   - two false clauses in the `rules.md` Logger row;
   - a misleading "a peer's roll time" sentence;
   - a `per_core_valid` that counted the control session's own moves.
+
+### BQ-S1 - measured; H0 and H1 held, the bar missed at relaxed
+
+Measured at `4cf30270` (`v2.7.0-909-g4cf30270`) on a release build, 3 runs
+of every §5.1 cell at `relaxed` and `group`, interleaved and gated per cell
+on a quiet host (54 cells, every one with a result); BQ-Q1 (a)'s BL pair in
+the same host session. Results:
+`bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md` and
+`bench/v3.0.0/results-bl-ruling1-remeasure-v2.7.0-909-g4cf30270.md`. Every
+verdict below was recomputed from the raw files by one agent and then
+attacked by two more (one recomputing, one re-reading the criterion and
+the instruments); `analyze_s1.py`'s two errors (a hardcoded bulk core, and
+deltas that drop keys absent from the first read) do not reach them.
+
+- **H0 - held** (`[measured]`). Relaxed, by 100x or more on every clause:
+  the largest hold is 587 ms to 1.21 s, rolls cover 99.4-100 % of the
+  stream-latch wait on cores with no bulk writer, and readers' and small
+  writers' schedule p99 is 1,032-1,996x their isolated arm in C1 and
+  1,399x in C2 (medians; 375-6,082x over run pairings). Group, by the
+  letter: C2 fails both clauses (hold 15-21 ms, 81-84 % covered, p99
+  28-30x), but none of C2's tail lines up with a roll (BQ-Q7). BQ goes on to
+  the rungs (§0.4).
+- **H1 - held.** Relaxed: step c carries 89.8-99.5 % of the hold over the
+  rolls at or above p99, almost all of it the **gate wait** - the roll
+  waiting out the WAL writer's sync already in flight, whose tail
+  `fdatasync` alone takes 300-700 ms on a device that also takes 75-80 MiB/s
+  of log and the checkpoint's writeback. Group: held by the letter on
+  one-roll bins, the leading step flipping between c and g.
+- **H3 (measurement half) - not rejected, and bounded out.** The non-tail
+  syncs are 39.8-72.0 % of step c in C1-spread and C2. But removing every
+  non-tail sync, the roll's own and the waited-out writer syncs', leaves
+  hold p99 at 652-780 ms in every relaxed cell (`h3_bound.py`), so H3 cannot
+  meet the bar (BQ-Q6 (a)).
+- **H4 - not rejected at relaxed, rejected at group.** Relaxed C3: the
+  missed rolls hold 11.9 % of all hold (per run 8.3 / 16.3 / 11.1 %), but
+  step d's own wait is 0.3-0.8 % of it; missed rolls are long for the gate,
+  not the miss. Group: 0 misses in 75 rolls. Options 1-2 are bounded out
+  (relaxed p99 stays at 106 ms or more with step d removed); option 3 acts
+  on the device and needs its build (BQ-Q6 (a)).
+- **H5 (measurement half) - material at relaxed on core 0 only.** Core 0's
+  drain is about 100 % of its stream-latch wait; peers carry none at
+  relaxed. Bounded out: with every roll-aligned stall removed, relaxed C1
+  reader p99 is still 2.6-145 ms (BQ-Q6 (a)).
+- **The bar (§5.3) - missed at relaxed** by 200-2,000x in every C1 placement
+  and in C2; at group C1 is borderline by run pairing, and C2's miss is not
+  the roll's (BQ-Q7).
+- **BL ruling 1** (`05cd011f` against `3338cf0c`): reader service p99 fell from
+  262-283 ms to 1.7-3.0 ms (medians); schedule p99 is still 277-295 ms
+  (medians), which is the roll's.
+
+**Found beside the hypotheses:** at relaxed the log is almost never recycled
+during the load (`wal_segments_removed` 0 in 13 of 15 runs, 2 and 4 in the
+other two; 33-39 live segments at the last roll, against 20-22 removed and
+5-6 live at group). A page re-dirtied after its writeback copy keeps its
+first `rec_lsn` and pins the fold's redo start in segment 0, and the gate's
+rotation stretches each core to one run every 25 s. Every sync's breadth
+grows with it. Filed as
+`docs/inflight/bugs/a-page-re-dirtied-after-its-writeback-copy-pins-the-redo-start.md`;
+not BQ's subject, and outside its scope to fix.
+
+**Next (BQ-S2, rung 1, per BQ-Q6 (a)):** the driver's delta fix first
+(`meta_delta` as m1 - m0 with an absent key read as 0, and each slow
+sample's serving core recorded); then H4 option 3 (`BuildBody` prewrites
+only where `Reserve` fell back to `ftruncate`, the body's `fsync` kept) and
+H2 at 16, 256 and 1,024 MiB, each a measurement build on a fresh volume,
+against `4cf30270`.

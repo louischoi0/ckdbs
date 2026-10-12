@@ -1,0 +1,66 @@
+relaxed c1-batch0              r1 n=36 {'hit': 34, 'waited': 2} miss%=  7.27 sd%= 0.03 sd=3435 H=12127880 M=881659 | all n=39   6.70 | overlap n=37   7.03 | meta rolls=36.0 hold=12127895.0 bw=3436.0 bu=0.0 hit/wt/in=34.0/2.0/0.0 p99=429897.5 p999=592633.5
+relaxed c1-batch0              r2 n=35 {'waited': 3, 'hit': 32} miss%= 11.99 sd%= 0.07 sd=7907 H=11251732 M=1349152 | all n=38  13.54 | overlap n=36  11.60 | meta rolls=35.0 hold=11251749.0 bw=7908.0 bu=0.0 hit/wt/in=32.0/3.0/0.0 p99=354250.9 p999=673697.0
+relaxed c1-batch0              r3 n=33 {'hit': 30, 'waited': 3} miss%= 10.50 sd%= 0.78 sd=88143 H=11249824 M=1180824 | all n=35  12.73 | overlap n=33  10.50 | meta rolls=33.0 hold=11249842.0 bw=88145.0 bu=0.0 hit/wt/in=30.0/3.0/0.0 p99=366275.1 p999=623917.1
+relaxed c1-iso-batch0          r1 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=379.3 p999=2270.2
+relaxed c1-iso-batch0          r2 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=206.2 p999=1007.8
+relaxed c1-iso-batch0          r3 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=353.6 p999=1554.5
+relaxed c1-iso-segregated-no0  r1 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=279.2 p999=2472.6
+relaxed c1-iso-segregated-no0  r2 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=215.8 p999=803.2
+relaxed c1-iso-segregated-no0  r3 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=561.2 p999=2532.7
+relaxed c1-iso-spread          r1 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=226.5 p999=1142.0
+relaxed c1-iso-spread          r2 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=216.2 p999=976.3
+relaxed c1-iso-spread          r3 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=444.4 p999=2151.0
+relaxed c1-segregated-no0      r1 n=35 {'hit': 30, 'waited': 5} miss%= 17.02 sd%= 1.36 sd=156113 H=11438918 M=1947034 | all n=38  15.61 | overlap n=36  16.45 | meta rolls=35.0 hold=11438937.0 bw=156116.0 bu=0.0 hit/wt/in=30.0/5.0/0.0 p99=306395.5 p999=625640.2
+relaxed c1-segregated-no0      r2 n=35 {'hit': 32, 'waited': 3} miss%= 12.35 sd%= 1.00 sd=104357 H=10390514 M=1283095 | all n=38  11.24 | overlap n=36  11.87 | meta rolls=35.0 hold=10390531.0 bw=104358.0 bu=0.0 hit/wt/in=32.0/3.0/0.0 p99=210569.9 p999=295939.7
+relaxed c1-segregated-no0      r3 n=37 {'hit': 36, 'waited': 1} miss%=  2.80 sd%= 0.02 sd=2255 H=11995287 M=335709 | all n=39   2.66 | overlap n=37   2.80 | meta rolls=37.0 hold=11995307.0 bw=2255.0 bu=0.0 hit/wt/in=36.0/1.0/0.0 p99=288106.4 p999=496224.9
+relaxed c1-spread              r1 n=35 {'hit': 35} miss%=  0.00 sd%= 0.00 sd=0 H=10554710 M=0 | all n=37   0.00 | overlap n=35   0.00 | meta rolls=35.0 hold=10554729.0 bw=0.0 bu=0.0 hit/wt/in=35.0/0.0/0.0 p99=205115.8 p999=474535.0
+relaxed c1-spread              r2 n=35 {'hit': 33, 'waited': 2} miss%=  9.05 sd%= 1.36 sd=158800 H=11716712 M=1060916 | all n=38   8.33 | overlap n=36   8.74 | meta rolls=35.0 hold=11716730.0 bw=158801.0 bu=0.0 hit/wt/in=33.0/2.0/0.0 p99=507976.3 p999=1000173.1
+relaxed c1-spread              r3 n=34 {'hit': 34} miss%=  0.00 sd%= 0.00 sd=0 H=12744976 M=0 | all n=36   0.00 | overlap n=34   0.00 | meta rolls=34.0 hold=12744994.0 bw=0.0 bu=0.0 hit/wt/in=34.0/0.0/0.0 p99=452132.2 p999=734689.0
+relaxed c2                     r1 n=33 {'hit': 31, 'waited': 2} miss%=  8.00 sd%= 1.01 sd=137769 H=13605443 M=1088373 | all n=37   9.66 | overlap n=35   7.59 | meta rolls=34.0 hold=13942620.0 bw=137770.0 bu=0.0 hit/wt/in=32.0/2.0/0.0 p99=658499.5 p999=777711.2
+relaxed c2                     r2 n=33 {'hit': 29, 'waited': 4} miss%= 15.27 sd%= 1.75 sd=241299 H=13754277 M=2100422 | all n=36  14.14 | overlap n=34  14.84 | meta rolls=33.0 hold=13754290.0 bw=241300.0 bu=0.0 hit/wt/in=29.0/4.0/0.0 p99=1295966.4 p999=1718794.3
+relaxed c2                     r3 n=34 {'hit': 32, 'waited': 2} miss%=  5.02 sd%= 0.25 sd=33191 H=13189359 M=661651 | all n=37   4.63 | overlap n=35   4.87 | meta rolls=34.0 hold=13189370.0 bw=33191.0 bu=0.0 hit/wt/in=32.0/2.0/0.0 p99=659450.5 p999=877924.4
+relaxed c2-iso                 r1 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=487.1 p999=2920.4
+relaxed c2-iso                 r2 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=213.1 p999=1843.2
+relaxed c2-iso                 r3 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=471.4 p999=3092.1
+relaxed c3                     r1 n=36 {'hit': 33, 'waited': 3} miss%=  8.26 sd%= 0.65 sd=87784 H=13532234 M=1117596 | all n=38  10.31 | overlap n=36   8.26 | meta rolls=36.0 hold=13532253.0 bw=87785.0 bu=0.0 hit/wt/in=33.0/3.0/0.0 p99=None p999=None
+   miss 11 hold 449139 gate 399869 bw 45443 bu 0 create 48423
+   miss 24 hold 316626 gate 308203 bw 2878 bu 0 create 7007
+   miss 29 hold 351831 gate 307304 bw 39463 bu 0 create 42962
+relaxed c3                     r2 n=36 {'hit': 31, 'waited': 5} miss%= 16.33 sd%= 0.83 sd=110041 H=13266259 M=2166938 | all n=38  15.48 | overlap n=36  16.33 | meta rolls=36.0 hold=13266279.0 bw=110043.0 bu=0.0 hit/wt/in=31.0/5.0/0.0 p99=None p999=None
+   miss 7 hold 336414 gate 328149 bw 4426 bu 0 create 7848
+   miss 9 hold 331506 gate 326364 bw 1579 bu 0 create 4592
+   miss 18 hold 356018 gate 342640 bw 819 bu 0 create 12307
+   miss 25 hold 357543 gate 346741 bw 3296 bu 0 create 9260
+   miss 27 hold 785457 gate 680360 bw 99921 bu 0 create 102863
+relaxed c3                     r3 n=36 {'hit': 32, 'waited': 4} miss%= 11.12 sd%= 0.33 sd=42015 H=12845993 M=1428895 | all n=38  13.13 | overlap n=36  11.12 | meta rolls=36.0 hold=12846010.0 bw=42017.0 bu=0.0 hit/wt/in=32.0/4.0/0.0 p99=None p999=None
+   miss 6 hold 398490 gate 390661 bw 279 bu 0 create 7451
+   miss 9 hold 353193 gate 344320 bw 1932 bu 0 create 8295
+   miss 10 hold 408901 gate 362707 bw 36177 bu 0 create 45616
+   miss 13 hold 268311 gate 242842 bw 3627 bu 0 create 24693
+group   c1-batch0              r1 n=25 {'hit': 25} miss%=  0.00 sd%= 0.00 sd=0 H=176080 M=0 | all n=26   0.00 | overlap n=25   0.00 | meta rolls=25.0 hold=176091.0 bw=0.0 bu=0.0 hit/wt/in=25.0/0.0/0.0 p99=605.6 p999=9645.5
+group   c1-batch0              r2 n=24 {'hit': 24} miss%=  0.00 sd%= 0.00 sd=0 H=158344 M=0 | all n=26   0.00 | overlap n=25   0.00 | meta rolls=24.0 hold=158356.0 bw=0.0 bu=0.0 hit/wt/in=24.0/0.0/0.0 p99=761.0 p999=3005.0
+group   c1-batch0              r3 n=24 {'hit': 24} miss%=  0.00 sd%= 0.00 sd=0 H=179552 M=0 | all n=25   0.00 | overlap n=24   0.00 | meta rolls=24.0 hold=179562.0 bw=0.0 bu=0.0 hit/wt/in=24.0/0.0/0.0 p99=748.2 p999=5093.1
+group   c1-iso-batch0          r1 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=220.3 p999=1902.6
+group   c1-iso-batch0          r2 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=632.3 p999=2614.5
+group   c1-iso-batch0          r3 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=504.3 p999=2763.0
+group   c1-iso-segregated-no0  r1 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=204.1 p999=976.3
+group   c1-iso-segregated-no0  r2 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=474.5 p999=2688.9
+group   c1-iso-segregated-no0  r3 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=386.2 p999=2524.1
+group   c1-iso-spread          r1 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=227.7 p999=1573.8
+group   c1-iso-spread          r2 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=389.3 p999=1402.1
+group   c1-iso-spread          r3 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=541.0 p999=2077.1
+group   c1-segregated-no0      r1 n=24 {'hit': 24} miss%=  0.00 sd%= 0.00 sd=0 H=162491 M=0 | all n=25   0.00 | overlap n=24   0.00 | meta rolls=24.0 hold=162503.0 bw=0.0 bu=0.0 hit/wt/in=24.0/0.0/0.0 p99=408.9 p999=2888.7
+group   c1-segregated-no0      r2 n=24 {'hit': 24} miss%=  0.00 sd%= 0.00 sd=0 H=169915 M=0 | all n=25   0.00 | overlap n=24   0.00 | meta rolls=24.0 hold=169925.0 bw=0.0 bu=0.0 hit/wt/in=24.0/0.0/0.0 p99=408.2 p999=3320.0
+group   c1-segregated-no0      r3 n=23 {'hit': 23} miss%=  0.00 sd%= 0.00 sd=0 H=153351 M=0 | all n=24   0.00 | overlap n=23   0.00 | meta rolls=23.0 hold=153361.0 bw=0.0 bu=0.0 hit/wt/in=23.0/0.0/0.0 p99=1108.6 p999=24247.4
+group   c1-spread              r1 n=24 {'hit': 24} miss%=  0.00 sd%= 0.00 sd=0 H=158390 M=0 | all n=25   0.00 | overlap n=24   0.00 | meta rolls=24.0 hold=158401.0 bw=0.0 bu=0.0 hit/wt/in=24.0/0.0/0.0 p99=975.1 p999=19313.3
+group   c1-spread              r2 n=24 {'hit': 24} miss%=  0.00 sd%= 0.00 sd=0 H=184338 M=0 | all n=25   0.00 | overlap n=24   0.00 | meta rolls=24.0 hold=184349.0 bw=0.0 bu=0.0 hit/wt/in=24.0/0.0/0.0 p99=940.1 p999=14086.2
+group   c1-spread              r3 n=24 {'hit': 24} miss%=  0.00 sd%= 0.00 sd=0 H=170552 M=0 | all n=25   0.00 | overlap n=24   0.00 | meta rolls=24.0 hold=170566.0 bw=0.0 bu=0.0 hit/wt/in=24.0/0.0/0.0 p99=1016.9 p999=5128.9
+group   c2                     r1 n=23 {'hit': 23} miss%=  0.00 sd%= 0.00 sd=0 H=176272 M=0 | all n=24   0.00 | overlap n=23   0.00 | meta rolls=23.0 hold=176281.0 bw=0.0 bu=0.0 hit/wt/in=23.0/0.0/0.0 p99=306515.9 p999=341492.7
+group   c2                     r2 n=23 {'hit': 23} miss%=  0.00 sd%= 0.00 sd=0 H=199823 M=0 | all n=24   0.00 | overlap n=23   0.00 | meta rolls=23.0 hold=199835.0 bw=0.0 bu=0.0 hit/wt/in=23.0/0.0/0.0 p99=319706.7 p999=402902.6
+group   c2                     r3 n=23 {'hit': 23} miss%=  0.00 sd%= 0.00 sd=0 H=181819 M=0 | all n=24   0.00 | overlap n=23   0.00 | meta rolls=23.0 hold=181829.0 bw=0.0 bu=0.0 hit/wt/in=23.0/0.0/0.0 p99=326555.7 p999=380962.6
+group   c2-iso                 r1 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=11066.2 p999=18925.4
+group   c2-iso                 r2 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=10905.3 p999=20062.7
+group   c2-iso                 r3 n=0 {} miss%=  0.00 sd%= 0.00 sd=0 H=0 M=0 | all n=0   0.00 | overlap n=0   0.00 | meta rolls=0.0 hold=0.0 bw=0.0 bu=0.0 hit/wt/in=0.0/0.0/0.0 p99=10922.9 p999=20555.7
+group   c3                     r1 n=25 {'hit': 25} miss%=  0.00 sd%= 0.00 sd=0 H=183810 M=0 | all n=26   0.00 | overlap n=25   0.00 | meta rolls=25.0 hold=183822.0 bw=0.0 bu=0.0 hit/wt/in=25.0/0.0/0.0 p99=None p999=None
+group   c3                     r2 n=25 {'hit': 25} miss%=  0.00 sd%= 0.00 sd=0 H=180168 M=0 | all n=26   0.00 | overlap n=25   0.00 | meta rolls=25.0 hold=180178.0 bw=0.0 bu=0.0 hit/wt/in=25.0/0.0/0.0 p99=None p999=None
+group   c3                     r3 n=25 {'hit': 25} miss%=  0.00 sd%= 0.00 sd=0 H=160854 M=0 | all n=26   0.00 | overlap n=25   0.00 | meta rolls=25.0 hold=160867.0 bw=0.0 bu=0.0 hit/wt/in=25.0/0.0/0.0 p99=None p999=None

@@ -1,0 +1,112 @@
+== relaxed c1-segregated-no0
+  r1: rolls 35/35.0 (log 38) maxhold 709918 md_holdmax 311348.0 rollcores [1] ins [(3.0, 1.0)] nb [0, 2, 3] moves 17
+      cov 11466.0 ms stream 11466.8 all 13301.7 share_stream 100.0 share_all 86.2 percore(cov,stream) {0: (11254, 11255), 1: (0, 0), 2: (5, 5), 3: (207, 207)}
+      p99 306395.5 p99.9 625640.2 iso p99 279.2 ratio 1097.41 line {'n': 121, 'near': 121, 'ovl': 121, 'chance': 2.35, 'cover': 38.4}
+      syncs 1075.0 iso syncs 50.0 svc p50 126.4 p99 1007.3 iso svc p50 105.1 p99 159.7
+  r2: rolls 35/35.0 (log 38) maxhold 678169 md_holdmax 257662.0 rollcores [1] ins [(3.0, 1.0)] nb [0, 2, 3] moves 24
+      cov 10558.6 ms stream 10559.6 all 12132.6 share_stream 100.0 share_all 87.0 percore(cov,stream) {0: (10173, 10174), 1: (0, 0), 2: (173, 173), 3: (212, 213)}
+      p99 210569.9 p99.9 295939.7 iso p99 215.8 ratio 975.76 line {'n': 120, 'near': 113, 'ovl': 113, 'chance': 2.35, 'cover': 34.89}
+      syncs 1055.0 iso syncs 48.0 svc p50 130.2 p99 1093.6 iso svc p50 105.4 p99 140.7
+  r3: rolls 37/37.0 (log 39) maxhold 587321 md_holdmax 243303.0 rollcores [1] ins [(3.0, 1.0)] nb [0, 2, 3] moves 6
+      cov 11461.3 ms stream 11462.4 all 12281.1 share_stream 100.0 share_all 93.3 percore(cov,stream) {0: (11444, 11445), 1: (0, 0), 2: (13, 14), 3: (4, 4)}
+      p99 288106.4 p99.9 496224.9 iso p99 561.2 ratio 513.38 line {'n': 121, 'near': 100, 'ovl': 121, 'chance': 2.46, 'cover': 39.88}
+      syncs 962.0 iso syncs 48.0 svc p50 124.7 p99 1232.4 iso svc p50 105.4 p99 381.5
+  p99 med/med 1031.90 range 375.21-1419.81 spread cell 95825.6 iso 345.4 pooled rolls 107
+== relaxed c1-batch0
+  r1: rolls 36/36.0 (log 39) maxhold 653644 md_holdmax 241615.0 rollcores [1] ins [(0.0, 1.0)] nb [0, 2, 3] moves 18
+      cov 12760.9 ms stream 12762.9 all 13709.0 share_stream 100.0 share_all 93.1 percore(cov,stream) {0: (11932, 11934), 1: (0, 0), 2: (20, 20), 3: (809, 809)}
+      p99 429897.5 p99.9 592633.5 iso p99 379.3 ratio 1133.40 line {'n': 121, 'near': 121, 'ovl': 121, 'chance': 2.41, 'cover': 40.62}
+      syncs 1108.0 iso syncs 50.0 svc p50 128.0 p99 5216.8 iso svc p50 108.0 p99 233.9
+  r2: rolls 35/35.0 (log 38) maxhold 721835 md_holdmax 338567.0 rollcores [3] ins [(0.0, 3.0)] nb [0, 1, 2] moves 10
+      cov 11222.0 ms stream 11223.0 all 12721.0 share_stream 100.0 share_all 88.2 percore(cov,stream) {0: (11065, 11066), 1: (148, 148), 2: (8, 8), 3: (0, 0)}
+      p99 354250.9 p99.9 673697.0 iso p99 206.2 ratio 1718.00 line {'n': 121, 'near': 121, 'ovl': 121, 'chance': 2.35, 'cover': 37.76}
+      syncs 1018.0 iso syncs 48.0 svc p50 118.7 p99 870.2 iso svc p50 104.7 p99 132.1
+  r3: rolls 33/33.0 (log 35) maxhold 724760 md_holdmax 397380.0 rollcores [3] ins [(0.0, 3.0)] nb [0, 1, 2] moves 11
+      cov 11261.1 ms stream 11270.5 all 12809.7 share_stream 99.9 share_all 87.9 percore(cov,stream) {0: (10757, 10766), 1: (238, 238), 2: (267, 267), 3: (0, 0)}
+      p99 366275.1 p99.9 623917.1 iso p99 353.6 ratio 1035.85 line {'n': 120, 'near': 120, 'ovl': 120, 'chance': 2.19, 'cover': 37.3}
+      syncs 897.0 iso syncs 48.0 svc p50 138.5 p99 3552.4 iso svc p50 107.5 p99 177.4
+  p99 med/med 1035.85 range 933.96-2084.86 spread cell 75646.6 iso 173.1 pooled rolls 104
+== relaxed c1-spread
+  r1: rolls 35/35.0 (log 37) maxhold 668302 md_holdmax 362840.0 rollcores [2] ins [(3.0, 2.0)] nb [0, 1, 3] moves 10
+      cov 10726.2 ms stream 10727.1 all 12421.9 share_stream 100.0 share_all 86.3 percore(cov,stream) {0: (10348, 10349), 1: (361, 361), 2: (0, 0), 3: (17, 17)}
+      p99 205115.8 p99.9 474535.0 iso p99 226.5 ratio 905.59 line {'n': 120, 'near': 117, 'ovl': 117, 'chance': 2.33, 'cover': 35.1}
+      syncs 1148.0 iso syncs 50.0 svc p50 124.7 p99 631.8 iso svc p50 119.7 p99 155.2
+  r2: rolls 35/35.0 (log 38) maxhold 788238 md_holdmax 366691.0 rollcores [0, 1, 3] ins [(3.0, 3.0)] nb [2] moves 92
+      cov 11.9 ms stream 11.9 all 108.1 share_stream 99.4 share_all 11.0 percore(cov,stream) {0: (6256, 6257), 1: (347, 347), 2: (12, 12), 3: (750, 750)}
+      p99 507976.3 p99.9 1000173.1 iso p99 216.2 ratio 2349.57 line {'n': 120, 'near': 7, 'ovl': 120, 'chance': 2.35, 'cover': 39.34}
+      syncs 1005.0 iso syncs 48.0 svc p50 130.9 p99 2259.7 iso svc p50 117.1 p99 144.7
+  r3: rolls 34/34.0 (log 36) maxhold 828117 md_holdmax 432782.0 rollcores [0, 3] ins [(3.0, 3.0)] nb [1, 2] moves 20
+      cov 262.1 ms stream 262.4 all 1724.2 share_stream 99.9 share_all 15.2 percore(cov,stream) {0: (12014, 12015), 1: (10, 10), 2: (252, 252), 3: (0, 0)}
+      p99 452132.2 p99.9 734689.0 iso p99 444.4 ratio 1017.40 line {'n': 121, 'near': 121, 'ovl': 121, 'chance': 2.26, 'cover': 42.35}
+      syncs 975.0 iso syncs 48.0 svc p50 131.1 p99 2384.2 iso svc p50 120.6 p99 225.8
+  p99 med/med 1996.17 range 461.56-2349.57 spread cell 302860.5 iso 228.2 pooled rolls 104
+== relaxed c2
+  r1: rolls 34/34.0 (log 37) maxhold 788571 md_holdmax 387815.0 rollcores [3] ins [(3.0, 3.0)] nb [0, 1, 2] moves 22
+      cov 40286.5 ms stream 40300.3 all 40399.7 share_stream 100.0 share_all 99.7 percore(cov,stream) {0: (13829, 13832), 1: (12957, 12964), 2: (13500, 13504), 3: (0, 2)}
+      p99 658499.5 p99.9 777711.2 iso p99 487.1 ratio 1351.88 line {'n': 237, 'near': 237, 'ovl': 237, 'chance': 2.21, 'cover': 45.35}
+      syncs 820.0 iso syncs 3060.0 svc p50 106.3 p99 317242.1 iso svc p50 90.6 p99 218.2
+  r2: rolls 33/33.0 (log 36) maxhold 1210247 md_holdmax 810242.0 rollcores [3] ins [(3.0, 3.0)] nb [0, 1, 2] moves 27
+      cov 38935.8 ms stream 38951.0 all 39043.3 share_stream 100.0 share_all 99.7 percore(cov,stream) {0: (13007, 13011), 1: (12271, 12278), 2: (13658, 13661), 3: (0, 2)}
+      p99 1295966.4 p99.9 1718794.3 iso p99 213.1 ratio 6081.49 line {'n': 240, 'near': 240, 'ovl': 240, 'chance': 2.19, 'cover': 45.63}
+      syncs 831.0 iso syncs 2974.0 svc p50 102.5 p99 246816.2 iso svc p50 90.1 p99 136.6
+  r3: rolls 34/34.0 (log 37) maxhold 746392 md_holdmax 340025.0 rollcores [3] ins [(3.0, 3.0)] nb [0, 1, 2] moves 23
+      cov 37115.4 ms stream 37130.1 all 37226.7 share_stream 100.0 share_all 99.7 percore(cov,stream) {0: (12345, 12349), 1: (12773, 12779), 2: (11997, 12003), 3: (0, 2)}
+      p99 659450.5 p99.9 877924.4 iso p99 471.4 ratio 1398.92 line {'n': 241, 'near': 184, 'ovl': 241, 'chance': 2.28, 'cover': 44.21}
+      syncs 838.0 iso syncs 3101.0 svc p50 101.3 p99 310157.1 iso svc p50 91.8 p99 292.1
+  p99 med/med 1398.92 range 1351.88-6081.49 spread cell 637466.9 iso 274.0 pooled rolls 101
+== group c1-segregated-no0
+  r1: rolls 24/24.0 (log 25) maxhold 20617 md_holdmax 16302.0 rollcores [3] ins [(3.0, 3.0)] nb [0, 1, 2] moves 4
+      cov 45.3 ms stream 45.5 all 1203.1 share_stream 99.5 share_all 3.8 percore(cov,stream) {0: (35, 35), 1: (5, 5), 2: (5, 5), 3: (0, 0)}
+      p99 408.9 p99.9 2888.7 iso p99 204.1 ratio 2.00 line {'n': 49, 'near': 5, 'ovl': 3, 'chance': 1.59, 'cover': 0.54}
+      syncs 4469.0 iso syncs 48.0 svc p50 125.2 p99 283.7 iso svc p50 103.7 p99 131.8
+  r2: rolls 24/24.0 (log 25) maxhold 14035 md_holdmax 7893.0 rollcores [1] ins [(3.0, 1.0)] nb [0, 2, 3] moves 5
+      cov 25.4 ms stream 25.5 all 657.0 share_stream 99.6 share_all 3.9 percore(cov,stream) {0: (23, 24), 1: (0, 0), 2: (2, 2), 3: (0, 0)}
+      p99 408.2 p99.9 3320.0 iso p99 474.5 ratio 0.86 line {'n': 54, 'near': 1, 'ovl': 1, 'chance': 1.59, 'cover': 0.56}
+      syncs 4575.0 iso syncs 48.0 svc p50 123.5 p99 285.6 iso svc p50 104.9 p99 247.0
+  r3: rolls 23/23.0 (log 24) maxhold 13681 md_holdmax 7464.0 rollcores [0, 1, 2] ins [(3.0, 2.0)] nb [3] moves 20
+      cov 0.0 ms stream 0.0 all 702.7 share_stream 0.0 share_all 0.0 percore(cov,stream) {0: (29, 31), 1: (0, 0), 2: (0, 0), 3: (0, 0)}
+      p99 1108.6 p99.9 24247.4 iso p99 386.2 ratio 2.87 line {'n': 121, 'near': 3, 'ovl': 3, 'chance': 1.53, 'cover': 0.51}
+      syncs 4141.0 iso syncs 48.0 svc p50 128.5 p99 600.6 iso svc p50 109.2 p99 190.0
+  p99 med/med 1.06 range 0.86-5.43 spread cell 700.4 iso 270.4 pooled rolls 71
+== group c1-batch0
+  r1: rolls 25/25.0 (log 26) maxhold 17778 md_holdmax 13499.0 rollcores [0, 2] ins [(0.0, 2.0)] nb [1, 3] moves 20
+      cov 0.0 ms stream 0.0 all 1135.3 share_stream None share_all 0.0 percore(cov,stream) {0: (37, 37), 1: (0, 0), 2: (0, 0), 3: (0, 0)}
+      p99 605.6 p99.9 9645.5 iso p99 220.3 ratio 2.75 line {'n': 87, 'near': 3, 'ovl': 3, 'chance': 1.66, 'cover': 0.59}
+      syncs 4500.0 iso syncs 48.0 svc p50 122.3 p99 355.7 iso svc p50 104.4 p99 142.3
+  r2: rolls 24/24.0 (log 26) maxhold 13095 md_holdmax 7509.0 rollcores [1] ins [(0.0, 1.0)] nb [0, 2, 3] moves 11
+      cov 32.0 ms stream 34.8 all 1115.4 share_stream 91.8 share_all 2.9 percore(cov,stream) {0: (32, 35), 1: (0, 0), 2: (0, 0), 3: (0, 0)}
+      p99 761.0 p99.9 3005.0 iso p99 632.3 ratio 1.20 line {'n': 97, 'near': 2, 'ovl': 2, 'chance': 1.59, 'cover': 0.53}
+      syncs 4564.0 iso syncs 48.0 svc p50 123.5 p99 381.7 iso svc p50 108.0 p99 295.4
+  r3: rolls 24/24.0 (log 25) maxhold 15920 md_holdmax 11537.0 rollcores [1] ins [(0.0, 1.0)] nb [0, 2, 3] moves 4
+      cov 56.1 ms stream 66.0 all 1054.1 share_stream 85.0 share_all 5.3 percore(cov,stream) {0: (56, 66), 1: (0, 1), 2: (0, 0), 3: (0, 0)}
+      p99 748.2 p99.9 5093.1 iso p99 504.3 ratio 1.48 line {'n': 90, 'near': 8, 'ovl': 8, 'chance': 1.59, 'cover': 0.6}
+      syncs 4429.0 iso syncs 48.0 svc p50 123.0 p99 480.7 iso svc p50 108.5 p99 298.5
+  p99 med/med 1.48 range 0.96-3.45 spread cell 155.4 iso 412.0 pooled rolls 73
+== group c1-spread
+  r1: rolls 24/24.0 (log 25) maxhold 11626 md_holdmax 7226.0 rollcores [2] ins [(3.0, 2.0)] nb [0, 1, 3] moves 5
+      cov 16.4 ms stream 16.6 all 1068.6 share_stream 99.3 share_all 1.5 percore(cov,stream) {0: (16, 17), 1: (0, 0), 2: (0, 0), 3: (0, 0)}
+      p99 975.1 p99.9 19313.3 iso p99 227.7 ratio 4.28 line {'n': 118, 'near': 2, 'ovl': 2, 'chance': 1.59, 'cover': 0.53}
+      syncs 4477.0 iso syncs 48.0 svc p50 122.5 p99 581.7 iso svc p50 121.6 p99 154.5
+  r2: rolls 24/24.0 (log 25) maxhold 28738 md_holdmax 24026.0 rollcores [2] ins [(3.0, 2.0)] nb [0, 1, 3] moves 7
+      cov 58.8 ms stream 74.7 all 1157.4 share_stream 78.7 share_all 5.1 percore(cov,stream) {0: (59, 75), 1: (0, 0), 2: (0, 0), 3: (0, 0)}
+      p99 940.1 p99.9 14086.2 iso p99 389.3 ratio 2.41 line {'n': 115, 'near': 6, 'ovl': 6, 'chance': 1.59, 'cover': 0.61}
+      syncs 4556.0 iso syncs 48.0 svc p50 125.6 p99 426.5 iso svc p50 124.0 p99 229.4
+  r3: rolls 24/24.0 (log 25) maxhold 13796 md_holdmax 5057.0 rollcores [1] ins [(3.0, 1.0)] nb [0, 2, 3] moves 4
+      cov 34.7 ms stream 39.7 all 1073.0 share_stream 87.4 share_all 3.2 percore(cov,stream) {0: (31, 36), 1: (0, 0), 2: (0, 0), 3: (4, 4)}
+      p99 1016.9 p99.9 5128.9 iso p99 541.0 ratio 1.88 line {'n': 120, 'near': 4, 'ovl': 2, 'chance': 1.59, 'cover': 0.57}
+      syncs 4553.0 iso syncs 48.0 svc p50 127.3 p99 728.8 iso svc p50 120.9 p99 243.9
+  p99 med/med 2.50 range 1.74-4.47 spread cell 76.8 iso 313.3 pooled rolls 72
+== group c2
+  r1: rolls 23/23.0 (log 24) maxhold 15202 md_holdmax 6187.0 rollcores [3] ins [(3.0, 3.0)] nb [0, 1, 2] moves 28
+      cov 417.5 ms stream 502.0 all 1014.0 share_stream 83.2 share_all 41.2 percore(cov,stream) {0: (147, 181), 1: (130, 159), 2: (140, 162), 3: (0, 2)}
+      p99 306515.9 p99.9 341492.7 iso p99 11066.2 ratio 27.70 line {'n': 241, 'near': 0, 'ovl': 0, 'chance': 1.53, 'cover': 0.59}
+      syncs 10218.0 iso syncs 21945.0 svc p50 3446.8 p99 86342.6 iso svc p50 1085.3 p99 10605.6
+  r2: rolls 23/23.0 (log 24) maxhold 19436 md_holdmax 13944.0 rollcores [3] ins [(3.0, 3.0)] nb [0, 1, 2] moves 24
+      cov 510.3 ms stream 627.2 all 915.9 share_stream 81.4 share_all 55.7 percore(cov,stream) {0: (158, 182), 1: (183, 228), 2: (170, 217), 3: (0, 6)}
+      p99 319706.7 p99.9 402902.6 iso p99 10905.3 ratio 29.32 line {'n': 239, 'near': 0, 'ovl': 0, 'chance': 1.52, 'cover': 0.66}
+      syncs 9834.0 iso syncs 21909.0 svc p50 3585.1 p99 71303.8 iso svc p50 1087.4 p99 10300.9
+  r3: rolls 23/23.0 (log 24) maxhold 21332 md_holdmax 15761.0 rollcores [3] ins [(3.0, 3.0)] nb [0, 1, 2] moves 36
+      cov 451.3 ms stream 540.1 all 722.0 share_stream 83.6 share_all 62.5 percore(cov,stream) {0: (160, 195), 1: (150, 178), 2: (141, 167), 3: (0, 3)}
+      p99 326555.7 p99.9 380962.6 iso p99 10922.9 ratio 29.90 line {'n': 240, 'near': 0, 'ovl': 0, 'chance': 1.52, 'cover': 0.6}
+      syncs 9873.0 iso syncs 22025.0 svc p50 3527.6 p99 91718.4 iso svc p50 1095.3 p99 10210.3
+  p99 med/med 29.27 range 27.70-29.94 spread cell 20039.8 iso 160.9 pooled rolls 69

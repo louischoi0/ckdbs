@@ -1,0 +1,169 @@
+# window=strict rolls=883
+## per cell x durability, 3 runs pooled
+relaxed/c1-batch0                  n=104 p99=721835us n>=p99=2 n>=p90=11
+      >=p99 a=  0.0 b=  0.0 c= 99.5 d=  0.0 e=  0.2 f=  0.0 g=  0.3 resid=  0.0 | lead c 99.5
+        sub c_gate= 99.2 c_sync=  0.4 c_sync_tail=  0.0 c_sync_rest=  0.4 d_wait=  0.0 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.0 b=  0.0 c= 97.0 d=  0.8 e=  0.6 f=  0.1 g=  1.5 resid=  0.0 | lead c 97.0
+        sub c_gate= 94.6 c_sync=  2.4 c_sync_tail=  1.0 c_sync_rest=  1.4 d_wait=  0.8 d_inline=  0.0 create_resid=  0.0
+        all a=  0.8 b=  0.0 c= 96.5 d=  0.3 e=  1.2 f=  0.0 g=  1.1 resid=  0.0 | lead c 96.5
+        sub c_gate= 95.7 c_sync=  0.8 c_sync_tail=  0.2 c_sync_rest=  0.6 d_wait=  0.3 d_inline=  0.0 create_resid=  0.0
+        top rolls: r3/c1-batch0 hold=724760 c=721428 (gate=718035) d=0 e=1212 g=2054 body=hit; r2/c1-batch0 hold=721835 c=718343 (gate=716467) d=0 e=1119 g=2312 body=hit
+      fragility per-run ['r1:c100(n1)', 'r2:c100(n1)', 'r3:c100(n1)'] LOO ['-r1:c100', '-r2:c100', '-r3:c100'] bootstrap lead freq {'c': 2000} P(lead>=40)=1.000
+relaxed/c1-segregated-no0          n=107 p99=697241us n>=p99=2 n>=p90=11
+      >=p99 a=  0.0 b=  0.0 c= 93.1 d=  6.4 e=  0.1 f=  0.0 g=  0.4 resid=  0.0 | lead c 93.1
+        sub c_gate= 92.9 c_sync=  0.2 c_sync_tail=  0.0 c_sync_rest=  0.2 d_wait=  6.4 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.0 b=  0.0 c= 94.5 d=  3.3 e=  1.8 f=  0.0 g=  0.5 resid=  0.0 | lead c 94.5
+        sub c_gate= 94.2 c_sync=  0.2 c_sync_tail=  0.0 c_sync_rest=  0.2 d_wait=  3.3 d_inline=  0.0 create_resid=  0.0
+        all a=  0.0 b=  0.0 c= 97.3 d=  0.8 e=  0.9 f=  0.0 g=  1.0 resid=  0.0 | lead c 97.3
+        sub c_gate= 96.9 c_sync=  0.4 c_sync_tail=  0.0 c_sync_rest=  0.4 d_wait=  0.8 d_inline=  0.0 create_resid=  0.0
+        top rolls: r1/c1-segregated-no0 hold=709918 c=706899 (gate=705864) d=0 e=975 g=1960 body=hit; r1/c1-segregated-no0 hold=697241 c=602811 (gate=601497) d=89950 e=968 g=3437 body=waited
+      fragility per-run ['r1:c100(n1)', 'r2:c84(n1)', 'r3:c99(n1)'] LOO ['-r1:c84', '-r2:c100', '-r3:c100'] bootstrap lead freq {'c': 2000} P(lead>=40)=1.000
+relaxed/c1-spread                  n=104 p99=788238us n>=p99=2 n>=p90=11
+      >=p99 a=  0.0 b=  0.0 c= 89.8 d=  9.8 e=  0.1 f=  0.0 g=  0.2 resid=  0.0 | lead c 89.8
+        sub c_gate= 89.7 c_sync=  0.2 c_sync_tail=  0.0 c_sync_rest=  0.1 d_wait=  9.8 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.0 b=  0.0 c= 96.7 d=  2.1 e=  0.8 f=  0.0 g=  0.3 resid=  0.0 | lead c 96.7
+        sub c_gate= 95.0 c_sync=  1.7 c_sync_tail=  0.0 c_sync_rest=  1.7 d_wait=  2.1 d_inline=  0.0 create_resid=  0.0
+        all a=  0.0 b=  0.0 c= 97.5 d=  0.5 e=  0.9 f=  0.0 g=  1.1 resid=  0.0 | lead c 97.5
+        sub c_gate= 96.8 c_sync=  0.7 c_sync_tail=  0.0 c_sync_rest=  0.7 d_wait=  0.5 d_inline=  0.0 create_resid=  0.0
+        top rolls: r3/c1-spread hold=828117 c=825415 (gate=823738) d=0 e=1121 g=1467 body=hit; r2/c1-spread hold=788238 c=626726 (gate=625873) d=158338 e=1195 g=1914 body=waited
+      fragility per-run ['r1:c99(n1)', 'r2:c80(n1)', 'r3:c100(n1)'] LOO ['-r1:c100', '-r2:c100', '-r3:c80'] bootstrap lead freq {'c': 2000} P(lead>=40)=1.000
+relaxed/c2                         n=100 p99=788571us n>=p99=2 n>=p90=11
+      >=p99 a=  0.0 b=  0.0 c= 90.3 d=  0.0 e=  6.9 f=  0.1 g=  2.7 resid=  0.0 | lead c 90.3
+        sub c_gate= 73.2 c_sync= 17.1 c_sync_tail=  0.0 c_sync_rest= 17.1 d_wait=  0.0 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.0 b=  0.0 c= 85.4 d=  4.6 e=  7.5 f=  0.0 g=  2.5 resid=  0.0 | lead c 85.4
+        sub c_gate= 74.7 c_sync= 10.7 c_sync_tail=  0.0 c_sync_rest= 10.7 d_wait=  4.6 d_inline=  0.0 create_resid=  0.0
+        all a=  0.0 b=  0.0 c= 95.0 d=  1.0 e=  2.7 f=  0.0 g=  1.2 resid=  0.0 | lead c 95.0
+        sub c_gate= 92.4 c_sync=  2.7 c_sync_tail=  0.0 c_sync_rest=  2.7 d_wait=  1.0 d_inline=  0.0 create_resid=  0.0
+        top rolls: r2/c2 hold=1210247 c=1066726 (gate=725896) d=0 e=97375 g=46054 body=hit; r1/c2 hold=788571 c=739005 (gate=737279) d=0 e=40803 g=6954 body=hit
+      fragility per-run ['r1:c94(n1)', 'r2:c88(n1)', 'r3:c87(n1)'] LOO ['-r1:c88', '-r2:c94', '-r3:c88'] bootstrap lead freq {'c': 2000} P(lead>=40)=1.000
+relaxed/c3                         n=108 p99=794287us n>=p99=2 n>=p90=11
+      >=p99 a=  0.0 b=  0.0 c= 91.4 d=  0.0 e=  5.5 f=  0.0 g=  3.1 resid=  0.0 | lead c 91.4
+        sub c_gate= 91.3 c_sync=  0.1 c_sync_tail=  0.0 c_sync_rest=  0.1 d_wait=  0.0 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.0 b=  0.0 c= 92.7 d=  1.5 e=  3.1 f=  0.0 g=  2.7 resid=  0.0 | lead c 92.7
+        sub c_gate= 92.5 c_sync=  0.2 c_sync_tail=  0.0 c_sync_rest=  0.2 d_wait=  1.5 d_inline=  0.0 create_resid=  0.0
+        all a=  0.2 b=  0.0 c= 97.1 d=  0.6 e=  0.9 f=  0.0 g=  1.2 resid=  0.0 | lead c 97.1
+        sub c_gate= 96.8 c_sync=  0.3 c_sync_tail=  0.0 c_sync_rest=  0.3 d_wait=  0.6 d_inline=  0.0 create_resid=  0.0
+        top rolls: r2/c3 hold=911297 c=903951 (gate=903161) d=0 e=1345 g=5924 body=hit; r3/c3 hold=794287 c=654290 (gate=653190) d=0 e=92335 g=47596 body=hit
+      fragility per-run ['r1:c100(n1)', 'r2:c99(n1)', 'r3:c82(n1)'] LOO ['-r1:c99', '-r2:c82', '-r3:c99'] bootstrap lead freq {'c': 2000} P(lead>=40)=1.000
+group/c1-batch0                    n= 73 p99=17778us n>=p99=1 n>=p90=8
+      >=p99 a=  0.1 b=  0.0 c= 16.7 d=  0.0 e=  6.5 f=  0.2 g= 76.4 resid=  0.1 | lead g 76.4
+        sub c_gate= 15.0 c_sync=  1.8 c_sync_tail=  0.3 c_sync_rest=  1.4 d_wait=  0.0 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.2 b=  0.0 c= 43.0 d=  0.0 e= 18.4 f=  0.2 g= 38.1 resid=  0.1 | lead c 43.0
+        sub c_gate= 14.7 c_sync= 28.3 c_sync_tail= 26.8 c_sync_rest=  1.5 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        all a=  0.4 b=  0.0 c= 38.4 d=  0.0 e= 20.5 f=  0.4 g= 40.2 resid=  0.2 | lead g 40.2
+        sub c_gate=  6.0 c_sync= 32.4 c_sync_tail= 28.9 c_sync_rest=  3.5 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        top rolls: r1/c1-batch0 hold=17778 c=2977 (gate=2665) d=0 e=1162 g=13584 body=hit
+      fragility per-run ['r1:g76(n1)', 'r2:e56(n1)', 'r3:c74(n1)'] LOO ['-r1:c74', '-r2:g76', '-r3:g76'] bootstrap lead freq {'c': 583, 'g': 1324, 'e': 93} P(lead>=40)=1.000
+group/c1-segregated-no0            n= 71 p99=20617us n>=p99=1 n>=p90=8
+      >=p99 a=  0.2 b=  0.0 c= 77.2 d=  0.0 e= 11.2 f=  0.2 g= 11.2 resid=  0.1 | lead c 77.2
+        sub c_gate=  0.0 c_sync= 77.2 c_sync_tail= 75.9 c_sync_rest=  1.3 d_wait=  0.0 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.2 b=  0.0 c= 51.6 d=  0.0 e= 11.1 f=  0.2 g= 36.8 resid=  0.1 | lead c 51.6
+        sub c_gate= 15.3 c_sync= 36.3 c_sync_tail= 34.4 c_sync_rest=  1.8 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        all a=  0.5 b=  0.0 c= 40.7 d=  0.0 e= 18.3 f=  0.6 g= 39.7 resid=  0.2 | lead c 40.7
+        sub c_gate=  6.3 c_sync= 34.4 c_sync_tail= 30.9 c_sync_rest=  3.5 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        top rolls: r1/c1-segregated-no0 hold=20617 c=15911 (gate=0) d=0 e=2306 g=2309 body=hit
+      fragility per-run ['r1:c77(n1)', 'r2:g78(n1)', 'r3:g73(n1)'] LOO ['-r1:g78', '-r2:c77', '-r3:c77'] bootstrap lead freq {'c': 1391, 'g': 609} P(lead>=40)=1.000
+group/c1-spread                    n= 72 p99=28738us n>=p99=1 n>=p90=8
+      >=p99 a=  0.1 b=  0.0 c= 75.6 d=  0.0 e= 17.0 f=  0.1 g=  7.1 resid=  0.0 | lead c 75.6
+        sub c_gate=  0.0 c_sync= 75.6 c_sync_tail= 74.1 c_sync_rest=  1.4 d_wait=  0.0 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.2 b=  0.0 c= 60.3 d=  0.0 e= 10.8 f=  0.2 g= 28.4 resid=  0.1 | lead c 60.3
+        sub c_gate=  2.8 c_sync= 57.5 c_sync_tail= 55.8 c_sync_rest=  1.7 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        all a=  0.5 b=  0.0 c= 43.7 d=  0.0 e= 17.3 f=  0.4 g= 38.0 resid=  0.2 | lead c 43.7
+        sub c_gate=  3.1 c_sync= 40.6 c_sync_tail= 36.8 c_sync_rest=  3.8 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        top rolls: r2/c1-spread hold=28738 c=21720 (gate=0) d=0 e=4894 g=2052 body=hit
+      fragility per-run ['r1:g60(n1)', 'r2:c76(n1)', 'r3:c64(n1)'] LOO ['-r1:c76', '-r2:c64', '-r3:c76'] bootstrap lead freq {'c': 1991, 'g': 9} P(lead>=40)=1.000
+group/c2                           n= 69 p99=21332us n>=p99=1 n>=p90=7
+      >=p99 a=  0.1 b=  0.0 c= 10.6 d=  0.0 e=  4.4 f=  0.1 g= 84.7 resid=  0.1 | lead g 84.7
+        sub c_gate=  9.3 c_sync=  1.3 c_sync_tail=  0.2 c_sync_rest=  1.1 d_wait=  0.0 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.1 b=  0.0 c= 34.4 d=  0.0 e= 15.0 f=  0.2 g= 50.3 resid=  0.1 | lead g 50.3
+        sub c_gate= 32.8 c_sync=  1.6 c_sync_tail=  0.3 c_sync_rest=  1.3 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        all a=  0.1 b=  0.0 c= 43.7 d=  0.0 e= 16.8 f=  0.4 g= 38.9 resid=  0.1 | lead c 43.7
+        sub c_gate= 39.0 c_sync=  4.7 c_sync_tail=  1.8 c_sync_rest=  2.8 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        top rolls: r3/c2 hold=21332 c=2271 (gate=1985) d=0 e=948 g=18059 body=hit
+      fragility per-run ['r1:e54(n1)', 'r2:g74(n1)', 'r3:g85(n1)'] LOO ['-r1:g85', '-r2:g85', '-r3:g74'] bootstrap lead freq {'g': 1827, 'c': 164, 'e': 9} P(lead>=40)=1.000
+group/c3                           n= 75 p99=22709us n>=p99=1 n>=p90=8
+      >=p99 a=  0.1 b=  0.0 c= 24.6 d=  0.0 e=  9.9 f=  0.1 g= 65.1 resid=  0.0 | lead g 65.1
+        sub c_gate=  0.0 c_sync= 24.6 c_sync_tail= 24.0 c_sync_rest=  0.6 d_wait=  0.0 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.2 b=  0.0 c= 29.2 d=  0.0 e= 27.5 f=  0.2 g= 42.8 resid=  0.1 | lead g 42.8
+        sub c_gate=  1.3 c_sync= 27.9 c_sync_tail= 26.3 c_sync_rest=  1.6 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        all a=  0.3 b=  0.0 c= 36.6 d=  0.0 e= 20.2 f=  0.4 g= 42.3 resid=  0.2 | lead g 42.3
+        sub c_gate=  4.0 c_sync= 32.5 c_sync_tail= 29.1 c_sync_rest=  3.4 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        top rolls: r2/c3 hold=22709 c=5596 (gate=0) d=0 e=2259 g=14785 body=hit
+      fragility per-run ['r1:c45(n1)', 'r2:g65(n1)', 'r3:e40(n1)'] LOO ['-r1:g65', '-r2:c45', '-r3:g65'] bootstrap lead freq {'g': 1280, 'c': 552, 'e': 168} P(lead>=40)=0.998
+## per durability, H0 cells pooled (C1 x3 placements + C2; iso arms have no rolls)
+relaxed/C1+C2                      n=415 p99=772841us n>=p99=5 n>=p90=42
+      >=p99 a=  0.0 b=  0.0 c= 91.8 d=  3.6 e=  3.2 f=  0.0 g=  1.3 resid=  0.0 | lead c 91.8
+        sub c_gate= 83.9 c_sync=  7.9 c_sync_tail=  0.0 c_sync_rest=  7.9 d_wait=  3.6 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.0 b=  0.0 c= 92.2 d=  2.8 e=  3.8 f=  0.0 g=  1.2 resid=  0.0 | lead c 92.2
+        sub c_gate= 87.9 c_sync=  4.3 c_sync_tail=  0.2 c_sync_rest=  4.0 d_wait=  2.8 d_inline=  0.0 create_resid=  0.0
+        all a=  0.2 b=  0.0 c= 96.5 d=  0.6 e=  1.5 f=  0.0 g=  1.1 resid=  0.0 | lead c 96.5
+        sub c_gate= 95.3 c_sync=  1.2 c_sync_tail=  0.1 c_sync_rest=  1.1 d_wait=  0.6 d_inline=  0.0 create_resid=  0.0
+        top rolls: r2/c2 hold=1210247 c=1066726 (gate=725896) d=0 e=97375 g=46054 body=hit; r3/c1-spread hold=828117 c=825415 (gate=823738) d=0 e=1121 g=1467 body=hit; r1/c2 hold=788571 c=739005 (gate=737279) d=0 e=40803 g=6954 body=hit; r2/c1-spread hold=788238 c=626726 (gate=625873) d=158338 e=1195 g=1914 body=waited
+      fragility per-run ['r1:c87(n2)', 'r2:c85(n2)', 'r3:c100(n2)'] LOO ['-r1:c89', '-r2:c98', '-r3:c87'] bootstrap lead freq {'c': 2000} P(lead>=40)=1.000
+relaxed/C1+C2+C3                   n=523 p99=788238us n>=p99=6 n>=p90=53
+      >=p99 a=  0.0 b=  0.0 c= 90.5 d=  3.0 e=  4.4 f=  0.0 g=  2.1 resid=  0.0 | lead c 90.5
+        sub c_gate= 84.0 c_sync=  6.5 c_sync_tail=  0.0 c_sync_rest=  6.5 d_wait=  3.0 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.0 b=  0.0 c= 92.0 d=  2.5 e=  3.9 f=  0.0 g=  1.6 resid=  0.0 | lead c 92.0
+        sub c_gate= 88.3 c_sync=  3.7 c_sync_tail=  0.2 c_sync_rest=  3.5 d_wait=  2.5 d_inline=  0.0 create_resid=  0.0
+        all a=  0.2 b=  0.0 c= 96.6 d=  0.6 e=  1.4 f=  0.0 g=  1.1 resid=  0.0 | lead c 96.6
+        sub c_gate= 95.6 c_sync=  1.0 c_sync_tail=  0.1 c_sync_rest=  1.0 d_wait=  0.6 d_inline=  0.0 create_resid=  0.0
+        top rolls: r2/c2 hold=1210247 c=1066726 (gate=725896) d=0 e=97375 g=46054 body=hit; r2/c3 hold=911297 c=903951 (gate=903161) d=0 e=1345 g=5924 body=hit; r3/c1-spread hold=828117 c=825415 (gate=823738) d=0 e=1121 g=1467 body=hit; r3/c3 hold=794287 c=654290 (gate=653190) d=0 e=92335 g=47596 body=hit
+      fragility per-run ['r1:c87(n2)', 'r2:c93(n2)', 'r3:c91(n2)'] LOO ['-r1:c92', '-r2:c94', '-r3:c90'] bootstrap lead freq {'c': 2000} P(lead>=40)=1.000
+group/C1+C2                        n=285 p99=20617us n>=p99=3 n>=p90=29
+      >=p99 a=  0.1 b=  0.0 c= 56.4 d=  0.0 e= 11.5 f=  0.1 g= 31.7 resid=  0.0 | lead c 56.4
+        sub c_gate=  2.8 c_sync= 53.6 c_sync_tail= 52.4 c_sync_rest=  1.3 d_wait=  0.0 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.1 b=  0.0 c= 49.0 d=  0.0 e= 13.7 f=  0.2 g= 36.9 resid=  0.1 | lead c 49.0
+        sub c_gate= 20.6 c_sync= 28.4 c_sync_tail= 26.9 c_sync_rest=  1.5 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        all a=  0.4 b=  0.0 c= 41.7 d=  0.0 e= 18.2 f=  0.5 g= 39.2 resid=  0.2 | lead c 41.7
+        sub c_gate= 14.3 c_sync= 27.4 c_sync_tail= 24.0 c_sync_rest=  3.4 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        top rolls: r2/c1-spread hold=28738 c=21720 (gate=0) d=0 e=4894 g=2052 body=hit; r3/c2 hold=21332 c=2271 (gate=1985) d=0 e=948 g=18059 body=hit; r1/c1-segregated-no0 hold=20617 c=15911 (gate=0) d=0 e=2306 g=2309 body=hit
+      fragility per-run ['r1:c77(n1)', 'r2:c76(n1)', 'r3:g85(n1)'] LOO ['-r1:c48', '-r2:g49', '-r3:c76'] bootstrap lead freq {'c': 1177, 'g': 823} P(lead>=40)=1.000
+group/C1+C2+C3                     n=360 p99=20617us n>=p99=4 n>=p90=37
+      >=p99 a=  0.1 b=  0.0 c= 48.7 d=  0.0 e= 11.1 f=  0.1 g= 39.8 resid=  0.0 | lead c 48.7
+        sub c_gate=  2.1 c_sync= 46.6 c_sync_tail= 45.5 c_sync_rest=  1.1 d_wait=  0.0 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.1 b=  0.0 c= 44.9 d=  0.0 e= 14.8 f=  0.2 g= 39.9 resid=  0.1 | lead c 44.9
+        sub c_gate= 17.0 c_sync= 27.9 c_sync_tail= 26.4 c_sync_rest=  1.5 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        all a=  0.4 b=  0.0 c= 40.6 d=  0.0 e= 18.6 f=  0.4 g= 39.8 resid=  0.2 | lead c 40.6
+        sub c_gate= 12.2 c_sync= 28.5 c_sync_tail= 25.1 c_sync_rest=  3.4 d_wait=  0.0 d_inline=  0.0 create_resid=  0.1
+        top rolls: r2/c1-spread hold=28738 c=21720 (gate=0) d=0 e=4894 g=2052 body=hit; r2/c3 hold=22709 c=5596 (gate=0) d=0 e=2259 g=14785 body=hit; r3/c2 hold=21332 c=2271 (gate=1985) d=0 e=948 g=18059 body=hit; r1/c1-segregated-no0 hold=20617 c=15911 (gate=0) d=0 e=2306 g=2309 body=hit
+      fragility per-run ['r1:c49(n2)', 'r2:c53(n2)', 'r3:g52(n2)'] LOO ['-r1:g48', '-r2:g57', '-r3:c60'] bootstrap lead freq {'g': 965, 'c': 1035} P(lead>=40)=0.999
+## overall, both durabilities pooled (shown to say why it is wrong)
+all/C1+C2                          n=700 p99=746392us n>=p99=8 n>=p90=71
+      >=p99 a=  0.0 b=  0.0 c= 91.3 d=  4.1 e=  2.9 f=  0.0 g=  1.7 resid=  0.0 | lead c 91.3
+        sub c_gate= 81.3 c_sync= 10.1 c_sync_tail=  0.0 c_sync_rest= 10.1 d_wait=  4.1 d_inline=  0.0 create_resid=  0.0
+      >=p90 a=  0.0 b=  0.0 c= 93.6 d=  1.9 e=  3.4 f=  0.0 g=  1.1 resid=  0.0 | lead c 93.6
+        sub c_gate= 90.3 c_sync=  3.2 c_sync_tail=  0.2 c_sync_rest=  3.0 d_wait=  1.9 d_inline=  0.0 create_resid=  0.0
+        all a=  0.2 b=  0.0 c= 95.7 d=  0.6 e=  1.7 f=  0.0 g=  1.7 resid=  0.0 | lead c 95.7
+        sub c_gate= 94.2 c_sync=  1.6 c_sync_tail=  0.4 c_sync_rest=  1.2 d_wait=  0.6 d_inline=  0.0 create_resid=  0.0
+        top rolls: r2/c2 hold=1210247 c=1066726 (gate=725896) d=0 e=97375 g=46054 body=hit; r3/c1-spread hold=828117 c=825415 (gate=823738) d=0 e=1121 g=1467 body=hit; r1/c2 hold=788571 c=739005 (gate=737279) d=0 e=40803 g=6954 body=hit; r2/c1-spread hold=788238 c=626726 (gate=625873) d=158338 e=1195 g=1914 body=waited
+## per run (each run its own p99)
+group/c1-batch0/r1             n=25 n>=p99=1 lead=g 76.4  c=16.7 d=0.0 e=6.5 g=76.4
+group/c1-batch0/r2             n=24 n>=p99=1 lead=e 55.6  c=23.2 d=0.0 e=55.6 g=20.7
+group/c1-batch0/r3             n=24 n>=p99=1 lead=c 73.5  c=73.5 d=0.0 e=6.8 g=19.3
+group/c1-segregated-no0/r1     n=24 n>=p99=1 lead=c 77.2  c=77.2 d=0.0 e=11.2 g=11.2
+group/c1-segregated-no0/r2     n=24 n>=p99=1 lead=g 78.4  c=13.5 d=0.0 e=7.7 g=78.4
+group/c1-segregated-no0/r3     n=23 n>=p99=1 lead=g 73.3  c=17.4 d=0.0 e=8.8 g=73.3
+group/c1-spread/r1             n=24 n>=p99=1 lead=g 59.9  c=26.0 d=0.0 e=13.6 g=59.9
+group/c1-spread/r2             n=24 n>=p99=1 lead=c 75.6  c=75.6 d=0.0 e=17.0 g=7.1
+group/c1-spread/r3             n=24 n>=p99=1 lead=c 63.5  c=63.5 d=0.0 e=7.6 g=28.3
+group/c2/r1                    n=23 n>=p99=1 lead=e 53.9  c=18.4 d=0.0 e=53.9 g=27.3
+group/c2/r2                    n=23 n>=p99=1 lead=g 74.0  c=19.2 d=0.0 e=6.6 g=74.0
+group/c2/r3                    n=23 n>=p99=1 lead=g 84.7  c=10.6 d=0.0 e=4.4 g=84.7
+group/c3/r1                    n=25 n>=p99=1 lead=c 44.8  c=44.8 d=0.0 e=22.6 g=32.2
+group/c3/r2                    n=25 n>=p99=1 lead=g 65.1  c=24.6 d=0.0 e=9.9 g=65.1
+group/c3/r3                    n=25 n>=p99=1 lead=e 39.7  c=31.2 d=0.0 e=39.7 g=28.5
+relaxed/c1-batch0/r1           n=36 n>=p99=1 lead=c 99.5  c=99.5 d=0.0 e=0.2 g=0.3
+relaxed/c1-batch0/r2           n=35 n>=p99=1 lead=c 99.5  c=99.5 d=0.0 e=0.2 g=0.3
+relaxed/c1-batch0/r3           n=33 n>=p99=1 lead=c 99.5  c=99.5 d=0.0 e=0.2 g=0.3
+relaxed/c1-segregated-no0/r1   n=35 n>=p99=1 lead=c 99.6  c=99.6 d=0.0 e=0.1 g=0.3
+relaxed/c1-segregated-no0/r2   n=35 n>=p99=1 lead=c 84.4  c=84.4 d=15.0 e=0.4 g=0.3
+relaxed/c1-segregated-no0/r3   n=37 n>=p99=1 lead=c 99.4  c=99.4 d=0.0 e=0.2 g=0.4
+relaxed/c1-spread/r1           n=35 n>=p99=1 lead=c 99.4  c=99.4 d=0.0 e=0.2 g=0.4
+relaxed/c1-spread/r2           n=35 n>=p99=1 lead=c 79.5  c=79.5 d=20.1 e=0.2 g=0.2
+relaxed/c1-spread/r3           n=34 n>=p99=1 lead=c 99.7  c=99.7 d=0.0 e=0.1 g=0.2
+relaxed/c2/r1                  n=33 n>=p99=1 lead=c 93.7  c=93.7 d=0.0 e=5.2 g=0.9
+relaxed/c2/r2                  n=33 n>=p99=1 lead=c 88.1  c=88.1 d=0.0 e=8.0 g=3.8
+relaxed/c2/r3                  n=34 n>=p99=1 lead=c 87.2  c=87.2 d=0.0 e=6.5 g=6.3
+relaxed/c3/r1                  n=36 n>=p99=1 lead=c 99.5  c=99.5 d=0.0 e=0.1 g=0.3
+relaxed/c3/r2                  n=36 n>=p99=1 lead=c 99.2  c=99.2 d=0.0 e=0.1 g=0.7
+relaxed/c3/r3                  n=36 n>=p99=1 lead=c 82.4  c=82.4 d=0.0 e=11.6 g=6.0

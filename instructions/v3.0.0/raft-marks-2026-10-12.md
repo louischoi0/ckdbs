@@ -140,3 +140,12 @@ Korean it was typed in.
 | **Mark** | **BQ-Q0: opened.** W4 lifts W3's gate on BP: BQ starts while BP-S1 is measuring on the same host, so BQ's builds overlap BP's runs and BQ's own measurements are taken only when no BP run is live. **BQ-Q1..Q5 are marked as CLA proposed**, on W3's *"go ahead and keep going"*: Q1 (a), Q2 (a), Q3 (a), Q4 (b), Q5 (b) - so BQ stops at rung 3 and rung 4 (H6) needs its own word |
 | **Does not settle** | Rung 4; BL-S4's rulings 2 and 3 (BQ answers 3 by measurement); BP |
 | **Recorded at** | `workorder-bq-wal-segment-roll.md` §6, §7; `index.md`'s BQ row |
+
+## 16. BQ-S1 measured; BQ-Q6 and BQ-Q7 adopted
+
+| | |
+|---|---|
+| **Word** | *"Refer to the wal-segment worktree and merge the remaining work into this session; plan and orchestrate the work with its ordering and gates in mind; until two milestones close, go-ahead-achieving-milestone: set hypotheses and measure, verify and re-explore, establish, reject."* (the operator, 2026-10-12, translated) |
+| **Mark** | BQ joins BP's branch (`6139c2de`). BQ-S1's verdicts are recorded in BQ's §7. **BQ-Q6 (a)** and **BQ-Q7 (a)**, new items written with CLA's proposal, are adopted on the operator's standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone), not as the operator's own marks |
+| **Does not settle** | Rung 4 (BQ-Q5 (b) stands); the recycling defect's fix, which is filed and not BQ's; a push, a merge to `main`, a tag or a version |
+| **Recorded at** | `workorder-bq-wal-segment-roll.md` §6, §7; `docs/inflight/bugs/a-page-re-dirtied-after-its-writeback-copy-pins-the-redo-start.md` |

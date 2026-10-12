@@ -500,8 +500,10 @@ def run_one(args, run):
             "session_cores": [o["core"] for o in outs],
             # `*_longest_us` is a maximum since the server started, not a
             # counter: its delta is meaningless, so it is reported as read.
-            "meta_delta": {k: m1[k] - m_from[k] for k in m1
-                           if k in m_from and not k.endswith("_longest_us") and not is_gauge(k)},
+            # A key absent from the first read is 0 there (SHOW META leaves
+            # a `load_c<k>_` wait or tally out while it is 0).
+            "meta_delta": {k: m1[k] - m_from.get(k, 0) for k in m1
+                           if not k.endswith("_longest_us") and not is_gauge(k)},
             # BL-S1's per-core load words are gauges: read once, mid-span.
             "meta_gauges_mid": {k: v for k, v in m_mid.items() if is_gauge(k)},
             "meta_longest": {k: v for k, v in m1.items() if k.endswith("_longest_us")},

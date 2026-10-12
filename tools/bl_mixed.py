@@ -357,8 +357,11 @@ def run_one(args, run):
         # different cores; the delta then keeps only the instance-wide keys.
         ctl_cores = (m0.get("core"), m_mid.get("core"), m1.get("core"))
         ctl_moved = len(set(ctl_cores)) > 1
-        meta_delta = {k: m1[k] - m0[k] for k in m1
-                      if k in m0 and not k.endswith("_longest_us") and not is_gauge(k)
+        # A key absent from m0 is 0 there: SHOW META leaves a `load_c<k>_`
+        # wait or tally out while it is 0, so dropping it would drop every one
+        # that first moved inside the window (BQ-S1's analysis found this).
+        meta_delta = {k: m1[k] - m0.get(k, 0) for k in m1
+                      if not k.endswith("_longest_us") and not is_gauge(k)
                       and not (ctl_moved and is_per_core(k))}
         # Balancer moves (BL-S3) per core, summed: `moves` raw from the
         # server's start (setup and warmup included), `moves_in_window` over

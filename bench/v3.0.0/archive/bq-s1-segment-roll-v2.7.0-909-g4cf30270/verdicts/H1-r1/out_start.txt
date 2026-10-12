@@ -1,0 +1,118 @@
+mode start
+rolls per run:
+   ('group', 'c1-batch0', 'r1') 25
+   ('group', 'c1-batch0', 'r2') 24
+   ('group', 'c1-batch0', 'r3') 24
+   ('group', 'c1-iso-batch0', 'r1') 0
+   ('group', 'c1-iso-batch0', 'r2') 0
+   ('group', 'c1-iso-batch0', 'r3') 0
+   ('group', 'c1-iso-segregated-no0', 'r1') 0
+   ('group', 'c1-iso-segregated-no0', 'r2') 0
+   ('group', 'c1-iso-segregated-no0', 'r3') 0
+   ('group', 'c1-iso-spread', 'r1') 0
+   ('group', 'c1-iso-spread', 'r2') 0
+   ('group', 'c1-iso-spread', 'r3') 0
+   ('group', 'c1-segregated-no0', 'r1') 24
+   ('group', 'c1-segregated-no0', 'r2') 24
+   ('group', 'c1-segregated-no0', 'r3') 23
+   ('group', 'c1-spread', 'r1') 24
+   ('group', 'c1-spread', 'r2') 24
+   ('group', 'c1-spread', 'r3') 24
+   ('group', 'c2', 'r1') 23
+   ('group', 'c2', 'r2') 23
+   ('group', 'c2', 'r3') 23
+   ('group', 'c2-iso', 'r1') 0
+   ('group', 'c2-iso', 'r2') 0
+   ('group', 'c2-iso', 'r3') 0
+   ('group', 'c3', 'r1') 25
+   ('group', 'c3', 'r2') 25
+   ('group', 'c3', 'r3') 25
+   ('relaxed', 'c1-batch0', 'r1') 36
+   ('relaxed', 'c1-batch0', 'r2') 35
+   ('relaxed', 'c1-batch0', 'r3') 33
+   ('relaxed', 'c1-iso-batch0', 'r1') 0
+   ('relaxed', 'c1-iso-batch0', 'r2') 0
+   ('relaxed', 'c1-iso-batch0', 'r3') 0
+   ('relaxed', 'c1-iso-segregated-no0', 'r1') 0
+   ('relaxed', 'c1-iso-segregated-no0', 'r2') 0
+   ('relaxed', 'c1-iso-segregated-no0', 'r3') 0
+   ('relaxed', 'c1-iso-spread', 'r1') 0
+   ('relaxed', 'c1-iso-spread', 'r2') 0
+   ('relaxed', 'c1-iso-spread', 'r3') 0
+   ('relaxed', 'c1-segregated-no0', 'r1') 35
+   ('relaxed', 'c1-segregated-no0', 'r2') 35
+   ('relaxed', 'c1-segregated-no0', 'r3') 37
+   ('relaxed', 'c1-spread', 'r1') 35
+   ('relaxed', 'c1-spread', 'r2') 35
+   ('relaxed', 'c1-spread', 'r3') 34
+   ('relaxed', 'c2', 'r1') 34
+   ('relaxed', 'c2', 'r2') 33
+   ('relaxed', 'c2', 'r3') 34
+   ('relaxed', 'c2-iso', 'r1') 0
+   ('relaxed', 'c2-iso', 'r2') 0
+   ('relaxed', 'c2-iso', 'r3') 0
+   ('relaxed', 'c3', 'r1') 36
+   ('relaxed', 'c3', 'r2') 36
+   ('relaxed', 'c3', 'r3') 36
+
+== >=p99
+relaxed  c1-batch0            n= 104 thr=   721.8ms top=  2 c=99.5 g=0.3 e=0.2 | gate=99.2 tail=0.0 rest=0.4 resid=0.00
+relaxed  c1-segregated-no0    n= 107 thr=   697.2ms top=  2 c=93.1 d=6.4 g=0.4 e=0.1 | gate=92.9 tail=0.0 rest=0.2 resid=0.00
+relaxed  c1-spread            n= 104 thr=   788.2ms top=  2 c=89.8 d=9.8 g=0.2 e=0.1 | gate=89.7 tail=0.0 rest=0.1 resid=0.00
+relaxed  c2                   n= 101 thr=   788.6ms top=  2 c=90.3 e=6.9 g=2.7 f=0.1 | gate=73.2 tail=0.0 rest=17.1 resid=0.00
+relaxed  c3                   n= 108 thr=   794.3ms top=  2 c=91.4 e=5.5 g=3.1 | gate=91.3 tail=0.0 rest=0.1 resid=0.00
+relaxed  H0-pool              n= 416 thr=   772.8ms top=  5 c=91.8 d=3.6 e=3.2 g=1.3 | gate=83.9 tail=0.0 rest=7.9 resid=0.00
+group    c1-batch0            n=  73 thr=    17.8ms top=  1 g=76.4 c=16.7 e=6.5 f=0.2 a=0.1 | gate=15.0 tail=0.3 rest=1.4 resid=0.07
+group    c1-segregated-no0    n=  71 thr=    20.6ms top=  1 c=77.2 g=11.2 e=11.2 f=0.2 a=0.2 | gate=0.0 tail=75.9 rest=1.3 resid=0.06
+group    c1-spread            n=  72 thr=    28.7ms top=  1 c=75.6 e=17.0 g=7.1 f=0.1 a=0.1 | gate=0.0 tail=74.1 rest=1.4 resid=0.04
+group    c2                   n=  69 thr=    21.3ms top=  1 g=84.7 c=10.6 e=4.4 f=0.1 a=0.1 | gate=9.3 tail=0.2 rest=1.1 resid=0.05
+group    c3                   n=  75 thr=    22.7ms top=  1 g=65.1 c=24.6 e=9.9 f=0.1 a=0.1 | gate=0.0 tail=24.0 rest=0.6 resid=0.04
+group    H0-pool              n= 285 thr=    20.6ms top=  3 c=56.4 g=31.7 e=11.5 f=0.1 a=0.1 | gate=2.8 tail=52.4 rest=1.3 resid=0.05
+
+== >=p90
+relaxed  c1-batch0            n= 104 thr=   516.3ms top= 11 c=97.0 g=1.5 d=0.8 e=0.6 f=0.1 | gate=94.6 tail=1.0 rest=1.4 resid=0.00
+relaxed  c1-segregated-no0    n= 107 thr=   382.8ms top= 11 c=94.5 d=3.3 e=1.8 g=0.5 | gate=94.2 tail=0.0 rest=0.2 resid=0.00
+relaxed  c1-spread            n= 104 thr=   540.4ms top= 11 c=96.7 d=2.1 e=0.8 g=0.3 | gate=95.0 tail=0.0 rest=1.7 resid=0.00
+relaxed  c2                   n= 101 thr=   637.4ms top= 11 c=85.4 e=7.5 d=4.6 g=2.5 | gate=74.7 tail=0.0 rest=10.7 resid=0.00
+relaxed  c3                   n= 108 thr=   456.5ms top= 11 c=92.7 e=3.1 g=2.7 d=1.5 | gate=92.5 tail=0.0 rest=0.2 resid=0.00
+relaxed  H0-pool              n= 416 thr=   526.8ms top= 42 c=92.2 e=3.8 d=2.8 g=1.2 | gate=87.9 tail=0.2 rest=4.0 resid=0.00
+group    c1-batch0            n=  73 thr=     9.6ms top=  8 c=43.0 g=38.1 e=18.4 f=0.2 a=0.2 | gate=14.7 tail=26.8 rest=1.5 resid=0.08
+group    c1-segregated-no0    n=  71 thr=    11.7ms top=  8 c=51.6 g=36.8 e=11.1 f=0.2 a=0.2 | gate=15.3 tail=34.4 rest=1.8 resid=0.08
+group    c1-spread            n=  72 thr=    10.7ms top=  8 c=60.3 g=28.4 e=10.8 f=0.2 a=0.2 | gate=2.8 tail=55.8 rest=1.7 resid=0.07
+group    c2                   n=  69 thr=    14.4ms top=  7 g=50.3 c=34.4 e=15.0 f=0.2 a=0.1 | gate=32.8 tail=0.3 rest=1.3 resid=0.07
+group    c3                   n=  75 thr=    10.1ms top=  8 g=42.8 c=29.2 e=27.5 f=0.2 a=0.2 | gate=1.3 tail=26.3 rest=1.6 resid=0.08
+group    H0-pool              n= 285 thr=    12.0ms top= 29 c=49.0 g=36.9 e=13.7 f=0.2 a=0.1 | gate=20.6 tail=26.9 rest=1.5 resid=0.07
+
+== all
+relaxed  c1-batch0            n= 104 thr=    -0.0ms top=104 c=96.5 e=1.2 g=1.1 a=0.8 d=0.3 | gate=95.7 tail=0.2 rest=0.6 resid=0.00
+relaxed  c1-segregated-no0    n= 107 thr=    -0.0ms top=107 c=97.3 g=1.0 e=0.9 d=0.8 | gate=96.9 tail=0.0 rest=0.4 resid=0.00
+relaxed  c1-spread            n= 104 thr=    -0.0ms top=104 c=97.5 g=1.1 e=0.9 d=0.5 | gate=96.8 tail=0.0 rest=0.7 resid=0.00
+relaxed  c2                   n= 101 thr=    -0.0ms top=101 c=95.1 e=2.7 g=1.2 d=1.0 | gate=92.4 tail=0.0 rest=2.6 resid=0.00
+relaxed  c3                   n= 108 thr=    -0.0ms top=108 c=97.1 g=1.2 e=0.9 d=0.6 a=0.2 | gate=96.8 tail=0.0 rest=0.3 resid=0.00
+relaxed  H0-pool              n= 416 thr=    -0.0ms top=416 c=96.5 e=1.5 g=1.1 d=0.6 a=0.2 | gate=95.3 tail=0.1 rest=1.1 resid=0.00
+group    c1-batch0            n=  73 thr=    -0.0ms top= 73 g=40.2 c=38.4 e=20.5 f=0.4 a=0.4 | gate=6.0 tail=28.9 rest=3.5 resid=0.16
+group    c1-segregated-no0    n=  71 thr=    -0.0ms top= 71 c=40.7 g=39.7 e=18.3 f=0.6 a=0.5 | gate=6.3 tail=30.9 rest=3.5 resid=0.16
+group    c1-spread            n=  72 thr=    -0.0ms top= 72 c=43.7 g=38.0 e=17.3 a=0.5 f=0.4 | gate=3.1 tail=36.8 rest=3.8 resid=0.15
+group    c2                   n=  69 thr=    -0.0ms top= 69 c=43.7 g=38.9 e=16.8 f=0.4 a=0.1 | gate=39.0 tail=1.8 rest=2.8 resid=0.15
+group    c3                   n=  75 thr=    -0.0ms top= 75 g=42.3 c=36.6 e=20.2 f=0.4 a=0.3 | gate=4.0 tail=29.1 rest=3.4 resid=0.16
+group    H0-pool              n= 285 thr=    -0.0ms top=285 c=41.7 g=39.2 e=18.2 f=0.5 a=0.4 | gate=14.3 tail=24.0 rest=3.4 resid=0.15
+
+== per-run >=p99 leader
+relaxed  c1-batch0            r1:n=36,top=1,c100  r2:n=35,top=1,c100  r3:n=33,top=1,c100
+relaxed  c1-segregated-no0    r1:n=35,top=1,c100  r2:n=35,top=1,c84  r3:n=37,top=1,c99
+relaxed  c1-spread            r1:n=35,top=1,c99  r2:n=35,top=1,c80  r3:n=34,top=1,c100
+relaxed  c2                   r1:n=34,top=1,c94  r2:n=33,top=1,c88  r3:n=34,top=1,c87
+relaxed  c3                   r1:n=36,top=1,c100  r2:n=36,top=1,c99  r3:n=36,top=1,c82
+group    c1-batch0            r1:n=25,top=1,g76  r2:n=24,top=1,e56  r3:n=24,top=1,c74
+group    c1-segregated-no0    r1:n=24,top=1,c77  r2:n=24,top=1,g78  r3:n=23,top=1,g73
+group    c1-spread            r1:n=24,top=1,g60  r2:n=24,top=1,c76  r3:n=24,top=1,c64
+group    c2                   r1:n=23,top=1,e54  r2:n=23,top=1,g74  r3:n=23,top=1,g85
+group    c3                   r1:n=25,top=1,c45  r2:n=25,top=1,g65  r3:n=25,top=1,e40
+relaxed H0 pool LORO ['c89', 'c98', 'c87'] bootstrap lead {'c': 2000} P(>=40)=1.000
+group H0 pool LORO ['c48', 'g49', 'c76'] bootstrap lead {'c': 1213, 'g': 787} P(>=40)=1.000
+
+== absolutes (H0 pool)
+relaxed n 416 hold p50/p99/max 323.3/772.8/1210.2 c 317.9/739.0/1066.7 g 2.1/46.1/102.9 efg 3.3/95.8/242.0 gate p50 316.8 sum 137.6s of hold 144.4s {'hit': 389, 'waited': 27}
+   e+f+g share of all hold 2.6%
+group n 285 hold p50/p99/max 6.1/20.6/28.7 c 2.3/14.4/21.7 g 2.2/13.6/18.1 efg 3.4/14.8/19.0 gate p50 0.0 sum 0.3s of hold 2.1s {'hit': 285}
+   e+f+g share of all hold 57.8%

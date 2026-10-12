@@ -310,16 +310,23 @@ statement about an engine that no longer exists; re-verify or strike it.
     (`src/wal/file_log_device.cpp`, `include/kds/wal/stream.hpp`). Its
     comment forbids narrowing that to the tail, because a roll can land
     between the stream capturing its watermark and the device sync.
-  - **Since BC the run is bounded**: segments wholly below the durable redo
-    start are removed (`wal.md` §11-4), so the calls per sync are the
-    segments since the anchor's, not every segment the instance ever wrote.
-    The cost no longer grows with the instance's age.
+  - **Since BC the run is bounded only while checkpoints clean what they
+    copy**: segments wholly below the durable redo start are removed
+    (`wal.md` §11-4). Under a bulk load at `relaxed` the bound did not hold:
+    a page re-dirtied after its writeback copy keeps its first recLSN and
+    pins the fold in segment 0, and 13 of 15 BQ-S1 runs removed 0 segments,
+    with 33-39 live
+    (`bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md` §5;
+    `docs/inflight/bugs/a-page-re-dirtied-after-its-writeback-copy-pins-the-redo-start.md`).
+    Verified at `4cf30270`.
   - Syncing only the segments *written* since the last sync would be
     enough: the previous tail plus any segment created since. Nothing
     records which those are.
 
-  Cost: one `fdatasync` per live segment per durable-point advance, bounded
-  by the checkpoint cadence. Not measured. Owner: `docs/spec/wal.md` §3,
+  Cost: one `fdatasync` per live segment per durable-point advance, about
+  50 us per live segment (measured at `4cf30270`, BQ-S1); a segment roll at
+  `relaxed` is held mostly by the tail's sync, not by this breadth (BQ-S1's
+  H3 bound). Owner: `docs/spec/wal.md` §3,
   `wal/file_log_device.cpp`.
 
 - **A segment roll does I/O inside the instance's append latch, which

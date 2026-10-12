@@ -1,0 +1,533 @@
+
+relaxed c1-batch0 r1 win=29.86s rolls=36 (whole-in-measure 36) by_core={1: 36} hold_in_win=12.13s p50=326356 max=653644 moves_in_win=18 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 3, 1, 2, 3, 0, 0] cores_end=[3.0, 3.0, 0.0, 3.0, 3.0, 3.0, 2.0, 1.0]
+   c0: stream=  11933.7ms drain=  11933.7ms (100.0%) rollcov=  11932.0ms gate=     65.5ms moves_out=9
+   c1: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  11819.7ms moves_out=0
+   c2: stream=     19.9ms drain=      0.0ms (0.0%) rollcov=     19.8ms gate=      0.0ms moves_out=0
+   c3: stream=    809.3ms drain=      0.0ms (0.0%) rollcov=    809.1ms gate=      0.0ms moves_out=9
+   core0 sched: {'sched_hold_out_run_over_100ms': 36.0, 'sched_hold_out_run_over_10ms': 40.0, 'sched_unpolled_over_100ms': 39.0, 'sched_longest_unpolled_us': 239988.0}
+   reader: n=12006 slow=2123 dropped=0 p99 json/recomp=429897.5/429897.5 p99.9=592633.5/592633.5
+      >=10ms: 1956 aligned=1712 overlap_any=1772 stall_ms=362592 aligned_ms=341670 cover=0.406 | w/o aligned p99=72991.8 p99.9=196496.2
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 60, '-5..0': 0, '0..5': 1594, '5..30': 118, '30..100': 0, '>=100': 0}
+      [0:1->3 188/218 max=632.8] [1:2->3 567/607 max=645.0] [2:3->0 163/199 max=597.5] [3:1->3 271/305 max=595.1] [4:2->3 334/409 max=592.6] [5:3->3 189/218 max=635.2]
+
+relaxed c1-batch0 r2 win=29.8s rolls=35 (whole-in-measure 35) by_core={3: 35} hold_in_win=11.25s p50=290667 max=721835 moves_in_win=10 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 3, 1, 2, 3, 0, 0] cores_end=[1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 2.0, 3.0]
+   c0: stream=  11066.3ms drain=  11066.3ms (100.0%) rollcov=  11065.4ms gate=     11.9ms moves_out=5
+   c1: stream=    148.5ms drain=      0.0ms (0.0%) rollcov=    148.4ms gate=      0.0ms moves_out=5
+   c2: stream=      8.3ms drain=      0.0ms (0.0%) rollcov=      8.2ms gate=      0.0ms moves_out=0
+   c3: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  10971.0ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 36.0, 'sched_hold_out_run_over_10ms': 42.0, 'sched_unpolled_over_100ms': 38.0, 'sched_longest_unpolled_us': 339042.0}
+   reader: n=12006 slow=1263 dropped=0 p99 json/recomp=354250.9/354250.9 p99.9=673697.0/673697.0
+      >=10ms: 1184 aligned=984 overlap_any=1084 stall_ms=213658 aligned_ms=197006 cover=0.378 | w/o aligned p99=49904.8 p99.9=220775.4
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 34, '-50..-5': 66, '-5..0': 0, '0..5': 875, '5..30': 109, '30..100': 0, '>=100': 0}
+      [0:1->1 49/69 max=310.8] [1:2->1 103/123 max=703.6] [2:3->0 458/532 max=718.3] [3:1->1 48/70 max=713.6] [4:2->1 9/30 max=141.0] [5:3->1 317/360 max=708.4]
+
+relaxed c1-batch0 r3 win=30.16s rolls=33 (whole-in-measure 33) by_core={3: 33} hold_in_win=11.25s p50=316502 max=724760 moves_in_win=11 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 3, 1, 2, 3, 0, 0] cores_end=[1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 3.0]
+   c0: stream=  10765.7ms drain=  10765.7ms (100.0%) rollcov=  10756.6ms gate=      0.0ms moves_out=6
+   c1: stream=    238.0ms drain=      0.0ms (0.0%) rollcov=    237.8ms gate=      0.0ms moves_out=5
+   c2: stream=    266.8ms drain=      0.0ms (0.0%) rollcov=    266.6ms gate=      0.0ms moves_out=0
+   c3: stream=      0.4ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  10362.3ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 32.0, 'sched_hold_out_run_over_10ms': 38.0, 'sched_unpolled_over_100ms': 34.0, 'sched_longest_unpolled_us': 398647.0}
+   reader: n=12006 slow=1555 dropped=0 p99 json/recomp=366275.1/366275.1 p99.9=623917.1/623917.1
+      >=10ms: 1177 aligned=903 overlap_any=1062 stall_ms=202974 aligned_ms=177357 cover=0.373 | w/o aligned p99=97385.4 p99.9=218665.4
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 43, '-50..-5': 116, '-5..0': 33, '0..5': 790, '5..30': 80, '30..100': 0, '>=100': 0}
+      [0:1->1 292/361 max=516.1] [1:2->0 48/86 max=305.8] [2:3->1 65/113 max=702.8] [3:1->1 23/52 max=192.2] [4:2->1 450/495 max=712.9] [5:3->1 25/70 max=238.6]
+
+relaxed c1-iso-batch0 r1 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 3, 1, 2, 3] cores_end=[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=46 dropped=0 p99 json/recomp=379.3/<1ms p99.9=2270.2/2270.2
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=2270.2
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=2.8] [1:2->2 0/0 max=1.9] [2:3->3 0/0 max=2.9] [3:1->1 0/0 max=3.3] [4:2->2 0/0 max=3.8] [5:3->3 0/0 max=3.3]
+
+relaxed c1-iso-batch0 r2 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 3, 1, 2, 3] cores_end=[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=13 dropped=0 p99 json/recomp=206.2/<1ms p99.9=1007.8/1007.8
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=1007.8
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=0.0] [1:2->2 0/0 max=2.1] [2:3->3 0/0 max=1.4] [3:1->1 0/0 max=0.0] [4:2->2 0/0 max=1.2] [5:3->3 0/0 max=2.0]
+
+relaxed c1-iso-batch0 r3 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 3, 1, 2, 3] cores_end=[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=29 dropped=0 p99 json/recomp=353.6/<1ms p99.9=1554.5/1554.5
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=1554.5
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=4.0] [1:2->2 0/0 max=3.5] [2:3->3 0/0 max=4.1] [3:1->1 0/0 max=2.6] [4:2->2 0/0 max=1.2] [5:3->3 0/0 max=2.7]
+
+relaxed c1-iso-segregated-no0 r1 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 1, 2, 1, 2] cores_end=[1.0, 2.0, 1.0, 2.0, 1.0, 2.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=49 dropped=0 p99 json/recomp=279.2/<1ms p99.9=2472.6/2472.6
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=2472.6
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=3.2] [1:2->2 0/0 max=2.6] [2:1->1 0/0 max=4.1] [3:2->2 0/0 max=0.0] [4:1->1 0/0 max=1.6] [5:2->2 0/0 max=3.8]
+
+relaxed c1-iso-segregated-no0 r2 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 1, 2, 1, 2] cores_end=[1.0, 2.0, 1.0, 2.0, 1.0, 2.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=11 dropped=0 p99 json/recomp=215.8/<1ms p99.9=803.2/<1ms
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=<1ms
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=3.2] [1:2->2 0/0 max=3.8] [2:1->1 0/0 max=4.1] [3:2->2 0/0 max=0.0] [4:1->1 0/0 max=1.2] [5:2->2 0/0 max=0.0]
+
+relaxed c1-iso-segregated-no0 r3 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 1, 2, 1, 2] cores_end=[1.0, 2.0, 1.0, 2.0, 1.0, 2.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=65 dropped=0 p99 json/recomp=561.2/<1ms p99.9=2532.7/2532.7
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=2532.7
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=1.9] [1:2->2 0/0 max=2.7] [2:1->1 0/0 max=3.1] [3:2->2 0/0 max=2.6] [4:1->1 0/0 max=4.0] [5:2->2 0/0 max=3.7]
+
+relaxed c1-iso-spread r1 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[0, 1, 2, 3, 0, 1] cores_end=[0.0, 1.0, 2.0, 3.0, 0.0, 1.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=19 dropped=0 p99 json/recomp=226.5/<1ms p99.9=1142.0/1142.0
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=1142.0
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/0 max=3.6] [1:1->1 0/0 max=1.1] [2:2->2 0/0 max=0.0] [3:3->3 0/0 max=1.3] [4:0->0 0/0 max=1.2] [5:1->1 0/0 max=1.8]
+
+relaxed c1-iso-spread r2 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[0, 1, 2, 3, 0, 1] cores_end=[0.0, 1.0, 2.0, 3.0, 0.0, 1.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=12 dropped=0 p99 json/recomp=216.2/<1ms p99.9=976.3/<1ms
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=<1ms
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/0 max=1.2] [1:1->1 0/0 max=0.0] [2:2->2 0/0 max=1.5] [3:3->3 0/0 max=2.9] [4:0->0 0/0 max=3.3] [5:1->1 0/0 max=0.0]
+
+relaxed c1-iso-spread r3 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[0, 1, 2, 3, 0, 1] cores_end=[0.0, 1.0, 2.0, 3.0, 0.0, 1.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=38 dropped=0 p99 json/recomp=444.4/<1ms p99.9=2151.0/2151.0
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=2151.0
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/0 max=3.9] [1:1->1 0/0 max=2.2] [2:2->2 0/0 max=5.4] [3:3->3 0/0 max=2.2] [4:0->0 0/0 max=3.7] [5:1->1 0/0 max=4.4]
+
+relaxed c1-segregated-no0 r1 win=29.79s rolls=35 (whole-in-measure 35) by_core={1: 35} hold_in_win=11.44s p50=297148 max=709918 moves_in_win=17 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 1, 2, 1, 2, 3, 3] cores_end=[0.0, 2.0, 2.0, 2.0, 2.0, 2.0, 3.0, 1.0]
+   c0: stream=  11254.8ms drain=  11254.8ms (100.0%) rollcov=  11254.2ms gate=      0.0ms moves_out=8
+   c1: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  10981.6ms moves_out=0
+   c2: stream=      5.3ms drain=      0.0ms (0.0%) rollcov=      5.3ms gate=      0.0ms moves_out=5
+   c3: stream=    206.6ms drain=      0.0ms (0.0%) rollcov=    206.5ms gate=      0.0ms moves_out=4
+   core0 sched: {'sched_hold_out_run_over_100ms': 34.0, 'sched_hold_out_run_over_10ms': 37.0, 'sched_unpolled_over_100ms': 37.0, 'sched_longest_unpolled_us': 312642.0}
+   reader: n=12006 slow=1275 dropped=0 p99 json/recomp=306395.5/306395.5 p99.9=625640.2/625640.2
+      >=10ms: 1174 aligned=968 overlap_any=1016 stall_ms=198017 aligned_ms=180573 cover=0.384 | w/o aligned p99=51528.9 p99.9=202040.0
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 48, '-5..0': 0, '0..5': 949, '5..30': 19, '30..100': 0, '>=100': 0}
+      [0:1->0 137/171 max=333.3] [1:2->2 27/56 max=410.0] [2:1->2 49/92 max=407.5] [3:2->2 42/68 max=325.9] [4:1->2 98/129 max=329.2] [5:2->2 615/658 max=696.8]
+
+relaxed c1-segregated-no0 r2 win=29.78s rolls=35 (whole-in-measure 35) by_core={1: 35} hold_in_win=10.39s p50=282839 max=678169 moves_in_win=24 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 1, 2, 1, 2, 3, 3] cores_end=[2.0, 2.0, 2.0, 2.0, 2.0, 0.0, 3.0, 1.0]
+   c0: stream=  10174.1ms drain=  10174.1ms (100.0%) rollcov=  10173.3ms gate=      3.5ms moves_out=7
+   c1: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=   9999.8ms moves_out=0
+   c2: stream=    172.9ms drain=      0.0ms (0.0%) rollcov=    172.9ms gate=      0.0ms moves_out=7
+   c3: stream=    212.6ms drain=      0.0ms (0.0%) rollcov=    212.5ms gate=      0.0ms moves_out=10
+   core0 sched: {'sched_hold_out_run_over_100ms': 38.0, 'sched_hold_out_run_over_10ms': 42.0, 'sched_unpolled_over_100ms': 40.0, 'sched_longest_unpolled_us': 258972.0}
+   reader: n=12006 slow=960 dropped=0 p99 json/recomp=210569.9/210569.9 p99.9=295939.7/295939.7
+      >=10ms: 862 aligned=557 overlap_any=731 stall_ms=96851 aligned_ms=73941 cover=0.349 | w/o aligned p99=75609.0 p99.9=183235.4
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 44, '-50..-5': 130, '-5..0': 0, '0..5': 557, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->2 29/76 max=289.8] [1:2->2 10/56 max=173.0] [2:1->2 43/92 max=284.8] [3:2->2 251/316 max=360.1] [4:1->2 114/175 max=340.6] [5:2->0 110/147 max=338.1]
+
+relaxed c1-segregated-no0 r3 win=30.08s rolls=37 (whole-in-measure 37) by_core={1: 37} hold_in_win=12.00s p50=330814 max=587321 moves_in_win=6 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 1, 2, 1, 2, 3, 3] cores_end=[3.0, 0.0, 3.0, 3.0, 3.0, 3.0, 2.0, 1.0]
+   c0: stream=  11445.1ms drain=  11440.8ms (100.0%) rollcov=  11444.1ms gate=      0.0ms moves_out=3
+   c1: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  11792.5ms moves_out=0
+   c2: stream=     13.5ms drain=      0.0ms (0.0%) rollcov=     13.5ms gate=      0.0ms moves_out=0
+   c3: stream=      3.8ms drain=      0.0ms (0.0%) rollcov=      3.7ms gate=      0.0ms moves_out=3
+   core0 sched: {'sched_hold_out_run_over_100ms': 37.0, 'sched_hold_out_run_over_10ms': 41.0, 'sched_unpolled_over_100ms': 38.0, 'sched_longest_unpolled_us': 236849.0}
+   reader: n=12006 slow=1167 dropped=0 p99 json/recomp=288106.4/288106.4 p99.9=496224.9/496224.9
+      >=10ms: 1025 aligned=786 overlap_any=894 stall_ms=162145 aligned_ms=141759 cover=0.399 | w/o aligned p99=68641.7 p99.9=211147.8
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 45, '-50..-5': 50, '-5..0': 0, '0..5': 761, '5..30': 25, '30..100': 13, '>=100': 0}
+      [0:1->3 148/186 max=360.4] [1:2->0 622/695 max=584.2] [2:1->3 0/44 max=235.9] [3:2->3 16/61 max=239.5] [4:1->3 0/19 max=132.9] [5:2->3 0/20 max=130.5]
+
+relaxed c1-spread r1 win=30.07s rolls=35 (whole-in-measure 35) by_core={2: 35} hold_in_win=10.55s p50=271313 max=668302 moves_in_win=10 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[0, 1, 2, 3, 0, 1, 2, 3] cores_end=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 3.0, 2.0]
+   c0: stream=  10348.6ms drain=  10348.6ms (100.0%) rollcov=  10347.8ms gate=      3.9ms moves_out=5
+   c1: stream=    361.3ms drain=      0.0ms (0.0%) rollcov=    361.2ms gate=      0.0ms moves_out=4
+   c2: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  10213.5ms moves_out=1
+   c3: stream=     17.2ms drain=      0.0ms (0.0%) rollcov=     17.1ms gate=      0.0ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 30.0, 'sched_hold_out_run_over_10ms': 35.0, 'sched_unpolled_over_100ms': 34.0, 'sched_longest_unpolled_us': 641214.0}
+   reader: n=12006 slow=519 dropped=0 p99 json/recomp=205115.8/205115.8 p99.9=474535.0/474535.0
+      >=10ms: 425 aligned=246 overlap_any=299 stall_ms=66265 aligned_ms=51485 cover=0.351 | w/o aligned p99=42974.2 p99.9=183095.9
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 53, '-50..-5': 0, '-5..0': 0, '0..5': 115, '5..30': 131, '30..100': 0, '>=100': 0}
+      [0:0->1 45/76 max=348.9] [1:1->1 37/66 max=556.0] [2:2->1 56/87 max=358.4] [3:3->1 24/51 max=356.3] [4:0->1 60/95 max=563.4] [5:1->1 24/50 max=351.4]
+
+relaxed c1-spread r2 win=29.78s rolls=35 (whole-in-measure 35) by_core={3: 19, 1: 1, 0: 15} hold_in_win=11.72s p50=308346 max=788238 moves_in_win=92 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[0, 1, 2, 3, 0, 1, 2, 3] cores_end=[2.0, 2.0, 2.0, 0.0, 2.0, 2.0, 1.0, 3.0]
+   c0: stream=   6256.6ms drain=   6256.6ms (100.0%) rollcov=   6256.2ms gate=   5135.9ms moves_out=9
+   c1: stream=    347.3ms drain=      0.0ms (0.0%) rollcov=    347.2ms gate=    323.8ms moves_out=21
+   c2: stream=     11.9ms drain=      0.0ms (0.0%) rollcov=     11.9ms gate=      0.0ms moves_out=27
+   c3: stream=    749.8ms drain=      0.0ms (0.0%) rollcov=    749.7ms gate=   5899.5ms moves_out=35
+   core0 sched: {'sched_hold_out_run_over_100ms': 36.0, 'sched_hold_out_run_over_10ms': 38.0, 'sched_unpolled_over_100ms': 22.0, 'sched_longest_unpolled_us': 244039.0}
+   reader: n=12006 slow=1296 dropped=0 p99 json/recomp=507976.3/507976.3 p99.9=1000173.1/1000173.1
+      >=10ms: 1140 aligned=792 overlap_any=960 stall_ms=258384 aligned_ms=162047 cover=0.393 | w/o aligned p99=145185.5 p99.9=1000173.1
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 22, '-50..-5': 146, '-5..0': 45, '0..5': 674, '5..30': 73, '30..100': 0, '>=100': 0}
+      [0:0->2 99/171 max=1057.1] [1:1->2 46/106 max=1054.7] [2:2->2 117/185 max=537.6] [3:3->0 156/203 max=535.2] [4:0->2 284/327 max=532.8] [5:1->2 90/148 max=1059.6]
+
+relaxed c1-spread r3 win=30.1s rolls=34 (whole-in-measure 34) by_core={0: 1, 3: 33} hold_in_win=12.74s p50=325569 max=828117 moves_in_win=20 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[0, 1, 2, 3, 0, 1, 2, 3] cores_end=[2.0, 2.0, 0.0, 2.0, 2.0, 2.0, 1.0, 3.0]
+   c0: stream=  12014.9ms drain=  12014.9ms (100.0%) rollcov=  12014.2ms gate=    534.8ms moves_out=10
+   c1: stream=     10.5ms drain=      0.0ms (0.0%) rollcov=     10.4ms gate=      0.0ms moves_out=0
+   c2: stream=    251.9ms drain=      0.0ms (0.0%) rollcov=    251.7ms gate=      0.0ms moves_out=7
+   c3: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  11782.6ms moves_out=3
+   core0 sched: {'sched_hold_out_run_over_100ms': 32.0, 'sched_hold_out_run_over_10ms': 39.0, 'sched_unpolled_over_100ms': 32.0, 'sched_longest_unpolled_us': 434947.0}
+   reader: n=12006 slow=1565 dropped=0 p99 json/recomp=452132.2/452132.2 p99.9=734689.0/734689.0
+      >=10ms: 1409 aligned=1334 overlap_any=1334 stall_ms=287310 aligned_ms=284809 cover=0.423 | w/o aligned p99=2639.8 p99.9=55835.0
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 1253, '5..30': 81, '30..100': 0, '>=100': 0}
+      [0:0->2 79/88 max=749.4] [1:1->2 146/160 max=409.1] [2:2->0 360/373 max=745.8] [3:3->2 59/72 max=370.7] [4:0->2 357/372 max=757.2] [5:1->2 333/344 max=810.0]
+
+relaxed c2 r1 win=30.74s rolls=34 (whole-in-measure 33) by_core={3: 34} hold_in_win=13.94s p50=368518 max=788571 moves_in_win=22 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'inserter'] targets=[0, 1, 2, 0, 1, 2, 0, 1, 3] cores_end=[2.0, 0.0, 2.0, 1.0, 1.0, 1.0, 0.0, 0.0, 3.0]
+   c0: stream=  13832.1ms drain=   5269.4ms (38.1%) rollcov=  13828.7ms gate=      0.0ms moves_out=6
+   c1: stream=  12963.8ms drain=      0.0ms (0.0%) rollcov=  12957.5ms gate=      0.0ms moves_out=8
+   c2: stream=  13504.4ms drain=      0.0ms (0.0%) rollcov=  13500.4ms gate=      0.0ms moves_out=8
+   c3: stream=      2.0ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  13111.4ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 33.0, 'sched_hold_out_run_over_10ms': 35.0, 'sched_unpolled_over_100ms': 18.0, 'sched_longest_unpolled_us': 238403.0}
+   writer: n=23741 slow=11986 dropped=0 p99 json/recomp=658499.5/658499.5 p99.9=777711.2/777711.2
+      >=10ms: 11598 aligned=10893 overlap_any=10893 stall_ms=2675546 aligned_ms=2601304 cover=0.454 | w/o aligned p99=131777.8 p99.9=243307.8
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 7811, '5..30': 3082, '30..100': 0, '>=100': 0}
+      [0:0->2 1360/1456 max=781.4] [1:1->0 1374/1453 max=820.4] [2:2->2 1376/1453 max=819.3] [3:0->1 1346/1444 max=787.5] [4:1->1 1373/1447 max=816.9] [5:2->1 1351/1432 max=785.2] [6:0->0 1350/1474 max=783.9] [7:1->0 1363/1439 max=782.6]
+
+relaxed c2 r2 win=30.14s rolls=33 (whole-in-measure 33) by_core={3: 33} hold_in_win=13.75s p50=373504 max=1210247 moves_in_win=27 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'inserter'] targets=[0, 1, 2, 0, 1, 2, 0, 1, 3] cores_end=[2.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 3.0]
+   c0: stream=  13011.4ms drain=   4428.9ms (34.0%) rollcov=  13006.6ms gate=      0.0ms moves_out=10
+   c1: stream=  12278.3ms drain=      0.0ms (0.0%) rollcov=  12271.1ms gate=      0.0ms moves_out=8
+   c2: stream=  13661.3ms drain=      0.0ms (0.0%) rollcov=  13658.1ms gate=      0.0ms moves_out=9
+   c3: stream=      2.3ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  12416.7ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 33.0, 'sched_hold_out_run_over_10ms': 39.0, 'sched_unpolled_over_100ms': 19.0, 'sched_longest_unpolled_us': 958083.0}
+   writer: n=24007 slow=12240 dropped=0 p99 json/recomp=1295966.4/1295966.4 p99.9=1718794.3/1718794.3
+      >=10ms: 11919 aligned=10714 overlap_any=11195 stall_ms=3591736 aligned_ms=3353708 cover=0.456 | w/o aligned p99=342265.4 p99.9=653094.3
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 7724, '5..30': 2990, '30..100': 481, '>=100': 0}
+      [0:0->2 1293/1439 max=1204.6] [1:1->0 1363/1504 max=1762.0] [2:2->1 1361/1513 max=1760.7] [3:0->1 1302/1479 max=1739.3] [4:1->0 1391/1530 max=1768.1] [5:2->1 1277/1485 max=1776.8] [6:0->1 1362/1483 max=1207.1] [7:1->0 1365/1486 max=1205.7]
+
+relaxed c2 r3 win=29.83s rolls=34 (whole-in-measure 34) by_core={3: 34} hold_in_win=13.19s p50=364678 max=746392 moves_in_win=23 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'inserter'] targets=[0, 1, 2, 0, 1, 2, 0, 1, 3] cores_end=[0.0, 1.0, 1.0, 1.0, 2.0, 1.0, 2.0, 0.0, 3.0]
+   c0: stream=  12348.5ms drain=   4041.4ms (32.7%) rollcov=  12345.3ms gate=      0.0ms moves_out=8
+   c1: stream=  12778.7ms drain=      0.0ms (0.0%) rollcov=  12772.9ms gate=      0.0ms moves_out=6
+   c2: stream=  12002.9ms drain=      0.0ms (0.0%) rollcov=  11997.2ms gate=      0.0ms moves_out=9
+   c3: stream=      1.8ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  12263.4ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 35.0, 'sched_hold_out_run_over_10ms': 36.0, 'sched_unpolled_over_100ms': 19.0, 'sched_longest_unpolled_us': 955721.0}
+   writer: n=24006 slow=11663 dropped=0 p99 json/recomp=659450.5/659450.5 p99.9=877924.4/877924.4
+      >=10ms: 11312 aligned=10332 overlap_any=10622 stall_ms=2525756 aligned_ms=2303527 cover=0.442 | w/o aligned p99=297424.3 p99.9=858115.2
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 8137, '5..30': 2195, '30..100': 0, '>=100': 290}
+      [0:0->0 1322/1424 max=777.5] [1:1->1 1320/1409 max=776.3] [2:2->1 1263/1400 max=746.0] [3:0->1 1259/1372 max=744.9] [4:1->2 1276/1383 max=772.6] [5:2->1 1262/1482 max=1094.6] [6:0->2 1365/1412 max=895.8] [7:1->0 1265/1430 max=768.9]
+
+relaxed c2-iso r1 win=30.08s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=2 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer'] targets=[0, 1, 2, 0, 1, 2, 0, 1] cores_end=[0.0, 1.0, 2.0, 0.0, 1.0, 3.0, 3.0, 1.0]
+   c0: stream=      0.0ms drain=      0.0ms (-) rollcov=      0.0ms gate=      0.0ms moves_out=1
+   c2: stream=      0.0ms drain=      0.0ms (-) rollcov=      0.0ms gate=      0.0ms moves_out=1
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 1.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 11472.0}
+   writer: n=24007 slow=122 dropped=0 p99 json/recomp=487.1/<1ms p99.9=2920.4/2920.4
+      >=10ms: 2 aligned=0 overlap_any=0 stall_ms=26 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=2920.4
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/0 max=10.0] [1:1->1 0/0 max=4.3] [2:2->2 0/0 max=7.5] [3:0->0 0/0 max=6.3] [4:1->1 0/0 max=3.7] [5:2->3 0/1 max=13.8] [6:0->3 0/1 max=12.5] [7:1->1 0/0 max=1.9]
+
+relaxed c2-iso r2 win=30.08s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=1 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer'] targets=[0, 1, 2, 0, 1, 2, 0, 1] cores_end=[0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 3.0, 1.0]
+   c0: stream=      0.0ms drain=      0.0ms (-) rollcov=      0.0ms gate=      0.0ms moves_out=1
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 4244.0}
+   writer: n=24007 slow=39 dropped=0 p99 json/recomp=213.1/<1ms p99.9=1843.2/1843.2
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=1843.2
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/0 max=8.2] [1:1->1 0/0 max=3.0] [2:2->2 0/0 max=1.6] [3:0->0 0/0 max=4.5] [4:1->1 0/0 max=5.9] [5:2->2 0/0 max=3.9] [6:0->3 0/0 max=4.4] [7:1->1 0/0 max=3.4]
+
+relaxed c2-iso r3 win=30.08s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=1 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer'] targets=[0, 1, 2, 0, 1, 2, 0, 1] cores_end=[0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 3.0]
+   c1: stream=      0.0ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      0.0ms moves_out=1
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 5519.0}
+   writer: n=24007 slow=134 dropped=0 p99 json/recomp=471.4/<1ms p99.9=3092.1/3092.1
+      >=10ms: 1 aligned=0 overlap_any=0 stall_ms=10 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=3092.1
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/0 max=3.8] [1:1->1 0/1 max=10.4] [2:2->2 0/0 max=3.3] [3:0->0 0/0 max=3.1] [4:1->1 0/0 max=6.6] [5:2->2 0/0 max=3.8] [6:0->0 0/0 max=6.2] [7:1->3 0/0 max=3.8]
+
+relaxed c3 r1 win=30.02s rolls=36 (whole-in-measure 36) by_core={3: 36} hold_in_win=13.53s p50=358559 max=673132 moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['inserter'] targets=[3] cores_end=[3.0]
+   c0: stream=  13353.6ms drain=  13353.5ms (100.0%) rollcov=  13352.6ms gate=      3.1ms moves_out=0
+   c1: stream=    231.2ms drain=      0.0ms (0.0%) rollcov=    231.2ms gate=      0.0ms moves_out=0
+   c2: stream=     94.4ms drain=      0.0ms (0.0%) rollcov=     94.3ms gate=      0.0ms moves_out=0
+   c3: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  13123.6ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 35.0, 'sched_hold_out_run_over_10ms': 37.0, 'sched_unpolled_over_100ms': 42.0, 'sched_longest_unpolled_us': 316097.0}
+
+relaxed c3 r2 win=30.02s rolls=36 (whole-in-measure 36) by_core={3: 36} hold_in_win=13.27s p50=364131 max=911297 moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['inserter'] targets=[3] cores_end=[3.0]
+   c0: stream=  13108.9ms drain=  13103.1ms (100.0%) rollcov=  13106.9ms gate=      0.0ms moves_out=0
+   c1: stream=    352.7ms drain=      0.0ms (0.0%) rollcov=    352.5ms gate=      0.0ms moves_out=0
+   c2: stream=    378.6ms drain=      0.0ms (0.0%) rollcov=    378.4ms gate=      0.0ms moves_out=0
+   c3: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  12963.2ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 38.0, 'sched_hold_out_run_over_10ms': 41.0, 'sched_unpolled_over_100ms': 41.0, 'sched_longest_unpolled_us': 511500.0}
+
+relaxed c3 r3 win=30.01s rolls=36 (whole-in-measure 36) by_core={3: 36} hold_in_win=12.85s p50=349308 max=794287 moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['inserter'] targets=[3] cores_end=[3.0]
+   c0: stream=  12634.7ms drain=  12634.7ms (100.0%) rollcov=  12633.5ms gate=      3.2ms moves_out=0
+   c1: stream=    900.6ms drain=      0.0ms (0.0%) rollcov=    900.2ms gate=      0.0ms moves_out=0
+   c2: stream=    138.6ms drain=      0.0ms (0.0%) rollcov=    138.6ms gate=      0.0ms moves_out=0
+   c3: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=  12281.0ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 34.0, 'sched_hold_out_run_over_10ms': 41.0, 'sched_unpolled_over_100ms': 41.0, 'sched_longest_unpolled_us': 434926.0}
+
+group c1-batch0 r1 win=30.09s rolls=25 (whole-in-measure 25) by_core={0: 1, 2: 24} hold_in_win=0.18s p50=5935 max=17778 moves_in_win=20 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 3, 1, 2, 3, 0, 0] cores_end=[3.0, 0.0, 0.0, 3.0, 3.0, 3.0, 1.0, 2.0]
+   c0: stream=     36.7ms drain=     36.7ms (100.0%) rollcov=     36.5ms gate=      0.0ms moves_out=8
+   c1: stream=      0.0ms drain=      0.0ms (-) rollcov=      0.0ms gate=      0.0ms moves_out=1
+   c2: stream=      0.2ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      6.4ms moves_out=4
+   c3: stream=      0.0ms drain=      0.0ms (-) rollcov=      0.0ms gate=      0.0ms moves_out=7
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 3.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 39557.0}
+   reader: n=12006 slow=87 dropped=0 p99 json/recomp=605.6/<1ms p99.9=9645.5/9645.5
+      >=10ms: 12 aligned=0 overlap_any=0 stall_ms=373 aligned_ms=0 cover=0.006 | w/o aligned p99=<1ms p99.9=9645.5
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->3 0/3 max=54.3] [1:2->0 0/2 max=27.2] [2:3->0 0/0 max=3.4] [3:1->3 0/1 max=22.2] [4:2->3 0/2 max=34.7] [5:3->3 0/4 max=56.9]
+
+group c1-batch0 r2 win=30.1s rolls=24 (whole-in-measure 24) by_core={1: 24} hold_in_win=0.16s p50=5761 max=13095 moves_in_win=11 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 3, 1, 2, 3, 0, 0] cores_end=[3.0, 3.0, 3.0, 3.0, 0.0, 3.0, 2.0, 1.0]
+   c0: stream=     34.8ms drain=     34.8ms (100.0%) rollcov=     32.0ms gate=      0.0ms moves_out=5
+   c1: stream=      0.2ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      3.5ms moves_out=3
+   c3: stream=      0.0ms drain=      0.0ms (-) rollcov=      0.0ms gate=      0.0ms moves_out=3
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 1.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 7387.0}
+   reader: n=12006 slow=97 dropped=0 p99 json/recomp=761.0/<1ms p99.9=3005.0/3005.0
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.005 | w/o aligned p99=<1ms p99.9=2685.3
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->3 0/0 max=4.0] [1:2->3 0/0 max=3.9] [2:3->3 0/0 max=3.9] [3:1->3 0/0 max=4.7] [4:2->0 0/0 max=5.8] [5:3->3 0/0 max=2.1]
+
+group c1-batch0 r3 win=30.09s rolls=24 (whole-in-measure 24) by_core={1: 24} hold_in_win=0.18s p50=6597 max=15920 moves_in_win=4 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 3, 1, 2, 3, 0, 0] cores_end=[0.0, 2.0, 2.0, 0.0, 2.0, 2.0, 3.0, 1.0]
+   c0: stream=     66.0ms drain=     66.0ms (100.0%) rollcov=     56.1ms gate=      0.0ms moves_out=2
+   c1: stream=      0.8ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=     21.0ms moves_out=0
+   c2: stream=      0.0ms drain=      0.0ms (-) rollcov=      0.0ms gate=      0.0ms moves_out=2
+   c3: stream=      0.0ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 5.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 40017.0}
+   reader: n=12006 slow=90 dropped=0 p99 json/recomp=748.2/<1ms p99.9=5093.1/5093.1
+      >=10ms: 10 aligned=1 overlap_any=1 stall_ms=219 aligned_ms=11 cover=0.006 | w/o aligned p99=<1ms p99.9=3650.2
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 1, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->0 0/2 max=38.9] [1:2->2 0/0 max=5.1] [2:3->2 0/0 max=3.6] [3:1->0 1/8 max=31.5] [4:2->2 0/0 max=3.7] [5:3->2 0/0 max=3.4]
+
+group c1-iso-batch0 r1 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 3, 1, 2, 3] cores_end=[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=25 dropped=0 p99 json/recomp=220.3/<1ms p99.9=1902.6/1902.6
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=1902.6
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=3.3] [1:2->2 0/0 max=1.5] [2:3->3 0/0 max=2.4] [3:1->1 0/0 max=3.1] [4:2->2 0/0 max=1.5] [5:3->3 0/0 max=2.0]
+
+group c1-iso-batch0 r2 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 3, 1, 2, 3] cores_end=[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=80 dropped=0 p99 json/recomp=632.3/<1ms p99.9=2614.5/2614.5
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=2614.5
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=3.0] [1:2->2 0/0 max=4.0] [2:3->3 0/0 max=2.6] [3:1->1 0/0 max=4.0] [4:2->2 0/0 max=2.6] [5:3->3 0/0 max=4.9]
+
+group c1-iso-batch0 r3 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 3, 1, 2, 3] cores_end=[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=61 dropped=0 p99 json/recomp=504.3/<1ms p99.9=2763.0/2763.0
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=2763.0
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=3.1] [1:2->2 0/0 max=4.5] [2:3->3 0/0 max=3.7] [3:1->1 0/0 max=3.1] [4:2->2 0/0 max=3.1] [5:3->3 0/0 max=4.5]
+
+group c1-iso-segregated-no0 r1 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 1, 2, 1, 2] cores_end=[1.0, 2.0, 1.0, 2.0, 1.0, 2.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=11 dropped=0 p99 json/recomp=204.1/<1ms p99.9=976.3/<1ms
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=<1ms
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=0.0] [1:2->2 0/0 max=2.1] [2:1->1 0/0 max=2.4] [3:2->2 0/0 max=1.9] [4:1->1 0/0 max=0.0] [5:2->2 0/0 max=3.0]
+
+group c1-iso-segregated-no0 r2 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 1, 2, 1, 2] cores_end=[1.0, 2.0, 1.0, 2.0, 1.0, 2.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=64 dropped=0 p99 json/recomp=474.5/<1ms p99.9=2688.9/2688.9
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=2688.9
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=6.3] [1:2->2 0/0 max=3.9] [2:1->1 0/0 max=3.7] [3:2->2 0/0 max=1.9] [4:1->1 0/0 max=2.8] [5:2->2 0/0 max=3.8]
+
+group c1-iso-segregated-no0 r3 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[1, 2, 1, 2, 1, 2] cores_end=[1.0, 2.0, 1.0, 2.0, 1.0, 2.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=48 dropped=0 p99 json/recomp=386.2/<1ms p99.9=2524.1/2524.1
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=2524.1
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->1 0/0 max=3.8] [1:2->2 0/0 max=3.2] [2:1->1 0/0 max=4.0] [3:2->2 0/0 max=4.1] [4:1->1 0/0 max=2.7] [5:2->2 0/0 max=3.5]
+
+group c1-iso-spread r1 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[0, 1, 2, 3, 0, 1] cores_end=[0.0, 1.0, 2.0, 3.0, 0.0, 1.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=19 dropped=0 p99 json/recomp=227.7/<1ms p99.9=1573.8/1573.8
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=1573.8
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/0 max=1.7] [1:1->1 0/0 max=0.0] [2:2->2 0/0 max=1.7] [3:3->3 0/0 max=2.4] [4:0->0 0/0 max=2.7] [5:1->1 0/0 max=3.1]
+
+group c1-iso-spread r2 win=30.07s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[0, 1, 2, 3, 0, 1] cores_end=[0.0, 1.0, 2.0, 3.0, 0.0, 1.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=28 dropped=0 p99 json/recomp=389.3/<1ms p99.9=1402.1/1402.1
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=1402.1
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/0 max=2.7] [1:1->1 0/0 max=3.1] [2:2->2 0/0 max=5.8] [3:3->3 0/0 max=1.3] [4:0->0 0/0 max=3.6] [5:1->1 0/0 max=4.1]
+
+group c1-iso-spread r3 win=30.06s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader'] targets=[0, 1, 2, 3, 0, 1] cores_end=[0.0, 1.0, 2.0, 3.0, 0.0, 1.0]
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   reader: n=12006 slow=52 dropped=0 p99 json/recomp=541.0/<1ms p99.9=2077.1/2077.1
+      >=10ms: 0 aligned=0 overlap_any=0 stall_ms=0 aligned_ms=0 cover=0.0 | w/o aligned p99=<1ms p99.9=2077.1
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/0 max=2.8] [1:1->1 0/0 max=3.6] [2:2->2 0/0 max=3.2] [3:3->3 0/0 max=3.0] [4:0->0 0/0 max=5.1] [5:1->1 0/0 max=2.7]
+
+group c1-segregated-no0 r1 win=30.1s rolls=24 (whole-in-measure 24) by_core={3: 24} hold_in_win=0.16s p50=5631 max=20617 moves_in_win=4 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 1, 2, 1, 2, 3, 3] cores_end=[2.0, 0.0, 2.0, 2.0, 2.0, 2.0, 1.0, 3.0]
+   c0: stream=     35.4ms drain=     35.4ms (100.0%) rollcov=     35.3ms gate=      0.0ms moves_out=2
+   c1: stream=      4.7ms drain=      0.0ms (0.0%) rollcov=      4.6ms gate=      0.0ms moves_out=0
+   c2: stream=      5.4ms drain=      0.0ms (0.0%) rollcov=      5.4ms gate=      0.0ms moves_out=2
+   c3: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=     10.8ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 4.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 36100.0}
+   reader: n=12006 slow=49 dropped=0 p99 json/recomp=408.9/<1ms p99.9=2888.7/2888.7
+      >=10ms: 2 aligned=0 overlap_any=0 stall_ms=50 aligned_ms=0 cover=0.005 | w/o aligned p99=<1ms p99.9=2636.7
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->2 0/0 max=8.3] [1:2->0 0/2 max=32.4] [2:1->2 0/0 max=2.9] [3:2->2 0/0 max=7.0] [4:1->2 0/0 max=4.6] [5:2->2 0/0 max=2.1]
+
+group c1-segregated-no0 r2 win=30.1s rolls=24 (whole-in-measure 24) by_core={1: 24} hold_in_win=0.17s p50=5593 max=14035 moves_in_win=5 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 1, 2, 1, 2, 3, 3] cores_end=[3.0, 3.0, 0.0, 3.0, 0.0, 3.0, 2.0, 1.0]
+   c0: stream=     23.5ms drain=     23.5ms (100.0%) rollcov=     23.4ms gate=      0.0ms moves_out=2
+   c1: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      9.4ms moves_out=3
+   c2: stream=      1.9ms drain=      0.0ms (0.0%) rollcov=      1.9ms gate=      0.0ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 1.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 39813.0}
+   reader: n=12006 slow=54 dropped=0 p99 json/recomp=408.2/<1ms p99.9=3320.0/3320.0
+      >=10ms: 6 aligned=0 overlap_any=0 stall_ms=155 aligned_ms=0 cover=0.006 | w/o aligned p99=<1ms p99.9=3290.7
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->3 0/2 max=28.3] [1:2->3 0/0 max=2.4] [2:1->0 0/2 max=38.2] [3:2->3 0/0 max=3.3] [4:1->0 0/2 max=33.2] [5:2->3 0/0 max=2.4]
+
+group c1-segregated-no0 r3 win=30.1s rolls=23 (whole-in-measure 23) by_core={1: 6, 0: 6, 2: 11} hold_in_win=0.15s p50=5762 max=13681 moves_in_win=20 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[1, 2, 1, 2, 1, 2, 3, 3] cores_end=[0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 3.0, 2.0]
+   c0: stream=     31.0ms drain=     30.9ms (99.9%) rollcov=     28.7ms gate=      0.0ms moves_out=6
+   c1: stream=      0.0ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      3.1ms moves_out=4
+   c2: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      7.3ms moves_out=7
+   c3: stream=      0.0ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      0.0ms moves_out=3
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 4.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 46512.0}
+   reader: n=12006 slow=128 dropped=0 p99 json/recomp=1108.6/1108.6 p99.9=24247.4/24247.4
+      >=10ms: 23 aligned=0 overlap_any=0 stall_ms=596 aligned_ms=0 cover=0.005 | w/o aligned p99=1087.7 p99.9=24247.4
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:1->0 0/3 max=39.1] [1:2->1 0/3 max=39.2] [2:1->1 0/5 max=51.7] [3:2->1 0/4 max=31.6] [4:1->1 0/4 max=29.2] [5:2->0 0/4 max=41.6]
+
+group c1-spread r1 win=30.1s rolls=24 (whole-in-measure 24) by_core={2: 24} hold_in_win=0.16s p50=5612 max=11626 moves_in_win=5 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[0, 1, 2, 3, 0, 1, 2, 3] cores_end=[1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 3.0, 2.0]
+   c0: stream=     16.6ms drain=     16.6ms (100.0%) rollcov=     16.4ms gate=      0.0ms moves_out=4
+   c1: stream=      0.0ms drain=      0.0ms (-) rollcov=      0.0ms gate=      0.0ms moves_out=1
+   c2: stream=      0.2ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      4.4ms moves_out=0
+   c3: stream=      0.0ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 2.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 47335.0}
+   reader: n=12006 slow=118 dropped=0 p99 json/recomp=975.1/<1ms p99.9=19313.3/19313.3
+      >=10ms: 18 aligned=0 overlap_any=0 stall_ms=520 aligned_ms=0 cover=0.005 | w/o aligned p99=<1ms p99.9=19313.3
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->1 0/5 max=44.0] [1:1->1 0/5 max=41.5] [2:2->1 0/0 max=3.2] [3:3->0 0/2 max=29.2] [4:0->1 0/3 max=48.9] [5:1->1 0/3 max=46.4]
+
+group c1-spread r2 win=30.1s rolls=24 (whole-in-measure 24) by_core={2: 24} hold_in_win=0.18s p50=5482 max=28738 moves_in_win=7 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[0, 1, 2, 3, 0, 1, 2, 3] cores_end=[3.0, 3.0, 3.0, 0.0, 3.0, 3.0, 1.0, 2.0]
+   c0: stream=     74.7ms drain=     74.7ms (100.0%) rollcov=     58.8ms gate=      0.0ms moves_out=4
+   c2: stream=      0.2ms drain=      0.0ms (0.5%) rollcov=      0.0ms gate=      6.6ms moves_out=0
+   c3: stream=      0.0ms drain=      0.0ms (-) rollcov=      0.0ms gate=      0.0ms moves_out=3
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 5.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 64285.0}
+   reader: n=12006 slow=115 dropped=0 p99 json/recomp=940.1/<1ms p99.9=14086.2/14086.2
+      >=10ms: 16 aligned=3 overlap_any=3 stall_ms=479 aligned_ms=44 cover=0.006 | w/o aligned p99=<1ms p99.9=11363.7
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 3, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->3 0/0 max=4.4] [1:1->3 0/0 max=4.0] [2:2->3 1/5 max=56.1] [3:3->0 1/3 max=29.0] [4:0->3 1/8 max=66.0] [5:1->3 0/0 max=3.2]
+
+group c1-spread r3 win=30.1s rolls=24 (whole-in-measure 24) by_core={1: 24} hold_in_win=0.17s p50=6117 max=13796 moves_in_win=4 meta_core=(0.0, 0.0, False)
+   roles=['reader', 'reader', 'reader', 'reader', 'reader', 'reader', 'walker', 'inserter'] targets=[0, 1, 2, 3, 0, 1, 2, 3] cores_end=[2.0, 2.0, 2.0, 2.0, 0.0, 2.0, 3.0, 1.0]
+   c0: stream=     36.0ms drain=     36.0ms (100.0%) rollcov=     30.9ms gate=      0.0ms moves_out=1
+   c1: stream=      0.2ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      4.9ms moves_out=0
+   c3: stream=      3.8ms drain=      0.0ms (0.0%) rollcov=      3.8ms gate=      0.0ms moves_out=3
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 6.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 39658.0}
+   reader: n=12006 slow=124 dropped=0 p99 json/recomp=1016.9/1016.9 p99.9=5128.9/5128.9
+      >=10ms: 7 aligned=0 overlap_any=0 stall_ms=188 aligned_ms=0 cover=0.006 | w/o aligned p99=1006.4 p99.9=4458.7
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->2 0/0 max=4.3] [1:1->2 0/0 max=3.8] [2:2->2 0/0 max=4.5] [3:3->2 0/0 max=4.0] [4:0->0 0/7 max=39.6] [5:1->2 0/0 max=3.9]
+
+group c2 r1 win=30.1s rolls=23 (whole-in-measure 23) by_core={3: 23} hold_in_win=0.18s p50=6587 max=15202 moves_in_win=28 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'inserter'] targets=[0, 1, 2, 0, 1, 2, 0, 1, 3] cores_end=[2.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 3.0]
+   c0: stream=    180.8ms drain=     98.6ms (54.6%) rollcov=    147.2ms gate=    468.9ms moves_out=10
+   c1: stream=    158.7ms drain=     93.1ms (58.7%) rollcov=    130.0ms gate=      0.0ms moves_out=9
+   c2: stream=    162.5ms drain=     83.4ms (51.3%) rollcov=    140.3ms gate=      0.0ms moves_out=9
+   c3: stream=      1.9ms drain=      0.0ms (0.5%) rollcov=      0.0ms gate=     68.9ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 2.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 5907.0}
+   writer: n=24004 slow=24004 dropped=0 p99 json/recomp=306515.9/306515.9 p99.9=341492.7/341492.7
+      >=10ms: 12499 aligned=64 overlap_any=64 stall_ms=1805602 aligned_ms=844 cover=0.006 | w/o aligned p99=306515.9 p99.9=341492.7
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 42, '5..30': 22, '30..100': 0, '>=100': 0}
+      [0:0->2 9/1564 max=357.2] [1:1->1 9/1569 max=361.8] [2:2->1 8/1556 max=343.7] [3:0->1 7/1561 max=342.5] [4:1->0 8/1563 max=362.1] [5:2->0 9/1568 max=360.8] [6:0->1 6/1562 max=359.6] [7:1->0 8/1556 max=347.4]
+
+group c2 r2 win=30.34s rolls=23 (whole-in-measure 23) by_core={3: 23} hold_in_win=0.20s p50=7493 max=19436 moves_in_win=24 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'inserter'] targets=[0, 1, 2, 0, 1, 2, 0, 1, 3] cores_end=[2.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 3.0]
+   c0: stream=    181.9ms drain=    113.2ms (62.3%) rollcov=    157.6ms gate=    238.1ms moves_out=9
+   c1: stream=    227.9ms drain=    152.5ms (66.9%) rollcov=    182.8ms gate=      0.0ms moves_out=8
+   c2: stream=    217.4ms drain=    119.5ms (55.0%) rollcov=    169.9ms gate=      0.0ms moves_out=7
+   c3: stream=      6.4ms drain=      0.0ms (0.2%) rollcov=      0.0ms gate=     82.7ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 1.0, 'sched_hold_out_run_over_10ms': 7.0, 'sched_unpolled_over_100ms': 2.0, 'sched_longest_unpolled_us': 224397.0}
+   writer: n=23976 slow=23976 dropped=0 p99 json/recomp=319706.7/319706.7 p99.9=402902.6/402902.6
+      >=10ms: 12864 aligned=121 overlap_any=121 stall_ms=1909341 aligned_ms=2209 cover=0.007 | w/o aligned p99=319706.7 p99.9=402902.6
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 60, '5..30': 61, '30..100': 0, '>=100': 0}
+      [0:0->2 15/1602 max=428.3] [1:1->1 13/1606 max=406.6] [2:2->1 12/1620 max=425.8] [3:0->0 18/1627 max=424.5] [4:1->1 14/1591 max=402.9] [5:2->0 17/1610 max=411.7] [6:0->0 18/1612 max=410.4] [7:1->1 14/1596 max=409.1]
+
+group c2 r3 win=30.29s rolls=23 (whole-in-measure 23) by_core={3: 23} hold_in_win=0.18s p50=6117 max=21332 moves_in_win=36 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'inserter'] targets=[0, 1, 2, 0, 1, 2, 0, 1, 3] cores_end=[2.0, 1.0, 1.0, 2.0, 1.0, 0.0, 0.0, 0.0, 3.0]
+   c0: stream=    194.9ms drain=    144.8ms (74.3%) rollcov=    160.1ms gate=    126.3ms moves_out=10
+   c1: stream=    177.7ms drain=    108.1ms (60.9%) rollcov=    150.3ms gate=      0.0ms moves_out=14
+   c2: stream=    167.5ms drain=     88.1ms (52.6%) rollcov=    141.0ms gate=      0.0ms moves_out=12
+   c3: stream=      3.1ms drain=      0.0ms (0.9%) rollcov=      0.0ms gate=     66.1ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 2.0, 'sched_hold_out_run_over_10ms': 6.0, 'sched_unpolled_over_100ms': 3.0, 'sched_longest_unpolled_us': 185062.0}
+   writer: n=23938 slow=23938 dropped=0 p99 json/recomp=326555.7/326555.7 p99.9=380962.6/380962.6
+      >=10ms: 12721 aligned=77 overlap_any=77 stall_ms=1908042 aligned_ms=1326 cover=0.006 | w/o aligned p99=326555.7 p99.9=380962.6
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 54, '5..30': 23, '30..100': 0, '>=100': 0}
+      [0:0->2 9/1592 max=390.1] [1:1->1 8/1587 max=378.8] [2:2->1 10/1581 max=394.7] [3:0->2 10/1603 max=393.4] [4:1->1 10/1583 max=392.2] [5:2->0 10/1582 max=383.9] [6:0->0 13/1601 max=399.7] [7:1->0 7/1592 max=381.3]
+
+group c2-iso r1 win=30.09s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer'] targets=[0, 1, 2, 0, 1, 2, 0, 1] cores_end=[0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0]
+   c0: stream=      0.0ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   c1: stream=      0.0ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   c2: stream=      0.0ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 1940.0}
+   writer: n=24006 slow=23999 dropped=0 p99 json/recomp=11066.2/11066.2 p99.9=18925.4/18925.4
+      >=10ms: 325 aligned=0 overlap_any=0 stall_ms=4350 aligned_ms=0 cover=0.0 | w/o aligned p99=11066.2 p99.9=18925.4
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/40 max=25.6] [1:1->1 0/40 max=24.4] [2:2->2 0/36 max=25.1] [3:0->0 0/39 max=23.9] [4:1->1 0/41 max=29.4] [5:2->2 0/43 max=29.4] [6:0->0 0/42 max=28.1] [7:1->1 0/44 max=26.8]
+
+group c2-iso r2 win=30.09s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer'] targets=[0, 1, 2, 0, 1, 2, 0, 1] cores_end=[0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0]
+   c0: stream=      0.0ms drain=      0.0ms (50.0%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   c1: stream=      0.0ms drain=      0.0ms (96.0%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   c2: stream=      0.0ms drain=      0.0ms (93.3%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 0.0}
+   writer: n=24007 slow=24004 dropped=0 p99 json/recomp=10905.3/10905.3 p99.9=20062.7/20062.7
+      >=10ms: 318 aligned=0 overlap_any=0 stall_ms=4275 aligned_ms=0 cover=0.0 | w/o aligned p99=10905.3 p99.9=20062.7
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/36 max=27.0] [1:1->1 0/39 max=28.2] [2:2->2 0/44 max=27.0] [3:0->0 0/45 max=25.7] [4:1->1 0/45 max=24.5] [5:2->2 0/36 max=23.3] [6:0->0 0/36 max=22.0] [7:1->1 0/37 max=20.7]
+
+group c2-iso r3 win=30.09s rolls=0 (whole-in-measure 0) by_core={} hold_in_win=0.00s p50=None max=None moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer', 'writer'] targets=[0, 1, 2, 0, 1, 2, 0, 1] cores_end=[0.0, 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1.0]
+   c0: stream=      0.0ms drain=      0.0ms (40.0%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   c1: stream=      0.0ms drain=      0.0ms (33.3%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   c2: stream=      0.0ms drain=      0.0ms (50.0%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 0.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 2290.0}
+   writer: n=24007 slow=24003 dropped=0 p99 json/recomp=10922.9/10922.9 p99.9=20555.7/20555.7
+      >=10ms: 301 aligned=0 overlap_any=0 stall_ms=4328 aligned_ms=0 cover=0.0 | w/o aligned p99=10922.9 p99.9=20555.7
+      end-offset hist (ms, >=10ms samples overlapping a roll): {'<-50': 0, '-50..-5': 0, '-5..0': 0, '0..5': 0, '5..30': 0, '30..100': 0, '>=100': 0}
+      [0:0->0 0/39 max=40.8] [1:1->1 0/38 max=39.5] [2:2->2 0/35 max=38.3] [3:0->0 0/38 max=37.1] [4:1->1 0/38 max=35.8] [5:2->2 0/38 max=34.6] [6:0->0 0/40 max=34.4] [7:1->1 0/35 max=42.0]
+
+group c3 r1 win=30.02s rolls=25 (whole-in-measure 25) by_core={3: 25} hold_in_win=0.18s p50=6624 max=15238 moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['inserter'] targets=[3] cores_end=[3.0]
+   c0: stream=     15.2ms drain=     15.2ms (100.0%) rollcov=      4.5ms gate=      0.0ms moves_out=0
+   c1: stream=      0.0ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   c2: stream=      0.0ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      0.0ms moves_out=0
+   c3: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=     12.9ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 3.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 35394.0}
+
+group c3 r2 win=30.02s rolls=25 (whole-in-measure 25) by_core={3: 25} hold_in_win=0.18s p50=5780 max=22709 moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['inserter'] targets=[3] cores_end=[3.0]
+   c0: stream=     77.9ms drain=     77.9ms (100.0%) rollcov=     67.3ms gate=      0.0ms moves_out=0
+   c3: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      4.7ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 1.0, 'sched_hold_out_run_over_10ms': 10.0, 'sched_unpolled_over_100ms': 1.0, 'sched_longest_unpolled_us': 236636.0}
+
+group c3 r3 win=30.01s rolls=25 (whole-in-measure 25) by_core={3: 25} hold_in_win=0.16s p50=5552 max=11076 moves_in_win=0 meta_core=(0.0, 0.0, False)
+   roles=['inserter'] targets=[3] cores_end=[3.0]
+   c0: stream=     37.3ms drain=     37.3ms (100.0%) rollcov=     34.1ms gate=      1.8ms moves_out=0
+   c3: stream=      0.1ms drain=      0.0ms (0.0%) rollcov=      0.0ms gate=      3.5ms moves_out=0
+   core0 sched: {'sched_hold_out_run_over_100ms': 0.0, 'sched_hold_out_run_over_10ms': 4.0, 'sched_unpolled_over_100ms': 0.0, 'sched_longest_unpolled_us': 12539.0}
