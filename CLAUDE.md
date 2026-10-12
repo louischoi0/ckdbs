@@ -316,6 +316,7 @@ out.
 | Token | Meaning |
 |---|---|
 | `*M` | milestone (the asterisk is part of the token: `M0`, `M2` in AR0 are milestone names, not this) |
+| `&*M` | the milestone currently in progress in this session |
 | `*T` | a task inside a `*M` |
 | `*I` | issue |
 | `*B` | bug |
