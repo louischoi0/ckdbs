@@ -323,6 +323,7 @@ out.
 | `<-:` | blocked by: `B <-: A` means A blocks B (the blocked item on the left, the blocker on the right) |
 | `:>>` | the `*P` relation written as an arrow: `A :>> B` means A must be met before B can proceed (A is B's `*P`); the same relation as `<-:`, written the other way: `A :>> B` is `B <-: A` |
 | `{…}` | a set of items: `{A, B, C} :>> D` means A, B and C must all be met before D can proceed |
+| `(…)` | any of a set of items: `(A, B, C) :>> D` means any one of A, B or C being met lets D proceed |
 
 ## Open Decisions — DO NOT assume or silently pick
 
