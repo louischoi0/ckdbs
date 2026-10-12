@@ -417,7 +417,12 @@ TEST(WalRollInstrumentsTest, ARollThatMeetsABuildInProgressWaitsForItAndSaysSo) 
 
         std::unique_lock<std::mutex> building = file.value()->HoldPrepareForTest();
         RollRecord roll;
+        const Lsn durable_before = stream.value()->durable_lsn();
         std::thread roller([&] { EXPECT_TRUE(AppendRolling(*stream.value(), &roll).ok()); });
+        // The 50 ms starts once the roll has synced the segment it leaves
+        // (step c publishes it) and so stands at the body: under load the
+        // seal, flush and sync alone can outlast a sleep started at launch.
+        EXPECT_TRUE(Eventually([&] { return stream.value()->durable_lsn() > durable_before; }));
         std::this_thread::sleep_for(50ms);
         building.unlock();
         roller.join();

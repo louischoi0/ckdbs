@@ -1233,7 +1233,7 @@ walk added nothing. **Held. C:** the walk deleted; a cell in
 reader was redo's diagnostic, retired by AM-S4(d); `kPageFlagsOffset` is
 read only by `Read/WritePageHeader`, and `record.cpp` loads the envelope's
 `flags` byte without validating it. **Held. C:** nothing writes either
-byte any more - `DevicePageStore::StampPageLsn` and its suppression, the
+byte any more - the stamp `DevicePageStore::StampPageLsn` wrote beside the page LSN (which it still stamps) and its suppression, the
 mount's `StampSuppression`, redo's `ApplyPageInit` stamp,
 `LoggingCoreOf`, the checkpoint records' and `PAGE_INIT`'s core byte,
 `Get/SetPageStreamStamp`, `SHOW PAGE`'s `stream_stamp=`; the core-id guard
