@@ -94,28 +94,29 @@ class Server:
 
 
 class Workload:
-    """Inserts and updates on `t` from one connection until stopped."""
+    """Inserts and updates on `t` from one connection until stopped. `pause`
+    returns only once no statement is in flight and none will start."""
 
     def __init__(self, server, start_id):
         self.conn = server.conn()
         self.next_id, self.stop_flag, self.paused = start_id, threading.Event(), threading.Event()
-        self.idle = threading.Event()
+        self.lock = threading.Lock()
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.rng = random.Random(start_id)
 
     def run(self):
         while not self.stop_flag.is_set():
-            if self.paused.is_set():
-                self.idle.set()
-                time.sleep(0.01)
-                continue
-            self.idle.clear()
-            if self.rng.random() < 0.7 or self.next_id < 10:
-                self.conn.send_command(f"INSERT INTO t VALUES ({self.next_id}, {self.next_id})")
-                self.next_id += 1
-            else:
-                key = self.rng.randrange(1, self.next_id)
-                self.conn.send_command(f"UPDATE t SET v = v + 1 WHERE id = {key}")
+            with self.lock:
+                if not self.paused.is_set():
+                    if self.rng.random() < 0.7 or self.next_id < 10:
+                        self.conn.send_command(
+                            f"INSERT INTO t VALUES ({self.next_id}, {self.next_id})")
+                        self.next_id += 1
+                    else:
+                        key = self.rng.randrange(1, self.next_id)
+                        self.conn.send_command(f"UPDATE t SET v = v + 1 WHERE id = {key}")
+                    continue
+            time.sleep(0.01)
 
     def __enter__(self):
         self.thread.start()
@@ -127,11 +128,10 @@ class Workload:
 
     def pause(self):
         self.paused.set()
-        if not self.idle.wait(30):
-            raise RuntimeError("the workload did not pause")
+        with self.lock:  # the statement in flight, if any, has returned
+            pass
 
     def resume(self):
-        self.idle.clear()  # a stale idle would let the next pause return early
         self.paused.clear()
 
 

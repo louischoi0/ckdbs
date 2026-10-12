@@ -608,7 +608,8 @@ public:
     // up to its stop. Writing them to the device instead would put bits
     // there ahead of an unlogged page's bytes - BI-Q12's hazard, which a
     // crash after the STOP turned into a page allocated and never written.
-    // A region that is not resident is on the device as it was read.
+    // Every region is resident from the mount on, so a region absent here
+    // was never created and its bits are all clear.
     struct MapImage {
         PageId page_id;
         std::array<std::byte, kPageSize> bytes;

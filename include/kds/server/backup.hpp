@@ -142,6 +142,7 @@ private:
     // appending a second one.
     wal::Lsn stop_lsn_ = 0;
     std::uint64_t stop_segment_ = 0;
+    std::uint32_t stop_capacity_ = 0;  // the capacity that attempt copied to
     std::chrono::steady_clock::time_point last_activity_{};
     // The data copy (path B): its directory and file, once COPY ran.
     std::string copy_dir_;

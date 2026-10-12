@@ -259,18 +259,25 @@ StatusOr<std::string> BackupControl::Stop(const std::string& dir, wal::WalManage
     }
 
     // The I/O, without `mu_`: no publish on another reactor waits on it.
+    std::uint32_t capacity = 0;
     const auto fail = [&](const Status& s) -> Status {
         std::lock_guard<std::mutex> lock(mu_);
         state_ = State::kOpen;
         stop_lsn_ = stop;  // a BACKUP_END that landed is not appended twice
         stop_segment_ = stop_segment;
+        if (stop != 0) stop_capacity_ = capacity;
         Touch();
         return s;
     };
     // The data tail the file grew since START, before the stop (§3 item 5),
     // and only before it: a retry whose BACKUP_END already landed copies no
     // page, since one copied now could carry a change past the stop.
-    std::uint32_t capacity = wiring_.data_device->page_capacity();
+    // A retry reuses the capacity its first attempt copied to: a map image
+    // for a region created after the stop has no place in the copy.
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        capacity = stop_capacity_ != 0 ? stop_capacity_ : wiring_.data_device->page_capacity();
+    }
     if (copied && stop == 0) {
         const ArmedFence armed(wiring_.data_device->write_fence());
         capacity = wiring_.data_device->page_capacity();
@@ -404,6 +411,7 @@ void BackupControl::EndLocked(const char* outcome, const std::string& error) {
     pin_ = kNoPin;
     state_ = State::kIdle;
     stop_lsn_ = 0;
+    stop_capacity_ = 0;
     copy_dir_.clear();
     if (wiring_.log != nullptr) {
         const std::string what = "backup " + std::to_string(backup_id_) + " " + outcome +

@@ -291,21 +291,34 @@ Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {
         }
         return Status::OK();
     };
-    if (Status s = copy_checked(data_from, request.data_file,
+    // **Under a temporary name until the restore is marked owed in it**: a
+    // crash between the copy and the mark must not leave a data file whose
+    // copied anchor a mount would start from (BR-R4).
+    const std::string preparing = request.data_file + ".restoring";
+    fs::remove(preparing, ec);
+    if (Status s = copy_checked(data_from, preparing,
                                 request.data_file_from.empty() ? kBackupDataFileName : "");
         !s.ok()) {
+        fs::remove(preparing, ec);
         return s;
     }
     std::uint64_t lineage = 0;
     {
-        auto device = storage::FilePageDevice::Open(request.data_file);
+        auto device = storage::FilePageDevice::Open(preparing);
         if (!device.ok()) return device.status();
         if (Status s = PrepareRestoredVolume(
                 *device.value(), {manifest.start_lsn, manifest.stop_lsn, manifest.backup_id},
                 &lineage);
             !s.ok()) {
+            fs::remove(preparing, ec);
             return s;
         }
+    }
+    if (::rename(preparing.c_str(), request.data_file.c_str()) != 0) {
+        return Status::IoError("restore: name " + request.data_file + ": " + std::strerror(errno));
+    }
+    if (Status s = SyncDirectory(fs::path(request.data_file).parent_path().string()); !s.ok()) {
+        return s;
     }
     for (std::uint64_t seg = manifest.start_segment; seg <= manifest.stop_segment; ++seg) {
         const std::string name = std::string(kBackupWalDirName) + "/" + SegmentFileName(seg);

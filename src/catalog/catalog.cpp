@@ -3252,10 +3252,7 @@ StatusOr<bool> Catalog::ResetAccessStatsIfDamaged() {
     //
     // The walk is the detector: a torn page fails its checksum on fault and
     // a broken chain fails the walk, and either answers the same way. The
-    // chain's growth pages are **not** reclaimed - no reclaim walk reaches
-    // a catalog relation's discarded chain (`drop-table.md` DT1's stated
-    // leaks) - so a discard leaks them, which is the cost stated rather
-    // than discovered.
+    // discard keeps the chain's readable pages (`DiscardAccessStats`).
     // **The walk is the detector, and it is the ordinary one**: a torn page
     // fails its checksum on fault and a broken link fails the traversal, so
     // `ChainVisit` answering non-OK *is* the damage report. Writing a second
@@ -3282,18 +3279,37 @@ Status Catalog::DiscardAccessStats() {
     // again - a discard that left the growth pages behind would spend
     // catalog page ids, of which there are 116 for every catalog relation,
     // at every restore (BR-S8's review). The head stays at its fixed id, so
-    // the `sys.objects` and `sys.tables` rows naming page 11 stay true. A
-    // page that cannot be read ends the chain at the page before it.
+    // the `sys.objects` and `sys.tables` rows naming page 11 stay true.
+    //
+    // **Bounded, because the damaged path comes through here**: a link that
+    // leaves the catalog overflow range, a page that is not a heap page, a
+    // page that fails its checksum, or more steps than the range has pages
+    // (a cycle) ends the chain at the page before it - never a page of
+    // another relation re-formatted, never a mount that does not return.
+    // Any other failure is returned.
+    constexpr std::size_t kMaxChainPages = kCatalogOverflowLimit - kCatalogOverflowFirst + 1;
     PageId at = kCatalogPageAccessStats;
     PageId previous = kInvalidPageId;
-    while (at != kInvalidPageId) {
-        auto page = store_.Get(at);
-        if (!page.ok()) {
-            if (previous == kInvalidPageId) return page.status();  // the head itself
-            auto before = store_.Get(previous);
-            if (!before.ok()) return before.status();
-            heap::PageView(before.value().bytes()).set_next_page_id(kInvalidPageId);
-            return Status::OK();
+    for (std::size_t step = 0; at != kInvalidPageId; ++step) {
+        const bool in_range = at == kCatalogPageAccessStats ||
+                              (at >= kCatalogOverflowFirst && at < kCatalogOverflowLimit);
+        auto page = in_range && step < kMaxChainPages ? store_.Get(at)
+                                                       : StatusOr<storage::PageRef>(
+                                                             Status::Corruption("out of chain"));
+        const bool is_heap =
+            page.ok() && storage::RawPageType(page.value().bytes()) ==
+                             static_cast<std::uint8_t>(PageType::kHeap);
+        if (!page.ok() || !is_heap) {
+            if (page.ok() || page.status().code() == StatusCode::kCorruption) {
+                if (previous == kInvalidPageId) {
+                    return Status::Corruption("catalog: sys.access_stats' head page is unreadable");
+                }
+                auto before = store_.Get(previous);
+                if (!before.ok()) return before.status();
+                heap::PageView(before.value().bytes()).set_next_page_id(kInvalidPageId);
+                return Status::OK();
+            }
+            return page.status();
         }
         const PageId next = heap::PageView(page.value().bytes()).next_page_id();
         auto fresh = heap::PageView::CreateEmpty(page.value().bytes(), 0);
