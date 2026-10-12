@@ -231,6 +231,11 @@ client author has to know to write one.
   `S_ROW_BATCH` frames, each `{row_count u16, rows…}`, each row a
   `{i32 len | -1 = NULL, bytes}` per field. Then `S_COMPLETE {tag,
   rows_affected}`.
+- **A relation's pk field is always 8 bytes**, little-endian, whatever
+  integer type the column declares: `type_oid` names the declared type,
+  `type_len` is 8, and the value can exceed the declared range. A load
+  chunk sends it the same way (`protocol.md` §6). Decode an integer by
+  the field's own length, not by its `type_oid`.
 - **A statement with no result set** answers `S_COMPLETE` alone, its `tag`
   being the sentence the engine rendered. Where that sentence carries
   *lines* — `SHOW`, `DESCRIBE`, `ANALYZE`, `TRACE` — it arrives as a

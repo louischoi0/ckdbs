@@ -4911,7 +4911,11 @@ std::vector<wire::FieldDescription> DescribeFields(
         wire::FieldDescription f;
         f.name = names[i];
         f.type_oid = i < type_vals.size() ? type_vals[i] : 0;
-        f.type_len = wire::WireTypeLen(f.type_oid);
+        // Any relation's column 0 is its Keystone id and travels as u64,
+        // the joined relation's included (`wire::WireValueType`).
+        f.type_len = wire::WireTypeLen(
+            i < projection.size() ? wire::WireValueType(f.type_oid, projection[i].col_pos)
+                                  : f.type_oid);
         f.type_mod = i < type_mods.size() ? type_mods[i] : 0;
         // **`kFieldFlagKeystone` marks the relation's own column 0**, not
         // the first field of whatever was projected (`wire/row_codec.hpp`:

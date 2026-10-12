@@ -671,6 +671,18 @@ which went with the bump (`heap-and-tuple.md` §4.1).
 
 ## Keystone ids
 
+- **A fold or a group key over a narrow pk is refused past the declared
+  width on the binary wire.** Verified at `1aebdfe8` plus the narrow-pk wire
+  fix. A relation's column 0 is 8 bytes on the wire whatever it declares
+  (`protocol.md` §6), but only where the field is a column reference
+  (`wire::WireValueType` reads its `col_pos`). `MIN(id)`, `MAX(id)` and
+  `GROUP BY id` are typed as the column they read
+  (`AggregateOutputType`, which `UPDATE ... SET` typing also reads), so over
+  an `int8`/`int16`/`int32` pk with an id past that width the encoder refuses
+  the row `OutOfRange` (`KwpSessionTest.ANarrowPkPastItsDeclaredWidthReachesTheClientWhole`)
+  rather than send it cut. A refusal, never a wrong number; the debug text
+  surface answers it whole. Owner: `protocol.md` §6.
+
 - **An engine-internal purge of a user relation still owes a keyed
   tombstone, and none is built; `PURGE` frees a key by design.** Verified at
   `26766699` (BH-S3). A committed key stays bound because its delete-marked

@@ -108,6 +108,15 @@ std::int16_t WireTypeLen(std::uint32_t type_val) noexcept {
     }
 }
 
+std::uint32_t WireValueType(std::uint32_t type_val, std::uint32_t col_pos) noexcept {
+    switch (type_val) {
+        case kTypeValInt8:
+        case kTypeValInt16:
+        case kTypeValInt32: return col_pos == 0 ? kTypeValInt64 : type_val;
+        default: return type_val;
+    }
+}
+
 std::vector<FieldDescription> DescribeSchema(const catalog::Schema& schema) {
     std::vector<FieldDescription> fields;
     fields.reserve(schema.columns.size());
@@ -115,7 +124,7 @@ std::vector<FieldDescription> DescribeSchema(const catalog::Schema& schema) {
         FieldDescription f;
         f.name = std::string(catalog::NameView(col.name));
         f.type_oid = col.type_val;
-        f.type_len = WireTypeLen(col.type_val);
+        f.type_len = WireTypeLen(WireValueType(col.type_val, col.pos));
         // The catalog's packed (p, s) word, carried as-is: one packing,
         // two readers (TY02's helpers), zero for every other type - which
         // `catalog::TypeModOf` is, so the rule lives in one place.
@@ -144,7 +153,7 @@ void EncodeRowDescription(const std::vector<FieldDescription>& fields,
 
 Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& value,
                    std::vector<std::byte>& out) {
-    return EncodeValue(col.type_val, col.len, value, out);
+    return EncodeValue(WireValueType(col.type_val, col.pos), col.len, value, out);
 }
 
 Status EncodeValue(std::uint32_t type_val, std::uint32_t type_mod,
@@ -181,6 +190,19 @@ Status EncodeValue(std::uint32_t type_val, std::uint32_t type_mod,
         case kTypeValTimestamp: {
             if (Status s = ExpectInt(value, "an integer"); !s.ok()) return s;
             const std::int16_t width = WireTypeLen(type_val);
+            // Written at the declared width, so a value that does not fit
+            // it would reach the client as another number. Refused rather
+            // than cut: a narrow pk's id is widened by WireValueType before
+            // it gets here, and anything else that overflows its width is
+            // an answer this column cannot carry.
+            if (width < 8) {
+                const std::int64_t bound = std::int64_t{1} << (8 * width - 1);
+                if (value.int_val < -bound || value.int_val >= bound) {
+                    return Status::OutOfRange(
+                        "wire row codec: " + std::to_string(value.int_val) +
+                        " does not fit the column's " + std::to_string(width) + "-byte width");
+                }
+            }
             PutLE(out, static_cast<std::uint32_t>(width), 4);
             PutLE(out, value.int_val, width);
             return Status::OK();

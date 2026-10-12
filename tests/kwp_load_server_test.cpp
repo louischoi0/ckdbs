@@ -145,8 +145,14 @@ protected:
     static std::vector<std::byte> Chunk(std::uint64_t load_id, std::uint32_t seq,
                                         const catalog::Schema& schema,
                                         const std::vector<std::vector<parser::AstValue>>& rows) {
+        // The codec reads a column's position (column 0 is the Keystone,
+        // u64 on the wire), and `Col` leaves it 0, so the copy numbers them.
+        catalog::Schema positioned = schema;
+        for (std::uint32_t i = 0; i < positioned.columns.size(); ++i) {
+            positioned.columns[i].pos = i;
+        }
         wire::RowBatchWriter writer;
-        for (const auto& row : rows) EXPECT_TRUE(writer.AppendRow(schema, row).ok());
+        for (const auto& row : rows) EXPECT_TRUE(writer.AppendRow(positioned, row).ok());
         wire::PayloadWriter w;
         w.U64(load_id);
         w.U32(seq);

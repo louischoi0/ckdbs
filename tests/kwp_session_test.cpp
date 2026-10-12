@@ -278,6 +278,49 @@ TEST_F(KwpSessionTest, ASelectStarDescribesTheWholeSchema) {
         << "field 0 of every user relation is the Keystone id";
 }
 
+TEST_F(KwpSessionTest, ANarrowPkPastItsDeclaredWidthReachesTheClientWhole) {
+    // protocol.md §6: a relation's column 0 is its Keystone id, u64 on the
+    // wire whatever integer width it declares - in any projected position
+    // and on a joined relation as much as the first one.
+    Handshake();
+    Run("CREATE TABLE np (id int32, v int64)");
+    Run("CREATE TABLE nq (id int8, w int64)");
+    const std::int64_t id = (std::int64_t{1} << 31) + 5;
+    Run("INSERT INTO np VALUES (" + std::to_string(id) + ", 300)");
+    Run("INSERT INTO nq VALUES (300, 7)");
+
+    const auto expect_id = [&](const std::string& sql, std::size_t field, std::int64_t want) {
+        auto frames = RunStatement(sql);
+        ASSERT_EQ(frames.size(), 3u) << sql;
+        auto desc = wire::DecodeRowDescription(frames[0].payload);
+        ASSERT_TRUE(desc.ok()) << desc.status().message();
+        EXPECT_EQ(desc.value()[field].type_len, 8) << sql;
+        auto rows = wire::DecodeRowBatch(frames[1].payload, desc.value().size());
+        ASSERT_TRUE(rows.ok()) << rows.status().message();
+        ASSERT_EQ(rows.value().size(), 1u) << sql;
+        ASSERT_EQ(rows.value()[0][field].bytes.size(), 8u) << sql;
+        std::int64_t got = 0;
+        for (std::size_t b = 0; b < 8; ++b) {
+            got |= std::int64_t{std::to_integer<std::uint8_t>(rows.value()[0][field].bytes[b])}
+                   << (8 * b);
+        }
+        EXPECT_EQ(got, want) << sql;
+    };
+    expect_id("SELECT * FROM np", 0, id);
+    expect_id("SELECT v, id FROM np", 1, id);
+    expect_id("SELECT np.v, nq.id FROM np JOIN nq ON nq.id = np.v", 1, 300);
+
+    // A fold's output is typed as the column it read, not as a Keystone,
+    // so MAX(id) is not widened: it is refused rather than sent cut.
+    auto folded = RunStatement("SELECT MAX(id) FROM np");
+    ASSERT_FALSE(folded.empty());
+    EXPECT_EQ(folded.back().type, static_cast<std::uint8_t>(ServerFrameType::kError));
+    for (const auto& f : folded) {
+        EXPECT_NE(f.type, static_cast<std::uint8_t>(ServerFrameType::kRowBatch))
+            << "no row may carry the cut id";
+    }
+}
+
 TEST_F(KwpSessionTest, AWriteAnswersACompletionWithItsRowCountAndNoDescription) {
     Handshake();
     auto frames = RunStatement("INSERT INTO t VALUES (40, 'delta')");
