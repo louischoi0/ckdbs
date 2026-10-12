@@ -321,6 +321,7 @@ out.
 | `*B` | bug |
 | `*P` | progress gate: what must be resolved before the named work can proceed. "Resolving the thread-contamination `*I` is the `*P` of the BK `*M`" means the BK milestone cannot be closed until that issue is resolved |
 | `<-:` | blocked by: `B <-: A` means A blocks B (the blocked item on the left, the blocker on the right) |
+| `:>>` | the `*P` relation written as an arrow: `A :>> B` means A must be met before B can proceed (A is B's `*P`) |
 
 ## Open Decisions — DO NOT assume or silently pick
 
