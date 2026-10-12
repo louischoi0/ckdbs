@@ -2,7 +2,8 @@
 
 **The operator's words of 2026-10-12**, recorded by CLA in the main
 checkout on `main` at `ade5bc20` (`v2.7.0-843-gade5bc20`; the v3.0.0 tag is
-not cut). Every word is recorded **in English**, translated from the
+not cut); §4-§5 on `worktree-bl-drop-session-affinity` from `1aebdfe8`
+(`v2.7.0-854-g1aebdfe8`). Every word is recorded **in English**, translated from the
 Korean it was typed in.
 
 ## 1. A direction for scans asked for
@@ -31,3 +32,21 @@ Korean it was typed in.
 | **Mark** | BM-S0: the order written (`workorder-bm-scan-row-kernel.md`) and pushed to `main` directly from the main checkout, with no worktree and no work branch, as a document-only change. The pre-push hook did not run, because it is not enabled in this clone; a documentation-only push is the case its own text names as legitimate for `--no-verify` (`scripts/githooks/pre-push:24-28`). No build and no suite ran. **Not opened**: BM-Q0..Q12 are unmarked. The letter BM is CLA's choice (BM-Q11) |
 | **Does not settle** | BM-Q0..Q12, among them the kernel's authority (BM-Q2, `[quiet-wrong]` under (b)), the NULL operand (BM-Q3) and the sequencing (BM-Q9) |
 | **Recorded at** | `workorder-bm-scan-row-kernel.md`; `index.md`'s BM row |
+
+## 4. Session affinity struck from BL
+
+| | |
+|---|---|
+| **Word** | *"Analyse the BL milestone. And I am thinking of discarding the affinity concept for now - give the grounds for it or the case against."* CLA analysed BL and recommended striking BL's session affinity axis, keeping the move's restraint as the engine's own constants, and treated the namespace's affinity (NS10, D18) as a separate question. The operator answered: *"Discard only session affinity, and amend the BL document."* |
+| **Mark** | W4 of BL: BL-R3 is struck, and with it BL-Q5, BL-Q6 and BL-Q9; the balancer reads no session setting and applies one engine-wide hysteresis margin and dwell (BL-R4). It strikes the affinity half of W1 (`raft-marks-2026-10-11.md` §5). Written on `worktree-bl-drop-session-affinity` from `1aebdfe8` as a document-only change |
+| **Does not settle** | The namespace's affinity (NS10, D18), which stays as written; BL-Q0..Q4, BL-Q7, BL-Q8 and BL-Q10..Q15, still unmarked; BL still not opened |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` header (W4), BL-R3, §4, §6; `index.md`'s BL row |
+
+## 5. BL's priority as four context levels
+
+| | |
+|---|---|
+| **Word** | *"There is something to decide before the document is finalized: how the session priority levels are set. I want to design a set of levels that applies context - a level that puts priority on the single-row updates that carry business logic, a level that runs in the background, a level for query-analysis reads that gives way first, and so on."* (W5). CLA proposed four levels and the items below; asked for more on the latency class, CLA explained why the `transactional` level needs a latency class and why its lag limit replaces a per-statement demotion. The operator answered: *"Update the workplan document according to CLA's proposal."* (W6) |
+| **Mark** | **Adopted whole on W6, not marked per item**: BL-Q16 (a), four levels `transactional`, `normal` (the default), `analytic`, `background`; BL-Q8 (a), declared by the session after the handshake, `transactional` alone gated by the `admin` role (BL-R8), engine-derived levels a later direction; the per-statement demotion folded into the lag limit (BL-R2); BL-Q17 (a), `analytic` not read-only; BL-Q18 (a), `background` the idle class with a floor; BL-Q4 (b), a share and a latency class bounded by the lag limit. Written on `worktree-bl-drop-session-affinity` from `1aebdfe8` as a document-only change |
+| **Does not settle** | The numbers - shares, the 16-page slice, the lag limit L, the floor F - which stay `[provisional]` until BL-S1 and BL-S5; the spelling that declares a level (BL-S4); BL-Q0..Q3, BL-Q7 and BL-Q10..Q15, still unmarked; BL still not opened |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` header (W5, W6), BL-R2, BL-R7, BL-R8, §4, §6; `index.md`'s BL row |
