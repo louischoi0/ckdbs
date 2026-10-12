@@ -328,7 +328,7 @@ struct TableAccess {
     // **This is the one field on this struct that can move without DDL, and
     // the exception is deliberate rather than overlooked.** A root split
     // during an ordinary INSERT republishes `root_page_id` through
-    // `Catalog::UpdateIndexRoot()`. **It used to do that with a version
+    // `Catalog::AdoptRoot()`. **It used to do that with a version
     // bump, which dropped this entry and dangled the running statement's
     // `const TableAccess*`; since PW2-4 it writes the anchor and updates
     // this field in place instead, so the entry survives** - the same
@@ -407,11 +407,12 @@ struct TableAccess {
 // everything about a `sys.patterns` row that DDL alone can change.
 //
 // **The omissions are the point.** `use_count` and `last_seen` are not
-// here, and neither may ever be added: they change on every execution,
-// which is not DDL, so a cached copy of them would be stale the moment it
-// was taken and there is no invalidation that could fix it. This is
-// exactly why TableAccess carries no `next_id` (catalog_cache.hpp), and
-// for exactly the same reason - a fact that moves without DDL is not a
+// here, and neither may ever be added: they are heat, which moved on every
+// execution until BL-S4's ruling 1 retired its writer (rows.hpp), and a
+// fact that moves without DDL would be stale in a cache the moment it was
+// taken, with no invalidation that could fix it. This is exactly why
+// TableAccess carries no `next_id` (catalog_cache.hpp), and for exactly
+// the same reason - a fact that moves without DDL is not a
 // cacheable fact. A caller that wants heat reads the row from the page
 // through Catalog::GetSysPatternRow().
 //

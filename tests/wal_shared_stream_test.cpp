@@ -379,14 +379,16 @@ TEST(SharedStreamRecyclingTest, ADetachBesideAppendsUnderTheLatchLosesNoRecord) 
                              ("kds_shared_stream_recycle_" + std::to_string(::getpid())))
                                 .string();
     std::filesystem::remove_all(dir);
-    constexpr std::uint64_t kSegment = 64 * 1024;
+    constexpr std::uint64_t kSegment = kMinSegmentSize;
     auto device = FileLogDevice::Open(dir, 0, kSegment);
     ASSERT_TRUE(device.ok()) << device.status().message();
     auto opened = WalStream::Open(device.value().get(), 0, kMinRingCapacity, /*shared=*/true);
     ASSERT_TRUE(opened.ok()) << opened.status().message();
     WalStream& stream = *opened.value();
 
-    constexpr int kRecords = 6000;
+    // About twenty segments' worth, so detaches run beside many rolls.
+    constexpr int kRecords =
+        static_cast<int>(20 * kSegment / (kRecordHeaderSize + kPayloadSize));
     std::atomic<bool> done{false};
     std::thread appender([&] {
         for (int i = 0; i < kRecords; ++i) {

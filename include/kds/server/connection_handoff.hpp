@@ -40,11 +40,37 @@
 // An offered fd belongs to the inbox until taken, and to the taker after.
 // One the destination never takes - an instance stopped between the accept
 // and the take - is closed by the destructor, so no socket leaks.
+//
+// ---- A live connection (BL-S2) ------------------------------------------
+//
+// **The same inbox carries a connection between transactions** (BL-R6,
+// `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`):
+// a session is placed on a core per transaction, not for its life, so a
+// listener hands a whole connection - its socket, its protocol state, its
+// session - to the core its next transaction runs on. The carrier is this
+// one, extended rather than duplicated (`sched.md` §5): an accepted socket
+// is an arrival with no `Transit`. A `Transit` is opaque here; the listener
+// defines it, and one never taken is destroyed with the inbox, which is
+// where it closes its socket.
 
 namespace kds::server {
 
 class ConnectionHandoff {
 public:
+    // A live connection in an inbox. Its destructor is its teardown when no
+    // core takes it.
+    class Transit {
+    public:
+        virtual ~Transit() = default;
+    };
+
+    // What an inbox holds: an accepted socket (`moved` null) or a live
+    // connection on socket `fd`.
+    struct Arrival {
+        int fd = -1;
+        std::unique_ptr<Transit> moved;
+    };
+
     // `wakers` must outlive this, and may be null: nothing is kicked, and a
     // destination finds its inbox at its next wake for another reason.
     ConnectionHandoff(std::uint32_t cores, const sched::WakeRegistry* wakers);
@@ -63,21 +89,22 @@ public:
     std::uint32_t placed() const noexcept { return next_.load(std::memory_order_relaxed); }
 
     // Places `fd` in `core`'s inbox, then kicks `core`. Callable from any
-    // thread; `core` must be below `cores()`.
-    void Offer(std::uint32_t core, int fd);
+    // thread; `core` must be below `cores()`. `moved`, when given, is the
+    // live connection on `fd` (BL-S2).
+    void Offer(std::uint32_t core, int fd, std::unique_ptr<Transit> moved = nullptr);
 
     // Whether `core`'s inbox may hold a socket. A hint: true may find the
     // inbox already taken by a racing `Take`, never false while one waits.
     bool Pending(std::uint32_t core) const noexcept;
 
-    // Every socket waiting for `core`, in offer order, now owned by the
+    // Everything waiting for `core`, in offer order, now owned by the
     // caller.
-    std::vector<int> Take(std::uint32_t core);
+    std::vector<Arrival> Take(std::uint32_t core);
 
 private:
     struct Inbox {
         Latch latch{LatchKind::kHandoff};
-        std::vector<int> fds;
+        std::vector<Arrival> arrivals;
         std::atomic<bool> pending{false};
     };
 

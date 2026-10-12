@@ -235,7 +235,8 @@ Status WireResultSink::EncodeProjectedRow(std::span<const exec::ColumnRef> proje
     std::vector<std::byte> bytes;
     bytes.reserve(projection.size() * 12);
     for (std::size_t i = 0; i < projection.size(); ++i) {
-        const std::uint32_t type_val = i < types.size() ? types[i] : 0;
+        const std::uint32_t type_val =
+            wire::WireValueType(i < types.size() ? types[i] : 0, projection[i].col_pos);
         const std::uint32_t type_mod = i < fields_.size() ? fields_[i].type_mod : 0;
         if (Status s = wire::EncodeValue(type_val, type_mod, frame.Get(projection[i]), bytes);
             !s.ok()) {

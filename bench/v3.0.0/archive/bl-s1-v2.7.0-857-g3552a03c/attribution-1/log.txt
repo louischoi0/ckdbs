@@ -1,0 +1,8 @@
+bl-mixed-k4-segregated-mixed-slicedflt-r0 load 2.19->2.12 errors=0 read p50=125.9 p99=276234.9 sched p99=440405.6 max=584026.8 walker p50=3752.9 ins p50=3380.8 cores=['0.0', '1.0', '2.0', '3.0']
+bl-mixed-k4-segregated-mixed-slicedflt-r0 load 2.12->1.90 errors=0 read p50=131.1 p99=1328.2 sched p99=405129.7 max=686900.6 walker p50=3707.4 ins p50=3329.8 cores=['0.0', '1.0', '2.0', '3.0']
+bl-mixed-k4-segregated-no0-mixed-slicedflt-r0 load 1.90->1.88 errors=0 read p50=112.8 p99=259.2 sched p99=564.6 max=6211.3 walker p50=3753.9 ins p50=3349.8 cores=['1.0', '2.0', '3.0']
+bl-mixed-k4-segregated-no0-mixed-slicedflt-r0 load 1.88->1.79 errors=0 read p50=118.3 p99=283870.0 sched p99=377763.0 max=474221.2 walker p50=3845.9 ins p50=3461.1 cores=['1.0', '2.0', '3.0']
+bl-mixed-k4-segregated-mixed-slicedflt-r0 load 1.79->1.81 errors=0 read p50=128.0 p99=290065.1 sched p99=562014.1 max=675712.1 walker p50=3764.9 ins p50=3401.3 cores=['0.0', '1.0', '2.0', '3.0']
+bl-mixed-k4-segregated-mixed-slicedflt-r0 load 1.81->1.89 errors=0 read p50=121.1 p99=1232.6 sched p99=329115.9 max=408707.9 walker p50=3855.0 ins p50=3477.8 cores=['0.0', '1.0', '2.0', '3.0']
+bl-mixed-k4-segregated-no0-mixed-slicedflt-r0 load 1.89->1.72 errors=0 read p50=114.2 p99=566.7 sched p99=756.0 max=4775.5 walker p50=3744.6 ins p50=3360.5 cores=['1.0', '2.0', '3.0']
+bl-mixed-k4-segregated-no0-mixed-slicedflt-r0 load 1.72->2.20 errors=0 read p50=117.5 p99=254149.9 sched p99=626534.9 max=733055.4 walker p50=3753.7 ins p50=3380.5 cores=['1.0', '2.0', '3.0']

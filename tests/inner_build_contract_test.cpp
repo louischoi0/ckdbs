@@ -143,6 +143,42 @@ TEST_F(InnerBuildContractTest, ANullJoinValueAnswersTheSameBuiltOrWalked) {
         << "a NULL key matches no equality: " << built;
 }
 
+TEST_F(InnerBuildContractTest, ANullProbeNotInStopsItsWalkAndAnswersTheSameBuiltOrWalked) {
+    // A NULL probe settles NOT IN at the first inner row of its bucket, so
+    // the first outer row's walk stops early and leaves a partial build;
+    // the next outer row's match (tr (2,50)) lies past where it stopped.
+    // np = (1, NULL) (2, 50) (3, 99): row 1 is unknown, row 2 matches,
+    // row 3's bucket is empty - only 3 is admitted, at every cap.
+    catalog::Schema schema;
+    for (std::uint32_t pos : {0u, 1u}) {
+        catalog::SysColumnRow row{};
+        row.pos = pos;
+        catalog::SetName(row.name, pos == 0 ? "id" : "v");
+        row.type_val = catalog::kTypeValInt64;
+        row.len = 8;
+        row.notnull = pos == 0;
+        schema.columns.push_back(row);
+    }
+    ASSERT_TRUE(boot_->catalog
+                    .CreateTable(catalog::kNamespacePublic, "np", schema,
+                                 catalog::ClusteredType::kBtree)
+                    .ok());
+    parser::AstValue null_value;
+    null_value.type = parser::ValueType::kNull;
+    Insert("np", {null_value});
+    Insert("np", {Int(50)});
+    Insert("np", {Int(99)});
+
+    const char* sql =
+        "SELECT np.id FROM np WHERE np.v NOT IN (SELECT tr.qty FROM tr WHERE tr.au_id = np.id)";
+    const std::vector<std::string> reference = Run(sql, nullptr, /*cap=*/0);
+    EXPECT_EQ(reference, (std::vector<std::string>{"3"}));
+    for (std::size_t cap : {std::size_t{1}, std::size_t{2}, std::size_t{5},
+                            kDefaultJoinBuildMaxRows}) {
+        EXPECT_EQ(Run(sql, nullptr, cap), reference) << "cap " << cap;
+    }
+}
+
 TEST_F(InnerBuildContractTest, OneCappedStepDoesNotDeclineItsSibling) {
     // The [OPEN] scoping question's built behavior, pinned: one knob,
     // checked per build (CLAUDE.md's index carries the open half). Cap 4

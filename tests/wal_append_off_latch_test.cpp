@@ -35,7 +35,7 @@ namespace {
 
 using namespace std::chrono_literals;
 
-constexpr std::uint64_t kSegment = 64 * 1024;
+constexpr std::uint64_t kSegment = kMinSegmentSize;  // the stream's floor (`stream.hpp`)
 
 std::string TempDir(const char* name) {
     return (std::filesystem::temp_directory_path() /

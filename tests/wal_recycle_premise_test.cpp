@@ -52,7 +52,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr std::uint64_t kSegmentSize = 16 * 1024;
+constexpr std::uint64_t kSegmentSize = kMinSegmentSize;  // the stream's floor (`stream.hpp`)
 constexpr PageId kP = server::kFirstUserPageId;
 constexpr PageId kQ = server::kFirstUserPageId + 1;
 constexpr std::uint64_t kTxn = 7;
@@ -284,7 +284,7 @@ TEST(WalRecyclePremiseTest, APageSeededAtRecLsnZeroStillHasItsLaterRecordReplaye
 // store and writes back again the page a raced writeback left dirty - so
 // the sequence is placed instead, through a writeback seam.
 
-constexpr std::uint64_t kRigSegmentSize = 256 * 1024;
+constexpr std::uint64_t kRigSegmentSize = kMinSegmentSize;
 
 std::vector<char> FileBytes(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
@@ -511,7 +511,9 @@ TEST(WalRecyclePremiseRigTest, AfterRecyclingTheMountRecoversBecauseRedoIsFloore
         const auto reclaimed = [&] {
             return rig.log_device().segments_removed() == rig.log_device().first_segment();
         };
-        RunPlacedSequence(rig, /*padding_rows=*/1500);
+        // Scaled with the segment (1,500 rows at 256 KiB), so `r` and `q`
+        // still lie a segment apart.
+        RunPlacedSequence(rig, /*padding_rows=*/3000);
         ASSERT_FALSE(::testing::Test::HasFatalFailure());
         ASSERT_TRUE(server::Within(std::chrono::seconds(5), reclaimed));
         ASSERT_GT(rig.log_device().first_segment(), 0u) << "the run must have recycled";

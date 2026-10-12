@@ -169,7 +169,7 @@ not the data. `known-gaps.md`'s *"no single part of it dominates"* is the
 same finding seen from the other side.
 
 `[measured]` The shape is not a corner case.
-`results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` §4 measured twelve
+`results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` §4 (at `36449d28`) measured twelve
 library shapes at engine `v2.7.0-531`, with another driver and run on the
 same host model (its §1). Its findings:
 - unindexed, KDS ran at 0.60x to 0.87x of PostgreSQL, falling with rows;

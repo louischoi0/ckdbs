@@ -1,0 +1,1 @@
+{ "name": "milestone-pane", "version": "0.1.0", "description": "Toggleable pane summarising the current KDS work order: stages, rulings, operator items, gates", "types": "./types/index.d.ts" }

@@ -1,0 +1,17 @@
+diff --git a/src/server/command_dispatcher.cpp b/src/server/command_dispatcher.cpp
+index 592bbf6b..58f7e39e 100644
+--- a/src/server/command_dispatcher.cpp
++++ b/src/server/command_dispatcher.cpp
+@@ -4983,6 +4983,12 @@ class SelectRun {
+ public:
+     SelectRun(CommandDispatcher& d, Session& session) : d_(d), session_(session) {
+         slice_.cancel = session.cancel_flag().get();
++        // BL-S1 MEASUREMENT ONLY - never committed: the slice sweep's override.
++        static const std::uint32_t bl_slice = [] {
++            const char* v = std::getenv("KDS_BL_PAGES_PER_SLICE");
++            return v != nullptr ? static_cast<std::uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
++        }();
++        if (bl_slice != 0) slice_.pages_per_slice = bl_slice;
+         if (d_.select_scratch_pool_.empty()) {
+             scratch_ = std::make_unique<CommandDispatcher::SelectScratch>();
+         } else {

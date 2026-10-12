@@ -16,6 +16,7 @@
 
 #include "kds/exec/varheap_sweep.hpp"
 #include "kds/exec/step_vm.hpp"
+#include "kds/sched/core_load.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/storage/file_page_device.hpp"
 
@@ -1742,12 +1743,21 @@ Status Expeditor::Start() {
     // is spawned, and the reactor below is the same single one that has
     // always served. G2 asks for zero overhead on the single-core path, and
     // the cheapest way to mean it is to build nothing.
+    //
+    // BL-S1: the cores whose load every core may read (`core_load.hpp`) -
+    // none at one core, where nothing writes a load word (BL-R9).
+    sched::CoreLoad::SetCores(config_.cores > 1 ? config_.cores : 0);
     if (config_.cores > 1) {
         // AU-S3: the waker table, registered into by every core including
         // this one - since AT-S10d the only cross-core path the instance
         // has (AR0-6-R1: write the shared state, then kick).
         wakers_.emplace(config_.cores);
-        if (handoff) handoff_.emplace(config_.cores, &*wakers_);
+        // BL-S3: every transaction is placed above one core, by the test's
+        // placer or the instance's balancer, so the inboxes moves cross
+        // through always exist here.
+        placer_ = config_.transaction_placer != nullptr ? config_.transaction_placer
+                                                        : &load_placer_;
+        handoff_.emplace(config_.cores, &*wakers_);
         // AO-S5: and the lock table kicks through it - a decide's slot flip
         // on one core ends the block a waiter's reactor sits in on another
         // (AU-S2). The same registry a stop kicks through.
@@ -1917,12 +1927,14 @@ Status Expeditor::Start() {
             }
             // Every peer listens on the port with core 0's setup (AT-S8), or
             // runs what core 0 hands it where the port cannot be shared.
-            if (Status s = handoff_.has_value()
+            if (Status s = handoff
                                ? core.value()->HostHandedConnections(*handoff_, client_setup)
                                : core.value()->ListenAndAttach(config_.port, client_setup);
                 !s.ok()) {
                 return s;
             }
+            // BL-S2: and takes the connections other cores move to it.
+            if (Status s = core.value()->AcceptMoves(*handoff_, placer_); !s.ok()) return s;
             core.value()->dispatcher().SetReclaimCounters(&reclaim_counters_);
             core.value()->dispatcher().SetStatementEpochs(&*statement_epochs_);
             core.value()->dispatcher().SetReclaimQueue(&*reclaimer_);
@@ -2020,9 +2032,15 @@ Status Expeditor::Start() {
             return s;
         }
     }
-    if (handoff_.has_value()) listener.value().set_handoff(&*handoff_);
+    if (handoff) listener.value().set_handoff(&*handoff_);
     if (Status s = listener.value().Attach(scheduler, *dispatcher_, &*logger_); !s.ok()) {
         return s;
+    }
+    // BL-S2: core 0 places transactions and takes the connections other
+    // cores move to it.
+    if (handoff_.has_value()) {
+        listener.value().set_mover(&*handoff_, placer_);
+        if (Status s = listener.value().Host(*handoff_, 0); !s.ok()) return s;
     }
     if (kwp_listener.has_value()) {
         if (Status s = kwp_listener->Attach(scheduler, *dispatcher_, &*logger_); !s.ok()) {
@@ -2181,6 +2199,8 @@ void Expeditor::StopStartedCores() {
     // checkpoint its own mount published. `~CoreRuntime` is the disposal
     // that belongs to a core which served nothing.
     cores_.clear();
+    // Before `running_`'s registry, as at the tail (BL-S2).
+    handoff_.reset();
 }
 
 Status Expeditor::RunUntilStopped() {
@@ -2314,6 +2334,11 @@ Status Expeditor::RunUntilStopped() {
     // order inside `ServeRuntime` is the order they had. Everything above
     // has finished with them: the workers are joined, the listeners
     // detached, the last checkpoint written.
+    //
+    // **The inboxes before the registry** (BL-S2): a connection moved and
+    // never taken unregisters its cancel entry as it is destroyed, and the
+    // registry is `ServeRuntime`'s.
+    handoff_.reset();
     running_.reset();
     return s;
 }

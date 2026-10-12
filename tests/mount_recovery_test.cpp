@@ -47,7 +47,7 @@
 namespace kds::server {
 namespace {
 
-constexpr std::uint64_t kSegmentSize = 16 * 1024;
+constexpr std::uint64_t kSegmentSize = wal::kMinSegmentSize;
 constexpr PageId kPage = kFirstUserPageId;
 
 std::vector<std::byte> Bytes(std::size_t n, unsigned char fill) {
@@ -624,7 +624,7 @@ TEST_F(RecoveryAuditTest, ARedoStartTheFloorRaisedIsPrintedWithWhatItRaised) {
 
 // BC-R6: the recycling fields are core 0's, beside `wal_syncs`.
 TEST_F(RecoveryAuditTest, TheLogsRecyclingIsReportedWhereTheLogIsOwned) {
-    auto device = wal::MemoryLogDevice::Create(64 * 1024);
+    auto device = wal::MemoryLogDevice::Create(wal::kMinSegmentSize);
     ASSERT_TRUE(device.ok());
     sched::ManualClock clock;
     auto wal = wal::WalManager::Open(device.value().get(), clock, /*core_id=*/0);
@@ -634,7 +634,7 @@ TEST_F(RecoveryAuditTest, TheLogsRecyclingIsReportedWhereTheLogIsOwned) {
         ASSERT_TRUE(wal.value()->Append({wal::RecordType::kHeapInsert, 1, 1}, payload).ok());
     }
     ASSERT_TRUE(wal.value()->SyncAll().ok());
-    wal.value()->RecycleBelow(2 * 64 * 1024 + wal::kSegmentHeaderSize);
+    wal.value()->RecycleBelow(2 * wal::kMinSegmentSize + wal::kSegmentHeaderSize);
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, *faulty_, /*log=*/nullptr, &clock,
                         wal.value().get());
@@ -646,7 +646,7 @@ TEST_F(RecoveryAuditTest, TheLogsRecyclingIsReportedWhereTheLogIsOwned) {
 
 // `wal.md` §6-5: a stopped log is named in SHOW META, and only then.
 TEST_F(RecoveryAuditTest, AFailStoppedLogIsNamedInShowMeta) {
-    auto device = wal::MemoryLogDevice::Create(64 * 1024);
+    auto device = wal::MemoryLogDevice::Create(wal::kMinSegmentSize);
     ASSERT_TRUE(device.ok());
     sched::ManualClock clock;
     auto wal = wal::WalManager::Open(device.value().get(), clock, /*core_id=*/0);

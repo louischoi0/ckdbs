@@ -17,6 +17,9 @@ Shapes:
              one relation shared by every client
   insertN    the same into one relation per client: what separates the pk's
              issue (page 7 on KDS) from the rightmost leaf
+  pkmix      BL-S1's skew mix: per statement, a pk point read of the preloaded
+             relation or, with even odds, a pk UPDATE of a row in the client's
+             own key stripe (no two clients write one row)
   recent     an INSERT, then a pk read of a row written up to 300 ids before
              it - rows written within the last few hundred commits, which on
              KDS are classified through the visibility window (P2)
@@ -86,7 +89,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_common import nearest_rank  # noqa: E402
 from bb_overhead_benchmark import host_state, meta_all, wait_for_load  # noqa: E402
 
-SHAPES = ("point", "trade", "insert1", "insertN", "recent")
+SHAPES = ("point", "trade", "insert1", "insertN", "recent", "pkmix")
 KDS_DURABILITY = ("relaxed", "group", "strict")
 PG_DURABILITY = ("off", "on")
 CLIENT_BOUND = 0.80
@@ -186,7 +189,7 @@ def tables(args, suffix):
 def setup(args, be, suffix):
     t = tables(args, suffix)
     must = lambda sql: _must(be, sql)
-    if args.shape == "point":
+    if args.shape in ("point", "pkmix"):
         must(ddl(args.engine, t["point"], ["c0", "c1"]))
         preload(args.engine, be, t["point"], [[i, i] for i in range(args.rows)])
     elif args.shape == "trade":
@@ -224,6 +227,13 @@ def statements(args, t, index, rng, last):
     if args.shape == "point":
         while True:
             yield [(f"SELECT * FROM {t['point']} WHERE id = {rng.randint(1, args.rows)}", "read")]
+    if args.shape == "pkmix":
+        while True:
+            if rng.random() < 0.5:
+                yield [(f"SELECT * FROM {t['point']} WHERE id = {rng.randint(1, args.rows)}", "read")]
+            else:
+                k = index + 1 + args.sessions * rng.randrange(args.rows // args.sessions)
+                yield [(f"UPDATE {t['point']} SET c1 = c1 + 1 WHERE id = {k}", "write")]
     if args.shape == "trade":
         first = index * ACCOUNTS_PER_CLIENT + 1
         state = {a: [OPENING_BALANCE, 0, 0] for a in range(first, first + ACCOUNTS_PER_CLIENT)}
@@ -263,6 +273,17 @@ def client(args):
     else:
         be = Pg(args.port, args.pg_database, args.durability)
     core = meta_all(be.conn).get("core") if args.engine == "kds" else None
+    # BL-S1's balanced and skewed arms: a client cannot choose its core under
+    # SO_REUSEPORT, so it reconnects until the kernel's hash lands it on the
+    # core its arm assigned. `reconnects` says how many it took.
+    reconnects = 0
+    while args.engine == "kds" and args.target_core >= 0 and core != args.target_core:
+        if reconnects >= 2000:
+            raise SystemExit(f"client {args.client_index}: core {args.target_core} not reached")
+        be.conn.close()
+        be = Kds(args.port)
+        core = meta_all(be.conn).get("core")
+        reconnects += 1
     t = tables(args, args.suffix)
     rng = random.Random(args.client_index * 7919 + 1)
     last = {"id": None}
@@ -304,7 +325,7 @@ def client(args):
     if cpu0 is None:  # one unit outlasted the whole measured span: nothing measured
         cpu0, t_start = r1.ru_utime + r1.ru_stime, t_end
     cpu = (r1.ru_utime + r1.ru_stime) - cpu0
-    print(json.dumps({"index": args.client_index, "core": core, "t_start": t_start, "t_end": t_end,
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
                       "cpu_s": cpu, "refusals": refusals, "errors": errors, "first_error": first_err,
                       "lat": lat}))
 
@@ -320,6 +341,8 @@ def start_kds(args, wd, port):
                 f"log_file = s.log\nlog_dir = {wd}\nlog_level = warn\n")
         if args.server_cpus:
             f.write(f"reactor_cpus = {args.server_cpus}\n")
+        for line in getattr(args, "extra_conf", None) or []:
+            f.write(line + "\n")
     # bench/README.md rule 5: a port something already answers on would hand
     # the connect loop below another instance while ours fails to bind.
     with socket.socket() as s:
@@ -365,8 +388,30 @@ def pin_postmaster(args, ctl):
         subprocess.run(["taskset", "-pc", args.server_cpus, p], check=True, capture_output=True)
 
 
+GAUGE = re.compile(r"^load_c\d+_(busy_ppm|foreground_ppm|queued_foreground|sessions)$")
+
+
+def is_gauge(key):
+    return GAUGE.match(key) is not None
+
+
+def placement_targets(args):
+    """BL-S1's arms (BL §5.1). `kernel`: no target, the kernel's hash as
+    shipped. `balanced`: client i on core i % cores. `skew`: two thirds of the
+    sessions balanced and the last third on core 1 (core 0 at `cores = 1`) -
+    arm D's drift at its worst, every reopened session landing on one core,
+    which an accept-only balancer cannot undo."""
+    n, k = args.sessions, args.cores
+    if args.placement == "kernel" or args.engine != "kds":
+        return [-1] * n
+    if args.placement == "balanced":
+        return [i % k for i in range(n)]
+    third = n // 3
+    return [i % k for i in range(n - third)] + [min(1, k - 1)] * third
+
+
 def run_one(args, run):
-    tag = (f"{args.engine}-{args.shape}-{args.durability}-k{args.cores}-s{args.sessions}-r{run}"
+    tag = (f"{args.engine}-{args.shape}-{args.durability}-k{args.cores}-s{args.sessions}-{args.placement}-r{run}"
            if args.engine == "kds" else f"pg-{args.shape}-{args.durability}-s{args.sessions}-r{run}")
     wait = wait_for_load(args.max_load, args.max_wait)
     before = host_state()
@@ -389,14 +434,16 @@ def run_one(args, run):
                 pin_postmaster(args, ctl)
         setup(args, ctl, suffix)
         m0 = meta_all(ctl.conn) if args.engine == "kds" else {}
-        start_at = time.time() + 3.0
+        targets = placement_targets(args)
+        # A client that must reconnect to reach its core needs longer to start.
+        start_at = time.time() + (3.0 if args.placement == "kernel" else 3.0 + 0.05 * args.sessions * args.cores)
         for i in range(args.sessions):
             cl = [sys.executable, os.path.abspath(__file__), "--client", "--engine", args.engine,
                   "--port", str(args.port), "--client-index", str(i), "--shape", args.shape,
                   "--sessions", str(args.sessions), "--rows", str(args.rows),
                   "--durability", args.durability, "--suffix", suffix, "--start-at", repr(start_at),
                   "--warmup", str(args.warmup), "--seconds", str(args.seconds),
-                  "--pg-database", args.pg_database]
+                  "--pg-database", args.pg_database, "--target-core", str(targets[i])]
             if args.client_cpus:
                 cpus = args.client_cpus.split(",")
                 cl = ["taskset", "-c", cpus[i % len(cpus)]] + cl
@@ -405,6 +452,8 @@ def run_one(args, run):
         # and just after the clients stop.
         time.sleep(max(0.0, start_at + args.warmup - time.time()))
         m_from = meta_all(ctl.conn) if args.engine == "kds" else {}
+        time.sleep(max(0.0, start_at + args.warmup + args.seconds / 2 - time.time()))
+        m_mid = meta_all(ctl.conn) if args.engine == "kds" else {}
         outs = []
         for p in procs:
             o, _ = p.communicate(timeout=args.warmup + args.seconds + 600)
@@ -423,6 +472,8 @@ def run_one(args, run):
         res = {
             "engine": args.engine, "shape": args.shape, "durability": args.durability,
             "cores": args.cores if args.engine == "kds" else None, "sessions": args.sessions,
+            "placement": args.placement,
+            "reconnects": sum(o.get("reconnects", 0) for o in outs),
             "run": run, "seconds": args.seconds, "warmup": args.warmup,
             "server_cpus": args.server_cpus, "client_cpus": args.client_cpus,
             "wait_s": round(wait, 1), "host_before": before, "host_after": after,
@@ -449,7 +500,10 @@ def run_one(args, run):
             "session_cores": [o["core"] for o in outs],
             # `*_longest_us` is a maximum since the server started, not a
             # counter: its delta is meaningless, so it is reported as read.
-            "meta_delta": {k: m1[k] - m_from[k] for k in m1 if k in m_from and not k.endswith("_longest_us")},
+            "meta_delta": {k: m1[k] - m_from[k] for k in m1
+                           if k in m_from and not k.endswith("_longest_us") and not is_gauge(k)},
+            # BL-S1's per-core load words are gauges: read once, mid-span.
+            "meta_gauges_mid": {k: v for k, v in m_mid.items() if is_gauge(k)},
             "meta_longest": {k: v for k, v in m1.items() if k.endswith("_longest_us")},
             "meta_session_core": m1.get("core"),  # whose sched_* the block is
             "bin_sha256": bin_sha256,
@@ -539,6 +593,11 @@ def main():
     p.add_argument("--client-index", type=int, default=0, help=argparse.SUPPRESS)
     p.add_argument("--start-at", type=float, default=0.0, help=argparse.SUPPRESS)
     p.add_argument("--suffix", default="", help=argparse.SUPPRESS)
+    p.add_argument("--target-core", type=int, default=-1, help=argparse.SUPPRESS)
+    p.add_argument("--placement", choices=("kernel", "balanced", "skew"), default="kernel",
+                   help="BL-S1: the kernel's hash, a balanced placement, or arm D's skew")
+    p.add_argument("--extra-conf", action="append", default=[],
+                   help="a `key = value` line appended to the KDS config (repeatable)")
     args = p.parse_args()
     if args.durability is None:
         args.durability = "group" if args.engine == "kds" else "on"

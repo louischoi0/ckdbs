@@ -122,7 +122,7 @@ makes on its own; the answer is the fix below.
   when that commit queues behind the sync the writer is already running
   (`instance_visibility.hpp`; `txn.md` §4.1). Scenario 0's `cores = 1`
   `strict` cell implies about 1.5 ms per sync
-  (`bench/v3.0.0/results-scenario0-stockmarket-v2.7.0-531-g9a0525d.md` §5);
+  (`bench/v3.0.0/results-scenario0-stockmarket-v2.7.0-531-g9a0525d.md` §5, at `36449d28`);
   the measured bystander's p99 sat near two of those.
 - **The same miss in a foreign-key check, found by reading, not run.** A
   check view mints through `MintCheckView` (`CheckView`,

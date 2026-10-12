@@ -74,16 +74,23 @@ Three consumers:
 
 - **The lock table's slot flip** (AU-S2, `txn.md` §5): a decide flips the
   waiter's slot under the partition latch and kicks the waiter's core.
-- **D19's connection handoff** (AT-S10c, `include/kds/server/connection_handoff.hpp`),
-  built only where `TcpServer::Listen` answers `Unsupported` because the
-  platform refuses `SO_REUSEPORT`. There core 0 binds the port alone,
+- **The connection handoff** (`include/kds/server/connection_handoff.hpp`),
+  built above one core, and its inbox hosted on every core. **D19's
+  fallback** (AT-S10c) uses it where `TcpServer::Listen` answers
+  `Unsupported` because the platform refuses `SO_REUSEPORT`. There core 0 binds the port alone,
   places each accepted socket on a core round-robin over every core,
   itself included (`NextCore`), pushes it into that core's inbox under the
   inbox's latch, and kicks it; the destination's reactor runs a parked task
   (`TcpServer::Host`, attached by `CoreRuntime::HostHandedConnections`)
   that takes the inbox and adopts each socket as though it had accepted it.
-  The socket travels in the inbox because a kick carries no payload. A
-  session crosses once, at placement, and runs to completion where it lands.
+  The socket travels in the inbox because a kick carries no payload.
+  **BL's moves** (BL-S2, BL-S3) use it at every transaction's head: the
+  source's reactor stops watching the socket, offers the connection's map
+  node - the session, its protocol state and the statement that asked -
+  to the destination's inbox and kicks it, and the destination registers
+  the socket and runs that statement first (`TcpServer::MoveConnection`,
+  `AdoptMoved`). A transaction never crosses: it begins, waits and commits
+  on one core.
 - **A stop** (AU-S3): the scheduler's stop flag is atomic, and core 0 sets
   a peer's and kicks it; a peer's STOP sets core 0's through the
   instance's hook and kicks it.
@@ -251,7 +258,7 @@ clock, so a held kick ends a real idle block only when the cell says so.
 ## 9. Invariants
 
 1. One pinned worker thread per core; no thread creation after startup.
-2. All scheduler state is core-local but the sleep flag and `Waker` of §7, and the scheduler takes no lock. **The reactor is not lock-free, and the exception is named rather than general** (AR0-2): a task appending to the WAL takes the log's latch (`wal.md` §3), a task syncing takes the log device's segment-table lock under it, and a peer's wait on the writer takes the writer's mutex with the latch released. Those three were the whole list until six joined them, and two more at AT-S5d. **AO-S8 counted the list rather than appending to it**, and found it three short of the tree — the enumeration is the invariant, so a lock missing from it is the defect this clause names, not a documentation debt. Each carries its order in `rules.md` §3's table and in its own header:
+2. All scheduler state is core-local but the sleep flag and `Waker` of §7 and, since BL-S1, the core's **load slot** (`sched/core_load.hpp`): above one core the reactor publishes, at its iteration end, the fraction of the last 50 ms window it was busy and spent polling `foreground`, and its queued `foreground` count, for any core to read with relaxed loads; every field has the one writer, a stale value places a transaction on a busier core and never on a wrong one, and at one core nothing is written (`rules.md` §3). The scheduler takes no lock. **The reactor is not lock-free, and the exception is named rather than general** (AR0-2): a task appending to the WAL takes the log's latch (`wal.md` §3), a task syncing takes the log device's segment-table lock under it, and a peer's wait on the writer takes the writer's mutex with the latch released. Those three were the whole list until six joined them, and two more at AT-S5d. **AO-S8 counted the list rather than appending to it**, and found it three short of the tree — the enumeration is the invariant, so a lock missing from it is the defect this clause names, not a documentation debt. Each carries its order in `rules.md` §3's table and in its own header:
 
     - the **visibility window latch** (`txn/instance_visibility.hpp`, AN-S1), a leaf;
     - the **page frame's latch word** (`device_page_store.hpp`, `page.md` §6, AM-S1), outer to the WAL stream latch;

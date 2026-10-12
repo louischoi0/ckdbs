@@ -255,18 +255,20 @@ TEST_F(TrailRecorderTest, AnOverflowedCollectorRecordsNothingRatherThanAPartialT
 
 // ---- Heat ----------------------------------------------------------------
 
-TEST_F(TrailRecorderTest, RecordingAdvancesTheHeatCountersSHOWPATTERNSReports) {
+TEST_F(TrailRecorderTest, RecordingLeavesThePatternRowsHeatAsRegistered) {
     const std::string sql = "SELECT * FROM t WHERE id = 3";
     Run(sql);
     Run(sql);
     Run(sql);
+    ASSERT_EQ(recorder_->stats().trails_written, 2u);
 
     auto row = boot_->catalog.GetSysPatternRow(KeyOf(sql).fetch_id);
     ASSERT_TRUE(row.ok());
-    // Two recorded executions after the one that only counted. Before this
-    // change nothing in the engine ever incremented this field, so
-    // SHOW PATTERNS reported uses=0 forever.
-    EXPECT_EQ(row.value().use_count, 2u);
+    // BL-S4's ruling 1 (rows.hpp): a recorded execution writes its trail and
+    // no catalog row, so a repeated read makes no logged write. Heat stays
+    // as registered. `use_count` is the field that pins it: this fixture has
+    // no clock, so a restored bump would stamp `last_seen` with 0 as well.
+    EXPECT_EQ(row.value().use_count, 0u);
 }
 
 // ---- The one that matters ------------------------------------------------

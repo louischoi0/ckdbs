@@ -439,7 +439,9 @@ the statement's shape with its select list left out, so `SELECT a ...` and
 trail. `ANALYZE` prints a statement's `pattern_id` (its whole shape) and its
 `fetch_id`, the second being the one to look for in `SHOW PATTERNS`. A row
 marked `stale=v1` was recorded by a build before this keying, is listed
-under the `pattern_id=` it was keyed by, and is never used.
+under the `pattern_id=` it was keyed by, and is never used. A row's
+`uses=` and `last_seen=` read 0: executing a pattern writes its trail and
+nothing to its row, so a repeated read makes no logged write.
 
 `CREATE PATTERN ...` now answers the ordinary refusal for an unknown
 `CREATE` target, and `$name` parameters are refused wherever they are
@@ -754,7 +756,7 @@ over expressions, no parenthesized nesting. Each conjunct is one of
 | `col op other.col` | kCompareValue (column RHS) | how correlation is written |
 | `col op (SELECT ...)` | kCompareSubquery | scalar; >1 row is a runtime `CardinalityViolation` |
 | `col IN (SELECT ...)` | kInSubquery | |
-| `col NOT IN (SELECT ...)` | kNotInSubquery | tri-state, not `!IN` — stays correct when NULLs land |
+| `col NOT IN (SELECT ...)` | kNotInSubquery | tri-state, not `!IN`: a NULL in the result with no match, or a NULL probe against a non-empty result, is unknown and admits no row; against an empty result it is true |
 | `EXISTS (SELECT ...)` | kExists | no column on the left |
 | `NOT EXISTS (SELECT ...)` | kNotExists | |
 | `col BETWEEN low AND high` | kBetween | inclusive both ends; lowers to `>= low AND <= high`, the range on the step is only a hint |

@@ -1,0 +1,23 @@
+diff --git a/src/server/expeditor.cpp b/src/server/expeditor.cpp
+index fd0834b9..4db3178a 100644
+--- a/src/server/expeditor.cpp
++++ b/src/server/expeditor.cpp
+@@ -1604,6 +1604,18 @@ Status Expeditor::Start() {
+     // core it is placed on (`connection_handoff.hpp`), shared state and a
+     // kick rather than a ring kind. `force_listener_handoff` takes this arm
+     // on Linux, which never refuses.
++    // BL MEASUREMENT ONLY - never committed: every head moves to the next core.
++    {
++        struct NextCore final : TransactionPlacer {
++            std::uint32_t n = 1;
++            std::uint32_t Place(std::uint32_t core, Session&) override { return (core + 1) % n; }
++        };
++        static NextCore probe;
++        if (std::getenv("KDS_BL_PROBE_MOVES") != nullptr && config_.cores > 1) {
++            probe.n = config_.cores;
++            config_.transaction_placer = &probe;
++        }
++    }
+     bool handoff = config_.cores > 1 && config_.force_listener_handoff;
+     {
+         auto opened = TcpServer::Listen(config_.port, /*reuse_port=*/config_.cores > 1 && !handoff);

@@ -6,6 +6,7 @@
 #include "kds/txn/lock_table.hpp"
 
 #include "kds/sched/checkpoint_census.hpp"
+#include "kds/sched/core_load.hpp"
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 
@@ -1501,7 +1502,8 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        // Every core listens (AT-S8), so the kernel picks the accepting core and
        // a client cannot choose it (PW5), so a client that needs to know -
        // the per-core writer benchmark, an operator reading a refusal - must
-       // be able to ask. Constant per session, by M3: a session never moves.
+       // be able to ask. Constant per transaction; per session too unless a
+       // transaction placer moves it between transactions (BL-S2).
        << " core=" << core_id_
        // §5d: delete-marked catalog rows the horizon-gated purge retired
        // *this* mount. Its sibling `catalog_marks_finalized` below counts a
@@ -1817,6 +1819,32 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         }
     }
 
+    // **Every core's load, from any core** (BL-S1, `sched/core_load.hpp`):
+    // the one block here that does not describe only the asking session's
+    // core. `load_c<k>_*` for each of the instance's cores; none at one core,
+    // where nothing writes them (BL-R9).
+    for (std::uint32_t k = 0; k < sched::CoreLoad::Cores(); ++k) {
+        const sched::CoreLoad::Slot& s = sched::CoreLoad::Of(k);
+        const auto r = [](const auto& v) { return v.load(std::memory_order_relaxed); };
+        os << " load_c" << k << "_busy_ppm=" << r(s.busy_ppm) << " load_c" << k
+           << "_foreground_ppm=" << r(s.foreground_ppm) << " load_c" << k
+           << "_queued_foreground=" << r(s.queued_foreground) << " load_c" << k
+           << "_sessions=" << r(s.sessions) << " load_c" << k << "_active_sessions="
+           << r(s.active_sessions) << " load_c" << k << "_heads=" << r(s.heads)
+           << " load_c" << k << "_inside=" << r(s.inside) << " load_c" << k
+           << "_moves_out=" << r(s.moves_out);
+        // **What the core waited on** (BL-S1's holder split): the contention
+        // block's per-core slot (`base/contention.hpp`), which that block
+        // prints summed. Only the latches it waited on; slot 0 also carries
+        // the threads that declared no core (the WAL writer among them).
+        const detail::ContentionSlot& c = detail::g_contention[k % detail::kContentionSlots];
+        for (std::size_t i = 0; i < kLatchKindCount; ++i) {
+            const std::uint64_t ns = r(c.wait_ns[i]);
+            if (ns == 0) continue;
+            os << " load_c" << k << "_waited_" << kLatchKindNames[i] << "_us=" << ns / 1000;
+        }
+    }
+
     // The last recovery, for the operator who has to answer "what did the
     // restart do" (RC09, `docs/spec/wal.md` §13). Absent rather than zeroed when no
     // report is installed - a dispatcher built without one (every socket-free
@@ -1977,7 +2005,9 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
         // read the same on every row today - `auto` and `no` - because
         // withdrawing declared patterns took away the only writer of
         // kOriginUser and of kPatternPinned; the fields stay on disk and
-        // this prints what they hold rather than what it assumes.
+        // this prints what they hold rather than what it assumes. `uses`
+        // and `last_seen` likewise read 0 since BL-S4's ruling 1 deleted
+        // their writer (rows.hpp).
         os << " origin=" << (row.origin == catalog::kOriginUser ? "user" : "auto")
            << " pinned=" << ((row.flags & catalog::kPatternPinned) != 0 ? "yes" : "no")
            << " class=" << static_cast<int>(row.stmt_class)
@@ -4557,18 +4587,23 @@ Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& wr
     return Status::OK();
 }
 
+// An index split's record holds every page it wrote and the anchor, under
+// the stream's bound (`storage::LogBtreeSplit`'s size rule, for the index's
+// own cap).
+static_assert(index::kMaxIndexChanges + 1 <= wal::kMaxBtreeSplitPages);
+
 Status CommandDispatcher::LogIndexWrite(const exec::IndexWrite& write, std::uint64_t txn_id) {
     if (wal_ == nullptr) return Status::OK();
-    // A split's pages take full page images and **no** INDEX_INSERT: the
+    // A split's pages take one BTREE_SPLIT and **no** INDEX_INSERT: the
     // images are taken after the entry is in, so emitting both would apply
-    // it twice. Same instrument the clustered tree's internal nodes take,
-    // and for the same reason - no record type describes an entry-array
-    // division (wal/record.hpp).
+    // it twice. The clustered tree's record, for the clustered tree's
+    // reason - one record replays whole or not at all, where a run of
+    // FULL_PAGE_IMAGEs could end between a divided leaf and the parent that
+    // routes to its new half - and a root the split grew rides in it
+    // (`LogTreeSplit`).
     if (!write.restructured.empty()) {
-        for (PageId page_id : write.restructured) {
-            if (Status s = LogFullPageImage(page_id, txn_id); !s.ok()) return s;
-        }
-        return Status::OK();
+        return LogTreeSplit(write.restructured, txn_id, write.rel_oid, write.index_oid,
+                            write.new_root, write.anchor_page_id);
     }
 
     std::vector<std::byte> buf(wal::kIndexInsertFixedSize + write.entry.size());
@@ -4604,8 +4639,24 @@ exec::IndexWriteLog CommandDispatcher::IndexWriteLogFor(const WriteScope& scope,
             return LogIndexWrite(write, txn_id);
         };
     }
-    return [&pending](const exec::IndexWrite& write) {
+    // Collected for `LogInsert`, which logs them under the transaction it
+    // opens - but not every exit reaches it (an UPDATE never does, and an
+    // INSERT's take-back exits before it), so a root a split grew is
+    // published here with its own ANCHOR_UPDATE, as it was before the root
+    // rode in the split's record, and the copy kept carries none.
+    return [this, &pending](const exec::IndexWrite& write) -> Status {
+        if (write.new_root == kInvalidPageId) {
+            pending.push_back(write);
+            return Status::OK();
+        }
+        if (Status s = catalog_.PublishRoot(write.rel_oid, write.index_oid, write.new_root,
+                                            write.anchor_page_id);
+            !s.ok()) {
+            return s.WithContext("republishing the root of index " +
+                                 std::to_string(write.index_oid));
+        }
         pending.push_back(write);
+        pending.back().new_root = kInvalidPageId;
         return Status::OK();
     };
 }
@@ -4657,11 +4708,18 @@ Status CommandDispatcher::NoteSpills(const WriteScope& scope, std::uint32_t rel_
 
 Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType leaf_type,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
-                                    std::uint64_t owner_oid,
+                                    std::uint64_t owner_oid, PageId anchor_page_id,
                                     const std::vector<exec::AppendedSpill>& spills,
                                     const std::vector<exec::IndexWrite>& index_writes,
                                     bool own_txn) {
-    if (wal_ == nullptr) return Status::OK();
+    const bool btree = leaf_type == PageType::kBtreeLeaf;
+    if (wal_ == nullptr) {
+        // Nothing to log, and a root the split grew is published all the
+        // same.
+        return btree && placed.restructured()
+                   ? LogSplit(placed, wal::kNoTxnId, owner_oid, anchor_page_id)
+                   : Status::OK();
+    }
 
     // `own_txn` is false once a TransactionManager runs the transaction:
     // it already appended TXN_BEGIN at Begin() and will append TXN_COMMIT
@@ -4680,7 +4738,6 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
     // whichever leaf took it, or a BTREE_INSERT naming the slot the row was
     // placed at. Either comes after the row's spills and index entries, the
     // order the heap's HEAP_INSERT keeps below.
-    const bool btree = leaf_type == PageType::kBtreeLeaf;
 
     // Every page a heap insert restructured, in the order the storage layer
     // says redo has to apply it, and all of it before the tuple's own
@@ -4720,7 +4777,7 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
     if (btree && placed.restructured()) {
         // The split's one record, which carries the row: no insert record
         // follows it, as an index split logs no INDEX_INSERT.
-        if (Status s = storage::LogBtreeSplit(wal_, page_store_, txn_id, placed.changes());
+        if (Status s = LogSplit(placed, txn_id, owner_oid, anchor_page_id);
             !s.ok()) {
             return s;
         }
@@ -4763,6 +4820,55 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
         !wal_->IsDurable(commit.value())) {
         pending_commit_lsn_ = commit.value();
     }
+    return Status::OK();
+}
+
+Status CommandDispatcher::LogSplit(const storage::InsertPlacement& placed, std::uint64_t txn_id,
+                                   catalog::Oid oid, PageId anchor_page_id) {
+    std::vector<PageId> pages;
+    pages.reserve(placed.changes().size());
+    for (const storage::StructuralChange& change : placed.changes()) {
+        pages.push_back(change.page_id);
+    }
+    return LogTreeSplit(pages, txn_id, oid, /*index_oid=*/0, placed.new_root, anchor_page_id);
+}
+
+Status CommandDispatcher::LogTreeSplit(std::span<const PageId> pages, std::uint64_t txn_id,
+                                       catalog::Oid rel_oid, std::uint64_t index_oid,
+                                       PageId new_root, PageId anchor_page_id) {
+    // The anchor is taken after every page the split wrote and dropped
+    // first. The pages it then latches beside it are ones the split created,
+    // which nothing reaches but through a page already held.
+    std::optional<storage::PageRef> anchor;
+    Status refused = Status::OK();
+    if (new_root != kInvalidPageId) {
+        auto staged = catalog_.StageAnchorRoot(anchor_page_id, rel_oid, index_oid, new_root);
+        if (staged.ok()) {
+            anchor.emplace(std::move(staged.value()));
+        } else {
+            refused = staged.status();
+        }
+    }
+    // A refused staging still logs the split: its pages are written either
+    // way, and a split no record describes refuses the next mount
+    // (`wal.md` §6). Only the root goes unpublished, and the error says so.
+    if (Status s = storage::LogBtreeSplit(wal_, page_store_, txn_id, pages,
+                                          anchor.has_value() ? &*anchor : nullptr);
+        !s.ok()) {
+        return s;
+    }
+    if (!refused.ok()) {
+        if (logging(LogLevel::kError)) {
+            log_->Error("btree", "relation oid " + std::to_string(rel_oid) + " index oid " +
+                                     std::to_string(index_oid) +
+                                     " grew a level but its root could not be repointed at page " +
+                                     std::to_string(new_root) + ": " + refused.message());
+        }
+        return refused;
+    }
+    if (!anchor.has_value()) return Status::OK();
+    anchor.reset();
+    catalog_.AdoptRoot(rel_oid, index_oid, new_root);
     return Status::OK();
 }
 
@@ -4913,9 +5019,9 @@ std::vector<std::uint32_t> AggregateOutputTypeMods(const exec::AggregateSpec& sp
 }
 
 // One result-set description from three positional lists. The `type_len`
-// is derived rather than passed - it is a function of the type and nothing
-// else (`wire::WireTypeLen`), so a caller that supplied one could only ever
-// agree with it or be wrong.
+// is derived rather than passed - it is a function of the type and of
+// whether the field is a relation's column 0 (`wire::WireValueType`), so a
+// caller that supplied one could only ever agree with it or be wrong.
 std::vector<wire::FieldDescription> DescribeFields(
     std::span<const std::string> names, std::span<const std::uint32_t> type_vals,
     std::span<const std::uint32_t> type_mods,
@@ -4926,7 +5032,11 @@ std::vector<wire::FieldDescription> DescribeFields(
         wire::FieldDescription f;
         f.name = names[i];
         f.type_oid = i < type_vals.size() ? type_vals[i] : 0;
-        f.type_len = wire::WireTypeLen(f.type_oid);
+        // Any relation's column 0 is its Keystone id and travels as u64,
+        // the joined relation's included (`wire::WireValueType`).
+        f.type_len = wire::WireTypeLen(
+            i < projection.size() ? wire::WireValueType(f.type_oid, projection[i].col_pos)
+                                  : f.type_oid);
         f.type_mod = i < type_mods.size() ? type_mods[i] : 0;
         // **`kFieldFlagKeystone` marks the relation's own column 0**, not
         // the first field of whatever was projected (`wire/row_codec.hpp`:
@@ -6037,34 +6147,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         return placed.status();
     }
 
-    // The tree grew a level, so the relation's root moved. Published only
-    // once the new root's contents are logged: a root published before the
-    // pages under it are described is a root recovery cannot follow. Since
-    // PW2-4 the move writes the anchor and updates the cached entry **in
-    // place** - `ta` stays valid, no invalidation broadcast, no catalog
-    // write. Both the success path below and E5's take-back of a split run
-    // it, after the holds the placement handed out are gone.
-    const auto publish_root = [&]() -> Status {
-        if (placed.value().new_root == kInvalidPageId) return Status::OK();
-        if (Status s = catalog_.UpdateRelationDescPage(oid, placed.value().new_root,
-                                                       ta.anchor_page_id);
-            !s.ok()) {
-            if (logging(LogLevel::kError)) {
-                log_->Error("btree", "table oid " + std::to_string(oid) +
-                                         " grew a level but its root could not be repointed at "
-                                         "page " +
-                                         std::to_string(placed.value().new_root) + ": " +
-                                         s.message());
-            }
-            return s;
-        }
-        if (logging(LogLevel::kInfo)) {
-            log_->Info("btree", "table oid " + std::to_string(oid) +
-                                    " grew a level; root is now page " +
-                                    std::to_string(placed.value().new_root));
-        }
-        return Status::OK();
-    };
+    // A level the tree grew is published inside the split's own record
+    // (`LogSplit`), on the success path below and on E5's take-back alike.
 
     // ---- E5: a placement no record will describe is taken back ----------
     //
@@ -6089,13 +6173,12 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             if (!placed.value().restructured()) return leaf.UnInsertTuple(placed.value().slot);
             if (Status s = leaf.RetireSlot(placed.value().slot); !s.ok()) return s;
             page.value().Release();
-            if (Status s = storage::LogBtreeSplit(wal_, page_store_, wal::kNoTxnId,
-                                                  placed.value().changes());
+            if (Status s = LogSplit(placed.value(), wal::kNoTxnId, oid, ta.anchor_page_id);
                 !s.ok()) {
                 return s;
             }
             placed.value().held.clear();
-            return publish_root();
+            return Status::OK();
         }();
         if (!undone.ok() && logging(LogLevel::kError)) {
             log_->Error("btree", "taking back the unlogged placement of id " +
@@ -6125,7 +6208,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // **fails the statement** where the hook above absorbs.
     //
     // `ta` survives this call even when a split republishes an index root:
-    // Catalog::UpdateIndexRoot updates the cached entry in place rather than
+    // Catalog::AdoptRoot updates the cached entry in place rather than
     // invalidating it (catalog_cache.hpp), which is exactly what the
     // desc-page relink below does *not* do.
     // Collected only when there is a log to write to, so the unlogged path
@@ -6207,7 +6290,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // is answered - this class's header's ordering note (AT-S21).
     if (Status s = LogInsert(placed.value(),
                              is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded,
-                             WriterId(scope), oid, spills, index_writes,
+                             WriterId(scope), oid, ta.anchor_page_id, spills, index_writes,
                              /*own_txn=*/scope.txn == nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
@@ -6216,8 +6299,6 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         }
         return s;
     }
-
-    if (Status s = publish_root(); !s.ok()) return s;
 
     // A relation growing a page is rare and structural - the closest thing
     // this engine has to a file extending - so it is Debug, above the
@@ -7081,10 +7162,23 @@ DispatchOutcome CommandDispatcher::RunAggregated(
         return {ErrorReply(s), false, 0, s};
     }
 
-    if (Status s = sink.Describe(DescribeFields(chain.column_names,
-                                               AggregateOutputTypes(*chain.aggregate),
-                                               AggregateOutputTypeMods(*chain.aggregate)));
-        !s.ok()) {
+    // A MIN/MAX or a group key over a relation's column 0 is a Keystone id,
+    // written as one whatever the column declares (`wire::WireValueType`).
+    // Widened for the wire only: `AggregateOutputType` stays the column's
+    // type, which `UPDATE ... SET` typing reads. Not through
+    // `DescribeFields`' projection, which would flag a `COUNT(*)` - whose
+    // ref is `{0, 0, 0}` too - as a Keystone; its int64 is unchanged here.
+    const std::vector<std::uint32_t> out_types = AggregateOutputTypes(*chain.aggregate);
+    std::vector<std::uint32_t> wire_types(out_types.size());
+    for (std::size_t i = 0; i < out_types.size(); ++i) {
+        wire_types[i] = wire::WireValueType(out_types[i], chain.aggregate->items[i].ref.col_pos);
+    }
+    std::vector<wire::FieldDescription> fields = DescribeFields(
+        chain.column_names, out_types, AggregateOutputTypeMods(*chain.aggregate));
+    for (std::size_t i = 0; i < fields.size() && i < wire_types.size(); ++i) {
+        fields[i].type_len = wire::WireTypeLen(wire_types[i]);
+    }
+    if (Status s = sink.Describe(std::move(fields)); !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
 
@@ -7112,10 +7206,9 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     // Through the one sink every row path emits by: two formatters for a
     // folded row is how one of them comes to forget an item's `type_val`.
     std::string row_scratch;
-    const std::vector<std::uint32_t> out_types = AggregateOutputTypes(*chain.aggregate);
     Status emitted = aggregator_.Finish(
         [&](std::span<const parser::AstValue> row) -> Status {
-            if (Status s = sink.EncodeValueRow(out_types, row, row_scratch); !s.ok()) return s;
+            if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) return s;
             return sink.Emit(row_scratch);
         });
     if (!emitted.ok()) {
@@ -8691,7 +8784,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                 !s.ok()) {
                 return s;
             }
-            if (Status s = LogIndexWrites(index_writes, scope.txn->id()); !s.ok()) return s;
+            // The index entries were logged as maintenance made them, under
+            // this transaction (`IndexWriteLogFor`).
 
             std::vector<std::byte> buf(wal::kHeapWriteFixedSize + encoded.value().size());
             const wal::HeapWritePayload fields{

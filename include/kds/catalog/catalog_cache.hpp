@@ -33,7 +33,8 @@
 //     sys.types              written only by Catalog::Bootstrap()
 //   never cached, always read from the page:
 //     next_id, and therefore GetSysTableRow()/AllocateRowId()
-//     a pattern's use_count/last_seen, and therefore GetSysPatternRow()
+//     a pattern's use_count/last_seen (reserved, rows.hpp), and therefore
+//     GetSysPatternRow()
 //
 // That last line is load-bearing twice over. AllocateRowId() bumps a field
 // of the same sys.tables row a TableAccess is built from, and it runs

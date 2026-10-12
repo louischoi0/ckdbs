@@ -503,6 +503,15 @@ constexpr std::size_t BtreeSplitSize(std::size_t nr_pages) noexcept {
     return kBtreeSplitFixedSize + nr_pages * kBtreeSplitEntrySize;
 }
 
+// The most pages one BTREE_SPLIT carries: the deepest split
+// (`storage::kMaxStructuralChanges` and `index::kMaxIndexChanges`, both
+// 2 x kMaxBtreeDepth + 1 = 33) and the anchor a root growth images, 34.
+// Each tree asserts its bound against this where it logs; the stream's
+// floors (`stream.hpp`) are sized from it, so a split's record is never
+// refused for its size. More is refused at encode and is Corruption at
+// decode.
+inline constexpr std::size_t kMaxBtreeSplitPages = 34;
+
 struct BtreeSplitImage {
     PageId page_id = kInvalidPageId;
     std::span<const std::byte> image;  // kPageSize bytes

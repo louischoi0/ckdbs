@@ -67,10 +67,12 @@ Patterns are catalog objects, in a relation named `patterns` in the `sys` namesp
 | `stmt_class` | `uint8` | the parser's execution-class tag (`docs/spec/parser-v2.md` I2; every step-chain statement carries `kJoinSelect`, per J3) |
 | `waystone_root` | `PageId` | root of this pattern's `arg_hash` directory, `kInvalidPageId` when none |
 | `dir_depth` | `uint8` | levels the directory walk traverses; persisted, never derived |
-| `use_count` | `uint32` | executions observed; best-effort |
-| `last_seen` | `uint64` | truncated logical timestamp; best-effort |
+| `use_count` | `uint32` | reserved: written 0 at registration, advanced by nothing |
+| `last_seen` | `uint64` | reserved: written 0 at registration, advanced by nothing |
 
 The row also carries `flags` (`u16`) and `origin` (`u8`), retained from the withdrawn declared-pattern design (`docs/spec/create-pattern-user-defined-patterns-v1.md`): every row is `kOriginAuto` and nothing writes `kPatternPinned`.
+
+**A recorded execution writes its trail and no catalog row.** `use_count` and `last_seen` were the pattern's heat, advanced by every recorded execution through a logged rewrite of the row; that write put a repeated point `SELECT` on the one WAL behind any bulk writer, and it was deleted with `Catalog::TouchPattern` on BL-S4's ruling 1 (`instructions/v3.0.0/raft-marks-2026-10-12.md` §11, W11). The two fields stay on disk, and `SHOW PATTERNS` and the `sys.patterns` view print them as zero. `sys.patterns` stays wholly logged: every field a writer moves is written through the WAL, and `sys.access_stats` remains the one unlogged catalog relation `docs/rules/rules.md` §5 admits.
 
 `waystone_root` and `dir_depth` are written as one unit by `Catalog::SetPatternWaystoneRoot()` and validated as a pair: a root without its depth is unwalkable, and a depth disagreeing with the root sends every walk to the wrong leaf. `dir_depth == 0` is the authority on "no directory" — a row read out of a zeroed page decodes its root as page 0, which looks like a valid `PageId`, so the question is keyed on the field whose zero value already means none.
 

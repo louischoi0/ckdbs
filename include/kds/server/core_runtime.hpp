@@ -391,6 +391,12 @@ public:
     Status HostHandedConnections(ConnectionHandoff& handoff,
                                  const TcpServer::ClientSetup& setup = {});
 
+    // **BL-S2**: this core's listener places each transaction by `placer`,
+    // moving a connection through `handoff`, and hosts the inbox the
+    // connections other cores move to it arrive in. After one of the two
+    // above; both must outlive this runtime.
+    Status AcceptMoves(ConnectionHandoff& handoff, TransactionPlacer* placer);
+
     // BUG-4 ordering (the PW5 review): closes the listener - and with it
     // every accepted session, rolling back open transactions - while this
     // core's WAL can still be synced by the caller. Serve calls it for

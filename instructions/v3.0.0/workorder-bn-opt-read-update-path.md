@@ -104,7 +104,7 @@ order is cited by its file name (BN-Q10).
 - **A scan's per-row cost is twice PostgreSQL's.** About 70 ns a row of the
   scanned relation against 34 ns, on twelve library shapes whose geometric
   mean falls to 0.60x-0.62x at 10,000 rows unindexed
-  (`bench/v3.0.0/results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` §4; the
+  (`bench/v3.0.0/results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` §4, at `36449d28`; the
   KDS figures describe engine `9a0525d`, `v2.7.0-531`, on another driver
   and host than the table above).
 

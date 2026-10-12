@@ -19,9 +19,7 @@
 namespace kds::wal {
 namespace {
 
-// Big enough for several records per segment, small enough that filling one
-// is a handful of appends.
-constexpr std::uint64_t kSegmentSize = 65536;
+constexpr std::uint64_t kSegmentSize = kMinSegmentSize;  // the stream's floor (`stream.hpp`)
 constexpr std::size_t kPayloadSize = 1000;
 
 std::vector<std::byte> Pattern(std::size_t n, std::uint8_t seed) {
@@ -105,7 +103,7 @@ TEST_F(WalStreamTest, OpenRejectsATooSmallRing) {
 }
 
 TEST_F(WalStreamTest, OpenRejectsAnUnusableSegmentSize) {
-    auto tiny = MemoryLogDevice::Create(kSegmentHeaderSize);
+    auto tiny = MemoryLogDevice::Create(kMinSegmentSize - kRecordAlignment);
     ASSERT_TRUE(tiny.ok());
     auto opened = WalStream::Open(tiny.value().get());
     ASSERT_FALSE(opened.ok());

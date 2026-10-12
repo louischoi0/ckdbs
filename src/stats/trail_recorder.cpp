@@ -149,11 +149,6 @@ void TrailRecorder::OnPatternResult(const InstanceKey& key, const exec::TrailCol
         return;
     }
     ++stats_.trails_written;
-
-    // Heat last, and its failure is ignored for the same reason: these
-    // counters rank patterns for retention and nothing reports them, so a
-    // dropped bump loses a statistic rather than a trail.
-    (void)catalog_.TouchPattern(key.fetch_id, now);
 }
 
 }  // namespace kds::stats

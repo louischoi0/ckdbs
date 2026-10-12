@@ -54,8 +54,10 @@ TEST(ConnectionHandoffTest, AnOfferIsPendingForItsCoreAloneAndKicksItAfterPublis
     EXPECT_EQ(wakers.KicksTo(1), 1u);
     EXPECT_EQ(wakers.KicksTo(2), 0u);
 
-    const std::vector<int> taken = handoff.Take(1);
-    ASSERT_EQ(taken, std::vector<int>{pipe_fds[0]});
+    const std::vector<ConnectionHandoff::Arrival> taken = handoff.Take(1);
+    ASSERT_EQ(taken.size(), 1u);
+    EXPECT_EQ(taken[0].fd, pipe_fds[0]);
+    EXPECT_EQ(taken[0].moved, nullptr) << "an accepted socket arrived as a live connection";
     EXPECT_FALSE(handoff.Pending(1)) << "a taken inbox still reads as pending";
     EXPECT_TRUE(handoff.Take(1).empty()) << "a socket was handed out twice";
 
@@ -74,6 +76,27 @@ TEST(ConnectionHandoffTest, ASocketNobodyTookIsClosedWithTheHandoff) {
         ASSERT_TRUE(IsOpen(pipe_fds[0]));
     }
     EXPECT_FALSE(IsOpen(pipe_fds[0])) << "an untaken socket outlived its inbox";
+    ::close(pipe_fds[1]);
+}
+
+// BL-S2: a live connection in an inbox nobody took is torn down by its own
+// `Transit`, and the inbox does not close the socket under it a second time.
+TEST(ConnectionHandoffTest, ALiveConnectionNobodyTookIsTornDownByItsTransit) {
+    struct Probe final : ConnectionHandoff::Transit {
+        explicit Probe(int* destroyed) : destroyed_(destroyed) {}
+        ~Probe() override { ++*destroyed_; }
+        int* destroyed_;
+    };
+    int pipe_fds[2];
+    ASSERT_EQ(::pipe(pipe_fds), 0);
+    int destroyed = 0;
+    {
+        ConnectionHandoff handoff(2, nullptr);
+        handoff.Offer(1, pipe_fds[0], std::make_unique<Probe>(&destroyed));
+    }
+    EXPECT_EQ(destroyed, 1) << "an untaken live connection was never torn down";
+    EXPECT_TRUE(IsOpen(pipe_fds[0])) << "the inbox closed a socket its transit owns";
+    ::close(pipe_fds[0]);
     ::close(pipe_fds[1]);
 }
 

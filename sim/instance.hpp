@@ -45,6 +45,7 @@
 #include "kds/txn/undo_log.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
+#include "kds/wal/stream.hpp"
 
 namespace kds::sim {
 
@@ -52,10 +53,11 @@ namespace kds::sim {
 // initializers are not usable in the enclosing class's own default arguments
 // (the complete-class-context rule), and Create() wants `= {}`.
 struct SimInstanceOptions {
-    // 64 KiB segments (BC-S4): small enough that every run rolls the log
-    // many times and its checkpoints recycle what lies below their anchor,
-    // and still eight times the largest record (a FULL_PAGE_IMAGE).
-    std::uint64_t wal_segment_bytes = 64ull * 1024;
+    // The stream's floor (BC-S4, `wal/stream.hpp`): the smallest segment a
+    // stream opens, so a run rolls the log as often as one can and its
+    // checkpoints recycle what lies below their anchor, and the deepest
+    // split's record still fits one.
+    std::uint64_t wal_segment_bytes = wal::kMinSegmentSize;
     std::uint32_t extent_pages = 64;
     std::uint32_t initial_pages = 64;
     // The buffer pool's maximum (BE-Q2): the harness runs under a real cap,

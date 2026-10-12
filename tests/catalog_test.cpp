@@ -364,7 +364,7 @@ TEST_F(CatalogTest, DdlInvalidatesACachedTableAccess) {
     ASSERT_TRUE(first.ok());
     const PageId old_desc = first.value()->desc_page_id;
 
-    ASSERT_TRUE(catalog_.UpdateRelationDescPage(oid.value(), old_desc + 1000,
+    ASSERT_TRUE(catalog_.PublishRoot(oid.value(), /*index_oid=*/0, old_desc + 1000,
                                                 first.value()->anchor_page_id)
                     .ok());
 
@@ -386,7 +386,7 @@ TEST_F(CatalogTest, BuildSchemaFromColumnsStillReportsNotFoundForACatalogTable) 
     }
 }
 
-TEST_F(CatalogTest, UpdateRelationDescPagePreservesRowIdentity) {
+TEST_F(CatalogTest, PublishRootPreservesRowIdentity) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
     Schema schema = MinimalPkSchema();
@@ -397,7 +397,7 @@ TEST_F(CatalogTest, UpdateRelationDescPagePreservesRowIdentity) {
     ASSERT_TRUE(before.ok());
     PageId old_desc = before.value().desc_page_id;
 
-    Status s = catalog_.UpdateRelationDescPage(oid.value(), old_desc + 1000,
+    Status s = catalog_.PublishRoot(oid.value(), /*index_oid=*/0, old_desc + 1000,
                                                before.value().anchor_page_id);
     ASSERT_TRUE(s.ok()) << s.message();
 
@@ -577,7 +577,7 @@ TEST_F(CatalogTest, ADroppedIndexIsRetiredSoTheNameIsFreeAgain) {
 
 TEST_F(CatalogTest, AnIndexRootMovesInPlaceRatherThanInvalidatingTheCache) {
     // A root split reports a new root and someone above the storage layer
-    // records it - the counterpart of UpdateRelationDescPage, but *not* the
+    // records it - the counterpart of a clustered root move, but *not* the
     // counterpart of its invalidation.
     //
     // This asserted a version bump when IX04 landed, and IX06 changed it
@@ -602,7 +602,7 @@ TEST_F(CatalogTest, AnIndexRootMovesInPlaceRatherThanInvalidatingTheCache) {
 
     const std::uint64_t before = catalog_.catalog_version();
     const PageId original_root = ta->indexes[0].root_page_id;
-    ASSERT_TRUE(catalog_.UpdateIndexRoot(table.value(), oid.value(), 4242,
+    ASSERT_TRUE(catalog_.PublishRoot(table.value(), oid.value(), 4242,
                                          ta->anchor_page_id)
                     .ok());
     EXPECT_EQ(catalog_.catalog_version(), before) << "a root move must not drop the cache";
@@ -744,7 +744,7 @@ TEST_F(CatalogTest, ACachedTableAccessSeesAnIndexCreatedAfterItWasFilled) {
     // across an index insert that grows a level is holding a dangling one.
     auto oid = catalog_.FindIndexByName("ix");
     ASSERT_TRUE(oid.ok());
-    ASSERT_TRUE(catalog_.UpdateIndexRoot(table.value(), oid.value().index_oid, 7777,
+    ASSERT_TRUE(catalog_.PublishRoot(table.value(), oid.value().index_oid, 7777,
                                          after.value()->anchor_page_id)
                     .ok());
 
@@ -991,7 +991,7 @@ TEST_F(CatalogTest, DdlBumpsTheCatalogVersion) {
     auto vrow = catalog_.GetSysTableRow(oid.value());
     ASSERT_TRUE(vrow.ok());
     ASSERT_TRUE(
-        catalog_.UpdateRelationDescPage(oid.value(), 9999, vrow.value().anchor_page_id).ok());
+        catalog_.PublishRoot(oid.value(), /*index_oid=*/0, 9999, vrow.value().anchor_page_id).ok());
     // PW2-4 reversed the old pin here: a root move is not DDL - the cached
     // entry updates in place, and the version must NOT bump (the running
     // INSERT holds the entry, and a peer's move must not broadcast).
@@ -1364,9 +1364,9 @@ TEST_F(PatternCatalogTest, RegisteringAPatternDoesNotInvalidateTableAccess) {
 TEST_F(PatternCatalogTest, HeatIsReadFromThePageNotTheCache) {
     ASSERT_TRUE(catalog_.RegisterPattern(21, kStmtClassUnclassified).ok());
 
-    // PatternAccess deliberately has no use_count/last_seen to read: they
-    // change on every execution, which is not DDL, so they are not
-    // cacheable facts. The row is where they live.
+    // PatternAccess deliberately has no use_count/last_seen to read: heat
+    // moves without DDL, so it is not a cacheable fact (schema.hpp). The
+    // row is where they live, reserved and 0 (rows.hpp).
     auto row = catalog_.GetSysPatternRow(21);
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(row.value().use_count, 0u);

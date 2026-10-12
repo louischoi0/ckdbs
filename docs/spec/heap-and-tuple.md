@@ -121,7 +121,7 @@ What holds regardless:
 - **Issued ids are monotonic in issue order on every relation; named keys carry no order on a btree** (§4.1a). A btree leaf's slot order is its key order by placement (BD-R1), not by issue order. Page-wise `min_key` ordering is preserved by a leaf division as well, so range pruning (`kRange`'s tail prune, `src/exec/step_vm.cpp`) does not depend on slot order.
 - The pk is carried **only** by the Keystone word, never also as a body column: `EncodeRow()` writes `[Keystone word][columns 1..n-1]`. Storing a key twice is how the two copies come to disagree. A supplied id is *named* in the statement's first position and still lands only in the Keystone word.
 - The pk **cannot be updated**. It is the tuple's identity, not a field of it.
-- A relation's first column must be declared with an **integer type** (`catalog::CheckKeystoneColumn`), checked at `CREATE TABLE`. Its declared width is display metadata: the id lives in the 48-bit Keystone field regardless, so a narrow declared type does not cap the sequence in storage. On the binary wire the pk field is written at the declared width, against `protocol.md` §6's u64 - a filed defect (`docs/inflight/bugs/a-pk-declared-narrower-than-sixty-four-bits-is-cut-on-the-wire.md`).
+- A relation's first column must be declared with an **integer type** (`catalog::CheckKeystoneColumn`), checked at `CREATE TABLE`. Its declared width is display metadata: the id lives in the 48-bit Keystone field regardless, so a narrow declared type does not cap the sequence in storage. On the binary wire the pk field is 8 bytes whatever the declared width (`protocol.md` §6, `wire::WireValueType`).
 
 Implementation rules:
 

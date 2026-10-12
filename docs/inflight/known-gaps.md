@@ -255,31 +255,6 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## WAL
 
-- **A `BTREE_SPLIT` of 8 or more pages exceeds a 64 KiB ring or segment.**
-  Verified at `07e822a6` (BD-S3), by reading. A split's record carries a
-  full image of every page it writes (8,200 bytes each), so 8 pages need
-  more than 64 KiB, and `kMinRingCapacity` and the sim's segments are both
-  64 KiB. The `static_assert` in `storage/log_page_image.hpp` holds the
-  deepest split (`kMaxStructuralChanges`) under the *default* ring only.
-  Unreachable in practice - a split writes two pages per level it climbs,
-  so 8 pages need three full internal levels to divide at once - but where
-  it happens the append is refused `InvalidArgument` after the split's
-  pages changed in memory. Raising the minimum past the deepest split was
-  declined at BD-S2's review: it moves the premise of the cells that open
-  at the minimum ring and of the sim's segment rolls. Owner:
-  `docs/spec/wal.md` §5.2.
-
-- **Whether an index split's records replay as one is unchecked below the
-  root leaf.** Verified at `4debe8d9` (BD-S1). The secondary index tree
-  logs a split as separate page images and no `INDEX_INSERT`, the shape the
-  clustered tree's append split had when a log cut between its parent and
-  its link left a leaf off the walk (`workorder-bd-sorted-leaf-named-keys.md`
-  §1.8, fixed by `BTREE_SPLIT`).
-  BD-S1 cut the log after every record of the root leaf's split and it did
-  not reproduce; a leaf split under an internal node and an internal node's
-  divide were not cut. Owner: `docs/spec/index.md`; a fix, if one
-  reproduces, is an order of its own.
-
 - **A heap placement whose record is never written is not taken back.**
   Verified at `07e822a6` (BD-S3), by reading; BD-S1's
   `SortedLeafCrashTest.ARowPlacedAndNeverLoggedLeavesNoHoleForTheNextRecordsRedo`
@@ -641,7 +616,7 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   scenario rebaseline on `bench-rerun-scenarios` at
   `v2.7.0-531-g9a0525d` (2026-09-30,
   `bench/v3.0.0/results-scenario0-stockmarket-v2.7.0-531-g9a0525d.md` §6,
-  `results-scenario2-freight-v2.7.0-531-g9a0525d.md`). A write descent
+  `results-scenario2-freight-v2.7.0-531-g9a0525d.md`, both at `36449d28`). A write descent
   whose leaf no longer covers its key restarts from the root
   `storage::kMaxDescentRestarts` (4) times and is then refused
   `TXN_CONFLICT retryable=1 btree descent for key K from page P gave up
@@ -933,12 +908,6 @@ pages and the cases it does not reach.
   map region, a map flush writes the region's one page whole, so the
   per-level syncs matter only to a tree spanning regions - past 65,280
   pages - and no cell builds one.
-- **A root growth's anchor publish is logged after its split**
-  (`bugs/a-root-growths-anchor-publish-is-logged-after-its-split.md`).
-  Where that cut stands, a reclaim walks from the grown-over root: the
-  leaf chain reaches every leaf, and the new root and its right half's
-  internal nodes leak.
-
 ## Statement scheduling
 
 Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
@@ -975,6 +944,64 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
     `WalkSliceRigTest.ACoreTornDownWithAWalkBetweenSlicesReleasesItFirst`
     passes in Debug with `Scheduler::DiscardTasks` removed. The tree has
     no sanitizer build.
+
+## Placement per transaction (BL)
+
+Verified on `worktree-bl-session-balancer` at BL-S3's commit, measured in
+`bench/v3.0.0/results-bl-s1-placement-premise-v2.7.0-857-g3552a03c.md`;
+the first bullet re-read on `worktree-bl-touchpattern-delete` at `05cd011f`.
+BL is paused (the order's §6, "BL paused 2026-10-12").
+Owned by `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
+until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
+`docs/spec/sched.md` §5.
+
+- **A bulk writer stalled point readers on every core for 0.25-0.8 s at
+  BL-S3's commit, and no placement isolated them.** Two couplings through
+  the one WAL were found. The first is gone at `05cd011f`: BL-S4's ruling 1
+  (`raft-marks-2026-10-12.md` §11) deleted `Catalog::TouchPattern`, whose
+  logged rewrite of a pattern's heat every repeated point `SELECT` made.
+  **The stall has not been re-measured since** (the re-measurement stopped
+  at BL's pause), so the headline numbers describe the engine with both
+  couplings. The second stands:
+  - **a segment roll holds the stream latch across device I/O**:
+    `WalStream::Append`'s roll seals, flushes and runs `StartSegment`'s
+    device sync, which waits out the writer thread's sync of every live
+    segment, all under the latch (`wal.md` §6 step 1). Core 0's 10 ms
+    group-commit drain takes the same latch.
+
+  `Latch::lock` blocks the reactor, so every session on a core whose
+  reader or drain meets a roll waits the roll out. Measured: readers on
+  three cores holding no batch session waited 0.69-4.13 s each on the stream
+  latch in 10 s; with Waystone recording off and the readers off core 0,
+  their schedule p99 fell from about 500 ms to 0.57-0.76 ms in two runs and
+  41-102 ms in two more (a checkpoint turn on a reader core). **BL-S4's partition
+  waits on the roll**, whose fix is the order's §6 ruling 3, unmarked (the
+  trace and its options are in the results file's archive, `wal-coupling.md`).
+- **`TRACE ON` is per core, not per session** (`CommandDispatcher::tracing_`).
+  It always was; since BL-S3 moves sessions, a session's trace stops when it
+  moves and another session landing on the traced core is traced instead.
+- **Tools that pin a session by reconnecting until `SHOW META` names a
+  core** (`tools/multicore_benchmark.py`, `lock_contention_benchmark.py`,
+  `bi_checkpoint_stall.py`, `bb_concurrent_benchmark.py`, `bl_mixed.py`'s
+  placements, `ba_census.py`'s arms) measure the balancer's placement on a
+  BL-S3 binary: a pinned session may move at a head whenever
+  `LoadPlacer::Decide`'s conditions hold (`load_placer.hpp`). No setting
+  turns the balancer off; against a pre-BL-S3 binary (`3552a03c`) they
+  measure what their docstrings say.
+- **The staleness test assumes an idle reactor publishes often**:
+  `LoadPlacer::kStaleNs` (four windows) holds while `max_idle_block_ms`
+  stays under three windows (150 ms); the default is 10. A larger idle
+  block makes an idle core read as held, and it draws no session.
+- **BL-R5 is not built**: under D19's fallback core 0 still hands accepted
+  sockets round-robin, not to the least busy core. The balancer corrects
+  the placement at a session's first head, so the accept-time choice was
+  not separately measured.
+- **What the suite does not cover:** a TLS or SCRAM session moving (the
+  channel and gate travel inside the `Connection`, covered by reading only),
+  a cancel sent to a session after it moved (the registry entry is keyed by
+  session id and holds the session's flag; reading only), and bytes that
+  arrive in the kernel between the source's unregister and the
+  destination's register (level-triggered registration; reading only).
 
 ## Expressions in `UPDATE ... SET` (BJ)
 

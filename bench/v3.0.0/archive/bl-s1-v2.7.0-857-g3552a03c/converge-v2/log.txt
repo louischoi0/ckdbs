@@ -1,0 +1,27 @@
+kds-pkmix-relaxed-k2-s16-balanced-r0 load 2.34->5.43 stmts=919632 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=76580.8 p50=167.9
+kds-pkmix-relaxed-k2-s16-skew-r0 load 3.29->5.67 stmts=971027 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=80854.4 p50=171.6
+kds-pkmix-relaxed-k2-s16-skew-r0 load 2.98->5.11 stmts=1007846 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=83926.8 p50=167.9
+kds-pkmix-relaxed-k4-s8-balanced-r0 load 3.16->4.21 stmts=732242 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=61003.3 p50=103.9
+kds-pkmix-relaxed-k4-s8-skew-r0 load 3.50->4.38 stmts=697393 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=58102.1 p50=114.0
+kds-pkmix-relaxed-k4-s8-skew-r0 load 3.41->4.36 stmts=709789 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=59130.7 p50=113.4
+kds-pkmix-relaxed-k4-s16-balanced-r0 load 3.39->5.28 stmts=839631 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=69915.0 p50=203.6
+kds-pkmix-relaxed-k4-s16-skew-r0 load 3.16->5.46 stmts=827392 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=68896.7 p50=185.6
+kds-pkmix-relaxed-k4-s16-skew-r0 load 3.31->6.37 stmts=890141 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=74122.8 p50=185.1
+kds-pkmix-relaxed-k2-s16-balanced-r0 load 3.17->6.42 stmts=1005536 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=83726.2 p50=168.0
+kds-pkmix-relaxed-k2-s16-skew-r0 load 3.10->4.52 stmts=973724 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=81079.2 p50=170.4
+kds-pkmix-relaxed-k2-s16-skew-r0 load 3.52->4.40 stmts=1003827 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=83588.3 p50=168.0
+kds-pkmix-relaxed-k4-s8-balanced-r0 load 3.51->4.58 stmts=714117 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=59491.0 p50=104.1
+kds-pkmix-relaxed-k4-s8-skew-r0 load 2.78->3.30 stmts=698129 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=58159.7 p50=114.2
+kds-pkmix-relaxed-k4-s8-skew-r0 load 2.95->3.42 stmts=712721 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=59378.8 p50=111.1
+kds-pkmix-relaxed-k4-s16-balanced-r0 load 2.98->6.35 stmts=835812 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=69598.0 p50=203.2
+kds-pkmix-relaxed-k4-s16-skew-r0 load 3.05->5.00 stmts=832430 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=69316.2 p50=184.7
+kds-pkmix-relaxed-k4-s16-skew-r0 load 3.14->5.63 stmts=878192 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=73127.5 p50=185.1
+kds-pkmix-relaxed-k2-s16-balanced-r0 load 3.49->5.23 stmts=1007964 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=83933.2 p50=168.3
+kds-pkmix-relaxed-k2-s16-skew-r0 load 3.28->5.19 stmts=972904 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=81014.0 p50=170.4
+kds-pkmix-relaxed-k2-s16-skew-r0 load 3.22->6.30 stmts=1010361 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=84132.9 p50=168.4
+kds-pkmix-relaxed-k4-s8-balanced-r0 load 3.08->4.12 stmts=727530 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=60610.1 p50=104.1
+kds-pkmix-relaxed-k4-s8-skew-r0 load 3.21->3.88 stmts=696627 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=58034.0 p50=114.6
+kds-pkmix-relaxed-k4-s8-skew-r0 load 3.02->4.53 stmts=717194 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=59750.5 p50=110.9
+kds-pkmix-relaxed-k4-s16-balanced-r0 load 2.94->6.54 stmts=846662 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=70484.5 p50=203.6
+kds-pkmix-relaxed-k4-s16-skew-r0 load 3.13->5.66 stmts=827192 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=68877.5 p50=185.2
+kds-pkmix-relaxed-k4-s16-skew-r0 load 2.89->5.46 stmts=879847 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=73261.7 p50=185.0

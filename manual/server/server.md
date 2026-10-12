@@ -66,10 +66,13 @@ The binary wire protocol (KWP/1, `docs/spec/protocol.md`) is specified with a
 handshake and auth stages, but only its frame codec exists in code.
 
 **Every core accepts on the port.** With `cores > 1` each core binds `port`
-with `SO_REUSEPORT` and the kernel decides which core accepts a connection;
-the session then runs to completion on that core, under the same `tls`,
-`auth` and statement limits as on any other. A client cannot choose its
-core. `SO_REUSEPORT` has one cost worth knowing: another process running as
+with `SO_REUSEPORT` and the kernel decides which core accepts a connection,
+under the same `tls`, `auth` and statement limits as on any other. A client
+cannot choose its core, and **a session does not keep it**: at the start of
+each transaction the server may move the session to a core that has been
+markedly less busy, and the transaction then runs to its end there. A
+session moves at most once per half second, and a session whose own work is
+what makes its core busy is not moved. `SO_REUSEPORT` has one cost worth knowing: another process running as
 the same user can bind the same port and silently take a share of the
 connections, so do not start two instances on one port. With `cores = 1`
 the port is bound exclusively. The `peer_listeners` key that used to switch
@@ -79,7 +82,7 @@ Where the platform refuses `SO_REUSEPORT`, the server does not fail: it
 logs a `WARN` from `expeditor` ("the port cannot be shared ... core 0
 accepts and hands connections off"), core 0 binds the port exclusively and
 accepts every connection, and each is handed round-robin to a core — core 0
-included — where its session runs to completion as before. No configuration
+included — from where its session may move between transactions as above. No configuration
 selects this; Linux never refuses the option, so a Linux deployment does
 not see it.
 
