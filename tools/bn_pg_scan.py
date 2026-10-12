@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""BM's close: a scan row's server cost on PostgreSQL, measured as
-`tools/bm_census.py` measures KDS's (`workorder-bm-opt-read-update-path.md`
+"""BN's close: a scan row's server cost on PostgreSQL, measured as
+`tools/bn_census.py` measures KDS's (`workorder-bn-opt-read-update-path.md`
 §5: "a 10,000-row unindexed equality against BA-S3's PostgreSQL twin").
 
-    bm_pg_scan.py --port 15433 [--database bench] [--rows 10000] [--ops 200]
+    bn_pg_scan.py --port 15433 [--database bench] [--rows 10000] [--ops 200]
                   [--runs 5] [--pin-backend 2] [--pin-driver 4] --out OUT.json
 
 Expects the scratch cluster `tools/pg_setup.sh` manages, already started.
@@ -65,7 +65,7 @@ def main():
     os.sched_setaffinity(0, {int(a.pin_driver)})
     out = {"args": vars(a), "runs": []}
     for r in range(a.runs):
-        conn = PgConnection(port=a.port, database=a.database, application_name="bm_pg_scan.py")
+        conn = PgConnection(port=a.port, database=a.database, application_name="bn_pg_scan.py")
         pid = conn.backend_pid
         subprocess.run(["taskset", "-p", "-c", a.pin_backend, str(pid)], check=True,
                        capture_output=True)

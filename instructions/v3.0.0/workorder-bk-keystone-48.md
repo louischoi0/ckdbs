@@ -32,10 +32,12 @@ for the word.
 **The letter collided and was resolved.** Two orders opened on `main` the
 same day were lettered BK too, found when `main` was merged again for the
 push; on the operator's word of 2026-10-11 (W5,
-`raft-marks-2026-10-11-keystone-48.md` §4) they are BM
-(`workorder-bm-opt-read-update-path.md`) and BN
-(`workorder-bn-sys-statistics-show-sugar.md`), and this order, written
-first that day (02:11 UTC), keeps BK. Every reference followed the
+`raft-marks-2026-10-11-keystone-48.md` §4) they are BN
+(`workorder-bn-opt-read-update-path.md`) and BO
+(`workorder-bo-sys-statistics-show-sugar.md`) - BM, the first choice for
+the read/update order, was taken on `main` by
+`workorder-bm-scan-row-kernel.md` before the relettering landed on
+2026-10-12 - and this order, written first that day (02:11 UTC), keeps BK. Every reference followed the
 letters, file names included. This order's marks are
 `raft-marks-2026-10-11-keystone-48.md`; `raft-marks-2026-10-11.md` is
 another session's record of the same day.

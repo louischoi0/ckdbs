@@ -8116,8 +8116,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // by the statement so no row allocates for it after the first.
     // `assigned` names the cells a row's new image re-encodes, one per
     // assignment, pointing into `values`; every other cell is carried from
-    // the row's own bytes (`exec::EncodeAssigned`, BM-R3,
-    // `workorder-bm-opt-read-update-path.md`).
+    // the row's own bytes (`exec::EncodeAssigned`, BN-R3,
+    // `workorder-bn-opt-read-update-path.md`).
     std::vector<parser::AstValue> values(compiled.size());
     std::vector<exec::AssignedCell> assigned(compiled.size());
     for (std::size_t i = 0; i < compiled.size(); ++i) {
@@ -8147,7 +8147,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     std::vector<exec::PendingSpill> spills;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
 
-    // Stage 2's decode target and what it decodes (BM-R2): every column
+    // Stage 2's decode target and what it decodes (BN-R2): every column
     // where a Cabin or an index reads the row (an assertion is asked per
     // row, below), otherwise the columns the SET expressions read.
     // `row_poisoned` says the slots outside the mask hold `kUndecoded`.
@@ -8387,11 +8387,11 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
         }
 
-        // ---- Stage 2: what the SET list and the hooks read (BM-R2) -------
+        // ---- Stage 2: what the SET list and the hooks read (BN-R2) -------
         //
         // Into `row`, the statement's, because the SET expressions and the
         // write hooks read it (the new image is encoded from `payload_copy`,
-        // BM-R3). Decoded from `payload_copy`, whose bytes outlive every page
+        // BN-R3). Decoded from `payload_copy`, whose bytes outlive every page
         // fetch stage 1 may have made.
         //
         // **Whole only where a hook reads it.** A Cabin, an index and an
@@ -8545,7 +8545,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // under the var-heap page's hold - this leaf's hold outside it, the
         // order a reader takes too; `appended_spills` then stays empty.
         const auto log_spill = SpillLogFor(scope, ta.oid, id.value());
-        // **Only the assigned cells are encoded** (BM-R3): every other cell
+        // **Only the assigned cells are encoded** (BN-R3): every other cell
         // is carried from `payload_copy`, the version this walk read, so a
         // spilled value the SET list does not name is shared with the new
         // version rather than appended again - and no longer leaked by every
@@ -8591,7 +8591,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             // the slot since the copy: the walk holds this page's write
             // `PageRef` and carries no `co_await` (the conflict check's
             // argument above), and the new image the carry starts from is
-            // the same buffer (BM-R3).
+            // the same buffer (BN-R3).
             const std::vector<std::byte>& image = payload_copy;
 
             txn::UndoRecordFields rec{};

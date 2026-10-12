@@ -73,9 +73,9 @@ TEST_F(SetExprEvalTest, AnExpressionIntoAnIndexedColumnMovesItsEntry) {
     EXPECT_EQ(Run("SELECT id FROM t WHERE i64 = 1000"), "id");
 }
 
-// ---- BM-R2: a row with no hook decodes only what its expressions read ------
+// ---- BN-R2: a row with no hook decodes only what its expressions read ------
 //
-// `instructions/v3.0.0/workorder-bm-opt-read-update-path.md` BM-S3. `t` has no
+// `instructions/v3.0.0/workorder-bn-opt-read-update-path.md` BN-S3. `t` has no
 // Cabin, index or assertion until a cell adds one, so these statements decode
 // exactly the columns their SET expressions name and leave `kUndecoded` in
 // every other slot - which the evaluator refuses, so a mask that missed a

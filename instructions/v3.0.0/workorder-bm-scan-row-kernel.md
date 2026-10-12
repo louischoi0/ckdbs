@@ -42,13 +42,13 @@ operator named no letter; BM is CLA's choice and BM-Q11 puts it to the
 operator.
 
 **BM against other orders.**
-- **BK, the read and update paths** (`workorder-bk-opt-read-update-path.md`,
-  closed 2026-10-11). BK-R4 was *"a scan's per-row cost ... split into
-  parts, and the largest part is cut"*. BK cut 3 ns of the row and left the
-  rest to `known-gaps.md`'s BK section (*"A scan row costs twice
+- **BN, the read and update paths** (`workorder-bn-opt-read-update-path.md`,
+  closed 2026-10-11). BN-R4 was *"a scan's per-row cost ... split into
+  parts, and the largest part is cut"*. BN cut 3 ns of the row and left the
+  rest to `known-gaps.md`'s BN section (*"A scan row costs twice
   PostgreSQL's, and no single part of it dominates"*). That entry rests on
-  BK-S1's re-profile, which found no part above a quarter
-  (`bench/v3.0.0/archive/bk-s1-census-v2.7.0-769-gb70f79d8/profB1r-reports.txt`).
+  BN-S1's re-profile, which found no part above a quarter
+  (`bench/v3.0.0/archive/bn-s1-census-v2.7.0-769-gb70f79d8/profB1r-reports.txt`).
   BM is that remainder. Its premise is that a distributed
   cost is cut by changing the unit of per-row work, not by another point
   cut.
@@ -80,7 +80,7 @@ as today.
 
 **Three goals:**
 - **G1 — the scan row's CPU.** The net per-row server CPU of an unindexed
-  scan falls, measured on the BK shape and on the wider shapes of §5.1.
+  scan falls, measured on the BN shape and on the wider shapes of §5.1.
 - **G2 — the same answer, the same order, the same counts.** Rows, their
   emission order, `ANALYZE`'s `examined=` and `sel=`, the row-touch budget,
   Waystone trails, Cabin recording and the inner build are unchanged
@@ -124,18 +124,18 @@ body and (B) as a conditional stage. (C) and (D) are named as exclusions
 
 ## 1. Survey at `ade5bc20`
 
-### 1.1 What BK measured
+### 1.1 What BN measured
 
-`[measured]` `bench/v3.0.0/results-bk-close-v2.7.0-787-g8679367e.md` §4,
+`[measured]` `bench/v3.0.0/results-bn-close-v2.7.0-787-g8679367e.md` §4,
 at `v2.7.0-787-g8679367e`:
 - **Shape.** `SELECT * FROM s WHERE w = ?` over 10,000 rows of
-  `s (id int64, v int64, w int64)` (`tools/bk_census.py:174`), one row
+  `s (id int64, v int64, w int64)` (`tools/bn_census.py:174`), one row
   matching.
 - **Configuration.** `cores = 1`, `relaxed`, `buffer_pool_frames = 65536`,
   everything resident.
 - **Result.** Net of a point statement, a scanned row costs 67.2 ns of
   server CPU (literal path) and 67.0 ns (prepared). PostgreSQL 18.6 costs
-  34.3 ns on the same host and pinning, a ratio of 1.96. BK moved the row
+  34.3 ns on the same host and pinning, a ratio of 1.96. BN moved the row
   by 2.9 ns.
 
 `[measured]` The same file's profile of B (1,394 samples, 708.6 µs per
@@ -297,7 +297,7 @@ changes no answer, and BM-Q3 is a question of I16's structure and of cost.
 - a scan over rows written since the floor therefore takes a latch shared
   by every core, once per row.
 
-`[measured]` BK's shape loaded its rows before the arms ran, at
+`[measured]` BN's shape loaded its rows before the arms ran, at
 `cores = 1`. `LookupCommit` is in none of the profile's top entries, so
 that shape most likely never left the floor path. **No measurement exists
 of a scan under concurrent writers.**
@@ -330,9 +330,9 @@ to the horizon.
 - **The read-path switch pattern**: `indexes = on|off` steers execution,
   never the compiled chain, and the contract suites compare replies byte
   for byte across it (`kds.conf.sample:490-505`).
-- **The census and twin drivers** BK left: `tools/bk_census.py`,
-  `tools/bk_pg_scan.py`, `tools/kds_sampler.c` with
-  `tools/kds_sampler_report.py` and `tools/bk_parts.json`.
+- **The census and twin drivers** BN left: `tools/bn_census.py`,
+  `tools/bn_pg_scan.py`, `tools/kds_sampler.c` with
+  `tools/kds_sampler_report.py` and `tools/bn_parts.json`.
 
 ### 1.8 What is not BM's (W1)
 
@@ -347,7 +347,7 @@ to the horizon.
 - **BG's scan queue** reorders reclamation so a scan larger than the pool
   stops lapping the hot set (`workorder-bg-scan-queue.md` §1.1).
 - `[measured]` Both act only when the scan and the working set compete for
-  frames. BK's 67 ns was measured with every page resident, so neither
+  frames. BN's 67 ns was measured with every page resident, so neither
   moves it, and BM moves neither re-fault rate.
 - **Cold reads** are a third question: residency is the pool's, latency on
   a miss is the device path's (§0's non-goals).
@@ -514,12 +514,12 @@ Workflow step 3).
 | stage | what | done when | size |
 |---|---|---|---|
 | BM-S0 | **The order** | <ul><li>This file</li><li>Its review (§6)</li><li>The index row</li><li>`raft-marks-2026-10-12.md` §1-§3</li></ul> | S |
-| BM-S1 | **The premise, measured** (BM-R8) | <ul><li>**Code: instrumentation only, no behaviour change:**<ul><li>a per-core count of `LookupCommit` calls, in `SHOW META` as `visibility_window_lookups` for the session's core;</li><li>`tools/bk_parts.json` split so the row walk's parts (loop and callback, visibility, decode, residual, copy) are separate parts rather than one `descent and page access`.</li></ul></li><li>**The drivers:** `tools/bk_census.py` and `tools/bk_pg_scan.py` extended with §5.1's shapes and their PostgreSQL twins.</li><li>**The measurement** (§5.1), into `bench/v3.0.0/results-bm-s1-scan-row-<describe>.md`.</li><li>**The gates** (BM-Q1, BM-Q8).</li><li>**The suite green.**</li></ul> | M |
+| BM-S1 | **The premise, measured** (BM-R8) | <ul><li>**Code: instrumentation only, no behaviour change:**<ul><li>a per-core count of `LookupCommit` calls, in `SHOW META` as `visibility_window_lookups` for the session's core;</li><li>`tools/bn_parts.json` split so the row walk's parts (loop and callback, visibility, decode, residual, copy) are separate parts rather than one `descent and page access`.</li></ul></li><li>**The drivers:** `tools/bn_census.py` and `tools/bn_pg_scan.py` extended with §5.1's shapes and their PostgreSQL twins.</li><li>**The measurement** (§5.1), into `bench/v3.0.0/results-bm-s1-scan-row-<describe>.md`.</li><li>**The gates** (BM-Q1, BM-Q8).</li><li>**The suite green.**</li></ul> | M |
 | BM-S2 | **The walk owns its slot loop; the walk's invariants checked once** (BM-R5, BM-R6). No result can change | <ul><li>**Code:**<ul><li>the page primitives take a template visitor, or the VM inlines the leaf's slot loop (not `FunctionRef`, §1.2);</li><li>`ReadTuple`'s checks with the header read once per page: BF-R10's bound and the payload check kept, and a refused slot no row, as today (§1.3);</li><li>counters in locals, flushed per page;</li><li>the once-per-walk check of BM-R6.</li></ul></li><li>**Cells:**<ul><li>a three-leaf relation emits in slot order across both boundaries;</li><li>`LIMIT 1` and a true `EXISTS` stopping mid-page leave `pages=` at 1 and `examined=` at the stopping row's ordinal plus one;</li><li>an empty relation and an empty leaf leave `pages=` at 0;</li><li>a slot whose offset leaves the page is no row, as today;</li><li>a hand-built chain with an out-of-range `col_pos` is refused `Corruption` with today's message at the first row, and not on an empty relation;</li><li>a payload of the wrong length is refused as today.</li></ul></li><li>**Mutations, each repeated:**<ul><li>the stop deferred to the page's end (killed by the stop cell's `examined=`);</li><li>the counters not flushed on a stop (killed by the stop cell);</li><li>the once-per-walk check skipped (killed by the malformed-chain cell).</li></ul></li><li>**The contract suites byte-identical** (waystone, index, cabin, inner-build) and the suite green.</li></ul> | M |
 | BM-S3 | **The kernel, integer-encoded types** (BM-R1..R4): the int widths, `uint64`, bool, date, timestamp, decimal, `decimal128` | <ul><li>**Code:**<ul><li>the kernel compiled per step at bind from the residual (BM-R4);</li><li>evaluated in `AcceptTupleAt`, the one place every read access kind reaches (`UPDATE` and `DELETE` filter through `EvaluateConjuncts`, `step_vm.cpp:2868`, `command_dispatcher.cpp:8312-8313`, and are not BM's), before the copy for a visible version and after the undo walk for a reconstructed one (BM-R3);</li><li>a rejected row examined and charged (BM-R2);</li><li>the switch, as BM-Q5 marks.</li></ul></li><li>**Cells:**<ul><li>**the differential matrix**: for every kernel type × the six operators × literals at each boundary (the type's min and max, ±1, 0, `INT64_MAX` and above for `uint64`, negative and positive `decimal128` halves), the kernel's verdict equals `CompareValues`' for every non-NULL operand, and it rejects no row whose operand is NULL (BM-Q3);</li><li>a literal above an `int32` column's range answers as today's int64 comparison under all six operators: every row under `<`, `<=` and `<>`, none under `=`, `>` and `>=`;</li><li>a pk-range conjunct on column 0 over rows whose Keystone flags byte is set;</li><li>`decimal128` values that differ only in the low half, across 2^63;</li><li>a malformed non-kernel conjunct, on a relation whose every row the kernel rejects, is still refused at the first row (BM-R6);</li><li>**MVCC**: a committed row with `w = 5` updated to `w = 6` by a writer the reader cannot see is returned by `WHERE w = 5`;</li><li>**recording**: under a live recording of `sym`, a row with `sym = 'A'` that `qty > 5` rejects enters the set, and a later served `WHERE sym = 'A'` returns it;</li><li>**budget**: with `max_rows_touched` below the relation and every row kernel-rejected, `ResourceExhausted` falls on the same row as with the kernel off;</li><li>`ANALYZE`'s `examined=` and `sel=` equal on and off;</li><li>the inner build's correlated conjunct is never in a kernel.</li></ul></li><li>**Mutations, each repeated:**<ul><li>`uint64` compared signed (killed by the `INT64_MAX` cell);</li><li>`<=` compiled as `<` (killed by the boundary cell);</li><li>column 0 read as its 8-byte cell (killed by the flags cell);</li><li>the `decimal128` low half compared signed (killed by the low-half cell);</li><li>the kernel reading the page for a reconstructed version (killed by the MVCC cell);</li><li>the kernel consulted during recording (killed by the recording cell);</li><li>a kernel-rejected row not charged (killed by the budget cell).</li></ul></li><li>**The contract suites byte-identical with the switch on and off**, and the suite green.</li></ul> | M |
 | BM-S4 | **The kernel, strings**: `char(N)` and an inline `varchar` cell | <ul><li>**Code:**<ul><li>`char(N)` compared after the NUL trim `DecodeOneValueInto` applies;</li><li>a `varchar` cell compared only through `DecodeCell` (`src/storage/tagged_cell.cpp:99-123`), and only when it answers an inline value. Any other answer (spilled, NULL-tagged, or a refusal) goes to the residual, which answers or refuses it as today.</li></ul></li><li>**Cells:**<ul><li>values shorter than N and exactly N;</li><li>a literal longer than N;</li><li>a spilled value equal to the literal is returned;</li><li>a NULL-tagged cell under a present bit is still `Corruption`;</li><li>an inline cell whose length exceeds its capacity is still `Corruption`.</li></ul></li><li>**Mutations, each repeated:**<ul><li>the trim removed (killed by the short-value cell);</li><li>a spilled cell compared by its inline bytes (killed by the spilled cell);</li><li>`DecodeCell` bypassed and the inline length trusted (killed by the over-capacity cell).</li></ul></li><li>**The suite green.**</li></ul> | S |
 | BM-S5 | **A recent row's visibility** (BM-R7), **only if BM-Q8's gate opens it** | <ul><li>**Code:**<ul><li>the floor read once per page;</li><li>the per-walk verdict memo.</li></ul></li><li>**Cells** (two-core rig):<ul><li>a writer committing above the reader's snapshot mid-walk stays invisible for every row of it;</li><li>a floor rising mid-walk changes no verdict;</li><li>a second statement after the commit sees it;</li><li>a page holding the rows of two writers, one visible and one not, answers each row by its own writer.</li></ul></li><li>**Mutations, each repeated:**<ul><li>the memo kept across statements (killed by the second-statement cell);</li><li>the memo keyed by page rather than by transaction (killed by a page holding two writers' rows).</li></ul></li><li>**The suite green** and the sim corpus.</li></ul> | S |
-| BM-S6 | **The close** | <ul><li>**The measurement** (§5.2).</li><li>**Text:**<ul><li>`parser-v2.md` I15 and §7 (the kernel, BM-R1..R5);</li><li>`kds.conf.sample` for the switch;</li><li>`step_vm.hpp`'s `rows_examined` comment;</li><li>CLAUDE.md's query-language row.</li></ul></li><li>**Docs:**<ul><li>`known-gaps.md`'s BK scan entry restated with the close's number, or deleted if it no longer holds;</li><li>what BM did not cut, named there.</li></ul></li></ul> | S |
+| BM-S6 | **The close** | <ul><li>**The measurement** (§5.2).</li><li>**Text:**<ul><li>`parser-v2.md` I15 and §7 (the kernel, BM-R1..R5);</li><li>`kds.conf.sample` for the switch;</li><li>`step_vm.hpp`'s `rows_examined` comment;</li><li>CLAUDE.md's query-language row.</li></ul></li><li>**Docs:**<ul><li>`known-gaps.md`'s BN scan entry restated with the close's number, or deleted if it no longer holds;</li><li>what BM did not cut, named there.</li></ul></li></ul> | S |
 
 ## 4. Items for the operator
 
@@ -528,7 +528,7 @@ All unmarked. Every proposal is `[design]` unless a cell says otherwise.
 | item | question | kind | CLA's proposal | mark |
 |---|---|---|---|---|
 | BM-Q0 | **Open BM**, with BM-S0..S6 and BM-R1..R8 as written | process | Yes, sequenced as BM-Q9 marks | |
-| BM-Q1 | **BM-S1's premise gate.** BM stops for a ruling when, on the BK shape and on §5.1's wide shape, the parts BM-S2..S4 replace are under one third `[provisional]` of the net row. Those parts are the loop and callback, the per-row checks, the copy, the decode of a rejected row, and the residual on a rejected row | process | As written. At BK's close they were 38 ns or more of 67 (§1.1). The gate asks whether that holds on wider rows and at other selectivities | |
+| BM-Q1 | **BM-S1's premise gate.** BM stops for a ruling when, on the BN shape and on §5.1's wide shape, the parts BM-S2..S4 replace are under one third `[provisional]` of the net row. Those parts are the loop and callback, the per-row checks, the copy, the decode of a rejected row, and the residual on a rejected row | process | As written. At BN's close they were 38 ns or more of 67 (§1.1). The gate asks whether that holds on wider rows and at other selectivities | |
 | BM-Q2 | **The kernel's authority.**<br>(a) A pre-filter: it only rejects, and the residual decides every row it passes (BM-R1).<br>(b) Authoritative: a row passing every kernel conjunct skips them in the residual | design, **[quiet-wrong] under (b)** | (a). Under (a) a defect can only drop a row, and the differential matrix is aimed at exactly that. Under (b) a defect can also admit one. (b) also saves nothing on a selective scan: the residual only runs on the rows the kernel passes. §5.1's 100 % cell prices what (a) costs when every row passes. (b) is reconsidered only if that cost is material | |
 | BM-Q3 | **A NULL operand.**<br>(a) The kernel passes a row whose operand's NULL bit is set to the residual, so I16's single collapse stays the only one.<br>(b) The kernel rejects it through a helper shared with `CompareValues`, and I16 is amended to one function and two call sites | design | (a). The two are result-equivalent: a NULL operand keeps no row under the six operators (§1.5). (a) keeps the collapse in `CompareValues` alone, at the cost of a residual call on each NULL row, which §5.1's nullable cell measures. (b) is taken only if that cost is material | |
 | BM-Q4 | **Counters and the budget** (BM-R2): a kernel-rejected row is examined, unmatched and charged once, so `examined=`, `sel=` and `ResourceExhausted` are unchanged. `spills=` may fall | design | As written. Charging per page instead would move the row a budget refuses on | |
@@ -548,17 +548,17 @@ All unmarked. Every proposal is `[design]` unless a cell says otherwise.
 `[design]` Where every cell is run:
 - In `build-release`, rebuilt at BM-S1's instrumented commit and named by
   `git describe --tags`. `bench/README.md`'s five rules apply.
-- On one host, the server and driver pinned to separate CPUs as BK pinned
+- On one host, the server and driver pinned to separate CPUs as BN pinned
   them.
 - Each cell on a fresh server and data file, with the literal and prepared
   driver paths, interleaved, eight runs.
 - PostgreSQL 18 as the twin for every cell but the writer cell.
 
 **Shapes:**
-- **BK's shape**: `SELECT * FROM s WHERE w = ?`, 10,000 rows, for
+- **BN's shape**: `SELECT * FROM s WHERE w = ?`, 10,000 rows, for
   continuity with §1.1.
 - **Rows**: the same at 1,000, 10,000 and 100,000. This separates the
-  fixed cost from the per-row cost, which BK's close did not sweep.
+  fixed cost from the per-row cost, which BN's close did not sweep.
 - **Selectivity**: `WHERE w < ?` at 0 %, 1 %, 10 % and 100 % of rows
   emitted. The 100 % cell is the all-pass cost of BM-Q2 (a) and BM-Q12's
   guard.
@@ -576,7 +576,7 @@ All unmarked. Every proposal is `[design]` unless a cell says otherwise.
     p50 and p99 against the same scan with no writer.
   - No twin: the cell measures KDS against itself.
 
-**Profile.** `tools/kds_sampler.c` on BK's shape, on the width shape, and
+**Profile.** `tools/kds_sampler.c` on BN's shape, on the width shape, and
 in the writer cell, with BM-S1's split parts.
 
 **Report, per cell:**
@@ -653,7 +653,7 @@ applied**, and CLA re-read each cited line before applying it.
   horizon.
 - **The write path.** `UPDATE` and `DELETE` filter outside `AcceptTupleAt`.
 - **Wrong attributions:**
-  - "a quarter" is BK-S1's re-profile, not BK's close;
+  - "a quarter" is BN-S1's re-profile, not BN's close;
   - the pre-push hook has no documentation exemption;
   - BI shares `command_dispatcher.cpp` (moot once BI closed; BM-Q9).
 - **`varchar`.** The kernel goes through `DecodeCell`'s checks.

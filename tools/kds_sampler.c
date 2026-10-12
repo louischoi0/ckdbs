@@ -1,6 +1,6 @@
 // kds_sampler - a CPU-time sampling profiler loaded with LD_PRELOAD.
 //
-// BM-S1 (instructions/v3.0.0/workorder-bm-opt-read-update-path.md) needs a
+// BN-S1 (instructions/v3.0.0/workorder-bn-opt-read-update-path.md) needs a
 // sampled split of where a statement's server CPU goes, and `perf` is
 // refused on the measuring host (perf_event_paranoid = 4, no root). This is
 // the smallest thing that answers it: ITIMER_PROF delivers SIGPROF per slice

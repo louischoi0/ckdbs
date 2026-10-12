@@ -1015,45 +1015,45 @@ Written at BJ's close on `worktree-bj-expression-update`. Owned by
   between the parser and `UpdateInner` is not attributed (`perf` is locked out).
   A constant-folding or lazier-allocation second attempt was not made.
 
-## The read and update paths (BM)
+## The read and update paths (BN)
 
-Written at BM's close on `worktree-bk-read-update-paths`, verified at `8679367e`. Owned by
-`instructions/v3.0.0/workorder-bm-opt-read-update-path.md` and the specs each
+Written at BN's close on `worktree-bk-read-update-paths`, verified at `8679367e`. Owned by
+`instructions/v3.0.0/workorder-bn-opt-read-update-path.md` and the specs each
 stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
 
 - **A prepared statement is still substituted into its text and parsed again
-  at every execution** (BM-R1 not built, BM-Q13). Parse and compile are
-  1.1-4.5 µs of a point statement's server CPU after BM (5-15 % of it,
-  `bench/v3.0.0/archive/bm-close-v2.7.0-787-g8679367e/partsB.md`), and a
+  at every execution** (BN-R1 not built, BN-Q13). Parse and compile are
+  1.1-4.5 µs of a point statement's server CPU after BN (5-15 % of it,
+  `bench/v3.0.0/archive/bn-close-v2.7.0-787-g8679367e/partsB.md`), and a
   client that prepares is the only one a cached parse would help; no driver
   in the tree prepares. A text parameter containing a single quote stays
   unbindable at `C_BIND` for the same reason.
 - **Waystone records a trail for a point `SELECT` by pk**: recording and the
-  replay attempt are 7-9 % of its server CPU (BM-S1's census), for a lookup
-  the descent already answers directly. No BM proposal named it.
+  replay attempt are 7-9 % of its server CPU (BN-S1's census), for a lookup
+  the descent already answers directly. No BN proposal named it.
 - **The request path's floor is the kernel's**: a `C_PING` round trip costs
-  12 µs of server CPU and 26 µs at p50 on a quiet host at BM's close, 64 % of
+  12 µs of server CPU and 26 µs at p50 on a quiet host at BN's close, 64 % of
   the CPU in its one `send()` and 33 % in the read and the reactor's wake
-  (BM-Q8: no engine change in BM reaches it).
-- **A spilled value an UPDATE re-assigns is still never released**: BM-R3
+  (BN-Q8: no engine change in BN reaches it).
+- **A spilled value an UPDATE re-assigns is still never released**: BN-R3
   stopped the copy of a value the SET list does not name, not the
   superseded one it does. The deferred-release drain stays unbuilt, and
   `heap-and-tuple.md` §3.4 states the rule it must take: a value goes only
   once the newest version naming it is reclaimed.
 - **What the suite does not cover:**
-  - the race BM-S3's review found and the order fixed - an assertion adopted
+  - the race BN-S3's review found and the order fixed - an assertion adopted
     on another core between a statement's refused `IS` and its row's `IX` -
     has no cell; the ask sits after the conflict check, where it always did;
   - the var-heap tail hint across a `DROP TABLE` reclaim that reuses the
     dropped chain's root id: the cell (`ARootIsBornWithNoHint`) uses the
     in-memory store's id order, not a reclaim on `DevicePageStore`.
 - **A scan row costs twice PostgreSQL's, and no single part of it
-  dominates**: 67 ns of server CPU a row net of the statement at BM's close
+  dominates**: 67 ns of server CPU a row net of the statement at BN's close
   against PostgreSQL 18's 34 ns on one host and driver
-  (`bench/v3.0.0/results-bm-close-v2.7.0-787-g8679367e.md`). BM-S1's
+  (`bench/v3.0.0/results-bn-close-v2.7.0-787-g8679367e.md`). BN-S1's
   re-profile on the busy census host split it between visibility, decode,
   the residual and the leaf visit, none above a quarter
-  (`archive/bm-s1-census-v2.7.0-769-gb70f79d8/profB1r-reports.txt`).
+  (`archive/bn-s1-census-v2.7.0-769-gb70f79d8/profB1r-reports.txt`).
 
 ## Carve and checkpoint stalls
 

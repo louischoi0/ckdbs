@@ -1231,8 +1231,8 @@ public:
                 if (e.column_no >= row_.size()) {
                     return Status::Corruption("an expression names a column past the row");
                 }
-                // A slot the partial decode left out (BM-R2 of
-                // `workorder-bm-opt-read-update-path.md`): the mask that
+                // A slot the partial decode left out (BN-R2 of
+                // `workorder-bn-opt-read-update-path.md`): the mask that
                 // chose the columns missed one this expression reads.
                 if (row_[e.column_no].type == parser::ValueType::kParam) {
                     return Status::Corruption("an expression reads column " +

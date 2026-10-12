@@ -521,12 +521,12 @@ void TcpServer::OnClientReadable(int client_fd) {
         return;  // closed or server stopping
     }
     // **A statement this read started replies at its completion, in one
-    // write with everything queued ahead of it** (BM-R7,
-    // `workorder-bm-opt-read-update-path.md`). A pipelined
+    // write with everything queued ahead of it** (BN-R7,
+    // `workorder-bn-opt-read-update-path.md`). A pipelined
     // PARSE/BIND/EXECUTE leaves `S_PARSE_OK` and `S_BIND_OK` in the outbox
     // when the statement is submitted; flushing them here was a second
     // `send()` per statement and a second wake of a client that had nothing
-    // to do with them but read on (BM-S1's census ranked it first). Nothing
+    // to do with them but read on (BN-S1's census ranked it first). Nothing
     // waits on those frames: a client that wanted them before executing
     // would not have sent the EXECUTE - one that blocks on them while its
     // other connection holds a lock this statement waits for is broken by

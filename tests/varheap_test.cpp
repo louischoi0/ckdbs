@@ -438,9 +438,9 @@ TEST_F(VarHeapChainTest, ATailLinkedOnBetweenTheWalkAndItsHoldIsWalkedOn) {
     EXPECT_EQ(length.value(), 3u) << "a grown page is unreachable from the root";
 }
 
-// ---- The walk starts at the last tail (BM-R8) ------------------------------
+// ---- The walk starts at the last tail (BN-R8) ------------------------------
 //
-// `instructions/v3.0.0/workorder-bm-opt-read-update-path.md` BM-S9. Every
+// `instructions/v3.0.0/workorder-bn-opt-read-update-path.md` BN-S9. Every
 // append walked from the root, so a spilled value cost a page fetch per page
 // the chain had. The store now remembers the page the last append landed in;
 // these cells pin that the walk starts there, that a hint the chain moved

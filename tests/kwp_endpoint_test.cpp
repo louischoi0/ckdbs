@@ -413,7 +413,7 @@ TEST_F(KwpEndpointTest, AServedPortalIdleBeyondTheTimeoutIsReleased) {
 }
 
 TEST_F(KwpEndpointTest, APipelinedStatementRepliesInOneWrite) {
-    // BM-R7 (`workorder-bm-opt-read-update-path.md`): the frames a pipelined
+    // BN-R7 (`workorder-bn-opt-read-update-path.md`): the frames a pipelined
     // PARSE/BIND/EXECUTE/SYNC earns leave in one `send()` at the statement's
     // completion. Flushing `S_PARSE_OK`/`S_BIND_OK` when the read submitted
     // the statement was a second write and a second client wake per
@@ -421,7 +421,7 @@ TEST_F(KwpEndpointTest, APipelinedStatementRepliesInOneWrite) {
     // which loopback hands the server's read whole (a split read would count
     // one more write, and is the one way this cell could flake): the
     // handshake's reply, the statement's and STOP's are one write each - five
-    // before BM-R7.
+    // before BN-R7.
     constexpr std::uint16_t kPort = 25459;
     auto listener = TcpServer::Listen(kPort);
     ASSERT_TRUE(listener.ok()) << listener.status().message();

@@ -241,8 +241,8 @@ public:
     // Live client connections, for tests and for the shutdown path.
     std::size_t open_connections() const noexcept { return clients_.size(); }
 
-    // `send()` calls that carried bytes, over the listener's life (BM-R7,
-    // `workorder-bm-opt-read-update-path.md`: a
+    // `send()` calls that carried bytes, over the listener's life (BN-R7,
+    // `workorder-bn-opt-read-update-path.md`: a
     // statement's reply leaves in one). Reactor-thread state: read it once
     // the reactor has stopped.
     std::uint64_t reply_writes() const noexcept { return reply_writes_; }

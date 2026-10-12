@@ -18,11 +18,11 @@
 // `instructions/v2.5.0/varchar-char-architecture.md` §4).
 //
 // **The model rests on one fact about the code, and the first test here is
-// that fact.** Since BM-R3 (`workorder-bm-opt-read-update-path.md`) an
+// that fact.** Since BN-R3 (`workorder-bn-opt-read-update-path.md`) an
 // UPDATE re-encodes only the cells it assigns, so a spilled value the SET
 // list never touched is *carried*: the new
 // version points at the old version's slot, and versions of one tuple share
-// it. Until BM it was appended again by every UPDATE of its row, so no two
+// it. Until BN it was appended again by every UPDATE of its row, so no two
 // versions shared a slot and every superseded copy leaked. "A version dies,
 // so its slots die" is therefore wrong now; the rule is "a value may be
 // released only once the newest version naming it is reclaimed"
@@ -112,10 +112,10 @@ protected:
 // ---- The premise the whole model rests on --------------------------------
 
 TEST_F(VarHeapLifetimeTest, AnUpdateOfAnotherColumnCarriesTheSpilledValue) {
-    // **The premise since BM-R3** (`workorder-bm-opt-read-update-path.md`,
-    // BM-Q4 (a)): an UPDATE re-encodes only the cells it assigns, so a
+    // **The premise since BN-R3** (`workorder-bn-opt-read-update-path.md`,
+    // BN-Q4 (a)): an UPDATE re-encodes only the cells it assigns, so a
     // spilled value the SET list does not name is carried - the new version
-    // points at the old version's slot. Until BM it was copied to a fresh
+    // points at the old version's slot. Until BN it was copied to a fresh
     // slot by every UPDATE of its row and the copy it superseded leaked. Two
     // versions now share one value, which is what binds every release of a
     // superseded value: only once the newest version naming it is reclaimed

@@ -456,7 +456,7 @@ class Connection:
         """Parses `sql` once under the statement name `name` (§5's named
         statement, held until `C_CLOSE` or disconnect). Returns its
         `pattern_id`. A later `execute_prepared(name, params)` binds and runs
-        it without sending its text again (BM-S1: the PARSE-once path)."""
+        it without sending its text again (BN-S1: the PARSE-once path)."""
         self.sock.sendall(frame(C_PARSE, _Writer().s(name).text(sql).take()) + frame(C_SYNC))
         pattern_id, error = 0, None
         while True:

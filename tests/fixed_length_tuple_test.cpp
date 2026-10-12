@@ -559,7 +559,7 @@ TEST_F(FixedLengthTupleTest, TheNewTypesStoreAndReadBackAsWritten) {
 
 TEST_F(FixedLengthTupleTest, AStoredValueSurvivesAnUpdateOfAnotherColumn) {
     // An untouched column must not move when a neighbour is written. Since
-    // BM-R3 (`workorder-bm-opt-read-update-path.md`) an UPDATE carries every
+    // BN-R3 (`workorder-bn-opt-read-update-path.md`) an UPDATE carries every
     // cell its SET list does not assign, so the first UPDATE pins the carry;
     // the decode-then-encode round trip
     // this cell was written for is reached now only by an expression that

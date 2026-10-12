@@ -12,8 +12,8 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/varheap.hpp"
 
-// **A carried spill through a crash and through `PURGE`** (BM-S5,
-// `instructions/v3.0.0/workorder-bm-opt-read-update-path.md` BM-R3, BM-Q4
+// **A carried spill through a crash and through `PURGE`** (BN-S5,
+// `instructions/v3.0.0/workorder-bn-opt-read-update-path.md` BN-R3, BN-Q4
 // (a)): an UPDATE that does not assign a spilled column carries its cell, so
 // the new version names the old version's var-heap slot. The live rollback's
 // cells are `varheap_lifetime_test.cpp`'s; these are the other two releasers

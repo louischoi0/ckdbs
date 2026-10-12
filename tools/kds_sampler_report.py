@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Symbolize and fold a `tools/kds_sampler.c` dump (BM-S1).
+"""Symbolize and fold a `tools/kds_sampler.c` dump (BN-S1).
 
     kds_sampler_report.py DUMP [--top N] [--parts PARTS.json] [--json OUT]
 

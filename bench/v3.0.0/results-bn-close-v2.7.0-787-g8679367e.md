@@ -1,9 +1,9 @@
-# BM's close: the read and update paths, measured against the commit BM opens from
+# BN's close: the read and update paths, measured against the commit BN opens from
 
-**Thesis.** Against `v2.7.0-769-gb70f79d8` (A, BM's opening commit), `v2.7.0-787-g8679367e` (B, BM's closing
+**Thesis.** Against `v2.7.0-769-gb70f79d8` (A, BN's opening commit), `v2.7.0-787-g8679367e` (B, BN's closing
 commit) is faster in every statement shape measured, at one session, `cores = 1`, `relaxed`, 1,000-row relations
 (10,000 for the scan). **The largest win is the smallest change: a statement's reply leaves in one `send()` instead
-of two (BM-S4).** The point `SELECT`, `UPDATE` (literal and `v + 1`), `INSERT` and `DELETE` are 7.2-9.4 µs lower at
+of two (BN-S4).** The point `SELECT`, `UPDATE` (literal and `v + 1`), `INSERT` and `DELETE` are 7.2-9.4 µs lower at
 p50 (13.9-17.5 %, +16 to +21 % statements per second), the server's CPU per statement is 6.3-7.5 µs lower and the
 client's 8.8-9.8 µs, in 8 of 8 runs; the `C_PING` control, which has no early flush to lose, did not move (+0.01 µs
 at p50, +0.02 µs of server CPU). **An `UPDATE` of a row with a spilled `varchar` is 16.6-17.0 µs (26-29 %) lower and one
@@ -16,10 +16,10 @@ the socket's `send` and `read`, and **its own storage work - undo, WAL, locks, d
 the CPU and 5 % of the wall time**. Where one stage's share of a delta can be read from the profile it is said;
 where two stages touch one function it is not, because no binary between A and B was measured.
 
-- **A** = `b70f79d8`, `v2.7.0-769-gb70f79d8`: BM's opening commit, engine code identical to `ac04b84e`
-  (`bench/v3.0.0/results-bm-s1-census-v2.7.0-769-gb70f79d8.md`).
-- **B** = `8679367e`, `v2.7.0-787-g8679367e`: BM-S4 (`fd851d32`, one write per reply), BM-S5 (`ed4a5655`, carried
-  spills), BM-S9 (`e6b320b4`, the var-heap tail), BM-S3 (`22f07942` partial decode and one undo hold, `3a5081e5`
+- **A** = `b70f79d8`, `v2.7.0-769-gb70f79d8`: BN's opening commit, engine code identical to `ac04b84e`
+  (`bench/v3.0.0/results-bn-s1-census-v2.7.0-769-gb70f79d8.md`).
+- **B** = `8679367e`, `v2.7.0-787-g8679367e`: BN-S4 (`fd851d32`, one write per reply), BN-S5 (`ed4a5655`, carried
+  spills), BN-S9 (`e6b320b4`, the var-heap tail), BN-S3 (`22f07942` partial decode and one undo hold, `3a5081e5`
   `ExecStats::For` inline) and origin/main merged at the close. **B also carries four `main` engine commits A does not**
   (`git log b70f79d8..8679367e -- src include`): `696a4a38` (one Keystone-id test for a named pk and a foreign-key
   value; `command_dispatcher.cpp`, on the path of the census's `INSERT`, which names its pk), `31dac324` (an integer
@@ -27,10 +27,10 @@ where two stages touch one function it is not, because no binary between A and B
   None is on the send, undo or var-heap path, but no merge-free B was measured, so their share of any delta is not
   separated, and the `C_PING` control cannot see them; the `INSERT`'s server-CPU fall is the smallest of the point
   statements (6.3 µs), inside the repeat floor of section 7.
-- Drivers, as the branch's `tools/` at the commit that adds this file: `tools/bm_census.py` (its docstring is the flag
-  reference; `bench/docs/` stays closed, `bench/README.md`), `tools/bm_census_table.py`, `tools/kds_sampler.c` with
-  `tools/kds_sampler_report.py` and `tools/bm_parts.json`, `tools/bm_pg_scan.py`.
-- Raw output: `archive/bm-close-v2.7.0-787-g8679367e/` - `ab.json` and `ab-delete.json` (per run, per arm), the two
+- Drivers, as the branch's `tools/` at the commit that adds this file: `tools/bn_census.py` (its docstring is the flag
+  reference; `bench/docs/` stays closed, `bench/README.md`), `tools/bn_census_table.py`, `tools/kds_sampler.c` with
+  `tools/kds_sampler_report.py` and `tools/bn_parts.json`, `tools/bn_pg_scan.py`.
+- Raw output: `archive/bn-close-v2.7.0-787-g8679367e/` - `ab.json` and `ab-delete.json` (per run, per arm), the two
   table dumps, `profA.json`/`profB.json` with their top-25 reports and parts tables, `pg.json`, `binaries.txt`. The
   drivers' console logs (`ab.log`, `ab-delete.log`, `profA.log`, `profB.log`) were archived after this file was written;
   the sampler's raw dumps were left in `/home/cdkbs/bench-runs/bk/close/` and are not archived.
@@ -39,9 +39,9 @@ where two stages touch one function it is not, because no binary between A and B
 |---|---|
 | Executed | 2026-10-11, from the output files' modification times: binaries copied 08:57:10 UTC; A/B census 08:57-08:59 (`ab.json` last written 08:59:16); B's profile ends 09:00:05, A's 09:00:18; PostgreSQL twin 09:01:07; DELETE supplement ends 09:02:01 |
 | Worktree / branch | `bk-read-update-paths`, `worktree-bk-read-update-paths`; this file is the only file its author wrote |
-| A | `b70f79d8`, `v2.7.0-769-gb70f79d8`, committed 2026-10-11 07:01:07 UTC. Its build tree no longer exists (`build-release` now holds B), so **the source binary's mtime is not available**: the copy's mtime, 07:11:35 UTC, is the copy time, 10 minutes after the commit; the copy's sha256 is the one the S1 census file names for its A, which that file states was built from `b70f79d8` before any `src/` change of BM |
+| A | `b70f79d8`, `v2.7.0-769-gb70f79d8`, committed 2026-10-11 07:01:07 UTC. Its build tree no longer exists (`build-release` now holds B), so **the source binary's mtime is not available**: the copy's mtime, 07:11:35 UTC, is the copy time, 10 minutes after the commit; the copy's sha256 is the one the S1 census file names for its A, which that file states was built from `b70f79d8` before any `src/` change of BN |
 | B | `8679367e`, `v2.7.0-787-g8679367e`, committed 08:50:45 UTC. **Source binary** `build-release/kds_server` of this worktree: mtime 08:56:49 UTC, 6 minutes **newer than its commit**, sha256 equal to the copy's (checked again at 09:27 UTC); copy made 08:57:10. **`git diff HEAD -- src include` was empty when checked at 09:06 UTC**, after the build and the measurement, so the binary was built from HEAD's sources; the working tree has changed since (next row) |
-| Tree | **Dirty.** At 09:27 UTC `git status` lists 25 modified files: documents, `tools/bm_census.py`, `tools/bm_pg_scan.py` and **14 under `src/`, `include/` and `tests/` that were not modified at 09:06 UTC**, plus untracked archive files. The measured binaries predate every one of them (built 08:56:49 UTC, measured by 09:02:01), so none of those edits is in a number here. **The drivers that produced `ab-delete.json` and `pg.json` are the branch's `tools/` at the commit that adds this file, not `8679367e`'s**: `tools/bm_census.py`'s `--only` flag and `delete-pk` shape and `tools/bm_pg_scan.py`'s `(rows, error)` return were uncommitted edits when the runs were taken and are committed with this file. `ab.json`'s arguments carry no `only` key and it has no delete arm, so it ran before those edits |
+| Tree | **Dirty.** At 09:27 UTC `git status` lists 25 modified files: documents, `tools/bn_census.py`, `tools/bn_pg_scan.py` and **14 under `src/`, `include/` and `tests/` that were not modified at 09:06 UTC**, plus untracked archive files. The measured binaries predate every one of them (built 08:56:49 UTC, measured by 09:02:01), so none of those edits is in a number here. **The drivers that produced `ab-delete.json` and `pg.json` are the branch's `tools/` at the commit that adds this file, not `8679367e`'s**: `tools/bn_census.py`'s `--only` flag and `delete-pk` shape and `tools/bn_pg_scan.py`'s `(rows, error)` return were uncommitted edits when the runs were taken and are committed with this file. `ab.json`'s arguments carry no `only` key and it has no delete arm, so it ran before those edits |
 | Measured copies | `/home/cdkbs/bench-runs/bk/bin/`: `kds_server-A-b70f79d8` `b48117d162cb499523ab7d371adecf4529f49df784e3c19b9291ee76201b9bbc`; `kds_server-B-8679367e` `d57464e631a831e9634a0bb6e7af63386d73ffc1b83d7c9e6869e316c57a2096`; profiled `kds_server-Aprof-b70f79d8` `329e419df73119d0f5c6f18d330cb15731d8fb63b4a5a7f21fbcd8ee19212eaa`, `kds_server-Bprof-8679367e` `e403a390ae7fa01dfbddcf898bbe84e3c8b423d79366c4262effe66538fe8414` (source `build-prof/kds_server`, mtime 08:57:09 UTC), `kds_sampler.so` `df1e67bae6a60f47ef05cd916c94938215287195bdc802b04730c414b787379f`. Every server started from a copy |
 | Build | Release (`CMAKE_BUILD_TYPE=Release` read from B's and the profiled copy's `CMakeCache.txt`; A's per the S1 file), `-DKDS_BUILD_TESTS=OFF -DKDS_BUILD_SIM=OFF`, target `kds_server`; the profiled copies add `-DCMAKE_CXX_FLAGS=-fno-omit-frame-pointer` |
 | Host / device | 8 vCPU AMD EPYC 9V74, Linux 7.0.0-1014-azure; data files and WAL under `/home/cdkbs/bench-runs/bk/close/` on `/dev/root`, **ext4**, not tmpfs (`df -T`, checked when this file was written); server on CPU 2, driver on CPU 4 |
@@ -51,7 +51,7 @@ where two stages touch one function it is not, because no binary between A and B
 
 ## What was run, and what was not
 
-- **Interleaved A/B**, `python3 tools/bm_census.py --bin <A> --bin-b <B> --workdir ... --port 31961 --runs 8 --quiet-load 4 --quiet-wait 300`.
+- **Interleaved A/B**, `python3 tools/bn_census.py --bin <A> --bin-b <B> --workdir ... --port 31961 --runs 8 --quiet-load 4 --quiet-wait 300`.
   Per run: a fresh server per binary, `t` and `r` (1,000 rows), `s` (10,000 rows), `sp` and `sa` (1,000 rows with a
   300-byte `varchar` cell, spilled, which is longer than the instance's inline cell), an empty `i`; then each shape over two
   driver paths - **literal** (an unnamed `C_PARSE` of the statement's text per execution, what every driver in `tools/`
@@ -74,7 +74,7 @@ where two stages touch one function it is not, because no binary between A and B
   spilled row, and the end state of `r` and `sp`. **0 bad replies in 14 runs; `range_v_ok` and `spill_txt_ok` true on A
   and on B in all 8 census runs.**
 - **Percentiles** are per run, and every table below carries the median over the runs of each. **The driver emits p90,
-  not p95** (`tools/bm_census.py`'s `summarize`), so the tables carry p0, p25, p50, p90 and p99 and p95 cannot be derived
+  not p95** (`tools/bn_census.py`'s `summarize`), so the tables carry p0, p25, p50, p90 and p99 and p95 cannot be derived
   from the output.
 - **Deltas are paired per run (B - A)** and reported as the median with [min, max] over the runs; with 8 runs a 95 %
   interval would be no tighter than the range, so none is claimed. **Rates are derived**: `1,000,000 / p50` for a serial
@@ -83,11 +83,11 @@ where two stages touch one function it is not, because no binary between A and B
 - **Profile**, `LD_PRELOAD` `tools/kds_sampler.c` (SIGPROF at 1 kHz of process CPU time; `perf` is refused on this host,
   `perf_event_paranoid = 4`): B over every shape, 30,000 statements per point arm, 1,500 every-row `UPDATE`s, 2,000
   scans; A over the every-row `UPDATE` and the scan only. **A has no profile of any point statement in this run.** Each
-  sample goes to the first part of `tools/bm_parts.json` that any frame of its chain matches, so **for the every-row
+  sample goes to the first part of `tools/bn_parts.json` that any frame of its chain matches, so **for the every-row
   `UPDATE` and the scan `descent and page access` is the whole row walk** (`btree::BtreeVisitLeafPage` is on every
   chain and matches before decode does). One sample is about 0.5 µs of a scan statement and 0.7 µs of an every-row one,
   so a 100-sample entry carries about ±5 µs; the profiled builds' wall times are not quoted.
-- **PostgreSQL**, `python3 tools/bm_pg_scan.py --port 15434 --database bench --runs 5`: PG 18.6, the cluster
+- **PostgreSQL**, `python3 tools/bn_pg_scan.py --port 15434 --database bench --runs 5`: PG 18.6, the cluster
   `/home/cdkbs/pg-bench-ba` (`postgresql.conf` read: defaults except `port`, `listen_addresses`, the socket directory
   and logging off), the backend pinned to CPU 2, the simple query protocol, one literal statement per execution.
 
@@ -149,11 +149,11 @@ statement; driver CPU is the Python client's own thread):
 | `SELECT * FROM s WHERE w = ?` (10,000 rows, unindexed) | literal | 783.0 µs | -37.74 µs [-126.87 µs, -30.52 µs] | -4.9 % [-11.7, -3.6] | 731.1 µs | -36.68 µs [-48.42 µs, -21.65 µs] | 58.4 µs | -10.26 µs |
 | `SELECT * FROM s WHERE w = ?` (10,000 rows, unindexed) | prepared | 766.3 µs | -37.01 µs [-75.53 µs, -32.44 µs] | -4.9 % [-9.4, -4.2] | 732.3 µs | -35.01 µs [-52.99 µs, -16.14 µs] | 53.8 µs | -9.94 µs |
 
-**Why this is BM-S4 and not the other stages.**
+**Why this is BN-S4 and not the other stages.**
 
-- **The size is the same for statements BM-S3, S5 and S9 do not touch.** Server CPU falls 6.3-7.4 µs for the `SELECT`,
+- **The size is the same for statements BN-S3, S5 and S9 do not touch.** Server CPU falls 6.3-7.4 µs for the `SELECT`,
   `INSERT` and `DELETE` (none runs an UPDATE's code) and 6.4-7.5 µs for the unspilled `UPDATE`s, 18.7-23.8 % of the
-  statement's server CPU. The UPDATE's extra over the others is about 1 µs at most, inside the repeat floor of section 7. **BM-S1's
+  statement's server CPU. The UPDATE's extra over the others is about 1 µs at most, inside the repeat floor of section 7. **BN-S1's
   census predicted 19-23 % of every point statement for the second flush; the measured fall is 18.7-23.8 %.** Its
   predicted 12 µs was taken on a busy host that doubled every CPU figure; on this one the same share is 6.3-7.5 µs.
 - **It is the price of one send.** B's profile puts the single `send` of a point statement at 8.1-10.3 µs and the
@@ -162,7 +162,7 @@ statement; driver CPU is the Python client's own thread):
 - **The client saved a wake-up too.** Driver CPU falls 8.8-9.8 µs, which is why the wall time falls by more than the
   server's CPU does (section 5).
 - **The control did not move.** `C_PING` never had an early flush, and its p50 and server CPU are unchanged.
-- **What this cannot separate**: BM-S3's partial decode and BM-S5's one encode inside a point `UPDATE` of an unspilled
+- **What this cannot separate**: BN-S3's partial decode and BN-S5's one encode inside a point `UPDATE` of an unspilled
   three-column row. No binary between A and B was measured; the UPDATE shapes lose at most 1 µs more than the shapes
   that run none of that code. Nothing resolvable is claimed for them.
 
@@ -175,7 +175,7 @@ statements, section 5).
 
 ## 2. The spilled-row `UPDATE`: the copy stops, and the walk with it
 
-Two defects BM-S1 found are gone, and both show as numbers. **A thousand updates of a spilled row allocated 38 var-heap
+Two defects BN-S1 found are gone, and both show as numbers. **A thousand updates of a spilled row allocated 38 var-heap
 pages on A and 0 on B, in every one of 14 runs** (the S1 census read 38 as well: a 300-byte copy per update, about 26
 to an 8 KiB page); an unspilled row allocated 0 on both.
 
@@ -231,7 +231,7 @@ arm's position on its relation:
 µs in the `sp` literal column are those, not the chain.)
 
 **Attribution, as far as the data goes.** Taking the arms that ran first on their relation (the shortest chain) and
-setting each against the same path's unspilled `UPDATE`, whose fall is the send plus whatever BM-S3 gives a point
+setting each against the same path's unspilled `UPDATE`, whose fall is the send plus whatever BN-S3 gives a point
 update:
 
 | statement | path | B - A server CPU, arm ran first on its relation: median [min, max] over its 4 runs | the same path's unspilled `UPDATE t` B - A server CPU (8 runs) | difference |
@@ -242,11 +242,11 @@ update:
 | `UPDATE sa SET txt = ? WHERE id = ?` (the spilled cell assigned) | prepared | -12.19 µs [-13.56 µs, -11.50 µs] | -6.61 µs | -5.58 µs |
 
 The statement that does not assign the spilled cell falls **6.1-7.2 µs of server CPU beyond the unspilled one**: the
-copy BM-S5 stops - the fetch of the old value, the append, its log record and its undo note - and no walk, since B
+copy BN-S5 stops - the fetch of the old value, the append, its log record and its undo note - and no walk, since B
 appends nothing. B's var-heap part in the profile is 0.0 µs (not listed) for that statement and 0.4 µs (1 %) for the
-assigning one; BM-S1 had it at 37-54 % and 32-60 % of the statement on A, on a busy host. The assigning statement still
-appends one value; its **2.9 µs (literal) and 5.6 µs (prepared)** beyond the unspilled one are shared by BM-S9 (the walk
-starts at the tail, not the root) and BM-S3 (the cell it overwrites is no longer fetched and resolved), and **the two
+assigning one; BN-S1 had it at 37-54 % and 32-60 % of the statement on A, on a busy host. The assigning statement still
+appends one value; its **2.9 µs (literal) and 5.6 µs (prepared)** beyond the unspilled one are shared by BN-S9 (the walk
+starts at the tail, not the root) and BN-S3 (the cell it overwrites is no longer fetched and resolved), and **the two
 are not separable here**. The two paths differ by 2.7 µs; the prepared-first runs are 1, 3, 5 and 7, and three of
 them (3, 5, 7) carry disturbed `sa` arms, so the difference is not read as an effect of the path.
 
@@ -261,7 +261,7 @@ per-row cost, which a size sweep would settle).
 **The profile says where.** A: 967.6 µs of server CPU per statement; B: 753.1 µs; 214.5 µs fewer, of which 207.1 µs (96.5
 %) is inside the per-row visitor lambda `UpdateInner::{lambda#1}` and 7.4 µs outside it.
 
-| part (first matching part of `tools/bm_parts.json`) | A: 967.6 µs per statement, 1,415 samples | B: 753.1 µs, 1,130 samples | B - A (-214.5 µs) |
+| part (first matching part of `tools/bn_parts.json`) | A: 967.6 µs per statement, 1,415 samples | B: 753.1 µs, 1,130 samples | B - A (-214.5 µs) |
 |---|---|---|---|
 | socket send | 23.3 µs (2 %) | 7.3 µs (1 %) | -16.0 µs |
 | socket read and wait | 2.7 µs (0 %) | 6.0 µs (1 %) | +3.3 µs |
@@ -295,19 +295,19 @@ are "unlisted" and each lies under that entry's time):
 | WAL and data-file writes (`pwrite64`, `WalStream::Append`, `HardwareExtend`) | 78.6 µs | 78.0 µs | -0.5 µs |
 | `__libc_send` | 22.5 µs | not listed (< 8.0 µs) | falls by at least 14.6 µs |
 
-- **The undo log**: `AppendUndo` falls 37.7 µs (225.0 to 187.3). BM-S3 appends through the hold that checked the tail's
-  room (one page fetch a row fewer) and BM-S5 takes the before-image from the walk's copy of the row's bytes
+- **The undo log**: `AppendUndo` falls 37.7 µs (225.0 to 187.3). BN-S3 appends through the hold that checked the tail's
+  room (one page fetch a row fewer) and BN-S5 takes the before-image from the walk's copy of the row's bytes
   (`payload_copy`) instead of re-reading the page (another); the page table's hash lookup (`std::_Hashtable::find`, the `frames_` map under `DevicePageStore::Resolve`)
   falls 26.2 µs (89 to 52 samples), which is what two fetches fewer a row would look like. **The stage split is not
   separable**: each removes one, and no binary has one without the other.
 - **Allocation and the row's vectors**: the allocator's own frames fall by at least 34.0 µs and the vector and string
   frames by at least 21.8 µs (they overlap: the vectors allocate). That is what the whole-row decode into per-row vectors
-  and the extra before-image copy going away would look like (BM-S3's statement-scoped partial row, BM-S5's copy); the
+  and the extra before-image copy going away would look like (BN-S3's statement-scoped partial row, BN-S5's copy); the
   decode functions' own self time falls by at least 2.3 µs only.
-- **Encode did not shrink at this resolution** (30.8 against 32.6 µs listed): BM-S5's in-place re-encode of one cell
+- **Encode did not shrink at this resolution** (30.8 against 32.6 µs listed): BN-S5's in-place re-encode of one cell
   saves nothing resolvable on a three-column integer row; its value is the carried spill (section 2).
-- **The WAL did not change**: `pwrite`, `WalStream::Append` and the CRC-32C extension total 78.6 and 78.0 µs. **BM-R5
-  (byte-range records), discarded at BM-S3's re-profile, is confirmed by this run**: the undo and WAL records are the
+- **The WAL did not change**: `pwrite`, `WalStream::Append` and the CRC-32C extension total 78.6 and 78.0 µs. **BN-R5
+  (byte-range records), discarded at BN-S3's re-profile, is confirmed by this run**: the undo and WAL records are the
   largest named part of B (284.6 µs, 38 % of the statement, 33 % on A) and did not shrink while the row visit shrank by
   174 µs; they are per record, not per byte.
 
@@ -332,7 +332,7 @@ twin does:
 
 The paired fall of A's net row is -2.98 ns [-4.15, -1.38] literal and -2.84 ns [-4.61, -0.92] prepared (8 of 8
 negative). **KDS's scan row is 1.96 times PostgreSQL's on B and 2.03 on A**: the order's §0 reading of 70 against 34 ns
-holds on one driver and one host family, and BM moved it by 3 ns. PostgreSQL is the floor, not the reference: its
+holds on one driver and one host family, and BN moved it by 3 ns. PostgreSQL is the floor, not the reference: its
 point statement costs 41.0 µs of backend CPU against KDS's 28.1 µs (B) and 35.7 µs (A), so the engine clears the floor
 there, and the scan row, twice as dear, is the part of the engine that does not. The twin exists for the scan only;
 the every-row `UPDATE` and the spilled-row shapes have none.
@@ -340,7 +340,7 @@ the every-row `UPDATE` and the spilled-row shapes have none.
 The scan's sampled parts (every sample of the row walk lands in `descent and page access`, 93 % in both, which is why
 the functions below are the useful split):
 
-| part (first matching part of `tools/bm_parts.json`) | A: 754.4 µs per statement, 1,523 samples | B: 708.6 µs, 1,394 samples | B - A (-45.8 µs) |
+| part (first matching part of `tools/bn_parts.json`) | A: 754.4 µs per statement, 1,523 samples | B: 708.6 µs, 1,394 samples | B - A (-45.8 µs) |
 |---|---|---|---|
 | socket send | 21.3 µs (3 %) | 9.1 µs (1 %) | -12.2 µs |
 | socket read and wait | 4.5 µs (1 %) | 7.6 µs (1 %) | +3.1 µs |
@@ -375,10 +375,10 @@ the functions below are the useful split):
 | `memcpy` | 13.9 µs (1.8 %, 28 samples) | 17.8 µs (2.5 %, 35 samples) | +3.9 µs | 1.8 ns |
 
 - **`ExecStats::For` fell from 34.7 to 19.3 µs (70 to 38 samples, about three sampling errors): 1.5 ns of the 2.9 ns
-  the interleaved pair puts on the row**, BM-S3's inline and its single counter update per examined row. The symbol is still sampled at 2.7 %, so some
+  the interleaved pair puts on the row**, BN-S3's inline and its single counter update per examined row. The symbol is still sampled at 2.7 %, so some
   call sites remain out of line in this build, or the work moved into its callers; the profile cannot tell which.
 - The send falls 12.1 µs in the profile (43 to 18 samples); the interleaved pair puts the fixed saving at 7 µs.
-- **The rest of the movement is inside the sampling error**: `PageView::ReadTuple` -17.3 µs (117 to 80 samples, no BM
+- **The rest of the movement is inside the sampling error**: `PageView::ReadTuple` -17.3 µs (117 to 80 samples, no BN
   stage touches it), `EvaluateAll` -10.7 µs and `DecodeColumnsInto` -9.3 µs against rises of +6.8 µs
   (`DecodeOneValueInto`), +4.8 µs (`DecodeAndResolve`) and +3.6 µs (`_M_invoke`). `PageView::ReadTuple`'s source is
   unchanged between A and B. Not attributed.
@@ -469,7 +469,7 @@ configuration and pinning. Its p50s for the B' arm, as rates:
 | `UPDATE r SET v = ? WHERE id >= 1` (every one of 1,000 rows) | 1,017 /s (983 µs) | 1,014 /s (987 µs) | -0.3 % rate (+3 µs) | 1,310 /s (764 µs) | +28.8 % rate (-220 µs) |
 
 **A reads between -1.8 and +3.4 µs from BJ's close in every shape, and +0.3 µs on `SHOW META`**, the control BJ chose
-because no BJ path can touch it (and which has no BM code on it in A), so BJ's figures are a usable previous number to
+because no BJ path can touch it (and which has no BN code on it in A), so BJ's figures are a usable previous number to
 about 3 µs. The engine commits between BJ's close and A are three BJ review fixes and two foreign-key fixes (`git log
 e458e272..b70f79d8 -- src include`), the drivers differ, and the 13-14 hours between are another host state. **B is 4.0-10.8
 µs lower than BJ's close in every point shape and 220 µs lower on the every-row `UPDATE`**: `SHOW META` (-4.0 µs) by
@@ -549,8 +549,8 @@ shift which position each arm held:
 
 **Not resolved or not attributed**
 
-- **BM-S3's and BM-S5's share of a point `UPDATE`** and **the split of the every-row `UPDATE`'s 214.5 µs between BM-S3's
-  decode and undo hold and BM-S5's encode and before-image**: no stage binary exists.
+- **BN-S3's and BN-S5's share of a point `UPDATE`** and **the split of the every-row `UPDATE`'s 214.5 µs between BN-S3's
+  decode and undo hold and BN-S5's encode and before-image**: no stage binary exists.
 - **The scan's remainder**: about 14 µs of the walk's 29 µs gain is not in `ExecStats::For`, and the profile's movements
   there are inside its sampling error.
 - **A mid-arm bump** in the literal `SELECT` arm: blocks 4-7 (counting from 0) read 4-6.5 µs higher in server CPU on
@@ -565,32 +565,32 @@ shift which position each arm held:
 
 1. **A point statement is now mostly request path; the engine's own storage work is a tenth of the server CPU.** Send
    and read are 59 % of a point `UPDATE`'s CPU in B, parse and compile 8 %, scaffolding 10 %, and the storage side 2.3
-   µs. Any further point-statement gain is in the request path BM-Q8 put out of BM, in the dispatcher's scaffolding or in
+   µs. Any further point-statement gain is in the request path BN-Q8 put out of BN, in the dispatcher's scaffolding or in
    the client's decode of the reply - not in undo, locks or the tree.
-2. **The order's §0 reading of the point `SELECT` does not hold.** `instructions/v3.0.0/workorder-bm-opt-read-update-path.md`
+2. **The order's §0 reading of the point `SELECT` does not hold.** `instructions/v3.0.0/workorder-bn-opt-read-update-path.md`
    §0 (from BJ's close) calls the `SELECT`'s 17.5 µs over `SHOW META` "the largest engine-side share in the table". On A
    the two differ by 15.0 µs of wall, **2.2 µs of server CPU** and **12.5 µs of the client's CPU**; on B by 10.3, 3.5
    and 7.8 µs. The extra is mostly the client decoding a result set, and `SHOW META` is not "a statement that touches
-   nothing": 31 % of its 23.6 µs of server CPU is statement scaffolding, 7.4 µs (BM-S1 read that part as the
+   nothing": 31 % of its 23.6 µs of server CPU is statement scaffolding, 7.4 µs (BN-S1 read that part as the
    statement's own text), against 1.9-4.3 µs in the other point statements.
 3. **A second flush costs the client as much as the server, and overlapped CPU is not free.** Removing it took 17.2 µs
    of CPU out of a point `SELECT` for a 9.0 µs fall in wall time; the 8.1 µs difference had been running concurrently.
 4. **A thousand updates of a spilled row no longer leak 38 pages, and the update no longer touches the var-heap at all
    unless it assigns the spilled cell** (var-heap append: 0.0 µs listed, 0.4 µs when assigned). The per-statement cost
    no longer depends on how many values the relation holds; A's did, by about 1 µs per 1,000 updates.
-5. **The undo and WAL records are the every-row `UPDATE`'s floor.** At 38 % of B's CPU and unchanged by BM, with the row
-   visit around them down by 174 µs, they are per record, not per byte; BM-R5's discard stands and CN-7's O5 has its data
+5. **The undo and WAL records are the every-row `UPDATE`'s floor.** At 38 % of B's CPU and unchanged by BN, with the row
+   visit around them down by 174 µs, they are per record, not per byte; BN-R5's discard stands and CN-7's O5 has its data
    point: no record size is material on a three-column row.
-6. **The scan row is decode-bound and BM barely touched it.** `ExecStats::For` is the only read-path cut (1.5 ns of 67);
+6. **The scan row is decode-bound and BN barely touched it.** `ExecStats::For` is the only read-path cut (1.5 ns of 67);
    decode (19.9 ns), the residual (11.5 ns) and `AcceptTupleAt`'s own body (11.7 ns) are the next candidates. **§1.4's
    question, the uncontended `window_latch_`, is not answered**: the snapshot is applied at exactly one place,
    `AcceptTupleAt` (`include/kds/exec/step_vm.hpp:275`), and no `Classify` or `ReadView` frame reaches the profile's self
    list (cut-off 0.22 %, 0.16 ns a row), so the classification and its latch are inlined into one of the walk's bodies
    (`AcceptTupleAt` 11.7 ns, `BtreeVisitLeafPage` 6.5 ns, the callback 6.6 ns) or cost under 0.16 ns, and the profile
    cannot say which.
-7. **A second reading for BM-Q13's BM-S2 (not built).** Parse plus compile on the prepared path, in B, is 1.2-4.5 µs,
-   6-15 % of server CPU and 2.9-10.2 % of the wall time (table below). BM-Q1's bar reads 5 % of the statement's server
-   time, which every row meets; three of the seven reach 5 % of the wall. BM-Q13 chose not to build BM-S2 on 2.2-4.2 µs
+7. **A second reading for BN-Q13's BN-S2 (not built).** Parse plus compile on the prepared path, in B, is 1.2-4.5 µs,
+   6-15 % of server CPU and 2.9-10.2 % of the wall time (table below). BN-Q1's bar reads 5 % of the statement's server
+   time, which every row meets; three of the seven reach 5 % of the wall. BN-Q13 chose not to build BN-S2 on 2.2-4.2 µs
    (7-12 %); these are the close's figures, on one core, `relaxed`, by a driver that prepares.
 
 | statement (prepared path, B) | parse | compile | parse + compile | share of server CPU | share of wall p50 |
@@ -614,14 +614,14 @@ request path's and the every-row visit's, and the next candidates are named in i
 
 - **`strict` and `group` durability.** Every number is `relaxed`: no statement waits on a sync, so this run says nothing
   about what a commit costs when it must.
-- **`cores` above 1**, more than one session, and any saturation or contention cell. BM-S9's tail hint is a table of
+- **`cores` above 1**, more than one session, and any saturation or contention cell. BN-S9's tail hint is a table of
   relaxed atomics shared by the cores; its cell tests two growers, this run does not price them.
 - **Row-set sizes**: 200 and 10,000 rows for the point and every-row shapes, 200 and 1,000 for the scan (the flags are
   `--rows` and `--scan-rows`); a point lookup should not scale, and the scan and every-row figures per row are one-size.
 - **Wider rows and several spilled cells.** Every row here has three `int64`s or two and one 300-byte `varchar`; the
   partial decode's saving grows with the columns not read, and a row with two spilled cells was not built.
-- **A relation with a Cabin, an index or an assertion**, which decodes its row whole (BM-S3's rule) and so does not
-  take the decode half of BM-R2.
+- **A relation with a Cabin, an index or an assertion**, which decodes its row whole (BN-S3's rule) and so does not
+  take the decode half of BN-R2.
 - **Larger var-heap chains.** A census relation's chain reaches 7,000 values (1,000 loaded, two arms of 3,000); B's
   profile of the assigning statement reaches 61,000 (two arms of 30,000), and A was profiled on no spilled statement.
 - **A profile of A's point statements**, and a stage-by-stage build.
@@ -703,15 +703,15 @@ cells; the every-row and scan arms are in whole µs.
 All from `/home/cdkbs/ckdbs/.claude/worktrees/bk-read-update-paths`, with the copies named in the stamp table; the
 drivers are the branch's `tools/` at the commit that adds this file:
 
-    python3 tools/bm_census.py --bin /home/cdkbs/bench-runs/bk/bin/kds_server-A-b70f79d8 \
+    python3 tools/bn_census.py --bin /home/cdkbs/bench-runs/bk/bin/kds_server-A-b70f79d8 \
         --bin-b /home/cdkbs/bench-runs/bk/bin/kds_server-B-8679367e \
         --workdir /home/cdkbs/bench-runs/bk/close/wd --port 31961 --runs 8 \
         --quiet-load 4 --quiet-wait 300 --out ab.json
-    python3 tools/bm_census.py --bin ... --bin-b ... --workdir .../wdd --port 31991 --runs 6 \
+    python3 tools/bn_census.py --bin ... --bin-b ... --workdir .../wdd --port 31991 --runs 6 \
         --quiet-load 4 --quiet-wait 300 --only noop,delete-pk,select-pk --out ab-delete.json
-    python3 tools/bm_census.py --bin .../kds_server-Bprof-8679367e --workdir .../wdp --port 31971 \
+    python3 tools/bn_census.py --bin .../kds_server-Bprof-8679367e --workdir .../wdp --port 31971 \
         --sampler .../kds_sampler.so --sampler-dir .../profB --runs 0 --profile-ops 30000 \
         --profile-range-ops 1500 --profile-scan-ops 2000 --out profB.json
     (A: --bin .../kds_server-Aprof-b70f79d8 --port 31981 --profile-only update-range,scan)
-    python3 tools/bm_pg_scan.py --port 15434 --database bench --runs 5 --out pg.json
-    python3 tools/bm_census_table.py ab.json
+    python3 tools/bn_pg_scan.py --port 15434 --database bench --runs 5 --out pg.json
+    python3 tools/bn_census_table.py ab.json

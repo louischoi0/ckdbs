@@ -33,8 +33,8 @@
 //     has no reason to touch a kVarHeap page, so it never will.
 //   - Reclamation is not new machinery: it rides on purge. Versions of one
 //     tuple share every spilled value an UPDATE did not assign
-//     (`exec::EncodeAssigned`, BM-R3 of
-//     `workorder-bm-opt-read-update-path.md`), so a value may be released
+//     (`exec::EncodeAssigned`, BN-R3 of
+//     `workorder-bn-opt-read-update-path.md`), so a value may be released
 //     only once **the newest version naming it** is reclaimed
 //     (`heap-and-tuple.md` §3.4).
 //
@@ -49,7 +49,7 @@
 // with the newest version naming it: at the rollback of the transaction
 // that appended it, or at the `PURGE` of the tombstone that names it - not
 // when an older version that also names it dies, since an UPDATE carries
-// every spilled cell it does not assign (BM-R3). This file only performs
+// every spilled cell it does not assign (BN-R3). This file only performs
 // it, exactly as it performs an append without deciding what spills.
 // `docs/spec/txn.md` §3.3 and §6 and `heap-and-tuple.md` §3.4 own the
 // lifetime.

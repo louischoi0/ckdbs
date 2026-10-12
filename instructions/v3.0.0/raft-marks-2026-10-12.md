@@ -10,7 +10,7 @@ Korean it was typed in.
 | | |
 |---|---|
 | **Word** | *"The scan is slow right now. Propose ways to improve it, and a direction for scans."* |
-| **Mark** | None: a question answered. CLA reported BK's close measurement and the per-row repetitions of the walk, and proposed four directions in order: (A) the walk owning its slot loop and a compiled filter that rejects before it decodes; (B) a recent row's visibility, measured first; (C) cold-scan read-ahead, measured first and gated on the I/O-backend decision; (D) not now - page summaries and intra-statement parallelism |
+| **Mark** | None: a question answered. CLA reported BN's close measurement (the read/update order, lettered BK until the collision was resolved on 2026-10-12) and the per-row repetitions of the walk, and proposed four directions in order: (A) the walk owning its slot loop and a compiled filter that rejects before it decodes; (B) a recent row's visibility, measured first; (C) cold-scan read-ahead, measured first and gated on the I/O-backend decision; (D) not now - page summaries and intra-statement parallelism |
 | **Does not settle** | Anything |
 | **Recorded at** | `workorder-bm-scan-row-kernel.md` §0.1 |
 
@@ -19,7 +19,7 @@ Korean it was typed in.
 | | |
 |---|---|
 | **Word** | *"Is the scan kernel the same concept as the scan ring we reviewed before?"* |
-| **Mark** | None: a question answered. CLA answered no. The scan ring (`eviction.md` EV6) and BG's scan queue (`workorder-bg-scan-queue.md`) decide which frames a scan occupies and in what order they are reclaimed. That is the buffer pool's question, and it acts only when a scan and the working set compete for frames. The kernel is the executor's per-row CPU on pages already resident, which is what BK's 67 ns a row measured. Neither moves the other's number. Cold-read latency is a third question |
+| **Mark** | None: a question answered. CLA answered no. The scan ring (`eviction.md` EV6) and BG's scan queue (`workorder-bg-scan-queue.md`) decide which frames a scan occupies and in what order they are reclaimed. That is the buffer pool's question, and it acts only when a scan and the working set compete for frames. The kernel is the executor's per-row CPU on pages already resident, which is what BN's 67 ns a row measured (the read/update order, lettered BK at the time). Neither moves the other's number. Cold-read latency is a third question |
 | **Does not settle** | Anything |
 | **Recorded at** | `workorder-bm-scan-row-kernel.md` header (W1) and §1.8 |
 

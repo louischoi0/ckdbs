@@ -248,7 +248,7 @@ client author has to know to write one.
   its next statement swallowed. **Pipelined, the answers arrive together**:
   `S_PARSE_OK` and `S_BIND_OK` for frames sent ahead of a `C_EXECUTE` come
   with the statement's own answer, at its completion (`protocol.md` §5,
-  BM-R7 of `workorder-bm-opt-read-update-path.md`); a client that waits for
+  BN-R7 of `workorder-bn-opt-read-update-path.md`); a client that waits for
   `S_PARSE_OK` before executing gets it at once.
 - **Errors** are `S_ERROR {code, retryable, severity, message, detail?,
   position?}`, `code` being `category << 16 | detail`. `severity` says
