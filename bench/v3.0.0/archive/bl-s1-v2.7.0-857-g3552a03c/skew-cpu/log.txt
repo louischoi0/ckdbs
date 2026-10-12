@@ -1,0 +1,27 @@
+kds-point-relaxed-k2-s4-kernel-r0 load 2.01->2.34 stmts=458472 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=57308.6 p50=63.8
+kds-point-relaxed-k2-s4-balanced-r0 load 2.34->2.57 stmts=356436 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=44554.4 p50=85.2
+kds-point-relaxed-k2-s4-skew-r0 load 2.00->2.17 stmts=359100 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=44887.4 p50=84.6
+kds-point-relaxed-k4-s8-kernel-r0 load 2.17->3.07 stmts=497099 errors=0 refusals=0 client_bound=False cores=['0.0', '2.0', '3.0'] stmt/s=62107.5 p50=111.1
+kds-point-relaxed-k4-s8-balanced-r0 load 2.04->2.97 stmts=455601 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=56926.3 p50=111.9
+kds-point-relaxed-k4-s8-skew-r0 load 2.31->3.25 stmts=488920 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=61088.8 p50=110.7
+kds-point-relaxed-k2-s8-kernel-r0 load 2.10->3.01 stmts=537646 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=67175.4 p50=101.5
+kds-point-relaxed-k2-s8-balanced-r0 load 2.35->3.14 stmts=524195 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=65497.6 p50=101.2
+kds-point-relaxed-k2-s8-skew-r0 load 2.45->3.21 stmts=530043 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=66226.9 p50=101.5
+kds-point-relaxed-k2-s4-kernel-r0 load 2.25->2.35 stmts=357554 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=44694.1 p50=85.2
+kds-point-relaxed-k2-s4-balanced-r0 load 2.35->2.83 stmts=358104 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=44762.9 p50=85.3
+kds-point-relaxed-k2-s4-skew-r0 load 2.03->2.17 stmts=361939 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=45242.2 p50=84.1
+kds-point-relaxed-k4-s8-kernel-r0 load 2.17->3.20 stmts=477147 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=59620.1 p50=113.2
+kds-point-relaxed-k4-s8-balanced-r0 load 2.21->3.18 stmts=450501 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=56285.6 p50=112.9
+kds-point-relaxed-k4-s8-skew-r0 load 2.48->3.74 stmts=480094 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=59983.8 p50=110.9
+kds-point-relaxed-k2-s8-kernel-r0 load 2.26->3.30 stmts=520842 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=65075.8 p50=102.6
+kds-point-relaxed-k2-s8-balanced-r0 load 2.23->3.12 stmts=512472 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=64033.3 p50=102.9
+kds-point-relaxed-k2-s8-skew-r0 load 2.35->3.28 stmts=523123 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=65359.0 p50=102.1
+kds-point-relaxed-k2-s4-kernel-r0 load 1.99->3.32 stmts=242645 errors=0 refusals=0 client_bound=False cores=['1.0'] stmt/s=30329.6 p50=79.3
+kds-point-relaxed-k2-s4-balanced-r0 load 2.38->2.47 stmts=353720 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=44214.5 p50=85.6
+kds-point-relaxed-k2-s4-skew-r0 load 2.47->2.78 stmts=359318 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=44912.8 p50=83.9
+kds-point-relaxed-k4-s8-kernel-r0 load 2.26->2.91 stmts=520560 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=65065.4 p50=107.8
+kds-point-relaxed-k4-s8-balanced-r0 load 2.27->3.32 stmts=450358 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=56272.5 p50=112.9
+kds-point-relaxed-k4-s8-skew-r0 load 2.31->2.96 stmts=491964 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=61470.6 p50=110.9
+kds-point-relaxed-k2-s8-kernel-r0 load 2.30->2.64 stmts=500811 errors=0 refusals=0 client_bound=False cores=['1.0'] stmt/s=62577.7 p50=121.3
+kds-point-relaxed-k2-s8-balanced-r0 load 2.05->3.14 stmts=523384 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=65391.7 p50=101.3
+kds-point-relaxed-k2-s8-skew-r0 load 2.26->3.42 stmts=532176 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=66490.0 p50=101.3

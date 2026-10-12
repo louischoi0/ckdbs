@@ -74,16 +74,23 @@ Three consumers:
 
 - **The lock table's slot flip** (AU-S2, `txn.md` §5): a decide flips the
   waiter's slot under the partition latch and kicks the waiter's core.
-- **D19's connection handoff** (AT-S10c, `include/kds/server/connection_handoff.hpp`),
-  built only where `TcpServer::Listen` answers `Unsupported` because the
-  platform refuses `SO_REUSEPORT`. There core 0 binds the port alone,
+- **The connection handoff** (`include/kds/server/connection_handoff.hpp`),
+  built above one core, and its inbox hosted on every core. **D19's
+  fallback** (AT-S10c) uses it where `TcpServer::Listen` answers
+  `Unsupported` because the platform refuses `SO_REUSEPORT`. There core 0 binds the port alone,
   places each accepted socket on a core round-robin over every core,
   itself included (`NextCore`), pushes it into that core's inbox under the
   inbox's latch, and kicks it; the destination's reactor runs a parked task
   (`TcpServer::Host`, attached by `CoreRuntime::HostHandedConnections`)
   that takes the inbox and adopts each socket as though it had accepted it.
-  The socket travels in the inbox because a kick carries no payload. A
-  session crosses once, at placement, and runs to completion where it lands.
+  The socket travels in the inbox because a kick carries no payload.
+  **BL's moves** (BL-S2, BL-S3) use it at every transaction's head: the
+  source's reactor stops watching the socket, offers the connection's map
+  node - the session, its protocol state and the statement that asked -
+  to the destination's inbox and kicks it, and the destination registers
+  the socket and runs that statement first (`TcpServer::MoveConnection`,
+  `AdoptMoved`). A transaction never crosses: it begins, waits and commits
+  on one core.
 - **A stop** (AU-S3): the scheduler's stop flag is atomic, and core 0 sets
   a peer's and kicks it; a peer's STOP sets core 0's through the
   instance's hook and kicks it.

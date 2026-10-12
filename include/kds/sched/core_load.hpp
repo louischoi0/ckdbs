@@ -37,7 +37,7 @@ namespace kds::sched {
 
 class CoreLoad {
 public:
-    static constexpr std::uint32_t kSlots = 64;  // `kMaxWalCores` (superblock.hpp)
+    static constexpr std::uint32_t kSlots = 64;  // `kMaxWalCores` (superblock.hpp), the most cores an instance runs
 
     // **The window the fractions are taken over.** A reactor publishes once
     // its iterations since the last publish span this much wall time, so a
@@ -59,11 +59,24 @@ public:
         std::atomic<std::uint32_t> queued_foreground{0};
         // Client connections this core's listeners hold.
         std::atomic<std::uint32_t> sessions{0};
+        // Sessions that ran a statement in the last window - the busy
+        // fraction's owners, which an idle connection is not - and the count
+        // the current window is gathering (both this reactor's).
+        std::atomic<std::uint32_t> active_sessions{0};
+        std::atomic<std::uint32_t> active_now{0};
         // **Where a move is possible** (BL-R1): statements that began a
         // transaction - a session with none open asked for a dispatch - and
         // statements that ran inside an open one.
         std::atomic<std::uint64_t> heads{0};
         std::atomic<std::uint64_t> inside{0};
+        // When the last window ended, on the instance's one clock: a core
+        // whose word is old is inside a hold (`load_placer.hpp`).
+        std::atomic<std::uint64_t> window_end_ns{0};
+        // The window this core last let a session leave in (its
+        // `window_end_ns` then), and the sessions it has let leave: the
+        // balancer moves at most one session off a core per window.
+        std::atomic<std::uint64_t> moved_out_in{0};
+        std::atomic<std::uint64_t> moves_out{0};
     };
 
     static Slot& Of(std::uint32_t core) noexcept { return slots()[core % kSlots]; }
@@ -83,8 +96,13 @@ public:
         s.foreground_ppm.store(0, std::memory_order_relaxed);
         s.queued_foreground.store(0, std::memory_order_relaxed);
         s.sessions.store(0, std::memory_order_relaxed);
+        s.active_sessions.store(0, std::memory_order_relaxed);
+        s.active_now.store(0, std::memory_order_relaxed);
         s.heads.store(0, std::memory_order_relaxed);
         s.inside.store(0, std::memory_order_relaxed);
+        s.window_end_ns.store(0, std::memory_order_relaxed);
+        s.moved_out_in.store(0, std::memory_order_relaxed);
+        s.moves_out.store(0, std::memory_order_relaxed);
     }
 
     // Adds one to a single-writer count: a load and a store, not a

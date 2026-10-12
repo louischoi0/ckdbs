@@ -1,0 +1,73 @@
+kds-pkmix-relaxed-k2-s16-kernel-r0 load 1.82->3.14 stmts=638223 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=79681.6 p50=168.9
+kds-pkmix-relaxed-k2-s16-balanced-r0 load 2.44->4.67 stmts=656554 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=81971.0 p50=169.0
+kds-pkmix-relaxed-k2-s16-skew-r0 load 2.48->4.09 stmts=647090 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=80791.1 p50=170.2
+kds-pkmix-group-k2-s16-kernel-r0 load 1.99->1.70 stmts=96336 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=12021.9 p50=1113.6
+kds-pkmix-group-k2-s16-balanced-r0 load 1.70->1.48 stmts=100191 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=12506.3 p50=1313.3
+kds-pkmix-group-k2-s16-skew-r0 load 1.48->1.90 stmts=97690 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=12198.0 p50=1143.9
+kds-pkmix-relaxed-k4-s16-kernel-r0 load 1.90->4.53 stmts=572274 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=71297.1 p50=185.9
+kds-pkmix-relaxed-k4-s16-balanced-r0 load 2.21->4.58 stmts=568412 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=68840.0 p50=204.6
+kds-pkmix-relaxed-k4-s16-skew-r0 load 2.49->4.24 stmts=544107 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=67927.4 p50=186.1
+kds-pkmix-group-k4-s16-kernel-r0 load 2.00->2.00 stmts=102523 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=12801.7 p50=1228.1
+kds-pkmix-group-k4-s16-balanced-r0 load 2.00->1.79 stmts=95410 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=11911.5 p50=1249.7
+kds-pkmix-group-k4-s16-skew-r0 load 1.72->1.73 stmts=103693 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=12948.1 p50=1220.8
+kds-pkmix-relaxed-k4-s8-kernel-r0 load 1.73->2.80 stmts=480144 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=59992.1 p50=112.8
+kds-pkmix-relaxed-k4-s8-balanced-r0 load 2.18->3.38 stmts=490655 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=61306.9 p50=105.5
+kds-pkmix-relaxed-k4-s8-skew-r0 load 2.05->2.97 stmts=469207 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=58622.9 p50=115.4
+kds-pkmix-group-k4-s8-kernel-r0 load 2.39->2.23 stmts=53295 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=6659.0 p50=1210.5
+kds-pkmix-group-k4-s8-balanced-r0 load 2.23->1.89 stmts=50296 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=6282.8 p50=1215.8
+kds-pkmix-group-k4-s8-skew-r0 load 1.89->1.99 stmts=53042 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=6626.5 p50=1168.0
+kds-pkmix-relaxed-k2-s4-kernel-r0 load 1.99->2.09 stmts=386692 errors=0 refusals=0 client_bound=False cores=['1.0'] stmt/s=48335.9 p50=73.2
+kds-pkmix-relaxed-k2-s4-balanced-r0 load 2.09->2.32 stmts=398740 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=49842.1 p50=73.8
+kds-pkmix-relaxed-k2-s4-skew-r0 load 2.32->2.65 stmts=398927 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=49865.5 p50=73.7
+kds-pkmix-group-k2-s4-kernel-r0 load 2.06->1.84 stmts=28578 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=3571.8 p50=147.7
+kds-pkmix-group-k2-s4-balanced-r0 load 1.84->1.78 stmts=26441 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=3304.4 p50=155.1
+kds-pkmix-group-k2-s4-skew-r0 load 1.78->1.77 stmts=26877 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=3359.2 p50=241.1
+kds-pkmix-relaxed-k2-s16-kernel-r0 load 1.77->3.30 stmts=604021 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=75413.8 p50=172.8
+kds-pkmix-relaxed-k2-s16-balanced-r0 load 2.00->4.24 stmts=657413 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=82076.8 p50=169.0
+kds-pkmix-relaxed-k2-s16-skew-r0 load 2.27->3.67 stmts=633222 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=79059.2 p50=171.1
+kds-pkmix-group-k2-s16-kernel-r0 load 2.22->2.88 stmts=105494 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=13169.5 p50=1276.7
+kds-pkmix-group-k2-s16-balanced-r0 load 2.24->1.89 stmts=103556 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=12927.7 p50=1222.0
+kds-pkmix-group-k2-s16-skew-r0 load 1.89->2.52 stmts=102743 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=12824.6 p50=1284.7
+kds-pkmix-relaxed-k4-s16-kernel-r0 load 1.96->4.07 stmts=576585 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=71986.8 p50=185.7
+kds-pkmix-relaxed-k4-s16-balanced-r0 load 2.46->4.22 stmts=567037 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=70792.6 p50=203.2
+kds-pkmix-relaxed-k4-s16-skew-r0 load 2.19->3.58 stmts=558373 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=69715.9 p50=186.1
+kds-pkmix-group-k4-s16-kernel-r0 load 2.17->1.99 stmts=103593 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=12934.7 p50=1210.0
+kds-pkmix-group-k4-s16-balanced-r0 load 1.91->1.79 stmts=104657 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=13066.4 p50=1226.4
+kds-pkmix-group-k4-s16-skew-r0 load 1.79->2.11 stmts=102813 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=12835.3 p50=1202.6
+kds-pkmix-relaxed-k4-s8-kernel-r0 load 2.11->3.63 stmts=474452 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=59278.0 p50=112.3
+kds-pkmix-relaxed-k4-s8-balanced-r0 load 2.20->2.94 stmts=486415 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=60773.7 p50=105.0
+kds-pkmix-relaxed-k4-s8-skew-r0 load 2.36->2.83 stmts=464230 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=58001.4 p50=115.4
+kds-pkmix-group-k4-s8-kernel-r0 load 2.20->2.71 stmts=53746 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '3.0'] stmt/s=6714.5 p50=1207.7
+kds-pkmix-group-k4-s8-balanced-r0 load 2.25->2.05 stmts=53518 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=6684.6 p50=1177.7
+kds-pkmix-group-k4-s8-skew-r0 load 2.05->1.91 stmts=53995 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=6745.6 p50=1127.4
+kds-pkmix-relaxed-k2-s4-kernel-r0 load 1.91->2.23 stmts=399554 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=49944.0 p50=72.1
+kds-pkmix-relaxed-k2-s4-balanced-r0 load 2.23->2.50 stmts=396300 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=49537.3 p50=73.9
+kds-pkmix-relaxed-k2-s4-skew-r0 load 2.01->2.40 stmts=394212 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=49276.1 p50=73.8
+kds-pkmix-group-k2-s4-kernel-r0 load 2.40->2.18 stmts=26370 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=3296.4 p50=342.1
+kds-pkmix-group-k2-s4-balanced-r0 load 2.18->1.85 stmts=26340 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=3292.5 p50=271.6
+kds-pkmix-group-k2-s4-skew-r0 load 1.85->1.75 stmts=26976 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=3371.9 p50=244.6
+kds-pkmix-relaxed-k2-s16-kernel-r0 load 1.75->3.06 stmts=598611 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=74739.7 p50=172.2
+kds-pkmix-relaxed-k2-s16-balanced-r0 load 2.38->4.32 stmts=655840 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=81805.3 p50=168.0
+kds-pkmix-relaxed-k2-s16-skew-r0 load 2.19->2.31 stmts=636097 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=79417.0 p50=171.6
+kds-pkmix-group-k2-s16-kernel-r0 load 2.31->1.95 stmts=100222 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=12511.6 p50=1267.8
+kds-pkmix-group-k2-s16-balanced-r0 load 1.95->1.67 stmts=105465 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=13162.7 p50=1278.9
+kds-pkmix-group-k2-s16-skew-r0 load 1.67->2.61 stmts=105448 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=13172.1 p50=1237.2
+kds-pkmix-relaxed-k4-s16-kernel-r0 load 2.03->4.35 stmts=586620 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=73238.4 p50=183.7
+kds-pkmix-relaxed-k4-s16-balanced-r0 load 2.26->4.61 stmts=566239 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=70692.0 p50=204.0
+kds-pkmix-relaxed-k4-s16-skew-r0 load 2.25->4.15 stmts=555869 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=69398.7 p50=185.6
+kds-pkmix-group-k4-s16-kernel-r0 load 2.18->1.85 stmts=98757 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=12329.5 p50=1241.3
+kds-pkmix-group-k4-s16-balanced-r0 load 1.85->2.46 stmts=100484 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=12545.2 p50=1243.2
+kds-pkmix-group-k4-s16-skew-r0 load 2.46->2.12 stmts=101951 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=12729.6 p50=1207.0
+kds-pkmix-relaxed-k4-s8-kernel-r0 load 2.12->3.19 stmts=475639 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=59430.7 p50=112.3
+kds-pkmix-relaxed-k4-s8-balanced-r0 load 2.06->3.06 stmts=486638 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=60804.0 p50=104.4
+kds-pkmix-relaxed-k4-s8-skew-r0 load 2.38->2.93 stmts=467067 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=58355.3 p50=114.8
+kds-pkmix-group-k4-s8-kernel-r0 load 2.28->1.93 stmts=47915 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=5981.1 p50=1276.6
+kds-pkmix-group-k4-s8-balanced-r0 load 1.93->2.13 stmts=50157 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=6266.3 p50=1232.3
+kds-pkmix-group-k4-s8-skew-r0 load 2.13->2.04 stmts=52458 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=6553.6 p50=1219.1
+kds-pkmix-relaxed-k2-s4-kernel-r0 load 2.04->2.37 stmts=397194 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=49648.8 p50=73.6
+kds-pkmix-relaxed-k2-s4-balanced-r0 load 2.37->2.46 stmts=395478 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=49434.2 p50=73.5
+kds-pkmix-relaxed-k2-s4-skew-r0 load 2.46->2.75 stmts=398011 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=49751.0 p50=73.2
+kds-pkmix-group-k2-s4-kernel-r0 load 2.14->2.04 stmts=27554 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=3442.6 p50=159.9
+kds-pkmix-group-k2-s4-balanced-r0 load 2.04->1.88 stmts=27813 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=3476.1 p50=141.7
+kds-pkmix-group-k2-s4-skew-r0 load 1.88->1.69 stmts=27362 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=3420.0 p50=192.9
+kds-pkmix-relaxed-k2-s16-kernel-r0 load 1.69->4.02 stmts=642021 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=80161.7 p50=168.7

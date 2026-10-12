@@ -507,6 +507,10 @@ void Scheduler::RecordIterationHold(MonoTimeNs start_ns, MonoTimeNs block_ns,
                                        load_window_span_ns_),
             std::memory_order_relaxed);
         load_window_fg_mark_ns_ = polled_ns_total_[kFg];
+        load.window_end_ns.store(now, std::memory_order_relaxed);
+        load.active_sessions.store(load.active_now.load(std::memory_order_relaxed),
+                                   std::memory_order_relaxed);
+        load.active_now.store(0, std::memory_order_relaxed);
         load_window_span_ns_ = 0;
         load_window_hold_ns_ = 0;
     }

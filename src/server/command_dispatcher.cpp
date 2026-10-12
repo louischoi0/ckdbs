@@ -1814,8 +1814,10 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         os << " load_c" << k << "_busy_ppm=" << r(s.busy_ppm) << " load_c" << k
            << "_foreground_ppm=" << r(s.foreground_ppm) << " load_c" << k
            << "_queued_foreground=" << r(s.queued_foreground) << " load_c" << k
-           << "_sessions=" << r(s.sessions) << " load_c" << k << "_heads=" << r(s.heads)
-           << " load_c" << k << "_inside=" << r(s.inside);
+           << "_sessions=" << r(s.sessions) << " load_c" << k << "_active_sessions="
+           << r(s.active_sessions) << " load_c" << k << "_heads=" << r(s.heads)
+           << " load_c" << k << "_inside=" << r(s.inside) << " load_c" << k
+           << "_moves_out=" << r(s.moves_out);
         // **What the core waited on** (BL-S1's holder split): the contention
         // block's per-core slot (`base/contention.hpp`), which that block
         // prints summed. Only the latches it waited on; slot 0 also carries

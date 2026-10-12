@@ -656,6 +656,12 @@ bool TcpServer::DrainFrames(int client_fd, Connection& conn) {
         if (scheduler_->wake_armed()) {
             sched::CoreLoad::Slot& load = sched::CoreLoad::Of(scheduler_->core_id());
             sched::CoreLoad::Bump(head ? load.heads : load.inside);
+            const std::uint64_t window = load.window_end_ns.load(std::memory_order_relaxed);
+            if (conn.session.counted_in_window() != window) {
+                conn.session.set_counted_in_window(window);
+                load.active_now.store(load.active_now.load(std::memory_order_relaxed) + 1,
+                                      std::memory_order_relaxed);
+            }
         }
         // **The head of a transaction is where it is placed** (BL-R1): no
         // transaction is open and no statement of this connection runs, so
@@ -704,6 +710,7 @@ void TcpServer::SubmitStatement(int client_fd, Connection& conn) {
 void TcpServer::MoveConnection(int client_fd, std::uint32_t core) {
     (void)scheduler_->UnregisterIoHandler(client_fd);
     CountSession(-1);
+    sched::CoreLoad::Bump(sched::CoreLoad::Of(scheduler_->core_id()).moves_out);
     mover_->Offer(core, client_fd,
                   std::make_unique<MovedConnection>(clients_.extract(client_fd), cancels_));
 }

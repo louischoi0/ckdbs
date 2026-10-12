@@ -308,6 +308,18 @@ public:
     // prepared and decided. No statement crosses, so a session is one
     // core's and holds none of it (`docs/spec/cross-owner-txn.md`).
 
+    // **When BL's balancer last moved this session** (BL-R4's dwell,
+    // `load_placer.hpp`), on the instance's clock; 0 for never. Kept on the
+    // session because the session is what travels and the placer is every
+    // core's.
+    std::uint64_t moved_at_ns() const noexcept { return moved_at_ns_; }
+    void set_moved_at_ns(std::uint64_t ns) noexcept { moved_at_ns_ = ns; }
+    // The load window this session was last counted active in (its core's
+    // `window_end_ns` then, `sched/core_load.hpp`), so a session is counted
+    // once a window however many statements it runs.
+    std::uint64_t counted_in_window() const noexcept { return counted_in_window_; }
+    void set_counted_in_window(std::uint64_t w) noexcept { counted_in_window_ = w; }
+
     // Which commands a poisoned session still answers (section 10-8).
     // Deliberately a whitelist rather than a blacklist: a new statement
     // must be refused inside a failed transaction by default, and admitting
@@ -345,6 +357,8 @@ private:
     // AO-S3b. Absent on every session that is not parked mid-walk, which
     // is every session almost all of the time.
     std::optional<ParkedWrite> parked_write_ = std::nullopt;
+    std::uint64_t moved_at_ns_ = 0;
+    std::uint64_t counted_in_window_ = UINT64_MAX;
 };
 
 }  // namespace kds::server

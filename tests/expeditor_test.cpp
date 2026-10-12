@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -24,6 +25,7 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/file_page_device.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
+#include "kds/server/load_placer.hpp"
 #include "kds/server/transaction_placement.hpp"
 #include "kds/wire/error_registry.hpp"
 #include "kds/wire/kwp.hpp"
@@ -546,13 +548,6 @@ TEST_F(ExpeditorTest, UnderTheHandoffFallbackAConnectionCoreZeroAcceptedIsServed
     EXPECT_TRUE(running.Stop().ok());
 }
 
-TEST_F(ExpeditorTest, WhereThePortIsSharedThereIsNoHandoff) {
-    auto opened = Expeditor::Open(ConfigAt(/*cores=*/2), /*now_unix_seconds=*/1000);
-    ASSERT_TRUE(opened.ok()) << opened.status().message();
-    ASSERT_TRUE(Started(opened.value()->Start()));
-    EXPECT_EQ(opened.value()->connection_handoff(), nullptr);
-}
-
 // ---- AT-0 item 7: the fault net's key sets the fault net ----------------
 //
 // `in_doubt_ceiling_ms` was re-scoped and renamed to
@@ -609,6 +604,8 @@ TEST_F(ExpeditorTest, AtOneCoreThereIsNoWakeRegistry) {
     ASSERT_TRUE(Started(db.Start()));
 
     EXPECT_EQ(db.wakers(), nullptr);
+    // BL-R9: nor any inbox for a move, so no transaction is placed.
+    EXPECT_EQ(db.connection_handoff(), nullptr);
     // And core 0's own reactor reports the counter honestly rather than
     // omitting it: `sched_wakes_sent` is 0 because nothing can be woken,
     // which is a different statement from "the block is missing".
@@ -979,6 +976,45 @@ private:
 
 }  // namespace
 
+// **Above one core the instance places every transaction with its balancer**
+// (BL-S3), unless a test seam is set; at one core nothing is placed.
+//
+// **The mutation**: wire `placer_` to the seam alone and the two-core half
+// reads no `LoadPlacer`.
+TEST_F(ExpeditorTest, AboveOneCoreTheBalancerPlacesEveryTransaction) {
+    for (const std::uint32_t cores : {2u, 1u}) {
+        auto opened = Expeditor::Open(ConfigAt(cores), /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        ASSERT_TRUE(Started(opened.value()->Start()));
+        const TransactionPlacer* placer = opened.value()->transaction_placer();
+        if (cores == 1) {
+            EXPECT_EQ(placer, nullptr) << "a placer at one core";
+        } else {
+            EXPECT_NE(dynamic_cast<const LoadPlacer*>(placer), nullptr)
+                << "no balancer places the transactions";
+        }
+    }
+}
+
+// Where the port is shared the kernel places each accept, and the handoff
+// carries only BL's moves (BL-S3): it exists above one core, and core 0
+// routes no accepted socket through it.
+TEST_F(ExpeditorTest, WhereThePortIsSharedTheHandoffRoutesNoAccept) {
+    Expeditor::Config config = ConfigAt(/*cores=*/2);
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    ASSERT_NE(db.connection_handoff(), nullptr) << "no inbox for a move to cross";
+    KwpClient client(config.port);
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    ASSERT_TRUE(client.Hello());
+    EXPECT_GE(client.Core(), 0);
+    EXPECT_EQ(db.connection_handoff()->placed(), 0u) << "core 0 routed an accept it did not need to";
+    EXPECT_TRUE(running.Stop().ok());
+}
+
 // The head of each autocommit statement is placed, so a session's
 // statements run where the placer says, one move per head - and a row
 // written on one core is read on the other, since a move carries nothing
@@ -1064,6 +1100,8 @@ TEST_F(ExpeditorTest, ATransactionStaysOnTheCoreItBeganOn) {
 TEST_F(ExpeditorTest, EveryCoresLoadIsReadFromAnyCoreAndNoneAtOneCore) {
     for (const std::uint32_t cores : {2u, 1u}) {
         Expeditor::Config config = ConfigAt(cores);
+        ScriptedPlacer stay;  // the session's core is read, so it must not move
+        config.transaction_placer = &stay;
         auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
         ASSERT_TRUE(opened.ok()) << opened.status().message();
         Expeditor& db = *opened.value();

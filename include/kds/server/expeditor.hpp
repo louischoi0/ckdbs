@@ -19,6 +19,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/core_runtime.hpp"
+#include "kds/server/load_placer.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
@@ -122,10 +123,11 @@ public:
         // reaches it.
         bool force_listener_handoff = false;
 
-        // **Not a configuration key**: BL-S2's test seam. Above one core,
-        // where it is set, every listener asks it at each transaction's head
-        // which core that transaction runs on, and moves the connection
-        // there (`transaction_placement.hpp`). Must outlive the run.
+        // **Not a configuration key**: a test seam over BL-S3's balancer.
+        // Above one core every listener asks a placer at each transaction's
+        // head which core that transaction runs on, and moves the connection
+        // there (`transaction_placement.hpp`); unset, the placer is the
+        // instance's `LoadPlacer`. Must outlive the run.
         TransactionPlacer* transaction_placer = nullptr;
 
         // The buffer pool's maximum, in 8 KiB frames, for the whole instance:
@@ -659,6 +661,9 @@ public:
     // cores rather than dangling ones. Core 0 is not in it - core 0's
     // runtime is this object.
     const std::vector<std::unique_ptr<CoreRuntime>>& cores() const noexcept { return cores_; }
+    // What places each transaction above one core (BL-S3): the test's seam
+    // or the instance's `LoadPlacer`; null at one core, after `Start()`.
+    const TransactionPlacer* transaction_placer() const noexcept { return placer_; }
     // The inboxes a connection crosses cores through: D19's fallback's
     // accepts, and BL-S2's moves where a placer is set. Null where neither.
     const ConnectionHandoff* connection_handoff() const noexcept {
@@ -887,6 +892,10 @@ private:
     // `wakers_`, which it kicks through, and before `cores_` and
     // `running_`, whose listeners hold it - so it outlives both.
     std::optional<ConnectionHandoff> handoff_;
+    // BL-S3: the balancer every core asks, above one core where no test
+    // placer is set (`load_placer.hpp`).
+    LoadPlacer load_placer_;
+    TransactionPlacer* placer_ = nullptr;
     // AU-S3: what a peer calls when a client says STOP on it. Built once
     // core 0's scheduler and the waker table both exist, and handed to every
     // peer so none of them needs to know about either.

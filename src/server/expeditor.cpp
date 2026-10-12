@@ -1731,9 +1731,12 @@ Status Expeditor::Start() {
         // this one - since AT-S10d the only cross-core path the instance
         // has (AR0-6-R1: write the shared state, then kick).
         wakers_.emplace(config_.cores);
-        if (handoff || config_.transaction_placer != nullptr) {
-            handoff_.emplace(config_.cores, &*wakers_);
-        }
+        // BL-S3: every transaction is placed above one core, by the test's
+        // placer or the instance's balancer, so the inboxes moves cross
+        // through always exist here.
+        placer_ = config_.transaction_placer != nullptr ? config_.transaction_placer
+                                                        : &load_placer_;
+        handoff_.emplace(config_.cores, &*wakers_);
         // AO-S5: and the lock table kicks through it - a decide's slot flip
         // on one core ends the block a waiter's reactor sits in on another
         // (AU-S2). The same registry a stop kicks through.
@@ -1910,12 +1913,7 @@ Status Expeditor::Start() {
                 return s;
             }
             // BL-S2: and takes the connections other cores move to it.
-            if (config_.transaction_placer != nullptr) {
-                if (Status s = core.value()->AcceptMoves(*handoff_, config_.transaction_placer);
-                    !s.ok()) {
-                    return s;
-                }
-            }
+            if (Status s = core.value()->AcceptMoves(*handoff_, placer_); !s.ok()) return s;
             core.value()->dispatcher().SetReclaimCounters(&reclaim_counters_);
             core.value()->dispatcher().SetStatementEpochs(&*statement_epochs_);
             core.value()->dispatcher().SetReclaimQueue(&*reclaimer_);
@@ -2019,8 +2017,8 @@ Status Expeditor::Start() {
     }
     // BL-S2: core 0 places transactions and takes the connections other
     // cores move to it.
-    if (handoff_.has_value() && config_.transaction_placer != nullptr) {
-        listener.value().set_mover(&*handoff_, config_.transaction_placer);
+    if (handoff_.has_value()) {
+        listener.value().set_mover(&*handoff_, placer_);
         if (Status s = listener.value().Host(*handoff_, 0); !s.ok()) return s;
     }
     if (kwp_listener.has_value()) {

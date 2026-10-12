@@ -967,6 +967,61 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
     passes in Debug with `Scheduler::DiscardTasks` removed. The tree has
     no sanitizer build.
 
+## Placement per transaction (BL)
+
+Verified on `worktree-bl-session-balancer` at BL-S3's commit, measured in
+`bench/v3.0.0/results-bl-s1-placement-premise-v2.7.0-857-g3552a03c.md`.
+Owned by `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
+until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
+`docs/spec/sched.md` §5.
+
+- **A bulk writer stalls point readers on every core for 0.25-0.8 s, and
+  no placement isolates them.** Two couplings, both through the one WAL:
+  - **a repeated pk point `SELECT` makes a logged catalog write**: from the
+    second sighting of a `{fetch_id, arg_hash}`, `TrailRecorder` calls
+    `Catalog::TouchPattern`, which overwrites the pattern's `use_count` and
+    `last_seen` - "best-effort" fields (`waystone-concpets.md` §4) - through
+    `OverwriteLogged` with the WAL, so every such read appends a record;
+  - **a segment roll holds the stream latch across device I/O**:
+    `WalStream::Append`'s roll seals, flushes and runs `StartSegment`'s
+    device sync, which waits out the writer thread's sync of every live
+    segment, all under the latch (`wal.md` §6 step 1). Core 0's 10 ms
+    group-commit drain takes the same latch.
+
+  `Latch::lock` blocks the reactor, so every session on a core whose
+  reader or drain meets a roll waits the roll out. Measured: readers on
+  three cores holding no batch session waited 0.69-4.13 s each on the stream
+  latch in 10 s; with Waystone recording off and the readers off core 0,
+  their schedule p99 fell from about 500 ms to 0.57-0.76 ms in two runs and
+  41-102 ms in two more (a checkpoint turn on a reader core). **BL-S4's partition
+  waits on this**; the fixes are a ruling outside BL (the trace and its
+  options are in the results file's archive, `wal-coupling.md`).
+- **`TRACE ON` is per core, not per session** (`CommandDispatcher::tracing_`).
+  It always was; since BL-S3 moves sessions, a session's trace stops when it
+  moves and another session landing on the traced core is traced instead.
+- **Tools that pin a session by reconnecting until `SHOW META` names a
+  core** (`tools/multicore_benchmark.py`, `lock_contention_benchmark.py`,
+  `bi_checkpoint_stall.py`, `bb_concurrent_benchmark.py`, `bl_mixed.py`'s
+  placements, `ba_census.py`'s arms) measure the balancer's placement on a
+  BL-S3 binary: a pinned session may move at a head whenever
+  `LoadPlacer::Decide`'s conditions hold (`load_placer.hpp`). No setting
+  turns the balancer off; against a pre-BL-S3 binary (`3552a03c`) they
+  measure what their docstrings say.
+- **The staleness test assumes an idle reactor publishes often**:
+  `LoadPlacer::kStaleNs` (four windows) holds while `max_idle_block_ms`
+  stays under three windows (150 ms); the default is 10. A larger idle
+  block makes an idle core read as held, and it draws no session.
+- **BL-R5 is not built**: under D19's fallback core 0 still hands accepted
+  sockets round-robin, not to the least busy core. The balancer corrects
+  the placement at a session's first head, so the accept-time choice was
+  not separately measured.
+- **What the suite does not cover:** a TLS or SCRAM session moving (the
+  channel and gate travel inside the `Connection`, covered by reading only),
+  a cancel sent to a session after it moved (the registry entry is keyed by
+  session id and holds the session's flag; reading only), and bytes that
+  arrive in the kernel between the source's unregister and the
+  destination's register (level-triggered registration; reading only).
+
 ## Expressions in `UPDATE ... SET` (BJ)
 
 Written at BJ's close on `worktree-bj-expression-update`. Owned by

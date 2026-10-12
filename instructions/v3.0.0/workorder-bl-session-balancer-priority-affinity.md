@@ -619,10 +619,10 @@ proposal is `[design]` unless a cell says otherwise.
 
 | item | question | kind | CLA's proposal | mark |
 |---|---|---|---|---|
-| BL-Q0 | **Open BL**, with BL-S0..S5 and BL-R4..R9 as written, **after BI-S5 closes** (W2's premise). BL-R1 and BL-R2 are the operator's (W0, W1, W5, W6, W8); BL-R7's rungs are W8's; BL-R3 is struck (W4) | process | Yes | |
-| BL-Q1 | **W0's grain.**<br>(a) The session is never pinned; a transaction stays on its core (BL-R1).<br>(b) The statement: a transaction's statements may run on different cores | scope, **[quiet-wrong] under (b)** | (a). (b) moves the in-flight slot, the waits and the commit across cores, which CC3 forbids today and which needs its own ratification; it buys nothing for short OLTP transactions | |
+| BL-Q0 | **Open BL**, with BL-S0..S5 and BL-R4..R9 as written, **after BI-S5 closes** (W2's premise). BL-R1 and BL-R2 are the operator's (W0, W1, W5, W6, W8); BL-R7's rungs are W8's; BL-R3 is struck (W4) | process | Yes | **Opened by W10** (2026-10-12), BI-S5 having closed at `083ab01d`; §6 |
+| BL-Q1 | **W0's grain.**<br>(a) The session is never pinned; a transaction stays on its core (BL-R1).<br>(b) The statement: a transaction's statements may run on different cores | scope, **[quiet-wrong] under (b)** | (a). (b) moves the in-flight slot, the waits and the commit across cores, which CC3 forbids today and which needs its own ratification; it buys nothing for short OLTP transactions | **(a)**, W10's "per transaction" (2026-10-12); built in BL-S2 |
 | BL-Q2 | **The carrier.**<br>(a) The whole connection moves at a boundary (BL-R6); a session that stays pays no hop.<br>(b) An I/O core keeps every fd, and each transaction is dispatched to an execution core: two kicks per transaction.<br>(c) A central balancer thread decides every dispatch | design | (a). (b) is BL-S1-measurable as two kick round trips per transaction and is reconsidered only if (a)'s move rate is so high that every transaction moves anyway. (c) is W3's excluded shape | |
-| BL-Q3 | **The load signal** in the per-core word: (a) ready `foreground` length; (b) live sessions; (c) in-flight transactions; (d) `foreground` polled time in a decaying window; (e) a combination BL-S1 picks | measurement | (e), chosen by BL-S1 as the signal whose per-core spread best predicts the per-core p99 spread in §5.1's skew cells; (b) is the fallback when none separates | |
+| BL-Q3 | **The load signal** in the per-core word: (a) ready `foreground` length; (b) live sessions; (c) in-flight transactions; (d) `foreground` polled time in a decaying window; (e) a combination BL-S1 picks | measurement | (e), chosen by BL-S1 as the signal whose per-core spread best predicts the per-core p99 spread in §5.1's skew cells; (b) is the fallback when none separates | **`busy_ppm`**, measured in BL-S1 (§6): the best rank correlation with the per-core p99; at `group` none predicts it |
 | BL-Q4 | **Priority's components.**<br>(a) A share only.<br>(b) A share and a latency class, the class bounded by a lag limit so it cannot exceed its share over time | design | (b), revised from (a) on W5, then deferred by W8 to BL-R7's rung 4: built only if placement (rung 2) and the two-tier pick (rung 3) both miss §5.2's bar (v) | **(b)**, adopted whole on W6 (2026-10-12), not marked per item; **deferred to rung 4 by W8** (2026-10-12) |
 | BL-Q5 | ~~Affinity's form~~ | - | - | **Struck by W4** (2026-10-12): no session affinity exists (BL-R3) |
 | BL-Q6 | ~~Do the axes interact in v0?~~ | - | - | **Struck by W4** (2026-10-12): one session axis remains. Its surviving half stands as BL-R4: the balancer reads a level's partition, never a weight |
@@ -633,7 +633,7 @@ proposal is `[design]` unless a cell says otherwise.
 | BL-Q11 | **CN-10.** BL builds §3.4's carrier with a load trigger, not §3.5's admission. (a) BL's close marks U6 as built by BL, with the trigger noted as BL-R4's; (b) U6 stays open until §3.5 exists | process | (a) | |
 | BL-Q12 | **Priority inversion.**<br>(a) None in v0; a counter of waits whose holder's level is below the waiter's.<br>(b) Inheritance: a holder's session is polled at its highest waiter's level until the release | design | (a), with (b) taken up only if §5.2 counts inversions on more than 1 % of lock waits in its mixed cell. The counter splits by the pair of levels: a `background` writer holding row `X` against a `transactional` writer is the combination BL-R7 expects | |
 | BL-Q13 | **Yielding writes and index walks** (BL-R7's remainder). (a) Out of BL, named in the close; (b) in BL | scope | (a). It is a suspension-safety argument over locks and borrows, an order of its own | |
-| BL-Q14 | **BL-S1's premise gate.** BL stops for a ruling when any of: (i) under §5.1's skew cells, the balanced arm improves neither aggregate throughput nor per-core p99 spread by more than the run-to-run spread; or (ii) under the mixed cell, the same-core point read's p99 is already within 2× its isolated p99, so priority has nothing to serve; or (iii) one value of the mixed cell's slice sweep brings it there, in which case CLA proposes rung 1 alone (BL-R7). The 1,024-row inserter does not yield, so no slice value moves its share of the p99; (iii) is judged against the reactor-hold split, not the raw p99 | process | As written. (i) gates BL-S2/S3; (ii) and (iii) gate BL-S4. Each gate is independent | |
+| BL-Q14 | **BL-S1's premise gate.** BL stops for a ruling when any of: (i) under §5.1's skew cells, the balanced arm improves neither aggregate throughput nor per-core p99 spread by more than the run-to-run spread; or (ii) under the mixed cell, the same-core point read's p99 is already within 2× its isolated p99, so priority has nothing to serve; or (iii) one value of the mixed cell's slice sweep brings it there, in which case CLA proposes rung 1 alone (BL-R7). The 1,024-row inserter does not yield, so no slice value moves its share of the p99; (iii) is judged against the reactor-hold split, not the raw p99 | process | As written. (i) gates BL-S2/S3; (ii) and (iii) gate BL-S4. Each gate is independent | Measured in BL-S1 (§6): (i) passes on the spread; (ii) does not stop; (iii) serves a walk alone and not the mixed cell, whose stall is the WAL's - BL-S4 stopped for a ruling |
 | BL-Q15 | **The measurement** (§5.2), at BL's close, per CLAUDE.md's Session Workflow step 3 | process | As written | |
 | BL-Q16 | **The level set** (W5).<br>(a) Four context levels, `transactional`, `normal` (the default), `analytic`, `background`, each a bundle of mechanisms (BL-R2).<br>(b) Points on one scale (`high`, `normal`, `low`) | user-visible | (a). A scale cannot separate W5's contexts: a share does nothing for a short update, and "gives way first" and "runs on what is left" are different rules. The names are a closed set and hash as identifiers | **(a)**, adopted whole on W6 (2026-10-12), not marked per item |
 | BL-Q17 | **Is `analytic` read-only?**<br>(a) No: a scheduling level only; a write runs at `analytic`'s level.<br>(b) Yes: a write in an `analytic` session is refused | scope | (a). (b) turns a scheduling hint into an access limit, which belongs to the statement-class roles, not to a priority | **(a)**, adopted whole on W6 (2026-10-12), not marked per item |
@@ -844,3 +844,108 @@ spec sections, the slice's reach above one core and three cuts were
 applied. No finding was rejected; its item 9, the per-level slice
 protecting no interactive level above one core, is recorded in BL-R2
 rather than changed, since W8 adopted the slice.
+
+### BL opened 2026-10-12 (W10) - BL-S1, BL-S2, BL-S3 landed; BL-S4 stopped
+
+**W10** (2026-10-12, `raft-marks-2026-10-12.md` §8) opened BL and set how it
+runs: *"Work according to the BL milestone. Split it into work units; if a
+work unit has no utility, explore alternatives thoroughly, and if none is
+found, reject it, report and stop. The purpose of this milestone is to place
+cores per transaction rather than per session, to optimize scheduling, and
+to handle each finely by its character. Establish the four stages, but
+choose the detailed implementation by experiment and measurement. Not every
+concept in the order needs to be developed; what experiment and measurement
+show to be meaningless may be skipped."* BI-S5 had closed at `083ab01d`, so
+W2's premise held. Worked on `worktree-bl-session-balancer` from `a3208be7`.
+The measurements are
+`bench/v3.0.0/results-bl-s1-placement-premise-v2.7.0-857-g3552a03c.md`.
+
+**BL-S1 - built, measured** (`3552a03c`). `sched::CoreLoad`: one slot per
+core, written above one core only, read from any - busy and `foreground`
+fractions over a 50 ms window, queued `foreground` tasks, sessions,
+transaction heads and statements inside a transaction - printed by
+`SHOW META` as `load_c<k>_*` with each core's contention slot
+(`load_c<k>_waited_<latch>_us`), which is the holder split. Gates:
+- **(i) passes on the spread, not on throughput.** A balanced placement
+  takes the per-core p99 spread from 1.12-1.78x to 1.01-1.05x and the worst
+  core's p99 down 2-25 % at `relaxed`; throughput moves -10 % to +6 %, which
+  this host (clients on the reactors' SMT siblings) cannot attribute to the
+  server. At `group` nothing separates the arms.
+- **(ii) does not stop BL**: the one-core mixed reader's p99 is over 1,000x
+  its isolated p99.
+- **(iii)**: a walk alone is served by the slice (16 pages: 321 us against an
+  isolated 379), but no slice moves the mixed cell, whose stalls are not
+  reactor-side (BL-S4 below).
+- **BL-Q3**: `busy_ppm` (rank correlation with the per-core p99 0.36, against
+  0.33 `foreground_ppm`, 0.15 `sessions`, -0.07 queued tasks; level with
+  `foreground_ppm` where no statement writes, 0.30 against 0.32).
+
+**BL-S2 - built** (`3552a03c`). At a transaction's head - a statement asked
+for with no transaction open - a listener asks its `TransactionPlacer`, and
+a core other than its own takes the whole connection: the map node travels
+through `ConnectionHandoff`'s inbox, the source unregisters the socket before
+the destination registers it, a finished statement's reply is flushed first,
+and the statement whose head moved it runs first on the destination. A
+transaction never crosses (BL-Q1 (a), the reading W10's "per transaction"
+names). Cells: a head moves, a transaction stays where `BEGIN` moved it, a
+pipelined statement travels, a prepared statement executes on the other
+core. **The movable predicate is one clause**, `!in_explicit_txn()`: portals,
+pipelined frames, the reply tail and the handshake state travel inside the
+`KwpSession`, so BL-R1's clauses 3-5 are moot rather than checked; no
+dispatch reaches the placer before the handshake. **The clock is not
+re-pointed**: every core's scheduler is handed the instance's one clock.
+Move cost (§5.1's last cell, by a measurement build): +28 us at a
+statement's p50 on two cores, +39 us on four.
+
+**BL-S3 - built, measured** (this row's commit). `LoadPlacer`, the default
+placer above one core, moves a session at a head to the least-busy core when
+the gap passes `kMarginPpm` (200,000: above the widest gap read between evenly
+placed cores, `[provisional]`), the move shrinks the gap (the session's share
+- its core's busy fraction over the sessions active in the window - is under
+the gap, so a lone session never moves), the target published within
+`kStaleNs` (four windows: a core inside a hold draws nothing), no session left
+this core in this window, and the session has stayed `kDwellNs` (500 ms).
+**The first rule did not hold** and is recorded: requiring the share under
+*half* the gap, over every connection, left 3/1 splits in place, and one run
+took 88 moves in 12 s with its p99 at 1,052 us; its review found it, the rule
+was corrected and the convergence re-run. From a skewed start the corrected
+balancer, in every run, brings the client p99 spread from 1.49-2.11x to
+1.10-1.15x, the worst client's p99 down 12-29 % and throughput up 2.3-6.5 %
+over the same skew - the balanced placement's or better - at under six moves
+a second across sixteen sessions. **BL-R5 (the accept placement) is not
+built**: the balancer corrects the kernel's placement at a session's first
+head, and the fallback's round-robin was not separately priced
+(`known-gaps.md`).
+
+**BL-S4 - stopped for a ruling.** Its premise - that a session placed on a
+core holding no batch session is protected from it - is **false as the engine
+stands, and the reason is outside BL**: one bulk-inserting session stalls
+readers on every core for 0.25-0.8 s through the one WAL. A repeated pk
+point `SELECT` makes a logged catalog write (`Catalog::TouchPattern`, the
+pattern's best-effort `use_count`/`last_seen`), and a segment roll holds the
+stream latch across a device sync; core 0's group-commit drain meets every
+roll. A forced partition is measurably better than none (schedule p99
+422-618 ms against 646-793 ms spread, five runs each) and stalls for half a
+second all the same. **The alternative was found and measured**: with
+Waystone recording off and the readers off core 0 and off the batch core,
+the readers' schedule p99 is 0.57-0.76 ms in two runs and 41-102 ms in two
+more (a checkpoint turn on a reader core), against 0.49 ms alone; with the
+batch sessions on core 0 instead, 1-19 ms. Taking it needs three
+rulings, none of them BL's to make:
+1. **The read path's logged write** (Waystone's spec, `rules.md` §5's CR6):
+   (a) delete `TouchPattern` - the heat stays as registered, and its readers
+   are the heap-only relayout planner (dark since SUS-1) and `SHOW`;
+   (b) make the two heat fields unlogged, a second exception to CR6 inside a
+   logged page; (c) keep it logged but coalesce per core in memory and fold
+   it on a `system` tick, which still meets a roll once per tick. CLA
+   proposes (a).
+2. **Core 0's role under a partition** (BL-R2 says core 0 is never a batch
+   core): the measurement says it is the best one, since its drain meets
+   every roll. CLA proposes that the batch partition be core 0 first.
+3. **Whether a roll keeps the stream latch across its device I/O** (`wal.md`
+   §6 step 1, AL-R1's boundary): releasing it for the roll is the structural
+   fix for writers too, and a WAL order of its own. CLA proposes it be
+   written as one, not taken inside BL.
+
+**Not measured**: the overhead A/B (§5.2 bar (i)), owed at BL's close; BL
+does not close while BL-S4 waits. Nothing here is a tag or a push.
