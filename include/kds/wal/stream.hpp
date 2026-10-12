@@ -11,6 +11,7 @@
 #include "kds/base/latch.hpp"
 #include "kds/base/status.hpp"
 #include "kds/wal/log_device.hpp"
+#include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
 // The WAL stream (wal.md sections 3, 4.1, 6): the layer that turns "append
@@ -137,12 +138,24 @@ namespace kds::wal {
 // be at least kMinRingCapacity so a record of any legal size can be staged.
 inline constexpr std::size_t kDefaultRingCapacity = 1024 * 1024;
 
-// Smallest ring a stream will open with. A record has to fit the ring
-// whole - oversized payloads are a design error, not a spanning case
-// (wal.md section 4.1) - and the biggest record the catalog defines is a
-// FULL_PAGE_IMAGE at kRecordHeaderSize + 8192 bytes, so anything below
-// this would reject records the format considers ordinary.
-inline constexpr std::size_t kMinRingCapacity = 64 * 1024;
+// The largest BTREE_SPLIT record: 32 + 8 + 34 x 8,200 = 278,840 bytes, a
+// multiple of the record alignment.
+inline constexpr std::size_t kLargestSplitRecord =
+    kRecordHeaderSize + BtreeSplitSize(kMaxBtreeSplitPages);
+
+// Smallest ring and smallest segment a stream will open with. A record has
+// to fit both whole - oversized payloads are a design error, not a spanning
+// case (wal.md section 4.1) - and a split's record is appended after its
+// pages changed, where a refusal would leave them changed with no record
+// behind them. Both floors therefore hold the largest split, so `Append`'s
+// size refusals never meet one: 512 KiB is the power of two above 278,840
+// bytes, and a segment's header block (4 KiB) still leaves room for it.
+inline constexpr std::size_t kMinRingCapacity = 512 * 1024;
+inline constexpr std::uint64_t kMinSegmentSize = 512 * 1024;
+static_assert(kMinRingCapacity >= kLargestSplitRecord);
+static_assert(kMinSegmentSize - kSegmentHeaderSize >= kLargestSplitRecord);
+static_assert(kDefaultRingCapacity >= kMinRingCapacity);
+static_assert(kDefaultSegmentSize >= kMinSegmentSize);
 
 class WalStream {
 public:

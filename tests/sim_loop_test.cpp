@@ -151,6 +151,7 @@ TEST(SimLoop, ALongRunRollsASegmentAndStillRecoversEveryAcknowledgedRow) {
     const SimVerdict verdict = RunSimulation(config);
     EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
     EXPECT_EQ(verdict.gated_missing_rows, 0u);
+    EXPECT_GT(verdict.segments_recycled, 0u) << "the run never left its first segment";
 }
 
 // A clean shutdown has to publish an anchor, or the next mount re-reads

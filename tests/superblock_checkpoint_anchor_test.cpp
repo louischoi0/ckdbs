@@ -535,7 +535,7 @@ TEST_F(SuperBlockAnchorTest, TheRecyclerIsHandedOnlyARedoStartThePlatterHolds) {
 // exactly the segments wholly below it leave the device. Inline here - this
 // manager has no writer thread - as in the simulator.
 TEST_F(SuperBlockAnchorTest, APublishRemovesExactlyTheSegmentsWhollyBelowItsRedoStart) {
-    auto device = wal::MemoryLogDevice::Create(64 * 1024);
+    auto device = wal::MemoryLogDevice::Create(wal::kMinSegmentSize);
     ASSERT_TRUE(device.ok());
     auto wal = wal::WalManager::Open(device.value().get(), clock_, /*core_id=*/0);
     ASSERT_TRUE(wal.ok());
@@ -549,18 +549,18 @@ TEST_F(SuperBlockAnchorTest, APublishRemovesExactlyTheSegmentsWhollyBelowItsRedo
     anchor.SetRecycler([&](wal::Lsn d) { wal.value()->RecycleBelow(d); });
 
     // Inside segment 2: segments 0 and 1 are wholly below it, 2 is not.
-    const wal::Lsn inside_two = 2 * 64 * 1024 + wal::kSegmentHeaderSize;
+    const wal::Lsn inside_two = 2 * wal::kMinSegmentSize + wal::kSegmentHeaderSize;
     ASSERT_TRUE(anchor.Publish({0, inside_two, inside_two, inside_two, 2}).ok());
     EXPECT_EQ(device.value()->first_segment(), 2u);
     EXPECT_EQ(device.value()->segments_removed(), 2u);
 
     // Exactly at segment 3's start: segment 2 is wholly below it now.
-    const wal::Lsn at_three = 3 * 64 * 1024;
+    const wal::Lsn at_three = 3 * wal::kMinSegmentSize;
     ASSERT_TRUE(anchor.Publish({0, at_three, at_three, at_three, 3}).ok());
     EXPECT_EQ(device.value()->first_segment(), 3u);
 
     // Past the last segment's start: everything but the last.
-    const wal::Lsn past = 9 * 64 * 1024;
+    const wal::Lsn past = 9 * wal::kMinSegmentSize;
     ASSERT_TRUE(anchor.Publish({0, past, past, past, 9}).ok());
     EXPECT_EQ(device.value()->first_segment(), device.value()->end_segment() - 1);
     EXPECT_EQ(wal.value()->recycle_failures(), 0u);
@@ -575,7 +575,7 @@ TEST_F(SuperBlockAnchorTest, LeftoversBelowTheMountAnchorGoWithTheFirstPublishNo
                              ("kds_bc_s3_leftovers_" + std::to_string(::getpid())))
                                 .string();
     std::filesystem::remove_all(dir);
-    constexpr std::uint64_t kSegment = 64 * 1024;
+    constexpr std::uint64_t kSegment = wal::kMinSegmentSize;
     {
         auto device = wal::FileLogDevice::Open(dir, 0, kSegment);
         ASSERT_TRUE(device.ok());

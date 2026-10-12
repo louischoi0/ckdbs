@@ -20,7 +20,7 @@
 namespace kds::wal {
 namespace {
 
-constexpr std::uint64_t kSegmentSize = 65536;
+constexpr std::uint64_t kSegmentSize = kMinSegmentSize;  // the stream's floor (`stream.hpp`)
 constexpr std::size_t kPayloadSize = 1000;
 constexpr sched::MonoTimeNs kFlushInterval = 10'000'000;  // 10 ms
 

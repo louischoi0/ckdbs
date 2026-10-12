@@ -4588,8 +4588,7 @@ Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& wr
 // An index split's record holds every page it wrote and the anchor, under
 // the stream's bound (`storage::LogBtreeSplit`'s size rule, for the index's
 // own cap).
-static_assert(wal::BtreeSplitSize(index::kMaxIndexChanges + 1) + wal::kRecordHeaderSize <=
-              wal::kDefaultRingCapacity);
+static_assert(index::kMaxIndexChanges + 1 <= wal::kMaxBtreeSplitPages);
 
 Status CommandDispatcher::LogIndexWrite(const exec::IndexWrite& write, std::uint64_t txn_id) {
     if (wal_ == nullptr) return Status::OK();

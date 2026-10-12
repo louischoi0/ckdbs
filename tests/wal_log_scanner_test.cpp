@@ -33,9 +33,7 @@
 namespace kds::wal {
 namespace {
 
-// Small enough that a handful of records rolls a segment, and still a
-// multiple of the record alignment (WalStream::Open requires it).
-constexpr std::uint64_t kSegmentSize = 16 * 1024;
+constexpr std::uint64_t kSegmentSize = kMinSegmentSize;  // the stream's floor (`stream.hpp`)
 
 std::vector<std::byte> Payload(std::size_t n, unsigned char fill) {
     return std::vector<std::byte>(n, static_cast<std::byte>(fill));
@@ -108,7 +106,7 @@ TEST_F(LogScannerTest, CrossesASegmentBoundaryLosingAndDuplicatingNothing) {
     {
         auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok()) << stream.status().message();
-        for (int i = 0; i < 20; ++i) {
+        for (int i = 0; device_->end_segment() < 3; ++i) {
             auto lsn = stream.value()->Append({RecordType::kHeapInsert, 7, 1},
                                               Payload(kBig, static_cast<unsigned char>(i)));
             ASSERT_TRUE(lsn.ok()) << lsn.status().message();
@@ -441,7 +439,7 @@ TEST_F(LogScannerTest, AStartInARecycledSegmentIsCorruptionAndTheLiveRunStillSca
         auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok());
         // Enough 1 KiB records to roll into a third segment.
-        for (int i = 0; i < 30; ++i) {
+        while (device_->end_segment() < 3) {
             auto lsn = stream.value()->Append({RecordType::kHeapInsert, 1, 1}, Payload(1024, 0x41));
             ASSERT_TRUE(lsn.ok()) << lsn.status().message();
             lsns.push_back(lsn.value());
@@ -471,7 +469,7 @@ TEST_F(LogScannerTest, AStreamReopensOverARunThatDoesNotStartAtZero) {
     {
         auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok());
-        for (int i = 0; i < 30; ++i) {
+        while (device_->end_segment() < 3) {
             auto lsn = stream.value()->Append({RecordType::kHeapInsert, 1, 1}, Payload(1024, 0x42));
             ASSERT_TRUE(lsn.ok());
             last = lsn.value();
@@ -487,7 +485,9 @@ TEST_F(LogScannerTest, AStreamReopensOverARunThatDoesNotStartAtZero) {
     EXPECT_GT(stream.value()->append_lsn(), last) << "resumes at the tail of the last segment";
     // Rolling from here numbers the next segment after the run, not after
     // how many the device holds.
-    for (int i = 0; i < 30; ++i) {
+    // A segment's worth of 1 KiB records, so the stream must roll; counted,
+    // not looped on `end_segment()`, which is what is under test.
+    for (std::uint64_t i = 0; i < kSegmentSize / 1024; ++i) {
         ASSERT_TRUE(stream.value()->Append({RecordType::kHeapInsert, 1, 1}, Payload(1024, 0x43)).ok());
     }
     ASSERT_TRUE(stream.value()->Sync().ok());

@@ -255,25 +255,6 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## WAL
 
-- **A `BTREE_SPLIT` of 8 or more pages exceeds a 64 KiB ring or segment.**
-  Verified at `07e822a6` (BD-S3), by reading. A split's record carries a
-  full image of every page it writes (8,200 bytes each), so 8 pages need
-  more than 64 KiB, and `kMinRingCapacity` and the sim's segments are both
-  64 KiB. The `static_assert` in `storage/log_page_image.hpp` holds the
-  deepest split (`kMaxStructuralChanges`) under the *default* ring only.
-  Unreachable in practice - a split writes two pages per level it climbs,
-  so 8 pages need three full internal levels to divide at once - but where
-  it happens the append is refused `InvalidArgument` after the split's
-  pages changed in memory - and, for a split that grew a root, after the
-  anchor's slot was staged, which a size refusal does not fail-stop, so the
-  staged slot can be written back with no record behind it. A root growth
-  images one page more than its split (the anchor), and a secondary index's
-  split is this record too since the root growth fix, so both meet the
-  bound. Raising the minimum past the deepest split was
-  declined at BD-S2's review: it moves the premise of the cells that open
-  at the minimum ring and of the sim's segment rolls. Owner:
-  `docs/spec/wal.md` §5.2.
-
 - **A heap placement whose record is never written is not taken back.**
   Verified at `07e822a6` (BD-S3), by reading; BD-S1's
   `SortedLeafCrashTest.ARowPlacedAndNeverLoggedLeavesNoHoleForTheNextRecordsRedo`

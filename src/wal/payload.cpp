@@ -547,6 +547,10 @@ StatusOr<std::size_t> EncodeBtreeSplit(std::span<std::byte> out,
     if (images.empty()) {
         return Status::InvalidArgument("wal payload: a BTREE_SPLIT names at least one page");
     }
+    if (images.size() > kMaxBtreeSplitPages) {
+        return Status::InvalidArgument("wal payload: a BTREE_SPLIT names more than " +
+                                       std::to_string(kMaxBtreeSplitPages) + " pages");
+    }
     const std::size_t size = BtreeSplitSize(images.size());
     if (Status s = CheckOutputSize(out, size, "BTREE_SPLIT"); !s.ok()) return s;
     Store<std::uint32_t>(out, 0, static_cast<std::uint32_t>(images.size()));
@@ -567,7 +571,7 @@ StatusOr<std::size_t> EncodeBtreeSplit(std::span<std::byte> out,
 StatusOr<std::vector<BtreeSplitImage>> DecodeBtreeSplit(std::span<const std::byte> in) {
     if (Status s = CheckInputSize(in, kBtreeSplitFixedSize, "BTREE_SPLIT"); !s.ok()) return s;
     const std::uint32_t count = Load<std::uint32_t>(in, 0);
-    if (count == 0 || in.size() != BtreeSplitSize(count)) {
+    if (count == 0 || count > kMaxBtreeSplitPages || in.size() != BtreeSplitSize(count)) {
         return Status::Corruption("wal payload: BTREE_SPLIT names " + std::to_string(count) +
                                   " pages in " + std::to_string(in.size()) + " bytes");
     }
