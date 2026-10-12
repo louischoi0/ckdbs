@@ -95,7 +95,7 @@ protected:
             // this was found.
             if (placed.value().new_root != kInvalidPageId) {
                 ASSERT_TRUE(boot_->catalog
-                                .UpdateRelationDescPage(oid.value(), placed.value().new_root,
+                                .PublishRoot(oid.value(), /*index_oid=*/0, placed.value().new_root,
                                                         access.value()->anchor_page_id)
                                 .ok());
             }

@@ -206,8 +206,8 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
         // inside it, stay valid for the next iteration and for the caller.
         // With a log the root rides in the split's record instead
         // (`IndexWrite::new_root`).
-        if (Status s = catalog.UpdateIndexRoot(access.oid, ix.index_oid, moved.value(),
-                                               access.anchor_page_id);
+        if (Status s = catalog.PublishRoot(access.oid, ix.index_oid, moved.value(),
+                                           access.anchor_page_id);
             !s.ok()) {
             return s.WithContext("republishing the root of index " +
                                  std::to_string(ix.index_oid));

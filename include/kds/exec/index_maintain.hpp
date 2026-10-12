@@ -71,10 +71,12 @@ namespace kds::exec {
 // buffer the entry was encoded into is gone.
 //
 // **`restructured` empty is the common case and means "log an INDEX_INSERT".**
-// Non-empty means the append split something, and then the caller logs a
-// full page image of each named page and **no** INDEX_INSERT - the images are
+// Non-empty means the append split something, and then the caller logs one
+// BTREE_SPLIT of the named pages and **no** INDEX_INSERT - the images are
 // taken after the entry is in, so emitting both would apply it twice
-// (wal/record.hpp).
+// (wal/record.hpp). A root the split grew is the log's to publish
+// (`new_root`): a sink that will not carry it in the split's record
+// publishes it itself (`Catalog::PublishRoot`).
 //
 // Collected only when there is a log to write to: a null sink costs the write
 // path nothing, which is what keeps the unlogged path the code it always was.
@@ -115,7 +117,7 @@ using IndexWriteLog = std::function<Status(const IndexWrite&)>;
 // `row` is the encoded tuple exactly as it was written to the page.
 //
 // **On return, `access` may be dangling - and is not.** A split republishes
-// the index's root through `Catalog::UpdateIndexRoot`, which updates the
+// the index's root through `Catalog::AdoptRoot`, which updates the
 // cached entry **in place** rather than invalidating it, precisely so a
 // caller holding the pointer across this call keeps a valid one and sees the
 // new root. That is what makes calling this from inside a per-row lambda

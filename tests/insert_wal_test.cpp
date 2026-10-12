@@ -850,7 +850,7 @@ TEST_F(InsertWalTest, ARelationWithNoIndexLogsNoIndexRecords) {
     EXPECT_EQ(CountOf(RecordTypes(), wal::RecordType::kIndexInsert), 0u);
 }
 
-TEST_F(InsertWalTest, ASplitTakesFullPageImagesAndNoIndexInsert) {
+TEST_F(InsertWalTest, AnIndexSplitTakesOneBtreeSplitAndNoIndexInsert) {
     // The images are taken after the entry is in, so emitting an
     // INDEX_INSERT as well would apply it twice. One rule, and this is what
     // pins it: the count of INDEX_INSERT records is the count of appends
@@ -879,15 +879,24 @@ TEST_F(InsertWalTest, ASplitTakesFullPageImagesAndNoIndexInsert) {
     ASSERT_TRUE(wal_->Flush().ok());
 
     const std::vector<wal::RecordType> types = RecordTypes();
-    // One record per row in the clustered tree: a BTREE_INSERT, or the
-    // BTREE_SPLIT that carries the row (BD-R12).
+    // Fewer INDEX_INSERTs than rows, because the appends that split took a
+    // BTREE_SPLIT instead - the clustered tree's record, one per split.
+    const std::size_t index_inserts = CountOf(types, wal::RecordType::kIndexInsert);
+    ASSERT_LT(index_inserts, static_cast<std::size_t>(kRows));
+    // So every row is one clustered record - a BTREE_INSERT, or the
+    // BTREE_SPLIT that carries it (BD-R12) - and every index append that
+    // logged no INDEX_INSERT is one BTREE_SPLIT more.
     EXPECT_EQ(CountOf(types, wal::RecordType::kBtreeInsert) +
                   CountOf(types, wal::RecordType::kBtreeSplit),
-              static_cast<std::size_t>(kRows));
-    // Fewer than one per row, because the appends that split took images
-    // instead - and at least one image was taken.
-    EXPECT_LT(CountOf(types, wal::RecordType::kIndexInsert), static_cast<std::size_t>(kRows));
-    EXPECT_GT(CountOf(types, wal::RecordType::kFullPageImage), 0u);
+              static_cast<std::size_t>(kRows) + (kRows - index_inserts));
+    // This dispatcher has no transaction manager, so its index writes are
+    // collected for LogInsert, and a root they grew is published as it grows
+    // (`IndexWriteLogFor`): every value is still found through the index.
+    for (int v = 0; v < kRows; ++v) {
+        const std::string reply =
+            d.Dispatch("SELECT owner FROM t WHERE owner = 'v" + std::to_string(v) + "'").response;
+        EXPECT_NE(reply.find("v" + std::to_string(v)), std::string::npos) << v << ": " << reply;
+    }
 }
 
 // ---- 4. Nothing logs a catalog page, not even a rollback ----------------

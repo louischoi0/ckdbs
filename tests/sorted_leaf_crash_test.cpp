@@ -538,8 +538,8 @@ TEST(SortedLeafCrashTest, ALogCutInsideAnInternalRootsDivideKeepsTheRootItGrew) 
         Ok(d0, "INSERT INTO t VALUES (15, '" + pad + "')");
         ASSERT_TRUE(rig->Snapshot(after.path).ok());
     }
-    ASSERT_GE(WidestSplit(after.path / "wal"), 5u)
-        << "two leaves, two internal halves and a new root: the root did not grow";
+    ASSERT_GE(WidestSplit(after.path / "wal"), 6u)
+        << "two leaves, two internal halves, a new root and the anchor: no root grew in one record";
     CutEverywhere(before.path, after.path,
                   [&](Expeditor& db, bool committed, const std::string& where) {
                       std::set<std::uint64_t> want = ids;
@@ -551,9 +551,9 @@ TEST(SortedLeafCrashTest, ALogCutInsideAnInternalRootsDivideKeepsTheRootItGrew) 
 TEST(SortedLeafCrashTest, ALogCutInsideAnIndexRootsDivideKeepsTheRootItGrew) {
     // The index's twin: its root leaf full, a key in its middle divides it,
     // moving the upper half, and a root grows over it. Its split was a run of FULL_PAGE_IMAGEs
-    // before, then its ANCHOR_UPDATE; both are one BTREE_SPLIT now. Inside a
-    // transaction, whose index writes are logged as maintenance makes them
-    // (`IndexWriteLogFor`) - the order the entry named.
+    // before, then its ANCHOR_UPDATE; both are one BTREE_SPLIT now. A read
+    // through the stale leaf root still reaches the moved half by its
+    // sibling link, so the write after the restart is what shows the loss.
     const auto create = [](CommandDispatcher& d0) {
         Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
         Ok(d0, "CREATE INDEX tv ON t (v)");

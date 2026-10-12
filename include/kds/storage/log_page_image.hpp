@@ -52,11 +52,13 @@ inline Status LogFullPageImage(wal::WalManager* wal, PageStore& store, std::uint
 // link (BD-S1's `SortedLeafCrashTest.ALogCutInsideAnAppendSplit...`). The
 // caller holds every page, so the images are the split as it finished.
 //
-// **A split that grew a root names the relation's anchor page among them**,
-// its root slot already moved: the root a mount reads is then replayed with
+// **A split that grew a root passes the relation's anchor page too**, its
+// root slot already moved and still held by the caller
+// (`Catalog::StageAnchorRoot`): the root a mount reads is then replayed with
 // the split or not at all, and never names a root the log did not keep or
-// misses one it did (`Catalog::StageAnchorRoot`). Used by the clustered
-// tree and by a secondary index alike.
+// misses one it did. Imaged through the caller's hold rather than fetched
+// again, so a deep split stays within the pool's per-pinner ceiling
+// (`kPinCeiling`). Used by the clustered tree and a secondary index alike.
 //
 // **The record fits the stream whole** (BD-R12's size rule): a split writes
 // at most `kMaxStructuralChanges` pages (`index::kMaxIndexChanges` for an
@@ -66,28 +68,29 @@ inline Status LogFullPageImage(wal::WalManager* wal, PageStore& store, std::uint
 static_assert(wal::BtreeSplitSize(kMaxStructuralChanges + 1) + wal::kRecordHeaderSize <=
               wal::kDefaultRingCapacity);
 inline Status LogBtreeSplit(wal::WalManager* wal, PageStore& store, std::uint64_t txn_id,
-                            std::span<const PageId> pages) {
+                            std::span<const PageId> pages, const PageRef* anchor = nullptr) {
     if (wal == nullptr) return Status::OK();
     if (pages.empty()) return Status::InvalidArgument("a BTREE_SPLIT names at least one page");
 
     std::vector<PageRef> held;
     std::vector<wal::BtreeSplitImage> images;
     held.reserve(pages.size());
-    images.reserve(pages.size());
+    images.reserve(pages.size() + 1);
     for (const PageId page_id : pages) {
         auto bytes = store.Get(page_id);
         if (!bytes.ok()) return bytes.status();
         held.push_back(std::move(bytes.value()));
         images.push_back({page_id, held.back().bytes()});
     }
+    if (anchor != nullptr) images.push_back({anchor->page_id(), anchor->bytes()});
     std::vector<std::byte> payload(wal::BtreeSplitSize(images.size()));
     if (auto n = wal::EncodeBtreeSplit(payload, images); !n.ok()) return n.status();
     auto rec =
         wal->Append(wal::RecordSpec{wal::RecordType::kBtreeSplit, txn_id, pages.front()}, payload);
     if (!rec.ok()) return rec.status();
     held.clear();
-    for (const PageId page_id : pages) {
-        if (Status s = store.StampPageLsn(page_id, rec.value()); !s.ok()) return s;
+    for (const wal::BtreeSplitImage& image : images) {
+        if (Status s = store.StampPageLsn(image.page_id, rec.value()); !s.ok()) return s;
     }
     return Status::OK();
 }

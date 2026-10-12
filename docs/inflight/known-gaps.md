@@ -264,7 +264,12 @@ statement about an engine that no longer exists; re-verify or strike it.
   Unreachable in practice - a split writes two pages per level it climbs,
   so 8 pages need three full internal levels to divide at once - but where
   it happens the append is refused `InvalidArgument` after the split's
-  pages changed in memory. Raising the minimum past the deepest split was
+  pages changed in memory - and, for a split that grew a root, after the
+  anchor's slot was staged, which a size refusal does not fail-stop, so the
+  staged slot can be written back with no record behind it. A root growth
+  images one page more than its split (the anchor), and a secondary index's
+  split is this record too since the root growth fix, so both meet the
+  bound. Raising the minimum past the deepest split was
   declined at BD-S2's review: it moves the premise of the cells that open
   at the minimum ring and of the sim's segment rolls. Owner:
   `docs/spec/wal.md` §5.2.

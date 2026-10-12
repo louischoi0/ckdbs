@@ -1395,8 +1395,8 @@ private:
     // `CREATE INDEX` / `DROP INDEX` (docs/spec/index.md §10). One handler
     // for both, for HandleCabin's reason: they share a parse and a reply
     // shape and differ only in which catalog call they reach.
-    // Emits one INDEX_INSERT per index mutation, or a full page image per
-    // page a split restructured. Called **before** the HEAP_INSERT or
+    // Emits one INDEX_INSERT per index mutation, or one BTREE_SPLIT of the
+    // pages a split restructured, with the anchor when it grew a root. Called **before** the HEAP_INSERT or
     // HEAP_OVERWRITE the entries point at (docs/spec/index.md §12.1): a
     // dangling entry is dropped by verification, a row with no entry is
     // lost.
@@ -2232,10 +2232,17 @@ private:
     Status LogSplit(const storage::InsertPlacement& placed, std::uint64_t txn_id, catalog::Oid oid,
                     PageId anchor_page_id);
 
+    // The record both trees' splits take: `pages` as one BTREE_SPLIT and,
+    // when `new_root` is set, the anchor staged into it and the root
+    // adopted after the append (`index_oid` 0 is the clustered root).
+    Status LogTreeSplit(std::span<const PageId> pages, std::uint64_t txn_id,
+                        catalog::Oid rel_oid, std::uint64_t index_oid, PageId new_root,
+                        PageId anchor_page_id);
+
     // One page's full image, logged and the page stamped behind it.
     //
-    // **Four call sites wrote these ten lines identically** - an index split, a
-    // var-heap link edit, a heap structural change, and bulk insert's per-page
+    // **Four call sites wrote these ten lines identically** - an index split
+    // (one BTREE_SPLIT since), a var-heap link edit, a heap structural change, and bulk insert's per-page
     // images - and a fifth lives in `assertion_build.cpp`. An image is the
     // instrument for "no record type describes this change", so the pattern
     // recurs by design; what does not need to recur is the stamp, which is the

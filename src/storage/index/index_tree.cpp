@@ -125,7 +125,7 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, const IndexLeafView
 // reason: `IndexInsert` keeps the descent's exclusive hold on the old leaf
 // across its whole walk up, so a re-descent that meets the leaf waits until
 // the parent carries the separator that routes it past. **A stale root**
-// (`Catalog::UpdateIndexRoot`'s note) fails every attempt alike - it routes
+// (`Catalog::AdoptRoot`'s note) fails every attempt alike - it routes
 // a key outside its subtree to that subtree's rightmost leaf, whose right
 // sibling now bounds it - and exhausts the bound into a retryable refusal
 // instead of an entry placed where no descent from the current root looks.

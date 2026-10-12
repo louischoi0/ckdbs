@@ -632,8 +632,8 @@ cannot serve one on `b`, so answering yes for `b` would stop the compiler
 calling that step a filter scan while leaving it exactly as slow — a lie to
 the access statistics, which is that function's only consumer.
 
-`Catalog::UpdateIndexRoot` is how a root split is recorded, the counterpart
-of `UpdateRelationDescPage` and for the same reason: the storage layer has no
+`Catalog::StageAnchorRoot` and `Catalog::AdoptRoot` are how a root split is recorded - inside the
+split's own `BTREE_SPLIT` (`wal.md` §5.2), as the clustered tree's is - for one reason: the storage layer has no
 catalog, so it reports a new root and something above it writes one down.
 `DropIndex` **retires** the row rather than delete-marking it (a catalog read
 has no snapshot to filter a mark against) and **frees no page at its own
@@ -650,7 +650,7 @@ mask names **leading** key columns only, for the reason `FindIndexOnColumn`
 does.
 
 > **IX12a — `IndexRef::root_page_id` is the one field on `TableAccess` that
-> changes without DDL, so `Catalog::UpdateIndexRoot` updates the cached entry
+> changes without DDL, so `Catalog::AdoptRoot` updates the cached entry
 > **in place** rather than invalidating it.**
 
 A root split republishes the root from inside an ordinary INSERT. Bumping the
@@ -742,7 +742,7 @@ new right sibling.
   that removes index entries revisits the check in the same change
   (`index_tree.hpp`, "Concurrency").
 - **A stale root** - a core whose memo predates a level growth
-  (`Catalog::UpdateIndexRoot` bumps the schema word; the memo drops at the
+  (`Catalog::AdoptRoot` bumps the schema word; the memo drops at the
   next task boundary) - routes a key outside its subtree to a leaf that no
   longer covers it, every attempt alike, and is refused retryable rather than
   placed where no descent from the current root looks. Inside its subtree the

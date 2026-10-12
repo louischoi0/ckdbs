@@ -328,7 +328,7 @@ struct TableAccess {
     // **This is the one field on this struct that can move without DDL, and
     // the exception is deliberate rather than overlooked.** A root split
     // during an ordinary INSERT republishes `root_page_id` through
-    // `Catalog::UpdateIndexRoot()`. **It used to do that with a version
+    // `Catalog::AdoptRoot()`. **It used to do that with a version
     // bump, which dropped this entry and dangled the running statement's
     // `const TableAccess*`; since PW2-4 it writes the anchor and updates
     // this field in place instead, so the entry survives** - the same
