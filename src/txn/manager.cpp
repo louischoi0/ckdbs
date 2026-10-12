@@ -97,30 +97,16 @@ ReadView TransactionManager::MintCheckView(std::uint64_t own_trx_id) const noexc
     view.snapshot_lsn = visibility_->SnapshotCeiling();
     view.own_trx_id = own_trx_id;
     view.visibility = visibility_;
-    // The Cabin's bit (cabin.md section 6a), and the one reason this still
-    // walks `live_`: a set may not be banked from a view that could not see
-    // a transaction in flight. `Begin` mints before it pushes, so the owner
-    // is never its own contemporary here.
-    //
-    // **Two questions since AT-S7, because one store serves every core.**
-    // This core's list answers for this core - and is the whole answer on a
-    // manager with no instance to ask, which is a fixture's shape - and
-    // `AnyUnresolved` answers for every other. A transaction in flight on a
-    // peer writes rows this view cannot see and commits them the moment it
-    // ends, which is the same break the local half has always guarded.
-    for (const std::unique_ptr<Transaction>& t : live_) {
-        if (t->active_ && t->id_ != own_trx_id) {
-            view.in_flight_at_mint = true;
-            break;
-        }
-    }
-    // No null test: a manager handed no instance builds its own
-    // (`manager.hpp`'s constructor), and the two lines above this one
-    // already dereference it. On that own instance `AnyUnresolved` *is*
-    // the local answer, so the list above is what stays sharper - it is
-    // the only one of the two that can exclude this view's own
-    // transaction.
-    if (!view.in_flight_at_mint) view.in_flight_at_mint = visibility_->AnyUnresolved();
+    // The Cabin's bit (cabin.md section 6a): a set may not be banked from a
+    // view that could not see a transaction in flight, on any core, since
+    // one store serves every core. `AnyUnresolved` is the whole answer
+    // (BP-H4): every `Begin` publishes its core's oldest unresolved id
+    // before it returns, and every end republishes after `active_` drops,
+    // so another active transaction on this core already makes it true. It
+    // counts this view's own transaction too, which only errs toward
+    // declining a bank. No null test: a manager handed no instance builds
+    // its own (`manager.hpp`'s constructor).
+    view.in_flight_at_mint = visibility_->AnyUnresolved();
     return view;
 }
 
