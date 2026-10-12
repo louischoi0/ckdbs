@@ -5,10 +5,10 @@
 
 namespace kds::test_support {
 
-std::size_t g_allocations = 0;
-bool g_counting = false;
-std::size_t g_fail_after = 0;
-std::size_t g_fail_seen = 0;
+thread_local std::size_t g_allocations = 0;
+thread_local bool g_counting = false;
+thread_local std::size_t g_fail_after = 0;
+thread_local std::size_t g_fail_seen = 0;
 
 }  // namespace kds::test_support
 
