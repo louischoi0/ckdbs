@@ -1184,3 +1184,79 @@ with its seven-op minimization. Committed seeds all pass.
 fixes. **Mutation:** the refusal turned into a skip fails all three
 retired-kind cells, three runs of three. Overhead not measured; measured
 at the milestone's close.
+
+### BP-S3 — BP-G1: what `cores = 1` no longer pays
+
+Worked on `worktree-bp-per-core-residue` from `1592007e`. **Deviation from
+the stage row:** H1, H2 and H3 land in one commit, because they share one
+arming cell (`ExpeditorTest.TheSharedStructuresAreArmedAboveOneCoreOnly`)
+and the `Expeditor` lines that arm them; H4 and H5 land one commit each.
+
+**The call-site census BP-R1 asks for** `[source-read]` at `1592007e`. The
+instance spawns three threads besides its reactors - the WAL writer
+(`src/wal/writer.cpp`), the log preparer (`src/wal/file_log_device.cpp`)
+and the data syncer (`src/storage/data_syncer.cpp`) - and none of them
+reaches `StatementEpochs`, `InstanceVisibility`'s window or `CabinStore`.
+Every arming site reads `config_.cores`, which `CheckCoreCount` validates
+before `Open`.
+
+**BP-H1** (`StatementEpochs`' two `seq_cst` fences). **V:** at `cores = 1`
+every publish and every read run on the one reactor thread - the statement
+scope, the KWP load endpoint, core 0's reclaim tick, and a test's
+`ReclaimStep()` on the dispatching thread - so program order already puts
+the publish before the read. **Held. C:** the fences are taken only when
+`cores > 1` (`shared()`); a cell in `in_run_reclaim_test.cpp`.
+
+**BP-H2** (the window latch). **V:** its callers - `LookupCommit`,
+`BeginCommit`, `PublishCommit`, `Reclaim`, `window_size` - all run on the
+reactor at `cores = 1`. A default-constructed instance stays armed:
+embedded callers and rigs drive one from several threads
+(`instance_visibility_test.cpp`'s reclaim race). **Held. C:**
+`InstanceVisibility(bool shared = true)`; `Expeditor` passes `cores > 1`.
+
+**BP-H3** (`CabinStore`'s partition and stats latches). **V:** the walk's
+serve, the FK check's serve, the write hook and `CABIN AUTO`'s executor on
+core 0's tick are its only callers, all on the reactor at `cores = 1`.
+**Held. C:** `CabinStore(limits, bool shared = true)`, `Armed()` handing
+`LatchGuard` a null latch when unshared; `Expeditor` passes `cores > 1`.
+
+**BP-H4** (`MintCheckView`'s walk of `live_`). **V:** `Begin` sets
+`active_` (`manager.cpp:148`) and publishes its core's bounds (`:170`)
+before it returns; a commit drops `active_` and republishes (`:313-314`),
+an abort likewise (`:617`, `:626`); `Release` refuses an active
+transaction (`:786`). So `AnyUnresolved()` is true whenever any
+transaction on this core is active, and the walk was OR'd with it: the
+walk added nothing. **Held. C:** the walk deleted; a cell in
+`txn_manager_test.cpp`.
+
+**BP-H5** (the page stream stamp, BP-Q3 (a)). **V:** the stamp's one
+reader was redo's diagnostic, retired by AM-S4(d); `kPageFlagsOffset` is
+read only by `Read/WritePageHeader`, and `record.cpp` loads the envelope's
+`flags` byte without validating it. **Held. C:** nothing writes either
+byte any more - `DevicePageStore::StampPageLsn` and its suppression, the
+mount's `StampSuppression`, redo's `ApplyPageInit` stamp,
+`LoggingCoreOf`, the checkpoint records' and `PAGE_INIT`'s core byte,
+`Get/SetPageStreamStamp`, `SHOW PAGE`'s `stream_stamp=`; the core-id guard
+`CheckLoggableCoreId` and its cell, which existed only because a
+checkpoint record named its core in that byte. **No superblock bump**:
+neither byte has a reader in either direction - a new build ignores an old
+volume's stamps and core bytes, and an old build reads 0.
+`page.md` §2b and `wal.md` §3 say so.
+
+**Review** (`critics-developer`, on the uncommitted diff): no correctness
+bug; H4's comment verified against every `active_` write. **Applied:**
+H5's leftover - `CheckLoggableCoreId`, its two calls and its cell deleted;
+false prose in `redo.hpp` and `page_mgr.cpp`, `page.md`'s offset-2 row,
+`wal.md`'s "is 0" made "written 0"; H2 collapsed onto the constructor form
+the other two use (the post-construction `DisarmWindowLatch()` and its
+"call once" caveat gone, `WindowLatchForTest()` returning null when
+unarmed); the census sentence repeated in three headers cut to a pointer
+here; `CabinStore::shared_`'s duplicated default; a dead include in
+`mount_recovery.cpp`. **Rejected:** none. Also fixed before the review:
+`Checkpointer::AppendEnd` still wrote the core byte (the suite's red
+`APeersCheckpointNamesItsCoreInTheAnchorAndNotInTheRecord`), and a
+`-Wreorder` in `CabinStore`'s initializer list.
+
+**Suite:** 3603/3603 (`ctest -j8`, Debug) at the stack's head; the four commits were not built one by one. **Mutations** (`~/bench-runs/bp-s1/mut_s3.sh`, each built and run three times): H1 (fences forced off), H2 (window latch forced off), H3 (Cabin latches forced off), H4 (`Begin`'s publication removed) and H5 (redo restamping a formatted page) each killed 3/3.
+**BP-G1 cells' A/B:** reported at the close per BP-R6 (BP-R1: it gates
+nothing). Overhead not measured; measured at the milestone's close.

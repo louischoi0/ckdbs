@@ -56,11 +56,7 @@ bool TouchesNoPage(RecordType type) noexcept {
     }
 }
 
-// Formats the page the record describes, then gives it the stamp of the
-// core that logged the record - **not** of the core replaying it. This is
-// the only place redo writes a stamp at all, and the logging core is the
-// only right answer: the stamp is a diagnostic naming the core that last
-// wrote the page (`page_header.hpp`).
+// Formats the page the record describes.
 Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
     auto fields = DecodePageInit(record.payload);
     if (!fields.ok()) {
@@ -75,22 +71,17 @@ Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& 
     // decodes as owner 0, so replaying old log leaves old pages exactly as
     // unattributed as the build that wrote them did.
     const std::uint64_t owner_oid = fields.value().owner_oid;
-    // Every format below clears the header's flags word, which is where the
-    // stamp lives, so the stamp is written after whichever one ran.
-    const std::uint16_t stamp = storage::StreamStampFor(LoggingCoreOf(record.header.flags));
     if (type == PageType::kHeap || type == PageType::kBtreeLeaf) {
         auto view = heap::PageView::CreateEmptyAs(page, fields.value().min_key, type, owner_oid);
         if (!view.ok()) {
             return view.status();
         }
-        storage::SetPageStreamStamp(page, stamp);
         return Status::OK();
     }
     if (type == PageType::kVarHeap) {
         if (Status s = varheap::FormatPage(page, owner_oid); !s.ok()) {
             return s;
         }
-        storage::SetPageStreamStamp(page, stamp);
         return Status::OK();
     }
     if (type == PageType::kCabinBound) {
@@ -106,11 +97,9 @@ Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& 
         if (Status s = storage::cabin::BoundCabinPage::Format(page); !s.ok()) {
             return s;
         }
-        storage::SetPageStreamStamp(page, stamp);
         return Status::OK();
     }
     storage::FormatPage(page, type, /*flags=*/0, owner_oid);
-    storage::SetPageStreamStamp(page, stamp);
     return Status::OK();
 }
 
@@ -476,14 +465,6 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // must follow the mutation: a stamp written first would mark the
         // page done for a change that then failed.
         storage::SetPageLsn(page, record.header.lsn);
-        // No restamp rides it: the recovering core is not the core that
-        // wrote the record, so a restamp would label core 2's pages core
-        // 0's. The stamp decides nothing (`page_header.hpp`); it stays
-        // truthful about which core last
-        // wrote the page. `ApplyPageInit` is the one path that still writes
-        // a stamp, from `LoggingCoreOf(record.header.flags)` - the record's
-        // own core, not the recovering core. An image writes none: its memcpy
-        // restores whatever stamp the captured image carried.
         ++stats.applied;
         return Status::OK();
     };

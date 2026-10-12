@@ -503,23 +503,6 @@ public:
     // history is at cf889b63. `CurrentCore()` is set by the thread, and
     // `CoreRuntime::Open`'s guard supplies it for the whole mount pass.
 
-    // **Suppresses the PL-C stream stamp on the mutation path** for the
-    // length of a recovery pass that is not this core's own (AR0 M0,
-    // AL-R5/AL-R6). Under one stream core 0's mount pass replays and rolls
-    // back records belonging to *every* core, and the stamp names the core
-    // that wrote the page - a diagnostic, so stamping core 0 onto a page
-    // core 2 wrote would mislabel it.
-    //
-    // Redo skips its own restamp under one stream (`wal/redo.cpp`), but
-    // undo's compensations reach this function through the ordinary
-    // mutation path (`txn/recovery_undo.cpp`), so the suppression has to
-    // live here, where every writer passes, rather than at each caller.
-    // The page_lsn is still stamped: idempotence is that field's job.
-    //
-    // Set for the mount pass and cleared after it; a store serving
-    // statements never has it on, so the ordinary write path is unchanged.
-    void SetStampSuppressed(bool suppressed) noexcept { stamp_suppressed_ = suppressed; }
-    bool stamp_suppressed() const noexcept { return stamp_suppressed_; }
 
     // **There is no read predicate**: one frame table serves every core, so
     // every core faults every page. `MayFault` retired (AW-S1b); its history
@@ -1730,9 +1713,6 @@ private:
     // frame - which would also make `Frame` non-movable, and the table
     // moves frames in.
     std::condition_variable_any loading_done_;
-    // See SetStampSuppressed. Off everywhere but inside a single-stream
-    // mount pass.
-    bool stamp_suppressed_ = false;
 
     // FM2: the resident map pages, keyed by region (free_map.hpp's
     // placement arithmetic). Ordered rather than hashed so a flush writes

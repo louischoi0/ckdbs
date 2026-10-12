@@ -1674,24 +1674,6 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
     }
 
     SetPageLsn(std::span<std::byte, kPageSize>(*it->second.bytes), lsn);
-    // PW1c-3, PL §9 rule 4: the core that last wrote the page, a diagnostic
-    // `SHOW PAGE` prints; nothing refuses on it (`page_header.hpp`).
-    //
-    // **Unless this pass is recovering on every core's behalf** (AR0 M0;
-    // the header's `SetStampSuppressed` says why). The page_lsn above is
-    // still stamped, because idempotence is that field's job; what is
-    // withheld is the stream stamp.
-    //
-    // **`CurrentCore()`, not `core_id_`** (AM-S2 step 3, the same argument
-    // the page latch's owner field made). The stamp answers *whose* offset
-    // the page_lsn beside it is, which is a fact about the core that wrote
-    // the record - not about the store the frame happens to live in. They
-    // are the same thing only while each core has a store of its own, and
-    // step 3 ends that.
-    if (!stamp_suppressed_) {
-        SetPageStreamStamp(std::span<std::byte, kPageSize>(*it->second.bytes),
-                           StreamStampFor(CurrentCore()));
-    }
     it->second.MarkDirty(++dirty_gens_);
     // First record since the frame was last written back wins: recLSN is
     // the *oldest* LSN redo must replay to make the page whole, so a later

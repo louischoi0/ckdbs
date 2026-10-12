@@ -34,11 +34,7 @@ inline StatusOr<Lsn> LogPageInit(WalManager* wal, std::uint64_t txn_id, PageId p
     const PageInitPayload fields{min_key, static_cast<std::uint8_t>(type), {0, 0, 0},
                                  /*reserved2=*/0, owner_oid};
     if (auto n = EncodePageInit(buf, fields); !n.ok()) return n.status();
-    // The cast is safe because `WalManager::Open`/`Attach` refuse a core id
-    // the byte could not hold.
-    return wal->Append(RecordSpec{RecordType::kPageInit, txn_id, page_id,
-                                  static_cast<std::uint8_t>(wal->core_id())},
-                       buf);
+    return wal->Append(RecordSpec{RecordType::kPageInit, txn_id, page_id}, buf);
 }
 
 }  // namespace kds::wal

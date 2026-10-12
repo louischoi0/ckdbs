@@ -31,7 +31,7 @@ Fixed 32 bytes at offset 0 of every headered page. Type-specific content begins 
 |---|---|---|---|
 | 0 | 1 | `page_type` | frozen append-only enum: `heap`, `btree_internal`, `btree_leaf`, `undo`, `catalog`, `superblock`, `freemap`, … (`0` = invalid/unformatted) |
 | 1 | 1 | `format_version` | per-type layout version; bumps are format events |
-| 2 | 2 | `flags` | the stream stamp: `core_id + 1` of the core that last wrote the page, 0 = never stamped (§2b) |
+| 2 | 2 | `flags` | unused: written 0, read by nothing (§2b) |
 | 4 | 4 | `checksum` | CRC32C over the full 8 KiB with this field zeroed (§10) |
 | 8 | 8 | `page_lsn` | LSN of the last WAL record applied (wal.md §9); 0 = never logged |
 | 16 | 8 | `relayout_epoch` | bumped when tuples on the page move (`docs/spec/physical-optimizer.md` R4, `heap-and-tuple.md` §3.1a); 0 = never relayouted |
@@ -64,28 +64,14 @@ What it does not give:
 
 **Its consumers:** the anchor's identity check when a relation's access is filled (`catalog.cpp`); a dropped relation's reclaim, which frees a page only when it carries the oid its parent says it should (`drop-table.md` DT1, BF-R3); the one verifier of a remembered location, which misses on a page another relation owns (`exec/tuple_verify.hpp`, BF-R10); and a statement's bind, which checks that a relation's anchor and first page still carry its oid. None of them is a census: there is no scan of the file.
 
-## 2b. The stream stamp
+## 2b. The common `flags` word
 
-The 2-byte `flags` word at offset 2 holds `core_id + 1` of the core that
-last wrote the page, and 0 for a page never written under a log. **It
-decides nothing.** No branch anywhere in the engine reads it; it is a
-diagnostic record, printed by `SHOW PAGE`'s `stream_stamp=` field and
-kept truthful by redo.
-
-Two writers, and they agree by construction:
-
-- **Every logged mutation** stamps the page with the writing core
-  (`device_page_store.cpp`), suppressed for the duration of a mount's
-  recovery so that a replay does not claim another core's pages as the
-  recovering core's (`SetStampSuppressed`, `mount_recovery.cpp`).
-- **Redo's full-page-image restore** stamps from the record's own logging
-  core, so a healed page carries the core that wrote it rather than the
-  core that replayed it.
-
-The field says who wrote a page, and nothing acts on the answer. It is kept rather than
-reclaimed because removing it is a format event and it costs two bytes
-already spent; if a later stage wants those bytes, it takes them with a
-version bump and this section is the whole of what it must replace.
+The 2-byte `flags` word at offset 2 is written 0 by every format and
+**read by nothing**. It held a stream stamp, `core_id + 1` of the core
+that last wrote the page; BP-H5 stopped writing it, so a page last written
+before that carries a stale nonzero value and nothing acts on it. It stays
+in the header because removing it is a format event; a later stage that
+wants the two bytes takes them with a version bump.
 
 ## 3. `PageRef` — the Pinned-Page Handle
 

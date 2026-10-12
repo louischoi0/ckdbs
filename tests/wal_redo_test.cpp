@@ -371,12 +371,9 @@ TEST_F(RedoTest, AnAnchorUpdateAgainstANonAnchorPageIsCorruption) {
     EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
 }
 
-// **The stamp a formatting record writes.** Redo may have to *create* a
-// page whose allocation the crash lost. Created for the recovering core -
-// or left unstamped, which is never a claim - the page could not be
-// reclaimed by the core that owns it at the next mount. So the record names
-// its core, and the page is created for that core.
-TEST_F(RedoTest, ACreatedPageIsStampedForTheCoreThatLoggedIt) {
+// **No stamp** (BP-H5): a page redo creates keeps the `flags` word its
+// format wrote, 0, whatever core's byte the record's envelope carries.
+TEST_F(RedoTest, ACreatedPageCarriesNoStreamStamp) {
     WriteHeapStreamLoggedBy(/*core=*/2);
 
     auto r = Redo((*device_), 0, store_, Analyzed());
@@ -385,58 +382,8 @@ TEST_F(RedoTest, ACreatedPageIsStampedForTheCoreThatLoggedIt) {
 
     auto page = store_.Get(kPage);
     ASSERT_TRUE(page.ok());
-    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), storage::StreamStampFor(2))
-        << "a page redo created was stamped by the recovering core, not the core that logged it";
-}
-
-// Core 0's own records still produce core 0's stamp, so a single-core
-// instance's pages are unchanged.
-TEST_F(RedoTest, APageLoggedByCoreZeroIsStampedForCoreZero) {
-    WriteHeapStreamLoggedBy(/*core=*/0);
-
-    auto r = Redo((*device_), 0, store_, Analyzed());
-    ASSERT_TRUE(r.ok()) << r.status().message();
-
-    auto page = store_.Get(kPage);
-    ASSERT_TRUE(page.ok());
-    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), storage::StreamStampFor(0));
-}
-
-// ---- The stamp redo must not touch (AM-S4(d)) ---------------------------
-
-// Restamping every page it redoes would hand core 2's pages to core 0,
-// which `device_page_store`'s claim-at-fault reads at the next mount as
-// core 0 owning them. The stamp stays a claim; it stopped being a statement
-// about which log the records are in, because there is one.
-TEST_F(RedoTest, RedoLeavesTheOwningCoresStampAlone) {
-    // The page must already exist and be stamped when a record is applied
-    // to it, so: replay once, hand the page to core 2, append a further
-    // record, and replay again. Stamping before the first pass would prove
-    // nothing - the replayed PAGE_INIT reformats the page and clears it.
-    WriteHeapStream(1);
-    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
-    {
-        auto page = store_.Get(kPage);
-        ASSERT_TRUE(page.ok());
-        storage::SetPageStreamStamp(page.value().bytes(), 3);  // core 2 owns it
-    }
-
-    auto s2 = WalStream::Open(device_.get(), 0);
-    ASSERT_TRUE(s2.ok());
-    ASSERT_NE(AppendHeapInsert(*s2.value(), /*slot=*/1, 0xB2), 0u);
-    ASSERT_TRUE(s2.value()->Sync().ok());
-
-    auto r = Redo((*device_), 0, store_, Analyzed());
-    ASSERT_TRUE(r.ok()) << r.status().message();
-    ASSERT_GT(r.value().applied, 0u) << "nothing was applied, so nothing could restamp";
-
-    auto page = store_.Get(kPage);
-    ASSERT_TRUE(page.ok());
-    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), 3u)
-        << "core 0's mount pass took a page away from the core that owns it";
-    // The page_lsn still moved: idempotence is that field's job, not the
-    // ownership byte's.
-    EXPECT_GT(storage::GetPageLsn(page.value().bytes()), 0u);
+    EXPECT_EQ(storage::ReadPageHeader(page.value().bytes()).flags, 0u)
+        << "redo wrote a stream stamp";
 }
 
 // ---- The UNDO_WRITE gap, asserted rather than worked around -------------

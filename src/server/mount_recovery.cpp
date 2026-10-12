@@ -1,7 +1,5 @@
 #include "kds/server/mount_recovery.hpp"
 
-#include "kds/storage/device_page_store.hpp"
-
 #include <optional>
 #include <string>
 #include <utility>
@@ -26,28 +24,6 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     start.anchor_durable_lsn = anchor.durable_lsn;
 
     txn::RecoveryUndo undo(undo_log, wal);
-    // **The whole pass writes without claiming** (AR0 M0, AL-R6). Redo
-    // takes no restamp, but undo's compensations reach the store through
-    // the ordinary mutation path, so the suppression is set here - around
-    // both phases - rather than at either. A guard, so a refused mount
-    // leaves the store as it found it. Unconditional (AM-S4(d)): one
-    // topology mounts.
-    class StampSuppression {
-    public:
-        explicit StampSuppression(storage::PageStore& store) noexcept {
-            device_store_ = dynamic_cast<storage::DevicePageStore*>(&store);
-            if (device_store_ != nullptr) device_store_->SetStampSuppressed(true);
-        }
-        ~StampSuppression() {
-            if (device_store_ != nullptr) device_store_->SetStampSuppressed(false);
-        }
-        StampSuppression(const StampSuppression&) = delete;
-        StampSuppression& operator=(const StampSuppression&) = delete;
-
-    private:
-        storage::DevicePageStore* device_store_ = nullptr;
-    };
-    StampSuppression suppression(store);
 
     auto report = wal::RecoverCore(device, core_id, store, start, &undo, clock);
     if (!report.ok()) {

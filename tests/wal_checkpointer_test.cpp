@@ -412,12 +412,10 @@ bool IsCheckpointRecord(const RecordHeaderFields& header) {
            header.type == static_cast<std::uint8_t>(RecordType::kCheckpointEnd);
 }
 
-// **On a shared stream, which is the topology the byte exists for.** An
-// attached manager serves core 5 while the stream it appends to is the
-// instance's, numbered 0 - so the segment header cannot answer "whose
-// checkpoint is this" and the record must. Opening a per-core stream at
-// core 5 would exercise the one configuration where the byte is redundant.
-TEST_F(CheckpointerTest, APeersCheckpointOnASharedStreamNamesItsOwnCore) {
+// A peer's checkpoint names its core in the anchor it publishes, and its
+// records' envelope byte stays 0 (BP-H5: the byte had one reader, redo's
+// stamp, and the stamp is gone).
+TEST_F(CheckpointerTest, APeersCheckpointNamesItsCoreInTheAnchorAndNotInTheRecord) {
     const CurrentCoreGuard as_peer(5);
     WalManagerConfig shared;
     shared.ring_capacity = kMinRingCapacity;
@@ -442,47 +440,9 @@ TEST_F(CheckpointerTest, APeersCheckpointOnASharedStreamNamesItsOwnCore) {
     for (const RecordHeaderFields& header : RecordsOn(*owner_device.value())) {
         if (!IsCheckpointRecord(header)) continue;
         ++named;
-        EXPECT_EQ(LoggingCoreOf(header.flags), 5u);
-    }
-    EXPECT_EQ(named, 2);
-}
-
-// Core 0's records still hold a zero flags byte, which is why this needed
-// no format event. The golden log pins the same fact by CRC over a whole
-// log; this one names the cause when it breaks.
-TEST_F(CheckpointerTest, CoreZerosRecordsStillCarryAZeroFlagsByte) {
-    const CurrentCoreGuard as_core_0(0);
-    auto zero_device = MemoryLogDevice::Create(kSegmentSize);
-    ASSERT_TRUE(zero_device.ok());
-    auto zero_wal = WalManager::Open(zero_device.value().get(), clock_, /*core_id=*/0);
-    ASSERT_TRUE(zero_wal.ok());
-
-    InMemoryCheckpointAnchor anchor;
-    Checkpointer checkpointer(*zero_wal.value(), target_, txns_, anchor);
-    ASSERT_TRUE(checkpointer.RunToCompletion().ok());
-
-    int seen = 0;
-    for (const RecordHeaderFields& header : RecordsOn(*zero_device.value())) {
-        if (!IsCheckpointRecord(header)) continue;
-        ++seen;
         EXPECT_EQ(header.flags, 0u);
     }
-    EXPECT_EQ(seen, 2);
-}
-
-// The bound sits where a core id enters the WAL layer, so a manager that
-// could not log an honest checkpoint fails at the door rather than
-// degrading into a core that errors every interval forever.
-TEST(WalManagerCoreIdTest, ACoreIdPastTheCheckpointByteIsRefusedAtOpen) {
-    auto device = MemoryLogDevice::Create(kSegmentSize);
-    ASSERT_TRUE(device.ok());
-    sched::ManualClock clock;
-
-    EXPECT_TRUE(WalManager::Open(device.value().get(), clock, 255).ok());
-
-    auto refused = WalManager::Open(device.value().get(), clock, 256);
-    EXPECT_FALSE(refused.ok());
-    EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(named, 2);
 }
 
 }  // namespace

@@ -22,11 +22,7 @@ Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
         return encoded.status();
     }
 
-    // The record says whose checkpoint it is (payload.hpp). The cast is
-    // safe because `WalManager::Open`/`Attach` refuse a core id the byte
-    // could not hold, so a manager that exists has one that fits.
-    auto lsn = wal_.Append({RecordType::kCheckpointBegin, kNoTxnId, kInvalidPageId,
-                            static_cast<std::uint8_t>(wal_.core_id())},
+    auto lsn = wal_.Append({RecordType::kCheckpointBegin, kNoTxnId, kInvalidPageId},
                            std::span(payload_scratch_).first(encoded.value()));
     if (!lsn.ok()) {
         return lsn.status();
@@ -297,8 +293,7 @@ StatusOr<Lsn> Checkpointer::AppendEnd() {
     if (!encoded.ok()) {
         return encoded.status();
     }
-    return wal_.Append({RecordType::kCheckpointEnd, kNoTxnId, kInvalidPageId,
-                        static_cast<std::uint8_t>(wal_.core_id())},
+    return wal_.Append({RecordType::kCheckpointEnd, kNoTxnId, kInvalidPageId},
                        std::span(payload_scratch_).first(encoded.value()));
 }
 

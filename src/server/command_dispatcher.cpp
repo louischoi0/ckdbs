@@ -2122,7 +2122,6 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
         os << "page_id=" << page_id << "\\n"
            << "page_type=BTREE_INTERNAL\\n"
            << "page_lsn=" << storage::GetPageLsn(page.value().bytes()) << "\\n"
-           << "stream_stamp=" << storage::GetPageStreamStamp(page.value().bytes()) << "\\n"
            << "level=" << node.level() << "\\n"
            << "nr_entries=" << node.entry_count() << "\\n"
            << "max_entries=" << btree::kInternalMaxEntries << "\\n"
@@ -2152,10 +2151,7 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
     std::ostringstream os;
     os << "page_id=" << page_id << "\\n"
        << "page_type=" << (is_leaf ? "BTREE_LEAF" : "HEAP") << "\\n"
-       // The page's LSN and its stream stamp, a diagnostic (the f19ead1
-       // review's observability gap); this is where it is read.
        << "page_lsn=" << storage::GetPageLsn(page.value().bytes()) << "\\n"
-       << "stream_stamp=" << storage::GetPageStreamStamp(page.value().bytes()) << "\\n"
        << "min_key=" << view.min_key() << "\\n"
        << "nr_slots=" << view.slot_count() << "\\n"
        << "lower=" << view.lower() << "\\n"

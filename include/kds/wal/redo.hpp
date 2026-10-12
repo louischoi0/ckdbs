@@ -88,9 +88,8 @@ struct RedoStats {
 // the scan ends with one still poisoned is that Corruption. That ordering
 // is why the FPI exists.
 //
-// Redo neither refuses a foreign stream stamp nor restamps what it applies:
-// there is one stream (AM-S4(d)). A page-formatting record still stamps the
-// page for the core the record itself names, a diagnostic (`page_header.hpp`).
+// Redo writes no stream stamp (page.md section 2b): a formatted page's
+// flags word is 0.
 StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::PageStore& store,
                          const AnalysisResult& analysis);
 

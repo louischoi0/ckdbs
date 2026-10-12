@@ -453,45 +453,6 @@ StatusOr<std::size_t> EncodeBtreeSplit(std::span<std::byte> out,
                                        std::span<const BtreeSplitImage> images);
 StatusOr<std::vector<BtreeSplitImage>> DecodeBtreeSplit(std::span<const std::byte> in);
 
-// ---- Which core appended a record (AR0 M0, AL-R4/AL-R5/AL-R6) ----------
-//
-// There is one stream, so every core's records interleave in the same log,
-// and two kinds of
-// record cannot do their job without saying whose they are:
-//
-//   `CHECKPOINT_BEGIN`/`END`  a dirty table belongs to one core's pool, so
-//                             a checkpoint that cannot be attributed cannot
-//                             be applied to the right one.
-//   `PAGE_INIT`               redo may have to *create* the page, and the
-//                             page it creates carries the stamp
-//                             (`docs/spec/page.md` §2b). Created for the
-//                             recovering core rather than the logging one,
-//                             the page would record the wrong writer. That
-//                             is a diagnostic fact, and keeping it truthful
-//                             costs a byte already in the envelope.
-//
-// It rides the envelope's **per-type `flags` byte** (`record.hpp`), not the
-// payload, and that is a departure from AL-R2's letter which AL-R4 records.
-// `CHECKPOINT_BEGIN`'s payload is a fixed header followed by two
-// variable-length tables, so a field in the header shifts every entry and a
-// field at the tail is readable only by inferring its presence from the
-// record's length. The envelope has a byte set aside for exactly this kind
-// of per-type fact, and `ASSERT_ROLLBACK` uses a bit of it the same way.
-//
-// **It is not a format event.** Both records have been appended with
-// `flags = 0` since they existed and nothing has ever read the byte, so
-// every record ever written already says "core 0" - which is what a record
-// **in stream 0** is. One byte covers
-// `kMaxCores`, and the bound is enforced where a core id enters the WAL
-// layer at all - `WalManager::Open`/`Attach` - not here.
-
-// The core that appended the record. 0 for every record written before the
-// byte carried this, which is what those records mean - they are in core
-// 0's stream.
-inline std::uint32_t LoggingCoreOf(std::uint8_t flags) noexcept {
-    return static_cast<std::uint32_t>(flags);
-}
-
 // ---- CHECKPOINT_BEGIN ----------------------------------------------------
 //
 // The two tables recovery's analysis phase starts from (wal.md sections 11,
