@@ -429,6 +429,11 @@ public:
     // on this stack.
     Status SyncAll();
 
+    // `Append`, and the record's segment sealed in the same hold of the
+    // stream latch (`WalStream::AppendAndSeal`): `BACKUP STOP`'s, so a
+    // backup's stop is where its log ends (BR-S2). Not a sync.
+    StatusOr<Lsn> AppendAndSeal(const RecordSpec& spec, std::span<const std::byte> payload);
+
     // **Non-blocking**: stages the bytes and asks the writer for a sync,
     // without waiting for one. The drain's path on an attached manager,
     // where a tick may not hold the reactor, and a checkpoint task's on any
@@ -438,6 +443,11 @@ public:
     Status RequestSyncNow();
 
 private:
+    // `Append` and `AppendAndSeal`'s one body: the stream call, the ring's
+    // bounded drain-and-retry, and the counters.
+    StatusOr<Lsn> AppendThrough(const RecordSpec& spec, std::span<const std::byte> payload,
+                                bool seal);
+
     WalManager(WalStream* stream, std::unique_ptr<WalStream> owned_stream, WalWriter* writer,
                const sched::Clock& clock, std::uint32_t core_id, WalManagerConfig config);
 

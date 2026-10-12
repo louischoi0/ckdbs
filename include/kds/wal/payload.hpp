@@ -169,6 +169,27 @@ StatusOr<std::size_t> EncodeTxnPrepare(std::span<std::byte> out,
                                        const TxnPreparePayload& fields);
 StatusOr<TxnPreparePayload> DecodeTxnPrepare(std::span<const std::byte> in);
 
+// ---- BACKUP_BEGIN / BACKUP_END (BR-S2) ----------------------------------
+//
+// One shape for both: the backup's id and the start LSN its window opened
+// at - the durable redo start `BACKUP START` pinned (BR-R3). The END repeats
+// the start so a reader of the log alone can bound the window from either
+// record.
+struct BackupMarkPayload {
+    std::uint64_t backup_id;
+    std::uint64_t start_lsn;
+};
+
+inline constexpr std::size_t kBackupMarkIdOffset = 0;
+inline constexpr std::size_t kBackupMarkStartOffset = 8;
+inline constexpr std::size_t kBackupMarkPayloadSize = 16;  // 8 + 8
+
+static_assert(offsetof(BackupMarkPayload, backup_id) == kBackupMarkIdOffset);
+static_assert(offsetof(BackupMarkPayload, start_lsn) == kBackupMarkStartOffset);
+
+StatusOr<std::size_t> EncodeBackupMark(std::span<std::byte> out, const BackupMarkPayload& fields);
+StatusOr<BackupMarkPayload> DecodeBackupMark(std::span<const std::byte> in);
+
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
 //
 // One shape for both: an insert names a new slot, an overwrite names an

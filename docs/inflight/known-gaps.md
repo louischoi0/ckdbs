@@ -1126,6 +1126,41 @@ closed 2026-10-11 at `ec827a19`).
   had the same window before BI; BI-Q12 closed the step's, which was a
   whole run long. Not measured.
 
+## Backup and restore (BR)
+
+Verified on `br-backup-restore` (BR's close). Owned by `docs/spec/backup.md`;
+the procedures are `manual/server/backup-restore.md`.
+
+- **Not built** (BR §0.2): incremental backup, compression and encryption of
+  a backup or the archive, a native object-storage target, a parallel copy,
+  concurrent backups, a logical dump, a streaming standby.
+- **A torn page from the device is refused, not healed.** A snapshot that
+  does not freeze the filesystem (a cloud disk snapshot) is a crash image,
+  and the per-checkpoint image cadence of `wal.md` §10 is not built, so a
+  page torn in it refuses the restore's mount. Path B's copy cannot tear (the
+  fence); path D needs a freezing snapshot.
+- **A restore leaks**: a page the source freed after the copier read its
+  map region stays allocated in the restore, as after a crash; Waystone
+  pages and `sys.access_stats`' chain, made unreachable at the restore's
+  mount (`DiscardAdvisoryState`), stay allocated where they were written.
+- **PITR targets an LSN, not a time**: the commit record carries no time
+  (BR-Q5 (b)). An operator notes `SHOW META`'s `wal_durable_lsn`.
+- **`kds_backup` reaches the admin role only on an `auth = off` server**:
+  `tools/kwp.py` has no SCRAM or TLS.
+- **The LVM reference script is not run here**: the development VM grants no
+  root (`br-s0-census.md` H9); path D's drills use the freeze script.
+- **An `archive_command` that hangs holds the archive**: it is not timed out,
+  only ended at shutdown; the archive's lag and `wal_archive_blocking` are
+  what an operator watches.
+- **The copier's rate (256 MiB/s), the fail-closed reserve (4 segments) and
+  the hour that ends an idle backup are `[provisional]`**, with BR-S10's
+  numbers in `bench/v3.0.0/`.
+- **Two engine defects BR found and did not fix**, each in `bugs/`: a full
+  page image cannot heal an allocated checksum-failed page, and a
+  synchronous anchor publish writes page 0 beside the pages it stands for.
+  An unlogged Waystone page can lose its allocation bit at a crash (the
+  backup's form of it is closed by copying the maps after the stop).
+
 ## Decisions the revision has not taken
 
 - **AR0's D1–D16: four are taken, one of them against AR0's own

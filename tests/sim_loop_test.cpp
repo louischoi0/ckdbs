@@ -99,6 +99,30 @@ TEST(SimLoop, CleanRunsHoldOnEveryCommittedSeed) {
     }
 }
 
+// BR-S8: every committed seed, in every mode, takes a base backup across a
+// window of its ops - checkpoints, writebacks, recycling and reclaims
+// running under the copy - and the backup restores to exactly the oracle at
+// its stop. Waystone and the Cabin store on, since their pages are the
+// unlogged ones a restore must not trust.
+TEST(SimLoop, ABackupTakenAcrossTheRunRestoresToItsStopOnEveryCommittedSeed) {
+    for (const SimMode mode : {SimMode::kClean, SimMode::kSyncCrash, SimMode::kCrash}) {
+        for (const std::uint64_t seed : CommittedSeeds()) {
+            SimConfig config;
+            config.seed = seed;
+            config.ops = 600;
+            config.iterations = 2;
+            config.mode = mode;
+            config.backup = true;
+            FeatureToggles on;
+            on.waystone = on.cabins = on.access_statistics = true;
+            config.toggles = on;
+            const SimVerdict verdict = RunSimulation(config);
+            EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
+            EXPECT_GT(verdict.backups_restored, 0u) << verdict.Summary(config);
+        }
+    }
+}
+
 TEST(SimLoop, SyncCrashKeepsEverySyncedRowOnEveryCommittedSeed) {
     for (const std::uint64_t seed : CommittedSeeds()) {
         SimConfig config;

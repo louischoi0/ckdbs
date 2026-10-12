@@ -8,7 +8,9 @@
 
 #include "kds/base/fail_stop.hpp"
 #include "kds/server/config_file.hpp"
+#include "kds/server/backup_manifest.hpp"
 #include "kds/server/expeditor.hpp"
+#include "kds/server/restore.hpp"
 #include "kds/server/stop_signal.hpp"
 
 // auth.hpp is OpenSSL-free and safe to include in every build; only the
@@ -44,6 +46,10 @@ constexpr const char* kUsage =
     "                  [--log-file <name>] [--log-dir <dir>] [--log-level <level>]\n"
     "       kds_server --add-user <name> [--role readonly|readwrite|admin]\n"
     "                  [--users-file <path>] [--config <path>]\n"
+    "       kds_server --restore-from <backup_dir> [--restore-data <file>]\n"
+    "                  [--restore-archive <dir>] [--restore-target <lsn>|latest]\n"
+    "                  [--restore-only] [<data_file>] [--config <path>] ...\n"
+    "       kds_server --verify-backup <backup_dir>\n"
     "\n"
     "  --config <path>   key = value settings file; see docs/spec/client-manual.md\n"
     "  --debug-text-port <n>\n"
@@ -52,6 +58,17 @@ constexpr const char* kUsage =
     "  <data_file>       positional, overrides data_file from the config\n"
     "  --add-user <name> provision a SCRAM-SHA-256 user into the users file\n"
     "                    (prompts for the password; the server does not run)\n"
+    "  --restore-from <backup_dir>\n"
+    "                    lay the backup out as the configured data_file and\n"
+    "                    wal_dir (which must hold nothing), recover it past its\n"
+    "                    stop, then serve - or exit, with --restore-only\n"
+    "  --restore-data <file>   a snapshot backup's (path D) data file\n"
+    "  --restore-archive <dir> the WAL archive a target past the stop reads\n"
+    "  --restore-target <lsn>|latest\n"
+    "                    replay past the stop to the first record at or past\n"
+    "                    <lsn>, or through every archived segment\n"
+    "  --verify-backup <backup_dir>\n"
+    "                    check a backup's manifest and every file it names\n"
     "\n"
     "Config keys: data_file, port, wal_dir, checkpoint_interval_ms,\n"
     "             tls, tls_cert_file, tls_key_file, auth, users_file,\n"
@@ -192,6 +209,11 @@ struct CliMode {
     // `--add-user` can be refused instead of silently ignored - a flag
     // accepted and not acted on is a lie about what the process did.
     std::optional<kds::server::Role> role;
+    // Restore (BR-S6, S7): lay a backup out, then recover and serve, or
+    // recover and exit with `restore_only`.
+    kds::server::RestoreRequest restore;
+    bool restore_only = false;
+    std::string verify_backup;
 };
 
 // Returns false and prints why on a bad argument list.
@@ -285,6 +307,30 @@ bool ParseArgs(int argc, char** argv, kds::server::Expeditor::Config& config, Cl
                 return false;
             }
             mode.role = role.value();
+        } else if (arg == "--restore-from" || arg == "--restore-data" ||
+                   arg == "--restore-archive" || arg == "--verify-backup") {
+            const char* v = next(argv[i]);
+            if (v == nullptr) return false;
+            std::string& field = arg == "--restore-from"      ? mode.restore.backup_dir
+                                 : arg == "--restore-data"    ? mode.restore.data_file_from
+                                 : arg == "--restore-archive" ? mode.restore.archive_dir
+                                                              : mode.verify_backup;
+            field = v;
+        } else if (arg == "--restore-target") {
+            const char* v = next("--restore-target");
+            if (v == nullptr) return false;
+            if (std::string_view(v) == "latest") {
+                mode.restore.target_latest = true;
+            } else {
+                char* end = nullptr;
+                mode.restore.target_lsn = std::strtoull(v, &end, 10);
+                if (end == v || *end != '\0' || mode.restore.target_lsn == 0) {
+                    std::cerr << "--restore-target is an lsn or 'latest', got '" << v << "'\n";
+                    return false;
+                }
+            }
+        } else if (arg == "--restore-only") {
+            mode.restore_only = true;
         } else if (arg == "--users-file") {
             const char* v = next("--users-file");
             if (v == nullptr) return false;
@@ -321,6 +367,48 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // A backup verified where it lies (BR-S8): its manifest, and every file
+    // it names against its size and checksum. Nothing runs.
+    if (!mode.verify_backup.empty()) {
+        auto manifest = kds::server::ReadManifest(mode.verify_backup);
+        kds::Status s = manifest.ok()
+                            ? kds::server::VerifyBackupFiles(mode.verify_backup, manifest.value())
+                            : manifest.status();
+        if (!s.ok()) {
+            std::cerr << "backup not valid: " << s.message() << "\n";
+            return EXIT_FAILURE;
+        }
+        const auto& m = manifest.value();
+        std::cout << "backup " << m.backup_id << " valid: path " << m.path << ", lsn "
+                  << m.start_lsn << " .. " << m.stop_lsn << ", segments " << m.start_segment
+                  << " .. " << m.stop_segment << ", " << m.files.size() << " files, lineage "
+                  << m.lineage_id << ", written by " << m.engine << "\n";
+        return EXIT_SUCCESS;
+    }
+    const bool restoring = !mode.restore.backup_dir.empty();
+    if (!restoring && (mode.restore_only || !mode.restore.data_file_from.empty() ||
+                       !mode.restore.archive_dir.empty() || mode.restore.target_lsn != 0 ||
+                       mode.restore.target_latest)) {
+        std::cerr << "--restore-data, --restore-archive, --restore-target and --restore-only "
+                     "only apply to --restore-from\n"
+                  << kUsage;
+        return EXIT_FAILURE;
+    }
+    if (restoring) {
+        mode.restore.data_file = config.data_file;
+        mode.restore.wal_dir = config.wal_dir.empty() ? config.data_file + ".wal" : config.wal_dir;
+        kds::server::RestoreLayout layout;
+        if (kds::Status s = kds::server::LayOutRestore(mode.restore, &layout); !s.ok()) {
+            std::cerr << "restore failed: " << s.message() << "\n";
+            return EXIT_FAILURE;
+        }
+        std::cout << "backup " << layout.backup_id << " laid out: lsn " << layout.start_lsn
+                  << " .. " << layout.stop_lsn;
+        if (layout.cut_lsn != 0) std::cout << ", cut at lsn " << layout.cut_lsn;
+        std::cout << ", segments to " << layout.last_segment << ", new lineage "
+                  << layout.lineage_id << "; recovering" << std::endl;
+    }
+
     if (!mode.add_user.empty()) {
 #if KDS_WITH_TLS
         return AddUser(config.users_file, mode.add_user,
@@ -354,6 +442,13 @@ int main(int argc, char** argv) {
     }
     auto& db = *expeditor.value();
     db.set_stop_signal(&stop_signal.value());
+    if (restoring) {
+        // The mount recovered past the stop or did not open (BR-R2).
+        std::cout << "restore of backup " << db.recovery().restore_backup_id
+                  << " recovered past its stop lsn " << db.recovery().restore_stop_lsn
+                  << std::endl;
+        if (mode.restore_only) return EXIT_SUCCESS;
+    }
 
     std::cout << "ckdbs on " << db.config().data_file << ": "
               << db.store().allocated_pages() << " pages, superblock version "

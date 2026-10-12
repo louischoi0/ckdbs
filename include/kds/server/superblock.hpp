@@ -271,7 +271,13 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // sit in the bits that are the id's now, on their pages and inside every
 // `ASSERT_RESERVE`/`ASSERT_BUILD` record. Refused with no migration, the
 // standing order of 2026-10-07 applied once more.
-inline constexpr std::uint32_t kSuperBlockVersion = 22;
+//
+// 23 (BR, `instructions/v3.0.0/br-s0-census.md` §2): the archive lineage and
+// the backup a restore is owed for follow `core_count`. A version-22 image would
+// read them as zero - no lineage, no restore owed - which is true of it, but
+// the standing order refuses it all the same rather than mount an image
+// this build did not write.
+inline constexpr std::uint32_t kSuperBlockVersion = 23;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //
@@ -360,6 +366,25 @@ struct SuperBlockFields {
     // outright - a version-9 image decodes this field out of the reserved
     // tail as 0, and "boot with no cores" is not a state to carry forward.
     std::uint32_t core_count;
+
+    // ---- Backup and restore (BR, br-s0-census.md section 2) -----------
+    //
+    // `lineage_id` names the history this volume's log belongs to, and is
+    // carried in every archived segment's name (BR-R10): a restore that
+    // opens writes log under segment numbers the original also wrote past
+    // the same point, so each restore takes a fresh id before it writes
+    // anything. Drawn at creation; 0 only on an image built outside
+    // `BootstrapDatabase`.
+    std::uint64_t lineage_id;
+    // A restore owed (BR-R2): nonzero means this volume was laid out from
+    // that backup and has not yet been recovered past its stop. **The
+    // window itself lives in anchor slot 0**, which the restore rewrote to
+    // `{0, start, stop, segment(start)}` (BR-R4: the backup's start, never
+    // the copied anchor; the stop as the durable point analysis refuses to
+    // end short of) - one authority, not two copies to keep in step. The
+    // first anchor published after the mount clears this in the same page
+    // image, so a crash before it mounts the restore again from the start.
+    std::uint64_t restore_backup_id;
 };
 
 inline constexpr std::size_t kMagicOffset = 0;
@@ -439,6 +464,11 @@ static_assert(sizeof(WalAnchorFields) == kWalAnchorEntrySize);
 // configuration, it is a typo.
 Status CheckCoreCount(std::uint32_t cores);
 
+// A fresh archive lineage id (BR-R10): random, never 0. Drawn when a volume
+// is created and when a restore lays one out, so two histories that share
+// segment numbers never share archive names.
+std::uint64_t DrawLineageId();
+
 inline constexpr std::size_t kWalAnchorTableOffset = 40;
 static_assert(kWalAnchorTableOffset % alignof(std::uint64_t) == 0);
 inline constexpr std::size_t kWalAnchorTableSize = kMaxWalCores * kWalAnchorEntrySize;
@@ -456,7 +486,12 @@ static_assert(kNextTrxIdOffset % alignof(std::uint64_t) == 0);
 inline constexpr std::size_t kCoreCountOffset = kNextTrxIdOffset + sizeof(std::uint64_t);
 static_assert(kCoreCountOffset % alignof(std::uint32_t) == 0);
 
-inline constexpr std::size_t kSuperBlockUsedSize = kCoreCountOffset + sizeof(std::uint32_t);
+// Appended past core_count, 8-aligned (v23, BR): no existing offset moves.
+inline constexpr std::size_t kLineageIdOffset = kCoreCountOffset + 8;
+inline constexpr std::size_t kRestoreBackupIdOffset = kLineageIdOffset + 8;
+static_assert(kLineageIdOffset % alignof(std::uint64_t) == 0);
+
+inline constexpr std::size_t kSuperBlockUsedSize = kRestoreBackupIdOffset + sizeof(std::uint64_t);
 
 static_assert(kSuperBlockBodyOffset + kSuperBlockUsedSize <= kPageSize);
 
@@ -599,6 +634,18 @@ public:
     // times before the AL-S9 review found the next three already live in
     // `SHOW META`. `Open` now refuses a config with no image, which is why
     // there is no longer a list of fields a peer may ask about.
+
+    // ---- Backup and restore (BR) -----------------------------------------
+
+    std::uint64_t lineage_id() const noexcept { return fields_.lineage_id; }
+    void SetLineageId(std::uint64_t lineage) noexcept { fields_.lineage_id = lineage; }
+
+    // The backup a restore is owed for, 0 when none is (see SuperBlockFields;
+    // its window is anchor slot 0). In-memory only, durable once page 0 is
+    // encoded and synced.
+    std::uint64_t restore_backup_id() const noexcept { return fields_.restore_backup_id; }
+    bool restore_owed() const noexcept { return fields_.restore_backup_id != 0; }
+    void SetRestoreBackupId(std::uint64_t id) noexcept { fields_.restore_backup_id = id; }
 
     // Stamps last_mount_time to `now_unix_seconds` (call once per boot,
     // after Decode()/CreateFresh() succeeds).

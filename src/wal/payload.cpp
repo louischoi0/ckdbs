@@ -169,6 +169,25 @@ StatusOr<AnchorUpdatePayload> DecodeAnchorUpdate(std::span<const std::byte> in) 
     return fields;
 }
 
+// ---- BACKUP_BEGIN / BACKUP_END ------------------------------------------
+
+StatusOr<std::size_t> EncodeBackupMark(std::span<std::byte> out, const BackupMarkPayload& fields) {
+    if (Status s = CheckOutputSize(out, kBackupMarkPayloadSize, "BACKUP_MARK"); !s.ok()) {
+        return s;
+    }
+    Store<std::uint64_t>(out, kBackupMarkIdOffset, fields.backup_id);
+    Store<std::uint64_t>(out, kBackupMarkStartOffset, fields.start_lsn);
+    return kBackupMarkPayloadSize;
+}
+
+StatusOr<BackupMarkPayload> DecodeBackupMark(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kBackupMarkPayloadSize, "BACKUP_MARK"); !s.ok()) return s;
+    BackupMarkPayload fields{};
+    fields.backup_id = Load<std::uint64_t>(in, kBackupMarkIdOffset);
+    fields.start_lsn = Load<std::uint64_t>(in, kBackupMarkStartOffset);
+    return fields;
+}
+
 // ---- TXN_PREPARE ---------------------------------------------------------
 
 StatusOr<std::size_t> EncodeTxnPrepare(std::span<std::byte> out,

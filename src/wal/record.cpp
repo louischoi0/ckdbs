@@ -56,6 +56,8 @@ const char* RecordTypeName(RecordType type) noexcept {
         case RecordType::kVarHeapRelease: return "VARHEAP_RELEASE";
         case RecordType::kBtreeInsert: return "BTREE_INSERT";
         case RecordType::kBtreeSplit: return "BTREE_SPLIT";
+        case RecordType::kBackupBegin: return "BACKUP_BEGIN";
+        case RecordType::kBackupEnd: return "BACKUP_END";
         case RecordType::kIndexInsert: return "INDEX_INSERT";
         case RecordType::kAssertReserve: return "ASSERT_RESERVE";
         case RecordType::kAssertCommit: return "ASSERT_COMMIT";

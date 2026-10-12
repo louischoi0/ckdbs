@@ -1,5 +1,7 @@
 #include "kds/server/expeditor.hpp"
 
+#include "kds/server/restore.hpp"
+
 
 #include <pthread.h>
 #include <sched.h>
@@ -61,7 +63,8 @@ std::string Expeditor::Config::LogPath() const {
 }
 
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
-    return {"data_file",  "port",     "wal_dir",  "checkpoint_interval_ms", "durability",
+    return {"data_file",  "port",     "wal_dir",  "archive_dir", "archive_command",
+            "checkpoint_interval_ms", "durability",
             "tls",        "tls_cert_file",        "tls_key_file",
             "auth",       "users_file",
             "isolation",             "default_key_mode",
@@ -235,6 +238,24 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetString("wal_dir");
         if (!v.ok()) return v.status();
         wal_dir = std::move(v.value());
+    }
+    // The WAL archive (BR-S4): on when one of the two is set, and only one
+    // may be - two destinations for one segment would be two archives whose
+    // agreement nothing checks.
+    if (file.Has("archive_dir")) {
+        auto v = file.GetString("archive_dir");
+        if (!v.ok()) return v.status();
+        archive.archive_dir = std::move(v.value());
+    }
+    if (file.Has("archive_command")) {
+        auto v = file.GetString("archive_command");
+        if (!v.ok()) return v.status();
+        archive.archive_command = std::move(v.value());
+    }
+    if (!archive.archive_dir.empty() && !archive.archive_command.empty()) {
+        return Status::InvalidArgument(file.origin() +
+                                       ": archive_dir and archive_command are two destinations "
+                                       "for one archive; set one");
     }
     // The buffer pool's maximum (BE-R3): **required**. A file without it is
     // refused here rather than run with some pool the operator did not
@@ -843,7 +864,26 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // or are leftovers of a removal a crash cut short, and this mount neither
     // reads nor deletes them - the completion checkpoint's publish does the
     // latter. An anchor of 0 has never been published, and recycles nothing.
-    const WalAnchorFields mount_anchor = expeditor->database_->superblock.wal_anchor(0);
+    //
+    // **A restore owed starts at the backup's start, never at the copied
+    // anchor** (BR-R4, `br-s0-census.md` §2): a fuzzy copy's page 0 can carry
+    // an anchor above pages copied before it was written, and recovering
+    // from there would skip records those pages need. `MarkRestoreOwed`
+    // rewrote slot 0 to the backup's start with the stop as its durable
+    // point, which analysis refuses to end short of (BR-R2), so slot 0 is
+    // the one value read by the log's open, recovery and the assertion
+    // resume; the restore fields name the backup.
+    const SuperBlock& mounted = expeditor->database_->superblock;
+    const WalAnchorFields mount_anchor = mounted.wal_anchor(0);
+    const std::uint64_t restoring = mounted.restore_backup_id();
+    if (restoring != 0 && expeditor->logger_->enabled(LogLevel::kInfo)) {
+        expeditor->logger_->Info(
+            "expeditor", "restore owed for backup " + std::to_string(restoring) +
+                             ": recovering from lsn " +
+                             std::to_string(mount_anchor.redo_start_lsn) +
+                             ", opening only past the stop lsn " +
+                             std::to_string(mount_anchor.durable_lsn));
+    }
     auto log_device = wal::FileLogDevice::Open(
         expeditor->config_.wal_dir, /*core_id=*/0, wal::kDefaultSegmentSize,
         mount_anchor.redo_start_lsn != 0 ? mount_anchor.segment_no : 0);
@@ -965,11 +1005,28 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     std::optional<storage::DrainOnPressure> mount_drain;
     mount_drain.emplace(*expeditor->store_);
     auto recovered = RecoverCoreAtMount(
-        /*core_id=*/0, expeditor->database_->superblock.wal_anchor(0), *expeditor->log_device_,
-        *expeditor->store_, *expeditor->undo_log_, &*expeditor->wal_, &*expeditor->logger_,
-        &expeditor->clock_);
-    if (!recovered.ok()) return recovered.status();
+        /*core_id=*/0, mount_anchor, *expeditor->log_device_, *expeditor->store_,
+        *expeditor->undo_log_, &*expeditor->wal_, &*expeditor->logger_, &expeditor->clock_);
+    if (!recovered.ok()) {
+        if (restoring != 0) {
+            // BR-R2/BR-R8, named: a restore that does not complete does not
+            // open, and the operator is told which backup and which window.
+            return recovered.status().WithMessage(
+                "restore of backup " + std::to_string(restoring) + " (start lsn " +
+                std::to_string(mount_anchor.redo_start_lsn) + ", stop lsn " +
+                std::to_string(mount_anchor.durable_lsn) + " in segment " +
+                std::to_string((mount_anchor.durable_lsn - 1) / wal::kDefaultSegmentSize) +
+                ") did not complete; the instance does not open: " +
+                recovered.status().message());
+        }
+        return recovered.status();
+    }
     expeditor->recovery_ = recovered.value();
+    if (restoring != 0) {
+        expeditor->recovery_.restore_backup_id = restoring;
+        expeditor->recovery_.restore_redo_start = mount_anchor.redo_start_lsn;
+        expeditor->recovery_.restore_stop_lsn = mount_anchor.durable_lsn;
+    }
     // BF-R4's gate for a tombstone this mount finds pending: where the scan
     // ended. Not the append point after undo - a compensation's recLSN
     // holds the completion checkpoint's redo start below that, and no
@@ -1017,6 +1074,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // failing one.
     auto stats_reset = expeditor->database_->catalog.ResetAccessStatsIfDamaged();
     if (!stats_reset.ok()) return stats_reset.status();
+    // **A restore's unlogged state is not trusted** (BR-S8, `restore.hpp`):
+    // Waystone directories and the access statistic, both advisory, made
+    // unreachable before anything can follow them to a page the layout gave
+    // back. Here, after recovery and before the completion checkpoint that
+    // persists it.
+    if (restoring != 0) {
+        if (Status s = DiscardAdvisoryState(expeditor->database_->catalog); !s.ok()) return s;
+    }
 
     // H7: collect the spills nothing points at. The assertion catalog -
     // `exec::LogChainInsert`'s one remaining caller since `sys.pattern_defs`
@@ -1150,7 +1215,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // `checkpoint_lsn` arm beside this one was the per-core anchor's.
     expeditor->recovery_ = ResumeAssertionsAfterRecovery(
         expeditor->database_->catalog, *expeditor->store_, *expeditor->log_device_,
-        /*stream_core=*/0, expeditor->database_->superblock.wal_anchor(0).redo_start_lsn,
+        /*stream_core=*/0, mount_anchor.redo_start_lsn,
         expeditor->dispatcher_->assertions(), expeditor->recovery_, &*expeditor->logger_);
 
     // **The completion checkpoint** (RC08), which is what makes the next
@@ -1178,8 +1243,42 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // **Recycling** (BC-R5): every durable advance of the redo start, on
     // whichever core published it, reaches core 0's log, whose writer
     // thread removes the files.
+    //
+    // **Through the backup control** (BR-R3, `br-s0-census.md` §3 item 4): an
+    // open backup's pin bounds what is removed, and the bound is computed
+    // under the same hold `BACKUP START` reads `D` and pins it in.
+    expeditor->backup_.emplace(BackupControl::Wiring{
+        expeditor->config_.wal_dir, wal::kDefaultSegmentSize,
+        expeditor->database_->superblock.lineage_id(), expeditor->database_->superblock.version(),
+        expeditor->device_.get(),
+        [anchor = &*expeditor->checkpoint_anchor_] { return anchor->durable_redo_start(); },
+        [store = expeditor->store_.get()] { return store->WriteMaps().status(); },
+        &*expeditor->logger_});
+    // **And the archive's floor** (BR-S4, T7): no segment is removed before
+    // it is archived. The archiver starts from the live log's first segment.
+    if (expeditor->config_.archive.enabled()) {
+        expeditor->archiver_.emplace(WalArchiver::Wiring{
+            expeditor->config_.archive, expeditor->config_.wal_dir,
+            expeditor->database_->superblock.lineage_id(), wal::kDefaultSegmentSize,
+            // From the lowest segment on disk: a previous run's leftovers
+            // below the anchor may not have been archived when it stopped.
+            expeditor->log_device_->lowest_segment(),
+            [wal = expeditor->wal_.get()] { return wal->durable_lsn(); },
+            [device = expeditor->log_device_.get()](std::uint64_t next) {
+                device->HoldDetachedFrom(next);
+            },
+            &*expeditor->logger_});
+        // Held before the completion checkpoint's reclaim can run.
+        expeditor->log_device_->HoldDetachedFrom(expeditor->log_device_->lowest_segment());
+    }
     expeditor->checkpoint_anchor_->SetRecycler(
-        [wal = expeditor->wal_.get()](wal::Lsn redo_start) { wal->RecycleBelow(redo_start); });
+        [wal = expeditor->wal_.get(), backup = &*expeditor->backup_,
+         archiver = expeditor->archiver()](wal::Lsn redo_start) {
+            backup->Recycle(redo_start, [wal, archiver](wal::Lsn bound) {
+                wal->RecycleBelow(archiver != nullptr ? std::min(bound, archiver->floor())
+                                                      : bound);
+            });
+        });
     if (Status s = CheckpointAfterRecovery(/*core_id=*/0, *expeditor->wal_,
                                            *expeditor->checkpoint_target_,
                                            *expeditor->checkpoint_anchor_, &*expeditor->logger_,
@@ -1203,6 +1302,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         return s;
     }
     expeditor->dispatcher_->SetReclaimCounters(&expeditor->reclaim_counters_);
+    expeditor->dispatcher_->set_backup(&*expeditor->backup_);
+    expeditor->dispatcher_->set_archiver(expeditor->archiver());
     // Reclaim within the run (BF-R9): every core publishes its statement
     // epoch, and a committed drop is queued from whichever core committed it.
     expeditor->statement_epochs_.emplace(expeditor->config_.cores);
@@ -1251,6 +1352,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->checkpointer_->SetLogger(&*expeditor->logger_);
 
     if (Status s = expeditor->Sync(); !s.ok()) return s;
+    // The archive starts once the mount is whole (BR-S4): from the live
+    // log's first segment, every sealed one in order.
+    if (expeditor->archiver_) expeditor->archiver_->Start();
 
     expeditor->logger_->Info("expeditor",
                              "database ready: " +
@@ -1314,7 +1418,12 @@ OptimizerSurface Expeditor::Optimizer() {
 Status Expeditor::ReclaimStep() {
     // `D` is the anchor's durable redo start, 0 until the completion
     // checkpoint publishes - the safe direction (BF-R4).
-    return reclaimer_->Step(checkpoint_anchor_->durable_redo_start(), &*statement_epochs_);
+    //
+    // **And no lower than an open backup's start** (BR, census H3): a page
+    // freed without a record during the window would be named by a record
+    // the restore replays, with its bit clear in the copy.
+    return reclaimer_->Step(backup_->ReclaimBound(checkpoint_anchor_->durable_redo_start()),
+                            &*statement_epochs_);
 }
 
 Status Expeditor::Checkpoint() {
@@ -1936,6 +2045,8 @@ Status Expeditor::Start() {
             // BL-S2: and takes the connections other cores move to it.
             if (Status s = core.value()->AcceptMoves(*handoff_, placer_); !s.ok()) return s;
             core.value()->dispatcher().SetReclaimCounters(&reclaim_counters_);
+            core.value()->dispatcher().set_backup(&*backup_);
+            core.value()->dispatcher().set_archiver(archiver());
             core.value()->dispatcher().SetStatementEpochs(&*statement_epochs_);
             core.value()->dispatcher().SetReclaimQueue(&*reclaimer_);
             cores_.push_back(std::move(core.value()));
@@ -2112,6 +2223,10 @@ Status Expeditor::Start() {
             logger_->Warn("reclaim", "reclaim step failed: " + s.message());
         }
     });
+
+    // An open backup with nothing running past `kAbandonNs` is ended (BR-S2).
+    constexpr sched::MonoTimeNs kBackupTickNs = 1'000'000'000;  // 1 s
+    scheduler.SubmitEvery(kBackupTickNs, [this] { backup_->ExpireIfAbandoned(); });
 
     scheduler.SubmitEvery(kWritebackIntervalNs, [this] {
         (void)store_->MaintainFreeReserve();

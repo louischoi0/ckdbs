@@ -153,6 +153,8 @@ class Scheduler;
 namespace kds::server {
 
 struct ReclaimCounters;  // page_reclaim.hpp
+class BackupControl;     // backup.hpp
+class WalArchiver;       // wal_archive.hpp
 class PageReclaimer;     // page_reclaim.hpp
 class StatementEpochs;   // statement_epoch.hpp
 
@@ -1918,6 +1920,17 @@ public:
     // ran and found nothing".
     void set_recovery(const MountRecovery* recovery) noexcept { recovery_ = recovery; }
 
+    // The instance's backup control (BR-S2), which `BACKUP` runs through and
+    // `SHOW META` reads. `Expeditor`'s, outliving every dispatcher; null
+    // where nothing mounts a volume, and `BACKUP` is then refused.
+    void set_backup(BackupControl* backup) noexcept { backup_ = backup; }
+
+    // The instance's WAL archive (BR-S4), null when archiving is off: its
+    // counters go into `SHOW META`, and while it is failing with the WAL
+    // filesystem near full every statement that writes the log is refused
+    // (BR-Q2 (a)).
+    void set_archiver(const WalArchiver* archiver) noexcept { archiver_ = archiver; }
+
     // This core's reactor, for `SHOW META`'s group-accounting block
     // (`docs/spec/sched.md` §4's last bullet, owed since `bench/v2.1.0` §11-5).
     // The scheduler outlives this dispatcher on every core: core 0's is a
@@ -2120,6 +2133,12 @@ private:
                                                      const txn::Snapshot& snapshot,
                                                      const exec::StatementContext& context);
     DispatchOutcome HandleSync();
+    // BR-Q2 (a)'s refusal while the WAL archive fails and its filesystem is
+    // near full, or nothing; every path that writes the log asks it.
+    std::optional<DispatchOutcome> ArchiveRefusal() const;
+    // BACKUP START '<label>' | COPY TO '<dir>' | STOP TO '<dir>' | ABORT |
+    // STATUS (BR-S2, S5).
+    DispatchOutcome HandleBackup(std::string_view line, Session& session);
 
 
 
@@ -2694,6 +2713,8 @@ private:
     // mutates the controller under it. Null where one thread owns both.
     Latch* cabin_optimizer_view_latch_ = nullptr;
     const MountRecovery* recovery_ = nullptr;  // RC09, set_recovery()
+    BackupControl* backup_ = nullptr;          // BR-S2, set_backup()
+    const WalArchiver* archiver_ = nullptr;    // BR-S4, set_archiver()
 
     // PHY06's view sources: the controller's managed table and decision
     // log, the executor's applied-action counters. Read-only - the view

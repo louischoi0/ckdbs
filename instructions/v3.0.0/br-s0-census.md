@@ -83,3 +83,62 @@ the segments `[start, stop]` into the backup directory for path D as for
 path B (BR-Q6), so a D restore is the snapshot's data file plus the
 backup's own log, and the two-volume ordering of BR-S3 is met by
 construction: the log is copied after the data volume's snapshot.
+
+## 3. Review (critics-developer, on `br-backup-restore` at `27f8a0ae`)
+
+Eight findings; six change the design above, two confirm it. Where this
+section and §1-§2 disagree, this section governs.
+
+1. **H8 was wrong: Waystone pages are created with no record**
+   (`src/stats/waystone_dir.cpp:47`, `:104`, `src/stats/trail_store.cpp:126`),
+   so redo never recreates them and the allocation floor does not count
+   them. A free map copied before such a page's bit reached the device
+   leaves the id free in the restore; the cursor then hands it to a logged
+   page, and the next Waystone write lands on it unlogged - lost rows, a
+   breach of invariant 8. `[quiet-wrong]`. **Applied**: `BACKUP STOP` copies,
+   under the fence, every page between the capacity the copier reached and
+   the capacity at that moment; appends `BACKUP_END` (the stop); then writes
+   the maps (`DevicePageStore::WriteMaps`) and copies every map page of
+   every region. The maps are copied **after** the stop, so they carry the
+   bit of every page any record up to the stop can name - including a
+   Waystone root a `sys.patterns` row replayed below the stop points at. A
+   bit for a page created after the stop only leaks that page in the
+   restore, as a crash's floor does. A crash has a narrower
+   form of the same hole (a Waystone parent written back ahead of the map
+   write); it is the engine's, not BR's, and is recorded in
+   `docs/inflight/bugs/an-unlogged-waystone-page-can-lose-its-allocation-bit.md`.
+2. **The copier cannot verify a page's CRC32C from the device alone**: a
+   headerless page created after its map was read fails it, and an
+   allocated, never-written page is zeros. **Applied**: §2's copy-time
+   verification is dropped; a backup is verified by `kds_backup verify`
+   against its manifest and by the restore's mount. The copier therefore
+   touches no latch-guarded structure, as BR-R9 says.
+3. **H1 named three readers of the mount anchor; there are more**
+   (`SuperBlockCheckpointAnchor::MountAnchorOf`, whose warm-up republishes
+   the mount anchor above one core, and the fixture path's
+   `core_config.anchor`). **Applied**: `MarkRestoreOwed` also rewrites
+   slot 0 to `{0, start, stop, segment(start)}`, so no reader of the image
+   can see the copied anchor at all, and slot 0's durable point carries the
+   stop into analysis's check whatever reads it.
+4. **The pin and the read of `D` must be one act** - a publish between them
+   would let the recycler and the reclaim pass the start. **Applied**:
+   `BACKUP START` reads `D` and installs the pin under the backup control's
+   mutex, and both the recycler's bound and the reclaim step's gate are
+   computed under the same mutex.
+5. **The stop must follow the copier's last read**, so WAL-before-data keeps
+   every copied `page_lsn` at or below it; a page copied after the stop
+   could hold a loser's change undo never sees. `[quiet-wrong]`.
+   **Applied**: `BACKUP STOP` refuses while the copier runs and copies the
+   data tail (finding 1) before it appends `BACKUP_END`. The map pages it
+   copies after the stop carry no `page_lsn` redo or undo reads.
+6. **H2 overclaimed**: the users file and the TLS key and certificate are
+   durable state outside `data_file` and `wal_dir`. **Applied**: they are
+   configuration, not data, and are excluded from a backup by name in the
+   manifest's documentation (`manual/server/backup-restore.md`). The fence
+   covers every data-file write (`device_page_store.cpp:442,552,563,2107`);
+   `MemoryPageDevice` needs it too for the simulation harness.
+7. **H3's free path confirmed** - one caller of `FreePage`; `ReleaseClaim`
+   only before any record.
+8. **Copy order across pages confirmed** - redo gates each page on its own
+   LSN, `next_trx_id` is the maximum of the superblock's and the log's, and
+   every core's latest `CHECKPOINT_BEGIN` lies at or above `D`.

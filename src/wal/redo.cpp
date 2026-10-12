@@ -61,6 +61,9 @@ bool TouchesNoPage(RecordType type) noexcept {
         case RecordType::kCheckpointBegin:
         case RecordType::kCheckpointEnd:
         case RecordType::kPad:
+        // A backup's bounds (BR-S2) describe a window, not a page.
+        case RecordType::kBackupBegin:
+        case RecordType::kBackupEnd:
             return true;
         default:
             return false;

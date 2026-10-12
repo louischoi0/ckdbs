@@ -33,7 +33,7 @@ int Usage(const char* argv0) {
                  "          [--faults none|io] [--fault-rate N]\n"
                  "          [--toggles off|on|cabins|waystone] [--pair]\n"
                  "          [--minimize [--out FILE] [--max-replays N]] | [--replay FILE]\n"
-                 "          [--skip-recovery] [--checkpoint-every N]\n",
+                 "          [--skip-recovery] [--checkpoint-every N] [--backup]\n",
                  argv0);
     return 2;
 }
@@ -94,6 +94,8 @@ int main(int argc, char** argv) {
         } else if (arg == "--fault-rate" && value) {
             config.fault_rate = static_cast<std::uint32_t>(std::strtoul(value, nullptr, 10));
             ++i;
+        } else if (arg == "--backup") {
+            config.backup = true;  // BR-S8: a base backup and its restore per iteration
         } else if (arg == "--checkpoint-every" && value) {
             config.checkpoint_every = static_cast<std::size_t>(std::strtoull(value, nullptr, 10));
             ++i;

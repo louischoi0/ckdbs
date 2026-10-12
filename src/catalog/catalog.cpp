@@ -3266,14 +3266,7 @@ StatusOr<bool> Catalog::ResetAccessStatsIfDamaged() {
             return storage::VisitControl::kContinue;
         });
     if (walked.ok()) return false;
-
-    // Re-formatted in place at its fixed id, which is what makes this a
-    // discard rather than a re-bootstrap: the `sys.objects` and `sys.tables`
-    // rows still name page 11 and stay true.
-    auto head = store_.Get(kCatalogPageAccessStats);
-    if (!head.ok()) return head.status();
-    auto fresh = heap::PageView::CreateEmpty(head.value().bytes(), 0);
-    if (!fresh.ok()) return fresh.status();
+    if (Status s = DiscardAccessStats(); !s.ok()) return s;
     if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
         log_->Error("catalog",
                     "sys.access_stats was damaged and has been discarded: it is unlogged by "
@@ -3281,6 +3274,17 @@ StatusOr<bool> Catalog::ResetAccessStatsIfDamaged() {
                     "rather than a wrong answer");
     }
     return true;
+}
+
+Status Catalog::DiscardAccessStats() {
+    // Re-formatted in place at its fixed id, which is what makes this a
+    // discard rather than a re-bootstrap: the `sys.objects` and `sys.tables`
+    // rows still name page 11 and stay true.
+    auto head = store_.Get(kCatalogPageAccessStats);
+    if (!head.ok()) return head.status();
+    auto fresh = heap::PageView::CreateEmpty(head.value().bytes(), 0);
+    if (!fresh.ok()) return fresh.status();
+    return Status::OK();
 }
 
 StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {

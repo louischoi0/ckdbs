@@ -100,8 +100,22 @@ public:
     }
 
     std::uint32_t core_id() const noexcept { return core_id_; }
+
+    // **The archive's hold on the reclaim** (BR-S4): a detached segment at or
+    // above `segment_no` is kept queued, not unlinked, until the archiver has
+    // it. `kNoHold` (the default) holds nothing.
+    static constexpr std::uint64_t kNoHold = ~std::uint64_t{0};
+    void HoldDetachedFrom(std::uint64_t segment_no) noexcept {
+        hold_from_.store(segment_no, std::memory_order_release);
+    }
+    // The lowest segment still on the device: the live run's first, or a
+    // detached one below it not yet removed (a previous run's leftovers).
+    std::uint64_t lowest_segment() const;
     const std::string& dir() const noexcept { return dir_; }
     std::string SegmentPath(std::uint64_t segment_no) const;
+    // `wal-<core_id>-<segment_no>.log`: the one spelling, which a backup's
+    // log copy and a restore's layout use too (BR).
+    static std::string SegmentFileName(std::uint32_t core_id, std::uint64_t segment_no);
 
     Status CreateSegment(std::uint64_t segment_no,
                          std::span<const std::byte> header = {}) override;
@@ -221,6 +235,7 @@ private:
     std::atomic<std::uint64_t> first_{0};
     // Segment numbers to unlink: detached, or skipped below `first_needed`.
     std::vector<std::uint64_t> detached_;
+    std::atomic<std::uint64_t> hold_from_{kNoHold};
     std::uint64_t removed_ = 0;
 };
 

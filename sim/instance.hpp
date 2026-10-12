@@ -22,11 +22,13 @@
 // verdicts (the loop owns those). This file only makes "an instance you
 // can kill" a value.
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "kds/base/status.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
@@ -90,9 +92,40 @@ struct SimInstanceOptions {
     bool access_statistics = true;   // sys.access_stats, the server default
 };
 
+// A base backup the harness took (BR-S8): the data pages as the fuzzy copy
+// read them, the log's segments from the start to the stop, and the window.
+struct SimBackupImage {
+    std::uint64_t backup_id = 0;
+    wal::Lsn start = 0;
+    wal::Lsn stop = 0;
+    std::uint32_t pages = 0;           // data pages copied
+    std::vector<std::byte> data;       // pages * kPageSize
+    std::uint64_t first_segment = 0;   // segment(start)
+    std::vector<std::vector<std::byte>> segments;  // first_segment onward, to the stop's
+};
+
 class SimInstance {
 public:
     using Options = SimInstanceOptions;
+
+    // **A restore** (BR-S8): fresh devices laid out from `image` - its pages,
+    // its segments as the live run, page 0 marked owed - and booted, which
+    // recovers past the stop or refuses.
+    static StatusOr<std::unique_ptr<SimInstance>> CreateFromBackup(Options options,
+                                                                   const SimBackupImage& image);
+
+    // **A base backup, taken the way `BackupControl` takes one** (BR-S2,
+    // S5): `BackupStart` reads the anchor's durable redo start and pins it
+    // against the recycler and the reclaim; `BackupCopy` copies the next
+    // `pages` data pages as they stand now (a device read is whole here, as
+    // the fence makes a file's); `BackupStop` copies the tail, logs
+    // BACKUP_END sealed and synced, writes and copies the maps, copies the
+    // log's window and releases the pin. False / an error when no anchor has
+    // been published yet.
+    bool BackupStart();
+    Status BackupCopy(std::uint32_t pages);
+    StatusOr<SimBackupImage> BackupStop();
+    bool backup_open() const noexcept { return backup_.has_value(); }
 
     // Fresh devices, fresh database (bootstrap's fresh path).
     static StatusOr<std::unique_ptr<SimInstance>> Create(Options options = {});
@@ -221,6 +254,17 @@ private:
 
     Options options_{};
     sched::ManualClock clock_;
+    // The open backup: its pin bounds `Recycle` and the reclaim (census §3
+    // item 4), and its copy grows by `BackupCopy`.
+    struct OpenBackup {
+        SimBackupImage image;
+        std::uint32_t start_capacity = 0;
+        std::uint32_t copied = 0;
+    };
+    std::optional<OpenBackup> backup_;
+    wal::Lsn Pinned(wal::Lsn d) const noexcept {
+        return backup_.has_value() ? std::min(d, backup_->image.start) : d;
+    }
     std::uint64_t recycles_ = 0;
     std::uint64_t crashes_reviving_segments_ = 0;
     std::uint64_t detach_refusals_ = 0;

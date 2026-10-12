@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <set>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -899,38 +900,56 @@ TEST_F(InsertWalTest, AnIndexSplitTakesOneBtreeSplitAndNoIndexInsert) {
     }
 }
 
-// ---- 4. Nothing logs a catalog page, not even a rollback ----------------
+// ---- 4. A rollback logs its catalog compensation ------------------------
 
 // A transactional DDL registers its catalog rows on the trail so `ROLLBACK`
-// can undo them (workplan-ddl-transactional.md DT3a/DT5). The forward
-// writes are unlogged - catalog writes have no records and the catalog is
-// not recovered (known-gaps.md RV3) - so a *compensation* record naming a
-// catalog page would be the only record in the stream that does, and
-// recovery would apply it to a page image that never saw the write it
-// undoes. A SLOT_RETIRE for a slot the on-disk page does not have yet is
-// `NotFound` from the applier, and redo reports rather than skips: the
-// consequence is a failed mount, not a lost row.
-TEST_F(InsertWalTest, ARolledBackDdlWritesNoRecordAgainstACatalogPage) {
+// can undo them (DT3a/DT5). The forward writes are logged since RV3, so the
+// compensation is too (BR, `TransactionManager::Compensate`): until BR it was
+// not, on the premise these two cells pinned - that catalog writes had no
+// records - and a crash replayed a rolled-back drop with nothing to put it
+// back (`BackupRestoreTest.ARolledBackDropSurvivesAReplayOverPagesFromBeforeIt`).
+// What stays true of the premise's worry: a compensation never names a
+// catalog page no earlier record named, so redo never applies one to a page
+// image that never saw the write it undoes. Wired as `Expeditor` wires it -
+// the catalog logs.
+void ExpectCompensationsFollowForwardWrites(const std::vector<wal::DecodedRecord>& records,
+                                            std::size_t min_overwrites) {
+    std::set<PageId> named;
+    std::size_t compensations = 0, overwrites = 0;
+    for (const wal::DecodedRecord& record : records) {
+        const PageId page_id = record.header.page_id;
+        if (page_id == kInvalidPageId || page_id >= catalog::kCatalogOverflowLimit) continue;
+        const wal::RecordType type = record.type();
+        if (type == wal::RecordType::kSlotRetire || type == wal::RecordType::kHeapDeleteUnmark) {
+            ++compensations;
+            EXPECT_TRUE(named.count(page_id) != 0)
+                << wal::RecordTypeName(type) << " names catalog page " << page_id
+                << " before any forward record does";
+        }
+        if (type == wal::RecordType::kHeapOverwrite) ++overwrites;
+        named.insert(page_id);
+    }
+    EXPECT_GT(compensations, 0u) << "the rollback logged no catalog compensation";
+    EXPECT_GE(overwrites, min_overwrites);
+}
+
+TEST_F(InsertWalTest, ARolledBackDdlLogsItsCatalogCompensation) {
+    boot_->catalog.SetWal(wal_.get());
     CommandDispatcher d = TransactionalDispatcher(wal::DurabilityClass::kStrict);
     ASSERT_EQ(d.Dispatch("BEGIN").response.substr(0, 5), "BEGIN");
     ASSERT_EQ(d.Dispatch("CREATE TABLE gone (id int64, v int32)").response.substr(0, 7),
               "CREATED");
     ASSERT_EQ(d.Dispatch("ROLLBACK").response.substr(0, 8), "ROLLBACK");
     ASSERT_TRUE(wal_->Flush().ok());
-
     std::vector<std::vector<std::byte>> storage;
-    for (const wal::DecodedRecord& record : DeviceRecords(storage)) {
-        const PageId page_id = record.header.page_id;
-        if (page_id == kInvalidPageId) continue;
-        EXPECT_GE(page_id, catalog::kCatalogOverflowLimit)
-            << wal::RecordTypeName(record.type()) << " names catalog page " << page_id
-            << ", whose forward writes are unlogged";
-    }
+    ExpectCompensationsFollowForwardWrites(DeviceRecords(storage), 0);
 }
 
 // The same for a drop, whose compensation is a delete-unmark plus the
-// tombstone's overwrite rather than a retire (DT5).
-TEST_F(InsertWalTest, ARolledBackDropWritesNoRecordAgainstACatalogPage) {
+// tombstone's overwrite back (DT5): the retype is one overwrite, its undo
+// another.
+TEST_F(InsertWalTest, ARolledBackDropLogsItsCatalogCompensation) {
+    boot_->catalog.SetWal(wal_.get());
     CommandDispatcher d = TransactionalDispatcher(wal::DurabilityClass::kStrict);
     ASSERT_EQ(d.Dispatch("CREATE TABLE doomed (id int64, v int32)").response.substr(0, 7),
               "CREATED");
@@ -938,15 +957,8 @@ TEST_F(InsertWalTest, ARolledBackDropWritesNoRecordAgainstACatalogPage) {
     ASSERT_EQ(d.Dispatch("DROP TABLE doomed").response.rfind("ERR", 0), std::string::npos);
     ASSERT_EQ(d.Dispatch("ROLLBACK").response.substr(0, 8), "ROLLBACK");
     ASSERT_TRUE(wal_->Flush().ok());
-
     std::vector<std::vector<std::byte>> storage;
-    for (const wal::DecodedRecord& record : DeviceRecords(storage)) {
-        const PageId page_id = record.header.page_id;
-        if (page_id == kInvalidPageId) continue;
-        EXPECT_GE(page_id, catalog::kCatalogOverflowLimit)
-            << wal::RecordTypeName(record.type()) << " names catalog page " << page_id
-            << ", whose forward writes are unlogged";
-    }
+    ExpectCompensationsFollowForwardWrites(DeviceRecords(storage), 2);
 }
 
 // ---- The group-commit batch, in SHOW META -------------------------------

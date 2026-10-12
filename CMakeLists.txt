@@ -19,6 +19,7 @@ add_library(kds
     src/storage/page_header.cpp
     src/storage/anchor_page.cpp
     src/storage/page_device.cpp
+    src/storage/page_write_fence.cpp
     src/storage/file_page_device.cpp
     src/storage/memory_page_device.cpp
     src/storage/keystone.cpp
@@ -48,6 +49,10 @@ add_library(kds
     src/server/superblock.cpp
     src/server/superblock_checkpoint_anchor.cpp
     src/server/page_reclaim.cpp
+    src/server/restore.cpp
+    src/server/backup.cpp
+    src/server/backup_manifest.cpp
+    src/server/wal_archive.cpp
     src/server/core_runtime.cpp
     src/server/mount_recovery.cpp
     src/server/stop_signal.cpp
@@ -141,6 +146,17 @@ add_library(kds
     src/sched/epoll_io_backend.cpp
 )
 target_include_directories(kds PUBLIC include)
+
+# `kds/base/version.hpp`: the build's `git describe --tags`, which a backup
+# manifest records (BR-R7). Regenerated at every build, rewritten only when it
+# changes.
+set(KDS_VERSION_HEADER ${CMAKE_BINARY_DIR}/generated/kds/base/version.hpp)
+add_custom_target(kds_version ALL
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${KDS_VERSION_HEADER}
+            -P ${CMAKE_SOURCE_DIR}/cmake/version.cmake
+    BYPRODUCTS ${KDS_VERSION_HEADER})
+add_dependencies(kds kds_version)
+target_include_directories(kds PUBLIC ${CMAKE_BINARY_DIR}/generated)
 
 # The TLS wire channel (docs/spec/protocol.md §1, direct TLS decided
 # 2026-08-13). OpenSSL is the engine's first external dependency, so it

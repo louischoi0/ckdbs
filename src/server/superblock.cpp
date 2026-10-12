@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <cstring>
+#include <random>
 #include <string>
 
 #include "kds/catalog/well_known.hpp"
@@ -22,6 +23,13 @@ Status CheckCoreCount(std::uint32_t cores) {
                                        "), the number of superblock WAL anchor slots");
     }
     return Status::OK();
+}
+
+std::uint64_t DrawLineageId() {
+    std::random_device device;
+    std::uint64_t id = 0;
+    while (id == 0) id = (std::uint64_t{device()} << 32) ^ device();
+    return id;
 }
 
 SuperBlock::SuperBlock() noexcept : fields_{} {}
@@ -135,6 +143,10 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
         return Status::Corruption("superblock: " + s.message());
     }
 
+    std::memcpy(&f.lineage_id, base + kLineageIdOffset, sizeof(f.lineage_id));
+    std::memcpy(&f.restore_backup_id, base + kRestoreBackupIdOffset,
+                sizeof(f.restore_backup_id));
+
     SuperBlock sb(f);
     for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
         const std::byte* entry = base + kWalAnchorTableOffset + core * kWalAnchorEntrySize;
@@ -180,6 +192,9 @@ void SuperBlock::Encode(std::span<std::byte, kPageSize> page) const {
 
     std::memcpy(base + kNextTrxIdOffset, &fields_.next_trx_id, sizeof(fields_.next_trx_id));
     std::memcpy(base + kCoreCountOffset, &fields_.core_count, sizeof(fields_.core_count));
+    std::memcpy(base + kLineageIdOffset, &fields_.lineage_id, sizeof(fields_.lineage_id));
+    std::memcpy(base + kRestoreBackupIdOffset, &fields_.restore_backup_id,
+                sizeof(fields_.restore_backup_id));
 
     // The whole table is written, not just the slots in use: an unpublished
     // slot's zeroes are meaningful (superblock.hpp), and writing only the

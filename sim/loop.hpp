@@ -150,6 +150,17 @@ struct SimConfig {
     // log whose head is gone. By op index, never drawn from the seed: a
     // committed seed's plan stays the plan it was. 0 turns it off.
     std::size_t checkpoint_every = 97;
+
+    // **A base backup inside each iteration, and its restore** (BR-S8): the
+    // backup opens after a seed-drawn op, copies its data pages a few at a
+    // time between the ops that follow - so checkpoints, writebacks,
+    // recycling and reclaims run across the copy - and stops after a later
+    // op. After the iteration's own restart, the backup is restored onto
+    // fresh devices and reconciled against the oracle as it stood at the
+    // stop. Drawn from its own fork of the seed, so the plan is unchanged.
+    // Fault-free runs only: an injected error under a backup proves the
+    // injection, not the backup.
+    bool backup = false;
 };
 
 struct SimVerdict {
@@ -198,6 +209,8 @@ struct SimVerdict {
     // Pages of a reclaimed relation still allocated and reached by no walk,
     // under faults: a failed growth's or split's (a stated leak).
     std::size_t census_leaks = 0;
+    // BR-S8: backups taken and restored and reconciled.
+    std::size_t backups_restored = 0;
 
     // Recycling (BC-S4): mid-run checkpoints, advances the recycler was
     // handed, and segments removed. A run where these stay 0 recovered from

@@ -1,8 +1,12 @@
 #include "sim/instance.hpp"
 
+#include <array>
 #include <utility>
 
 #include "kds/server/mount_recovery.hpp"
+#include "kds/server/restore.hpp"
+#include "kds/storage/free_map.hpp"
+#include "kds/wal/payload.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 #include "kds/storage/page_store_checkpoint_target.hpp"
@@ -149,6 +153,7 @@ Status SimInstance::Boot() {
 }
 
 void SimInstance::Recycle(wal::Lsn durable_redo_start) {
+    durable_redo_start = Pinned(durable_redo_start);  // an open backup's start
     ++recycles_;
     if (recycles_ % 4 != 0) {
         // The detach alone: the removal's directory sync is still to come.
@@ -164,7 +169,7 @@ void SimInstance::Recycle(wal::Lsn durable_redo_start) {
 
 Status SimInstance::ReclaimStep() {
     if (!reclaimer_.has_value() || reclaim_counters_.pending.load() == 0) return Status::OK();
-    return reclaimer_->Step(anchor_->durable_redo_start());
+    return reclaimer_->Step(Pinned(anchor_->durable_redo_start()));
 }
 
 Status SimInstance::SettleReclaim() {
@@ -177,7 +182,7 @@ Status SimInstance::SettleReclaim() {
                                 std::to_string(reclaim_gate_));
     }
     while (reclaimer_->jobs() != 0 && reclaim_counters_.refused.load() == 0) {
-        if (Status s = reclaimer_->Step(anchor_->durable_redo_start()); !s.ok()) return s;
+        if (Status s = reclaimer_->Step(Pinned(anchor_->durable_redo_start())); !s.ok()) return s;
     }
     return Status::OK();
 }
@@ -209,7 +214,9 @@ Status SimInstance::AbandonCheckpointMidSteps() {
 
 void SimInstance::TearDown() {
     // Reverse of Boot(). The session first: it may hold a pointer into the
-    // transaction manager it sits above.
+    // transaction manager it sits above. An open backup ends with the run,
+    // as a server restart ends one: no BACKUP_END, no backup.
+    backup_.reset();
     session_ = server::Session();
     reclaimer_.reset();
     reclaim_counters_.Reset();
@@ -291,6 +298,137 @@ Status SimInstance::Reboot() {
                                        "CleanShutdown() first");
     }
     return Boot();
+}
+
+bool SimInstance::BackupStart() {
+    if (backup_.has_value() || !anchor_.has_value()) return false;
+    const wal::Lsn d = anchor_->durable_redo_start();
+    if (d == 0) return false;
+    OpenBackup open;
+    open.image.backup_id = 1;
+    open.image.start = d;
+    open.start_capacity = page_device_->page_capacity();
+    open.image.data.resize(static_cast<std::size_t>(open.start_capacity) * kPageSize);
+    backup_.emplace(std::move(open));
+    return true;
+}
+
+namespace {
+
+// Reads `[first, end)` of `device` into `data`, growing it as needed.
+Status CopyDevicePages(storage::PageDevice& device, std::uint32_t first, std::uint32_t end,
+                       std::vector<std::byte>& data) {
+    if (end <= first) return Status::OK();
+    if (data.size() < static_cast<std::size_t>(end) * kPageSize) {
+        data.resize(static_cast<std::size_t>(end) * kPageSize);
+    }
+    return device.ReadPageRunFenced(
+        first, end - first,
+        std::span<std::byte>(data.data() + static_cast<std::size_t>(first) * kPageSize,
+                             static_cast<std::size_t>(end - first) * kPageSize));
+}
+
+}  // namespace
+
+Status SimInstance::BackupCopy(std::uint32_t pages) {
+    if (!backup_.has_value()) return Status::OK();
+    const std::uint32_t end = std::min(backup_->start_capacity, backup_->copied + pages);
+    if (Status s = CopyDevicePages(*page_device_, backup_->copied, end, backup_->image.data);
+        !s.ok()) {
+        return s;
+    }
+    backup_->copied = end;
+    return Status::OK();
+}
+
+StatusOr<SimBackupImage> SimInstance::BackupStop() {
+    if (!backup_.has_value()) return Status::InvalidArgument("no backup is open");
+    SimBackupImage& image = backup_->image;
+    // The rest of the copy and the tail the device grew, before the stop.
+    const std::uint32_t capacity = page_device_->page_capacity();
+    if (Status s = CopyDevicePages(*page_device_, backup_->copied, capacity, image.data); !s.ok()) {
+        return s;
+    }
+    std::array<std::byte, wal::kBackupMarkPayloadSize> payload{};
+    (void)wal::EncodeBackupMark(payload, {image.backup_id, image.start});
+    auto ended = wal_->AppendAndSeal(
+        {wal::RecordType::kBackupEnd, wal::kNoTxnId, kInvalidPageId, 0}, payload);
+    if (!ended.ok()) return ended.status();
+    image.stop = ended.value() + wal::EncodedRecordSize(payload.size());
+    if (Status s = wal_->SyncAll(); !s.ok()) return s;
+    // The maps after the stop (census §3 item 1).
+    if (auto maps = store_->WriteMaps(); !maps.ok()) return maps.status();
+    for (std::uint32_t region = 0; storage::FreeMapRegionBase(region) < capacity; ++region) {
+        const PageId base = storage::FreeMapRegionBase(region);
+        for (const PageId id :
+             {storage::FreeMapPageIdFor(base), storage::HeaderlessMapPageIdFor(base)}) {
+            if (id >= capacity) continue;
+            if (Status s = CopyDevicePages(*page_device_, id, id + 1, image.data); !s.ok()) {
+                return s;
+            }
+        }
+    }
+    image.pages = capacity;
+    image.data.resize(static_cast<std::size_t>(capacity) * kPageSize);
+    // The window's log, as STOP's worker copies it.
+    const std::uint64_t size = log_device_->segment_size();
+    image.first_segment = image.start / size;
+    for (std::uint64_t seg = image.first_segment; seg <= ended.value() / size; ++seg) {
+        std::vector<std::byte> bytes(size);
+        if (Status s = log_device_->ReadAt(seg, 0, bytes); !s.ok()) return s;
+        image.segments.push_back(std::move(bytes));
+    }
+    SimBackupImage taken = std::move(image);
+    backup_.reset();  // the pin goes with it
+    return taken;
+}
+
+StatusOr<std::unique_ptr<SimInstance>> SimInstance::CreateFromBackup(Options options,
+                                                                     const SimBackupImage& image) {
+    std::unique_ptr<SimInstance> instance(new SimInstance());
+    instance->options_ = options;
+    auto page_device = storage::MemoryPageDevice::Create(options.extent_pages,
+                                                         options.initial_pages);
+    if (!page_device.ok()) return page_device.status();
+    instance->page_device_ = std::move(page_device.value());
+    if (Status s = instance->page_device_->EnsureCapacity(image.pages); !s.ok()) return s;
+    if (Status s = instance->page_device_->WritePageRun(0, image.pages, image.data); !s.ok()) {
+        return s;
+    }
+    if (Status s = instance->page_device_->Sync(); !s.ok()) return s;
+
+    auto log_device = wal::MemoryLogDevice::Create(options.wal_segment_bytes);
+    if (!log_device.ok()) return log_device.status();
+    instance->log_device_ = std::move(log_device.value());
+    wal::MemoryLogDevice& log = *instance->log_device_;
+    // Numbered from 0, as the device numbers them; the ones below the start
+    // are created empty and detached, so the live run begins at the start.
+    const std::uint64_t last = image.first_segment + image.segments.size();
+    for (std::uint64_t seg = 0; seg < last; ++seg) {
+        if (Status s = log.CreateSegment(seg); !s.ok()) return s;
+        if (seg >= image.first_segment) {
+            if (Status s = log.WriteAt(seg, 0, image.segments[seg - image.first_segment]);
+                !s.ok()) {
+                return s;
+            }
+        }
+    }
+    if (Status s = log.Sync(); !s.ok()) return s;
+    if (image.first_segment > 0) {
+        if (Status s = log.DetachBelow(image.first_segment); !s.ok()) return s;
+        if (Status s = log.ReclaimDetached(); !s.ok()) return s;
+    }
+    if (Status s = server::MarkRestoreOwedOn(*instance->page_device_,
+                                             {image.start, image.stop, image.backup_id});
+        !s.ok()) {
+        return s;
+    }
+    // `LayOutRestore`'s offline half and the mount's (`restore.hpp`).
+    if (Status s = server::ForgetUnwrittenPages(*instance->page_device_); !s.ok()) return s;
+    if (Status s = instance->Boot(); !s.ok()) return s;
+    if (Status s = server::DiscardAdvisoryState(instance->catalog()); !s.ok()) return s;
+    if (Status s = instance->RunCheckpoint(); !s.ok()) return s;
+    return instance;
 }
 
 std::string SimInstance::Execute(std::string_view sql) {

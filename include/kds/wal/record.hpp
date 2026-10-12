@@ -256,6 +256,15 @@ enum class RecordType : std::uint8_t {
     // names every page (`payload.hpp`). It carries the inserted row, so no
     // insert record follows it.
     kBtreeSplit = 30,
+    // **A backup's bounds** (BR-S2, `workorder-br-backup-restore.md`):
+    // BACKUP_BEGIN at `BACKUP START`, BACKUP_END at `BACKUP STOP`, each
+    // carrying the backup's id and its start LSN (`payload.hpp`). They name
+    // no page and change none - redo passes them, analysis reads nothing off
+    // them - and exist so the log itself says which windows were backed up:
+    // a backup whose BACKUP_END is not in its log was abandoned and is not a
+    // backup.
+    kBackupBegin = 31,
+    kBackupEnd = 32,
     // **INDEX_PAGE_INIT is not assigned either, and spec §12.1 proposed it.**
     // The proposal assumed a new index page could be described by its header
     // the way a new heap page is, with the following record filling it. A
@@ -279,7 +288,7 @@ enum class RecordType : std::uint8_t {
 // Keep this pinned to the last enumerator when appending a type; the test that
 // every named type encodes is what proves it stayed pinned.
 inline constexpr std::uint8_t kMaxAssignedRecordType =
-    static_cast<std::uint8_t>(RecordType::kBtreeSplit);
+    static_cast<std::uint8_t>(RecordType::kBackupEnd);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 const char* RecordTypeName(RecordType type) noexcept;

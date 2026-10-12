@@ -1,4 +1,6 @@
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/backup.hpp"
+#include "kds/server/wal_archive.hpp"
 #include "kds/server/page_reclaim.hpp"
 #include "kds/server/statement_epoch.hpp"
 #include "kds/server/read_borrow.hpp"
@@ -26,6 +28,7 @@
 #include <cctype>
 #include <cstring>
 #include <charconv>
+#include <ctime>
 #include <iomanip>
 #include <map>
 #include <set>
@@ -1237,6 +1240,16 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
                 false};
     }
 
+    // ---- The archive's fail-closed gate (BR-Q2 (a), `wal_archive.hpp`) -------
+    //
+    // Reads, transaction control and the admin verbs that end the condition
+    // (BACKUP, SYNC, STOP) still run; a statement that writes the log does not.
+    if (IEquals(cmd, "INSERT") || IEquals(cmd, "UPDATE") || IEquals(cmd, "DELETE") ||
+        IEquals(cmd, "CREATE") || IEquals(cmd, "DROP") || IEquals(cmd, "ALTER") ||
+        IEquals(cmd, "PURGE")) {
+        if (auto refused = ArchiveRefusal(); refused.has_value()) return *refused;
+    }
+
     // ---- The failed-txn gate (docs/spec/txn.md section 10-8) -----------------
     //
     // A statement inside an explicit transaction failed, so the transaction
@@ -1446,6 +1459,11 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     if (IEquals(cmd, "SYNC")) {
         return HandleSync();
     }
+    // Unclassified in `RequiredRole`, so admin's: a backup pins the log and
+    // writes the server's files.
+    if (IEquals(cmd, "BACKUP")) {
+        return HandleBackup(Trim(line), session);
+    }
     // WITH is routed to the SELECT path rather than falling through to
     // "unknown command": the parser answers it with the truthful "CTEs
     // are not supported, subqueries are allowed in predicate position
@@ -1456,6 +1474,132 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         return HandleSelect(Trim(line), session);
     }
     return {"ERR unknown command", false};
+}
+
+namespace {
+
+// BACKUP's words, read by hand: the statement never reaches the SQL parser,
+// as SET, SHOW and SYNC do not. Each word carries its byte offset so a
+// refusal can name it.
+struct BackupWord {
+    std::string text;
+    std::size_t at = 0;
+    bool quoted = false;
+};
+
+StatusOr<std::vector<BackupWord>> SplitBackupWords(std::string_view line) {
+    std::vector<BackupWord> words;
+    std::size_t i = 0;
+    while (i < line.size()) {
+        if (line[i] == ' ' || line[i] == '\t') {
+            ++i;
+            continue;
+        }
+        BackupWord word;
+        word.at = i;
+        if (line[i] == '\'') {
+            word.quoted = true;
+            ++i;
+            bool closed = false;
+            while (i < line.size()) {
+                if (line[i] == '\'') {
+                    if (i + 1 < line.size() && line[i + 1] == '\'') {
+                        word.text.push_back('\'');
+                        i += 2;
+                        continue;
+                    }
+                    ++i;
+                    closed = true;
+                    break;
+                }
+                word.text.push_back(line[i++]);
+            }
+            if (!closed) {
+                return Status::InvalidArgument("BACKUP: unterminated string (byte " +
+                                               std::to_string(word.at) + ")");
+            }
+        } else {
+            while (i < line.size() && line[i] != ' ' && line[i] != '\t' && line[i] != ';') {
+                word.text.push_back(line[i++]);
+            }
+            if (word.text.empty()) {  // a bare ';' ends the statement
+                ++i;
+                continue;
+            }
+        }
+        words.push_back(std::move(word));
+    }
+    return words;
+}
+
+}  // namespace
+
+DispatchOutcome CommandDispatcher::HandleBackup(std::string_view line, Session& session) {
+    const auto refuse = [](const Status& s) { return DispatchOutcome{ErrorReply(s), false, 0, s}; };
+    const auto answer = [&](StatusOr<std::string> r) {
+        return r.ok() ? DispatchOutcome{r.value(), false} : refuse(r.status());
+    };
+    auto split = SplitBackupWords(line);
+    if (!split.ok()) return refuse(split.status());
+    const std::vector<BackupWord>& w = split.value();
+    const std::size_t verb_at = w.size() > 1 ? w[1].at : line.size();
+    const std::string verb = w.size() > 1 ? w[1].text : std::string();
+    if (backup_ == nullptr || wal_ == nullptr) {
+        return refuse(Status::Unsupported(
+            "BACKUP needs a mounted volume with a log, and this dispatcher has none (byte 0)"));
+    }
+    if (IEquals(verb, "STATUS") && w.size() == 2) {
+        return {backup_->StatusLine(), false};
+    }
+    if (session.in_explicit_txn()) {
+        return refuse(Status::NotImplemented(
+            "BACKUP inside a transaction is not implemented; run it in autocommit (byte 0)"));
+    }
+    // `<verb> '<arg>'` or `<verb> TO '<arg>'`: the one argument, quoted.
+    const auto quoted_arg = [&](bool to) -> StatusOr<std::string> {
+        const std::size_t at = to ? 3 : 2;
+        if (to && (w.size() < 3 || !IEquals(w[2].text, "TO") || w[2].quoted)) {
+            return Status::InvalidArgument("BACKUP " + verb + " expects TO '<directory>' (byte " +
+                                           std::to_string(w.size() > 2 ? w[2].at : line.size()) +
+                                           ")");
+        }
+        if (w.size() <= at || !w[at].quoted) {
+            return Status::InvalidArgument(
+                "BACKUP " + verb + " expects a quoted " + (to ? "directory" : "label") +
+                " (byte " + std::to_string(w.size() > at ? w[at].at : line.size()) + ")");
+        }
+        if (w.size() > at + 1) {
+            return Status::InvalidArgument("BACKUP " + verb + ": unexpected `" + w[at + 1].text +
+                                           "` (byte " + std::to_string(w[at + 1].at) + ")");
+        }
+        if (to && w[at].text.empty()) {
+            return Status::InvalidArgument("BACKUP " + verb + ": an empty directory (byte " +
+                                           std::to_string(w[at].at) + ")");
+        }
+        return w[at].text;
+    };
+    const auto now_unix = static_cast<std::uint64_t>(std::time(nullptr));
+    if (IEquals(verb, "START")) {
+        auto label = quoted_arg(/*to=*/false);
+        if (!label.ok()) return refuse(label.status());
+        return answer(backup_->Start(label.value(), *wal_));
+    }
+    if (IEquals(verb, "COPY")) {
+        auto dir = quoted_arg(/*to=*/true);
+        if (!dir.ok()) return refuse(dir.status());
+        return answer(backup_->Copy(dir.value()));
+    }
+    if (IEquals(verb, "STOP")) {
+        auto dir = quoted_arg(/*to=*/true);
+        if (!dir.ok()) return refuse(dir.status());
+        return answer(backup_->Stop(dir.value(), *wal_, now_unix));
+    }
+    if (IEquals(verb, "ABORT") && w.size() == 2) {
+        return answer(backup_->Abort());
+    }
+    return refuse(Status::InvalidArgument(
+        "BACKUP expects START '<label>', COPY TO '<directory>', STOP TO '<directory>', ABORT "
+        "or STATUS (byte " + std::to_string(w.size() > 2 ? w[2].at : verb_at) + ")"));
 }
 
 DispatchOutcome CommandDispatcher::HandleSync() {
@@ -1487,6 +1631,9 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     std::ostringstream os;
     os << "version=" << superblock_.version() << " create_time=" << superblock_.create_time()
        << " last_mount_time=" << superblock_.last_mount_time()
+       // The archive lineage (BR-R10): the history this volume's log is,
+       // fresh at creation and at every restore.
+       << " wal_lineage=" << superblock_.lineage_id()
        // **What the volume's log is** (AR0 M0). Always `single` since
        // AM-S4(d) - `SuperBlock::Decode` refuses every other topology - and
        // kept rather than dropped because it is a durable *format* fact a
@@ -1617,7 +1764,11 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // zeroed rule - which is an in-process dispatcher, never a served core.
     if (wal_ != nullptr) {
         const wal::WalStats& wal_stats = wal_->stats();
-        os << " wal_syncs=" << (wal_stats.syncs + wal_->writer_syncs())
+        // The log's durable end - the instance's one stream, so every core
+        // prints the same number. What a point-in-time restore's target is
+        // written in (BR-S7): an LSN noted before an operation to undo.
+        os << " wal_durable_lsn=" << wal_->durable_lsn()
+           << " wal_syncs=" << (wal_stats.syncs + wal_->writer_syncs())
            << " wal_interval_syncs=" << wal_stats.interval_syncs
            << " wal_sync_failures="
            << (wal_stats.sync_failures + wal_->writer_sync_failures());
@@ -1871,6 +2022,15 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
             os << " recovery_redo_start=" << recovery_->redo_start
                << " recovery_redo_start_recomputed=" << recovery_->redo_start_floored_from;
         }
+        // **A restore this mount completed** (BR-R2), absent when none was
+        // owed: which backup, where its replay started, and the stop it
+        // passed - the mount refuses to open short of it, so a printed stop
+        // is a stop reached. Core 0's: a peer recovered nothing.
+        if (recovery_->restore_backup_id != 0) {
+            os << " recovery_restore_backup=" << recovery_->restore_backup_id
+               << " recovery_restore_start=" << recovery_->restore_redo_start
+               << " recovery_restore_stop=" << recovery_->restore_stop_lsn;
+        }
         // R6-4's three, printed only when this mount actually resolved a
         // cross-owner transaction - one a log written before AT-S6 retired
         // 2PC left prepared. **Absent rather than zeroed**: nothing prepares
@@ -1927,6 +2087,10 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         os << " recovery_assertions_enforcing=" << recovery_->assertions_enforcing
            << " recovery_assertions_unrecovered=" << recovery_->assertions_unrecovered;
     }
+    // **The backup block** (BR): the instance's one control, so every core
+    // prints the same state; absent where nothing mounted a volume.
+    if (backup_ != nullptr) backup_->AppendMeta(os);
+    if (archiver_ != nullptr) archiver_->AppendMeta(os);
     // **BA's census block** (BA-R0, BA-S2; `base/contention.hpp`): the
     // instance's, summed over every core when read - unlike the WAL block
     // above, which is this core's. Every latch kind is printed, `other`
@@ -5319,8 +5483,22 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     return InsertParsed(std::get<parser::InsertStmt>(parsed.value()), scope);
 }
 
+std::optional<DispatchOutcome> CommandDispatcher::ArchiveRefusal() const {
+    // Archiving is failing and the WAL filesystem is near full: a write is
+    // refused by name rather than let the log fill the volume or recycle
+    // past the archive.
+    if (archiver_ == nullptr || !archiver_->blocking()) return std::nullopt;
+    const Status s = Status::ResourceExhausted(
+        "the WAL archive is failing (" + archiver_->last_error() +
+        ") and the WAL filesystem is near full; statements that write the log are refused "
+        "until archiving recovers (byte 0)");
+    return DispatchOutcome{ErrorReply(s), false, 0, s};
+}
+
 DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
                                                  Session& session) {
+    // The KWP load stream comes in here, past `DispatchInner`'s gate.
+    if (auto refused = ArchiveRefusal(); refused.has_value()) return *refused;
     // HandleInsert's body around the parsed half: same scope, same verdict
     // rule, so a load chunk and a textual statement are indistinguishable
     // from the write pipeline's side (KW5, BI2).

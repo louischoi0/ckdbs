@@ -129,6 +129,9 @@ Status FilePageDevice::WriteAt(PageId first_page_id, std::uint32_t nr_pages,
         return status;
     }
 
+    // BR's fence: disarmed, three atomic operations; armed, never beside a
+    // backup copier's read of an overlapping range (page_write_fence.hpp).
+    const PageWriteFence::WriteScope fenced(write_fence_, first_page_id, nr_pages);
     std::size_t remaining = static_cast<std::size_t>(nr_pages) * kPageSize;
     std::uint64_t offset = PageOffset(first_page_id);
     while (remaining > 0) {

@@ -31,6 +31,8 @@
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
+#include "kds/server/backup.hpp"
+#include "kds/server/wal_archive.hpp"
 #include "kds/server/page_reclaim.hpp"
 #include "kds/server/statement_epoch.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
@@ -189,6 +191,10 @@ public:
         // Directory the per-core WAL segment files live in. Defaults to
         // `<data_file>.wal` when left empty.
         std::string wal_dir;
+
+        // The WAL archive (BR-S4, `wal_archive.hpp`): on when one of its
+        // two destinations is set.
+        ArchiveSettings archive;
 
         // How often the `system`-group checkpoint task runs. Checkpoint
         // cadence is the RTO knob and an [OPEN] decision (wal.md sections
@@ -660,6 +666,8 @@ public:
     // whose log held nothing, which is the common case and a fact worth
     // being able to assert rather than assume.
     const MountRecovery& recovery() const noexcept { return recovery_; }
+    BackupControl& backup() noexcept { return *backup_; }
+    WalArchiver* archiver() noexcept { return archiver_ ? &*archiver_ : nullptr; }
 
     // **The peers, and the window to ask in is between `Start()` and
     // `RunUntilStopped()`.** Empty at `cores = 1` and before `Start()`;
@@ -920,6 +928,14 @@ private:
     // every core's `SHOW META` prints.
     ReclaimCounters reclaim_counters_;
     std::optional<PageReclaimer> reclaimer_;
+    // The instance's backup control (BR): its pin bounds the recycler and
+    // the reclaim gate, and every core's dispatcher runs BACKUP through it.
+    // After the anchor it reads `D` from, so it is destroyed - its log copy
+    // joined - before the anchor.
+    std::optional<BackupControl> backup_;
+    // The WAL archive (BR-S4), when configured: its floor bounds the
+    // recycler beside the backup's pin. Stopped before the log it reads.
+    std::optional<WalArchiver> archiver_;
     // BF-R9's statement-epoch slots, one per core.
     std::optional<StatementEpochs> statement_epochs_;
     // Where the mount's recovery scan ended (BF-R4): every record that names

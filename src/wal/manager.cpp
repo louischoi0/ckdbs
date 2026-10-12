@@ -356,7 +356,20 @@ Status WalManager::EnsureDurable(Lsn lsn) {
 }
 
 StatusOr<Lsn> WalManager::Append(const RecordSpec& spec, std::span<const std::byte> payload) {
-    auto lsn = stream_->Append(spec, payload);
+    return AppendThrough(spec, payload, /*seal=*/false);
+}
+
+StatusOr<Lsn> WalManager::AppendAndSeal(const RecordSpec& spec,
+                                        std::span<const std::byte> payload) {
+    return AppendThrough(spec, payload, /*seal=*/true);
+}
+
+StatusOr<Lsn> WalManager::AppendThrough(const RecordSpec& spec,
+                                        std::span<const std::byte> payload, bool seal) {
+    const auto append = [&] {
+        return seal ? stream_->AppendAndSeal(spec, payload) : stream_->Append(spec, payload);
+    };
+    auto lsn = append();
     // wal.md section 6-4's backpressure. Synchronous I/O means the drain
     // happens right here, on the appender's own stack.
     //
@@ -373,7 +386,7 @@ StatusOr<Lsn> WalManager::Append(const RecordSpec& spec, std::span<const std::by
         if (Status s = Flush(); !s.ok()) {
             return s;
         }
-        lsn = stream_->Append(spec, payload);
+        lsn = append();
     }
     if (!lsn.ok()) {
         // Only the exhausted-bound case is the ring's: every other status

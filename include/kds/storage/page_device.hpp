@@ -5,6 +5,7 @@
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
+#include "kds/storage/page_write_fence.hpp"
 
 // The block-device seam: "move these 8 KiB between a frame and stable
 // storage". This is the layer *below* the buffer pool, and the boundary
@@ -128,6 +129,25 @@ public:
     // Makes every previously written page - and the device's own size
     // metadata after a growth - durable.
     virtual Status Sync() = 0;
+
+    // ---- The backup copier's fence (BR, `page_write_fence.hpp`) --------
+    //
+    // An implementation whose writes can interleave with a concurrent read
+    // of the same bytes brackets every write with a `WriteScope` on this
+    // fence (`FilePageDevice`); one whose operations already exclude each
+    // other whole needs nothing (`MemoryPageDevice`'s device mutex). The
+    // copier arms it and reads through `ReadPageRunFenced`.
+    PageWriteFence& write_fence() noexcept { return write_fence_; }
+    Status ReadPageRunFenced(PageId first_page_id, std::uint32_t nr_pages,
+                             std::span<std::byte> out) {
+        write_fence_.BeginRead(first_page_id, nr_pages);
+        Status s = ReadPageRun(first_page_id, nr_pages, out);
+        write_fence_.EndRead();
+        return s;
+    }
+
+protected:
+    PageWriteFence write_fence_;
 };
 
 // ---- Shared argument validation ----------------------------------------

@@ -80,6 +80,7 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
     if (fail_stops != 0) {
         out += " fail_stops=" + std::to_string(fail_stops);
     }
+    if (backups_restored != 0) out += " backups_restored=" + std::to_string(backups_restored);
     if (gated_missing_rows != 0) {
         out += " gated_missing_rows=" + std::to_string(gated_missing_rows) + " [GATED: recovery]";
     }
@@ -957,6 +958,18 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
 
     std::uint64_t fired_before = 0;
     bool fail_stopped = false;
+
+    // BR-S8's window, from its own fork of the seed (`SimConfig::backup`).
+    std::optional<std::size_t> backup_open_after, backup_stop_after;
+    Rng backup_rng = Rng(config.seed).Fork("backup/" + std::to_string(iteration));
+    if (config.backup && !it.faults_on() && plan.entries.size() >= 4) {
+        const std::size_t n = plan.entries.size();
+        backup_open_after = backup_rng.Below(n / 2);
+        backup_stop_after = *backup_open_after + 1 + backup_rng.Below(n - *backup_open_after - 2);
+    }
+    std::optional<SimBackupImage> backup;
+    std::optional<Oracle> at_stop;
+
     for (std::size_t i = 0; i < plan.entries.size(); ++i) {
         const SimPlan::Entry& entry = plan.entries[i];
         for (const FaultKind kind : entry.faults) {
@@ -1016,6 +1029,34 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
             if (abandoned.ok()) ++verdict.abandoned_checkpoints;
             it.trace.Note("abandoned checkpoint after op " + std::to_string(i) + ": " +
                           (abandoned.ok() ? std::string("ok") : abandoned.message()));
+        }
+
+        if (backup_open_after && i == *backup_open_after) {
+            // No anchor yet (the boot's completion checkpoint publishes one)
+            // is the only refusal; the window is then simply not taken.
+            if (it.instance.BackupStart()) it.trace.Note("backup opened after op " + std::to_string(i));
+        } else if (it.instance.backup_open() && backup_stop_after && i == *backup_stop_after) {
+            auto taken = it.instance.BackupStop();
+            if (!taken.ok()) {
+                Fail(it, "backup stop after op " + std::to_string(i) + ": " +
+                             taken.status().message());
+                return false;
+            }
+            backup = std::move(taken.value());
+            // The oracle at the stop: a transaction open there is rolled
+            // back by the restore, and everything acknowledged before it is
+            // durable (STOP synced the log).
+            at_stop.emplace(oracle);
+            if (at_stop->in_txn()) at_stop->Rollback();
+            at_stop->MarkSynced();
+            it.trace.Note("backup stopped after op " + std::to_string(i));
+        } else if (it.instance.backup_open()) {
+            if (Status s = it.instance.BackupCopy(1 + static_cast<std::uint32_t>(
+                                                          backup_rng.Below(16)));
+                !s.ok()) {
+                Fail(it, "backup copy after op " + std::to_string(i) + ": " + s.message());
+                return false;
+            }
         }
 
         // **Fail-stop** (`wal/stream.hpp`): after a failed log write or sync the
@@ -1118,6 +1159,35 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     Reconcile(it);
     ReconcileDrops(it);
     record_recycling();
+    if (!verdict.ok || !backup.has_value()) return verdict.ok;
+
+    // **The backup, restored** (BR-S8): onto fresh devices, recovered past
+    // its stop, integral, and holding exactly what the oracle held at the
+    // stop - every acknowledged row, none written after.
+    auto restored = SimInstance::CreateFromBackup(InstanceOptions(config, plan.toggles), *backup);
+    if (!restored.ok()) {
+        Fail(it, "restore of the iteration's backup failed: " + restored.status().message());
+        return false;
+    }
+    if (Status s = restored.value()->SettleReclaim(); !s.ok()) {
+        Fail(it, "the restore's reclaim did not finish: " + s.message());
+        return false;
+    }
+    const IntegrityReport restored_report = CheckInstance(
+        restored.value()->store(), restored.value()->page_device(), restored.value()->catalog());
+    if (!restored_report.ok()) {
+        Fail(it, "restored backup: " + restored_report.Summary());
+        return false;
+    }
+    SimConfig as_synced = config;
+    as_synced.mode = SimMode::kSyncCrash;  // every row at the stop was synced
+    Iteration restore_it{*restored.value(), *at_stop, verdict, as_synced, iteration};
+    restore_it.trace = it.trace;
+    restore_it.trace.Note("reconciling the restored backup (start " +
+                          std::to_string(backup->start) + ", stop " +
+                          std::to_string(backup->stop) + ")");
+    Reconcile(restore_it);
+    if (verdict.ok) ++verdict.backups_restored;
     return verdict.ok;
 }
 
@@ -1145,6 +1215,7 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     recycles += other.recycles;
     segments_recycled += other.segments_recycled;
     crashes_reviving_segments += other.crashes_reviving_segments;
+    backups_restored += other.backups_restored;
     fail_stops += other.fail_stops;
     unlogged_ddl_lost_tables += other.unlogged_ddl_lost_tables;
     if (ok && !other.ok) {

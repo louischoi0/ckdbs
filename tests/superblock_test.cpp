@@ -44,6 +44,21 @@ TEST(SuperBlockTest, EncodeDecodeRoundTrip) {
     EXPECT_EQ(decoded.value().wal_anchor(0).redo_start_lsn, 8192u);
 }
 
+// BR (v23): the lineage and the restore owed travel through the page.
+TEST(SuperBlockTest, TheLineageAndARestoreOwedRoundTrip) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    EXPECT_FALSE(sb.restore_owed());
+    sb.SetLineageId(0xfeedfacecafebeefULL);
+    sb.SetRestoreBackupId(42);
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().lineage_id(), 0xfeedfacecafebeefULL);
+    ASSERT_TRUE(decoded.value().restore_owed());
+    EXPECT_EQ(decoded.value().restore_backup_id(), 42u);
+}
+
 TEST(SuperBlockTest, DecodeRejectsBadMagic) {
     PageBuf buf{};  // zero-initialized: magic == 0, never a valid superblock
     auto decoded = SuperBlock::Decode(AsConstSpan(buf));

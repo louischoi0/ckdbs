@@ -251,6 +251,12 @@ public:
     // full - the caller drains and retries.
     StatusOr<Lsn> Append(const RecordSpec& spec, std::span<const std::byte> payload = {});
 
+    // Append, then Seal, in **one hold of the latch** (BR-S2): nothing
+    // another core appends can land between the record and the seal, so the
+    // record's end is where the segment - and a scan of it - ends. A
+    // backup's BACKUP_END, so its stop is exactly where its log ends.
+    StatusOr<Lsn> AppendAndSeal(const RecordSpec& spec, std::span<const std::byte> payload);
+
     // Writes the staged bytes to the device. Not durable until Sync().
     Status Flush();
 
@@ -307,6 +313,8 @@ private:
     // latch to finish, so a caller may hold it.
     void WaitOutFlushInFlight() const noexcept;
     Status SealLocked();
+    // Append's body, under the latch the caller holds.
+    StatusOr<Lsn> AppendLocked(const RecordSpec& spec, std::span<const std::byte> payload);
     // Walks segment `segment_no` forward and leaves append_lsn_ at its
     // durable end, or seals it if a PAD marker is found. Open() only.
     Status ScanTail(std::uint64_t segment_no);

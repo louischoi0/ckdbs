@@ -247,6 +247,21 @@ Status WalStream::SealLocked() {
 }
 
 StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byte> payload) {
+    LatchGuard guard(latch_);
+    return AppendLocked(spec, payload);
+}
+
+StatusOr<Lsn> WalStream::AppendAndSeal(const RecordSpec& spec,
+                                       std::span<const std::byte> payload) {
+    LatchGuard guard(latch_);
+    auto lsn = AppendLocked(spec, payload);
+    if (!lsn.ok()) return lsn;
+    if (Status s = SealLocked(); !s.ok()) return s;
+    return lsn;
+}
+
+StatusOr<Lsn> WalStream::AppendLocked(const RecordSpec& spec,
+                                      std::span<const std::byte> payload) {
     const std::size_t total = EncodedRecordSize(payload.size());
     // Neither refusal meets a BTREE_SPLIT: `Open`'s floors hold the largest.
     if (total > usable_segment_bytes()) {
@@ -258,7 +273,6 @@ StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byt
                                        " bytes is larger than the ring");
     }
 
-    LatchGuard guard(latch_);
     if (stopped()) return StoppedStatus();
 
     if (sealed() || SegmentRemaining() < total) {

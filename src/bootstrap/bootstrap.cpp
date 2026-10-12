@@ -119,6 +119,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
     // thing this build's `Decode` will read back.
     server::SuperBlock sb =
         server::SuperBlock::CreateFresh(now_unix_seconds, inline_cell_width, cores);
+    sb.SetLineageId(server::DrawLineageId());  // BR-R10: the volume's first history
     sb.Encode(created.value().bytes());
     if (log != nullptr && log->enabled(LogLevel::kInfo)) {
         log->Info("bootstrap", "no superblock found; creating a fresh database (version " +

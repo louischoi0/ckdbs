@@ -105,6 +105,13 @@ StatusOr<wal::CheckpointAnchorRecord> SuperBlockCheckpointAnchor::EncodeLanding(
         if (Status s = superblock_.SetWalAnchor(kFoldSlot, fields); !s.ok()) {
             return s;
         }
+        // **A restore is discharged by the first anchor written after it**
+        // (BR-R2, `br-s0-census.md` §2). Every publish follows the mount's
+        // recovery, which refused to open short of the stop, so the fields
+        // and the anchor change in this one page image: a crash before it
+        // lands mounts the restore again from the backup's start, and none
+        // after it can see the copied anchor's start without the fields.
+        superblock_.SetRestoreBackupId(0);
 
         // Fetched rather than cached: the superblock page is the store's to
         // move, and holding a span across calls would outlive whatever frame

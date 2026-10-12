@@ -120,6 +120,13 @@ struct MountRecovery {
     // and no compensation names them, since the drop's `X` waited out every
     // writer of the relation.
     wal::Lsn scan_end = 0;
+    // A restore this mount completed (BR-R2): the backup it came from and
+    // the stop its scan passed. Zero when the mount owed none. Set by the
+    // mount, which refuses to open short of the stop, so a nonzero stop
+    // here is a stop reached.
+    std::uint64_t restore_backup_id = 0;
+    wal::Lsn restore_redo_start = 0;
+    wal::Lsn restore_stop_lsn = 0;
 
     // ---- What undo rolled back ----
     std::uint64_t transactions_rolled_back = 0;

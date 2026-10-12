@@ -108,6 +108,7 @@ public:
 
     // ---- Transactions ---------------------------------------------------
 
+    bool in_txn() const noexcept { return in_txn_; }
     void Begin() {
         working_ = tables_;
         touched_.clear();

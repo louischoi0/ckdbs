@@ -560,9 +560,13 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kVarHeapRelease), 28);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kBtreeInsert), 29);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kBtreeSplit), 30);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kBackupBegin), 31);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kBackupEnd), 32);
     // Derived from the enum now, not typed here: pinning it as a literal is
     // what let type 23 ship unwritable (record.hpp).
-    EXPECT_EQ(kMaxAssignedRecordType, 30);
+    EXPECT_EQ(kMaxAssignedRecordType, 32);
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kBackupBegin)));
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kBackupEnd)));
 
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kUndoWrite)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kFree)));

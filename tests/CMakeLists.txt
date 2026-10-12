@@ -165,6 +165,8 @@ add_executable(kds_tests
     bulk_insert_test.cpp
     drop_table_test.cpp
     drop_table_reclaim_test.cpp
+    backup_restore_test.cpp
+    backup_archive_test.cpp
     in_run_reclaim_test.cpp
     page_free_test.cpp
     kwp_load_server_test.cpp

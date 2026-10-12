@@ -187,8 +187,12 @@ FileLogDevice::FileLogDevice(std::string dir, std::uint32_t core_id, std::uint64
       segment_size_(segment_size),
       dir_fd_(std::move(dir_fd)) {}
 
+std::string FileLogDevice::SegmentFileName(std::uint32_t core_id, std::uint64_t segment_no) {
+    return NamePrefix(core_id) + std::to_string(segment_no) + kNameSuffix;
+}
+
 std::string FileLogDevice::SegmentPath(std::uint64_t segment_no) const {
-    return dir_ + "/" + NamePrefix(core_id_) + std::to_string(segment_no) + kNameSuffix;
+    return dir_ + "/" + SegmentFileName(core_id_, segment_no);
 }
 
 StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& dir,
@@ -581,11 +585,30 @@ Status FileLogDevice::DetachBelow(std::uint64_t segment_no) {
     return Status::OK();
 }
 
+std::uint64_t FileLogDevice::lowest_segment() const {
+    std::lock_guard<std::mutex> guard(segments_mutex_);
+    std::uint64_t lowest = first_segment();
+    for (const std::uint64_t s : detached_) lowest = std::min(lowest, s);
+    return lowest;
+}
+
 Status FileLogDevice::ReclaimDetached() {
     std::vector<std::uint64_t> pending;
+    std::vector<std::uint64_t> held;
     {
         std::lock_guard<std::mutex> guard(segments_mutex_);
         pending.swap(detached_);
+        // Not yet archived: kept, queued, for a later reclaim (BR-S4).
+        const std::uint64_t hold = hold_from_.load(std::memory_order_acquire);
+        for (auto it = pending.begin(); it != pending.end();) {
+            if (*it >= hold) {
+                held.push_back(*it);
+                it = pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        detached_.insert(detached_.end(), held.begin(), held.end());
     }
     if (pending.empty()) {
         return Status::OK();
