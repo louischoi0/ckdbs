@@ -456,15 +456,20 @@ TEST(WireRowBatchTest, TheByteLayoutIsWhatTheSpecSays) {
     // Pinned against the encoder rather than only round-tripped: a client is
     // written against protocol.md §6, not against this code, so a layout
     // change has to be a deliberate act.
-    const auto schema = SchemaOf({Column(0, "id", catalog::kTypeValInt32)});
+    // Both columns declare int32: column 0 is the Keystone id and is u64
+    // whatever it declares, column 1 is written at its own width.
+    const auto schema = SchemaOf({Column(0, "id", catalog::kTypeValInt32),
+                                  Column(1, "v", catalog::kTypeValInt32)});
     RowBatchWriter writer;
-    ASSERT_TRUE(writer.AppendRow(schema, std::vector<parser::AstValue>{Int(1)}).ok());
+    ASSERT_TRUE(writer.AppendRow(schema, std::vector<parser::AstValue>{Int(1), Int(2)}).ok());
     const auto payload = writer.Finish();
 
     const std::vector<std::uint8_t> expected = {
-        0x01, 0x00,              // row_count u16 = 1
-        0x04, 0x00, 0x00, 0x00,  // field len i32 = 4
-        0x01, 0x00, 0x00, 0x00,  // value int32 = 1, little-endian
+        0x01, 0x00,                                      // row_count u16 = 1
+        0x08, 0x00, 0x00, 0x00,                          // field len i32 = 8
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // id u64 = 1, LE
+        0x04, 0x00, 0x00, 0x00,                          // field len i32 = 4
+        0x02, 0x00, 0x00, 0x00,                          // value int32 = 2, LE
     };
     ASSERT_EQ(payload.size(), expected.size());
     for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -472,15 +477,15 @@ TEST(WireRowBatchTest, TheByteLayoutIsWhatTheSpecSays) {
     }
 }
 
-// ---- A pk declared narrower than 64 bits is cut on the wire --------------
+// ---- A pk declared narrower than 64 bits travels as u64 ------------------
 //
-// `docs/inflight/bugs/a-pk-declared-narrower-than-sixty-four-bits-is-cut-on-the-wire.md`
-// (filed by BK-S1 under BK-Q6 (a)): protocol.md §6 says field 0 of every
-// user relation is the Keystone id as u64, and the encoder writes it at the
-// declared column's width. `DISABLED_` while the bug is open so the suite
-// stays green; the letter that takes the fix drops the prefix.
+// protocol.md §6: field 0 of every user relation is the Keystone id as u64,
+// whatever integer width the column declares - the width is display
+// metadata (heap-and-tuple.md §4.1), and the id can exceed it. The encoder
+// used to write it at the declared width, so an id past it reached the
+// client as another number.
 
-TEST(WireRowBatchTest, DISABLED_AnInt32PkAboveItsDeclaredWidthReachesTheClientWhole) {
+TEST(WireRowBatchTest, AnInt32PkAboveItsDeclaredWidthReachesTheClientWhole) {
     const auto schema = SchemaOf({Column(0, "id", catalog::kTypeValInt32),
                                   Column(1, "v", catalog::kTypeValInt64)});
     // A Keystone id inside the id space and past int32.
@@ -493,6 +498,29 @@ TEST(WireRowBatchTest, DISABLED_AnInt32PkAboveItsDeclaredWidthReachesTheClientWh
     ASSERT_TRUE(rows.ok()) << rows.status().message();
     EXPECT_EQ(rows.value()[0][0].bytes.size(), 8u) << "a Keystone id is u64 on the wire";
     EXPECT_EQ(DecodeInt(rows.value()[0][0].bytes).value(), id);
+}
+
+TEST(WireRowBatchTest, ANarrowPkIsDescribedEightBytesUnderItsDeclaredType) {
+    const auto fields = DescribeSchema(SchemaOf({Column(0, "id", catalog::kTypeValInt8),
+                                                 Column(1, "v", catalog::kTypeValInt8)}));
+    EXPECT_EQ(fields[0].type_oid, catalog::kTypeValInt8) << "the declared type stays named";
+    EXPECT_EQ(fields[0].type_len, 8) << "the Keystone's width is fixed";
+    EXPECT_EQ(fields[1].type_len, 1) << "only column 0 is the Keystone";
+}
+
+TEST(WireRowBatchTest, AnIntegerPastItsDeclaredWidthIsRefusedRatherThanCut) {
+    // Column 1 is not the Keystone, so nothing widens it: a value that
+    // reached the encoder past its width is refused, never sent cut.
+    const auto schema = SchemaOf({Column(0, "id", catalog::kTypeValInt64),
+                                  Column(1, "v", catalog::kTypeValInt16)});
+    RowBatchWriter writer;
+    EXPECT_EQ(writer.AppendRow(schema, std::vector<parser::AstValue>{Int(1), Int(32768)})
+                  .code(),
+              StatusCode::kOutOfRange);
+    EXPECT_TRUE(writer.AppendRow(schema, std::vector<parser::AstValue>{Int(1), Int(-32768)})
+                    .ok());
+    EXPECT_TRUE(writer.AppendRow(schema, std::vector<parser::AstValue>{Int(1), Int(32767)})
+                    .ok());
 }
 
 }  // namespace

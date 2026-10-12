@@ -447,6 +447,16 @@ public:
                             return Status::Corruption("a sub-chain's value column is "
                                                       "unresolvable");
                         }
+                        if (probe == nullptr) {
+                            return Status::Corruption("an IN sub-chain has no probe");
+                        }
+                        // A NULL probe against any row is UNKNOWN for IN
+                        // and NOT IN alike, and no later row can change
+                        // that, so one row settles it.
+                        if (IsNull(*probe)) {
+                            saw_null = true;
+                            return storage::VisitControl::kStop;
+                        }
                         const parser::AstValue& candidate = frame.Get(sub.value);
                         if (IsNull(candidate)) {
                             // The dangerous half of NOT IN: a NULL in the
@@ -457,8 +467,7 @@ public:
                             saw_null = true;
                             return storage::VisitControl::kContinue;
                         }
-                        if (probe != nullptr && !IsNull(*probe) &&
-                            CompareValues(/*type_val=*/0, *probe, candidate,
+                        if (CompareValues(/*type_val=*/0, *probe, candidate,
                                           parser::CompareOp::kEq)) {
                             saw_match = true;
                             return storage::VisitControl::kStop;

@@ -756,7 +756,7 @@ over expressions, no parenthesized nesting. Each conjunct is one of
 | `col op other.col` | kCompareValue (column RHS) | how correlation is written |
 | `col op (SELECT ...)` | kCompareSubquery | scalar; >1 row is a runtime `CardinalityViolation` |
 | `col IN (SELECT ...)` | kInSubquery | |
-| `col NOT IN (SELECT ...)` | kNotInSubquery | tri-state, not `!IN` — stays correct when NULLs land |
+| `col NOT IN (SELECT ...)` | kNotInSubquery | tri-state, not `!IN`: a NULL in the result with no match, or a NULL probe against a non-empty result, is unknown and admits no row; against an empty result it is true |
 | `EXISTS (SELECT ...)` | kExists | no column on the left |
 | `NOT EXISTS (SELECT ...)` | kNotExists | |
 | `col BETWEEN low AND high` | kBetween | inclusive both ends; lowers to `>= low AND <= high`, the range on the step is only a hint |

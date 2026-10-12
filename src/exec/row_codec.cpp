@@ -85,13 +85,6 @@ std::int64_t SignExtend(std::uint64_t raw, int width) {
     return static_cast<std::int64_t>(raw);
 }
 
-bool FitsSigned(std::int64_t v, int width) {
-    if (width >= 8) return true;
-    std::int64_t lo = -(std::int64_t{1} << (width * 8 - 1));
-    std::int64_t hi = (std::int64_t{1} << (width * 8 - 1)) - 1;
-    return v >= lo && v <= hi;
-}
-
 int IntWidthFor(std::uint32_t type_val) {
     switch (type_val) {
         case kTypeValInt8: return 1;

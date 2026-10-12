@@ -113,6 +113,16 @@ inline constexpr std::uint16_t kFieldFlagKeystone = 0x1;
 // they came from.
 inline constexpr std::uint16_t kFieldFlagDiagnosticLine = 0x2;
 
+// The type a column's values are written as. A relation's column 0 is its
+// Keystone id, a u64 on the wire whatever integer width the column declares
+// (protocol.md §6; the declared width is display metadata,
+// heap-and-tuple.md §4.1), so a narrow integer there is written as eight
+// bytes while `type_oid` still names the declared type. Every other column
+// is written as its own type. `col_pos` is the column's position in its
+// relation, which is what makes it the Keystone - not its place in a
+// result set.
+std::uint32_t WireValueType(std::uint32_t type_val, std::uint32_t col_pos) noexcept;
+
 // Wire bytes for a fixed-width column type, or -1 when it is variable.
 // Answers -1 for a type this build does not know, which is the safe
 // reading: a consumer then relies on the per-value length, which is always
@@ -154,8 +164,10 @@ Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& val
 // fold's output row (`SUM(v)`, `COUNT(*)`) has a type and a scale and **no
 // `SysColumnRow` anywhere** - the aggregate spec carries the pair, resolved
 // at compile, precisely because the fold sits outside the catalog. The
-// overload above is this one with the two fields read off the row, so there
-// is one encoder and no arm that can drift.
+// overload above is this one with the two fields read off the row and the
+// type passed through `WireValueType`, so there is one encoder and no arm
+// that can drift. An integer that does not fit its type's width is refused
+// OutOfRange, never written cut.
 Status EncodeValue(std::uint32_t type_val, std::uint32_t type_mod,
                    const parser::AstValue& value, std::vector<std::byte>& out);
 
