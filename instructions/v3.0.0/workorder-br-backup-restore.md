@@ -7,6 +7,8 @@ change. **Opened 2026-10-12** on the operator's word (BR-Q0 (a), §10) on
 `br-backup-restore`; BR-Q1..Q6 adopted on the operator's standing go-ahead
 of 2026-10-12 (go-ahead-achieving-milestone), §10. BR-S0's census is
 `br-s0-census.md`; where it restates a rule of §2, the census governs.
+**Built to its close on 2026-10-12** (§11) on `br-backup-restore`; merge, push
+and any tag wait for the operator's word.
 
 The operator's words, translated:
 
@@ -454,7 +456,7 @@ where BR-S0 found its premise false (`br-s0-census.md`).
 | S7 | PITR to an LSN or `latest` through the archive; a damaged archived segment refused | LSN only (BR-Q5 (b)) |
 | S8 | `d861b46a`, `d7ff583a`, `a8110b05`: the simulation's `--backup` op and `SimLoop.ABackupTakenAcrossTheRunRestoresToItsStopOnEveryCommittedSeed`; `tools/br_drill.py` (equivalence B/D/PITR, cases 1, 3-7) | case 2 (a kill between BACKUP_END and the manifest) is covered by construction - no manifest, no backup - and not driven; case 8 by the simulation's reclaims under the pin |
 | S9 | `tools/kds_backup.py` (`base`, `snapshot`, `verify`, `list`, `expire`), `manual/server/backup-restore.md`, `SHOW META` blocks | the runbook was followed in the development VM, not a fresh one |
-| S10 | `f60a061c`: `bench/v3.0.0/results-br-close-overhead-v2.7.0-913-ga8110b05.md` (no resolvable statement-path cost with backup and archive off) and `results-br-close-backup-restore-v2.7.0-913-ga8110b05.md` (what BR costs when on, archive throughput, restore time) | the measurement found a restore of a 3.5 GiB window refused at its completion checkpoint (a dirty table larger than the WAL ring) - the engine's, reproduced on `fb953f07`; fixed in recovery (`CheckpointAfterRecovery` writes its pages first), the cadence's half a bug entry |
+| S10 | `f60a061c`, re-measured at `90cdf918` (the 4 GiB-window restore opens 3/3): `bench/v3.0.0/results-br-close-overhead-v2.7.0-913-ga8110b05.md` (no resolvable statement-path cost with backup and archive off) and `results-br-close-backup-restore-v2.7.0-913-ga8110b05.md` (what BR costs when on, archive throughput, restore time) | the measurement found a restore of a 3.5 GiB window refused at its completion checkpoint (a dirty table larger than the WAL ring) - the engine's, reproduced on `fb953f07`; fixed in recovery (`CheckpointAfterRecovery` writes its pages first), the cadence's half a bug entry |
 | S11 | `docs/spec/backup.md`, `wal.md` §11/§13, `known-gaps.md`, `CLAUDE.md`'s row | - |
 
 **A recovery defect BR found and fixed (BR-R1)**: a rolled-back DDL's catalog

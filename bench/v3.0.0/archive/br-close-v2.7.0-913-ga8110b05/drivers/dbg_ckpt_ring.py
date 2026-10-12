@@ -39,11 +39,11 @@ srv2 = Server(label, binary, root, 31861, cores=cores, durability="relaxed", fra
 t1 = time.time()
 try:
     srv2.start()
-    c2 = srv2.conn()
+    c2 = srv2.conn_on_core(0) if cores > 1 else srv2.conn()
     m2 = bb.meta_all(c2)
-    print("mount OK after %.1f s: recovery_records=%s redo_applied=%s analysis_us=%s redo_us=%s checkpoint_us=%s" % (
-        time.time() - t1, m2.get("recovery_records"), m2.get("recovery_redo_applied"), m2.get("recovery_analysis_us"),
-        m2.get("recovery_redo_us"), m2.get("recovery_checkpoint_us")))
+    print("mount OK after %.1f s (core %s): recovery_records=%s redo_applied=%s analysis_us=%s redo_us=%s checkpoint_us=%s redo_start=%s durable=%s" % (
+        time.time() - t1, m2.get("core"), m2.get("recovery_records"), m2.get("recovery_redo_applied"), m2.get("recovery_analysis_us"),
+        m2.get("recovery_redo_us"), m2.get("recovery_checkpoint_us"), m2.get("recovery_redo_start"), m2.get("wal_durable_lsn")))
     c2.close()
     srv2.stop()
 except SystemExit as e:

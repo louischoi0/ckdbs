@@ -23,6 +23,8 @@ why the base copy's own speed is set by the throttle and not by the device.
 
 - **A** = `fb953f07` (`v2.7.0-908-gfb953f07`). Used only for the diagnosis in section 6; every number above is B's.
 - **B** = `a8110b05` (`v2.7.0-913-ga8110b05`), BR closed in code. Binary `af25c71f…`.
+- **C** = `90cdf918` (`v2.7.0-915-g90cdf918`), which writes the mount's dirty pages before its completion checkpoint. Section 11 only: the
+  last row of the table above (the refused restore) opens there. Binary `bd98b0ea…`.
 - The statement-path overhead A/B with backup and archive off is in `results-br-close-overhead-v2.7.0-913-ga8110b05.md`.
   This file is B alone (A has no archive and no backup), so its baseline is B with the feature off, in the same run.
 
@@ -429,6 +431,104 @@ as findings and not decided here:
 
 Raw numbers, drivers and logs: `bench/v3.0.0/archive/br-close-v2.7.0-913-ga8110b05/` (`out/m1a`, `out/m1a-diag`, `out/m1b`,
 `out/m2`, `out/m3`, `out/stall`, `logs`, `drivers`).
+
+## 11. Re-measured at 90cdf918 (`v2.7.0-915-g90cdf918`)
+
+**The window that did not open now opens, three attempts out of three, and a crash at `cores = 4` right after the bulk load
+mounts.** The one engine change between `a8110b05` and `90cdf918` that touches restore is in
+`src/server/mount_recovery.cpp`: `CheckpointAfterRecovery` writes every page the replay dirtied before it begins the checkpoint,
+so `CHECKPOINT_BEGIN` carries an empty dirty-page table (13 added lines; `diff -rq` of the `src/` and `include/` of the two exports
+names only that file, and `git diff --stat a8110b05 90cdf918 -- src include CMakeLists.txt` is that one file). Sections 1 to 10 are
+unchanged and describe `a8110b05`; this section is `90cdf918` (C), and its numbers are the only ones measured at C.
+
+| Item | Value |
+|---|---|
+| Executed | 2026-10-12, 17:46 to 18:11 UTC: build 17:46-17:47; backup re-takes 17:47-17:51; restores 17:51-18:04; the kill tests 18:04-18:08; the 1,179 MiB-window comparison 18:08-18:11 |
+| Commit | `90cdf918` (`v2.7.0-915-g90cdf918`, committed 2026-10-12 17:40:36 UTC), the worktree's HEAD in `br-backup-restore`. Binary C: Release build of `git archive 90cdf918` (`-DCMAKE_BUILD_TYPE=Release -DKDS_BUILD_TESTS=OFF -DKDS_BUILD_SIM=OFF -DKDS_BUILD_BENCH=OFF`), mtime 17:47:02 UTC, after the commit (17:40:36 UTC); measured copy `bin/kds_server-C` sha256 `bd98b0ea667248ee2bcc27e63556dcfe669dc72158e4a8bdbbcea455288ffb26`. B (`af25c71f…`) and A (`09c82ae3…`) are the copies of section 1, unchanged |
+| Device, host, pinning | as section 1 (`/dev/nvme0n1p1`, ext4, 165-173 MB/s fsynced; server `taskset -c 0,2,4,6`, reactors `4,2,6,0`, driver `taskset -c 7`); ports 31881 (backup re-take), 31841 (restores), 31861 (kill test). `os.sync()` and a 3 s pause before every timed attempt, outside the timing |
+| Host load | 1-minute load before each attempt: 2.13 (backup re-take), 2.22-2.51 (the 4,059 MiB restores), 2.11-3.73 (the 1,179 MiB comparison); `pgrep` lists held no compiler, build or test process (only this run's own shell wrappers); the kill test's load was not read (above); **no per-second sampler ran for this section**, so a foreign process under 20 s long would not show |
+| Suite | not executed; the statement path was not re-measured (the change is in the mount only) |
+
+**The backup was re-taken, not reused.** The first measurement's work directory was removed when it finished. The recipe is
+section 4's: binary B, `cores = 4`, `archive_dir` set, the 540,000-row ballast loaded alone (77.9-79.3 s), then `BACKUP START`,
+`COPY`, `STOP`. **The window depends on when the cadence's checkpoint last published**: with a 5 s pause after the load the new
+backup's window was 1,179 MiB (start LSN 3,019,927,616, 17:47-17:49); with none it was 4,059 MiB (start LSN 4,760, the log's first bytes;
+the original, taken after 5 s, was 3,470 MiB). The 4,059 MiB backup is the one restored below; it is the same class as the one that
+refused and 17 % longer. The 1,179 MiB one is used for the comparison at the end.
+
+### The backup that refuses at B opens at C
+
+Backup 2307654901409108541: path B, start LSN 4,760, stop LSN 4,256,700,240, a window of 4,059.5 MiB (3.96 GiB) of log, 137,600
+data pages, 5.1 GiB on disk (`du`), taken at load 2.13 with no competing process.
+
+| binary | attempt | backup files | exit status | total | layout (copy + verify) | mount | load before |
+|---|---|---|---|---|---|---|---|
+| B `a8110b05` | 1 | cold | 1 | 63.5 s | 59.9 s | refused: `completion checkpoint: WalStream: record of 1649312 bytes is larger than the ring` | 2.51 |
+| C `90cdf918` | 1 | cold | 0 | 99.1 s | 88.5 s | 10.5 s | 2.49 |
+| C `90cdf918` | 2 | warm | 0 | 72.3 s | 61.5 s | 10.7 s | 2.35 |
+| C `90cdf918` | 3 | warm | 0 | 67.3 s | 56.9 s | 10.3 s | 2.22 |
+| C `90cdf918`, serving (`SHOW META` read, then stopped) | 4 | warm | 0 | 65.3 s | 54.6 s | 10.3 s | 2.36 |
+
+Every C restore printed `restore of backup 2307654901409108541 recovered past its stop lsn 4256700240`; `--verify-backup` of the
+backup is 12.7 s at C (11.0 s in a pass that did not drain the page cache). A first C pass that did **not** call `sync` between
+attempts read layout 33.8-58.6 s and mount 10.5-13.6 s for three attempts and, for the serving run, a mount of 33.9 s (analysis
+9.8 s, redo 11.9 s, completion checkpoint 12.1 s) after an 82.9 s layout; it is replaced by the table above, because the
+previous attempts' dirty page cache (about 5 GiB each) was most likely still draining on a 165 MB/s device (inferred from the
+change when `sync` was added; not isolated).
+
+**What the mount spent, the serving run** (`SHOW META` of core 0): 1,633,761 records scanned, 5,401 committed, 80,292 redo
+applied, no undo; analysis 1.08 s, redo 2.06 s, high-water 0 s, undo 0 s, completion checkpoint 7.11 s; the phases sum to 10.25 s of
+the 10.31 s mount, so, unlike the smaller windows of section 5, nothing of this mount is unattributed.
+
+- **Replay rate.** Analysis plus redo cover the 4,059.5 MiB window in 3.14 s: **1,291 MiB/s** of log, with the log warm in the page
+  cache after the layout wrote it. The whole mount, completion checkpoint included, is 394 MiB/s of window (4,059.5 MiB in 10.31
+  s). Section 5's 376, 405 and 318 MiB/s were windows in which redo applied more records per MiB (99,841 of 540,798 records at
+  199 MiB) and are not comparable rate for rate; this window applies 80,292 of 1,633,761 records, presumably because the copied data file
+  was written back after most of them (not checked).
+- **Where the time moved.** The completion checkpoint is now 7.1 s of the mount: it writes the dirty pages before it begins (how many pages
+  was not recorded). For this window the alternative was a refusal.
+- **Layout is the larger part.** 54.6-88.5 s for 5,222 MiB (59 MiB/s cold, 85-96 MiB/s warm), against 113-124 MiB/s for the
+  1.08-1.10 GiB backups of section 5: the layout copies and makes durable the 4 GiB of the window's log as well as the data file.
+  Total restore time of the 3.96 GiB window is 65-99 s.
+
+### The crash at `cores = 4` that A could not mount
+
+`dbg_ckpt_ring.py C 540000 0 4` (same flow as section 6): `cores = 4`, the 540,000-row ballast loaded alone (87.9 s; the 1-minute load was not
+read before this run, it read 3.11 at the end of the first run of the test and 2.11 before the next cell), `kill -9` at once, restart of the same files. **The mount succeeds in 10.2 s on core 0**: 1,633,558 records, 406,686 redo
+applied, analysis 1.32 s, redo 2.06 s, completion checkpoint 6.76 s, durable LSN 4,256,008,800. A first run of the same test
+mounted in 9.1 s; it read the recovery block from a peer core (a peer prints zeros), so its numbers are not kept. A at
+`fb953f07` refused the same flow (section 6), and B at `a8110b05` refused the restore of the same class of window.
+
+### Windows B could already mount: no slowdown, one outlier
+
+The 1,179 MiB-window backup (id 3493310068671412471, start LSN 3,019,927,616, stop 4,256,710,024), two attempts each:
+
+| binary | attempt | exit status | total | layout | mount | completion checkpoint (serving run) |
+|---|---|---|---|---|---|---|
+| B `a8110b05` | 1 (cold) | 0 | 52.6 s | 22.9 s | 29.6 s | 2.99 s |
+| B `a8110b05` | 2 (warm) | 0 | 20.8 s | 16.7 s | 4.1 s | |
+| C `90cdf918` | 1 (cold) | 0 | 29.2 s | 23.1 s | 6.0 s | 2.28 s |
+| C `90cdf918` | 2 (warm) | 0 | 29.0 s | 25.7 s | 3.2 s | |
+
+The mount is 3.2-6.0 s at C and 4.1-29.6 s at B; B's first attempt is an outlier of unknown cause (its second attempt, 4.1 s, and its
+serving run, 4.0 s, were not), so two attempts per binary say only that C is not slower here: the completion checkpoints are
+2.3-3.0 s in the serving runs; what B's wrote was not examined. Redo applied 0 of 474,728 records in both. The smaller windows of section 5 were not repeated at C.
+
+### What follows
+
+- **BR-S10's refusal is closed at `90cdf918`** for a replay window that dirties more pages than the ring holds records; the
+  loud refusal of section 5 became a restore that opens, and its cost is the checkpoint's page writes (7 s of 10 for 4 GiB of
+  window).
+- **`D` still lags.** Nothing in this change moves the redo start: a backup taken right after a bulk load still has a 4 GiB
+  window (4,059 MiB here), and its cost is now layout time (the log copied) and the completion checkpoint, not a refusal. BR-Q3's
+  question (a checkpoint at `backup_start`) is, for this window, now about restore time and not about whether it opens.
+- **Not re-measured at C:** the statement-path A/B (section 1 of the overhead file), the archive and backup cells, M2, and the
+  restores of the 199 and 329 MiB windows. The change is in the mount only; this section is the re-run of the failed restore and
+  of the A-side diagnosis, as asked.
+
+Raw numbers: `archive/br-close-v2.7.0-913-ga8110b05/out/m3/` (`retake-backup-0s.json`, `retake-backup-5s.json`,
+`restore-B-retaken-0s.json`, `restore-C-retaken-0s.json`, `restore-C-retaken-0s-nosync-pass.json`, `restore-B-retaken-5s.json`,
+`restore-C-retaken-5s.json`) and `logs/dbg_ckpt_ring_C_c4.txt`; drivers `br_retake.py`, `br_restore2.py`, `build_c.sh`.
 
 ## Host record
 

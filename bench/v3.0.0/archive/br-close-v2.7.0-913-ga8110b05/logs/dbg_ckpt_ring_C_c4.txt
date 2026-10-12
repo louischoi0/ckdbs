@@ -1,0 +1,30 @@
+t=1.5 rows=20000 ckpt_runs=0.0 start_refused=0.0 last_completed=0.0 dirty_at_start=0.0 pool_resident=5132.0 durable_lsn=134761600.0
+t=3.2 rows=40000 ckpt_runs=0.0 start_refused=0.0 last_completed=0.0 dirty_at_start=0.0 pool_resident=10248.0 durable_lsn=282126288.0
+t=5.4 rows=60000 ckpt_runs=0.0 start_refused=0.0 last_completed=0.0 dirty_at_start=0.0 pool_resident=15365.0 durable_lsn=470463496.0
+t=7.0 rows=80000 ckpt_runs=0.0 start_refused=0.0 last_completed=0.0 dirty_at_start=0.0 pool_resident=20480.0 durable_lsn=613309888.0
+t=8.7 rows=100000 ckpt_runs=0.0 start_refused=0.0 last_completed=0.0 dirty_at_start=0.0 pool_resident=25596.0 durable_lsn=740186384.0
+t=11.6 rows=120000 ckpt_runs=0.0 start_refused=0.0 last_completed=0.0 dirty_at_start=0.0 pool_resident=30713.0 durable_lsn=944293896.0
+t=13.7 rows=140000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=35828.0 durable_lsn=1077495056.0
+t=15.3 rows=160000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=40944.0 durable_lsn=1224072136.0
+t=17.5 rows=180000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=46061.0 durable_lsn=1411054440.0
+t=21.7 rows=200000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=51176.0 durable_lsn=1543480584.0
+t=26.3 rows=220000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=56293.0 durable_lsn=1677721496.0
+t=30.4 rows=240000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=61409.0 durable_lsn=1879048088.0
+t=32.5 rows=260000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=66525.0 durable_lsn=2033655280.0
+t=34.1 rows=280000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=71641.0 durable_lsn=2158263184.0
+t=39.7 rows=300000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=76757.0 durable_lsn=2348810136.0
+t=47.9 rows=320000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=81873.0 durable_lsn=2483027952.0
+t=52.4 rows=340000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=86989.0 durable_lsn=2617591720.0
+t=59.5 rows=360000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=92105.0 durable_lsn=2818572184.0
+t=66.6 rows=380000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=97221.0 durable_lsn=2952789968.0
+t=71.0 rows=400000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=102337.0 durable_lsn=3087007640.0
+t=75.4 rows=420000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=107398.0 durable_lsn=3294671264.0
+t=77.1 rows=440000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=112406.0 durable_lsn=3433371304.0
+t=79.3 rows=460000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=117413.0 durable_lsn=3623907392.0
+t=81.0 rows=480000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=122420.0 durable_lsn=3767930624.0
+t=83.4 rows=500000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=127428.0 durable_lsn=3898753808.0
+t=86.2 rows=520000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=132435.0 durable_lsn=4094211664.0
+t=87.9 rows=540000 ckpt_runs=1.0 start_refused=0.0 last_completed=1.0 dirty_at_start=15278.0 pool_resident=137442.0 durable_lsn=4244727120.0
+after the idle: ckpt_runs 1.0 start_refused 0.0 last_completed 1.0 last_pages 15278.0 dirty_at_start 15278.0
+killed -9; restarting the same files
+mount OK after 10.2 s (core 0.0): recovery_records=1633558.0 redo_applied=406686.0 analysis_us=1322680.0 redo_us=2061676.0 checkpoint_us=6761290.0 redo_start=None durable=4256008800.0

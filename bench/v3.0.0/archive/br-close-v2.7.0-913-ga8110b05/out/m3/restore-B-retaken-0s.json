@@ -1,0 +1,51 @@
+{
+ "label": "B-retaken-0s",
+ "binary": "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/bin/kds_server-B",
+ "backup": "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/bk-retake-0s",
+ "cores": 4,
+ "manifest": {
+  "kds-backup-manifest": "1",
+  "backup_id": "2307654901409108541",
+  "label": "726574616b65",
+  "path": "B",
+  "engine": "unknown",
+  "superblock_version": "23",
+  "page_size": "8192",
+  "segment_size": "67108864",
+  "lineage": "14988275706999859458",
+  "start_lsn": "4760",
+  "stop_lsn": "4256700240",
+  "start_segment": "0",
+  "stop_segment": "63",
+  "created_unix": "1791827427",
+  "end": "177b4cbe"
+ },
+ "restores": [
+  {
+   "rep": 0,
+   "cold_backup_files": true,
+   "serve": false,
+   "rc": 1,
+   "total_s": 63.544,
+   "layout_s": 59.864,
+   "mount_s": null,
+   "lines": [
+    "backup 2307654901409108541 laid out: lsn 4760 .. 4256700240, segments to 63, new lineage 4639035576021120946; recovering",
+    "startup failed: recovery of core 0: completion checkpoint: WalStream: record of 1649312 bytes is larger than the ring"
+   ],
+   "meta": null,
+   "host_before": {
+    "loadavg": "2.51 4.23 4.97 1/343 739625",
+    "competing": []
+   },
+   "host_after": {
+    "loadavg": "2.46 3.89 4.81 1/342 739742",
+    "competing": []
+   }
+  }
+ ],
+ "verify": {
+  "rc": 0,
+  "s": 2.737
+ }
+}

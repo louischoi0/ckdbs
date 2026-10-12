@@ -95,7 +95,7 @@ M2 += "\n\nPeak over any 5 s window 106.7 MiB/s (from 30.8 s), median of the 5 s
 
 # M3
 m3_parts = []
-for f in sorted(glob.glob(f"{R}/out/m3/*.json")):
+for f in [f"{R}/out/m3/{n}.json" for n in ("m1b-c1", "m1b-c4", "m2-pitr-latest")]:
     d = json.load(open(f))
     m = d["manifest"]
     start, stop = int(m["start_lsn"]), int(m["stop_lsn"])

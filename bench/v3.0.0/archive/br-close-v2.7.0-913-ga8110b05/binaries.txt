@@ -29,3 +29,8 @@ out/m0/analysis.json, out/m0b, out/m1a, out/m1a-diag, out/m1b, out/m2/m2.json (t
 logs/ (driver logs, cells-m0.log, host-samples-*.jsonl, the generated tables); drivers/.
 Cells: relaxed-c1, relaxed-c4 (24 runs per size), aa-c1, aa-c4 (A against A, 12 runs per size), group-c1, group-c4 (10 runs per size);
 -cN is the server's cores. A discarded pilot pass (12 runs per size, killed at 15:55 UTC for a larger count) is not archived.
+
+C (section 11 of the backup-restore file): 90cdf918 (v2.7.0-915-g90cdf918, committed 2026-10-12 17:40:36 UTC); bd98b0ea667248ee2bcc27e63556dcfe669dc72158e4a8bdbbcea455288ffb26  kds_server-C
+   Same flags as A and B, `git archive 90cdf918`; `diff -rq` of its src/ and include/ against B's export names only
+   src/server/mount_recovery.cpp; source binary mtime 2026-10-12 17:47:02 UTC; measured copy bin/kds_server-C, same hash.
+   Drivers added: build_c.sh, br_retake.py, br_restore2.py (dbg_ckpt_ring.py now reads the serving run from core 0).

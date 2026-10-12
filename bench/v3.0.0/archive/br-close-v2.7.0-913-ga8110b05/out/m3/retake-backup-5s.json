@@ -1,0 +1,24 @@
+{
+ "backup_id": "3493310068671412471",
+ "start_lsn": 3019927616,
+ "stop_lsn": 4256710024,
+ "data_pages": 137664,
+ "window_mib": 1179.4876174926758,
+ "durable_lsn_at_start": 4256709688.0,
+ "ballast_load_s": 79.3,
+ "copy_s": 4.21,
+ "stop_finish_s": 14.8,
+ "outcome": "done",
+ "host_before": {
+  "loadavg": "4.52 6.32 5.70 1/352 739153",
+  "competing": [
+   "739136 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791810649490-l1ka97.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cd /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05 && cp -p src-C/build-release/kds_server bin/kds_server-C && sha256sum bin/kds_server-C bin/kds_server-A bin/kds_server-B && stat -c '\"'\"'%y %n'\"'\"' bin/kds_server-C && cat /proc/loadavg && pgrep -a \"ctest|cc1plus\" | head -2 | cut -c1-80; python3 drivers/br_retake.py 31881 out/m3/retake-backup.json 2>&1 | tail -3 | cut -c1-600' < /dev/null && pwd -P >| /tmp/claude-9e3c-cwd"
+  ]
+ },
+ "host_after": {
+  "loadavg": "2.51 5.20 5.36 1/351 739314",
+  "competing": [
+   "739136 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791810649490-l1ka97.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cd /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05 && cp -p src-C/build-release/kds_server bin/kds_server-C && sha256sum bin/kds_server-C bin/kds_server-A bin/kds_server-B && stat -c '\"'\"'%y %n'\"'\"' bin/kds_server-C && cat /proc/loadavg && pgrep -a \"ctest|cc1plus\" | head -2 | cut -c1-80; python3 drivers/br_retake.py 31881 out/m3/retake-backup.json 2>&1 | tail -3 | cut -c1-600' < /dev/null && pwd -P >| /tmp/claude-9e3c-cwd"
+  ]
+ }
+}

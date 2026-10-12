@@ -1,0 +1,120 @@
+{
+ "label": "C-retaken-5s",
+ "binary": "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/bin/kds_server-C",
+ "backup": "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/bk-retake-5s",
+ "cores": 4,
+ "manifest": {
+  "kds-backup-manifest": "1",
+  "backup_id": "3493310068671412471",
+  "label": "726574616b65",
+  "path": "B",
+  "engine": "unknown",
+  "superblock_version": "23",
+  "page_size": "8192",
+  "segment_size": "67108864",
+  "lineage": "9272709424576130810",
+  "start_lsn": "3019927616",
+  "stop_lsn": "4256710024",
+  "start_segment": "45",
+  "stop_segment": "63",
+  "created_unix": "1791827316",
+  "end": "3ae809d8"
+ },
+ "restores": [
+  {
+   "rep": 0,
+   "cold_backup_files": true,
+   "serve": false,
+   "rc": 0,
+   "total_s": 29.158,
+   "layout_s": 23.14,
+   "mount_s": 5.984,
+   "lines": [
+    "backup 3493310068671412471 laid out: lsn 3019927616 .. 4256710024, segments to 63, new lineage 17354013083614646015; recovering",
+    "restore of backup 3493310068671412471 recovered past its stop lsn 4256710024"
+   ],
+   "meta": null,
+   "host_before": {
+    "loadavg": "2.41 2.84 3.46 1/338 741737",
+    "competing": []
+   },
+   "host_after": {
+    "loadavg": "2.34 2.77 3.42 4/356 741808",
+    "competing": []
+   }
+  },
+  {
+   "rep": 1,
+   "cold_backup_files": false,
+   "serve": false,
+   "rc": 0,
+   "total_s": 29.017,
+   "layout_s": 25.737,
+   "mount_s": 3.248,
+   "lines": [
+    "backup 3493310068671412471 laid out: lsn 3019927616 .. 4256710024, segments to 63, new lineage 2065074978153908086; recovering",
+    "restore of backup 3493310068671412471 recovered past its stop lsn 4256710024"
+   ],
+   "meta": null,
+   "host_before": {
+    "loadavg": "2.74 2.85 3.44 4/364 741832",
+    "competing": []
+   },
+   "host_after": {
+    "loadavg": "3.14 2.95 3.46 1/348 741891",
+    "competing": []
+   }
+  }
+ ],
+ "verify": {
+  "rc": 0,
+  "s": 0.413
+ },
+ "serve": {
+  "rep": 99,
+  "cold_backup_files": false,
+  "serve": true,
+  "rc": 0,
+  "total_s": 18.044,
+  "layout_s": 14.594,
+  "mount_s": 3.269,
+  "lines": [
+   "backup 3493310068671412471 laid out: lsn 3019927616 .. 4256710024, segments to 63, new lineage 5074976832777051289; recovering",
+   "restore of backup 3493310068671412471 recovered past its stop lsn 4256710024",
+   "ckdbs on /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/m3r-C-retaken-5s-99-serve/kds.db: 137485 pages, superblock version 23",
+   "logging to /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/m3r-C-retaken-5s-99-serve/kds.log at level WARN",
+   "listening on 127.0.0.1:31841"
+  ],
+  "meta": {
+   "pool_resident": 39487.0,
+   "wal_durable_lsn": 4294971712.0,
+   "recovery_records": 474728.0,
+   "recovery_committed": 1570.0,
+   "recovery_rolled_back": 0.0,
+   "recovery_compensations": 0.0,
+   "recovery_redo_applied": 0.0,
+   "recovery_pages_healed": 0.0,
+   "recovery_torn_tail": 0.0,
+   "recovery_restore_backup": 3.493310068671412e+18,
+   "recovery_restore_start": 3019927616.0,
+   "recovery_restore_stop": 4256710024.0,
+   "recovery_analysis_us": 328114.0,
+   "recovery_redo_us": 613154.0,
+   "recovery_high_water_us": 0.0,
+   "recovery_undo_us": 0.0,
+   "recovery_checkpoint_us": 2281049.0,
+   "recovery_relations_checked": 1.0,
+   "recovery_relations_missing_pages": 0.0,
+   "recovery_assertions_enforcing": 0.0,
+   "recovery_assertions_unrecovered": 0.0
+  },
+  "host_before": {
+   "loadavg": "2.89 2.90 3.44 1/348 741897",
+   "competing": []
+  },
+  "host_after": {
+   "loadavg": "2.54 2.82 3.40 1/349 741935",
+   "competing": []
+  }
+ }
+}

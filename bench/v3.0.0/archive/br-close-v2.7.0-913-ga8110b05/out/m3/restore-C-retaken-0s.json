@@ -1,0 +1,142 @@
+{
+ "label": "C-retaken-0s",
+ "binary": "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/bin/kds_server-C",
+ "backup": "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/bk-retake-0s",
+ "cores": 4,
+ "manifest": {
+  "kds-backup-manifest": "1",
+  "backup_id": "2307654901409108541",
+  "label": "726574616b65",
+  "path": "B",
+  "engine": "unknown",
+  "superblock_version": "23",
+  "page_size": "8192",
+  "segment_size": "67108864",
+  "lineage": "14988275706999859458",
+  "start_lsn": "4760",
+  "stop_lsn": "4256700240",
+  "start_segment": "0",
+  "stop_segment": "63",
+  "created_unix": "1791827427",
+  "end": "177b4cbe"
+ },
+ "restores": [
+  {
+   "rep": 0,
+   "cold_backup_files": true,
+   "serve": false,
+   "rc": 0,
+   "total_s": 99.087,
+   "layout_s": 88.5,
+   "mount_s": 10.506,
+   "lines": [
+    "backup 2307654901409108541 laid out: lsn 4760 .. 4256700240, segments to 63, new lineage 1771197873022095834; recovering",
+    "restore of backup 2307654901409108541 recovered past its stop lsn 4256700240"
+   ],
+   "meta": null,
+   "host_before": {
+    "loadavg": "2.49 3.02 4.09 1/336 740609",
+    "competing": []
+   },
+   "host_after": {
+    "loadavg": "2.55 3.00 3.98 1/345 740774",
+    "competing": []
+   }
+  },
+  {
+   "rep": 1,
+   "cold_backup_files": false,
+   "serve": false,
+   "rc": 0,
+   "total_s": 72.292,
+   "layout_s": 61.519,
+   "mount_s": 10.692,
+   "lines": [
+    "backup 2307654901409108541 laid out: lsn 4760 .. 4256700240, segments to 63, new lineage 11207016414066723147; recovering",
+    "restore of backup 2307654901409108541 recovered past its stop lsn 4256700240"
+   ],
+   "meta": null,
+   "host_before": {
+    "loadavg": "2.35 2.95 3.96 1/347 740779",
+    "competing": []
+   },
+   "host_after": {
+    "loadavg": "2.33 2.87 3.86 1/353 740892",
+    "competing": []
+   }
+  },
+  {
+   "rep": 2,
+   "cold_backup_files": false,
+   "serve": false,
+   "rc": 0,
+   "total_s": 67.256,
+   "layout_s": 56.877,
+   "mount_s": 10.302,
+   "lines": [
+    "backup 2307654901409108541 laid out: lsn 4760 .. 4256700240, segments to 63, new lineage 7206567292973142927; recovering",
+    "restore of backup 2307654901409108541 recovered past its stop lsn 4256700240"
+   ],
+   "meta": null,
+   "host_before": {
+    "loadavg": "2.22 2.83 3.84 1/353 740897",
+    "competing": []
+   },
+   "host_after": {
+    "loadavg": "2.47 2.87 3.79 1/346 741007",
+    "competing": []
+   }
+  }
+ ],
+ "verify": {
+  "rc": 0,
+  "s": 12.652
+ },
+ "serve": {
+  "rep": 99,
+  "cold_backup_files": false,
+  "serve": true,
+  "rc": 0,
+  "total_s": 65.319,
+  "layout_s": 54.616,
+  "mount_s": 10.312,
+  "lines": [
+   "backup 2307654901409108541 laid out: lsn 4760 .. 4256700240, segments to 63, new lineage 17112448467939143085; recovering",
+   "restore of backup 2307654901409108541 recovered past its stop lsn 4256700240",
+   "ckdbs on /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/m3r-C-retaken-0s-99-serve/kds.db: 137444 pages, superblock version 23",
+   "logging to /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/m3r-C-retaken-0s-99-serve/kds.log at level WARN",
+   "listening on 127.0.0.1:31841"
+  ],
+  "meta": {
+   "pool_resident": 137441.0,
+   "wal_durable_lsn": 4294971712.0,
+   "recovery_records": 1633761.0,
+   "recovery_committed": 5401.0,
+   "recovery_rolled_back": 0.0,
+   "recovery_compensations": 0.0,
+   "recovery_redo_applied": 80292.0,
+   "recovery_pages_healed": 0.0,
+   "recovery_torn_tail": 0.0,
+   "recovery_restore_backup": 2.3076549014091085e+18,
+   "recovery_restore_start": 4760.0,
+   "recovery_restore_stop": 4256700240.0,
+   "recovery_analysis_us": 1079105.0,
+   "recovery_redo_us": 2064642.0,
+   "recovery_high_water_us": 0.0,
+   "recovery_undo_us": 0.0,
+   "recovery_checkpoint_us": 7108725.0,
+   "recovery_relations_checked": 1.0,
+   "recovery_relations_missing_pages": 0.0,
+   "recovery_assertions_enforcing": 0.0,
+   "recovery_assertions_unrecovered": 0.0
+  },
+  "host_before": {
+   "loadavg": "2.36 2.84 3.78 2/361 741025",
+   "competing": []
+  },
+  "host_after": {
+   "loadavg": "2.96 2.96 3.76 1/343 741129",
+   "competing": []
+  }
+ }
+}
