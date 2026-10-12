@@ -473,7 +473,7 @@ timed arm (controls excluded), per run, 16 runs per cell:
 
 BA-S14's exit row: "scenario 0's `c8-s` cell with no refusal". `tools/scenario0_stockmarket.py`
 (unchanged since `9a0525d`), the arguments and cell order of
-`archive/scenario0-v2.7.0-531-g9a0525d/run_s02.sh`: `--users 100 --accounts-per-user 3
+`archive/scenario0-v2.7.0-531-g9a0525d/run_s02.sh` (at `36449d28`): `--users 100 --accounts-per-user 3
 --assets 30 --traders 8 --txn-per-user 50 --verify 200 --seed 1 --sync`, three passes of four
 cells, the B binary, ports 15700-15703, no CPU pinning (as there), `buffer_pool_frames
 = 65536` (required since BE; the `9a0525d` run predates it), `log_level = warn`. Host: load

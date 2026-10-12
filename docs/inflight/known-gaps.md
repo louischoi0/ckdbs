@@ -648,7 +648,7 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   scenario rebaseline on `bench-rerun-scenarios` at
   `v2.7.0-531-g9a0525d` (2026-09-30,
   `bench/v3.0.0/results-scenario0-stockmarket-v2.7.0-531-g9a0525d.md` §6,
-  `results-scenario2-freight-v2.7.0-531-g9a0525d.md`). A write descent
+  `results-scenario2-freight-v2.7.0-531-g9a0525d.md`, both at `36449d28`). A write descent
   whose leaf no longer covers its key restarts from the root
   `storage::kMaxDescentRestarts` (4) times and is then refused
   `TXN_CONFLICT retryable=1 btree descent for key K from page P gave up
