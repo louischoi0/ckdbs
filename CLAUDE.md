@@ -304,6 +304,19 @@ later must still say what it was true of:
   read from the clock at the moment of writing. The commit says what tree a
   claim was true of; the time says when the report was made of it.
 
+## Operator abbreviations
+
+The operator uses shorthand when talking to CLA (operator, 2026-10-12).
+**This table is the dictionary, and CLA keeps it**: an abbreviation the
+operator defines is added here in the session it is defined, and one
+missing from it is asked about, never guessed. An abbreviation is a
+conversational token, not a document term — a document spells the word
+out.
+
+| Token | Meaning |
+|---|---|
+| `*M` | milestone (the asterisk is part of the token: `M0`, `M2` in AR0 are milestone names, not this) |
+
 ## Open Decisions — DO NOT assume or silently pick
 
 None are recorded here or in the specs: the lists that stood here and in
