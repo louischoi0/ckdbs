@@ -922,7 +922,7 @@ measurement, and `R` the re-exploration or rejection.
 
 ## 5. Items for the operator
 
-Marked 2026-10-12 by W2 (`raft-marks-2026-10-12.md` §13). Every proposal is `[design]` unless a cell says otherwise.
+Marked 2026-10-12 by W2 (`raft-marks-2026-10-12.md` §15). Every proposal is `[design]` unless a cell says otherwise.
 
 | item | question | kind | CLA's proposal | mark |
 |---|---|---|---|---|
