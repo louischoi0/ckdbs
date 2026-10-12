@@ -83,6 +83,13 @@ struct IndexWrite {
     std::uint16_t slot = 0;
     std::vector<std::byte> entry;
     std::vector<PageId> restructured;
+    // Set when the split grew the index a level: the log publishes the root
+    // in the split's own record (`Catalog::StageAnchorRoot`), so the anchor
+    // slot and the pages under it are replayed together or not at all.
+    PageId new_root = kInvalidPageId;
+    catalog::Oid rel_oid = 0;
+    catalog::Oid index_oid = 0;
+    PageId anchor_page_id = kInvalidPageId;
 };
 
 // What maintenance hands each write to, **while the tree still holds the

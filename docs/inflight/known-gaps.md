@@ -269,17 +269,6 @@ statement about an engine that no longer exists; re-verify or strike it.
   at the minimum ring and of the sim's segment rolls. Owner:
   `docs/spec/wal.md` §5.2.
 
-- **Whether an index split's records replay as one is unchecked below the
-  root leaf.** Verified at `4debe8d9` (BD-S1). The secondary index tree
-  logs a split as separate page images and no `INDEX_INSERT`, the shape the
-  clustered tree's append split had when a log cut between its parent and
-  its link left a leaf off the walk (`workorder-bd-sorted-leaf-named-keys.md`
-  §1.8, fixed by `BTREE_SPLIT`).
-  BD-S1 cut the log after every record of the root leaf's split and it did
-  not reproduce; a leaf split under an internal node and an internal node's
-  divide were not cut. Owner: `docs/spec/index.md`; a fix, if one
-  reproduces, is an order of its own.
-
 - **A heap placement whose record is never written is not taken back.**
   Verified at `07e822a6` (BD-S3), by reading; BD-S1's
   `SortedLeafCrashTest.ARowPlacedAndNeverLoggedLeavesNoHoleForTheNextRecordsRedo`
@@ -924,12 +913,6 @@ pages and the cases it does not reach.
   map region, a map flush writes the region's one page whole, so the
   per-level syncs matter only to a tree spanning regions - past 65,280
   pages - and no cell builds one.
-- **A root growth's anchor publish is logged after its split**
-  (`bugs/a-root-growths-anchor-publish-is-logged-after-its-split.md`).
-  Where that cut stands, a reclaim walks from the grown-over root: the
-  leaf chain reaches every leaf, and the new root and its right half's
-  internal nodes leak.
-
 ## Statement scheduling
 
 Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and

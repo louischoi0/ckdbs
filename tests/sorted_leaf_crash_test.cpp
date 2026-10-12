@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -114,6 +115,33 @@ std::set<std::uint64_t> Fill(CommandDispatcher& d0, std::uint64_t rows = 400) {
         ids.insert(k * 10);
     }
     return ids;
+}
+
+// The k whose row (k * 10, k) splits the root leaf of the one index
+// `create` declares, found by a dry run on an in-memory rig; 0 when none
+// within 4,000 rows does.
+std::uint64_t IndexRootSplitter(const std::function<void(CommandDispatcher&)>& create) {
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    EXPECT_TRUE(opened.ok()) << opened.status().message();
+    if (!opened.ok()) return 0;
+    TwoCoreRig& rig = *opened.value();
+    CommandDispatcher& d0 = rig.core(0).dispatcher();
+    CurrentCoreGuard as(0);
+    create(d0);
+    const auto index_root = [&]() -> PageId {
+        auto oid = rig.core(0).catalog().FindTableOidByName("t");
+        EXPECT_TRUE(oid.ok());
+        auto access = rig.core(0).catalog().InitTableAccess(oid.value());
+        EXPECT_TRUE(access.ok());
+        EXPECT_EQ(access.value()->indexes.size(), 1u);
+        return access.value()->indexes.front().root_page_id;
+    };
+    const PageId first_root = index_root();
+    for (std::uint64_t k = 1; k <= 4000; ++k) {
+        Ok(d0, "INSERT INTO t VALUES (" + std::to_string(k * 10) + ", " + std::to_string(k) + ")");
+        if (index_root() != first_root) return k;
+    }
+    return 0;
 }
 
 // ---- E5: an unlogged placement, then a logged insert, then the crash ------
@@ -250,30 +278,8 @@ TEST(SortedLeafCrashTest, ALogCutInsideAnIndexSplitLeavesEveryRowOnItsIndex) {
         Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
         Ok(d0, "CREATE INDEX tv ON t (v)");
     };
-    std::uint64_t splitter = 0;  // the k whose row splits the index's root
-    {
-        auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
-        ASSERT_TRUE(opened.ok()) << opened.status().message();
-        TwoCoreRig& rig = *opened.value();
-        CommandDispatcher& d0 = rig.core(0).dispatcher();
-        CurrentCoreGuard as(0);
-        create(d0);
-        const auto index_root = [&]() -> PageId {
-            auto oid = rig.core(0).catalog().FindTableOidByName("t");
-            EXPECT_TRUE(oid.ok());
-            auto access = rig.core(0).catalog().InitTableAccess(oid.value());
-            EXPECT_TRUE(access.ok());
-            EXPECT_EQ(access.value()->indexes.size(), 1u);
-            return access.value()->indexes.front().root_page_id;
-        };
-        const PageId first_root = index_root();
-        for (std::uint64_t k = 1; k <= 4000 && splitter == 0; ++k) {
-            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(k * 10) + ", " + std::to_string(k) +
-                       ")");
-            if (index_root() != first_root) splitter = k;
-        }
-        ASSERT_NE(splitter, 0u) << "the index never split its root";
-    }
+    const std::uint64_t splitter = IndexRootSplitter(create);
+    ASSERT_NE(splitter, 0u) << "the index never split its root";
 
     TempDir before;
     TempDir after;
@@ -467,6 +473,140 @@ TEST(SortedLeafCrashTest, ALogCutInsideAnInternalNodesDivideLeavesTheTreeWhole) 
                       std::set<std::uint64_t> want = ids;
                       if (committed) want.insert(15);
                       ExpectRelation(db, want, where);
+                  });
+}
+
+
+// ---- A root a split grew, published in the split's own record -------------
+//
+// The anchor's root slot rides in the BTREE_SPLIT that grew the root, so a
+// cut keeps both or neither. Before, it was a later ANCHOR_UPDATE, and a cut
+// between the two mounted a tree whose anchor named the old root - now the
+// new root's leftmost child - so every committed row the split moved right
+// was lost to every descent, for good.
+
+TEST(SortedLeafCrashTest, ALogCutInsideARootLeafsDivideKeepsTheRootItGrew) {
+    // 198 rows fill the root leaf; 15 sorts inside it, so the leaf divides
+    // and a root grows over it.
+    TempDir before;
+    TempDir after;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
+        ids = Fill(d0, 198);
+        ASSERT_TRUE(rig->Snapshot(before.path).ok());
+        Ok(d0, "INSERT INTO t VALUES (15, 0)");
+        ASSERT_TRUE(rig->Snapshot(after.path).ok());
+    }
+    CutEverywhere(before.path, after.path,
+                  [&](Expeditor& db, bool committed, const std::string& where) {
+                      std::set<std::uint64_t> want = ids;
+                      if (committed) want.insert(15);
+                      ExpectRelation(db, want, where);
+                      Ok(db.dispatcher(), "INSERT INTO t VALUES (100000, 0)");
+                      want.insert(100000);
+                      ExpectRelation(db, want, where + ", then a row above them all");
+                  });
+}
+
+TEST(SortedLeafCrashTest, ALogCutInsideAnInternalRootsDivideKeepsTheRootItGrew) {
+    // The internal shape: rows of about 4 KB, two to a leaf, so 1,358 rows
+    // fill an internal root; 15 divides the first leaf and its separator
+    // divides the full root, which grows a level.
+    const WithoutFrameBudgetOverride full_capacity;
+    const std::string pad(3900, 'x');
+    TempDir before;
+    TempDir after;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CurrentCoreGuard as(0);
+        Ok(d0, "CREATE TABLE t (id int64, s varchar(4000)) BTREE");
+        Session load;
+        load.set_durability(wal::DurabilityClass::kRelaxed);
+        for (std::uint64_t k = 1; k <= 1358; ++k) {
+            Ok(d0, "INSERT INTO t VALUES (" + std::to_string(k * 10) + ", '" + pad + "')", &load);
+            ids.insert(k * 10);
+        }
+        ASSERT_TRUE(rig->Snapshot(before.path).ok());
+        Ok(d0, "INSERT INTO t VALUES (15, '" + pad + "')");
+        ASSERT_TRUE(rig->Snapshot(after.path).ok());
+    }
+    ASSERT_GE(WidestSplit(after.path / "wal"), 5u)
+        << "two leaves, two internal halves and a new root: the root did not grow";
+    CutEverywhere(before.path, after.path,
+                  [&](Expeditor& db, bool committed, const std::string& where) {
+                      std::set<std::uint64_t> want = ids;
+                      if (committed) want.insert(15);
+                      ExpectRelation(db, want, where);
+                  });
+}
+
+TEST(SortedLeafCrashTest, ALogCutInsideAnIndexRootsDivideKeepsTheRootItGrew) {
+    // The index's twin: its root leaf full, a key in its middle divides it,
+    // moving the upper half, and a root grows over it. Its split was a run of FULL_PAGE_IMAGEs
+    // before, then its ANCHOR_UPDATE; both are one BTREE_SPLIT now. Inside a
+    // transaction, whose index writes are logged as maintenance makes them
+    // (`IndexWriteLogFor`) - the order the entry named.
+    const auto create = [](CommandDispatcher& d0) {
+        Ok(d0, "CREATE TABLE t (id int64, v int64) BTREE");
+        Ok(d0, "CREATE INDEX tv ON t (v)");
+    };
+    const std::uint64_t splitter = IndexRootSplitter(create);
+    ASSERT_NE(splitter, 0u) << "the index never split its root";
+    // id 5 under the middle row's v: the entry (v, 5) sorts just below
+    // that row's, inside the full leaf.
+    constexpr std::uint64_t kDivider = 5;
+    const std::uint64_t middle = (splitter - 1) / 2;
+
+    TempDir before;
+    TempDir after;
+    std::set<std::uint64_t> ids;
+    {
+        auto rig = OpenFileRig();
+        ASSERT_NE(rig, nullptr);
+        CommandDispatcher& d0 = rig->core(0).dispatcher();
+        CurrentCoreGuard as(0);
+        create(d0);
+        ids = Fill(d0, splitter - 1);
+        ASSERT_TRUE(rig->Snapshot(before.path).ok());
+        Session txn;
+        Ok(d0, "BEGIN", &txn);
+        Ok(d0,
+           "INSERT INTO t VALUES (" + std::to_string(kDivider) + ", " + std::to_string(middle) +
+               ")",
+           &txn);
+        Ok(d0, "COMMIT", &txn);
+        ASSERT_TRUE(rig->Snapshot(after.path).ok());
+    }
+    CutEverywhere(before.path, after.path,
+                  [&](Expeditor& db, bool committed, const std::string& where) {
+                      std::set<std::uint64_t> want = ids;
+                      if (committed) want.insert(kDivider);
+                      ExpectRelation(db, want, where);
+                      // Every row through the index: the divide moved the
+                      // upper half, which is what a stale root loses.
+                      for (std::uint64_t id : want) {
+                          if (id == kDivider) continue;
+                          std::vector<std::uint64_t> rows{id};
+                          if (committed && id / 10 == middle) rows = {kDivider, id};
+                          EXPECT_EQ(Ids(db.dispatcher(), "SELECT id FROM t WHERE v = " +
+                                                             std::to_string(id / 10)),
+                                    rows)
+                              << where << ": the index does not find " << id;
+                      }
+                      // A write through the index after the restart: from
+                      // a grown-over root it is refused for good.
+                      Ok(db.dispatcher(), "INSERT INTO t VALUES (100000, 100000)");
+                      EXPECT_EQ(Ids(db.dispatcher(), "SELECT id FROM t WHERE v = 100000"),
+                                std::vector<std::uint64_t>{100000})
+                          << where;
                   });
 }
 

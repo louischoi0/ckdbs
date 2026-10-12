@@ -698,16 +698,17 @@ opposite pointer direction.
 
 A new index page cannot be described by its header the way a new heap page
 is: a **dividing** split leaves the new sibling already holding half the
-entries, so only a full page image describes it. So a split takes a
-`kFullPageImage` per page it created or rewrote, because no record type
-describes an entry-array division. The clustered tree imaged its pages the
-same way until BD-R12 put every page of its split into one `BTREE_SPLIT`
-record (`wal.md` §5.2); whether an index split needs the same is recorded
-in `known-gaps.md`.
+entries, so only a full page image describes it. So a split takes one
+`BTREE_SPLIT` (`wal.md` §5.2), the clustered tree's record: every page it
+created or rewrote as an image, replayed whole or not at all, and, when it
+grew the index a level, the relation's anchor page with the index's root
+slot already moved - so a log cut never leaves the anchor naming a root that
+has grown a level, from which every later insert is refused.
 
 That gives one rule with no exceptions: **an append that split nothing logs an
-`INDEX_INSERT`; an append that split logs images and no `INDEX_INSERT`.** The
-images are taken after the entry is in, so emitting both would apply it twice.
+`INDEX_INSERT`; an append that split logs one `BTREE_SPLIT` and no
+`INDEX_INSERT`.** The images are taken after the entry is in, so emitting both
+would apply it twice.
 
 The hook **reports** its writes and the dispatcher emits them, which is
 `btree.cpp`'s division ("it mutates pages; it does not know about the WAL").

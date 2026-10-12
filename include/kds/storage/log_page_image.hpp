@@ -45,22 +45,28 @@ inline Status LogFullPageImage(wal::WalManager* wal, PageStore& store, std::uint
 }
 
 // **A B+ tree split, as one record** (BTREE_SPLIT, BD-R12): every page a
-// split's `InsertPlacement::changes()` names imaged into a single record whose
-// envelope names the first,
+// split wrote imaged into a single record whose envelope names the first,
 // and every page stamped with its LSN. One record is what makes the split
 // replay whole or not at all - its CRC ends the log before a torn one -
 // where a run of FULL_PAGE_IMAGEs could end between the parent and the
-// link (BD-S1's `SortedLeafCrashTest.ALogCutInsideAnAppendSplit...`). The caller holds every page, so the images are
-// the split as it finished.
+// link (BD-S1's `SortedLeafCrashTest.ALogCutInsideAnAppendSplit...`). The
+// caller holds every page, so the images are the split as it finished.
+//
+// **A split that grew a root names the relation's anchor page among them**,
+// its root slot already moved: the root a mount reads is then replayed with
+// the split or not at all, and never names a root the log did not keep or
+// misses one it did (`Catalog::StageAnchorRoot`). Used by the clustered
+// tree and by a secondary index alike.
 //
 // **The record fits the stream whole** (BD-R12's size rule): a split writes
-// at most `kMaxStructuralChanges` pages, and their images are under the
-// default ring, the smaller of the two bounds `WalStream::Append` holds a
-// record to (`WalManager::usable_payload_bytes`).
-static_assert(wal::BtreeSplitSize(kMaxStructuralChanges) + wal::kRecordHeaderSize <=
+// at most `kMaxStructuralChanges` pages (`index::kMaxIndexChanges` for an
+// index, asserted where it is logged), one more for the anchor, and their
+// images are under the default ring, the smaller of the two bounds
+// `WalStream::Append` holds a record to (`WalManager::usable_payload_bytes`).
+static_assert(wal::BtreeSplitSize(kMaxStructuralChanges + 1) + wal::kRecordHeaderSize <=
               wal::kDefaultRingCapacity);
 inline Status LogBtreeSplit(wal::WalManager* wal, PageStore& store, std::uint64_t txn_id,
-                            std::span<const StructuralChange> pages) {
+                            std::span<const PageId> pages) {
     if (wal == nullptr) return Status::OK();
     if (pages.empty()) return Status::InvalidArgument("a BTREE_SPLIT names at least one page");
 
@@ -68,21 +74,20 @@ inline Status LogBtreeSplit(wal::WalManager* wal, PageStore& store, std::uint64_
     std::vector<wal::BtreeSplitImage> images;
     held.reserve(pages.size());
     images.reserve(pages.size());
-    for (const StructuralChange& page : pages) {
-        auto bytes = store.Get(page.page_id);
+    for (const PageId page_id : pages) {
+        auto bytes = store.Get(page_id);
         if (!bytes.ok()) return bytes.status();
         held.push_back(std::move(bytes.value()));
-        images.push_back({page.page_id, held.back().bytes()});
+        images.push_back({page_id, held.back().bytes()});
     }
     std::vector<std::byte> payload(wal::BtreeSplitSize(images.size()));
     if (auto n = wal::EncodeBtreeSplit(payload, images); !n.ok()) return n.status();
     auto rec =
-        wal->Append(wal::RecordSpec{wal::RecordType::kBtreeSplit, txn_id, pages.front().page_id},
-                    payload);
+        wal->Append(wal::RecordSpec{wal::RecordType::kBtreeSplit, txn_id, pages.front()}, payload);
     if (!rec.ok()) return rec.status();
     held.clear();
-    for (const StructuralChange& page : pages) {
-        if (Status s = store.StampPageLsn(page.page_id, rec.value()); !s.ok()) return s;
+    for (const PageId page_id : pages) {
+        if (Status s = store.StampPageLsn(page_id, rec.value()); !s.ok()) return s;
     }
     return Status::OK();
 }

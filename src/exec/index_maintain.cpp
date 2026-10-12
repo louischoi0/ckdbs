@@ -174,7 +174,13 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
         for (const index::IndexChange& change : placed.value().changes()) {
             write.restructured.push_back(change.page_id);
         }
+        write.new_root = placed.value().new_root;
+        write.rel_oid = access.oid;
+        write.index_oid = ix.index_oid;
+        write.anchor_page_id = access.anchor_page_id;
         if (Status s = (*log)(write); !s.ok()) return s;
+        // The log publishes a root it carries, so there is none to report.
+        return kInvalidPageId;
     }
     return placed.value().new_root;  // the holds drop here, after the log
 }
@@ -194,10 +200,12 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
         if (!moved.ok()) return moved.status();
         if (moved.value() == kInvalidPageId) continue;
 
-        // A split grew the tree, so this index's root moved. Republished
-        // through the catalog, which updates the cached entry **in place** -
-        // so `access`, and `ix` inside it, stay valid for the next iteration
-        // and for the caller.
+        // A split grew the tree with no log to carry the root, so this
+        // index's root moved here. Republished through the catalog, which
+        // updates the cached entry **in place** - so `access`, and `ix`
+        // inside it, stay valid for the next iteration and for the caller.
+        // With a log the root rides in the split's record instead
+        // (`IndexWrite::new_root`).
         if (Status s = catalog.UpdateIndexRoot(access.oid, ix.index_oid, moved.value(),
                                                access.anchor_page_id);
             !s.ok()) {

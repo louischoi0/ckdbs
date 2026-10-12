@@ -328,7 +328,8 @@ Status LogCatPageInit(wal::WalManager* wal, std::uint64_t trx_id, PageId page_id
 // formatted page - its roots are body content (the 3f07eda review's
 // C3). Replay stays safe without ordering care because the redo range
 // is a suffix: a replayed PAGE_INIT that wipes the body is necessarily
-// followed in-range by every ANCHOR_UPDATE that refills it.
+// followed in-range by every ANCHOR_UPDATE that refills it, and by every
+// BTREE_SPLIT that carries the page whole after a root growth.
 Status LogCatAnchorUpdate(wal::WalManager* wal, storage::PageStore& store, std::uint64_t trx_id,
                           PageId anchor_page, std::uint64_t index_oid, PageId root) {
     if (trx_id == kBootstrapXid) trx_id = wal::kNoTxnId;
@@ -1134,6 +1135,13 @@ Status Catalog::CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_o
 
 Status Catalog::WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
                                 std::uint64_t index_oid, PageId root, std::uint64_t trx_id) {
+    auto staged = StageAnchorRoot(anchor_page, expected_owner_oid, index_oid, root);
+    if (!staged.ok()) return staged.status();
+    return LogCatAnchorUpdate(wal_, store_, trx_id, anchor_page, index_oid, root);
+}
+
+StatusOr<storage::PageRef> Catalog::StageAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
+                                                    std::uint64_t index_oid, PageId root) {
     auto anchor = store_.Get(anchor_page);
     if (!anchor.ok()) return anchor.status().WithContext("faulting anchor for a root move");
     // The write is where the damage is created, so it checks what the
@@ -1157,7 +1165,7 @@ Status Catalog::WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
                !s.ok()) {
         return s;
     }
-    return LogCatAnchorUpdate(wal_, store_, trx_id, anchor_page, index_oid, root);
+    return std::move(anchor.value());
 }
 
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
@@ -2675,6 +2683,11 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
         !s.ok()) {
         return s;
     }
+    AdoptRelationRoot(table_oid, new_desc_page_id, anchor_page_id);
+    return Status::OK();
+}
+
+void Catalog::AdoptRelationRoot(Oid table_oid, PageId new_desc_page_id, PageId anchor_page_id) {
     cache_.UpdateDescPage(table_oid, new_desc_page_id);
     // **And every other core is told** (AT-S5c). The in-place update above
     // is this core's; until AT-S5 that was the whole story, because a
@@ -2697,7 +2710,6 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
                                    std::to_string(new_desc_page_id) + " (anchor " +
                                    std::to_string(anchor_page_id) + ")");
     }
-    return Status::OK();
 }
 
 // ---- sys.patterns ----------------------------------------------------
@@ -3622,9 +3634,13 @@ Status Catalog::UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root,
         !s.ok()) {
         return s;
     }
+    AdoptIndexRoot(rel_oid, index_oid, new_root);
+    return Status::OK();
+}
+
+void Catalog::AdoptIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root) {
     cache_.UpdateIndexRoot(rel_oid, index_oid, new_root);
     BumpWord();  // every other core re-reads; this one keeps its entry
-    return Status::OK();
 }
 
 StatusOr<std::vector<SysIndexRow>> Catalog::ListIndexes(const txn::ReadView* view) {

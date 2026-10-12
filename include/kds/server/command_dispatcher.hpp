@@ -2218,10 +2218,19 @@ private:
     // each spill was noted and logged at its append (`SpillLogFor`).
     Status LogInsert(storage::InsertPlacement& placed, PageType leaf_type,
                      std::span<const std::byte> tuple, std::uint64_t trx_id,
-                     std::uint64_t owner_oid,
+                     std::uint64_t owner_oid, PageId anchor_page_id,
                      const std::vector<exec::AppendedSpill>& spills,
                      const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
+
+    // A clustered split's one BTREE_SPLIT record and, when it grew the tree
+    // a level, the root's publication **inside that record**: the anchor's
+    // slot is staged under the split's holds and imaged with its pages, then
+    // adopted in memory once the record is appended. A log cut therefore
+    // keeps the split and its root together or neither. With no log the
+    // slot is still written and adopted.
+    Status LogSplit(const storage::InsertPlacement& placed, std::uint64_t txn_id, catalog::Oid oid,
+                    PageId anchor_page_id);
 
     // One page's full image, logged and the page stamped behind it.
     //

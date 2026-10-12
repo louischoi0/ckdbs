@@ -102,8 +102,8 @@ struct InsertPlacement {
     std::uint16_t slot = 0;           // its slot within that page
 
     // Set when a B+ tree grew a level: the caller must repoint the
-    // relation's `sys.tables.desc_page_id` at it
-    // (`Catalog::UpdateRelationDescPage`, which exists for this). Returned
+    // relation's anchor at it, inside the split's own record
+    // (`CommandDispatcher::LogSplit`, `Catalog::StageAnchorRoot`). Returned
     // rather than written by the storage layer because that layer has no
     // catalog - and because a root published before its contents are
     // logged is a root recovery cannot reach. Always kInvalidPageId for a

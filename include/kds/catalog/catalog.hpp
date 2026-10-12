@@ -919,8 +919,19 @@ public:
     // The anchor id comes from the caller's TableAccess (S2's rule); the
     // move writes the anchor alone and updates the cached entry in place -
     // no row write, no invalidation, no catalog scan (PW2-3/PW2-4).
+    //
+    // A root a split grew is published in two halves instead, so the anchor
+    // rides in the split's own record (`storage::LogBtreeSplit`):
+    // `StageAnchorRoot` before the record, `AdoptRelationRoot` after it.
+    // This one, which logs its own ANCHOR_UPDATE, is for a move no split
+    // record carries.
     Status UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
                                   PageId anchor_page_id);
+
+    // The in-memory half of a clustered root move whose anchor slot is
+    // already written and logged: this core's cached entry in place, and
+    // the schema word bumped so every other core re-reads the anchor.
+    void AdoptRelationRoot(Oid table_oid, PageId new_desc_page_id, PageId anchor_page_id);
 
     // ---- sys.access_stats (docs/spec/heap-and-tuple.md §7) --------------------
 
@@ -1072,6 +1083,16 @@ public:
     Status WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid, std::uint64_t index_oid,
                            PageId root, std::uint64_t trx_id);
 
+    // WriteAnchorRoot's checks and slot write, **unlogged**, the page handed
+    // back still held exclusive: for a root a split grew, whose caller
+    // images the anchor into the split's one record before the hold drops
+    // (`storage::LogBtreeSplit`), so the slot and the root it names are
+    // replayed together or not at all. A record that fails to append
+    // fail-stops the log (wal.md §6), so a staged slot no record carries is
+    // never written back.
+    StatusOr<storage::PageRef> StageAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
+                                               std::uint64_t index_oid, PageId root);
+
     // What WriteAnchorRoot would refuse for `index_oid`, asked without
     // writing anything: the same page validation, then
     // storage::CheckAnchorRoomForIndex, which says why it is worth asking.
@@ -1196,6 +1217,10 @@ public:
     // through the write accessor - dirtying it per split on core 0,
     // refusing outright on a peer - for two values MaintainIndexes holds).
     Status UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root, PageId anchor_page_id);
+
+    // AdoptRelationRoot's twin for an index root whose anchor slot rode in
+    // the index split's record.
+    void AdoptIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root);
 
     const SysObjectRegistry& sys_objects() const noexcept { return sys_objects_; }
 

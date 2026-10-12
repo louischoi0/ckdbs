@@ -188,7 +188,9 @@ enum class RecordType : std::uint8_t {
     // fresh anchor's durable story, since PAGE_INIT rebuilds only the
     // common header and the roots are body content. Physiological like
     // every page record: the envelope names the anchor page, the payload
-    // the slot.
+    // the slot. **A root a split grew does not take one**: the anchor page
+    // rides in that split's BTREE_SPLIT instead, so the two cannot be cut
+    // apart (`Catalog::StageAnchorRoot`).
     kAnchorUpdate = 26,
     // **The participant's prepare** (R6-3, `instructions/v2.4.0/2pc.md` D4),
     // **written only by a pre-AT engine**: 2PC retired at AT-S6 and the
