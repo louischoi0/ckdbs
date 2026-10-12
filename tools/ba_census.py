@@ -107,7 +107,11 @@ class Kds:
 
     def __init__(self, port):
         from ckdbs_cli import ServerConnection
-        self.conn = ServerConnection("127.0.0.1", port)
+        # `KDS_CLIENT_TIMEOUT` (seconds, default 5): a cell whose stall is
+        # the measurement (BQ-S2's large segments build a body inline for
+        # seconds) raises it so the stall is a sample, not a dead client.
+        self.conn = ServerConnection("127.0.0.1", port,
+                                     timeout=float(os.environ.get("KDS_CLIENT_TIMEOUT", "5")))
 
     def run(self, sql):
         """(reply, None, None), or (None, "refused" | "error", the reply)."""

@@ -14,6 +14,13 @@
 // predictable branches and no atomic at all (G2's
 // accepted cost class).
 //
+// **Unarmed at `cores = 1`**, each by a constructor argument or the core
+// count and each with its call-site census in
+// `instructions/v3.0.0/workorder-bp-per-core-residue.md` §7: the lock
+// table's partitions (AO-R9), the instance read view's window latch
+// (BP-H2), the Cabin store's latches (BP-H3), the assertion registry's, and
+// the statement epochs' fences (BP-H1, fences rather than a latch).
+//
 // **A `std::mutex`, not a spin latch, and the reason is what the sections
 // actually do.** The first draft of this header was a spinning
 // `exchange`/`yield` pair, justified as guarding "a critical section

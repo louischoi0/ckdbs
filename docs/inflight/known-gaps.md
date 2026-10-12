@@ -1107,6 +1107,28 @@ closed 2026-10-11 at `ec827a19`).
   had the same window before BI; BI-Q12 closed the step's, which was a
   whole run long. Not measured.
 
+## Per-core structures kept (BP)
+
+Verified at `ccf9cfc1` (`v2.7.0-909-gccf9cfc1`; the census,
+`bench/v3.0.0/results-bp-s1-census-v2.7.0-909-gccf9cfc1.md`). Each was
+measured under BP-R2's bar and kept; the cost stays and is stated here.
+Owned by `instructions/v3.0.0/workorder-bp-per-core-residue.md` §7.
+
+- **Every core checkpoints in its turn** (AT-S8, BP-H7): runs per 5 s period
+  are 1 / 2 / 3.9 at cores 1 / 2 / 4, and pages written per 1,000 rows rise
+  11-18 % from one core to four. Under BP-R2's throughput and p99 terms;
+  one instance-wide run would need every live transaction's undo head
+  published, a recovery-correctness change (BP-Q5 (b), not taken).
+- **A whole catalog memo drops when the schema word moves for a root a
+  level grew over** (BP-H6): at most 2.7e-4 drops per statement, 0.08 % of
+  statement CPU at worst.
+- **The per-core id window** (AT-R4, BP-H8) is unmeasured: `SHOW META`
+  carries no window-size, burn or `LookupCommit` counter, and no skew cell
+  has run.
+- **The per-core in-flight table** (AX, BP-H9): a miss reads one id; its
+  1,024-slot cap per core was not approached, and the skew case that would
+  settle whether one core can reach it while others have room has not run.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1–D16: four are taken, one of them against AR0's own
