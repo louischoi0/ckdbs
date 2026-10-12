@@ -875,10 +875,10 @@ TEST_F(CommandDispatcherTest, SubqueryPredicatesExecuteAndActuallyFilter) {
 }
 
 // A NULL tested against a non-empty subquery result is UNKNOWN for IN and
-// NOT IN alike, so neither admits the row. `docs/inflight/bugs/a-null-
-// probe-not-in-a-non-empty-subquery-answers-true.md`: NOT IN answers TRUE
-// and admits it. Disabled until the fix lands, as the entry says.
-TEST_F(CommandDispatcherTest, DISABLED_ANullProbeIsUnknownAgainstANonEmptySubquery) {
+// NOT IN alike, so neither admits the row - in a SELECT and in a write's
+// WHERE. NOT IN used to answer TRUE and admit it. Against an empty result
+// NOT IN is TRUE whatever the probe.
+TEST_F(CommandDispatcherTest, ANullProbeIsUnknownAgainstANonEmptySubquery) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     ASSERT_EQ(d.Dispatch("CREATE TABLE n (id int64, v int64 NULL)").response.substr(0, 7),
               "CREATED");
@@ -891,6 +891,19 @@ TEST_F(CommandDispatcherTest, DISABLED_ANullProbeIsUnknownAgainstANonEmptySubque
     EXPECT_EQ(d.Dispatch("SELECT id FROM n WHERE v NOT IN (SELECT x FROM s)").response,
               "id\\n2");
     EXPECT_EQ(d.Dispatch("SELECT id FROM n WHERE v IN (SELECT x FROM s)").response, "id");
+
+    // A write's WHERE reaches the same verdict: only row 2 is touched.
+    EXPECT_EQ(d.Dispatch("UPDATE n SET v = 3 WHERE v NOT IN (SELECT x FROM s)").response,
+              "UPDATED 1");
+    EXPECT_EQ(d.Dispatch("SELECT id FROM n WHERE v = 3").response, "id\\n2");
+    EXPECT_EQ(d.Dispatch("DELETE FROM n WHERE v NOT IN (SELECT x FROM s)").response,
+              "DELETED 1");
+    EXPECT_EQ(d.Dispatch("SELECT id FROM n").response, "id\\n1");
+
+    // An empty result admits the NULL row: NULL NOT IN (empty) is TRUE.
+    EXPECT_EQ(d.Dispatch("SELECT id FROM n WHERE v NOT IN (SELECT x FROM s WHERE x = 9)")
+                  .response,
+              "id\\n1");
 }
 
 TEST_F(CommandDispatcherTest, ANestedUncorrelatedExistsFiltersAWriteToo) {

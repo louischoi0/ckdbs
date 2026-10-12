@@ -172,7 +172,10 @@ belongs to the doc named.
   from the stored bitmap.
 - **`IN` / `NOT IN`** (`docs/spec/parser-v2.md`). `NOT IN` over a subquery
   result containing NULL yields no rows — the standard's tri-state collapse,
-  not `!IN`. `IN (value list)` is refused ("expected a subquery").
+  not `!IN`. A NULL probe against a non-empty result is unknown for `IN`
+  and `NOT IN` alike, so neither admits the row; against an empty result
+  `NOT IN` is true whatever the probe. `IN (value list)` is refused
+  ("expected a subquery").
 - **The primary key is never NULL**, and this is not a policy but invariant 11:
   the pk is carried by the Keystone word, which has no NULL encoding. A first
   column declared `NULL` is refused at `CREATE TABLE`.
