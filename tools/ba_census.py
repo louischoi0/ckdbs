@@ -332,13 +332,13 @@ def client(args):
 
 # ---- one run of one cell ---------------------------------------------------
 
-def start_kds(args, wd, port):
+def start_kds(args, wd, port, log_level="warn"):
     data = os.path.join(wd, "d.db")
     conf = os.path.join(wd, "s.conf")
     with open(conf, "w") as f:
         f.write(f"data_file = {data}\nport = {port}\ncores = {args.cores}\n"
                 f"durability = {args.durability}\nbuffer_pool_frames = {args.frames}\n"
-                f"log_file = s.log\nlog_dir = {wd}\nlog_level = warn\n")
+                f"log_file = s.log\nlog_dir = {wd}\nlog_level = {log_level}\n")
         if args.server_cpus:
             f.write(f"reactor_cpus = {args.server_cpus}\n")
         for line in getattr(args, "extra_conf", None) or []:

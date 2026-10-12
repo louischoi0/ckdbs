@@ -333,8 +333,54 @@ Status WalManager::EnsureDurable(Lsn lsn) {
     return Sync();
 }
 
+namespace {
+
+// **The per-roll line** (BQ-S1): one Info line per roll, written by the
+// appender that rolled, after the stream latch is released but still under
+// the page latches of the mutation it logs - `base/log.hpp`'s one sanctioned
+// write under a page latch, once per segment. Steady-clock
+// start and end, so a driver's monotonic stamps line up with it; every
+// duration in microseconds.
+void LogRoll(Logger* log, const RollRecord& r) {
+    if (log == nullptr || !log->enabled(LogLevel::kInfo)) return;
+    const auto us = [](std::uint64_t ns) { return std::to_string(ns / 1000); };
+    const char* body = "unreported";
+    switch (r.create.body) {
+        case BodyOutcome::kHit: body = "hit"; break;
+        case BodyOutcome::kWaited: body = "waited"; break;
+        case BodyOutcome::kInline: body = "inline"; break;
+        case BodyOutcome::kUnreported: break;
+    }
+    log->Info("wal", "roll seg=" + std::to_string(r.segment_no) +
+                         " core=" + std::to_string(r.core) +
+                         " start_ns=" + std::to_string(r.start_ns) +
+                         " end_ns=" + std::to_string(r.end_ns) + " hold_us=" + us(r.hold_ns()) +
+                         " seal_us=" + us(r.seal_ns) + " flush_us=" + us(r.flush_ns) +
+                         " sync_gate_us=" + us(r.sync_gate_ns) + " sync_us=" + us(r.sync_ns) +
+                         " sync_tail_us=" + us(r.sync.tail_ns) +
+                         " sync_rest_us=" + us(r.sync.rest_ns) +
+                         " sync_segs=" + std::to_string(r.sync.segments) +
+                         " waited_syncs=" + std::to_string(r.waited_syncs) +
+                         " waited_sync_tail_us=" + us(r.waited_sync.tail_ns) +
+                         " waited_sync_rest_us=" + us(r.waited_sync.rest_ns) +
+                         " waited_sync_segs=" + std::to_string(r.waited_sync.segments) +
+                         " create_us=" + us(r.create_ns) + " body=" + body +
+                         " body_wait_us=" + us(r.create.body_wait_ns) +
+                         " body_us=" + us(r.create.body_ns) +
+                         " header_us=" + us(r.create.header_ns) +
+                         " rename_us=" + us(r.create.rename_ns) +
+                         " dirsync_us=" + us(r.create.dir_sync_ns));
+}
+
+}  // namespace
+
 StatusOr<Lsn> WalManager::Append(const RecordSpec& spec, std::span<const std::byte> payload) {
-    auto lsn = stream_->Append(spec, payload);
+    RollRecord roll;
+    auto lsn = stream_->Append(spec, payload, &roll);
+    if (roll.end_ns != 0) {
+        LogRoll(log_, roll);
+        roll = RollRecord{};
+    }
     // wal.md section 6-4's backpressure. Synchronous I/O means the drain
     // happens right here, on the appender's own stack.
     //
@@ -351,7 +397,11 @@ StatusOr<Lsn> WalManager::Append(const RecordSpec& spec, std::span<const std::by
         if (Status s = Flush(); !s.ok()) {
             return s;
         }
-        lsn = stream_->Append(spec, payload);
+        lsn = stream_->Append(spec, payload, &roll);
+        if (roll.end_ns != 0) {
+            LogRoll(log_, roll);
+            roll = RollRecord{};
+        }
     }
     if (!lsn.ok()) {
         // Only the exhausted-bound case is the ring's: every other status
@@ -430,6 +480,17 @@ Status WalManager::DrainOnce() {
     // as a failure on every tick, for the life of the process
     // (`wal/stream.hpp`'s fail-stop).
     if (stream_->stopped()) return Status::OK();
+    // **What this pass waited on the stream latch** (BQ-S1, H5): this
+    // thread's own slot, read before and after. The drain is synchronous on
+    // its core's thread, so nothing else writes that slot's stream-latch
+    // wait in between; every return below is covered by the guard.
+    struct DrainLatchWait {
+        std::uint64_t before = Contention::MineWaitNs(LatchKind::kWalStream);
+        ~DrainLatchWait() {
+            const std::uint64_t after = Contention::MineWaitNs(LatchKind::kWalStream);
+            if (after != before) Contention::Add(Tally::kWalDrainLatchWaitNs, after - before);
+        }
+    } drain_latch_wait;
     // BA-R0's drain count: a pass taken while a group commit waits on it.
     if (HasPendingGroupCommits()) Contention::Add(Tally::kDrainPassesPending);
     // **First, close what somebody else's sync already made durable.**

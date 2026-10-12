@@ -411,7 +411,10 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
 
     // The implicit transaction (KW5, BI11): the same BEGIN the text
     // protocol runs, so every semantics is the session's own. A session
-    // already inside a transaction is refused by BEGIN itself.
+    // already inside a transaction is refused by BEGIN itself. **Exempt
+    // from the transaction lifetime ceiling** (docs/spec/txn.md §1,
+    // exemption 4): this listener has no sweep, because a bulk load may
+    // honestly outlive `txn_lifetime_ceiling_ms`.
     if (auto out = dispatcher_->Dispatch("BEGIN", &conn.session);
         out.response.rfind("ERR", 0) == 0) {
         SendError(conn, StatusFromErrorReply(out.response));

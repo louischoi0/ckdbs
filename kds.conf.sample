@@ -620,7 +620,9 @@ lock_wait_fault_net_ms = 1000
 # that is running is never interrupted; the transaction is rolled back at
 # the first sweep after it ends. The sweep runs every quarter of the
 # ceiling, so a transaction ends between 1x and 1.25x of it. Autocommit
-# statements are not transactions this bounds.
+# statements are not transactions this bounds, and a KWP load session
+# (`kwp_port`) is exempt: a bulk load is one transaction and may honestly
+# run longer than the ceiling.
 #
 # 60 s is the operator's provisional number: the engine serves
 # transactions that complete within 10 s. `0` is refused - the ceiling has

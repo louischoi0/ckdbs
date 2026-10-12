@@ -21,8 +21,10 @@ absolute numbers as "what a client pays", not "what the engine costs".
 """
 
 import json
+import math
 import statistics
 import time
+from fractions import Fraction
 
 # Name column width: wide enough for the PostgreSQL driver's variant-tagged
 # phase names ("point-select[noidx]"), and shared so both tools' tables line
@@ -33,8 +35,10 @@ NAME_WIDTH = 22
 def nearest_rank(ordered, p):
     """The nearest-rank percentile of an ascending sequence: ceil(p/100 * n) - 1,
     clamped, so p=50 on 4 samples picks index 1. One home for the rule -
-    Phase.percentile and the drivers' own tables both read it here."""
-    rank = max(1, -(-int(p) * len(ordered) // 100)) - 1
+    Phase.percentile and the drivers' own tables both read it here. A
+    fractional p (99.9) is taken exactly through its decimal spelling, so
+    p=99.9 on 1,000 samples picks index 998 rather than p99's 989."""
+    rank = max(1, math.ceil(Fraction(str(p)) * len(ordered) / 100)) - 1
     return ordered[rank]
 
 

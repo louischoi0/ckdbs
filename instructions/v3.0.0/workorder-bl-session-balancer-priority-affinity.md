@@ -994,3 +994,9 @@ for now; I will resume it later."*
 **To resume**: re-run the ruling 1 re-measurement on a quiet host, write
 it as a results file named by `git describe`, and correct `known-gaps.md`'s
 BL headline from it; then BL-S4 proceeds only if rulings 2 and 3 are marked.
+
+**Ruling 3 given its own order, 2026-10-12** (`raft-marks-2026-10-12.md`
+§13): `workorder-bq-wal-segment-roll.md` takes it as its subject, written
+and not opened, and answers it by measurement. The ruling stays unmarked
+here until BQ's answer lands. BQ-Q1 proposes that BQ-S1 also take the
+ruling 1 re-measurement above.

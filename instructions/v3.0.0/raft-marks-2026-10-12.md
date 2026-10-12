@@ -122,3 +122,21 @@ Korean it was typed in.
 | **Mark** | **BP-Q0 opened**, on `worktree-bp-per-core-residue` from `cf889b63`. BP-Q1..Q3, Q6, Q8..Q13 marked as CLA proposed: Q3 (a), Q10 (b), Q11 `kMaxCores`, Q13 (a), BP-S2 first. BP-Q4, Q5 and Q7 marked "decided by BP-S1": their option is adopted from the census on the operator's standing go-ahead. **BP-Q14**, the citation sweep's reach, written after W2 and adopted on the standing go-ahead as (a): live documents and source comments, not dated records. The order is renamed `workorder-bp-per-core-residue.md` |
 | **Does not settle** | Any option the census decides, until BP-S1 has run; a push, a merge to `main`, a tag or a version |
 | **Recorded at** | `workorder-bp-per-core-residue.md` header (W2), §5; `index.md`'s BP row |
+
+## 14. BQ written: the WAL segment roll
+
+| | |
+|---|---|
+| **Word** | *"Explain the WAL segment roll, and why you proposed writing it as a separate work order."* (W0 of BQ), *"Isn't it enough to just make the segment file larger?"* (W1), then *"For now, write the work order for the WAL segment roll: experiment, hypothesis verification, measurement, re-exploration, rejection."* (W2; recorded on `worktree-wal-segment-roll-order` from `59c4139f`) |
+| **Mark** | **BQ-S0**: `workorder-bq-wal-segment-roll.md` written. W0 and W1 were questions, answered in the session and recorded in the order (§0.2, §1.3, H2). W2 sets the order's method. BQ takes BL-S4's ruling 3 out of BL as its subject |
+| **Does not settle** | BL-S4's ruling 3 itself, which BQ answers by measurement; BQ's opening (BQ-Q0) and BQ-Q1..Q5; BL-S4's ruling 2; when BL resumes |
+| **Recorded at** | `workorder-bq-wal-segment-roll.md`; `index.md`'s BQ row; `workorder-bl-session-balancer-priority-affinity.md` §6 ("BL paused 2026-10-12") |
+
+## 15. BQ opened
+
+| | |
+|---|---|
+| **Word** | *"Check whether milestone BP was closed or paused, then start the BQ workplan; go ahead and keep going until the milestone is achieved or a failure or ineffectiveness is discovered."* (W3 of BQ, given as a five-minute loop), then *"Don't wait for BP; start BQ right away."* (W4; both recorded on `worktree-wal-segment-roll-order` at `dbff867b`) |
+| **Mark** | **BQ-Q0: opened.** W4 lifts W3's gate on BP: BQ starts while BP-S1 is measuring on the same host, so BQ's builds overlap BP's runs and BQ's own measurements are taken only when no BP run is live. **BQ-Q1..Q5 are marked as CLA proposed**, on W3's *"go ahead and keep going"*: Q1 (a), Q2 (a), Q3 (a), Q4 (b), Q5 (b) - so BQ stops at rung 3 and rung 4 (H6) needs its own word |
+| **Does not settle** | Rung 4; BL-S4's rulings 2 and 3 (BQ answers 3 by measurement); BP |
+| **Recorded at** | `workorder-bq-wal-segment-roll.md` §6, §7; `index.md`'s BQ row |

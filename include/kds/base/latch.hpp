@@ -67,11 +67,16 @@ public:
     Latch(const Latch&) = delete;
     Latch& operator=(const Latch&) = delete;
 
-    void lock() {
-        if (mutex_.try_lock()) return;
+    void lock() { (void)LockReportingWait(); }
+    // `lock`, returning the nanoseconds it waited: 0 when uncontended, and
+    // charged to the kind exactly as `lock` charges it (BQ-S1).
+    std::uint64_t LockReportingWait() {
+        if (mutex_.try_lock()) return 0;
         const auto start = std::chrono::steady_clock::now();
         mutex_.lock();
-        Contention::LatchWait(kind_, NsSince(start));
+        const std::uint64_t ns = NsSince(start);
+        Contention::LatchWait(kind_, ns);
+        return ns;
     }
     bool try_lock() noexcept { return mutex_.try_lock(); }
     void unlock() noexcept { mutex_.unlock(); }
@@ -103,13 +108,18 @@ inline bool HoldsLatch(const Latch*) noexcept { return false; }
 // RAII over an optional latch. `nullptr` means "not shared".
 class LatchGuard {
 public:
-    explicit LatchGuard(Latch* latch) noexcept : latch_(latch) {
+    // `waited_ns`, when given, receives what the acquisition waited: 0 for a
+    // null latch or an uncontended one (BQ-S1).
+    explicit LatchGuard(Latch* latch, std::uint64_t* waited_ns = nullptr) noexcept
+        : latch_(latch) {
+        std::uint64_t waited = 0;
         if (latch_ != nullptr) {
-            latch_->lock();
+            waited = latch_->LockReportingWait();
 #ifndef NDEBUG
             detail::held_latches.push_back(latch_);
 #endif
         }
+        if (waited_ns != nullptr) *waited_ns = waited;
     }
     ~LatchGuard() {
         if (latch_ != nullptr) {

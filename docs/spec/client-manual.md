@@ -410,6 +410,45 @@ are armed there (the window, the superblock, the WAL sync gate, the Cabin
 store's) can move, and only if another thread takes them - the sync gate
 does, since the WAL writer thread syncs through it beside the reactor.
 
+**`SHOW META` gained the WAL segment roll's instruments at BQ-S1**
+(`instructions/v3.0.0/workorder-bq-wal-segment-roll.md`). Three kinds of
+field, read differently:
+
+- **The stream's totals, the same on every core and never summed across
+  cores**, since the instance has one stream: `wal_append_lsn` (the
+  stream's byte position, whose delta over a window is the log volume
+  written in it), `wal_rolls`, `wal_roll_hold_us` and
+  `wal_roll_hold_max_us` (the latch hold of every roll, summed, and the
+  longest), the step times `wal_roll_seal_us`, `wal_roll_flush_us`,
+  `wal_roll_sync_gate_us` (waiting out a sync in flight), `wal_roll_sync_us`
+  (the roll's own device sync, split into `wal_roll_sync_tail_us` for the
+  segment being left and `wal_roll_sync_rest_us` for the rest of the live
+  run, over `wal_roll_sync_segments` segments in all and at most
+  `wal_roll_sync_segments_max` in one) and `wal_roll_create_us` (the new
+  segment's creation, split into `wal_roll_body_wait_us`, `wal_roll_body_us`,
+  `wal_roll_header_us`, `wal_roll_rename_us` and `wal_roll_dirsync_us`), and
+  the body's outcome counts `wal_roll_body_hit` (built ahead and ready),
+  `wal_roll_body_waited` (built ahead, not yet ready) and
+  `wal_roll_body_inline` (built by the roll itself). The totals include
+  rolls on peers, whose inline syncs `wal_syncs` never counts.
+- **Three contention tallies, parts of the stream latch's own pair and never
+  additions to it**: `contention_wal_drain_latch_wait_us`, the WAL drain's
+  part of `contention_wal_stream_wait_us`; `contention_wal_roll_blocked_waits`,
+  the part of `contention_wal_stream_waits` whose wait a roll's hold
+  overlapped; and `contention_wal_roll_blocked_wait_us`, the part of the wait
+  the hold covered. All three stay 0 at `cores = 1`, where the stream latch
+  is null.
+- **Per core, beside `load_c<k>_waited_wal_stream_us`**:
+  `load_c<k>_wal_drain_latch_wait_us`, `load_c<k>_wal_roll_blocked_waits` and
+  `load_c<k>_wal_roll_blocked_wait_us`, each absent when 0. The rest of
+  `load_c<k>_waited_wal_stream_us` is every other stream-latch acquisition on
+  that core - statements, the checkpoint's flush, writeback's, the anchor
+  publish's detach, and on core 0 the threads that declared no core.
+
+Each roll also writes one Info line to the server log, `[wal] roll seg=...`,
+with its start and end on the steady clock and every step's time; it is
+absent at `log_level = warn`.
+
 **Above one core, core 0's `group` syncs moved from `wal_syncs`'s inline
 half to the writer's at BA-S7** (`docs/spec/wal.md` §3):
 `contention_syncs_inline` counts only `strict` commits, `SYNC` and

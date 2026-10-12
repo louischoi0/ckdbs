@@ -133,3 +133,19 @@ export function toMarkdown(s: Summary): string {
       x.isStruck ? ['struck'] : [x.isOpen ? 'unmarked' : 'marked', ...(x.isQuietWrong ? ['quiet-wrong'] : [])]),
   ].join('\n')
 }
+
+/** `/milestone list`: one row per open work order, in the order given - progress and the next stage. */
+export function listing(open: Summary[]): string {
+  const cell = (t: string) => t.replace(/\|/g, '\\|')
+  return [
+    `## Open milestones (${open.length})`,
+    '',
+    '| milestone | landed | next stage | file |',
+    '|---|---|---|---|',
+    ...open.map(s => {
+      const live = s.stages.filter(x => !x.isStruck)
+      const next = live.find(x => !x.note)
+      return `| **${s.letter}** — ${cell(s.title)} | ${live.length - live.filter(x => !x.note).length}/${live.length} | ${next ? `**${next.id}** — ${cell(next.text)}` : ''} | \`${s.file.replace(/^.*\//, '')}\` |`
+    }),
+  ].join('\n')
+}

@@ -1,14 +1,34 @@
 #include "kds/wal/stream.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
 #include <utility>
 
+#include "kds/base/contention.hpp"
+#include "kds/base/current_core.hpp"
 #include "kds/wal/log_scanner.hpp"
 
 namespace kds::wal {
+namespace {
+
+// The steady clock's reading in nanoseconds since its epoch: the roll
+// window's unit (`RollRecord`).
+std::uint64_t SteadyNowNs() noexcept {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
+}
+
+// One writer per counter (`roll_stats_`): a load and a store, not a
+// read-modify-write.
+void Bump(std::atomic<std::uint64_t>& cell, std::uint64_t by) noexcept {
+    cell.store(cell.load(std::memory_order_relaxed) + by, std::memory_order_relaxed);
+}
+
+}  // namespace
 
 WalStream::WalStream(LogDevice* device, std::uint32_t core_id, std::size_t ring_capacity,
                      bool shared)
@@ -71,10 +91,43 @@ Status WalStream::FailStop(const Status& cause) {
                            cause.message() + "); restart the instance to recover");
 }
 
-Status WalStream::SyncDevice() {
-    std::lock_guard<Latch> guard(sync_mutex_);
+WalStream::SyncTotals WalStream::ReadSyncTotals() const {
+    std::lock_guard<std::mutex> guard(sync_totals_mutex_);
+    return sync_totals_;
+}
+
+Status WalStream::SyncDevice(RollRecord* roll) {
+    // The running totals before the wait: whatever moved them by the time
+    // the gate is held finished while this roll waited (H3).
+    const SyncTotals before = roll != nullptr ? ReadSyncTotals() : SyncTotals{};
+    const std::uint64_t waited = sync_mutex_.LockReportingWait();
+    std::lock_guard<Latch> guard(sync_mutex_, std::adopt_lock);
+    // A roll that did not wait reports nothing waited out, even if a sync
+    // finished between its read and its acquisition.
+    if (roll != nullptr && waited > 0) {
+        const SyncTotals after = ReadSyncTotals();
+        roll->sync_gate_ns = waited;
+        roll->waited_syncs = static_cast<std::uint32_t>(after.syncs - before.syncs);
+        roll->waited_sync.tail_ns = after.tail_ns - before.tail_ns;
+        roll->waited_sync.rest_ns = after.rest_ns - before.rest_ns;
+        roll->waited_sync.segments = static_cast<std::uint32_t>(after.segments - before.segments);
+    }
     if (stopped()) return StoppedStatus();
-    if (Status s = device_->Sync(); !s.ok()) return FailStop(s);
+    DeviceSyncTiming timing;
+    const auto start = std::chrono::steady_clock::now();
+    const Status status = device_->SyncTimed(timing);
+    {
+        std::lock_guard<std::mutex> totals(sync_totals_mutex_);
+        ++sync_totals_.syncs;
+        sync_totals_.tail_ns += timing.tail_ns;
+        sync_totals_.rest_ns += timing.rest_ns;
+        sync_totals_.segments += timing.segments;
+    }
+    if (roll != nullptr) {
+        roll->sync_ns = NsSince(start);
+        roll->sync = timing;
+    }
+    if (!status.ok()) return FailStop(status);
     return Status::OK();
 }
 
@@ -84,7 +137,7 @@ Status WalStream::StoppedStatus() {
         "to recover");
 }
 
-Status WalStream::StartSegment(std::uint64_t segment_no) {
+Status WalStream::StartSegment(std::uint64_t segment_no, RollRecord* roll) {
     // **A roll makes the segment it leaves durable first** - its records and
     // the seal marker the roll just flushed - through the sync gate, which
     // stops the log on a failure. A segment then never exists ahead of an
@@ -94,7 +147,7 @@ Status WalStream::StartSegment(std::uint64_t segment_no) {
     // and every record written after the restart would be invisible to
     // recovery. The fresh stream's first segment has no predecessor.
     if (device_->end_segment() != 0) {
-        if (Status s = SyncDevice(); !s.ok()) return s;
+        if (Status s = SyncDevice(roll); !s.ok()) return s;
         PublishDurable(flushed_lsn());
     }
 
@@ -110,8 +163,14 @@ Status WalStream::StartSegment(std::uint64_t segment_no) {
     // The header goes in with the creation, not through the ring and not
     // after it: the device makes the segment and its header durable
     // together, so a crash never leaves a segment whose header is zeroes.
-    if (Status s = device_->CreateSegment(segment_no, header_block_); !s.ok()) {
+    SegmentCreateTiming create;
+    const auto create_start = std::chrono::steady_clock::now();
+    if (Status s = device_->CreateSegmentTimed(segment_no, header_block_, create); !s.ok()) {
         return FailStop(s);
+    }
+    if (roll != nullptr) {
+        roll->create_ns = NsSince(create_start);
+        roll->create = create;
     }
 
     const Lsn first = fields.start_lsn + kSegmentHeaderSize;
@@ -173,23 +232,74 @@ Status WalStream::ScanTail(std::uint64_t segment_no) {
     return Status::OK();
 }
 
-Status WalStream::Roll() {
+Status WalStream::Roll(RollRecord* roll) {
+    const auto flush_start = std::chrono::steady_clock::now();
     if (Status s = FlushLocked(); !s.ok()) {
         return s;
     }
+    roll->flush_ns = NsSince(flush_start);
     // Numbered from the device rather than from append_lsn_, so the two can
     // never disagree about which segment comes next.
-    return StartSegment(device_->end_segment());
+    return StartSegment(device_->end_segment(), roll);
+}
+
+void WalStream::RecordRoll(const RollRecord& roll) noexcept {
+    const auto at = [this](RollStat stat) -> std::atomic<std::uint64_t>& {
+        return roll_stats_[static_cast<std::size_t>(stat)];
+    };
+    Bump(at(RollStat::kRolls), 1);
+    Bump(at(RollStat::kHoldNs), roll.hold_ns());
+    if (roll.hold_ns() > at(RollStat::kHoldMaxNs).load(std::memory_order_relaxed)) {
+        at(RollStat::kHoldMaxNs).store(roll.hold_ns(), std::memory_order_relaxed);
+    }
+    Bump(at(RollStat::kSealNs), roll.seal_ns);
+    Bump(at(RollStat::kFlushNs), roll.flush_ns);
+    Bump(at(RollStat::kSyncGateNs), roll.sync_gate_ns);
+    Bump(at(RollStat::kSyncNs), roll.sync_ns);
+    Bump(at(RollStat::kSyncTailNs), roll.sync.tail_ns);
+    Bump(at(RollStat::kSyncRestNs), roll.sync.rest_ns);
+    Bump(at(RollStat::kSyncSegments), roll.sync.segments);
+    if (roll.sync.segments > at(RollStat::kSyncSegmentsMax).load(std::memory_order_relaxed)) {
+        at(RollStat::kSyncSegmentsMax).store(roll.sync.segments, std::memory_order_relaxed);
+    }
+    Bump(at(RollStat::kCreateNs), roll.create_ns);
+    Bump(at(RollStat::kBodyWaitNs), roll.create.body_wait_ns);
+    Bump(at(RollStat::kBodyNs), roll.create.body_ns);
+    Bump(at(RollStat::kHeaderNs), roll.create.header_ns);
+    Bump(at(RollStat::kRenameNs), roll.create.rename_ns);
+    Bump(at(RollStat::kDirSyncNs), roll.create.dir_sync_ns);
+    switch (roll.create.body) {
+        case BodyOutcome::kHit: Bump(at(RollStat::kBodyHit), 1); break;
+        case BodyOutcome::kWaited: Bump(at(RollStat::kBodyWaited), 1); break;
+        case BodyOutcome::kInline: Bump(at(RollStat::kBodyInline), 1); break;
+        case BodyOutcome::kUnreported: break;
+    }
+    last_roll_start_ns_ = roll.start_ns;
+    last_roll_end_ns_ = roll.end_ns;
+}
+
+void WalStream::ChargeRollOverlap(std::uint64_t waited_ns) const noexcept {
+    if (waited_ns == 0) return;
+    // The wait ran over [now - waited, now]; the last roll over
+    // [last_roll_start_ns_, last_roll_end_ns_], ended by now since this
+    // thread holds the latch the roll held. Only the last roll is tested:
+    // two rolls inside one wait would be under-counted.
+    const std::uint64_t now = SteadyNowNs();
+    const std::uint64_t wait_start = now > waited_ns ? now - waited_ns : 0;
+    const std::uint64_t from = std::max(wait_start, last_roll_start_ns_);
+    if (last_roll_end_ns_ <= from) return;
+    Contention::Add(Tally::kWalRollBlockedWaits);
+    Contention::Add(Tally::kWalRollBlockedWaitNs, last_roll_end_ns_ - from);
 }
 
 Status WalStream::Seal() {
-    LatchGuard guard(latch_);
+    const StreamLatchHold hold(*this);
     if (stopped()) return StoppedStatus();
     return SealLocked();
 }
 
 Status WalStream::DetachBelow(Lsn lsn) {
-    LatchGuard guard(latch_);
+    const StreamLatchHold hold(*this);
     // A flush in flight is inside the device's `WriteAt`, which reads the
     // segment table unlocked on the promise that no table change runs beside
     // it (file_log_device.hpp); the detach waits it out, as a roll does.
@@ -246,7 +356,8 @@ Status WalStream::SealLocked() {
     return Status::OK();
 }
 
-StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byte> payload) {
+StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byte> payload,
+                                RollRecord* rolled) {
     const std::size_t total = EncodedRecordSize(payload.size());
     // Neither refusal meets a BTREE_SPLIT: `Open`'s floors hold the largest.
     if (total > usable_segment_bytes()) {
@@ -258,16 +369,26 @@ StatusOr<Lsn> WalStream::Append(const RecordSpec& spec, std::span<const std::byt
                                        " bytes is larger than the ring");
     }
 
-    LatchGuard guard(latch_);
+    const StreamLatchHold hold(*this);
     if (stopped()) return StoppedStatus();
 
     if (sealed() || SegmentRemaining() < total) {
+        // **The roll's hold, timed** (BQ-S1): only here, so an append that
+        // does not roll reads no clock.
+        RollRecord roll;
+        roll.core = CurrentCore();
+        roll.start_ns = SteadyNowNs();
         if (Status s = SealLocked(); !s.ok()) {
             return s;
         }
-        if (Status s = Roll(); !s.ok()) {
+        roll.seal_ns = SteadyNowNs() - roll.start_ns;
+        if (Status s = Roll(&roll); !s.ok()) {
             return s;
         }
+        roll.end_ns = SteadyNowNs();
+        roll.segment_no = SegmentOf(append_lsn());
+        RecordRoll(roll);
+        if (rolled != nullptr) *rolled = roll;
     }
 
     const std::size_t used = ring_used();
@@ -307,7 +428,7 @@ Status WalStream::Flush() {
         Lsn from = 0;
         Lsn to = 0;
         {
-            LatchGuard guard(latch_);
+            const StreamLatchHold hold(*this);
             // The claim is tested before the stop: a failed flush stops the
             // log before it releases its claim, so a thread that sees the
             // claim free sees that stop too.

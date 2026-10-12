@@ -211,6 +211,7 @@ add_executable(kds_tests
     memory_log_device_test.cpp
     file_log_device_test.cpp
     wal_append_off_latch_test.cpp
+    wal_roll_instruments_test.cpp
     sim_rng_test.cpp
     sim_loop_test.cpp
     bounded_pool_test.cpp

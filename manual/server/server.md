@@ -124,7 +124,7 @@ out-of-range values, each naming the file and line.
 | `aggregate_max_groups` / `aggregate_max_distinct` | `65536` / `1048576` | Aggregation caps. A cap fails the statement, never truncates. |
 | `sort_max_rows` | `1048576` | How many rows one `ORDER BY` may hold. Fails the statement naming the key; never truncates, never spills. A `LIMIT` caps what is held at `offset + limit`, so this binds only an unlimited sort — and `ORDER BY <pk>` ascending is elided rather than sorted, so it is never bound at all. |
 | `lock_wait_fault_net_ms` | `1000` | **How long a statement may wait before the engine calls the wait a fault.** Not the ordinary end of a wait: a statement waiting for a row, a range or a relation is woken by the holder's decide whenever that comes, and this bound is for the case where no decide comes — a detector that missed a cycle, or a holder that is stuck. It aborts the **waiter**, never the holder, and logs the fault as one. `0` refuses at once instead of waiting, which is the other policy rather than an off-switch. **A file that sets `in_doubt_ceiling_ms` is refused at startup naming this key.** |
-| `txn_lifetime_ceiling_ms` | `60000` | **How old an explicit transaction may get before the server rolls it back**, counted from its `BEGIN`: busy or idle, poisoned or not, DDL inside it included. The client's next statement is refused `RESOURCE_EXHAUSTED` with the transaction-lifetime-ceiling detail - `COMMIT` included, because the writes are already undone - until it sends `ROLLBACK`. A running statement is never interrupted; the rollback comes at the first sweep after it ends, and the sweep runs every quarter of the ceiling. Autocommit statements are not bounded by it. `0` is refused: the ceiling has no off-switch. |
+| `txn_lifetime_ceiling_ms` | `60000` | **How old an explicit transaction may get before the server rolls it back**, counted from its `BEGIN`: busy or idle, poisoned or not, DDL inside it included. The client's next statement is refused `RESOURCE_EXHAUSTED` with the transaction-lifetime-ceiling detail - `COMMIT` included, because the writes are already undone - until it sends `ROLLBACK`. A running statement is never interrupted; the rollback comes at the first sweep after it ends, and the sweep runs every quarter of the ceiling. Autocommit statements are not bounded by it, and a KWP load session (`kwp_port`) is exempt: a load is one transaction and may run as long as it needs. `0` is refused: the ceiling has no off-switch. |
 | `log_dir` / `log_file` / `log_level` | — / `kdb.log` / `info` | Log destination and level (`trace`..`off`). Empty `log_file` disables file logging. |
 
 `inline_cell_width` is the one superblock-pinned key and the one that can
@@ -193,9 +193,12 @@ construction and the instance's durability cost is read on core 0
 the same thing on every core: a peer writes `sys.patterns` and
 `sys.access_stats` itself, and both relations are the instance's one.
 Recovery runs once, on core 0, before any peer exists.
-`SHOW META`'s `contention_*` fields are the exception to "read on core 0":
-they are summed over every core, and count where one core waited for
-another (`docs/spec/client-manual.md`).
+`SHOW META`'s `contention_*` fields, and since BQ-S1 `wal_append_lsn` and the
+segment roll's `wal_rolls`/`wal_roll_*`, are the exceptions to "read on core
+0": the first are summed over every core and count where one core waited for
+another; the second are the one stream's totals, printed the same on every
+core and never summed, and they include rolls on peers, whose inline
+syncs `wal_syncs` never counts (`docs/spec/client-manual.md`).
 
 **Which CPU each reactor runs on.** By default a peer reactor `k` is pinned
 to CPU `k` and core 0 runs unpinned, which on a host that numbers SMT

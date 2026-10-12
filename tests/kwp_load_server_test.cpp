@@ -748,5 +748,68 @@ TEST_F(KwpLoadServerTest, ARefusedRowKillsTheLoadWithTheGatesOwnCode) {
     client.join();
 }
 
+TEST_F(KwpLoadServerTest, ALoadSessionOutlivesTheLifetimeCeilingThatEndsATextTransaction) {
+    // `txn.md` §1, exemption 4 (the operator's ruling of 2026-10-12): a
+    // load session is one explicit transaction and is never swept, however
+    // long it runs. The text transaction on the same reactor is the
+    // control - without it the cell would pass on a listener whose sweep
+    // never ran. 200 ms, and the load idles five ceilings mid-stream.
+    constexpr std::uint16_t kTextPort = 25725;
+    constexpr std::uint16_t kKwpPort = 25726;
+    constexpr sched::MonoTimeNs kCeilingNs = 200ULL * 1'000'000ULL;
+    ASSERT_EQ(dispatcher_->Dispatch("CREATE TABLE t (id int64, a int64, b int64)")
+                  .response.substr(0, 7),
+              "CREATED");
+
+    auto text = TcpServer::Listen(kTextPort);
+    auto kwp = KwpLoadServer::Listen(kKwpPort);
+    ASSERT_TRUE(text.ok());
+    ASSERT_TRUE(kwp.ok());
+    TcpServer::ClientSetup setup;
+    setup.protocol = Protocol::kText;
+    setup.txn_lifetime_ceiling_ns = kCeilingNs;
+    text.value().Configure(setup);
+
+    std::thread client([&] {
+        StopGuard stop{kTextPort};
+        int text_fd = ConnectToLoopback(kTextPort);
+        ASSERT_GE(text_fd, 0);
+        ASSERT_EQ(SendAndReceiveLine(text_fd, "BEGIN").rfind("BEGIN", 0), 0u);
+
+        int fd = ConnectToLoopback(kKwpPort);
+        ASSERT_GE(fd, 0);
+        wire::FrameDecoder decoder;
+        ASSERT_TRUE(Handshake(fd, decoder));
+        const auto begun = Begin(fd, decoder, "t");
+        ASSERT_TRUE(begun.has_value());
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+        const std::string swept = SendAndReceiveLine(text_fd, "SELECT * FROM t");
+        EXPECT_NE(swept.find("lifetime ceiling"), std::string::npos)
+            << "the control did not fire, so the load's survival proves nothing: " << swept;
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+
+        const std::pair<std::int64_t, std::int64_t> rows[] = {{10, 1}, {20, 2}};
+        const auto chunk = Chunk(begun->first, 0, rows);
+        SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk);
+        auto ack = ReadFrame(fd, decoder);
+        ASSERT_TRUE(ack.has_value());
+        EXPECT_EQ(ack->type, static_cast<std::uint8_t>(wire::ServerFrameType::kLoadAck))
+            << "a load idle past the ceiling was not served";
+        SendFrame(fd, wire::ClientFrameType::kLoadEnd, {});
+        auto done = ReadFrame(fd, decoder);
+        ASSERT_TRUE(done.has_value());
+        EXPECT_EQ(done->type, static_cast<std::uint8_t>(wire::ServerFrameType::kComplete));
+        ::close(fd);
+
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT COUNT(*) FROM t"), "count(*)\\n2");
+        ::close(text_fd);
+    });
+
+    RunReactor(text.value(), kwp.value());
+    client.join();
+}
+
 }  // namespace
 }  // namespace kds::server

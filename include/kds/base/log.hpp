@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -30,18 +31,21 @@
 //
 // A write() per line, synchronous, no buffering thread. That is cheap
 // enough for lifecycle events and far too expensive for anything holding a
-// page latch or running inside a tuple loop. The level check happens before
+// page latch or running inside a tuple loop. The one exception is BQ-S1's
+// per-roll line (`wal/manager.cpp`), written once per WAL segment by the
+// appender that rolled, under its page latches, behind a roll that held
+// them across milliseconds of device I/O already. The level check happens before
 // the message is formatted, so a suppressed Debug() costs one comparison
 // and does not build its string - but the argument still evaluates, so do
 // not call this with work in the arguments on a hot path.
 //
 // ---- Concurrency --------------------------------------------------------
 //
-// Core-local like everything else (rules.md section 3): one Logger, one
-// reactor thread, no internal locking. The single write() per line means
-// interleaving from separate processes appending to one file stays
-// line-atomic in practice (O_APPEND), but two threads sharing one Logger is
-// not supported and is not something this engine does.
+// No internal locking. **Every core shares core 0's Logger** (the
+// expeditor hands it to each peer), so its two counters are relaxed
+// atomics, and a line stays whole because each is one write() on an
+// O_APPEND descriptor. A sink that is not line-atomic across threads - the
+// in-memory test sink - is for one thread only.
 
 namespace kds {
 
@@ -154,8 +158,12 @@ public:
     // Lines written, and sink failures swallowed. A log that silently
     // stopped working is worse than no log, so the count is exposed rather
     // than only the successes.
-    std::uint64_t lines_written() const noexcept { return lines_written_; }
-    std::uint64_t write_failures() const noexcept { return write_failures_; }
+    std::uint64_t lines_written() const noexcept {
+        return lines_written_.load(std::memory_order_relaxed);
+    }
+    std::uint64_t write_failures() const noexcept {
+        return write_failures_.load(std::memory_order_relaxed);
+    }
 
     // Writes `<unix_seconds> <LEVEL> [component] message`. `component` is a
     // short subsystem tag ("expeditor", "checkpoint") rather than a file or
@@ -173,8 +181,8 @@ private:
     LogSink* sink_;
     const WallClock& clock_;
     LogLevel min_level_;
-    std::uint64_t lines_written_ = 0;
-    std::uint64_t write_failures_ = 0;
+    std::atomic<std::uint64_t> lines_written_{0};
+    std::atomic<std::uint64_t> write_failures_{0};
 };
 
 }  // namespace kds
