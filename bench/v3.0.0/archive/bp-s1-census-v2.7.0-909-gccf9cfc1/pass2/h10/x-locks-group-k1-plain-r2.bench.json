@@ -1,0 +1,136 @@
+{
+  "driver": "lock_contention_benchmark.py",
+  "prove_run": false,
+  "sessions": 8,
+  "rows": 256,
+  "ops_per_session_per_arm": 2000,
+  "blocks": 4,
+  "host_before": {
+    "loadavg": "1.52 2.16 2.54 3/349 706527",
+    "competing": []
+  },
+  "host_after": {
+    "loadavg": "3.25 2.63 2.67 4/351 706981",
+    "competing": []
+  },
+  "show_meta_before": {
+    "B": {
+      "0": "version=22 create_time=1791822954 last_mount_time=1791822954 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=1 map_coverage_ids=65280 headerless_pages=0 pages_allocated=19 pages_freed=0 pages_reused=0 reclaim_pending=0 reclaim_deferred=0 reclaim_skipped=0 reclaim_refused=0 pool_budget=65536 pool_resident=18 pool_slots=1024 pool_hits=1170 pool_misses=18 pool_reclaimed_inline=0 pool_reclaimed_background=0 pool_batches_inline=0 pool_batches_background=0 pool_batches_partial=0 pool_batch_steps=0 pool_batch_steps_background=0 pool_dirty_queued=0 pool_dirty_drained=0 pool_refused=0 undo_pages_live=2 undo_pages_recycled=0 wal_syncs=262 wal_interval_syncs=1 wal_sync_failures=0 wal_first_segment=0 wal_segments_removed=0 wal_remove_failures=0 wal_group_commits=257 wal_group_batches=257 wal_mean_group_batch=1.000 wal_group_batch_max=1 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 sched_wall_us=8199431 sched_iterations=664 sched_idle_blocks=0 sched_parked_idle_blocks=7 sched_idle_block_us=136716 sched_wakes_sent=0 sched_wakes_received=0 sched_foreground_polled_us=11679 sched_foreground_polls=524 sched_foreground_consumed_us=11679 sched_foreground_longest_poll_us=101 sched_foreground_polls_over_10ms=0 sched_foreground_polls_over_100ms=0 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_maintenance_longest_poll_us=0 sched_maintenance_polls_over_10ms=0 sched_maintenance_polls_over_100ms=0 sched_system_polled_us=234 sched_system_polls=25 sched_system_consumed_us=234 sched_system_longest_poll_us=92 sched_system_polls_over_10ms=0 sched_system_polls_over_100ms=0 sched_hold_in_run_longest_us=392176 sched_hold_in_run_over_10ms=1 sched_hold_in_run_over_100ms=1 sched_hold_in_run_over_1s=0 sched_hold_out_run_longest_us=598505 sched_hold_out_run_over_10ms=44 sched_hold_out_run_over_100ms=20 sched_hold_out_run_over_1s=0 sched_longest_unpolled_us=598467 sched_unpolled_over_100ms=21 checkpoint_runs=1 checkpoint_start_refused=0 checkpoint_last_completed=1 checkpoint_last_wall_us=407307 checkpoint_last_step_max_us=89 checkpoint_last_step_page_write_max_us=45 checkpoint_last_steps=1 checkpoint_last_pages=6 checkpoint_last_dirty_at_start=6 checkpoint_last_gate_parks=1 checkpoint_last_end_parks=1 checkpoint_last_start_sum_us=8 checkpoint_last_start_max_us=8 checkpoint_last_log_gate_batch_sum_us=0 checkpoint_last_log_gate_batch_max_us=0 checkpoint_last_log_gate_run_sum_us=0 checkpoint_last_log_gate_run_max_us=0 checkpoint_last_page_write_sum_us=45 checkpoint_last_page_write_max_us=23 checkpoint_last_map_write_sum_us=0 checkpoint_last_map_write_max_us=0 checkpoint_last_claim_wait_sum_us=0 checkpoint_last_claim_wait_max_us=0 checkpoint_last_data_sync_sum_us=0 checkpoint_last_data_sync_max_us=0 checkpoint_last_end_wait_sum_us=0 checkpoint_last_end_wait_max_us=0 checkpoint_last_publish_writeback_sum_us=34 checkpoint_last_publish_writeback_max_us=16 checkpoint_last_publish_sync_sum_us=0 checkpoint_last_publish_sync_max_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=36249 recovery_redo_us=34421 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=318957 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 contention_other_waits=0 contention_other_wait_us=0 contention_frame_table_waits=0 contention_frame_table_wait_us=0 contention_free_map_waits=0 contention_free_map_wait_us=0 contention_free_map_flush_waits=0 contention_free_map_flush_wait_us=0 contention_window_waits=0 contention_window_wait_us=0 contention_lock_partition_waits=0 contention_lock_partition_wait_us=0 contention_lock_wait_for_waits=0 contention_lock_wait_for_wait_us=0 contention_wal_stream_waits=0 contention_wal_stream_wait_us=0 contention_wal_sync_gate_waits=3 contention_wal_sync_gate_wait_us=304460 contention_assertion_dir_waits=0 contention_assertion_dir_wait_us=0 contention_optimizer_waits=0 contention_optimizer_wait_us=0 contention_superblock_waits=0 contention_superblock_wait_us=0 contention_cabin_partition_waits=0 contention_cabin_partition_wait_us=0 contention_cabin_stats_waits=0 contention_cabin_stats_wait_us=0 contention_handoff_waits=0 contention_handoff_wait_us=0 contention_page_latch_waits=0 contention_page_latch_spin_turns=0 contention_syncs_inline=259 contention_syncs_writer=3 contention_drain_passes_pending=257 contention_ceiling_waits=0 contention_ceiling_wait_us=0 contention_carves=1 contention_checkpoint_runs=1 contention_refused_btree_descend=0 contention_refused_btree_parent=0 contention_refused_btree_secure=0 contention_refused_btree_lookup=0 contention_refused_index_descend=0 contention_refused_index_parent=0 contention_refused_index_secure=0 contention_structural_reruns=0 contention_catalog_memo_drops=1 contention_word_moves_root=1 contention_word_moves_cabin=0 contention_word_moves_schema=4 contention_word_moves_resolve=2 contention_inflight_asks=0 contention_inflight_misses=0 contention_inflight_miss_ids_read=0 contention_checkpoint_pages_written=22 contention_data_syncs=7 contention_fence_walks=0 contention_carve_longest_us=340225 contention_checkpoint_longest_us=407307"
+    }
+  },
+  "show_meta_after": {
+    "B": {
+      "0": "version=22 create_time=1791822954 last_mount_time=1791822954 wal_topology=single cabin_optimizer=off core=0 catalog_marks_purged=0 map_regions=1 map_pages_resident=2 map_coverage_ids=65280 headerless_pages=1 pages_allocated=103 pages_freed=0 pages_reused=0 reclaim_pending=0 reclaim_deferred=0 reclaim_skipped=0 reclaim_refused=0 pool_budget=65536 pool_resident=101 pool_slots=1024 pool_hits=513978 pool_misses=101 pool_reclaimed_inline=0 pool_reclaimed_background=0 pool_batches_inline=0 pool_batches_background=0 pool_batches_partial=0 pool_batch_steps=0 pool_batch_steps_background=0 pool_dirty_queued=0 pool_dirty_drained=0 pool_refused=0 undo_pages_live=2 undo_pages_recycled=442 wal_syncs=16288 wal_interval_syncs=3 wal_sync_failures=0 wal_first_segment=0 wal_segments_removed=0 wal_remove_failures=0 wal_group_commits=64257 wal_group_batches=16261 wal_mean_group_batch=3.952 wal_group_batch_max=7 wal_group_batch_min=1 wal_ring_full=0 wal_ring_full_refusals=0 sched_wall_us=105739784 sched_iterations=36551 sched_idle_blocks=0 sched_parked_idle_blocks=251 sched_idle_block_us=462247 sched_wakes_sent=0 sched_wakes_received=0 sched_foreground_polled_us=2393632 sched_foreground_polls=160525 sched_foreground_consumed_us=893537 sched_foreground_longest_poll_us=112 sched_foreground_polls_over_10ms=0 sched_foreground_polls_over_100ms=0 sched_maintenance_polled_us=0 sched_maintenance_polls=0 sched_maintenance_consumed_us=0 sched_maintenance_longest_poll_us=0 sched_maintenance_polls_over_10ms=0 sched_maintenance_polls_over_100ms=0 sched_system_polled_us=99153 sched_system_polls=722 sched_system_consumed_us=22932 sched_system_longest_poll_us=58396 sched_system_polls_over_10ms=2 sched_system_polls_over_100ms=0 sched_hold_in_run_longest_us=605642 sched_hold_in_run_over_10ms=64 sched_hold_in_run_over_100ms=31 sched_hold_in_run_over_1s=0 sched_hold_out_run_longest_us=612743 sched_hold_out_run_over_10ms=691 sched_hold_out_run_over_100ms=188 sched_hold_out_run_over_1s=0 sched_longest_unpolled_us=612540 sched_unpolled_over_100ms=217 checkpoint_runs=21 checkpoint_start_refused=0 checkpoint_last_completed=1 checkpoint_last_wall_us=14000 checkpoint_last_step_max_us=209 checkpoint_last_step_page_write_max_us=117 checkpoint_last_steps=1 checkpoint_last_pages=48 checkpoint_last_dirty_at_start=48 checkpoint_last_gate_parks=1 checkpoint_last_end_parks=1 checkpoint_last_start_sum_us=11 checkpoint_last_start_max_us=11 checkpoint_last_log_gate_batch_sum_us=0 checkpoint_last_log_gate_batch_max_us=0 checkpoint_last_log_gate_run_sum_us=0 checkpoint_last_log_gate_run_max_us=0 checkpoint_last_page_write_sum_us=117 checkpoint_last_page_write_max_us=25 checkpoint_last_map_write_sum_us=0 checkpoint_last_map_write_max_us=0 checkpoint_last_claim_wait_sum_us=0 checkpoint_last_claim_wait_max_us=0 checkpoint_last_data_sync_sum_us=0 checkpoint_last_data_sync_max_us=0 checkpoint_last_end_wait_sum_us=0 checkpoint_last_end_wait_max_us=0 checkpoint_last_publish_writeback_sum_us=43 checkpoint_last_publish_writeback_max_us=15 checkpoint_last_publish_sync_sum_us=0 checkpoint_last_publish_sync_max_us=0 recovery_records=0 recovery_committed=0 recovery_rolled_back=0 recovery_compensations=0 recovery_redo_applied=0 recovery_pages_healed=0 recovery_torn_tail=0 recovery_analysis_us=36249 recovery_redo_us=34421 recovery_high_water_us=0 recovery_undo_us=0 recovery_checkpoint_us=318957 recovery_relations_checked=0 recovery_relations_missing_pages=0 catalog_recovered=1 catalog_marks_finalized=0 ddl_transactional=create-table,drop-table,create-index,drop-index ddl_durable=1 recovery_assertions_enforcing=0 recovery_assertions_unrecovered=0 contention_other_waits=0 contention_other_wait_us=0 contention_frame_table_waits=0 contention_frame_table_wait_us=0 contention_free_map_waits=0 contention_free_map_wait_us=0 contention_free_map_flush_waits=0 contention_free_map_flush_wait_us=0 contention_window_waits=0 contention_window_wait_us=0 contention_lock_partition_waits=0 contention_lock_partition_wait_us=0 contention_lock_wait_for_waits=0 contention_lock_wait_for_wait_us=0 contention_wal_stream_waits=0 contention_wal_stream_wait_us=0 contention_wal_sync_gate_waits=22 contention_wal_sync_gate_wait_us=1161263 contention_assertion_dir_waits=0 contention_assertion_dir_wait_us=0 contention_optimizer_waits=0 contention_optimizer_wait_us=0 contention_superblock_waits=0 contention_superblock_wait_us=0 contention_cabin_partition_waits=0 contention_cabin_partition_wait_us=0 contention_cabin_stats_waits=0 contention_cabin_stats_wait_us=0 contention_handoff_waits=0 contention_handoff_wait_us=0 contention_page_latch_waits=0 contention_page_latch_spin_turns=0 contention_syncs_inline=16263 contention_syncs_writer=25 contention_drain_passes_pending=16261 contention_ceiling_waits=0 contention_ceiling_wait_us=0 contention_carves=16 contention_checkpoint_runs=21 contention_refused_btree_descend=0 contention_refused_btree_parent=0 contention_refused_btree_secure=0 contention_refused_btree_lookup=0 contention_refused_index_descend=0 contention_refused_index_parent=0 contention_refused_index_secure=0 contention_structural_reruns=0 contention_catalog_memo_drops=1 contention_word_moves_root=1 contention_word_moves_cabin=0 contention_word_moves_schema=4 contention_word_moves_resolve=2 contention_inflight_asks=0 contention_inflight_misses=0 contention_inflight_miss_ids_read=0 contention_checkpoint_pages_written=246 contention_data_syncs=82 contention_fence_walks=0 contention_carve_longest_us=340225 contention_checkpoint_longest_us=1898402"
+    }
+  },
+  "pools": {
+    "B": {
+      "port": 32051,
+      "pin_core": null,
+      "opened": 8,
+      "cores": [
+        "0"
+      ]
+    }
+  },
+  "arms": {
+    "B": {
+      "update-hot": {
+        "phase": "update-hot",
+        "detail": "every session on one row - the tuple X, fought over",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 46.826859,
+        "qps": 341.7,
+        "mean_us": 23409.9,
+        "p0_us": 1069.3,
+        "p25_us": 2071.6,
+        "p50_us": 2169.5,
+        "p95_us": 63806.1,
+        "p99_us": 597675.3,
+        "max_us": 918759.3
+      },
+      "update-disjoint": {
+        "phase": "update-disjoint",
+        "detail": "one row each - R3's relation IX, alone",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 4.863579,
+        "qps": 3289.8,
+        "mean_us": 2428.4,
+        "p0_us": 1064.7,
+        "p25_us": 2055.1,
+        "p50_us": 2117.8,
+        "p95_us": 4231.0,
+        "p99_us": 8977.7,
+        "max_us": 19819.3
+      },
+      "update-disjoint-again": {
+        "phase": "update-disjoint-again",
+        "detail": "the noise floor: the row above, repeated",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 23.7154,
+        "qps": 674.7,
+        "mean_us": 11854.3,
+        "p0_us": 1066.9,
+        "p25_us": 2055.0,
+        "p50_us": 2123.9,
+        "p95_us": 90376.8,
+        "p99_us": 167776.1,
+        "max_us": 802486.4
+      },
+      "insert-omitted": {
+        "phase": "insert-omitted",
+        "detail": "pk omitted: one mark, one tail, every session (D20)",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 20.74181,
+        "qps": 771.4,
+        "mean_us": 10367.4,
+        "p0_us": 1094.5,
+        "p25_us": 2031.9,
+        "p50_us": 2101.7,
+        "p95_us": 16051.2,
+        "p99_us": 199843.0,
+        "max_us": 839970.4
+      },
+      "select-hot": {
+        "phase": "select-hot",
+        "detail": "control: a read takes no borrow",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.811835,
+        "qps": 19708.4,
+        "mean_us": 401.4,
+        "p0_us": 69.0,
+        "p25_us": 363.4,
+        "p50_us": 399.3,
+        "p95_us": 545.6,
+        "p99_us": 758.1,
+        "max_us": 1675.7
+      },
+      "ping": {
+        "phase": "ping",
+        "detail": "control: SHOW META resolves no relation",
+        "ops": 16000,
+        "errors": 0,
+        "first_error": null,
+        "elapsed_s": 0.562832,
+        "qps": 28427.7,
+        "mean_us": 255.2,
+        "p0_us": 58.2,
+        "p25_us": 213.7,
+        "p50_us": 236.5,
+        "p95_us": 478.6,
+        "p99_us": 496.7,
+        "max_us": 792.1
+      }
+    }
+  }
+}

@@ -1,0 +1,148 @@
+{"t": 1791808053.3321328, "loadavg": "2.34 1.99 1.78 1/348 562131", "gate_waited_s": 6790}
+{"t": 1791808066.2810626, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/smoke/c3", "rc": 0, "loadavg": "2.22 1.97 1.77 1/326 562273"}
+{"t": 1791808066.2935042, "loadavg": "2.22 1.97 1.77 1/326 562274", "gate_waited_s": 0}
+{"t": 1791808082.6148431, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/smoke/c2", "rc": 0, "loadavg": "2.26 1.99 1.78 1/334 562324"}
+{"t": 1791808694.9216993, "loadavg": "1.38 4.27 3.56 2/330 570180", "gate_waited_s": 410}
+{"t": 1791808714.444007, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/3338cf0c/segregated-no0/r1", "rc": 0, "loadavg": "1.81 4.17 3.55 1/330 570290"}
+{"t": 1791808714.4564083, "loadavg": "1.81 4.17 3.55 1/330 570291", "gate_waited_s": 0}
+{"t": 1791808733.8200212, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/05cd011f/segregated-no0/r1", "rc": 0, "loadavg": "2.46 4.16 3.56 1/324 570342"}
+{"t": 1791808733.832589, "loadavg": "2.46 4.16 3.56 1/324 570343", "gate_waited_s": 0}
+{"t": 1791808753.3372512, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/3338cf0c/batch0/r1", "rc": 0, "loadavg": "2.51 4.06 3.54 1/331 570398"}
+{"t": 1791808763.362669, "loadavg": "2.12 3.92 3.50 1/326 570429", "gate_waited_s": 10}
+{"t": 1791808782.9767745, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/05cd011f/batch0/r1", "rc": 0, "loadavg": "2.33 3.85 3.48 1/332 570509"}
+{"t": 1791808782.9893365, "loadavg": "2.33 3.85 3.48 1/332 570510", "gate_waited_s": 0}
+{"t": 1791808802.513058, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/3338cf0c/spread/r1", "rc": 0, "loadavg": "2.47 3.78 3.46 1/294 570563"}
+{"t": 1791808802.5257237, "loadavg": "2.47 3.78 3.46 1/294 570564", "gate_waited_s": 0}
+{"t": 1791808822.0819502, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/05cd011f/spread/r1", "rc": 0, "loadavg": "2.42 3.68 3.44 1/298 570612"}
+{"t": 1791808822.0944197, "loadavg": "2.42 3.68 3.44 2/298 570613", "gate_waited_s": 0}
+{"t": 1791808841.5813053, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/3338cf0c/segregated-no0/r2", "rc": 0, "loadavg": "2.58 3.65 3.43 2/297 570642"}
+{"t": 1791808851.6071653, "loadavg": "2.26 3.54 3.40 4/298 570690", "gate_waited_s": 10}
+{"t": 1791808871.2730343, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/05cd011f/segregated-no0/r2", "rc": 0, "loadavg": "2.38 3.48 3.38 1/297 570841"}
+{"t": 1791808871.2854857, "loadavg": "2.38 3.48 3.38 1/297 570842", "gate_waited_s": 0}
+{"t": 1791808890.4516733, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/3338cf0c/batch0/r2", "rc": 0, "loadavg": "2.22 3.37 3.35 1/297 570988"}
+{"t": 1791808890.4642055, "loadavg": "2.22 3.37 3.35 1/297 570989", "gate_waited_s": 0}
+{"t": 1791808910.028369, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/05cd011f/batch0/r2", "rc": 0, "loadavg": "2.28 3.30 3.32 1/298 571135"}
+{"t": 1791808910.041021, "loadavg": "2.28 3.30 3.32 1/298 571136", "gate_waited_s": 0}
+{"t": 1791808929.142793, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/3338cf0c/spread/r2", "rc": 0, "loadavg": "2.36 3.24 3.30 1/298 571279"}
+{"t": 1791808929.1553319, "loadavg": "2.36 3.24 3.30 1/298 571280", "gate_waited_s": 0}
+{"t": 1791808948.7709038, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/05cd011f/spread/r2", "rc": 0, "loadavg": "2.34 3.18 3.28 1/299 571450"}
+{"t": 1791808948.7834718, "loadavg": "2.34 3.18 3.28 1/299 571451", "gate_waited_s": 0}
+{"t": 1791808968.3132968, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/3338cf0c/segregated-no0/r3", "rc": 0, "loadavg": "2.28 3.10 3.25 2/298 571622"}
+{"t": 1791808968.326472, "loadavg": "2.28 3.10 3.25 1/298 571623", "gate_waited_s": 0}
+{"t": 1791808987.9527097, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/05cd011f/segregated-no0/r3", "rc": 0, "loadavg": "2.72 3.15 3.26 1/297 571777"}
+{"t": 1791808997.9781234, "loadavg": "2.38 3.06 3.23 1/297 571874", "gate_waited_s": 10}
+{"t": 1791809017.6477945, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/3338cf0c/batch0/r3", "rc": 0, "loadavg": "2.52 3.04 3.22 2/298 572019"}
+{"t": 1791809027.6746824, "loadavg": "2.29 2.97 3.20 1/298 572041", "gate_waited_s": 10}
+{"t": 1791809047.2070472, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/05cd011f/batch0/r3", "rc": 0, "loadavg": "2.35 2.94 3.18 1/298 572107"}
+{"t": 1791809047.2194297, "loadavg": "2.35 2.94 3.18 1/298 572108", "gate_waited_s": 0}
+{"t": 1791809066.7732096, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/3338cf0c/spread/r3", "rc": 0, "loadavg": "2.52 2.95 3.18 1/291 572183"}
+{"t": 1791809076.798346, "loadavg": "2.13 2.85 3.15 1/291 572187", "gate_waited_s": 10}
+{"t": 1791809096.42354, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bl/05cd011f/spread/r3", "rc": 0, "loadavg": "2.27 2.83 3.13 1/295 572272"}
+{"t": 1791809096.4596293, "loadavg": "2.27 2.83 3.13 1/295 572274", "gate_waited_s": 0}
+{"t": 1791809133.2930262, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c3/r1", "rc": 0, "loadavg": "2.63 2.85 3.13 1/294 572388"}
+{"t": 1791809143.3182256, "loadavg": "2.31 2.77 3.10 1/296 572400", "gate_waited_s": 10}
+{"t": 1791809183.749704, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c2/r1", "rc": 0, "loadavg": "2.82 2.84 3.10 1/293 572516"}
+{"t": 1791809193.7747502, "loadavg": "2.38 2.74 3.07 1/293 572530", "gate_waited_s": 10}
+{"t": 1791809232.680809, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c2-iso/r1", "rc": 0, "loadavg": "1.43 2.45 2.95 1/295 572594"}
+{"t": 1791809232.693106, "loadavg": "1.43 2.45 2.95 1/295 572595", "gate_waited_s": 0}
+{"t": 1791809273.4567232, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-segregated-no0/r1", "rc": 0, "loadavg": "2.57 2.61 2.99 1/295 572652"}
+{"t": 1791809283.4818432, "loadavg": "2.17 2.53 2.96 1/294 572655", "gate_waited_s": 10}
+{"t": 1791809321.5608425, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-iso-segregated-no0/r1", "rc": 0, "loadavg": "1.27 2.26 2.85 1/287 572697"}
+{"t": 1791809321.572767, "loadavg": "1.27 2.26 2.85 1/287 572698", "gate_waited_s": 0}
+{"t": 1791809361.183881, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-batch0/r1", "rc": 0, "loadavg": "1.91 2.28 2.83 1/295 572764"}
+{"t": 1791809361.1961572, "loadavg": "1.91 2.28 2.83 1/295 572765", "gate_waited_s": 0}
+{"t": 1791809399.3214703, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-iso-batch0/r1", "rc": 0, "loadavg": "1.24 2.07 2.74 1/297 572826"}
+{"t": 1791809399.3338852, "loadavg": "1.24 2.07 2.74 1/297 572827", "gate_waited_s": 0}
+{"t": 1791809439.3431408, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-spread/r1", "rc": 0, "loadavg": "2.37 2.25 2.77 1/289 572872"}
+{"t": 1791809439.3555899, "loadavg": "2.37 2.25 2.77 1/289 572873", "gate_waited_s": 0}
+{"t": 1791809477.4289038, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-iso-spread/r1", "rc": 0, "loadavg": "1.38 2.01 2.67 1/295 572916"}
+{"t": 1791809477.4410205, "loadavg": "1.38 2.01 2.67 1/295 572917", "gate_waited_s": 0}
+{"t": 1791809513.8551197, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c3/r1", "rc": 0, "loadavg": "1.51 1.98 2.63 1/295 572966"}
+{"t": 1791809513.8678253, "loadavg": "1.51 1.98 2.63 1/288 572967", "gate_waited_s": 0}
+{"t": 1791809553.9390862, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c2/r1", "rc": 0, "loadavg": "1.56 1.93 2.59 1/294 573016"}
+{"t": 1791809553.9513564, "loadavg": "1.56 1.93 2.59 1/294 573017", "gate_waited_s": 0}
+{"t": 1791809593.364965, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c2-iso/r1", "rc": 0, "loadavg": "1.11 1.77 2.50 1/295 573085"}
+{"t": 1791809593.3772664, "loadavg": "1.11 1.77 2.50 1/295 573086", "gate_waited_s": 0}
+{"t": 1791809632.8895938, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-segregated-no0/r1", "rc": 0, "loadavg": "2.02 1.92 2.52 1/296 573139"}
+{"t": 1791809632.902165, "loadavg": "2.02 1.92 2.52 1/296 573140", "gate_waited_s": 0}
+{"t": 1791809671.5324726, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-iso-segregated-no0/r1", "rc": 0, "loadavg": "1.23 1.74 2.44 1/297 573184"}
+{"t": 1791809671.544887, "loadavg": "1.23 1.74 2.44 1/297 573185", "gate_waited_s": 0}
+{"t": 1791809711.0460808, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-batch0/r1", "rc": 0, "loadavg": "1.54 1.74 2.41 1/290 573242"}
+{"t": 1791809711.058528, "loadavg": "1.54 1.74 2.41 1/290 573243", "gate_waited_s": 0}
+{"t": 1791809749.6774018, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-iso-batch0/r1", "rc": 0, "loadavg": "1.31 1.68 2.36 1/297 573300"}
+{"t": 1791809749.6898425, "loadavg": "1.31 1.68 2.36 1/297 573301", "gate_waited_s": 0}
+{"t": 1791809789.06133, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-spread/r1", "rc": 0, "loadavg": "2.03 1.81 2.37 1/296 573323"}
+{"t": 1791809789.0736845, "loadavg": "2.03 1.81 2.37 1/296 573324", "gate_waited_s": 0}
+{"t": 1791809827.7542095, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-iso-spread/r1", "rc": 0, "loadavg": "1.10 1.60 2.28 1/295 573372"}
+{"t": 1791809827.7661676, "loadavg": "1.10 1.60 2.28 1/295 573373", "gate_waited_s": 0}
+{"t": 1791809864.1145196, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c3/r2", "rc": 0, "loadavg": "1.92 1.75 2.30 1/296 573422"}
+{"t": 1791809864.1270134, "loadavg": "1.92 1.75 2.30 1/296 573423", "gate_waited_s": 0}
+{"t": 1791809904.555397, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c2/r2", "rc": 0, "loadavg": "2.33 1.87 2.32 1/287 573466"}
+{"t": 1791809904.5678973, "loadavg": "2.33 1.87 2.32 1/287 573467", "gate_waited_s": 0}
+{"t": 1791809943.4610076, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c2-iso/r2", "rc": 0, "loadavg": "1.58 1.73 2.25 1/293 573535"}
+{"t": 1791809943.4733527, "loadavg": "1.58 1.73 2.25 1/293 573536", "gate_waited_s": 0}
+{"t": 1791809984.239477, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-segregated-no0/r2", "rc": 0, "loadavg": "2.49 1.94 2.30 2/292 573587"}
+{"t": 1791809984.25181, "loadavg": "2.49 1.94 2.30 1/292 573588", "gate_waited_s": 0}
+{"t": 1791810022.4185276, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-iso-segregated-no0/r2", "rc": 0, "loadavg": "1.58 1.76 2.22 1/292 573627"}
+{"t": 1791810022.4306545, "loadavg": "1.58 1.76 2.22 1/292 573628", "gate_waited_s": 0}
+{"t": 1791810062.8761287, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-batch0/r2", "rc": 0, "loadavg": "2.48 1.97 2.27 1/294 573692"}
+{"t": 1791810062.888587, "loadavg": "2.48 1.97 2.27 1/294 573693", "gate_waited_s": 0}
+{"t": 1791810101.0549183, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-iso-batch0/r2", "rc": 0, "loadavg": "1.56 1.79 2.20 1/287 573738"}
+{"t": 1791810101.0670228, "loadavg": "1.56 1.79 2.20 1/287 573739", "gate_waited_s": 0}
+{"t": 1791810140.36203, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-spread/r2", "rc": 0, "loadavg": "2.31 1.94 2.23 1/295 573787"}
+{"t": 1791810140.3745036, "loadavg": "2.31 1.94 2.23 1/295 573788", "gate_waited_s": 0}
+{"t": 1791810178.5473225, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-iso-spread/r2", "rc": 0, "loadavg": "1.18 1.69 2.14 1/287 573839"}
+{"t": 1791810178.5594418, "loadavg": "1.18 1.69 2.14 1/287 573840", "gate_waited_s": 0}
+{"t": 1791810214.9771955, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c3/r2", "rc": 0, "loadavg": "1.24 1.65 2.10 1/295 573890"}
+{"t": 1791810214.9898236, "loadavg": "1.24 1.65 2.10 1/295 573891", "gate_waited_s": 0}
+{"t": 1791810255.291655, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c2/r2", "rc": 0, "loadavg": "1.36 1.62 2.07 1/299 573945"}
+{"t": 1791810255.3043175, "loadavg": "1.36 1.62 2.07 1/299 573946", "gate_waited_s": 0}
+{"t": 1791810294.8079498, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c2-iso/r2", "rc": 0, "loadavg": "1.09 1.51 2.01 1/295 573995"}
+{"t": 1791810294.8210554, "loadavg": "1.09 1.51 2.01 1/295 573996", "gate_waited_s": 0}
+{"t": 1791810334.2014527, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-segregated-no0/r2", "rc": 0, "loadavg": "1.65 1.60 2.02 1/294 574035"}
+{"t": 1791810334.2138443, "loadavg": "1.65 1.60 2.02 1/294 574036", "gate_waited_s": 0}
+{"t": 1791810372.7384017, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-iso-segregated-no0/r2", "rc": 0, "loadavg": "0.92 1.42 1.94 1/295 574136"}
+{"t": 1791810372.7506986, "loadavg": "0.92 1.42 1.94 2/295 574137", "gate_waited_s": 0}
+{"t": 1791810412.2151365, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-batch0/r2", "rc": 0, "loadavg": "1.70 1.55 1.96 1/296 574185"}
+{"t": 1791810412.227583, "loadavg": "1.70 1.55 1.96 2/296 574186", "gate_waited_s": 0}
+{"t": 1791810450.7629166, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-iso-batch0/r2", "rc": 0, "loadavg": "1.13 1.43 1.91 1/296 574232"}
+{"t": 1791810450.7750974, "loadavg": "1.13 1.43 1.91 1/296 574233", "gate_waited_s": 0}
+{"t": 1791810490.2686863, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-spread/r2", "rc": 0, "loadavg": "1.40 1.46 1.90 1/295 574332"}
+{"t": 1791810490.2811768, "loadavg": "1.40 1.46 1.90 1/295 574333", "gate_waited_s": 0}
+{"t": 1791810528.927217, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-iso-spread/r2", "rc": 0, "loadavg": "0.89 1.32 1.83 2/294 574388"}
+{"t": 1791810528.9397345, "loadavg": "0.89 1.32 1.83 1/294 574389", "gate_waited_s": 0}
+{"t": 1791810566.475277, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c3/r3", "rc": 0, "loadavg": "1.81 1.49 1.87 1/293 574483"}
+{"t": 1791810566.4876385, "loadavg": "1.81 1.49 1.87 1/293 574484", "gate_waited_s": 0}
+{"t": 1791810607.019243, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c2/r3", "rc": 0, "loadavg": "2.20 1.62 1.90 1/292 574671"}
+{"t": 1791810607.0320487, "loadavg": "2.20 1.62 1.90 1/292 574672", "gate_waited_s": 0}
+{"t": 1791810646.052446, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c2-iso/r3", "rc": 0, "loadavg": "1.30 1.46 1.83 1/328 574820"}
+{"t": 1791810646.0651, "loadavg": "1.30 1.46 1.83 1/328 574821", "gate_waited_s": 0}
+{"t": 1791810685.7030847, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-segregated-no0/r3", "rc": 0, "loadavg": "1.97 1.61 1.86 1/327 574900"}
+{"t": 1791810685.7157905, "loadavg": "1.97 1.61 1.86 1/327 574901", "gate_waited_s": 0}
+{"t": 1791810723.884424, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-iso-segregated-no0/r3", "rc": 0, "loadavg": "1.01 1.41 1.78 1/328 574980"}
+{"t": 1791810723.8966367, "loadavg": "1.01 1.41 1.78 1/328 574981", "gate_waited_s": 0}
+{"t": 1791810764.2140698, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-batch0/r3", "rc": 0, "loadavg": "3.16 1.88 1.93 10/352 575415"}
+{"t": 1791811297.06654, "loadavg": "2.24 5.47 4.11 3/332 584476", "gate_waited_s": 530}
+{"t": 1791811335.3369737, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-iso-batch0/r3", "rc": 0, "loadavg": "1.23 4.81 3.94 1/333 584517"}
+{"t": 1791811335.349424, "loadavg": "1.23 4.81 3.94 1/333 584518", "gate_waited_s": 0}
+{"t": 1791811376.1954262, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-spread/r3", "rc": 0, "loadavg": "2.06 4.57 3.90 1/327 584574"}
+{"t": 1791811376.2082903, "loadavg": "2.06 4.57 3.90 1/327 584575", "gate_waited_s": 0}
+{"t": 1791811414.477747, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/relaxed/c1-iso-spread/r3", "rc": 0, "loadavg": "1.28 4.06 3.75 1/324 584637"}
+{"t": 1791811414.4902456, "loadavg": "1.28 4.06 3.75 1/324 584638", "gate_waited_s": 0}
+{"t": 1791811450.9256582, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c3/r3", "rc": 0, "loadavg": "1.57 3.82 3.68 1/333 584696"}
+{"t": 1791811450.9385462, "loadavg": "1.57 3.82 3.68 1/333 584697", "gate_waited_s": 0}
+{"t": 1791811491.2261665, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c2/r3", "rc": 0, "loadavg": "1.71 3.56 3.60 1/328 584775"}
+{"t": 1791811491.2389915, "loadavg": "1.71 3.56 3.60 1/328 584776", "gate_waited_s": 0}
+{"t": 1791811530.6709638, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c2-iso/r3", "rc": 0, "loadavg": "1.41 3.24 3.49 1/325 584830"}
+{"t": 1791811530.68383, "loadavg": "1.41 3.24 3.49 1/325 584831", "gate_waited_s": 0}
+{"t": 1791811570.182887, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-segregated-no0/r3", "rc": 0, "loadavg": "1.65 3.05 3.41 1/334 584924"}
+{"t": 1791811570.1959832, "loadavg": "1.65 3.05 3.41 1/334 584925", "gate_waited_s": 0}
+{"t": 1791811608.7912645, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-iso-segregated-no0/r3", "rc": 0, "loadavg": "0.95 2.70 3.28 1/333 584990"}
+{"t": 1791811608.8037221, "loadavg": "0.95 2.70 3.28 1/333 584991", "gate_waited_s": 0}
+{"t": 1791811648.2073307, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-batch0/r3", "rc": 0, "loadavg": "1.66 2.66 3.24 1/324 585027"}
+{"t": 1791811648.2200387, "loadavg": "1.66 2.66 3.24 1/324 585028", "gate_waited_s": 0}
+{"t": 1791811686.7772105, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-iso-batch0/r3", "rc": 0, "loadavg": "1.07 2.40 3.13 1/332 585166"}
+{"t": 1791811686.7897065, "loadavg": "1.07 2.40 3.13 1/332 585167", "gate_waited_s": 0}
+{"t": 1791811726.2758758, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-spread/r3", "rc": 0, "loadavg": "1.76 2.40 3.09 1/331 585267"}
+{"t": 1791811726.2887588, "loadavg": "1.76 2.40 3.09 2/331 585268", "gate_waited_s": 0}
+{"t": 1791811764.9512208, "after": "/home/cdkbs/bench-runs/bq/out-4cf30270/bq/group/c1-iso-spread/r3", "rc": 0, "loadavg": "0.97 2.11 2.97 1/325 585367"}

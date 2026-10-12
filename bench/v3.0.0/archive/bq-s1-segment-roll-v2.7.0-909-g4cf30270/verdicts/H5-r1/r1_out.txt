@@ -1,0 +1,162 @@
+relaxed c1-segregated-no0 r1 rolls=35 holdwin=11439ms rollers={1: 35} rollwall=38% holdp50=297.1 max=709.9 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:11254.8/11254.8/11254.2/g0 c1:0.0/0.1/0.0/g10982 c2:0.0/5.3/5.3/g0 c3:0.0/206.6/206.5/g0 totdrain=11254.8
+    n=12006 slow=1275 drop=0 big=1174 ov=1016 aligned=968 share=91% p99=306.396(json 306.396) p999=625.640(json 625.640) -> noaligned p99=51.529 p999=202.040
+relaxed c1-segregated-no0 r2 rolls=35 holdwin=10391ms rollers={1: 35} rollwall=35% holdp50=282.8 max=678.2 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:10174.1/10174.1/10173.3/g3 c1:0.0/0.1/0.0/g10000 c2:0.0/172.9/172.9/g0 c3:0.0/212.6/212.5/g0 totdrain=10174.1
+    n=12006 slow=960 drop=0 big=862 ov=731 aligned=557 share=76% p99=210.570(json 210.570) p999=295.940(json 295.940) -> noaligned p99=75.609 p999=183.235
+relaxed c1-segregated-no0 r3 rolls=37 holdwin=11995ms rollers={1: 37} rollwall=40% holdp50=330.8 max=587.3 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:11440.8/11445.1/11444.1/g0 c1:0.0/0.1/0.0/g11793 c2:0.0/13.5/13.5/g0 c3:0.0/3.8/3.7/g0 totdrain=11440.8
+    n=12006 slow=1167 drop=0 big=1025 ov=894 aligned=786 share=87% p99=288.106(json 288.106) p999=496.225(json 496.225) -> noaligned p99=68.642 p999=211.148
+relaxed c1-batch0 r1 rolls=36 holdwin=12128ms rollers={1: 36} rollwall=41% holdp50=327.8 max=653.6 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:11933.7/11933.7/11932.0/g66 c1:0.0/0.1/0.0/g11820 c2:0.0/19.9/19.8/g0 c3:0.0/809.3/809.1/g0 totdrain=11933.7
+    n=12006 slow=2123 drop=0 big=1956 ov=1772 aligned=1712 share=94% p99=429.898(json 429.897) p999=592.633(json 592.634) -> noaligned p99=72.992 p999=196.496
+relaxed c1-batch0 r2 rolls=35 holdwin=11252ms rollers={3: 35} rollwall=38% holdp50=290.7 max=721.8 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:11066.3/11066.3/11065.4/g12 c1:0.0/148.5/148.4/g0 c2:0.0/8.3/8.2/g0 c3:0.0/0.1/0.0/g10971 totdrain=11066.3
+    n=12006 slow=1263 drop=0 big=1184 ov=1084 aligned=984 share=92% p99=354.251(json 354.251) p999=673.697(json 673.697) -> noaligned p99=49.905 p999=220.775
+relaxed c1-batch0 r3 rolls=33 holdwin=11250ms rollers={3: 33} rollwall=37% holdp50=316.5 max=724.8 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:10765.7/10765.7/10756.6/g0 c1:0.0/238.0/237.8/g0 c2:0.0/266.8/266.6/g0 c3:0.0/0.4/0.0/g10362 totdrain=10765.7
+    n=12006 slow=1555 drop=0 big=1177 ov=1062 aligned=903 share=87% p99=366.275(json 366.275) p999=623.917(json 623.917) -> noaligned p99=97.385 p999=218.665
+relaxed c1-spread r1 rolls=35 holdwin=10555ms rollers={2: 35} rollwall=35% holdp50=271.3 max=668.3 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:10348.6/10348.6/10347.8/g4 c1:0.0/361.3/361.2/g0 c2:0.0/0.1/0.0/g10213 c3:0.0/17.2/17.1/g0 totdrain=10348.6
+    n=12006 slow=519 drop=0 big=425 ov=299 aligned=246 share=78% p99=205.116(json 205.116) p999=474.535(json 474.535) -> noaligned p99=42.974 p999=183.096
+relaxed c1-spread r2 rolls=35 holdwin=11717ms rollers={3: 19, 1: 1, 0: 15} rollwall=39% holdp50=308.3 max=788.2 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:6256.6/6256.6/6256.2/g5136 c1:0.0/347.3/347.2/g324 c2:0.0/11.9/11.9/g0 c3:0.0/749.8/749.7/g5899 totdrain=6256.6
+    n=12006 slow=1296 drop=0 big=1140 ov=960 aligned=792 share=63% p99=507.976(json 507.976) p999=1000.173(json 1000.173) -> noaligned p99=145.185 p999=1000.173
+relaxed c1-spread r3 rolls=34 holdwin=12745ms rollers={0: 1, 3: 33} rollwall=42% holdp50=330.2 max=828.1 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:12014.9/12014.9/12014.2/g535 c1:0.0/10.5/10.4/g0 c2:0.0/251.9/251.7/g0 c3:0.0/0.1/0.0/g11783 totdrain=12014.9
+    n=12006 slow=1565 drop=0 big=1409 ov=1334 aligned=1334 share=99% p99=452.132(json 452.132) p999=734.689(json 734.689) -> noaligned p99=2.640 p999=55.835
+relaxed c2 r1 rolls=34 holdwin=13943ms rollers={3: 34} rollwall=45% holdp50=370.6 max=788.6 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:5269.4/13832.1/13828.7/g0 c1:0.0/12963.8/12957.5/g0 c2:0.0/13504.4/13500.4/g0 c3:0.0/2.0/0.0/g13111 totdrain=5269.4
+    n=23741 slow=11986 drop=0 big=11598 ov=10893 aligned=10893 share=97% p99=658.499(json 658.500) p999=777.711(json 777.711) -> noaligned p99=131.778 p999=243.308
+relaxed c2 r2 rolls=33 holdwin=13754ms rollers={3: 33} rollwall=46% holdp50=373.5 max=1210.2 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:4428.9/13011.4/13006.6/g0 c1:0.0/12278.3/12271.1/g0 c2:0.0/13661.3/13658.1/g0 c3:0.0/2.3/0.0/g12417 totdrain=4428.9
+    n=24007 slow=12240 drop=0 big=11919 ov=11195 aligned=10714 share=93% p99=1295.966(json 1295.966) p999=1718.794(json 1718.794) -> noaligned p99=342.265 p999=653.094
+relaxed c2 r3 rolls=34 holdwin=13189ms rollers={3: 34} rollwall=44% holdp50=366.9 max=746.4 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:4041.4/12348.5/12345.3/g0 c1:0.0/12778.7/12772.9/g0 c2:0.0/12002.9/11997.2/g0 c3:0.0/1.8/0.0/g12263 totdrain=4041.4
+    n=24006 slow=11663 drop=0 big=11312 ov=10622 aligned=10332 share=91% p99=659.451(json 659.451) p999=877.924(json 877.924) -> noaligned p99=297.424 p999=858.115
+relaxed c3 r1 rolls=36 holdwin=13532ms rollers={3: 36} rollwall=45% holdp50=365.6 max=673.1 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:13353.5/13353.6/13352.6/g3 c1:0.0/231.2/231.2/g0 c2:0.0/94.4/94.3/g0 c3:0.0/0.1/0.0/g13124 totdrain=13353.5
+    n=0 slow=0 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.000) p999=0.000(json 0.000) -> noaligned p99=0.000 p999=0.000
+relaxed c3 r2 rolls=36 holdwin=13266ms rollers={3: 36} rollwall=44% holdp50=365.7 max=911.3 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:13103.1/13108.9/13106.9/g0 c1:0.0/352.7/352.5/g0 c2:0.0/378.6/378.4/g0 c3:0.0/0.1/0.0/g12963 totdrain=13103.1
+    n=0 slow=0 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.000) p999=0.000(json 0.000) -> noaligned p99=0.000 p999=0.000
+relaxed c3 r3 rolls=36 holdwin=12846ms rollers={3: 36} rollwall=43% holdp50=352.8 max=794.3 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:12634.7/12634.7/12633.5/g3 c1:0.0/900.6/900.2/g0 c2:0.0/138.6/138.6/g0 c3:0.0/0.1/0.0/g12281 totdrain=12634.7
+    n=0 slow=0 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.000) p999=0.000(json 0.000) -> noaligned p99=0.000 p999=0.000
+relaxed c1-iso-segregated-no0 r1 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=49 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.279) p999=2.473(json 2.473) -> noaligned p99=0.000 p999=2.473
+relaxed c1-iso-segregated-no0 r2 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=11 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.216) p999=0.000(json 0.803) -> noaligned p99=0.000 p999=0.000
+relaxed c1-iso-segregated-no0 r3 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=65 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.561) p999=2.533(json 2.533) -> noaligned p99=0.000 p999=2.533
+relaxed c1-iso-batch0 r1 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=46 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.379) p999=2.270(json 2.270) -> noaligned p99=0.000 p999=2.270
+relaxed c1-iso-batch0 r2 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=13 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.206) p999=1.008(json 1.008) -> noaligned p99=0.000 p999=1.008
+relaxed c1-iso-batch0 r3 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=29 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.354) p999=1.554(json 1.554) -> noaligned p99=0.000 p999=1.554
+relaxed c1-iso-spread r1 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=19 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.227) p999=1.142(json 1.142) -> noaligned p99=0.000 p999=1.142
+relaxed c1-iso-spread r2 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=12 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.216) p999=0.000(json 0.976) -> noaligned p99=0.000 p999=0.000
+relaxed c1-iso-spread r3 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=38 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.444) p999=2.151(json 2.151) -> noaligned p99=0.000 p999=2.151
+relaxed c2-iso r1 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=24007 slow=122 drop=0 big=2 ov=0 aligned=0 share=0% p99=0.000(json 0.487) p999=2.920(json 2.920) -> noaligned p99=0.000 p999=2.920
+relaxed c2-iso r2 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=24007 slow=39 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.213) p999=1.843(json 1.843) -> noaligned p99=0.000 p999=1.843
+relaxed c2-iso r3 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=24007 slow=134 drop=0 big=1 ov=0 aligned=0 share=0% p99=0.000(json 0.471) p999=3.092(json 3.092) -> noaligned p99=0.000 p999=3.092
+group c1-segregated-no0 r1 rolls=24 holdwin=163ms rollers={3: 24} rollwall=1% holdp50=5.6 max=20.6 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:35.4/35.4/35.3/g0 c1:0.0/4.7/4.6/g0 c2:0.0/5.4/5.4/g0 c3:0.0/0.1/0.0/g11 totdrain=35.4
+    n=12006 slow=49 drop=0 big=2 ov=0 aligned=0 share=0% p99=0.000(json 0.409) p999=2.889(json 2.889) -> noaligned p99=0.000 p999=2.637
+group c1-segregated-no0 r2 rolls=24 holdwin=170ms rollers={1: 24} rollwall=1% holdp50=5.7 max=14.0 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:23.5/23.5/23.4/g0 c1:0.0/0.1/0.0/g9 c2:0.0/1.9/1.9/g0 c3:0.0/0.0/0.0/g0 totdrain=23.5
+    n=12006 slow=54 drop=0 big=6 ov=0 aligned=0 share=0% p99=0.000(json 0.408) p999=3.320(json 3.320) -> noaligned p99=0.000 p999=3.291
+group c1-segregated-no0 r3 rolls=23 holdwin=153ms rollers={1: 6, 0: 6, 2: 11} rollwall=1% holdp50=5.8 max=13.7 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:30.9/31.0/28.7/g0 c1:0.0/0.0/0.0/g3 c2:0.0/0.1/0.0/g7 c3:0.0/0.0/0.0/g0 totdrain=30.9
+    n=12006 slow=128 drop=0 big=23 ov=0 aligned=0 share=0% p99=1.109(json 1.109) p999=24.247(json 24.247) -> noaligned p99=1.088 p999=24.247
+group c1-batch0 r1 rolls=25 holdwin=176ms rollers={0: 1, 2: 24} rollwall=1% holdp50=5.9 max=17.8 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:36.7/36.7/36.5/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.2/0.0/g6 c3:0.0/0.0/0.0/g0 totdrain=36.7
+    n=12006 slow=87 drop=0 big=12 ov=0 aligned=0 share=0% p99=0.000(json 0.606) p999=9.645(json 9.646) -> noaligned p99=0.000 p999=9.645
+group c1-batch0 r2 rolls=24 holdwin=158ms rollers={1: 24} rollwall=1% holdp50=5.8 max=13.1 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:34.8/34.8/32.0/g0 c1:0.0/0.2/0.0/g4 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=34.8
+    n=12006 slow=97 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.761) p999=3.005(json 3.005) -> noaligned p99=0.000 p999=2.685
+group c1-batch0 r3 rolls=24 holdwin=180ms rollers={1: 24} rollwall=1% holdp50=6.8 max=15.9 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:66.0/66.0/56.1/g0 c1:0.0/0.8/0.0/g21 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=66.0
+    n=12006 slow=90 drop=0 big=10 ov=1 aligned=1 share=5% p99=0.000(json 0.748) p999=5.093(json 5.093) -> noaligned p99=0.000 p999=3.650
+group c1-spread r1 rolls=24 holdwin=158ms rollers={2: 24} rollwall=1% holdp50=5.6 max=11.6 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:16.6/16.6/16.4/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.2/0.0/g4 c3:0.0/0.0/0.0/g0 totdrain=16.6
+    n=12006 slow=118 drop=0 big=18 ov=0 aligned=0 share=0% p99=0.000(json 0.975) p999=19.313(json 19.313) -> noaligned p99=0.000 p999=19.313
+group c1-spread r2 rolls=24 holdwin=184ms rollers={2: 24} rollwall=1% holdp50=6.0 max=28.7 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:74.7/74.7/58.8/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.2/0.0/g7 c3:0.0/0.0/0.0/g0 totdrain=74.7
+    n=12006 slow=115 drop=0 big=16 ov=3 aligned=3 share=9% p99=0.000(json 0.940) p999=14.086(json 14.086) -> noaligned p99=0.000 p999=11.364
+group c1-spread r3 rolls=24 holdwin=171ms rollers={1: 24} rollwall=1% holdp50=6.1 max=13.8 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:36.0/36.0/30.9/g0 c1:0.0/0.2/0.0/g5 c2:0.0/0.0/0.0/g0 c3:0.0/3.8/3.8/g0 totdrain=36.0
+    n=12006 slow=124 drop=0 big=7 ov=0 aligned=0 share=0% p99=1.017(json 1.017) p999=5.129(json 5.129) -> noaligned p99=1.006 p999=4.459
+group c2 r1 rolls=23 holdwin=176ms rollers={3: 23} rollwall=1% holdp50=6.6 max=15.2 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:98.6/180.8/147.2/g469 c1:93.1/158.7/130.0/g0 c2:83.4/162.5/140.3/g0 c3:0.0/1.9/0.0/g69 totdrain=275.2
+    n=24004 slow=24004 drop=0 big=12499 ov=64 aligned=64 share=0% p99=306.516(json 306.516) p999=341.493(json 341.493) -> noaligned p99=306.516 p999=341.493
+group c2 r2 rolls=23 holdwin=200ms rollers={3: 23} rollwall=1% holdp50=7.5 max=19.4 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:113.2/181.9/157.6/g238 c1:152.5/227.9/182.8/g0 c2:119.5/217.4/169.9/g0 c3:0.0/6.4/0.0/g83 totdrain=385.3
+    n=23976 slow=23976 drop=0 big=12864 ov=121 aligned=121 share=0% p99=319.707(json 319.707) p999=402.903(json 402.903) -> noaligned p99=319.707 p999=402.903
+group c2 r3 rolls=23 holdwin=182ms rollers={3: 23} rollwall=1% holdp50=6.1 max=21.3 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:144.8/194.9/160.1/g126 c1:108.1/177.7/150.3/g0 c2:88.1/167.5/141.0/g0 c3:0.0/3.1/0.0/g66 totdrain=341.0
+    n=23938 slow=23938 drop=0 big=12721 ov=77 aligned=77 share=0% p99=326.556(json 326.556) p999=380.963(json 380.963) -> noaligned p99=326.556 p999=380.963
+group c3 r1 rolls=25 holdwin=184ms rollers={3: 25} rollwall=1% holdp50=6.6 max=15.2 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:15.2/15.2/4.5/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.1/0.0/g13 totdrain=15.2
+    n=0 slow=0 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.000) p999=0.000(json 0.000) -> noaligned p99=0.000 p999=0.000
+group c3 r2 rolls=25 holdwin=180ms rollers={3: 25} rollwall=1% holdp50=5.8 max=22.7 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:77.9/77.9/67.3/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.1/0.0/g5 totdrain=77.9
+    n=0 slow=0 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.000) p999=0.000(json 0.000) -> noaligned p99=0.000 p999=0.000
+group c3 r3 rolls=25 holdwin=161ms rollers={3: 25} rollwall=1% holdp50=5.6 max=11.1 ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:37.3/37.3/34.1/g2 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.1/0.0/g3 totdrain=37.3
+    n=0 slow=0 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.000) p999=0.000(json 0.000) -> noaligned p99=0.000 p999=0.000
+group c1-iso-segregated-no0 r1 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=11 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.204) p999=0.000(json 0.976) -> noaligned p99=0.000 p999=0.000
+group c1-iso-segregated-no0 r2 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=64 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.474) p999=2.689(json 2.689) -> noaligned p99=0.000 p999=2.689
+group c1-iso-segregated-no0 r3 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=48 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.386) p999=2.524(json 2.524) -> noaligned p99=0.000 p999=2.524
+group c1-iso-batch0 r1 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=25 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.220) p999=1.903(json 1.903) -> noaligned p99=0.000 p999=1.903
+group c1-iso-batch0 r2 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=80 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.632) p999=2.614(json 2.615) -> noaligned p99=0.000 p999=2.614
+group c1-iso-batch0 r3 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=61 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.504) p999=2.763(json 2.763) -> noaligned p99=0.000 p999=2.763
+group c1-iso-spread r1 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=19 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.228) p999=1.574(json 1.574) -> noaligned p99=0.000 p999=1.574
+group c1-iso-spread r2 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=28 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.389) p999=1.402(json 1.402) -> noaligned p99=0.000 p999=1.402
+group c1-iso-spread r3 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=12006 slow=52 drop=0 big=0 ov=0 aligned=0 share=0% p99=0.000(json 0.541) p999=2.077(json 2.077) -> noaligned p99=0.000 p999=2.077
+group c2-iso r1 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=24006 slow=23999 drop=0 big=325 ov=0 aligned=0 share=0% p99=11.066(json 11.066) p999=18.925(json 18.925) -> noaligned p99=11.066 p999=18.925
+group c2-iso r2 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=24007 slow=24004 drop=0 big=318 ov=0 aligned=0 share=0% p99=10.905(json 10.905) p999=20.063(json 20.063) -> noaligned p99=10.905 p999=20.063
+group c2-iso r3 rolls=0 holdwin=0ms rollers={} rollwall=0%  ctl=False cores=(0.0, 0.0)
+    drain/stream/rollcov ms: c0:0.0/0.0/0.0/g0 c1:0.0/0.0/0.0/g0 c2:0.0/0.0/0.0/g0 c3:0.0/0.0/0.0/g0 totdrain=0.0
+    n=24007 slow=24003 drop=0 big=301 ov=0 aligned=0 share=0% p99=10.923(json 10.923) p999=20.556(json 20.556) -> noaligned p99=10.923 p999=20.556

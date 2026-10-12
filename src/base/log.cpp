@@ -157,9 +157,9 @@ void Logger::Log(LogLevel level, std::string_view component, std::string_view me
     // down because the report could not be filed would be strictly worse
     // than losing the report.
     if (sink_->Write(line).ok()) {
-        ++lines_written_;
+        lines_written_.fetch_add(1, std::memory_order_relaxed);
     } else {
-        ++write_failures_;
+        write_failures_.fetch_add(1, std::memory_order_relaxed);
     }
 }
 

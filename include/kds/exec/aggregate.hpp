@@ -48,11 +48,9 @@
 //
 // Every aggregate's running state supports `Merge`, such that folding a row
 // stream in one pass and folding two disjoint partitions of it then merging
-// give the same output rows. Nothing in v1 calls it. It was kept so
-// `docs/spec/crosscore.md`'s step pipeline could ship *partial aggregates* -
-// group count on the wire, not row count - without touching the step VM;
-// the pipeline went at AT-S10 with no statement opening a stage, and the
-// invariant stays pinned by its test. `AVG` landed 2026-08-07 carried as the `(sum, count)` pair
+// give the same output rows. Nothing in v1 calls it. It was kept for the
+// step pipeline's partial aggregates, which retired (AT-S10; its history
+// is at cf889b63), and the invariant stays pinned by its test. `AVG` landed 2026-08-07 carried as the `(sum, count)` pair
 // this paragraph reserved for it: partial sums and counts merge by
 // addition and the divide waits for `Finish`, where merging two partial
 // quotients would have been unrecoverable rounding.
@@ -133,10 +131,8 @@ public:
     // (AG6) survives a merge with a defined partition order.
     //
     // **Nothing in v1 calls it, and the test is its only consumer.** It was
-    // built so `docs/spec/crosscore.md`'s step pipeline could ship *partial
-    // aggregates* - a remote core folding its own partition and shipping
-    // states, the home core merging - without touching the step VM. The
-    // pipeline went at AT-S10; the header says why the invariant stays.
+    // built for the retired step pipeline's partial aggregates (AT-S10); the
+    // header says why the invariant stays.
     Status Merge(Aggregator&& other);
 
     // How many groups the fold founded. The global form is always 1.

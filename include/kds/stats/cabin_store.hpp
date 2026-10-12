@@ -62,12 +62,10 @@ class OptimizerSignals;
 // ---- Why a scan can safely fill it --------------------------------------
 //
 // The classic build-by-observation hazard is a write slipping between the
-// recording scan and the mark. It used to be deleted structurally -
-// statements for a relation ran to completion on its owning core (D3), so
-// scan + record + mark-observed was atomic against every other statement
-// (§6) - and **that argument is gone**: a write runs where the session is
-// (AT-S5), a read too (AT-S6), and one store serves every core (AT-S7), so
-// two reactors reach one set.
+// recording scan and the mark. A write runs where the session is (AT-S5),
+// a read too (AT-S6), and one store serves every core (AT-S7), so two
+// reactors reach one set. The owning-core argument that once ruled the
+// hazard out retired (AT-S5); its history is at cf889b63.
 //
 // What replaces it is `BeginRecording`, and it is the reason a build is
 // announced rather than simply committed. Announcing installs the set
@@ -276,8 +274,7 @@ public:
     // 16 rather than a core count: the store is not per core and the
     // contention it spreads is per *cabin*, so the number to beat is how
     // many cabins are written at once, which no measurement has yet named
-    // (AO-S7's "no contender" finding rested on a relation's writes running
-    // on its owner core, which AT-S5 removed).
+    // (AO-S7's "no contender" finding no longer describes the engine).
     static constexpr std::size_t kPartitions = 16;
 
     // Sightings held before the table is cleared. `TrailRecorder`'s policy
@@ -333,7 +330,13 @@ public:
         std::uint64_t appends = 0;
     };
 
-    explicit CabinStore(CabinLimits limits = CabinLimits()) noexcept : limits_(limits) {}
+    // **`shared` arms the latches** (BP-H3; census in
+    // workorder-bp-per-core-residue.md section 7): `Expeditor` passes
+    // `cores > 1`. Armed by default, for the embedded callers and rigs.
+    explicit CabinStore(CabinLimits limits = CabinLimits(), bool shared = true) noexcept
+        : shared_(shared), limits_(limits) {}
+
+    bool shared() const noexcept { return shared_; }
 
     // ---- Read path ------------------------------------------------------
 
@@ -606,6 +609,11 @@ private:
     // are the instance's totals and every partition writes them, so folding
     // them into one partition would make that partition every core's.
     mutable Latch stats_latch_{LatchKind::kCabinStats};
+
+    // `latch` when the store is shared, null otherwise: what every
+    // acquisition passes to `LatchGuard`, which takes nothing for a null.
+    Latch* Armed(Latch& latch) const noexcept { return shared_ ? &latch : nullptr; }
+    bool shared_;
 
     CabinLimits limits_;
     std::array<Partition, kPartitions> partitions_;

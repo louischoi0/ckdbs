@@ -54,10 +54,7 @@ support `Merge(a, b) → a'` such that folding a row stream in one pass and
 folding two disjoint partitions of it then merging yield the same output
 rows. `COUNT`/`SUM` merge by addition, `MIN`/`MAX` by comparison, `DISTINCT`
 by set union, `AVG` as its `(sum, count)` pair with the divide deferred to
-`Finish`. It was written so `docs/spec/crosscore.md`'s step pipeline could
-ship *partial aggregates* — group count, not row count, on the wire —
-without touching the step VM; that pipeline is deleted since AT-S10, and
-the invariant stands as a property of the state. Merge preserves the left operand's group order and
+`Finish`. The invariant is a property of the state. Merge preserves the left operand's group order and
 appends the right's unseen groups in their own order, so first-seen
 determinism (AG6) survives a merge with a defined partition order.
 
@@ -267,11 +264,10 @@ like `durability`.
 - **Class / access stats**: AG14 — unchanged; `RecordChainAccess` sees the
   same chain.
 - **Cross-core**: nothing crosses. An aggregated statement runs, whole,
-  on its session's core (`crosscore.md` CC1), so no state is shipped and
-  no core merges another's. AG-M stays the contract - a merge of two
-  partitions equals the one-pass fold - because it is what a partitioned
-  aggregation would need; the remote cores that ran a partition and
-  shipped its state retired with the fan-in at AT-S9.
+  on its session's core (`crosscore.md` CC1), so no core merges
+  another's. AG-M stays the contract - a merge of two partitions equals
+  the one-pass fold - because it is what a partitioned aggregation would
+  need.
 - **Transactions**: the fold reads through the statement's snapshot like
   every read; nothing here touches visibility.
 

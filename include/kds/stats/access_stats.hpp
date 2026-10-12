@@ -59,12 +59,9 @@ struct AccessStatsCounters {
 // `now` is the injected clock's reading, or 0 when there is no clock -
 // `last_seen` is best-effort in the same sense `sys.patterns`' is.
 //
-// **The write is local and immediate on every core** (AT-S7). A peer took
-// a second path until then - CR7's fold into an `AccessBatch`, flushed to
-// core 0 over the ring - because `sys.access_stats` sits in the reserved
-// range and a peer could not write it. Every core writes every page since
-// AT-S5, so the sink parameter, the batch, the ring kind and CR8's
-// permitted drop are all gone and this is the one path again.
+// **The write is local and immediate on every core** (AT-S7): every core
+// writes every page. The access batch, its ring kind and CR8's permitted
+// drop retired (AT-S7); their history is at cf889b63.
 void RecordChainAccess(catalog::Catalog& catalog, const exec::StepChain& chain,
                        std::uint64_t now, AccessStatsCounters* counters = nullptr);
 

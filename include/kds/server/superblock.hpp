@@ -12,7 +12,7 @@
 
 // The SuperBlock: one fixed logical page (kPageSize) holding whole-database
 // metadata - identity (magic/version/create time), the mount stamp, and the
-// per-core WAL anchors recovery starts from.
+// WAL anchor table recovery starts from.
 //
 // What it deliberately does *not* hold is allocation state - no page-id
 // counter, no total/free page counts, no pre-allocation range. Which page
@@ -96,10 +96,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // above - the first is a field past `next_trx_id` where a version-9 image
 // holds zeroes, and a zero core count is not "unset", it is "boot with no
 // cores"; the second is the fifth repeat of the catalog-row-layout break
-// 4 -> 5 first recorded. The count is pinned rather than adopted because
-// recovery under a changed core count is [OPEN] (wal.md section 3): a
-// database whose streams were written by N cores must not be mounted by M
-// until something decides what happens to the other streams.
+// 4 -> 5 first recorded.
 // 10 -> 11: bootstrap gained `sys.fkeys` (docs/spec/foreign-keys.md §1) on a
 // fixed page id a pre-existing file does not have - the fourth repeat of the
 // 5 -> 6 shape, and the one where mounting anyway would be worst. A
@@ -183,58 +180,24 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // stays, written 0, and a relation still carrying the old 1 is refused by
 // name rather than by version (BB-R11) - until 19 -> 20 refused the
 // volumes that could carry it, below.
-// 15 -> 16 (2026-08-27): bootstrap gained `sys.ranges`, the range
-// directory (docs/spec/crosscore.md CC9, workplan-range-directory.md RD1),
-// on fixed page 15 - the sixth repeat of the 5 -> 6 shape, and the second
-// carrying the 12 -> 13 entry's overflow-range break, which reads on this
-// bump letter for letter: *"A version-12 file that ever outgrew one of its
-// nine catalog roots put a `sys.columns` or `sys.tables` overflow page at
-// id 14 - and this build would create sys.assertions on top of it. That is
-// not a missing relation, it is a silently overwritten one, which is the
-// worst failure any bump on this list has protected against."* Here it is
-// a version-15 file that ever outgrew any of its eleven roots, its first
-// overflow id is 15, and the relation created on top would be sys.ranges;
-// `kCatalogOverflowFirst` moves 15 -> 16 on the same bump. The relation
-// itself is **empty and codec-less at this version** (the row is RD2's,
-// gated on D2) - the bump is not for what it holds but for where it sits,
-// and landing the epoch now, before R6's recovery fixtures exist, is the
-// ordering instructions/v2.4.0/range-foundation.md §0 argues costs nothing.
-// **No bump on 2026-09-02, recorded because the work order asked for
-// one** (AR0 M0's AL-R3, which this contradicts). `log_topology` consumed
+// 15 -> 16 (2026-08-27): bootstrap gained `sys.ranges` on fixed page 15,
+// and `kCatalogOverflowFirst` moved 15 -> 16 on the same bump (the 12 -> 13
+// entry's overflow-range break). The range directory retired at 17 -> 18;
+// its history is at cf889b63.
+// **No bump on 2026-09-02** (AR0 M0's AL-R3): `log_topology` consumed
 // `reserved1`, the u32 at offset 12 that `CreateFresh` has zeroed and
-// `Encode` has written since the initial commit - and 0 is exactly
-// `kPerCoreStreams`, so every **v16** image already states the truth about
-// itself. (v16 is the only version that can reach the field: `Decode`
-// refuses any other before reading it.) Same move as
-// `page_header.hpp:58`, twice.
-// 16 -> 17 (2026-09-05, AM-S4 / AM-R4, on D14): **the first bump on this
-// list that protects nothing in the catalog and everything in the pages.**
-// Every entry above is about a fixed page id moving or a row's width
-// changing; this one is about what a *data* page's bytes mean. AM-S2 gives
-// one buffer pool to every core, so no core owns a frame, and PL-C's stream
-// stamp - the 2-byte field at offset 2 of every headered page, saying which
-// core's log the `page_lsn` beside it belongs to - has no reader left. A
-// version-16 file's pages carry that field with a meaning this build no
-// longer assigns, and its `page_lsn` is an offset into whichever of several
-// streams that core wrote.
-//
-// **Refusing is the whole of D14** ("no in-place migration; a new major
-// version mounts only volumes created by it"), and it is the first time in
-// this revision a v3 image stops mounting: M0 kept them mountable, which is
-// exactly how a version-16 image with `log_topology = kPerCoreStreams` still
-// exists to be refused. There is nothing to migrate *to* - a per-core-stream
-// volume's LSNs are not comparable across cores, so no rewrite of the field
-// could make them one stream's - and nothing to migrate *for*: the version
-// of record is `v2.7.0` and v3 is unreleased, so what this strands is
-// development volumes.
+// `Encode` has written since the initial commit.
+// 16 -> 17 (2026-09-05, AM-S4 / AM-R4, on D14): a version-16 volume's
+// `page_lsn`s are offsets into several per-core streams, which no rewrite
+// could make one stream's, so it is refused with no migration (D14: "no
+// in-place migration; a new major version mounts only volumes created by
+// it"). Per-core streams retired (AM-S4(d)); their history is at cf889b63.
 // 17 -> 18 (2026-09-30): **bootstrap lost `sys.ranges`**, and the split
 // relation with it (`raft-marks-2026-09-30.md` §9). A relation is one
 // structure headed by `desc_page_id`, always, and this build reads nothing
-// else. A version-17 file that holds a relation split before AT-S9 would
-// mount and be read from its first chain alone - every later range's rows
-// missing with nothing logged - so the version is what refuses it, on
-// D14's rule: no compatibility was asked for, and none is kept. Page 15 and
-// oid 133 are left unused rather than reissued.
+// else; a version-17 file that holds a split relation would be read from
+// its first chain alone, so the version refuses it (D14). Page 15 and oid
+// 133 are left unused rather than reissued.
 // 18 -> 19 (2026-09-30, AY-S8): **an `ASSERT_SNAPSHOT` carries its run's
 // chunk count** (`wal/payload.hpp`), and recovery takes a run as a base only
 // once it has that many chunks. A version-18 volume's log holds snapshots
@@ -310,7 +273,7 @@ struct SuperBlockFields {
     std::uint32_t log_topology;
     std::uint64_t create_time;       // unix seconds
     std::uint64_t last_mount_time;
-    std::uint32_t wal_anchor_count;  // anchor slots ever published into
+    std::uint32_t wal_anchor_count;  // written, read by no branch (BP-H13); the field stays
 
     // ---- The pinned tuple-cell width (heap-and-tuple.md section 3.3) ----
     //
@@ -353,13 +316,10 @@ struct SuperBlockFields {
 
     // ---- The core count ----------------------------------------------------
     //
-    // The `cores` this volume was last mounted with. **Not pinned since
-    // AT-S9**: a mount at another count records the running one and logs
-    // the change (`bootstrap.cpp`; `core_count()` below says why nothing on
-    // the volume names a core). It was pinned, and every mount refused a
-    // disagreement, while WAL streams were per core and relations had an
-    // owner core; the reorganisation a count change would then have needed
-    // is `git show 2b20369:include/kds/server/superblock.hpp`.
+    // The `cores` this volume was last mounted with. **Not pinned** (AT-S9):
+    // a mount at another count records the running one and logs the change
+    // (`bootstrap.cpp`; `core_count()` below says why nothing on the volume
+    // names a core). The core-count pin retired (AT-S9); its history is at cf889b63.
     //
     // Never zero in a legal image: CreateFresh takes the count from a
     // configuration that has already refused 0, and Decode refuses a zero
@@ -425,12 +385,14 @@ static_assert(offsetof(SuperBlockFields, inline_cell_width) == kInlineCellWidthO
 // segment header, record.hpp), so zero can never be confused with a real
 // anchor and correctly reads as "replay from the start of the stream".
 
-// Slots in the table. A power of two, sized so the whole table stays well
-// inside one page: 64 * kWalAnchorEntrySize = 2048 bytes, which with the
-// fixed fields above leaves over 3/4 of the page still reserved. Raising it
-// is a format-version event, so it is deliberately generous relative to any
-// core count this engine runs on today.
-inline constexpr std::uint32_t kMaxWalCores = 64;
+// The most cores an instance runs. Everything sized per core is sized by
+// it: the in-flight and visibility arrays (`instance_visibility.hpp`), the
+// checkpoint gate's slots and the anchor's published mask, and the page
+// latch's owner field (`expeditor.cpp` asserts the fit). It also sizes the
+// anchor table below, whose 64 slots stay on disk although only slot 0 is
+// published: 64 * kWalAnchorEntrySize = 2048 bytes, well inside one page.
+// Raising it is a format-version event for that table.
+inline constexpr std::uint32_t kMaxCores = 64;
 
 struct WalAnchorFields {
     std::uint64_t checkpoint_lsn;   // the CHECKPOINT_BEGIN record this came from
@@ -457,10 +419,9 @@ static_assert(sizeof(WalAnchorFields) == kWalAnchorEntrySize);
 // a legal core count is - the same role storage::CheckInlineCellWidth plays
 // for the other pinned number.
 //
-// The ceiling is kMaxWalCores rather than a preference: the anchor table is
-// indexed directly by `core_id` and has exactly that many slots, so a core
-// above it has nowhere to publish a checkpoint from (SetWalAnchor refuses
-// it). Zero is refused because a database with no reactor is not a
+// The ceiling is kMaxCores rather than a preference: every per-core array
+// the instance builds has exactly that many slots (`kMaxCores` above), so a
+// core above it has no slot to publish into. Zero is refused because a database with no reactor is not a
 // configuration, it is a typo.
 Status CheckCoreCount(std::uint32_t cores);
 
@@ -471,7 +432,7 @@ std::uint64_t DrawLineageId();
 
 inline constexpr std::size_t kWalAnchorTableOffset = 40;
 static_assert(kWalAnchorTableOffset % alignof(std::uint64_t) == 0);
-inline constexpr std::size_t kWalAnchorTableSize = kMaxWalCores * kWalAnchorEntrySize;
+inline constexpr std::size_t kWalAnchorTableSize = kMaxCores * kWalAnchorEntrySize;
 
 // Bytes actually read/written; the rest of the page (up to kPageSize) is
 // reserved for future fields and always encoded as zero, same intent as
@@ -521,9 +482,7 @@ public:
     // are not testing the count.
     // The log topology is `kSingleStream` and takes no parameter
     // (AM-S4(d)): it is what the volume's log **is**, chosen once here and
-    // never again, and this build has one answer. A parameter stood here
-    // defaulting to `kPerCoreStreams`, which meant every superblock built
-    // outside `BootstrapDatabase` claimed the topology `Decode` refuses.
+    // never again, and this build has one answer.
     static SuperBlock CreateFresh(
         std::uint64_t now_unix_seconds,
         std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth,
@@ -548,11 +507,10 @@ public:
     // relation's row size in this database was computed from it.
     std::uint32_t inline_cell_width() const noexcept { return fields_.inline_cell_width; }
 
-    // **The `cores` this volume was last mounted with**, no longer pinned
-    // (AT-S9, E9's withdrawal handing it the question). It was pinned
-    // because WAL streams were per core and then because `owner_core`
-    // named cores; one stream (AM-S4(d)) and no owners (D17) left nothing
-    // on the volume that names a core, so a mount at another count sets it
+    // **The `cores` this volume was last mounted with**, not pinned (AT-S9,
+    // E9's withdrawal handing it the question): with one stream (AM-S4(d))
+    // and no owners (D17) nothing on the volume names a core, so a mount at
+    // another count sets it
     // (`SetCoreCount`) and everything sized by it - the anchor fold's
     // warm-up, the lock table, the page latch - is sized from the running
     // count. Validated by `CheckCoreCount`, as at creation.
@@ -595,17 +553,13 @@ public:
     // (`SetWalAnchor` refuses the rest), so the others read zero, which is
     // "never checkpointed" and is skipped. Sized by `core_count`, so the
     // table also bounds which cores this database has.
-    //
-    // The caller this doc block used to name - the cross-stream prepared
-    // resolver, which needed a *coordinator's* anchor to bound a scan of
-    // that core's own stream - went at AM-S4(d) with the second stream.
     std::vector<WalAnchorFields> wal_anchors() const;
 
     // Records a completed checkpoint's anchor. In-memory only - it is
     // durable once the superblock page has been encoded and the store
     // synced, which is the caller's job and the whole of wal.md section
     // 8-3's ordering requirement. Fails with InvalidArgument for a core_id
-    // at or above kMaxWalCores; refusing beats wrapping, which would let
+    // at or above kMaxCores; refusing beats wrapping, which would let
     // one core's anchor silently overwrite another's.
     //
     // **Under `kSingleStream` the only legal slot is 0** (AR0 M0, AL-R3):
@@ -617,23 +571,16 @@ public:
     // bypassing that fold rather than a limitation.
     Status SetWalAnchor(std::uint32_t core_id, const WalAnchorFields& anchor) noexcept;
 
-    // **There is no `log_topology()` and no `single_stream()`** (AM-S4(d)).
-    // Both could answer only one way once `Decode` began refusing every
-    // topology but `kSingleStream`, and a predicate that can only say true
-    // is the same defect as a printed field that can only say one thing -
-    // the next reader takes it for a question the engine still asks. The
-    // word is still encoded and still validated; nothing branches on it.
+    // The `log_topology()` and `single_stream()` predicates retired
+    // (AM-S4(d)); their history is at cf889b63. The word is still encoded
+    // and still validated; nothing branches on it.
     //
     // **A peer's copy is the volume's whole decoded image**, handed over on
-    // `CoreRuntime::Config` and copied in `Open`'s first statement. It used
-    // to be a *default-constructed* copy filled in field by field, and zero
-    // is a legal value of most of these fields - `kPerCoreStreams` is 0, a
-    // zero `next_trx_id` is "core 0 had none to give", a zero `create_time`
-    // renders as the epoch - so a field nobody carried across answered
-    // silently and wrongly rather than not at all. That happened three
-    // times before the AL-S9 review found the next three already live in
-    // `SHOW META`. `Open` now refuses a config with no image, which is why
-    // there is no longer a list of fields a peer may ask about.
+    // `CoreRuntime::Config` and copied in `Open`'s first statement. Zero is
+    // a legal value of most of these fields - a zero `next_trx_id`, a zero
+    // `create_time` rendering as the epoch - so a field nobody carried
+    // across would answer silently and wrongly; `Open` refuses a config
+    // with no image (the AL-S9 review).
 
     // ---- Backup and restore (BR) -----------------------------------------
 
@@ -655,7 +602,7 @@ private:
     explicit SuperBlock(SuperBlockFields fields) noexcept : fields_(fields) {}
 
     SuperBlockFields fields_;
-    WalAnchorFields wal_anchors_[kMaxWalCores]{};
+    WalAnchorFields wal_anchors_[kMaxCores]{};
 };
 
 }  // namespace kds::server

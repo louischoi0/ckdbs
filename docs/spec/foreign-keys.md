@@ -5,11 +5,10 @@ decisions F1–F6 govern.
 Depends on: `docs/rules/keystoneid-invariant.md` (K1/K2), the dispatcher's
 write paths (`InsertInner`, `UpdateInner`, `DeleteInner`), the MVCC
 in-place + undo model (`heap_page.hpp`: tuple header `trx_id` +
-`undo_ptr`, no xmax), core-ownership dispatch, stoppable walks
+`undo_ptr`, no xmax), stoppable walks
 (`VisitControl`).
 Interlocks with: `docs/spec/cabin.md` (the reverse check),
-unique-constraint semantics (fail-fast, same family),
-`docs/spec/cross-owner-txn.md` (retired; the intent's release was there).
+unique-constraint semantics (fail-fast, same family).
 
 Decisions:
 
@@ -31,12 +30,10 @@ Decisions:
   — the check itself never blocks, running as it does inside a write
   path with no suspension point. **What the statement does with that
   answer changed at AO-S3**: it parks on the writer's decide and runs
-  again, on the same core (AO-S3) or on the parent's (AO-S5(b)), instead
-  of handing the wait to the client's retry loop. F3's original ground,
-  *"blocking is not expressible on a cooperative single-writer core"*, was
-  true of the engine that had no lock family and is not true of this one;
-  what survives is the deterministic-error semantic, which is the one
-  unique checks use, and the code the client eventually sees. The busy verdict is `FkVerdict::kBusy` → `Status::TxnConflict`,
+  again, on the same core, instead of handing the wait to the client's
+  retry loop. What the fail-fast check keeps is the deterministic-error
+  semantic, which is the one unique checks use, and the code the client
+  eventually sees. The busy verdict is `FkVerdict::kBusy` → `Status::TxnConflict`,
   wire-spelled `ERR TXN_CONFLICT retryable=1` — **one retryable code
   wide**, no separate busy code. A violation is `kFkViolation`,
   `ERR FK_VIOLATION retryable=0`. Retry-versus-wrong stays
@@ -50,12 +47,9 @@ Decisions:
   the step VM's probe memo does not apply, and the checks reach
   statistics by hand (§2, Statistics).
 - **F5 — There is no co-location to ask for.** Both checks run on the
-  core the statement runs on and read every core's pages (§2a, §3a, since
-  AT-S5f), and no relation is owned by a core since AT-S9, so a parent and
-  a child in two namespaces cost exactly what they cost in one. What this
-  decision said until then - admit a cross-owner pair, price it at one ring
-  round trip per distinct parent owner, warn at `CREATE TABLE` and point at
-  a namespace as the remedy - went with the owners.
+  core the statement runs on and read every page through the instance's
+  one buffer pool (§2a, §3a), so a parent and a child in two namespaces
+  cost exactly what they cost in one.
 - **F6 — Reverse check is Cabin's territory.** Parent-delete's "does any
   child reference me" is a stoppable walk that consults an active Cabin
   on the child fk column first: its verified empty set is the
@@ -179,19 +173,16 @@ up in `SHOW ACCESS` beside ordinary query shapes, which is what lets an
 operator compare constraint cost against query cost. An INSERT has no
 plan, so ANALYZE carries no tag for the check.
 
-## 2a. The forward check is hoisted, and nothing crosses (AT-S5f)
+## 2a. The forward check is hoisted
 
-**Where the check runs.** On the core the statement runs on, whichever
-core owns the parent. `CheckParentPresent` descends `parent.desc_page_id`
-with no ownership question in it, and since AM-S2 step 3 that is a page
-every core faults through one frame table — so the descent was already
-uniform and what made a parent *foreign* was a deferral above it, not the
-read below it. AT-S5f removed the deferral.
+**Where the check runs.** On the core the statement runs on.
+`CheckParentPresent` descends `parent.desc_page_id`, a page every core
+faults through the instance's one frame table.
 
-**The hoist stays, and it is not about crossing.** Every parent pk a
-statement needs is still extracted **before any row work** — an INSERT's
+**Why it is hoisted.** Every parent pk a
+statement needs is extracted **before any row work** — an INSERT's
 from its `VALUES`, an UPDATE's from its `SET` body — and resolved at the
-dispatch fork. Two things pay for it, and neither is a ring round trip:
+dispatch fork. Two things pay for it:
 
 - **Deduplication** (AH-R2). The extracted pks are one entry per distinct
   (parent relation, pk), so a thousand-row insert against one parent costs
@@ -209,8 +200,7 @@ exclusive leaf, the open page-latch cycle
 (`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`).
 A scalar subquery is run once before the walk and is a constant from then on.
 
-**Nothing inside an open `WriteScope` waits or crosses**, which was
-AH-R1's rule and survives it: the per-row check answers from the resolved
+**Nothing inside an open `WriteScope` waits** (AH-R1): the per-row check answers from the resolved
 verdicts and local state alone. The self-referencing arm's hold (below) is
 asked there and, refused, is *recorded* - the insert's own row borrow is
 recorded the same way - and the statement ends to wait outside the scope.
@@ -258,23 +248,16 @@ writer of that row on whichever core either runs (§3a).
   visible to the re-run and an abort makes the violation terminal, so
   neither arm is futile.
 
-**It is a local descent, so it reads the transaction's own id** - and
-that is a dependency worth naming, because the probe it replaced carried
-the coordinator's `(session, transaction)` on the wire precisely so a
-parent written by one half of a cross-owner transaction was recognised as
-the *asker's own* rather than as a stranger's. AT-S5 deleted the write
-ship, so a transaction writes on one core and the two ids are one id. If
-a write ever ships again, this check will meet its own sibling's row,
-read a foreign holder, and wait on a transaction that is waiting for it -
-a cycle the detector cannot see, because both halves hold the same id.
-The check would then need the coordinator's identity back.
+**It reads the transaction's own id**: a transaction writes on one core
+under one id, so a parent it wrote itself is recognised as its own by the
+ordinary `own_trx_id` rule (§4).
 
 **The parent set must be enumerable.** F1 makes an fk value a literal or
 a bound parameter, so the extraction pass is total. A statement whose
 parent set cannot be enumerated at the fork is **refused**, with the
 byte, rather than run against a partial set.
 
-The peer-writer funding gate (`CheckWriteAffinity`) does not refuse a
+The write admission gate (`CheckWriteAdmission`) does not refuse a
 write for carrying a foreign key.
 
 **The load path is in scope.** `CheckForeignKeyOnWrite`'s third caller is
@@ -336,29 +319,7 @@ An existence-only unit that only a `DELETE` would take is not built; it is
 a change to AR2's units, and would be put forward as its own item if these
 costs are measured to matter.
 
-### 2b. What the crossing was, and what went with it
-
-Between AH (2026-09-01) and AT-S5f the forward check across owners was a
-**protocol**. A parent whose `owner_core` was not this core was deferred
-into that owner's group and asked over one `kFkProbeRequest` per owner;
-the owner answered a verdict and left a row-scoped **reference intent**
-behind, which its own `DELETE` consulted and which the child
-transaction's **decide** released. AO-S5(b) added the park: the parent's
-core held a busy probe until its writer decided rather than answering
-busy.
-
-All of it is retired — the two ring kind pairs, `FkIntentTable`,
-`FkPendingDeleteTable`, `fk_probe_service`, the probe park and its rounds
-loop, the intent-holder list beside `participants_`, and the decide's
-`intent_only` byte. **What replaces the intent is not a smaller intent:
-it is the reverse check** (§3a), which now sees every child row on every
-core, so an uncommitted child is evidence the parent's `DELETE` reads for
-itself rather than evidence another core has to have left behind.
-
-**Every cross-core contact still mints the session's shipping identity**,
-but there is one contact now: a ship. `ShipStatement` mints it.
-
-## 3a. The reverse check sees every child (AT-S5f)
+## 3a. The reverse check sees every child
 
 A parent's `DELETE` asks *"does any child still reference me"*, and
 RESTRICT needs that answer to be **authoritative**: a "no children" that
@@ -368,21 +329,13 @@ constraint may not have.
 
 **So the check sees all of them.** `CheckNoChildReferences` walks the
 child relation whole - its one heap chain from `desc_page_id`, or a btree
-child descended whole. Two things stood in the way and both are gone: the
-refusal for a child with a range this core did not own, and the fan-out
-that replaced it (one `kFkReverseProbeRequest` per child owner, a
-collect pass to name the rows, a registration to hold the window open
-across the park, and as many rounds as the pk set needed).
+child descended whole, on the core the statement runs on.
 
-**It runs per row inside the walk**, where the local arm always ran.
+**It runs per row inside the walk.**
 There is nothing to hoist: a check that asks nobody needs no answer in
 hand before the walk starts, and a DELETE on the synchronous path runs
-exactly as it does on a served one.
-
-**The read path asks the same question since AT-S9.** It walked only the
-ranges its core owned while a fan-in concatenated the rest; ranges have no
-owners since AT-S9 and no relation is split since 2026-09-30
-(`crosscore.md` CC8), so a read and this check walk the same structure.
+exactly as it does on a served one. A read and this check walk the same
+structure: a relation is one structure headed by `desc_page_id`.
 
 Verdicts are the local check's: no visible child → clear; a committed
 visible child → `kFkViolation` (terminal); a row with an in-flight
@@ -393,16 +346,10 @@ writing it.
 holds the parent row's `S` from its check to its decide (§2a), and the
 parent's `DELETE` takes that row's `X` before it walks, so the `DELETE`
 waits for the child writer on whichever core either runs - before the
-child's row is written as well as after it. What stood here was the
-interval before the write, open across cores from AT-S5f, which removed the
-reference intent that had closed it: a `DELETE` on one core walked an honest
-empty child between another core's passing check and its row write, and
-both statements reported success over a child of a deleted parent. A
-two-core rig cell reproduced it at `64b97e7`; since BB-S3's review the
-window is pinned on one thread,
-`FkParentHoldTest.AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused`, the
-rig cell having gone when BB-R3's refusal of the below-mark key it wrote
-behind the walk left it testing nothing.
+child's row is written as well as after it. The interval before the
+write - a `DELETE` walking an honest empty child between another
+statement's passing check and its row write - is pinned on one thread,
+`FkParentHoldTest.AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused`.
 
 **A child writer that holds no `S` on the parent is met by the walk
 instead** (AY-Q8): a child `DELETE`, an `UPDATE` of other columns, or
@@ -424,11 +371,10 @@ child of a deleted parent with nothing refused.
 A hit is authoritative and returns without walking, and so is an
 **exhausted** set - every entry checked, none a live or undecided child -
 which answers "no children" and records a `CabinProbe`, no walk. It rests
-on three things, each of which once failed:
+on three things:
 
-- **One store for the instance** (AT-S7). While the store was a
-  dispatcher's own (until then; AT-R15 took the return away for it) a
-  child written on another core never reached this core's set.
+- **One store for the instance** (AT-S7), so a child written on any
+  core reaches the set.
 - **D9(a)'s `S`** (§2a). A set's count is fixed when the check reads it,
   and a child is placed before its hook appends it; a writer that sets the
   fk to the parent holds the parent row's `S` from before its descent to
@@ -505,9 +451,7 @@ in-flight *insert* of the parent: `undo_ptr == 0` with an invisible
 writer, which `Classify` answers `kNoVersion` and the check must answer
 **busy**, not violation. A transaction's own pending image needs no
 special case — a fresh view carries `own_trx_id`, so it is visible to
-its own check by the ordinary rule — on the parent's core too, where the
-probe's view carries the requester's own participant there as
-`own_trx_id` (§5, AO-S5(b) C1).
+its own check by the ordinary rule (§5).
 
 Implementation rule: this mode lives beside the snapshot visibility
 routine in the same translation unit. A second, FK-private visibility

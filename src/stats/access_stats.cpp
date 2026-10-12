@@ -26,9 +26,8 @@ void RecordChainAccess(catalog::Catalog& catalog, const exec::StepChain& chain,
         // line, which is what makes the statistic comparable across kinds -
         // "how often is this relation looked up versus filter-scanned" is
         // only answerable if both were counted the same way.
-        // **CR7's fork stood here and is gone** (AT-S7): a peer folded
-        // into a batch because it could not write the relation, and every
-        // core writes every page since AT-S5. One sink, one walk.
+        // Every core writes every page (AT-S5): one sink, one walk. CR7's
+        // access-batch fork retired (AT-S7); its history is at cf889b63.
         const Status s = catalog.RecordAccess(exec::StoredAccessKind(step.kind), step.rel_oid,
                                               ColumnMaskOf(step), now);
         if (counters != nullptr) {

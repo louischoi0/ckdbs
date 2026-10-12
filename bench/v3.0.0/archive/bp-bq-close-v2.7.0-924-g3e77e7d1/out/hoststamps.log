@@ -1,0 +1,72 @@
+2026-10-12 19:25:42 bn AB r1 load=1.48 3.62 3.84 competing=4
+2026-10-12 19:25:54 after bn AB r1 rc=0
+2026-10-12 19:26:04 bn AQ r1 load=1.53 3.50 3.80 competing=4
+2026-10-12 19:26:16 after bn AQ r1 rc=0
+2026-10-12 19:26:26 bn AB r2 load=1.54 3.34 3.74 competing=4
+2026-10-12 19:26:39 after bn AB r2 rc=0
+2026-10-12 19:26:49 bn AQ r2 load=1.56 3.24 3.70 competing=5
+2026-10-12 19:27:01 after bn AQ r2 rc=0
+2026-10-12 19:27:11 bn AB r3 load=1.39 3.09 3.64 competing=4
+2026-10-12 19:27:23 after bn AB r3 rc=0
+2026-10-12 19:27:33 bn AQ r3 load=1.44 2.97 3.58 competing=4
+2026-10-12 19:27:45 after bn AQ r3 rc=0
+2026-10-12 19:27:45 ba point A r1 load=1.46 2.92 3.56 competing=4
+2026-10-12 19:28:12 after ba point A r1 rc=0
+2026-10-12 19:29:22 ba point Q r1 load=1.36 2.72 3.44 competing=4
+2026-10-12 19:29:49 after ba point Q r1 rc=0
+2026-10-12 19:30:59 ba point B r1 load=1.38 2.61 3.35 competing=4
+2026-10-12 19:31:26 after ba point B r1 rc=0
+2026-10-12 19:32:36 ba insert1 A r1 load=1.47 2.49 3.24 competing=4
+2026-10-12 19:33:03 after ba insert1 A r1 rc=0
+2026-10-12 19:34:03 ba insert1 Q r1 load=1.55 2.46 3.17 competing=4
+2026-10-12 19:34:31 after ba insert1 Q r1 rc=0
+2026-10-12 19:35:31 ba insert1 B r1 load=1.48 2.39 3.10 competing=4
+2026-10-12 19:35:58 after ba insert1 B r1 rc=0
+2026-10-12 19:37:08 ba point Q r2 load=1.46 2.40 3.05 competing=4
+2026-10-12 19:37:35 after ba point Q r2 rc=0
+2026-10-12 19:38:46 ba point B r2 load=1.36 2.33 2.97 competing=4
+2026-10-12 19:39:13 after ba point B r2 rc=0
+2026-10-12 19:40:13 ba point A r2 load=1.42 2.27 2.90 competing=4
+2026-10-12 19:40:40 after ba point A r2 rc=0
+2026-10-12 19:41:40 ba insert1 Q r2 load=1.36 2.24 2.85 competing=4
+2026-10-12 19:42:07 after ba insert1 Q r2 rc=0
+2026-10-12 19:42:57 ba insert1 B r2 load=1.52 2.26 2.82 competing=4
+2026-10-12 19:43:25 after ba insert1 B r2 rc=0
+2026-10-12 19:44:35 ba insert1 A r2 load=1.57 2.35 2.81 competing=4
+2026-10-12 19:45:02 after ba insert1 A r2 rc=0
+2026-10-12 19:45:52 ba point B r3 load=1.47 2.25 2.75 competing=4
+2026-10-12 19:46:19 after ba point B r3 rc=0
+2026-10-12 19:47:30 ba point A r3 load=1.49 2.32 2.74 competing=4
+2026-10-12 19:47:57 after ba point A r3 rc=0
+2026-10-12 19:48:57 ba point Q r3 load=1.37 2.27 2.69 competing=4
+2026-10-12 19:49:24 after ba point Q r3 rc=0
+2026-10-12 19:50:34 ba insert1 B r3 load=1.55 2.32 2.69 competing=4
+2026-10-12 19:51:01 after ba insert1 B r3 rc=0
+2026-10-12 19:52:02 ba insert1 A r3 load=1.59 2.33 2.67 competing=4
+2026-10-12 19:52:29 after ba insert1 A r3 rc=0
+2026-10-12 19:53:39 ba insert1 Q r3 load=1.50 2.31 2.64 competing=4
+2026-10-12 19:54:07 after ba insert1 Q r3 rc=0
+2026-10-12 19:54:57 lock k8 plain S6A r0 load=1.53 2.30 2.62 competing=4
+2026-10-12 19:55:03 after lock k8 plain S6A r0 rc=0
+2026-10-12 19:55:13 lock k8 plain B r0 load=1.48 2.26 2.60 competing=4
+2026-10-12 19:55:19 after lock k8 plain B r0 rc=0
+2026-10-12 19:55:39 lock k8 fence S6A r0 load=1.38 2.18 2.57 competing=4
+2026-10-12 19:55:46 after lock k8 fence S6A r0 rc=0
+2026-10-12 19:55:56 lock k8 fence B r0 load=1.41 2.16 2.55 competing=4
+2026-10-12 19:56:02 after lock k8 fence B r0 rc=0
+2026-10-12 19:56:12 lock k8 plain S6A r1 load=1.59 2.16 2.55 competing=4
+2026-10-12 19:56:18 after lock k8 plain S6A r1 rc=0
+2026-10-12 19:56:28 lock k8 plain B r1 load=1.44 2.10 2.52 competing=4
+2026-10-12 19:56:35 after lock k8 plain B r1 rc=0
+2026-10-12 19:56:55 lock k8 fence S6A r1 load=1.55 2.09 2.51 competing=4
+2026-10-12 19:57:01 after lock k8 fence S6A r1 rc=0
+2026-10-12 19:57:21 lock k8 fence B r1 load=1.53 2.05 2.48 competing=4
+2026-10-12 19:57:28 after lock k8 fence B r1 rc=0
+2026-10-12 19:57:38 lock k8 plain S6A r2 load=1.56 2.03 2.47 competing=4
+2026-10-12 19:57:44 after lock k8 plain S6A r2 rc=0
+2026-10-12 19:57:44 lock k8 plain B r2 load=1.59 2.03 2.46 competing=4
+2026-10-12 19:57:50 after lock k8 plain B r2 rc=0
+2026-10-12 19:58:10 lock k8 fence S6A r2 load=1.41 1.96 2.43 competing=4
+2026-10-12 19:58:16 after lock k8 fence S6A r2 rc=0
+2026-10-12 19:58:16 lock k8 fence B r2 load=1.38 1.94 2.42 competing=4
+2026-10-12 19:58:23 after lock k8 fence B r2 rc=0

@@ -1,0 +1,136 @@
+ISO c1-iso-segregated-no0 (0.8528, 3.0431999999999997) 2.25 8.79 7.80 1/344 721748 moves 1 {'sched_hold_in_run_longest_us': 1275.0, 'sched_hold_out_run_longest_us': 3026.0, 'contention_carve_longest_us': 3524.0, 'contention_checkpoint_longest_us': 643590.0}
+ISO c1-iso-batch0 (0.6015, 2.4381) 1.47 7.77 7.50 1/348 721884 moves 1 {'sched_hold_in_run_longest_us': 1530.0, 'sched_hold_out_run_longest_us': 4288.0, 'contention_carve_longest_us': 5217.0, 'contention_checkpoint_longest_us': 32954.0}
+ISO c1-iso-spread (0.7472000000000001, 3.408) 0.89 6.82 7.19 1/351 721959 moves 0 {'sched_hold_in_run_longest_us': 329.0, 'sched_hold_out_run_longest_us': 4341.0, 'contention_carve_longest_us': 4339.0, 'contention_checkpoint_longest_us': 28513.0}
+ISO c2-iso (140.7776, 467.36) 0.55 6.08 6.93 1/346 722063 moves 12 {'sched_hold_in_run_longest_us': 186065.0, 'sched_hold_out_run_longest_us': 291641.0, 'contention_carve_longest_us': 542146.0, 'contention_checkpoint_longest_us': 947537.0}
+
+c1-segregated-no0 s16 medp99 159.63 ratio_med 187.2 p999/iso [197.0, 136.9, 130.9]
+    (319.78, 375.0, 599.6, 0.64, 125, ['3'], 0)
+    (159.63, 187.2, 416.5, 0.56, 142, ['3'], 0)
+    (106.99, 125.5, 398.5, 0.55, 142, ['1'], 0)
+c1-segregated-no0 base medp99 380.73 ratio_med 446.4 p999/iso [216.6, 186.8, 219.9]
+    (451.4, 529.3, 659.2, 0.76, 35, ['1'], 0)
+    (380.73, 446.5, 568.4, 0.62, 36, ['1'], 0)
+    (311.89, 365.7, 669.2, 0.76, 36, ['1'], 0)
+c1-segregated-no0 s256 medp99 1034.36 ratio_med 1212.9 p999/iso [1875.2, 442.6, 385.9]
+    (4906.47, 5753.4, 5706.7, 5.78, 5, ['3'], 0)
+    (1034.36, 1212.9, 1346.9, 1.51, 8, ['3'], 0)
+    (951.03, 1115.2, 1174.5, 1.26, 8, ['1'], 0)
+c1-segregated-no0 s1024 medp99 3632.82 ratio_med 4259.9 p999/iso [52.4, 1486.0, 1550.7]
+    (2.46, 2.9, 159.6, 11.55, 2, ['2'], 0)
+    (4178.37, 4899.6, 4522.3, 4.7, 2, ['2'], 0)
+    (3632.82, 4259.9, 4719.2, 4.9, 2, ['2'], 0)
+c1-segregated-no0 opt3 medp99 42.02 ratio_med 49.3 p999/iso [297.7, 28.8, 63.7]
+    (640.49, 751.0, 906.1, 1.0, 25, ['1'], 0)
+    (17.35, 20.3, 87.5, 0.19, 50, ['0', '2'], 0)
+    (42.02, 49.3, 193.8, 0.78, 53, ['1'], 0)
+c1-batch0 s16 medp99 244.53 ratio_med 406.5 p999/iso [288.3, 227.8, 181.3]
+    (244.53, 406.5, 703.0, 0.81, 129, ['1'], 0)
+    (303.41, 504.4, 555.3, 0.6, 142, ['3'], 0)
+    (167.29, 278.1, 442.1, 0.49, 143, ['2'], 0)
+c1-batch0 base medp99 241.31 ratio_med 401.2 p999/iso [152.8, 283.5, 194.4]
+    (223.76, 372.0, 372.6, 0.55, 35, ['0', '1'], 0)
+    (459.54, 764.0, 691.2, 0.79, 35, ['3'], 0)
+    (241.31, 401.2, 473.9, 0.63, 34, ['3'], 0)
+c1-batch0 s256 medp99 981.62 ratio_med 1632.0 p999/iso [1182.0, 502.2, 521.3]
+    (2280.92, 3792.1, 2881.8, 3.06, 5, ['1'], 0)
+    (960.04, 1596.1, 1224.3, 1.37, 9, ['2'], 0)
+    (981.62, 1632.0, 1270.9, 1.42, 8, ['1'], 0)
+c1-batch0 s1024 medp99 4369.95 ratio_med 7265.1 p999/iso [2047.4, 2006.0, 2140.7]
+    (4369.95, 7265.1, 4991.8, 5.17, 2, ['3'], 0)
+    (3939.3, 6549.1, 4890.9, 5.07, 2, ['2'], 0)
+    (4415.48, 7340.8, 5219.2, 5.31, 2, ['1'], 0)
+c1-batch0 opt3 medp99 71.22 ratio_med 118.4 p999/iso [489.3, 83.1, 201.1]
+    (231.13, 384.3, 1192.9, 1.37, 49, ['3'], 0)
+    (42.55, 70.7, 202.6, 0.28, 53, ['1'], 0)
+    (71.22, 118.4, 490.3, 0.55, 52, ['1'], 0)
+c1-spread s16 medp99 201.45 ratio_med 269.6 p999/iso [145.6, 147.4, 144.9]
+    (351.91, 471.0, 496.1, 0.53, 125, ['0', '3'], 0)
+    (159.86, 213.9, 502.3, 0.55, 142, ['3'], 0)
+    (201.45, 269.6, 493.9, 0.59, 143, ['2'], 0)
+c1-spread base medp99 312.38 ratio_med 418.1 p999/iso [181.7, 110.4, 207.3]
+    (312.38, 418.1, 619.3, 0.75, 35, ['1'], 0)
+    (247.5, 331.2, 376.2, 0.4, 35, ['0', '1', '2'], 0)
+    (325.09, 435.1, 706.6, 0.77, 36, ['2'], 0)
+c1-spread s256 medp99 1056.2 ratio_med 1413.5 p999/iso [627.4, 353.3, 374.8]
+    (1376.47, 1842.2, 2138.2, 2.32, 6, ['0', '2'], 0)
+    (607.51, 813.0, 1203.9, 1.35, 8, ['2'], 0)
+    (1056.2, 1413.5, 1277.4, 1.31, 8, ['2'], 0)
+c1-spread s1024 medp99 3717.48 ratio_med 4975.2 p999/iso [1457.9, 1067.6, 1431.6]
+    (3717.48, 4975.2, 4968.6, 5.15, 2, ['3'], 0)
+    (2615.07, 3499.8, 3638.4, 3.82, 2, ['2'], 0)
+    (4074.01, 5452.4, 4878.9, 5.02, 2, ['1'], 0)
+c1-spread opt3 medp99 113.01 ratio_med 151.2 p999/iso [248.1, 19.7, 247.4]
+    (615.75, 824.1, 845.5, 0.89, 52, ['2', '3'], 0)
+    (22.43, 30.0, 67.2, 0.1, 59, ['3'], 0)
+    (113.01, 151.2, 843.3, 1.0, 53, ['3'], 0)
+c2 s16 medp99 951.82 ratio_med 6.8 p999/iso [2.7, 2.6, 1.9]
+    (1033.64, 7.3, 1277.6, 1.31, 131, ['3'], 0)
+    (951.82, 6.8, 1218.6, 1.25, 137, ['3'], 0)
+    (646.18, 4.6, 888.1, 0.92, 137, ['3'], 0)
+c2 base medp99 773.47 ratio_med 5.5 p999/iso [9.2, 2.1, 2.1]
+    (4026.38, 28.6, 4289.8, 4.32, 30, ['3'], 0)
+    (773.47, 5.5, 1002.1, 1.03, 34, ['3'], 0)
+    (751.81, 5.3, 972.5, 1.0, 35, ['3'], 0)
+c2 s256 medp99 2021.17 ratio_med 14.4 p999/iso [9.7, 4.8, 6.0]
+    (4260.33, 30.3, 4527.4, 4.56, 5, ['3'], 0)
+    (2021.17, 14.4, 2257.1, 2.38, 9, ['3'], 0)
+    (1879.85, 13.4, 2819.9, 2.94, 8, ['3'], 0)
+c2 s1024 medp99 5437.12 ratio_med 38.6 p999/iso [2.4, 12.2, 12.2]
+    (434.88, 3.1, 1138.8, 1.34, 2, ['3'], 0)
+    (5437.12, 38.6, 5701.0, 5.73, 2, ['3'], 0)
+    (5522.58, 39.2, 5697.5, 5.74, 2, ['3'], 0)
+c2 opt3 medp99 2232.09 ratio_med 15.9 p999/iso [6.9, 5.7, 2.5]
+    (2534.72, 18.0, 3245.3, 3.34, 17, ['3'], 0)
+    (2232.09, 15.9, 2658.8, 2.71, 58, ['3'], 0)
+    (975.24, 6.9, 1179.8, 1.24, 57, ['3'], 0)
+
+C3 s16 [170262, 170277, 169949] med 170262 mean 170162 max_s [0.62, 0.61, 0.58]
+C3 base [169212, 164384, 169894] med 169212 mean 167830 max_s [0.85, 0.81, 0.76]
+C3 s256 [119302, 179334, 178928] med 178928 mean 159188 max_s [2.8, 1.83, 2.23]
+C3 s1024 [156197, 180917, 188004] med 180917 mean 175040 max_s [10.53, 5.64, 6.04]
+C3 opt3 [141243, 304305, 273802] med 273802 mean 239784 max_s [1.29, 0.31, 0.84]
+
+s16 n 2220 p50 78 p90 110 max 1307 ms/MiB 4.9
+   steps med {'sync_gate_us': 68.67, 'sync_us': 3.83, 'body_wait_us': 0.0, 'header_us': 1.13, 'rename_us': 0.04, 'dirsync_us': 2.18, 'seal_us': 0.03, 'flush_us': 0.0, 'body_us': 0.0, 'create_us': 3.43}
+   share gate 82.4 bw 0.3
+   body Counter({'hit': 2196, 'waited': 24}) bw>0 24 bw-roll hold share 3.1
+   bw==0 hold med 78.2 gate 68.3 n 2196
+   waited tail per-sync med/p90 58.4 71.8  summed med/p90 115.3 141.5
+   roll-held s/window med 13.1 range 9.84 14.68 rolls/s med 4.733 mean 4.587 lograte/size med 4.73 c3 syncs/s [34.86, 34.22, 33.8]
+base n 562 p50 327 p90 497 max 4318 ms/MiB 5.1
+   steps med {'sync_gate_us': 317.98, 'sync_us': 1.14, 'body_wait_us': 0.0, 'header_us': 1.1, 'rename_us': 0.03, 'dirsync_us': 2.16, 'seal_us': 0.03, 'flush_us': 0.0, 'body_us': 0.0, 'create_us': 3.41}
+   share gate 95.6 bw 0.5
+   body Counter({'hit': 510, 'waited': 52}) bw>0 52 bw-roll hold share 12.9
+   bw==0 hold med 323.2 gate 317.6 n 510
+   waited tail per-sync med/p90 151.0 304.5  summed med/p90 301.4 606.0
+   roll-held s/window med 12.43 range 10.51 16.21 rolls/s med 1.167 mean 1.158 lograte/size med 1.174 c3 syncs/s [34.28, 25.21, 26.69]
+s256 n 125 p50 1429 p90 2563 max 5992 ms/MiB 5.58
+   steps med {'sync_gate_us': 1235.48, 'sync_us': 0.99, 'body_wait_us': 190.78, 'header_us': 1.1, 'rename_us': 0.03, 'dirsync_us': 2.14, 'seal_us': 0.03, 'flush_us': 0.0, 'body_us': 0.0, 'create_us': 200.09}
+   share gate 78.1 bw 14.9
+   body Counter({'waited': 106, 'hit': 19}) bw>0 106 bw-roll hold share 87.8
+   bw==0 hold med 1139.3 gate 1117.4 n 19
+   waited tail per-sync med/p90 727.2 1200.5  summed med/p90 1453.2 2357.4
+   roll-held s/window med 13.34 range 10.15 18.03 rolls/s med 0.267 mean 0.249 lograte/size med 0.291 c3 syncs/s [2.73, 15.68, 16.3]
+s1024 n 30 p50 5056 p90 6039 max 11561 ms/MiB 4.94
+   steps med {'sync_gate_us': 2228.88, 'sync_us': 1.03, 'body_wait_us': 2763.29, 'header_us': 1.19, 'rename_us': 0.03, 'dirsync_us': 2.06, 'seal_us': 0.03, 'flush_us': 0.0, 'body_us': 0.0, 'create_us': 2766.81}
+   share gate 46.9 bw 52.0
+   body Counter({'waited': 28, 'hit': 2}) bw>0 28 bw-roll hold share 99.5
+   bw==0 hold med 398.3 gate 387.4 n 2
+   waited tail per-sync med/p90 1465.2 2601.1  summed med/p90 2930.4 5202.2
+   roll-held s/window med 9.39 range 0.8 15.69 rolls/s med 0.067 mean 0.067 lograte/size med 0.075 c3 syncs/s [0.67, 8.76, 8.29]
+opt3 n 780 p50 16 p90 231 max 1500 ms/MiB 0.25
+   steps med {'sync_gate_us': 5.2, 'sync_us': 4.42, 'body_wait_us': 0.0, 'header_us': 2.84, 'rename_us': 0.03, 'dirsync_us': 2.02, 'seal_us': 0.08, 'flush_us': 0.0, 'body_us': 0.0, 'create_us': 4.96}
+   share gate 68.2 bw 0.0
+   body Counter({'hit': 780}) bw>0 0 bw-roll hold share 0.0
+   bw==0 hold med 16.0 gate 5.2 n 780
+   waited tail per-sync med/p90 8.1 123.0  summed med/p90 7.5 191.2
+   roll-held s/window med 3.26 range 0.97 13.01 rolls/s med 1.767 mean 1.618 lograte/size med 1.747 c3 syncs/s [28.17, 95.77, 78.11]
+
+base-r1.json mount 0.729 ckpt 0.679097 net 0.05 an+redo 0.004 longest_ins 1.665 rolls 2.0
+base-r2.json mount 0.235 ckpt 0.178536 net 0.056 an+redo 0.004 longest_ins 0.314 rolls 2.0
+s1024-r1.json mount 1.161 ckpt 0.029771 net 1.131 an+redo 0.521 longest_ins 7.946 rolls 2.0
+s1024-r2.json mount 2.803 ckpt 1.30951 net 1.493 an+redo 0.552 longest_ins 12.816 rolls 2.0
+s16-r1.json mount 0.174 ckpt 0.153863 net 0.02 an+redo 0.001 longest_ins 0.119 rolls 3.0
+s16-r2.json mount 0.051 ckpt 0.031446 net 0.02 an+redo 0.001 longest_ins 0.049 rolls 3.0
+s256-r1.json mount 1.193 ckpt 0.941961 net 0.251 an+redo 0.102 longest_ins 4.221 rolls 2.0
+s256-r2.json mount 0.282 ckpt 0.010479 net 0.272 an+redo 0.109 longest_ins 3.357 rolls 2.0

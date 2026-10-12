@@ -188,7 +188,7 @@ public:
         bool auth_scram = false;
         std::string users_file;
 
-        // Directory the per-core WAL segment files live in. Defaults to
+        // Directory the WAL segment files live in. Defaults to
         // `<data_file>.wal` when left empty.
         std::string wal_dir;
 
@@ -444,8 +444,8 @@ public:
         std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
 
         // **How long a statement may wait before the engine calls it a
-        // fault** (AO-R8, re-scoped here at AT-S6 from the in-doubt
-        // ceiling this field used to be). Milliseconds in the file,
+        // fault** (AO-R8, the retired in-doubt ceiling's quantity,
+        // re-scoped at AT-S6). Milliseconds in the file,
         // because the quantity an operator reasons about is a
         // client-visible stall and microseconds would be noise on it. The
         // semantics have one home, at `kLockWaitFaultNetNs`
@@ -503,8 +503,8 @@ public:
         // WAL stream (AM-S4(d)) and no `owner_core` (D17) having left nothing
         // on the volume that names a core.
         //
-        // Bounded above by server::kMaxWalCores (the superblock's anchor
-        // table is indexed by core_id) and validated against
+        // Bounded above by server::kMaxCores (every per-core array is
+        // indexed by core_id) and validated against
         // std::thread::hardware_concurrency() at startup: overcommitting
         // pinned reactors to fewer physical cores is not a configuration
         // this engine's cooperative, never-blocking task model survives.
@@ -655,6 +655,12 @@ public:
     const SuperBlock& superblock() const noexcept { return database_->superblock; }
     catalog::Catalog& catalog() noexcept { return database_->catalog; }
     storage::DevicePageStore& store() noexcept { return *store_; }
+    // What BP-S3's arming cells read: which instance structures latch.
+    const txn::InstanceVisibility& visibility() const noexcept { return *visibility_; }
+    const stats::CabinStore* cabin_store() const noexcept {
+        return cabin_store_ ? &*cabin_store_ : nullptr;
+    }
+    const StatementEpochs& statement_epochs() const noexcept { return *statement_epochs_; }
     CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
     const Config& config() const noexcept { return config_; }
     const wal::CheckpointStats& checkpoint_stats() const noexcept {
@@ -765,16 +771,13 @@ private:
     // therefore destroyed last, after `cores_` and after `txn_manager_` -
     // the same rule `wal_` follows for the stream peers append through.
     //
-    // **Always engaged since AM-S4(d)**, where the arm that left it empty
-    // went with the topology that needed it: it records commit order as a
-    // commit record's LSN, and under per-core streams LSNs were
-    // stream-local and never compared across streams (`wal.md` §3), so
-    // there was no order to record. `SuperBlock::Decode` refuses such a
-    // volume now, so every mount has one order and records it.
+    // **Always engaged** (AM-S4(d)): it records commit order as a commit
+    // record's LSN, and `SuperBlock::Decode` refuses a volume with more
+    // than one stream, so every mount has one order and records it.
     std::optional<txn::InstanceVisibility> visibility_;
 
     // **The instance's lock table** (AO-R2, built here at AO-S5): one for
-    // every core, sized `64 x cores` partitions, latchless at one. Core 0's
+    // every core, 64 partitions at any core count, latchless at one. Core 0's
     // manager takes it below and every peer borrows it through
     // `CoreRuntime::Config::locks`, so a decide on any core releases into
     // the one table and wakes - and kicks, through `wakers_` - a waiter
@@ -811,7 +814,7 @@ private:
     // count and not for `Catalog::pending_marks_`, which is the *local*
     // fallback this replaces - one name for the two would read as the same
     // quantity. Three separate pointers rather than one struct: at three
-    // words the struct does not pay for re-opening AT-S2's shipped wiring,
+    // words the struct does not pay for re-opening AT-S2's landed wiring,
     // which `catalog.md` CT6 states as the threshold it is, and AT-0
     // item 11 is where the fourth word decides it.
     std::atomic<std::uint64_t> delete_mark_count_{0};
@@ -861,8 +864,8 @@ private:
     std::optional<txn::TransactionManager> txn_manager_;
 
     // What core 0's recovery did at mount (RV1). Kept rather than logged and
-    // dropped, because two later steps of Open() read it: the extent
-    // allocator's search hint owes `page_floor` (RC04's obligation 1), and
+    // dropped, because two later steps of Open() read it: the store's
+    // allocation floor owes `page_floor` (RC04's obligation 1), and
     // the transaction ceiling is applied from it before the id sequence that
     // caches one is built. Default-constructed means "recovery has not run
     // yet", which is only true before that call.
@@ -950,7 +953,7 @@ private:
     // kick). Called on the way down, from core 0's thread, before the
     // workers are joined. A no-op at `cores = 1`, where no waker table was
     // built and there is no peer to stop.
-    void BroadcastShutdown(sched::Scheduler& core0_scheduler);
+    void BroadcastShutdown();
 
     // The failure half of `Start()`: stops and joins whatever core threads
     // it had already spawned, then drops the cores. Not the shutdown tail -

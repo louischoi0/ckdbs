@@ -1,0 +1,81 @@
+# H4 criterion cell: C3 (rolls in the measurement window)
+relaxed c3 r1: rolls=36 (log 38, meta 36.0) counts={'hit': 33, 'waited': 3, 'inline': 0} other=[] meta hit/waited/inline=33.0/3.0/0.0 hold_sum=13532234us missed_hold=1117596us share=8.26% stepd_sum=87784us (meta 87785.0) stepd_share=0.649% | all-log: missed share=10.31% counts={'hit': 34, 'waited': 4, 'inline': 0}
+                      miss seg=11 body=waited body_wait_us=45443 body_us=0 hold_us=449139 sync_gate_us=399869
+                      miss seg=24 body=waited body_wait_us=2878 body_us=0 hold_us=316626 sync_gate_us=308203
+                      miss seg=29 body=waited body_wait_us=39463 body_us=0 hold_us=351831 sync_gate_us=307304
+                      (outside window) miss seg=1 body=waited body_wait_us=97 body_us=0 hold_us=351025
+relaxed c3 r2: rolls=36 (log 38, meta 36.0) counts={'hit': 31, 'waited': 5, 'inline': 0} other=[] meta hit/waited/inline=31.0/5.0/0.0 hold_sum=13266259us missed_hold=2166938us share=16.33% stepd_sum=110041us (meta 110043.0) stepd_share=0.829% | all-log: missed share=15.48% counts={'hit': 33, 'waited': 5, 'inline': 0}
+                      miss seg=7 body=waited body_wait_us=4426 body_us=0 hold_us=336414 sync_gate_us=328149
+                      miss seg=9 body=waited body_wait_us=1579 body_us=0 hold_us=331506 sync_gate_us=326364
+                      miss seg=18 body=waited body_wait_us=819 body_us=0 hold_us=356018 sync_gate_us=342640
+                      miss seg=25 body=waited body_wait_us=3296 body_us=0 hold_us=357543 sync_gate_us=346741
+                      miss seg=27 body=waited body_wait_us=99921 body_us=0 hold_us=785457 sync_gate_us=680360
+relaxed c3 r3: rolls=36 (log 38, meta 36.0) counts={'hit': 32, 'waited': 4, 'inline': 0} other=[] meta hit/waited/inline=32.0/4.0/0.0 hold_sum=12845993us missed_hold=1428895us share=11.12% stepd_sum=42015us (meta 42017.0) stepd_share=0.327% | all-log: missed share=13.13% counts={'hit': 33, 'waited': 5, 'inline': 0}
+                      miss seg=6 body=waited body_wait_us=279 body_us=0 hold_us=398490 sync_gate_us=390661
+                      miss seg=9 body=waited body_wait_us=1932 body_us=0 hold_us=353193 sync_gate_us=344320
+                      miss seg=10 body=waited body_wait_us=36177 body_us=0 hold_us=408901 sync_gate_us=362707
+                      miss seg=13 body=waited body_wait_us=3627 body_us=0 hold_us=268311 sync_gate_us=242842
+                      (outside window) miss seg=1 body=waited body_wait_us=327 body_us=0 hold_us=352572
+relaxed c3 per-run missed-hold share: ['8.26', '16.33', '11.12'] mean=11.91 min=8.26 max=16.33 spread=8.08 pp; pooled=11.89%; step-d own share ['0.649', '0.829', '0.327']
+group   c3 r1: rolls=25 (log 26, meta 25.0) counts={'hit': 25, 'waited': 0, 'inline': 0} other=[] meta hit/waited/inline=25.0/0.0/0.0 hold_sum=183810us missed_hold=0us share=0.00% stepd_sum=0us (meta 0.0) stepd_share=0.000% | all-log: missed share=0.00% counts={'hit': 26, 'waited': 0, 'inline': 0}
+group   c3 r2: rolls=25 (log 26, meta 25.0) counts={'hit': 25, 'waited': 0, 'inline': 0} other=[] meta hit/waited/inline=25.0/0.0/0.0 hold_sum=180168us missed_hold=0us share=0.00% stepd_sum=0us (meta 0.0) stepd_share=0.000% | all-log: missed share=0.00% counts={'hit': 26, 'waited': 0, 'inline': 0}
+group   c3 r3: rolls=25 (log 26, meta 25.0) counts={'hit': 25, 'waited': 0, 'inline': 0} other=[] meta hit/waited/inline=25.0/0.0/0.0 hold_sum=160854us missed_hold=0us share=0.00% stepd_sum=0us (meta 0.0) stepd_share=0.000% | all-log: missed share=0.00% counts={'hit': 26, 'waited': 0, 'inline': 0}
+group   c3 per-run missed-hold share: ['0.00', '0.00', '0.00'] mean=0.00 min=0.00 max=0.00 spread=0.00 pp; pooled=0.00%; step-d own share ['0.000', '0.000', '0.000']
+
+# Body outcomes in every cell (window)
+group   c1-batch0            r1: rolls=25 {'hit': 25, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=5935 waits=[]
+group   c1-batch0            r2: rolls=24 {'hit': 24, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=5789.0 waits=[]
+group   c1-batch0            r3: rolls=24 {'hit': 24, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=6681.5 waits=[]
+group   c1-segregated-no0    r1: rolls=24 {'hit': 24, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=5635.5 waits=[]
+group   c1-segregated-no0    r2: rolls=24 {'hit': 24, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=5659.0 waits=[]
+group   c1-segregated-no0    r3: rolls=23 {'hit': 23, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=5762 waits=[]
+group   c1-spread            r1: rolls=24 {'hit': 24, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=5618.5 waits=[]
+group   c1-spread            r2: rolls=24 {'hit': 24, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=5760.0 waits=[]
+group   c1-spread            r3: rolls=24 {'hit': 24, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=6120.5 waits=[]
+group   c2                   r1: rolls=23 {'hit': 23, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=6587 waits=[]
+group   c2                   r2: rolls=23 {'hit': 23, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=7493 waits=[]
+group   c2                   r3: rolls=23 {'hit': 23, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=6117 waits=[]
+group   c3                   r1: rolls=25 {'hit': 25, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=6624 waits=[]
+group   c3                   r2: rolls=25 {'hit': 25, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=5780 waits=[]
+group   c3                   r3: rolls=25 {'hit': 25, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=5552 waits=[]
+relaxed c1-batch0            r1: rolls=36 {'hit': 34, 'waited': 2, 'inline': 0} missed_share=7.27% stepd_sum=3435us stepd_max=2181us stepd_share=0.028% hold_p50=327093.5 waits=[(2181, 0), (1254, 0)]
+relaxed c1-batch0            r2: rolls=35 {'hit': 32, 'waited': 3, 'inline': 0} missed_share=11.99% stepd_sum=7907us stepd_max=4677us stepd_share=0.070% hold_p50=290667 waits=[(1678, 0), (1552, 0), (4677, 0)]
+relaxed c1-batch0            r3: rolls=33 {'hit': 30, 'waited': 3, 'inline': 0} missed_share=10.50% stepd_sum=88143us stepd_max=43357us stepd_share=0.784% hold_p50=316502 waits=[(42682, 0), (43357, 0), (2104, 0)]
+relaxed c1-segregated-no0    r1: rolls=35 {'hit': 30, 'waited': 5, 'inline': 0} missed_share=17.02% stepd_sum=156113us stepd_max=89950us stepd_share=1.365% hold_p50=297148 waits=[(209, 0), (59293, 0), (1939, 0), (89950, 0), (4722, 0)]
+relaxed c1-segregated-no0    r2: rolls=35 {'hit': 32, 'waited': 3, 'inline': 0} missed_share=12.35% stepd_sum=104357us stepd_max=101537us stepd_share=1.004% hold_p50=282839 waits=[(1984, 0), (101537, 0), (836, 0)]
+relaxed c1-segregated-no0    r3: rolls=37 {'hit': 36, 'waited': 1, 'inline': 0} missed_share=2.80% stepd_sum=2255us stepd_max=2255us stepd_share=0.019% hold_p50=330814 waits=[(2255, 0)]
+relaxed c1-spread            r1: rolls=35 {'hit': 35, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=271313 waits=[]
+relaxed c1-spread            r2: rolls=35 {'hit': 33, 'waited': 2, 'inline': 0} missed_share=9.05% stepd_sum=158800us stepd_max=158338us stepd_share=1.355% hold_p50=308346 waits=[(158338, 0), (462, 0)]
+relaxed c1-spread            r3: rolls=34 {'hit': 34, 'waited': 0, 'inline': 0} missed_share=0.00% stepd_sum=0us stepd_max=0us stepd_share=0.000% hold_p50=327890.0 waits=[]
+relaxed c2                   r1: rolls=33 {'hit': 31, 'waited': 2, 'inline': 0} missed_share=8.00% stepd_sum=137769us stepd_max=136989us stepd_share=1.013% hold_p50=370563 waits=[(780, 0), (136989, 0)]
+relaxed c2                   r2: rolls=33 {'hit': 29, 'waited': 4, 'inline': 0} missed_share=15.27% stepd_sum=241299us stepd_max=127798us stepd_share=1.754% hold_p50=373504 waits=[(1564, 0), (54, 0), (111883, 0), (127798, 0)]
+relaxed c2                   r3: rolls=34 {'hit': 32, 'waited': 2, 'inline': 0} missed_share=5.02% stepd_sum=33191us stepd_max=33125us stepd_share=0.252% hold_p50=365809.0 waits=[(33125, 0), (66, 0)]
+relaxed c3                   r1: rolls=36 {'hit': 33, 'waited': 3, 'inline': 0} missed_share=8.26% stepd_sum=87784us stepd_max=45443us stepd_share=0.649% hold_p50=362098.0 waits=[(45443, 0), (2878, 0), (39463, 0)]
+relaxed c3                   r2: rolls=36 {'hit': 31, 'waited': 5, 'inline': 0} missed_share=16.33% stepd_sum=110041us stepd_max=99921us stepd_share=0.829% hold_p50=364939.5 waits=[(4426, 0), (1579, 0), (819, 0), (3296, 0), (99921, 0)]
+relaxed c3                   r3: rolls=36 {'hit': 32, 'waited': 4, 'inline': 0} missed_share=11.12% stepd_sum=42015us stepd_max=36177us stepd_share=0.327% hold_p50=351030.5 waits=[(279, 0), (1932, 0), (36177, 0), (3627, 0)]
+
+# Upper bound: C1/C2 non-bulk schedule p99/p99.9 with every step-d microsecond removed
+relaxed c1-batch0          r1: p99=429897.5 p99.9=592633.5 stepd_total=3435 stepd_max_roll=2181 hold_p50=327093.5 -> p99>=426462.5 vs 2x iso (iso max 379.3)=758.6 meets=False; p99.9>=589198.5 vs 5x iso (iso max 2270.2)=11351.0 meets=False
+relaxed c1-batch0          r2: p99=354250.9 p99.9=673697.0 stepd_total=7907 stepd_max_roll=4677 hold_p50=290667 -> p99>=346343.9 vs 2x iso (iso max 379.3)=758.6 meets=False; p99.9>=665790.0 vs 5x iso (iso max 2270.2)=11351.0 meets=False
+relaxed c1-batch0          r3: p99=366275.1 p99.9=623917.1 stepd_total=88143 stepd_max_roll=43357 hold_p50=316502 -> p99>=278132.1 vs 2x iso (iso max 379.3)=758.6 meets=False; p99.9>=535774.1 vs 5x iso (iso max 2270.2)=11351.0 meets=False
+relaxed c1-segregated-no0  r1: p99=306395.5 p99.9=625640.2 stepd_total=156113 stepd_max_roll=89950 hold_p50=297148 -> p99>=150282.5 vs 2x iso (iso max 561.2)=1122.4 meets=False; p99.9>=469527.2 vs 5x iso (iso max 2532.7)=12663.5 meets=False
+relaxed c1-segregated-no0  r2: p99=210569.9 p99.9=295939.7 stepd_total=104357 stepd_max_roll=101537 hold_p50=282839 -> p99>=106212.9 vs 2x iso (iso max 561.2)=1122.4 meets=False; p99.9>=191582.7 vs 5x iso (iso max 2532.7)=12663.5 meets=False
+relaxed c1-segregated-no0  r3: p99=288106.4 p99.9=496224.9 stepd_total=2255 stepd_max_roll=2255 hold_p50=330814 -> p99>=285851.4 vs 2x iso (iso max 561.2)=1122.4 meets=False; p99.9>=493969.9 vs 5x iso (iso max 2532.7)=12663.5 meets=False
+relaxed c1-spread          r1: p99=205115.8 p99.9=474535.0 stepd_total=0 stepd_max_roll=0 hold_p50=271313 -> p99>=205115.8 vs 2x iso (iso max 444.4)=888.8 meets=False; p99.9>=474535.0 vs 5x iso (iso max 2151.0)=10755.0 meets=False
+relaxed c1-spread          r2: p99=507976.3 p99.9=1000173.1 stepd_total=158800 stepd_max_roll=158338 hold_p50=308346 -> p99>=349176.3 vs 2x iso (iso max 444.4)=888.8 meets=False; p99.9>=841373.1 vs 5x iso (iso max 2151.0)=10755.0 meets=False
+relaxed c1-spread          r3: p99=452132.2 p99.9=734689.0 stepd_total=0 stepd_max_roll=0 hold_p50=327890.0 -> p99>=452132.2 vs 2x iso (iso max 444.4)=888.8 meets=False; p99.9>=734689.0 vs 5x iso (iso max 2151.0)=10755.0 meets=False
+relaxed c2                 r1: p99=658499.5 p99.9=777711.2 stepd_total=137769 stepd_max_roll=136989 hold_p50=370563 -> p99>=520730.5 vs 2x iso (iso max 487.1)=974.2 meets=False; p99.9>=639942.2 vs 5x iso (iso max 3092.1)=15460.5 meets=False
+relaxed c2                 r2: p99=1295966.4 p99.9=1718794.3 stepd_total=241299 stepd_max_roll=127798 hold_p50=373504 -> p99>=1054667.4 vs 2x iso (iso max 487.1)=974.2 meets=False; p99.9>=1477495.3 vs 5x iso (iso max 3092.1)=15460.5 meets=False
+relaxed c2                 r3: p99=659450.5 p99.9=877924.4 stepd_total=33191 stepd_max_roll=33125 hold_p50=365809.0 -> p99>=626259.5 vs 2x iso (iso max 487.1)=974.2 meets=False; p99.9>=844733.4 vs 5x iso (iso max 3092.1)=15460.5 meets=False
+group   c1-batch0          r1: p99=605.6 p99.9=9645.5 stepd_total=0 stepd_max_roll=0 hold_p50=5935 -> p99>=605.6 vs 2x iso (iso max 632.3)=1264.6 meets=True; p99.9>=9645.5 vs 5x iso (iso max 2763.0)=13815.0 meets=True
+group   c1-batch0          r2: p99=761.0 p99.9=3005.0 stepd_total=0 stepd_max_roll=0 hold_p50=5789.0 -> p99>=761.0 vs 2x iso (iso max 632.3)=1264.6 meets=True; p99.9>=3005.0 vs 5x iso (iso max 2763.0)=13815.0 meets=True
+group   c1-batch0          r3: p99=748.2 p99.9=5093.1 stepd_total=0 stepd_max_roll=0 hold_p50=6681.5 -> p99>=748.2 vs 2x iso (iso max 632.3)=1264.6 meets=True; p99.9>=5093.1 vs 5x iso (iso max 2763.0)=13815.0 meets=True
+group   c1-segregated-no0  r1: p99=408.9 p99.9=2888.7 stepd_total=0 stepd_max_roll=0 hold_p50=5635.5 -> p99>=408.9 vs 2x iso (iso max 474.5)=949.0 meets=True; p99.9>=2888.7 vs 5x iso (iso max 2688.9)=13444.5 meets=True
+group   c1-segregated-no0  r2: p99=408.2 p99.9=3320.0 stepd_total=0 stepd_max_roll=0 hold_p50=5659.0 -> p99>=408.2 vs 2x iso (iso max 474.5)=949.0 meets=True; p99.9>=3320.0 vs 5x iso (iso max 2688.9)=13444.5 meets=True
+group   c1-segregated-no0  r3: p99=1108.6 p99.9=24247.4 stepd_total=0 stepd_max_roll=0 hold_p50=5762 -> p99>=1108.6 vs 2x iso (iso max 474.5)=949.0 meets=False; p99.9>=24247.4 vs 5x iso (iso max 2688.9)=13444.5 meets=False
+group   c1-spread          r1: p99=975.1 p99.9=19313.3 stepd_total=0 stepd_max_roll=0 hold_p50=5618.5 -> p99>=975.1 vs 2x iso (iso max 541.0)=1082.0 meets=True; p99.9>=19313.3 vs 5x iso (iso max 2077.1)=10385.5 meets=False
+group   c1-spread          r2: p99=940.1 p99.9=14086.2 stepd_total=0 stepd_max_roll=0 hold_p50=5760.0 -> p99>=940.1 vs 2x iso (iso max 541.0)=1082.0 meets=True; p99.9>=14086.2 vs 5x iso (iso max 2077.1)=10385.5 meets=False
+group   c1-spread          r3: p99=1016.9 p99.9=5128.9 stepd_total=0 stepd_max_roll=0 hold_p50=6120.5 -> p99>=1016.9 vs 2x iso (iso max 541.0)=1082.0 meets=True; p99.9>=5128.9 vs 5x iso (iso max 2077.1)=10385.5 meets=True
+group   c2                 r1: p99=306515.9 p99.9=341492.7 stepd_total=0 stepd_max_roll=0 hold_p50=6587 -> p99>=306515.9 vs 2x iso (iso max 11066.2)=22132.4 meets=False; p99.9>=341492.7 vs 5x iso (iso max 20555.7)=102778.5 meets=False
+group   c2                 r2: p99=319706.7 p99.9=402902.6 stepd_total=0 stepd_max_roll=0 hold_p50=7493 -> p99>=319706.7 vs 2x iso (iso max 11066.2)=22132.4 meets=False; p99.9>=402902.6 vs 5x iso (iso max 20555.7)=102778.5 meets=False
+group   c2                 r3: p99=326555.7 p99.9=380962.6 stepd_total=0 stepd_max_roll=0 hold_p50=6117 -> p99>=326555.7 vs 2x iso (iso max 11066.2)=22132.4 meets=False; p99.9>=380962.6 vs 5x iso (iso max 20555.7)=102778.5 meets=False

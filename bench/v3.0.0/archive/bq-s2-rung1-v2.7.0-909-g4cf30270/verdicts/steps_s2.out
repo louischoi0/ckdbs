@@ -1,0 +1,15 @@
+base   rolls=521 p99=809ms bodies={'hit': 475, 'waited': 46}
+   all: seal=0.1 flush=0.0 sync_gate=95.6 sync=1.5 body_wait=0.5 body=0.0 header=1.2 rename=0.0 dirsync=1.2
+   >=p99 (6): seal=0.0 flush=0.0 sync_gate=79.9 sync=14.5 body_wait=0.0 body=0.0 header=3.6 rename=0.0 dirsync=2.1
+opt3   rolls=728 p99=1136ms bodies={'hit': 728}
+   all: seal=0.5 flush=0.0 sync_gate=68.9 sync=11.3 body_wait=0.0 body=0.0 header=12.4 rename=0.1 dirsync=6.9
+   >=p99 (8): seal=0.0 flush=0.0 sync_gate=61.1 sync=15.5 body_wait=0.0 body=0.0 header=17.5 rename=0.0 dirsync=5.9
+s16    rolls=2064 p99=534ms bodies={'hit': 2049, 'waited': 15}
+   all: seal=0.8 flush=0.0 sync_gate=82.5 sync=7.7 body_wait=0.2 body=0.0 header=4.9 rename=0.0 dirsync=3.8
+   >=p99 (21): seal=0.0 flush=0.0 sync_gate=72.0 sync=9.0 body_wait=0.6 body=0.0 header=14.3 rename=0.0 dirsync=4.1
+s256   rolls=112 p99=3498ms bodies={'waited': 94, 'hit': 18}
+   all: seal=0.1 flush=0.0 sync_gate=78.0 sync=6.1 body_wait=14.2 body=0.0 header=0.5 rename=0.0 dirsync=1.1
+   >=p99 (2): seal=0.0 flush=0.0 sync_gate=71.3 sync=9.4 body_wait=16.1 body=0.0 header=2.1 rename=0.0 dirsync=1.0
+s1024  rolls=30 p99=11561ms bodies={'waited': 28, 'hit': 2}
+   all: seal=0.0 flush=0.0 sync_gate=46.9 sync=0.7 body_wait=52.0 body=0.0 header=0.2 rename=0.0 dirsync=0.2
+   >=p99 (1): seal=0.0 flush=0.0 sync_gate=56.0 sync=2.7 body_wait=40.1 body=0.0 header=0.0 rename=0.0 dirsync=1.2

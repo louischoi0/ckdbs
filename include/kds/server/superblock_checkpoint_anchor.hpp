@@ -46,12 +46,9 @@
 //
 // ---- The fold, under one stream (AR0 M0, work order AL's AL-R4) ---------
 //
-// Which slot an anchor lands in depends on what the volume's log *is*
-// (`superblock.hpp`'s `log_topology`):
-//
-//   per-core streams   slot `core_id`, one anchor per stream. Unchanged.
-//   one stream         **slot 0 alone**, holding the *minimum* redo start
-//                      over every core's latest completed checkpoint.
+// An anchor lands in **slot 0 alone** - the volume's log is one stream
+// (`superblock.hpp`'s `log_topology`) - holding the *minimum* redo start
+// over every core's latest completed checkpoint.
 //
 // The minimum, because with one stream there is one place recovery starts
 // and it must not be past any core's earliest still-needed record: core 2
@@ -180,12 +177,10 @@ private:
 
     // The floor the warm-up holds to: the lowest redo start over the anchor
     // slots the mount found **that were ever published into**, which is slot 0
-    // alone, since nothing else is ever written. The loop over 64 entries
-    // existed for a volume converted in place, where a peer's old slot
-    // could sit below core 0's and a floor above it would reintroduce the
-    // hazard the warm-up closes. Nothing converts in place (AL-R3) and
-    // since AM-S4(d) no volume carrying such a slot mounts, so the loop is
-    // a canary rather than a case: one pass over 64 entries, once, and the
+    // alone, since nothing else is ever written. Nothing converts in place
+    // (AL-R3) and no volume carrying another published slot mounts
+    // (AM-S4(d)), so the loop over 64 entries is a canary rather than a
+    // case: one pass over 64 entries, once, and the
     // thing that would notice if either of those stopped holding.
     //
     // **Skipping the never-published slots is not a detail.** A zero
@@ -221,9 +216,9 @@ private:
     // `popcount(published_) == core_count` - a fact about *which* cores,
     // where counting a map's entries would answer the same only if every
     // key were in range, which nothing upstream guarantees.
-    std::array<wal::CheckpointAnchorRecord, kMaxWalCores> per_core_{};
+    std::array<wal::CheckpointAnchorRecord, kMaxCores> per_core_{};
     std::uint64_t published_ = 0;
-    static_assert(kMaxWalCores == 64, "the published mask is one bit per core");
+    static_assert(kMaxCores == 64, "the published mask is one bit per core");
 };
 
 }  // namespace kds::server

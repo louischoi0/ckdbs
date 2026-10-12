@@ -121,32 +121,6 @@ StatusOr<PageInitPayload> DecodePageInit(std::span<const std::byte> in) {
     return fields;
 }
 
-// ---- PAGE_HANDOFF --------------------------------------------------------
-
-StatusOr<std::size_t> EncodePageHandoff(std::span<std::byte> out,
-                                        const PageHandoffPayload& fields) {
-    if (Status s = CheckOutputSize(out, kPageHandoffPayloadSize, "PAGE_HANDOFF"); !s.ok()) {
-        return s;
-    }
-    Store<std::uint32_t>(out, kPageHandoffIncomingCoreOffset, fields.incoming_core);
-    return kPageHandoffPayloadSize;
-}
-
-StatusOr<PageHandoffPayload> DecodePageHandoff(std::span<const std::byte> in) {
-    // A floor, **never an exact size** - the same `>=` rule DecodePageInit
-    // spells out above. `DecodeRecord` hands back the record's 8-byte
-    // aligned tail, so these four bytes arrive here as eight, and an
-    // equality test refused every PAGE_HANDOFF ever read through the
-    // envelope. It shipped that way in PW1c-1 and was invisible because the
-    // only caller was a test handing the codec a bare 4-byte buffer.
-    if (Status s = CheckInputSize(in, kPageHandoffPayloadSize, "PAGE_HANDOFF"); !s.ok()) {
-        return s;
-    }
-    PageHandoffPayload fields{};
-    fields.incoming_core = Load<std::uint32_t>(in, kPageHandoffIncomingCoreOffset);
-    return fields;
-}
-
 // ---- ANCHOR_UPDATE -------------------------------------------------------
 
 StatusOr<std::size_t> EncodeAnchorUpdate(std::span<std::byte> out,
@@ -185,44 +159,6 @@ StatusOr<BackupMarkPayload> DecodeBackupMark(std::span<const std::byte> in) {
     BackupMarkPayload fields{};
     fields.backup_id = Load<std::uint64_t>(in, kBackupMarkIdOffset);
     fields.start_lsn = Load<std::uint64_t>(in, kBackupMarkStartOffset);
-    return fields;
-}
-
-// ---- TXN_PREPARE ---------------------------------------------------------
-
-StatusOr<std::size_t> EncodeTxnPrepare(std::span<std::byte> out,
-                                       const TxnPreparePayload& fields) {
-    if (Status s = CheckOutputSize(out, kTxnPreparePayloadSize, "TXN_PREPARE"); !s.ok()) {
-        return s;
-    }
-    Store<std::uint64_t>(out, kTxnPrepareSessionIdOffset, fields.coordinator_session_id);
-    Store<std::uint64_t>(out, kTxnPrepareTxnIdOffset, fields.coordinator_txn_id);
-    Store<std::uint32_t>(out, kTxnPrepareCoreOffset, fields.coordinator_core);
-    return kTxnPreparePayloadSize;
-}
-
-StatusOr<TxnPreparePayload> DecodeTxnPrepare(std::span<const std::byte> in) {
-    // A floor, never an exact size - DecodePageHandoff's paragraph states
-    // why, and it shipped as a defect there once.
-    if (Status s = CheckInputSize(in, kTxnPreparePayloadSize, "TXN_PREPARE"); !s.ok()) {
-        return s;
-    }
-    TxnPreparePayload fields{};
-    fields.coordinator_session_id = Load<std::uint64_t>(in, kTxnPrepareSessionIdOffset);
-    fields.coordinator_txn_id = Load<std::uint64_t>(in, kTxnPrepareTxnIdOffset);
-    fields.coordinator_core = Load<std::uint32_t>(in, kTxnPrepareCoreOffset);
-    // **A prepare that names no coordinator transaction resolves to
-    // nothing.** The lookup R6-4 makes is "the record carrying this id in
-    // that core's stream", and 0 is the id no transaction has - so a zero
-    // here would send recovery looking for a decision that cannot exist
-    // and leave the transaction in doubt for ever. Refused as the
-    // corruption it is, on the same fail-closed reading PAGE_INIT applies
-    // to an unknown page type.
-    if (fields.coordinator_txn_id == 0) {
-        return Status::Corruption(
-            "wal payload: TXN_PREPARE names coordinator transaction 0, which no transaction "
-            "has; a prepared transaction with no coordinator id could never be resolved");
-    }
     return fields;
 }
 

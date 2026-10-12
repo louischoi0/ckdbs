@@ -30,11 +30,10 @@
 // becomes real I/O instead of bookkeeping, and the API shape is meant to
 // survive that unchanged.
 //
-// Concurrency: single-core only, matching rules.md #3 (thread-per-core,
-// shared-nothing) - pin counts and frame state are plain (non-atomic)
-// fields. A cross-core buffer pool would need the message/queue interface
-// rules.md #3 requires for cross-core communication, which does not exist
-// yet; this class is not it.
+// Concurrency: single-threaded - pin counts and frame state are plain
+// (non-atomic) fields, and nothing shares one PageMgr across threads
+// (rules.md §3: core-local unless declared). The instance's shared pool is
+// `storage::DevicePageStore`, not this class.
 //
 // ---- The WAL gate (page.md section 8, wal.md section 8-1) ---------------
 //

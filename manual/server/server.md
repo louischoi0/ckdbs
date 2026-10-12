@@ -53,9 +53,9 @@ log destination and the port, then blocks in `Serve()` for the life of the
 process. The data file is created if absent; the WAL segments live in
 `<data_file>.wal/` unless `wal_dir` says otherwise. Every volume this build
 mounts has **one WAL stream for the instance**, whatever `cores` says, and
-`SHOW META`'s `wal_topology` field says so. A volume written before that
-change has one stream per core and **no longer mounts**: there is no
-migration, and the refusal names it. Recreate the database. The same holds
+`SHOW META`'s `wal_topology` field says so. A volume whose superblock
+records more than one stream **does not mount**: there is no migration,
+and the refusal names it. Recreate the database. The same holds
 for every volume older than superblock version 22 (2026-10-11): 20 keeps a
 B+ tree leaf in key order by placement, 21 records a dropped relation's
 roots in its tombstone, and 22 carries the 48-bit Keystone id.
@@ -75,8 +75,8 @@ session moves at most once per half second, and a session whose own work is
 what makes its core busy is not moved. `SO_REUSEPORT` has one cost worth knowing: another process running as
 the same user can bind the same port and silently take a share of the
 connections, so do not start two instances on one port. With `cores = 1`
-the port is bound exclusively. The `peer_listeners` key that used to switch
-this is retired and refused at startup.
+the port is bound exclusively. The `peer_listeners` key is refused at
+startup.
 
 Where the platform refuses `SO_REUSEPORT`, the server does not fail: it
 logs a `WARN` from `expeditor` ("the port cannot be shared ... core 0
@@ -104,7 +104,7 @@ out-of-range values, each naming the file and line.
 | `port` | `15432` | TCP port, loopback only. |
 | `tcp_keepalive_s` | `60` | **Seconds of silence before an accepted client socket is probed.** Six probes follow a sixth of this apart, and `TCP_USER_TIMEOUT` is set to the same total, so a client that vanished without closing - power lost, a cable pulled - is reaped after about twice this. Every listener: the default port, `debug_text_port` and `kwp_port`. A live idle client is never ended - there is no idle-session timeout - **but a live client that leaves a reply unread (a zero receive window) for about twice this is**, which is what the user timeout costs. `0` turns keepalive off; above `32767` (Linux's `MAX_TCP_KEEPIDLE`) is refused at startup. |
 | `wal_dir` | `<data_file>.wal` | WAL segment directory. |
-| `cores` | `1` | Reactor cores, pinned one per CPU. **Not pinned since v3.0.0's M3**: a mount under a different count records the new one in the superblock and logs the change. Above 1 the cores share one WAL stream and one log: core 0 owns it, peers append through it, and every `fdatasync` is issued once (`docs/spec/wal.md` §3). |
+| `cores` | `1` | Reactor cores, pinned one per CPU. **The count is not pinned to the volume**: a mount under a different count records the new one in the superblock and logs the change. Above 1 the cores share one WAL stream and one log: core 0 owns it, peers append through it, and every `fdatasync` is issued once (`docs/spec/wal.md` §3). |
 | `inline_cell_width` | `64` | Bytes every `varchar` occupies inside a tuple. **Pinned at bootstrap**, mount-checked; changing it for existing data is a rebuild, no migration. Range 16..4096. |
 | `isolation` | `read committed` | The level a connection starts at; overridable per session (`SET ISOLATION LEVEL`) and per transaction (`BEGIN ISOLATION LEVEL`). |
 | `durability` | `group` | `strict`/`d1`, `group`/`d2`, `relaxed`/`d3` — applied at COMMIT for every logged statement (INSERT/UPDATE/DELETE). Instance-wide; the per-transaction class is a KWP/1 field, not wired. |
@@ -123,14 +123,14 @@ out-of-range values, each naming the file and line.
 | `cabin_max_values` / `cabin_max_entries_per_value` | `4096` / `4096` | Cabin caps. A cap refuses to observe, never truncates. |
 | `aggregate_max_groups` / `aggregate_max_distinct` | `65536` / `1048576` | Aggregation caps. A cap fails the statement, never truncates. |
 | `sort_max_rows` | `1048576` | How many rows one `ORDER BY` may hold. Fails the statement naming the key; never truncates, never spills. A `LIMIT` caps what is held at `offset + limit`, so this binds only an unlimited sort — and `ORDER BY <pk>` ascending is elided rather than sorted, so it is never bound at all. |
-| `lock_wait_fault_net_ms` | `1000` | **How long a statement may wait before the engine calls the wait a fault.** Not the ordinary end of a wait: a statement waiting for a row, a range or a relation is woken by the holder's decide whenever that comes, and this bound is for the case where no decide comes — a detector that missed a cycle, or a holder that is stuck. It aborts the **waiter**, never the holder, and logs the fault as one. `0` refuses at once instead of waiting, which is the other policy rather than an off-switch. **This key was `in_doubt_ceiling_ms`, and a file that still sets that name is refused at startup naming this one** (AO-R8's plan, taken at M3's AT-S6): the old key bounded a wait on a row held by a transaction this core had prepared for a cross-owner commit, and there is no cross-owner transaction. The default was 11 s while two-phase commit was in the tree, because an honest holder could sit inside a coordinator's 10 s phase deadline; nothing waits on another core now. |
+| `lock_wait_fault_net_ms` | `1000` | **How long a statement may wait before the engine calls the wait a fault.** Not the ordinary end of a wait: a statement waiting for a row, a range or a relation is woken by the holder's decide whenever that comes, and this bound is for the case where no decide comes — a detector that missed a cycle, or a holder that is stuck. It aborts the **waiter**, never the holder, and logs the fault as one. `0` refuses at once instead of waiting, which is the other policy rather than an off-switch. **A file that sets `in_doubt_ceiling_ms` is refused at startup naming this key.** |
 | `txn_lifetime_ceiling_ms` | `60000` | **How old an explicit transaction may get before the server rolls it back**, counted from its `BEGIN`: busy or idle, poisoned or not, DDL inside it included. The client's next statement is refused `RESOURCE_EXHAUSTED` with the transaction-lifetime-ceiling detail - `COMMIT` included, because the writes are already undone - until it sends `ROLLBACK`. A running statement is never interrupted; the rollback comes at the first sweep after it ends, and the sweep runs every quarter of the ceiling. Autocommit statements are not bounded by it, and a KWP load session (`kwp_port`) is exempt: a load is one transaction and may run as long as it needs. `0` is refused: the ceiling has no off-switch. |
 | `log_dir` / `log_file` / `log_level` | — / `kdb.log` / `info` | Log destination and level (`trace`..`off`). Empty `log_file` disables file logging. |
 
 `inline_cell_width` is the one superblock-pinned key and the one that can
 refuse a mount: it is read once when a *new* database is bootstrapped, and
 every later start validates the running value against it. Four keys are
-retired and refused by name - `peer_listeners`, `in_doubt_ceiling_ms`,
+refused by name - `peer_listeners`, `in_doubt_ceiling_ms`,
 `placement` and `range_size_ids` - each refusal saying what replaced it.
 
 ## 4. Connecting
@@ -183,7 +183,7 @@ tags and per-level detail: `docs/spec/client-manual.md` §1.
 [VALUES]` (page-level debugging). Full list: `manual/sql/sql.md` §6.
 
 **Multi-core.** `cores > 1` spawns one pinned reactor thread per core.
-No relation is owned by a core, and every statement runs on the core its
+No relation is tied to a core, and every statement runs on the core its
 session is on; a namespace groups relations and decides nothing about cores
 (`docs/spec/namespace.md`).
 The cores share **one WAL stream** — core 0 opens the log and every peer
@@ -193,9 +193,12 @@ construction and the instance's durability cost is read on core 0
 the same thing on every core: a peer writes `sys.patterns` and
 `sys.access_stats` itself, and both relations are the instance's one.
 Recovery runs once, on core 0, before any peer exists.
-`SHOW META`'s `contention_*` fields are the exception to "read on core 0":
-they are summed over every core, and count where one core waited for
-another (`docs/spec/client-manual.md`).
+`SHOW META`'s `contention_*` fields, and since BQ-S1 `wal_append_lsn` and the
+segment roll's `wal_rolls`/`wal_roll_*`, are the exceptions to "read on core
+0": the first are summed over every core and count where one core waited for
+another; the second are the one stream's totals, printed the same on every
+core and never summed, and they include rolls on peers, whose inline
+syncs `wal_syncs` never counts (`docs/spec/client-manual.md`).
 
 **Which CPU each reactor runs on.** By default a peer reactor `k` is pinned
 to CPU `k` and core 0 runs unpinned, which on a host that numbers SMT

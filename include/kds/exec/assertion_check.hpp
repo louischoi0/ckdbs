@@ -72,10 +72,9 @@
 //
 // **One `AssertionEnforcer` serves every core**: `Expeditor` owns it,
 // `CoreRuntime::Config` hands it to each peer, and a dispatcher built with
-// none builds its own - `LockTable`'s idiom. It was one per core, holding
-// the directories of the relations that core owned, until AT-S5 made a
-// write run where its session is; a write on a core whose registry held no
-// directory was then admitted unchecked (D1). Memory-resident still: a
+// none builds its own - `LockTable`'s idiom. A write runs where its
+// session is (AT-S5), so a registry per core would admit a write unchecked
+// on a core whose registry held no directory (D1). Memory-resident still: a
 // restart loses it, and SHOW ASSERTIONS derives `enforcing` from its
 // presence so the loss is reported rather than silent.
 //

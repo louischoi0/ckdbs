@@ -1,0 +1,24 @@
+relaxed n=416
+  hold    p50=  323.28 p90=  526.78 p99=  772.84 max= 1210.25 ms  sum= 144.36s
+  a       p50=    0.03 p90=    0.06 p99=    0.07 max=  280.73 ms  sum=   0.29s
+  c       p50=  317.88 p90=  483.76 p99=  739.00 max= 1066.73 ms  sum= 139.35s
+  c_gate  p50=  316.80 p90=  450.62 p99=  718.03 max=  823.74 ms  sum= 137.61s
+  c_sync  p50=    1.18 p90=    1.96 p99=   96.23 max=  340.83 ms  sum=   1.74s
+  d       p50=    0.00 p90=    0.00 p99=  101.54 max=  158.34 ms  sum=   0.93s
+  e       p50=    1.10 p90=    3.16 p99=   90.83 max=  239.31 ms  sum=   2.13s
+  f       p50=    0.03 p90=    0.04 p99=    1.07 max=    6.52 ms  sum=   0.03s
+  g       p50=    2.11 p90=    5.16 p99=   46.05 max=  102.93 ms  sum=   1.62s
+  efg     p50=    3.29 p90=   10.54 p99=   95.83 max=  241.97 ms  sum=   3.78s
+  bodies {'hit': 389, 'waited': 27, 'inline': 0}
+group n=285
+  hold    p50=    6.09 p90=   12.02 p99=   20.62 max=   28.74 ms  sum=   2.07s
+  a       p50=    0.02 p90=    0.03 p99=    0.31 max=    0.74 ms  sum=   0.01s
+  c       p50=    2.31 p90=    4.21 p99=   14.38 max=   21.72 ms  sum=   0.86s
+  c_gate  p50=    0.00 p90=    3.10 p99=   10.08 max=   14.13 ms  sum=   0.30s
+  c_sync  p50=    1.91 p90=    3.00 p99=   11.51 max=   21.72 ms  sum=   0.57s
+  d       p50=    0.00 p90=    0.00 p99=    0.00 max=    0.00 ms  sum=   0.00s
+  e       p50=    1.07 p90=    1.80 p99=    6.14 max=    8.20 ms  sum=   0.38s
+  f       p50=    0.03 p90=    0.03 p99=    0.04 max=    0.83 ms  sum=   0.01s
+  g       p50=    2.23 p90=    4.29 p99=   13.58 max=   18.06 ms  sum=   0.81s
+  efg     p50=    3.38 p90=    6.34 p99=   14.78 max=   19.04 ms  sum=   1.20s
+  bodies {'hit': 285, 'waited': 0, 'inline': 0}

@@ -51,7 +51,7 @@ wal::CheckpointAnchorRecord SuperBlockCheckpointAnchor::FoldedAnchor() const noe
     // proof: it is `redo_start_lsn / segment_size` *of the same core*, so a
     // field-wise minimum could name a segment that does not hold the LSN.
     const wal::CheckpointAnchorRecord* lowest = nullptr;
-    for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
+    for (std::uint32_t core = 0; core < kMaxCores; ++core) {
         if ((published_ & (std::uint64_t{1} << core)) == 0) continue;
         const wal::CheckpointAnchorRecord& record = per_core_[core];
         if (lowest == nullptr || record.redo_start_lsn < lowest->redo_start_lsn) {
@@ -65,9 +65,8 @@ wal::CheckpointAnchorRecord SuperBlockCheckpointAnchor::FoldedAnchor() const noe
 
 StatusOr<wal::CheckpointAnchorRecord> SuperBlockCheckpointAnchor::EncodeLanding(
     const wal::CheckpointAnchorRecord& anchor) {
-    // **Always the fold into slot 0** (the header's fold section);
-    // unconditional since AM-S4(d), where the per-core arm that wrote
-    // `anchor.core_id`'s own slot left with the topology it belonged to.
+    // **Always the fold into slot 0** (the header's fold section;
+    // AM-S4(d)).
     if (anchor.core_id >= superblock_.core_count()) {
         // Refused rather than recorded: an out-of-range id would set a
         // bit no `core_count` accounts for, releasing the warm-up early

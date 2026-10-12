@@ -274,18 +274,6 @@ statement about an engine that no longer exists; re-verify or strike it.
   reaches an unlinked page (`page.md` §5, `drop-table.md` DT1). This
   predates AZ-S1: the page used to hold the row. **No owner.**
 
-- **`PAGE_HANDOFF` is neither written nor read, and its record type
-  stays.** Verified at AT-S9, 2026-09-24. Its reader was the receiving
-  core's write grant, struck at AW-S1b, and since AM-S4(d) analysis neither
-  erases nor seeds on it and redo skips it. Its last writer was
-  `range_alloc.cpp`'s range opening, retired at AT-S9 with insert
-  spreading, so the durability cost the entry used to price (one
-  `FlushPages` and one device sync per range opening) is gone too. What
-  remains is the record type, which a pre-AT log can still carry and
-  recovery must still decode, and `wal::LogPageHandoff`, whose only callers
-  are the cells that build such a log. Retiring the type is a format
-  decision of its own. Owner: `docs/spec/wal.md` §5.2.
-
 - **Two cuts AM-S4(d) made possible and did not take.** Named by that
   stage's `critics-developer` pass, verified by it by trace and exhaustive
   grep, and deferred because the operator called for the push before they
@@ -322,46 +310,74 @@ statement about an engine that no longer exists; re-verify or strike it.
     (`src/wal/file_log_device.cpp`, `include/kds/wal/stream.hpp`). Its
     comment forbids narrowing that to the tail, because a roll can land
     between the stream capturing its watermark and the device sync.
-  - **Since BC the run is bounded**: segments wholly below the durable redo
-    start are removed (`wal.md` §11-4), so the calls per sync are the
-    segments since the anchor's, not every segment the instance ever wrote.
-    The cost no longer grows with the instance's age.
+  - **Since BC the run is bounded only while checkpoints clean what they
+    copy**: segments wholly below the durable redo start are removed
+    (`wal.md` §11-4). Under a bulk load at `relaxed` the bound did not hold:
+    a page re-dirtied after its writeback copy keeps its first recLSN and
+    pins the fold in segment 0, and 13 of 15 BQ-S1 runs removed 0 segments,
+    with 33-39 live
+    (`bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md` §5;
+    `docs/inflight/bugs/a-page-re-dirtied-after-its-writeback-copy-pins-the-redo-start.md`).
+    Verified at `4cf30270`.
   - Syncing only the segments *written* since the last sync would be
     enough: the previous tail plus any segment created since. Nothing
     records which those are.
 
-  Cost: one `fdatasync` per live segment per durable-point advance, bounded
-  by the checkpoint cadence. Not measured. Owner: `docs/spec/wal.md` §3,
+  Cost: one `fdatasync` per live segment per durable-point advance, about
+  50 us per live segment (measured at `4cf30270`, BQ-S1); a segment roll at
+  `relaxed` is held mostly by the tail's sync, not by this breadth (BQ-S1's
+  H3 bound). **Re-priced at BQ's close, 2026-10-12**: the non-tail syncs are
+  39.8-72.0 % of step c over the rolls at or above the hold's p99 in BQ-S1's
+  C1-spread and C2 cells, but with
+  every one of them removed the roll's hold p99 stays 652-780 ms at
+  `relaxed`, so narrowing the sync (BQ's rung 3, H3, `[quiet-wrong]`, its
+  proof unwritten) was recorded unable to meet BQ's bar and not built
+  (BQ-Q6 (a), `instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7).
+  The breadth stays and so does the comment forbidding the narrowing.
+  Owner: `docs/spec/wal.md` §3,
   `wal/file_log_device.cpp`.
 
-- **A segment roll does I/O inside the instance's append latch, which
-  `wal.md` §6 both says and denies, and its cost was never priced.**
-  Verified at `8f9a887`, 2026-09-28, by reading (CN-9 §4 C4).
-  - `WalStream::Append` takes the stream latch and calls `Roll` under it
-    when the record does not fit (`src/wal/stream.cpp:210-219`).
-  - `Roll` reaches `CreateSegment` (`:142-148`, `:63-64`). That runs
-    `posix_fallocate`, zero-fills 64 MiB, writes the header, `fsync`s the
-    file and then `fsync`s the directory (`src/wal/file_log_device.cpp`).
-  - **Since the unheadered-tail fix (2026-10-07, `worktree-fix-roll-header`)
-    the roll first syncs the device** through the stream's sync gate, so the
-    segment it leaves is sealed durably before the next one exists - one
-    more `fdatasync` per roll, and a wait for any sync already in flight.
-  - **The behaviour is deliberate.** The authority for it as built is
-    `include/kds/wal/stream.hpp:35-43`, which makes the latch a mutex for
-    exactly this wait.
-  - **The spec contradicts itself here.** `docs/spec/wal.md:114`, in the
-    `[PROPOSED]` §6, puts *"any segment roll"* inside the latched append,
-    and in the same sentence calls an append *"no allocation and no I/O"*.
-  - **The follow-on was never priced.** `stream.hpp` names it: *"if AL-S8
-    prices this as material"*. AL-S8's files measure the single stream, not
-    the roll.
+- **A segment roll does I/O inside the instance's append latch, and at
+  `relaxed` under a bulk writer its hold is hundreds of milliseconds.**
+  Re-verified at `1fb71d1a` by reading, 2026-10-12; priced by BQ at
+  `4cf30270` (`instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7,
+  `bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md`,
+  `bench/v3.0.0/results-bq-s2-rung1-v2.7.0-909-g4cf30270.md`).
+  - `WalStream::Append` (`src/wal/stream.cpp:359`) rolls under the stream
+    latch when the record does not fit: `Roll` (`:235-243`) reaches
+    `StartSegment` (`:140-150`), which syncs the segment it leaves through
+    `SyncDevice` - waiting out any sync in flight, the writer thread's
+    included - and creates the next. Deliberate, and stated as built in
+    `include/kds/wal/stream.hpp`'s protocol header and `wal.md` §6 step 1,
+    whose self-contradiction BQ-S5 resolved.
+  - **Measured**: at `relaxed` under one bulk writer (~75 MiB/s of log) a
+    roll holds the latch p50 ~330 ms, p99 ~790 ms, max 1.2 s, 95 % of
+    it the gate wait - the writer's tail `fdatasync`, slow on a device also
+    taking the log, the checkpoint's writeback and the preparer's zero
+    fill. Rolls every ~0.85 s put 35-46 % of a window under a hold; cores
+    without the bulk writer see a schedule p99 of ~290-660 ms against
+    ~0.23-0.47 ms isolated (medians), and core 0's drain carries ~100 % of its
+    stream-latch wait. At `group` the hold is ~6 ms p50 / ~20 ms p99.
+  - **What BQ tried, cheapest first** (BQ-R2): H2's larger segment makes
+    rolls rarer and longer, not cheaper (~5 ms more hold per MiB, the
+    total held time flat; at 1,024 MiB BQ's probe saw the restart 1.1-1.4 s
+    longer and one `INSERT` stalled up to 12.8 s on the preparer's build). Rungs 2 and 3 (H5, H3) are recorded unable
+    from BQ-S1's bounds (BQ-Q6 (a)): with every non-tail sync removed the
+    hold p99 stays 652-780 ms, and with every roll-aligned stall removed C1
+    reader p99 stays 2.6-145 ms. BQ closed on §0.4's row 4: nothing below
+    rung 4 met the bar, and the latch is kept with this cost named.
+  - **Open leads for a successor order**: (i) H4 option 3 (no zero
+    prewrite where `posix_fallocate` reserved, the body's `fsync` kept) cut
+    the hold's p50 to ~16 ms, but its tail stays (p99 ~1.1 s, bimodal) and
+    its group guard (C2's `group` commit p99) is unevaluated, so it is a
+    measurement build, not a fix; (ii) rung 4, H6 - releasing the latch for
+    steps c-g - is `[quiet-wrong]` and unlicensed (BQ-Q5 (b)): it needs the
+    operator's own word.
+  - **Beside it, not BQ's**: at `relaxed` the log is almost never recycled
+    during a bulk load
+    (`docs/inflight/bugs/a-page-re-dirtied-after-its-writeback-copy-pins-the-redo-start.md`).
 
-  Cost: once per 64 MiB of log, every core's append waits through a
-  latched device sync, a `posix_fallocate`, a 64 MiB prewrite and two
-  `fsync`s. What that
-  means for a device is CN-9 §4 C4's. Owner: `docs/spec/wal.md` §6 for the contradiction, and
-  `wal/stream.hpp`'s latch protocol for the cost. Price it first: the
-  CLAUDE.md rule is to re-measure the premise before building the fix.
+  Owner: `docs/spec/wal.md` §6, `wal/stream.hpp`'s latch protocol.
 
 ## Multi-core state
 
@@ -372,7 +388,7 @@ statement about an engine that no longer exists; re-verify or strike it.
   wrong zero — the WAL anchor, `next_trx_id` (PW1), `log_topology`
   (AL-7e) — and the AL-S9 review found **the next three already live**:
   `version`, `create_time` and `last_mount_time`, which a peer's
-  `SHOW META` printed as `0` and as the epoch under `peer_listeners = on`,
+  `SHOW META` printed as `0` and as the epoch,
   against `docs/spec/crosscore.md` CC11's *every core reads with the same
   authority*.
 
@@ -532,16 +548,6 @@ answered "no children" over a child an undecided `UPDATE` had moved off it,
 the rollback then restoring the reference - closed in the same stage, the
 reverse check reading such a row's earlier version (AY-Q8); its bug entry
 went with it.
-
-The entry before that - a transaction whose
-participant was deleting the parent answered `busy` across cores where one
-core answered `violation`, and could not clear inside an explicit
-transaction (AO-S5(b) C1, verified on `ao-s5b-c1c2` over `25c5849`) -
-**closed at AT-S5f** with the two things it needed: a `DELETE` that
-shipped to the parent's owner, which went at AT-S5, and
-`FkPendingDeleteTable`'s pre-gate ahead of the visibility read, which went
-with the probe protocol. Both checks read the rows themselves now, so
-there is no second core's registration to be answered by.
 
 ## Multi-core state, continued
 
@@ -796,10 +802,8 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   and AT's quiet-wrong defence is sequenced as though it covered every
   read.** Verified 2026-09-09 on `ao-m2-close` at `cf3d0d0` by reading the
   sites: `src/exec/step_vm.cpp:1960` and `:2030` guard the position report on
-  `index == 0`, and `src/server/remote_step_service.cpp` passes no
-  `PositionSink` at any of its three execution sites (`:458`, `:886`, `:1080`).
-  So a nested step's walk — a join's inner relation — and every remote step
-  declare no position and hold no relation `IS`.
+  `index == 0`. So a nested step's walk — a join's inner relation —
+  declares no position and holds no relation `IS`.
 
   **A point, index or Cabin read declares nothing only where its own path
   serves it**, which is narrower than `txn.md` §5 and AO-S6e-b's list both
@@ -832,10 +836,8 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   `e6d9098`), and `ar0-5-amendment-uniformity.md` §7 and §8.
 
   **Closed at AT-S1 on `m3-at`** for every shape above: the compiler
-  declares each relation it binds (`step_compiler.cpp`), the three write
-  verbs declare at resolve, and a remote-step producer took its own `IS`
-  in its frame (`remote_step_service.cpp`, deleted at AT-S10 with the
-  protocol). **What stays open is the
+  declares each relation it binds (`step_compiler.cpp`), and the three write
+  verbs declare at resolve. **What stays open is the
   direction, and it is a correction to AR0-5 §8 rather than a gap**: the
   ask is a non-blocking `TryAcquire`, so a reader arriving while a DDL holds
   `X` is refused and reads on - sound by catalog MVCC, catalog-only DDL and,
@@ -949,34 +951,43 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 
 Verified on `worktree-bl-session-balancer` at BL-S3's commit, measured in
 `bench/v3.0.0/results-bl-s1-placement-premise-v2.7.0-857-g3552a03c.md`;
-the first bullet re-read on `worktree-bl-touchpattern-delete` at `05cd011f`.
+the first bullet re-read on `worktree-bl-touchpattern-delete` at `05cd011f`
+and re-priced at BQ's close (2026-10-12, from `4cf30270`'s measurement).
 BL is paused (the order's §6, "BL paused 2026-10-12").
 Owned by `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
 until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
 `docs/spec/sched.md` §5.
 
-- **A bulk writer stalled point readers on every core for 0.25-0.8 s at
-  BL-S3's commit, and no placement isolated them.** Two couplings through
-  the one WAL were found. The first is gone at `05cd011f`: BL-S4's ruling 1
+- **A bulk writer stalls point readers on every core, and no placement
+  isolates them; what is left of the stall at `05cd011f` is the segment
+  roll's.** Two couplings through the one WAL were found at BL-S3's commit,
+  where readers stalled 0.25-0.8 s. **The first is gone**: BL-S4's ruling 1
   (`raft-marks-2026-10-12.md` §11) deleted `Catalog::TouchPattern`, whose
   logged rewrite of a pattern's heat every repeated point `SELECT` made.
-  **The stall has not been re-measured since** (the re-measurement stopped
-  at BL's pause), so the headline numbers describe the engine with both
-  couplings. The second stands:
+  **Re-measured 2026-10-12** by BQ-S1 under BQ-Q1 (a), `05cd011f` against
+  `3338cf0c` in BL's C1 cell (`relaxed`, four cores, three placements,
+  three runs each;
+  `bench/v3.0.0/results-bl-ruling1-remeasure-v2.7.0-909-g4cf30270.md`):
+  reader service p99 fell from 262-283 ms to 1.7-3.0 ms (medians), and the
+  reader cores' stream-latch wait from 2.3-3.5 s per 10 s to 0-0.31 s; the
+  schedule p99 stays 277-295 ms (medians) and the p99.9 and maximum do not
+  move. **The second stands, and is what is left**:
   - **a segment roll holds the stream latch across device I/O**:
     `WalStream::Append`'s roll seals, flushes and runs `StartSegment`'s
     device sync, which waits out the writer thread's sync of every live
     segment, all under the latch (`wal.md` §6 step 1). Core 0's 10 ms
-    group-commit drain takes the same latch.
+    group-commit drain takes the same latch, and core 0's stream-latch wait
+    is 3.0-3.9 s of every 10 s at both commits.
 
   `Latch::lock` blocks the reactor, so every session on a core whose
-  reader or drain meets a roll waits the roll out. Measured: readers on
-  three cores holding no batch session waited 0.69-4.13 s each on the stream
-  latch in 10 s; with Waystone recording off and the readers off core 0,
-  their schedule p99 fell from about 500 ms to 0.57-0.76 ms in two runs and
-  41-102 ms in two more (a checkpoint turn on a reader core). **BL-S4's partition
-  waits on the roll**, whose fix is the order's §6 ruling 3, unmarked (the
-  trace and its options are in the results file's archive, `wal-coupling.md`).
+  reader or drain meets a roll waits the roll out. **BL-S4's partition
+  waits on the roll**, whose fix was the order's §6 ruling 3. BQ took it
+  as its subject and answered it on 2026-10-12: the latch is kept, with its
+  cost named (this file's WAL entry on the roll; `wal.md` §6 step 5; the
+  first trace is in BL-S1's results archive, `wal-coupling.md`),
+  so no fix to the roll is coming from BQ, and releasing the latch for the
+  roll (BQ's rung 4) needs the operator's own word (BQ-Q5 (b)). Ruling 2
+  stays unmarked.
 - **`TRACE ON` is per core, not per session** (`CommandDispatcher::tracing_`).
   It always was; since BL-S3 moves sessions, a session's trace stops when it
   moves and another session landing on the traced core is traced instead.
@@ -1126,6 +1137,28 @@ closed 2026-10-11 at `ec827a19`).
   had the same window before BI; BI-Q12 closed the step's, which was a
   whole run long. Not measured.
 
+## Per-core structures kept (BP)
+
+Verified at `ccf9cfc1` (`v2.7.0-909-gccf9cfc1`; the census,
+`bench/v3.0.0/results-bp-s1-census-v2.7.0-909-gccf9cfc1.md`). Each was
+measured under BP-R2's bar and kept; the cost stays and is stated here.
+Owned by `instructions/v3.0.0/workorder-bp-per-core-residue.md` §7.
+
+- **Every core checkpoints in its turn** (AT-S8, BP-H7): runs per 5 s period
+  are 1 / 2 / 3.9 at cores 1 / 2 / 4, and pages written per 1,000 rows rise
+  11-18 % from one core to four. Under BP-R2's throughput and p99 terms;
+  one instance-wide run would need every live transaction's undo head
+  published, a recovery-correctness change (BP-Q5 (b), not taken).
+- **A whole catalog memo drops when the schema word moves for a root a
+  level grew over** (BP-H6): at most 2.7e-4 drops per statement, 0.08 % of
+  statement CPU at worst.
+- **The per-core id window** (AT-R4, BP-H8) is unmeasured: `SHOW META`
+  carries no window-size, burn or `LookupCommit` counter, and no skew cell
+  has run.
+- **The per-core in-flight table** (AX, BP-H9): a miss reads one id; its
+  1,024-slot cap per core was not approached, and the skew case that would
+  settle whether one core can reach it while others have room has not run.
+
 ## Backup and restore (BR)
 
 Verified on `br-backup-restore` (BR's close). Owned by `docs/spec/backup.md`;
@@ -1180,8 +1213,8 @@ the procedures are `manual/server/backup-restore.md`.
   table of the D-items *"taken as ratified for M0's scope"* — **D3, D4, D14
   and D15** — of which only D15 was explicitly stamped (as AL-R8, 2026-09-03).
 
-  **D3 is the one to know about.** AR0 proposed *(a) a dedicated log core,
-  other cores fan in via ring*. AL-R1 built something else — every core
+  **D3 is the one to know about.** AR0 proposed *(a) a dedicated log
+  core*. AL-R1 built something else — every core
   appends under one latch, with a single writer thread — and the work order
   says so outright: *"every core still appends, which is where AL-R1
   departs from D3(a)."* That is a D-item settled in practice, against the

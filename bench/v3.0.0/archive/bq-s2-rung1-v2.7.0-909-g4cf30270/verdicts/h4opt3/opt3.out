@@ -1,0 +1,154 @@
+# relaxed isolated (base, r1 only)
+  c1-iso-segregated-no0  p99=852.8 p99.9=3043.2 n=12006 errors=0 moves_in_window=0 load_before=2.25 8.79 7.80 1/344 721748
+  c1-iso-batch0          p99=601.5 p99.9=2438.1 n=12006 errors=0 moves_in_window=0 load_before=1.47 7.77 7.50 1/348 721884
+  c1-iso-spread          p99=747.2 p99.9=3408.0 n=12006 errors=0 moves_in_window=0 load_before=0.89 6.82 7.19 1/351 721959
+  c2-iso                 p99=140777.6 p99.9=467360.0 n=24007 errors=0 moves_in_window=12 load_before=0.55 6.08 6.93 1/346 722063
+
+## c1-segregated-no0
+  base r1 errs=0 ref=0 moves_win=18 ins=[3.0]->[1.0] roll_cores=[1] rolls=34 (meta 35) hold p50/p99/max ms=270.8/769.3/769.3 sum_hold_s=10.79 body={'hit': 29, 'waited': 5} body_wait_ms=186.0 body_inline_ms=0.0 header sum/max ms=327/202 gate sum ms=10046 create sum ms=615 load_before=['2.32', '2.62', '3.19']
+          agg p99/p99.9 ms=451.4/659.2 NB(roll cores) cores=[2.0] n=5994 p99/p99.9 ms=522.6/698.1 NB(ins connect) cores=[1.0, 2.0] p99/p99.9 ms=451.4/659.2
+          NB/iso p99=613x (bar 2x) p99.9=229x (bar 5x)
+  base r2 errs=0 ref=0 moves_win=6 ins=[3.0]->[1.0] roll_cores=[1] rolls=36 (meta 36) hold p50/p99/max ms=323.6/628.7/628.7 sum_hold_s=12.53 body={'hit': 35, 'waited': 1} body_wait_ms=40.7 body_inline_ms=0.0 header sum/max ms=131/90 gate sum ms=12179 create sum ms=287 load_before=['2.12', '4.32', '3.97']
+          agg p99/p99.9 ms=380.7/568.4 NB(roll cores) cores=[2.0] n=6003 p99/p99.9 ms=410.5/555.2 NB(ins connect) cores=[1.0, 2.0] p99/p99.9 ms=380.7/568.4
+          NB/iso p99=481x (bar 2x) p99.9=182x (bar 5x)
+  base r3 errs=0 ref=0 moves_win=8 ins=[3.0]->[1.0] roll_cores=[1] rolls=36 (meta 36) hold p50/p99/max ms=285.7/768.4/768.4 sum_hold_s=11.15 body={'hit': 31, 'waited': 5} body_wait_ms=54.1 body_inline_ms=0.0 header sum/max ms=46/6 gate sum ms=10915 create sum ms=184 load_before=['2.24', '2.39', '2.88']
+          agg p99/p99.9 ms=311.9/669.2 NB(roll cores) cores=[2.0] n=6003 p99/p99.9 ms=446.2/713.8 NB(ins connect) cores=[1.0, 2.0] p99/p99.9 ms=311.9/669.2
+          NB/iso p99=523x (bar 2x) p99.9=235x (bar 5x)
+  opt3 r1 errs=0 ref=0 moves_win=35 ins=[3.0]->[1.0] roll_cores=[1] rolls=25 (meta 25) hold p50/p99/max ms=212.1/1009.2/1009.2 sum_hold_s=9.36 body={'hit': 25} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=950/342 gate sum ms=7458 create sum ms=1532 load_before=['2.43', '3.15', '4.74']
+          agg p99/p99.9 ms=640.5/906.1 NB(roll cores) cores=[2.0] n=6003 p99/p99.9 ms=532.1/903.7 NB(ins connect) cores=[1.0, 2.0] p99/p99.9 ms=640.5/906.1
+          NB/iso p99=624x (bar 2x) p99.9=297x (bar 5x)
+  opt3 r2 errs=0 ref=0 moves_win=40 ins=[3.0]->[2.0] roll_cores=[0, 2] rolls=50 (meta 50) hold p50/p99/max ms=13.7/198.4/198.4 sum_hold_s=1.41 body={'hit': 50} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=193/21 gate sum ms=896 create sum ms=314 load_before=['2.10', '3.22', '3.61']
+          agg p99/p99.9 ms=17.4/87.5 NB(roll cores) cores=[1.0] n=6003 p99/p99.9 ms=18.2/127.0 NB(ins connect) cores=[1.0, 2.0] p99/p99.9 ms=17.4/87.5
+          NB/iso p99=21x (bar 2x) p99.9=42x (bar 5x)
+  opt3 r3 errs=0 ref=0 moves_win=33 ins=[3.0]->[1.0] roll_cores=[1] rolls=52 (meta 54) hold p50/p99/max ms=12.7/276.6/276.6 sum_hold_s=1.77 body={'hit': 52} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=171/16 gate sum ms=1203 create sum ms=344 load_before=['1.88', '2.24', '2.72']
+          agg p99/p99.9 ms=42.0/193.8 NB(roll cores) cores=[2.0] n=6003 p99/p99.9 ms=39.3/164.3 NB(ins connect) cores=[1.0, 2.0] p99/p99.9 ms=42.0/193.8
+          NB/iso p99=46x (bar 2x) p99.9=54x (bar 5x)
+
+## c1-batch0
+  base r1 errs=0 ref=0 moves_win=20 ins=[0.0]->[1.0] roll_cores=[0, 1] rolls=35 (meta 35) hold p50/p99/max ms=281.4/770.9/770.9 sum_hold_s=10.65 body={'hit': 33, 'waited': 2} body_wait_ms=53.1 body_inline_ms=0.0 header sum/max ms=151/70 gate sum ms=10262 create sum ms=297 load_before=['2.47', '2.65', '3.17']
+          agg p99/p99.9 ms=223.8/372.6 NB(roll cores) cores=[2.0, 3.0] n=8004 p99/p99.9 ms=234.5/432.2 NB(ins connect) cores=[1.0, 2.0, 3.0] p99/p99.9 ms=223.8/372.6
+          NB/iso p99=390x (bar 2x) p99.9=177x (bar 5x)
+  base r2 errs=0 ref=0 moves_win=14 ins=[0.0]->[3.0] roll_cores=[3] rolls=35 (meta 35) hold p50/p99/max ms=309.9/791.1/791.1 sum_hold_s=12.12 body={'hit': 29, 'waited': 6} body_wait_ms=332.0 body_inline_ms=0.0 header sum/max ms=110/42 gate sum ms=11522 create sum ms=551 load_before=['2.39', '4.08', '3.91']
+          agg p99/p99.9 ms=459.5/691.2 NB(roll cores) cores=[1.0, 2.0] n=8004 p99/p99.9 ms=519.0/697.7 NB(ins connect) cores=[1.0, 2.0, 3.0] p99/p99.9 ms=459.5/691.2
+          NB/iso p99=863x (bar 2x) p99.9=286x (bar 5x)
+  base r3 errs=0 ref=0 moves_win=8 ins=[0.0]->[3.0] roll_cores=[3] rolls=34 (meta 34) hold p50/p99/max ms=316.2/642.7/642.7 sum_hold_s=11.58 body={'hit': 29, 'waited': 5} body_wait_ms=36.7 body_inline_ms=0.0 header sum/max ms=185/92 gate sum ms=11122 create sum ms=422 load_before=['2.48', '2.41', '2.87']
+          agg p99/p99.9 ms=241.3/473.9 NB(roll cores) cores=[1.0, 2.0] n=8004 p99/p99.9 ms=256.3/514.6 NB(ins connect) cores=[1.0, 2.0, 3.0] p99/p99.9 ms=241.3/473.9
+          NB/iso p99=426x (bar 2x) p99.9=211x (bar 5x)
+  opt3 r1 errs=0 ref=0 moves_win=6 ins=[0.0]->[3.0] roll_cores=[3] rolls=49 (meta 49) hold p50/p99/max ms=18.1/1372.5/1372.5 sum_hold_s=4.61 body={'hit': 49} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=327/65 gate sum ms=3333 create sum ms=577 load_before=['2.43', '3.04', '4.44']
+          agg p99/p99.9 ms=231.1/1192.9 NB(roll cores) cores=[1.0, 2.0] n=8004 p99/p99.9 ms=476.6/1252.5 NB(ins connect) cores=[1.0, 2.0, 3.0] p99/p99.9 ms=231.1/1192.9
+          NB/iso p99=792x (bar 2x) p99.9=514x (bar 5x)
+  opt3 r2 errs=0 ref=0 moves_win=42 ins=[0.0]->[1.0] roll_cores=[1] rolls=53 (meta 53) hold p50/p99/max ms=17.1/281.3/281.3 sum_hold_s=2.42 body={'hit': 53} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=387/66 gate sum ms=1239 create sum ms=588 load_before=['2.35', '3.15', '3.57']
+          agg p99/p99.9 ms=42.6/202.6 NB(roll cores) cores=[2.0, 3.0] n=8004 p99/p99.9 ms=36.4/187.3 NB(ins connect) cores=[1.0, 2.0, 3.0] p99/p99.9 ms=42.6/202.6
+          NB/iso p99=61x (bar 2x) p99.9=77x (bar 5x)
+  opt3 r3 errs=0 ref=0 moves_win=28 ins=[0.0]->[1.0] roll_cores=[1] rolls=52 (meta 52) hold p50/p99/max ms=14.9/571.0/571.0 sum_hold_s=2.96 body={'hit': 52} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=456/141 gate sum ms=1641 create sum ms=841 load_before=['2.41', '2.33', '2.73']
+          agg p99/p99.9 ms=71.2/490.3 NB(roll cores) cores=[2.0, 3.0] n=8004 p99/p99.9 ms=15.0/86.1 NB(ins connect) cores=[1.0, 2.0, 3.0] p99/p99.9 ms=71.2/490.3
+          NB/iso p99=25x (bar 2x) p99.9=35x (bar 5x)
+
+## c1-spread
+  base r1 errs=0 ref=0 moves_win=11 ins=[3.0]->[1.0] roll_cores=[1] rolls=34 (meta 35) hold p50/p99/max ms=261.3/766.6/766.6 sum_hold_s=9.98 body={'hit': 30, 'waited': 4} body_wait_ms=8.5 body_inline_ms=0.0 header sum/max ms=118/43 gate sum ms=9592 create sum ms=329 load_before=['2.47', '2.63', '3.14']
+          agg p99/p99.9 ms=312.4/619.3 NB(roll cores) cores=[0.0, 2.0, 3.0] n=7990 p99/p99.9 ms=342.1/649.1 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=307.3/627.2
+          NB/iso p99=458x (bar 2x) p99.9=190x (bar 5x)
+  base r2 errs=0 ref=0 moves_win=36 ins=[3.0]->[2.0] roll_cores=[0, 1, 2] rolls=34 (meta 35) hold p50/p99/max ms=271.3/789.8/789.8 sum_hold_s=10.18 body={'hit': 31, 'waited': 3} body_wait_ms=43.6 body_inline_ms=0.0 header sum/max ms=46/4 gate sum ms=9935 create sum ms=204 load_before=['2.15', '3.77', '3.82']
+          agg p99/p99.9 ms=247.5/376.2 NB(roll cores) cores=[3.0] n=2001 p99/p99.9 ms=144.8/349.0 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=257.6/376.5
+          NB/iso p99=194x (bar 2x) p99.9=102x (bar 5x)
+  base r3 errs=0 ref=0 moves_win=7 ins=[3.0]->[2.0] roll_cores=[2] rolls=35 (meta 36) hold p50/p99/max ms=282.0/784.1/784.1 sum_hold_s=10.54 body={'hit': 33, 'waited': 2} body_wait_ms=2.7 body_inline_ms=0.0 header sum/max ms=57/8 gate sum ms=10336 create sum ms=155 load_before=['2.29', '2.43', '2.85']
+          agg p99/p99.9 ms=325.1/706.6 NB(roll cores) cores=[0.0, 1.0, 3.0] n=9985 p99/p99.9 ms=306.6/680.8 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=369.8/711.6
+          NB/iso p99=410x (bar 2x) p99.9=200x (bar 5x)
+  opt3 r1 errs=0 ref=0 moves_win=62 ins=[3.0]->[3.0] roll_cores=[2, 3] rolls=52 (meta 52) hold p50/p99/max ms=14.1/901.5/901.5 sum_hold_s=3.26 body={'hit': 52} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=343/135 gate sum ms=2184 create sum ms=520 load_before=['2.27', '2.93', '4.31']
+          agg p99/p99.9 ms=615.7/845.5 NB(roll cores) cores=[0.0, 1.0] n=8004 p99/p99.9 ms=534.1/823.4 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=581.1/838.3
+          NB/iso p99=715x (bar 2x) p99.9=242x (bar 5x)
+  opt3 r2 errs=0 ref=0 moves_win=44 ins=[3.0]->[3.0] roll_cores=[3] rolls=59 (meta 59) hold p50/p99/max ms=14.0/64.3/64.3 sum_hold_s=0.97 body={'hit': 59} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=188/11 gate sum ms=326 create sum ms=327 load_before=['2.45', '3.05', '3.51']
+          agg p99/p99.9 ms=22.4/67.2 NB(roll cores) cores=[0.0, 1.0, 2.0] n=10005 p99/p99.9 ms=23.9/69.7 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=23.9/69.7
+          NB/iso p99=32x (bar 2x) p99.9=20x (bar 5x)
+  opt3 r3 errs=0 ref=0 moves_win=32 ins=[3.0]->[3.0] roll_cores=[3] rolls=53 (meta 53) hold p50/p99/max ms=14.3/1011.8/1011.8 sum_hold_s=3.04 body={'hit': 53} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=455/143 gate sum ms=1901 create sum ms=648 load_before=['2.16', '2.30', '2.70']
+          agg p99/p99.9 ms=113.0/843.3 NB(roll cores) cores=[0.0, 1.0, 2.0] n=10005 p99/p99.9 ms=212.5/858.2 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=212.5/858.2
+          NB/iso p99=284x (bar 2x) p99.9=252x (bar 5x)
+
+## c2
+  base r1 errs=0 ref=0 moves_win=20 ins=[3.0]->[3.0] roll_cores=[3] rolls=29 (meta 30) hold p50/p99/max ms=366.1/4317.8/4317.8 sum_hold_s=15.55 body={'hit': 27, 'waited': 2} body_wait_ms=0.9 body_inline_ms=0.0 header sum/max ms=84/48 gate sum ms=15094 create sum ms=272 load_before=['2.48', '2.66', '3.24']
+          agg p99/p99.9 ms=4026.4/4289.8 NB(roll cores) cores=[0.0, 1.0, 2.0] n=23693 p99/p99.9 ms=4026.4/4289.8 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=4026.4/4289.8
+          NB/iso p99=29x (bar 2x) p99.9=9x (bar 5x)
+  base r2 errs=0 ref=0 moves_win=17 ins=[3.0]->[3.0] roll_cores=[3] rolls=33 (meta 34) hold p50/p99/max ms=359.2/1028.9/1028.9 sum_hold_s=12.73 body={'hit': 29, 'waited': 4} body_wait_ms=22.2 body_inline_ms=0.0 header sum/max ms=250/112 gate sum ms=11754 create sum ms=452 load_before=['2.44', '4.74', '4.09']
+          agg p99/p99.9 ms=773.5/1002.1 NB(roll cores) cores=[0.0, 1.0, 2.0] n=23888 p99/p99.9 ms=773.5/1002.1 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=773.5/1002.1
+          NB/iso p99=5x (bar 2x) p99.9=2x (bar 5x)
+  base r3 errs=0 ref=0 moves_win=22 ins=[3.0]->[3.0] roll_cores=[3] rolls=34 (meta 35) hold p50/p99/max ms=360.7/1000.9/1000.9 sum_hold_s=13.30 body={'hit': 29, 'waited': 5} body_wait_ms=93.6 body_inline_ms=0.0 header sum/max ms=128/48 gate sum ms=12398 create sum ms=551 load_before=['2.23', '2.40', '2.91']
+          agg p99/p99.9 ms=751.8/972.5 NB(roll cores) cores=[0.0, 1.0, 2.0] n=23966 p99/p99.9 ms=751.8/972.5 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=751.8/972.5
+          NB/iso p99=5x (bar 2x) p99.9=2x (bar 5x)
+  opt3 r1 errs=0 ref=0 moves_win=47 ins=[3.0]->[3.0] roll_cores=[3] rolls=17 (meta 17) hold p50/p99/max ms=800.8/1451.6/1451.6 sum_hold_s=12.73 body={'hit': 17} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=1753/596 gate sum ms=9983 create sum ms=2717 load_before=['2.42', '3.27', '5.05']
+          agg p99/p99.9 ms=2534.7/3245.3 NB(roll cores) cores=[0.0, 1.0, 2.0] n=23991 p99/p99.9 ms=2534.7/3245.3 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=2534.7/3245.3
+          NB/iso p99=18x (bar 2x) p99.9=7x (bar 5x)
+  opt3 r2 errs=0 ref=0 moves_win=96 ins=[3.0]->[3.0] roll_cores=[3] rolls=58 (meta 58) hold p50/p99/max ms=16.9/1147.6/1147.6 sum_hold_s=4.71 body={'hit': 58} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=346/49 gate sum ms=3384 create sum ms=581 load_before=['2.39', '3.45', '3.70']
+          agg p99/p99.9 ms=2232.1/2658.8 NB(roll cores) cores=[0.0, 1.0, 2.0] n=24007 p99/p99.9 ms=2232.1/2658.8 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=2232.1/2658.8
+          NB/iso p99=16x (bar 2x) p99.9=6x (bar 5x)
+  opt3 r3 errs=0 ref=0 moves_win=109 ins=[3.0]->[3.0] roll_cores=[3] rolls=57 (meta 57) hold p50/p99/max ms=16.5/1135.7/1135.7 sum_hold_s=4.69 body={'hit': 57} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=671/250 gate sum ms=2986 create sum ms=851 load_before=['1.94', '2.29', '2.76']
+          agg p99/p99.9 ms=975.2/1179.8 NB(roll cores) cores=[0.0, 1.0, 2.0] n=24007 p99/p99.9 ms=975.2/1179.8 NB(ins connect) cores=[0.0, 1.0, 2.0] p99/p99.9 ms=975.2/1179.8
+          NB/iso p99=7x (bar 2x) p99.9=3x (bar 5x)
+
+## c3
+  base r1 errs=0 ref=0 moves_win=0 ins=[3.0]->[3.0] roll_cores=[3] rolls=36 (meta 36) hold p50/p99/max ms=349.8/847.4/847.4 sum_hold_s=13.17 body={'hit': 35, 'waited': 1} body_wait_ms=41.5 body_inline_ms=0.0 header sum/max ms=183/108 gate sum ms=12381 create sum ms=407 load_before=['2.41', '2.66', '3.26']
+          rows/s=169212 log MiB/s=75.58 lsn MiB/s=75.58
+  base r2 errs=0 ref=0 moves_win=0 ins=[3.0]->[3.0] roll_cores=[3] rolls=33 (meta 33) hold p50/p99/max ms=402.9/808.9/808.9 sum_hold_s=14.37 body={'hit': 33} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=95/39 gate sum ms=14125 create sum ms=201 load_before=['2.28', '5.06', '4.16']
+          rows/s=164384 log MiB/s=73.42 lsn MiB/s=73.42
+  base r3 errs=0 ref=0 moves_win=0 ins=[3.0]->[3.0] roll_cores=[3] rolls=36 (meta 36) hold p50/p99/max ms=372.5/753.3/753.3 sum_hold_s=14.53 body={'hit': 35, 'waited': 1} body_wait_ms=3.4 body_inline_ms=0.0 header sum/max ms=192/91 gate sum ms=14198 create sum ms=287 load_before=['2.15', '2.39', '2.94']
+          rows/s=169894 log MiB/s=75.89 lsn MiB/s=75.89
+  opt3 r1 errs=0 ref=0 moves_win=0 ins=[3.0]->[3.0] roll_cores=[3] rolls=28 (meta 29) hold p50/p99/max ms=48.0/1288.9/1288.9 sum_hold_s=8.86 body={'hit': 28} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=1405/297 gate sum ms=5616 create sum ms=2143 load_before=['2.29', '3.47', '5.34']
+          rows/s=141243 log MiB/s=59.99 lsn MiB/s=59.99
+  opt3 r2 errs=0 ref=0 moves_win=0 ins=[3.0]->[3.0] roll_cores=[3] rolls=64 (meta 64) hold p50/p99/max ms=16.5/310.4/310.4 sum_hold_s=2.21 body={'hit': 64} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=226/16 gate sum ms=1502 create sum ms=392 load_before=['2.30', '3.58', '3.75']
+          rows/s=304305 log MiB/s=135.88 lsn MiB/s=135.88
+  opt3 r3 errs=0 ref=0 moves_win=0 ins=[3.0]->[3.0] roll_cores=[3] rolls=57 (meta 57) hold p50/p99/max ms=17.3/837.5/837.5 sum_hold_s=4.37 body={'hit': 57} body_wait_ms=0.0 body_inline_ms=0.0 header sum/max ms=428/69 gate sum ms=2878 create sum ms=712 load_before=['2.15', '2.37', '2.81']
+          rows/s=273802 log MiB/s=122.27 lsn MiB/s=122.27
+
+## per cell x arm: run lists, median, spread (max-min)
+  c1-segregated-no0  NB p99: base=[523, 410, 446] med 446 spread 112 | opt3=[532, 18, 39] med 39 spread 514 | opt3-base med -407 ms; ranges overlap=True
+  c1-segregated-no0  NB p99.9: base=[698, 555, 714] med 698 spread 159 | opt3=[904, 127, 164] med 164 spread 777 | opt3-base med -534 ms; ranges overlap=True
+  c1-segregated-no0  agg p99_us: base=[451, 381, 312] opt3=[640, 17, 42] med 381 -> 42 ms
+  c1-segregated-no0  agg p99.9_us: base=[659, 568, 669] opt3=[906, 88, 194] med 659 -> 194 ms
+  c1-batch0          NB p99: base=[234, 519, 256] med 256 spread 285 | opt3=[477, 36, 15] med 36 spread 462 | opt3-base med -220 ms; ranges overlap=True
+  c1-batch0          NB p99.9: base=[432, 698, 515] med 515 spread 266 | opt3=[1253, 187, 86] med 187 spread 1166 | opt3-base med -327 ms; ranges overlap=True
+  c1-batch0          agg p99_us: base=[224, 460, 241] opt3=[231, 43, 71] med 241 -> 71 ms
+  c1-batch0          agg p99.9_us: base=[373, 691, 474] opt3=[1193, 203, 490] med 474 -> 490 ms
+  c1-spread          NB p99: base=[342, 145, 307] med 307 spread 197 | opt3=[534, 24, 212] med 212 spread 510 | opt3-base med -94 ms; ranges overlap=True
+  c1-spread          NB p99.9: base=[649, 349, 681] med 649 spread 332 | opt3=[823, 70, 858] med 823 spread 789 | opt3-base med +174 ms; ranges overlap=True
+  c1-spread          agg p99_us: base=[312, 247, 325] opt3=[616, 22, 113] med 312 -> 113 ms
+  c1-spread          agg p99.9_us: base=[619, 376, 707] opt3=[846, 67, 843] med 619 -> 843 ms
+  c2                 NB p99: base=[4026, 773, 752] med 773 spread 3275 | opt3=[2535, 2232, 975] med 2232 spread 1559 | opt3-base med +1459 ms; ranges overlap=True
+  c2                 NB p99.9: base=[4290, 1002, 973] med 1002 spread 3317 | opt3=[3245, 2659, 1180] med 2659 spread 2065 | opt3-base med +1657 ms; ranges overlap=True
+  c2                 agg p99_us: base=[4026, 773, 752] opt3=[2535, 2232, 975] med 773 -> 2232 ms
+  c2                 agg p99.9_us: base=[4290, 1002, 973] opt3=[3245, 2659, 1180] med 1002 -> 2659 ms
+  c3 rows/s base=[169211.7, 164384.5, 169893.7] mean 167830 spread 5509 (3.3%) | opt3=[141243.0, 304305.2, 273802.4] mean 239784 spread 163062 | delta +42.9%
+  c1-segregated-no0  inserter rows/s base=[169866, 175643, 169057] opt3=[120777, 235869, 254751]
+  c1-batch0          inserter rows/s base=[169374, 170361, 168425] opt3=[234982, 254850, 248440]
+  c1-spread          inserter rows/s base=[170069, 169574, 170238] opt3=[250973, 281655, 252536]
+  c2                 inserter rows/s base=[145977, 164800, 168306] opt3=[85680, 274358, 270799]
+
+## pooled roll hold distribution and step shares per cell x arm (in-window rolls)
+  c1-segregated-no0  base n=106 hold ms p25/p50/p90/p99/max=264.3/297.9/474.7/768.4/769.3 mean=325.3 body={'hit': 95, 'waited': 11} missed-hold share=13.5%
+      sync_gate=96.1% sync=0.5% create=3.2% body_wait=0.8% body=0.0% header=1.5% rename=0.0% dirsync=0.9% seal=0.3%
+      header ms p50/p99/max=1.1/90.1/202.2 create(d-g) ms p50/p99/max=3.4/146.9/214.9 waited_sync_tail ms p50/p99=300.1/895.9
+  c1-segregated-no0  opt3 n=127 hold ms p25/p50/p90/p99/max=11.8/14.3/272.6/992.6/1009.2 mean=98.7 body={'hit': 127} missed-hold share=0.0%
+      sync_gate=76.2% sync=5.9% create=17.5% body_wait=0.0% body=0.0% header=10.5% rename=0.1% dirsync=6.9% seal=0.4%
+      header ms p50/p99/max=2.8/301.0/342.1 create(d-g) ms p50/p99/max=4.9/346.9/697.0 waited_sync_tail ms p50/p99=7.0/892.3
+  c1-batch0          base n=104 hold ms p25/p50/p90/p99/max=271.5/302.6/467.2/770.9/791.1 mean=330.2 body={'hit': 91, 'waited': 13} missed-hold share=19.4%
+      sync_gate=95.8% sync=0.5% create=3.7% body_wait=1.2% body=0.0% header=1.3% rename=0.0% dirsync=1.2% seal=0.0%
+      header ms p50/p99/max=1.1/69.8/92.1 create(d-g) ms p50/p99/max=3.4/139.6/159.0 waited_sync_tail ms p50/p99=301.3/879.7
+  c1-batch0          opt3 n=154 hold ms p25/p50/p90/p99/max=12.2/16.7/124.4/769.2/1372.5 mean=64.8 body={'hit': 154} missed-hold share=0.0%
+      sync_gate=62.2% sync=16.3% create=20.1% body_wait=0.0% body=0.0% header=11.7% rename=0.1% dirsync=8.3% seal=1.3%
+      header ms p50/p99/max=2.9/66.4/140.9 create(d-g) ms p50/p99/max=5.2/112.1/293.8 waited_sync_tail ms p50/p99=6.3/411.0
+  c1-spread          base n=103 hold ms p25/p50/p90/p99/max=251.6/273.4/458.4/784.1/789.8 mean=298.1 body={'hit': 94, 'waited': 9} missed-hold share=11.6%
+      sync_gate=97.3% sync=0.5% create=2.2% body_wait=0.2% body=0.0% header=0.7% rename=0.0% dirsync=1.3% seal=0.0%
+      header ms p50/p99/max=1.1/34.6/43.5 create(d-g) ms p50/p99/max=3.4/43.7/140.6 waited_sync_tail ms p50/p99=298.4/852.9
+  c1-spread          opt3 n=164 hold ms p25/p50/p90/p99/max=11.6/14.1/35.5/901.5/1011.8 mean=44.3 body={'hit': 164} missed-hold share=0.0%
+      sync_gate=60.6% sync=17.1% create=20.5% body_wait=0.0% body=0.0% header=13.6% rename=0.1% dirsync=6.9% seal=1.7%
+      header ms p50/p99/max=2.8/135.5/143.5 create(d-g) ms p50/p99/max=4.9/138.8/155.5 waited_sync_tail ms p50/p99=5.4/507.9
+  c2                 base n=96 hold ms p25/p50/p90/p99/max=335.1/362.9/584.6/4317.8/4317.8 mean=433.3 body={'hit': 85, 'waited': 11} missed-hold share=19.8%
+      sync_gate=94.4% sync=2.6% create=3.1% body_wait=0.3% body=0.0% header=1.1% rename=0.0% dirsync=1.7% seal=0.0%
+      header ms p50/p99/max=1.1/112.0/112.0 create(d-g) ms p50/p99/max=3.5/235.5/235.5 waited_sync_tail ms p50/p99=308.2/4390.7
+  c2                 opt3 n=132 hold ms p25/p50/p90/p99/max=13.3/21.0/744.1/1279.9/1451.6 mean=167.6 body={'hit': 132} missed-hold share=0.0%
+      sync_gate=73.9% sync=7.2% create=18.8% body_wait=0.0% body=0.0% header=12.5% rename=0.0% dirsync=6.2% seal=0.1%
+      header ms p50/p99/max=2.9/440.0/595.7 create(d-g) ms p50/p99/max=5.0/633.1/644.7 waited_sync_tail ms p50/p99=12.0/1049.5
+  c3                 base n=105 hold ms p25/p50/p90/p99/max=342.3/375.8/528.7/808.9/847.4 mean=400.6 body={'hit': 103, 'waited': 2} missed-hold share=1.6%
+      sync_gate=96.8% sync=1.1% create=2.1% body_wait=0.1% body=0.0% header=1.1% rename=0.0% dirsync=0.9% seal=0.0%
+      header ms p50/p99/max=1.2/91.0/107.7 create(d-g) ms p50/p99/max=3.3/97.0/202.2 waited_sync_tail ms p50/p99=299.8/820.7
+  c3                 opt3 n=149 hold ms p25/p50/p90/p99/max=13.0/17.2/310.4/1117.7/1288.9 mean=103.6 body={'hit': 149} missed-hold share=0.0%
+      sync_gate=64.7% sync=14.1% create=21.0% body_wait=0.0% body=0.0% header=13.3% rename=0.1% dirsync=7.6% seal=0.2%
+      header ms p50/p99/max=2.8/296.6/297.0 create(d-g) ms p50/p99/max=4.9/456.8/595.3 waited_sync_tail ms p50/p99=8.9/891.6

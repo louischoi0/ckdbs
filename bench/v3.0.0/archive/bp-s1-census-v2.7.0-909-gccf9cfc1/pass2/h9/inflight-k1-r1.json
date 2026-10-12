@@ -1,0 +1,115 @@
+{
+ "cores": 1,
+ "run": 1,
+ "durability": "relaxed",
+ "bin_sha256": "a6fc3c04ef2bf2e19e3715ca1943c689959c97e9aa59a57a205029da1aea111f",
+ "loadavg_before": "1.44 2.87 4.28 3/342 662528",
+ "session_core": 0,
+ "data_device": "/dev/root      ext4 258932720 128584368 130331968  50% /",
+ "load_s": 0.25,
+ "delete": {
+  "reply": "DELETED 100000",
+  "wall_ms": 49.5,
+  "server_cpu_ms": 49.4,
+  "inflight": {
+   "contention_inflight_asks": 0,
+   "contention_inflight_misses": 0,
+   "contention_inflight_miss_ids_read": 0
+  }
+ },
+ "purge": {
+  "reply": "PURGED 100000",
+  "wall_ms": 673.1,
+  "server_cpu_ms": 673.5,
+  "inflight": {
+   "contention_inflight_asks": 100000,
+   "contention_inflight_misses": 100000,
+   "contention_inflight_miss_ids_read": 100000
+  },
+  "contention": {
+   "contention_inflight_asks": 100000,
+   "contention_inflight_misses": 100000,
+   "contention_inflight_miss_ids_read": 100000
+  }
+ },
+ "named_fresh": {
+  "statements": 20000,
+  "errors": 0,
+  "first_error": null,
+  "wall_s": 1.004,
+  "stmt_per_s": 19924.4,
+  "server_cpu_us_per_stmt": 26.8,
+  "lat": {
+   "n": 20000,
+   "p0_us": 40.7,
+   "p25_us": 46.2,
+   "p50_us": 47.1,
+   "p95_us": 62.5,
+   "p99_us": 73.2
+  },
+  "inflight": {
+   "contention_inflight_asks": 0,
+   "contention_inflight_misses": 0,
+   "contention_inflight_miss_ids_read": 0
+  },
+  "contention": {
+   "contention_syncs_writer": 100,
+   "contention_carves": 4,
+   "contention_word_moves_root": 1,
+   "contention_data_syncs": 4
+  }
+ },
+ "named_duplicate": {
+  "statements": 20000,
+  "errors": 20000,
+  "first_error": "ERR duplicate primary key 1 already present at page 1181 slot 0 (byte 22)",
+  "wall_s": 1.155,
+  "stmt_per_s": 17313.5,
+  "server_cpu_us_per_stmt": 29.25,
+  "lat": {
+   "n": 20000,
+   "p0_us": 38.2,
+   "p25_us": 50.9,
+   "p50_us": 51.9,
+   "p95_us": 70.5,
+   "p99_us": 127.4
+  },
+  "inflight": {
+   "contention_inflight_asks": 0,
+   "contention_inflight_misses": 0,
+   "contention_inflight_miss_ids_read": 0
+  },
+  "contention": {
+   "contention_syncs_writer": 115,
+   "contention_carves": 6,
+   "contention_checkpoint_runs": 1,
+   "contention_checkpoint_pages_written": 1162,
+   "contention_data_syncs": 11
+  }
+ },
+ "named_vs_undecided": {
+  "waits": 20,
+  "hold_ms": 200,
+  "results": [
+   [
+    200.4,
+    "INSERTED oid=4006 id=1 page=1285 slot=1"
+   ],
+   [
+    200.5,
+    "INSERTED oid=4006 id=2 page=1285 slot=3"
+   ],
+   [
+    200.4,
+    "INSERTED oid=4006 id=3 page=1285 slot=5"
+   ]
+  ],
+  "inflight": {
+   "contention_inflight_asks": 20,
+   "contention_inflight_misses": 0,
+   "contention_inflight_miss_ids_read": 0
+  },
+  "server_cpu_ms_total": 54.2
+ },
+ "loadavg_after": "1.37 2.81 4.25 3/343 662575"
+}

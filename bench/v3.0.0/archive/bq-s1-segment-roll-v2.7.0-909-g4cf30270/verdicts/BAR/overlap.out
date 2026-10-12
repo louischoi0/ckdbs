@@ -1,0 +1,24 @@
+relaxed c1-segregated-no0  r1 NB reader samples>=50ms=  970 overlap roll=90% end<= 20ms after a roll end=87% overlap ckpt=37% either=100% | window covered: rolls=39% ckpt=27%
+relaxed c1-segregated-no0  r2 NB reader samples>=50ms=  632 overlap roll=89% end<= 20ms after a roll end=71% overlap ckpt=40% either=99% | window covered: rolls=36% ckpt=29%
+relaxed c1-segregated-no0  r3 NB reader samples>=50ms=  840 overlap roll=89% end<= 20ms after a roll end=79% overlap ckpt=31% either=100% | window covered: rolls=40% ckpt=23%
+relaxed c1-batch0          r1 NB reader samples>=50ms= 1657 overlap roll=93% end<= 20ms after a roll end=91% overlap ckpt=48% either=100% | window covered: rolls=41% ckpt=32%
+relaxed c1-batch0          r2 NB reader samples>=50ms=  981 overlap roll=95% end<= 20ms after a roll end=90% overlap ckpt=45% either=100% | window covered: rolls=39% ckpt=30%
+relaxed c1-batch0          r3 NB reader samples>=50ms=  954 overlap roll=92% end<= 20ms after a roll end=78% overlap ckpt=67% either=99% | window covered: rolls=37% ckpt=49%
+relaxed c1-spread          r1 NB reader samples>=50ms=  293 overlap roll=78% end<= 20ms after a roll end=68% overlap ckpt=76% either=98% | window covered: rolls=35% ckpt=32%
+relaxed c1-spread          r2 NB reader samples>=50ms=  796 overlap roll=89% end<= 20ms after a roll end=67% overlap ckpt=58% either=100% | window covered: rolls=40% ckpt=27%
+relaxed c1-spread          r3 NB reader samples>=50ms= 1136 overlap roll=99% end<= 20ms after a roll end=99% overlap ckpt=43% either=100% | window covered: rolls=42% ckpt=30%
+relaxed c2                 r1 NB writer samples>=50ms=10336 overlap roll=97% end<= 20ms after a roll end=97% overlap ckpt=60% either=100% | window covered: rolls=47% ckpt=51%
+relaxed c2                 r2 NB writer samples>=50ms=10665 overlap roll=97% end<= 20ms after a roll end=89% overlap ckpt=61% either=100% | window covered: rolls=47% ckpt=50%
+relaxed c2                 r3 NB writer samples>=50ms=10053 overlap roll=97% end<= 20ms after a roll end=94% overlap ckpt=58% either=100% | window covered: rolls=45% ckpt=50%
+group   c1-segregated-no0  r1 NB reader samples>=50ms=    0 overlap roll=- end<= 20ms after a roll end=- overlap ckpt=- either=- | window covered: rolls=1% ckpt=4%
+group   c1-segregated-no0  r2 NB reader samples>=50ms=    0 overlap roll=- end<= 20ms after a roll end=- overlap ckpt=- either=- | window covered: rolls=1% ckpt=3%
+group   c1-segregated-no0  r3 NB reader samples>=50ms=    1 overlap roll=0% end<= 20ms after a roll end=0% overlap ckpt=0% either=0% | window covered: rolls=1% ckpt=5%
+group   c1-batch0          r1 NB reader samples>=50ms=    2 overlap roll=0% end<= 20ms after a roll end=0% overlap ckpt=0% either=0% | window covered: rolls=1% ckpt=4%
+group   c1-batch0          r2 NB reader samples>=50ms=    0 overlap roll=- end<= 20ms after a roll end=- overlap ckpt=- either=- | window covered: rolls=1% ckpt=4%
+group   c1-batch0          r3 NB reader samples>=50ms=    0 overlap roll=- end<= 20ms after a roll end=- overlap ckpt=- either=- | window covered: rolls=1% ckpt=7%
+group   c1-spread          r1 NB reader samples>=50ms=    0 overlap roll=- end<= 20ms after a roll end=- overlap ckpt=- either=- | window covered: rolls=1% ckpt=4%
+group   c1-spread          r2 NB reader samples>=50ms=    3 overlap roll=0% end<= 20ms after a roll end=0% overlap ckpt=0% either=0% | window covered: rolls=1% ckpt=4%
+group   c1-spread          r3 NB reader samples>=50ms=    0 overlap roll=- end<= 20ms after a roll end=- overlap ckpt=- either=- | window covered: rolls=1% ckpt=4%
+group   c2                 r1 NB writer samples>=50ms= 9871 overlap roll=0% end<= 20ms after a roll end=0% overlap ckpt=24% either=24% | window covered: rolls=1% ckpt=21%
+group   c2                 r2 NB writer samples>=50ms= 9906 overlap roll=0% end<= 20ms after a roll end=0% overlap ckpt=40% either=40% | window covered: rolls=1% ckpt=24%
+group   c2                 r3 NB writer samples>=50ms=10064 overlap roll=0% end<= 20ms after a roll end=0% overlap ckpt=39% either=39% | window covered: rolls=1% ckpt=25%

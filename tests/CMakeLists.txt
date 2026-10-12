@@ -19,6 +19,7 @@ add_executable(kds_tests
     waystone_across_cores_test.cpp
     cabin_serve_across_cores_test.cpp
     read_borrow_rig_test.cpp
+    purge_trigger_rig_test.cpp
     current_core_test.cpp
     alloc_race_test.cpp
     free_map_race_test.cpp
@@ -82,7 +83,6 @@ add_executable(kds_tests
     index_compile_test.cpp
     index_contract_test.cpp
     superblock_test.cpp
-    prepared_recovery_test.cpp
     core_runtime_test.cpp
     expeditor_test.cpp
     coro_test.cpp
@@ -214,6 +214,7 @@ add_executable(kds_tests
     memory_log_device_test.cpp
     file_log_device_test.cpp
     wal_append_off_latch_test.cpp
+    wal_roll_instruments_test.cpp
     sim_rng_test.cpp
     sim_loop_test.cpp
     bounded_pool_test.cpp

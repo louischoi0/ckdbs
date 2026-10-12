@@ -191,7 +191,7 @@ TEST(SuperBlockWalAnchorTest, FreshDatabaseHasNoAnchors) {
     SuperBlock sb = SuperBlock::CreateFresh(1000);
 
     EXPECT_EQ(sb.wal_anchor_count(), 0u);
-    for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
+    for (std::uint32_t core = 0; core < kMaxCores; ++core) {
         // Zero is not a legal record LSN, so this reads unambiguously as
         // "no checkpoint yet" and sends recovery to the start of the stream.
         EXPECT_EQ(sb.wal_anchor(core).redo_start_lsn, 0u);
@@ -233,7 +233,7 @@ TEST(SuperBlockWalAnchorTest, AnchorsSurviveEncodeDecode) {
 TEST(SuperBlockWalAnchorTest, EveryCoreButZeroIsRefusedASlot) {
     SuperBlock sb = SuperBlock::CreateFresh(1000);
 
-    for (std::uint32_t core = 1; core < kMaxWalCores; ++core) {
+    for (std::uint32_t core = 1; core < kMaxCores; ++core) {
         Status s = sb.SetWalAnchor(core, WalAnchorFields{core + 1, core + 2, core + 3, core});
         EXPECT_FALSE(s.ok()) << "core " << core << " was given a slot";
         EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
@@ -254,7 +254,7 @@ TEST(SuperBlockWalAnchorTest, EveryCoreButZeroIsRefusedASlot) {
 TEST(SuperBlockWalAnchorTest, CoreIdBeyondTheTableIsRefusedNotWrapped) {
     SuperBlock sb = SuperBlock::CreateFresh(1000);
 
-    Status s = sb.SetWalAnchor(kMaxWalCores, WalAnchorFields{1, 2, 3, 0});
+    Status s = sb.SetWalAnchor(kMaxCores, WalAnchorFields{1, 2, 3, 0});
     EXPECT_FALSE(s.ok());
     EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
     // And nothing was written: wrapping would have landed on core 0.
@@ -264,7 +264,7 @@ TEST(SuperBlockWalAnchorTest, CoreIdBeyondTheTableIsRefusedNotWrapped) {
 
 TEST(SuperBlockWalAnchorTest, ReadingPastTheTableIsNoAnchorNotACrash) {
     SuperBlock sb = SuperBlock::CreateFresh(1000);
-    EXPECT_EQ(sb.wal_anchor(kMaxWalCores).redo_start_lsn, 0u);
+    EXPECT_EQ(sb.wal_anchor(kMaxCores).redo_start_lsn, 0u);
     EXPECT_EQ(sb.wal_anchor(1'000'000).redo_start_lsn, 0u);
 }
 
@@ -354,16 +354,16 @@ TEST(SuperBlockTest, AZeroCoreCountIsCorruptionRatherThanADefault) {
     EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
 }
 
-TEST(SuperBlockTest, ACoreCountAboveTheAnchorTableIsRefused) {
-    // kMaxWalCores is a hard ceiling, not a preference: the anchor table is
-    // indexed by core_id and a core above it has nowhere to publish from.
-    EXPECT_TRUE(CheckCoreCount(kMaxWalCores).ok());
-    EXPECT_EQ(CheckCoreCount(kMaxWalCores + 1).code(), StatusCode::kInvalidArgument);
+TEST(SuperBlockTest, ACoreCountAboveTheCeilingIsRefused) {
+    // kMaxCores is a hard ceiling, not a preference: every per-core array
+    // is indexed by core_id and a core above it has no slot.
+    EXPECT_TRUE(CheckCoreCount(kMaxCores).ok());
+    EXPECT_EQ(CheckCoreCount(kMaxCores + 1).code(), StatusCode::kInvalidArgument);
     EXPECT_EQ(CheckCoreCount(0).code(), StatusCode::kInvalidArgument);
 
     // And the ceiling is named, so an operator who hits it learns what
     // bounds them.
-    EXPECT_NE(CheckCoreCount(kMaxWalCores + 1).message().find(std::to_string(kMaxWalCores)),
+    EXPECT_NE(CheckCoreCount(kMaxCores + 1).message().find(std::to_string(kMaxCores)),
               std::string::npos);
 }
 

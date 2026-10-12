@@ -92,7 +92,7 @@
 // registry's accepted race costs one idle block - AR0-6-R1's stated cost,
 // never liveness, because the park is level-triggered: a parked task is
 // re-polled after every block, so the reactor re-reads nothing before it
-// blocks and none is owed. No `kLockWake` ring kind was ever built (AU-R4).
+// blocks and none is owed.
 //
 // Two consequences of having no caller yet, stated so they are not read as
 // finished work:
@@ -118,7 +118,8 @@
 // `server/core_runtime.hpp`'s `Config`, not present today. This comment is
 // the declaration `rules.md` §3 requires of any lock.
 //
-// **Partitioned `64 x cores`** `[constant, AR0 D2's; re-measured in AO-S7]`,
+// **Partitioned 64 ways at every core count** (`kLockPartitions`; BP-S6,
+// BP-Q15 (a) - AO-S7 had it `64 x cores`),
 // keyed by `(rel_oid, unit kind, lo)` so that a relation's own entry and
 // the units beneath it hash apart: the relation entry is touched by every
 // writer's `IX` and every positioned reader's `IS`, and sharing its
@@ -225,12 +226,9 @@
 // three transactions against an `X` request - so AO-S6 owes the container
 // as well as the edge.
 //
-// **One waiter could have two blockers at once from AO-S5(b) until
-// AT-S5f**: a child whose foreign keys named parents on two owner cores
-// fanned out one probe per owner, and each owner that found its parent
-// busy registered `child -> its own holder` from its own reactor, the
-// second replacing the first. The probes went at AT-S5f, and a waiter
-// registers its own edges from its own statement since.
+// A waiter registers its own edges from its own statement. The FK probe
+// fan-out that once gave one waiter two blockers retired (AT-S5f); its
+// history is at cf889b63.
 //
 // **Detection happens when the edge is added, not on a cadence, and that
 // is a departure from AO-R7 worth stating.** AO-R7 specifies a
@@ -247,14 +245,13 @@
 // Visibility was never the problem: the table is the instance's and
 // `wait_latch_` orders every core's registrations, so a registration-time
 // walk sees every core's edges. What a periodic walk was for is a wait
-// that registered *no* edge - the shipped-statement park and the FK probe
-// park - and both went with their protocols (AT-S6, AT-S5f).
+// that registered *no* edge, and none is left: the edgeless parks retired
+// (AT-S6, AT-S5f).
 //
 // ---- The cap (AO-R10, E2) -------------------------------------------------
 //
-// `max_locks_per_txn` = 65,536 entries per transaction - per transaction
-// across cores, since AT-S6 left one `Transaction` per transaction (AT-0
-// item 3, kept 2026-09-28). Reaching it
+// `max_locks_per_txn` = 65,536 entries per transaction - a transaction
+// has one `Transaction` (AT-0 item 3, kept 2026-09-28). Reaching it
 // refuses `ResourceExhausted`, non-retryable because a retry meets the same
 // cap. **A cap refuses, it never truncates**, and there is no escalation
 // (AR2-R4): escalation would convert fine borrows into a coarse one
@@ -392,8 +389,11 @@ struct LockKey {
 // it. One name for the quantity: nothing else spells this number.
 inline constexpr std::size_t kMaxLocksPerTxnDefault = 65536;
 
-// AO-R2's partition count, per core. `[constant]`, re-measured in AO-S7.
-inline constexpr std::size_t kLockPartitionsPerCore = 64;
+// AO-R2's partition count, fixed at every core count since BP-S6 (BP-Q15
+// (a)): AO-S7 sized it per core under ownership, and above one core a tuple
+// ask under a held fence walks every partition (`FenceCoversKey`), which at
+// `64 x cores` cost +12 % of a statement's CPU at eight cores (BP-H10).
+inline constexpr std::size_t kLockPartitions = 64;
 
 // **The read borrow holds under an identity that is not a transaction's**
 // (AO-S6e-b). AR2 §3's `SELECT` row scopes the read borrow to *the
@@ -421,18 +421,14 @@ inline constexpr bool IsReadHolder(std::uint64_t holder) noexcept {
 // holder that is stuck - and when it fires it aborts the *waiter* (R1
 // never touches the holder) and is logged as the fault it is.
 //
-// **Its value answered AO-3's finding J and no longer has to.** While 2PC
-// was in the tree an honest holder could sit inside a coordinator's phase
-// deadline - 10 s - so a net below that would have fired on a holder doing
-// nothing wrong, and AO-R8 set 11 s "until M3 retires 2PC, then D12's
-// 1 s". **AT-S6 retired it**, and this is that stage's half: no holder
-// waits on another core for anything now, so the longest honest wait is a
-// local statement's own work and the net is **1 s**.
+// **The net is 1 s** (D12): no holder waits on another core for anything,
+// so the longest honest wait is a local statement's own work. The 2PC
+// phase deadline that once set it to 11 s retired (AT-S6); its history is
+// at cf889b63.
 //
 // **The default, and the key that overrides it.** `lock_wait_fault_net_ms`
 // is `in_doubt_ceiling_ms` re-scoped and renamed (AT-0 item 7, AO-R8's own
-// plan): the old key named a wait ceiling with two 2PC users, both gone,
-// and the quantity it named - how long a statement may wait before the
+// plan): the quantity the old key named - how long a statement may wait before the
 // engine calls it a fault - is this one. A second key would have been a
 // second name for it (`CLAUDE.md`'s rule), and deleting it would have left
 // an operator's file silently ignored, so the old spelling is **refused at
@@ -554,8 +550,8 @@ private:
 
 class LockTable {
 public:
-    // `core_count` sizes the partition array and decides whether latches
-    // are constructed at all: at one core every `Latch*` is null and no
+    // `core_count` decides whether latches are constructed at all (the
+    // partition count is fixed, `kLockPartitions`): at one core every `Latch*` is null and no
     // `std::mutex` exists (AO-R9 - what compiles out is the
     // synchronization, never the wait). Zero cores is a refusal, not a
     // silent reinterpretation.

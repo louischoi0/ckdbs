@@ -145,7 +145,7 @@ private:
 // its last run whole.
 class CheckpointCensus {
 public:
-    static constexpr std::uint32_t kSlots = 64;  // `kMaxWalCores` (superblock.hpp)
+    static constexpr std::uint32_t kSlots = 64;  // `kMaxCores` (superblock.hpp)
 
     struct Slot {
         // Bumped at a run's entry and again at its end, so an odd value is a

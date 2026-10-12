@@ -81,6 +81,15 @@ std::uint64_t OidOf(CommandDispatcher& d, const std::string& table) {
     return reclaim_census::DescribeField(d, table, "oid");
 }
 
+// BP-H1: the slots' two fences are armed above one core only. At
+// `cores = 1` every head and every reclaim step share the reactor thread
+// (`statement_epoch.hpp` names them), so program order is the ordering.
+TEST(InRunReclaimTest, TheEpochFencesAreArmedAboveOneCoreOnly) {
+    EXPECT_FALSE(StatementEpochs(1).shared());
+    EXPECT_TRUE(StatementEpochs(2).shared());
+    EXPECT_TRUE(StatementEpochs(8).shared());
+}
+
 TEST(InRunReclaimTest, ADropCommittedInTheRunIsFreedInTheRun) {
     InRunReclaimRig rig;
     CurrentCoreGuard as(0);

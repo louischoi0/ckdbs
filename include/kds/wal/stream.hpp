@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -35,8 +36,9 @@
 //     unlatch. The LSN is fixed under the latch, so a record's address is
 //     known before its bytes are visible to anyone else - `StampPageLsn`
 //     and the `recLSN` discipline (page.md section 8) are unchanged.
-//   - `Flush` and `Seal`, from any thread: the device write happens
-//     **under the latch**, and so does the segment roll - which is not
+//   - `Seal`, and the flush before a roll, from any thread: the device
+//     write happens **under the latch**, and so does the segment roll -
+//     which is not
 //     microseconds but a device sync of the segment it leaves (through
 //     `SyncDevice`, so the seal marker is durable before the next segment
 //     exists), then the next segment's `CreateSegment`,
@@ -46,7 +48,16 @@
 //     directory fsync (`wal/file_log_device.cpp`); without the body built,
 //     the creation builds it inline as before. That is why the latch is a
 //     mutex and not a spin: a waiter sleeps through a roll instead of
-//     burning a core through it.
+//     burning a core through it. **Priced 2026-10-12, and kept** (BQ,
+//     `instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7;
+//     `bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md`):
+//     at `relaxed` under a bulk writer a roll holds this latch p50 about
+//     330 ms, p99 about 790 ms, max 1.2 s, 95 % of it `SyncDevice`
+//     waiting out the writer thread's sync in flight; at `group`, about
+//     6 ms p50 and 20 ms p99. No rung below the latch's release met BQ's bar
+//     (two measured, two bounded out), and
+//     releasing it for the roll's I/O is not licensed (BQ-Q5 (b)), so the
+//     roll stays latched (wal.md section 6 steps 1 and 5).
 //   - **`Flush` writes outside the latch since BA-S12**: it swaps the staged
 //     ring for a second buffer under the latch and writes the swapped-out
 //     bytes unlatched, one such write in flight at a time. A flush under
@@ -85,9 +96,10 @@
 // first segment's header, which is why no record ever has LSN 0 and why
 // page_lsn 0 keeps meaning "never logged" (record.hpp).
 //
-// Plain division rather than shift/mask: the segment size is [OPEN]
-// (wal.md section 15), and a power-of-two requirement here would quietly
-// decide it. One divide per append is nothing next to the memcpy.
+// Plain division rather than shift/mask: the segment size is the device's
+// parameter (64 MiB on every volume, a constant of the format, wal.md
+// section 4.1), and a power-of-two requirement here would quietly decide
+// what any later size may be. One divide per append is nothing next to the memcpy.
 //
 // ---- The ring ------------------------------------------------------------
 //
@@ -157,6 +169,69 @@ static_assert(kMinSegmentSize - kSegmentHeaderSize >= kLargestSplitRecord);
 static_assert(kDefaultRingCapacity >= kMinRingCapacity);
 static_assert(kDefaultSegmentSize >= kMinSegmentSize);
 
+// **One roll, timed** (BQ-S1, `instructions/v3.0.0/workorder-bq-wal-segment-roll.md`
+// §1.1): what a roll's hold of the stream latch was spent on, step by step.
+// Filled under the latch by the roller; times are steady-clock nanoseconds,
+// `start_ns`/`end_ns` since that clock's epoch so they line up with a
+// driver's `CLOCK_MONOTONIC` stamps.
+struct RollRecord {
+    std::uint64_t segment_no = 0;  // the segment the roll created
+    std::uint32_t core = 0;        // the rolling thread's core
+    std::uint64_t start_ns = 0;
+    std::uint64_t end_ns = 0;
+    std::uint64_t seal_ns = 0;       // a. the seal and its flush
+    std::uint64_t flush_ns = 0;      // b. the roll's own flush
+    std::uint64_t sync_gate_ns = 0;  // c. waiting out a sync in flight
+    std::uint64_t sync_ns = 0;       // c. its own device sync
+    DeviceSyncTiming sync;           // c. that sync, split
+    // c. the syncs that finished while it waited at the gate, summed, and
+    // how many: a sync already in flight when the wait began counts whole
+    // (H3).
+    DeviceSyncTiming waited_sync;
+    std::uint32_t waited_syncs = 0;
+    std::uint64_t create_ns = 0;     // d-g. the whole creation
+    SegmentCreateTiming create;      // d-g. split, where the device reports it
+    std::uint64_t hold_ns() const noexcept { return end_ns - start_ns; }
+};
+
+// The instance's running roll totals, one counter per field, which `SHOW
+// META` prints under these names on every core (BQ-Q3 (a)). A name ending
+// `_us` is kept in nanoseconds and printed in microseconds.
+enum class RollStat : std::uint8_t {
+    kRolls,
+    kHoldNs,
+    kHoldMaxNs,
+    kSealNs,
+    kFlushNs,
+    kSyncGateNs,
+    kSyncNs,
+    kSyncTailNs,
+    kSyncRestNs,
+    kSyncSegments,
+    kSyncSegmentsMax,
+    kCreateNs,
+    kBodyWaitNs,
+    kBodyNs,
+    kHeaderNs,
+    kRenameNs,
+    kDirSyncNs,
+    kBodyHit,
+    kBodyWaited,
+    kBodyInline,
+    kCount,
+};
+inline constexpr std::size_t kRollStatCount = static_cast<std::size_t>(RollStat::kCount);
+inline constexpr std::array<const char*, kRollStatCount> kRollStatNames = {
+    "wal_rolls",          "wal_roll_hold_us",      "wal_roll_hold_max_us",
+    "wal_roll_seal_us",   "wal_roll_flush_us",     "wal_roll_sync_gate_us",
+    "wal_roll_sync_us",   "wal_roll_sync_tail_us", "wal_roll_sync_rest_us",
+    "wal_roll_sync_segments", "wal_roll_sync_segments_max",
+    "wal_roll_create_us", "wal_roll_body_wait_us", "wal_roll_body_us",
+    "wal_roll_header_us", "wal_roll_rename_us",    "wal_roll_dirsync_us",
+    "wal_roll_body_hit",  "wal_roll_body_waited",  "wal_roll_body_inline",
+};
+static_assert(kRollStatNames.back() != nullptr, "a RollStat without a name");
+
 class WalStream {
 public:
     // Neither copyable nor movable, and stated rather than inherited: the
@@ -221,7 +296,11 @@ public:
     // report OK over pages the failure dropped. The cost is a sync waiting
     // out one already in flight - for a roll, with every appender behind
     // it. Any thread; takes no stream latch itself.
-    Status SyncDevice();
+    //
+    // A roll passes its record, which takes the gate's wait, its own sync's
+    // time and split, and - when it waited - the split of the sync it waited
+    // out (BQ-S1).
+    Status SyncDevice(RollRecord* roll = nullptr);
 
     // Stops the stream (above) and returns the refusal naming `cause`. The
     // stream's own failed writes call it, and so does the manager's ring-full
@@ -249,13 +328,24 @@ public:
     // Fails with InvalidArgument for a record larger than the ring or than
     // a whole segment's usable space, and with OutOfSpace when the ring is
     // full - the caller drains and retries.
-    StatusOr<Lsn> Append(const RecordSpec& spec, std::span<const std::byte> payload = {});
+    //
+    // When the call rolled and `rolled` is given, the roll's record is
+    // copied there (BQ-S1); a call that did not roll leaves it untouched.
+    StatusOr<Lsn> Append(const RecordSpec& spec, std::span<const std::byte> payload = {},
+                         RollRecord* rolled = nullptr);
+
+    // The roll totals (`RollStat`). Any thread: written by one roller at a
+    // time, under the latch, and read as a statistic without a fence.
+    std::uint64_t roll_stat(RollStat stat) const noexcept {
+        return roll_stats_[static_cast<std::size_t>(stat)].load(std::memory_order_relaxed);
+    }
 
     // Append, then Seal, in **one hold of the latch** (BR-S2): nothing
     // another core appends can land between the record and the seal, so the
     // record's end is where the segment - and a scan of it - ends. A
     // backup's BACKUP_END, so its stop is exactly where its log ends.
-    StatusOr<Lsn> AppendAndSeal(const RecordSpec& spec, std::span<const std::byte> payload);
+    StatusOr<Lsn> AppendAndSeal(const RecordSpec& spec, std::span<const std::byte> payload,
+                                RollRecord* rolled = nullptr);
 
     // Writes the staged bytes to the device. Not durable until Sync().
     Status Flush();
@@ -306,15 +396,34 @@ private:
     // `*Locked` names rather than through `Flush()` and `Seal()`.
     // (`ScanTail` and the first `StartSegment` run from `Open`, where
     // nothing else holds the stream yet.)
-    Status StartSegment(std::uint64_t segment_no);
-    Status Roll();
+    Status StartSegment(std::uint64_t segment_no, RollRecord* roll = nullptr);
+    Status Roll(RollRecord* roll);
     Status FlushLocked();
+    // Adds a finished roll to the totals and remembers its window (BQ-S1).
+    void RecordRoll(const RollRecord& roll) noexcept;
+    // Charges the part of a `waited_ns` stream-latch wait, just ended, that
+    // the last roll's hold covered to this core's `kWalRollBlocked*` tallies.
+    void ChargeRollOverlap(std::uint64_t waited_ns) const noexcept;
+    // **Every public entry's hold of the stream latch** (BQ-S1): the latch,
+    // and the roll-covered part of its wait charged once it is held.
+    class StreamLatchHold {
+    public:
+        explicit StreamLatchHold(const WalStream& stream) noexcept
+            : guard_(stream.latch_, &waited_) {
+            stream.ChargeRollOverlap(waited_);
+        }
+
+    private:
+        std::uint64_t waited_ = 0;  // before `guard_`, which writes it
+        LatchGuard guard_;
+    };
     // Yield-spins until no unlatched flush is in flight; that write needs no
     // latch to finish, so a caller may hold it.
     void WaitOutFlushInFlight() const noexcept;
     Status SealLocked();
     // Append's body, under the latch the caller holds.
-    StatusOr<Lsn> AppendLocked(const RecordSpec& spec, std::span<const std::byte> payload);
+    StatusOr<Lsn> AppendLocked(const RecordSpec& spec, std::span<const std::byte> payload,
+                               RollRecord* rolled);
     // Walks segment `segment_no` forward and leaves append_lsn_ at its
     // durable end, or seals it if a PAD marker is found. Open() only.
     Status ScanTail(std::uint64_t segment_no);
@@ -366,6 +475,27 @@ private:
     // The segment whose body `Append` last asked the device to build ahead
     // (BA-S12). Under the latch.
     std::uint64_t prepare_asked_ = 0;
+
+    // **BQ-S1's roll instruments.** The totals are written by the roller
+    // alone (under the latch, or by the stream's one thread unshared), as a
+    // load and a store; `last_roll_*` is the last roll's window, read under
+    // the latch by a waiter that has just acquired it. `sync_totals_` is
+    // every device sync's running totals, read by a roll before and after
+    // its gate wait so it can tell what finished while it waited; its own
+    // mutex keeps a read from tearing across one sync's four additions, is
+    // innermost, and is never held across I/O.
+    struct SyncTotals {
+        std::uint64_t syncs = 0;
+        std::uint64_t tail_ns = 0;
+        std::uint64_t rest_ns = 0;
+        std::uint64_t segments = 0;
+    };
+    SyncTotals ReadSyncTotals() const;
+    std::array<std::atomic<std::uint64_t>, kRollStatCount> roll_stats_{};
+    std::uint64_t last_roll_start_ns_ = 0;
+    std::uint64_t last_roll_end_ns_ = 0;
+    mutable std::mutex sync_totals_mutex_;
+    SyncTotals sync_totals_;
 };
 
 }  // namespace kds::wal

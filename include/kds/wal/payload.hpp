@@ -81,28 +81,6 @@ static_assert(sizeof(PageInitPayload) == kPageInitPayloadSize);
 StatusOr<std::size_t> EncodePageInit(std::span<std::byte> out, const PageInitPayload& fields);
 StatusOr<PageInitPayload> DecodePageInit(std::span<const std::byte> in);
 
-// ---- PAGE_HANDOFF --------------------------------------------------------
-//
-// PW1c-1: the incoming core is the payload's whole content - the page is
-// the envelope's, the handoff LSN is the record's own.
-
-struct PageHandoffPayload {
-    std::uint32_t incoming_core;
-};
-
-inline constexpr std::size_t kPageHandoffIncomingCoreOffset = 0;
-// 4 bytes on disk. A *floor*, like every size in this file: DecodeRecord
-// returns the record's 8-byte-aligned tail, so this payload arrives at the
-// decoder as 8 bytes, never as 4.
-inline constexpr std::size_t kPageHandoffPayloadSize = 4;
-
-static_assert(offsetof(PageHandoffPayload, incoming_core) == kPageHandoffIncomingCoreOffset);
-static_assert(sizeof(PageHandoffPayload) == kPageHandoffPayloadSize);
-
-StatusOr<std::size_t> EncodePageHandoff(std::span<std::byte> out,
-                                        const PageHandoffPayload& fields);
-StatusOr<PageHandoffPayload> DecodePageHandoff(std::span<const std::byte> in);
-
 // ANCHOR_UPDATE (PW2): one anchor slot moved - the clustered root when
 // index_oid is 0 (no index oid is ever 0), otherwise that index's root.
 // The anchor page itself is the envelope's page_id.
@@ -122,52 +100,6 @@ static_assert(offsetof(AnchorUpdatePayload, root) == kAnchorUpdateRootOffset);
 StatusOr<std::size_t> EncodeAnchorUpdate(std::span<std::byte> out,
                                          const AnchorUpdatePayload& fields);
 StatusOr<AnchorUpdatePayload> DecodeAnchorUpdate(std::span<const std::byte> in);
-
-// ---- TXN_PREPARE ---------------------------------------------------------
-//
-// R6-3, D4's prepare phase, **written only by a pre-AT engine** (2PC
-// retired at AT-S6); decoded by analysis for the mount's resolution, and
-// encoded here by the cells that synthesise such a volume. The
-// **coordinator's** identity, and nothing
-// else: what this core prepared is described by every record it already
-// wrote under the envelope's own txn_id, and what it needs from this
-// record is the handle to ask *who decided what*.
-//
-// All three fields are the coordinator's, and all three are load-bearing:
-//
-//   - `core` because a session id is minted per core, so two cores mint
-//     the same one (the shipped-statement dedup key, retired at AT-S6, one level
-//     down) - a record keyed on the id alone would resolve one
-//     coordinator's transaction against another's stream;
-//   - `session_id` because that pair is what the participant's enrolment
-//     is keyed on, so it is what a resolution ask can name;
-//   - `transaction_id` because it is what the coordinator's own
-//     TXN_COMMIT carries in its envelope, and finding that record is the
-//     whole of how a prepared transaction learns its outcome. That lookup
-//     is a **read of one stream for one id**, never a comparison of two
-//     streams' LSNs - guideline 3 stands.
-struct TxnPreparePayload {
-    std::uint64_t coordinator_session_id;
-    std::uint64_t coordinator_txn_id;
-    std::uint32_t coordinator_core;
-};
-
-inline constexpr std::size_t kTxnPrepareSessionIdOffset = 0;
-inline constexpr std::size_t kTxnPrepareTxnIdOffset = 8;
-inline constexpr std::size_t kTxnPrepareCoreOffset = 16;
-// 8+8+4 = 20 bytes on disk; a floor, like every size in this file - the
-// envelope hands the decoder its 8-byte-aligned tail, so these twenty
-// arrive as twenty-four.
-inline constexpr std::size_t kTxnPreparePayloadSize = 20;
-
-static_assert(offsetof(TxnPreparePayload, coordinator_session_id) ==
-              kTxnPrepareSessionIdOffset);
-static_assert(offsetof(TxnPreparePayload, coordinator_txn_id) == kTxnPrepareTxnIdOffset);
-static_assert(offsetof(TxnPreparePayload, coordinator_core) == kTxnPrepareCoreOffset);
-
-StatusOr<std::size_t> EncodeTxnPrepare(std::span<std::byte> out,
-                                       const TxnPreparePayload& fields);
-StatusOr<TxnPreparePayload> DecodeTxnPrepare(std::span<const std::byte> in);
 
 // ---- BACKUP_BEGIN / BACKUP_END (BR-S2) ----------------------------------
 //
@@ -541,49 +473,6 @@ struct BtreeSplitImage {
 StatusOr<std::size_t> EncodeBtreeSplit(std::span<std::byte> out,
                                        std::span<const BtreeSplitImage> images);
 StatusOr<std::vector<BtreeSplitImage>> DecodeBtreeSplit(std::span<const std::byte> in);
-
-// ---- Which core appended a record (AR0 M0, AL-R4/AL-R5/AL-R6) ----------
-//
-// Under per-core streams the answer was the stream. There is one stream
-// now, so every core's records interleave in the same log, and two kinds of
-// record cannot do their job without saying whose they are:
-//
-//   `CHECKPOINT_BEGIN`/`END`  a dirty table belongs to one core's pool, so
-//                             a checkpoint that cannot be attributed cannot
-//                             be applied to the right one.
-//   `PAGE_INIT`               redo may have to *create* the page, and the
-//                             page it creates carries the stamp
-//                             (`docs/spec/page.md` §2b). Created for the
-//                             recovering core rather than the logging one,
-//                             the page would record the wrong writer. That
-//                             was an ownership fact until AW-S1b and is a
-//                             diagnostic one now, and keeping it truthful
-//                             costs a byte already in the envelope.
-//
-// It rides the envelope's **per-type `flags` byte** (`record.hpp`), not the
-// payload, and that is a departure from AL-R2's letter which AL-R4 records.
-// `CHECKPOINT_BEGIN`'s payload is a fixed header followed by two
-// variable-length tables, so a field in the header shifts every entry and a
-// field at the tail is readable only by inferring its presence from the
-// record's length. The envelope has a byte set aside for exactly this kind
-// of per-type fact, and `ASSERT_ROLLBACK` uses a bit of it the same way.
-//
-// **It is not a format event.** Both records have been appended with
-// `flags = 0` since they existed and nothing has ever read the byte, so
-// every record ever written already says "core 0" - which is what a record
-// **in stream 0** is. A pre-cutover peer's record reads 0 too and is *not*
-// core 0's, but it lives in `wal-N` and no single-stream mount ever opens
-// one (AL-R2); admitting a legacy per-core file into this attribution is
-// the one thing that would make the byte lie. One byte covers
-// `kMaxWalCores`, and the bound is enforced where a core id enters the WAL
-// layer at all - `WalManager::Open`/`Attach` - not here.
-
-// The core that appended the record. 0 for every record written before the
-// byte carried this, which is what those records mean - they are in core
-// 0's stream, or in a per-core stream that answers the question itself.
-inline std::uint32_t LoggingCoreOf(std::uint8_t flags) noexcept {
-    return static_cast<std::uint32_t>(flags);
-}
 
 // ---- CHECKPOINT_BEGIN ----------------------------------------------------
 //

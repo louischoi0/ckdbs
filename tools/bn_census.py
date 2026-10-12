@@ -48,7 +48,7 @@ every-row and spill arms' end states are read back. After the arms, each
 server takes `--rows` updates of an unspilled row and of a spilled one,
 `pages_allocated` from SHOW META read around each.
 """
-import argparse, json, os, signal, struct, subprocess, sys, time
+import argparse, json, os, shutil, signal, struct, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kwp  # noqa: E402
@@ -94,8 +94,12 @@ class Server:
         os.makedirs(a.workdir, exist_ok=True)
         self.data = os.path.join(a.workdir, f"bk-{label}-{tag}.db")
         conf = os.path.join(a.workdir, f"bk-{label}-{tag}.conf")
+        # A fresh volume is the data file **and** its WAL directory: a log
+        # left by an earlier invocation whose early segments were recycled
+        # refuses the mount ("segment 0 is missing").
         if os.path.exists(self.data):
             os.remove(self.data)
+        shutil.rmtree(self.data + ".wal", ignore_errors=True)
         with open(conf, "w") as f:
             f.write(f"data_file = {self.data}\nport = {port}\ncores = 1\n"
                     f"durability = relaxed\nbuffer_pool_frames = 65536\n"

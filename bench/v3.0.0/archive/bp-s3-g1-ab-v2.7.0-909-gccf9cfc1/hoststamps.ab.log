@@ -1,0 +1,38 @@
+2026-10-12 14:21:13 ab bn r1 load=1.52 6.43 9.16 df=ext4
+2026-10-12 14:21:25 after ab bn r1 rc=0
+2026-10-12 14:21:45 ab bn r2 load=1.37 5.94 8.91 df=ext4
+2026-10-12 14:21:45 after ab bn r2 rc=1
+2026-10-12 14:21:45 ab bn r3 load=1.37 5.94 8.91 df=ext4
+2026-10-12 14:21:46 after ab bn r3 rc=1
+2026-10-12 14:21:46 ab commit group a r1 load=1.37 5.94 8.91 df=ext4
+2026-10-12 14:22:11 after ab commit group a r1 rc=0
+2026-10-12 14:22:11 ab commit group b r1 load=1.33 5.56 8.70 df=ext4
+2026-10-12 14:22:38 after ab commit group b r1 rc=0
+2026-10-12 14:26:38 ab commit strict a r1 load=1.57 4.17 7.39 df=ext4
+2026-10-12 14:27:04 after ab commit strict a r1 rc=0
+2026-10-12 14:27:04 ab commit strict b r1 load=1.51 3.94 7.23 df=ext4
+2026-10-12 14:27:30 after ab commit strict b r1 rc=0
+2026-10-12 14:27:30 ab commit group a r2 load=1.41 3.72 7.07 df=ext4
+2026-10-12 14:27:55 after ab commit group a r2 rc=0
+2026-10-12 14:28:05 ab commit group b r2 load=1.48 3.48 6.86 df=ext4
+2026-10-12 14:28:31 after ab commit group b r2 rc=0
+2026-10-12 14:28:31 ab commit strict a r2 load=1.42 3.30 6.71 df=ext4
+2026-10-12 14:28:58 after ab commit strict a r2 rc=0
+2026-10-12 14:28:58 ab commit strict b r2 load=1.30 3.11 6.56 df=ext4
+2026-10-12 14:29:23 after ab commit strict b r2 rc=0
+2026-10-12 14:29:23 ab commit group a r3 load=1.32 2.94 6.39 df=ext4
+2026-10-12 14:29:49 after ab commit group a r3 rc=0
+2026-10-12 14:30:09 ab commit group b r3 load=1.29 2.72 6.15 df=ext4
+2026-10-12 14:30:34 after ab commit group b r3 rc=0
+2026-10-12 14:30:34 ab commit strict a r3 load=1.45 2.64 6.03 df=ext4
+2026-10-12 14:31:00 after ab commit strict a r3 rc=0
+2026-10-12 14:31:00 ab commit strict b r3 load=1.31 2.51 5.90 df=ext4
+2026-10-12 14:31:26 after ab commit strict b r3 rc=0
+2026-10-12 16:59:10 ab bn r2 load=1.42 2.07 2.29 df=ext4
+2026-10-12 16:59:10 after ab bn r2 rc=1
+2026-10-12 16:59:10 ab bn r3 load=1.42 2.07 2.29 df=ext4
+2026-10-12 16:59:10 after ab bn r3 rc=1
+2026-10-12 19:10:04 ab bn r2 (after s2) load=0.93 1.93 2.45
+2026-10-12 19:10:16 after ab bn r2 rc=0
+2026-10-12 19:10:16 ab bn r3 (after s2) load=1.10 1.94 2.45
+2026-10-12 19:10:28 after ab bn r3 rc=0

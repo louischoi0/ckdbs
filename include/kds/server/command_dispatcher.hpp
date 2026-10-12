@@ -382,10 +382,8 @@ std::string ErrorReply(const Status& status);
 
 // **The inverse**, for the paths that hold a rendered `ERR` line and need
 // the *code* back out of it: the KWP session and the KWP load server, four
-// call sites. It was written for one caller that no longer exists - a
-// statement executed on its owner core answered in a rendered line, and
-// the `retryable` bit a client's retry loop read had to be the bit the
-// owner meant - which went with statement shipping at AT-S6.
+// call sites. Its first caller, statement shipping, retired (AT-S6); its
+// history is at cf889b63.
 //
 // A dispatcher's outcome carries no `Status`: every handler renders one at
 // its own return, and threading a code back out would touch every write
@@ -407,7 +405,7 @@ std::string ErrorReply(const Status& status);
 // beginning `ERR ` would be read as a refusal. What keeps that unreachable
 // is not this function but the replies themselves - a DML answer opens with
 // a fixed keyword (`INSERTED`/`UPDATED`/`DELETED`/`OK`), and a SELECT's
-// header line is comma-joined identifiers, so no shippable success has a
+// header line is comma-joined identifiers, so no success line has a
 // space at byte 3. Stated because it is a property of the *callers*, and a
 // reply shape added later that can lead with free text breaks it silently.
 Status StatusFromErrorReply(std::string_view reply);
@@ -825,11 +823,6 @@ private:
     // commits an owned scope, anything else aborts it. Inside an explicit
     // transaction a failure **poisons the session** rather than unwinding -
     // rows already written stay, and the client must ROLLBACK (section 6).
-    //
-    // **No `statement_ends` since AT-S5f.** It existed for one reader - the
-    // pending-delete registration a parked DELETE had to keep across its
-    // fan-out - and both the registration and the park went with the probe
-    // protocol. The scope's own unwind was always identical on both arms.
     Status EndWrite(Session& session, WriteScope& scope, const Status& result);
 
     // **The one way an owned scope ends without committing** (AO-S6d,
@@ -863,8 +856,7 @@ private:
     // unchanged and still decides the verdict; this notes, when the verdict
     // is a conflict against a transaction that has not decided - on any
     // core since AX-S1 made `IsInFlight` the instance's - that the refusal
-    // is one a bounded wait could get past (AO-S3 widened
-    // R6-5's prepared holder to any undecided one). One function for the
+    // is one a bounded wait could get past (AO-S3). One function for the
     // two call sites, so the two write paths cannot come to disagree about
     // which conflicts are waitable.
     // Records `trx` as the holder this statement is waiting for, when
@@ -951,20 +943,8 @@ private:
     // caller's test of it *after* the call mean "the re-run opened a new
     // wait" rather than "the old one is still up".
     //
-    // It became a function because the foreign-key probe arm called it too
-    // (the arm went at AT-S5f; `AwaitStatementWaits` is its caller now).
-    // `DispatchAsync` ran this wait before that arm and never after it, so
-    // a statement that parked on a foreign parent and met a held row on
-    // its resume was refused where the same statement dispatched directly
-    // would have waited. `foreign-keys.md` §2a carries the rest of the
-    // argument, that section being the one that owns the resume.
-    //
-    // **What it was not**: unsound. The resume ran without `may_park_`, so
-    // no blocker was recorded there and `EndWrite` poisoned an explicit
-    // transaction normally. The refusal was unhelpful, not a client told
-    // `ERR` over a transaction that then commits - that is what *this*
-    // change would produce if the allowance around the resume landed
-    // without the wait beside it, which is the mutation its cell names.
+    // `AwaitStatementWaits` is its caller. The foreign-key probe arm, its
+    // other caller, retired (AT-S5f); its history is at cf889b63.
     //
     // `statement_deadline_ns` is in-out and zero means "not taken yet":
     // the fault net bounds the *statement*, so a second entry inherits the
@@ -1358,11 +1338,32 @@ private:
     // are removed when the transaction resolves, by `EndDdlScope`.
     std::vector<std::uint64_t> ddl_txns_;
     void EndDdlScope(const Session& session, wal::Lsn committed_lsn = wal::kNoLsn);
+
+public:
+    // **The delete-mark purge's trigger** (BP-H11, ddl-transactional.md
+    // §5d): core 0's 50 ms `system` tick. A sweep write-fetches every
+    // catalog page even when it retires nothing, so it runs only while a
+    // mark is pending and only when the pending count or the settlement
+    // (`TransactionManager::SettlementNow`) moved since the last sweep. Core
+    // 0 only, a placement. A failed sweep is logged; its marks stay exactly
+    // as reachable as before.
+    void SweepSettledDeleteMarks();
+
+private:
     // Delete-marked catalog rows retired since mount by the horizon-gated
-    // purge EndDdlScope runs (ddl-transactional.md §5d). SHOW META
-    // prints it beside `catalog_marks_finalized`, whose count is the
-    // previous mount's leftovers - this one is this mount's own.
+    // purge (ddl-transactional.md §5d), and the sweeps that ran. SHOW META
+    // prints both; `catalog_marks_finalized` beside them counts the
+    // previous mount's leftovers - these are this mount's own.
     std::uint64_t catalog_marks_purged_ = 0;
+    std::uint64_t catalog_purge_sweeps_ = 0;
+    // What the last sweep saw: a sweep runs again only when the settlement
+    // or the pending count differs (`SweepSettledDeleteMarks`).
+    struct PurgeSeen {
+        txn::TransactionManager::Settlement settlement;
+        std::uint64_t marks;
+        bool operator==(const PurgeSeen&) const = default;
+    };
+    std::optional<PurgeSeen> purge_seen_;
     // Records that this transaction now holds uncommitted catalog rows,
     // which is what turns on `ViewFor`'s filtering.
     void MarkHoldsDdl(txn::Transaction& txn);
@@ -1427,8 +1428,7 @@ private:
                                                                   std::uint64_t pk);
 
     // Both statements take the relation `X` before their first catalog write
-    // and build where the session is (AT-S5e); the owner-built arm of
-    // PW1c-6b-3 went with the per-core structures it served.
+    // and build where the session is (AT-S5e).
     DispatchOutcome HandleIndex(std::string_view line, Session& session);
     DispatchOutcome HandleShowIndexes(Session& session);
 
@@ -1440,11 +1440,8 @@ private:
     // into the instance's registry, which is what makes the reply's
     // `enforcing=1` true rather than a claim about a row.
     //
-    // **Built where the session is, whoever "owns" the relation** (AT-S5d).
-    // The build was the owner's from PW1c-6c until then, shipped to it and
-    // adopted into its registry, because only the owner wrote the relation
-    // and only its registry was asked; the registry is one now and every
-    // core writes. Non-transactional DDL (`ddl-transactional.md` §5): the
+    // **Built where the session is** (AT-S5d): the registry is one and
+    // every core writes. Non-transactional DDL (`ddl-transactional.md` §5): the
     // session is read only to tell its own transaction's `IX` from another
     // writer's when the build's relation `X` is refused (AT-S5e).
     DispatchOutcome HandleAssertion(std::string_view line, Session& session);
@@ -1538,9 +1535,8 @@ private:
 
     // The reverse check for every foreign key pointing at `parent` (§3),
     // run per row about to be delete-marked.
-    // Every child is walked here since AT-S5f, whoever owns it: the answer
-    // is this core's for the whole relation, so there is nothing resolved
-    // elsewhere to read.
+    // Every child is walked here: the answer is this core's for the whole
+    // relation, so there is nothing resolved elsewhere to read.
     //
     // Called with the parent row's `X` held; the check view is minted
     // inside, after that grant (the body says why).
@@ -1564,7 +1560,7 @@ private:
     // The namespace a `CREATE TABLE ns.t` names, or `kNamespacePublic` for
     // an unqualified name (AF-T3). The one qualifier in the grammar that
     // decides rather than asserts: it decides the namespace the relation is
-    // created in (and until AT-S9 its owner core). An unknown namespace is refused with its byte and is
+    // created in. An unknown namespace is refused with its byte and is
     // **not** created - see `ast.hpp`'s namespace-qualifier rule.
     StatusOr<catalog::Oid> ResolveCreateNamespace(std::string_view qualifier,
                                                   std::uint32_t byte_offset,
@@ -1639,11 +1635,8 @@ private:
     // Split out for the KWP load session (docs/inflight/in-progress/workplan-kwp-load.md KW5),
     // whose rows arrive binary and never had text - BI2's "same write
     // path" made literal, since this IS the path a T1 statement takes.
-    // **No `line` since AT-S5f.** The text was carried for the two things
-    // that needed to re-run the statement elsewhere - the write ship, gone
-    // at AT-S5, and the foreign-key probe's resume - so an INSERT now
-    // reaches this path the way a KWP load chunk always did, with no text
-    // and nowhere to send it.
+    // **No `line`**: an INSERT reaches this path the way a KWP load chunk
+    // always did, with no text.
     DispatchOutcome InsertParsed(const parser::InsertStmt& stmt, WriteScope& scope);
 
 public:
@@ -1821,18 +1814,10 @@ public:
         after_update_row_applied_for_test_ = std::move(hook);
     }
 
-    // **`SetAccessBatch` and `SetAccessStatsApplied` stood here and are
-    // gone** (AT-S7). A peer had no way to write `sys.access_stats`, so it
-    // folded its shapes into an `AccessBatch` and core 0 applied the fold;
-    // both halves and the `SHOW META` block that reported them retire with
-    // the ring kind, because every core writes the relation itself now
-    // (`crosscore.md` CC13).
-
-    // **R6-5's in-doubt ceiling stood here and is gone** (AT-S6):
-    // `in_doubt_ceiling_ms` bounded a writer's wait on a cross-owner
-    // transaction in doubt, and with 2PC retired nothing is in doubt. A
-    // writer's wait is the lock family's, under `lock_wait_fault_net_ms`,
-    // and the old key is refused at startup naming it.
+    // The access-batch setters (AT-S7) and R6-5's in-doubt ceiling (AT-S6)
+    // retired; their history is at cf889b63. A writer's wait is the lock
+    // family's, under `lock_wait_fault_net_ms`, and the old key is refused
+    // at startup naming it.
     // **The instance lock table** (AO-R2), borrowed and null until an
     // expeditor hands one over. Its only use here is AO-S4a's wait-for
     // graph: with a table this core detects deadlock and may therefore let
@@ -1863,9 +1848,8 @@ public:
     // can name it (AO-S4b).
     const txn::LockTable* locks() const noexcept { return locks_; }
 
-    // **The lock family's fault net**, from `lock_wait_fault_net_ms`. It
-    // was the in-doubt ceiling until AT-S6 retired the thing that could be
-    // in doubt; the quantity is the same one, re-scoped (AT-0 item 7).
+    // **The lock family's fault net**, from `lock_wait_fault_net_ms`: the
+    // retired in-doubt ceiling's quantity, re-scoped (AT-0 item 7).
     sched::MonoTimeNs LockWaitFaultNetNs() const noexcept { return lock_wait_fault_net_ns_; }
     void set_lock_wait_fault_net_ns(sched::MonoTimeNs ns) noexcept {
         lock_wait_fault_net_ns_ = ns;
@@ -2398,12 +2382,10 @@ private:
     // argument for it is the one the `DispatchAsync` site already makes
     // about a hand-placed pair: it is correct today and silently wrong the
     // day a `co_await` or an early `co_return` appears between the two
-    // lines. There are three of them
-    // now - the statement's own dispatch, the write-block re-run and the
-    // probe arm's resume - and the third sits inside a loop next to a
-    // suspension point, which is exactly the shape the argument names.
-    // Restores rather than clears, so the three cannot come to disagree
-    // about what "off" was.
+    // lines. There are several - the statement's own dispatch and its
+    // re-runs, some inside a loop next to a suspension point, which is
+    // exactly the shape the argument names. Restores rather than clears, so
+    // they cannot come to disagree about what "off" was.
     class MayParkScope {
     public:
         // `statement` is the `DispatchAsync` call this window belongs to,
@@ -2741,26 +2723,17 @@ private:
     // This core's reactor, set_scheduler_view(); null off a reactor.
     const sched::Scheduler* scheduler_view_ = nullptr;
 
-    // **Nothing ships since AT-S6.** `MayShip`, `MayEnrolShip`,
-    // `ShipStatement`, `SoleForeignOwner`, `ForwardAnswerEdge`,
-    // `FinishShippedStatement`, `PrepareAcrossOwners` and
-    // `DescribePrepareFailure` stood here: the fork that decided a
-    // statement belonged on another core, the send, the park, the answer
-    // edge's forwarding, and D4's two phases over the participants the
-    // send enrolled. A read runs where the session is now, as a write has
-    // since AT-S5, so there is no statement to send and no participant to
-    // prepare (`docs/spec/cross-owner-txn.md`).
+    // Statement shipping and cross-owner 2PC retired (AT-S6); their history
+    // is at cf889b63.
 
-    // The local commit and rollback - the whole of both since AT-S6,
-    // where they used to be one arm of a fork.
+    // The local commit and rollback - the whole of both.
     DispatchOutcome CommitLocal(Session& session);
     DispatchOutcome RollbackLocal(Session& session);
 
 
 
-    // **The one refusal left before a write touches a page** (AT-S9, which
-    // renamed it from `CheckWriteAffinity` when the last question about a
-    // core left it): a relation under an assertion the instance cannot
+    // **The one refusal left before a write touches a page** (AT-S9): a
+    // relation under an assertion the instance cannot
     // enforce refuses its writes on every core. Every write verb asks it
     // once per statement.
     Status CheckWriteAdmission(const catalog::TableAccess& access);

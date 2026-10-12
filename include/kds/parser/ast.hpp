@@ -63,9 +63,8 @@ namespace kds::parser {
 // production, the body of `CREATE PATTERN`, and that production is gone, so
 // the parser refuses the token everywhere.
 //
-// The enumerator stays rather than leaving the enum a hole. It was
-// serialized by value in step descriptors until AT-S10 retired them, which
-// is why it was not renumbered away then; every path that would consume a
+// The enumerator stays rather than leaving the enum a hole: every path
+// that would consume a
 // value already refuses it by name (exec/row_codec.cpp, exec/step_vm.cpp,
 // exec/aggregate.cpp), which is cheaper to keep than to re-derive if the
 // re-design brings a placeholder back. Those refusals are now unreachable

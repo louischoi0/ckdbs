@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 #include "kds/base/current_core.hpp"
 
@@ -12,10 +13,12 @@
 // BA-R0, BA-S2): where one core waited for another, how often, and for how
 // long. `SHOW META`'s `contention` block prints it.
 //
-// **Counted only on the contended branch.** A `Latch` tries first and reads
-// the clock only when the try failed (`latch.hpp`); the other tallies sit on
-// paths that already waited, refused or ran a carve or a checkpoint. An
-// uncontended acquisition costs what it cost before.
+// **Waits are counted only on the contended branch.** A `Latch` tries first
+// and reads the clock only when the try failed (`latch.hpp`), so an
+// uncontended acquisition costs what it cost before. Most tallies sit on
+// paths that already waited, refused or ran a carve or a checkpoint; BP-S1's
+// census tallies (below) are the exception, counted once per call on paths
+// that run uncontended, a few per row at most.
 //
 // **Per core, summed when read.** Each slot is one cache-line-aligned block
 // written by its own core's thread, so the instrument adds no line two cores
@@ -83,6 +86,32 @@ enum class Tally : std::uint8_t {
     kRefusalIndexParent,
     kRefusalIndexSecure,
     kStructuralReruns,    // a statement re-run after a structural refusal (BA-S14)
+    // BP-S1's census (`workorder-bp-per-core-residue.md` §6.1).
+    kCatalogMemoDrops,    // a catalog memo dropped whole: a statement head's
+                          // revalidation, or the Cabin optimizer's tick
+    kWordMovesRoot,       // a schema-word move for a root a level grew over
+    kWordMovesCabin,      // ... for a Cabin's create or drop
+    kWordMovesSchema,     // ... for any other catalog write
+    kWordMovesResolve,    // ... for a catalog-writing transaction's
+                          // resolution: two per DDL (the manager's, and the
+                          // catalog's own invalidation)
+    kInFlightAsks,        // an `InstanceVisibility::InFlight` question, from
+                          // any caller (row checks, polls, catalog reads)
+    kInFlightMisses,      // ... answered "no", having read every table
+    kInFlightMissIdsRead, // the ids those misses scanned
+    kCheckpointPagesWritten,  // pages a checkpoint step or the run task's
+                              // publish wrote back (the cadence's path); a
+                              // synchronous run counts the pages its step
+                              // asked for and its publish's flush none
+    kDataSyncs,           // data-file device syncs, every caller
+    kFenceWalks,          // a `FenceCoversKey` walk (a fence was held); each
+                          // latches every partition but on a conflict, so
+                          // partitions read is the walks times the count
+    // BQ-S1 (`workorder-bq-wal-segment-roll.md`): what the WAL segment roll
+    // cost the cores it did not run on.
+    kWalDrainLatchWaitNs,   // the WAL drain's waits on the stream latch
+    kWalRollBlockedWaits,   // stream-latch waits that overlapped a roll's hold
+    kWalRollBlockedWaitNs,  // the part of those waits the roll's hold covered
     kCount,
 };
 
@@ -94,9 +123,21 @@ inline constexpr std::array<const char*, kTallyCount> kTallyNames = {
     "ceiling_wait_us",        "carves",                 "checkpoint_runs",
     "refused_btree_descend",  "refused_btree_parent",   "refused_btree_secure",
     "refused_btree_lookup",   "refused_index_descend",  "refused_index_parent",
-    "refused_index_secure",   "structural_reruns",
+    "refused_index_secure",   "structural_reruns",      "catalog_memo_drops",
+    "word_moves_root",        "word_moves_cabin",       "word_moves_schema",
+    "word_moves_resolve",     "inflight_asks",          "inflight_misses",
+    "inflight_miss_ids_read", "checkpoint_pages_written", "data_syncs",
+    "fence_walks",            "wal_drain_latch_wait_us",
+    "wal_roll_blocked_waits", "wal_roll_blocked_wait_us",
 };
 static_assert(kTallyNames.back() != nullptr, "a Tally without a name");
+
+// The tallies kept in nanoseconds, which `SHOW META` prints as
+// microseconds: exactly those whose name ends `_us`, the rule the roll
+// totals follow too (`wal/stream.hpp`).
+constexpr bool IsNsTally(Tally t) noexcept {
+    return std::string_view(kTallyNames[static_cast<std::size_t>(t)]).ends_with("_us");
+}
 
 // The longest single run of a periodic stall, in nanoseconds.
 enum class Longest : std::uint8_t {
@@ -129,7 +170,7 @@ struct alignas(64) ContentionSlot {
     std::array<std::atomic<std::uint64_t>, kTallyCount> tallies{};
     std::array<std::atomic<std::uint64_t>, kLongestCount> longest_ns{};
 };
-// `kMaxWalCores` (superblock.hpp): no instance has more cores than that.
+// `kMaxCores` (superblock.hpp): no instance has more cores than that.
 inline constexpr std::uint32_t kContentionSlots = 64;
 inline std::array<ContentionSlot, kContentionSlots> g_contention{};
 }  // namespace detail
@@ -164,6 +205,13 @@ public:
 
     static void Add(Tally t, std::uint64_t n = 1) noexcept {
         Mine().tallies[static_cast<std::size_t>(t)].fetch_add(n, std::memory_order_relaxed);
+    }
+
+    // This thread's own slot's running wait, for a caller that brackets its
+    // own work with two reads (the WAL drain, BQ-S1). A slot is written only
+    // by its core's thread, or by threads that declared none (slot 0).
+    static std::uint64_t MineWaitNs(LatchKind kind) noexcept {
+        return Mine().wait_ns[static_cast<std::size_t>(kind)].load(std::memory_order_relaxed);
     }
 
     static void Max(Longest l, std::uint64_t ns) noexcept {

@@ -1,0 +1,57 @@
+samples 679
+
+-- self --
+ 48.16%    327  kds::heap::PageView::PayloadAt const
+ 22.68%    154  kds::btree::SearchLeaf
+ 15.46%    105  __memcpy_avx512_unaligned_erms
+  8.54%     58  kds::btree::::SlotKeystoneId
+  1.03%      7  std::_Hashtable::find [clone .isra.0]
+  0.59%      4  kds::storage::::HardwareExtend
+  0.44%      3  kds_server+0xcec0
+  0.29%      2  std::_Function_handler::_M_invoke
+  0.29%      2  kds::exec::PurgeKey
+  0.29%      2  kds::storage::DevicePageStore::ResidentBytes
+  0.29%      2  kds::btree::::DescendTo
+  0.15%      1  kds::btree::BtreeVisitLeafPage
+  0.15%      1  kds::storage::DevicePageStore::PinFrame
+  0.15%      1  kds::storage::PageRef::operator= [clone .isra.0]
+  0.15%      1  kds::wal::WalManager::Append
+  0.15%      1  kds::exec::LogSlotRetire
+  0.15%      1  kds::storage::PageStore::Get
+  0.15%      1  __libc_pwrite64
+  0.15%      1  std::__cxx11::basic_string::_M_dispose
+  0.15%      1  kds::server::CommandDispatcher::HandlePurge
+  0.15%      1  kds::StatusOr::~StatusOr
+  0.15%      1  kds::heap::PageView::ReadTuple const
+  0.15%      1  kds::btree::InternalView::ChildFor const
+  0.15%      1  kds::wal::::CheckOutputSize [clone .isra.0]
+
+-- inclusive --
+ 48.16%    327  kds::heap::PageView::PayloadAt const
+ 35.94%    244  [unmapped]
+ 22.68%    154  kds::btree::SearchLeaf
+ 15.46%    105  __memcpy_avx512_unaligned_erms
+  8.54%     58  kds::btree::::SlotKeystoneId
+  1.03%      7  std::_Hashtable::find [clone .isra.0]
+  0.74%      5  kds::storage::DevicePageStore::Resolve
+  0.59%      4  kds::storage::::HardwareExtend
+  0.44%      3  kds_server+0xcec0
+  0.29%      2  std::_Function_handler::_M_invoke
+  0.29%      2  kds::exec::PurgeKey
+  0.29%      2  kds::storage::DevicePageStore::ResidentBytes
+  0.29%      2  kds::btree::::DescendTo
+  0.15%      1  kds::btree::BtreeVisitLeafPage
+  0.15%      1  kds::storage::DevicePageStore::PinFrame
+  0.15%      1  kds::storage::PageRef::operator= [clone .isra.0]
+  0.15%      1  kds::wal::WalManager::Append
+  0.15%      1  kds::exec::LogSlotRetire
+  0.15%      1  kds::storage::PageStore::Get
+  0.15%      1  __libc_pwrite64
+  0.15%      1  kds::wal::FileLogDevice::WriteAt
+  0.15%      1  std::__cxx11::basic_string::_M_dispose
+  0.15%      1  kds::server::CommandDispatcher::DispatchInner
+  0.15%      1  kds::server::CommandDispatcher::HandlePurge
+  0.15%      1  kds::StatusOr::~StatusOr
+  0.15%      1  kds::heap::PageView::ReadTuple const
+  0.15%      1  kds::btree::InternalView::ChildFor const
+  0.15%      1  kds::wal::::CheckOutputSize [clone .isra.0]

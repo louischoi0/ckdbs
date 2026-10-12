@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "kds/base/contention.hpp"
 #include "kds/sched/waker_table.hpp"
 
 namespace kds::txn {
@@ -87,7 +88,7 @@ std::uint64_t InstanceVisibility::BeginCommit(std::uint32_t core) {
     // **An earlier open marker keeps the slot** (BA-S7 part 2): its bound
     // is at or below this one, so it already caps every mint below this
     // commit's LSN, and the slot publishes the lowest open bound.
-    LatchGuard guard(&window_latch_);
+    LatchGuard guard(window_latch_);
     CoreVisibilitySlot& slot = slots_[core];
     const std::uint64_t bound = commit_ceiling_.load();
     slot.open_bounds.push_back(bound);
@@ -269,10 +270,15 @@ bool InstanceVisibility::InFlight(std::uint64_t trx_id, std::uint32_t first_core
     // Every attached core once, starting at `first_core`: the rotation is a
     // permutation of `[0, in_use)` whatever `first_core` is.
     const std::uint32_t in_use = slots_in_use_.load(std::memory_order_acquire);
+    Contention::Add(Tally::kInFlightAsks);
+    std::uint64_t ids_read = 0;
     for (std::uint32_t k = 0; k < in_use; ++k) {
         const CoreInFlightTable* table = in_flight_table((first_core + k) % in_use);
-        if (table != nullptr && HoldsIn(*table, trx_id, [](std::uint32_t) {})) return true;
+        if (table == nullptr) continue;
+        if (HoldsIn(*table, trx_id, [&ids_read](std::uint32_t) { ++ids_read; })) return true;
     }
+    Contention::Add(Tally::kInFlightMisses);
+    Contention::Add(Tally::kInFlightMissIdsRead, ids_read);
     return false;
 }
 
@@ -284,7 +290,7 @@ std::uint32_t InstanceVisibility::InFlightCount(std::uint32_t core) const noexce
 std::uint64_t InstanceVisibility::PublishCommit(std::uint64_t trx_id, std::uint64_t commit_lsn) {
     bool reclaim = false;
     {
-        LatchGuard guard(&window_latch_);
+        LatchGuard guard(window_latch_);
         // The unlogged order: one past the highest published. Under the
         // hold, so two unlogged managers over one instance never take the
         // same position.
@@ -318,7 +324,7 @@ InstanceVisibility::CommitLookup InstanceVisibility::LookupCommit(std::uint64_t 
     // floor under this same latch, so what this returns is either wholly
     // before that pass or wholly after it - never the half-and-half that
     // answers "not committed" for a reclaimed winner.
-    LatchGuard guard(&window_latch_);
+    LatchGuard guard(window_latch_);
     CommitLookup found;
     auto it = window_.find(trx_id);
     if (it != window_.end()) found.commit_lsn = it->second;
@@ -327,7 +333,7 @@ InstanceVisibility::CommitLookup InstanceVisibility::LookupCommit(std::uint64_t 
 }
 
 std::size_t InstanceVisibility::window_size() const {
-    LatchGuard guard(&window_latch_);
+    LatchGuard guard(window_latch_);
     return window_.size();
 }
 
@@ -338,7 +344,7 @@ std::size_t InstanceVisibility::Reclaim() {
     // raising it on no evidence at all.
     if (candidate == kUnboundedBound) return 0;
 
-    LatchGuard guard(&window_latch_);
+    LatchGuard guard(window_latch_);
 
     // **The bound, read under the hold** (the header's "reclamation"
     // note): the oldest published snapshot, capped by every pending

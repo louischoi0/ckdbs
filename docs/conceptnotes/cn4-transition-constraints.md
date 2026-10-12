@@ -82,7 +82,7 @@ way around the same guarantee (§6, T9).
   written (`a-chunked-assertion-snapshot-can-be-split-by-another-cores-record.md`,
   fixed at AY-S8 and deleted, and
   `docs/inflight/bugs/assertion-reservations-stranded-by-a-failed-settle.md`).
-  No WAL record kind, no ring kind, no cross-core protocol.
+  No WAL record kind, no cross-core protocol.
 - **No new concurrency.** What makes the old value the one being replaced
   is first-updater-wins `[source-read]`: `TransactionManager::CheckWriteConflict`
   (`src/txn/manager.cpp:199`) refuses a write over a head whose writer the

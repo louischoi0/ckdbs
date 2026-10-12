@@ -135,13 +135,9 @@
 // as a property of the code rather than of a build flag. In debug builds
 // `KDS_TEST_PAGE_LATCH=1` arms every store so the whole suite runs armed.
 //
-// What it protects through M1: a frame against a concurrent *reader* on
-// another core, and against the writeback and sweep paths (AM-R1: writes
-// still route to the relation's owner). In AM-S1 the pools are still per
-// core, so no second core can reach a frame and the latch is inert; the
-// primitive, its order and its cells are what that stage lands. Writeback,
-// StampPageLsn, the hit path's usage bump and the scan ring still touch
-// frames unlatched - AM-S2 and AM-S3 own those.
+// What it protects: a frame against a concurrent reader or writer on
+// another core, and against the writeback and sweep paths; writeback
+// copies each page under its latch (AT-S8 step 1b).
 //
 // Taken where the pin is taken and released where it is released: a
 // PageRef holds both. Get and the Create* accessors take it exclusive,
@@ -223,27 +219,17 @@
 //     its hold at the *next* `Fetch`, so the Cabin build's spill fetches
 //     (`cabin_optimizer_exec.cpp`, phase 2) run inside it, `S(leaf)` then
 //     `S(var-heap page)`. Shares never block shares, so a cycle needs an
-//     exclusive waiter on both. What ruled that out was an invariant
-//     nothing enforced: the Cabin build ran on the relation's owner core
-//     and every write to that relation routed to the same owner, so the
-//     ring's consumer and the only writer of both pages were one thread -
-//     and the paragraph said it "dissolves the day a cross-core write
-//     path lands". **That day was AT-S5** (a write runs where the session
-//     is), so the invariant is gone and the pair is still taken.
-//
-//     What held it after AT-S5 was `CabinScopeCovers`' owner test (AT-S6),
-//     and AT-S7 removed that test with the per-core store; the function
-//     went at AT-S10. The only two users of `OpenScanRing` are the Cabin
-//     build and the relayout planner, which SUS-1 leaves dark for every
-//     relation created since 2026-09-05, so the pair is taken from any
-//     core and the order below is owed.
+//     exclusive waiter on both. A write runs where the session is (AT-S5),
+//     so the pair is taken from any core: the only two users of
+//     `OpenScanRing` are the Cabin build and the relayout planner, which
+//     SUS-1 leaves dark for every relation created since 2026-09-05, and
+//     the order below is owed. The owner-core invariant that once ruled the
+//     cycle out retired (AT-S5, AT-S7); its history is at cf889b63.
 //     A descent holds one at a time, its handle dying per
-//     iteration; through M1 one core
-//     owns its pool, so no two holders of different pages can ever wait on
-//     each other and no order is needed. The shared pool is where an ABBA
+//     iteration. The shared pool is where an ABBA
 //     becomes possible, and the tree's own shapes - a leaf then its
 //     parents, bottom-up (`SecureParents`, AT-S16), a leaf then its right
-//     neighbour, old before new - are what AM-S2 will state as the order.
+//     neighbour, old before new - are the order.
 //     A write walk's `WHERE` sub-chain breaks them, reading leaves on
 //     either side under the walk's exclusive hold
 //     (`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`,
@@ -331,11 +317,8 @@ public:
     // keeping the two apart is what lets recovery close the hazard without
     // inventing pages.
     //
-    // It refused on a **leased** store until AW-S1b: a core allocating from
-    // an extent core 0 had reserved never consulted this floor, so raising
-    // it there would have been a repair that reported success and changed
-    // nothing. Every core allocates from the one free map now, so the floor
-    // it raises is the floor every core searches from.
+    // Every core allocates from the one free map, so the floor it raises is
+    // the floor every core searches from.
     Status RaiseAllocationFloor(PageId first_allocatable_page_id) override;
 
     // Get() that leaves the frame clean (page_store.hpp). Without it a
@@ -516,45 +499,14 @@ public:
     // alone. A no-op past the bound.
     void ClearCoreWalGate(std::uint32_t core, const wal::WalDurability* gate) noexcept;
 
-    // **`SetStreamCoreId` and `core_id()` are gone** (AM-S2 step 3). The
-    // first existed for an ordering that no longer exists: recovery stamps
-    // pages before the lease may be installed, so a peer had to be told its
-    // id early or it stamped core 0's onto its own pages. `CurrentCore()` is
-    // set by the thread rather than by the object, so `CoreRuntime::Open`'s
-    // guard supplies it for the whole mount pass and there is no ordering
-    // left to get wrong. The second had one caller, a cell asserting the
-    // default.
+    // `SetStreamCoreId` and `core_id()` retired (AM-S2 step 3); their
+    // history is at cf889b63. `CurrentCore()` is set by the thread, and
+    // `CoreRuntime::Open`'s guard supplies it for the whole mount pass.
 
-    // **Suppresses the PL-C stream stamp on the mutation path** for the
-    // length of a recovery pass that is not this core's own (AR0 M0,
-    // AL-R5/AL-R6). Under one stream core 0's mount pass replays and rolls
-    // back records belonging to *every* core, and the stamp is a claim on
-    // the page - it said which stream's records may name it, and until
-    // AW-S1b it was also read at the next fault to decide who may write.
-    // Stamping core 0 onto a page core 2 wrote therefore did not merely
-    // mislabel it: core 2 faulted the page, was granted nothing, and
-    // **could never write its own page again**, because a heap data page was
-    // in no relation write grant and the extent lease was re-drawn each
-    // mount.
-    //
-    // Redo skips its own restamp under one stream (`wal/redo.cpp`), but
-    // undo's compensations reach this function through the ordinary
-    // mutation path (`txn/recovery_undo.cpp`), so the suppression has to
-    // live here, where every writer passes, rather than at each caller.
-    // The page_lsn is still stamped: idempotence is that field's job and it
-    // is not ownership.
-    //
-    // Set for the mount pass and cleared after it; a store serving
-    // statements never has it on, so the ordinary write path is unchanged.
-    void SetStampSuppressed(bool suppressed) noexcept { stamp_suppressed_ = suppressed; }
-    bool stamp_suppressed() const noexcept { return stamp_suppressed_; }
 
-    // **There is no read predicate.** `MayFault` stood here until AW-S1b -
-    // "core 0 may reach anything; any other core may reach ids inside an
-    // extent it was granted, plus the fixed system range read-only" -
-    // enforced on the frame-load path in debug builds only. One frame table
-    // serves every core, so every core faults every page and the question
-    // has no content.
+    // **There is no read predicate**: one frame table serves every core, so
+    // every core faults every page. `MayFault` retired (AW-S1b); its history
+    // is at cf889b63.
 
     // Records that the record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn and, if this is the first record to dirty the
@@ -723,11 +675,8 @@ public:
     // un-evictable and then found itself evictable is exactly the failure
     // the declaration exists to prevent.
     //
-    // **A residency-only knob again since AT-S5.** It was the write
-    // boundary too from AW-a, when the store's write predicate read it as
-    // "the system range" writable only from core 0; that arm went at AT-S5
-    // and the predicate at AT-S18, and nothing reads this as an
-    // authorization.
+    // **A residency-only knob**: nothing reads this as an authorization.
+    // Its write-boundary arm retired (AT-S5, AT-S18); its history is at cf889b63.
     //
     // The only value any caller installs is still the volume's own layout
     // boundary (`server::kFirstUserPageId`). **AST04 must not use this**:
@@ -969,8 +918,7 @@ private:
     using Page = std::array<std::byte, kPageSize>;
 
     // The one refusal a caller sees when a page id is not allocated here,
-    // carrying the id (and, on a leased core until AW-S1b, which authority
-    // answered).
+    // carrying the id.
     Status NotAllocated(PageId page_id) const;
 
     // The gate every accessor goes through, so a third one cannot forget
@@ -1779,9 +1727,6 @@ private:
     // frame - which would also make `Frame` non-movable, and the table
     // moves frames in.
     std::condition_variable_any loading_done_;
-    // See SetStampSuppressed. Off everywhere but inside a single-stream
-    // mount pass.
-    bool stamp_suppressed_ = false;
 
     // FM2: the resident map pages, keyed by region (free_map.hpp's
     // placement arithmetic). Ordered rather than hashed so a flush writes

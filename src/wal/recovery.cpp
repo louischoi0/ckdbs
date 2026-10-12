@@ -46,61 +46,6 @@ StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
     }
     out.analysis = analyzed.value();
 
-    // ---- 1a. Resolution: what a prepared transaction's coordinator said --
-    //
-    // **Before the loser refusal below, and before redo**, because it is
-    // what decides which set each prepared transaction joins - and it is
-    // read-only, so a mount that refuses here has written nothing.
-    //
-    // No LSNs are compared and no second log is opened: the participant's
-    // records say what to redo and the coordinator's say whether it was
-    // committed, and with one stream (AM-S4(d)) both are records this scan
-    // already passed. Guideline 3 is not approached, let alone crossed.
-    out.prepared = out.analysis.prepared;
-    if (out.analysis.prepared != 0) {
-        // **The answer is already in hand.** The participant's TXN_PREPARE
-        // and its coordinator's decision are records of the same log, so
-        // resolving is a lookup of the coordinator's own transaction id in
-        // the table this pass just built, not a second file to open.
-        //
-        // **Absence means aborted, and that is sound rather than a
-        // default.** The engine that wrote a TXN_PREPARE floored every
-        // checkpoint's redo start at its oldest live prepare, and folded
-        // the minimum over cores, so the scan begins at or before every
-        // undecided prepare. A decision is written after the prepare it
-        // decides, so if the prepare is in this scan and no decision is,
-        // none was ever made - there is no second stream whose segments
-        // could have been recycled out from under the question.
-        //
-        // **Only a volume written before AT-S6 reaches this.** Nothing has
-        // prepared since 2PC retired there, and AT-S18 removed the floor
-        // with the emitter: this pass resolves every prepare before the
-        // completion checkpoint, so no checkpoint of this engine ever sees
-        // one live.
-        for (const auto& [participant_txn_id, prepared] : out.analysis.prepared_txns) {
-            auto state = out.analysis.transactions.find(participant_txn_id);
-            if (state == out.analysis.transactions.end()) {
-                return Status::Corruption(
-                    "recovery: prepared transaction " + std::to_string(participant_txn_id) +
-                    " has no analysis state");
-            }
-            const auto decision = out.analysis.transactions.find(prepared.coordinator_txn_id);
-            const bool committed = decision != out.analysis.transactions.end() &&
-                                   decision->second.outcome == TxnOutcome::kWinner;
-            if (committed) {
-                state->second.outcome = TxnOutcome::kWinner;
-                ++out.analysis.winners;
-                ++out.prepared_committed;
-            } else {
-                state->second.outcome = TxnOutcome::kLoser;
-                ++out.analysis.losers;
-                ++out.prepared_aborted;
-            }
-        }
-        out.analysis.prepared = 0;
-        out.analysis.prepared_txns.clear();
-    }
-
     // ---- The refusal, taken before a byte is written --------------------
     //
     // Checked here rather than after redo, deliberately. Redo restores

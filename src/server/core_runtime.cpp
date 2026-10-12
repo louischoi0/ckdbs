@@ -33,13 +33,9 @@ namespace kds::server {
 CoreRuntime::~CoreRuntime() {
     // **This runs as this core, wherever it is called from** (AM-S2 step 3).
     // The Expeditor calls this on a peer from *core 0's* thread on the way
-    // down, and the work below writes pages: `StampPageLsn` records whose
-    // stream the page_lsn beside it belongs to, so without this the peer's
-    // pages would go out stamped core 0's - a mislabel `SHOW PAGE` would
-    // print, and one the next mount refused (rule 5) until AW-S1b took the
-    // stamp's ownership reading. It was the store's own `core_id_` that
-    // hid this, and that member is gone because a shared store cannot have
-    // one.
+    // down, and the work below writes pages: `StampPageLsn` records the
+    // core beside the page_lsn, so without this the peer's pages would go
+    // out stamped core 0's - a mislabel `SHOW PAGE` would print.
     const CurrentCoreGuard as_this_core(core_id());
     listener_.reset();
     // **Queued statements go while what they borrow is still here**
@@ -53,9 +49,8 @@ CoreRuntime::~CoreRuntime() {
     if (owned_store_ == nullptr && store_ != nullptr && wal_ != nullptr) {
         store_->ClearCoreWalGate(core_id(), wal_.get());
     }
-    // R6-2's rollback of the cross-owner transactions this core was a
-    // participant in stood here until AT-S6, which retired the participant:
-    // a transaction is one core's, whole, and ends with its session.
+    // R6-2's cross-owner participant rollback retired (AT-S6); its history
+    // is at cf889b63. A transaction is one core's, whole, and ends with its session.
     // The dispatcher's view of the reactor is nulled by hand: the header's
     // teardown argument is that a member destructor may reach back, and a
     // stale reactor pointer is exactly what that argument forbids. Nothing
@@ -111,8 +106,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     auto runtime = std::unique_ptr<CoreRuntime>(new CoreRuntime(config, log));
     // The whole decoded image, not a field of it. `anchor` stays on the
     // config: it is a selection over the image - the fold's slot 0 - not a
-    // gap in it. `anchors` stood beside it and went at AM-S4(d) with the
-    // cross-stream resolver that was its only reader.
+    // gap in it.
     runtime->superblock_ = *config.superblock;
 
     // Each core gets its own epoll instance. Sharing one would be shared
@@ -128,9 +122,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // **The reactor learns its core here**, with no registry: `RunOnce`
     // sets the thread's `CurrentCore()` from it every iteration, so a
     // reactor left at the default runs as core 0 - re-entering core 0's
-    // exclusive page latches and stamping core 0's stream. `AttachTransport`
-    // set it until AT-S10d; the instance's `AttachWakerTable` sets it again
-    // with the same id, and a runtime that never gets one keeps this.
+    // exclusive page latches and stamping core 0's stream. The instance's
+    // `AttachWakerTable` sets it again with the same id, and a runtime that
+    // never gets one keeps this.
     if (Status s = runtime->scheduler_->AttachWakerTable(nullptr, config.core_id); !s.ok()) {
         return s;
     }
@@ -140,10 +134,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // its latch and asks the writer for every sync, which is what takes
     // `fdatasync` off this reactor (AL-2's case for the whole milestone).
     //
-    // The arm that stood beside this one opened
-    // `wal-<core_id>-<segment_no>.log` for a peer that owned its own
-    // stream. No mountable volume has one, so this core has no `wal_dir`
-    // to open and holds no `log_device_`.
+    // This core has no `wal_dir` to open and holds no `log_device_`: a
+    // volume with more than one stream does not mount.
     if (config.shared_stream == nullptr || config.shared_writer == nullptr) {
         // A peer with no stream to attach to would silently open one of
         // its own and write records nobody replays.
@@ -195,32 +187,20 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // on a peer is nothing: one stream, recovered whole by core 0's mount
     // before this core is built (below).
     //
-    // It ran **before the lease was installed**, deliberately, until AW-S1b
-    // removed the lease: RC04's repair raises the store's allocation floor,
-    // and a leased store refused that raise - correctly, since such a core
-    // took its ids from its extent and never consulted the floor - so
-    // installing the lease first made every peer with a non-empty stream
-    // refuse its own mount.
-    //
     // The undo log is built here for a reason of its own: recovery's undo phase
     // writes through it, and the rest of the transaction stack must not exist
     // yet, because `TrxIdSequence` caches the transaction ceiling at
     // construction (txn/trx_id.hpp).
     //
-    // **The stamp identity needs no ordering here any more** (AM-S2 step 3).
+    // **The stamp identity needs no ordering here** (AM-S2 step 3).
     // Recovery's undo phase writes compensations through `StampPageLsn`,
-    // which records whose stream the page_lsn belongs to; this used to come
-    // from the store's own `core_id_`, set by the same call that installed
-    // the lease - so a `SetStreamCoreId` call had to be hoisted above the
-    // recovery or a peer stamped its own pages as core 0's, which rule 5
-    // refused at the next mount until AW-S1b. The identity is the thread's
-    // now, and the
+    // whose identity is the thread's, and the
     // `CurrentCoreGuard` at the top of this function covers the whole pass.
     // The page latch (AM-S1): armed from the instance's core count, which
     // bootstrap recorded in the superblock and `Expeditor::Open` copied here -
     // after the identity above, so the owner field the word records is this
-    // core's. `core_count > 1` alone, which is what the WAL's own arming
-    // predicate came down to at AM-S4(d) as well. At one core the word is
+    // core's. `core_count > 1` alone, as the WAL's own arming predicate
+    // is. At one core the word is
     // never touched (device_page_store.hpp, "The page latch").
     // **The pinner count, not just the arm** (AM-S2). `kPinCeiling` bounds
     // *one operation*'''s pin stack, and `live_pins_` is a proxy for it only
@@ -248,9 +228,6 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // core 0 has already rolled back. The recovery report stays
     // zeroed, which is the truth for a core that recovered nothing, and
     // `SHOW META`'s block reads that way on a peer.
-    // **Unconditional since AM-S4(d)**: the per-core arm that stood beside
-    // this one called `RecoverCoreAtMount` over this core's own stream, and
-    // no mountable volume gives it one.
     //
     // **Timed, though nothing was recovered.** `SHOW META` prints the
     // whole `_us` block only where a clock was supplied
@@ -273,10 +250,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // once the dispatcher whose assertion registry it may snapshot exists,
     // and only on a runtime handed the instance's anchor (AT-S8). Core 0's
     // own runs in Expeditor::Open.
-    // **The system range, and nothing else** (AW-S1b). This installed an
-    // extent lease beside it while per-core stores existed; the lease is
-    // gone, and what survives is the residency floor - the boundary was
-    // also core 0's write boundary until AT-S5 retired that arm. A store
+    // **The system range, and nothing else**: the residency floor. A store
     // the Expeditor built already carries it - `SetResidentLimit` is where
     // that store gets it - so this is the arm for a `CoreRuntime` opened
     // directly on a device, which is a test fixture rather than a server.
@@ -300,8 +274,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // window from the instance's ceiling since AT-S10b** - the superblock,
     // latch and persist it was handed (`Config::trx_id_ceiling`) - and
     // issues row ids through the catalog's direct path, as core 0 always
-    // has. A peer used to draw both from blocks core 0 carved and leased to
-    // it over the ring, because page 0 and the catalog pages were core 0's.
+    // has.
     runtime->trx_ids_.emplace(*config.trx_id_ceiling.superblock, config.trx_id_ceiling.persist);
     runtime->trx_ids_->SetLatch(config.trx_id_ceiling.latch);
     // The undo log is already built - recovery wrote its compensations
@@ -333,10 +306,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     if (config.cabins && runtime->cabins_ == nullptr) {
         runtime->cabin_store_.emplace(config.cabin_limits);
     }
-    // **Waystone records here too since AT-S7.** A peer had no recorder
-    // at all - `sys.patterns` is a catalog page, read-only on a peer until
-    // AT-S5 - and every core writes catalog pages since then. Built
-    // before the dispatcher, which borrows it.
+    // **Waystone records here too** (AT-S7): every core writes catalog
+    // pages. Built before the dispatcher, which borrows it.
     if (config.waystone_recording) {
         runtime->trail_recorder_.emplace(*runtime->catalog_, *runtime->store_, &clock);
     }
@@ -344,11 +315,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         runtime->superblock_, *runtime->catalog_, *runtime->store_, log, &clock,
         &*runtime->wal_, config.durability, config.budget,
         runtime->trail_recorder_ ? &*runtime->trail_recorder_ : nullptr, config.waystone_replay,
-        // **The instance's switch, on every core** (AT-S7). This was a
-        // hard `false` for every core a runtime opens, because
-        // `sys.access_stats` sat in the reserved range and a peer could
-        // not write it; CR7 gave a peer a batch instead, and the batch is
-        // gone with the ring kind that flushed it.
+        // **The instance's switch, on every core** (AT-S7).
         config.access_statistics,
         runtime->cabins(), &*runtime->txn_manager_,
         config.isolation, config.core_id);
@@ -379,12 +346,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // The view is dropped in `~CoreRuntime`, which destroys the scheduler
     // *ahead* of the dispatcher - declaration order alone would not do it.
     runtime->dispatcher_->set_scheduler_view(&*runtime->scheduler_);
-    // The catalog's one-writer rule was made enforceable at dispatch by PW4
-    // and is history: the argument lived at `PeerDdlRefused`, which AT-S5
-    // deleted with the route (`crosscore.md` CC11).
-    // `SetCatalogReadOnly(true)` stood here until AT-S5 and CR7's batch
-    // arming until AT-S7, both for a peer: its catalog pages had one writer
-    // and `sys.access_stats` sat where it could not write.
+    // The catalog's one-writer rule, `PeerDdlRefused`, `SetCatalogReadOnly`
+    // and the access batch retired (AT-S5, AT-S7); their history is at cf889b63.
 
     // **Assertion enforcement at mount** (RC07). Here rather than beside
     // `RecoverCoreAtMount` above for `Expeditor::Open`'s reason - the
@@ -392,23 +355,15 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // before the listener binds, so no statement is accepted against an
     // unenforcing constraint.
     //
-    // **The self-grant this used to need went with CC7's fault rights**
-    // (AW-S1b). `sys.assertions` keeps each declaration's text in a
-    // var-heap page taken from the general supply rather than the reserved
-    // range (`crosscore.md` CC12/CR1), which the system-range arm of the
-    // old fault predicate did not cover - so a peer granted itself read
-    // rights over exactly the pages its rows named
-    // (`exec::CatalogSpillPages`, deleted with the grant) or `ListAssertions`
-    // was refused the fetch and no assertion of its own could be revived.
-    // One frame table serves every core, so a peer reading such a page
-    // finds the frame core 0 wrote and needs no right to it.
+    // The fault-right self-grant retired with CC7's fault rights (AW-S1b);
+    // its history is at cf889b63. One frame table serves every core, so a
+    // peer reading a declaration's var-heap page finds the frame core 0
+    // wrote and needs no right to it.
 
     // **The assertion resume is the registry's, not the core's** (AT-S5d).
     // Handed the instance's registry, this core resumes nothing: core 0's
     // mount filled it before any peer was built, for every relation, and a
-    // second resume would adopt every directory twice. It resumed the
-    // assertions on the relations it owned into its own registry until
-    // then, which is why a peer's `recovery_assertions_*` counted.
+    // second resume would adopt every directory twice.
     //
     // A runtime with a registry of its own - a fixture - resumes into it
     // exactly as core 0 does, from `redo_start_lsn` rather than
@@ -427,8 +382,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
             *runtime->wal_->stream()->device(),
             // **The stream's core, which is never this core**: the scanner
             // validates every segment header against the id it is given.
-            // Literal 0 since AM-S4(d): there is one stream and it is core
-            // 0's.
+            // Literal 0: there is one stream and it is core 0's.
             /*stream_core=*/0, config.anchor.redo_start_lsn, runtime->dispatcher_->assertions(),
             runtime->recovery_, log);
     }
@@ -517,11 +471,9 @@ void CoreRuntime::Run() {
     }
 
     // **The idle burn rides the drain tick** (AN-R13), on every core but 0,
-    // whose tick is `Expeditor`'s. It rode with the two id-lease refills
-    // until AT-S10b retired them; a burn is a carve here like any other
-    // since, so it needs nothing from core 0. (R6-2's lifetime-ceiling sweep rode
-    // here too until AT-S6, and what its removal leaves is a gap:
-    // `docs/inflight/known-gaps.md`.)
+    // whose tick is `Expeditor`'s. A burn is a carve here like any other,
+    // so it needs nothing from core 0. R6-2's lifetime-ceiling sweep, which
+    // rode here too, retired with 2PC (AT-S6); its history is at cf889b63.
     if (config_.core_id != 0 && config_.wal_drain_interval_ns > 0) {
         scheduler_->SubmitEvery(config_.wal_drain_interval_ns,
                                 [this] {
@@ -660,9 +612,7 @@ Status CoreRuntime::AttachListener(TcpServer server, const TcpServer::ClientSetu
     // through the instance's hook, straight to core 0's stop flag - atomic
     // since AU-S3 - plus a kick to end the block it is sitting in; Serve's
     // ordinary tail then broadcasts shutdown to every peer, one stop path
-    // whichever core the client landed on. It used to route a `kShutdown`
-    // message for one reason only: the flag was a plain bool, so core 0's
-    // own thread had to be the one to flip it. The hook is installed by the
+    // whichever core the client landed on. The hook is installed by the
     // instance, so a fixture that wires a listener with no instance around
     // it simply has none and `TcpServer` falls back to stopping the reactor
     // this listener is attached to (`tcp_server.cpp`'s `scheduler_->Stop()`).

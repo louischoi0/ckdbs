@@ -107,7 +107,11 @@ class Kds:
 
     def __init__(self, port):
         from ckdbs_cli import ServerConnection
-        self.conn = ServerConnection("127.0.0.1", port)
+        # `KDS_CLIENT_TIMEOUT` (seconds, default 5): a cell whose stall is
+        # the measurement (BQ-S2's large segments build a body inline for
+        # seconds) raises it so the stall is a sample, not a dead client.
+        self.conn = ServerConnection("127.0.0.1", port,
+                                     timeout=float(os.environ.get("KDS_CLIENT_TIMEOUT", "5")))
 
     def run(self, sql):
         """(reply, None, None), or (None, "refused" | "error", the reply)."""
@@ -332,13 +336,13 @@ def client(args):
 
 # ---- one run of one cell ---------------------------------------------------
 
-def start_kds(args, wd, port):
+def start_kds(args, wd, port, log_level="warn"):
     data = os.path.join(wd, "d.db")
     conf = os.path.join(wd, "s.conf")
     with open(conf, "w") as f:
         f.write(f"data_file = {data}\nport = {port}\ncores = {args.cores}\n"
                 f"durability = {args.durability}\nbuffer_pool_frames = {args.frames}\n"
-                f"log_file = s.log\nlog_dir = {wd}\nlog_level = warn\n")
+                f"log_file = s.log\nlog_dir = {wd}\nlog_level = {log_level}\n")
         if args.server_cpus:
             f.write(f"reactor_cpus = {args.server_cpus}\n")
         for line in getattr(args, "extra_conf", None) or []:
@@ -500,8 +504,10 @@ def run_one(args, run):
             "session_cores": [o["core"] for o in outs],
             # `*_longest_us` is a maximum since the server started, not a
             # counter: its delta is meaningless, so it is reported as read.
-            "meta_delta": {k: m1[k] - m_from[k] for k in m1
-                           if k in m_from and not k.endswith("_longest_us") and not is_gauge(k)},
+            # A key absent from the first read is 0 there (SHOW META leaves
+            # a `load_c<k>_` wait or tally out while it is 0).
+            "meta_delta": {k: m1[k] - m_from.get(k, 0) for k in m1
+                           if not k.endswith("_longest_us") and not is_gauge(k)},
             # BL-S1's per-core load words are gauges: read once, mid-span.
             "meta_gauges_mid": {k: v for k, v in m_mid.items() if is_gauge(k)},
             "meta_longest": {k: v for k, v in m1.items() if k.endswith("_longest_us")},

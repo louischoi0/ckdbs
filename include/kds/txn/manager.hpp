@@ -46,9 +46,9 @@
 // Both are horizon-only - they free nothing a live view can reach - so the
 // error stays structurally unreachable by decision, not by omission.
 //
-// **No cross-core protocol.** One manager, one core, one WAL stream; a
-// transaction spanning cores is not representable and `wal.md` section 3
-// says not to design it yet.
+// **No cross-core protocol.** One manager per core, over the instance's one
+// WAL stream; a transaction runs on the core that began it and never
+// crosses (`crosscore.md`).
 //
 // ---- The trail, and the undo chain beside it -------------------------------
 //
@@ -206,9 +206,7 @@ private:
 // Readers a purge must not purge under, beyond the live transactions the
 // manager already holds: autocommit snapshots held across a park. Since
 // BA-S15 a `SELECT`'s walk is one - it yields between slices holding its
-// view (`server::SelectRun`) - where the shipped pipeline stages, which
-// kept theirs on a coroutine frame across every credit gate, were the last
-// before AT-S10 retired them. Bounded and fixed so the registry is an array and never a malloc on a
+// view (`server::SelectRun`). Bounded and fixed so the registry is an array and never a malloc on a
 // statement's front door, and the bound refuses rather than drops: a
 // reader the registry could not admit would be a reader a purge cannot
 // see, so exhaustion refuses the reader rather than unsoundly proceeding.
@@ -274,8 +272,8 @@ public:
     // one of its own** (AN-S2): the predicate reads the floor and the
     // window on every call, so there is no manager without a visibility,
     // and a fixture or a single-manager tool that passes none gets a
-    // private instance with one slot - the same code the shipped
-    // `cores = 1` runs, over an object nobody else can see. There is no
+    // private instance with one slot - the same code `cores = 1` runs,
+    // over an object nobody else can see. There is no
     // second predicate to fall back to. `core` names the slot this manager
     // owns.
     // `locks` is the instance's lock table (AO-R2), borrowed on the same
@@ -740,6 +738,19 @@ public:
     // snapshot. The catalog's delete-mark purge is the caller.
     bool ResolvedForEveryReader(std::uint64_t trx_id) const;
 
+    // **What `ResolvedForEveryReader` can change its answer on** (BP-H11):
+    // the floor, the pending-commit bound, and the horizon capped at the
+    // commit ceiling - so the bound moves with commits only while no reader
+    // holds it, and stands still under an open older reader. A purge that
+    // left a mark has nothing to retire until one of these moves.
+    struct Settlement {
+        std::uint64_t floor;
+        std::uint64_t horizon;
+        std::uint64_t pending;
+        bool operator==(const Settlement&) const = default;
+    };
+    Settlement SettlementNow() const noexcept;
+
 private:
     friend class ReaderLease;
 
@@ -836,9 +847,8 @@ struct LeasedSnapshot {
 // The view a statement outside any transaction reads at: everything
 // committed on this manager's core, nothing in flight. The free-function
 // sibling of `SnapshotFor(const Transaction&)` above, and it lives here
-// for the same reason that one does: it was minted by two callers until
-// AT-S10 retired the cross-core pipeline stages, and one seam is where a
-// future second caller will look.
+// for the same reason that one does: one seam is where a future second
+// caller will look.
 //
 // Registered by construction, on the seam and not at the call sites: a
 // reader that outlives its statement across a park is exactly the reader

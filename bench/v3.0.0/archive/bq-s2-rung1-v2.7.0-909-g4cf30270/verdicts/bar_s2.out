@@ -1,0 +1,195 @@
+ISO c1-iso-segregated-no0    p99=853us p99.9=3.0ms max=4.6ms errors=0 moves_in_window=0 load=2.25
+ISO c1-iso-batch0            p99=602us p99.9=2.4ms max=4.4ms errors=0 moves_in_window=0 load=1.47
+ISO c1-iso-spread            p99=747us p99.9=3.4ms max=5.2ms errors=0 moves_in_window=0 load=0.89
+ISO c2-iso                   p99=140.8ms p99.9=467.4ms max=616.3ms errors=0 moves_in_window=12 load=0.55
+S1 ISO c1-iso-segregated-no0 p99=['279us', '216us', '561us'] p99.9=['2.5ms', '803us', '2.5ms']
+S1 ISO c1-iso-batch0         p99=['379us', '206us', '354us'] p99.9=['2.3ms', '1.0ms', '1.6ms']
+S1 ISO c1-iso-spread         p99=['226us', '216us', '444us'] p99.9=['1.1ms', '976us', '2.2ms']
+S1 ISO c2-iso                p99=['487us', '213us', '471us'] p99.9=['2.9ms', '1.8ms', '3.1ms']
+
+== c1-segregated-no0 (iso p99 853us, p99.9 3.0ms; most favourable iso over S2+S1 runs: 853us / 3.0ms)
+  base   agg99   vals=['451.4ms', '380.7ms', '311.9ms'] ratio/iso=[529.3, 446.5, 365.7] limit 2x met=[False, False, False] best-pairing ratio=365.7
+  base   agg999  vals=['659.2ms', '568.4ms', '669.2ms'] ratio/iso=[216.6, 186.8, 219.9] limit 5x met=[False, False, False] best-pairing ratio=186.8
+  base   nb99    vals=['522.6ms', '410.5ms', '446.2ms'] ratio/iso=[612.9, 481.3, 523.2] limit 2x met=[False, False, False] best-pairing ratio=481.3
+  base   nb999   vals=['698.1ms', '555.2ms', '713.8ms'] ratio/iso=[229.4, 182.4, 234.6] limit 5x met=[False, False, False] best-pairing ratio=182.4
+  base   nbs99   vals=['522.6ms', '410.5ms', '446.2ms'] ratio/iso=[612.9, 481.3, 523.2] limit 2x met=[False, False, False] best-pairing ratio=481.3
+  base   nbs999  vals=['698.1ms', '555.2ms', '713.8ms'] ratio/iso=[229.4, 182.4, 234.6] limit 5x met=[False, False, False] best-pairing ratio=182.4
+  base   bulk cores=[[1], [1], [1]] inserter(connect,end)=[[(3.0, 1.0)], [(3.0, 1.0)], [(3.0, 1.0)]] NB clients=[3, 3, 3] NBs clients=[3, 3, 3] moves_in_window=[18, 6, 8]
+  base   rolls(log/ctr)=[(35, 35.0), (36, 36.0), (36, 36.0)] hold max=['769.3ms', '628.7ms', '768.4ms'] held s/window=[11.04, 12.53, 11.15] agg max=['757.5ms', '617.6ms', '758.3ms'] errors=[0, 0, 0] load=['2.32', '2.12', '2.24']
+  opt3   agg99   vals=['640.5ms', '17.4ms', '42.0ms'] ratio/iso=[751.0, 20.3, 49.3] limit 2x met=[False, False, False] best-pairing ratio=20.3
+  opt3   agg999  vals=['906.1ms', '87.5ms', '193.8ms'] ratio/iso=[297.8, 28.8, 63.7] limit 5x met=[False, False, False] best-pairing ratio=28.8
+  opt3   nb99    vals=['532.1ms', '18.2ms', '39.3ms'] ratio/iso=[623.9, 21.3, 46.1] limit 2x met=[False, False, False] best-pairing ratio=21.3
+  opt3   nb999   vals=['903.7ms', '127.0ms', '164.3ms'] ratio/iso=[296.9, 41.7, 54.0] limit 5x met=[False, False, False] best-pairing ratio=41.7
+  opt3   nbs99   vals=['532.1ms', '18.2ms', '39.3ms'] ratio/iso=[623.9, 21.3, 46.1] limit 2x met=[False, False, False] best-pairing ratio=21.3
+  opt3   nbs999  vals=['903.7ms', '94.7ms', '164.3ms'] ratio/iso=[296.9, 31.1, 54.0] limit 5x met=[False, False, False] best-pairing ratio=31.1
+  opt3   bulk cores=[[1], [0, 2], [1]] inserter(connect,end)=[[(3.0, 1.0)], [(3.0, 2.0)], [(3.0, 1.0)]] NB clients=[3, 3, 3] NBs clients=[3, 2, 3] moves_in_window=[35, 40, 33]
+  opt3   rolls(log/ctr)=[(25, 25.0), (50, 50.0), (53, 54.0)] hold max=['1009.2ms', '198.4ms', '798.0ms'] held s/window=[9.36, 1.41, 2.56] agg max=['995.2ms', '191.7ms', '783.3ms'] errors=[0, 0, 0] load=['2.43', '2.10', '1.88']
+  s16    agg99   vals=['319.8ms', '159.6ms', '107.0ms'] ratio/iso=[375.0, 187.2, 125.5] limit 2x met=[False, False, False] best-pairing ratio=125.5
+  s16    agg999  vals=['599.6ms', '416.5ms', '398.5ms'] ratio/iso=[197.0, 136.9, 130.9] limit 5x met=[False, False, False] best-pairing ratio=130.9
+  s16    nb99    vals=['319.8ms', '159.6ms', '118.2ms'] ratio/iso=[375.0, 187.2, 138.6] limit 2x met=[False, False, False] best-pairing ratio=138.6
+  s16    nb999   vals=['599.6ms', '416.5ms', '456.3ms'] ratio/iso=[197.0, 136.9, 149.9] limit 5x met=[False, False, False] best-pairing ratio=136.9
+  s16    nbs99   vals=['319.8ms', '159.6ms', '118.2ms'] ratio/iso=[375.0, 187.2, 138.6] limit 2x met=[False, False, False] best-pairing ratio=138.6
+  s16    nbs999  vals=['599.6ms', '416.5ms', '456.3ms'] ratio/iso=[197.0, 136.9, 149.9] limit 5x met=[False, False, False] best-pairing ratio=136.9
+  s16    bulk cores=[[3], [3], [1]] inserter(connect,end)=[[(3.0, 3.0)], [(3.0, 3.0)], [(3.0, 1.0)]] NB clients=[6, 6, 3] NBs clients=[6, 6, 3] moves_in_window=[22, 25, 30]
+  s16    rolls(log/ctr)=[(125, 125.0), (142, 142.0), (142, 142.0)] hold max=['429.3ms', '585.3ms', '553.2ms'] held s/window=[13.21, 10.88, 10.49] agg max=['635.7ms', '563.5ms', '545.2ms'] errors=[0, 0, 0] load=['2.38', '2.04', '2.06']
+  s256   agg99   vals=['4906.5ms', '1034.4ms', '951.0ms'] ratio/iso=[5753.4, 1212.9, 1115.2] limit 2x met=[False, False, False] best-pairing ratio=1115.2
+  s256   agg999  vals=['5706.7ms', '1346.9ms', '1174.5ms'] ratio/iso=[1875.2, 442.6, 386.0] limit 5x met=[False, False, False] best-pairing ratio=386.0
+  s256   nb99    vals=['4906.5ms', '1034.4ms', '965.9ms'] ratio/iso=[5753.4, 1212.9, 1132.6] limit 2x met=[False, False, False] best-pairing ratio=1132.6
+  s256   nb999   vals=['5706.7ms', '1346.9ms', '1199.6ms'] ratio/iso=[1875.2, 442.6, 394.2] limit 5x met=[False, False, False] best-pairing ratio=394.2
+  s256   nbs99   vals=['4906.5ms', '1034.4ms', '965.9ms'] ratio/iso=[5753.4, 1212.9, 1132.6] limit 2x met=[False, False, False] best-pairing ratio=1132.6
+  s256   nbs999  vals=['5706.7ms', '1346.9ms', '1199.6ms'] ratio/iso=[1875.2, 442.6, 394.2] limit 5x met=[False, False, False] best-pairing ratio=394.2
+  s256   bulk cores=[[3], [3], [1]] inserter(connect,end)=[[(3.0, 3.0)], [(3.0, 3.0)], [(3.0, 1.0)]] NB clients=[6, 6, 3] NBs clients=[6, 6, 3] moves_in_window=[16, 12, 29]
+  s256   rolls(log/ctr)=[(5, 5.0), (8, 8.0), (8, 8.0)] hold max=['3457.7ms', '1521.0ms', '1688.6ms'] held s/window=[12.16, 9.93, 10.0] agg max=['5783.4ms', '1510.8ms', '1259.0ms'] errors=[0, 0, 0] load=['2.36', '2.32', '2.35']
+  s1024  agg99   vals=['2.5ms', '4178.4ms', '3632.8ms'] ratio/iso=[2.9, 4899.6, 4259.9] limit 2x met=[False, False, False] best-pairing ratio=2.9
+  s1024  agg999  vals=['159.6ms', '4522.3ms', '4719.2ms'] ratio/iso=[52.4, 1486.0, 1550.8] limit 5x met=[False, False, False] best-pairing ratio=52.4
+  s1024  nb99    vals=['2.0ms', '3583.9ms', '4005.0ms'] ratio/iso=[2.4, 4202.5, 4696.3] limit 2x met=[False, False, False] best-pairing ratio=2.4
+  s1024  nb999   vals=['162.0ms', '4386.8ms', '4808.5ms'] ratio/iso=[53.2, 1441.5, 1580.1] limit 5x met=[False, False, False] best-pairing ratio=53.2
+  s1024  nbs99   vals=['2.0ms', '3583.9ms', '4005.0ms'] ratio/iso=[2.4, 4202.5, 4696.3] limit 2x met=[False, False, False] best-pairing ratio=2.4
+  s1024  nbs999  vals=['162.0ms', '4386.8ms', '4808.5ms'] ratio/iso=[53.2, 1441.5, 1580.1] limit 5x met=[False, False, False] best-pairing ratio=53.2
+  s1024  bulk cores=[[2], [2], [2]] inserter(connect,end)=[[(3.0, 2.0)], [(3.0, 2.0)], [(3.0, 2.0)]] NB clients=[3, 3, 3] NBs clients=[3, 3, 3] moves_in_window=[4, 22, 17]
+  s1024  rolls(log/ctr)=[(2, 2.0), (2, 2.0), (2, 2.0)] hold max=['11561.1ms', '4698.3ms', '4908.2ms'] held s/window=[17.08, 9.19, 9.06] agg max=['11550.5ms', '4695.3ms', '4897.5ms'] errors=[0, 0, 0] load=['2.30', '2.33', '2.25']
+
+== c1-batch0 (iso p99 602us, p99.9 2.4ms; most favourable iso over S2+S1 runs: 602us / 2.4ms)
+  base   agg99   vals=['223.8ms', '459.5ms', '241.3ms'] ratio/iso=[372.0, 764.0, 401.2] limit 2x met=[False, False, False] best-pairing ratio=372.0
+  base   agg999  vals=['372.6ms', '691.2ms', '473.9ms'] ratio/iso=[152.8, 283.5, 194.4] limit 5x met=[False, False, False] best-pairing ratio=152.8
+  base   nb99    vals=['234.5ms', '519.0ms', '256.3ms'] ratio/iso=[389.8, 862.9, 426.1] limit 2x met=[False, False, False] best-pairing ratio=389.8
+  base   nb999   vals=['432.2ms', '697.7ms', '514.6ms'] ratio/iso=[177.3, 286.2, 211.1] limit 5x met=[False, False, False] best-pairing ratio=177.3
+  base   nbs99   vals=['234.5ms', '519.0ms', '256.3ms'] ratio/iso=[389.8, 862.9, 426.1] limit 2x met=[False, False, False] best-pairing ratio=389.8
+  base   nbs999  vals=['432.2ms', '697.7ms', '514.6ms'] ratio/iso=[177.3, 286.2, 211.1] limit 5x met=[False, False, False] best-pairing ratio=177.3
+  base   bulk cores=[[0, 1], [3], [3]] inserter(connect,end)=[[(0.0, 1.0)], [(0.0, 3.0)], [(0.0, 3.0)]] NB clients=[4, 4, 4] NBs clients=[4, 4, 4] moves_in_window=[20, 14, 8]
+  base   rolls(log/ctr)=[(35, 35.0), (35, 35.0), (34, 34.0)] hold max=['770.9ms', '791.1ms', '642.7ms'] held s/window=[10.65, 12.12, 11.58] agg max=['550.8ms', '786.7ms', '633.6ms'] errors=[0, 0, 0] load=['2.47', '2.39', '2.48']
+  opt3   agg99   vals=['231.1ms', '42.6ms', '71.2ms'] ratio/iso=[384.3, 70.7, 118.4] limit 2x met=[False, False, False] best-pairing ratio=70.7
+  opt3   agg999  vals=['1192.9ms', '202.6ms', '490.3ms'] ratio/iso=[489.3, 83.1, 201.1] limit 5x met=[False, False, False] best-pairing ratio=83.1
+  opt3   nb99    vals=['476.6ms', '36.4ms', '15.0ms'] ratio/iso=[792.4, 60.5, 24.9] limit 2x met=[False, False, False] best-pairing ratio=24.9
+  opt3   nb999   vals=['1252.5ms', '187.3ms', '86.1ms'] ratio/iso=[513.7, 76.8, 35.3] limit 5x met=[False, False, False] best-pairing ratio=35.3
+  opt3   nbs99   vals=['476.6ms', '36.4ms', '15.0ms'] ratio/iso=[792.4, 60.5, 24.9] limit 2x met=[False, False, False] best-pairing ratio=24.9
+  opt3   nbs999  vals=['1252.5ms', '187.3ms', '86.1ms'] ratio/iso=[513.7, 76.8, 35.3] limit 5x met=[False, False, False] best-pairing ratio=35.3
+  opt3   bulk cores=[[3], [1], [1]] inserter(connect,end)=[[(0.0, 3.0)], [(0.0, 1.0)], [(0.0, 1.0)]] NB clients=[4, 4, 4] NBs clients=[4, 4, 4] moves_in_window=[6, 42, 28]
+  opt3   rolls(log/ctr)=[(49, 49.0), (53, 53.0), (52, 52.0)] hold max=['1372.5ms', '281.3ms', '571.0ms'] held s/window=[4.61, 2.42, 2.96] agg max=['1371.4ms', '280.4ms', '549.8ms'] errors=[0, 0, 0] load=['2.43', '2.35', '2.41']
+  s16    agg99   vals=['244.5ms', '303.4ms', '167.3ms'] ratio/iso=[406.5, 504.4, 278.1] limit 2x met=[False, False, False] best-pairing ratio=278.1
+  s16    agg999  vals=['703.0ms', '555.3ms', '442.1ms'] ratio/iso=[288.4, 227.8, 181.3] limit 5x met=[False, False, False] best-pairing ratio=181.3
+  s16    nb99    vals=['358.9ms', '291.2ms', '240.1ms'] ratio/iso=[596.7, 484.2, 399.1] limit 2x met=[False, False, False] best-pairing ratio=399.1
+  s16    nb999   vals=['732.9ms', '555.3ms', '456.9ms'] ratio/iso=[300.6, 227.8, 187.4] limit 5x met=[False, False, False] best-pairing ratio=187.4
+  s16    nbs99   vals=['358.9ms', '291.2ms', '240.1ms'] ratio/iso=[596.7, 484.2, 399.1] limit 2x met=[False, False, False] best-pairing ratio=399.1
+  s16    nbs999  vals=['732.9ms', '555.3ms', '456.9ms'] ratio/iso=[300.6, 227.8, 187.4] limit 5x met=[False, False, False] best-pairing ratio=187.4
+  s16    bulk cores=[[1], [3], [2]] inserter(connect,end)=[[(0.0, 1.0)], [(0.0, 3.0)], [(0.0, 2.0)]] NB clients=[4, 4, 4] NBs clients=[4, 4, 4] moves_in_window=[23, 24, 17]
+  s16    rolls(log/ctr)=[(129, 129.0), (142, 142.0), (143, 143.0)] hold max=['820.0ms', '603.0ms', '497.5ms'] held s/window=[10.63, 11.3, 9.85] agg max=['810.6ms', '596.8ms', '486.4ms'] errors=[0, 0, 0] load=['2.15', '2.49', '2.21']
+  s256   agg99   vals=['2280.9ms', '960.0ms', '981.6ms'] ratio/iso=[3792.1, 1596.1, 1632.0] limit 2x met=[False, False, False] best-pairing ratio=1596.1
+  s256   agg999  vals=['2881.8ms', '1224.3ms', '1270.9ms'] ratio/iso=[1182.0, 502.1, 521.2] limit 5x met=[False, False, False] best-pairing ratio=502.1
+  s256   nb99    vals=['62.4ms', '1044.9ms', '931.6ms'] ratio/iso=[103.8, 1737.2, 1548.8] limit 2x met=[False, False, False] best-pairing ratio=103.8
+  s256   nb999   vals=['173.2ms', '1253.9ms', '1300.6ms'] ratio/iso=[71.0, 514.3, 533.4] limit 5x met=[False, False, False] best-pairing ratio=71.0
+  s256   nbs99   vals=['62.4ms', '1044.9ms', '931.6ms'] ratio/iso=[103.8, 1737.2, 1548.8] limit 2x met=[False, False, False] best-pairing ratio=103.8
+  s256   nbs999  vals=['173.2ms', '1253.9ms', '1300.6ms'] ratio/iso=[71.0, 514.3, 533.4] limit 5x met=[False, False, False] best-pairing ratio=71.0
+  s256   bulk cores=[[1], [2], [1]] inserter(connect,end)=[[(0.0, 1.0)], [(0.0, 2.0)], [(0.0, 1.0)]] NB clients=[4, 4, 4] NBs clients=[4, 4, 4] moves_in_window=[2, 14, 10]
+  s256   rolls(log/ctr)=[(5, 5.0), (9, 9.0), (8, 8.0)] hold max=['3063.9ms', '1382.8ms', '1443.6ms'] held s/window=[13.21, 10.19, 9.07] agg max=['3056.6ms', '1372.3ms', '1419.7ms'] errors=[0, 0, 0] load=['2.47', '2.41', '2.29']
+  s1024  agg99   vals=['4369.9ms', '3939.3ms', '4415.5ms'] ratio/iso=[7265.1, 6549.1, 7340.8] limit 2x met=[False, False, False] best-pairing ratio=6549.1
+  s1024  agg999  vals=['4991.8ms', '4890.9ms', '5219.2ms'] ratio/iso=[2047.4, 2006.0, 2140.7] limit 5x met=[False, False, False] best-pairing ratio=2006.0
+  s1024  nb99    vals=['4269.7ms', '4008.9ms', '4713.2ms'] ratio/iso=[7098.4, 6664.8, 7835.7] limit 2x met=[False, False, False] best-pairing ratio=6664.8
+  s1024  nb999   vals=['4534.4ms', '4950.5ms', '5248.9ms'] ratio/iso=[1859.8, 2030.5, 2152.9] limit 5x met=[False, False, False] best-pairing ratio=1859.8
+  s1024  nbs99   vals=['4269.7ms', '4008.9ms', '4713.2ms'] ratio/iso=[7098.4, 6664.8, 7835.7] limit 2x met=[False, False, False] best-pairing ratio=6664.8
+  s1024  nbs999  vals=['4534.4ms', '4950.5ms', '5248.9ms'] ratio/iso=[1859.8, 2030.5, 2152.9] limit 5x met=[False, False, False] best-pairing ratio=1859.8
+  s1024  bulk cores=[[3], [2], [1]] inserter(connect,end)=[[(0.0, 3.0)], [(0.0, 2.0)], [(0.0, 1.0)]] NB clients=[4, 4, 4] NBs clients=[4, 4, 4] moves_in_window=[19, 24, 19]
+  s1024  rolls(log/ctr)=[(2, 2.0), (2, 2.0), (2, 2.0)] hold max=['5190.7ms', '5082.6ms', '5316.2ms'] held s/window=[9.3, 9.17, 9.39] agg max=['5169.2ms', '5069.2ms', '5308.1ms'] errors=[0, 0, 0] load=['2.42', '2.37', '2.43']
+
+== c1-spread (iso p99 747us, p99.9 3.4ms; most favourable iso over S2+S1 runs: 747us / 3.4ms)
+  base   agg99   vals=['312.4ms', '247.5ms', '325.1ms'] ratio/iso=[418.1, 331.2, 435.1] limit 2x met=[False, False, False] best-pairing ratio=331.2
+  base   agg999  vals=['619.3ms', '376.2ms', '706.6ms'] ratio/iso=[181.7, 110.4, 207.3] limit 5x met=[False, False, False] best-pairing ratio=110.4
+  base   nb99    vals=['342.1ms', '144.8ms', '306.6ms'] ratio/iso=[457.8, 193.8, 410.3] limit 2x met=[False, False, False] best-pairing ratio=193.8
+  base   nb999   vals=['649.1ms', '349.0ms', '680.8ms'] ratio/iso=[190.5, 102.4, 199.8] limit 5x met=[False, False, False] best-pairing ratio=102.4
+  base   nbs99   vals=['342.1ms', 'None', '306.6ms'] ratio/iso=[457.8, None, 410.3] limit 2x met=[False, False, False] best-pairing ratio=410.3
+  base   nbs999  vals=['649.1ms', 'None', '680.8ms'] ratio/iso=[190.5, None, 199.8] limit 5x met=[False, False, False] best-pairing ratio=190.5
+  base   bulk cores=[[1], [0, 1, 2], [2]] inserter(connect,end)=[[(3.0, 1.0)], [(3.0, 2.0)], [(3.0, 2.0)]] NB clients=[4, 1, 5] NBs clients=[4, 0, 5] moves_in_window=[11, 36, 7]
+  base   rolls(log/ctr)=[(35, 35.0), (35, 35.0), (36, 36.0)] hold max=['766.6ms', '789.8ms', '784.1ms'] held s/window=[10.27, 10.45, 10.85] agg max=['753.4ms', '398.8ms', '770.8ms'] errors=[0, 0, 0] load=['2.47', '2.15', '2.29']
+  opt3   agg99   vals=['615.7ms', '22.4ms', '113.0ms'] ratio/iso=[824.1, 30.0, 151.2] limit 2x met=[False, False, False] best-pairing ratio=30.0
+  opt3   agg999  vals=['845.5ms', '67.2ms', '843.3ms'] ratio/iso=[248.1, 19.7, 247.5] limit 5x met=[False, False, False] best-pairing ratio=19.7
+  opt3   nb99    vals=['534.1ms', '23.9ms', '212.5ms'] ratio/iso=[714.9, 31.9, 284.4] limit 2x met=[False, False, False] best-pairing ratio=31.9
+  opt3   nb999   vals=['823.4ms', '69.7ms', '858.2ms'] ratio/iso=[241.6, 20.5, 251.8] limit 5x met=[False, False, False] best-pairing ratio=20.5
+  opt3   nbs99   vals=['291.0ms', '23.9ms', '212.5ms'] ratio/iso=[389.5, 31.9, 284.4] limit 2x met=[False, False, False] best-pairing ratio=31.9
+  opt3   nbs999  vals=['558.0ms', '69.7ms', '858.2ms'] ratio/iso=[163.7, 20.5, 251.8] limit 5x met=[False, False, False] best-pairing ratio=20.5
+  opt3   bulk cores=[[2, 3], [3], [3]] inserter(connect,end)=[[(3.0, 3.0)], [(3.0, 3.0)], [(3.0, 3.0)]] NB clients=[4, 5, 5] NBs clients=[1, 5, 5] moves_in_window=[62, 44, 32]
+  opt3   rolls(log/ctr)=[(52, 52.0), (59, 59.0), (53, 53.0)] hold max=['901.5ms', '64.3ms', '1011.8ms'] held s/window=[3.26, 0.97, 3.04] agg max=['892.5ms', '101.5ms', '995.6ms'] errors=[0, 0, 0] load=['2.27', '2.45', '2.16']
+  s16    agg99   vals=['351.9ms', '159.9ms', '201.5ms'] ratio/iso=[471.0, 213.9, 269.6] limit 2x met=[False, False, False] best-pairing ratio=213.9
+  s16    agg999  vals=['496.1ms', '502.3ms', '493.9ms'] ratio/iso=[145.6, 147.4, 144.9] limit 5x met=[False, False, False] best-pairing ratio=144.9
+  s16    nb99    vals=['354.3ms', '141.3ms', '200.4ms'] ratio/iso=[474.1, 189.1, 268.1] limit 2x met=[False, False, False] best-pairing ratio=189.1
+  s16    nb999   vals=['482.2ms', '493.5ms', '498.3ms'] ratio/iso=[141.5, 144.8, 146.2] limit 5x met=[False, False, False] best-pairing ratio=141.5
+  s16    nbs99   vals=['354.3ms', '141.3ms', '200.4ms'] ratio/iso=[474.1, 189.1, 268.1] limit 2x met=[False, False, False] best-pairing ratio=189.1
+  s16    nbs999  vals=['482.2ms', '493.5ms', '498.3ms'] ratio/iso=[141.5, 144.8, 146.2] limit 5x met=[False, False, False] best-pairing ratio=141.5
+  s16    bulk cores=[[0, 3], [3], [2]] inserter(connect,end)=[[(3.0, 3.0)], [(3.0, 3.0)], [(3.0, 2.0)]] NB clients=[3, 5, 5] NBs clients=[3, 5, 5] moves_in_window=[34, 58, 18]
+  s16    rolls(log/ctr)=[(125, 125.0), (142, 142.0), (143, 143.0)] hold max=['533.8ms', '565.8ms', '594.5ms'] held s/window=[12.81, 10.68, 10.21] agg max=['531.1ms', '549.2ms', '587.4ms'] errors=[0, 0, 0] load=['2.07', '2.47', '2.30']
+  s256   agg99   vals=['1376.5ms', '607.5ms', '1056.2ms'] ratio/iso=[1842.2, 813.0, 1413.5] limit 2x met=[False, False, False] best-pairing ratio=813.0
+  s256   agg999  vals=['2138.2ms', '1203.9ms', '1277.4ms'] ratio/iso=[627.4, 353.3, 374.8] limit 5x met=[False, False, False] best-pairing ratio=353.3
+  s256   nb99    vals=['1720.6ms', '706.6ms', '1066.5ms'] ratio/iso=[2302.7, 945.7, 1427.4] limit 2x met=[False, False, False] best-pairing ratio=945.7
+  s256   nb999   vals=['2227.8ms', '1233.8ms', '1276.9ms'] ratio/iso=[653.7, 362.0, 374.7] limit 5x met=[False, False, False] best-pairing ratio=362.0
+  s256   nbs99   vals=['458.7ms', '706.6ms', '1066.5ms'] ratio/iso=[613.9, 945.7, 1427.4] limit 2x met=[False, False, False] best-pairing ratio=613.9
+  s256   nbs999  vals=['995.1ms', '1233.8ms', '1276.9ms'] ratio/iso=[292.0, 362.0, 374.7] limit 5x met=[False, False, False] best-pairing ratio=292.0
+  s256   bulk cores=[[0, 2], [2], [2]] inserter(connect,end)=[[(3.0, 2.0)], [(3.0, 2.0)], [(3.0, 2.0)]] NB clients=[3, 5, 5] NBs clients=[2, 5, 5] moves_in_window=[6, 10, 14]
+  s256   rolls(log/ctr)=[(6, 6.0), (8, 8.0), (8, 8.0)] hold max=['2885.0ms', '1529.5ms', '1325.5ms'] held s/window=[12.78, 9.28, 9.15] agg max=['2316.9ms', '1353.0ms', '1311.9ms'] errors=[0, 0, 0] load=['2.30', '1.73', '2.27']
+  s1024  agg99   vals=['3717.5ms', '2615.1ms', '4074.0ms'] ratio/iso=[4975.2, 3499.8, 5452.4] limit 2x met=[False, False, False] best-pairing ratio=3499.8
+  s1024  agg999  vals=['4968.6ms', '3638.4ms', '4878.9ms'] ratio/iso=[1457.9, 1067.6, 1431.6] limit 5x met=[False, False, False] best-pairing ratio=1067.6
+  s1024  nb99    vals=['3866.6ms', '2647.8ms', '104.9ms'] ratio/iso=[5174.8, 3543.7, 140.5] limit 2x met=[False, False, False] best-pairing ratio=140.5
+  s1024  nb999   vals=['4998.4ms', '3668.2ms', '223.5ms'] ratio/iso=[1466.7, 1076.3, 65.6] limit 5x met=[False, False, False] best-pairing ratio=65.6
+  s1024  nbs99   vals=['3866.6ms', '2647.8ms', '104.9ms'] ratio/iso=[5174.8, 3543.7, 140.5] limit 2x met=[False, False, False] best-pairing ratio=140.5
+  s1024  nbs999  vals=['4998.4ms', '3668.2ms', '223.5ms'] ratio/iso=[1466.7, 1076.3, 65.6] limit 5x met=[False, False, False] best-pairing ratio=65.6
+  s1024  bulk cores=[[3], [2], [1]] inserter(connect,end)=[[(3.0, 3.0)], [(3.0, 2.0)], [(3.0, 1.0)]] NB clients=[5, 5, 4] NBs clients=[5, 5, 4] moves_in_window=[5, 8, 6]
+  s1024  rolls(log/ctr)=[(2, 2.0), (2, 2.0), (2, 2.0)] hold max=['5153.7ms', '4809.0ms', '5029.0ms'] held s/window=[9.22, 8.64, 9.92] agg max=['5147.1ms', '3815.3ms', '5019.5ms'] errors=[0, 0, 0] load=['2.37', '2.47', '2.45']
+
+== c2 (iso p99 140.8ms, p99.9 467.4ms; most favourable iso over S2+S1 runs: 140.8ms / 467.4ms)
+  base   agg99   vals=['4026.4ms', '773.5ms', '751.8ms'] ratio/iso=[28.6, 5.5, 5.3] limit 2x met=[False, False, False] best-pairing ratio=5.3
+  base   agg999  vals=['4289.8ms', '1002.1ms', '972.5ms'] ratio/iso=[9.2, 2.1, 2.1] limit 5x met=[False, True, True] best-pairing ratio=2.1
+  base   nb99    vals=['4026.4ms', '773.5ms', '751.8ms'] ratio/iso=[28.6, 5.5, 5.3] limit 2x met=[False, False, False] best-pairing ratio=5.3
+  base   nb999   vals=['4289.8ms', '1002.1ms', '972.5ms'] ratio/iso=[9.2, 2.1, 2.1] limit 5x met=[False, True, True] best-pairing ratio=2.1
+  base   nbs99   vals=['4026.4ms', '773.5ms', '751.8ms'] ratio/iso=[28.6, 5.5, 5.3] limit 2x met=[False, False, False] best-pairing ratio=5.3
+  base   nbs999  vals=['4289.8ms', '1002.1ms', '972.5ms'] ratio/iso=[9.2, 2.1, 2.1] limit 5x met=[False, True, True] best-pairing ratio=2.1
+  base   bulk cores=[[3], [3], [3]] inserter(connect,end)=[[(3.0, 3.0)], [(3.0, 3.0)], [(3.0, 3.0)]] NB clients=[8, 8, 8] NBs clients=[8, 8, 8] moves_in_window=[20, 17, 22]
+  base   rolls(log/ctr)=[(30, 30.0), (34, 34.0), (35, 35.0)] hold max=['4317.8ms', '1028.9ms', '1000.9ms'] held s/window=[16.86, 13.06, 13.65] agg max=['4317.5ms', '1028.8ms', '1000.5ms'] errors=[0, 0, 0] load=['2.48', '2.44', '2.23']
+  opt3   agg99   vals=['2534.7ms', '2232.1ms', '975.2ms'] ratio/iso=[18.0, 15.9, 6.9] limit 2x met=[False, False, False] best-pairing ratio=6.9
+  opt3   agg999  vals=['3245.3ms', '2658.8ms', '1179.8ms'] ratio/iso=[6.9, 5.7, 2.5] limit 5x met=[False, False, True] best-pairing ratio=2.5
+  opt3   nb99    vals=['2534.7ms', '2232.1ms', '975.2ms'] ratio/iso=[18.0, 15.9, 6.9] limit 2x met=[False, False, False] best-pairing ratio=6.9
+  opt3   nb999   vals=['3245.3ms', '2658.8ms', '1179.8ms'] ratio/iso=[6.9, 5.7, 2.5] limit 5x met=[False, False, True] best-pairing ratio=2.5
+  opt3   nbs99   vals=['2534.7ms', '2232.1ms', '975.2ms'] ratio/iso=[18.0, 15.9, 6.9] limit 2x met=[False, False, False] best-pairing ratio=6.9
+  opt3   nbs999  vals=['3245.3ms', '2658.8ms', '1179.8ms'] ratio/iso=[6.9, 5.7, 2.5] limit 5x met=[False, False, True] best-pairing ratio=2.5
+  opt3   bulk cores=[[3], [3], [3]] inserter(connect,end)=[[(3.0, 3.0)], [(3.0, 3.0)], [(3.0, 3.0)]] NB clients=[8, 8, 8] NBs clients=[8, 8, 8] moves_in_window=[47, 96, 109]
+  opt3   rolls(log/ctr)=[(17, 17.0), (58, 58.0), (57, 57.0)] hold max=['1451.6ms', '1147.6ms', '1135.7ms'] held s/window=[12.73, 4.71, 4.69] agg max=['3338.1ms', '2714.6ms', '1239.1ms'] errors=[0, 0, 0] load=['2.42', '2.39', '1.94']
+  s16    agg99   vals=['1033.6ms', '951.8ms', '646.2ms'] ratio/iso=[7.3, 6.8, 4.6] limit 2x met=[False, False, False] best-pairing ratio=4.6
+  s16    agg999  vals=['1277.6ms', '1218.6ms', '888.1ms'] ratio/iso=[2.7, 2.6, 1.9] limit 5x met=[True, True, True] best-pairing ratio=1.9
+  s16    nb99    vals=['1033.6ms', '951.8ms', '646.2ms'] ratio/iso=[7.3, 6.8, 4.6] limit 2x met=[False, False, False] best-pairing ratio=4.6
+  s16    nb999   vals=['1277.6ms', '1218.6ms', '888.1ms'] ratio/iso=[2.7, 2.6, 1.9] limit 5x met=[True, True, True] best-pairing ratio=1.9
+  s16    nbs99   vals=['1033.6ms', '951.8ms', '646.2ms'] ratio/iso=[7.3, 6.8, 4.6] limit 2x met=[False, False, False] best-pairing ratio=4.6
+  s16    nbs999  vals=['1277.6ms', '1218.6ms', '888.1ms'] ratio/iso=[2.7, 2.6, 1.9] limit 5x met=[True, True, True] best-pairing ratio=1.9
+  s16    bulk cores=[[3], [3], [3]] inserter(connect,end)=[[(3.0, 3.0)], [(3.0, 3.0)], [(3.0, 3.0)]] NB clients=[8, 8, 8] NBs clients=[8, 8, 8] moves_in_window=[122, 132, 118]
+  s16    rolls(log/ctr)=[(131, 131.0), (137, 137.0), (137, 137.0)] hold max=['1307.4ms', '1246.8ms', '918.1ms'] held s/window=[14.09, 13.87, 14.64] agg max=['1306.8ms', '1247.3ms', '917.5ms'] errors=[0, 0, 0] load=['2.42', '2.16', '2.15']
+  s256   agg99   vals=['4260.3ms', '2021.2ms', '1879.8ms'] ratio/iso=[30.3, 14.4, 13.4] limit 2x met=[False, False, False] best-pairing ratio=13.4
+  s256   agg999  vals=['4527.4ms', '2257.1ms', '2819.9ms'] ratio/iso=[9.7, 4.8, 6.0] limit 5x met=[False, True, False] best-pairing ratio=4.8
+  s256   nb99    vals=['4260.3ms', '2021.2ms', '1879.8ms'] ratio/iso=[30.3, 14.4, 13.4] limit 2x met=[False, False, False] best-pairing ratio=13.4
+  s256   nb999   vals=['4527.4ms', '2257.1ms', '2819.9ms'] ratio/iso=[9.7, 4.8, 6.0] limit 5x met=[False, True, False] best-pairing ratio=4.8
+  s256   nbs99   vals=['4260.3ms', '2021.2ms', '1879.8ms'] ratio/iso=[30.3, 14.4, 13.4] limit 2x met=[False, False, False] best-pairing ratio=13.4
+  s256   nbs999  vals=['4527.4ms', '2257.1ms', '2819.9ms'] ratio/iso=[9.7, 4.8, 6.0] limit 5x met=[False, True, False] best-pairing ratio=4.8
+  s256   bulk cores=[[3], [3], [3]] inserter(connect,end)=[[(3.0, 3.0)], [(3.0, 3.0)], [(3.0, 3.0)]] NB clients=[8, 8, 8] NBs clients=[8, 8, 8] moves_in_window=[28, 18, 33]
+  s256   rolls(log/ctr)=[(5, 5.0), (9, 9.0), (8, 8.0)] hold max=['4557.7ms', '2269.6ms', '1918.5ms'] held s/window=[16.1, 13.88, 11.39] agg max=['4556.9ms', '2382.3ms', '2938.5ms'] errors=[0, 0, 0] load=['2.31', '2.22', '2.18']
+  s1024  agg99   vals=['434.9ms', '5437.1ms', '5522.6ms'] ratio/iso=[3.1, 38.6, 39.2] limit 2x met=[False, False, False] best-pairing ratio=3.1
+  s1024  agg999  vals=['1138.8ms', '5701.0ms', '5697.5ms'] ratio/iso=[2.4, 12.2, 12.2] limit 5x met=[True, False, False] best-pairing ratio=2.4
+  s1024  nb99    vals=['434.9ms', '5437.1ms', '5522.6ms'] ratio/iso=[3.1, 38.6, 39.2] limit 2x met=[False, False, False] best-pairing ratio=3.1
+  s1024  nb999   vals=['1138.8ms', '5701.0ms', '5697.5ms'] ratio/iso=[2.4, 12.2, 12.2] limit 5x met=[True, False, False] best-pairing ratio=2.4
+  s1024  nbs99   vals=['434.9ms', '5437.1ms', '5522.6ms'] ratio/iso=[3.1, 38.6, 39.2] limit 2x met=[False, False, False] best-pairing ratio=3.1
+  s1024  nbs999  vals=['1138.8ms', '5701.0ms', '5697.5ms'] ratio/iso=[2.4, 12.2, 12.2] limit 5x met=[True, False, False] best-pairing ratio=2.4
+  s1024  bulk cores=[[3], [3], [3]] inserter(connect,end)=[[(3.0, 3.0)], [(3.0, 3.0)], [(3.0, 3.0)]] NB clients=[8, 8, 8] NBs clients=[8, 8, 8] moves_in_window=[30, 19, 24]
+  s1024  rolls(log/ctr)=[(2, 2.0), (2, 2.0), (2, 2.0)] hold max=['561.1ms', '5727.8ms', '5712.5ms'] held s/window=[0.8, 10.42, 11.31] agg max=['1337.1ms', '5728.6ms', '5738.0ms'] errors=[0, 0, 0] load=['2.11', '2.30', '2.41']
+
+== c3 (term iii)
+  base   rows/s=[169212, 164384, 169894] mean=167830 spread=5509 driver MiB/s=[75.6, 73.4, 75.9] mean=75.0 lsn MiB/s=[75.6, 73.4, 75.9] mean=75.0 rolls=[36, 33, 36] hold p50/p99/max=375.8ms/808.9ms/847.4ms held s=[13.17, 14.37, 14.53] bodies=[{'hit': 35, 'waited': 1}, {'hit': 33}, {'hit': 35, 'waited': 1}] errors=[0, 0, 0] load=['2.41', '2.28', '2.15']
+  opt3   rows/s=[141243, 304305, 273802] mean=239784 spread=163062 driver MiB/s=[60.0, 135.9, 122.3] mean=106.0 lsn MiB/s=[60.0, 135.9, 122.3] mean=106.0 rolls=[29, 64, 57] hold p50/p99/max=17.2ms/1288.9ms/1499.8ms held s=[10.36, 2.21, 4.37] bodies=[{'hit': 29}, {'hit': 64}, {'hit': 57}] errors=[0, 0, 0] load=['2.29', '2.30', '2.15']
+  s16    rows/s=[170262, 170277, 169949] mean=170162 spread=328 driver MiB/s=[75.8, 76.1, 75.9] mean=75.9 lsn MiB/s=[75.8, 76.1, 75.9] mean=75.9 rolls=[142, 142, 142] hold p50/p99/max=93.1ms/553.2ms/612.4ms held s=[13.58, 14.03, 13.85] bodies=[{'hit': 142}, {'hit': 141, 'waited': 1}, {'hit': 142}] errors=[0, 0, 0] load=['2.49', '2.21', '2.29']
+  s256   rows/s=[119302, 179334, 178928] mean=159188 spread=60033 driver MiB/s=[49.3, 75.9, 75.9] mean=67.0 lsn MiB/s=[49.3, 75.9, 75.9] mean=67.0 rolls=[7, 9, 9] hold p50/p99/max=1592.2ms/2790.3ms/2790.3ms held s=[17.14, 13.78, 13.72] bodies=[{'waited': 7}, {'hit': 1, 'waited': 8}, {'hit': 2, 'waited': 7}] errors=[0, 0, 0] load=['2.35', '2.24', '2.15']
+  s1024  rows/s=[156197, 180917, 188004] mean=175040 spread=31807 driver MiB/s=[52.7, 80.8, 84.0] mean=72.5 lsn MiB/s=[52.7, 80.8, 84.0] mean=72.5 rolls=[2, 2, 2] hold p50/p99/max=5638.8ms/10526.0ms/10526.0ms held s=[18.55, 10.94, 11.61] bodies=[{'waited': 2}, {'waited': 2}, {'waited': 2}] errors=[0, 0, 0] load=['2.46', '2.44', '2.29']
+  base   vs base: rows/s +0.0%  driver MiB/s +0.0%  lsn MiB/s +0.0%  (min arm run / max base run rows/s -3.2%, max/min +3.4%)
+  opt3   vs base: rows/s +42.9%  driver MiB/s +41.5%  lsn MiB/s +41.5%  (min arm run / max base run rows/s -16.9%, max/min +85.1%)
+  s16    vs base: rows/s +1.4%  driver MiB/s +1.3%  lsn MiB/s +1.3%  (min arm run / max base run rows/s +0.0%, max/min +3.6%)
+  s256   vs base: rows/s -5.1%  driver MiB/s -10.6%  lsn MiB/s -10.6%  (min arm run / max base run rows/s -29.8%, max/min +9.1%)
+  s1024  vs base: rows/s +4.3%  driver MiB/s -3.3%  lsn MiB/s -3.3%  (min arm run / max base run rows/s -8.1%, max/min +14.4%)
+
+== roll holds pooled over C1+C2 per arm
+  base   runs=12 rolls=416 per run=34.7 hold p50=309.9ms p99=797.4ms max=4317.8ms sum per run=12.02s
+  opt3   runs=12 rolls=578 per run=48.2 hold p50=15.6ms p99=1135.7ms max=1451.6ms sum per run=4.39s
+  s16    runs=12 rolls=1638 per run=136.5 hold p50=74.7ms p99=521.9ms max=1307.4ms sum per run=11.89s
+  s256   runs=12 rolls=87 per run=7.2 hold p50=1332.5ms p99=4557.7ms max=4557.7ms sum per run=11.43s
+  s1024  runs=12 rolls=24 per run=2.0 hold p50=4809.0ms p99=11561.1ms max=11561.1ms sum per run=9.46s

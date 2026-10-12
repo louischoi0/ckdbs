@@ -1,0 +1,8498 @@
+[
+ {
+  "cell": "c1-batch0",
+  "dur": "relaxed",
+  "run": "r1",
+  "win_s": 29.86,
+  "rolls": 36,
+  "rolls_whole_in_measure": 36,
+  "roll_cores": {
+   "1": 36
+  },
+  "hold_in_win_us": 12127895,
+  "hold_p50": 326356,
+  "hold_max": 653644,
+  "moves_in_window": 18,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3,
+   0,
+   0
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   3.0,
+   3.0,
+   0.0,
+   3.0,
+   3.0,
+   3.0,
+   2.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 11933677.0,
+    "drain": 11933677.0,
+    "rollcov": 11931957.0,
+    "gate": 65533.0,
+    "moves_out": 9.0
+   },
+   "1": {
+    "stream": 90.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 11819656.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 19886.0,
+    "drain": 0.0,
+    "rollcov": 19790.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 809293.0,
+    "drain": 0.0,
+    "rollcov": 809148.0,
+    "gate": 0.0,
+    "moves_out": 9.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 36.0,
+   "sched_hold_out_run_over_10ms": 40.0,
+   "sched_unpolled_over_100ms": 39.0,
+   "sched_longest_unpolled_us": 239988.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 12762945.0,
+   "wal_drain_latch_wait_us": 11933677.0,
+   "wal_roll_blocked_wait_us": 12760896.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 2123,
+   "dropped": 0,
+   "p99_recomp": 429897.5,
+   "p999_recomp": 592633.5,
+   "p99_json": 429897.5,
+   "p999_json": 592633.5,
+   "ge10ms": 1956,
+   "ge10ms_aligned": 1712,
+   "stall_ms_ge10": 362592,
+   "stall_ms_ge10_aligned": 341670,
+   "ge10ms_overlap_any": 1772,
+   "p99_without_aligned": 72991.8,
+   "p999_without_aligned": 196496.2,
+   "roll_cover_frac": 0.406,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 60,
+    "-5..0": 0,
+    "0..5": 1594,
+    "5..30": 118,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 218,
+     "al": 188,
+     "max_ms": 632.8
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 3.0,
+     "ge10": 607,
+     "al": 567,
+     "max_ms": 645.0
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 0.0,
+     "ge10": 199,
+     "al": 163,
+     "max_ms": 597.5
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 305,
+     "al": 271,
+     "max_ms": 595.1
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 3.0,
+     "ge10": 409,
+     "al": 334,
+     "max_ms": 592.6
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 218,
+     "al": 189,
+     "max_ms": 635.2
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-batch0",
+  "dur": "relaxed",
+  "run": "r2",
+  "win_s": 29.8,
+  "rolls": 35,
+  "rolls_whole_in_measure": 35,
+  "roll_cores": {
+   "3": 35
+  },
+  "hold_in_win_us": 11251749,
+  "hold_p50": 290667,
+  "hold_max": 721835,
+  "moves_in_window": 10,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3,
+   0,
+   0
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   1.0,
+   1.0,
+   0.0,
+   1.0,
+   1.0,
+   1.0,
+   2.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 11066281.0,
+    "drain": 11066281.0,
+    "rollcov": 11065360.0,
+    "gate": 11851.0,
+    "moves_out": 5.0
+   },
+   "1": {
+    "stream": 148476.0,
+    "drain": 0.0,
+    "rollcov": 148414.0,
+    "gate": 0.0,
+    "moves_out": 5.0
+   },
+   "2": {
+    "stream": 8271.0,
+    "drain": 0.0,
+    "rollcov": 8216.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 98.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 10970955.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 36.0,
+   "sched_hold_out_run_over_10ms": 42.0,
+   "sched_unpolled_over_100ms": 38.0,
+   "sched_longest_unpolled_us": 339042.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 11223126.0,
+   "wal_drain_latch_wait_us": 11066281.0,
+   "wal_roll_blocked_wait_us": 11221989.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 1263,
+   "dropped": 0,
+   "p99_recomp": 354250.9,
+   "p999_recomp": 673697.0,
+   "p99_json": 354250.9,
+   "p999_json": 673697.0,
+   "ge10ms": 1184,
+   "ge10ms_aligned": 984,
+   "stall_ms_ge10": 213658,
+   "stall_ms_ge10_aligned": 197006,
+   "ge10ms_overlap_any": 1084,
+   "p99_without_aligned": 49904.8,
+   "p999_without_aligned": 220775.4,
+   "roll_cover_frac": 0.378,
+   "end_offset_ms_hist": {
+    "<-50": 34,
+    "-50..-5": 66,
+    "-5..0": 0,
+    "0..5": 875,
+    "5..30": 109,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 69,
+     "al": 49,
+     "max_ms": 310.8
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 123,
+     "al": 103,
+     "max_ms": 703.6
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 0.0,
+     "ge10": 532,
+     "al": 458,
+     "max_ms": 718.3
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 70,
+     "al": 48,
+     "max_ms": 713.6
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 30,
+     "al": 9,
+     "max_ms": 141.0
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 1.0,
+     "ge10": 360,
+     "al": 317,
+     "max_ms": 708.4
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-batch0",
+  "dur": "relaxed",
+  "run": "r3",
+  "win_s": 30.16,
+  "rolls": 33,
+  "rolls_whole_in_measure": 33,
+  "roll_cores": {
+   "3": 33
+  },
+  "hold_in_win_us": 11249842,
+  "hold_p50": 316502,
+  "hold_max": 724760,
+  "moves_in_window": 11,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3,
+   0,
+   0
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   1.0,
+   0.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   2.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 10765699.0,
+    "drain": 10765699.0,
+    "rollcov": 10756577.0,
+    "gate": 0.0,
+    "moves_out": 6.0
+   },
+   "1": {
+    "stream": 237972.0,
+    "drain": 0.0,
+    "rollcov": 237828.0,
+    "gate": 0.0,
+    "moves_out": 5.0
+   },
+   "2": {
+    "stream": 266849.0,
+    "drain": 0.0,
+    "rollcov": 266649.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 369.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 10362282.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 32.0,
+   "sched_hold_out_run_over_10ms": 38.0,
+   "sched_unpolled_over_100ms": 34.0,
+   "sched_longest_unpolled_us": 398647.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 11270888.0,
+   "wal_drain_latch_wait_us": 10765699.0,
+   "wal_roll_blocked_wait_us": 11261055.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 1555,
+   "dropped": 0,
+   "p99_recomp": 366275.1,
+   "p999_recomp": 623917.1,
+   "p99_json": 366275.1,
+   "p999_json": 623917.1,
+   "ge10ms": 1177,
+   "ge10ms_aligned": 903,
+   "stall_ms_ge10": 202974,
+   "stall_ms_ge10_aligned": 177357,
+   "ge10ms_overlap_any": 1062,
+   "p99_without_aligned": 97385.4,
+   "p999_without_aligned": 218665.4,
+   "roll_cover_frac": 0.373,
+   "end_offset_ms_hist": {
+    "<-50": 43,
+    "-50..-5": 116,
+    "-5..0": 33,
+    "0..5": 790,
+    "5..30": 80,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 361,
+     "al": 292,
+     "max_ms": 516.1
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 0.0,
+     "ge10": 86,
+     "al": 48,
+     "max_ms": 305.8
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 1.0,
+     "ge10": 113,
+     "al": 65,
+     "max_ms": 702.8
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 52,
+     "al": 23,
+     "max_ms": 192.2
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 495,
+     "al": 450,
+     "max_ms": 712.9
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 1.0,
+     "ge10": 70,
+     "al": 25,
+     "max_ms": 238.6
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-batch0",
+  "dur": "relaxed",
+  "run": "r1",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   3.0,
+   1.0,
+   2.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 46,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 2270.2,
+   "p99_json": 379.3,
+   "p999_json": 2270.2,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2270.2,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.8
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.9
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.9
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.3
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.8
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.3
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-batch0",
+  "dur": "relaxed",
+  "run": "r2",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   3.0,
+   1.0,
+   2.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 13,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 1007.8,
+   "p99_json": 206.2,
+   "p999_json": 1007.8,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 1007.8,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 0.0
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.1
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.4
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 0.0
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.2
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.0
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-batch0",
+  "dur": "relaxed",
+  "run": "r3",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   3.0,
+   1.0,
+   2.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 29,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 1554.5,
+   "p99_json": 353.6,
+   "p999_json": 1554.5,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 1554.5,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.0
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.5
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.1
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.6
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.2
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.7
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-segregated-no0",
+  "dur": "relaxed",
+  "run": "r1",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   1.0,
+   2.0,
+   1.0,
+   2.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 49,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 2472.6,
+   "p99_json": 279.2,
+   "p999_json": 2472.6,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2472.6,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.2
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.6
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.1
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 0.0
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.6
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.8
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-segregated-no0",
+  "dur": "relaxed",
+  "run": "r2",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   1.0,
+   2.0,
+   1.0,
+   2.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 11,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": "<1ms",
+   "p99_json": 215.8,
+   "p999_json": 803.2,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": "<1ms",
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.2
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.8
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.1
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 0.0
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.2
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 0.0
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-segregated-no0",
+  "dur": "relaxed",
+  "run": "r3",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   1.0,
+   2.0,
+   1.0,
+   2.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 65,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 2532.7,
+   "p99_json": 561.2,
+   "p999_json": 2532.7,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2532.7,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.9
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.7
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.1
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.6
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.0
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.7
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-spread",
+  "dur": "relaxed",
+  "run": "r1",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   3.0,
+   0.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 19,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 1142.0,
+   "p99_json": 226.5,
+   "p999_json": 1142.0,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 1142.0,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.6
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.1
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 0.0
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.3
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.2
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.8
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-spread",
+  "dur": "relaxed",
+  "run": "r2",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   3.0,
+   0.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 12,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": "<1ms",
+   "p99_json": 216.2,
+   "p999_json": 976.3,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": "<1ms",
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.2
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 0.0
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.5
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.9
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.3
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 0.0
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-spread",
+  "dur": "relaxed",
+  "run": "r3",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   3.0,
+   0.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 38,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 2151.0,
+   "p99_json": 444.4,
+   "p999_json": 2151.0,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2151.0,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.9
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.2
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 5.4
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.2
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.7
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.4
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-segregated-no0",
+  "dur": "relaxed",
+  "run": "r1",
+  "win_s": 29.79,
+  "rolls": 35,
+  "rolls_whole_in_measure": 35,
+  "roll_cores": {
+   "1": 35
+  },
+  "hold_in_win_us": 11438937,
+  "hold_p50": 297148,
+  "hold_max": 709918,
+  "moves_in_window": 17,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2,
+   3,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   0.0,
+   2.0,
+   2.0,
+   2.0,
+   2.0,
+   2.0,
+   3.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 11254829.0,
+    "drain": 11254818.0,
+    "rollcov": 11254198.0,
+    "gate": 0.0,
+    "moves_out": 8.0
+   },
+   "1": {
+    "stream": 98.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 10981561.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 5289.0,
+    "drain": 0.0,
+    "rollcov": 5252.0,
+    "gate": 0.0,
+    "moves_out": 5.0
+   },
+   "3": {
+    "stream": 206638.0,
+    "drain": 0.0,
+    "rollcov": 206543.0,
+    "gate": 0.0,
+    "moves_out": 4.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 34.0,
+   "sched_hold_out_run_over_10ms": 37.0,
+   "sched_unpolled_over_100ms": 37.0,
+   "sched_longest_unpolled_us": 312642.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 11466854.0,
+   "wal_drain_latch_wait_us": 11254818.0,
+   "wal_roll_blocked_wait_us": 11465994.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 1275,
+   "dropped": 0,
+   "p99_recomp": 306395.5,
+   "p999_recomp": 625640.2,
+   "p99_json": 306395.5,
+   "p999_json": 625640.2,
+   "ge10ms": 1174,
+   "ge10ms_aligned": 968,
+   "stall_ms_ge10": 198017,
+   "stall_ms_ge10_aligned": 180573,
+   "ge10ms_overlap_any": 1016,
+   "p99_without_aligned": 51528.9,
+   "p999_without_aligned": 202040.0,
+   "roll_cover_frac": 0.384,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 48,
+    "-5..0": 0,
+    "0..5": 949,
+    "5..30": 19,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 171,
+     "al": 137,
+     "max_ms": 333.3
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 56,
+     "al": 27,
+     "max_ms": 410.0
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 92,
+     "al": 49,
+     "max_ms": 407.5
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 68,
+     "al": 42,
+     "max_ms": 325.9
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 129,
+     "al": 98,
+     "max_ms": 329.2
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 658,
+     "al": 615,
+     "max_ms": 696.8
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-segregated-no0",
+  "dur": "relaxed",
+  "run": "r2",
+  "win_s": 29.78,
+  "rolls": 35,
+  "rolls_whole_in_measure": 35,
+  "roll_cores": {
+   "1": 35
+  },
+  "hold_in_win_us": 10390531,
+  "hold_p50": 282839,
+  "hold_max": 678169,
+  "moves_in_window": 24,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2,
+   3,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   2.0,
+   2.0,
+   2.0,
+   2.0,
+   2.0,
+   0.0,
+   3.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 10174096.0,
+    "drain": 10174096.0,
+    "rollcov": 10173282.0,
+    "gate": 3495.0,
+    "moves_out": 7.0
+   },
+   "1": {
+    "stream": 85.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 9999784.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 172944.0,
+    "drain": 0.0,
+    "rollcov": 172887.0,
+    "gate": 0.0,
+    "moves_out": 7.0
+   },
+   "3": {
+    "stream": 212580.0,
+    "drain": 0.0,
+    "rollcov": 212464.0,
+    "gate": 0.0,
+    "moves_out": 10.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 38.0,
+   "sched_hold_out_run_over_10ms": 42.0,
+   "sched_unpolled_over_100ms": 40.0,
+   "sched_longest_unpolled_us": 258972.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 10559704.0,
+   "wal_drain_latch_wait_us": 10174096.0,
+   "wal_roll_blocked_wait_us": 10558632.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 960,
+   "dropped": 0,
+   "p99_recomp": 210569.9,
+   "p999_recomp": 295939.7,
+   "p99_json": 210569.9,
+   "p999_json": 295939.7,
+   "ge10ms": 862,
+   "ge10ms_aligned": 557,
+   "stall_ms_ge10": 96851,
+   "stall_ms_ge10_aligned": 73941,
+   "ge10ms_overlap_any": 731,
+   "p99_without_aligned": 75609.0,
+   "p999_without_aligned": 183235.4,
+   "roll_cover_frac": 0.349,
+   "end_offset_ms_hist": {
+    "<-50": 44,
+    "-50..-5": 130,
+    "-5..0": 0,
+    "0..5": 557,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 76,
+     "al": 29,
+     "max_ms": 289.8
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 56,
+     "al": 10,
+     "max_ms": 173.0
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 92,
+     "al": 43,
+     "max_ms": 284.8
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 316,
+     "al": 251,
+     "max_ms": 360.1
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 175,
+     "al": 114,
+     "max_ms": 340.6
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 0.0,
+     "ge10": 147,
+     "al": 110,
+     "max_ms": 338.1
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-segregated-no0",
+  "dur": "relaxed",
+  "run": "r3",
+  "win_s": 30.08,
+  "rolls": 37,
+  "rolls_whole_in_measure": 37,
+  "roll_cores": {
+   "1": 37
+  },
+  "hold_in_win_us": 11995307,
+  "hold_p50": 330814,
+  "hold_max": 587321,
+  "moves_in_window": 6,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2,
+   3,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   3.0,
+   0.0,
+   3.0,
+   3.0,
+   3.0,
+   3.0,
+   2.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 11445094.0,
+    "drain": 11440759.0,
+    "rollcov": 11444139.0,
+    "gate": 0.0,
+    "moves_out": 3.0
+   },
+   "1": {
+    "stream": 67.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 11792517.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 13538.0,
+    "drain": 0.0,
+    "rollcov": 13455.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 3771.0,
+    "drain": 0.0,
+    "rollcov": 3744.0,
+    "gate": 0.0,
+    "moves_out": 3.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 37.0,
+   "sched_hold_out_run_over_10ms": 41.0,
+   "sched_unpolled_over_100ms": 38.0,
+   "sched_longest_unpolled_us": 236849.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 11462469.0,
+   "wal_drain_latch_wait_us": 11440759.0,
+   "wal_roll_blocked_wait_us": 11461339.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 1167,
+   "dropped": 0,
+   "p99_recomp": 288106.4,
+   "p999_recomp": 496224.9,
+   "p99_json": 288106.4,
+   "p999_json": 496224.9,
+   "ge10ms": 1025,
+   "ge10ms_aligned": 786,
+   "stall_ms_ge10": 162145,
+   "stall_ms_ge10_aligned": 141759,
+   "ge10ms_overlap_any": 894,
+   "p99_without_aligned": 68641.7,
+   "p999_without_aligned": 211147.8,
+   "roll_cover_frac": 0.399,
+   "end_offset_ms_hist": {
+    "<-50": 45,
+    "-50..-5": 50,
+    "-5..0": 0,
+    "0..5": 761,
+    "5..30": 25,
+    "30..100": 13,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 186,
+     "al": 148,
+     "max_ms": 360.4
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 0.0,
+     "ge10": 695,
+     "al": 622,
+     "max_ms": 584.2
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 44,
+     "al": 0,
+     "max_ms": 235.9
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 3.0,
+     "ge10": 61,
+     "al": 16,
+     "max_ms": 239.5
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 19,
+     "al": 0,
+     "max_ms": 132.9
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 3.0,
+     "ge10": 20,
+     "al": 0,
+     "max_ms": 130.5
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-spread",
+  "dur": "relaxed",
+  "run": "r1",
+  "win_s": 30.07,
+  "rolls": 35,
+  "rolls_whole_in_measure": 35,
+  "roll_cores": {
+   "2": 35
+  },
+  "hold_in_win_us": 10554729,
+  "hold_p50": 271313,
+  "hold_max": 668302,
+  "moves_in_window": 10,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   3.0,
+   2.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 10348573.0,
+    "drain": 10348573.0,
+    "rollcov": 10347815.0,
+    "gate": 3857.0,
+    "moves_out": 5.0
+   },
+   "1": {
+    "stream": 361276.0,
+    "drain": 0.0,
+    "rollcov": 361208.0,
+    "gate": 0.0,
+    "moves_out": 4.0
+   },
+   "2": {
+    "stream": 65.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 10213496.0,
+    "moves_out": 1.0
+   },
+   "3": {
+    "stream": 17205.0,
+    "drain": 0.0,
+    "rollcov": 17149.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 30.0,
+   "sched_hold_out_run_over_10ms": 35.0,
+   "sched_unpolled_over_100ms": 34.0,
+   "sched_longest_unpolled_us": 641214.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 10727120.0,
+   "wal_drain_latch_wait_us": 10348573.0,
+   "wal_roll_blocked_wait_us": 10726174.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 519,
+   "dropped": 0,
+   "p99_recomp": 205115.8,
+   "p999_recomp": 474535.0,
+   "p99_json": 205115.8,
+   "p999_json": 474535.0,
+   "ge10ms": 425,
+   "ge10ms_aligned": 246,
+   "stall_ms_ge10": 66265,
+   "stall_ms_ge10_aligned": 51485,
+   "ge10ms_overlap_any": 299,
+   "p99_without_aligned": 42974.2,
+   "p999_without_aligned": 183095.9,
+   "roll_cover_frac": 0.351,
+   "end_offset_ms_hist": {
+    "<-50": 53,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 115,
+    "5..30": 131,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 1.0,
+     "ge10": 76,
+     "al": 45,
+     "max_ms": 348.9
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 66,
+     "al": 37,
+     "max_ms": 556.0
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 87,
+     "al": 56,
+     "max_ms": 358.4
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 1.0,
+     "ge10": 51,
+     "al": 24,
+     "max_ms": 356.3
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 1.0,
+     "ge10": 95,
+     "al": 60,
+     "max_ms": 563.4
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 50,
+     "al": 24,
+     "max_ms": 351.4
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-spread",
+  "dur": "relaxed",
+  "run": "r2",
+  "win_s": 29.78,
+  "rolls": 35,
+  "rolls_whole_in_measure": 35,
+  "roll_cores": {
+   "3": 19,
+   "1": 1,
+   "0": 15
+  },
+  "hold_in_win_us": 11716730,
+  "hold_p50": 308346,
+  "hold_max": 788238,
+  "moves_in_window": 92,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   2.0,
+   2.0,
+   2.0,
+   0.0,
+   2.0,
+   2.0,
+   1.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 6256636.0,
+    "drain": 6256589.0,
+    "rollcov": 6256155.0,
+    "gate": 5135855.0,
+    "moves_out": 9.0
+   },
+   "1": {
+    "stream": 347251.0,
+    "drain": 0.0,
+    "rollcov": 347198.0,
+    "gate": 323781.0,
+    "moves_out": 21.0
+   },
+   "2": {
+    "stream": 11950.0,
+    "drain": 0.0,
+    "rollcov": 11875.0,
+    "gate": 0.0,
+    "moves_out": 27.0
+   },
+   "3": {
+    "stream": 749797.0,
+    "drain": 0.0,
+    "rollcov": 749707.0,
+    "gate": 5899463.0,
+    "moves_out": 35.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 36.0,
+   "sched_hold_out_run_over_10ms": 38.0,
+   "sched_unpolled_over_100ms": 22.0,
+   "sched_longest_unpolled_us": 244039.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 7365634.0,
+   "wal_drain_latch_wait_us": 6256589.0,
+   "wal_roll_blocked_wait_us": 7364936.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 1296,
+   "dropped": 0,
+   "p99_recomp": 507976.3,
+   "p999_recomp": 1000173.1,
+   "p99_json": 507976.3,
+   "p999_json": 1000173.1,
+   "ge10ms": 1140,
+   "ge10ms_aligned": 792,
+   "stall_ms_ge10": 258384,
+   "stall_ms_ge10_aligned": 162047,
+   "ge10ms_overlap_any": 960,
+   "p99_without_aligned": 145185.5,
+   "p999_without_aligned": 1000173.1,
+   "roll_cover_frac": 0.393,
+   "end_offset_ms_hist": {
+    "<-50": 22,
+    "-50..-5": 146,
+    "-5..0": 45,
+    "0..5": 674,
+    "5..30": 73,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 171,
+     "al": 99,
+     "max_ms": 1057.1
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 106,
+     "al": 46,
+     "max_ms": 1054.7
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 185,
+     "al": 117,
+     "max_ms": 537.6
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 0.0,
+     "ge10": 203,
+     "al": 156,
+     "max_ms": 535.2
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 327,
+     "al": 284,
+     "max_ms": 532.8
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 148,
+     "al": 90,
+     "max_ms": 1059.6
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-spread",
+  "dur": "relaxed",
+  "run": "r3",
+  "win_s": 30.1,
+  "rolls": 34,
+  "rolls_whole_in_measure": 34,
+  "roll_cores": {
+   "0": 1,
+   "3": 33
+  },
+  "hold_in_win_us": 12744993,
+  "hold_p50": 325569,
+  "hold_max": 828117,
+  "moves_in_window": 20,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   2.0,
+   2.0,
+   0.0,
+   2.0,
+   2.0,
+   2.0,
+   1.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 12014890.0,
+    "drain": 12014890.0,
+    "rollcov": 12014175.0,
+    "gate": 534793.0,
+    "moves_out": 10.0
+   },
+   "1": {
+    "stream": 10451.0,
+    "drain": 0.0,
+    "rollcov": 10425.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 251918.0,
+    "drain": 0.0,
+    "rollcov": 251717.0,
+    "gate": 0.0,
+    "moves_out": 7.0
+   },
+   "3": {
+    "stream": 82.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 11782633.0,
+    "moves_out": 3.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 32.0,
+   "sched_hold_out_run_over_10ms": 39.0,
+   "sched_unpolled_over_100ms": 32.0,
+   "sched_longest_unpolled_us": 434947.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 12277342.0,
+   "wal_drain_latch_wait_us": 12014890.0,
+   "wal_roll_blocked_wait_us": 12276318.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 1565,
+   "dropped": 0,
+   "p99_recomp": 452132.2,
+   "p999_recomp": 734689.0,
+   "p99_json": 452132.2,
+   "p999_json": 734689.0,
+   "ge10ms": 1409,
+   "ge10ms_aligned": 1334,
+   "stall_ms_ge10": 287310,
+   "stall_ms_ge10_aligned": 284809,
+   "ge10ms_overlap_any": 1334,
+   "p99_without_aligned": 2639.8,
+   "p999_without_aligned": 55835.0,
+   "roll_cover_frac": 0.423,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 1253,
+    "5..30": 81,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 88,
+     "al": 79,
+     "max_ms": 749.4
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 160,
+     "al": 146,
+     "max_ms": 409.1
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 0.0,
+     "ge10": 373,
+     "al": 360,
+     "max_ms": 745.8
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 2.0,
+     "ge10": 72,
+     "al": 59,
+     "max_ms": 370.7
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 372,
+     "al": 357,
+     "max_ms": 757.2
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 344,
+     "al": 333,
+     "max_ms": 810.0
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2",
+  "dur": "relaxed",
+  "run": "r1",
+  "win_s": 30.74,
+  "rolls": 34,
+  "rolls_whole_in_measure": 33,
+  "roll_cores": {
+   "3": 34
+  },
+  "hold_in_win_us": 13942620,
+  "hold_p50": 368518,
+  "hold_max": 788571,
+  "moves_in_window": 22,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1,
+   3
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "inserter"
+  ],
+  "cores_end": [
+   2.0,
+   0.0,
+   2.0,
+   1.0,
+   1.0,
+   1.0,
+   0.0,
+   0.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 13832084.0,
+    "drain": 5269385.0,
+    "rollcov": 13828658.0,
+    "gate": 0.0,
+    "moves_out": 6.0
+   },
+   "1": {
+    "stream": 12963809.0,
+    "drain": 0.0,
+    "rollcov": 12957461.0,
+    "gate": 0.0,
+    "moves_out": 8.0
+   },
+   "2": {
+    "stream": 13504379.0,
+    "drain": 0.0,
+    "rollcov": 13500352.0,
+    "gate": 0.0,
+    "moves_out": 8.0
+   },
+   "3": {
+    "stream": 1969.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 13111363.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 33.0,
+   "sched_hold_out_run_over_10ms": 35.0,
+   "sched_unpolled_over_100ms": 18.0,
+   "sched_longest_unpolled_us": 238403.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 40302242.0,
+   "wal_drain_latch_wait_us": 5269385.0,
+   "wal_roll_blocked_wait_us": 40286471.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 23741,
+   "slow": 11986,
+   "dropped": 0,
+   "p99_recomp": 658499.5,
+   "p999_recomp": 777711.2,
+   "p99_json": 658499.5,
+   "p999_json": 777711.2,
+   "ge10ms": 11598,
+   "ge10ms_aligned": 10893,
+   "stall_ms_ge10": 2675546,
+   "stall_ms_ge10_aligned": 2601304,
+   "ge10ms_overlap_any": 10893,
+   "p99_without_aligned": 131777.8,
+   "p999_without_aligned": 243307.8,
+   "roll_cover_frac": 0.454,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 7811,
+    "5..30": 3082,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 1456,
+     "al": 1360,
+     "max_ms": 781.4
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 1453,
+     "al": 1374,
+     "max_ms": 820.4
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 1453,
+     "al": 1376,
+     "max_ms": 819.3
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 1.0,
+     "ge10": 1444,
+     "al": 1346,
+     "max_ms": 787.5
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 1447,
+     "al": 1373,
+     "max_ms": 816.9
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 1432,
+     "al": 1351,
+     "max_ms": 785.2
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 1474,
+     "al": 1350,
+     "max_ms": 783.9
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 1439,
+     "al": 1363,
+     "max_ms": 782.6
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2",
+  "dur": "relaxed",
+  "run": "r2",
+  "win_s": 30.14,
+  "rolls": 33,
+  "rolls_whole_in_measure": 33,
+  "roll_cores": {
+   "3": 33
+  },
+  "hold_in_win_us": 13754290,
+  "hold_p50": 373504,
+  "hold_max": 1210247,
+  "moves_in_window": 27,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1,
+   3
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "inserter"
+  ],
+  "cores_end": [
+   2.0,
+   0.0,
+   1.0,
+   1.0,
+   0.0,
+   1.0,
+   1.0,
+   0.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 13011352.0,
+    "drain": 4428934.0,
+    "rollcov": 13006605.0,
+    "gate": 0.0,
+    "moves_out": 10.0
+   },
+   "1": {
+    "stream": 12278330.0,
+    "drain": 0.0,
+    "rollcov": 12271054.0,
+    "gate": 0.0,
+    "moves_out": 8.0
+   },
+   "2": {
+    "stream": 13661272.0,
+    "drain": 0.0,
+    "rollcov": 13658105.0,
+    "gate": 0.0,
+    "moves_out": 9.0
+   },
+   "3": {
+    "stream": 2308.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 12416713.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 33.0,
+   "sched_hold_out_run_over_10ms": 39.0,
+   "sched_unpolled_over_100ms": 19.0,
+   "sched_longest_unpolled_us": 958083.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 38953263.0,
+   "wal_drain_latch_wait_us": 4428934.0,
+   "wal_roll_blocked_wait_us": 38935763.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 24007,
+   "slow": 12240,
+   "dropped": 0,
+   "p99_recomp": 1295966.4,
+   "p999_recomp": 1718794.3,
+   "p99_json": 1295966.4,
+   "p999_json": 1718794.3,
+   "ge10ms": 11919,
+   "ge10ms_aligned": 10714,
+   "stall_ms_ge10": 3591736,
+   "stall_ms_ge10_aligned": 3353708,
+   "ge10ms_overlap_any": 11195,
+   "p99_without_aligned": 342265.4,
+   "p999_without_aligned": 653094.3,
+   "roll_cover_frac": 0.456,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 7724,
+    "5..30": 2990,
+    "30..100": 481,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 1439,
+     "al": 1293,
+     "max_ms": 1204.6
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 1504,
+     "al": 1363,
+     "max_ms": 1762.0
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 1513,
+     "al": 1361,
+     "max_ms": 1760.7
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 1.0,
+     "ge10": 1479,
+     "al": 1302,
+     "max_ms": 1739.3
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 1530,
+     "al": 1391,
+     "max_ms": 1768.1
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 1485,
+     "al": 1277,
+     "max_ms": 1776.8
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 1.0,
+     "ge10": 1483,
+     "al": 1362,
+     "max_ms": 1207.1
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 1486,
+     "al": 1365,
+     "max_ms": 1205.7
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2",
+  "dur": "relaxed",
+  "run": "r3",
+  "win_s": 29.83,
+  "rolls": 34,
+  "rolls_whole_in_measure": 34,
+  "roll_cores": {
+   "3": 34
+  },
+  "hold_in_win_us": 13189370,
+  "hold_p50": 364678,
+  "hold_max": 746392,
+  "moves_in_window": 23,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1,
+   3
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "inserter"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   1.0,
+   1.0,
+   2.0,
+   1.0,
+   2.0,
+   0.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 12348521.0,
+    "drain": 4041361.0,
+    "rollcov": 12345318.0,
+    "gate": 0.0,
+    "moves_out": 8.0
+   },
+   "1": {
+    "stream": 12778720.0,
+    "drain": 0.0,
+    "rollcov": 12772890.0,
+    "gate": 0.0,
+    "moves_out": 6.0
+   },
+   "2": {
+    "stream": 12002865.0,
+    "drain": 0.0,
+    "rollcov": 11997225.0,
+    "gate": 0.0,
+    "moves_out": 9.0
+   },
+   "3": {
+    "stream": 1786.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 12263402.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 35.0,
+   "sched_hold_out_run_over_10ms": 36.0,
+   "sched_unpolled_over_100ms": 19.0,
+   "sched_longest_unpolled_us": 955721.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 37131892.0,
+   "wal_drain_latch_wait_us": 4041361.0,
+   "wal_roll_blocked_wait_us": 37115434.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 24006,
+   "slow": 11663,
+   "dropped": 0,
+   "p99_recomp": 659450.5,
+   "p999_recomp": 877924.4,
+   "p99_json": 659450.5,
+   "p999_json": 877924.4,
+   "ge10ms": 11312,
+   "ge10ms_aligned": 10332,
+   "stall_ms_ge10": 2525756,
+   "stall_ms_ge10_aligned": 2303527,
+   "ge10ms_overlap_any": 10622,
+   "p99_without_aligned": 297424.3,
+   "p999_without_aligned": 858115.2,
+   "roll_cover_frac": 0.442,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 8137,
+    "5..30": 2195,
+    "30..100": 0,
+    ">=100": 290
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 1424,
+     "al": 1322,
+     "max_ms": 777.5
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 1409,
+     "al": 1320,
+     "max_ms": 776.3
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 1400,
+     "al": 1263,
+     "max_ms": 746.0
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 1.0,
+     "ge10": 1372,
+     "al": 1259,
+     "max_ms": 744.9
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 1383,
+     "al": 1276,
+     "max_ms": 772.6
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 1482,
+     "al": 1262,
+     "max_ms": 1094.6
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 1412,
+     "al": 1365,
+     "max_ms": 895.8
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 1430,
+     "al": 1265,
+     "max_ms": 768.9
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2-iso",
+  "dur": "relaxed",
+  "run": "r1",
+  "win_s": 30.08,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 2,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   0.0,
+   1.0,
+   3.0,
+   3.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 1.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 1.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 1.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 11472.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 24007,
+   "slow": 122,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 2920.4,
+   "p99_json": 487.1,
+   "p999_json": 2920.4,
+   "ge10ms": 2,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 26,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2920.4,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 10.0
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.3
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 7.5
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 6.3
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.7
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 3.0,
+     "ge10": 1,
+     "al": 0,
+     "max_ms": 13.8
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 3.0,
+     "ge10": 1,
+     "al": 0,
+     "max_ms": 12.5
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.9
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2-iso",
+  "dur": "relaxed",
+  "run": "r2",
+  "win_s": 30.08,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 1,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   0.0,
+   1.0,
+   2.0,
+   3.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 1.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 4244.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 24007,
+   "slow": 39,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 1843.2,
+   "p99_json": 213.1,
+   "p999_json": 1843.2,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 1843.2,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 8.2
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.0
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.6
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.5
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 5.9
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.9
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.4
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.4
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2-iso",
+  "dur": "relaxed",
+  "run": "r3",
+  "win_s": 30.08,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 1,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   0.0,
+   1.0,
+   2.0,
+   0.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 2.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 1.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 5519.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 2.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 24007,
+   "slow": 134,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 3092.1,
+   "p99_json": 471.4,
+   "p999_json": 3092.1,
+   "ge10ms": 1,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 10,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 3092.1,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.8
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 1,
+     "al": 0,
+     "max_ms": 10.4
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.3
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.1
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 6.6
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.8
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 6.2
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.8
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c3",
+  "dur": "relaxed",
+  "run": "r1",
+  "win_s": 30.02,
+  "rolls": 36,
+  "rolls_whole_in_measure": 36,
+  "roll_cores": {
+   "3": 36
+  },
+  "hold_in_win_us": 13532254,
+  "hold_p50": 358559,
+  "hold_max": 673132,
+  "moves_in_window": 0,
+  "targets": [
+   3
+  ],
+  "roles": [
+   "inserter"
+  ],
+  "cores_end": [
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 13353556.0,
+    "drain": 13353531.0,
+    "rollcov": 13352640.0,
+    "gate": 3109.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 231233.0,
+    "drain": 0.0,
+    "rollcov": 231153.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 94368.0,
+    "drain": 0.0,
+    "rollcov": 94327.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 94.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 13123630.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 35.0,
+   "sched_hold_out_run_over_10ms": 37.0,
+   "sched_unpolled_over_100ms": 42.0,
+   "sched_longest_unpolled_us": 316097.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 13679251.0,
+   "wal_drain_latch_wait_us": 13353531.0,
+   "wal_roll_blocked_wait_us": 13678121.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ]
+ },
+ {
+  "cell": "c3",
+  "dur": "relaxed",
+  "run": "r2",
+  "win_s": 30.02,
+  "rolls": 36,
+  "rolls_whole_in_measure": 36,
+  "roll_cores": {
+   "3": 36
+  },
+  "hold_in_win_us": 13266278,
+  "hold_p50": 364131,
+  "hold_max": 911297,
+  "moves_in_window": 0,
+  "targets": [
+   3
+  ],
+  "roles": [
+   "inserter"
+  ],
+  "cores_end": [
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 13108898.0,
+    "drain": 13103129.0,
+    "rollcov": 13106891.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 352714.0,
+    "drain": 0.0,
+    "rollcov": 352538.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 378551.0,
+    "drain": 0.0,
+    "rollcov": 378443.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 103.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 12963204.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 38.0,
+   "sched_hold_out_run_over_10ms": 41.0,
+   "sched_unpolled_over_100ms": 41.0,
+   "sched_longest_unpolled_us": 511500.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 13840267.0,
+   "wal_drain_latch_wait_us": 13103129.0,
+   "wal_roll_blocked_wait_us": 13837872.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ]
+ },
+ {
+  "cell": "c3",
+  "dur": "relaxed",
+  "run": "r3",
+  "win_s": 30.01,
+  "rolls": 36,
+  "rolls_whole_in_measure": 36,
+  "roll_cores": {
+   "3": 36
+  },
+  "hold_in_win_us": 12846010,
+  "hold_p50": 349308,
+  "hold_max": 794287,
+  "moves_in_window": 0,
+  "targets": [
+   3
+  ],
+  "roles": [
+   "inserter"
+  ],
+  "cores_end": [
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 12634729.0,
+    "drain": 12634718.0,
+    "rollcov": 12633543.0,
+    "gate": 3224.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 900618.0,
+    "drain": 0.0,
+    "rollcov": 900162.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 138619.0,
+    "drain": 0.0,
+    "rollcov": 138581.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 150.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 12280969.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 34.0,
+   "sched_hold_out_run_over_10ms": 41.0,
+   "sched_unpolled_over_100ms": 41.0,
+   "sched_longest_unpolled_us": 434926.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 13674116.0,
+   "wal_drain_latch_wait_us": 12634718.0,
+   "wal_roll_blocked_wait_us": 13672287.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ]
+ },
+ {
+  "cell": "c1-batch0",
+  "dur": "group",
+  "run": "r1",
+  "win_s": 30.09,
+  "rolls": 25,
+  "rolls_whole_in_measure": 25,
+  "roll_cores": {
+   "0": 1,
+   "2": 24
+  },
+  "hold_in_win_us": 176091,
+  "hold_p50": 5935,
+  "hold_max": 17778,
+  "moves_in_window": 20,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3,
+   0,
+   0
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   3.0,
+   0.0,
+   0.0,
+   3.0,
+   3.0,
+   3.0,
+   1.0,
+   2.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 36704.0,
+    "drain": 36691.0,
+    "rollcov": 36533.0,
+    "gate": 0.0,
+    "moves_out": 8.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 1.0
+   },
+   "2": {
+    "stream": 221.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 6382.0,
+    "moves_out": 4.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 7.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 3.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 39557.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 36926.0,
+   "wal_drain_latch_wait_us": 36691.0,
+   "wal_roll_blocked_wait_us": 36533.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 87,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 9645.5,
+   "p99_json": 605.6,
+   "p999_json": 9645.5,
+   "ge10ms": 12,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 373,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 9645.5,
+   "roll_cover_frac": 0.006,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 3,
+     "al": 0,
+     "max_ms": 54.3
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 0.0,
+     "ge10": 2,
+     "al": 0,
+     "max_ms": 27.2
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.4
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 1,
+     "al": 0,
+     "max_ms": 22.2
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 3.0,
+     "ge10": 2,
+     "al": 0,
+     "max_ms": 34.7
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 4,
+     "al": 0,
+     "max_ms": 56.9
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-batch0",
+  "dur": "group",
+  "run": "r2",
+  "win_s": 30.1,
+  "rolls": 24,
+  "rolls_whole_in_measure": 24,
+  "roll_cores": {
+   "1": 24
+  },
+  "hold_in_win_us": 158355,
+  "hold_p50": 5761,
+  "hold_max": 13095,
+  "moves_in_window": 11,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3,
+   0,
+   0
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   3.0,
+   3.0,
+   3.0,
+   3.0,
+   0.0,
+   3.0,
+   2.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 34844.0,
+    "drain": 34843.0,
+    "rollcov": 31972.0,
+    "gate": 0.0,
+    "moves_out": 5.0
+   },
+   "1": {
+    "stream": 186.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 3541.0,
+    "moves_out": 3.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 3.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 1.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 7387.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 35030.0,
+   "wal_drain_latch_wait_us": 34843.0,
+   "wal_roll_blocked_wait_us": 31972.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 97,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 3005.0,
+   "p99_json": 761.0,
+   "p999_json": 3005.0,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2685.3,
+   "roll_cover_frac": 0.005,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.0
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.9
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.9
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.7
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 5.8
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.1
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-batch0",
+  "dur": "group",
+  "run": "r3",
+  "win_s": 30.09,
+  "rolls": 24,
+  "rolls_whole_in_measure": 24,
+  "roll_cores": {
+   "1": 24
+  },
+  "hold_in_win_us": 179563,
+  "hold_p50": 6597,
+  "hold_max": 15920,
+  "moves_in_window": 4,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3,
+   0,
+   0
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   0.0,
+   2.0,
+   2.0,
+   0.0,
+   2.0,
+   2.0,
+   3.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 65968.0,
+    "drain": 65968.0,
+    "rollcov": 56099.0,
+    "gate": 0.0,
+    "moves_out": 2.0
+   },
+   "1": {
+    "stream": 806.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 21027.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 2.0
+   },
+   "3": {
+    "stream": 10.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 5.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 40017.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 66785.0,
+   "wal_drain_latch_wait_us": 65968.0,
+   "wal_roll_blocked_wait_us": 56099.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 90,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 5093.1,
+   "p99_json": 748.2,
+   "p999_json": 5093.1,
+   "ge10ms": 10,
+   "ge10ms_aligned": 1,
+   "stall_ms_ge10": 219,
+   "stall_ms_ge10_aligned": 11,
+   "ge10ms_overlap_any": 1,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 3650.2,
+   "roll_cover_frac": 0.006,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 1,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 2,
+     "al": 0,
+     "max_ms": 38.9
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 5.1
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.6
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 8,
+     "al": 1,
+     "max_ms": 31.5
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.7
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.4
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-batch0",
+  "dur": "group",
+  "run": "r1",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   3.0,
+   1.0,
+   2.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 25,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 1902.6,
+   "p99_json": 220.3,
+   "p999_json": 1902.6,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 1902.6,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.3
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.5
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.4
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.1
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.5
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.0
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-batch0",
+  "dur": "group",
+  "run": "r2",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   3.0,
+   1.0,
+   2.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 80,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 2614.5,
+   "p99_json": 632.3,
+   "p999_json": 2614.5,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2614.5,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.0
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.0
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.6
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.0
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.6
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.9
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-batch0",
+  "dur": "group",
+  "run": "r3",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   3,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   3.0,
+   1.0,
+   2.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 61,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 2763.0,
+   "p99_json": 504.3,
+   "p999_json": 2763.0,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2763.0,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.1
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.5
+    },
+    {
+     "i": 2,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.7
+    },
+    {
+     "i": 3,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.1
+    },
+    {
+     "i": 4,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.1
+    },
+    {
+     "i": 5,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.5
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-segregated-no0",
+  "dur": "group",
+  "run": "r1",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   1.0,
+   2.0,
+   1.0,
+   2.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 11,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": "<1ms",
+   "p99_json": 204.1,
+   "p999_json": 976.3,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": "<1ms",
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 0.0
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.1
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.4
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.9
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 0.0
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.0
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-segregated-no0",
+  "dur": "group",
+  "run": "r2",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   1.0,
+   2.0,
+   1.0,
+   2.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 64,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 2688.9,
+   "p99_json": 474.5,
+   "p999_json": 2688.9,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2688.9,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 6.3
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.9
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.7
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.9
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.8
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.8
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-segregated-no0",
+  "dur": "group",
+  "run": "r3",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   1.0,
+   2.0,
+   1.0,
+   2.0,
+   1.0,
+   2.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 48,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 2524.1,
+   "p99_json": 386.2,
+   "p999_json": 2524.1,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2524.1,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.8
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.2
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.0
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.1
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.7
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.5
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-spread",
+  "dur": "group",
+  "run": "r1",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   3.0,
+   0.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 19,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 1573.8,
+   "p99_json": 227.7,
+   "p999_json": 1573.8,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 1573.8,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.7
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 0.0
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.7
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.4
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.7
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.1
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-spread",
+  "dur": "group",
+  "run": "r2",
+  "win_s": 30.07,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   3.0,
+   0.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 28,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 1402.1,
+   "p99_json": 389.3,
+   "p999_json": 1402.1,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 1402.1,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.7
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.1
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 5.8
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 1.3
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.6
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.1
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-iso-spread",
+  "dur": "group",
+  "run": "r3",
+  "win_s": 30.06,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   3.0,
+   0.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 0.0,
+   "wal_drain_latch_wait_us": 0.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 52,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 2077.1,
+   "p99_json": 541.0,
+   "p999_json": 2077.1,
+   "ge10ms": 0,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 0,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2077.1,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.8
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.6
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.2
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.0
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 5.1
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.7
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-segregated-no0",
+  "dur": "group",
+  "run": "r1",
+  "win_s": 30.1,
+  "rolls": 24,
+  "rolls_whole_in_measure": 24,
+  "roll_cores": {
+   "3": 24
+  },
+  "hold_in_win_us": 162503,
+  "hold_p50": 5631,
+  "hold_max": 20617,
+  "moves_in_window": 4,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2,
+   3,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   2.0,
+   0.0,
+   2.0,
+   2.0,
+   2.0,
+   2.0,
+   1.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 35449.0,
+    "drain": 35449.0,
+    "rollcov": 35254.0,
+    "gate": 0.0,
+    "moves_out": 2.0
+   },
+   "1": {
+    "stream": 4667.0,
+    "drain": 0.0,
+    "rollcov": 4641.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 5383.0,
+    "drain": 0.0,
+    "rollcov": 5373.0,
+    "gate": 0.0,
+    "moves_out": 2.0
+   },
+   "3": {
+    "stream": 141.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 10848.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 4.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 36100.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 45641.0,
+   "wal_drain_latch_wait_us": 35449.0,
+   "wal_roll_blocked_wait_us": 45268.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 49,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 2888.7,
+   "p99_json": 408.9,
+   "p999_json": 2888.7,
+   "ge10ms": 2,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 50,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 2636.7,
+   "roll_cover_frac": 0.005,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 8.3
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 0.0,
+     "ge10": 2,
+     "al": 0,
+     "max_ms": 32.4
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.9
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 7.0
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.6
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.1
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-segregated-no0",
+  "dur": "group",
+  "run": "r2",
+  "win_s": 30.1,
+  "rolls": 24,
+  "rolls_whole_in_measure": 24,
+  "roll_cores": {
+   "1": 24
+  },
+  "hold_in_win_us": 169925,
+  "hold_p50": 5593,
+  "hold_max": 14035,
+  "moves_in_window": 5,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2,
+   3,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   3.0,
+   3.0,
+   0.0,
+   3.0,
+   0.0,
+   3.0,
+   2.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 23529.0,
+    "drain": 23529.0,
+    "rollcov": 23433.0,
+    "gate": 0.0,
+    "moves_out": 2.0
+   },
+   "1": {
+    "stream": 69.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 9449.0,
+    "moves_out": 3.0
+   },
+   "2": {
+    "stream": 1948.0,
+    "drain": 0.0,
+    "rollcov": 1935.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 1.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 39813.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 25548.0,
+   "wal_drain_latch_wait_us": 23529.0,
+   "wal_roll_blocked_wait_us": 25369.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 54,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 3320.0,
+   "p99_json": 408.2,
+   "p999_json": 3320.0,
+   "ge10ms": 6,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 155,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 3290.7,
+   "roll_cover_frac": 0.006,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 2,
+     "al": 0,
+     "max_ms": 28.3
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.4
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 2,
+     "al": 0,
+     "max_ms": 38.2
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.3
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 2,
+     "al": 0,
+     "max_ms": 33.2
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 2.4
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-segregated-no0",
+  "dur": "group",
+  "run": "r3",
+  "win_s": 30.1,
+  "rolls": 23,
+  "rolls_whole_in_measure": 23,
+  "roll_cores": {
+   "1": 6,
+   "0": 6,
+   "2": 11
+  },
+  "hold_in_win_us": 153362,
+  "hold_p50": 5762,
+  "hold_max": 13681,
+  "moves_in_window": 20,
+  "targets": [
+   1,
+   2,
+   1,
+   2,
+   1,
+   2,
+   3,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   0.0,
+   3.0,
+   2.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 30954.0,
+    "drain": 30922.0,
+    "rollcov": 28701.0,
+    "gate": 0.0,
+    "moves_out": 6.0
+   },
+   "1": {
+    "stream": 45.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 3094.0,
+    "moves_out": 4.0
+   },
+   "2": {
+    "stream": 60.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 7313.0,
+    "moves_out": 7.0
+   },
+   "3": {
+    "stream": 11.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 3.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 4.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 46512.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 31072.0,
+   "wal_drain_latch_wait_us": 30922.0,
+   "wal_roll_blocked_wait_us": 28701.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 128,
+   "dropped": 0,
+   "p99_recomp": 1108.6,
+   "p999_recomp": 24247.4,
+   "p99_json": 1108.6,
+   "p999_json": 24247.4,
+   "ge10ms": 23,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 596,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": 1087.7,
+   "p999_without_aligned": 24247.4,
+   "roll_cover_frac": 0.005,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 3,
+     "al": 0,
+     "max_ms": 39.1
+    },
+    {
+     "i": 1,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 3,
+     "al": 0,
+     "max_ms": 39.2
+    },
+    {
+     "i": 2,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 5,
+     "al": 0,
+     "max_ms": 51.7
+    },
+    {
+     "i": 3,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 4,
+     "al": 0,
+     "max_ms": 31.6
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 4,
+     "al": 0,
+     "max_ms": 29.2
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 0.0,
+     "ge10": 4,
+     "al": 0,
+     "max_ms": 41.6
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-spread",
+  "dur": "group",
+  "run": "r1",
+  "win_s": 30.1,
+  "rolls": 24,
+  "rolls_whole_in_measure": 24,
+  "roll_cores": {
+   "2": 24
+  },
+  "hold_in_win_us": 158401,
+  "hold_p50": 5612,
+  "hold_max": 11626,
+  "moves_in_window": 5,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   1.0,
+   1.0,
+   1.0,
+   0.0,
+   1.0,
+   1.0,
+   3.0,
+   2.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 16552.0,
+    "drain": 16552.0,
+    "rollcov": 16443.0,
+    "gate": 0.0,
+    "moves_out": 4.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 1.0
+   },
+   "2": {
+    "stream": 161.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 4444.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 7.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 2.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 47335.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 16722.0,
+   "wal_drain_latch_wait_us": 16552.0,
+   "wal_roll_blocked_wait_us": 16443.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 118,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 19313.3,
+   "p99_json": 975.1,
+   "p999_json": 19313.3,
+   "ge10ms": 18,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 520,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 19313.3,
+   "roll_cover_frac": 0.005,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 1.0,
+     "ge10": 5,
+     "al": 0,
+     "max_ms": 44.0
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 5,
+     "al": 0,
+     "max_ms": 41.5
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.2
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 0.0,
+     "ge10": 2,
+     "al": 0,
+     "max_ms": 29.2
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 1.0,
+     "ge10": 3,
+     "al": 0,
+     "max_ms": 48.9
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 3,
+     "al": 0,
+     "max_ms": 46.4
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-spread",
+  "dur": "group",
+  "run": "r2",
+  "win_s": 30.1,
+  "rolls": 24,
+  "rolls_whole_in_measure": 24,
+  "roll_cores": {
+   "2": 24
+  },
+  "hold_in_win_us": 184349,
+  "hold_p50": 5482,
+  "hold_max": 28738,
+  "moves_in_window": 7,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   3.0,
+   3.0,
+   3.0,
+   0.0,
+   3.0,
+   3.0,
+   1.0,
+   2.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 74748.0,
+    "drain": 74748.0,
+    "rollcov": 58806.0,
+    "gate": 0.0,
+    "moves_out": 4.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 190.0,
+    "drain": 1.0,
+    "rollcov": 0.0,
+    "gate": 6577.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 3.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 5.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 64285.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 74938.0,
+   "wal_drain_latch_wait_us": 74749.0,
+   "wal_roll_blocked_wait_us": 58806.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 115,
+   "dropped": 0,
+   "p99_recomp": "<1ms",
+   "p999_recomp": 14086.2,
+   "p99_json": 940.1,
+   "p999_json": 14086.2,
+   "ge10ms": 16,
+   "ge10ms_aligned": 3,
+   "stall_ms_ge10": 479,
+   "stall_ms_ge10_aligned": 44,
+   "ge10ms_overlap_any": 3,
+   "p99_without_aligned": "<1ms",
+   "p999_without_aligned": 11363.7,
+   "roll_cover_frac": 0.006,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 3,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.4
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.0
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 3.0,
+     "ge10": 5,
+     "al": 1,
+     "max_ms": 56.1
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 0.0,
+     "ge10": 3,
+     "al": 1,
+     "max_ms": 29.0
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 3.0,
+     "ge10": 8,
+     "al": 1,
+     "max_ms": 66.0
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 3.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.2
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c1-spread",
+  "dur": "group",
+  "run": "r3",
+  "win_s": 30.1,
+  "rolls": 24,
+  "rolls_whole_in_measure": 24,
+  "roll_cores": {
+   "1": 24
+  },
+  "hold_in_win_us": 170566,
+  "hold_p50": 6117,
+  "hold_max": 13796,
+  "moves_in_window": 4,
+  "targets": [
+   0,
+   1,
+   2,
+   3,
+   0,
+   1,
+   2,
+   3
+  ],
+  "roles": [
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "reader",
+   "walker",
+   "inserter"
+  ],
+  "cores_end": [
+   2.0,
+   2.0,
+   2.0,
+   2.0,
+   0.0,
+   2.0,
+   3.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 35951.0,
+    "drain": 35950.0,
+    "rollcov": 30940.0,
+    "gate": 0.0,
+    "moves_out": 1.0
+   },
+   "1": {
+    "stream": 232.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 4890.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 3784.0,
+    "drain": 0.0,
+    "rollcov": 3770.0,
+    "gate": 0.0,
+    "moves_out": 3.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 6.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 39658.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 39968.0,
+   "wal_drain_latch_wait_us": 35950.0,
+   "wal_roll_blocked_wait_us": 34710.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "reader": {
+   "n": 12006,
+   "slow": 124,
+   "dropped": 0,
+   "p99_recomp": 1016.9,
+   "p999_recomp": 5128.9,
+   "p99_json": 1016.9,
+   "p999_json": 5128.9,
+   "ge10ms": 7,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 188,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": 1006.4,
+   "p999_without_aligned": 4458.7,
+   "roll_cover_frac": 0.006,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.3
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.8
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.5
+    },
+    {
+     "i": 3,
+     "core": 3.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 4.0
+    },
+    {
+     "i": 4,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 7,
+     "al": 0,
+     "max_ms": 39.6
+    },
+    {
+     "i": 5,
+     "core": 1.0,
+     "core_end": 2.0,
+     "ge10": 0,
+     "al": 0,
+     "max_ms": 3.9
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2",
+  "dur": "group",
+  "run": "r1",
+  "win_s": 30.1,
+  "rolls": 23,
+  "rolls_whole_in_measure": 23,
+  "roll_cores": {
+   "3": 23
+  },
+  "hold_in_win_us": 176281,
+  "hold_p50": 6587,
+  "hold_max": 15202,
+  "moves_in_window": 28,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1,
+   3
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "inserter"
+  ],
+  "cores_end": [
+   2.0,
+   1.0,
+   1.0,
+   1.0,
+   0.0,
+   0.0,
+   1.0,
+   0.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 180800.0,
+    "drain": 98645.0,
+    "rollcov": 147150.0,
+    "gate": 468939.0,
+    "moves_out": 10.0
+   },
+   "1": {
+    "stream": 158685.0,
+    "drain": 93106.0,
+    "rollcov": 130018.0,
+    "gate": 0.0,
+    "moves_out": 9.0
+   },
+   "2": {
+    "stream": 162479.0,
+    "drain": 83416.0,
+    "rollcov": 140322.0,
+    "gate": 0.0,
+    "moves_out": 9.0
+   },
+   "3": {
+    "stream": 1863.0,
+    "drain": 10.0,
+    "rollcov": 0.0,
+    "gate": 68853.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 2.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 5907.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 503827.0,
+   "wal_drain_latch_wait_us": 275177.0,
+   "wal_roll_blocked_wait_us": 417489.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 24004,
+   "slow": 24004,
+   "dropped": 0,
+   "p99_recomp": 306515.9,
+   "p999_recomp": 341492.7,
+   "p99_json": 306515.9,
+   "p999_json": 341492.7,
+   "ge10ms": 12499,
+   "ge10ms_aligned": 64,
+   "stall_ms_ge10": 1805602,
+   "stall_ms_ge10_aligned": 844,
+   "ge10ms_overlap_any": 64,
+   "p99_without_aligned": 306515.9,
+   "p999_without_aligned": 341492.7,
+   "roll_cover_frac": 0.006,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 42,
+    "5..30": 22,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 1564,
+     "al": 9,
+     "max_ms": 357.2
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 1569,
+     "al": 9,
+     "max_ms": 361.8
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 1556,
+     "al": 8,
+     "max_ms": 343.7
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 1.0,
+     "ge10": 1561,
+     "al": 7,
+     "max_ms": 342.5
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 1563,
+     "al": 8,
+     "max_ms": 362.1
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 0.0,
+     "ge10": 1568,
+     "al": 9,
+     "max_ms": 360.8
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 1.0,
+     "ge10": 1562,
+     "al": 6,
+     "max_ms": 359.6
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 1556,
+     "al": 8,
+     "max_ms": 347.4
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2",
+  "dur": "group",
+  "run": "r2",
+  "win_s": 30.34,
+  "rolls": 23,
+  "rolls_whole_in_measure": 23,
+  "roll_cores": {
+   "3": 23
+  },
+  "hold_in_win_us": 199835,
+  "hold_p50": 7493,
+  "hold_max": 19436,
+  "moves_in_window": 24,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1,
+   3
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "inserter"
+  ],
+  "cores_end": [
+   2.0,
+   1.0,
+   1.0,
+   0.0,
+   1.0,
+   0.0,
+   0.0,
+   1.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 181880.0,
+    "drain": 113239.0,
+    "rollcov": 157574.0,
+    "gate": 238123.0,
+    "moves_out": 9.0
+   },
+   "1": {
+    "stream": 227921.0,
+    "drain": 152506.0,
+    "rollcov": 182806.0,
+    "gate": 0.0,
+    "moves_out": 8.0
+   },
+   "2": {
+    "stream": 217362.0,
+    "drain": 119521.0,
+    "rollcov": 169874.0,
+    "gate": 0.0,
+    "moves_out": 7.0
+   },
+   "3": {
+    "stream": 6443.0,
+    "drain": 15.0,
+    "rollcov": 0.0,
+    "gate": 82712.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 1.0,
+   "sched_hold_out_run_over_10ms": 7.0,
+   "sched_unpolled_over_100ms": 2.0,
+   "sched_longest_unpolled_us": 224397.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 633607.0,
+   "wal_drain_latch_wait_us": 385281.0,
+   "wal_roll_blocked_wait_us": 510254.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 23976,
+   "slow": 23976,
+   "dropped": 0,
+   "p99_recomp": 319706.7,
+   "p999_recomp": 402902.6,
+   "p99_json": 319706.7,
+   "p999_json": 402902.6,
+   "ge10ms": 12864,
+   "ge10ms_aligned": 121,
+   "stall_ms_ge10": 1909341,
+   "stall_ms_ge10_aligned": 2209,
+   "ge10ms_overlap_any": 121,
+   "p99_without_aligned": 319706.7,
+   "p999_without_aligned": 402902.6,
+   "roll_cover_frac": 0.007,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 60,
+    "5..30": 61,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 1602,
+     "al": 15,
+     "max_ms": 428.3
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 1606,
+     "al": 13,
+     "max_ms": 406.6
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 1620,
+     "al": 12,
+     "max_ms": 425.8
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 1627,
+     "al": 18,
+     "max_ms": 424.5
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 1591,
+     "al": 14,
+     "max_ms": 402.9
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 0.0,
+     "ge10": 1610,
+     "al": 17,
+     "max_ms": 411.7
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 1612,
+     "al": 18,
+     "max_ms": 410.4
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 1596,
+     "al": 14,
+     "max_ms": 409.1
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2",
+  "dur": "group",
+  "run": "r3",
+  "win_s": 30.29,
+  "rolls": 23,
+  "rolls_whole_in_measure": 23,
+  "roll_cores": {
+   "3": 23
+  },
+  "hold_in_win_us": 181830,
+  "hold_p50": 6117,
+  "hold_max": 21332,
+  "moves_in_window": 36,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1,
+   3
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "inserter"
+  ],
+  "cores_end": [
+   2.0,
+   1.0,
+   1.0,
+   2.0,
+   1.0,
+   0.0,
+   0.0,
+   0.0,
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 194947.0,
+    "drain": 144801.0,
+    "rollcov": 160099.0,
+    "gate": 126307.0,
+    "moves_out": 10.0
+   },
+   "1": {
+    "stream": 177671.0,
+    "drain": 108130.0,
+    "rollcov": 150272.0,
+    "gate": 0.0,
+    "moves_out": 14.0
+   },
+   "2": {
+    "stream": 167469.0,
+    "drain": 88063.0,
+    "rollcov": 140969.0,
+    "gate": 0.0,
+    "moves_out": 12.0
+   },
+   "3": {
+    "stream": 3124.0,
+    "drain": 27.0,
+    "rollcov": 0.0,
+    "gate": 66144.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 2.0,
+   "sched_hold_out_run_over_10ms": 6.0,
+   "sched_unpolled_over_100ms": 3.0,
+   "sched_longest_unpolled_us": 185062.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 543210.0,
+   "wal_drain_latch_wait_us": 341020.0,
+   "wal_roll_blocked_wait_us": 451339.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 23938,
+   "slow": 23938,
+   "dropped": 0,
+   "p99_recomp": 326555.7,
+   "p999_recomp": 380962.6,
+   "p99_json": 326555.7,
+   "p999_json": 380962.6,
+   "ge10ms": 12721,
+   "ge10ms_aligned": 77,
+   "stall_ms_ge10": 1908042,
+   "stall_ms_ge10_aligned": 1326,
+   "ge10ms_overlap_any": 77,
+   "p99_without_aligned": 326555.7,
+   "p999_without_aligned": 380962.6,
+   "roll_cover_frac": 0.006,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 54,
+    "5..30": 23,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 1592,
+     "al": 9,
+     "max_ms": 390.1
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 1587,
+     "al": 8,
+     "max_ms": 378.8
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 1.0,
+     "ge10": 1581,
+     "al": 10,
+     "max_ms": 394.7
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 2.0,
+     "ge10": 1603,
+     "al": 10,
+     "max_ms": 393.4
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 1583,
+     "al": 10,
+     "max_ms": 392.2
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 0.0,
+     "ge10": 1582,
+     "al": 10,
+     "max_ms": 383.9
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 1601,
+     "al": 13,
+     "max_ms": 399.7
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 0.0,
+     "ge10": 1592,
+     "al": 7,
+     "max_ms": 381.3
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2-iso",
+  "dur": "group",
+  "run": "r1",
+  "win_s": 30.09,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   0.0,
+   1.0,
+   2.0,
+   0.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 1.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 3.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 1.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 1940.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 6.0,
+   "wal_drain_latch_wait_us": 2.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 24006,
+   "slow": 23999,
+   "dropped": 0,
+   "p99_recomp": 11066.2,
+   "p999_recomp": 18925.4,
+   "p99_json": 11066.2,
+   "p999_json": 18925.4,
+   "ge10ms": 325,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 4350,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": 11066.2,
+   "p999_without_aligned": 18925.4,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 40,
+     "al": 0,
+     "max_ms": 25.6
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 40,
+     "al": 0,
+     "max_ms": 24.4
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 36,
+     "al": 0,
+     "max_ms": 25.1
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 39,
+     "al": 0,
+     "max_ms": 23.9
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 41,
+     "al": 0,
+     "max_ms": 29.4
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 43,
+     "al": 0,
+     "max_ms": 29.4
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 42,
+     "al": 0,
+     "max_ms": 28.1
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 44,
+     "al": 0,
+     "max_ms": 26.8
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2-iso",
+  "dur": "group",
+  "run": "r2",
+  "win_s": 30.09,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   0.0,
+   1.0,
+   2.0,
+   0.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 2.0,
+    "drain": 1.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 25.0,
+    "drain": 24.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 15.0,
+    "drain": 14.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 0.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 43.0,
+   "wal_drain_latch_wait_us": 40.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 24007,
+   "slow": 24004,
+   "dropped": 0,
+   "p99_recomp": 10905.3,
+   "p999_recomp": 20062.7,
+   "p99_json": 10905.3,
+   "p999_json": 20062.7,
+   "ge10ms": 318,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 4275,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": 10905.3,
+   "p999_without_aligned": 20062.7,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 36,
+     "al": 0,
+     "max_ms": 27.0
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 39,
+     "al": 0,
+     "max_ms": 28.2
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 44,
+     "al": 0,
+     "max_ms": 27.0
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 45,
+     "al": 0,
+     "max_ms": 25.7
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 45,
+     "al": 0,
+     "max_ms": 24.5
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 36,
+     "al": 0,
+     "max_ms": 23.3
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 36,
+     "al": 0,
+     "max_ms": 22.0
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 37,
+     "al": 0,
+     "max_ms": 20.7
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c2-iso",
+  "dur": "group",
+  "run": "r3",
+  "win_s": 30.09,
+  "rolls": 0,
+  "rolls_whole_in_measure": 0,
+  "roll_cores": {},
+  "hold_in_win_us": 0,
+  "hold_p50": null,
+  "hold_max": null,
+  "moves_in_window": 0,
+  "targets": [
+   0,
+   1,
+   2,
+   0,
+   1,
+   2,
+   0,
+   1
+  ],
+  "roles": [
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer",
+   "writer"
+  ],
+  "cores_end": [
+   0.0,
+   1.0,
+   2.0,
+   0.0,
+   1.0,
+   2.0,
+   0.0,
+   1.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 5.0,
+    "drain": 2.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 3.0,
+    "drain": 1.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 2.0,
+    "drain": 1.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 0.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 2290.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 11.0,
+   "wal_drain_latch_wait_us": 5.0,
+   "wal_roll_blocked_wait_us": 0.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ],
+  "writer": {
+   "n": 24007,
+   "slow": 24003,
+   "dropped": 0,
+   "p99_recomp": 10922.9,
+   "p999_recomp": 20555.7,
+   "p99_json": 10922.9,
+   "p999_json": 20555.7,
+   "ge10ms": 301,
+   "ge10ms_aligned": 0,
+   "stall_ms_ge10": 4328,
+   "stall_ms_ge10_aligned": 0,
+   "ge10ms_overlap_any": 0,
+   "p99_without_aligned": 10922.9,
+   "p999_without_aligned": 20555.7,
+   "roll_cover_frac": 0.0,
+   "end_offset_ms_hist": {
+    "<-50": 0,
+    "-50..-5": 0,
+    "-5..0": 0,
+    "0..5": 0,
+    "5..30": 0,
+    "30..100": 0,
+    ">=100": 0
+   },
+   "by_client": [
+    {
+     "i": 0,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 39,
+     "al": 0,
+     "max_ms": 40.8
+    },
+    {
+     "i": 1,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 38,
+     "al": 0,
+     "max_ms": 39.5
+    },
+    {
+     "i": 2,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 35,
+     "al": 0,
+     "max_ms": 38.3
+    },
+    {
+     "i": 3,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 38,
+     "al": 0,
+     "max_ms": 37.1
+    },
+    {
+     "i": 4,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 38,
+     "al": 0,
+     "max_ms": 35.8
+    },
+    {
+     "i": 5,
+     "core": 2.0,
+     "core_end": 2.0,
+     "ge10": 38,
+     "al": 0,
+     "max_ms": 34.6
+    },
+    {
+     "i": 6,
+     "core": 0.0,
+     "core_end": 0.0,
+     "ge10": 40,
+     "al": 0,
+     "max_ms": 34.4
+    },
+    {
+     "i": 7,
+     "core": 1.0,
+     "core_end": 1.0,
+     "ge10": 35,
+     "al": 0,
+     "max_ms": 42.0
+    }
+   ]
+  }
+ },
+ {
+  "cell": "c3",
+  "dur": "group",
+  "run": "r1",
+  "win_s": 30.02,
+  "rolls": 25,
+  "rolls_whole_in_measure": 25,
+  "roll_cores": {
+   "3": 25
+  },
+  "hold_in_win_us": 183822,
+  "hold_p50": 6624,
+  "hold_max": 15238,
+  "moves_in_window": 0,
+  "targets": [
+   3
+  ],
+  "roles": [
+   "inserter"
+  ],
+  "cores_end": [
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 15177.0,
+    "drain": 15177.0,
+    "rollcov": 4527.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 8.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 7.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 147.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 12921.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 3.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 35394.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 15341.0,
+   "wal_drain_latch_wait_us": 15177.0,
+   "wal_roll_blocked_wait_us": 4527.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ]
+ },
+ {
+  "cell": "c3",
+  "dur": "group",
+  "run": "r2",
+  "win_s": 30.02,
+  "rolls": 25,
+  "rolls_whole_in_measure": 25,
+  "roll_cores": {
+   "3": 25
+  },
+  "hold_in_win_us": 180178,
+  "hold_p50": 5780,
+  "hold_max": 22709,
+  "moves_in_window": 0,
+  "targets": [
+   3
+  ],
+  "roles": [
+   "inserter"
+  ],
+  "cores_end": [
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 77868.0,
+    "drain": 77867.0,
+    "rollcov": 67270.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 134.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 4743.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 1.0,
+   "sched_hold_out_run_over_10ms": 10.0,
+   "sched_unpolled_over_100ms": 1.0,
+   "sched_longest_unpolled_us": 236636.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 78003.0,
+   "wal_drain_latch_wait_us": 77867.0,
+   "wal_roll_blocked_wait_us": 67270.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ]
+ },
+ {
+  "cell": "c3",
+  "dur": "group",
+  "run": "r3",
+  "win_s": 30.01,
+  "rolls": 25,
+  "rolls_whole_in_measure": 25,
+  "roll_cores": {
+   "3": 25
+  },
+  "hold_in_win_us": 160867,
+  "hold_p50": 5552,
+  "hold_max": 11076,
+  "moves_in_window": 0,
+  "targets": [
+   3
+  ],
+  "roles": [
+   "inserter"
+  ],
+  "cores_end": [
+   3.0
+  ],
+  "per_core": {
+   "0": {
+    "stream": 37320.0,
+    "drain": 37320.0,
+    "rollcov": 34084.0,
+    "gate": 1828.0,
+    "moves_out": 0.0
+   },
+   "1": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "2": {
+    "stream": 0.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 0.0,
+    "moves_out": 0.0
+   },
+   "3": {
+    "stream": 118.0,
+    "drain": 0.0,
+    "rollcov": 0.0,
+    "gate": 3464.0,
+    "moves_out": 0.0
+   }
+  },
+  "c0_sched": {
+   "sched_hold_out_run_over_100ms": 0.0,
+   "sched_hold_out_run_over_10ms": 4.0,
+   "sched_unpolled_over_100ms": 0.0,
+   "sched_longest_unpolled_us": 12539.0
+  },
+  "contention": {
+   "wal_stream_wait_us": 37438.0,
+   "wal_drain_latch_wait_us": 37320.0,
+   "wal_roll_blocked_wait_us": 34084.0
+  },
+  "meta_core": [
+   0.0,
+   0.0,
+   false
+  ]
+ }
+]

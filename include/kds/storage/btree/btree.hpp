@@ -89,11 +89,9 @@
 // descent never holds two pages at once, and an internal node is read and
 // let go before its child is asked for.
 //
-// *"There is no concurrent mutation to protect against yet - the server is
-// one cooperative thread and nothing here suspends"* stood here until
-// AT-S5c. AT-S5 made a write run where the session is, so two cores reach
-// one relation's leaves, and the sentence stopped being true of the one
-// place in this file that depends on it: **a write descent's re-fetch**,
+// A write runs where the session is (AT-S5), so two cores reach one
+// relation's leaves, and one place in this file depends on that: **a
+// write descent's re-fetch**,
 // which must drop the leaf's shared hold before asking for it exclusive
 // because the page latch is never upgraded. `DescendTo` carries the
 // window's whole account; what closes it is that a leaf's coverage

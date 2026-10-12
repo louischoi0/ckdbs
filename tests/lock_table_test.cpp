@@ -267,11 +267,11 @@ TEST(LockTableTest, AtOneCoreNoLatchIsConstructed) {
     // no `std::mutex` is built.
     auto one = MakeTable(1);
     EXPECT_FALSE(one->latched());
-    EXPECT_EQ(one->partition_count(), kLockPartitionsPerCore);
+    EXPECT_EQ(one->partition_count(), kLockPartitions);
 
     auto eight = MakeTable(8);
     EXPECT_TRUE(eight->latched());
-    EXPECT_EQ(eight->partition_count(), kLockPartitionsPerCore * 8);
+    EXPECT_EQ(eight->partition_count(), kLockPartitions) << "the count is fixed (BP-S6)";
 
     // The conflict is answered at one core exactly as at eight - finding
     // AO-3 H: two sessions on core 0 conflict today, so a borrow model that

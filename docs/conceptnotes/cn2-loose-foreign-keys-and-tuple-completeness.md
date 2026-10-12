@@ -58,7 +58,7 @@ report it, rather than refuse it.
   it from both write-path checks: the forward check on child
   INSERT/UPDATE (`foreign-keys.md` §2) and the reverse check on parent
   DELETE (§3). The row remains a foreign key for every other reader of
-  the catalog — placement policy, co-location warnings, `SHOW` output.
+  the catalog — `SHOW` output among them.
 - **Tuple completeness.** A tuple is *complete* when, for every foreign
   key declared on its relation (loose or not), the fk column is NULL or
   names a parent that is live at latest state. It is *incomplete* when
@@ -86,12 +86,12 @@ translation. **Proposed, not decided.**
   `REFERENCES <parent> LOOSE`. Catalog: `sys.fkeys.flags` bit 1,
   `kFkLoose`, beside `kFkNullable` at bit 0
   (`include/kds/catalog/rows.hpp:867,991`, `[source-read]`). One
-  catalog row, the same referent (F1), the same placement policy and
-  co-location `WARN` (F5). Not an action clause: F2 keeps the grammar
+  catalog row, the same referent (F1), the same checks' placement on the
+  statement's core (F5). Not an action clause: F2 keeps the grammar
   free of `ON DELETE`, and LOOSE is not a delete-time behaviour but the
   removal of both checks. The alternative — a separate object — was
   considered and refused for three reasons: the FK graph has consumers
-  that must read one catalog (F5's placement input); completeness must
+  that must read one catalog; completeness must
   be defined for RESTRICT keys too, so it cannot be a loose-only
   feature; and a RESTRICT↔LOOSE transition on one row is an `ALTER`,
   where two objects would need DROP + CREATE with an unprotected
@@ -138,9 +138,9 @@ translation. **Proposed, not decided.**
   would put a parent probe inside the step VM, which F4 keeps the
   checks out of. An aggregate (`SHOW`-style counts) is not refused but
   is not v1. Cost is the forward check's: one probe per fk column per
-  tuple, and for a cross-owner parent one ring round trip per distinct
-  owner (F5, `foreign-keys.md` §2a) — the command is a walk with a
-  probe per row and is priced as one.
+  tuple, each a descent of the parent where the statement runs (F5,
+  `foreign-keys.md` §2a) — the command is a walk with a probe per row
+  and is priced as one.
 - **F12 — RESTRICT ↔ LOOSE is an ALTER.** RESTRICT → LOOSE always
   succeeds: it removes checks and invalidates nothing. LOOSE → RESTRICT
   runs the completeness audit over the whole child relation first and
@@ -193,9 +193,8 @@ change anything:
   three-way latest-state verdict F9 lifts to the tuple. Pure in the
   three header fields, safe under a page span, walks no undo — which is
   why F10 costs no scratch copy.
-- The forward check across owners (`foreign-keys.md` §2a): the probe
-  ring round trip a cross-owner parent costs. F11's command inherits it
-  per row.
+- The forward check's parent descent (`foreign-keys.md` §2a): F11's
+  command inherits its cost per row.
 - The reverse check and its Cabin (`foreign-keys.md` §3, F6): not used
   by the command in v1. Named because F12's LOOSE → RESTRICT audit is
   the forward direction over every child, not the reverse direction

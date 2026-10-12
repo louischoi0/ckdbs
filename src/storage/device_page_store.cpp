@@ -228,13 +228,9 @@ StatusOr<DevicePageStore::MapRegion*> DevicePageStore::EnsureRegionResident(
     // publication moved back outside this hold, 4 runs in 8 die or report a
     // corrupted region count, one of them on a SIGSEGV.
     //
-    // **The peer's private empty region went with the lease** (AW-S1b). A
-    // leased store could not read a map page from the device - core 0 owned
-    // it, wrote it and did not latch it - so a peer reaching a region
-    // after its mount got a private, never-dirty copy instead. One frame
-    // table serves every core now, so the unsynchronised read that arm
-    // avoided cannot arise: there is one copy, and this is the discipline
-    // over it.
+    // One frame table serves every core, so there is one copy of each map
+    // page, and this is the discipline over it. The per-core private region
+    // retired with the lease (AW-S1b); its history is at cf889b63.
     {
         AssertNotUnderMapHold("EnsureRegionResident");
         LatchGuard map(map_latch());
@@ -464,10 +460,7 @@ Status DevicePageStore::MarkHeaderlessBeforeInsert(PageId headerless_page) {
 }
 
 StatusOr<std::size_t> DevicePageStore::FlushMaps() {
-    // **Every core's store publishes the maps.** It used to carry a check
-    // of its own - a leased store dropped its map writes rather than
-    // publishing a copy taken at its own mount - and AW-S1b removed the
-    // copy along with the lease.
+    // **Every core's store publishes the maps.**
     //
     // **Copy under the hold, write outside it** (AM-S3). The rule this class
     // has had since AM-S2 2b is that device work does not run under the
@@ -969,25 +962,10 @@ void DevicePageStore::ReleaseFrameLocked(Frame& frame) noexcept {
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId page_id,
                                                                          bool mark_dirty,
                                                                          FetchHeat heat) {
-    // **PW1c-7's stamp claim went with the fault grants** (AW-S1b). It
-    // restored a core's write rights after a restart by reading the page's
-    // own stream stamp, and its *read* trigger was "this core may not fault
-    // this page" - a question a shared pool cannot ask, since every core
-    // faults every page. Its write trigger is unreachable for the same
-    // reason the machinery around it is: there is one frame table and one
-    // free map, so no store is one core's. The prefetched page it handed
-    // down to the read below went with it, so the miss path always reads
-    // and always verifies.
-    // **The shared-nothing check went with the fault grants** (AW-S1b,
-    // AM-R4a). It refused a fault of a page belonging to another core, in
-    // debug builds only, and a shared pool is precisely an arrangement in
-    // which every core faults every page - so the predicate it called
-    // answered `true` unconditionally from AM-S2 step 3 onwards and the
-    // check was dead on every mountable volume before it was deleted.
-    // The write gate that stood here - `InvalidArgument` to a peer dirtying
-    // a system page - went at AT-S5 with the arm it enforced, and the
-    // predicate it asked at AT-S18; what serialises each shared page is
-    // `crosscore.md` CC11's.
+    // Every core faults every page: the miss path always reads and always
+    // verifies, and what serialises a shared page is `crosscore.md` CC11's.
+    // The per-core fault grants and write gate retired (AW-S1b, AT-S5); their
+    // history is at cf889b63.
 
     if (auto it = frames_.find(page_id); it != frames_.end()) {
         // Never clears the flag: a frame already dirty from an earlier
@@ -1033,9 +1011,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
         // first flush: the map records an id as it is claimed and the
         // page's bytes reach the device only at a write-back, so a crash
         // between a PAGE_INIT and that flush leaves exactly this (found by
-        // PW1c-7's restart test, where an extent reserved for a peer's
-        // lease was allocated whole in core 0's map while the peer wrote
-        // its pages lazily). NotFound, not Corruption: nothing was damaged, and
+        // PW1c-7's restart test). NotFound, not Corruption: nothing was damaged, and
         // redo's PAGE_INIT arm *creates* a page the store does not hold,
         // where its checksum arm can only poison one it holds wrong and
         // wait for a full page image that never comes (wal/redo.cpp). A
@@ -1480,12 +1456,9 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     }
     const bool popped = page_id != kInvalidPageId;
     // FM3/FM5: the search crosses regions, and creates the next one when it
-    // runs off the end of the last. **Every core's allocation since
-    // AW-S1b**: a peer used to take its id from a run core 0 had reserved
-    // for it, because a store it did not own could not reach the map. It
-    // reaches this one under the structure latch, so the reservation had
-    // nothing left to work around, and the hint keeps the search to one
-    // region's map in the steady state.
+    // runs off the end of the last. **Every core's allocation**: every core
+    // reaches the map under the structure latch, and the hint keeps the
+    // search to one region's map in the steady state.
     // **Scan and mark are one hold, and the device work is outside it**
     // (AM-S2). This used to choose an id here and mark it two calls away
     // inside `CreateAtUnpinned`, so any number of threads could scan the
@@ -1663,9 +1636,8 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetForReadUnpinned(Pa
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Resolve(PageId page_id,
                                                                   bool mark_dirty,
                                                                   FetchHeat heat) {
-    // **The device-map adoption went with the lease** (AW-S1b): it existed
-    // because a peer's private copy of the free map was taken at its mount
-    // and went stale from that moment, and there is one copy now.
+    // The device-map adoption retired with the lease (AW-S1b); its history
+    // is at cf889b63.
     if (!IsAllocated(page_id)) return NotAllocated(page_id);
     return ResidentBytes(page_id, mark_dirty, heat);
 }
@@ -1702,27 +1674,6 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
     }
 
     SetPageLsn(std::span<std::byte, kPageSize>(*it->second.bytes), lsn);
-    // PW1c-3, PL §9 rule 4: the core that last wrote the page. Rides the
-    // LSN stamp because the two answered one question - *whose* offset is
-    // page_lsn - while streams were per core. With one stream (AR0 M0) and
-    // the ownership reading gone (AW-S1b) it is a diagnostic `SHOW PAGE`
-    // prints, and nothing refuses on it (`page_header.hpp`).
-    //
-    // **Unless this pass is recovering on every core's behalf** (AR0 M0;
-    // the header's `SetStampSuppressed` says why). The page_lsn above is
-    // still stamped, because idempotence is that field's job; what is
-    // withheld is the stream stamp.
-    //
-    // **`CurrentCore()`, not `core_id_`** (AM-S2 step 3, the same argument
-    // the page latch's owner field made). The stamp answers *whose* offset
-    // the page_lsn beside it is, which is a fact about the core that wrote
-    // the record - not about the store the frame happens to live in. They
-    // are the same thing only while each core has a store of its own, and
-    // step 3 ends that.
-    if (!stamp_suppressed_) {
-        SetPageStreamStamp(std::span<std::byte, kPageSize>(*it->second.bytes),
-                           StreamStampFor(CurrentCore()));
-    }
     it->second.MarkDirty(++dirty_gens_);
     // First record since the frame was last written back wins: recLSN is
     // the *oldest* LSN redo must replay to make the page whole, so a later
@@ -2407,8 +2358,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
     // **What that sentence rests on, since it is not local.** The *hit* path
     // below still calls the whole raw fetch under the latch, and `Resolve`
     // begins with `IsAllocated`, whose false arm used to be a device read of
-    // its own (`AdoptDeviceMapOnMiss`, struck at AW-S1b with the private map
-    // copy it reconciled). No resident page reaches it, because a page is
+    // its own (`AdoptDeviceMapOnMiss`, retired at AW-S1b). No resident page reaches it, because a page is
     // only ever made resident after its bit is set, and `FreePage` erases a
     // frame in the hold that clears its bit, so no clear bit has a resident
     // frame (BF-R5) - "no I/O on a hit" is a property of *that* invariant,

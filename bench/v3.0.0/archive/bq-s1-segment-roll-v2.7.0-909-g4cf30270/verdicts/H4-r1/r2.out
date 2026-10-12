@@ -1,0 +1,4 @@
+r1 hit p50 365637 hit mean 376201 miss mean 372532 gate share 96.98 top3 [(473922, 'hit'), (660699, 'hit'), (673132, 'hit')] miss-minus-wait share 7.61
+r2 hit p50 366533 hit mean 358043 miss mean 433388 gate share 97.72 top3 [(490146, 'hit'), (785457, 'waited'), (911297, 'hit')] miss-minus-wait share 15.5
+r3 hit p50 349264.0 hit mean 356784 miss mean 357224 gate share 95.6 top3 [(566287, 'hit'), (574636, 'hit'), (794287, 'hit')] miss-minus-wait share 10.8
+[279, 819, 1579, 1932, 2878, 3296, 3627, 4426, 36177, 39463, 45443, 99921] 3461.5 4

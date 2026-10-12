@@ -1,0 +1,4 @@
+s16 nonbulk stream wait s med 11.71 range 1.6 40.9
+base nonbulk stream wait s med 12.66 range 0.07 48.55
+s256 nonbulk stream wait s med 14.58 range 2.73 48.28
+s1024 nonbulk stream wait s med 13.2 range 2.38 33.23

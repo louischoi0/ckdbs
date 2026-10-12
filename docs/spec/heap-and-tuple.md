@@ -210,7 +210,7 @@ BB-R1, which fixed a btree row's id under the exclusive hold of the leaf it land
 
 **A carve works on every relation.** `AllocateRowIdRange` refuses nothing for a key reason. Its one caller is the sorted fill, which is heap-gated (`bulkinsert.md`), and the one consequence is that a carve spends its block from the mark's point of view before those ids are placed. A *named* key cannot land inside a live carve: a carve runs only on a heap, where a named key must be at or above the mark, and the carve has already moved the mark past its own block.
 
-**Every core issues and admits from the one mark.** Admitting a named key writes the relation's `sys.tables` row — the mark — and so does issuing an omitted one (`AllocateRowId`'s bump). On a heap both happen under the exclusive hold of the chain's tail (BB-R7), the user page outer to the `sys.tables` page (BB-R4, `page.md` §6); on a btree both happen before the descent, under no user page (BD-R6). That row was the system core's page until AT-S5 and a peer refused a named key per row; it is every core's now, written under the page latch with no task parking inside the span (`catalog.md` CT5). The omitted arity has bumped it on every core since AT-S10b (§4.1a).
+**Every core issues and admits from the one mark.** Admitting a named key writes the relation's `sys.tables` row — the mark — and so does issuing an omitted one (`AllocateRowId`'s bump). On a heap both happen under the exclusive hold of the chain's tail (BB-R7), the user page outer to the `sys.tables` page (BB-R4, `page.md` §6); on a btree both happen before the descent, under no user page (BD-R6). Every core writes that row, under the page latch with no task parking inside the span (`catalog.md` CT5, §4.1a).
 
 **The pk is not updatable** (K2). `exec::CompileAssignments` refuses a pk `UPDATE` at compile time as `Unsupported` with the column's byte, regardless of provenance. Naming a key at insert and changing one afterwards are unrelated permissions; only the first is granted.
 
@@ -230,10 +230,10 @@ Tests: `tests/supplied_key_test.cpp` and `tests/sorted_leaf_named_keys_test.cpp`
 
 ### 4.1a Monotonicity when more than one core inserts
 
-**Every core issues from the one mark since AT-S10b.** A peer's omitted-pk
-`INSERT` runs on the peer (AT-S5) and calls `Catalog::AllocateRowId`, the
-in-place bump of the relation's `sys.tables.next_id` under that catalog
-page's latch that core 0 always ran (`catalog.md` CT5). Two cores issuing
+**Every core issues from the one mark.** An omitted-pk `INSERT` runs on
+its session's core and calls `Catalog::AllocateRowId`, the in-place bump of
+the relation's `sys.tables.next_id` under that catalog page's latch
+(`catalog.md` CT5). Two cores issuing
 into one relation are serialised by the latch, so the ids are **one
 sequence in issue order however many cores insert**, and §4.1's argument
 holds unchanged: the mark stays one ceiling on what has been placed, and
@@ -246,21 +246,16 @@ placement (BD-R2).
 **No core caches a block, and that is deliberate.** AT-R4 and D20
 (`instructions/v3.0.0/workorder-at-m3-uniformity.md`) name a per-core
 row-id cache of 4,096; the build departs from that wording on hard
-invariant 11's authority (`CLAUDE.md`): with insert spreading off, which is
-every relation, an issued pk is an identity *and a sequence*, monotonic in
+invariant 11's authority (`CLAUDE.md`): an issued pk is an identity *and a sequence*, monotonic in
 issue order (a named key carries no order on a btree, §4.1), and a
 per-core block breaks issue order across cores - two rows
 inserted a microsecond apart on different cores carry ids thousands apart,
-and the later one may carry the lower id. That was the engine until
-AT-S10b, when a peer issued from a block core 0 carved and leased to it over
-the ring. The transaction-id sequence keeps its per-core block
+and the later one may carry the lower id. The transaction-id sequence keeps its per-core block
 (`txn.md` §4.2), because no reader decides by a transaction id's order
 since AN-S2 (`txn.md` §4.1).
 
-**Insert spreading is retired (AT-S9)**, with range ownership, and the
-split relation it produced is retired with its directory (2026-09-30,
-`crosscore.md` CC8): a relation is one structure headed by `desc_page_id`,
-and `range_size_ids` is refused by name.
+**A relation is one structure headed by `desc_page_id`**, and
+`range_size_ids` is refused by name (`crosscore.md` CC8).
 
 **What a client may rely on.** An issued pk is an identity **and a
 sequence**, monotonic in issue order, on every relation and whichever cores
@@ -333,7 +328,7 @@ creatable only before SUS-1
 There is no single canonical in-memory tuple and no hash table enforcing that an identical tuple exists at most once in program memory. Consistency is kept at the **page** level.
 
 - A page frame is **pinned** for the duration of any access and **latched** — shared for reads, exclusive for structural mutation (slot directory changes, compaction, relayout). Tuple bytes are read and written directly within the pinned, latched frame; there is no tuple-identity cache to keep coherent with the page.
-- Latching is **a cross-core lock now, and the spec change came first** (`rules.md` §3). This read: latching is core-local, a page is owned by exactly one core, its latch serializes cooperative tasks on that core across suspension points, it is not a cross-core lock, and pages are not on `rules.md` §3's declared shared list — *adding them would be a spec change there before a code change here*. That is exactly the order it happened in: AM-S1 declared the page frame's latch word on `rules.md` §3's list, and AM-S2 built the shared pool under it. A frame's latch word is held by a **core**, re-entrant for that core and never upgraded, and it serializes holders on different cores as readily as tasks on one (`page.md` §6). **A write routed to the relation's owner until AT-S5**, with only the page cache beneath it shared; a write runs where the session is now (`crosscore.md` CC11), so the latch's cross-core half is load-bearing rather than latent, and `btree.cpp`'s descent is the first place that showed it (AT-S5c). What still goes through server-side forwarding is a *read* of a relation this core cannot serve (`protocol.md`, `crosscore.md`, D18).
+- Latching is **a cross-core lock**, declared on `rules.md` §3's shared list (the page frame's latch word, AM-S1) over the instance's one pool (AM-S2). A frame's latch word is held by a **core**, re-entrant for that core and never upgraded, and it serializes holders on different cores as readily as tasks on one (`page.md` §6). A write runs where the session is (`crosscore.md` CC11), so the latch's cross-core half is load-bearing, and `btree.cpp`'s descent depends on it (AT-S5c).
 - Executors may copy tuple bytes into private working buffers. These are ephemeral projections; they compete with no canonical copy, because there isn't one.
 - The Keystone word's atomic-CAS requirement (§4) is independent of latching: even under a latch, the word is read and written as a `std::atomic<uint64_t>` so fields never tear.
 

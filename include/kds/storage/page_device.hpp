@@ -45,9 +45,7 @@
 // the bound and faults nothing it should not - and the grow itself is
 // serialised inside the device, so two cores running off the end at once
 // produce one grow. How each implementation does that is its own
-// header's to state. Growth was core 0's alone while each core had its
-// own store and its own extent lease; this paragraph said so until
-// 2026-09-08, and "owned by one core" before the AL-S9 review.
+// header's to state.
 //
 // **That argument covers `page_capacity_` and nothing else** (AM-S2 R8).
 // It is about a monotonically rising bound read racily; it says nothing

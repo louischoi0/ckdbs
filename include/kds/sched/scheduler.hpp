@@ -21,10 +21,10 @@
 
 // The reactor (docs/spec/sched.md sections 2-4). One Scheduler runs on the
 // calling thread. Still missing from sched.md's blueprint: the hierarchical
-// timing wheel and the SLO-feedback controller. **No cross-core inbox since
-// AT-S10d**: the ring transport and phase 3 retired with the last message
-// kind, and a peer reaches this reactor only by writing shared state and
-// kicking it through the wake registry (AR0-6-R1, `waker_table.hpp`).
+// timing wheel and the SLO-feedback controller. **No cross-core inbox**: a
+// peer reaches this reactor only by writing shared state and kicking it
+// through the wake registry (AR0-6-R1, `waker_table.hpp`). The ring
+// transport retired (AT-S10d); its history is at cf889b63.
 //
 // Concurrency protocol: a Scheduler is core-local by construction - all of
 // Submit()/RegisterIoHandler()/RunOnce()/Run() must be called from the
@@ -43,9 +43,7 @@
 // join; a future off-core reader needs its own answer, not a getter.
 //
 // **`stopped()` is the one exception, and only it** (AU-S3). Its flag is
-// atomic, so `Stop()` and `stopped()` are safe from any thread - which is
-// what let `kShutdown` go, since that message existed precisely to make a
-// peer's own thread do the flip. Nothing else in this block became safe
+// atomic, so `Stop()` and `stopped()` are safe from any thread. Nothing else in this block became safe
 // alongside it, and the next accessor to need cross-thread reads has to
 // earn it the same way rather than by pointing here.
 
@@ -471,11 +469,8 @@ private:
     std::unordered_set<TimerId> cancelled_timers_;
     TimerId next_timer_id_ = kInvalidTimerId + 1;
 
-    // **Atomic since AU-S3, and that is the whole of why `kShutdown` could
-    // go.** A plain bool here is what made `Stop()` un-callable from another
-    // thread, and a message was the workaround: core 0 sent `kShutdown` so
-    // that the *peer's own* thread would flip it. With the flag atomic the
-    // stop crosses cores directly and the message has nothing left to carry.
+    // **Atomic** (AU-S3): `Stop()` is callable from another thread, so a
+    // stop crosses cores directly.
     //
     // Relaxed on both sides: nothing is published through this flag. It says
     // only "leave the loop", and everything the stopping core needs to see is

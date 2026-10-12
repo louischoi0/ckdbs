@@ -249,9 +249,7 @@ public:
     // dispatcher re-runs the statement whole; this one cannot, because a
     // statement that has written rows is not re-runnable - there are no
     // savepoints, so an explicit transaction's rows cannot be rolled back
-    // to a statement boundary. (`AbandonWriteForShipping` was the other
-    // ending - a scope closed without committing for a statement that
-    // would run elsewhere - and it went with the ship at AT-S6.)
+    // to a statement boundary.
     struct ParkedWrite {
         txn::Transaction* txn = nullptr;
         // The scope owned the transaction (autocommit). Carried because
@@ -319,18 +317,8 @@ public:
         txn_durability_.reset();
     }
 
-    // **No home core since AT-S9.** A transaction's writes bound to the
-    // core of its first write, and a write to a relation owned elsewhere was
-    // refused (CC3); a transaction is one core's whole since AT-S6 and no
-    // relation is owned since AT-S9, so there is nothing to bind or refuse.
-
-    // **Statement shipping's identity and the participant list stood here
-    // until AT-S6**, and went with the protocols: `ship_id_` and its
-    // sequence keyed a shipped statement's dedup record and a
-    // participant's context; `shipped_` kept a statement that arrived
-    // shipped from shipping on; `participants_` was what a `COMMIT`
-    // prepared and decided. No statement crosses, so a session is one
-    // core's and holds none of it (`docs/spec/cross-owner-txn.md`).
+    // The home core, the ship identity and the participant list retired
+    // (AT-S6, AT-S9); their history is at cf889b63. A session is one core's.
 
     // **When BL's balancer last moved this session** (BL-R4's dwell,
     // `load_placer.hpp`), on the instance's clock; 0 for never. Kept on the

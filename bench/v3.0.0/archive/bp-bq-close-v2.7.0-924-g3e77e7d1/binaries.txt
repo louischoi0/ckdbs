@@ -1,0 +1,22 @@
+Binaries of the BP and BQ close A/B (bench/v3.0.0/results-bp-bq-close-v2.7.0-924-g3e77e7d1.md).
+sha256 of the file measured; mtime in UTC, 2026-10-12; export = first 20 hex digits of the sha256 of the .tar
+the binary was built from, which equals that of `git archive <commit>` (checked for every export built for this
+close; the 1592007e and 4cf30270 prefixes are as recorded in results-bp-s3-g1-ab-v2.7.0-909-gccf9cfc1.md and
+results-bq-s2-rung1-v2.7.0-909-g4cf30270.md).
+
+id                  commit    git describe --tags       binary mtime  size       sha256
+A                   cf889b63  v2.7.0-902-gcf889b63      19:23:22      5766400    09c82ae38fd1ae4124b39263be51db23cb3322c97b75434aa41aa4cc5ee32892   (/home/cdkbs/bench-runs/close/bin/kds_server.cf889b63; export 8466a6e192441c6aac64)
+(BQ's opening)      59c4139f  v2.7.0-906-g59c4139f      19:24:06      5766400    09c82ae38fd1ae4124b39263be51db23cb3322c97b75434aa41aa4cc5ee32892   (kds_server.59c4139f; export 2761e0b0e6ac06d8f53c)
+1592007e            1592007e  v2.7.0-904-g1592007e      14:11:04      5760672    44b7c2e5e2bcd4093b62c83201e65d17bc17afb8add9264e6ed0d5abc22dfd8a   (/home/cdkbs/bench-runs/bp-s1/v2/bin/kds_server.a)
+Q                   4cf30270  v2.7.0-909-g4cf30270      10:33:54      5792080    024ef4dc863ebc6b164dd5a585a9fd6ccbfcf12817be1a0e1d29ef492d2e9540   (/home/cdkbs/bench-runs/bq/bin/kds_server.4cf30270)
+S6A = ccf9cfc1      ccf9cfc1  v2.7.0-909-gccf9cfc1      14:11:04      5756304    a6fc3c04ef2bf2e19e3715ca1943c689959c97e9aa59a57a205029da1aea111f   (/home/cdkbs/bench-runs/bp-s1/v2/bin/kds_server.b; export 1eb04e6753567c6fab5c)
+6139c2de            6139c2de  v2.7.0-917-g6139c2de      20:02:02      5781880    cd75758c6e69db674cabe9db51e7411696a8254ae55bee42c7ae52ab677b8123   (kds_server.6139c2de; export 48cf1d587813799eb243)
+d555cb55            d555cb55  v2.7.0-920-gd555cb55      20:02:46      5782048    0a39e325fffea0d115c98a87f14dc7d4e4a0875ce53a833a3910f8284d7a826f   (kds_server.d555cb55; export 0475020d4ae804e82dc4)
+B                   3e77e7d1  v2.7.0-924-g3e77e7d1      19:22:37      5782048    72e48fd3f20b3f7a56130300e2cc2cb1de3128fc2a12cf4da47ad7146300f005   (kds_server.3e77e7d1; export f589573bff3a5f51abaf)
+ccf9cfc1 aligned    ccf9cfc1  (-falign-functions=64 -falign-loops=64 -falign-jumps=16)  20:09:17  5957008  87aef827d7e853ca1dd888b7af4d7442d8ee98ab8e21b28bc61b57ac5f56e80a   (kds_server.ccf9cfc1.aligned)
+6139c2de aligned    6139c2de  (same flags)              20:10:02      5982584    c0db4fe2e75ee0e81bd939d09d8dad5ee7262cf4cba4b331314951a0f74109be   (kds_server.6139c2de.aligned)
+rollfix             not a commit: the worktree's sources (HEAD 1fb71d1a plus two uncommitted header comments) with WalManager::Append's per-append RollRecord made an std::optional filled only on a roll; built in the worktree's build-release; the patch was reverted afterwards and is not archived
+                                                        20:17:30      5782072    0d72c0d88487dfd6a3eed6204745b97bb623fbe6feefc00475ce987ef1ec1324   (kds_server.rollfix)
+
+Builds: Release (-O3 -DNDEBUG) from the exports under /home/cdkbs/bench-runs/close/src-<commit> (aligned: srcA-<commit>).
+Not archived: the binaries, the exports, the build trees, data files and WAL segments.

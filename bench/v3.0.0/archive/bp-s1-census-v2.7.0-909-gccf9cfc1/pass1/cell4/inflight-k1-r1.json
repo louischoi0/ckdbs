@@ -1,0 +1,114 @@
+{
+ "cores": 1,
+ "run": 1,
+ "durability": "relaxed",
+ "bin_sha256": "44b7c2e5e2bcd4093b62c83201e65d17bc17afb8add9264e6ed0d5abc22dfd8a",
+ "loadavg_before": "1.13 2.00 3.29 2/341 493827",
+ "session_core": 0,
+ "data_device": "/dev/root      ext4 258932720 117730984 141185352  46% /",
+ "load_s": 0.25,
+ "delete": {
+  "reply": "DELETED 100000",
+  "wall_ms": 48.6,
+  "server_cpu_ms": 48.6,
+  "inflight": {
+   "contention_inflight_asks": 0,
+   "contention_inflight_misses": 0,
+   "contention_inflight_tables_read": 0
+  }
+ },
+ "purge": {
+  "reply": "PURGED 100000",
+  "wall_ms": 674.2,
+  "server_cpu_ms": 674.5,
+  "inflight": {
+   "contention_inflight_asks": 100000,
+   "contention_inflight_misses": 100000,
+   "contention_inflight_tables_read": 100000
+  },
+  "contention": {
+   "contention_inflight_asks": 100000,
+   "contention_inflight_misses": 100000,
+   "contention_inflight_tables_read": 100000
+  }
+ },
+ "named_fresh": {
+  "statements": 20000,
+  "errors": 0,
+  "first_error": null,
+  "wall_s": 0.877,
+  "stmt_per_s": 22811.7,
+  "server_cpu_us_per_stmt": 20.9,
+  "lat": {
+   "n": 20000,
+   "p0_us": 33.1,
+   "p25_us": 40.8,
+   "p50_us": 41.2,
+   "p95_us": 53.3,
+   "p99_us": 64.5
+  },
+  "inflight": {
+   "contention_inflight_asks": 0,
+   "contention_inflight_misses": 0,
+   "contention_inflight_tables_read": 0
+  },
+  "contention": {
+   "contention_syncs_writer": 87,
+   "contention_carves": 4,
+   "contention_word_moves_root": 1
+  }
+ },
+ "named_duplicate": {
+  "statements": 20000,
+  "errors": 20000,
+  "first_error": "ERR duplicate primary key 1 already present at page 1181 slot 0 (byte 22)",
+  "wall_s": 0.99,
+  "stmt_per_s": 20195.7,
+  "server_cpu_us_per_stmt": 23.07,
+  "lat": {
+   "n": 20000,
+   "p0_us": 37.7,
+   "p25_us": 45.1,
+   "p50_us": 45.6,
+   "p95_us": 62.0,
+   "p99_us": 120.1
+  },
+  "inflight": {
+   "contention_inflight_asks": 0,
+   "contention_inflight_misses": 0,
+   "contention_inflight_tables_read": 0
+  },
+  "contention": {
+   "contention_syncs_writer": 100,
+   "contention_carves": 4,
+   "contention_checkpoint_runs": 1,
+   "contention_checkpoint_pages_written": 4,
+   "contention_checkpoint_data_syncs": 2
+  }
+ },
+ "named_vs_undecided": {
+  "waits": 20,
+  "hold_ms": 200,
+  "results": [
+   [
+    200.4,
+    "INSERTED oid=4006 id=1 page=1285 slot=1"
+   ],
+   [
+    200.4,
+    "INSERTED oid=4006 id=2 page=1285 slot=3"
+   ],
+   [
+    200.4,
+    "INSERTED oid=4006 id=3 page=1285 slot=5"
+   ]
+  ],
+  "inflight": {
+   "contention_inflight_asks": 20,
+   "contention_inflight_misses": 0,
+   "contention_inflight_tables_read": 20
+  },
+  "server_cpu_ms_total": 37.0
+ },
+ "loadavg_after": "0.96 1.93 3.25 2/340 493862"
+}

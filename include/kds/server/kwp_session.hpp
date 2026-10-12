@@ -57,8 +57,8 @@
 // §7 describes a suspended portal as "a suspended foreground task holding
 // pins". **It is not one here, and the spec is amended rather than the
 // build overstated.** This engine has no suspension point at a row
-// boundary: a walk holds a page pin across every row of a page, and no
-// walk parks at all since AT-S10 retired the cross-core resume gate. So
+// boundary: a walk holds a page pin across every row of a page, and a
+// `SELECT`'s walk yields only between slices (BA-S15), never mid-page. So
 // `C_EXECUTE {max_rows}` bounds
 // **delivery**, not execution: the statement runs whole into the portal's
 // buffered batches, and `max_rows` decides how many rows leave now.
@@ -74,10 +74,9 @@
 //     a protocol error.
 //   - A **true** cursor is reachable without redesigning this: a walk
 //     streamed under credit and parked at the page boundary is the
-//     mechanism a row-bounded EXECUTE needs, and the cross-core
-//     `RemoteStepServer` was one until AT-S10 retired it
-//     (`git show 91111e3:src/server/remote_step_service.cpp`). It is a
-//     later task, not a different design.
+//     mechanism a row-bounded EXECUTE needs, and the retired
+//     `RemoteStepServer` was one (AT-S10; its history is at cf889b63). It
+//     is a later task, not a different design.
 //
 // ---- Bound parameters are substituted, and why ---------------------------
 //
@@ -110,11 +109,10 @@ namespace kds::server {
 // KW-D3: 60 seconds on the injected clock.
 //
 // The derivation is the ratification's: this tree spent 60 s on the two
-// waits whose event was human-or-network-scale (the index and assertion
-// builds' reply deadlines, which went with their ships at AT-S5e and
-// AT-S5d) against 10 s for the machine-scale ones (`kShippedStatementDeadlineNs`,
-// `kTxnPhaseDeadlineNs`, which went with statement shipping and 2PC at
-// AT-S6). **An idle portal waits on a client**, so it takes
+// waits whose event was human-or-network-scale (the retired index and
+// assertion build reply deadlines) against 10 s for the machine-scale ones
+// (the retired statement-shipping and 2PC deadlines, AT-S6). **An idle
+// portal waits on a client**, so it takes
 // the first number, and reusing one rather than inventing a third is the
 // point.
 //

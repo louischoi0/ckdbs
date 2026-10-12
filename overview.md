@@ -16,7 +16,7 @@ KDS does not try to be everything a traditional RDBMS is. It deliberately narrow
 - **The engine observes, then reorganizes.** Executions feed a statistics layer (**Waystone**). Time-decayed scores classify data hot/warm/cold; the physical optimizer clusters hot tuples, compacts dead ones, and co-locates rows that recurring patterns touch together. Statistics change *where bytes live*, not just how queries run.
 - **Advisory by construction.** Everything learned — trails, scores, placement hints — is structurally advisory: delete all of it and every query still returns the same rows, just slower. The B+ tree stays the sole authority. This is a hard invariant with its own test family, not a design preference.
 - **Reliability is a product feature.** Write-ahead logging with per-transaction durability classes, page checksums, full-page-image torn-write recovery, and crash-recovery paths that are exercised — not assumed — by deterministic fault-injection tests.
-- **Mechanical sympathy everywhere.** Thread-per-core, shared-nothing: each core owns its data, its buffer pool, and its WAL stream. The buffer-cache hit path is a hash probe and an integer increment — no locks, no atomics. All I/O is asynchronous behind an injectable seam, so the entire engine runs under deterministic simulation.
+- **Mechanical sympathy everywhere.** Thread-per-core: a cooperative reactor per core runs every statement of a session on that session's core, over one buffer pool and one WAL stream for the instance; state shared across cores is declared in the spec that owns it. The buffer-cache hit path is a frame-table probe, a pin increment and a usage-counter bump — no syscalls. All I/O is asynchronous behind an injectable seam, so the entire engine runs under deterministic simulation.
 
 ## Indexing the Workload
 
@@ -65,12 +65,12 @@ One property makes the last step sane rather than reckless, and it is structural
                         └───────────┬───────────┘
               ┌─────────────────────┼─────────────────────┐
    ┌──────────▼──────────┐ ┌────────▼─────────┐ ┌─────────▼─────────┐
-   │ Buffer pool (1/core)│ │ WAL (1/core)     │ │  Space manager    │
+   │ Buffer pool (1/inst)│ │ WAL (1/instance) │ │  Space manager    │
    │ clock · bg writer   │ │ D1/D2/D3 classes │ │  extents · freemap│
    └──────────┬──────────┘ └────────┬─────────┘ └─────────┬─────────┘
               └─────────────────────┼─────────────────────┘
                         ┌───────────▼───────────┐
-                        │ Single growable file  │  + per-core WAL segment streams
+                        │ Single growable file  │  + one WAL segment stream
                         └───────────────────────┘
 ```
 
@@ -82,11 +82,11 @@ One property makes the last step sane rather than reckless, and it is structural
 | **Parser** | Small OLTP grammar — joins and predicate-position subqueries included. Parameterizes literals during the parse (pattern fingerprints come out for free), tags each statement with an execution class, binds catalog names to oids at parse time — the executor never re-analyzes shape or resolves names |
 | **Executor (step VM)** | Every statement is a **step chain** — lookups, probes, scans, nested sub-chains — run in written order. Replay-eligible steps consult the instance's trail first (validated per entry); the rest run authoritatively. Records trails from an instance's second execution |
 | **Waystone** | The trail store: per pattern instance `(pattern_id, arg_hash)`, the recorded Keystones of the rows it touched, with last-seen locations and step tags. Reached through `sys.patterns` and a per-pattern directory. Strictly advisory — droppable wholesale without changing any result |
-| **Semi-sorted heap** | 8 KiB pages with an immutable per-page key lower bound (`min_key`): pages are unordered inside, ordered between — range pruning without full sorting. Each tuple carries a 64-bit **Keystone** word (40-bit id · flags/lock byte · reserved) as its identity |
-| **B+ tree** | The authoritative pk → location index. One tree core, thin facades; append-optimized for monotonic engine-issued ids (rightmost fast path, asymmetric splits). Core-local — no latching protocols at all |
+| **Semi-sorted heap** | 8 KiB pages with an immutable per-page key lower bound (`min_key`): pages are unordered inside, ordered between — range pruning without full sorting. Each tuple carries a 64-bit **Keystone** word (48-bit id · flags byte · reserved byte) as its identity |
+| **B+ tree** | The authoritative pk → location index. One tree core, thin facades; append-optimized for monotonic engine-issued ids (rightmost fast path, asymmetric splits) |
 | **Physical optimizer** *(shadow mode built)* | The shadow half exists: `SHOW RELAYOUT` reports every candidate relayout plan with its lazy-decay-weighted benefit and the gate blocking it, and the page epoch that makes moving tuples safe is live at every validation site. The mover does not exist yet, so nothing moves — deliberately: the promotion gate applied to the optimizer itself, with the shadow report as the evidence that opening a gate pays |
-| **Buffer pool** | One per core over core-owned pages. RAII pinned-page handles, clock eviction, background writer, WAL-ordering gate enforced in code. Hit path: zero locks, zero atomics, zero allocation |
-| **WAL** | Per-core append-only streams. Physiological redo + undo-chain MVCC (writer trx-id + undo pointer; no xmax). Durability classes per transaction: `strict` / `group` / `relaxed`. Fuzzy checkpoints, full-page images, point-in-time-recovery-ready archives |
+| **Buffer pool** | One for the instance, its frames shared by every core. RAII pinned-page handles, clock eviction, background writer, WAL-ordering gate enforced in code. Hit path: a frame-table probe and a pin, no syscalls |
+| **WAL** | One append-only stream for the instance. Physiological redo + undo-chain MVCC (writer trx-id + undo pointer; no xmax). Durability classes per transaction: `strict` / `group` / `relaxed`. Fuzzy checkpoints, full-page images, point-in-time-recovery-ready archives |
 | **Storage** | One growable data file, pure arithmetic page addressing (`offset = page_id × 8 KiB`), extent-based crash-safe growth, bitmap free-space management, CRC32C page checksums. mmap deliberately rejected — explicit async I/O only |
 | **Scheduler** | Cooperative reactor pinned per core: run-to-completion tasks, scheduling groups (foreground / system / maintenance) with SLO-based throttling instead of preemption |
 | **Deterministic testing** | Clock, randomness, and all I/O are injected. The whole engine runs single-threaded under a simulated scheduler with crash and torn-write injection — durability claims are tested, not asserted |

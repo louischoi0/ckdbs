@@ -177,16 +177,14 @@ Rules:
   catalog write path (`docs/spec/wal.md`), so a crash in between leaves a
   ceiling that is too high — burning ids K3 calls free — never one too
   low.
-- **Every core issues, and none caches** (AT-S10b). The mark is a
+- **Every core issues, and none caches.** The mark is a
   `sys.tables` row bumped in place under its catalog page's latch, so two
   cores issuing into one relation are serialised by the latch and the ids
   stay one sequence in issue order (`heap-and-tuple.md` §4.1a). On a heap
   the bump runs under the exclusive hold of the chain's tail (BB-R7), so
   placement order is issue order there too; on a btree it runs under no
   page hold since BD (BD-R6), and an id issued before a higher one placed
-  first lands below it, where it sorts. Until AT-S10b a peer issued from a
-  block core 0 carved and leased to it, which made the ids a sequence per
-  core only.
+  first lands below it, where it sorts.
 - **Named keys — `Catalog::AdmitExplicitRowId(oid, id)`.** It first checks
   that the id is *spellable* — inside `[kFirstRowId, kMaxKeystoneId]`,
   else `OutOfRange`, the exhausted reason (BD-R5) — before the catalog
@@ -244,9 +242,7 @@ Not specified in this document; the reservation fixes only its
 boundary conditions so nothing else accidentally forecloses it:
 
 - It is an **offline, exclusive** operation on one relation: a
-  maintenance task with no concurrent statement on any core. The
-  scheduling model provided that exclusivity while every statement on a
-  relation ran on its owning core; since AT-S5 it does not, and what
+  maintenance task with no concurrent statement on any core. What
   excludes other cores' statements is not specified here (the relation
   `X` of `docs/spec/txn.md` §5 is the lock family's candidate).
 - It deliberately violates K1 **once, atomically, and visibly**:
@@ -279,12 +275,10 @@ every 64 rows, a 3× INSERT regression at N=64 — and per-id durability caps
 INSERT at the device's fsync rate. `txn::kTrxIdBlockSize` reuses the number
 rather than re-deciding it, for the one sequence whose ceiling is synced
 per block (the superblock's, `txn.md` §4.2); it is frozen like
-`kds.inline_cell_width`, not per-relation tunable. **Row ids take no block
-since AT-S10b**: every core's `AllocateRowId` bumps the mark per issued id
-as core 0's always did, a logged catalog write with no sync of its own, and
-the per-core row-id lease that had this shape (`kRowIdLeasePerGrant`,
-4096) is gone - a per-core block breaks issue order across cores
-(`heap-and-tuple.md` §4.1a).
+`kds.inline_cell_width`, not per-relation tunable. **Row ids take no
+block**: every core's `AllocateRowId` bumps the mark per issued id, a
+logged catalog write with no sync of its own - a per-core block would
+break issue order across cores (`heap-and-tuple.md` §4.1a).
 
 **K-M2a — The ceiling is durable.**
 `sys.tables.next_id`'s bump is a logged catalog write with an `UNDO_WRITE`

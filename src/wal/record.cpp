@@ -1,5 +1,6 @@
 #include "kds/wal/record.hpp"
 
+#include <string>
 #include <cstring>
 
 #include "kds/storage/crc32c.hpp"
@@ -31,6 +32,13 @@ std::size_t AlignUp(std::size_t n) noexcept {
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept {
     return raw != static_cast<std::uint8_t>(RecordType::kInvalid) && raw <= kMaxAssignedRecordType;
+}
+
+Status RetiredRecordRefusal(const char* pass, RecordType type, Lsn lsn) {
+    return Status::Corruption(std::string(pass) + ": " + RecordTypeName(type) + " at lsn " +
+                              std::to_string(lsn) +
+                              " is a retired record kind, written only below superblock "
+                              "version 22");
 }
 
 const char* RecordTypeName(RecordType type) noexcept {

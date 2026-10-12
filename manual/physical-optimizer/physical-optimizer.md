@@ -215,9 +215,8 @@ controller's snapshot sequence.
   the scores and decisions behind them.
 - Statistics rows are never removed, and a statistic outlives its
   relation — a vanished relation prints `rel=oid=<n>`.
-- Peers (`cores > 1`) run with `access_statistics` off by design, so on a
-  multi-core instance the report reflects core 0's traffic — which today
-  is all traffic.
+- Every core records into the instance's one `sys.access_stats`, so on a
+  multi-core instance the report reflects every core's traffic.
 - Nothing here can change a query result: the planner is read-only, the
   epoch pairing rule keeps every location hint verified, and shadow mode's
   only write is the report string.

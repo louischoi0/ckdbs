@@ -14,6 +14,13 @@
 // predictable branches and no atomic at all (G2's
 // accepted cost class).
 //
+// **Unarmed at `cores = 1`**, each by a constructor argument or the core
+// count and each with its call-site census in
+// `instructions/v3.0.0/workorder-bp-per-core-residue.md` §7: the lock
+// table's partitions (AO-R9), the instance read view's window latch
+// (BP-H2), the Cabin store's latches (BP-H3), the assertion registry's, and
+// the statement epochs' fences (BP-H1, fences rather than a latch).
+//
 // **A `std::mutex`, not a spin latch, and the reason is what the sections
 // actually do.** The first draft of this header was a spinning
 // `exchange`/`yield` pair, justified as guarding "a critical section
@@ -67,11 +74,16 @@ public:
     Latch(const Latch&) = delete;
     Latch& operator=(const Latch&) = delete;
 
-    void lock() {
-        if (mutex_.try_lock()) return;
+    void lock() { (void)LockReportingWait(); }
+    // `lock`, returning the nanoseconds it waited: 0 when uncontended, and
+    // charged to the kind exactly as `lock` charges it (BQ-S1).
+    std::uint64_t LockReportingWait() {
+        if (mutex_.try_lock()) return 0;
         const auto start = std::chrono::steady_clock::now();
         mutex_.lock();
-        Contention::LatchWait(kind_, NsSince(start));
+        const std::uint64_t ns = NsSince(start);
+        Contention::LatchWait(kind_, ns);
+        return ns;
     }
     bool try_lock() noexcept { return mutex_.try_lock(); }
     void unlock() noexcept { mutex_.unlock(); }
@@ -103,13 +115,18 @@ inline bool HoldsLatch(const Latch*) noexcept { return false; }
 // RAII over an optional latch. `nullptr` means "not shared".
 class LatchGuard {
 public:
-    explicit LatchGuard(Latch* latch) noexcept : latch_(latch) {
+    // `waited_ns`, when given, receives what the acquisition waited: 0 for a
+    // null latch or an uncontended one (BQ-S1).
+    explicit LatchGuard(Latch* latch, std::uint64_t* waited_ns = nullptr) noexcept
+        : latch_(latch) {
+        std::uint64_t waited = 0;
         if (latch_ != nullptr) {
-            latch_->lock();
+            waited = latch_->LockReportingWait();
 #ifndef NDEBUG
             detail::held_latches.push_back(latch_);
 #endif
         }
+        if (waited_ns != nullptr) *waited_ns = waited;
     }
     ~LatchGuard() {
         if (latch_ != nullptr) {

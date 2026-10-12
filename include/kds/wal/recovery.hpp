@@ -87,19 +87,6 @@ public:
     virtual Status RollBack(storage::PageStore& store, const AnalysisResult& analysis) = 0;
 };
 
-// **Where a prepared transaction's verdict comes from** (R6-4, D4).
-//
-// A `TxnOutcome::kPrepared` transaction is one this stream promised not to
-// decide: it made its work durable, replied prepared, and from that moment
-// may not abort unilaterally. The verdict is the coordinator's - and with
-// one stream for the instance (AM-S4(d)) the coordinator's decision is a
-// record of the log this recovery is already scanning, so `RecoverCore`
-// resolves it in-stream: a lookup of the coordinator's transaction id in
-// the table analysis built, with absence of a decision meaning abort
-// (`recovery.cpp` carries why that is sound and not a default). The
-// injected `PreparedResolver` that read a second core's log went with the
-// topology that made a second log exist.
-
 // How long each phase took (`docs/spec/wal.md` §13's "recovery phase timings",
 // RC09). Zero throughout when no clock was supplied, which `timed` says
 // explicitly - an operator reading four zeroes must be able to tell "instant"
@@ -122,14 +109,6 @@ struct RecoveryReport {
     RedoStats redo;
     HighWaterRepair high_water;
     RecoveryTimings timings;
-
-    // What the resolution phase did (R6-4). `prepared` is what analysis
-    // found; the other two are how they resolved, and they sum to it. All
-    // three are 0 on every stream that never took part in a cross-owner
-    // transaction.
-    std::uint64_t prepared = 0;
-    std::uint64_t prepared_committed = 0;
-    std::uint64_t prepared_aborted = 0;
 
     // Whether an UndoPhase ran. False with no losers (nothing to do) and
     // false with none installed (in which case recovery failed and this
@@ -160,10 +139,7 @@ struct RecoveryReport {
 //     page reaches the end of the scan unhealed (`redo.hpp`);
 //   - the store cannot raise its allocation floor (`high_water.hpp`);
 //   - **analysis found losers and `undo` is null** - see above;
-//   - a prepared transaction has no analysis state to resolve into (R6-4),
-//     which is a table that contradicts itself rather than an undecided
-//     transaction: the resolution itself cannot fail for want of an
-//     answer, because absence of a decision *is* the answer;
+//   - the log carries a retired record kind (`analysis.cpp`, BP-R4);
 //   - the undo phase itself fails.
 //
 // Every one of those is a refusal rather than a partial success, which is

@@ -373,6 +373,30 @@ TEST_F(TxnManagerTest, AnEndedButUnreleasedTransactionIsNotInFlight) {
     mgr_->Release(*ended);
 }
 
+// BP-H4: a view's `in_flight_at_mint` is the instance's unresolved count
+// alone. Another transaction live on this core makes it true because its
+// `Begin` published the core's oldest unresolved id before returning; once
+// that transaction has ended, a fresh `Begin`'s view (minted before its own
+// id is published) sees none.
+TEST_F(TxnManagerTest, AViewMintedBesideALiveTransactionKnowsSomethingIsInFlight) {
+    Transaction* a = Begin();
+    ASSERT_NE(a, nullptr);
+    Transaction* b = Begin();
+    ASSERT_NE(b, nullptr);
+    EXPECT_TRUE(b->view().in_flight_at_mint) << "a live transaction on this core went unseen";
+
+    ASSERT_TRUE(mgr_->Commit(*a, wal::DurabilityClass::kRelaxed).ok());
+    mgr_->Release(*a);
+    ASSERT_TRUE(mgr_->Commit(*b, wal::DurabilityClass::kRelaxed).ok());
+    mgr_->Release(*b);
+
+    Transaction* c = Begin();
+    ASSERT_NE(c, nullptr);
+    EXPECT_FALSE(c->view().in_flight_at_mint) << "nothing was in flight when c began";
+    ASSERT_TRUE(mgr_->Commit(*c, wal::DurabilityClass::kRelaxed).ok());
+    mgr_->Release(*c);
+}
+
 // ---- Reader registration (docs/workplan-reader-registration.md) -----------
 //
 // The horizon is an LSN since AN-S2 (AN-R3): the oldest `snapshot_lsn` any

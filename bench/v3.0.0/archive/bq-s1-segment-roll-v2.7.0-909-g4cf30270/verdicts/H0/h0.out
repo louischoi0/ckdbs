@@ -1,0 +1,306 @@
+=================== relaxed ===================
+c1-iso-segregated-no0    iso p99_us=[279.2, 215.8, 561.2] p99.9_us=[2472.6, 803.2, 2532.7] rolls_in_window=[0, 0, 0]
+c1-iso-batch0            iso p99_us=[379.3, 206.2, 353.6] p99.9_us=[2270.2, 1007.8, 1554.5] rolls_in_window=[0, 0, 0]
+c1-iso-spread            iso p99_us=[226.5, 216.2, 444.4] p99.9_us=[1142.0, 976.3, 2151.0] rolls_in_window=[0, 0, 0]
+c2-iso                   iso p99_us=[487.1, 213.1, 471.4] p99.9_us=[2920.4, 1843.2, 3092.1] rolls_in_window=[0, 0, 0]
+--- c1-segregated-no0 (iso c1-iso-segregated-no0 p99 [279.2, 215.8, 561.2]; spread 345.4)
+  r1: rolls win=35 meta=35 (counter 35.0) hold max win=709918 max meta=709918 (meta_m1 max 709918.0, meta_delta max 311348.0) p50=297148us
+      inserter connect->end core=[(3.0, 1.0)] roll cores (meta window, in order)=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] moves_in_window=17
+      c0: stream=11254829 covered=11254198 drain=11254818 sync_gate=0 all_kinds=11278403
+      c1: stream=98 covered=0 drain=0 sync_gate=10981561 all_kinds=11830351
+      c2: stream=5289 covered=5252 drain=0 sync_gate=0 all_kinds=64781
+      c3: stream=206638 covered=206543 drain=0 sync_gate=0 all_kinds=1958518
+      non-bulk cores=[0, 2, 3] (bulk = every core that rolled in the meta window [1]): covered=11465993 / stream=11466756 = 100.0%; / all latch kinds=13301702 = 86.2%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c3_waited_free_map_us=130, load_c3_wal_roll_blocked_waits=3, load_c3_wal_roll_blocked_wait_us=206543
+      analyze_s1.py definition (bulk=c3): 100.0%
+      reader from_schedule p0=121.4 p50=206.0 p99=306395.5 p99.9=625640.2 max=696811.2 n=12006; p99 / max(iso p99)=545.96x, / min(iso p99)=1419.81x
+      slow samples (>=1 ms late)=1275, overlapping a roll=1055 (82.7%); samples >= p99=121, overlapping a roll=121 (100.0%); rolls cover 39.2% of the window; >=p99 samples completing <=20 ms after a roll end=121/121 (100.0%, chance 2.4%)
+      by connect core p99: c1=247455.6, c2=400103.1
+  r2: rolls win=35 meta=35 (counter 35.0) hold max win=678169 max meta=678169 (meta_m1 max 678169.0, meta_delta max 257662.0) p50=282839us
+      inserter connect->end core=[(3.0, 1.0)] roll cores (meta window, in order)=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] moves_in_window=24
+      c0: stream=10174096 covered=10173282 drain=10174096 sync_gate=3495 all_kinds=10884327
+      c1: stream=85 covered=0 drain=0 sync_gate=9999784 all_kinds=11166322
+      c2: stream=172944 covered=172887 drain=0 sync_gate=0 all_kinds=243615
+      c3: stream=212580 covered=212464 drain=0 sync_gate=0 all_kinds=1004682
+      non-bulk cores=[0, 2, 3] (bulk = every core that rolled in the meta window [1]): covered=10558633 / stream=10559620 = 100.0%; / all latch kinds=12132624 = 87.0%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_wal_sync_gate_us=3495, load_c2_waited_free_map_us=2, load_c3_wal_roll_blocked_waits=3, load_c3_wal_roll_blocked_wait_us=212464
+      analyze_s1.py definition (bulk=c3): 100.0%
+      reader from_schedule p0=105.4 p50=208.4 p99=210569.9 p99.9=295939.7 max=360123.4 n=12006; p99 / max(iso p99)=375.21x, / min(iso p99)=975.76x
+      slow samples (>=1 ms late)=960, overlapping a roll=773 (80.5%); samples >= p99=120, overlapping a roll=113 (94.2%); rolls cover 35.7% of the window; >=p99 samples completing <=20 ms after a roll end=113/120 (94.2%, chance 2.4%)
+      by connect core p99: c1=174732.4, c2=226260.7
+  r3: rolls win=37 meta=37 (counter 37.0) hold max win=587321 max meta=587321 (meta_m1 max 587321.0, meta_delta max 243303.0) p50=330814us
+      inserter connect->end core=[(3.0, 1.0)] roll cores (meta window, in order)=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] moves_in_window=6
+      c0: stream=11445094 covered=11444139 drain=11440759 sync_gate=0 all_kinds=11452589
+      c1: stream=67 covered=0 drain=0 sync_gate=11792517 all_kinds=12606639
+      c2: stream=13538 covered=13455 drain=0 sync_gate=0 all_kinds=807468
+      c3: stream=3771 covered=3744 drain=0 sync_gate=0 all_kinds=21037
+      non-bulk cores=[0, 2, 3] (bulk = every core that rolled in the meta window [1]): covered=11461338 / stream=11462403 = 100.0%; / all latch kinds=12281094 = 93.3%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_free_map_us=1, load_c3_waited_free_map_us=2, load_c3_wal_roll_blocked_waits=1, load_c3_wal_roll_blocked_wait_us=3744
+      analyze_s1.py definition (bulk=c3): 100.0%
+      reader from_schedule p0=107.5 p50=201.9 p99=288106.4 p99.9=496224.9 max=584217.8 n=12006; p99 / max(iso p99)=513.38x, / min(iso p99)=1335.06x
+      slow samples (>=1 ms late)=1167, overlapping a roll=944 (80.9%); samples >= p99=121, overlapping a roll=121 (100.0%); rolls cover 40.0% of the window; >=p99 samples completing <=20 ms after a roll end=100/121 (82.6%, chance 2.5%)
+      by connect core p99: c1=204527.4, c2=329428.7
+--- c1-batch0 (iso c1-iso-batch0 p99 [379.3, 206.2, 353.6]; spread 173.1)
+  r1: rolls win=36 meta=36 (counter 36.0) hold max win=653644 max meta=653644 (meta_m1 max 653644.0, meta_delta max 241615.0) p50=327831us
+      inserter connect->end core=[(0.0, 1.0)] roll cores (meta window, in order)=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] moves_in_window=18
+      c0: stream=11933677 covered=11931957 drain=11933677 sync_gate=65533 all_kinds=12020369
+      c1: stream=90 covered=0 drain=0 sync_gate=11819656 all_kinds=12535320
+      c2: stream=19886 covered=19790 drain=0 sync_gate=0 all_kinds=860493
+      c3: stream=809293 covered=809148 drain=0 sync_gate=0 all_kinds=828117
+      non-bulk cores=[0, 2, 3] (bulk = every core that rolled in the meta window [1]): covered=12760895 / stream=12762856 = 100.0%; / all latch kinds=13708979 = 93.1%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_wal_sync_gate_us=65533, load_c3_wal_roll_blocked_waits=4, load_c3_wal_roll_blocked_wait_us=809148
+      analyze_s1.py definition (bulk=c0): 2.4%
+      reader from_schedule p0=109.4 p50=211.0 p99=429897.5 p99.9=592633.5 max=645043.8 n=12006; p99 / max(iso p99)=1133.40x, / min(iso p99)=2084.86x
+      slow samples (>=1 ms late)=2123, overlapping a roll=1849 (87.1%); samples >= p99=121, overlapping a roll=121 (100.0%); rolls cover 41.2% of the window; >=p99 samples completing <=20 ms after a roll end=121/121 (100.0%, chance 2.5%)
+      by connect core p99: c1=423231.1, c2=442395.9, c3=425504.0
+  r2: rolls win=35 meta=35 (counter 35.0) hold max win=721835 max meta=721835 (meta_m1 max 721835.0, meta_delta max 338567.0) p50=290667us
+      inserter connect->end core=[(0.0, 3.0)] roll cores (meta window, in order)=[3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3] moves_in_window=10
+      c0: stream=11066281 covered=11065360 drain=11066281 sync_gate=11851 all_kinds=11096688
+      c1: stream=148476 covered=148414 drain=0 sync_gate=0 all_kinds=210594
+      c2: stream=8271 covered=8216 drain=0 sync_gate=0 all_kinds=1413715
+      c3: stream=98 covered=0 drain=0 sync_gate=10970955 all_kinds=12142892
+      non-bulk cores=[0, 1, 2] (bulk = every core that rolled in the meta window [3]): covered=11221990 / stream=11223028 = 100.0%; / all latch kinds=12720997 = 88.2%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_free_map_us=1, load_c0_waited_wal_sync_gate_us=11851, load_c1_waited_lock_partition_us=0, load_c1_waited_wal_stream_us=148476, load_c1_wal_roll_blocked_waits=1, load_c1_wal_roll_blocked_wait_us=148414
+      analyze_s1.py definition (bulk=c0): 98.2%
+      reader from_schedule p0=120.9 p50=193.1 p99=354250.9 p99.9=673697.0 max=718328.2 n=12006; p99 / max(iso p99)=933.96x, / min(iso p99)=1718.00x
+      slow samples (>=1 ms late)=1263, overlapping a roll=1145 (90.7%); samples >= p99=121, overlapping a roll=121 (100.0%); rolls cover 38.5% of the window; >=p99 samples completing <=20 ms after a roll end=121/121 (100.0%, chance 2.4%)
+      by connect core p99: c1=240217.9, c2=245065.0, c3=471148.3
+  r3: rolls win=33 meta=33 (counter 33.0) hold max win=724760 max meta=724760 (meta_m1 max 724760.0, meta_delta max 397380.0) p50=316502us
+      inserter connect->end core=[(0.0, 3.0)] roll cores (meta window, in order)=[3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3] moves_in_window=11
+      c0: stream=10765699 covered=10756577 drain=10765699 sync_gate=0 all_kinds=10789735
+      c1: stream=237972 covered=237828 drain=0 sync_gate=0 all_kinds=316582
+      c2: stream=266849 covered=266649 drain=0 sync_gate=0 all_kinds=1703381
+      c3: stream=369 covered=0 drain=0 sync_gate=10362282 all_kinds=11457945
+      non-bulk cores=[0, 1, 2] (bulk = every core that rolled in the meta window [3]): covered=11261054 / stream=11270520 = 99.9%; / all latch kinds=12809698 = 87.9%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c1_waited_wal_stream_us=237972, load_c1_wal_roll_blocked_waits=5, load_c1_wal_roll_blocked_wait_us=237828
+      analyze_s1.py definition (bulk=c0): 99.8%
+      reader from_schedule p0=128.3 p50=220.8 p99=366275.1 p99.9=623917.1 max=712861.3 n=12006; p99 / max(iso p99)=965.66x, / min(iso p99)=1776.31x
+      slow samples (>=1 ms late)=1555, overlapping a roll=1167 (75.0%); samples >= p99=120, overlapping a roll=120 (100.0%); rolls cover 37.5% of the window; >=p99 samples completing <=20 ms after a roll end=120/120 (100.0%, chance 2.2%)
+      by connect core p99: c1=366455.3, c2=407834.8, c3=202341.3
+--- c1-spread (iso c1-iso-spread p99 [226.5, 216.2, 444.4]; spread 228.2)
+  r1: rolls win=35 meta=35 (counter 35.0) hold max win=668302 max meta=668302 (meta_m1 max 668302.0, meta_delta max 362840.0) p50=271313us
+      inserter connect->end core=[(3.0, 2.0)] roll cores (meta window, in order)=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] moves_in_window=10
+      c0: stream=10348573 covered=10347815 drain=10348573 sync_gate=3857 all_kinds=10359455
+      c1: stream=361276 covered=361208 drain=0 sync_gate=0 all_kinds=433955
+      c2: stream=65 covered=0 drain=0 sync_gate=10213496 all_kinds=11026591
+      c3: stream=17205 covered=17149 drain=0 sync_gate=0 all_kinds=1628480
+      non-bulk cores=[0, 1, 3] (bulk = every core that rolled in the meta window [2]): covered=10726172 / stream=10727054 = 100.0%; / all latch kinds=12421890 = 86.3%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_wal_roll_blocked_waits=34, load_c0_wal_roll_blocked_wait_us=10347815, load_c1_waited_free_map_us=1, load_c1_waited_lock_partition_us=1, load_c1_waited_optimizer_us=0, load_c2_waited_wal_sync_gate_us=10213496, load_c3_waited_wal_stream_us=17205, load_c3_wal_roll_blocked_waits=2, load_c3_wal_roll_blocked_wait_us=17149
+      analyze_s1.py definition (bulk=c3): 3.4%
+      reader from_schedule p0=110.1 p50=197.2 p99=205115.8 p99.9=474535.0 max=563422.9 n=12006; p99 / max(iso p99)=461.56x, / min(iso p99)=948.73x
+      slow samples (>=1 ms late)=519, overlapping a roll=321 (61.8%); samples >= p99=120, overlapping a roll=117 (97.5%); rolls cover 35.2% of the window; >=p99 samples completing <=20 ms after a roll end=117/120 (97.5%, chance 2.3%)
+      by connect core p99: c0=248921.4, c1=190424.9, c2=199127.4, c3=137671.7
+  r2: rolls win=35 meta=35 (counter 35.0) hold max win=788238 max meta=788238 (meta_m1 max 788238.0, meta_delta max 366691.0) p50=308346us
+      inserter connect->end core=[(3.0, 3.0)] roll cores (meta window, in order)=[3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3] moves_in_window=92
+      c0: stream=6256636 covered=6256155 drain=6256589 sync_gate=5135855 all_kinds=11704431
+      c1: stream=347251 covered=347198 drain=0 sync_gate=323781 all_kinds=1168758
+      c2: stream=11950 covered=11875 drain=0 sync_gate=0 all_kinds=108081
+      c3: stream=749797 covered=749707 drain=0 sync_gate=5899463 all_kinds=7226957
+      non-bulk cores=[2] (bulk = every core that rolled in the meta window [0, 1, 3]): covered=11875 / stream=11950 = 99.4%; / all latch kinds=108081 = 11.0%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c1_wal_roll_blocked_waits=1, load_c1_wal_roll_blocked_wait_us=347198, load_c3_waited_wal_stream_us=749797, load_c3_waited_wal_sync_gate_us=5899463, load_c3_waited_optimizer_us=0, load_c3_wal_roll_blocked_waits=2, load_c3_wal_roll_blocked_wait_us=749707
+      analyze_s1.py definition (bulk=c3): 94.7%
+      reader from_schedule p0=125.4 p50=212.2 p99=507976.3 p99.9=1000173.1 max=1059561.0 n=12006; p99 / max(iso p99)=1143.06x, / min(iso p99)=2349.57x
+      slow samples (>=1 ms late)=1296, overlapping a roll=1014 (78.2%); samples >= p99=120, overlapping a roll=120 (100.0%); rolls cover 40.1% of the window; >=p99 samples completing <=20 ms after a roll end=7/120 (5.8%, chance 2.4%)
+      by connect core p99: c0=505229.2, c1=762167.2, c2=309525.3, c3=311388.5
+  r3: rolls win=34 meta=34 (counter 34.0) hold max win=828117 max meta=828117 (meta_m1 max 828117.0, meta_delta max 432782.0) p50=330211us
+      inserter connect->end core=[(3.0, 3.0)] roll cores (meta window, in order)=[0, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3] moves_in_window=20
+      c0: stream=12014890 covered=12014175 drain=12014890 sync_gate=534793 all_kinds=12570735
+      c1: stream=10451 covered=10425 drain=0 sync_gate=0 all_kinds=1418430
+      c2: stream=251918 covered=251717 drain=0 sync_gate=0 all_kinds=305797
+      c3: stream=82 covered=0 drain=0 sync_gate=11782633 all_kinds=12563248
+      non-bulk cores=[1, 2] (bulk = every core that rolled in the meta window [0, 3]): covered=262142 / stream=262369 = 99.9%; / all latch kinds=1724227 = 15.2%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c1_waited_wal_stream_us=10451, load_c1_wal_roll_blocked_waits=1, load_c1_wal_roll_blocked_wait_us=10425
+      analyze_s1.py definition (bulk=c3): 100.0%
+      reader from_schedule p0=120.9 p50=217.0 p99=452132.2 p99.9=734689.0 max=809994.0 n=12006; p99 / max(iso p99)=1017.40x, / min(iso p99)=2091.27x
+      slow samples (>=1 ms late)=1565, overlapping a roll=1387 (88.6%); samples >= p99=121, overlapping a roll=121 (100.0%); rolls cover 42.5% of the window; >=p99 samples completing <=20 ms after a roll end=121/121 (100.0%, chance 2.3%)
+      by connect core p99: c0=459535.8, c1=484352.4, c2=541762.6, c3=178210.0
+--- c2 (iso c2-iso p99 [487.1, 213.1, 471.4]; spread 274.0)
+  r1: rolls win=34 meta=34 (counter 34.0) hold max win=788571 max meta=788571 (meta_m1 max 788571.0, meta_delta max 387815.0) p50=370563us
+      inserter connect->end core=[(3.0, 3.0)] roll cores (meta window, in order)=[3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3] moves_in_window=22
+      c0: stream=13832084 covered=13828658 drain=5269385 sync_gate=0 all_kinds=13856340
+      c1: stream=12963809 covered=12957461 drain=0 sync_gate=0 all_kinds=12998911
+      c2: stream=13504379 covered=13500352 drain=0 sync_gate=0 all_kinds=13544428
+      c3: stream=1969 covered=0 drain=0 sync_gate=13111363 all_kinds=13288755
+      non-bulk cores=[0, 1, 2] (bulk = every core that rolled in the meta window [3]): covered=40286471 / stream=40300272 = 100.0%; / all latch kinds=40399679 = 99.7%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_free_map_us=1, load_c1_waited_assertion_dir_us=1, load_c2_waited_free_map_us=1, load_c2_waited_assertion_dir_us=0
+      analyze_s1.py definition (bulk=c3): 100.0%
+      writer from_schedule p0=112.5 p50=2379.9 p99=658499.5 p99.9=777711.2 max=820445.8 n=23741; p99 / max(iso p99)=1351.88x, / min(iso p99)=3090.10x
+      slow samples (>=1 ms late)=11986, overlapping a roll=11203 (93.5%); samples >= p99=237, overlapping a roll=237 (100.0%); rolls cover 47.1% of the window; >=p99 samples completing <=20 ms after a roll end=237/237 (100.0%, chance 2.3%)
+      by connect core p99: c0=637311.5, c1=669683.5, c2=664666.9
+  r2: rolls win=33 meta=33 (counter 33.0) hold max win=1210247 max meta=1210247 (meta_m1 max 1210247.0, meta_delta max 810242.0) p50=373504us
+      inserter connect->end core=[(3.0, 3.0)] roll cores (meta window, in order)=[3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3] moves_in_window=27
+      c0: stream=13011352 covered=13006605 drain=4428934 sync_gate=0 all_kinds=13034892
+      c1: stream=12278330 covered=12271054 drain=0 sync_gate=0 all_kinds=12314361
+      c2: stream=13661272 covered=13658105 drain=0 sync_gate=0 all_kinds=13694011
+      c3: stream=2308 covered=0 drain=0 sync_gate=12416713 all_kinds=12563087
+      non-bulk cores=[0, 1, 2] (bulk = every core that rolled in the meta window [3]): covered=38935764 / stream=38950954 = 100.0%; / all latch kinds=39043264 = 99.7%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_assertion_dir_us=32, load_c1_waited_free_map_us=2598, load_c1_waited_assertion_dir_us=42, load_c2_waited_free_map_us=2, load_c2_waited_assertion_dir_us=0
+      analyze_s1.py definition (bulk=c3): 100.0%
+      writer from_schedule p0=92.7 p50=7106.8 p99=1295966.4 p99.9=1718794.3 max=1776826.9 n=24007; p99 / max(iso p99)=2660.58x, / min(iso p99)=6081.49x
+      slow samples (>=1 ms late)=12240, overlapping a roll=11475 (93.8%); samples >= p99=240, overlapping a roll=240 (100.0%); rolls cover 46.5% of the window; >=p99 samples completing <=20 ms after a roll end=240/240 (100.0%, chance 2.3%)
+      by connect core p99: c0=1120693.2, c1=1325644.3, c2=1474703.1
+  r3: rolls win=34 meta=34 (counter 34.0) hold max win=746392 max meta=746392 (meta_m1 max 746392.0, meta_delta max 340025.0) p50=366940us
+      inserter connect->end core=[(3.0, 3.0)] roll cores (meta window, in order)=[3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3] moves_in_window=23
+      c0: stream=12348521 covered=12345318 drain=4041361 sync_gate=0 all_kinds=12378387
+      c1: stream=12778720 covered=12772890 drain=0 sync_gate=0 all_kinds=12810757
+      c2: stream=12002865 covered=11997225 drain=0 sync_gate=0 all_kinds=12037508
+      c3: stream=1786 covered=0 drain=0 sync_gate=12263402 all_kinds=12423832
+      non-bulk cores=[0, 1, 2] (bulk = every core that rolled in the meta window [3]): covered=37115433 / stream=37130106 = 100.0%; / all latch kinds=37226652 = 99.7%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_free_map_us=0, load_c1_waited_assertion_dir_us=0, load_c2_waited_assertion_dir_us=0
+      analyze_s1.py definition (bulk=c3): 100.0%
+      writer from_schedule p0=99.2 p50=291.1 p99=659450.5 p99.9=877924.4 max=1094598.3 n=24006; p99 / max(iso p99)=1353.83x, / min(iso p99)=3094.56x
+      slow samples (>=1 ms late)=11663, overlapping a roll=10954 (93.9%); samples >= p99=241, overlapping a roll=241 (100.0%); rolls cover 44.9% of the window; >=p99 samples completing <=20 ms after a roll end=184/241 (76.3%, chance 2.3%)
+      by connect core p99: c0=661146.2, c1=650071.4, c2=672305.1
+=================== group ===================
+c1-iso-segregated-no0    iso p99_us=[204.1, 474.5, 386.2] p99.9_us=[976.3, 2688.9, 2524.1] rolls_in_window=[0, 0, 0]
+c1-iso-batch0            iso p99_us=[220.3, 632.3, 504.3] p99.9_us=[1902.6, 2614.5, 2763.0] rolls_in_window=[0, 0, 0]
+c1-iso-spread            iso p99_us=[227.7, 389.3, 541.0] p99.9_us=[1573.8, 1402.1, 2077.1] rolls_in_window=[0, 0, 0]
+c2-iso                   iso p99_us=[11066.2, 10905.3, 10922.9] p99.9_us=[18925.4, 20062.7, 20555.7] rolls_in_window=[0, 0, 0]
+--- c1-segregated-no0 (iso c1-iso-segregated-no0 p99 [204.1, 474.5, 386.2]; spread 270.4)
+  r1: rolls win=24 meta=24 (counter 24.0) hold max win=20617 max meta=20617 (meta_m1 max 20617.0, meta_delta max 16302.0) p50=5640us
+      inserter connect->end core=[(3.0, 3.0)] roll cores (meta window, in order)=[3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3] moves_in_window=4
+      c0: stream=35449 covered=35254 drain=35449 sync_gate=0 all_kinds=43337
+      c1: stream=4667 covered=4641 drain=0 sync_gate=0 all_kinds=1106298
+      c2: stream=5383 covered=5373 drain=0 sync_gate=0 all_kinds=53449
+      c3: stream=141 covered=0 drain=0 sync_gate=10848 all_kinds=593204
+      non-bulk cores=[0, 1, 2] (bulk = every core that rolled in the meta window [3]): covered=45268 / stream=45499 = 99.5%; / all latch kinds=1203084 = 3.8%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c1_waited_wal_stream_us=4667, load_c1_wal_roll_blocked_waits=2, load_c1_wal_roll_blocked_wait_us=4641, load_c2_waited_free_map_us=2, load_c2_wal_roll_blocked_waits=1, load_c2_wal_roll_blocked_wait_us=5373, load_c3_waited_wal_sync_gate_us=10848
+      analyze_s1.py definition (bulk=c3): 86.3%
+      reader from_schedule p0=120.2 p50=197.4 p99=408.9 p99.9=2888.7 max=32374.1 n=12006; p99 / max(iso p99)=0.86x, / min(iso p99)=2.00x
+      slow samples (>=1 ms late)=49, overlapping a roll=3 (6.1%); samples >= p99=49, overlapping a roll=3 (6.1%); rolls cover 0.5% of the window; >=p99 samples completing <=20 ms after a roll end=5/49 (10.2%, chance 1.6%)
+      by connect core p99: c1=321.9, c2=459.4
+  r2: rolls win=24 meta=24 (counter 24.0) hold max win=14035 max meta=14035 (meta_m1 max 14035.0, meta_delta max 7893.0) p50=5725us
+      inserter connect->end core=[(3.0, 1.0)] roll cores (meta window, in order)=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] moves_in_window=5
+      c0: stream=23529 covered=23433 drain=23529 sync_gate=0 all_kinds=30392
+      c1: stream=69 covered=0 drain=0 sync_gate=9449 all_kinds=536774
+      c2: stream=1948 covered=1935 drain=0 sync_gate=0 all_kinds=616480
+      c3: stream=0 covered=0 drain=0 sync_gate=0 all_kinds=10082
+      non-bulk cores=[0, 2, 3] (bulk = every core that rolled in the meta window [1]): covered=25368 / stream=25477 = 99.6%; / all latch kinds=656954 = 3.9%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_wal_roll_blocked_waits=4, load_c0_wal_roll_blocked_wait_us=23433, load_c1_waited_lock_partition_us=157, load_c1_waited_wal_stream_us=69, load_c1_waited_wal_sync_gate_us=9449, load_c2_waited_wal_stream_us=1948, load_c2_wal_roll_blocked_waits=1, load_c2_wal_roll_blocked_wait_us=1935, load_c3_waited_free_map_us=0
+      analyze_s1.py definition (bulk=c3): 0.0%
+      reader from_schedule p0=119.4 p50=193.1 p99=408.2 p99.9=3320.0 max=38190.6 n=12006; p99 / max(iso p99)=0.86x, / min(iso p99)=2.00x
+      slow samples (>=1 ms late)=54, overlapping a roll=1 (1.9%); samples >= p99=54, overlapping a roll=1 (1.9%); rolls cover 0.6% of the window; >=p99 samples completing <=20 ms after a roll end=1/54 (1.9%, chance 1.6%)
+      by connect core p99: c1=580.5, c2=368.8
+  r3: rolls win=23 meta=23 (counter 23.0) hold max win=13681 max meta=13681 (meta_m1 max 13681.0, meta_delta max 7464.0) p50=5762us
+      inserter connect->end core=[(3.0, 2.0)] roll cores (meta window, in order)=[1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] moves_in_window=20
+      c0: stream=30954 covered=28701 drain=30922 sync_gate=0 all_kinds=203414
+      c1: stream=45 covered=0 drain=0 sync_gate=3094 all_kinds=193818
+      c2: stream=60 covered=0 drain=0 sync_gate=7313 all_kinds=342252
+      c3: stream=11 covered=0 drain=0 sync_gate=0 all_kinds=702663
+      non-bulk cores=[3] (bulk = every core that rolled in the meta window [0, 1, 2]): covered=0 / stream=11 = 0.0%; / all latch kinds=702663 = 0.0%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c1_waited_wal_sync_gate_us=3094, load_c1_wal_drain_latch_wait_us=0, load_c2_waited_free_map_us=7, load_c2_waited_wal_stream_us=60, load_c2_waited_wal_sync_gate_us=7313, load_c3_waited_free_map_us=346, load_c3_waited_optimizer_us=0
+      analyze_s1.py definition (bulk=c3): 92.6%
+      reader from_schedule p0=114.2 p50=199.8 p99=1108.6 p99.9=24247.4 max=51697.5 n=12006; p99 / max(iso p99)=2.34x, / min(iso p99)=5.43x
+      slow samples (>=1 ms late)=128, overlapping a roll=3 (2.3%); samples >= p99=121, overlapping a roll=3 (2.5%); rolls cover 0.5% of the window; >=p99 samples completing <=20 ms after a roll end=3/121 (2.5%, chance 1.5%)
+      by connect core p99: c1=1169.9, c2=891.2
+--- c1-batch0 (iso c1-iso-batch0 p99 [220.3, 632.3, 504.3]; spread 412.0)
+  r1: rolls win=25 meta=25 (counter 25.0) hold max win=17778 max meta=17778 (meta_m1 max 17778.0, meta_delta max 13499.0) p50=5935us
+      inserter connect->end core=[(0.0, 2.0)] roll cores (meta window, in order)=[0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] moves_in_window=20
+      c0: stream=36704 covered=36533 drain=36691 sync_gate=0 all_kinds=51781
+      c1: stream=0 covered=0 drain=0 sync_gate=0 all_kinds=1117665
+      c2: stream=221 covered=0 drain=0 sync_gate=6382 all_kinds=239076
+      c3: stream=0 covered=0 drain=0 sync_gate=0 all_kinds=17651
+      non-bulk cores=[1, 3] (bulk = every core that rolled in the meta window [0, 2]): covered=0 / stream=0 = None%; / all latch kinds=1135316 = 0.0%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_wal_roll_blocked_waits=7, load_c0_wal_roll_blocked_wait_us=36533, load_c2_waited_lock_partition_us=112, load_c2_waited_wal_stream_us=221, load_c2_waited_wal_sync_gate_us=6382, load_c3_waited_wal_stream_us=0
+      analyze_s1.py definition (bulk=c0): None%
+      reader from_schedule p0=126.6 p50=194.8 p99=605.6 p99.9=9645.5 max=56852.8 n=12006; p99 / max(iso p99)=0.96x, / min(iso p99)=2.75x
+      slow samples (>=1 ms late)=87, overlapping a roll=3 (3.4%); samples >= p99=87, overlapping a roll=3 (3.4%); rolls cover 0.6% of the window; >=p99 samples completing <=20 ms after a roll end=3/87 (3.4%, chance 1.7%)
+      by connect core p99: c1=849.7, c2=561.7, c3=430.6
+  r2: rolls win=24 meta=24 (counter 24.0) hold max win=13095 max meta=13095 (meta_m1 max 13095.0, meta_delta max 7509.0) p50=5817us
+      inserter connect->end core=[(0.0, 1.0)] roll cores (meta window, in order)=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] moves_in_window=11
+      c0: stream=34844 covered=31972 drain=34843 sync_gate=0 all_kinds=49572
+      c1: stream=186 covered=0 drain=0 sync_gate=3541 all_kinds=307915
+      c2: stream=0 covered=0 drain=0 sync_gate=0 all_kinds=1023139
+      c3: stream=0 covered=0 drain=0 sync_gate=0 all_kinds=42659
+      non-bulk cores=[0, 2, 3] (bulk = every core that rolled in the meta window [1]): covered=31972 / stream=34844 = 91.8%; / all latch kinds=1115370 = 2.9%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_wal_roll_blocked_waits=5, load_c0_wal_roll_blocked_wait_us=31972, load_c1_waited_wal_sync_gate_us=3541, load_c1_wal_drain_latch_wait_us=0, load_c3_waited_free_map_us=1, load_c3_waited_lock_partition_us=0, load_c3_waited_optimizer_us=0
+      analyze_s1.py definition (bulk=c0): 0.0%
+      reader from_schedule p0=114.7 p50=193.4 p99=761.0 p99.9=3005.0 max=5773.5 n=12006; p99 / max(iso p99)=1.20x, / min(iso p99)=3.45x
+      slow samples (>=1 ms late)=97, overlapping a roll=2 (2.1%); samples >= p99=97, overlapping a roll=2 (2.1%); rolls cover 0.5% of the window; >=p99 samples completing <=20 ms after a roll end=3/97 (3.1%, chance 1.7%)
+      by connect core p99: c1=787.5, c2=932.0, c3=598.0
+  r3: rolls win=24 meta=24 (counter 24.0) hold max win=15920 max meta=15920 (meta_m1 max 15920.0, meta_delta max 11537.0) p50=6766us
+      inserter connect->end core=[(0.0, 1.0)] roll cores (meta window, in order)=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] moves_in_window=4
+      c0: stream=65968 covered=56099 drain=65968 sync_gate=0 all_kinds=76342
+      c1: stream=806 covered=0 drain=0 sync_gate=21027 all_kinds=282462
+      c2: stream=0 covered=0 drain=0 sync_gate=0 all_kinds=18743
+      c3: stream=10 covered=0 drain=0 sync_gate=0 all_kinds=958983
+      non-bulk cores=[0, 2, 3] (bulk = every core that rolled in the meta window [1]): covered=56099 / stream=65978 = 85.0%; / all latch kinds=1054068 = 5.3%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_free_map_us=0, load_c0_wal_roll_blocked_waits=8, load_c0_wal_roll_blocked_wait_us=56099, load_c1_waited_wal_sync_gate_us=21027, load_c1_wal_drain_latch_wait_us=0, load_c2_waited_lock_partition_us=0, load_c3_waited_wal_stream_us=10
+      analyze_s1.py definition (bulk=c0): 0.0%
+      reader from_schedule p0=127.6 p50=192.4 p99=748.2 p99.9=5093.1 max=38922.1 n=12006; p99 / max(iso p99)=1.18x, / min(iso p99)=3.40x
+      slow samples (>=1 ms late)=90, overlapping a roll=8 (8.9%); samples >= p99=90, overlapping a roll=8 (8.9%); rolls cover 0.6% of the window; >=p99 samples completing <=20 ms after a roll end=8/90 (8.9%, chance 1.6%)
+      by connect core p99: c1=933.4, c2=679.3, c3=645.6
+--- c1-spread (iso c1-iso-spread p99 [227.7, 389.3, 541.0]; spread 313.3)
+  r1: rolls win=24 meta=24 (counter 24.0) hold max win=11626 max meta=11626 (meta_m1 max 11626.0, meta_delta max 7226.0) p50=5625us
+      inserter connect->end core=[(3.0, 2.0)] roll cores (meta window, in order)=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] moves_in_window=5
+      c0: stream=16552 covered=16443 drain=16552 sync_gate=0 all_kinds=25015
+      c1: stream=0 covered=0 drain=0 sync_gate=0 all_kinds=40813
+      c2: stream=161 covered=0 drain=0 sync_gate=4444 all_kinds=240685
+      c3: stream=7 covered=0 drain=0 sync_gate=0 all_kinds=1002814
+      non-bulk cores=[0, 1, 3] (bulk = every core that rolled in the meta window [2]): covered=16443 / stream=16559 = 99.3%; / all latch kinds=1068642 = 1.5%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_free_map_us=4, load_c0_wal_roll_blocked_waits=3, load_c0_wal_roll_blocked_wait_us=16443, load_c1_waited_free_map_us=2, load_c2_waited_wal_sync_gate_us=4444, load_c3_waited_wal_stream_us=7
+      analyze_s1.py definition (bulk=c3): 0.0%
+      reader from_schedule p0=121.8 p50=192.6 p99=975.1 p99.9=19313.3 max=48889.6 n=12006; p99 / max(iso p99)=1.80x, / min(iso p99)=4.28x
+      slow samples (>=1 ms late)=118, overlapping a roll=2 (1.7%); samples >= p99=118, overlapping a roll=2 (1.7%); rolls cover 0.5% of the window; >=p99 samples completing <=20 ms after a roll end=2/118 (1.7%, chance 1.6%)
+      by connect core p99: c0=1169.4, c1=1082.7, c2=784.4, c3=908.6
+  r2: rolls win=24 meta=24 (counter 24.0) hold max win=28738 max meta=28738 (meta_m1 max 28738.0, meta_delta max 24026.0) p50=6038us
+      inserter connect->end core=[(3.0, 2.0)] roll cores (meta window, in order)=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] moves_in_window=7
+      c0: stream=74748 covered=58806 drain=74748 sync_gate=0 all_kinds=81904
+      c1: stream=0 covered=0 drain=0 sync_gate=0 all_kinds=1058104
+      c2: stream=190 covered=0 drain=1 sync_gate=6577 all_kinds=296998
+      c3: stream=0 covered=0 drain=0 sync_gate=0 all_kinds=17399
+      non-bulk cores=[0, 1, 3] (bulk = every core that rolled in the meta window [2]): covered=58806 / stream=74748 = 78.7%; / all latch kinds=1157407 = 5.1%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_free_map_us=2, load_c0_wal_roll_blocked_waits=5, load_c0_wal_roll_blocked_wait_us=58806, load_c1_waited_wal_stream_us=0, load_c2_waited_wal_sync_gate_us=6577, load_c2_wal_drain_latch_wait_us=1, load_c3_waited_wal_stream_us=0
+      analyze_s1.py definition (bulk=c3): 0.0%
+      reader from_schedule p0=128.0 p50=196.7 p99=940.1 p99.9=14086.2 max=66041.9 n=12006; p99 / max(iso p99)=1.74x, / min(iso p99)=4.13x
+      slow samples (>=1 ms late)=115, overlapping a roll=6 (5.2%); samples >= p99=115, overlapping a roll=6 (5.2%); rolls cover 0.6% of the window; >=p99 samples completing <=20 ms after a roll end=6/115 (5.2%, chance 1.6%)
+      by connect core p99: c0=877.6, c1=1144.2, c2=703.6, c3=554.8
+  r3: rolls win=24 meta=24 (counter 24.0) hold max win=13796 max meta=13796 (meta_m1 max 13796.0, meta_delta max 5057.0) p50=6124us
+      inserter connect->end core=[(3.0, 1.0)] roll cores (meta window, in order)=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] moves_in_window=4
+      c0: stream=35951 covered=30940 drain=35950 sync_gate=0 all_kinds=41275
+      c1: stream=232 covered=0 drain=0 sync_gate=4890 all_kinds=252144
+      c2: stream=0 covered=0 drain=0 sync_gate=0 all_kinds=20714
+      c3: stream=3784 covered=3770 drain=0 sync_gate=0 all_kinds=1011018
+      non-bulk cores=[0, 2, 3] (bulk = every core that rolled in the meta window [1]): covered=34710 / stream=39735 = 87.4%; / all latch kinds=1073007 = 3.2%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_wal_roll_blocked_waits=5, load_c0_wal_roll_blocked_wait_us=30940, load_c1_waited_wal_sync_gate_us=4890, load_c3_waited_free_map_us=265, load_c3_waited_wal_stream_us=3784, load_c3_wal_roll_blocked_waits=1, load_c3_wal_roll_blocked_wait_us=3770
+      analyze_s1.py definition (bulk=c3): 0.0%
+      reader from_schedule p0=125.6 p50=198.6 p99=1016.9 p99.9=5128.9 max=39622.5 n=12006; p99 / max(iso p99)=1.88x, / min(iso p99)=4.47x
+      slow samples (>=1 ms late)=124, overlapping a roll=2 (1.6%); samples >= p99=120, overlapping a roll=2 (1.7%); rolls cover 0.6% of the window; >=p99 samples completing <=20 ms after a roll end=4/120 (3.3%, chance 1.6%)
+      by connect core p99: c0=1434.1, c1=941.3, c2=628.9, c3=1092.0
+--- c2 (iso c2-iso p99 [11066.2, 10905.3, 10922.9]; spread 160.9)
+  r1: rolls win=23 meta=23 (counter 23.0) hold max win=15202 max meta=15202 (meta_m1 max 15202.0, meta_delta max 6187.0) p50=6587us
+      inserter connect->end core=[(3.0, 3.0)] roll cores (meta window, in order)=[3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3] moves_in_window=28
+      c0: stream=180800 covered=147150 drain=98645 sync_gate=468939 all_kinds=666006
+      c1: stream=158685 covered=130018 drain=93106 sync_gate=0 all_kinds=172966
+      c2: stream=162479 covered=140322 drain=83416 sync_gate=0 all_kinds=175048
+      c3: stream=1863 covered=0 drain=10 sync_gate=68853 all_kinds=145878
+      non-bulk cores=[0, 1, 2] (bulk = every core that rolled in the meta window [3]): covered=417490 / stream=501964 = 83.2%; / all latch kinds=1014020 = 41.2%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_wal_sync_gate_us=468939, load_c2_waited_free_map_us=0
+      analyze_s1.py definition (bulk=c3): 83.2%
+      writer from_schedule p0=1183.3 p50=12590.6 p99=306515.9 p99.9=341492.7 max=362052.7 n=24004; p99 / max(iso p99)=27.70x, / min(iso p99)=28.11x
+      slow samples (>=1 ms late)=24004, overlapping a roll=190 (0.8%); samples >= p99=241, overlapping a roll=0 (0.0%); rolls cover 0.6% of the window; >=p99 samples completing <=20 ms after a roll end=0/241 (0.0%, chance 1.5%)
+      by connect core p99: c0=306483.5, c1=307006.8, c2=306124.7
+  r2: rolls win=23 meta=23 (counter 23.0) hold max win=19436 max meta=19436 (meta_m1 max 19436.0, meta_delta max 13944.0) p50=7493us
+      inserter connect->end core=[(3.0, 3.0)] roll cores (meta window, in order)=[3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3] moves_in_window=24
+      c0: stream=181880 covered=157574 drain=113239 sync_gate=238123 all_kinds=434869
+      c1: stream=227921 covered=182806 drain=152506 sync_gate=0 all_kinds=248210
+      c2: stream=217362 covered=169874 drain=119521 sync_gate=0 all_kinds=232781
+      c3: stream=6443 covered=0 drain=15 sync_gate=82712 all_kinds=175213
+      non-bulk cores=[0, 1, 2] (bulk = every core that rolled in the meta window [3]): covered=510254 / stream=627163 = 81.4%; / all latch kinds=915860 = 55.7%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_free_map_us=0, load_c0_waited_wal_sync_gate_us=238123, load_c1_waited_assertion_dir_us=26, load_c2_waited_free_map_us=0, load_c2_waited_assertion_dir_us=24
+      analyze_s1.py definition (bulk=c3): 81.4%
+      writer from_schedule p0=1195.0 p50=13883.4 p99=319706.7 p99.9=402902.6 max=428313.0 n=23976; p99 / max(iso p99)=28.89x, / min(iso p99)=29.32x
+      slow samples (>=1 ms late)=23976, overlapping a roll=230 (1.0%); samples >= p99=239, overlapping a roll=0 (0.0%); rolls cover 0.7% of the window; >=p99 samples completing <=20 ms after a roll end=0/239 (0.0%, chance 1.5%)
+      by connect core p99: c0=324395.2, c1=315387.5, c2=318448.3
+  r3: rolls win=23 meta=23 (counter 23.0) hold max win=21332 max meta=21332 (meta_m1 max 21332.0, meta_delta max 15761.0) p50=6117us
+      inserter connect->end core=[(3.0, 3.0)] roll cores (meta window, in order)=[3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3] moves_in_window=36
+      c0: stream=194947 covered=160099 drain=144801 sync_gate=126307 all_kinds=338178
+      c1: stream=177671 covered=150272 drain=108130 sync_gate=0 all_kinds=198032
+      c2: stream=167469 covered=140969 drain=88063 sync_gate=0 all_kinds=185824
+      c3: stream=3124 covered=0 drain=27 sync_gate=66144 all_kinds=163274
+      non-bulk cores=[0, 1, 2] (bulk = every core that rolled in the meta window [3]): covered=451340 / stream=540087 = 83.6%; / all latch kinds=722034 = 62.5%
+      keys meta_delta dropped (absent at m0), m1-m0: load_c0_waited_wal_sync_gate_us=126307, load_c0_waited_assertion_dir_us=2, load_c1_waited_free_map_us=0, load_c1_waited_assertion_dir_us=2, load_c1_wal_roll_blocked_waits=22, load_c1_wal_roll_blocked_wait_us=150272, load_c2_waited_free_map_us=1, load_c2_waited_assertion_dir_us=1, load_c3_waited_wal_sync_gate_us=66144
+      analyze_s1.py definition (bulk=c3): 55.7%
+      writer from_schedule p0=1203.3 p50=14396.0 p99=326555.7 p99.9=380962.6 max=399730.7 n=23938; p99 / max(iso p99)=29.51x, / min(iso p99)=29.94x
+      slow samples (>=1 ms late)=23938, overlapping a roll=213 (0.9%); samples >= p99=240, overlapping a roll=0 (0.0%); rolls cover 0.6% of the window; >=p99 samples completing <=20 ms after a roll end=0/240 (0.0%, chance 1.5%)
+      by connect core p99: c0=331382.0, c1=326555.7, c2=322309.5

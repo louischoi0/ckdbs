@@ -1,0 +1,594 @@
+samples 8450
+
+-- self --
+ 37.11%   3136  __libc_send
+ 10.50%    887  epoll_wait
+  6.52%    551  __GI___libc_read
+  1.74%    147  kds::parser::Lexer::ScanToken
+  1.57%    133  kds::parser::FingerprintAccumulator::Feed
+  1.42%    120  kds::server::KwpSession::OnBind
+  1.23%    104  [vdso]+0x99a
+  1.15%     97  kds::txn::LockTable::AcquireInner
+  1.04%     88  __GI_tolower
+  0.96%     81  kds::server::KwpSession::OnParse
+  0.93%     79  isalnum
+  0.92%     78  __libc_pwrite64
+  0.92%     78  kds::server::CommandDispatcher::InsertOneRow
+  0.85%     72  __memcpy_avx512_unaligned_erms
+  0.84%     71  __GI___libc_malloc
+  0.82%     69  tcache_get_n
+  0.78%     66  std::_Hashtable::find [clone .isra.0]
+  0.70%     59  kds::btree::::PlaceUnderHold
+  0.69%     58  _int_free
+  0.66%     56  __GI___libc_free
+  0.57%     48  kds::server::CommandDispatcher::InsertParsed
+  0.57%     48  kds::server::TcpServer::OnClientReadable
+  0.53%     45  std::__cxx11::basic_string::operator= [clone .isra.0]
+  0.53%     45  kds::sched::Scheduler::RunOnce
+  0.50%     42  kds::catalog::SysTableRow::Decode
+  0.50%     42  __GI_fdatasync
+  0.50%     42  kds::storage::::HardwareExtend
+  0.50%     42  kds::server::TcpServer::OnStatementComplete
+  0.46%     39  std::__cxx11::to_string
+  0.43%     36  kds::wire::PayloadReader::Str[abi:cxx11]
+  0.41%     35  isspace
+  0.40%     34  std::__detail::__variant::__gen_vtable_impl::__visit_invoke
+  0.40%     34  kds::heap::PageView::ReadTuple const
+  0.39%     33  kds::txn::LockTable::PartitionOf const
+  0.38%     32  kds::wal::WalStream::Append
+  0.37%     31  kds::server::CommandDispatcher::DispatchAndStage
+  0.36%     30  kds::btree::SearchLeaf
+  0.34%     29  kds::catalog::Catalog::AllocateRowId
+  0.33%     28  kds::exec::EncodeRow
+  0.32%     27  kds::parser::Lexer::Next
+  0.32%     27  kds::wal::WalManager::Append
+  0.31%     26  kds::server::KwpSession::OnFrame
+  0.31%     26  kds::sched::Scheduler::RunReadyTasks
+  0.31%     26  kds::btree::InternalView::ChildFor const
+  0.28%     24  kds::parser::Parser::ParseInsert
+  0.28%     24  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+  0.27%     23  __memcmp_evex_movbe
+  0.27%     23  std::__cxx11::basic_string::_M_dispose
+  0.26%     22  kds::parser::Lexer::Peek
+  0.26%     22  std::__cxx11::basic_string::basic_string
+  0.25%     21  void std::vector::_M_range_insert [clone .isra.0]
+  0.25%     21  _int_malloc
+  0.25%     21  [vdso]+0x9ce
+  0.22%     19  kds::parser::Lexer::SkipWhitespaceAndComments
+  0.22%     19  kds::txn::InstanceVisibility::EndCommit
+  0.22%     19  __strlen_evex
+  0.21%     18  kds::txn::LockTable::ReleaseHeld
+  0.20%     17  kds::server::TcpServer::DrainFrames
+  0.20%     17  std::vector::~vector
+  0.19%     16  kds::parser::AstValue::AstValue
+  0.19%     16  kds::server::CommandDispatcher::LogInsert
+  0.18%     15  kds::wire::FrameDecoder::PopFrame
+  0.18%     15  std::__cxx11::basic_string::append
+  0.18%     15  kds::parser::FingerprintOf
+  0.18%     15  kds::StatusOr::~StatusOr
+  0.18%     15  kds::txn::InstanceVisibility::PublishCommit
+  0.18%     15  kds::storage::DevicePageStore::UnpinFrame
+  0.17%     14  kds::txn::TransactionManager::Begin
+  0.17%     14  std::_Function_handler::_M_invoke
+  0.17%     14  kds::btree::::DescendTo
+  0.17%     14  kds::storage::DevicePageStore::ResidentBytes
+  0.17%     14  kds::sched::SystemClock::Now const
+  0.17%     14  kds::server::DispatchOutcome::DispatchOutcome
+  0.17%     14  kds::server::CommandDispatcher::EndWrite
+  0.17%     14  kds::heap::PageView::PayloadAt const
+  0.17%     14  kds::server::KwpSession::OnStatementComplete
+  0.15%     13  kds::server::DispatchOutcome::operator= [clone .isra.0]
+  0.15%     13  tcache_put
+  0.15%     13  kds::txn::LockTable::WakeWaiters
+  0.15%     13  std::_Optional_payload_base::_M_reset
+  0.15%     13  bool std::equal [clone .isra.0]
+  0.15%     13  kds::storage::DevicePageStore::Resolve
+  0.15%     13  operator new
+  0.15%     13  kds::storage::DevicePageStore::PublishFreshPage
+  0.15%     13  std::__cxx11::basic_string std::operator+
+  0.14%     12  kds::KeystoneIdOfPayload
+  0.14%     12  kds::storage::DevicePageStore::FetchAndPin
+  0.14%     12  kds::server::KwpSession::OnExecute
+  0.14%     12  kds::wire::EncodeFrame
+  0.14%     12  kds::exec::::EncodeColumn
+  0.13%     11  kds::parser::Parser::ParseValue
+  0.13%     11  std::__cxx11::basic_string::insert [clone .constprop.0]
+  0.13%     11  std::chrono::_V2::steady_clock::now
+  0.13%     11  __GI___clock_gettime
+  0.13%     11  kds::server::CommandDispatcher::AwaitStatementWaits [clone .actor]
+  0.13%     11  __memset_avx512_unaligned_erms
+  0.12%     10  __GI___pthread_enable_asynccancel
+  0.12%     10  libstdc++.so.6.0.33+0xa2210
+  0.12%     10  kds::server::CommandDispatcher::DispatchInner
+  0.12%     10  operator delete
+  0.12%     10  kds::txn::UndoLog::Append
+  0.12%     10  isalpha
+  0.12%     10  kds::storage::DevicePageStore::BeginNoRefuseWindow
+  0.12%     10  kds::wal::EncodeRecord
+  0.11%      9  std::_Rb_tree::_M_erase [clone .isra.0]
+  0.11%      9  kds::storage::PageStore::Get
+  0.11%      9  kds::server::CommandDispatcher::BorrowChain
+  0.11%      9  kds::storage::DevicePageStore::StampPageLsn
+  0.11%      9  kds::sched::EpollIoBackend::PollReady
+  0.11%      9  kds::server::TcpServer::SyncWriteInterest
+  0.11%      9  kds::txn::TransactionManager::Commit
+  0.11%      9  kds::wire::FrameDecoder::Feed
+  0.11%      9  kds::wire::FrameHeader::Decode
+  0.09%      8  malloc_consolidate
+  0.09%      8  std::__cxx11::basic_string::_M_assign
+  0.09%      8  kds::sched::CoroTask::Poll
+  0.09%      8  kds::txn::InstanceVisibility::Reclaim
+  0.09%      8  kds::txn::InstanceVisibility::InFlightFull const
+  0.09%      8  kds::parser::Parser::Parse
+  0.09%      8  kds::server::TcpServer::FlushOutbox
+  0.09%      8  kds::sched::Scheduler::Submit
+  0.09%      8  kds::txn::InstanceVisibility::BeginCommit
+  0.09%      8  kds::server::CommandDispatcher::StatementEpochScope::StatementEpochScope
+  0.09%      8  kds::storage::DevicePageStore::PinFrame
+  0.09%      8  ___pthread_mutex_trylock
+  0.08%      7  kds::server::::SplitFirstToken
+  0.08%      7  kds::heap::PageView::InsertTupleAt
+  0.08%      7  kds::server::CommandDispatcher::LogIndexWrites
+  0.08%      7  kds::server::CommandDispatcher::HandleInsert
+  0.08%      7  kds::catalog::CatalogCache::FindTableAccess
+  0.08%      7  kds::txn::UndoLog::TailFor
+  0.08%      7  kds_server+0xcfb0
+  0.08%      7  kds::txn::TransactionManager::PublishCoreBounds
+  0.08%      7  kds::server::CommandDispatcher::InsertInner
+  0.08%      7  kds::txn::UndoLog::LogUndoWrite
+  0.08%      7  kds::exec::::EncodeOneValue
+  0.08%      7  kds::sched::Scheduler::Run
+  0.07%      6  kds::txn::UndoPageAppend
+  0.07%      6  kds::server::KwpSession::OnClose
+  0.07%      6  kds::storage::NoRefuseWindow::Open
+  0.07%      6  kds::parser::Parse
+  0.07%      6  kds::server::TcpServer::AppendReplyBytes
+  0.07%      6  std::__cxx11::basic_string::basic_string [clone .constprop.0]
+  0.07%      6  kds::server::ReadBorrow::Position
+  0.07%      6  kds::storage::DevicePageStore::FetchPinned
+  0.07%      6  kds::txn::LockTable::TryAcquire
+  0.07%      6  kds::storage::RawPageType
+  0.07%      6  kds::txn::UndoPageFreeSpace
+  0.07%      6  kds::parser::Parser::ParseQualifiedName
+  0.07%      6  kds::catalog::CatalogCache::FindOidByName
+  0.07%      6  kds::heap::PageView::slot_count const
+  0.07%      6  kds::wal::::CheckOutputSize [clone .isra.0]
+  0.06%      5  kds::server::CommandDispatcher::DispatchAsync
+  0.06%      5  kds::wal::EncodeHeapWrite
+  0.06%      5  kds::exec::AssertionEnforcer::CommitTxn
+  0.06%      5  kds::server::CommandDispatcher::BeginWrite
+  0.06%      5  kds::txn::TransactionManager::Release
+  0.06%      5  kds::wal::EncodeUndoWrite
+  0.06%      5  __GI_fsync
+  0.06%      5  std::_Rb_tree::find [clone .isra.0]
+  0.06%      5  kds::heap::PageView::next_page_id const
+  0.06%      5  kds::server::CommandDispatcher::ViewFor
+  0.06%      5  kds::txn::TransactionManager::AppendUndo
+  0.06%      5  kds::parser::Parser::ParseIdent[abi:cxx11]
+  0.06%      5  kds::txn::InstanceVisibility::PublishOldestUnresolved
+  0.05%      4  std::vector::vector [clone .isra.0]
+  0.05%      4  [vdso]+0xa22
+  0.05%      4  kds::server::KwpSession::Deliver
+  0.05%      4  checked_request2size
+  0.05%      4  kds_server+0xcf34
+  0.05%      4  kds::server::TcpServer::SubmitStatement
+  0.05%      4  kds::txn::EncodeUndoRecordTail
+  0.05%      4  kds_server+0xd8b0
+  0.05%      4  __futex_abstimed_wait_common64
+  0.05%      4  kds::catalog::Catalog::InitTableAccess
+  0.05%      4  kds::sched::Scheduler::ExpireTimers
+  0.05%      4  kds::catalog::::LogCatRow
+  0.05%      4  futex_wake
+  0.05%      4  kds::txn::TransactionManager::FinishCommitBody
+  0.05%      4  kds::sched::Scheduler::RecordIterationHold
+  0.05%      4  kds::txn::::WriteRecordHeader
+  0.05%      4  [vdso]+0x9c1
+  0.05%      4  kds::server::CommandDispatcher::InsertOneRow::{lambda#1}::operator const
+  0.05%      4  kds::parser::Parser::ExpectKeyword
+  0.05%      4  kds_server+0xd294
+  0.05%      4  kds::server::CommandDispatcher::NoteSpills
+  0.05%      4  [vdso]+0xa11
+  0.05%      4  unlink_chunk
+  0.05%      4  kds::server::CommandDispatcher::AwaitStatementWaits
+  0.05%      4  std::_Function_handler::_M_manager
+  0.05%      4  kds::server::CommandDispatcher::BorrowOrWait
+  0.04%      3  kds::storage::PageRef& std::vector::emplace_back [clone .isra.0]
+  0.04%      3  kds::exec::LogSpills
+  0.04%      3  libstdc++.so.6.0.33+0xa2c64
+  0.04%      3  kds::exec::::StartRow [clone .isra.0]
+  0.04%      3  std::_Hash_bytes
+  0.04%      3  kds::txn::TransactionManager::MintReadView
+  0.04%      3  kds::parser::Parser::ExpectToken
+  0.04%      3  kds::txn::InstanceVisibility::SnapshotCeiling const
+  0.04%      3  kds::server::CommandDispatcher::NoteCabinWrite
+  0.04%      3  kds::server::::Trim
+  0.04%      3  [vdso]+0x9e5
+  0.04%      3  std::_Rb_tree::equal_range
+  0.04%      3  kds::RequirePayloadCarries
+  0.04%      3  kds::txn::LockTable::Release
+  0.04%      3  kds::server::CommandDispatcher::DispatchAsync [clone .destroy]
+  0.04%      3  __GI___pthread_disable_asynccancel
+  0.04%      3  kds_server+0xcec0
+  0.04%      3  kds::server::DispatchOutcome::~DispatchOutcome
+  0.04%      3  kds::storage::Crc32cExtend
+  0.04%      3  posix_fallocate
+  0.04%      3  __unlink
+  0.04%      3  kds::server::KwpSession::Complete
+  0.02%      2  kds::txn::LockTable::ClearWaitFor
+  0.02%      2  kds::sched::Scheduler::IdleTimeoutMs const
+  0.02%      2  kds::storage::PageRef::operator= [clone .isra.0]
+  0.02%      2  lll_mutex_unlock_optimized
+  0.02%      2  kds::server::CommandDispatcher::DefersCommit const
+  0.02%      2  kds::server::CommandDispatcher::LogStatement const
+  0.02%      2  kds::wal::WalManager::Commit
+  0.02%      2  libstdc++.so.6.0.33+0xa2434
+  0.02%      2  kds::catalog::::OverwriteLogged
+  0.02%      2  kds::heap::PageView::min_key const
+  0.02%      2  kds::btree::::LeafStillCoversKey
+  0.02%      2  kds_server+0xcfb4
+  0.02%      2  kds::wal::EncodedRecordSize
+  0.02%      2  [vdso]+0x981
+  0.02%      2  kds::catalog::Catalog::FindTableOidByName
+  0.02%      2  std::_Rb_tree_insert_and_rebalance
+  0.02%      2  libstdc++.so.6.0.33+0xa1c30
+  0.02%      2  kds::Keystone::Encode
+  0.02%      2  kds::storage::SetPageLsn
+  0.02%      2  kds::btree::BtreeInsert
+  0.02%      2  kds::txn::InstanceVisibility::PublishSnapshotBound
+  0.02%      2  kds::wire::DecodeBindParams
+  0.02%      2  kds::storage::DevicePageStore::EndNoRefuseWindow
+  0.02%      2  kds::exec::AssertionEnforcer::ReserveInsert
+  0.02%      2  kds::server::KwpSession::SendReady
+  0.02%      2  kds_server+0xd190
+  0.02%      2  std::__detail::_Prime_rehash_policy::_M_need_rehash const
+  0.02%      2  kds_server+0xd290
+  0.02%      2  kds::txn::TrxIdSequence::Next
+  0.02%      2  std::__cxx11::basic_string::compare const [clone .isra.0]
+  0.01%      1  kds::exec::::CheckLayoutMatches
+  0.01%      1  kds_server+0xcf30
+  0.01%      1  void std::__cxx11::basic_string::_M_construct [clone .isra.0]
+  0.01%      1  kds_server+0xcec4
+  0.01%      1  kds::storage::DevicePageStore::ReserveFrame
+  0.01%      1  [vdso]+0x991
+  0.01%      1  kds_server+0xd704
+  0.01%      1  kds::heap::PageView::WriteHeader
+  0.01%      1  kds::server::KwpSession::Send [clone .constprop.0]
+  0.01%      1  kds::sched::CoroTask::~CoroTask
+  0.01%      1  kds::storage::DevicePageStore::AcquirePageLatch
+  0.01%      1  kds_server+0xcfc4
+  0.01%      1  kds::exec::MaintainIndexes
+  0.01%      1  [vdso]+0x99c
+  0.01%      1  kds::storage::FreeMapIsAllocated
+  0.01%      1  kds::wal::FileLogDevice::Sync
+  0.01%      1  [vdso]+0x950
+  0.01%      1  libstdc++.so.6.0.33+0xa2430
+  0.01%      1  kds::storage::FreeMapFindFirstFree
+  0.01%      1  kds::btree::::PlaceUnderHold::{lambda#1}::operator const
+  0.01%      1  kds::sched::AwaitCoro::await_resume
+  0.01%      1  kds::wal::FileLogDevice::WriteAt
+  0.01%      1  [vdso]+0x1160
+  0.01%      1  kds::exec::AssertionEnforcer::AdmitInsert
+  0.01%      1  kds::storage::DevicePageStore::WriteBack
+  0.01%      1  kds::storage::PageStore::CreateNew
+  0.01%      1  kds::txn::InstanceVisibility::LowerSnapshotBound
+  0.01%      1  kds::heap::PageView::CreateEmptyAs
+  0.01%      1  ___pthread_cond_signal
+  0.01%      1  kds_server+0xd470
+  0.01%      1  kds_server+0xd5b4
+  0.01%      1  kds::server::StatusFromErrorReply
+  0.01%      1  [vdso]+0x941
+  0.01%      1  std::vector::_M_erase [clone .isra.0]
+  0.01%      1  libstdc++.so.6.0.33+0xa1c34
+  0.01%      1  __GI___pthread_mutex_unlock_usercnt
+  0.01%      1  [vdso]+0x978
+  0.01%      1  kds_server+0xd230
+  0.01%      1  kds::catalog::Catalog::CheckRelationQualifier
+  0.01%      1  kds::storage::DevicePageStore::BeginDrainOnPressure
+  0.01%      1  std::_Rb_tree::erase [clone .isra.0]
+  0.01%      1  kds::txn::WriteUndoPageHeader
+  0.01%      1  [vdso]+0x985
+  0.01%      1  kds::storage::DataSyncer::Result const
+  0.01%      1  kds::wal::EncodeBtreeSplit
+  0.01%      1  [vdso]+0x970
+
+-- inclusive --
+ 37.23%   3146  kds::server::TcpServer::FlushOutbox
+ 37.11%   3136  __libc_send
+ 16.92%   1430  [unmapped]
+ 10.60%    896  kds::sched::EpollIoBackend::PollReady
+ 10.50%    887  epoll_wait
+  7.15%    604  kds::server::TcpServer::OnClientReadable
+  6.52%    551  __GI___libc_read
+  5.41%    457  kds::server::CommandDispatcher::InsertInner
+  4.19%    354  kds::server::CommandDispatcher::InsertParsed
+  3.38%    286  kds::server::CommandDispatcher::InsertOneRow
+  2.24%    189  kds::sched::SystemClock::Now const
+  2.22%    188  operator new
+  1.91%    161  std::chrono::_V2::steady_clock::now
+  1.88%    159  __GI___clock_gettime
+  1.74%    147  kds::parser::Lexer::ScanToken
+  1.68%    142  kds::txn::LockTable::TryAcquire
+  1.57%    133  kds::parser::FingerprintAccumulator::Feed
+  1.50%    127  kds::txn::LockTable::AcquireInner
+  1.49%    126  kds::server::KwpSession::OnBind
+  1.42%    120  __GI___libc_free
+  1.27%    107  __GI___libc_malloc
+  1.23%    104  [vdso]+0x99a
+  1.04%     88  __GI_tolower
+  1.03%     87  kds::server::KwpSession::OnParse
+  0.97%     82  kds::btree::BtreeInsert
+  0.93%     79  isalnum
+  0.92%     78  __libc_pwrite64
+  0.85%     72  __memcpy_avx512_unaligned_erms
+  0.82%     69  tcache_get_n
+  0.78%     66  std::_Hashtable::find [clone .isra.0]
+  0.75%     63  kds::storage::DevicePageStore::Resolve
+  0.75%     63  kds::wal::WalManager::Append
+  0.70%     59  kds::btree::::PlaceUnderHold
+  0.69%     58  _int_free
+  0.64%     54  kds::sched::CoroTask::Poll
+  0.53%     45  std::__cxx11::basic_string::operator= [clone .isra.0]
+  0.53%     45  kds::sched::Scheduler::RunOnce
+  0.52%     44  void std::vector::_M_range_insert [clone .isra.0]
+  0.51%     43  kds::wal::FileLogDevice::Sync
+  0.51%     43  kds::parser::Parser::ParseInsert
+  0.51%     43  kds::wal::FileLogDevice::BuildBody
+  0.50%     42  kds::catalog::SysTableRow::Decode
+  0.50%     42  __GI_fdatasync
+  0.50%     42  kds::storage::::HardwareExtend
+  0.50%     42  kds::server::TcpServer::OnStatementComplete
+  0.47%     40  kds::server::CommandDispatcher::InsertOneRow::{lambda#1}::operator const
+  0.46%     39  std::__cxx11::to_string
+  0.46%     39  std::__detail::__variant::__gen_vtable_impl::__visit_invoke
+  0.43%     36  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+  0.43%     36  kds::storage::PageRef& std::vector::emplace_back [clone .isra.0]
+  0.43%     36  kds::wire::PayloadReader::Str[abi:cxx11]
+  0.41%     35  kds::wal::FileLogDevice::WriteAt
+  0.41%     35  isspace
+  0.40%     34  kds::heap::PageView::ReadTuple const
+  0.39%     33  _int_malloc
+  0.39%     33  kds::txn::LockTable::PartitionOf const
+  0.38%     32  kds::exec::EncodeRow
+  0.38%     32  kds::wal::WalStream::Append
+  0.37%     31  kds::server::CommandDispatcher::DispatchAndStage
+  0.36%     30  kds::wire::FrameDecoder::PopFrame
+  0.36%     30  kds::btree::SearchLeaf
+  0.34%     29  kds::catalog::Catalog::AllocateRowId
+  0.33%     28  kds::sched::Scheduler::RunReadyTasks
+  0.32%     27  std::__cxx11::basic_string::append
+  0.32%     27  kds::parser::Lexer::Next
+  0.32%     27  kds::wire::EncodeFrame
+  0.31%     26  kds::server::KwpSession::OnFrame
+  0.31%     26  kds::btree::InternalView::ChildFor const
+  0.28%     24  kds::txn::TransactionManager::Begin
+  0.28%     24  std::_Rb_tree::_M_erase [clone .isra.0]
+  0.27%     23  __memcmp_evex_movbe
+  0.27%     23  kds::txn::TransactionManager::AppendUndo
+  0.27%     23  kds::server::TcpServer::DrainFrames
+  0.27%     23  std::__cxx11::basic_string::_M_dispose
+  0.26%     22  kds::parser::Lexer::Peek
+  0.26%     22  std::__cxx11::basic_string::basic_string
+  0.25%     21  [vdso]+0x9ce
+  0.24%     20  kds::server::CommandDispatcher::LogInsert
+  0.22%     19  kds::parser::Lexer::SkipWhitespaceAndComments
+  0.22%     19  kds::txn::InstanceVisibility::EndCommit
+  0.22%     19  __strlen_evex
+  0.22%     19  kds::txn::InstanceVisibility::PublishCommit
+  0.22%     19  kds::txn::LockTable::ReleaseHeld
+  0.21%     18  kds::StatusOr::~StatusOr
+  0.20%     17  std::vector::~vector
+  0.19%     16  kds::parser::AstValue::AstValue
+  0.19%     16  kds::txn::TransactionManager::PublishCoreBounds
+  0.18%     15  kds::server::CommandDispatcher::BorrowOrWait
+  0.18%     15  kds::parser::FingerprintOf
+  0.18%     15  kds::storage::DevicePageStore::UnpinFrame
+  0.17%     14  std::_Function_handler::_M_invoke
+  0.17%     14  kds::btree::::DescendTo
+  0.17%     14  std::__cxx11::basic_string::insert [clone .constprop.0]
+  0.17%     14  kds::storage::DevicePageStore::ResidentBytes
+  0.17%     14  kds::server::CommandDispatcher::AwaitStatementWaits
+  0.17%     14  kds::server::DispatchOutcome::DispatchOutcome
+  0.17%     14  std::__cxx11::basic_string::_M_assign
+  0.17%     14  kds::server::CommandDispatcher::EndWrite
+  0.17%     14  kds::heap::PageView::PayloadAt const
+  0.17%     14  kds::server::KwpSession::OnStatementComplete
+  0.17%     14  kds::txn::UndoLog::LogUndoWrite
+  0.15%     13  kds::server::DispatchOutcome::operator= [clone .isra.0]
+  0.15%     13  tcache_put
+  0.15%     13  kds::txn::LockTable::WakeWaiters
+  0.15%     13  std::_Optional_payload_base::_M_reset
+  0.15%     13  kds::txn::TransactionManager::Release
+  0.15%     13  bool std::equal [clone .isra.0]
+  0.15%     13  kds::storage::DevicePageStore::PublishFreshPage
+  0.15%     13  kds::txn::InstanceVisibility::BeginCommit
+  0.15%     13  std::__cxx11::basic_string std::operator+
+  0.14%     12  kds::server::CommandDispatcher::DispatchAsync
+  0.14%     12  kds::KeystoneIdOfPayload
+  0.14%     12  kds::storage::DevicePageStore::FetchAndPin
+  0.14%     12  kds::server::KwpSession::OnExecute
+  0.14%     12  std::_Function_handler::_M_manager
+  0.14%     12  kds::exec::::EncodeColumn
+  0.13%     11  kds::parser::Parser::ParseValue
+  0.13%     11  std::__cxx11::basic_string::basic_string [clone .constprop.0]
+  0.13%     11  kds::server::CommandDispatcher::AwaitStatementWaits [clone .actor]
+  0.13%     11  __memset_avx512_unaligned_erms
+  0.13%     11  kds::wal::EncodeRecord
+  0.12%     10  kds::storage::LogBtreeSplit
+  0.12%     10  __GI___pthread_enable_asynccancel
+  0.12%     10  libstdc++.so.6.0.33+0xa2210
+  0.12%     10  kds::server::CommandDispatcher::DispatchInner
+  0.12%     10  operator delete
+  0.12%     10  kds::txn::UndoLog::Append
+  0.12%     10  isalpha
+  0.12%     10  kds::storage::DevicePageStore::BeginNoRefuseWindow
+  0.11%      9  kds::storage::PageStore::Get
+  0.11%      9  kds::server::CommandDispatcher::BorrowChain
+  0.11%      9  kds::storage::DevicePageStore::StampPageLsn
+  0.11%      9  kds::server::TcpServer::SyncWriteInterest
+  0.11%      9  kds::txn::TransactionManager::Commit
+  0.11%      9  kds::wire::FrameDecoder::Feed
+  0.11%      9  kds::server::KwpSession::Send [clone .constprop.0]
+  0.11%      9  kds::wire::FrameHeader::Decode
+  0.11%      9  kds::server::KwpSession::Complete
+  0.09%      8  malloc_consolidate
+  0.09%      8  kds::txn::InstanceVisibility::Reclaim
+  0.09%      8  kds::txn::InstanceVisibility::InFlightFull const
+  0.09%      8  kds::parser::Parser::Parse
+  0.09%      8  kds::sched::Scheduler::Submit
+  0.09%      8  kds::server::CommandDispatcher::StatementEpochScope::StatementEpochScope
+  0.09%      8  kds::storage::DevicePageStore::PinFrame
+  0.09%      8  ___pthread_mutex_trylock
+  0.08%      7  kds::server::::SplitFirstToken
+  0.08%      7  kds::heap::PageView::InsertTupleAt
+  0.08%      7  kds::server::CommandDispatcher::LogIndexWrites
+  0.08%      7  kds::server::CommandDispatcher::HandleInsert
+  0.08%      7  kds::catalog::CatalogCache::FindTableAccess
+  0.08%      7  kds::txn::UndoLog::TailFor
+  0.08%      7  kds_server+0xcfb0
+  0.08%      7  kds::catalog::::LogCatRow
+  0.08%      7  kds::server::ReadBorrow::Position
+  0.08%      7  kds::sched::CoroTask::~CoroTask
+  0.08%      7  kds::exec::::EncodeOneValue
+  0.08%      7  kds::sched::Scheduler::Run
+  0.07%      6  kds::txn::UndoPageAppend
+  0.07%      6  kds::server::KwpSession::OnClose
+  0.07%      6  kds::storage::NoRefuseWindow::Open
+  0.07%      6  kds::parser::Parse
+  0.07%      6  kds::server::TcpServer::AppendReplyBytes
+  0.07%      6  kds::txn::TransactionManager::NoteInsert
+  0.07%      6  kds::storage::DevicePageStore::FetchPinned
+  0.07%      6  kds::storage::RawPageType
+  0.07%      6  kds::txn::UndoPageFreeSpace
+  0.07%      6  kds::parser::Parser::ParseQualifiedName
+  0.07%      6  kds::catalog::CatalogCache::FindOidByName
+  0.07%      6  kds::heap::PageView::slot_count const
+  0.07%      6  kds::wal::::CheckOutputSize [clone .isra.0]
+  0.06%      5  kds::wal::EncodeHeapWrite
+  0.06%      5  std::vector::vector [clone .isra.0]
+  0.06%      5  kds::exec::AssertionEnforcer::CommitTxn
+  0.06%      5  kds::server::CommandDispatcher::BeginWrite
+  0.06%      5  kds::server::TcpServer::SubmitStatement
+  0.06%      5  kds::server::ReadBorrow::~ReadBorrow
+  0.06%      5  kds::wal::EncodeUndoWrite
+  0.06%      5  __GI_fsync
+  0.06%      5  std::_Rb_tree::find [clone .isra.0]
+  0.06%      5  kds::heap::PageView::next_page_id const
+  0.06%      5  kds::storage::FilePageDevice::WriteAt
+  0.06%      5  kds::server::CommandDispatcher::ViewFor
+  0.06%      5  kds::parser::Parser::ParseIdent[abi:cxx11]
+  0.06%      5  kds::txn::InstanceVisibility::PublishOldestUnresolved
+  0.05%      4  [vdso]+0xa22
+  0.05%      4  kds::server::KwpSession::Deliver
+  0.05%      4  checked_request2size
+  0.05%      4  kds_server+0xcf34
+  0.05%      4  kds::txn::EncodeUndoRecordTail
+  0.05%      4  kds_server+0xd8b0
+  0.05%      4  __pthread_cond_wait_common
+  0.05%      4  __futex_abstimed_wait_common64
+  0.05%      4  kds::wal::WalWriter::Run
+  0.05%      4  kds::catalog::Catalog::InitTableAccess
+  0.05%      4  kds::sched::Scheduler::ExpireTimers
+  0.05%      4  futex_wake
+  0.05%      4  kds::txn::TransactionManager::FinishCommitBody
+  0.05%      4  kds::sched::Scheduler::RecordIterationHold
+  0.05%      4  kds::txn::::WriteRecordHeader
+  0.05%      4  [vdso]+0x9c1
+  0.05%      4  kds::parser::Parser::ExpectKeyword
+  0.05%      4  kds_server+0xd294
+  0.05%      4  kds::server::CommandDispatcher::NoteSpills
+  0.05%      4  [vdso]+0xa11
+  0.05%      4  unlink_chunk
+  0.04%      3  kds::exec::LogSpills
+  0.04%      3  libstdc++.so.6.0.33+0xa2c64
+  0.04%      3  kds::exec::::StartRow [clone .isra.0]
+  0.04%      3  std::_Hash_bytes
+  0.04%      3  kds::txn::TransactionManager::MintReadView
+  0.04%      3  kds::parser::Parser::ExpectToken
+  0.04%      3  kds::wal::WalManager::RequestSyncNow
+  0.04%      3  kds::txn::InstanceVisibility::SnapshotCeiling const
+  0.04%      3  kds::server::CommandDispatcher::NoteCabinWrite
+  0.04%      3  kds::server::::Trim
+  0.04%      3  [vdso]+0x9e5
+  0.04%      3  std::_Rb_tree::equal_range
+  0.04%      3  kds::RequirePayloadCarries
+  0.04%      3  kds::txn::LockTable::Release
+  0.04%      3  kds::server::CommandDispatcher::DispatchAsync [clone .destroy]
+  0.04%      3  __GI___pthread_disable_asynccancel
+  0.04%      3  kds_server+0xcec0
+  0.04%      3  kds::server::DispatchOutcome::~DispatchOutcome
+  0.04%      3  kds::storage::Crc32cExtend
+  0.04%      3  posix_fallocate
+  0.04%      3  __unlink
+  0.04%      3  kds::server::KwpSession::SendReady
+  0.02%      2  kds::txn::LockTable::ClearWaitFor
+  0.02%      2  kds::sched::Scheduler::IdleTimeoutMs const
+  0.02%      2  kds::storage::PageRef::operator= [clone .isra.0]
+  0.02%      2  lll_mutex_unlock_optimized
+  0.02%      2  kds::server::CommandDispatcher::DefersCommit const
+  0.02%      2  kds::server::CommandDispatcher::LogStatement const
+  0.02%      2  kds::wal::WalManager::Commit
+  0.02%      2  libstdc++.so.6.0.33+0xa2434
+  0.02%      2  kds::catalog::::OverwriteLogged
+  0.02%      2  kds::heap::PageView::min_key const
+  0.02%      2  kds::btree::::LeafStillCoversKey
+  0.02%      2  kds_server+0xcfb4
+  0.02%      2  kds::wal::EncodedRecordSize
+  0.02%      2  [vdso]+0x981
+  0.02%      2  kds::catalog::Catalog::FindTableOidByName
+  0.02%      2  std::_Rb_tree_insert_and_rebalance
+  0.02%      2  libstdc++.so.6.0.33+0xa1c30
+  0.02%      2  kds::Keystone::Encode
+  0.02%      2  kds::storage::SetPageLsn
+  0.02%      2  kds::txn::InstanceVisibility::PublishSnapshotBound
+  0.02%      2  kds::wire::DecodeBindParams
+  0.02%      2  kds::storage::DevicePageStore::EndNoRefuseWindow
+  0.02%      2  kds::exec::AssertionEnforcer::ReserveInsert
+  0.02%      2  kds_server+0xd190
+  0.02%      2  std::__detail::_Prime_rehash_policy::_M_need_rehash const
+  0.02%      2  kds_server+0xd290
+  0.02%      2  kds::txn::TrxIdSequence::Next
+  0.02%      2  std::__cxx11::basic_string::compare const [clone .isra.0]
+  0.01%      1  kds::exec::::CheckLayoutMatches
+  0.01%      1  kds_server+0xcf30
+  0.01%      1  void std::__cxx11::basic_string::_M_construct [clone .isra.0]
+  0.01%      1  kds_server+0xcec4
+  0.01%      1  kds::storage::DevicePageStore::ReserveFrame
+  0.01%      1  [vdso]+0x991
+  0.01%      1  kds_server+0xd704
+  0.01%      1  kds::heap::PageView::WriteHeader
+  0.01%      1  kds::storage::DevicePageStore::AcquirePageLatch
+  0.01%      1  kds_server+0xcfc4
+  0.01%      1  kds::exec::MaintainIndexes
+  0.01%      1  [vdso]+0x99c
+  0.01%      1  kds::storage::FreeMapIsAllocated
+  0.01%      1  [vdso]+0x950
+  0.01%      1  libstdc++.so.6.0.33+0xa2430
+  0.01%      1  kds::storage::DataSyncer::Run
+  0.01%      1  kds::storage::FreeMapFindFirstFree
+  0.01%      1  kds::btree::::PlaceUnderHold::{lambda#1}::operator const
+  0.01%      1  kds::sched::AwaitCoro::await_resume
+  0.01%      1  [vdso]+0x1160
+  0.01%      1  kds::exec::AssertionEnforcer::AdmitInsert
+  0.01%      1  kds::storage::DevicePageStore::WriteBack
+  0.01%      1  kds::storage::PageStore::CreateNew
+  0.01%      1  kds::txn::InstanceVisibility::LowerSnapshotBound
+  0.01%      1  kds::heap::PageView::CreateEmptyAs
+  0.01%      1  ___pthread_cond_signal
+  0.01%      1  kds_server+0xd470
+  0.01%      1  kds_server+0xd5b4
+  0.01%      1  kds::server::StatusFromErrorReply
+  0.01%      1  [vdso]+0x941
+  0.01%      1  std::vector::_M_erase [clone .isra.0]
+  0.01%      1  libstdc++.so.6.0.33+0xa1c34
+  0.01%      1  __GI___pthread_mutex_unlock_usercnt
+  0.01%      1  [vdso]+0x978
+  0.01%      1  kds_server+0xd230
+  0.01%      1  kds::catalog::Catalog::CheckRelationQualifier
+  0.01%      1  kds::storage::DevicePageStore::BeginDrainOnPressure
+  0.01%      1  std::_Rb_tree::erase [clone .isra.0]
+  0.01%      1  kds::txn::WriteUndoPageHeader
+  0.01%      1  kds::storage::FilePageDevice::Sync
+  0.01%      1  [vdso]+0x985
+  0.01%      1  kds::storage::DataSyncer::Result const
+  0.01%      1  kds::wal::EncodeBtreeSplit
+  0.01%      1  [vdso]+0x970

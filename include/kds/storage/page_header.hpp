@@ -134,35 +134,13 @@ void SetPageLsn(std::span<std::byte, kPageSize> page, std::uint64_t lsn);
 std::uint32_t GetStoredChecksum(std::span<const std::byte, kPageSize> page);
 std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page);
 
-// ---- The stream stamp (`docs/spec/page.md` §2b) ---------------------
+// ---- The common `flags` word (`docs/spec/page.md` §2b) ---------------
 //
-// The 16-bit `flags` word at offset 2 carries `core_id + 1` of the core
-// that last wrote the page; **0 means never stamped**, which is what
-// every pre-PW1c-3 page reads - the owner_oid no-backfill precedent.
-//
-// **It decides nothing.** It existed because `page_lsn` was a byte offset
-// into *one stream's* file, so after a handoff the number was meaningless
-// to the other stream and the stamp was what let redo tell "mine" from
-// "incomparable". There is one stream (AR0 M0) and one owner of the fact
-// (AW-S1b took the ownership reading), so what is left is a diagnostic:
-// `SHOW PAGE` prints it, every logged mutation writes it, and redo's
-// full-page-image restore keeps it truthful. No branch reads it.
-//
-// Explicit load/store like every persisted field - invariant 6, no
-// bitfields. Like SetPageLsn, mutation does not restamp the checksum.
-std::uint16_t GetPageStreamStamp(std::span<const std::byte, kPageSize> page);
-void SetPageStreamStamp(std::span<std::byte, kPageSize> page, std::uint16_t stamp);
-
-// The one home of the `core_id + 1` convention (invariant 6's discipline:
-// a persisted encoding is spelled once). 0 stays "never stamped".
-constexpr std::uint16_t StreamStampFor(std::uint32_t core_id) noexcept {
-    return static_cast<std::uint16_t>(core_id + 1);
-}
-// `StampIsForeign` stood here - stamped, and by some other stream - and
-// went at AM-S4(d) with its one caller, redo's refusal of a page carrying
-// another stream's stamp inside this scan's scope. There is one stream, so
-// there is no other stream to have crossed from and the question has no
-// answer to give.
+// Offset 2, 16 bits, per-type meaning and written 0 by every format. It held
+// a stream stamp, `core_id + 1` of the core that last wrote the page, which
+// nothing read; BP-H5 stopped writing it, so a page written before carries
+// a stale nonzero value and a page formatted since carries 0. No branch
+// reads it.
 
 // ---- Relayout epoch (docs/spec/physical-optimizer.md R4) ----------------
 //

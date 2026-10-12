@@ -132,7 +132,34 @@ Korean it was typed in.
 | **Does not settle** | BR's opening (BR-Q0) and BR-Q1..Q5; the admin tool's name (BR-S2); whether the stop LSN lives in the superblock (BR-S0) |
 | **Recorded at** | `workorder-br-backup-restore.md`; `index.md`'s BR row |
 
-## 15. BR opened, its order corrected, its items adopted
+## 15. BP opened
+
+| | |
+|---|---|
+| **Word** | *"Open BP, adopt CLA's proposals, S2 first, and remove every citation of the shared-nothing concept (CLAUDE.md and other documents)."* (W2 of BP), with the go-ahead-achieving-milestone skill invoked on it |
+| **Mark** | **BP-Q0 opened**, on `worktree-bp-per-core-residue` from `cf889b63`. BP-Q1..Q3, Q6, Q8..Q13 marked as CLA proposed: Q3 (a), Q10 (b), Q11 `kMaxCores`, Q13 (a), BP-S2 first. BP-Q4, Q5 and Q7 marked "decided by BP-S1": their option is adopted from the census on the operator's standing go-ahead. **BP-Q14**, the citation sweep's reach, written after W2 and adopted on the standing go-ahead as (a): live documents and source comments, not dated records. The order is renamed `workorder-bp-per-core-residue.md` |
+| **Does not settle** | Any option the census decides, until BP-S1 has run; a push, a merge to `main`, a tag or a version |
+| **Recorded at** | `workorder-bp-per-core-residue.md` header (W2), §5; `index.md`'s BP row |
+
+## 16. BQ opened
+
+| | |
+|---|---|
+| **Word** | *"Check whether milestone BP was closed or paused, then start the BQ workplan; go ahead and keep going until the milestone is achieved or a failure or ineffectiveness is discovered."* (W3 of BQ, given as a five-minute loop), then *"Don't wait for BP; start BQ right away."* (W4; both recorded on `worktree-wal-segment-roll-order` at `dbff867b`) |
+| **Mark** | **BQ-Q0: opened.** W4 lifts W3's gate on BP: BQ starts while BP-S1 is measuring on the same host, so BQ's builds overlap BP's runs and BQ's own measurements are taken only when no BP run is live. **BQ-Q1..Q5 are marked as CLA proposed**, on W3's *"go ahead and keep going"*: Q1 (a), Q2 (a), Q3 (a), Q4 (b), Q5 (b) - so BQ stops at rung 3 and rung 4 (H6) needs its own word |
+| **Does not settle** | Rung 4; BL-S4's rulings 2 and 3 (BQ answers 3 by measurement); BP |
+| **Recorded at** | `workorder-bq-wal-segment-roll.md` §6, §7; `index.md`'s BQ row |
+
+## 17. BQ-S1 measured; BQ-Q6 and BQ-Q7 adopted
+
+| | |
+|---|---|
+| **Word** | *"Refer to the wal-segment worktree and merge the remaining work into this session; plan and orchestrate the work with its ordering and gates in mind; until two milestones close, go-ahead-achieving-milestone: set hypotheses and measure, verify and re-explore, establish, reject."* (the operator, 2026-10-12, translated) |
+| **Mark** | BQ joins BP's branch (`6139c2de`). BQ-S1's verdicts are recorded in BQ's §7. **BQ-Q6 (a)** and **BQ-Q7 (a)**, new items written with CLA's proposal, are adopted on the operator's standing go-ahead of 2026-10-12 (go-ahead-achieving-milestone), not as the operator's own marks |
+| **Does not settle** | Rung 4 (BQ-Q5 (b) stands); the recycling defect's fix, which is filed and not BQ's; a push, a merge to `main`, a tag or a version |
+| **Recorded at** | `workorder-bq-wal-segment-roll.md` §6, §7; `docs/inflight/bugs/a-page-re-dirtied-after-its-writeback-copy-pins-the-redo-start.md` |
+
+## 18. BR opened, its order corrected, its items adopted
 
 | | |
 |---|---|

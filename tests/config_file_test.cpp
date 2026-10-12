@@ -478,14 +478,14 @@ TEST(ExpeditorConfigTest, ZeroCoresIsRefused) {
     EXPECT_EQ(config.cores, 1u) << "a refused value must not be half-applied";
 }
 
-TEST(ExpeditorConfigTest, MoreCoresThanWalAnchorSlotsIsRefusedNamingTheCeiling) {
-    // kMaxWalCores is a hard ceiling: the anchor table is indexed by
-    // core_id, so a core above it has nowhere to publish a checkpoint from.
+TEST(ExpeditorConfigTest, MoreCoresThanTheCeilingIsRefusedNamingIt) {
+    // kMaxCores is a hard ceiling: every per-core array is indexed by
+    // core_id, so a core above it has no slot.
     Expeditor::Config config;
     Status s = config.ApplyFile(
-        WithPool("cores = " + std::to_string(kMaxWalCores + 1) + "\n"));
+        WithPool("cores = " + std::to_string(kMaxCores + 1) + "\n"));
     EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
-    EXPECT_NE(s.message().find(std::to_string(kMaxWalCores)), std::string::npos) << s.message();
+    EXPECT_NE(s.message().find(std::to_string(kMaxCores)), std::string::npos) << s.message();
 }
 
 TEST(ExpeditorConfigTest, ARetiredKeyIsRefusedByNameWithWhatReplacedIt) {
@@ -559,8 +559,8 @@ TEST(ExpeditorConfigTest, BufferPoolFramesIsRequiredAndNonzero) {
 
 TEST(ExpeditorConfigTest, ExactlyTheCeilingIsAccepted) {
     Expeditor::Config config;
-    ASSERT_TRUE(config.ApplyFile(WithPool("cores = " + std::to_string(kMaxWalCores) + "\n")).ok());
-    EXPECT_EQ(config.cores, kMaxWalCores);
+    ASSERT_TRUE(config.ApplyFile(WithPool("cores = " + std::to_string(kMaxCores) + "\n")).ok());
+    EXPECT_EQ(config.cores, kMaxCores);
 }
 
 TEST(ExpeditorConfigTest, TcpKeepaliveDefaultsOnAndRefusesWhatTheKernelWouldNot) {

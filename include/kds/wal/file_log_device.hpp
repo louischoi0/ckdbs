@@ -119,6 +119,10 @@ public:
 
     Status CreateSegment(std::uint64_t segment_no,
                          std::span<const std::byte> header = {}) override;
+    // The creation itself, with its steps timed (BQ-S1); `CreateSegment`
+    // is this with the report discarded.
+    Status CreateSegmentTimed(std::uint64_t segment_no, std::span<const std::byte> header,
+                              SegmentCreateTiming& out) override;
     // Hands the number to this device's preparer thread, which builds the
     // body under the temporary name `Open` never adopts - the reservation,
     // the zeroing and their fsync. `CreateSegment` of the same number then
@@ -131,6 +135,12 @@ public:
         std::lock_guard<std::mutex> guard(prepare_mutex_);
         return prepared_no_;
     }
+    // Holds what a build ahead in progress holds, so a creation meanwhile
+    // waits as it would behind one: BQ-S1's cell for a body that was asked
+    // for and not ready.
+    std::unique_lock<std::mutex> HoldPrepareForTest() {
+        return std::unique_lock<std::mutex>(prepare_mutex_);
+    }
     Status WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                    std::span<const std::byte> in) override;
     Status ReadAt(std::uint64_t segment_no, std::uint64_t offset,
@@ -142,6 +152,9 @@ public:
     // created or reclaimed, not here, so a crash right after CreateSegment
     // cannot leave a nameless file.
     Status Sync() override;
+    // The sync itself, the tail's `fdatasync` timed apart from the rest's
+    // (BQ-S1, H3); `Sync` is this with the report discarded.
+    Status SyncTimed(DeviceSyncTiming& out) override;
 
     Status DetachBelow(std::uint64_t segment_no) override;
 

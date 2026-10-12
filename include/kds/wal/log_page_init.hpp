@@ -17,8 +17,7 @@
 // per-type `flags` byte, for the reason `payload.hpp` gives: under one
 // stream a page redo has to create would otherwise be stamped with the
 // recovering core rather than the core that wrote it. The stamp decides
-// nothing since AW-S1b (`page_header.hpp`); it used to decide which core
-// could claim the page. The one
+// nothing (`page_header.hpp`). The one
 // caller that needs the LSN anyway (the undo log's reclaim arm stamps
 // *before* the wipe) takes it from the return.
 //
@@ -35,11 +34,7 @@ inline StatusOr<Lsn> LogPageInit(WalManager* wal, std::uint64_t txn_id, PageId p
     const PageInitPayload fields{min_key, static_cast<std::uint8_t>(type), {0, 0, 0},
                                  /*reserved2=*/0, owner_oid};
     if (auto n = EncodePageInit(buf, fields); !n.ok()) return n.status();
-    // The cast is safe because `WalManager::Open`/`Attach` refuse a core id
-    // the byte could not hold.
-    return wal->Append(RecordSpec{RecordType::kPageInit, txn_id, page_id,
-                                  static_cast<std::uint8_t>(wal->core_id())},
-                       buf);
+    return wal->Append(RecordSpec{RecordType::kPageInit, txn_id, page_id}, buf);
 }
 
 }  // namespace kds::wal

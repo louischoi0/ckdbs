@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -17,6 +18,8 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#include "kds/base/contention.hpp"
 
 namespace kds::wal {
 namespace {
@@ -378,12 +381,27 @@ void FileLogDevice::BuildAhead(std::uint64_t segment_no) {
 }
 
 Status FileLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const std::byte> header) {
+    SegmentCreateTiming discarded;
+    return CreateSegmentTimed(segment_no, header, discarded);
+}
+
+Status FileLogDevice::CreateSegmentTimed(std::uint64_t segment_no,
+                                         std::span<const std::byte> header,
+                                         SegmentCreateTiming& out) {
     if (segment_no != end_segment()) {
         return Status::InvalidArgument("FileLogDevice: segments are created in order (expected " +
                                        std::to_string(end_segment()) + ", got " +
                                        std::to_string(segment_no) + ")");
     }
-    std::lock_guard<std::mutex> prepared(prepare_mutex_);
+    // A build ahead in progress holds this mutex across its whole build
+    // (`BuildAhead`), so a wait here is a body that was asked for and not
+    // ready: BQ-S1's step d.
+    std::unique_lock<std::mutex> prepared(prepare_mutex_, std::try_to_lock);
+    if (!prepared.owns_lock()) {
+        const auto wait_start = std::chrono::steady_clock::now();
+        prepared.lock();
+        out.body_wait_ns = NsSince(wait_start);
+    }
 
     // **Built under a name `Open` never adopts, and renamed when whole.** A
     // power cut inside a creation - during the prewrite, before its fsync -
@@ -412,11 +430,18 @@ Status FileLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const st
     if (prepared_no_ == segment_no) {
         fd = std::move(prepared_fd_);
         prepared_no_ = std::numeric_limits<std::uint64_t>::max();
+        out.body = out.body_wait_ns > 0 ? BodyOutcome::kWaited : BodyOutcome::kHit;
     } else {
+        const auto body_start = std::chrono::steady_clock::now();
         fd = BuildBody(temp);
+        out.body_ns = NsSince(body_start);
+        out.body = BodyOutcome::kInline;
         if (!fd.ok()) return fd.status();
     }
+    const auto header_start = std::chrono::steady_clock::now();
     if (Status s = WriteHeaderAndSync(fd.value().get(), header); !s.ok()) return abandon(s);
+    out.header_ns = NsSince(header_start);
+    const auto rename_start = std::chrono::steady_clock::now();
 
     // The final name, refused if a file already holds it: segments are
     // created once. A filesystem that refuses `RENAME_NOREPLACE` (`EINVAL`:
@@ -437,11 +462,15 @@ Status FileLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const st
         return abandon(ErrnoStatus("FileLogDevice: rename " + temp + " to " + path, err));
     }
 
+    out.rename_ns = NsSince(rename_start);
+
     // Directory metadata is synced here, not in Sync(): a crash right after
     // this call must not leave a segment whose name never reached the disk.
+    const auto dir_start = std::chrono::steady_clock::now();
     if (Status s = SyncDirectory(); !s.ok()) {
         return s;
     }
+    out.dir_sync_ns = NsSince(dir_start);
 
     {
         // The only mutation of the table, and the only reason the lock
@@ -521,6 +550,11 @@ Status FileLogDevice::ReadAt(std::uint64_t segment_no, std::uint64_t offset,
 }
 
 Status FileLogDevice::Sync() {
+    DeviceSyncTiming discarded;
+    return SyncTimed(discarded);
+}
+
+Status FileLogDevice::SyncTimed(DeviceSyncTiming& out) {
     // Every segment, not just the tail. Two reasons, and the second is a
     // correctness dependency another file rests on:
     //
@@ -558,7 +592,9 @@ Status FileLogDevice::Sync() {
     // sync has left to flush is data. fsync would add a timestamp-metadata
     // journal commit to every durability point for nothing a recovery could
     // ever read.
+    out.segments = static_cast<std::uint32_t>(held.size());
     for (std::size_t i = 0; i < held.size(); ++i) {
+        const auto start = std::chrono::steady_clock::now();
         while (::fdatasync(held[i]->get()) != 0) {
             if (errno == EINTR) {
                 continue;
@@ -566,6 +602,7 @@ Status FileLogDevice::Sync() {
             return ErrnoStatus("FileLogDevice: fdatasync segment " + std::to_string(first + i),
                                errno);
         }
+        (i + 1 == held.size() ? out.tail_ns : out.rest_ns) += NsSince(start);
     }
     return Status::OK();
 }

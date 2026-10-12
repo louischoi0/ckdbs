@@ -75,8 +75,7 @@ using TaskPtr = std::unique_ptr<Task>;
 // Phase-1 concrete Task: wraps a callable returning PollResult. Most call
 // sites should use this instead of writing a new Task subclass; it is not
 // re-entrant (a single FunctionTask instance is only ever driven by the
-// scheduler that owns its queue, per the thread-per-core/shared-nothing
-// rule - rules.md #3).
+// scheduler that owns its queue: a task is core-local, rules.md §3).
 class FunctionTask final : public Task {
 public:
     using Fn = std::function<PollResult()>;

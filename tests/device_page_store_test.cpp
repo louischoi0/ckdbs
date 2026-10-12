@@ -90,20 +90,18 @@ TEST(DevicePageStoreTest, CreateAtThenGetReturnsTheSamePage) {
     EXPECT_EQ(store->CreateAt(kFreeMapPageId).status().code(), StatusCode::kAlreadyExists);
 }
 
-TEST(DevicePageStoreTest, StampPageLsnStampsTheOwningStream) {
-    // PW1c-3 (docs/spec/page.md §2b): every logged
-    // mutation funnels through StampPageLsn, so the stream stamp rides the
-    // LSN stamp - core_id + 1, and this store's default identity is core 0.
+TEST(DevicePageStoreTest, StampPageLsnWritesTheLsnAndNoStreamStamp) {
+    // Every logged mutation funnels through StampPageLsn: it writes the
+    // page_lsn and leaves the common `flags` word alone (BP-H5).
+    const CurrentCoreGuard as_core_two(2);
     auto device = MakeDevice();
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
 
     auto created = store->CreateAt(0);
     ASSERT_TRUE(created.ok());
-    EXPECT_EQ(GetPageStreamStamp(created.value().bytes()), 0u) << "unstamped until logged";
-
     ASSERT_TRUE(store->StampPageLsn(0, /*lsn=*/64).ok());
-    EXPECT_EQ(GetPageStreamStamp(created.value().bytes()), 1u);
+    EXPECT_EQ(ReadPageHeader(created.value().bytes()).flags, 0u) << "a stream stamp was written";
     EXPECT_EQ(GetPageLsn(created.value().bytes()), 64u);
 }
 
@@ -947,66 +945,6 @@ TEST(FreeMapRegionTest, MapPagesAreNeverReclaimCandidates) {
 }
 
 // ---- The recovery pass writes without claiming (AR0 M0, AL-R6) ---------
-
-// Under one stream core 0's mount pass replays and rolls back records
-// belonging to every core, through core 0's store. Stamping core 0 onto a
-// page core 2 wrote mislabels whose stream may name it - and until AW-S1b it
-// did worse: the next mount read that stamp to decide who may write, so
-// core 2 faulted the page, was granted nothing, and could never write it
-// again. The write half is gone; rule 5's "a page's stamp is the truth
-// about its stream" is what the suppression still protects.
-//
-// Redo skips its own restamp, but undo's compensations reach the store
-// through this same ordinary mutation path, which is why the suppression
-// lives here rather than at either phase.
-TEST(DevicePageStoreStampSuppressionTest, ASuppressedPassLeavesAnothersStampAlone) {
-    auto device = MakeDevice(64, 0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-    // Core 0 by default: the stamp is the calling thread's identity now, and
-    // this thread declared none (AM-S2 step 3).
-
-    auto created = store->CreateNew();
-    ASSERT_TRUE(created.ok()) << created.status().message();
-    const PageId page = created.value().first;
-    FormatPage(created.value().second.bytes(), PageType::kHeap);
-    SetPageStreamStamp(created.value().second.bytes(), StreamStampFor(2));  // core 2's
-
-    store->SetStampSuppressed(true);
-    ASSERT_TRUE(store->StampPageLsn(page, 4096).ok());
-    store->SetStampSuppressed(false);
-
-    auto got = store->Get(page);
-    ASSERT_TRUE(got.ok());
-    EXPECT_EQ(GetPageStreamStamp(got.value().bytes()), StreamStampFor(2))
-        << "the recovery pass claimed a page it was only replaying";
-    // The page_lsn is still stamped: idempotence is that field's job and it
-    // is not ownership.
-    EXPECT_EQ(GetPageLsn(got.value().bytes()), 4096u);
-}
-
-// And with the suppression off - every path a serving instance takes - the
-// stamp is written exactly as before.
-TEST(DevicePageStoreStampSuppressionTest, AnOrdinaryWriteStillClaimsThePage) {
-    auto device = MakeDevice(64, 0);
-    auto store = OpenStore(*device);
-    ASSERT_NE(store, nullptr);
-    // The stamp records the *calling* core since AM-S2 step 3, so the cell
-    // declares one rather than telling the store to pretend.
-    const CurrentCoreGuard as_core_two(2);
-    EXPECT_FALSE(store->stamp_suppressed());
-
-    auto created = store->CreateNew();
-    ASSERT_TRUE(created.ok());
-    const PageId page = created.value().first;
-    FormatPage(created.value().second.bytes(), PageType::kHeap);
-
-    ASSERT_TRUE(store->StampPageLsn(page, 4096).ok());
-
-    auto got = store->Get(page);
-    ASSERT_TRUE(got.ok());
-    EXPECT_EQ(GetPageStreamStamp(got.value().bytes()), StreamStampFor(2));
-}
 
 }  // namespace
 }  // namespace kds::storage

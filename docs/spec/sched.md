@@ -8,7 +8,7 @@ The reactor: how work is scheduled on a core. Consistent with `docs/rules/rules.
 
 KDS does **not** schedule OS threads. At startup the engine spawns exactly one worker thread per core, pins each with CPU affinity, and never creates threads afterward. Each worker runs a **reactor**: a cooperative, run-to-completion event loop that owns the engine state assigned to that core. "The scheduler" is the policy inside each reactor that decides which ready task runs next. All **scheduler** data structures are core-local and lock-free by construction, with one documented exception: the reactor's sleep flag and its `Waker`, which other cores' threads read and write to end an idle block (§7).
 
-**Core-local is the default, not a law of the engine** (AR0-2). Shared-nothing was retired as the memory model: state may be shared where a subsystem's spec says it is and says what serializes it. `rules.md` §3 indexes what is declared today — the WAL stream, this section's wake flag, the data file's capacity, the visibility window (AN-S1), the page frame's latch word (AM-S1) and, declared before a line of it exists, M2's lock table; §9-2 below states the boundary for the reactor thread.
+**Core-local is the default; shared state is declared** (AR0-2): state may be shared where a subsystem's spec says it is and says what serializes it. `rules.md` §3 indexes what is declared — among them the WAL stream, this section's wake flag, the data file's capacity, the visibility window (AN-S1), the page frame's latch word (AM-S1) and M2's lock table; §9-2 below states the boundary for the reactor thread.
 
 Reference architectures: Seastar (ScyllaDB), glommio.
 
@@ -20,8 +20,8 @@ Each iteration executes fixed phases:
 loop:
   1. drain I/O completions        // poll completion queue; wake waiting tasks
   2. expire timers                // timing wheel against injected clock
-  3. (retired at AT-S10d)         // drained the cross-core rings; a kick
-                                  //   arrives in phase 1 as the waker's fd
+  3. (empty)                      // a kick arrives in phase 1 as the
+                                  //   waker's fd
   4. run ready tasks              // pick by group policy (§4), up to loop budget
   5. submit pending I/O           // batch submission
   6. idle policy if nothing ran   // §7 - the block is phase 1's, and
@@ -34,7 +34,7 @@ Rules:
 - Phases always run in this order; a phase may be empty but never skipped. Fixed ordering is required for deterministic replay.
 - Phase 4 has a **loop budget** (max tasks or time slice per iteration) so completion draining and I/O submission latency stay bounded under load.
 - The loop body performs no allocation in steady state; all queues are preallocated at startup.
-- Phase 3 is kept as a number and not reused: the numbering is cited across the tree, and renumbering would make every earlier citation name the wrong phase.
+- Phase 3 is empty and its number is not reused: the numbering is cited across the tree, and renumbering would make a citation name the wrong phase.
 
 ## 3. Tasks
 
@@ -43,8 +43,8 @@ Rules:
 - **A statement's walk yields** (BA-S15): a `SELECT`'s outermost walk gives its core back every `exec::SlicePolicy::pages_per_slice` (64) pages, at the bottom of its page loop, so a long scan no longer holds every other session on its core until it ends; `DispatchAsync` awaits it after the statement's head returns (`server::SelectRun`). What it holds across a yield - its read view, its read borrow, its core's statement epoch at the word it revalidated against, and a pin on the catalog memo - is statement-scoped and holds no page. A write, a pk descent, a join's inner walk under one outer page and an index walk do not yield; `exec::Budget` bounds them. Each suspended walk holds one of its core's `txn::kMaxRegisteredReaders` (256) reader-lease slots, so a 257th walk suspended at once on one core is refused `OutOfSpace` at its head rather than read unregistered.
 - **No preemption.** Signal- or timer-driven preemption is forbidden — it destroys deterministic simulation.
 - **Suspension safety.** A coroutine must not be parked while holding a resource that only makes sense within a call — above all a page span (`docs/spec/parser-v2.md` I15's R1). `sched::SetSuspendAudit` is the hook a higher layer installs to answer that, checked in debug builds at every suspension; `exec::InstallSuspendAudit()` is the executor's answer, installed per core on the thread that runs statements.
-- **No work-stealing.** A task created on a core runs and completes on that core. Nothing moves *work* between cores since AT-S10d: a core that needs another to act writes shared state and kicks it (§5), and the kicked core's own parked task does the work.
-- Task representation: **C++20 stackless coroutines** (`include/kds/sched/coro.hpp`). Every cross-core operation is a request whose answer arrives later, and a coroutine is how "wait" is spelled without blocking the reactor or hand-rolling a call chain into a state machine. `Task::Poll()` returning `kSuspended`/`kDone` is a coroutine's resume protocol, so the scheduler needed no change for it. The cost is a heap-allocated frame per coroutine, so this is for *suspendable* work — a statement, a lock or durability wait, a lease request — and never the per-tuple path.
+- **No work-stealing.** A task created on a core runs and completes on that core. Nothing moves *work* between cores: a core that needs another to act writes shared state and kicks it (§5), and the kicked core's own parked task does the work.
+- Task representation: **C++20 stackless coroutines** (`include/kds/sched/coro.hpp`). A wait whose answer arrives later — a lock, a durability wait, another core's decide — is spelled as a coroutine, which is how "wait" is spelled without blocking the reactor or hand-rolling a call chain into a state machine. `Task::Poll()` returning `kSuspended`/`kDone` is a coroutine's resume protocol, so the scheduler needed no change for it. The cost is a heap-allocated frame per coroutine, so this is for *suspendable* work — a statement, a lock or durability wait — and never the per-tuple path.
 - **An allocation failure or an exception that escapes a coroutine stops the process.** Exceptions are not engine logic (`rules.md` §1), but the standard library throws `std::bad_alloc` from every container the engine grows. A server installs a new-handler that aborts at the failed allocation (`kds/base/fail_stop.hpp`), before anything unwinds — an unwind releases latches, and a writeback on another core can then copy a page whose mutation has no log record yet — and `Coro::promise_type::unhandled_exception` names any other exception on stderr and aborts. A coroutine that returned there would complete its statement as `Status::OK()`. What a write leaves behind when interrupted between a page write and its record is not something to continue from, so the rule is one for every statement, and the mount restores from the log what the stop interrupted (`bad_alloc_death_test.cpp`'s mount cell). The held latches protect a path that logs under its holds (`wal.md`, AT-S21); the paths named in `docs/inflight/bugs/records-appended-after-their-page-is-released.md` release their page before logging, and a stop on one has only the window a crash there already has.
 
 ## 4. Scheduling Groups
@@ -67,8 +67,8 @@ for another writes it into shared state under that state's own latch, then
 kicks the destination through the instance's wake registry
 (`sched/waker_table.hpp`, §7). The kick carries no payload and no meaning:
 a woken reactor learns why from the structure it parks on. **There is no
-message, no queue between cores and no ring since AT-S10d**, and nothing
-crosses that a kick does not cover.
+message and no queue between cores**, and nothing crosses that a kick does
+not cover.
 
 Three consumers:
 
@@ -103,16 +103,6 @@ block (`max_idle_block_ms`, §7). Every consumer above is level-triggered -
 its parked task re-asks its predicate after every block - so a lost kick
 costs latency and never the wake.
 
-**What went at AT-S10d**, with the last kind that used it (the two id
-leases, AT-S10b): the per-core-pair SPSC rings and their N² preallocation
-(`sched/spsc_ring.hpp`), the injectable transport and its real and
-simulated implementations (`sched/ring_transport.hpp`,
-`sched/sim_ring_transport.hpp`), the message header and kind enum
-(`sched/ring_message.hpp`, D25's census at 2), the `ring_full` retry task
-(`sched/send_retry.hpp`), phase 3's drain and handler table, and
-`AttachTransport` on the scheduler and on `CoreRuntime`. The full text of
-this section as it stood is `git show ba8c824:docs/spec/sched.md`.
-
 ## 6. Timers
 
 - Per-core **hierarchical timing wheel** keyed on the injected monotonic clock. No `std::chrono` reads in engine logic (`docs/rules/rules.md` §4); the clock is a scheduler-provided interface.
@@ -129,11 +119,7 @@ kick ends it (`include/kds/sched/waker.hpp`). There is no busy-poll mode.
 `sched_wakes_received` (§4 for what the duration buys; `command_dispatcher.cpp`
 carries each field's reading, the client manual lists none). One of them is a check
 rather than a measurement: the instance's `sched_wakes_sent` must equal
-the sum of the cores' `sched_wakes_received`. **`sched_wake_race_skips`
-and `sched_spurious_wakes` went with the ring at AT-S10d**: the first
-counted the pre-block re-check finding a queued message and the second a
-wake that found an empty inbox, and with no queue the first cannot move
-and the second would count every wake.
+the sum of the cores' `sched_wakes_received`.
 
 **The wake, and its one atomic.** One `Waker` (an eventfd) per reactor,
 armed by `AttachWakerTable` and registered with that reactor's backend like
@@ -159,12 +145,10 @@ kicker that published just before the destination raised its flag reads it
 clear and skips the kick, and the destination waits out one idle block.
 Closing that window takes a store-buffer pair - a `seq_cst` fence on both
 sides - *and* the destination re-polling what it parks on after raising the
-flag. The ring supplied that third leg for its own queue in `HasPending`.
-**Not closing it is a choice, not a consequence**: a consumer's predicate -
-D19's `Pending(core)`, a lock waiter's slot - could be re-polled there, and
-AT-S10d retired the re-check with the ring rather than generalise it, so
-both fences ordered nothing and went too, the flag is a relaxed hint, and
-`Scheduler::wake_race_skips()` has nothing to count. Every consumer is
+flag. **Not closing it is a choice, not a consequence**: a consumer's
+predicate - D19's `Pending(core)`, a lock waiter's slot - could be
+re-polled there, but no pre-block re-check runs, so no fence is placed and
+the flag is a relaxed hint. Every consumer is
 level-triggered, re-polled after the block, so a skipped kick is slow and
 never wrong; generalising the re-check is the fix if one idle block ever
 measures as too much.
@@ -209,14 +193,7 @@ indistinguishable from one that has a wake it never needed.
 | `command_dispatcher.cpp:737` (**group commit**) | `wal_->IsDurable(lsn)` | the post-task hook on **this** core, once per iteration (`expeditor.cpp:1953`), with the drain timer as backstop | on-core: nothing to wake. Any "parked is not ready" rule must count the hook's own work as progress, or every commit gains a drain interval |
 | `tcp_server.cpp` `RunHost` (**D19's handoff**, a peer's hosting task; only where the port cannot be shared) | `handoff->Pending(core)`, or the server gone | core 0's `Offer`, which sets `pending` under the inbox latch and then kicks | the kick → **wake**. There is no pre-block re-check (§5, and above), so an offer racing the reactor into its block is noticed at the block's ceiling, one idle block late, never lost |
 
-Each row is named with what covers it. The two id-lease refill parks,
-satisfied by core 0's grant over the ring and covered by the wake, went
-with the leases at AT-S10b; the remote read's park and the remote step
-server's two, with the executor's `resume_gate_` they drove, went with
-the remote-step protocol at AT-S10; the shipped statement's `Settled(id)`
-park, whose reply was a ring message and whose deadline was the reason
-the ceiling above existed, went with statement shipping at AT-S6 and its
-row with the ring at AT-S10d. **Not in the table and owed to it**: the
+Each row is named with what covers it. **Not in the table and owed to it**: the
 lock family's two parks (`command_dispatcher.cpp`'s `decided` and
 `freed` predicates, AO), each bounded by the fault net read inside its
 predicate.
@@ -258,7 +235,7 @@ clock, so a held kick ends a real idle block only when the cell says so.
 ## 9. Invariants
 
 1. One pinned worker thread per core; no thread creation after startup.
-2. All scheduler state is core-local but the sleep flag and `Waker` of §7 and, since BL-S1, the core's **load slot** (`sched/core_load.hpp`): above one core the reactor publishes, at its iteration end, the fraction of the last 50 ms window it was busy and spent polling `foreground`, and its queued `foreground` count, for any core to read with relaxed loads; every field has the one writer, a stale value places a transaction on a busier core and never on a wrong one, and at one core nothing is written (`rules.md` §3). The scheduler takes no lock. **The reactor is not lock-free, and the exception is named rather than general** (AR0-2): a task appending to the WAL takes the log's latch (`wal.md` §3), a task syncing takes the log device's segment-table lock under it, and a peer's wait on the writer takes the writer's mutex with the latch released. Those three were the whole list until six joined them, and two more at AT-S5d. **AO-S8 counted the list rather than appending to it**, and found it three short of the tree — the enumeration is the invariant, so a lock missing from it is the defect this clause names, not a documentation debt. Each carries its order in `rules.md` §3's table and in its own header:
+2. All scheduler state is core-local but the sleep flag and `Waker` of §7 and, since BL-S1, the core's **load slot** (`sched/core_load.hpp`): above one core the reactor publishes, at its iteration end, the fraction of the last 50 ms window it was busy and spent polling `foreground`, and its queued `foreground` count, for any core to read with relaxed loads; every field has the one writer, a stale value places a transaction on a busier core and never on a wrong one, and at one core nothing is written (`rules.md` §3). `SHOW META` prints each core's slot as `load_c<k>_*`, none at one core, with that core's contention slot beside it as `load_c<k>_waited_<latch>_us` and, since BQ-S1, `load_c<k>_wal_drain_latch_wait_us`, `load_c<k>_wal_roll_blocked_waits` and `load_c<k>_wal_roll_blocked_wait_us`, each absent when 0; slot 0 also carries the threads that declared no core. The scheduler takes no lock. **The reactor is not lock-free, and the exception is named rather than general** (AR0-2): a task appending to the WAL takes the log's latch (`wal.md` §3), a task syncing takes the log device's segment-table lock under it, and a peer's wait on the writer takes the writer's mutex with the latch released. Those three were the whole list until six joined them, and two more at AT-S5d. **AO-S8 counted the list rather than appending to it**, and found it three short of the tree — the enumeration is the invariant, so a lock missing from it is the defect this clause names, not a documentation debt. Each carries its order in `rules.md` §3's table and in its own header:
 
     - the **visibility window latch** (`txn/instance_visibility.hpp`, AN-S1), a leaf;
     - the **page frame's latch word** (`device_page_store.hpp`, `page.md` §6, AM-S1), outer to the WAL stream latch;
@@ -275,7 +252,7 @@ clock, so a held kick ends a real idle block only when the cell says so.
 4a. A queue is not a claim of work: a task parked on a condition is not runnable, and the reactor may sleep while holding one (§7). A task type that cannot tell a park from a yield inherits `advanced_in_last_poll() == true` and keeps the reactor awake — the safe answer, never the accurate-looking one.
 5. Every task carries a scheduling-group membership; group pick is share-proportional.
 6. Background work is throttled only via group shares, never via ad-hoc sleeps.
-7. Cross-core interaction is write-then-kick and nothing else since AT-S10d (§5: the lock table's slot flip, D19's connection handoff and a stop): shared state written under its own latch, then the destination kicked. A kick never blocks and cannot fail. **A kick that finds the destination asleep ends its block** (§7); one that races the destination into its block is skipped, and the work it announced waits at most one idle block (7a) - the ring's stronger guarantee, that no reactor waits out a block on work already queued, retired with its queue.
+7. Cross-core interaction is write-then-kick and nothing else (§5: the lock table's slot flip, D19's connection handoff and a stop): shared state written under its own latch, then the destination kicked. A kick never blocks and cannot fail. **A kick that finds the destination asleep ends its block** (§7); one that races the destination into its block is skipped, and the work it announced waits at most one idle block (7a).
 7a. A reactor's idle block is always bounded — `PollReady` is never given a negative timeout — so a missed wake costs latency and never liveness.
 8. Engine logic never reads real time, real randomness, or performs direct syscalls; only injected interfaces.
 

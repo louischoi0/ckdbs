@@ -258,6 +258,17 @@ unshared stream is one implementation of it and the shared one another;
 the operator may still choose D3(a) or D3(c) for the flush side without
 touching an emitter.
 
+*Note, 2026-10-12 (BQ-S5; the ruling above stands as written).* "The
+device **sync** is outside the latch" no longer holds of a roll: since
+`a1679272` a roll syncs the segment it leaves through
+`WalStream::SyncDevice` under the latch, waiting out any sync in flight,
+before the next segment exists. BQ priced that hold and kept it
+(`instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7): at `relaxed`
+under a bulk writer it is p50 ~330 ms, p99 ~790 ms, 95 % of it the wait
+for the writer's sync. The current contract is `docs/spec/wal.md` §6 steps
+1 and 5; releasing the latch for the roll's I/O crosses this ruling and
+needs the operator's own word (BQ-Q5 (b)).
+
 **AL-R2 — The LSN is the instance's byte offset; the record *header* and
 the segment format do not change; the one stream is stream 0.** The
 record header carries no core id (`record.hpp:256-276`) and gains none.

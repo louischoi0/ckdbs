@@ -31,8 +31,8 @@ qualifier and is wrong without it:
 > A citation to one of those paths resolves against `1769487` **unless the
 > path exists in the working tree.**
 
-The qualifier is load-bearing rather than pedantic. `src/server/core_runtime.cpp`
-ships a runtime error message citing
+The qualifier is load-bearing rather than pedantic. `src/server/command_dispatcher.cpp`
+carries a comment citing
 `docs/inflight/in-progress/workplan-peer-writer.md` — and `in-progress/` is
 *not* a reopened bucket, so the qualified rule resolves it correctly at
 `1769487` while the unqualified one is right only by accident.

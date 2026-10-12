@@ -1,0 +1,127 @@
+# BQ-S2 H2 (segment size), relaxed. Latencies in ms (from schedule); <1 = below the 1 ms kept floor
+
+## Isolated baselines (S2, base, one run each): p99 / p99.9 ms, rolls, moves, loadavg before
+  c1-segregated-no0  0.853 / 3.043  rolls=0 moves=0 load=2.25 8.79 7.80 1/344 721748
+                     S1 iso p99=[279.2, 215.8, 561.2] p99.9=[2472.6, 803.2, 2532.7] us
+  c1-batch0          0.602 / 2.438  rolls=0 moves=0 load=1.47 7.77 7.50 1/348 721884
+                     S1 iso p99=[379.3, 206.2, 353.6] p99.9=[2270.2, 1007.8, 1554.5] us
+  c1-spread          0.747 / 3.408  rolls=0 moves=0 load=0.89 6.82 7.19 1/351 721959
+                     S1 iso p99=[226.5, 216.2, 444.4] p99.9=[1142.0, 976.3, 2151.0] us
+  c2                 140.778 / 467.360  rolls=0 moves=12 load=0.55 6.08 6.93 1/346 722063
+                     S1 iso p99=[487.1, 213.1, 471.4] p99.9=[2920.4, 1843.2, 3092.1] us
+
+## Bar terms (i) p99 <= 2x iso, (ii) p99.9 <= 5x iso; agg = every client of the role, nb = clients whose connect core is not a roll core, nbS = connect and end both not
+
+### c1-segregated-no0: S2 iso p99=0.853 ms (2x=1.706), p99.9=3.043 ms (5x=15.216); S1 iso max p99=0.561 p99.9=2.533
+  s16   agg p99=['319.8', '159.6', '107.0'] x[375.0, 187.2, 125.5] (i) MISSED [no run within 2x] | p99.9=['599.6', '416.5', '398.5'] x[197.0, 136.9, 130.9] (ii) MISSED | max=['635.7', '563.5', '545.2']
+        nb p99=['319.8', '159.6', '118.2'] nb p99.9=['599.6', '416.5', '456.3'] nbS p99=['319.8', '159.6', '118.2'] bulk cores=[[3], [3], [1]] rolls in window=[125, 142, 142] moves=[22, 25, 30] err=[0, 0, 0] load=['2.38', '2.04', '2.06']
+  base  agg p99=['451.4', '380.7', '311.9'] x[529.3, 446.5, 365.7] (i) MISSED [no run within 2x] | p99.9=['659.2', '568.4', '669.2'] x[216.6, 186.8, 219.9] (ii) MISSED | max=['757.5', '617.6', '758.3']
+        nb p99=['522.6', '410.5', '446.2'] nb p99.9=['698.1', '555.2', '713.8'] nbS p99=['522.6', '410.5', '446.2'] bulk cores=[[1], [1], [1]] rolls in window=[35, 36, 36] moves=[18, 6, 8] err=[0, 0, 0] load=['2.32', '2.12', '2.24']
+  opt3  agg p99=['640.5', '17.4', '42.0'] x[751.0, 20.3, 49.3] (i) MISSED [no run within 2x] | p99.9=['906.1', '87.5', '193.8'] x[297.8, 28.8, 63.7] (ii) MISSED | max=['995.2', '191.7', '783.3']
+        nb p99=['532.1', '18.2', '39.3'] nb p99.9=['903.7', '127.0', '164.3'] nbS p99=['532.1', '18.2', '39.3'] bulk cores=[[1], [0, 2], [1]] rolls in window=[25, 50, 53] moves=[35, 40, 33] err=[0, 0, 0] load=['2.43', '2.10', '1.88']
+  s256  agg p99=['4906.5', '1034.4', '951.0'] x[5753.4, 1212.9, 1115.2] (i) MISSED [no run within 2x] | p99.9=['5706.7', '1346.9', '1174.5'] x[1875.2, 442.6, 386.0] (ii) MISSED | max=['5783.4', '1510.8', '1259.0']
+        nb p99=['4906.5', '1034.4', '965.9'] nb p99.9=['5706.7', '1346.9', '1199.6'] nbS p99=['4906.5', '1034.4', '965.9'] bulk cores=[[3], [3], [1]] rolls in window=[5, 8, 8] moves=[16, 12, 29] err=[0, 0, 0] load=['2.36', '2.32', '2.35']
+  s1024 agg p99=['2.5', '4178.4', '3632.8'] x[2.9, 4899.6, 4259.9] (i) MISSED [no run within 2x] | p99.9=['159.6', '4522.3', '4719.2'] x[52.4, 1486.0, 1550.8] (ii) MISSED | max=['11550.5', '4695.3', '4897.5']
+        nb p99=['2.0', '3583.9', '4005.0'] nb p99.9=['162.0', '4386.8', '4808.5'] nbS p99=['2.0', '3583.9', '4005.0'] bulk cores=[[2], [2], [2]] rolls in window=[2, 2, 2] moves=[4, 22, 17] err=[0, 0, 0] load=['2.30', '2.33', '2.25']
+
+### c1-batch0: S2 iso p99=0.602 ms (2x=1.203), p99.9=2.438 ms (5x=12.191); S1 iso max p99=0.379 p99.9=2.270
+  s16   agg p99=['244.5', '303.4', '167.3'] x[406.5, 504.4, 278.1] (i) MISSED [no run within 2x] | p99.9=['703.0', '555.3', '442.1'] x[288.4, 227.8, 181.3] (ii) MISSED | max=['810.6', '596.8', '486.4']
+        nb p99=['358.9', '291.2', '240.1'] nb p99.9=['732.9', '555.3', '456.9'] nbS p99=['358.9', '291.2', '240.1'] bulk cores=[[1], [3], [2]] rolls in window=[129, 142, 143] moves=[23, 24, 17] err=[0, 0, 0] load=['2.15', '2.49', '2.21']
+  base  agg p99=['223.8', '459.5', '241.3'] x[372.0, 764.0, 401.2] (i) MISSED [no run within 2x] | p99.9=['372.6', '691.2', '473.9'] x[152.8, 283.5, 194.4] (ii) MISSED | max=['550.8', '786.7', '633.6']
+        nb p99=['234.5', '519.0', '256.3'] nb p99.9=['432.2', '697.7', '514.6'] nbS p99=['234.5', '519.0', '256.3'] bulk cores=[[0, 1], [3], [3]] rolls in window=[35, 35, 34] moves=[20, 14, 8] err=[0, 0, 0] load=['2.47', '2.39', '2.48']
+  opt3  agg p99=['231.1', '42.6', '71.2'] x[384.3, 70.7, 118.4] (i) MISSED [no run within 2x] | p99.9=['1192.9', '202.6', '490.3'] x[489.3, 83.1, 201.1] (ii) MISSED | max=['1371.4', '280.4', '549.8']
+        nb p99=['476.6', '36.4', '15.0'] nb p99.9=['1252.5', '187.3', '86.1'] nbS p99=['476.6', '36.4', '15.0'] bulk cores=[[3], [1], [1]] rolls in window=[49, 53, 52] moves=[6, 42, 28] err=[0, 0, 0] load=['2.43', '2.35', '2.41']
+  s256  agg p99=['2280.9', '960.0', '981.6'] x[3792.1, 1596.1, 1632.0] (i) MISSED [no run within 2x] | p99.9=['2881.8', '1224.3', '1270.9'] x[1182.0, 502.1, 521.2] (ii) MISSED | max=['3056.6', '1372.3', '1419.7']
+        nb p99=['62.4', '1044.9', '931.6'] nb p99.9=['173.2', '1253.9', '1300.6'] nbS p99=['62.4', '1044.9', '931.6'] bulk cores=[[1], [2], [1]] rolls in window=[5, 9, 8] moves=[2, 14, 10] err=[0, 0, 0] load=['2.47', '2.41', '2.29']
+  s1024 agg p99=['4369.9', '3939.3', '4415.5'] x[7265.1, 6549.1, 7340.8] (i) MISSED [no run within 2x] | p99.9=['4991.8', '4890.9', '5219.2'] x[2047.4, 2006.0, 2140.7] (ii) MISSED | max=['5169.2', '5069.2', '5308.1']
+        nb p99=['4269.7', '4008.9', '4713.2'] nb p99.9=['4534.4', '4950.5', '5248.9'] nbS p99=['4269.7', '4008.9', '4713.2'] bulk cores=[[3], [2], [1]] rolls in window=[2, 2, 2] moves=[19, 24, 19] err=[0, 0, 0] load=['2.42', '2.37', '2.43']
+
+### c1-spread: S2 iso p99=0.747 ms (2x=1.494), p99.9=3.408 ms (5x=17.040); S1 iso max p99=0.444 p99.9=2.151
+  s16   agg p99=['351.9', '159.9', '201.5'] x[471.0, 213.9, 269.6] (i) MISSED [no run within 2x] | p99.9=['496.1', '502.3', '493.9'] x[145.6, 147.4, 144.9] (ii) MISSED | max=['531.1', '549.2', '587.4']
+        nb p99=['354.3', '141.3', '200.4'] nb p99.9=['482.2', '493.5', '498.3'] nbS p99=['354.3', '141.3', '200.4'] bulk cores=[[0, 3], [3], [2]] rolls in window=[125, 142, 143] moves=[34, 58, 18] err=[0, 0, 0] load=['2.07', '2.47', '2.30']
+  base  agg p99=['312.4', '247.5', '325.1'] x[418.1, 331.2, 435.1] (i) MISSED [no run within 2x] | p99.9=['619.3', '376.2', '706.6'] x[181.7, 110.4, 207.3] (ii) MISSED | max=['753.4', '398.8', '770.8']
+        nb p99=['342.1', '144.8', '306.6'] nb p99.9=['649.1', '349.0', '680.8'] nbS p99=['342.1', 'NA', '306.6'] bulk cores=[[1], [0, 1, 2], [2]] rolls in window=[35, 35, 36] moves=[11, 36, 7] err=[0, 0, 0] load=['2.47', '2.15', '2.29']
+  opt3  agg p99=['615.7', '22.4', '113.0'] x[824.1, 30.0, 151.2] (i) MISSED [no run within 2x] | p99.9=['845.5', '67.2', '843.3'] x[248.1, 19.7, 247.5] (ii) MISSED | max=['892.5', '101.5', '995.6']
+        nb p99=['534.1', '23.9', '212.5'] nb p99.9=['823.4', '69.7', '858.2'] nbS p99=['291.0', '23.9', '212.5'] bulk cores=[[2, 3], [3], [3]] rolls in window=[52, 59, 53] moves=[62, 44, 32] err=[0, 0, 0] load=['2.27', '2.45', '2.16']
+  s256  agg p99=['1376.5', '607.5', '1056.2'] x[1842.2, 813.0, 1413.5] (i) MISSED [no run within 2x] | p99.9=['2138.2', '1203.9', '1277.4'] x[627.4, 353.3, 374.8] (ii) MISSED | max=['2316.9', '1353.0', '1311.9']
+        nb p99=['1720.6', '706.6', '1066.5'] nb p99.9=['2227.8', '1233.8', '1276.9'] nbS p99=['458.7', '706.6', '1066.5'] bulk cores=[[0, 2], [2], [2]] rolls in window=[6, 8, 8] moves=[6, 10, 14] err=[0, 0, 0] load=['2.30', '1.73', '2.27']
+  s1024 agg p99=['3717.5', '2615.1', '4074.0'] x[4975.2, 3499.8, 5452.4] (i) MISSED [no run within 2x] | p99.9=['4968.6', '3638.4', '4878.9'] x[1457.9, 1067.6, 1431.6] (ii) MISSED | max=['5147.1', '3815.3', '5019.5']
+        nb p99=['3866.6', '2647.8', '104.9'] nb p99.9=['4998.4', '3668.2', '223.5'] nbS p99=['3866.6', '2647.8', '104.9'] bulk cores=[[3], [2], [1]] rolls in window=[2, 2, 2] moves=[5, 8, 6] err=[0, 0, 0] load=['2.37', '2.47', '2.45']
+
+### c2: S2 iso p99=140.778 ms (2x=281.555), p99.9=467.360 ms (5x=2336.800); S1 iso max p99=0.487 p99.9=3.092
+  s16   agg p99=['1033.6', '951.8', '646.2'] x[7.3, 6.8, 4.6] (i) MISSED [no run within 2x] | p99.9=['1277.6', '1218.6', '888.1'] x[2.7, 2.6, 1.9] (ii) MET | max=['1306.8', '1247.3', '917.5']
+        nb p99=['1033.6', '951.8', '646.2'] nb p99.9=['1277.6', '1218.6', '888.1'] nbS p99=['1033.6', '951.8', '646.2'] bulk cores=[[3], [3], [3]] rolls in window=[131, 137, 137] moves=[122, 132, 118] err=[0, 0, 0] load=['2.42', '2.16', '2.15']
+  base  agg p99=['4026.4', '773.5', '751.8'] x[28.6, 5.5, 5.3] (i) MISSED [no run within 2x] | p99.9=['4289.8', '1002.1', '972.5'] x[9.2, 2.1, 2.1] (ii) MET | max=['4317.5', '1028.8', '1000.5']
+        nb p99=['4026.4', '773.5', '751.8'] nb p99.9=['4289.8', '1002.1', '972.5'] nbS p99=['4026.4', '773.5', '751.8'] bulk cores=[[3], [3], [3]] rolls in window=[30, 34, 35] moves=[20, 17, 22] err=[0, 0, 0] load=['2.48', '2.44', '2.23']
+  opt3  agg p99=['2534.7', '2232.1', '975.2'] x[18.0, 15.9, 6.9] (i) MISSED [no run within 2x] | p99.9=['3245.3', '2658.8', '1179.8'] x[6.9, 5.7, 2.5] (ii) MISSED | max=['3338.1', '2714.6', '1239.1']
+        nb p99=['2534.7', '2232.1', '975.2'] nb p99.9=['3245.3', '2658.8', '1179.8'] nbS p99=['2534.7', '2232.1', '975.2'] bulk cores=[[3], [3], [3]] rolls in window=[17, 58, 57] moves=[47, 96, 109] err=[0, 0, 0] load=['2.42', '2.39', '1.94']
+  s256  agg p99=['4260.3', '2021.2', '1879.8'] x[30.3, 14.4, 13.4] (i) MISSED [no run within 2x] | p99.9=['4527.4', '2257.1', '2819.9'] x[9.7, 4.8, 6.0] (ii) MISSED | max=['4556.9', '2382.3', '2938.5']
+        nb p99=['4260.3', '2021.2', '1879.8'] nb p99.9=['4527.4', '2257.1', '2819.9'] nbS p99=['4260.3', '2021.2', '1879.8'] bulk cores=[[3], [3], [3]] rolls in window=[5, 9, 8] moves=[28, 18, 33] err=[0, 0, 0] load=['2.31', '2.22', '2.18']
+  s1024 agg p99=['434.9', '5437.1', '5522.6'] x[3.1, 38.6, 39.2] (i) MISSED [no run within 2x] | p99.9=['1138.8', '5701.0', '5697.5'] x[2.4, 12.2, 12.2] (ii) MISSED | max=['1337.1', '5728.6', '5738.0']
+        nb p99=['434.9', '5437.1', '5522.6'] nb p99.9=['1138.8', '5701.0', '5697.5'] nbS p99=['434.9', '5437.1', '5522.6'] bulk cores=[[3], [3], [3]] rolls in window=[2, 2, 2] moves=[30, 19, 24] err=[0, 0, 0] load=['2.11', '2.30', '2.41']
+
+## Prediction: roll rate, per-roll hold, total stall (in-window rolls; every cell C1+C2+C3 pooled)
+  s16   seg=   16 MiB runs=15 rolls/s=4.587 (log 73.4 MiB/s -> expect 4.587) n_holds=2064 hold p50=78 p90=109 max=1307 ms mean=89 | roll-held s per 30 s: median=13.10 range=[9.84,14.68] | non-bulk cores stream-latch wait s median=11.71 range=[1.60,40.90]
+  base  seg=   64 MiB runs=15 rolls/s=1.158 (log 74.3 MiB/s -> expect 1.161) n_holds=521 hold p50=325 p90=505 max=4318 ms mean=358 | roll-held s per 30 s: median=12.43 range=[10.51,16.21] | non-bulk cores stream-latch wait s median=12.66 range=[0.07,48.55]
+  opt3  seg=   64 MiB runs=15 rolls/s=1.618 (log 103.2 MiB/s -> expect 1.612) n_holds=728 hold p50=16 p90=260 max=1500 ms mean=96 | roll-held s per 30 s: median=3.26 range=[0.97,13.01] | non-bulk cores stream-latch wait s median=3.96 range=[0.13,36.16]
+  s256  seg=  256 MiB runs=15 rolls/s=0.249 (log 66.9 MiB/s -> expect 0.261) n_holds=112 hold p50=1406 p90=2550 max=4558 ms mean=1623 | roll-held s per 30 s: median=13.34 range=[10.15,18.03] | non-bulk cores stream-latch wait s median=14.58 range=[2.73,48.28]
+  s1024 seg= 1024 MiB runs=15 rolls/s=0.067 (log 74.9 MiB/s -> expect 0.073) n_holds=30 hold p50=5029 p90=6039 max=11561 ms mean=5153 | roll-held s per 30 s: median=9.39 range=[0.80,15.69] | non-bulk cores stream-latch wait s median=13.20 range=[2.38,33.23]
+
+## C3 (term iii): rows/s, log MiB/s against base
+  base rows/s=[169212, 164384, 169894] mean=167830 spread=5509
+  s16   rows/s=[170262, 170277, 169949] mean=170162 (+1.4%) median=170262 (+0.6%) MiB/s=[75.8, 76.1, 75.9] inserter p99.9=['201.3', '201.8', '212.4'] max=['615.8', '613.6', '575.8'] load=['2.49', '2.21', '2.29']
+  base  rows/s=[169212, 164384, 169894] mean=167830 (+0.0%) median=169212 (+0.0%) MiB/s=[75.6, 73.4, 75.9] inserter p99.9=['445.3', '532.5', '500.4'] max=['851.9', '812.6', '756.8'] load=['2.41', '2.28', '2.15']
+  opt3  rows/s=[141243, 304305, 273802] mean=239784 (+42.9%) median=273802 (+61.8%) MiB/s=[60.0, 135.9, 122.3] inserter p99.9=['872.4', '69.9', '155.4'] max=['1292.9', '313.4', '842.2'] load=['2.29', '2.30', '2.15']
+  s256  rows/s=[119302, 179334, 178928] mean=159188 (-5.1%) median=178928 (+5.7%) MiB/s=[49.3, 75.9, 75.9] inserter p99.9=['2487.2', '1475.1', '1404.6'] max=['2795.4', '1831.6', '2228.5'] load=['2.35', '2.24', '2.15']
+  s1024 rows/s=[156197, 180917, 188004] mean=175040 (+4.3%) median=180917 (+6.9%) MiB/s=[52.7, 80.8, 84.0] inserter p99.9=['267.2', '292.0', '216.4'] max=['10529.4', '5643.2', '6042.7'] load=['2.46', '2.44', '2.29']
+
+## The hold by step, per size (every roll in every relaxed non-iso log, whole log)
+
+  s16 (16 MiB) rolls=2220 hold p50=78 p90=110 max=1307 ms bodies={'hit': 2196, 'waited': 24} missed-roll hold share=3.1%
+    median ms : seal=0.0 flush=0.0 sync_gate=68.7 sync=3.8 body_wait=0.0 body=0.0 header=1.1 rename=0.0 dirsync=2.2
+    p90 ms    : seal=0.1 flush=0.0 sync_gate=99.2 sync=7.3 body_wait=0.0 body=0.0 header=3.7 rename=0.0 dirsync=4.7
+    share %   : seal=0.9 flush=0.0 sync_gate=82.4 sync=7.4 body_wait=0.3 body=0.0 header=5.0 rename=0.0 dirsync=4.0 create_other=0.0
+    gate: waited_syncs median=2.0 waited tail fdatasync median=115 ms p90=141 ms; rest median=6 ms; own tail fdatasync median=0.1 ms p90=0.1; sync_segs median=65.0 max=153
+    body=hit     n=2196 hold median=78 ms gate median=68 body_wait median=0 body_inline median=0
+    body=waited  n=24 hold median=154 ms gate median=119 body_wait median=5 body_inline median=0
+
+  base (64 MiB) rolls=562 hold p50=326 p90=497 max=4318 ms bodies={'hit': 510, 'waited': 52} missed-roll hold share=12.9%
+    median ms : seal=0.0 flush=0.0 sync_gate=318.0 sync=1.1 body_wait=0.0 body=0.0 header=1.1 rename=0.0 dirsync=2.2
+    p90 ms    : seal=0.1 flush=0.0 sync_gate=478.1 sync=1.9 body_wait=0.0 body=0.0 header=3.3 rename=0.0 dirsync=5.3
+    share %   : seal=0.1 flush=0.0 sync_gate=95.6 sync=1.5 body_wait=0.5 body=0.0 header=1.1 rename=0.0 dirsync=1.2 create_other=0.0
+    gate: waited_syncs median=2.0 waited tail fdatasync median=301 ms p90=606 ms; rest median=159 ms; own tail fdatasync median=0.1 ms p90=0.1; sync_segs median=19.0 max=39
+    body=hit     n=510 hold median=323 ms gate median=318 body_wait median=0 body_inline median=0
+    body=waited  n=52 hold median=350 ms gate median=331 body_wait median=2 body_inline median=0
+
+  opt3 (64 MiB) rolls=780 hold p50=16 p90=231 max=1500 ms bodies={'hit': 780} missed-roll hold share=0.0%
+    median ms : seal=0.1 flush=0.0 sync_gate=5.2 sync=4.4 body_wait=0.0 body=0.0 header=2.8 rename=0.0 dirsync=2.0
+    p90 ms    : seal=0.3 flush=0.0 sync_gate=204.2 sync=9.4 body_wait=0.0 body=0.0 header=7.5 rename=0.0 dirsync=4.5
+    share %   : seal=0.5 flush=0.0 sync_gate=68.2 sync=11.4 body_wait=0.0 body=0.0 header=13.0 rename=0.1 dirsync=6.8 create_other=0.0
+    gate: waited_syncs median=1.0 waited tail fdatasync median=7 ms p90=191 ms; rest median=1 ms; own tail fdatasync median=3.6 ms p90=7.5; sync_segs median=15.0 max=51
+    body=hit     n=780 hold median=16 ms gate median=5 body_wait median=0 body_inline median=0
+
+  s256 (256 MiB) rolls=125 hold p50=1429 p90=2563 max=5992 ms bodies={'hit': 19, 'waited': 106} missed-roll hold share=87.8%
+    median ms : seal=0.0 flush=0.0 sync_gate=1235.5 sync=1.0 body_wait=190.8 body=0.0 header=1.1 rename=0.0 dirsync=2.1
+    p90 ms    : seal=0.1 flush=0.0 sync_gate=1883.2 sync=300.7 body_wait=661.5 body=0.0 header=6.3 rename=0.0 dirsync=43.9
+    share %   : seal=0.1 flush=0.0 sync_gate=78.1 sync=5.3 body_wait=14.9 body=0.0 header=0.5 rename=0.0 dirsync=1.1 create_other=0.0
+    gate: waited_syncs median=2 waited tail fdatasync median=1453 ms p90=2357 ms; rest median=1 ms; own tail fdatasync median=0.1 ms p90=2.0; sync_segs median=5 max=10
+    body=hit     n=19 hold median=1139 ms gate median=1117 body_wait median=0 body_inline median=0
+    body=waited  n=106 hold median=1480 ms gate median=1246 body_wait median=208 body_inline median=0
+
+  s1024 (1024 MiB) rolls=30 hold p50=5029 p90=6039 max=11561 ms bodies={'waited': 28, 'hit': 2} missed-roll hold share=99.5%
+    median ms : seal=0.0 flush=0.0 sync_gate=2228.9 sync=1.0 body_wait=2763.3 body=0.0 header=1.2 rename=0.0 dirsync=2.1
+    p90 ms    : seal=0.1 flush=0.0 sync_gate=3261.9 sync=141.8 body_wait=3453.3 body=0.0 header=2.8 rename=0.0 dirsync=8.4
+    share %   : seal=0.0 flush=0.0 sync_gate=46.9 sync=0.7 body_wait=52.0 body=0.0 header=0.2 rename=0.0 dirsync=0.2 create_other=0.0
+    gate: waited_syncs median=2.0 waited tail fdatasync median=2930 ms p90=5202 ms; rest median=0 ms; own tail fdatasync median=0.9 ms p90=1.7; sync_segs median=1.5 max=2
+    body=hit     n=2 hold median=398 ms gate median=387 body_wait median=0 body_inline median=0
+    body=waited  n=28 hold median=5118 ms gate median=2286 body_wait median=2787 body_inline median=0
+
+## Mount probe v2 (clean STOP; restart to first connection)
+  s16   r1 mount_s=0.174 completion-ckpt=0.154 mount minus ckpt=0.020 analysis+redo=0.001 longest INSERT=0.119 s rolls=3 log=63 MiB
+  s16   r2 mount_s=0.051 completion-ckpt=0.031 mount minus ckpt=0.020 analysis+redo=0.001 longest INSERT=0.049 s rolls=3 log=63 MiB
+  base  r1 mount_s=0.729 completion-ckpt=0.679 mount minus ckpt=0.050 analysis+redo=0.004 longest INSERT=1.665 s rolls=2 log=188 MiB
+  base  r2 mount_s=0.235 completion-ckpt=0.179 mount minus ckpt=0.056 analysis+redo=0.004 longest INSERT=0.314 s rolls=2 log=188 MiB
+  s256  r1 mount_s=1.193 completion-ckpt=0.942 mount minus ckpt=0.251 analysis+redo=0.102 longest INSERT=4.221 s rolls=2 log=658 MiB
+  s256  r2 mount_s=0.282 completion-ckpt=0.010 mount minus ckpt=0.272 analysis+redo=0.109 longest INSERT=3.357 s rolls=2 log=658 MiB
+  s1024 r1 mount_s=1.161 completion-ckpt=0.030 mount minus ckpt=1.131 analysis+redo=0.521 longest INSERT=7.946 s rolls=2 log=2570 MiB
+  s1024 r2 mount_s=2.803 completion-ckpt=1.310 mount minus ckpt=1.493 analysis+redo=0.552 longest INSERT=12.816 s rolls=2 log=2570 MiB

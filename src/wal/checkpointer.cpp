@@ -22,11 +22,7 @@ Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
         return encoded.status();
     }
 
-    // The record says whose checkpoint it is (payload.hpp). The cast is
-    // safe because `WalManager::Open`/`Attach` refuse a core id the byte
-    // could not hold, so a manager that exists has one that fits.
-    auto lsn = wal_.Append({RecordType::kCheckpointBegin, kNoTxnId, kInvalidPageId,
-                            static_cast<std::uint8_t>(wal_.core_id())},
+    auto lsn = wal_.Append({RecordType::kCheckpointBegin, kNoTxnId, kInvalidPageId},
                            std::span(payload_scratch_).first(encoded.value()));
     if (!lsn.ok()) {
         return lsn.status();
@@ -231,9 +227,11 @@ StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
         const std::uint64_t writes_before = run_report_ != nullptr ? run_report_->sum_ns[write] : 0;
         if (!write_only) {
             flushed = target_.FlushPages(pages);
+            if (flushed.ok()) Contention::Add(Tally::kCheckpointPagesWritten, pages.size());
         } else if (auto wrote = target_.WritePages(pages, defer); !wrote.ok()) {
             flushed = wrote.status();
         } else if (wrote.value() > 0) {
+            Contention::Add(Tally::kCheckpointPagesWritten, wrote.value());
             // Asked for and not waited on (BI-Q13): the data-sync thread
             // keeps the unsynced backlog near one step, so a synchronous sync
             // landing mid-run - a carve's page 0, the reclaimer's maps - does
@@ -295,8 +293,7 @@ StatusOr<Lsn> Checkpointer::AppendEnd() {
     if (!encoded.ok()) {
         return encoded.status();
     }
-    return wal_.Append({RecordType::kCheckpointEnd, kNoTxnId, kInvalidPageId,
-                        static_cast<std::uint8_t>(wal_.core_id())},
+    return wal_.Append({RecordType::kCheckpointEnd, kNoTxnId, kInvalidPageId},
                        std::span(payload_scratch_).first(encoded.value()));
 }
 
@@ -564,6 +561,7 @@ sched::Coro Checkpointer::WriteForPublish(std::span<const PageId> pages, std::ui
                                        parks < kGateParks && !pages.empty() ? &deferred : nullptr);
         }
         if (!wrote.ok()) co_return wrote.status();
+        Contention::Add(Tally::kCheckpointPagesWritten, wrote.value());
         if (deferred == kNoLsn) co_return Status::OK();
         if (deferred >= wal_.appended_lsn()) {
             parks = kGateParks - 1;  // the next attempt's inline gate refuses it

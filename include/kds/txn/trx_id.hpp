@@ -50,11 +50,9 @@
 // and the same superblock latch, and `Carve()` reads and raises the ceiling
 // inside that latch, which makes it the `fetch_add` AT-R4 names - two
 // cores carving at once get two disjoint blocks. There is no refill
-// protocol, no grant and no refusal: a spent window is another carve. Until
-// AT-S10b only core 0 carved, and a peer drew windows from blocks core 0
-// carved for it and sent over the ring (the transaction-id lease, PW1),
-// because page 0 was core 0's; every core writes it since AT-S5, under the
-// superblock latch since AT-S8.
+// protocol, no grant and no refusal: a spent window is another carve. Every
+// core writes page 0, under the superblock latch (AT-S5, AT-S8). The
+// transaction-id lease retired (AT-S10b); its history is at cf889b63.
 //
 // ---- Concurrency ----------------------------------------------------------
 //

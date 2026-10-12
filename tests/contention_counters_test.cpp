@@ -1,7 +1,7 @@
 // **BA's census instrument** (BA-S2, BA-R0,
 // `instructions/v3.0.0/workorder-ba-parallelism.md`): each counter `SHOW
 // META`'s `contention` block prints is moved by a cell that forces the wait
-// it counts, and an uncontended path moves nothing.
+// or the event it counts (BP-S1's census tallies count events, not waits).
 //
 // The instrument is process-wide (`base/contention.hpp`), so every cell
 // reads a delta across what it drives.
@@ -320,12 +320,93 @@ TEST(ContentionCountersTest, TwoCoresInsertingIntoOneRelationContendWhatAnInsert
     }
 }
 
+// BP-S1's census tallies: a schema-word move is counted under its cause,
+// and another core's memo drop at its next statement head is counted too.
+TEST(ContentionCountersTest, AWordMoveCountsUnderItsCauseAndAPeersMemoDropCounts) {
+    std::unique_ptr<TwoCoreRig> rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    auto run = [&](std::uint32_t core, const std::string& sql) {
+        const std::string reply = rig->core(core).dispatcher().Dispatch(sql).response;
+        EXPECT_FALSE(StartsWith(reply, "ERR")) << sql << ": " << reply;
+    };
+    run(1, "CREATE TABLE census (id int64, sym int64)");
+    run(1, "INSERT INTO census VALUES (1, 7)");
+
+    const std::uint64_t schema = Of(Tally::kWordMovesSchema);
+    const std::uint64_t cabin = Of(Tally::kWordMovesCabin);
+    run(0, "CREATE CABIN ON census(sym)");
+    EXPECT_EQ(Of(Tally::kWordMovesCabin) - cabin, 1u) << "a Cabin create moved the word as schema";
+    EXPECT_EQ(Of(Tally::kWordMovesSchema), schema) << "a Cabin create counted as schema";
+
+    const std::uint64_t drops = Of(Tally::kCatalogMemoDrops);
+    run(1, "SELECT * FROM census WHERE id = 1");
+    EXPECT_EQ(Of(Tally::kCatalogMemoDrops) - drops, 1u) << "core 1 kept a memo the word left";
+    // The control: the word has not moved since, so nothing drops.
+    run(1, "SELECT * FROM census WHERE id = 1");
+    EXPECT_EQ(Of(Tally::kCatalogMemoDrops) - drops, 1u) << "a memo dropped with the word still";
+
+    // A catalog-writing transaction's resolution moves it, and so does a root
+    // a level grows over: enough rows to split the first leaf.
+    const std::uint64_t resolve = Of(Tally::kWordMovesResolve);
+    run(1, "CREATE TABLE census_two (id int64, v int64)");
+    EXPECT_EQ(Of(Tally::kWordMovesResolve) - resolve, 2u)
+        << "a DDL's resolution moves the word twice: the manager's and the catalog's";
+    const std::uint64_t root = Of(Tally::kWordMovesRoot);
+    for (int batch = 0; batch < 20; ++batch) {
+        std::string sql = "INSERT INTO census_two VALUES ";
+        for (int i = 0; i < 100; ++i) {
+            const int id = batch * 100 + i + 1;
+            sql += (i == 0 ? "(" : ", (") + std::to_string(id) + ", " + std::to_string(id) + ")";
+        }
+        run(1, sql);
+    }
+    EXPECT_GE(Of(Tally::kWordMovesRoot) - root, 1u) << "a root growth went uncounted";
+
+    // A `PURGE` asks the in-flight tables whether each row's writer decided
+    // (a named key asks only once its key unit's borrow is refused, which no
+    // single session reaches). The deleter is decided, so every ask misses.
+    run(0, "INSERT INTO census_two VALUES (5000, 1)");
+    run(0, "DELETE FROM census_two WHERE id = 5000");
+    const std::uint64_t asks = Of(Tally::kInFlightAsks);
+    const std::uint64_t misses = Of(Tally::kInFlightMisses);
+    EXPECT_EQ(rig->core(0).dispatcher().Dispatch("PURGE FROM census_two WHERE id = 5000").response,
+              "PURGED 1");
+    EXPECT_GE(Of(Tally::kInFlightAsks) - asks, 1u) << "a purge's in-flight ask went uncounted";
+    EXPECT_EQ(Of(Tally::kInFlightMisses) - misses, Of(Tally::kInFlightAsks) - asks)
+        << "a decided writer's ask was not counted as a miss";
+}
+
+// BP-H9's census on the table itself: a miss counts every id it scanned, a
+// hit counts an ask and nothing more.
+TEST(ContentionCountersTest, AnInFlightMissCountsTheIdsItScanned) {
+    txn::InstanceVisibility vis;
+    vis.AttachInFlight(0);
+    vis.AttachInFlight(1);
+    vis.PublishInFlight(0, 7);
+    vis.PublishInFlight(1, 8);
+    vis.PublishInFlight(1, 9);
+
+    const std::uint64_t asks = Of(Tally::kInFlightAsks);
+    const std::uint64_t misses = Of(Tally::kInFlightMisses);
+    const std::uint64_t ids = Of(Tally::kInFlightMissIdsRead);
+    EXPECT_FALSE(vis.InFlight(42, 0));
+    EXPECT_EQ(Of(Tally::kInFlightAsks) - asks, 1u);
+    EXPECT_EQ(Of(Tally::kInFlightMisses) - misses, 1u);
+    EXPECT_EQ(Of(Tally::kInFlightMissIdsRead) - ids, 3u) << "a miss reads every id of every table";
+
+    EXPECT_TRUE(vis.InFlight(8, 0));
+    EXPECT_EQ(Of(Tally::kInFlightAsks) - asks, 2u);
+    EXPECT_EQ(Of(Tally::kInFlightMisses) - misses, 1u);
+    EXPECT_EQ(Of(Tally::kInFlightMissIdsRead) - ids, 3u) << "a hit added to the miss count";
+}
+
 TEST(ContentionCountersTest, TheWindowAndTheLockTableCountUnderTheirOwnKinds) {
     std::unique_ptr<TwoCoreRig> rig = OpenRig();
     ASSERT_NE(rig, nullptr);
 
     const std::uint64_t window = WaitsOf(LatchKind::kWindow);
-    HoldWhile(rig->visibility().WindowLatchForTest(), [&] {
+    ASSERT_NE(rig->visibility().WindowLatchForTest(), nullptr);
+    HoldWhile(*rig->visibility().WindowLatchForTest(), [&] {
         (void)rig->visibility().window_size();
     });
     EXPECT_EQ(WaitsOf(LatchKind::kWindow) - window, 1u);

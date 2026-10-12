@@ -10,10 +10,9 @@
 // The relation anchor page (PageType::kAnchor; workplan-peer-writer.md
 // §7a, PW2's decision): one fixed page per relation holding its entry
 // points, so that a root move writes a relation page and never a catalog
-// page. When PW2 decided it a catalog page was the system core's alone and a
-// relation page was owned and granted; both rules are retired (AT-S5,
-// AW-S1b), and the indirection stays because the `sys.tables` row is
-// CREATE-fixed.
+// page. The indirection stays because the `sys.tables` row is
+// CREATE-fixed; the ownership rules PW2 decided it under retired (AT-S5,
+// AW-S1b), and their history is at cf889b63.
 //
 // Layout, packed at kPageBodyOffset, every field read and written through
 // explicit offsets and memcpy (invariant 6's discipline - no overlay

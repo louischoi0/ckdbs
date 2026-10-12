@@ -39,6 +39,10 @@
 //
 // **Threading.** A slot's one writer is its core; any thread reads it. The
 // slots are the instance's, owned by `Expeditor`, sized to the core count.
+//
+// **The two fences are armed above one core only** (BP-H1; the call-site
+// census is in workorder-bp-per-core-residue.md section 7): at `cores = 1`
+// the publish and the read run on one thread, in program order.
 
 #include <algorithm>
 #include <atomic>
@@ -58,12 +62,15 @@ public:
     static constexpr std::uint64_t kEntering = 0;
 
     explicit StatementEpochs(std::uint32_t cores)
-        : cores_(cores), slots_(std::make_unique<Slot[]>(cores)) {}
+        : cores_(cores), shared_(cores > 1), slots_(std::make_unique<Slot[]>(cores)) {}
+
+    // Whether the fences are armed: above one core only (above).
+    bool shared() const noexcept { return shared_; }
 
     // The statement head's two halves, around `Catalog::Revalidate()`.
     void Enter(std::uint32_t core) noexcept {
         slots_[core].word.store(kEntering, std::memory_order_relaxed);
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (shared_) std::atomic_thread_fence(std::memory_order_seq_cst);
     }
     void Publish(std::uint32_t core, std::uint64_t word) noexcept {
         slots_[core].running = word;
@@ -99,7 +106,7 @@ public:
 
     // Whether every statement running now revalidated at or after `word`.
     bool AllAtLeast(std::uint64_t word) const noexcept {
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (shared_) std::atomic_thread_fence(std::memory_order_seq_cst);
         for (std::uint32_t core = 0; core < cores_; ++core) {
             if (slots_[core].word.load(std::memory_order_acquire) < word) return false;
         }
@@ -131,6 +138,7 @@ private:
         slots_[core].word.store(word, std::memory_order_release);
     }
     std::uint32_t cores_;
+    bool shared_;
     std::unique_ptr<Slot[]> slots_;
 };
 

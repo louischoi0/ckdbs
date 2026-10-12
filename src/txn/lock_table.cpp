@@ -1,5 +1,6 @@
 #include "kds/txn/lock_table.hpp"
 
+#include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 #include "kds/sched/waker_table.hpp"
 
@@ -56,11 +57,11 @@ const char* LockModeName(LockMode mode) noexcept {
 }
 
 LockTable::LockTable(std::uint32_t core_count, std::size_t max_locks_per_txn)
-    : partitions_(kLockPartitionsPerCore * core_count),
+    : partitions_(kLockPartitions),
       max_locks_per_txn_(max_locks_per_txn),
       // Sized in the member-init list: a `vector<atomic<T>>` cannot be
       // assigned into place, and its elements value-initialize to zero.
-      fence_counters_(kLockPartitionsPerCore * core_count) {
+      fence_counters_(kLockPartitions) {
     // **At one core no latch is constructed at all** (AO-R9): the table
     // exists, the conflicts are still answered, and the synchronization is
     // what compiles out. `LatchGuard(nullptr)` is then two predictable
@@ -79,8 +80,8 @@ StatusOr<std::unique_ptr<LockTable>> LockTable::Create(std::uint32_t core_count,
                                                        std::size_t max_locks_per_txn) {
     if (core_count == 0) {
         return Status::InvalidArgument(
-            "a lock table needs at least one core: zero would size the partition array to nothing "
-            "and every key would hash out of range");
+            "a lock table needs at least one core: it serves the instance's cores and arms its "
+            "latches by their count");
     }
     if (max_locks_per_txn == 0) {
         return Status::InvalidArgument(
@@ -281,9 +282,7 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
                     queued->slot->ready.store(false, std::memory_order_release);
                     queued->mode = mode;
                     // And the core, so a re-ask parks where it will be
-                    // polled rather than where it first asked. (The
-                    // cross-owner transaction that would have re-asked from
-                    // another reactor went at AT-S6.)
+                    // polled rather than where it first asked.
                     queued->core = CurrentCore();
                     result.wake = LockWake{key, queued->slot};
                     // **A wake is not a queue position** (AO-S6e-b). Only a
@@ -376,7 +375,8 @@ bool LockTable::NoteWaitFor(std::uint64_t waiter, std::uint64_t holder) {
     // Walk from the holder along the edges already recorded. If the walk
     // reaches the waiter, the edge about to be added closes a cycle and the
     // waiter is the victim (AO-R7). The walk is bounded by the edge count,
-    // which is bounded by the live transactions on this core, and it cannot
+    // which is bounded by the instance's live transactions (the wait-for
+    // graph is the instance's), and it cannot
     // loop forever: an existing cycle would have been refused at the
     // registration that closed it, so the graph is acyclic on entry.
     std::uint64_t at = holder;
@@ -411,12 +411,9 @@ void LockTable::ClearWaitFor(std::uint64_t waiter) {
     // so an ungated clear would put one instance-wide lock on the commit
     // path of every reactor for a graph that is empty whenever nothing
     // waits. Sound without the latch because every edge is its waiter's
-    // own since AT-S6: a transaction is one core's, so its registrations
-    // and its decide run in order on one reactor, and a zero read here
-    // cannot miss an edge its own statements added. (From AO-S4b until
-    // AT-S6 an owner registered a coordinator's edge from its own thread,
-    // and the argument was that the owner's `Finish` cleared it; the
-    // spurious refusal that window allowed went with the ship.)
+    // own: a transaction is one core's, so its registrations and its decide
+    // run in order on one reactor, and a zero read here cannot miss an edge
+    // its own statements added.
     if (wait_edge_count_.load(std::memory_order_acquire) == 0) return;
     LatchGuard guard(wait_latch_.get());
     auto gone = std::remove_if(wait_edges_.begin(), wait_edges_.end(),
@@ -610,6 +607,7 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t
     // relation's fence counter is nonzero (AO-R3), which is why a scan is
     // the right shape and an interval index is not: the common case does
     // not run this at all.
+    Contention::Add(Tally::kFenceWalks);
     for (Partition& part : partitions_) {
         LatchGuard guard(part.latch);
         for (Entry& e : part.entries) {

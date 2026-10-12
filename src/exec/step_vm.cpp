@@ -811,11 +811,9 @@ private:
 
     sched::Coro RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
-        // **No span rule since AT-S10** (`cabin.md` §4b): every walk here
-        // covers the whole relation, so a set is neither banked from nor
-        // served to a walk narrower than the relation. The one narrower
-        // walk was a remote stage's assigned slice, and nothing opens a
-        // stage.
+        // **No span rule** (`cabin.md` §4b): every walk here covers the
+        // whole relation, so a set is neither banked from nor served to a
+        // walk narrower than the relation.
 
         // Nothing configured, or a value that must never be observed (NULL,
         // an unbound `$param`). Both take the walk, which is what the step
@@ -2052,8 +2050,7 @@ private:
         // coroutine steps it page by page. Each *OnePage call holds its
         // page's pin only for the call, so the bottom of this loop - no
         // pin, no span - is the executor's one legal suspension point.
-        // AT-S10 retired the remote producer that parked there for credit;
-        // since BA-S15 the statement's own outermost walk yields there every
+        // Since BA-S15 the statement's own outermost walk yields there every
         // `SlicePolicy::pages_per_slice` pages, which is the slice boundary
         // below. A walk with no policy - every sync `Execute` - never does.
         //
