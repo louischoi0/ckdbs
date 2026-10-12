@@ -77,6 +77,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
             "join_build_max_rows",   "lock_wait_fault_net_ms",
             "max_locks_per_txn",     "tcp_keepalive_s",
+            "txn_lifetime_ceiling_ms",
             "decay_half_life",       "physical_optimizer",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
@@ -422,6 +423,24 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // value someone sweeping this knob is entitled to. The semantics
         // have one home, at `kLockWaitFaultNetNs` (txn/lock_table.hpp).
         lock_wait_fault_net_ns = v.value() * 1'000'000ULL;
+    }
+    if (file.Has("txn_lifetime_ceiling_ms")) {
+        auto v = file.GetUint("txn_lifetime_ceiling_ms");
+        if (!v.ok()) return v.status();
+        // Refused, not read as "off" (docs/spec/txn.md §1).
+        if (v.value() == 0) {
+            return Status::InvalidArgument(
+                "txn_lifetime_ceiling_ms = 0 would end every explicit transaction at once; the "
+                "ceiling has no off-switch (docs/spec/txn.md §1)");
+        }
+        // A value whose nanoseconds wrap would enforce a different, possibly
+        // sub-millisecond, ceiling than the one written.
+        if (v.value() > std::numeric_limits<std::uint64_t>::max() / 1'000'000ULL) {
+            return Status::InvalidArgument("txn_lifetime_ceiling_ms = " +
+                                           std::to_string(v.value()) +
+                                           " overflows the nanosecond clock");
+        }
+        txn_lifetime_ceiling_ns = v.value() * 1'000'000ULL;
     }
     if (file.Has("tcp_keepalive_s")) {
         auto v = file.GetUint("tcp_keepalive_s");
@@ -1631,6 +1650,7 @@ Status Expeditor::Start() {
     client_setup.protocol = Protocol::kKwp;
     client_setup.durability = config_.durability;
     client_setup.keepalive_s = config_.tcp_keepalive_s;
+    client_setup.txn_lifetime_ceiling_ns = config_.txn_lifetime_ceiling_ns;
 #if KDS_WITH_TLS
     if (tls_context.has_value()) {
         client_setup.channel = [ctx = &*tls_context] { return ctx->NewChannel(); };
@@ -1671,6 +1691,7 @@ Status Expeditor::Start() {
         TcpServer::ClientSetup text_setup;
         text_setup.protocol = Protocol::kText;
         text_setup.keepalive_s = config_.tcp_keepalive_s;
+        text_setup.txn_lifetime_ceiling_ns = config_.txn_lifetime_ceiling_ns;
         text.value().Configure(text_setup);
         text_listener.emplace(std::move(text.value()));
 #if KDS_WITH_TLS

@@ -46,7 +46,7 @@ the option the operator chose where CLA asked with options.
 | | |
 |---|---|
 | **Word** | *"So the session has to be split along two axes, priority and affinity. Priority is how many resources are allocated, and how quickly, within one core; the affinity setting is how much the session moves between cores."* |
-| **Mark** | BL-R2 (priority: a share of a contended core) and BL-R3 (affinity: the cost the balancer charges a move) |
+| **Mark** | BL-R2 (priority: a share of a contended core) and BL-R3 (affinity: the cost the balancer charges a move). **The affinity half was struck on 2026-10-12** (`raft-marks-2026-10-12.md` §4): BL-R3 is struck and priority is BL's one session axis. **Priority's values were set the same day** (`raft-marks-2026-10-12.md` §5): BL-R2 is four context levels; BL-Q4 and BL-Q8 adopted, BL-Q5, BL-Q6 and BL-Q9 struck |
 | **Does not settle** | BL-Q4..Q9: priority's components, affinity's form, whether the axes interact, whether the settings are user-visible, and the name, since `affinity` already names a namespace's quantity |
 | **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` §0.1, §2 |
 

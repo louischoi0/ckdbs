@@ -82,11 +82,15 @@ TEST(KwpErrorRegistryTest, TheDetailNumberingIsFrozenToo) {
     // Appended by AO-S1 (`txn/lock_table.hpp`): a transaction that reached
     // `max_locks_per_txn`. The one refusal the borrow model adds.
     EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kLockCap), 4);
+    // Appended for AN-R14's instance-wide half: an explicit transaction the
+    // server rolled back at `txn_lifetime_ceiling_ms` (`docs/spec/txn.md` §1).
+    EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kTxnLifetimeCeiling), 5);
 
     // `kNoDetail` is not a detail and must never collide with one, or a
     // category carrying no detail would read as carrying the first.
     EXPECT_NE(kNoDetail, 1);
     EXPECT_NE(kNoDetail, 4);
+    EXPECT_NE(kNoDetail, 5);
 }
 
 TEST(KwpErrorRegistryTest, EveryStatusCodeMapsToACategory) {

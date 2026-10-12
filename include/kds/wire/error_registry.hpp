@@ -141,6 +141,12 @@ enum class ResourceDetail : std::uint16_t {
     // `ResourceExhausted`: not a smaller statement or a slower client, but
     // a shorter transaction.
     kLockCap = 4,
+    // An explicit transaction outlived `txn_lifetime_ceiling_ms` (AN-R14,
+    // `docs/spec/txn.md` §1) and the server rolled it back. Every statement
+    // until the client's `ROLLBACK` is refused with it. Its own detail for
+    // `kLockCap`'s reason: the fix is a shorter transaction, and the
+    // client has to learn that its writes are already gone.
+    kTxnLifetimeCeiling = 5,
 };
 
 // ---- The mapping ---------------------------------------------------------
