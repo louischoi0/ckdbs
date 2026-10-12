@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { parseWorkOrder, report, toMarkdown } from './parse'
+import { closedMark, parseWorkOrder, report, toMarkdown } from './parse'
 
 const doc = [
   '# Work order ZZ — a fixture order',
@@ -48,4 +48,36 @@ test('draws the summary as markdown', () => {
   expect(md).toContain('- **ZZ-S0** `landed` — The order\n  *written 2026-10-12*')
   expect(md).toContain('- **ZZ-R2** `struck` — ~~Struck (W4): gone~~')
   expect(md).toContain('- **ZZ-Q2** `unmarked` `quiet-wrong` — The memo')
+})
+
+test('reads the status forms the older orders use', () => {
+  const md = [
+    '| ZZ-S3 | **Measured 2026-09-03** at `f6ed10c` | a status row ahead of the title |',
+    '# Work order ZZ — an older order',
+    '| ZZ-S1 | The seam | x |',
+    '| ZZ-S1a | The sub-stage | x |',
+    '| ZZ-S2 | The cutover | x |',
+    '| ZZ-S4 | The cell | x |',
+    '| ZZ-S5 | The close | x |',
+    '| ZZ-S6 | The number | x |',
+    '| ZZ-S1 | **Built 2026-09-02** on `w` | ',
+    '| ZZ-S1a | **landed at `b5abab6`.** | ',
+    '| ZZ-S2 | **In progress 2026-09-02** | ',
+    '### ZZ-Q9 and ZZ-S4 — built 2026-09-29',
+    '### ZZ-S5, ZZ-S6 — not built, 2026-10-11',
+  ].join('\n')
+  const s = parseWorkOrder(md, 'instructions/v3.0.0/workorder-zz-older.md')
+  expect(s.title).toBe('an older order')
+  expect(s.stages.filter(x => !x.note).map(x => x.id)).toEqual(['ZZ-S2'])
+  expect(s.stages.find(x => x.id === 'ZZ-S4')?.note).toBe('built 2026-09-29')
+})
+
+test('reads the close index.md records on an order row', () => {
+  const index = [
+    '| `workorder-zz-older.md` | **ZZ — an order. CLOSED 2026-09-08**; §7 is the close |',
+    '| `workorder-yy-open.md` | **YY — closed at its source**, still open |',
+  ].join('\n')
+  expect(closedMark(index, 'instructions/v3.0.0/workorder-zz-older.md')).toBe('2026-09-08')
+  expect(closedMark(index, 'instructions/v3.0.0/workorder-yy-open.md')).toBeUndefined()
+  expect(closedMark(index, 'instructions/v3.0.0/workorder-xx-none.md')).toBeUndefined()
 })
