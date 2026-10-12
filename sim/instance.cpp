@@ -1,6 +1,7 @@
 #include "sim/instance.hpp"
 
 #include <array>
+#include <cstring>
 #include <utility>
 
 #include "kds/server/mount_recovery.hpp"
@@ -307,6 +308,12 @@ bool SimInstance::BackupStart() {
     OpenBackup open;
     open.image.backup_id = 1;
     open.image.start = d;
+    std::array<std::byte, wal::kBackupMarkPayloadSize> payload{};
+    (void)wal::EncodeBackupMark(payload, {open.image.backup_id, d});
+    if (!wal_->Append({wal::RecordType::kBackupBegin, wal::kNoTxnId, kInvalidPageId, 0}, payload)
+             .ok()) {
+        return false;
+    }
     open.start_capacity = page_device_->page_capacity();
     open.image.data.resize(static_cast<std::size_t>(open.start_capacity) * kPageSize);
     backup_.emplace(std::move(open));
@@ -356,24 +363,19 @@ StatusOr<SimBackupImage> SimInstance::BackupStop() {
     if (!ended.ok()) return ended.status();
     image.stop = ended.value() + wal::EncodedRecordSize(payload.size());
     if (Status s = wal_->SyncAll(); !s.ok()) return s;
-    // The maps after the stop (census §3 item 1).
-    if (auto maps = store_->WriteMaps(); !maps.ok()) return maps.status();
-    for (std::uint32_t region = 0; storage::FreeMapRegionBase(region) < capacity; ++region) {
-        const PageId base = storage::FreeMapRegionBase(region);
-        for (const PageId id :
-             {storage::FreeMapPageIdFor(base), storage::HeaderlessMapPageIdFor(base)}) {
-            if (id >= capacity) continue;
-            if (Status s = CopyDevicePages(*page_device_, id, id + 1, image.data); !s.ok()) {
-                return s;
-            }
-        }
+    // The maps after the stop (census §3 item 1), from memory, as STOP
+    // takes them: never written to this instance's device.
+    for (const storage::DevicePageStore::MapImage& map : store_->MapImages()) {
+        if (map.page_id >= capacity) continue;
+        std::memcpy(image.data.data() + static_cast<std::size_t>(map.page_id) * kPageSize,
+                    map.bytes.data(), kPageSize);
     }
     image.pages = capacity;
     image.data.resize(static_cast<std::size_t>(capacity) * kPageSize);
     // The window's log, as STOP's worker copies it.
     const std::uint64_t size = log_device_->segment_size();
     image.first_segment = image.start / size;
-    for (std::uint64_t seg = image.first_segment; seg <= ended.value() / size; ++seg) {
+    for (std::uint64_t seg = image.first_segment; seg <= (image.stop - 1) / size; ++seg) {
         std::vector<std::byte> bytes(size);
         if (Status s = log_device_->ReadAt(seg, 0, bytes); !s.ok()) return s;
         image.segments.push_back(std::move(bytes));
@@ -418,13 +420,12 @@ StatusOr<std::unique_ptr<SimInstance>> SimInstance::CreateFromBackup(Options opt
         if (Status s = log.DetachBelow(image.first_segment); !s.ok()) return s;
         if (Status s = log.ReclaimDetached(); !s.ok()) return s;
     }
-    if (Status s = server::MarkRestoreOwedOn(*instance->page_device_,
-                                             {image.start, image.stop, image.backup_id});
+    // `LayOutRestore`'s preparation and the mount's discard (`restore.hpp`).
+    if (Status s = server::PrepareRestoredVolume(*instance->page_device_,
+                                                 {image.start, image.stop, image.backup_id});
         !s.ok()) {
         return s;
     }
-    // `LayOutRestore`'s offline half and the mount's (`restore.hpp`).
-    if (Status s = server::ForgetUnwrittenPages(*instance->page_device_); !s.ok()) return s;
     if (Status s = instance->Boot(); !s.ok()) return s;
     if (Status s = server::DiscardAdvisoryState(instance->catalog()); !s.ok()) return s;
     if (Status s = instance->RunCheckpoint(); !s.ok()) return s;

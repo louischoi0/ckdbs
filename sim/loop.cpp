@@ -969,6 +969,10 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     }
     std::optional<SimBackupImage> backup;
     std::optional<Oracle> at_stop;
+    // Every relation an op named before the stop, so the restore can be
+    // asked that the ones the oracle no longer holds - dropped - stay gone.
+    std::set<std::string> named_before_stop;
+    std::set<std::string> dropped_at_stop;
 
     for (std::size_t i = 0; i < plan.entries.size(); ++i) {
         const SimPlan::Entry& entry = plan.entries[i];
@@ -977,6 +981,9 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                      it.instance.log_device());
             ++verdict.faults_armed;
             it.trace.Note("armed " + ScheduledFault{i, kind}.Describe());
+        }
+        if (backup_stop_after && i <= *backup_stop_after && !entry.op.table.empty()) {
+            named_before_stop.insert(entry.op.table);
         }
         const bool op_ok = ExecuteOp(it, entry.op, i);
         // **The reclaim's tick, between statements** (BF-R8): one bounded
@@ -1049,6 +1056,9 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
             at_stop.emplace(oracle);
             if (at_stop->in_txn()) at_stop->Rollback();
             at_stop->MarkSynced();
+            for (const std::string& table : named_before_stop) {
+                if (!at_stop->HasTable(table)) dropped_at_stop.insert(table);
+            }
             it.trace.Note("backup stopped after op " + std::to_string(i));
         } else if (it.instance.backup_open()) {
             if (Status s = it.instance.BackupCopy(1 + static_cast<std::uint32_t>(
@@ -1187,6 +1197,14 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                           std::to_string(backup->start) + ", stop " +
                           std::to_string(backup->stop) + ")");
     Reconcile(restore_it);
+    // The mirror of BR-R1's defect: a relation dropped and committed before
+    // the stop must not come back.
+    for (const std::string& table : dropped_at_stop) {
+        if (!IsErr(restored.value()->Execute("SELECT * FROM " + table))) {
+            Fail(restore_it, "restored backup: relation '" + table +
+                                 "', dropped before the stop, is back");
+        }
+    }
     if (verdict.ok) ++verdict.backups_restored;
     return verdict.ok;
 }

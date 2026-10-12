@@ -13,7 +13,6 @@
 
 #include "kds/base/version.hpp"
 #include "kds/server/superblock.hpp"
-#include "kds/storage/free_map.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/wal/payload.hpp"
 
@@ -291,18 +290,17 @@ StatusOr<std::string> BackupControl::Stop(const std::string& dir, wal::WalManage
     }
     if (Status s = wal.SyncAll(); !s.ok()) return fail(s);
     if (copied) {
-        // The maps, after the stop (§3 item 1): written, then every region's
-        // free and headerless map page within the copy copied over what the
-        // copier read. A retry copies them again, which is safe: a map page
-        // carries no page_lsn.
-        if (Status s = wiring_.write_maps(); !s.ok()) return fail(s);
-        const ArmedFence armed(wiring_.data_device->write_fence());
-        for (std::uint32_t region = 0; storage::FreeMapRegionBase(region) < capacity; ++region) {
-            const PageId base = storage::FreeMapRegionBase(region);
-            for (const PageId id :
-                 {storage::FreeMapPageIdFor(base), storage::HeaderlessMapPageIdFor(base)}) {
-                if (id >= capacity) continue;
-                if (Status s = CopyPages(id, id + 1, /*throttled=*/false); !s.ok()) return fail(s);
+        // The maps, after the stop (§3 item 1): every resident region's free
+        // and headerless map as it stands in memory, written over what the
+        // copier read - never to the source's device (`MapImages`). A retry
+        // writes them again, which is safe: a map page carries no page_lsn.
+        for (const storage::DevicePageStore::MapImage& image : wiring_.map_images()) {
+            if (image.page_id >= capacity) continue;
+            if (Status s = PwriteAll(copy_fd_, image.bytes.data(), kPageSize,
+                                     static_cast<std::uint64_t>(image.page_id) * kPageSize,
+                                     "the data copy's maps");
+                !s.ok()) {
+                return fail(s);
             }
         }
     }

@@ -3277,13 +3277,31 @@ StatusOr<bool> Catalog::ResetAccessStatsIfDamaged() {
 }
 
 Status Catalog::DiscardAccessStats() {
-    // Re-formatted in place at its fixed id, which is what makes this a
-    // discard rather than a re-bootstrap: the `sys.objects` and `sys.tables`
-    // rows still name page 11 and stay true.
-    auto head = store_.Get(kCatalogPageAccessStats);
-    if (!head.ok()) return head.status();
-    auto fresh = heap::PageView::CreateEmpty(head.value().bytes(), 0);
-    if (!fresh.ok()) return fresh.status();
+    // Every page of the chain re-formatted in place, its link kept, so the
+    // rows are gone and the pages stay the chain's for `InsertRow` to fill
+    // again - a discard that left the growth pages behind would spend
+    // catalog page ids, of which there are 116 for every catalog relation,
+    // at every restore (BR-S8's review). The head stays at its fixed id, so
+    // the `sys.objects` and `sys.tables` rows naming page 11 stay true. A
+    // page that cannot be read ends the chain at the page before it.
+    PageId at = kCatalogPageAccessStats;
+    PageId previous = kInvalidPageId;
+    while (at != kInvalidPageId) {
+        auto page = store_.Get(at);
+        if (!page.ok()) {
+            if (previous == kInvalidPageId) return page.status();  // the head itself
+            auto before = store_.Get(previous);
+            if (!before.ok()) return before.status();
+            heap::PageView(before.value().bytes()).set_next_page_id(kInvalidPageId);
+            return Status::OK();
+        }
+        const PageId next = heap::PageView(page.value().bytes()).next_page_id();
+        auto fresh = heap::PageView::CreateEmpty(page.value().bytes(), 0);
+        if (!fresh.ok()) return fresh.status();
+        fresh.value().set_next_page_id(next);
+        previous = at;
+        at = next;
+    }
     return Status::OK();
 }
 

@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "kds/catalog/catalog.hpp"
+#include "kds/parser/fingerprint.hpp"
 #include "kds/server/backup_manifest.hpp"
 #include "kds/server/wal_archive.hpp"
 #include "kds/storage/file_page_device.hpp"
@@ -180,6 +181,12 @@ Status ForgetUnwrittenPages(storage::PageDevice& device, std::uint64_t* forgotte
     return Status::OK();
 }
 
+Status PrepareRestoredVolume(storage::PageDevice& device, const RestoreWindow& window,
+                             std::uint64_t* lineage) {
+    if (Status s = MarkRestoreOwedOn(device, window, lineage); !s.ok()) return s;
+    return ForgetUnwrittenPages(device);
+}
+
 Status DiscardAdvisoryState(catalog::Catalog& catalog) {
     // Every Waystone directory is unreachable from here on: its pages are
     // unlogged, so the copy holds them as of some instant of the window and
@@ -187,7 +194,12 @@ Status DiscardAdvisoryState(catalog::Catalog& catalog) {
     auto patterns = catalog.ListPatterns();
     if (!patterns.ok()) return patterns.status();
     for (const catalog::SysPatternRow& row : patterns.value()) {
-        if (row.waystone_root == kInvalidPageId) continue;
+        // A row of another fingerprint version is unreachable by any
+        // statement and is not one `ClaimPatternWaystoneRoot` writes.
+        if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version) ||
+            !catalog::HasWaystoneDirectory(row)) {
+            continue;
+        }
         auto cleared = catalog.ClaimPatternWaystoneRoot(row.fetch_id, kInvalidPageId, 0);
         if (!cleared.ok()) return cleared.status();
     }
@@ -284,10 +296,16 @@ Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {
         !s.ok()) {
         return s;
     }
+    std::uint64_t lineage = 0;
     {
         auto device = storage::FilePageDevice::Open(request.data_file);
         if (!device.ok()) return device.status();
-        if (Status s = ForgetUnwrittenPages(*device.value()); !s.ok()) return s;
+        if (Status s = PrepareRestoredVolume(
+                *device.value(), {manifest.start_lsn, manifest.stop_lsn, manifest.backup_id},
+                &lineage);
+            !s.ok()) {
+            return s;
+        }
     }
     for (std::uint64_t seg = manifest.start_segment; seg <= manifest.stop_segment; ++seg) {
         const std::string name = std::string(kBackupWalDirName) + "/" + SegmentFileName(seg);
@@ -367,13 +385,6 @@ Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {
         }
     }
 
-    std::uint64_t lineage = 0;
-    if (Status s = MarkRestoreOwed(request.data_file,
-                                   {manifest.start_lsn, manifest.stop_lsn, manifest.backup_id},
-                                   &lineage);
-        !s.ok()) {
-        return s;
-    }
     take_back.keep = true;
     if (out != nullptr) {
         out->backup_id = manifest.backup_id;

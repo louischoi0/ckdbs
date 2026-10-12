@@ -176,6 +176,8 @@ def cmd_list(args):
 
 def cmd_expire(args):
     backups = backups_under(args.root)
+    if args.keep is not None and args.keep < 0:
+        raise SystemExit("expire: --keep is a count of backups to keep, 0 or more")
     if args.keep is not None:
         keep = backups[-args.keep:] if args.keep > 0 else []
     else:

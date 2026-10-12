@@ -34,6 +34,15 @@ namespace kds::server {
 // unlogged structure can reach a page the first half gave back.
 Status ForgetUnwrittenPages(storage::PageDevice& device, std::uint64_t* forgotten = nullptr);
 
+// A copied data file made a restore's volume: the restore marked owed
+// **first** (`MarkRestoreOwedOn`), so a crash at any later point of the
+// layout leaves a volume that refuses to open short of the stop rather than
+// one that mounts from the copied anchor (BR-R4); then
+// `ForgetUnwrittenPages`. `LayOutRestore`'s and the simulation's one path.
+struct RestoreWindow;
+Status PrepareRestoredVolume(storage::PageDevice& device, const RestoreWindow& window,
+                             std::uint64_t* lineage = nullptr);
+
 }  // namespace kds::server
 
 namespace kds::catalog {

@@ -1252,7 +1252,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->database_->superblock.lineage_id(), expeditor->database_->superblock.version(),
         expeditor->device_.get(),
         [anchor = &*expeditor->checkpoint_anchor_] { return anchor->durable_redo_start(); },
-        [store = expeditor->store_.get()] { return store->WriteMaps().status(); },
+        [store = expeditor->store_.get()] { return store->MapImages(); },
         &*expeditor->logger_});
     // **And the archive's floor** (BR-S4, T7): no segment is removed before
     // it is archived. The archiver starts from the live log's first segment.

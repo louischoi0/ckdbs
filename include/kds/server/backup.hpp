@@ -16,9 +16,7 @@
 #include "kds/wal/manager.hpp"
 #include "kds/wal/record.hpp"
 
-namespace kds::storage {
-class PageDevice;
-}  // namespace kds::storage
+#include "kds/storage/device_page_store.hpp"
 
 // The instance's backup control (BR-S2, S5,
 // `instructions/v3.0.0/workorder-br-backup-restore.md`, `br-s0-census.md`).
@@ -70,9 +68,9 @@ public:
         storage::PageDevice* data_device = nullptr;
         // The durable redo start `D` (`SuperBlockCheckpointAnchor`).
         std::function<wal::Lsn()> durable_redo_start;
-        // Writes the free and headerless maps to the device
-        // (`DevicePageStore::WriteMaps`), so STOP's copy of them is current.
-        std::function<Status()> write_maps;
+        // The free and headerless maps as they stand in memory
+        // (`DevicePageStore::MapImages`), which STOP writes into its copy.
+        std::function<std::vector<storage::DevicePageStore::MapImage>()> map_images;
         Logger* log = nullptr;
     };
 

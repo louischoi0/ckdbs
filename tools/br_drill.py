@@ -127,9 +127,11 @@ class Workload:
 
     def pause(self):
         self.paused.set()
-        self.idle.wait(30)
+        if not self.idle.wait(30):
+            raise RuntimeError("the workload did not pause")
 
     def resume(self):
+        self.idle.clear()  # a stale idle would let the next pause return early
         self.paused.clear()
 
 
@@ -194,7 +196,9 @@ class Drills:
         the source's at the stop exactly."""
         conn = src.conn()
         target = os.path.join(self.work, name)
-        started = fields(conn.send_command(f"BACKUP START '{name}'"))
+        reply = conn.send_command(f"BACKUP START '{name}'")
+        self.expect(reply.startswith("OK"), f"start {name}", reply)
+        started = fields(reply)
         if path == "B":
             conn.send_command(f"BACKUP COPY TO '{target}'")
             while fields(conn.send_command("BACKUP STATUS")).get("copying") != "0":
@@ -274,6 +278,34 @@ class Drills:
         self.expect(digest == pit_hash, "pitr",
                     f"hash at lsn {pit_lsn}: source {pit_rows} rows, restored {rows}")
         self.ok("pitr to a recorded lsn", f"({rows} rows)")
+
+    def operation(self):
+        """BR-S9: list every backup, verify one, then expire to the newest and
+        restore it through the archive - expire never strands a retained one."""
+        root = os.path.join(self.work, "backups")
+        os.makedirs(root)
+        for name in ("b1", "d1", "tool"):
+            shutil.copytree(os.path.join(self.work, name), os.path.join(root, name))
+        src = Server(self.binary, os.path.join(self.work, "src"), self.port)
+        listed = backup_tool(src, "list", root).stdout.strip().splitlines()
+        self.expect(len(listed) == 3, "list", "\n".join(listed))
+        self.ok("list", f"({len(listed)} backups)")
+        before = sorted(os.listdir(self.archive))
+        expired = backup_tool(src, "expire", root, "--keep", "1", "--archive", self.archive)
+        kept = sorted(os.listdir(root))
+        self.expect(kept == ["tool"], "expire", f"kept {kept}: {expired.stdout}")
+        after = sorted(os.listdir(self.archive))
+        target, _ = restore(self.binary, self.work, "r-expired", os.path.join(root, "tool"),
+                            self.port + 1, "--restore-archive", self.archive,
+                            "--restore-target", "latest")
+        target.start()
+        _, rows = table_hash(target.conn())
+        target.stop()
+        self.ok("expire", f"(kept 1 of 3, archive {len(before)} -> {len(after)} segments, "
+                f"the kept one restores to latest: {rows} rows)")
+        refused = backup_tool(src, "expire", root, "--keep", "0", check=False)
+        self.expect(refused.returncode != 0, "expire keep 0", refused.stdout)
+        self.ok("expire refuses a retention that keeps nothing")
 
     def faults(self):
         b1 = os.path.join(self.work, "b1")
@@ -378,6 +410,7 @@ def main():
     args = p.parse_args()
     drills = Drills(args)
     drills.equivalence()
+    drills.operation()
     drills.faults()
     print("all drills passed")
 

@@ -602,6 +602,19 @@ public:
     }
     StatusOr<std::size_t> WriteMaps() { return FlushMaps(); }
 
+    // **Every resident map region's pages as they stand in memory**, each
+    // stamped with its checksum, and **nothing written** (BR-S5): a backup's
+    // STOP puts these in its copy, so the copy's maps carry every allocation
+    // up to its stop. Writing them to the device instead would put bits
+    // there ahead of an unlogged page's bytes - BI-Q12's hazard, which a
+    // crash after the STOP turned into a page allocated and never written.
+    // A region that is not resident is on the device as it was read.
+    struct MapImage {
+        PageId page_id;
+        std::array<std::byte, kPageSize> bytes;
+    };
+    std::vector<MapImage> MapImages() const;
+
     // **One page made durable, and nothing else** (BA-S13, BA-R10): written
     // back through `WriteBack`'s claim (AT-S10e) and then the data file
     // synced **unconditionally** - unlike `FlushPages`, which skips its sync

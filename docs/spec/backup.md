@@ -50,10 +50,22 @@ single decision site, and redo's heal is refused for an allocated page -
 **B6 - The copy is bounded by the stop on both sides.** The copier copies to
 the capacity read at START; STOP copies the tail the file grew, **then**
 appends BACKUP_END, so every copied page's `page_lsn` is below the stop
-(WAL-before-data). After the stop it writes the free and headerless maps and
-copies every map page, so the copy's maps carry the bit of every page a
-record up to the stop names - including Waystone pages, which are created
-with no record (`docs/inflight/bugs/an-unlogged-waystone-page-can-lose-its-allocation-bit.md`).
+(WAL-before-data). After the stop it writes every resident map region's
+free and headerless map, **as it stands in memory**, into the copy
+(`DevicePageStore::MapImages`) - never to the source's device, where a bit
+ahead of an unlogged page's bytes is BI-Q12's hazard - so the copy's maps
+carry the bit of every page a record up to the stop names, Waystone pages
+included, which are created with no record
+(`docs/inflight/bugs/an-unlogged-waystone-page-can-lose-its-allocation-bit.md`).
+
+**B6a - A restore makes unlogged state unreachable** (`restore.hpp`).
+Marking the restore owed is the layout's first write after the data copy,
+so an interrupted layout never mounts from the copied anchor. Then every
+user page the copied maps call allocated whose bytes are all zero is given
+back (`ForgetUnwrittenPages`): a logged one is recreated by its record, an
+unlogged one was never written. At the restore's mount every Waystone root
+is cleared and `sys.access_stats` emptied in place (`DiscardAdvisoryState`),
+so nothing unlogged can reach a page given back (invariant 8, CR6).
 
 **B7 - The stop is where the backup's log ends.** BACKUP_END is appended and
 its segment sealed in one hold of the stream latch (`WalStream::AppendAndSeal`),

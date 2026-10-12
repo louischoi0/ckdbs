@@ -2275,6 +2275,22 @@ std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn()
     return dirty;
 }
 
+std::vector<DevicePageStore::MapImage> DevicePageStore::MapImages() const {
+    std::vector<MapImage> out;
+    AssertNotUnderMapHold("MapImages");
+    LatchGuard map(map_latch());
+    for (const auto& [region, pages] : map_regions_) {
+        const PageId base = FreeMapRegionBase(region);
+        out.push_back({FreeMapPageIdFor(base), pages.free_map});
+        StampPageChecksum(std::span<std::byte, kPageSize>(out.back().bytes));
+        if (pages.headerless_map != nullptr) {
+            out.push_back({HeaderlessMapPageIdFor(base), *pages.headerless_map});
+            StampPageChecksum(std::span<std::byte, kPageSize>(out.back().bytes));
+        }
+    }
+    return out;
+}
+
 Status DevicePageStore::PersistPage(PageId page_id) {
     const PageId ids[] = {page_id};
     if (auto written = WriteBack(ids); !written.ok()) return written.status();

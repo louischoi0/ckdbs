@@ -143,8 +143,10 @@ kds_server --restore-from /backups/2026-10-12 --config /etc/kds/new.conf
 ```
 
 The configured `data_file` and `wal_dir` **must hold nothing**. The restore
-checks the manifest, verifies every file, copies the data file and the
-segments, marks the restore owed in the new volume, and mounts it: recovery
+checks the manifest, verifies every file, copies the data file and marks the
+restore owed in it at once (a restore interrupted after that never opens
+short of the stop), gives back the pages the copy holds as never written (a
+second read of the data file), copies the segments, and mounts it: recovery
 replays from the backup's start, and the instance opens only once it has
 passed the stop. It then serves, or exits with `--restore-only`. Path D: name
 the snapshot's data file with `--restore-data <file>` when the backup does

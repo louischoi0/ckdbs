@@ -913,9 +913,10 @@ TEST_F(InsertWalTest, AnIndexSplitTakesOneBtreeSplitAndNoIndexInsert) {
 // image that never saw the write it undoes. Wired as `Expeditor` wires it -
 // the catalog logs.
 void ExpectCompensationsFollowForwardWrites(const std::vector<wal::DecodedRecord>& records,
-                                            std::size_t min_overwrites) {
+                                            bool overwrite_undone) {
     std::set<PageId> named;
-    std::size_t compensations = 0, overwrites = 0;
+    std::size_t compensations = 0, overwrites_after_unmark = 0;
+    bool unmarked = false;
     for (const wal::DecodedRecord& record : records) {
         const PageId page_id = record.header.page_id;
         if (page_id == kInvalidPageId || page_id >= catalog::kCatalogOverflowLimit) continue;
@@ -926,11 +927,13 @@ void ExpectCompensationsFollowForwardWrites(const std::vector<wal::DecodedRecord
                 << wal::RecordTypeName(type) << " names catalog page " << page_id
                 << " before any forward record does";
         }
-        if (type == wal::RecordType::kHeapOverwrite) ++overwrites;
+        if (type == wal::RecordType::kHeapDeleteUnmark) unmarked = true;
+        // The retype's undo: an overwrite logged after the rollback began.
+        if (type == wal::RecordType::kHeapOverwrite && unmarked) ++overwrites_after_unmark;
         named.insert(page_id);
     }
     EXPECT_GT(compensations, 0u) << "the rollback logged no catalog compensation";
-    EXPECT_GE(overwrites, min_overwrites);
+    if (overwrite_undone) EXPECT_GT(overwrites_after_unmark, 0u) << "the retype's undo is unlogged";
 }
 
 TEST_F(InsertWalTest, ARolledBackDdlLogsItsCatalogCompensation) {
@@ -942,7 +945,7 @@ TEST_F(InsertWalTest, ARolledBackDdlLogsItsCatalogCompensation) {
     ASSERT_EQ(d.Dispatch("ROLLBACK").response.substr(0, 8), "ROLLBACK");
     ASSERT_TRUE(wal_->Flush().ok());
     std::vector<std::vector<std::byte>> storage;
-    ExpectCompensationsFollowForwardWrites(DeviceRecords(storage), 0);
+    ExpectCompensationsFollowForwardWrites(DeviceRecords(storage), /*overwrite_undone=*/false);
 }
 
 // The same for a drop, whose compensation is a delete-unmark plus the
@@ -958,7 +961,7 @@ TEST_F(InsertWalTest, ARolledBackDropLogsItsCatalogCompensation) {
     ASSERT_EQ(d.Dispatch("ROLLBACK").response.substr(0, 8), "ROLLBACK");
     ASSERT_TRUE(wal_->Flush().ok());
     std::vector<std::vector<std::byte>> storage;
-    ExpectCompensationsFollowForwardWrites(DeviceRecords(storage), 2);
+    ExpectCompensationsFollowForwardWrites(DeviceRecords(storage), /*overwrite_undone=*/true);
 }
 
 // ---- The group-commit batch, in SHOW META -------------------------------

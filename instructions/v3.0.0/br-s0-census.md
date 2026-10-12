@@ -142,3 +142,12 @@ section and §1-§2 disagree, this section governs.
 8. **Copy order across pages confirmed** - redo gates each page on its own
    LSN, `next_trx_id` is the maximum of the superblock's and the log's, and
    every core's latest `CHECKPOINT_BEGIN` lies at or above `D`.
+
+**Amended at BR-S8** (the simulation's backup op): finding 1's map write
+went to the source's device and so itself put bits ahead of unlogged pages'
+bytes - BI-Q12's hazard, which a crash after a STOP turned into a page
+allocated and never written on the *source*. STOP now copies the maps from
+memory into the backup (`DevicePageStore::MapImages`) and writes nothing to
+the device. The restore side gives back pages the copy holds as never
+written and makes Waystone and `sys.access_stats` unreachable
+(`docs/spec/backup.md` B6a).
