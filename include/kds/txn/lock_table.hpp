@@ -118,7 +118,8 @@
 // `server/core_runtime.hpp`'s `Config`, not present today. This comment is
 // the declaration `rules.md` §3 requires of any lock.
 //
-// **Partitioned `64 x cores`** `[constant, AR0 D2's; re-measured in AO-S7]`,
+// **Partitioned 64 ways at every core count** (`kLockPartitions`; BP-S6,
+// BP-Q15 (a) - AO-S7 had it `64 x cores`),
 // keyed by `(rel_oid, unit kind, lo)` so that a relation's own entry and
 // the units beneath it hash apart: the relation entry is touched by every
 // writer's `IX` and every positioned reader's `IS`, and sharing its
@@ -388,8 +389,11 @@ struct LockKey {
 // it. One name for the quantity: nothing else spells this number.
 inline constexpr std::size_t kMaxLocksPerTxnDefault = 65536;
 
-// AO-R2's partition count, per core. `[constant]`, re-measured in AO-S7.
-inline constexpr std::size_t kLockPartitionsPerCore = 64;
+// AO-R2's partition count, fixed at every core count since BP-S6 (BP-Q15
+// (a)): AO-S7 sized it per core under ownership, and above one core a tuple
+// ask under a held fence walks every partition (`FenceCoversKey`), which at
+// `64 x cores` cost +12 % of a statement's CPU at eight cores (BP-H10).
+inline constexpr std::size_t kLockPartitions = 64;
 
 // **The read borrow holds under an identity that is not a transaction's**
 // (AO-S6e-b). AR2 §3's `SELECT` row scopes the read borrow to *the
@@ -546,8 +550,8 @@ private:
 
 class LockTable {
 public:
-    // `core_count` sizes the partition array and decides whether latches
-    // are constructed at all: at one core every `Latch*` is null and no
+    // `core_count` decides whether latches are constructed at all (the
+    // partition count is fixed, `kLockPartitions`): at one core every `Latch*` is null and no
     // `std::mutex` exists (AO-R9 - what compiles out is the
     // synchronization, never the wait). Zero cores is a refusal, not a
     // silent reinterpretation.

@@ -57,11 +57,11 @@ const char* LockModeName(LockMode mode) noexcept {
 }
 
 LockTable::LockTable(std::uint32_t core_count, std::size_t max_locks_per_txn)
-    : partitions_(kLockPartitionsPerCore * core_count),
+    : partitions_(kLockPartitions),
       max_locks_per_txn_(max_locks_per_txn),
       // Sized in the member-init list: a `vector<atomic<T>>` cannot be
       // assigned into place, and its elements value-initialize to zero.
-      fence_counters_(kLockPartitionsPerCore * core_count) {
+      fence_counters_(kLockPartitions) {
     // **At one core no latch is constructed at all** (AO-R9): the table
     // exists, the conflicts are still answered, and the synchronization is
     // what compiles out. `LatchGuard(nullptr)` is then two predictable
@@ -80,8 +80,8 @@ StatusOr<std::unique_ptr<LockTable>> LockTable::Create(std::uint32_t core_count,
                                                        std::size_t max_locks_per_txn) {
     if (core_count == 0) {
         return Status::InvalidArgument(
-            "a lock table needs at least one core: zero would size the partition array to nothing "
-            "and every key would hash out of range");
+            "a lock table needs at least one core: it serves the instance's cores and arms its "
+            "latches by their count");
     }
     if (max_locks_per_txn == 0) {
         return Status::InvalidArgument(

@@ -918,7 +918,8 @@ declared in the spec that owns the subsystem, and this is that spec:
 > The **lock table** is the lock family's partitioned table, **one for the
 > instance** — built by the `Expeditor` for every core count, borrowed by
 > every core's transaction manager, and taken by every dispatcher. It is
-> `64 × cores` partitions keyed by `(rel_oid, unit kind, lo)`, so a
+> 64 partitions at every core count (BP-S6, BP-Q15 (a)) keyed by
+> `(rel_oid, unit kind, lo)`, so a
 > relation's entry and its tuples hash apart. Each partition carries a
 > `base/latch.hpp` latch, **null at `cores = 1`**. One thing is read
 > *without* that latch and it is not a field of the entry: a **striped

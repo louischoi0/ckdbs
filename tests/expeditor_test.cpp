@@ -329,8 +329,8 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     ASSERT_NE(db.locks(), nullptr) << "a two-core instance built no lock table";
     EXPECT_EQ(db.locks()->wake_registry(), db.wakers())
         << "the lock table kicks through a registry that is not this instance's";
-    EXPECT_EQ(db.locks()->partition_count(), 64u * 2u)
-        << "the lock table is not partitioned for both cores";
+    EXPECT_EQ(db.locks()->partition_count(), 64u)
+        << "the lock table's partition count is fixed at every core count (BP-S6)";
     // **And every dispatcher records its edges in it** (AO-S4b): a
     // dispatcher handed no table keeps the narrow admission and records
     // no edge, and a cross-core cycle through it is one the detector never

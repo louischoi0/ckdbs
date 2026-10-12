@@ -769,7 +769,7 @@ private:
     std::optional<txn::InstanceVisibility> visibility_;
 
     // **The instance's lock table** (AO-R2, built here at AO-S5): one for
-    // every core, sized `64 x cores` partitions, latchless at one. Core 0's
+    // every core, 64 partitions at any core count, latchless at one. Core 0's
     // manager takes it below and every peer borrows it through
     // `CoreRuntime::Config::locks`, so a decide on any core releases into
     // the one table and wakes - and kicks, through `wakers_` - a waiter

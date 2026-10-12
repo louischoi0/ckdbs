@@ -1371,3 +1371,32 @@ for whoever takes the buffer pool next.
 ruling above (AT-S8 for H7, AT-R4 for H8, AX for H9), and BP-Q5..Q7's
 options are adopted from the census on the standing go-ahead rather than
 put to the operator, as W2's mark for them says.
+
+### BP-S6 - the lock partitions (BP-H10)
+
+Worked on `worktree-bp-per-core-residue` from `0f10a751`, on BP-S1's
+verdict (H10 held at cores 8) and BP-Q15 (a).
+
+**C:** the lock table's partition count is `kLockPartitions = 64` at every
+core count (it was `64 x cores`, AO-S7's sizing under ownership); the fence
+counter's stripes follow it. `core_count` now only decides whether latches
+are built. `txn.md`'s lock-table declaration, `lock_table.hpp`'s header and
+`Create`'s zero-core refusal say so.
+
+**Cells:** `LockTableTest.AtOneCoreNoLatchIsConstructed` and
+`ExpeditorTest.TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage` pin 64
+at one, two and eight cores. **Mutation** (the count scaled by cores again)
+killed 3/3.
+
+**Review** (`critics-developer`): no correctness bug; nothing indexes
+partitions or fence stripes by core, and the one-latch-at-a-time order is
+untouched. **Applied:** a two-core test still expecting `64 x 2` (the
+reviewer's fix); BP-Q15's reason against (b) corrected - a per-relation list
+could re-take each fence's partition latch and so keep AY-S2's rule, and its
+real cost is a second structure that must stay in step; a stale header
+comment. **Rejected:** giving the fence counter's stripes their own count -
+with 64 stripes a shared stripe costs a scan of 64 partitions instead of
+512, so the expected cost per tuple ask is about what it was.
+
+**Suite:** 3613/3613 (`ctest -j8`, Debug). **A/B:** the lock cells at the
+milestone's close, against `ccf9cfc1`.
