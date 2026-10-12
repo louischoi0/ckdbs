@@ -107,12 +107,25 @@ skip records those pages need. `[quiet-wrong]`. Restore writes the backup's
 start into the anchor before mount, or mount takes it from the label in
 preference to slot 0.
 
-**BR-R5 - Torn-page protection covers the backup window.** From
-`backup_start` until `backup_stop`, the first modification of each headered
-page after the start LSN logs a `FULL_PAGE_IMAGE` (T4's cadence, armed only
-for the window). Built so that the general per-checkpoint cadence, if later
-ordered, is the same mechanism with the threshold moved to each
-checkpoint's begin. BR-Q1.
+**BR-R5 - Torn-page protection covers the backup window.** `[quiet-wrong]`
+(corrected 2026-10-12, defect 1 of the review in §9). From `backup_start`
+until `backup_stop`, the first modification of each headered page whose
+`page_lsn` is below the **arm LSN** `A` logs a `FULL_PAGE_IMAGE` (T4's
+cadence, armed only for the window). `A` is the log's end read after the
+window is visible to every mutation, **not** the start LSN `D`: a page
+modified between `D` and the arming already carries a `page_lsn` above `D`,
+so a threshold of `D` would log no image for its next modification and a
+copy torn by that modification's writeback would have nothing to heal it.
+Two further conditions the threshold alone does not give, each verified by
+BR-S0 (H4, H5) and closed in BR-S2: (i) no mutation that read the window
+clear may take an LSN at or above `A` - the decision is re-checked where the
+LSN is assigned, or the arming waits past every mutation that read it clear;
+(ii) a page dirtied before `A` and written back during the copy with no later
+modification gets no image, so either the copy begins only after every page
+dirty at `A` is written (a checkpoint begun after the arming), or the copier
+proves each page whole by its CRC32C and re-reads a torn one. Built so that
+the general per-checkpoint cadence, if later ordered, is the same mechanism
+with the threshold moved to each checkpoint's begin. BR-Q1.
 
 **BR-R6 - Zero cost on the hot path when no backup runs and archiving is
 off.** The permitted cost is one predictable branch on an instance word at
@@ -137,10 +150,13 @@ archiver never runs under the stream latch: a seal only marks the segment
 ready, so BR adds nothing to the hold BQ is measuring (T14).
 
 **BR-R10 - A restored instance never writes into the original's archive
-lineage.** After a PITR open (or any restore that continues past the stop),
-the instance starts a new lineage: an id written to the superblock and
-carried in every archived segment's name, so the restored instance's
-segments cannot overwrite the original's.
+lineage.** `[quiet-wrong]` (corrected 2026-10-12, defect 2 of §9). **Every
+restore that opens** starts a new lineage - one that opens at the stop LSN
+as much as a PITR open: from the stop onward the restored instance writes
+log the original also wrote past the same point, under the same segment
+numbers. The lineage id is written to the superblock and carried in every
+archived segment's name, so the restored instance's segments cannot
+overwrite the original's.
 
 ## 3. Hypotheses BR-S0 verifies before code
 
@@ -156,6 +172,8 @@ stage it names.
 | H5 | The FPI decision site is one place per mutation path | Census of page-mutation log sites | BR-R5 is built per site, each with a cell |
 | H6 | The seal point is observable on core 0's writer thread without extending the stream latch | Read `file_log_device.cpp`'s roll | The archiver is woken from the next poll instead |
 | H7 | Recovery's completion checkpoint and recycling do not remove segments a still-running restore needs | Read BC's removal order at mount | Restore suppresses recycling until it reaches the stop LSN |
+| H8 | Allocation, freeing and reuse of page ids inside the window are reproduced by redo from the start alone: a page created past the data file's length read at the copy's start is recreated by its logged creation record, and neither the unlogged free map (T11) nor BF's unrecorded free (T12) lets a restored instance hand out an id a replayed record placed (added 2026-10-12, defect 3 of §9) | Read the creation records' redo, the free map's repair at mount, and the in-memory free list's rebuild | **`[quiet-wrong]` candidate.** Restore rebuilds the allocation state from redo before the open |
+| H9 | The development VM can take an atomic snapshot of the volumes holding `data_file` and `wal_dir` (added 2026-10-12, defect 5 of §9) | `sudo -n`, `lvcreate`, `btrfs`, `zfs`, the root and `/tmp` filesystems | BR-S3's drill takes its atomic copy by freezing the server process (`SIGSTOP`), copying both paths, and resuming it (`SIGCONT`): every write the kernel accepted is in the copy and none is half in it, which is the property a volume snapshot gives; the LVM script stays the reference, run where root exists |
 
 ## 4. Stages
 
@@ -208,7 +226,12 @@ BR-Q2 answerable.
   covering the stop is archived. The order is the documented contract.
 - `scripts/backup/snapshot-lvm.sh` as the reference; the engine carries no
   vendor logic.
-- **Exit:** D's drills (BR-S8) pass on LVM in the development VM.
+- **Exit:** D's drills (BR-S8) pass on an atomic snapshot in the development
+  VM. H9 decides the substrate: LVM where the VM grants root, else the
+  process-freeze copy (`scripts/backup/snapshot-freeze.sh`), whose atomicity
+  is the drill's premise and is stated as such in its report (corrected
+  2026-10-12, defect 5 of §9: the VM's `sudo` needs a password, so LVM is not
+  reachable from a session).
 
 ### BR-S4 - WAL archive ∥ (after S2)
 - `archive_mode`, and one of `archive_dir` (built in: copy, `fsync` the file,
@@ -225,19 +248,28 @@ BR-Q2 answerable.
 - **Exit:** kill during archive loses nothing and duplicates nothing that
   differs.
 
-### BR-S5 - Path B: base backup (after S2, S4)
+### BR-S5 - Path B: base backup (after S2; S4 only for PITR past the stop)
 - `kds_backup base --target DIR`: start → the copier streams `data_file`
-  in chunks (BR-R9) → stop → wait until the stop segment is archived →
-  write and `fsync` the manifest (BR-R7). A directory without a manifest is
-  not a backup.
+  in chunks (BR-R9) → stop → copy the segments from the start segment to the
+  stop segment into the backup, held by the pin until copied → write and
+  `fsync` the manifest (BR-R7). A directory without a manifest is not a
+  backup.
+- **A base backup carries its own log** (BR-Q6, corrected 2026-10-12, defect
+  4 of §9): the segments `[start, stop]` are in the backup directory, so a
+  base backup restores to its stop with archiving off. The archive is what a
+  restore past the stop (PITR, BR-S7) reads; it is not a precondition of B.
 - The file grows during the copy: the copier copies to the length it read
-  at stop; pages past it are created by records in the window.
+  **at start** (corrected 2026-10-12, defect 3 of §9: the earlier text said
+  "at stop", which contradicted its own next clause); a page past that
+  length is created inside the window, and H8 decides whether its creation
+  record recreates it with no help from the copy.
 - **Exit:** a base backup under load completes and its manifest verifies.
 
 ### BR-S6 - Restore (after S1, and S3 or S5)
 - `kds_backup restore --from BACKUP --to DIR [--archive SRC] [--target ...]`:
   check the manifest (BR-R7), refuse a non-empty target, lay out and verify
-  the files, write the restore label, fetch segments from the archive on
+  the files, write the restore label, read segments from the backup's own
+  log and then, past the stop, from the archive on
   demand, recover to the stop (and the target, BR-S7), open.
 - A gap stops by name (BR-R8).
 - **Exit:** B and D restore drills pass.
@@ -354,3 +386,35 @@ segments, which `wal.md` §13 already names as the log-shipping source.
 | BR-Q3 | Force a checkpoint at `backup_start`? | (a) no, start at `D` (BR-R3); (b) yes, for a shorter replay | **(a)**, with (b) as an option of the command once M3 shows replay time matters |
 | BR-Q4 | Concurrent backups | (a) one at a time; (b) many | **(a)** in BR |
 | BR-Q5 | PITR scope | (a) LSN and commit time; (b) LSN only; (c) none in BR | **(a)** if BR-S0 finds commit time in the commit record, else **(b)** |
+| BR-Q6 | Does a base backup carry its own log `[start, stop]`? (added 2026-10-12, defect 4 of §9) | (a) yes, always: the segments are copied into the backup under the pin, and the archive is needed only past the stop; (b) only when archiving is off; (c) no: B is refused by name with archiving off | **(a)**: a base backup that restores only while a second system (the archive) is intact is two backups that must both survive; (b) makes the backup's contents depend on a setting; (c) leaves the archive-off instance with no path B |
+
+## 9. Review of the order as written (2026-10-12)
+
+Five defects found in the order as pushed at `fb953f07`, read in the main
+checkout at `dc117a5d`, and corrected on `br-backup-restore` from
+`fb953f07` before BR-S0 began, on the operator's word *"fix the five
+defects in the order"*:
+
+1. **BR-R5's image threshold** named the start LSN `D`. A page modified
+   between `D` and the arming carries a `page_lsn` above `D`, so its next
+   modification logs no image and a copy torn by that modification's
+   writeback is unhealable. The threshold is the arm LSN `A`; the two
+   conditions the threshold alone does not give (a mutation that read the
+   window clear taking an LSN above `A`, and a page dirty before `A` written
+   back during the copy) are stated in BR-R5 and decided by BR-S0.
+   `[quiet-wrong]`.
+2. **BR-R10** gave a new lineage only after a PITR open or a restore past the
+   stop. A restore that opens at the stop writes log under the segment
+   numbers the original also wrote past the same point. Every restore that
+   opens starts a lineage. `[quiet-wrong]`.
+3. **BR-S5** said the copier copies "to the length it read at stop" and then
+   that pages past it are created in the window - which only reads with the
+   length taken at start. Corrected, and H8 added: whether allocation, free
+   and reuse inside the window are reproduced by redo alone, given the
+   unlogged free map (T11) and BF's unrecorded free (T12).
+4. **Path B depended on the archive** with nothing saying so: with archiving
+   off a base backup could not restore. BR-Q6 added (a base backup carries
+   its own `[start, stop]` log), and S5 no longer waits for S4.
+5. **BR-S3's exit** required LVM in a VM whose `sudo` needs a password. H9
+   added, and the exit names a process-freeze copy as the substrate where
+   LVM cannot run.
