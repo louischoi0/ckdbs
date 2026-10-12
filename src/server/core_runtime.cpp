@@ -637,6 +637,15 @@ Status CoreRuntime::HostHandedConnections(ConnectionHandoff& handoff,
     return Status::OK();
 }
 
+Status CoreRuntime::AcceptMoves(ConnectionHandoff& handoff, TransactionPlacer* placer) {
+    if (!listener_.has_value()) {
+        return Status::InvalidArgument("CoreRuntime::AcceptMoves before a listener is attached");
+    }
+    const CurrentCoreGuard as_this_core(core_id());
+    listener_->set_mover(&handoff, placer);
+    return listener_->Host(handoff, config_.core_id);
+}
+
 Status CoreRuntime::AttachListener(TcpServer server, const TcpServer::ClientSetup& setup) {
     listener_.emplace(std::move(server));
     listener_->Configure(setup);

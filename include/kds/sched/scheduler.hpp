@@ -384,6 +384,11 @@ private:
     std::uint64_t iteration_polled_ns_ = 0;
     std::uint64_t longest_unpolled_ns_ = 0;
     std::uint64_t unpolled_over_100ms_ = 0;
+    // The current `CoreLoad` window (core_load.hpp): its wall span, the part
+    // of it the reactor held, and `foreground`'s polled total at its start.
+    std::uint64_t load_window_span_ns_ = 0;
+    std::uint64_t load_window_hold_ns_ = 0;
+    std::uint64_t load_window_fg_mark_ns_ = 0;
     void RecordIterationHold(MonoTimeNs start_ns, MonoTimeNs block_ns,
                              std::uint64_t run_edges_at_entry) noexcept;
 

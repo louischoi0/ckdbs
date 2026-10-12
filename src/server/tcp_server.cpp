@@ -1,5 +1,6 @@
 #include "kds/server/tcp_server.hpp"
 
+#include "kds/sched/core_load.hpp"
 #include "kds/sched/coro.hpp"
 
 #include <arpa/inet.h>
@@ -129,6 +130,8 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
     : listen_fd_(other.listen_fd_),
       hosting_(other.hosting_),
       handoff_(other.handoff_),
+      mover_(other.mover_),
+      placer_(other.placer_),
       host_(std::move(other.host_)),
       scheduler_(other.scheduler_),
       dispatcher_(other.dispatcher_),
@@ -168,6 +171,8 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         listen_fd_ = other.listen_fd_;
         hosting_ = other.hosting_;
         handoff_ = other.handoff_;
+        mover_ = other.mover_;
+        placer_ = other.placer_;
         host_ = std::move(other.host_);
         if (host_ != nullptr) host_->server = this;
         scheduler_ = other.scheduler_;
@@ -276,6 +281,9 @@ void TcpServer::Detach() noexcept {
             host_->server = nullptr;
             host_.reset();
         }
+        // What `CloseClient` could not erase (a statement still in flight)
+        // leaves the count with the map below.
+        CountSession(-static_cast<int>(clients_.size()));
         scheduler_ = nullptr;
         dispatcher_ = nullptr;
     }
@@ -401,7 +409,19 @@ void TcpServer::AdoptConnection(int client_fd) {
     if (!s.ok()) {
         clients_.erase(client_fd);
         ::close(client_fd);
+        return;
     }
+    CountSession(+1);
+}
+
+void TcpServer::CountSession(int delta) noexcept {
+    // Every listener on the reactor shares the core's slot, so a count
+    // moves by its delta rather than being set to one listener's size. At
+    // one core there is no other core to read it (BL-R9).
+    if (!scheduler_->wake_armed()) return;
+    std::atomic<std::uint32_t>& n = sched::CoreLoad::Of(scheduler_->core_id()).sessions;
+    n.store(static_cast<std::uint32_t>(static_cast<int>(n.load(std::memory_order_relaxed)) + delta),
+            std::memory_order_relaxed);
 }
 
 Status TcpServer::Host(ConnectionHandoff& handoff, std::uint32_t core) {
@@ -411,6 +431,9 @@ Status TcpServer::Host(ConnectionHandoff& handoff, std::uint32_t core) {
                                        " is past the handoff's " +
                                        std::to_string(handoff.cores()));
     }
+    // One task per server: D19's fallback hosts the inbox already where
+    // BL-S2's moves ask for it again.
+    if (host_ != nullptr) return Status::OK();
     host_ = std::make_shared<HostState>();
     host_->server = this;
     scheduler_->Submit(sched::MakeCoroTask(sched::SchedulingGroup::kSystem,
@@ -430,7 +453,13 @@ sched::Coro TcpServer::RunHost(std::shared_ptr<HostState> state, ConnectionHando
         // block, so the kick an offer sends only has to end the block.
         co_await sched::WaitUntil{&ready};
         if (state->server == nullptr) co_return Status::OK();
-        for (int fd : handoff.Take(core)) state->server->AdoptConnection(fd);
+        for (ConnectionHandoff::Arrival& a : handoff.Take(core)) {
+            if (a.moved != nullptr) {
+                state->server->AdoptMoved(std::move(a.moved));
+            } else {
+                state->server->AdoptConnection(a.fd);
+            }
+        }
     }
 }
 
@@ -623,14 +652,89 @@ bool TcpServer::DrainFrames(int client_fd, Connection& conn) {
         // owns it may be closed while the statement runs.
         conn.current_line = std::move(action.sql);
         conn.session.set_result_sink(action.sink);
-        conn.in_flight = true;
-        scheduler_->Submit(sched::MakeCoroTask(
-            sched::SchedulingGroup::kForeground,
-            dispatcher_->DispatchAsync(conn.current_line, &conn.session, &conn.pending),
-            [this, client_fd](const Status&) { OnStatementComplete(client_fd); }));
+        const bool head = !conn.session.in_explicit_txn();
+        if (scheduler_->wake_armed()) {
+            sched::CoreLoad::Slot& load = sched::CoreLoad::Of(scheduler_->core_id());
+            sched::CoreLoad::Bump(head ? load.heads : load.inside);
+        }
+        // **The head of a transaction is where it is placed** (BL-R1): no
+        // transaction is open and no statement of this connection runs, so
+        // nothing of it is this core's - and the whole `KwpSession` moves,
+        // portals, pipelined frames and reply tail with it.
+        if (head && placer_ != nullptr) {
+            const std::uint32_t here = scheduler_->core_id();
+            const std::uint32_t there = placer_->Place(here, conn.session);
+            if (there != here && there < mover_->cores()) {
+                // A finished statement's reply leaves now, as it would have
+                // had the connection stayed (BN-R7 holds back only a
+                // pipelined statement's own `S_PARSE_OK`/`S_BIND_OK`).
+                if (!FlushOutbox(client_fd, conn)) return false;
+                MoveConnection(client_fd, there);
+                return false;  // the connection is another core's now
+            }
+        }
+        SubmitStatement(client_fd, conn);
         return true;
     }
     return true;
+}
+
+void TcpServer::SubmitStatement(int client_fd, Connection& conn) {
+    conn.in_flight = true;
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync(conn.current_line, &conn.session, &conn.pending),
+        [this, client_fd](const Status&) { OnStatementComplete(client_fd); }));
+}
+
+// ---- BL-S2: the move -------------------------------------------------------
+//
+// **Order is the protocol.** This core's reactor stops watching the socket
+// before the connection leaves its map, and the destination registers it
+// only after taking it: at no moment do two reactors watch one socket, and
+// bytes that arrive in between wait in the kernel's buffer, where the
+// destination's level-triggered registration reports them. Bytes this core
+// already read travel in the connection (`decoder`, `outbox`). The inbox's
+// latch is the handoff's happens-before edge (`connection_handoff.hpp`).
+//
+// **Nothing per core travels.** At a transaction's head the session holds no
+// transaction, lock, borrow, view or lease; the clock is the instance's one
+// (every core's scheduler is handed it), and the cancel registry and its
+// entry, keyed by session id, are the instance's.
+void TcpServer::MoveConnection(int client_fd, std::uint32_t core) {
+    (void)scheduler_->UnregisterIoHandler(client_fd);
+    CountSession(-1);
+    mover_->Offer(core, client_fd,
+                  std::make_unique<MovedConnection>(clients_.extract(client_fd), cancels_));
+}
+
+// **A moved connection always carries the statement whose head moved it**,
+// which runs here first.
+void TcpServer::AdoptMoved(std::unique_ptr<ConnectionHandoff::Transit> moved) {
+    auto& transit = static_cast<MovedConnection&>(*moved);
+    const int client_fd = transit.node.key();
+    Connection& conn = clients_.insert(std::move(transit.node)).position->second;
+    CountSession(+1);
+    Status s = scheduler_->RegisterIoHandler(
+        client_fd, sched::IoInterest::kReadable,
+        [this, client_fd](const sched::IoEvent& event) { OnClientEvent(client_fd, event); });
+    if (!s.ok()) {
+        conn.session.set_result_sink(nullptr);
+        CloseClient(client_fd);
+        return;
+    }
+    SubmitStatement(client_fd, conn);
+    // Registered readable only: a reply tail the source could not send
+    // (EAGAIN) needs this reactor's writable interest too.
+    conn.want_writable = false;
+    SyncWriteInterest(client_fd, conn);
+}
+
+TcpServer::MovedConnection::~MovedConnection() {
+    if (node.empty()) return;  // taken
+    Connection& conn = node.mapped();
+    if (conn.cancel_registered) cancels->Unregister(conn.kwp->session_id());
+    ::close(node.key());
 }
 
 bool TcpServer::FlushOutbox(int client_fd, Connection& conn) {
@@ -750,11 +854,7 @@ bool TcpServer::DrainCommands(int client_fd, Connection& conn) {
 
         if (dispatcher_ == nullptr || scheduler_ == nullptr) return true;
 
-        conn.in_flight = true;
-        scheduler_->Submit(sched::MakeCoroTask(
-            sched::SchedulingGroup::kForeground,
-            dispatcher_->DispatchAsync(conn.current_line, &conn.session, &conn.pending),
-            [this, client_fd](const Status&) { OnStatementComplete(client_fd); }));
+        SubmitStatement(client_fd, conn);
         return true;
     }
     return true;
@@ -923,6 +1023,7 @@ void TcpServer::CloseClient(int client_fd) {
     }
     if (scheduler_ != nullptr) {
         (void)scheduler_->UnregisterIoHandler(client_fd);
+        CountSession(-1);
     }
     ::close(client_fd);
 }

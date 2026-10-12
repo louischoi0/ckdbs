@@ -13,6 +13,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/connection_handoff.hpp"
 #include "kds/server/kwp_session.hpp"
+#include "kds/server/transaction_placement.hpp"
 #include "kds/server/wire_channel.hpp"
 
 // The client-facing accept/read/dispatch/write loop - the actual
@@ -144,10 +145,24 @@ public:
 
     // The receiving side, after Attach(): parks a task on this reactor that
     // wakes whenever `core`'s inbox holds a socket and runs each one here,
-    // as though this server had accepted it. The task outlives nothing it
-    // uses - a server moved or detached is told so, and the task ends at
-    // its next wake. `handoff` must outlive the scheduler's frames.
+    // as though this server had accepted it - or, for a live connection
+    // another core moved (BL-S2), adopts it and runs the statement it
+    // carried. The task outlives nothing it uses - a server moved or
+    // detached is told so, and the task ends at its next wake. `handoff`
+    // must outlive the scheduler's frames.
     Status Host(ConnectionHandoff& handoff, std::uint32_t core);
+
+    // ---- BL-S2: a session placed per transaction -------------------------
+    //
+    // Each time a KWP session with no transaction open asks for a dispatch,
+    // `placer` names the core that transaction runs on; one other than this
+    // server's moves the whole connection there through `handoff`'s inbox
+    // (`transaction_placement.hpp`). Before the reactor runs; both must
+    // outlive this server, and the destination must `Host` the same handoff.
+    void set_mover(ConnectionHandoff* handoff, TransactionPlacer* placer) noexcept {
+        mover_ = handoff;
+        placer_ = placer;
+    }
 
     // Installs the wire-byte transform every *subsequently accepted*
     // connection runs through (wire_channel.hpp) - in practice the TLS
@@ -339,6 +354,24 @@ private:
         std::vector<std::byte> frames_out;
     };
 
+    using Clients = std::unordered_map<int, Connection>;
+
+    // A live connection in another core's inbox (BL-S2), carrying the
+    // statement whose head moved it (`current_line`, the session's sink).
+    // The map node, not the `Connection`, travels: a node keeps its
+    // element's address, and `KwpSession` holds a reference to the
+    // `Session` beside it. Destroyed
+    // untaken - the instance stopping mid-move - it is the connection's
+    // teardown: its cancel entry leaves the registry and its socket closes.
+    // A session moves only between transactions, so there is nothing to
+    // roll back.
+    struct MovedConnection final : ConnectionHandoff::Transit {
+        MovedConnection(Clients::node_type n, CancelRegistry* c) : node(std::move(n)), cancels(c) {}
+        ~MovedConnection() override;
+        Clients::node_type node;
+        CancelRegistry* cancels;
+    };
+
     explicit TcpServer(int fd, bool hosting = false) noexcept : listen_fd_(fd), hosting_(hosting) {}
     void CloseIfOpen() noexcept;
 
@@ -399,11 +432,22 @@ private:
     // Everything after `accept()` returns a socket: the connection's state,
     // its protocol session and its reactor registration.
     void AdoptConnection(int client_fd);
+    // BL-S2's two halves: this core gives the connection on `client_fd` to
+    // `core` with its statement carried, and a core takes one given to it.
+    void MoveConnection(int client_fd, std::uint32_t core);
+    void AdoptMoved(std::unique_ptr<ConnectionHandoff::Transit> moved);
+    // Starts the statement `conn` holds (`current_line`, the sink) on this
+    // core.
+    void SubmitStatement(int client_fd, Connection& conn);
+    // Moves this core's `CoreLoad::sessions` by `delta` (core_load.hpp).
+    void CountSession(int delta) noexcept;
 
     int listen_fd_;
     // A `Hosting()` server: no socket is not an error at Attach().
     bool hosting_ = false;
     ConnectionHandoff* handoff_ = nullptr;  // set_handoff
+    ConnectionHandoff* mover_ = nullptr;    // set_mover
+    TransactionPlacer* placer_ = nullptr;   // set_mover
     std::shared_ptr<HostState> host_;  // Host
     sched::Scheduler* scheduler_ = nullptr;
     CommandDispatcher* dispatcher_ = nullptr;
@@ -424,7 +468,7 @@ private:
     // The portal-idle sweep's timer (§10, KW-D3), registered by `Attach` on
     // a KWP listener and cancelled by `Detach`.
     sched::TimerId idle_sweep_ = sched::kInvalidTimerId;
-    std::unordered_map<int, Connection> clients_;
+    Clients clients_;
     std::uint64_t reply_writes_ = 0;  // `reply_writes()`
 };
 

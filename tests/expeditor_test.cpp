@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -23,6 +24,11 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/file_page_device.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
+#include "kds/server/transaction_placement.hpp"
+#include "kds/wire/error_registry.hpp"
+#include "kds/wire/kwp.hpp"
+#include "kds/wire/kwp_types.hpp"
+#include "kds/wire/row_codec.hpp"
 
 // **The multi-core assembly, run rather than modelled** (AM-S0(a)).
 //
@@ -752,6 +758,395 @@ TEST_F(ExpeditorTest, APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt) {
     const std::string violating = SendLine(running.client(), "INSERT INTO cap VALUES (7)");
     EXPECT_EQ(violating.rfind("ERR ", 0), 0u) << violating;
     EXPECT_NE(violating.find("ASSERTION_VIOLATION"), std::string::npos) << violating;
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+// ---- BL-S2: a session placed per transaction ------------------------------
+//
+// `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
+// BL-R1, BL-R6. A listener asks its placer at each transaction's head, and
+// a core other than its own takes the whole connection. The placer here is
+// the test's: it names the core outright, so every cell decides the move
+// rather than racing a load signal for it.
+namespace {
+
+// Every head on `target`, or where the session is while `target` is -1.
+// Asked on both reactors, hence the atomics.
+class ScriptedPlacer final : public TransactionPlacer {
+public:
+    std::uint32_t Place(std::uint32_t core, Session&) override {
+        asked.fetch_add(1, std::memory_order_relaxed);
+        const int t = target.load(std::memory_order_relaxed);
+        return t < 0 ? core : static_cast<std::uint32_t>(t);
+    }
+    std::atomic<int> target{-1};
+    std::atomic<int> asked{0};
+};
+
+// A KWP/1 session over a real socket: one statement in, its answer out as
+// text - a result set's cells joined by spaces, one row per line; a
+// completion's tag; `ERR` and the message for an error frame.
+class KwpClient {
+public:
+    explicit KwpClient(std::uint16_t port) : fd_(ConnectToLoopback(port)) {}
+    ~KwpClient() {
+        if (fd_ >= 0) ::close(fd_);
+    }
+    KwpClient(const KwpClient&) = delete;
+    KwpClient& operator=(const KwpClient&) = delete;
+
+    bool Hello() {
+        if (fd_ < 0) return false;
+        wire::ClientHello hello;
+        hello.client_name = "bl-s2";
+        Send(wire::ClientFrameType::kHello, wire::EncodeClientHello(hello));
+        auto s_hello = Read();
+        auto ready = Read();
+        return s_hello.has_value() && ready.has_value() &&
+               ready->type == static_cast<std::uint8_t>(wire::ServerFrameType::kReady);
+    }
+
+    // PARSE, BIND and EXECUTE of the unnamed statement and portal, sent in
+    // one write - a pipeline the server reads in one go.
+    std::string Run(std::string_view sql) {
+        SendRaw(Pipeline(sql));
+        return Answer();
+    }
+
+    // PARSE alone, of statement `name`: no dispatch, so no head, and the
+    // statement is session state from here on.
+    bool Prepare(std::string_view name, std::string_view sql) {
+        Send(wire::ClientFrameType::kParse, ParseOf(name, sql));
+        auto f = Read();
+        return f.has_value() && f->type == static_cast<std::uint8_t>(wire::ServerFrameType::kParseOk);
+    }
+
+    // BIND and EXECUTE of the prepared statement `name`.
+    std::string Execute(std::string_view name) {
+        std::vector<std::byte> out = Frame(wire::ClientFrameType::kBind, BindOf(name));
+        const std::vector<std::byte> exec = Frame(wire::ClientFrameType::kExecute, ExecuteOf());
+        out.insert(out.end(), exec.begin(), exec.end());
+        SendRaw(out);
+        return Answer(/*parsed=*/false);
+    }
+
+    // Two statements in one write: the second's frames wait in the
+    // connection's decoder while the first runs - and travel with it.
+    std::pair<std::string, std::string> RunTwo(std::string_view a, std::string_view b) {
+        std::vector<std::byte> both = Pipeline(a);
+        const std::vector<std::byte> second = Pipeline(b);
+        both.insert(both.end(), second.begin(), second.end());
+        SendRaw(both);
+        std::string first = Answer();
+        return {first, Answer()};
+    }
+
+    // `C_TXN_BEGIN` (session default durability), `C_TXN_COMMIT`.
+    std::string Txn(wire::ClientFrameType type) {
+        std::vector<std::byte> payload;
+        if (type == wire::ClientFrameType::kTxnBegin) payload.push_back(std::byte{0});
+        Send(type, payload);
+        auto f = Read();
+        if (!f.has_value()) return "ERR hung up";
+        return f->type == static_cast<std::uint8_t>(wire::ServerFrameType::kTxnOk) ? "TXN_OK"
+                                                                                   : "ERR txn";
+    }
+
+    // The core `SHOW META` says this session runs on, or -1.
+    int Core() {
+        const std::string meta = Run("SHOW META");
+        const std::size_t at = meta.find("core=");
+        return at == std::string::npos ? -1 : std::atoi(meta.c_str() + at + 5);
+    }
+
+private:
+    static std::vector<std::byte> Frame(wire::ClientFrameType type,
+                                        std::span<const std::byte> payload) {
+        return wire::EncodeFrame(static_cast<std::uint8_t>(type), 0, payload);
+    }
+    static std::vector<std::byte> ParseOf(std::string_view name, std::string_view sql) {
+        wire::PayloadWriter w;
+        w.Str(name);
+        w.Text(sql);
+        return w.Take();
+    }
+    // The unnamed portal over statement `name`.
+    static std::vector<std::byte> BindOf(std::string_view name) {
+        wire::PayloadWriter w;
+        w.Str("");
+        w.Str(name);
+        std::vector<std::byte> out = w.Take();
+        (void)wire::EncodeBindParams({}, out);
+        return out;
+    }
+    static std::vector<std::byte> ExecuteOf() {
+        wire::PayloadWriter w;
+        w.Str("");
+        w.U32(0);
+        return w.Take();
+    }
+    static std::vector<std::byte> Pipeline(std::string_view sql) {
+        std::vector<std::byte> out;
+        for (const auto& f : {Frame(wire::ClientFrameType::kParse, ParseOf("", sql)),
+                              Frame(wire::ClientFrameType::kBind, BindOf("")),
+                              Frame(wire::ClientFrameType::kExecute, ExecuteOf())}) {
+            out.insert(out.end(), f.begin(), f.end());
+        }
+        return out;
+    }
+    void Send(wire::ClientFrameType type, std::span<const std::byte> payload) {
+        SendRaw(Frame(type, payload));
+    }
+    void SendRaw(const std::vector<std::byte>& bytes) {
+        ASSERT_EQ(::write(fd_, bytes.data(), bytes.size()), static_cast<ssize_t>(bytes.size()));
+    }
+    std::optional<wire::DecodedFrame> Read() {
+        while (true) {
+            if (auto frame = decoder_.PopFrame()) return frame;
+            pollfd p{fd_, POLLIN, 0};
+            if (::poll(&p, 1, 10'000) <= 0) return std::nullopt;
+            std::byte buf[4096];
+            const ssize_t n = ::read(fd_, buf, sizeof(buf));
+            if (n <= 0) return std::nullopt;
+            if (!decoder_.Feed(std::span<const std::byte>(buf, static_cast<std::size_t>(n))).ok()) {
+                return std::nullopt;
+            }
+        }
+    }
+    // One statement's frames, from `S_PARSE_OK` (when `parsed`) and
+    // `S_BIND_OK` to its completion - both of which a move must deliver too,
+    // since they were in the source's reply tail. An error frame is read
+    // through to the `S_READY` its `C_SYNC` asks for, so the next call starts
+    // clean (§5's skip-to-sync).
+    std::string Answer(bool parsed = true) {
+        std::string text;
+        std::vector<wire::FieldDescription> fields;
+        bool parse_ok = !parsed;
+        bool bind_ok = false;
+        while (true) {
+            auto f = Read();
+            if (!f.has_value()) return "ERR hung up";
+            const auto type = static_cast<wire::ServerFrameType>(f->type);
+            if (type == wire::ServerFrameType::kError) {
+                auto e = wire::DecodeError(f->payload);
+                Send(wire::ClientFrameType::kSync, {});
+                for (auto r = Read(); r.has_value(); r = Read()) {
+                    if (r->type == static_cast<std::uint8_t>(wire::ServerFrameType::kReady)) break;
+                }
+                return "ERR " + (e.ok() ? e.value().message : std::string("undecodable"));
+            }
+            if (type == wire::ServerFrameType::kParseOk) {
+                parse_ok = true;
+            } else if (type == wire::ServerFrameType::kBindOk) {
+                bind_ok = true;
+            } else if (type == wire::ServerFrameType::kRowDesc) {
+                auto described = wire::DecodeRowDescription(f->payload);
+                if (!described.ok()) return "ERR row description";
+                fields = std::move(described.value());
+            } else if (type == wire::ServerFrameType::kRowBatch) {
+                auto rows = wire::DecodeRowBatch(f->payload, fields.size());
+                if (!rows.ok()) return "ERR row batch";
+                for (const auto& row : rows.value()) {
+                    for (std::size_t i = 0; i < row.size(); ++i) {
+                        // A variable-width column is text; every other one
+                        // these cells select is an integer.
+                        if (fields[i].type_len == -1) {
+                            text += wire::DecodeText(row[i].bytes);
+                        } else if (auto v = wire::DecodeInt(row[i].bytes); v.ok()) {
+                            text += std::to_string(v.value());
+                        }
+                        text += ' ';
+                    }
+                    text += '\n';
+                }
+            } else if (type == wire::ServerFrameType::kComplete) {
+                if (!parse_ok || !bind_ok) return "ERR completed without its S_PARSE_OK/S_BIND_OK";
+                // A one-line answer (`SHOW META`, a write's) is the tag
+                // itself, carried in this frame's payload.
+                if (text.empty()) {
+                    wire::PayloadReader r(f->payload);
+                    auto tag = r.Text();
+                    if (tag.has_value() && tag->has_value()) text = **tag;
+                }
+                return text;
+            }
+        }
+    }
+
+    int fd_;
+    wire::FrameDecoder decoder_;
+};
+
+}  // namespace
+
+// The head of each autocommit statement is placed, so a session's
+// statements run where the placer says, one move per head - and a row
+// written on one core is read on the other, since a move carries nothing
+// a core owns.
+//
+// **The mutation**: make `DrainFrames` skip the placer and every core read
+// is the accepting one.
+TEST_F(ExpeditorTest, EachTransactionsHeadRunsOnTheCoreThePlacerNames) {
+    Expeditor::Config config = ConfigAt(/*cores=*/2);
+    ScriptedPlacer placer;
+    config.transaction_placer = &placer;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    KwpClient client(config.port);
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    ASSERT_TRUE(client.Hello());
+
+    const int accepted = client.Core();
+    ASSERT_TRUE(accepted == 0 || accepted == 1) << "SHOW META named no core";
+    const int other = 1 - accepted;
+    placer.target = other;
+    EXPECT_EQ(client.Core(), other) << "the head did not move the session";
+    EXPECT_EQ(client.Run("CREATE TABLE bl (id int64, v int64)").substr(0, 7), "CREATED");
+    placer.target = accepted;
+    EXPECT_EQ(client.Run("INSERT INTO bl VALUES (41)").substr(0, 8), "INSERTED");
+    placer.target = other;
+    EXPECT_NE(client.Run("SELECT v FROM bl WHERE id = 1").find("41"), std::string::npos)
+        << "the row written on the other core is not read here";
+    EXPECT_EQ(client.Core(), other);
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+// **A transaction stays on the core it began on** (BL-R1): the placer is
+// asked at `BEGIN`, and not again until a statement finds no transaction
+// open. The `[quiet-wrong]` clause - a move inside a transaction runs its
+// next statement on a core whose in-flight table does not hold it.
+//
+// **The mutation**: drop the `in_explicit_txn()` test in `DrainFrames` and
+// the statements inside the transaction follow the placer to the other core.
+TEST_F(ExpeditorTest, ATransactionStaysOnTheCoreItBeganOn) {
+    Expeditor::Config config = ConfigAt(/*cores=*/2);
+    ScriptedPlacer placer;
+    config.transaction_placer = &placer;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    KwpClient client(config.port);
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    ASSERT_TRUE(client.Hello());
+    ASSERT_EQ(client.Run("CREATE TABLE bl (id int64, v int64)").substr(0, 7), "CREATED");
+
+    // `BEGIN` is the head, so it moves the session - and the transaction
+    // begins, and stays, on the core it moved to.
+    const int accepted_on = client.Core();
+    const int began_on = 1 - accepted_on;
+    placer.target = began_on;
+    ASSERT_EQ(client.Txn(wire::ClientFrameType::kTxnBegin), "TXN_OK");
+    const int asked_at_begin = placer.asked.load();
+    placer.target = accepted_on;  // every head from here would move
+    EXPECT_EQ(client.Core(), began_on) << "a statement inside the transaction moved";
+    EXPECT_EQ(client.Run("INSERT INTO bl VALUES (7)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(client.Core(), began_on);
+    EXPECT_EQ(placer.asked.load(), asked_at_begin) << "the placer was asked inside a transaction";
+    ASSERT_EQ(client.Txn(wire::ClientFrameType::kTxnCommit), "TXN_OK");
+    // The transaction has ended: the next statement is a head.
+    EXPECT_EQ(client.Core(), accepted_on);
+    EXPECT_NE(client.Run("SELECT v FROM bl WHERE id = 1").find("7"), std::string::npos)
+        << "the committed row is not read on the core the next head moved to";
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+// **Every core's load is read from any core, and nowhere at one core**
+// (BL-S1, BL-R9, `sched/core_load.hpp`): above one core `SHOW META` prints a
+// `load_c<k>_*` block for each core, the asking core's counting this
+// session and its statements; at one core nothing writes one.
+//
+// **The mutation**: drop `SetCores` and the two-core half reads no block.
+TEST_F(ExpeditorTest, EveryCoresLoadIsReadFromAnyCoreAndNoneAtOneCore) {
+    for (const std::uint32_t cores : {2u, 1u}) {
+        Expeditor::Config config = ConfigAt(cores);
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        ASSERT_TRUE(Started(db.Start()));
+        KwpClient client(config.port);
+        RunningInstance running(db, config.debug_text_port);
+        ASSERT_TRUE(running.Run());
+        ASSERT_TRUE(client.Hello());
+        const int core = client.Core();
+        const std::string meta = client.Run("SHOW META");
+        if (cores == 1) {
+            EXPECT_EQ(meta.find("load_c"), std::string::npos) << "a load word at one core";
+        } else {
+            for (int k = 0; k < 2; ++k) {
+                EXPECT_NE(meta.find("load_c" + std::to_string(k) + "_busy_ppm="), std::string::npos)
+                    << "no load block for core " << k;
+            }
+            const std::string mine = "load_c" + std::to_string(core) + "_";
+            const std::size_t sessions = meta.find(mine + "sessions=");
+            const std::size_t heads = meta.find(mine + "heads=");
+            ASSERT_NE(sessions, std::string::npos);
+            ASSERT_NE(heads, std::string::npos);
+            EXPECT_GE(std::atoi(meta.c_str() + sessions + mine.size() + 9), 1);
+            EXPECT_GE(std::atoi(meta.c_str() + heads + mine.size() + 6), 2)
+                << "the session's two statements were not counted as heads";
+        }
+        EXPECT_TRUE(running.Stop().ok());
+    }
+}
+
+// **A prepared statement is session state, and travels with it** (BL §1.2):
+// parsed on one core, bound and executed on the other, with the result it
+// gives where it was parsed.
+TEST_F(ExpeditorTest, AStatementPreparedOnOneCoreExecutesOnTheOther) {
+    Expeditor::Config config = ConfigAt(/*cores=*/2);
+    ScriptedPlacer placer;
+    config.transaction_placer = &placer;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    KwpClient client(config.port);
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    ASSERT_TRUE(client.Hello());
+    ASSERT_EQ(client.Run("CREATE TABLE bl (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(client.Run("INSERT INTO bl VALUES (5)").substr(0, 8), "INSERTED");
+
+    const int parsed_on = client.Core();
+    ASSERT_TRUE(client.Prepare("q", "SELECT v FROM bl WHERE id = 1"));
+    const std::string here = client.Execute("q");
+    EXPECT_NE(here.find('5'), std::string::npos) << here;
+    placer.target = 1 - parsed_on;
+    EXPECT_EQ(client.Execute("q"), here) << "the statement parsed on the other core answers otherwise";
+    EXPECT_EQ(client.Core(), 1 - parsed_on);
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+// **Bytes the source already read travel with the connection**: two
+// statements in one write, the first moving the session - its frames and
+// the second statement's are in the source's decoder by then. Both are
+// answered, in order, the second where the first moved it.
+//
+// **The mutation**: clear `decoder` in `MoveConnection` and the second
+// answer never comes.
+TEST_F(ExpeditorTest, APipelinedStatementTravelsWithTheConnectionThatMoved) {
+    Expeditor::Config config = ConfigAt(/*cores=*/2);
+    ScriptedPlacer placer;
+    config.transaction_placer = &placer;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    ASSERT_TRUE(Started(db.Start()));
+    KwpClient client(config.port);
+    RunningInstance running(db, config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    ASSERT_TRUE(client.Hello());
+
+    const int other = 1 - client.Core();
+    placer.target = other;
+    const auto [first, second] = client.RunTwo("SHOW META", "SHOW META");
+    EXPECT_NE(first.find("core=" + std::to_string(other)), std::string::npos) << first;
+    EXPECT_NE(second.find("core=" + std::to_string(other)), std::string::npos) << second;
     EXPECT_TRUE(running.Stop().ok());
 }
 

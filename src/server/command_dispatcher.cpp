@@ -6,6 +6,7 @@
 #include "kds/txn/lock_table.hpp"
 
 #include "kds/sched/checkpoint_census.hpp"
+#include "kds/sched/core_load.hpp"
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 
@@ -1486,7 +1487,8 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        // Every core listens (AT-S8), so the kernel picks the accepting core and
        // a client cannot choose it (PW5), so a client that needs to know -
        // the per-core writer benchmark, an operator reading a refusal - must
-       // be able to ask. Constant per session, by M3: a session never moves.
+       // be able to ask. Constant per transaction; per session too unless a
+       // transaction placer moves it between transactions (BL-S2).
        << " core=" << core_id_
        // §5d: delete-marked catalog rows the horizon-gated purge retired
        // *this* mount. Its sibling `catalog_marks_finalized` below counts a
@@ -1799,6 +1801,30 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
             os << " checkpoint_last_" << kCheckpointPhaseNames[i]
                << "_sum_us=" << load(ckpt.last_sum_ns[i]) / 1000 << " checkpoint_last_"
                << kCheckpointPhaseNames[i] << "_max_us=" << load(ckpt.last_max_ns[i]) / 1000;
+        }
+    }
+
+    // **Every core's load, from any core** (BL-S1, `sched/core_load.hpp`):
+    // the one block here that does not describe only the asking session's
+    // core. `load_c<k>_*` for each of the instance's cores; none at one core,
+    // where nothing writes them (BL-R9).
+    for (std::uint32_t k = 0; k < sched::CoreLoad::Cores(); ++k) {
+        const sched::CoreLoad::Slot& s = sched::CoreLoad::Of(k);
+        const auto r = [](const auto& v) { return v.load(std::memory_order_relaxed); };
+        os << " load_c" << k << "_busy_ppm=" << r(s.busy_ppm) << " load_c" << k
+           << "_foreground_ppm=" << r(s.foreground_ppm) << " load_c" << k
+           << "_queued_foreground=" << r(s.queued_foreground) << " load_c" << k
+           << "_sessions=" << r(s.sessions) << " load_c" << k << "_heads=" << r(s.heads)
+           << " load_c" << k << "_inside=" << r(s.inside);
+        // **What the core waited on** (BL-S1's holder split): the contention
+        // block's per-core slot (`base/contention.hpp`), which that block
+        // prints summed. Only the latches it waited on; slot 0 also carries
+        // the threads that declared no core (the WAL writer among them).
+        const detail::ContentionSlot& c = detail::g_contention[k % detail::kContentionSlots];
+        for (std::size_t i = 0; i < kLatchKindCount; ++i) {
+            const std::uint64_t ns = r(c.wait_ns[i]);
+            if (ns == 0) continue;
+            os << " load_c" << k << "_waited_" << kLatchKindNames[i] << "_us=" << ns / 1000;
         }
     }
 

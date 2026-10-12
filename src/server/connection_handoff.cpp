@@ -12,7 +12,11 @@ ConnectionHandoff::ConnectionHandoff(std::uint32_t cores, const sched::WakeRegis
 
 ConnectionHandoff::~ConnectionHandoff() {
     for (auto& inbox : inboxes_) {
-        for (int fd : inbox->fds) ::close(fd);
+        // A live connection's teardown is its own `Transit`'s, destroyed
+        // with the vector; an accepted socket has only its fd.
+        for (const Arrival& a : inbox->arrivals) {
+            if (a.moved == nullptr) ::close(a.fd);
+        }
     }
 }
 
@@ -20,11 +24,11 @@ std::uint32_t ConnectionHandoff::NextCore() noexcept {
     return next_.fetch_add(1, std::memory_order_relaxed) % cores();
 }
 
-void ConnectionHandoff::Offer(std::uint32_t core, int fd) {
+void ConnectionHandoff::Offer(std::uint32_t core, int fd, std::unique_ptr<Transit> moved) {
     Inbox& inbox = *inboxes_[core];
     {
         LatchGuard hold(&inbox.latch);
-        inbox.fds.push_back(fd);
+        inbox.arrivals.push_back(Arrival{fd, std::move(moved)});
         inbox.pending.store(true, std::memory_order_release);
     }
     // After the latch: the state the destination will look for is
@@ -36,11 +40,11 @@ bool ConnectionHandoff::Pending(std::uint32_t core) const noexcept {
     return inboxes_[core]->pending.load(std::memory_order_acquire);
 }
 
-std::vector<int> ConnectionHandoff::Take(std::uint32_t core) {
+std::vector<ConnectionHandoff::Arrival> ConnectionHandoff::Take(std::uint32_t core) {
     Inbox& inbox = *inboxes_[core];
-    std::vector<int> taken;
+    std::vector<Arrival> taken;
     LatchGuard hold(&inbox.latch);
-    taken.swap(inbox.fds);
+    taken.swap(inbox.arrivals);
     inbox.pending.store(false, std::memory_order_relaxed);
     return taken;
 }

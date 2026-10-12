@@ -122,6 +122,12 @@ public:
         // reaches it.
         bool force_listener_handoff = false;
 
+        // **Not a configuration key**: BL-S2's test seam. Above one core,
+        // where it is set, every listener asks it at each transaction's head
+        // which core that transaction runs on, and moves the connection
+        // there (`transaction_placement.hpp`). Must outlive the run.
+        TransactionPlacer* transaction_placer = nullptr;
+
         // The buffer pool's maximum, in 8 KiB frames, for the whole instance:
         // one pool every core shares (`eviction.md` §6). **Required**, with
         // no default - the 0 here is "not given", which `Open` refuses
@@ -653,7 +659,8 @@ public:
     // cores rather than dangling ones. Core 0 is not in it - core 0's
     // runtime is this object.
     const std::vector<std::unique_ptr<CoreRuntime>>& cores() const noexcept { return cores_; }
-    // D19's fallback's inboxes, or null where every core listens on the port.
+    // The inboxes a connection crosses cores through: D19's fallback's
+    // accepts, and BL-S2's moves where a placer is set. Null where neither.
     const ConnectionHandoff* connection_handoff() const noexcept {
         return handoff_.has_value() ? &*handoff_ : nullptr;
     }
