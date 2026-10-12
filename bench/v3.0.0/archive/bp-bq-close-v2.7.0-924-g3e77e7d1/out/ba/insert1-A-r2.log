@@ -1,0 +1,1 @@
+kds-insert1-relaxed-k4-s8-kernel-r0 load 1.57->2.95 stmts=1427761 errors=0 refusals=0 client_bound=False cores=['1.0', '2.0'] stmt/s=71137.1 p50=77.9

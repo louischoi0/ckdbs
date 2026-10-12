@@ -1,0 +1,1 @@
+kds-insert1-strict-k1-s1-kernel-r0 load 1.45->1.31 stmts=17268 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=863.4 p50=983.4

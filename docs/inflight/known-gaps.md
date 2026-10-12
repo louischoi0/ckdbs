@@ -326,37 +326,58 @@ statement about an engine that no longer exists; re-verify or strike it.
   Cost: one `fdatasync` per live segment per durable-point advance, about
   50 us per live segment (measured at `4cf30270`, BQ-S1); a segment roll at
   `relaxed` is held mostly by the tail's sync, not by this breadth (BQ-S1's
-  H3 bound). Owner: `docs/spec/wal.md` §3,
+  H3 bound). **Re-priced at BQ's close, 2026-10-12**: the non-tail syncs are
+  39.8-72.0 % of step c over the rolls at or above the hold's p99 in BQ-S1's
+  C1-spread and C2 cells, but with
+  every one of them removed the roll's hold p99 stays 652-780 ms at
+  `relaxed`, so narrowing the sync (BQ's rung 3, H3, `[quiet-wrong]`, its
+  proof unwritten) was recorded unable to meet BQ's bar and not built
+  (BQ-Q6 (a), `instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7).
+  The breadth stays and so does the comment forbidding the narrowing.
+  Owner: `docs/spec/wal.md` §3,
   `wal/file_log_device.cpp`.
 
-- **A segment roll does I/O inside the instance's append latch, which
-  `wal.md` §6 both says and denies, and its cost was never priced.**
-  Verified at `8f9a887`, 2026-09-28, by reading (CN-9 §4 C4).
-  - `WalStream::Append` takes the stream latch and calls `Roll` under it
-    when the record does not fit (`src/wal/stream.cpp:210-219`).
-  - `Roll` reaches `CreateSegment` (`:142-148`, `:63-64`). That runs
-    `posix_fallocate`, zero-fills 64 MiB, writes the header, `fsync`s the
-    file and then `fsync`s the directory (`src/wal/file_log_device.cpp`).
-  - **Since the unheadered-tail fix (2026-10-07, `worktree-fix-roll-header`)
-    the roll first syncs the device** through the stream's sync gate, so the
-    segment it leaves is sealed durably before the next one exists - one
-    more `fdatasync` per roll, and a wait for any sync already in flight.
-  - **The behaviour is deliberate.** The authority for it as built is
-    `include/kds/wal/stream.hpp:35-43`, which makes the latch a mutex for
-    exactly this wait.
-  - **The spec contradicts itself here.** `docs/spec/wal.md:114`, in the
-    `[PROPOSED]` §6, puts *"any segment roll"* inside the latched append,
-    and in the same sentence calls an append *"no allocation and no I/O"*.
-  - **The follow-on was never priced.** `stream.hpp` names it: *"if AL-S8
-    prices this as material"*. AL-S8's files measure the single stream, not
-    the roll.
+- **A segment roll does I/O inside the instance's append latch, and at
+  `relaxed` under a bulk writer its hold is hundreds of milliseconds.**
+  Re-verified at `1fb71d1a` by reading, 2026-10-12; priced by BQ at
+  `4cf30270` (`instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7,
+  `bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md`,
+  `bench/v3.0.0/results-bq-s2-rung1-v2.7.0-909-g4cf30270.md`).
+  - `WalStream::Append` (`src/wal/stream.cpp:359`) rolls under the stream
+    latch when the record does not fit: `Roll` (`:235-243`) reaches
+    `StartSegment` (`:140-150`), which syncs the segment it leaves through
+    `SyncDevice` - waiting out any sync in flight, the writer thread's
+    included - and creates the next. Deliberate, and stated as built in
+    `include/kds/wal/stream.hpp`'s protocol header and `wal.md` §6 step 1,
+    whose self-contradiction BQ-S5 resolved.
+  - **Measured**: at `relaxed` under one bulk writer (~75 MiB/s of log) a
+    roll holds the latch p50 ~330 ms, p99 ~790 ms, max 1.2 s, 95 % of
+    it the gate wait - the writer's tail `fdatasync`, slow on a device also
+    taking the log, the checkpoint's writeback and the preparer's zero
+    fill. Rolls every ~0.85 s put 35-46 % of a window under a hold; cores
+    without the bulk writer see a schedule p99 of ~290-660 ms against
+    ~0.23-0.47 ms isolated (medians), and core 0's drain carries ~100 % of its
+    stream-latch wait. At `group` the hold is ~6 ms p50 / ~20 ms p99.
+  - **What BQ tried, cheapest first** (BQ-R2): H2's larger segment makes
+    rolls rarer and longer, not cheaper (~5 ms more hold per MiB, the
+    total held time flat; at 1,024 MiB BQ's probe saw the restart 1.1-1.4 s
+    longer and one `INSERT` stalled up to 12.8 s on the preparer's build). Rungs 2 and 3 (H5, H3) are recorded unable
+    from BQ-S1's bounds (BQ-Q6 (a)): with every non-tail sync removed the
+    hold p99 stays 652-780 ms, and with every roll-aligned stall removed C1
+    reader p99 stays 2.6-145 ms. BQ closed on §0.4's row 4: nothing below
+    rung 4 met the bar, and the latch is kept with this cost named.
+  - **Open leads for a successor order**: (i) H4 option 3 (no zero
+    prewrite where `posix_fallocate` reserved, the body's `fsync` kept) cut
+    the hold's p50 to ~16 ms, but its tail stays (p99 ~1.1 s, bimodal) and
+    its group guard (C2's `group` commit p99) is unevaluated, so it is a
+    measurement build, not a fix; (ii) rung 4, H6 - releasing the latch for
+    steps c-g - is `[quiet-wrong]` and unlicensed (BQ-Q5 (b)): it needs the
+    operator's own word.
+  - **Beside it, not BQ's**: at `relaxed` the log is almost never recycled
+    during a bulk load
+    (`docs/inflight/bugs/a-page-re-dirtied-after-its-writeback-copy-pins-the-redo-start.md`).
 
-  Cost: once per 64 MiB of log, every core's append waits through a
-  latched device sync, a `posix_fallocate`, a 64 MiB prewrite and two
-  `fsync`s. What that
-  means for a device is CN-9 §4 C4's. Owner: `docs/spec/wal.md` §6 for the contradiction, and
-  `wal/stream.hpp`'s latch protocol for the cost. Price it first: the
-  CLAUDE.md rule is to re-measure the premise before building the fix.
+  Owner: `docs/spec/wal.md` §6, `wal/stream.hpp`'s latch protocol.
 
 ## Multi-core state
 
@@ -930,34 +951,43 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 
 Verified on `worktree-bl-session-balancer` at BL-S3's commit, measured in
 `bench/v3.0.0/results-bl-s1-placement-premise-v2.7.0-857-g3552a03c.md`;
-the first bullet re-read on `worktree-bl-touchpattern-delete` at `05cd011f`.
+the first bullet re-read on `worktree-bl-touchpattern-delete` at `05cd011f`
+and re-priced at BQ's close (2026-10-12, from `4cf30270`'s measurement).
 BL is paused (the order's §6, "BL paused 2026-10-12").
 Owned by `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
 until its close; the mechanisms by `docs/spec/crosscore.md` CC1 and
 `docs/spec/sched.md` §5.
 
-- **A bulk writer stalled point readers on every core for 0.25-0.8 s at
-  BL-S3's commit, and no placement isolated them.** Two couplings through
-  the one WAL were found. The first is gone at `05cd011f`: BL-S4's ruling 1
+- **A bulk writer stalls point readers on every core, and no placement
+  isolates them; what is left of the stall at `05cd011f` is the segment
+  roll's.** Two couplings through the one WAL were found at BL-S3's commit,
+  where readers stalled 0.25-0.8 s. **The first is gone**: BL-S4's ruling 1
   (`raft-marks-2026-10-12.md` §11) deleted `Catalog::TouchPattern`, whose
   logged rewrite of a pattern's heat every repeated point `SELECT` made.
-  **The stall has not been re-measured since** (the re-measurement stopped
-  at BL's pause), so the headline numbers describe the engine with both
-  couplings. The second stands:
+  **Re-measured 2026-10-12** by BQ-S1 under BQ-Q1 (a), `05cd011f` against
+  `3338cf0c` in BL's C1 cell (`relaxed`, four cores, three placements,
+  three runs each;
+  `bench/v3.0.0/results-bl-ruling1-remeasure-v2.7.0-909-g4cf30270.md`):
+  reader service p99 fell from 262-283 ms to 1.7-3.0 ms (medians), and the
+  reader cores' stream-latch wait from 2.3-3.5 s per 10 s to 0-0.31 s; the
+  schedule p99 stays 277-295 ms (medians) and the p99.9 and maximum do not
+  move. **The second stands, and is what is left**:
   - **a segment roll holds the stream latch across device I/O**:
     `WalStream::Append`'s roll seals, flushes and runs `StartSegment`'s
     device sync, which waits out the writer thread's sync of every live
     segment, all under the latch (`wal.md` §6 step 1). Core 0's 10 ms
-    group-commit drain takes the same latch.
+    group-commit drain takes the same latch, and core 0's stream-latch wait
+    is 3.0-3.9 s of every 10 s at both commits.
 
   `Latch::lock` blocks the reactor, so every session on a core whose
-  reader or drain meets a roll waits the roll out. Measured: readers on
-  three cores holding no batch session waited 0.69-4.13 s each on the stream
-  latch in 10 s; with Waystone recording off and the readers off core 0,
-  their schedule p99 fell from about 500 ms to 0.57-0.76 ms in two runs and
-  41-102 ms in two more (a checkpoint turn on a reader core). **BL-S4's partition
-  waits on the roll**, whose fix is the order's §6 ruling 3, unmarked (the
-  trace and its options are in the results file's archive, `wal-coupling.md`).
+  reader or drain meets a roll waits the roll out. **BL-S4's partition
+  waits on the roll**, whose fix was the order's §6 ruling 3. BQ took it
+  as its subject and answered it on 2026-10-12: the latch is kept, with its
+  cost named (this file's WAL entry on the roll; `wal.md` §6 step 5; the
+  first trace is in BL-S1's results archive, `wal-coupling.md`),
+  so no fix to the roll is coming from BQ, and releasing the latch for the
+  roll (BQ's rung 4) needs the operator's own word (BQ-Q5 (b)). Ruling 2
+  stays unmarked.
 - **`TRACE ON` is per core, not per session** (`CommandDispatcher::tracing_`).
   It always was; since BL-S3 moves sessions, a session's trace stops when it
   moves and another session landing on the traced core is traced instead.

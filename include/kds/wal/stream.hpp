@@ -36,8 +36,9 @@
 //     unlatch. The LSN is fixed under the latch, so a record's address is
 //     known before its bytes are visible to anyone else - `StampPageLsn`
 //     and the `recLSN` discipline (page.md section 8) are unchanged.
-//   - `Flush` and `Seal`, from any thread: the device write happens
-//     **under the latch**, and so does the segment roll - which is not
+//   - `Seal`, and the flush before a roll, from any thread: the device
+//     write happens **under the latch**, and so does the segment roll -
+//     which is not
 //     microseconds but a device sync of the segment it leaves (through
 //     `SyncDevice`, so the seal marker is durable before the next segment
 //     exists), then the next segment's `CreateSegment`,
@@ -47,7 +48,16 @@
 //     directory fsync (`wal/file_log_device.cpp`); without the body built,
 //     the creation builds it inline as before. That is why the latch is a
 //     mutex and not a spin: a waiter sleeps through a roll instead of
-//     burning a core through it.
+//     burning a core through it. **Priced 2026-10-12, and kept** (BQ,
+//     `instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7;
+//     `bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md`):
+//     at `relaxed` under a bulk writer a roll holds this latch p50 about
+//     330 ms, p99 about 790 ms, max 1.2 s, 95 % of it `SyncDevice`
+//     waiting out the writer thread's sync in flight; at `group`, about
+//     6 ms p50 and 20 ms p99. No rung below the latch's release met BQ's bar
+//     (two measured, two bounded out), and
+//     releasing it for the roll's I/O is not licensed (BQ-Q5 (b)), so the
+//     roll stays latched (wal.md section 6 steps 1 and 5).
 //   - **`Flush` writes outside the latch since BA-S12**: it swaps the staged
 //     ring for a second buffer under the latch and writes the swapped-out
 //     bytes unlatched, one such write in flight at a time. A flush under
@@ -86,9 +96,10 @@
 // first segment's header, which is why no record ever has LSN 0 and why
 // page_lsn 0 keeps meaning "never logged" (record.hpp).
 //
-// Plain division rather than shift/mask: the segment size is [OPEN]
-// (wal.md section 15), and a power-of-two requirement here would quietly
-// decide it. One divide per append is nothing next to the memcpy.
+// Plain division rather than shift/mask: the segment size is the device's
+// parameter (64 MiB on every volume, a constant of the format, wal.md
+// section 4.1), and a power-of-two requirement here would quietly decide
+// what any later size may be. One divide per append is nothing next to the memcpy.
 //
 // ---- The ring ------------------------------------------------------------
 //

@@ -1000,3 +1000,22 @@ BL headline from it; then BL-S4 proceeds only if rulings 2 and 3 are marked.
 and not opened, and answers it by measurement. The ruling stays unmarked
 here until BQ's answer lands. BQ-Q1 proposes that BQ-S1 also take the
 ruling 1 re-measurement above.
+
+**BQ's answer to ruling 3, 2026-10-12** (`workorder-bq-wal-segment-roll.md`
+§7; `bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md`,
+`bench/v3.0.0/results-bq-s2-rung1-v2.7.0-909-g4cf30270.md`): **a roll keeps
+the stream latch across its device I/O.** BQ closed on its §0.4 row 4 -
+nothing below rung 4 met its bar, so the latch is kept with its cost named.
+At `relaxed` under a bulk writer a roll holds the latch p50 ~330 ms,
+p99 ~790 ms, max 1.2 s, 95 % of it the wait for the WAL writer's sync in
+flight; at `group`, ~6 ms p50 / ~20 ms p99. A larger segment (H2) makes
+rolls rarer, not cheaper; H4 option 3 cuts the median to ~16 ms and leaves
+the tail (p99 ~1.1 s); H5 and H3 were bounded out (BQ-Q6 (a)). Releasing
+the latch (BQ's rung 4, H6) is unlicensed (BQ-Q5 (b)) and needs the
+operator's own word. **For BL-S4 this means its partition still meets the
+roll**: BQ-Q1 (a)'s re-measurement
+(`bench/v3.0.0/results-bl-ruling1-remeasure-v2.7.0-909-g4cf30270.md`) put
+reader service p99 at 1.7-3.0 ms after ruling 1, against 262-283 ms
+before, and schedule p99 at 277-295 ms, which is the roll's. Ruling 3 is
+answered by measurement, not marked; ruling 2 stays unmarked, and BL-S4
+proceeds only on the operator's word.

@@ -1,0 +1,23 @@
+14:18:38 chain launched pid 636519 (start)
+17:24:39 progress: 10 cells done
+17:43:39 chain launched pid 733368 (chain was dead without all.done)
+17:51:39 progress: 21 cells done
+17:52:39 FAILED {"t": 1791827519.8566554, "after": "/home/cdkbs/bench-runs/bq/s2/out/mount/s1024-r1.json", "rc": 1, "err": "me/cdkbs/ckdbs/.claude/worktrees/bp-per-core-residue/tools/kwp.py\", line 309, in _recv_fram
+17:52:39 FAILED {"t": 1791827550.0877647, "after": "/home/cdkbs/bench-runs/bq/s2/out/mount/base-r2.json", "rc": 1, "err": "ERR duplicate primary key 1 already present at page 129 slot 0 (byte 23) (row 1)
+"}
+17:52:39 FAILED {"t": 1791827550.136505, "after": "/home/cdkbs/bench-runs/bq/s2/out/mount/s16-r2.json", "rc": 1, "err": "ERR duplicate primary key 1 already present at page 129 slot 0 (byte 23) (row 1)
+"}
+17:52:39 FAILED {"t": 1791827550.18518, "after": "/home/cdkbs/bench-runs/bq/s2/out/mount/s256-r2.json", "rc": 1, "err": "ERR duplicate primary key 1 already present at page 129 slot 0 (byte 23) (row 1)
+"}
+17:52:39 FAILED {"t": 1791827550.2358181, "after": "/home/cdkbs/bench-runs/bq/s2/out/mount/s1024-r2.json", "rc": 1, "err": "ERR duplicate primary key 1 already present at page 129 slot 0 (byte 23) (row 1)
+"}
+17:53:39 FAILED {"t": 1791827590.2102344, "after": "/home/cdkbs/bench-runs/bq/s2/out/relaxed/c3/s256/r1", "rc": 1, "loadavg": "2.98 3.85 4.75 2/351 739849"}
+17:55:39 chain launched pid 740209 (chain was dead without all.done)
+17:56:39 progress: 31 cells done
+18:05:39 progress: 40 cells done
+18:17:39 progress: 50 cells done
+18:28:39 progress: 60 cells done
+18:44:39 progress: 70 cells done
+18:52:40 progress: 80 cells done
+19:01:40 progress: 90 cells done
+19:09:40 BQ-S2 chain DONE (cells without a result: 0)

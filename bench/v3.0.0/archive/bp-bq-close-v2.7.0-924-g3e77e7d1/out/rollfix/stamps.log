@@ -1,0 +1,12 @@
+2026-10-12 20:19:16 rollfix PREMERGE_FIX r1 load=1.49 3.10 2.81
+2026-10-12 20:19:28 after rollfix PREMERGE_FIX r1 rc=0
+2026-10-12 20:19:38 rollfix CLOSE_FIX r1 load=1.56 2.99 2.79
+2026-10-12 20:19:49 after rollfix CLOSE_FIX r1 rc=0
+2026-10-12 20:19:59 rollfix PREMERGE_FIX r2 load=1.45 2.88 2.75
+2026-10-12 20:20:10 after rollfix PREMERGE_FIX r2 rc=0
+2026-10-12 20:20:10 rollfix CLOSE_FIX r2 load=1.39 2.81 2.73
+2026-10-12 20:20:21 after rollfix CLOSE_FIX r2 rc=0
+2026-10-12 20:20:51 rollfix PREMERGE_FIX r3 load=1.44 2.68 2.69
+2026-10-12 20:21:02 after rollfix PREMERGE_FIX r3 rc=0
+2026-10-12 20:21:13 rollfix CLOSE_FIX r3 load=1.44 2.59 2.66
+2026-10-12 20:21:24 after rollfix CLOSE_FIX r3 rc=0

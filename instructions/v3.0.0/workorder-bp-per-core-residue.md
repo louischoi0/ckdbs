@@ -1400,3 +1400,28 @@ with 64 stripes a shared stripe costs a scan of 64 partitions instead of
 
 **Suite:** 3613/3613 (`ctest -j8`, Debug). **A/B:** the lock cells at the
 milestone's close, against `ccf9cfc1`.
+
+### BP-S8 - the close: texts landed, measured once, one question open
+
+On `worktree-bp-per-core-residue`. **§6.2's measurement**
+(`bench/v3.0.0/results-bp-bq-close-v2.7.0-924-g3e77e7d1.md`): A = `cf889b63` (BP's opening), B = `3e77e7d1` (the close), release
+builds from exports. At `cores = 1`: point statements within the floor; every-row
+`UPDATE` +2.1 to +2.8 %, which the open question below reads. At `cores = 4` (point
+reads, monotonic inserts): within noise. BP-S6's lock cells at `cores = 8`
+(A = `ccf9cfc1`): a held fence's statement 51.6 -> 48.4 us (-6.2 %), the
+fence premium over plain +13.6 % -> +5.1 %, the fence cell's partition waits
+-25 %, plain within spread. BP-S3's
+own A/B: `bench/v3.0.0/results-bp-s3-g1-ab-v2.7.0-909-gccf9cfc1.md`.
+
+**The open question** (three bounded attempts spent, so it stops for the operator): the close's direct A/B on a `cores = 1` every-row `UPDATE` of 10,000 rows (+2.1 to +2.8 %) is not a finding by itself - a pair of builds with identical code at `cores = 1` (BP-S6) reads +1.5 to +2.3 %, and three runs replicate a session, not a binary. What holds is that `ccf9cfc1` (BP before BQ joined) is the one fast build: every build from the merge on - the merge `6139c2de`, BP-S4, BP-S6, the close, builds with functions and loops aligned, and one with the per-append `RollRecord` made lazy - runs 3-6 % above it, about 1 point of that the bench harness's position offset (`bn_census`'s second server always carries a ~1 s stall). A sampler profile puts about half of the gap in `WalManager::Append`'s own frame (1.05 % of samples to 2.97-3.60 %, z = 3.9-4.8) with its callee `WalStream::Append` flat; the cause inside that frame is not found. Point statements and every `cores = 4` cell are within noise (`bench/v3.0.0/results-bp-bq-close-v2.7.0-924-g3e77e7d1.md`).
+
+**Texts:** `statement_epoch.hpp`, `instance_visibility.hpp`, `cabin_store.hpp`
+and `latch.hpp` say what is armed where (BP-S3, BP-S8); `wal.md` the retired
+kinds (BP-S2); `catalog.md` CT2 unchanged (BP-S5 did not run); CLAUDE.md's
+WAL, Transactions, Cabin and Transactional DDL rows; `known-gaps.md`'s
+"Per-core structures kept (BP)" for H6-H9. **Not reached:** BP-H10's
+remaining +5.1 % fence premium, whose next cut is BP-Q15 (b), a protocol
+change for its own order.
+
+Every stage has landed (S5 by its gate not run); the close waits at the
+push gate.

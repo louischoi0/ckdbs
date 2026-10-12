@@ -52,9 +52,10 @@
 
 namespace kds::wal {
 
-// Proposed default segment size, wal.md section 4.1 - marked [OPEN: size]
-// there, so this is a default implementations take as a parameter, never a
-// constant anything may depend on.
+// The segment size, a constant and a property of the volume (wal.md section
+// 4.1): a segment of another size is refused at open, so changing it is a
+// format event. BQ measured that a larger one makes rolls rarer and longer,
+// not cheaper (bench/v3.0.0/results-bq-s2-rung1-v2.7.0-909-g4cf30270.md).
 inline constexpr std::uint64_t kDefaultSegmentSize = 64ull * 1024 * 1024;
 
 // **Where a creation's time went** (BQ-S1, `workorder-bq-wal-segment-roll.md`

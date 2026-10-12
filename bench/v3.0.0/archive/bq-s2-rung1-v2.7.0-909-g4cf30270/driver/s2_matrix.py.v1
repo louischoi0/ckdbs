@@ -1,0 +1,122 @@
+"""BQ-S2's measurement (workorder-bq-wal-segment-roll.md, rung 1 under BQ-Q6 (a)):
+H4 option 3 and H2 at 16, 256 and 1,024 MiB against base 4cf30270,
+interleaved per run with the arm order rotated, gated per cell on a quiet
+host, each cell skipped when its driver already wrote a result (resume).
+
+Relaxed: C1 at three placements, C2, C3, every arm. Group: C1 at three
+placements and C3, every arm; C2 for base and opt3 only (H4 option 3's guard:
+C2's group commit p99; BQ-Q7 (a) judges the group bar on C1). Isolated
+baselines once per durability on base. Then the mount probe for H2.
+
+usage: python3 s2_matrix.py <out_dir> [runs]
+"""
+import json, os, subprocess, sys, time
+
+B = '/home/cdkbs/bench-runs/bq'
+DRIVER = '/home/cdkbs/ckdbs/.claude/worktrees/bp-per-core-residue/tools/bl_mixed.py'
+BINS = {'base': f'{B}/bin/kds_server.4cf30270', 'opt3': f'{B}/s2/bin/kds_server.opt3',
+        's16': f'{B}/s2/bin/kds_server.s16', 's256': f'{B}/s2/bin/kds_server.s256',
+        's1024': f'{B}/s2/bin/kds_server.s1024'}
+SEG_MIB = {'base': 64, 'opt3': 64, 's16': 16, 's256': 256, 's1024': 1024}
+ARMS = list(BINS)
+PLACEMENTS = ('segregated-no0', 'batch0', 'spread')
+LOAD_BOUND = 2.5
+BUSY = ('cc1plus', 'cmake --build', 'ctest', 'kds_tests', 'gtest', 'bench-runs/bp-s1/v2/chain',
+        'bi_checkpoint_stall', 'bn_census', 'lockcell', 'inflight_cell')
+COMMON = ['--cores', '4', '--seconds', '30', '--warmup', '2', '--runs', '1', '--max-wait', '0',
+          '--server-cpus', '0,2,4,6', '--client-cpus', '1,3,5,7', '--frames', '131072',
+          '--log-level', 'info', '--ctl-core', '0']
+
+
+def busy():
+    out = subprocess.run(['pgrep', '-af', '|'.join(BUSY)], capture_output=True, text=True).stdout
+    me = str(os.getpid())
+    return [l for l in out.splitlines() if l and not l.startswith(me + ' ') and 'pgrep' not in l
+            and 's2_matrix' not in l and 'shell-snapshots' not in l]
+
+
+def gate(out_dir, stamps):
+    waited = 0
+    while True:
+        load1 = float(open('/proc/loadavg').read().split()[0])
+        procs = busy()
+        if not procs and load1 < LOAD_BOUND:
+            break
+        with open(out_dir + '/gate.beat', 'w') as f:
+            f.write(f'{time.time()} {load1} {len(procs)}\n')
+        time.sleep(10)
+        waited += 10
+    stamps.write(json.dumps({'t': time.time(), 'loadavg': open('/proc/loadavg').read().strip(),
+                             'gate_waited_s': waited}) + '\n')
+    stamps.flush()
+
+
+def done(out):
+    return os.path.isdir(out) and any(f.endswith('.json') for f in os.listdir(out))
+
+
+def cell(out_dir, arm, out, extra, stamps):
+    if done(out):
+        return
+    gate(out_dir, stamps)
+    cmd = ['python3', DRIVER, '--bin', BINS[arm], '--port', '17561', '--workdir', f'{B}/s2/work',
+           '--out', out] + COMMON + extra
+    os.makedirs(out, exist_ok=True)
+    with open(out + '/console.log', 'a') as f:
+        f.write(' '.join(cmd) + '\n')
+        f.flush()
+        rc = subprocess.call(cmd, stdout=f, stderr=subprocess.STDOUT)
+    stamps.write(json.dumps({'t': time.time(), 'after': out, 'rc': rc,
+                             'loadavg': open('/proc/loadavg').read().strip()}) + '\n')
+    stamps.flush()
+
+
+def main():
+    out_dir = sys.argv[1]
+    runs = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+    os.makedirs(out_dir, exist_ok=True)
+    with open(out_dir + '/hoststamps.log', 'a') as stamps:
+        for dur in ('relaxed', 'group'):
+            d = ['--durability', dur]
+            for pl in PLACEMENTS:
+                cell(out_dir, 'base', f'{out_dir}/{dur}/c1-iso-{pl}/base/r1',
+                     ['--arm', 'isolated', '--readers', '6', '--rate', '400', '--placement', pl] + d, stamps)
+            cell(out_dir, 'base', f'{out_dir}/{dur}/c2-iso/base/r1',
+                 ['--arm', 'isolated', '--readers', '0', '--writers', '8', '--writer-rate', '800',
+                  '--placement', 'segregated'] + d, stamps)
+        for r in range(1, runs + 1):
+            arms = ARMS[r % len(ARMS):] + ARMS[:r % len(ARMS)]
+            for dur in ('relaxed', 'group'):
+                d = ['--durability', dur]
+                for arm in arms:
+                    cell(out_dir, arm, f'{out_dir}/{dur}/c3/{arm}/r{r}',
+                         ['--arm', 'insert', '--readers', '0', '--writers', '0', '--placement', 'segregated'] + d,
+                         stamps)
+                    if dur == 'relaxed' or arm in ('base', 'opt3'):
+                        cell(out_dir, arm, f'{out_dir}/{dur}/c2/{arm}/r{r}',
+                             ['--arm', 'insert', '--readers', '0', '--writers', '8', '--writer-rate', '800',
+                              '--placement', 'segregated'] + d, stamps)
+                    for pl in PLACEMENTS:
+                        cell(out_dir, arm, f'{out_dir}/{dur}/c1-{pl}/{arm}/r{r}',
+                             ['--arm', 'mixed', '--readers', '6', '--rate', '400', '--placement', pl] + d, stamps)
+        # H2's mount cost: two probes per size.
+        for rep in (1, 2):
+            for arm in ('base', 's16', 's256', 's1024'):
+                f = f'{out_dir}/mount/{arm}-r{rep}.json'
+                if os.path.exists(f):
+                    continue
+                os.makedirs(os.path.dirname(f), exist_ok=True)
+                gate(out_dir, stamps)
+                r = subprocess.run(['python3', f'{B}/s2/mount_probe.py', '--bin', BINS[arm],
+                                    '--workdir', f'{B}/s2/work-mount', '--port', '17571',
+                                    '--segment-mib', str(SEG_MIB[arm])],
+                                   capture_output=True, text=True)
+                if r.returncode == 0 and r.stdout.strip():
+                    open(f, 'w').write(r.stdout.strip().splitlines()[-1] + '\n')
+                stamps.write(json.dumps({'t': time.time(), 'after': f, 'rc': r.returncode,
+                                         'err': r.stderr[-300:]}) + '\n')
+                stamps.flush()
+    open(out_dir + '/all.done', 'w').write('done\n')
+
+
+main()

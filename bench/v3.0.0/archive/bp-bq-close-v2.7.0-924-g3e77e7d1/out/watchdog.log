@@ -1,0 +1,8 @@
+19:24:42 chain launched pid 767689 (start)
+19:27:42 progress: 5 cells done; last: after bn AB r3 rc=0
+19:33:42 progress: 10 cells done; last: after ba insert1 A r1 rc=0
+19:40:42 progress: 15 cells done; last: after ba point A r2 rc=0
+19:48:42 progress: 20 cells done; last: after ba point A r3 rc=0
+19:55:42 progress: 26 cells done; last: after lock k8 plain B r0 rc=0
+19:56:42 progress: 30 cells done; last: after lock k8 plain B r1 rc=0
+19:58:42 CLOSE chain DONE (failed cells over all passes: 0)

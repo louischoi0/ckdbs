@@ -1,0 +1,10 @@
+{"shape": "select-pk", "path": "literal", "bin": "A", "ops": 3000, "bad": 0, "p0_us": 52.53, "p25_us": 54.13, "p50_us": 54.71, "p90_us": 60.75, "p99_us": 72.69, "mean_us": 56.95, "server_cpu_us": 25.19, "driver_cpu_us": 32.15}
+{"shape": "select-pk", "path": "literal", "bin": "B", "ops": 3000, "bad": 0, "p0_us": 52.22, "p25_us": 54.77, "p50_us": 55.4, "p90_us": 62.61, "p99_us": 78.18, "mean_us": 57.85, "server_cpu_us": 25.98, "driver_cpu_us": 32.27}
+{"shape": "select-pk", "path": "prepared", "bin": "A", "ops": 3000, "bad": 0, "p0_us": 49.25, "p25_us": 50.77, "p50_us": 51.31, "p90_us": 56.72, "p99_us": 70.43, "mean_us": 53.48, "server_cpu_us": 24.4, "driver_cpu_us": 29.76}
+{"shape": "select-pk", "path": "prepared", "bin": "B", "ops": 3000, "bad": 0, "p0_us": 49.98, "p25_us": 51.42, "p50_us": 51.92, "p90_us": 57.23, "p99_us": 67.86, "mean_us": 53.93, "server_cpu_us": 24.88, "driver_cpu_us": 29.58}
+{"shape": "update-range", "path": "literal", "bin": "A", "ops": 60, "bad": 0, "p0_us": 6713.85, "p25_us": 6826.84, "p50_us": 6886.04, "p90_us": 7572.44, "p99_us": 81994.43, "mean_us": 9350.93, "server_cpu_us": 7021.86, "driver_cpu_us": 114.75}
+{"shape": "update-range", "path": "literal", "bin": "B", "ops": 60, "bad": 0, "p0_us": 6779.29, "p25_us": 6861.83, "p50_us": 6942.69, "p90_us": 7677.53, "p99_us": 1010673.48, "mean_us": 24459.62, "server_cpu_us": 7118.55, "driver_cpu_us": 93.6}
+{"shape": "update-range", "path": "prepared", "bin": "A", "ops": 60, "bad": 0, "p0_us": 6722.75, "p25_us": 6786.4, "p50_us": 6863.79, "p90_us": 7104.07, "p99_us": 54467.48, "mean_us": 8204.06, "server_cpu_us": 7049.94, "driver_cpu_us": 104.1}
+{"shape": "update-range", "path": "prepared", "bin": "B", "ops": 60, "bad": 0, "p0_us": 6742.58, "p25_us": 6849.11, "p50_us": 6930.43, "p90_us": 7504.94, "p99_us": 991157.3, "mean_us": 23678.62, "server_cpu_us": 7190.21, "driver_cpu_us": 109.77}
+A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 10000, 'pages_allocated_delta': 0} {'updates': 10000, 'pages_allocated_delta': 0}
+B {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 10000, 'pages_allocated_delta': 0} {'updates': 10000, 'pages_allocated_delta': 0}

@@ -659,3 +659,87 @@ sample's serving core recorded); then H4 option 3 (`BuildBody` prewrites
 only where `Reserve` fell back to `ftruncate`, the body's `fsync` kept) and
 H2 at 16, 256 and 1,024 MiB, each a measurement build on a fresh volume,
 against `4cf30270`.
+
+### BQ-S2 - rung 1 measured: H4 option 3 and H2 miss the bar
+
+Measured on `worktree-bp-per-core-residue` (BQ joined BP's branch at
+`6139c2de`) with measurement builds patched onto an export of `4cf30270`
+(`~/bench-runs/bq/s2/variants.py`): H4 option 3 (no zero prewrite where
+`posix_fallocate` reserved the extents; the body's `fsync` kept) and H2 at
+16, 256 and 1,024 MiB, against base (`4cf30270`, 64 MiB). Relaxed C1 at
+three placements, C2 and C3, every arm, three runs in per-arm blocks with
+the arm order rotated per run, each cell gated (the gate missed other
+sessions' builds in 7 cells, which the results file flags);
+the mount probe (a clean `STOP`, the restart timed) twice per size. Results:
+`bench/v3.0.0/results-bq-s2-rung1-v2.7.0-909-g4cf30270.md`. Every verdict
+recomputed from the raw files and attacked by two independent checks.
+
+**The procedure, decided while measuring** (recorded here, not marked): the
+matrix ran relaxed for every arm before any group cell, and group only for
+an arm meeting the relaxed bar - §5.3 needs both, so an arm that misses
+relaxed misses the rung whatever group shows. No arm met it, so no group
+cell ran. The client timeout was raised to 120 s after a 256 MiB cell's
+client timed out at 5 s: at large sizes a single statement's stall is the
+measurement, not a failure.
+
+- **The bar - missed** in all 60 relaxed (arm, cell, run) results: no run of
+  any arm is within 2x of its isolated p99 on cores with no bulk writer.
+- **H4 option 3 - rejected as the fix, and the nearest miss.** It cuts the
+  hold's median from about 325 ms to 16 ms - the preparer's 64 MiB zero
+  fill no longer competes for the device (`[inferred]`, no device-level
+  instrument ran), so the writer's sync the roll waits out falls from
+  301 ms to 9.9 ms per roll at its median, the gate from 318 to 5.2 ms - and C3 gains
+  43 % on average; it also lets the log recycle (12 of 15 runs, against 3
+  of 15 at base). The tail does not fall: pooled hold p99 rose from 809 ms
+  to 1.14 s, inside base's spread, and 13 % of rolls - a slow mode - carry
+  80 % of the hold. Its own guard, C2's group commit p99, was not evaluated,
+  and option 3 combined with a larger segment was never measured.
+- **H2 - rejected.** The roll rate falls as 1/size, as predicted, but each
+  roll's hold grows about 5 ms per MiB of segment, so the time held is flat
+  across sizes and the p99.9 and maximum rise. H2's second reject clause
+  has nothing to apply to, since no size meets the bar; as probe facts, at
+  1,024 MiB the restart took 1.1-1.4 s longer and one `INSERT` stalled up to
+  12.8 s while its roll waited on the preparer's build (28 of 30 large rolls
+  waited, none built inline). The size stays a constant (BQ-Q4
+  unexercised).
+
+### BQ-S3 - rungs 2 and 3: recorded unable from BQ-S1's bounds (BQ-Q6 (a))
+
+Not built. H5: with every roll-aligned stall removed, relaxed C1 reader p99
+stays 2.6-145 ms against an isolated 0.2-0.6 ms. H3: with every non-tail
+sync removed, the relaxed hold p99 stays 652-780 ms. Both from §7's BQ-S1
+entry.
+
+### BQ-S4 - rung 4: not run (BQ-Q5 (b))
+
+H6 (the latch released for steps c-g) stays unmeasured and needs the
+operator's own word. BQ closes on §0.4's row 4: nothing below rung 4 meets
+the bar, the latch is kept, and its cost is named (BQ-S5).
+
+### BQ-S5 - the close: texts landed, the overhead measured, one question open
+
+On `worktree-bp-per-core-residue`. **Texts:** `wal.md` §4.1 (the segment
+size a constant and a volume's property; a larger one makes rolls rarer and
+longer, not cheaper), §6 step 1 (a roll's sync is device I/O under the latch
+since `a1679272`, and the latched roll stands), §6 step 5 (priced by
+BQ-S1), §13 (no "segment size" setting; the roll's `SHOW META` fields named);
+`stream.hpp`'s and `log_device.hpp`'s comments; `known-gaps.md`'s two WAL
+entries and its BL entry re-priced, with the open leads named (H4 option 3's
+median cut, its unevaluated group guard and bimodal tail; rung 4's
+license); AL-R1 annotated in `workorder-al-m0-single-wal.md`, not rewritten;
+BL's §6 ruling 3 given BQ's answer. BQ-Q3 (a): the `wal_roll_*` counters
+stay.
+
+**The overhead A/B** (`bench/v3.0.0/results-bp-bq-close-v2.7.0-924-g3e77e7d1.md`): BQ's only
+engine change is `4cf30270`'s instruments, against its opening `59c4139f`
+(byte-identical to `cf889b63`). At `cores = 4` nothing moves outside noise.
+At `cores = 1` the result is undetermined: the baseline itself read 5.4-5.6 %
+higher in the sessions that paired it with `4cf30270` than in the others, so
+the pair's -1.5 to -1.7 % on the every-row `UPDATE` and +3.2 to +3.5 %
+against the other sessions' level bracket it.
+
+**The open question** is the close's, shared with BP and stated once, in `workorder-bp-per-core-residue.md` §7's BP-S8 entry: a `cores = 1` every-row `UPDATE` runs 3-6 % above BP's last build before BQ joined in every build from the merge on, about half of it in `WalManager::Append`'s own frame, cause not found.
+
+**Where BQ ends:** §0.4's row 4 - nothing below rung 4 met the bar, the
+latch is kept with its cost named, and rung 4 needs the operator's own word.
+Every stage has landed; the close waits at the push gate.
