@@ -1688,6 +1688,19 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         // reading, the second a sizing bug.
         os << " wal_ring_full=" << wal_stats.ring_full_drains
            << " wal_ring_full_refusals=" << wal_stats.ring_full_refusals;
+
+        // **The segment roll** (BQ-S1, `workorder-bq-wal-segment-roll.md`):
+        // the instance's totals, printed on every core like `wal_stopped`,
+        // since the stream is one object - so they are never summed across
+        // cores. `wal_append_lsn` is the stream's byte position; its delta
+        // over a window is the log volume written in it.
+        const wal::WalStream& stream = *wal_->stream();
+        os << " wal_append_lsn=" << stream.append_lsn();
+        for (std::size_t i = 0; i < wal::kRollStatCount; ++i) {
+            const std::string_view name = wal::kRollStatNames[i];
+            const std::uint64_t v = stream.roll_stat(static_cast<wal::RollStat>(i));
+            os << ' ' << name << '=' << (name.ends_with("_us") ? v / 1000 : v);
+        }
     }
 
     // **The `trxid_refill_*` and `rowid_refill_*` blocks went at AT-S10b**
@@ -1843,6 +1856,15 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
             if (ns == 0) continue;
             os << " load_c" << k << "_waited_" << kLatchKindNames[i] << "_us=" << ns / 1000;
         }
+        // BQ-S1's per-core share of the stream latch: the drain's part of
+        // `_waited_wal_stream_us`, and the waits a segment roll covered.
+        for (const Tally t : {Tally::kWalDrainLatchWaitNs, Tally::kWalRollBlockedWaits,
+                              Tally::kWalRollBlockedWaitNs}) {
+            const std::uint64_t v = r(c.tallies[static_cast<std::size_t>(t)]);
+            if (v == 0) continue;
+            os << " load_c" << k << '_' << kTallyNames[static_cast<std::size_t>(t)] << '='
+               << (IsNsTally(t) ? v / 1000 : v);
+        }
     }
 
     // The last recovery, for the operator who has to answer "what did the
@@ -1938,7 +1960,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " contention_" << kLatchKindNames[i] << "_wait_us=" << contention.wait_ns[i] / 1000;
     }
     for (std::size_t i = 0; i < kTallyCount; ++i) {
-        const bool ns = i == static_cast<std::size_t>(Tally::kCeilingWaitNs);
+        const bool ns = IsNsTally(static_cast<Tally>(i));
         os << " contention_" << kTallyNames[i] << "="
            << (ns ? contention.tallies[i] / 1000 : contention.tallies[i]);
     }

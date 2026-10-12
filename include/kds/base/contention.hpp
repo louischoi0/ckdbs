@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 #include "kds/base/current_core.hpp"
 
@@ -83,6 +84,11 @@ enum class Tally : std::uint8_t {
     kRefusalIndexParent,
     kRefusalIndexSecure,
     kStructuralReruns,    // a statement re-run after a structural refusal (BA-S14)
+    // BQ-S1 (`workorder-bq-wal-segment-roll.md`): what the WAL segment roll
+    // cost the cores it did not run on.
+    kWalDrainLatchWaitNs,   // the WAL drain's waits on the stream latch
+    kWalRollBlockedWaits,   // stream-latch waits that overlapped a roll's hold
+    kWalRollBlockedWaitNs,  // the part of those waits the roll's hold covered
     kCount,
 };
 
@@ -94,9 +100,17 @@ inline constexpr std::array<const char*, kTallyCount> kTallyNames = {
     "ceiling_wait_us",        "carves",                 "checkpoint_runs",
     "refused_btree_descend",  "refused_btree_parent",   "refused_btree_secure",
     "refused_btree_lookup",   "refused_index_descend",  "refused_index_parent",
-    "refused_index_secure",   "structural_reruns",
+    "refused_index_secure",   "structural_reruns",      "wal_drain_latch_wait_us",
+    "wal_roll_blocked_waits", "wal_roll_blocked_wait_us",
 };
 static_assert(kTallyNames.back() != nullptr, "a Tally without a name");
+
+// The tallies kept in nanoseconds, which `SHOW META` prints as
+// microseconds: exactly those whose name ends `_us`, the rule the roll
+// totals follow too (`wal/stream.hpp`).
+constexpr bool IsNsTally(Tally t) noexcept {
+    return std::string_view(kTallyNames[static_cast<std::size_t>(t)]).ends_with("_us");
+}
 
 // The longest single run of a periodic stall, in nanoseconds.
 enum class Longest : std::uint8_t {
@@ -164,6 +178,13 @@ public:
 
     static void Add(Tally t, std::uint64_t n = 1) noexcept {
         Mine().tallies[static_cast<std::size_t>(t)].fetch_add(n, std::memory_order_relaxed);
+    }
+
+    // This thread's own slot's running wait, for a caller that brackets its
+    // own work with two reads (the WAL drain, BQ-S1). A slot is written only
+    // by its core's thread, or by threads that declared none (slot 0).
+    static std::uint64_t MineWaitNs(LatchKind kind) noexcept {
+        return Mine().wait_ns[static_cast<std::size_t>(kind)].load(std::memory_order_relaxed);
     }
 
     static void Max(Longest l, std::uint64_t ns) noexcept {

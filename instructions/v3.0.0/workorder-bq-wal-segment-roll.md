@@ -2,8 +2,8 @@
 
 **Written 2026-10-12** on `worktree-wal-segment-roll-order` from `59c4139f`
 (`v2.7.0-906-g59c4139f`), on the operator's words W0-W2
-(`raft-marks-2026-10-12.md` §13). **Written, not opened**: BQ-Q0 asks for
-the opening, and no stage starts before it is marked.
+(`raft-marks-2026-10-12.md` §13). **Opened 2026-10-12 by W4** (`raft-marks-2026-10-12.md` §14), with
+BQ-Q1..Q5 marked as CLA proposed on W3.
 
 **BQ takes BL-S4's ruling 3 out of BL as its subject and does not mark it.**
 The ruling is *whether a roll keeps the stream latch across its device I/O*
@@ -386,8 +386,13 @@ Taken up only after rungs 1-3 miss, and only on BQ-Q5's mark.
      cannot disagree (`stream.cpp:180-182`). H6 breaks that premise.
 - **Its gain is capped by the ring.** At a bulk writer's rate, the 1 MiB
   ring may fill within the roll, and then every appending core waits the
-  claim out anyway. BQ-S1 records ring-full events during a roll, so that
-  cap is known before H6 is designed.
+  claim out anyway. Under the latched roll no append runs during a roll,
+  so no counter can see the ring fill during one. The cap is estimated
+  from BQ-S1's numbers instead: the log's byte rate (the delta of
+  `wal_append_lsn` over a window) times the roll hold's distribution (the
+  per-roll lines' `hold_us`), against the ring's capacity (1 MiB default,
+  512 KiB floor). The rate is the one achieved with appenders stalled by
+  the hold, not the one offered, so the estimate is a lower bound.
 - **Cells owed, each forced with a barrier and repeated:**
   - an append at the new segment's first LSN during its creation;
   - a flush claimed during the roll;
@@ -412,11 +417,11 @@ Taken up only after rungs 1-3 miss, and only on BQ-Q5's mark.
 | stage | what | done when | size |
 |---|---|---|---|
 | BQ-S0 | **The order** | <ul><li>This file and its review.</li><li>`index.md`'s BQ row.</li><li>`raft-marks-2026-10-12.md` §13.</li><li>BL's §6 pointer.</li></ul> | S |
-| BQ-S1 | **The instruments and the premise** (H0, H1, and the measurement half of H3, H4, H5) | <ul><li>**Code, instrumentation only.** Printed by `SHOW META` as `wal_roll_*` (BQ-Q3):<ul><li>per roll: the hold, and the time in each of steps a-g;</li><li>step c split into its gate wait, the tail's `fdatasync` and the rest, with the live segment count;</li><li>step d's outcome;</li><li>ring-full events during a roll;</li><li>`wal_drain_latch_wait_us`, the drains' share of the stream-latch wait. The statements' share is the existing `load_c<k>_waited_wal_stream_us` minus it.</li></ul></li><li>**A per-roll log line**: start and end in steady-clock ns, with the step times, so stalls can be lined up with rolls by timestamp.</li><li>**Cells:**<ul><li>a forced roll on a two-core rig moves every counter;</li><li>at `cores = 1`, a forced roll moves the step timers while `wal_drain_latch_wait_us` stays 0, because the latch is null.</li></ul></li><li>**The measurement**: §5.1's C1-C3, and BL's ruling 1 re-measurement if BQ-Q1 is (a).</li><li>**The verdicts** of H0 and H1 in §7.</li><li>**The suite green.**</li></ul> | M |
+| BQ-S1 | **The instruments and the premise** (H0, H1, and the measurement half of H3, H4, H5) | <ul><li>**Code, instrumentation only.** Printed by `SHOW META` as `wal_roll_*` (BQ-Q3):<ul><li>per roll: the hold, and the time in each of steps a-g;</li><li>step c split into its gate wait, the tail's `fdatasync` and the rest, with the live segment count;</li><li>step d's outcome;</li><li>`wal_drain_latch_wait_us`, the drains' share of the stream-latch wait. The rest of `load_c<k>_waited_wal_stream_us` is every other stream-latch acquisition on that core - statements' appends and commit flushes, the checkpoint's flush, writeback's `EnsureDurable` flush, the anchor publish's `DetachBelow`, and on core 0 the threads that declared no core - so it bounds the statements' share from above, and is not that share.</li></ul></li><li>**A per-roll log line**: start and end in steady-clock ns, with the step times, so stalls can be lined up with rolls by timestamp.</li><li>**Cells:**<ul><li>a forced roll on a two-core rig moves every counter;</li><li>at `cores = 1`, a forced roll moves the step timers while `wal_drain_latch_wait_us` stays 0, because the latch is null.</li></ul></li><li>**The measurement**: §5.1's C1-C3, and BL's ruling 1 re-measurement if BQ-Q1 is (a).</li><li>**The verdicts** of H0 and H1 in §7.</li><li>**The suite green.**</li></ul> | M |
 | BQ-S2 | **Rung 1** (H4, then H2) | <ul><li>The measurement builds and their verdicts.</li><li>A candidate that meets the bar is committed, with its cells and with BQ-Q4 answered if it is a size.</li><li>The suite green.</li></ul> | M |
 | BQ-S3 | **Rungs 2 and 3** (H5, H3), each only if the rung below missed | <ul><li>H5: the measurement build, then the build with its cells and mutation.</li><li>H3: the proof first, then the measurement build, then the build with its interleaving cells.</li><li>The verdicts.</li><li>The suite green.</li></ul> | M |
 | BQ-S4 | **Rung 4** (H6), only if rungs 1-3 missed and BQ-Q5 is marked (a) | <ul><li>The design re-derived at the current code, and its review before any code.</li><li>The measurement build.</li><li>The build with every cell and mutation of H6, and the `scripts/sim.sh` corpus with the new crash points.</li><li>The suite green.</li></ul> | L |
-| BQ-S5 | **The close** | <ul><li>The overhead A/B over BQ's whole change (CLAUDE.md step 3).</li><li>**Text:**<ul><li>`wal.md` §4.1 (the size) and §13 ("segment size" under Configuration, a setting that does not exist);</li><li>`wal.md` §6 step 1, whose self-contradiction is resolved whichever way BQ ends;</li><li>`stream.hpp`'s protocol header;</li><li>`known-gaps.md`'s two WAL entries and its BL entry, re-priced.</li></ul></li><li>AL-R1 annotated with a dated note pointing at `wal.md`, not rewritten, since it is the operator's ruling.</li><li>BL's §6 ruling 3 given BQ's answer.</li></ul> | S |
+| BQ-S5 | **The close** | <ul><li>The overhead A/B over BQ's whole change (CLAUDE.md step 3).</li><li>**Text:**<ul><li>`wal.md` §4.1 (the size) and §13 ("segment size" under Configuration, a setting that does not exist);</li><li>`wal.md` §6 step 1, whose self-contradiction is resolved whichever way BQ ends, and §6 step 5's "that cost is not measured", priced by BQ's results;</li><li>`wal.md` §13's observability list, naming the roll's `SHOW META` fields;</li><li>`stream.hpp`'s protocol header;</li><li>`known-gaps.md`'s two WAL entries and its BL entry, re-priced.</li></ul></li><li>AL-R1 annotated with a dated note pointing at `wal.md`, not rewritten, since it is the operator's ruling.</li><li>BL's §6 ruling 3 given BQ's answer.</li></ul> | S |
 
 ## 5. Measurement
 
@@ -433,7 +438,11 @@ otherwise a handful of maxima.
 - **C2 - the writer cell.** New in BQ-S1, an arm of `bl_mixed.py` or a
   sibling driver. Eight autocommit sessions run single-row pk `UPDATE`s on
   cores 0-2, beside the bulk inserter on core 3. Read for each session:
-  statement p50, p99, p99.9 and maximum, and commit latency.
+  statement p50, p99, p99.9 and maximum. **An autocommit session's commit
+  latency is its statement's round trip**, since its one reply follows the
+  commit (and, at `group`, the sync); it is read from the send
+  (`writer_service`) and from the due instant (`writer_from_schedule`), and
+  "C2's commit p99" below is `writer_from_schedule`'s p99.
 - **C3 - the bulk writer alone.** C1's inserter with nothing else. Read rows
   per second and log MiB per second. It prices a candidate's cost to the
   writer that causes the rolls.
@@ -468,12 +477,12 @@ Every proposal is `[design]` unless a cell says otherwise.
 
 | item | question | kind | CLA's proposal | mark |
 |---|---|---|---|---|
-| BQ-Q0 | **Open BQ**, with BQ-S0..S5 and BQ-R1..R3 as written | process | Yes. It depends on no open order, and BL stays paused | |
-| BQ-Q1 | **Does BQ-S1 also take BL's owed ruling 1 re-measurement?**<br>(a) Yes: same driver and host session, `05cd011f` against `3338cf0c`, its own results file under BL's name.<br>(b) No: BL takes it when it resumes | process | (a). It is the C1 run BQ-S1 needs anyway, plus one arm, and it stops `known-gaps.md`'s BL headline describing an engine that no longer exists | |
-| BQ-Q2 | **The bar** (§5.3).<br>(a) As proposed.<br>(b) p99 only.<br>(c) Other numbers | measurement | (a). Under (b), H2 can pass on rarity alone | |
-| BQ-Q3 | **The `wal_roll_*` counters after BQ.**<br>(a) Kept as `SHOW META` fields. `wal.md` §13 lists flush latency and ring-full stall time as product observability, and a roll's hold belongs beside them.<br>(b) Removed at BQ-S5 | user-visible | (a), and not a `sys` relation: those are BO's | |
-| BQ-Q4 | **If H2 lands, how the size changes.**<br>(a) The size recorded on the volume and read at mount, with the superblock bumped and every older volume refused.<br>(b) A new constant, with the superblock bumped and every older volume refused.<br>(c) A setting | format | (b). (a) adds a field that pays only if a later change wants a second size. (c) widens the scope to a tuning surface no workload has asked for. Under the standing order, none of the three mounts an older volume | |
-| BQ-Q5 | **Rung 4's license.** H6 rewrites `wal.md` §6 step 1 and crosses AL-R1.<br>(a) BQ-S4 may build it if rungs 1-3 miss, with its review before the code.<br>(b) BQ stops at rung 3 and reports, and H6 needs its own word | process, **[quiet-wrong]** | (b). AL-R1 was the operator's ruling, and H6's proof is the largest in the order | |
+| BQ-Q0 | **Open BQ**, with BQ-S0..S5 and BQ-R1..R3 as written | process | Yes. It depends on no open order, and BL stays paused | **Opened by W4** (2026-10-12, `raft-marks-2026-10-12.md` §14) |
+| BQ-Q1 | **Does BQ-S1 also take BL's owed ruling 1 re-measurement?**<br>(a) Yes: same driver and host session, `05cd011f` against `3338cf0c`, its own results file under BL's name.<br>(b) No: BL takes it when it resumes | process | (a). It is the C1 run BQ-S1 needs anyway, plus one arm, and it stops `known-gaps.md`'s BL headline describing an engine that no longer exists | **(a)**, as proposed, on W3 (§14) |
+| BQ-Q2 | **The bar** (§5.3).<br>(a) As proposed.<br>(b) p99 only.<br>(c) Other numbers | measurement | (a). Under (b), H2 can pass on rarity alone | **(a)**, as proposed, on W3 (§14) |
+| BQ-Q3 | **The `wal_roll_*` counters after BQ.**<br>(a) Kept as `SHOW META` fields. `wal.md` §13 lists flush latency and ring-full stall time as product observability, and a roll's hold belongs beside them.<br>(b) Removed at BQ-S5 | user-visible | (a), and not a `sys` relation: those are BO's | **(a)**, as proposed, on W3 (§14) |
+| BQ-Q4 | **If H2 lands, how the size changes.**<br>(a) The size recorded on the volume and read at mount, with the superblock bumped and every older volume refused.<br>(b) A new constant, with the superblock bumped and every older volume refused.<br>(c) A setting | format | (b). (a) adds a field that pays only if a later change wants a second size. (c) widens the scope to a tuning surface no workload has asked for. Under the standing order, none of the three mounts an older volume | **(b)**, as proposed, on W3 (§14) |
+| BQ-Q5 | **Rung 4's license.** H6 rewrites `wal.md` §6 step 1 and crosses AL-R1.<br>(a) BQ-S4 may build it if rungs 1-3 miss, with its review before the code.<br>(b) BQ stops at rung 3 and reports, and H6 needs its own word | process, **[quiet-wrong]** | (b). AL-R1 was the operator's ruling, and H6's proof is the largest in the order | **(b)**, as proposed, on W3 (§14): BQ stops at rung 3 |
 
 ## 7. Row status
 
@@ -495,3 +504,90 @@ applied in the same stage:
 
 No code, spec edit or test. The suite was not executed and no pass is
 claimed. Not opened (BQ-Q0).
+
+### BQ opened 2026-10-12 (W3, W4)
+
+W3 asked for BQ to start once BP had closed or paused, and to go ahead
+until the milestone closes or a failure or ineffectiveness is found; W4
+lifted the BP gate. BQ-Q0 opened, BQ-Q1..Q5 marked as proposed
+(`raft-marks-2026-10-12.md` §14). BP-S1 was measuring on the host when BQ
+opened, so BQ's builds ran niced beside it and BQ's measurements wait for
+a host with no BP run live.
+
+
+### BQ-S1 - instruments built; the measurement and the verdicts owed
+
+Built on `worktree-wal-segment-roll-order` from `dbff867b`, landing in the
+commit that carries this entry. Overhead not measured; measured at the
+milestone's close. The measurement (C1-C3), BQ-Q1 (a)'s BL re-measurement
+and the H0/H1 verdicts are **not yet taken**: they follow on the release
+build of this commit, on a host with no BP run live, and land as their own
+results files and as the next entry here.
+
+**What was built.**
+- `RollRecord`: one roll's hold, steps a-g, the gate's wait, its own
+  sync's tail/rest split, the syncs that finished while it waited (summed,
+  with their count), and the body's outcome.
+- `RollStat` totals, printed by `SHOW META` on every core (BQ-Q3 (a)), with
+  `wal_append_lsn` beside them.
+- Three contention tallies, per core as `load_c<k>_*` and summed as
+  `contention_*`: the drain's stream-latch wait, and the waits a roll's hold
+  covered, with the covered part.
+- One Info line per roll, `[wal] roll seg=...`, with steady-clock start and
+  end and every step.
+- The driver's C2 (`--writers`) and C3 arms, p99.9, durability in the tag,
+  the server log kept, the control reads pinned and re-read
+  (`--ctl-core`), and the balancer's moves counted per run.
+
+**Cells.** Six in `tests/wal_roll_instruments_test.cpp`:
+- a roll behind a held sync, with a drain blocked behind it;
+- two rolls at one core, with their log lines;
+- a body built inline;
+- a body waited for;
+- `SHOW META` on an owning core;
+- `SHOW META` on an attached core.
+
+Thirteen mutants, each built and run three times, were all killed three
+times out of three:
+- the overlap charge;
+- the drain guard;
+- the waited-out syncs, their split, and the running totals they are read
+  from;
+- the gate charged the sync;
+- `RecordRoll`;
+- `LogRoll`;
+- tail/rest swapped;
+- inline and waited reported as hit;
+- the totals owner-only;
+- the flush timer.
+
+**Where the build departs from this row.**
+1. **"Ring-full events during a roll" is not a counter.** Under the latched
+   roll no append runs during a roll, so none can see the ring fill during
+   one. A first draft counted ring-full drains that waited out a roll; the
+   review deleted it as a different event that would be read as H6's cap.
+   H6's cap is derived instead (H6, "Its gain is capped by the ring").
+2. **The drain's share is `contention_wal_drain_latch_wait_us`** and, per
+   core, `load_c<k>_wal_drain_latch_wait_us`. The per-core field is absent
+   when 0. The rest of `load_c<k>_waited_wal_stream_us` bounds the
+   statements' share from above and is not that share.
+3. **`SHOW META` carries totals, `wal_roll_hold_max_us` and the segment
+   count's sum and maximum, never per-roll values.** H1's share over the
+   rolls at or above the p99, and H3's per-roll split, are read from the
+   per-roll lines. C1-C3 therefore run at `log_level = info`.
+4. **The cells force each counter in its own shape** rather than all of
+   them in one two-core roll: hit, waited and inline exclude each other.
+
+**Review.** Two `critics-developer` passes.
+- The first had four reviewers, each finding verified adversarially: 35
+  confirmed and 6 refuted. All 35 were applied except E5, which is
+  rejected. E5 asked to collapse the roll's four field lists into one
+  table. The lists serve different readers (the record, the names, the
+  totals, the log line), the drift the review found was fixed directly
+  (E2), and an accessor table adds indirection for no reader.
+- The second found five defects in the first's fixes, all applied:
+  - a torn read of the sync totals, now under a mutex of their own;
+  - a waited-out sync reported with no wait;
+  - two false clauses in the `rules.md` Logger row;
+  - a misleading "a peer's roll time" sentence;
+  - a `per_core_valid` that counted the control session's own moves.

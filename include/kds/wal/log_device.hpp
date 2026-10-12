@@ -57,6 +57,33 @@ namespace kds::wal {
 // constant anything may depend on.
 inline constexpr std::uint64_t kDefaultSegmentSize = 64ull * 1024 * 1024;
 
+// **Where a creation's time went** (BQ-S1, `workorder-bq-wal-segment-roll.md`
+// §1.1 steps d-g), filled by `CreateSegmentTimed`. A device that does not
+// split its creation leaves every field 0 and `body` unreported; the stream
+// still times the whole call.
+enum class BodyOutcome : std::uint8_t {
+    kUnreported,  // the device does not say
+    kHit,         // the body was built ahead and ready
+    kWaited,      // a build ahead was in progress; the creation waited for it
+    kInline,      // nothing was built ahead; the creation built the body itself
+};
+struct SegmentCreateTiming {
+    std::uint64_t body_wait_ns = 0;  // waiting for a build ahead in progress
+    std::uint64_t body_ns = 0;       // building the body inline
+    std::uint64_t header_ns = 0;     // the header's write and its sync
+    std::uint64_t rename_ns = 0;     // the temporary name to the final one
+    std::uint64_t dir_sync_ns = 0;   // the directory's fsync, its serialization included
+    BodyOutcome body = BodyOutcome::kUnreported;
+};
+
+// **Where a sync's time went** (BQ-S1, H3): the tail segment's sync apart
+// from the rest of the live run's. Zero from a device that does not split.
+struct DeviceSyncTiming {
+    std::uint64_t tail_ns = 0;
+    std::uint64_t rest_ns = 0;
+    std::uint32_t segments = 0;  // the segments the sync covered
+};
+
 class LogDevice {
 public:
     virtual ~LogDevice() = default;
@@ -81,6 +108,14 @@ public:
     virtual Status CreateSegment(std::uint64_t segment_no,
                                  std::span<const std::byte> header = {}) = 0;
 
+    // `CreateSegment`, reporting where its time went (BQ-S1). The default
+    // reports nothing; a device that splits its creation overrides it and
+    // makes `CreateSegment` the call with the report discarded.
+    virtual Status CreateSegmentTimed(std::uint64_t segment_no, std::span<const std::byte> header,
+                                      SegmentCreateTiming& /*out*/) {
+        return CreateSegment(segment_no, header);
+    }
+
     // **Asks for segment `segment_no`'s body to be built ahead of its
     // creation** (BA-S12, BA-R9's first half): what a creation spends before
     // its header and its name - the reservation and the zeroing - done off
@@ -104,6 +139,9 @@ public:
     // Makes every prior write - and the existence of every segment created
     // so far - durable.
     virtual Status Sync() = 0;
+
+    // `Sync`, reporting where its time went (BQ-S1); the same default.
+    virtual Status SyncTimed(DeviceSyncTiming& /*out*/) { return Sync(); }
 
     // Removes segments first_segment()..segment_no-1 from the live run, with
     // no I/O (the concurrency section). `segment_no` may equal

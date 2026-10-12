@@ -193,9 +193,12 @@ construction and the instance's durability cost is read on core 0
 the same thing on every core: a peer writes `sys.patterns` and
 `sys.access_stats` itself, and both relations are the instance's one.
 Recovery runs once, on core 0, before any peer exists.
-`SHOW META`'s `contention_*` fields are the exception to "read on core 0":
-they are summed over every core, and count where one core waited for
-another (`docs/spec/client-manual.md`).
+`SHOW META`'s `contention_*` fields, and since BQ-S1 `wal_append_lsn` and the
+segment roll's `wal_rolls`/`wal_roll_*`, are the exceptions to "read on core
+0": the first are summed over every core and count where one core waited for
+another; the second are the one stream's totals, printed the same on every
+core and never summed, and they include rolls on peers, whose inline
+syncs `wal_syncs` never counts (`docs/spec/client-manual.md`).
 
 **Which CPU each reactor runs on.** By default a peer reactor `k` is pinned
 to CPU `k` and core 0 runs unpinned, which on a host that numbers SMT
