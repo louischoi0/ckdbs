@@ -316,6 +316,7 @@ out.
 | Token | Meaning |
 |---|---|
 | `*M` | milestone (the asterisk is part of the token: `M0`, `M2` in AR0 are milestone names, not this) |
+| `*T` | a task inside a `*M` |
 
 ## Open Decisions — DO NOT assume or silently pick
 
