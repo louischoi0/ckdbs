@@ -363,7 +363,7 @@ Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
                                wal::CheckpointTarget& target, wal::CheckpointAnchor& anchor,
                                Logger* log, const sched::Clock* clock,
                                sched::MonoTimeNs* elapsed_ns,
-                               wal::AssertionSnapshotSource* assertions) {
+                               wal::AssertionSnapshotSource* assertions, bool at_mount) {
     const sched::MonoTimeNs started = clock != nullptr ? clock->Now() : 0;
     // Empty by fact, not by omission - see the header. A checkpoint written
     // here with a *stale* active list would be worse than none: recovery would
@@ -382,7 +382,13 @@ Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
     // size is a record larger than the log's ring (12 bytes a page, 1 MiB),
     // and the mount was refused - a crash after a bulk load at `cores = 4`,
     // and BR-S10's restore of a 3.5 GiB window, found by its measurement.
-    if (const std::vector<PageId> dirty = target.DirtyPages(); !dirty.empty()) {
+    // The ids are the table's - the list `Start` would log - not
+    // `DirtyPages()`, which a target may leave at its empty default.
+    std::vector<PageId> dirty;
+    if (at_mount) {
+        for (const wal::CheckpointDirtyPage& page : target.DirtyTable()) dirty.push_back(page.page_id);
+    }
+    if (!dirty.empty()) {
         if (Status s = target.FlushPages(dirty); !s.ok()) {
             return s.WithContext("recovery of core " + std::to_string(core_id) +
                                  ": completion checkpoint's flush");

@@ -349,10 +349,18 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
 // base, and enforcement would survive exactly one restart. That is why this
 // call is sequenced after `ResumeAssertionsAfterRecovery` rather than beside the
 // recovery it completes.
+//
+// `at_mount` (the default, and every server caller's): every dirty page is
+// written before the run begins, so its CHECKPOINT_BEGIN carries an empty
+// dirty table - a replay can dirty more pages than one record holds in the
+// log's ring (BR-S10). Nothing else writes at a mount. The simulation's
+// mid-run and shutdown checkpoints pass false, so its crash corpus still
+// recovers from anchors whose redo start lies below their checkpoint.
 Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
                                wal::CheckpointTarget& target, wal::CheckpointAnchor& anchor,
                                Logger* log, const sched::Clock* clock = nullptr,
                                sched::MonoTimeNs* elapsed_ns = nullptr,
-                               wal::AssertionSnapshotSource* assertions = nullptr);
+                               wal::AssertionSnapshotSource* assertions = nullptr,
+                               bool at_mount = true);
 
 }  // namespace kds::server

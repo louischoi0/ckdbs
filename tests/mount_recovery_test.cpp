@@ -392,7 +392,6 @@ public:
         for (const PageId id : dirty_) table.push_back({id, /*rec_lsn=*/4096});
         return table;
     }
-    std::vector<PageId> DirtyPages() override { return dirty_; }
     Status FlushPages(std::span<const PageId> ids) override {
         std::set<PageId> flushed(ids.begin(), ids.end());
         std::erase_if(dirty_, [&](PageId id) { return flushed.count(id) != 0; });
@@ -418,6 +417,8 @@ TEST_F(MountRecoveryTest, AReplayThatDirtiedMoreThanTheRingHoldsStillCheckpoints
     ASSERT_TRUE(s.ok()) << s.message();
     EXPECT_EQ(target.still_dirty(), 0u);
     EXPECT_EQ(published.publishes(), 1u);
+    // Nothing left dirty: the run's redo start is its own CHECKPOINT_BEGIN.
+    EXPECT_EQ(published.anchor().redo_start_lsn, published.anchor().checkpoint_lsn);
 }
 
 TEST_F(MountRecoveryTest, TheAnchorItPublishesIsHonestAboutTheDurableEnd) {

@@ -63,7 +63,9 @@ namespace {
 // completion checkpoint writes every dirty page before it begins
 // (`CheckpointAfterRecovery`), so its CHECKPOINT_BEGIN carries an empty dirty
 // table where it listed the bootstrap's pages; that record shrinks and every
-// later record's LSN moves with it. No other record's bytes change.
+// later record's LSN moves with it, and that checkpoint's CHECKPOINT_END names
+// its own BEGIN as the redo start. The script's records are otherwise the
+// same records; the run's own checkpoints keep their dirty tables.
 constexpr std::uint32_t kGoldenLogCrc = 0xdc289c97u;
 
 const char* const kScript[] = {

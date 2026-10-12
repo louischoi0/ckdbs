@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/base/current_core.hpp"
+#include "kds/parser/parser.hpp"
 #include "kds/server/backup_manifest.hpp"
 #include "kds/server/expeditor.hpp"
 #include "kds/server/restore.hpp"
@@ -291,9 +292,30 @@ TEST(WalArchiverTest, AFailingArchiveNearAFullDiskRefusesWritesByName) {
         EXPECT_TRUE(StartsWith(reply, "ERR")) << write << " -> " << reply;
         EXPECT_NE(reply.find("WAL archive is failing"), std::string::npos) << reply;
     }
+    // The KWP load stream's door, past the dispatcher's statement gate.
+    auto parsed = parser::Parse("INSERT INTO t VALUES (3, 3)");
+    ASSERT_TRUE(parsed.ok());
+    Session session;
+    const std::string loaded =
+        db.dispatcher().ExecuteInsert(std::get<parser::InsertStmt>(parsed.value()), session).response;
+    EXPECT_NE(loaded.find("WAL archive is failing"), std::string::npos) << loaded;
     EXPECT_EQ(Ids(db, "SELECT id FROM t"), Range(1, 1));
     db.dispatcher().set_archiver(nullptr);
     Ok(db, "INSERT INTO t VALUES (2, 2)");
+}
+
+// Failing with room to spare is not blocking: the gate closes only near a
+// full filesystem (four ordinary segments fit any real disk).
+TEST(WalArchiverTest, AFailingArchiveWithRoomDoesNotBlock) {
+    TempDir dir;
+    const fs::path wal = dir.path / "wal";
+    constexpr std::uint64_t kSize = 4096;
+    FakeSegments(wal, 2, kSize);
+    WalArchiver archiver(WalArchiver::Wiring{{{}, "false"}, wal.string(), 7, kSize, 0,
+                                             [] { return wal::Lsn{kSize + 1}; }, {}, nullptr});
+    archiver.Start();
+    ASSERT_TRUE(WaitFor([&] { return !archiver.last_error().empty(); }));
+    EXPECT_FALSE(archiver.blocking());
 }
 
 // ---- Path B, restore, PITR (BR-S5..S7) ---------------------------------------

@@ -167,7 +167,9 @@ public:
     // shutdown, and the cadence tick mid-run (BC-S4), after which the log is
     // recycled below the anchor and the crash that follows is recovered from
     // a log whose head is gone.
-    Status RunCheckpoint();
+    // `at_mount`: the boot's completion checkpoint, which writes its pages
+    // first (`CheckpointAfterRecovery`); the run's own leave them dirty.
+    Status RunCheckpoint(bool at_mount = false);
 
     // **A cadence run abandoned mid-steps** (BI-S2): `Start` and one step of
     // a few pages, and then nothing - no `CHECKPOINT_END`, no publish - which

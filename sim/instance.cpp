@@ -141,7 +141,7 @@ Status SimInstance::Boot() {
             boot_->catalog, *store_, *log_device_, /*stream_core=*/0,
             boot_->superblock.wal_anchor(0).checkpoint_lsn, dispatcher_->assertions(),
             recovery_, /*log=*/nullptr);
-        if (Status s = RunCheckpoint(); !s.ok()) return s;
+        if (Status s = RunCheckpoint(/*at_mount=*/true); !s.ok()) return s;
         // The mount-time reclaim (BF-R8), collected after the completion
         // checkpoint and driven to its end here - the harness has no tick,
         // and what a later statement may find is a reclaimed volume. A
@@ -188,7 +188,7 @@ Status SimInstance::SettleReclaim() {
     return Status::OK();
 }
 
-Status SimInstance::RunCheckpoint() {
+Status SimInstance::RunCheckpoint(bool at_mount) {
     storage::PageStoreCheckpointTarget target(*store_);
     // The boot's one anchor, built at its first checkpoint (BF-R12).
     if (!anchor_.has_value()) {
@@ -197,7 +197,8 @@ Status SimInstance::RunCheckpoint() {
     }
     return server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, *anchor_,
                                            /*log=*/nullptr, /*clock=*/nullptr,
-                                           /*elapsed_ns=*/nullptr, &dispatcher_->assertions());
+                                           /*elapsed_ns=*/nullptr, &dispatcher_->assertions(),
+                                           at_mount);
 }
 
 Status SimInstance::AbandonCheckpointMidSteps() {
@@ -428,7 +429,7 @@ StatusOr<std::unique_ptr<SimInstance>> SimInstance::CreateFromBackup(Options opt
     }
     if (Status s = instance->Boot(); !s.ok()) return s;
     if (Status s = server::DiscardAdvisoryState(instance->catalog()); !s.ok()) return s;
-    if (Status s = instance->RunCheckpoint(); !s.ok()) return s;
+    if (Status s = instance->RunCheckpoint(/*at_mount=*/true); !s.ok()) return s;
     return instance;
 }
 

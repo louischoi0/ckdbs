@@ -8,7 +8,7 @@ commit after it, the cadence's half not.
 
 A `CHECKPOINT_BEGIN` carries the whole dirty-page table, 12 bytes a page
 (`wal/payload.hpp` `kDirtyEntrySize`), and a record may not exceed the WAL
-ring (`kDefaultRingCapacity`, 1 MiB; `WalStream::AppendLocked` refuses
+ring (`WalManagerConfig::ring_capacity`, 1 MiB by default; `WalStream::AppendLocked` refuses
 "record of N bytes is larger than the ring"). About 87,000 dirty pages fill
 it. BR-S10 met it at a mount: after a bulk load at `cores = 4`, a `kill -9`
 left a redo window that dirtied more pages than that, and the pre-BR build
