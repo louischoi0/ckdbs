@@ -1152,9 +1152,21 @@ the procedures are `manual/server/backup-restore.md`.
 - **An `archive_command` that hangs holds the archive**: it is not timed out,
   only ended at shutdown; the archive's lag and `wal_archive_blocking` are
   what an operator watches.
-- **The copier's rate (256 MiB/s), the fail-closed reserve (4 segments) and
-  the hour that ends an idle backup are `[provisional]`**, with BR-S10's
-  numbers in `bench/v3.0.0/`.
+- **What BR costs when on** (BR-S10, `bench/v3.0.0/results-br-close-backup-restore-v2.7.0-913-ga8110b05.md`):
+  the archive shares the WAL device's bandwidth - wide `INSERT`s lose 27-29 %
+  with the archive on the data device, 3 % with it elsewhere; the archiver
+  keeps 1.5x the mean log rate and 0.78x a 5 s peak, so it falls behind at a
+  peak and drains after it (39 segments held once). A base copy runs at its
+  256 MiB/s throttle and, at `cores = 1`, quadruples the workload's p99 for
+  the seconds it runs (`cores = 4`: at the floor).
+- **The copier's rate (256 MiB/s) and chunk (128 pages), the fail-closed
+  reserve (4 segments) and the hour that ends an idle backup stay
+  `[provisional]`**: BR-S10 measured each at one value only (its results
+  file says why each stays).
+- **A cadence checkpoint whose dirty table exceeds the WAL ring is refused**
+  (`bugs/a-checkpoint-whose-dirty-table-exceeds-the-ring-is-refused.md`); the
+  mount's completion checkpoint - a restore's included - writes its pages
+  first and no longer meets it.
 - **Two engine defects BR found and did not fix**, each in `bugs/`: a full
   page image cannot heal an allocated checksum-failed page, and a
   synchronous anchor publish writes page 0 beside the pages it stands for.

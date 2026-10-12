@@ -58,7 +58,13 @@ namespace {
 // logged `HEAP_INSERT` (type 5). `golden_tree`'s two rows are the script's
 // two such records; their payloads are byte-identical, so the stream moves
 // by the two type bytes and their CRCs, and every heap record is unchanged.
-constexpr std::uint32_t kGoldenLogCrc = 0xd4d0579au;
+// **Re-pinned at BR-S10** (on `br-backup-restore`, 2026-10-12,
+// `instructions/v3.0.0/workorder-br-backup-restore.md` §11): the boot's
+// completion checkpoint writes every dirty page before it begins
+// (`CheckpointAfterRecovery`), so its CHECKPOINT_BEGIN carries an empty dirty
+// table where it listed the bootstrap's pages; that record shrinks and every
+// later record's LSN moves with it. No other record's bytes change.
+constexpr std::uint32_t kGoldenLogCrc = 0xdc289c97u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",
