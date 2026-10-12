@@ -308,11 +308,10 @@ public:
         return ended;
     }
 
-    // The lifetime sweep rolled the transaction back, and the handle went
-    // with it (`CommandDispatcher::ExpireTransaction`). Failed, not idle:
-    // an idle session would run the client's next statement in autocommit,
-    // so the writes it believes are pending in its transaction would be
-    // silently missing from what it commits next.
+    // The lifetime sweep rolled the transaction back
+    // (`TcpServer::ExpireOverdueTransactions`). Failed, not idle: an idle
+    // session would run the client's next statement in autocommit, and the
+    // writes it believes pending would be silently missing from its COMMIT.
     void Expire(std::uint64_t trx_id) noexcept {
         txn_ = nullptr;
         state_ = State::kFailedTxn;

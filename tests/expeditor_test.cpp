@@ -762,16 +762,18 @@ TEST_F(ExpeditorTest, APeerThatOwnsAnAssertionMountsAndComesUpEnforcingIt) {
 // the listener's sweep, and the client learns it at its next statement. Run
 // on a real instance over the debug text port because the sweep is the
 // listener's and the key is the Expeditor's: a dispatcher-level cell would
-// test neither. 300 ms so the cells are short; the sweep then ticks every
-// 75 ms.
+// test neither.
 //
-// **The waits are generous on purpose.** Every assertion is either a lower
-// bound the sweep cannot beat (it never fires before the ceiling) or an
-// outcome after several ceilings, so a loaded host makes a cell slower,
-// never wrong.
+// **Two bounds, and the ceiling is sized for the tighter one.** Each cell's
+// setup - at most three statement round trips after its `BEGIN`, in the
+// in-flight cell - must finish inside one ceiling, or a setup assertion
+// meets the refusal; 1 s is that budget on a loaded `-j8` Debug host. Every
+// assertion after it is a lower bound the sweep cannot beat (it never fires
+// before the ceiling) or an outcome three ceilings on, where the sweep has
+// had eight ticks to act.
 
-constexpr std::uint64_t kCellCeilingMs = 300;
-constexpr auto kWellPastTheCeiling = std::chrono::milliseconds(6 * kCellCeilingMs);
+constexpr std::uint64_t kCellCeilingMs = 1000;
+constexpr auto kWellPastTheCeiling = std::chrono::milliseconds(3 * kCellCeilingMs);
 
 bool Refused(const std::string& reply) {
     return reply.rfind("ERR", 0) == 0 && reply.find("lifetime ceiling") != std::string::npos;
@@ -802,8 +804,10 @@ TEST_F(ExpeditorTest, AnIdleTransactionPastItsLifetimeIsRolledBackAndItsNextStat
     EXPECT_EQ(SendLine(fd, "ROLLBACK").rfind("ROLLBACK trx_id=", 0), 0u);
 
     // The insert is gone, and the session is in autocommit again.
-    EXPECT_EQ(SendLine(fd, "SELECT * FROM t WHERE id = 1").find("10"), std::string::npos)
-        << "the swept transaction's insert survived its rollback";
+    const std::string gone = SendLine(fd, "SELECT * FROM t WHERE id = 1");
+    ASSERT_EQ(gone.rfind("ERR", 0), std::string::npos) << gone;
+    EXPECT_EQ(gone.find("10"), std::string::npos)
+        << "the swept transaction's insert survived its rollback: " << gone;
     EXPECT_EQ(SendLine(fd, "INSERT INTO t VALUES (2, 20)").rfind("INSERTED", 0), 0u);
     EXPECT_TRUE(running.Stop().ok());
 }
@@ -822,8 +826,9 @@ TEST_F(ExpeditorTest, ABusyTransactionIsRolledBackAtItsLifetimeNotItsIdleness) {
     RunningInstance running(*opened.value(), config.debug_text_port);
     ASSERT_TRUE(running.Run());
     // A second connection for the transaction, closed without a ROLLBACK
-    // once it is swept: the close path's rollback must meet an expired
-    // session and end it, with the instance still serving afterwards.
+    // once it is swept, so the close path meets an expired session; the
+    // PING after it shows only that the instance survived, not that the
+    // close was handled first.
     const int fd = ConnectToLoopback(config.debug_text_port);
     ASSERT_GE(fd, 0);
 
@@ -841,7 +846,7 @@ TEST_F(ExpeditorTest, ABusyTransactionIsRolledBackAtItsLifetimeNotItsIdleness) {
     }
     const auto refused_after = std::chrono::steady_clock::now() - began;
     ASSERT_TRUE(Refused(reply)) << "a transaction issuing a statement every 30 ms ran for 10 s "
-                                   "under a 300 ms lifetime ceiling ("
+                                   "under a " << kCellCeilingMs << " ms lifetime ceiling ("
                                 << statements << " statements): " << reply;
     EXPECT_GE(refused_after, std::chrono::milliseconds(kCellCeilingMs))
         << "the sweep ended the transaction before its lifetime";

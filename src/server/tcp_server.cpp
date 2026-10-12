@@ -251,13 +251,14 @@ Status TcpServer::Attach(sched::Scheduler& scheduler, CommandDispatcher& dispatc
         });
     }
 
-    // **The transaction lifetime ceiling's caller** (AN-R14), on both
-    // protocols: an abandoned explicit transaction holds the instance's
-    // read horizon and its undo for as long as it stays open, whichever
-    // protocol opened it. A quarter of the ceiling for the portal sweep's
-    // reason - a transaction is ended within 25% past its bound.
-    txn_sweep_ = scheduler_->SubmitEvery(txn_lifetime_ceiling_ns_ / 4,
-                                         [this] { ExpireOverdueTransactions(); });
+    // **The transaction lifetime ceiling's caller** (AN-R14, txn.md §1), on
+    // both protocols. A quarter of the ceiling for the portal sweep's
+    // reason, and never under a millisecond, so a ceiling of a few
+    // milliseconds cannot turn the timer into a spin.
+    constexpr sched::MonoTimeNs kMinTxnSweepPeriodNs = 1'000'000;
+    txn_sweep_ = scheduler_->SubmitEvery(
+        std::max(txn_lifetime_ceiling_ns_ / 4, kMinTxnSweepPeriodNs),
+        [this] { ExpireOverdueTransactions(); });
     return Status::OK();
 }
 
@@ -775,7 +776,6 @@ bool TcpServer::DrainCommands(int client_fd, Connection& conn) {
 }
 
 void TcpServer::ExpireOverdueTransactions() {
-    if (dispatcher_ == nullptr || scheduler_ == nullptr) return;
     const sched::MonoTimeNs now = scheduler_->clock().Now();
     for (auto& [fd, conn] : clients_) {
         // In flight: the statement holds the session, so ending its
@@ -790,19 +790,18 @@ void TcpServer::ExpireOverdueTransactions() {
         const std::uint64_t id = open->id();
         // The connection-close path's own rollback (`CloseClient`), so the
         // sweep adds no second way to end a transaction.
-        DispatchOutcome rolled = dispatcher_->Dispatch("ROLLBACK", &conn.session);
-        if (conn.session.transaction() != nullptr) {
-            // The rollback refused before ending it (an assertion
-            // reservation's unwind); the transaction is still open and the
-            // next tick tries again.
-            if (logging(LogLevel::kWarn)) {
-                log_->Warn("txn", "fd=" + std::to_string(fd) + " trx_id=" + std::to_string(id) +
-                                      " is past the lifetime ceiling and its rollback was "
-                                      "refused: " +
-                                      rolled.response);
-            }
-            continue;
+        const DispatchOutcome rolled = dispatcher_->Dispatch("ROLLBACK", &conn.session);
+        // A failure is logged whichever side of the transaction's end it
+        // fell on: the client's refusal will say its writes are undone,
+        // and this line is where an operator learns when that is untrue.
+        if (!rolled.status.ok() && logging(LogLevel::kWarn)) {
+            log_->Warn("txn", "fd=" + std::to_string(fd) + " trx_id=" + std::to_string(id) +
+                                  " is past the lifetime ceiling and its rollback failed: " +
+                                  rolled.response);
         }
+        // Refused before it ended the transaction (an assertion
+        // reservation's unwind): still open, and the next tick tries again.
+        if (conn.session.transaction() != nullptr) continue;
         conn.session.Expire(id);
         if (logging(LogLevel::kInfo)) {
             log_->Info("txn", "fd=" + std::to_string(fd) + " trx_id=" + std::to_string(id) +

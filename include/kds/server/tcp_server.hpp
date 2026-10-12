@@ -234,9 +234,8 @@ public:
         // offered, only beside an identity source: a counter's key is no
         // authorization.
         CancelRegistry* cancels = nullptr;
-        // `txn_lifetime_ceiling_ms` (AN-R14). Never 0: the Expeditor
-        // refuses it, because a ceiling that can be switched off silently
-        // is the way AW-S3's sweep went dark.
+        // `txn_lifetime_ceiling_ms` (AN-R14). Never 0; the Expeditor
+        // refuses it (docs/spec/txn.md §1).
         sched::MonoTimeNs txn_lifetime_ceiling_ns = kDefaultTxnLifetimeCeilingNs;
     };
     void Configure(const ClientSetup& setup) {
@@ -391,16 +390,9 @@ private:
     // STOP, and continue draining.
     void OnStatementComplete(int client_fd);
 
-    // **The transaction lifetime sweep** (AN-R14, docs/spec/txn.md §1).
-    // Every connection whose explicit transaction - poisoned or not - began
-    // `txn_lifetime_ceiling_ns_` ago or more is rolled back through the
-    // connection-close path's `ROLLBACK` and left expired
-    // (`Session::Expire`), so its next statement learns it. A connection
-    // with a statement in flight is skipped this tick, never interrupted:
-    // the statement holds the session, and the next tick after it ends
-    // reaches the transaction. Autocommit statements have no transaction
-    // to sweep; DDL inside an explicit transaction is swept like any other
-    // statement in it (the operator's ruling of 2026-10-12).
+    // **The transaction lifetime sweep** (AN-R14; docs/spec/txn.md §1 is
+    // the contract). Rolls back each idle connection's overdue explicit
+    // transaction and leaves its session expired (`Session::Expire`).
     void ExpireOverdueTransactions();
     // Appends one reply line to the outbox, through the wire channel if
     // one is installed. Returns false if the connection was closed (a

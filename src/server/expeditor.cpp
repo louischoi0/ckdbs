@@ -427,13 +427,18 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
     if (file.Has("txn_lifetime_ceiling_ms")) {
         auto v = file.GetUint("txn_lifetime_ceiling_ms");
         if (!v.ok()) return v.status();
-        // Refused, not read as "off": AN-R14 is a ruled policy, and a
-        // ceiling a 0 silently disables is how AW-S3's sweep went dark
-        // (docs/spec/txn.md §1).
+        // Refused, not read as "off" (docs/spec/txn.md §1).
         if (v.value() == 0) {
             return Status::InvalidArgument(
                 "txn_lifetime_ceiling_ms = 0 would end every explicit transaction at once; the "
                 "ceiling has no off-switch (docs/spec/txn.md §1)");
+        }
+        // A value whose nanoseconds wrap would enforce a different, possibly
+        // sub-millisecond, ceiling than the one written.
+        if (v.value() > std::numeric_limits<std::uint64_t>::max() / 1'000'000ULL) {
+            return Status::InvalidArgument("txn_lifetime_ceiling_ms = " +
+                                           std::to_string(v.value()) +
+                                           " overflows the nanosecond clock");
         }
         txn_lifetime_ceiling_ns = v.value() * 1'000'000ULL;
     }
