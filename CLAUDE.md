@@ -319,6 +319,7 @@ out.
 | `*T` | a task inside a `*M` |
 | `*I` | issue |
 | `*B` | bug |
+| `*P` | progress gate: what must be resolved before the named work can proceed. "Resolving the thread-contamination `*I` is the `*P` of the BK `*M`" means the BK milestone cannot be closed until that issue is resolved |
 
 ## Open Decisions — DO NOT assume or silently pick
 
