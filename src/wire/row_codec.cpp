@@ -193,15 +193,11 @@ Status EncodeValue(std::uint32_t type_val, std::uint32_t type_mod,
             // Written at the declared width, so a value that does not fit
             // it would reach the client as another number. Refused rather
             // than cut: a narrow pk's id is widened by WireValueType before
-            // it gets here, and anything else that overflows its width is
-            // an answer this column cannot carry.
-            if (width < 8) {
-                const std::int64_t bound = std::int64_t{1} << (8 * width - 1);
-                if (value.int_val < -bound || value.int_val >= bound) {
-                    return Status::OutOfRange(
-                        "wire row codec: " + std::to_string(value.int_val) +
-                        " does not fit the column's " + std::to_string(width) + "-byte width");
-                }
+            // it gets here, so nothing a relation stores reaches this.
+            if (!FitsSigned(value.int_val, width)) {
+                return Status::OutOfRange("wire row codec: " + std::to_string(value.int_val) +
+                                          " does not fit the column's " +
+                                          std::to_string(width) + "-byte width");
             }
             PutLE(out, static_cast<std::uint32_t>(width), 4);
             PutLE(out, value.int_val, width);

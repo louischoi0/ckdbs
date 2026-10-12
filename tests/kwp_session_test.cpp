@@ -283,11 +283,12 @@ TEST_F(KwpSessionTest, ANarrowPkPastItsDeclaredWidthReachesTheClientWhole) {
     // wire whatever integer width it declares - in any projected position
     // and on a joined relation as much as the first one.
     Handshake();
-    Run("CREATE TABLE np (id int32, v int64)");
-    Run("CREATE TABLE nq (id int8, w int64)");
+    ASSERT_EQ(Run("CREATE TABLE np (id int32, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE TABLE nq (id int8, w int64)").substr(0, 7), "CREATED");
     const std::int64_t id = (std::int64_t{1} << 31) + 5;
-    Run("INSERT INTO np VALUES (" + std::to_string(id) + ", 300)");
-    Run("INSERT INTO nq VALUES (300, 7)");
+    ASSERT_EQ(Run("INSERT INTO np VALUES (" + std::to_string(id) + ", 300)").substr(0, 8),
+              "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO nq VALUES (300, 7)").substr(0, 8), "INSERTED");
 
     const auto expect_id = [&](const std::string& sql, std::size_t field, std::int64_t want) {
         auto frames = RunStatement(sql);
@@ -309,16 +310,10 @@ TEST_F(KwpSessionTest, ANarrowPkPastItsDeclaredWidthReachesTheClientWhole) {
     expect_id("SELECT * FROM np", 0, id);
     expect_id("SELECT v, id FROM np", 1, id);
     expect_id("SELECT np.v, nq.id FROM np JOIN nq ON nq.id = np.v", 1, 300);
-
-    // A fold's output is typed as the column it read, not as a Keystone,
-    // so MAX(id) is not widened: it is refused rather than sent cut.
-    auto folded = RunStatement("SELECT MAX(id) FROM np");
-    ASSERT_FALSE(folded.empty());
-    EXPECT_EQ(folded.back().type, static_cast<std::uint8_t>(ServerFrameType::kError));
-    for (const auto& f : folded) {
-        EXPECT_NE(f.type, static_cast<std::uint8_t>(ServerFrameType::kRowBatch))
-            << "no row may carry the cut id";
-    }
+    expect_id("SELECT id FROM np ORDER BY v", 0, id);
+    // A fold's MIN/MAX and a group key over column 0 are the id too.
+    expect_id("SELECT MAX(id) FROM np", 0, id);
+    expect_id("SELECT id, COUNT(*) FROM np GROUP BY id", 0, id);
 }
 
 TEST_F(KwpSessionTest, AWriteAnswersACompletionWithItsRowCountAndNoDescription) {

@@ -164,8 +164,10 @@ Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& val
 // fold's output row (`SUM(v)`, `COUNT(*)`) has a type and a scale and **no
 // `SysColumnRow` anywhere** - the aggregate spec carries the pair, resolved
 // at compile, precisely because the fold sits outside the catalog. The
-// overload above is this one with the two fields read off the row, so there
-// is one encoder and no arm that can drift.
+// overload above is this one with the two fields read off the row and the
+// type passed through `WireValueType`, so there is one encoder and no arm
+// that can drift. An integer that does not fit its type's width is refused
+// OutOfRange, never written cut.
 Status EncodeValue(std::uint32_t type_val, std::uint32_t type_mod,
                    const parser::AstValue& value, std::vector<std::byte>& out);
 

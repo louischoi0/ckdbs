@@ -588,6 +588,75 @@ TEST_F(KwpLoadServerTest, APkOnlyRelationLoadsIssuedAndNamedKeys) {
     client.join();
 }
 
+// A narrow pk travels as u64 in a load chunk as in a result (protocol.md
+// §6): 8 bytes past the declared width land whole, and the declared width's
+// 4 bytes are refused, because S_LOAD_READY described the field as 8.
+TEST_F(KwpLoadServerTest, ANarrowPkLoadsAsEightBytesPastItsDeclaredWidth) {
+    constexpr std::uint16_t kTextPort = 25725;
+    constexpr std::uint16_t kKwpPort = 25726;
+    ASSERT_EQ(dispatcher_->Dispatch("CREATE TABLE t (id int32, a int64)").response.substr(0, 7),
+              "CREATED");
+    catalog::Schema schema;
+    schema.columns = {Col(catalog::kTypeValInt32), Col(catalog::kTypeValInt64)};
+    const std::int64_t id = (std::int64_t{1} << 31) + 5;
+
+    auto text = TcpServer::Listen(kTextPort);
+    auto kwp = KwpLoadServer::Listen(kKwpPort);
+    ASSERT_TRUE(text.ok());
+    ASSERT_TRUE(kwp.ok());
+
+    std::thread client([&] {
+        StopGuard stop{kTextPort};
+        int fd = ConnectToLoopback(kKwpPort);
+        ASSERT_GE(fd, 0);
+        wire::FrameDecoder decoder;
+        ASSERT_TRUE(Handshake(fd, decoder));
+
+        auto ready = Begin(fd, decoder, "t");
+        ASSERT_TRUE(ready.has_value());
+        SendFrame(fd, wire::ClientFrameType::kLoadChunk,
+                  Chunk(ready->first, 0, schema, {{Int(id), Int(1)}}));
+        auto ack = ReadFrame(fd, decoder);
+        ASSERT_TRUE(ack.has_value());
+        ASSERT_EQ(ack->type, static_cast<std::uint8_t>(wire::ServerFrameType::kLoadAck));
+        SendFrame(fd, wire::ClientFrameType::kLoadEnd, {});
+        ASSERT_TRUE(ReadFrame(fd, decoder).has_value());
+
+        // The declared width's four bytes, spelled by a schema whose
+        // column 0 is not numbered 0, so the codec does not widen it.
+        ready = Begin(fd, decoder, "t");
+        ASSERT_TRUE(ready.has_value());
+        catalog::Schema unnumbered = schema;
+        for (auto& col : unnumbered.columns) col.pos = 1;
+        wire::RowBatchWriter writer;
+        ASSERT_TRUE(
+            writer.AppendRow(unnumbered, std::vector<parser::AstValue>{Int(9), Int(1)}).ok());
+        wire::PayloadWriter w;
+        w.U64(ready->first);
+        w.U32(0);
+        w.U16(1);
+        auto chunk = w.Take();
+        const auto batch = writer.Finish();
+        chunk.insert(chunk.end(), batch.begin(), batch.end());
+        SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk);
+        auto err = ReadFrame(fd, decoder);
+        ASSERT_TRUE(err.has_value());
+        ASSERT_EQ(err->type, static_cast<std::uint8_t>(wire::ServerFrameType::kError));
+        const std::string message = wire::DecodeError(err->payload).value().message;
+        EXPECT_NE(message.find("carries 4 bytes where its width is 8"), std::string::npos)
+            << message;
+        ::close(fd);
+
+        int text_fd = ConnectToLoopback(kTextPort);
+        ASSERT_GE(text_fd, 0);
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT id FROM t"), "id\\n" + std::to_string(id));
+        ::close(text_fd);
+    });
+
+    RunReactor(text.value(), kwp.value());
+    client.join();
+}
+
 // A row the storage gate refuses kills the load whole (BI4), and the
 // refusal keeps its code: a named key already present is `AlreadyExists`, a
 // decimal past its precision and a NULL in a `NOT NULL` column are the
