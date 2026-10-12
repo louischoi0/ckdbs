@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Summary } from '../types'
-import { parseWorkOrder, report, toMarkdown } from './parse'
+import { listing, parseWorkOrder, report, toMarkdown } from './parse'
 
 const PANE = 'milestone'
 // The terminal docks a pane beside the transcript only in fullscreen from this width.
@@ -30,15 +30,24 @@ async function locate($: EngineInterface, root: string, name: string | null): Pr
   return log.stdout.split('\n').find(Boolean) ?? null
 }
 
-/** The in-progress work order: the one git touched last that still has a stage open, else null. */
-async function inProgress($: EngineInterface, root: string): Promise<Summary | null> {
+/** Every tracked work order with a stage still open (neither landed nor struck), the one git touched last first. */
+async function openOrders($: EngineInterface, root: string, firstOnly = false): Promise<Summary[]> {
   const tracked = new Set((await $.process.run(['git', 'ls-files', 'instructions/*/workorder-*.md'], { cwd: root })).stdout.split('\n').filter(Boolean))
   const log = await $.process.run(['git', 'log', '--format=', '--name-only', '--', 'instructions/*/workorder-*.md'], { cwd: root })
+  const open: Summary[] = []
   for (const file of new Set(log.stdout.split('\n').filter(f => tracked.has(f)))) {
     const s = parseWorkOrder(await $.fs.read(`${root}/${file}`), file)
-    if (s.stages.some(x => !x.note && !x.isStruck)) return s
+    if (!s.stages.some(x => !x.note && !x.isStruck)) continue
+    open.push(s)
+    if (firstOnly) break
   }
-  return null
+  return open
+}
+
+/** When a work order entered the tree: its first commit, followed across renames, in epoch seconds. */
+async function addedAt($: EngineInterface, root: string, file: string): Promise<number> {
+  const log = await $.process.run(['git', 'log', '--follow', '--diff-filter=A', '--format=%at', '--', file], { cwd: root })
+  return Number(log.stdout.split('\n').filter(Boolean).pop() ?? Infinity)
 }
 
 async function refresh($: EngineInterface): Promise<void> {
@@ -63,7 +72,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'milestone',
-      description: '/milestone <name>: progress and what is left, in the side pane; & the milestone in progress (an error if none); bare / pane: the full summary there; off closes it; auto unpins',
+      description: '/milestone <name>: progress and what is left, in the side pane; & the milestone in progress (an error if none); list every milestone with a stage open, oldest registered first; bare / pane: the full summary there; off closes it; auto unpins',
     })
     return next(e)
   })
@@ -74,12 +83,21 @@ export const register: Register = on => {
       await $.ui.close({ id: PANE })
       return { text: 'Milestone pane closed.' }
     }
+    if (/^list$/i.test(arg)) {
+      const root = await $.session.root()
+      const open = await openOrders($, root)
+      const added = new Map(await Promise.all(open.map(async s => [s.file, await addedAt($, root, s.file)] as const)))
+      open.sort((a, b) => (added.get(a.file) ?? 0) - (added.get(b.file) ?? 0))
+      if (!open.length) return { text: 'No milestone open: every tracked work order has its stages landed or struck.' }
+      const text = listing(open)
+      return { text, context: [`Open milestones listed by /milestone list:\n${text}`] }
+    }
     if (arg === '&') {
-      const s = await inProgress($, await $.session.root())
+      const [s] = await openOrders($, await $.session.root(), true)
       if (!s) return { text: 'Error: no milestone in progress (every tracked work order has its stages landed or struck).', exitCode: 1 }
       await update($, pinned, () => s.letter.toLowerCase())
     }
-    const isName = arg !== '' && arg !== '&' && !/^(pane|auto)$/i.test(arg)
+    const isName = arg !== '' && arg !== '&' && !/^(pane|auto|list)$/i.test(arg)
     if (/^auto$/i.test(arg)) await update($, pinned, () => null)
     else if (isName) await update($, pinned, () => arg)
 
