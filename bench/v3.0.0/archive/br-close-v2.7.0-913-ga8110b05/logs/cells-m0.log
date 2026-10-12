@@ -1,0 +1,14 @@
+started 2026-10-12 15:55:25 UTC
+cell relaxed-c1 start 15:55:25 load 1.55 5.14 6.56
+cell relaxed-c1 end 15:58:58 rc=0 load 1.76 3.48 5.61
+cell relaxed-c4 start 15:58:58 load 1.76 3.48 5.61
+cell relaxed-c4 end 16:02:44 rc=0 load 1.93 2.65 4.81
+cell aa-c1 start 16:02:44 load 1.93 2.65 4.81
+cell aa-c1 end 16:04:29 rc=0 load 1.99 2.41 4.47
+cell aa-c4 start 16:04:29 load 1.99 2.41 4.47
+cell aa-c4 end 16:06:19 rc=0 load 1.88 2.20 4.16
+cell group-c1 start 16:06:19 load 1.88 2.20 4.16
+cell group-c1 end 16:10:48 rc=0 load 1.73 2.00 3.58
+cell group-c4 start 16:10:48 load 1.73 2.00 3.58
+cell group-c4 end 16:15:14 rc=0 load 2.26 1.96 3.15
+all done 2026-10-12 16:15:14 UTC

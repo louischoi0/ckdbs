@@ -1,0 +1,1 @@
+idle backup {'backup_id': '15350963357412918531', 'start_lsn': '618004624', 'stop_lsn': '4256699640', 'data_pages': 137600, 'copy_s': 4.213, 'copy_mib_s': 255.2, 'stop_finish_s': 33.901, 'outcome': 'done'}

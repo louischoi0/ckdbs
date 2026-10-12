@@ -1,0 +1,83 @@
+{
+ "mode": "on",
+ "cores": 4,
+ "tag": "c4-p0-on",
+ "host_before": {
+  "loadavg": "2.72 2.33 2.98 1/346 702908",
+  "competing": []
+ },
+ "host_after": {
+  "loadavg": "3.00 2.42 3.00 1/349 702963",
+  "competing": []
+ },
+ "results": {
+  "insert": {
+   "ops": 3000,
+   "p0_us": 39.6,
+   "p25_us": 41.9,
+   "p50_us": 42.3,
+   "p95_us": 55.3,
+   "p99_us": 64.9,
+   "p999_us": 80.7,
+   "max_us": 109.1,
+   "mean_us": 44.2,
+   "qps": 22528.0
+  },
+  "select-pk": {
+   "ops": 3000,
+   "p0_us": 54.4,
+   "p25_us": 56.5,
+   "p50_us": 57.3,
+   "p95_us": 73.5,
+   "p99_us": 84.3,
+   "p999_us": 99.7,
+   "max_us": 145.3,
+   "mean_us": 60.0,
+   "qps": 16611.3
+  },
+  "update-pk": {
+   "ops": 3000,
+   "p0_us": 35.8,
+   "p25_us": 44.5,
+   "p50_us": 45.0,
+   "p95_us": 57.7,
+   "p99_us": 70.2,
+   "p999_us": 94.3,
+   "max_us": 6404.5,
+   "mean_us": 48.9,
+   "qps": 20310.9
+  },
+  "wide-insert-50rows": {
+   "ops": 2400,
+   "p0_us": 1167.5,
+   "p25_us": 1210.9,
+   "p50_us": 1252.1,
+   "p95_us": 1465.3,
+   "p99_us": 5702.0,
+   "p999_us": 1130865.8,
+   "max_us": 1324230.5,
+   "mean_us": 6779.8,
+   "qps": 146.7,
+   "wal_bytes": 939872472.0,
+   "wal_mib_s": 54.8
+  }
+ },
+ "meta_end": {
+  "wal_archived": 12.0,
+  "wal_archive_lag_segments": 2.0,
+  "wal_archive_failures": 0.0,
+  "wal_archive_next_segment": 12.0,
+  "wal_first_segment": 0.0,
+  "wal_segments_removed": 0.0,
+  "wal_syncs": 143.0
+ },
+ "meta_after": {
+  "wal_archived": 14.0,
+  "wal_archive_lag_segments": 0.0,
+  "wal_archive_failures": 0.0,
+  "wal_archive_next_segment": 14.0,
+  "wal_first_segment": 0.0,
+  "wal_segments_removed": 0.0,
+  "wal_syncs": 151.0
+ }
+}

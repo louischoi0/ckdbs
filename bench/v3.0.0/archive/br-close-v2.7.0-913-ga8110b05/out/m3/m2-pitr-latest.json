@@ -1,0 +1,358 @@
+{
+ "label": "m2-pitr-latest",
+ "backup": "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/m2/bk",
+ "cores": 4,
+ "archive": "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/m2/archive",
+ "target": "latest",
+ "manifest": {
+  "kds-backup-manifest": "1",
+  "backup_id": "15350963357412918531",
+  "label": "6d32",
+  "path": "B",
+  "engine": "unknown",
+  "superblock_version": "23",
+  "page_size": "8192",
+  "segment_size": "67108864",
+  "lineage": "806365680275788170",
+  "start_lsn": "618004624",
+  "stop_lsn": "4256699640",
+  "start_segment": "9",
+  "stop_segment": "63",
+  "created_unix": "1791823246",
+  "files": [
+   [
+    "wal/wal-0-9.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-10.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-11.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-12.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-13.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-14.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-15.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-16.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-17.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-18.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-19.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-20.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-21.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-22.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-23.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-24.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-25.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-26.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-27.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-28.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-29.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-30.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-31.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-32.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-33.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-34.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-35.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-36.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-37.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-38.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-39.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-40.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-41.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-42.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-43.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-44.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-45.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-46.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-47.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-48.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-49.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-50.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-51.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-52.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-53.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-54.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-55.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-56.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-57.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-58.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-59.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-60.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-61.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-62.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-63.log",
+    67108864
+   ],
+   [
+    "kds.db",
+    1127219200
+   ]
+  ],
+  "end": "8bdd27e1"
+ },
+ "backup_bytes": 1127221712,
+ "verify": {
+  "rc": 0,
+  "s": 5.668,
+  "stdout": "backup 15350963357412918531 valid: path B, lsn 618004624 .. 4256699640, segments 9 .. 63, 56 files, lineage 806365680275788170, written by unknown"
+ },
+ "restores": [
+  {
+   "rep": 0,
+   "cold_backup_files": true,
+   "serve": false,
+   "rc": 0,
+   "total_s": 138.532,
+   "layout_s": 93.718,
+   "recovery_s": 44.659,
+   "lines": [
+    "backup 15350963357412918531 laid out: lsn 618004624 .. 4256699640, segments to 156, new lineage 7493612175456338487; recovering",
+    "restore of backup 15350963357412918531 recovered past its stop lsn 4256699640"
+   ],
+   "meta": null,
+   "host_before": {
+    "loadavg": "2.33 2.27 2.44 1/360 709768",
+    "competing": []
+   },
+   "host_after": {
+    "loadavg": "1.99 2.22 2.40 1/350 710226",
+    "competing": []
+   },
+   "data_bytes": 2985820160,
+   "wal_dir_bytes": 9999220736
+  },
+  {
+   "rep": 1,
+   "cold_backup_files": false,
+   "serve": false,
+   "rc": 0,
+   "total_s": 138.711,
+   "layout_s": 93.365,
+   "recovery_s": 45.171,
+   "lines": [
+    "backup 15350963357412918531 laid out: lsn 618004624 .. 4256699640, segments to 156, new lineage 13465873393092486041; recovering",
+    "restore of backup 15350963357412918531 recovered past its stop lsn 4256699640"
+   ],
+   "meta": null,
+   "host_before": {
+    "loadavg": "1.99 2.22 2.40 1/350 710228",
+    "competing": []
+   },
+   "host_after": {
+    "loadavg": "2.23 2.13 2.34 4/364 710681",
+    "competing": []
+   },
+   "data_bytes": 2985820160,
+   "wal_dir_bytes": 9999220736
+  }
+ ],
+ "serve": {
+  "rep": 99,
+  "cold_backup_files": false,
+  "serve": true,
+  "rc": 0,
+  "total_s": 139.097,
+  "layout_s": 93.7,
+  "recovery_s": 45.064,
+  "lines": [
+   "backup 15350963357412918531 laid out: lsn 618004624 .. 4256699640, segments to 156, new lineage 13287913274277792165; recovering",
+   "restore of backup 15350963357412918531 recovered past its stop lsn 4256699640",
+   "ckdbs on /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/m3-m2-pitr-latest-99-serve/kds.db: 364317 pages, superblock version 23",
+   "logging to /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/m3-m2-pitr-latest-99-serve/kds.log at level WARN",
+   "listening on 127.0.0.1:31841"
+  ],
+  "meta": {
+   "pool_resident": 262083.0,
+   "wal_durable_lsn": 10537085544.0,
+   "wal_first_segment": 157.0,
+   "recovery_records": 2617179.0,
+   "recovery_committed": 15742.0,
+   "recovery_rolled_back": 2.0,
+   "recovery_compensations": 96.0,
+   "recovery_redo_applied": 1647436.0,
+   "recovery_pages_healed": 0.0,
+   "recovery_torn_tail": 0.0,
+   "recovery_redo_start": 618004624.0,
+   "recovery_redo_start_recomputed": 537631168.0,
+   "recovery_restore_backup": 1.535096335741292e+19,
+   "recovery_restore_start": 618004624.0,
+   "recovery_restore_stop": 4256699640.0,
+   "recovery_analysis_us": 12062536.0,
+   "recovery_redo_us": 17671322.0,
+   "recovery_high_water_us": 0.0,
+   "recovery_undo_us": 1583633.0,
+   "recovery_checkpoint_us": 13462047.0,
+   "recovery_relations_checked": 2.0,
+   "recovery_relations_missing_pages": 0.0,
+   "recovery_assertions_enforcing": 0.0,
+   "recovery_assertions_unrecovered": 0.0
+  },
+  "host_before": {
+   "loadavg": "2.23 2.13 2.34 1/357 710682",
+   "competing": []
+  },
+  "host_after": {
+   "loadavg": "2.41 2.33 2.39 1/344 711197",
+   "competing": []
+  },
+  "data_bytes": 2985820160,
+  "wal_dir_bytes": 67108864
+ }
+}

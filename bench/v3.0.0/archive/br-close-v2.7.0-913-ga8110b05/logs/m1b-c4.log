@@ -1,0 +1,15 @@
+c4 rep0 base 7942.9/s p99=128.4us wal/stmt=1210.9
+c4 rep0 copy 10068.0/s p99=132.3us copy=4.243s 253.8MiB/s wal/stmt=1206.3 fence_waited=0.0
+c4 rep0 stop 2651.2/s p99=179.6us finish=10.586s outcome=done
+c4 rep1 base 10207.5/s p99=146.7us wal/stmt=1210.6
+c4 rep1 copy 8242.2/s p99=170.6us copy=5.349s 204.0MiB/s wal/stmt=1210.4 fence_waited=0.0
+c4 rep1 stop 3622.8/s p99=185.9us finish=11.446s outcome=done
+c4 rep2 base 13932.2/s p99=147.7us wal/stmt=1207.9
+c4 rep2 copy 1972.5/s p99=145.7us copy=5.182s 211.0MiB/s wal/stmt=1229.0 fence_waited=0.0
+c4 rep2 stop 4537.3/s p99=192.6us finish=10.518s outcome=done
+c4 rep3 base 6327.1/s p99=172.9us wal/stmt=1212.3
+c4 rep3 copy 10036.5/s p99=161.0us copy=4.344s 251.9MiB/s wal/stmt=1207.8 fence_waited=0.0
+c4 rep3 stop 2934.9/s p99=173.0us finish=11.253s outcome=done
+c4 rep4 base 7685.0/s p99=146.9us wal/stmt=1210.8
+c4 rep4 copy 8758.0/s p99=145.7us copy=4.405s 249.4MiB/s wal/stmt=1210.6 fence_waited=0.0
+c4 rep4 stop 3922.6/s p99=190.1us finish=10.943s outcome=done

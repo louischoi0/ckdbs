@@ -1,0 +1,85 @@
+{
+ "mode": "off",
+ "cores": 1,
+ "tag": "c1-p1-off",
+ "host_before": {
+  "loadavg": "2.65 2.12 3.03 3/345 702561",
+  "competing": [
+   "702561 pgrep -af cc1plus|cmake --build|ctest|kds_tests|tools/bl_mixed.py --bin|bq_s1_matrix"
+  ]
+ },
+ "host_after": {
+  "loadavg": "2.57 2.13 3.02 1/349 702594",
+  "competing": []
+ },
+ "results": {
+  "insert": {
+   "ops": 3000,
+   "p0_us": 38.9,
+   "p25_us": 41.1,
+   "p50_us": 41.4,
+   "p95_us": 51.1,
+   "p99_us": 61.4,
+   "p999_us": 76.6,
+   "max_us": 118.3,
+   "mean_us": 42.7,
+   "qps": 23303.8
+  },
+  "select-pk": {
+   "ops": 3000,
+   "p0_us": 53.8,
+   "p25_us": 55.0,
+   "p50_us": 55.5,
+   "p95_us": 65.9,
+   "p99_us": 73.2,
+   "p999_us": 84.0,
+   "max_us": 148.6,
+   "mean_us": 56.8,
+   "qps": 17544.4
+  },
+  "update-pk": {
+   "ops": 3000,
+   "p0_us": 35.3,
+   "p25_us": 42.7,
+   "p50_us": 43.0,
+   "p95_us": 52.9,
+   "p99_us": 62.8,
+   "p999_us": 76.1,
+   "max_us": 4042.9,
+   "mean_us": 45.6,
+   "qps": 21806.1
+  },
+  "wide-insert-50rows": {
+   "ops": 2400,
+   "p0_us": 1100.7,
+   "p25_us": 1177.9,
+   "p50_us": 1218.4,
+   "p95_us": 1455.0,
+   "p99_us": 5783.8,
+   "p999_us": 586263.9,
+   "max_us": 1140194.2,
+   "mean_us": 4805.4,
+   "qps": 206.6,
+   "wal_bytes": 939062288.0,
+   "wal_mib_s": 77.1
+  }
+ },
+ "meta_end": {
+  "wal_archived": null,
+  "wal_archive_lag_segments": null,
+  "wal_archive_failures": null,
+  "wal_archive_next_segment": null,
+  "wal_first_segment": 0.0,
+  "wal_segments_removed": 0.0,
+  "wal_syncs": 157.0
+ },
+ "meta_after": {
+  "wal_archived": null,
+  "wal_archive_lag_segments": null,
+  "wal_archive_failures": null,
+  "wal_archive_next_segment": null,
+  "wal_first_segment": 0.0,
+  "wal_segments_removed": 0.0,
+  "wal_syncs": 157.0
+ }
+}

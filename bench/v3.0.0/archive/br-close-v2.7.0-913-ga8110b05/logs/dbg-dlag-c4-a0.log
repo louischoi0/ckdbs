@@ -1,0 +1,12 @@
+c4-a0 loaded in 240.4 s
+c4-a0 t+ 0s durable 4227858384 start_lsn 4480 lag 4032 MiB ckpt_runs 1.0 last_completed 1.0 refused 0.0 dirty_at_start 4381.0
+c4-a0 t+ 2s durable 4256479568 start_lsn 4480 lag 4059 MiB ckpt_runs 1.0 last_completed 1.0 refused 0.0 dirty_at_start 4381.0
+c4-a0 t+ 4s durable 4256479616 start_lsn 4480 lag 4059 MiB ckpt_runs 1.0 last_completed 1.0 refused 0.0 dirty_at_start 4381.0
+c4-a0 t+ 6s durable 4256479664 start_lsn 4480 lag 4059 MiB ckpt_runs 1.0 last_completed 1.0 refused 0.0 dirty_at_start 4381.0
+c4-a0 t+ 8s durable 4256479712 start_lsn 4760 lag 4059 MiB ckpt_runs 1.0 last_completed 1.0 refused 0.0 dirty_at_start 4381.0
+c4-a0 t+10s durable 4256541864 start_lsn 4760 lag 4059 MiB ckpt_runs 1.0 last_completed 1.0 refused 0.0 dirty_at_start 4381.0
+c4-a0 t+12s durable 4256541952 start_lsn 4760 lag 4059 MiB ckpt_runs 1.0 last_completed 1.0 refused 0.0 dirty_at_start 4381.0
+c4-a0 t+14s durable 4256542000 start_lsn 872450896 lag 3227 MiB ckpt_runs 2.0 last_completed 1.0 refused 0.0 dirty_at_start 5172.0
+c4-a0 t+16s durable 4256542088 start_lsn 872450896 lag 3227 MiB ckpt_runs 2.0 last_completed 1.0 refused 0.0 dirty_at_start 5172.0
+c4-a0 t+18s durable 4256542256 start_lsn 2751492160 lag 1435 MiB ckpt_runs 2.0 last_completed 1.0 refused 0.0 dirty_at_start 5172.0
+c4-a0 t+20s durable 4256542464 start_lsn 4256542048 lag 0 MiB ckpt_runs 3.0 last_completed 1.0 refused 0.0 dirty_at_start 0.0

@@ -1,0 +1,7 @@
+relaxed cells: 30 (shape x rows x cores)
+- p50: 29 inside the noise, 1 resolved
+    - cores 1, UPDATE by pk, 10,000 rows: B - A +0.20 µs [+0.10, +0.50]; A/A -0.30 [-0.60, -0.20]
+- p99: 30 inside the noise, 0 resolved
+- QPS: 30 inside the noise, 0 resolved
+- server CPU per statement: 29 inside the noise, 1 resolved
+    - cores 1, UPDATE by pk, 10,000 rows: B - A +0.41 µs [+0.19, +0.55]; A/A -0.41 [-0.69, +0.17]

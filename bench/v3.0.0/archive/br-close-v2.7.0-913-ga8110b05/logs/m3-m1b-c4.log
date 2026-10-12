@@ -1,0 +1,5 @@
+verify {'rc': 0, 's': 1.601, 'stdout': 'backup 14296509397782360924 valid: path B, lsn 4907477288 .. 5252946384, segments 73 .. 78, 7 files, lineage 5941593249903413322, written by unknown'}
+m1b-c4 rep0: total 21.971s layout 11.275s recovery 10.65s rc=0 load 2.20
+m1b-c4 rep1: total 20.405s layout 9.796s recovery 10.567s rc=0 load 2.30
+m1b-c4 rep2: total 20.282s layout 9.748s recovery 10.494s rc=0 load 2.67
+serve meta: {'recovery_records': 849326.0, 'recovery_committed': 191095.0, 'recovery_rolled_back': 0.0, 'recovery_compensations': 0.0, 'recovery_redo_applied': 41606.0, 'recovery_pages_healed': 0.0, 'recovery_torn_tail': 0.0, 'recovery_restore_backup': 1.429650939778236e+19, 'recovery_restore_start': 4907477288.0, 'recovery_restore_stop': 5252946384.0, 'recovery_analysis_us': 236763.0, 'recovery_redo_us': 576520.0, 'recovery_high_water_us': 0.0, 'recovery_undo_us': 0.0, 'recovery_checkpoint_us': 7755.0, 'recovery_relations_checked': 2.0, 'recovery_relations_missing_pages': 0.0, 'recovery_assertions_enforcing': 0.0, 'recovery_assertions_unrecovered': 0.0}

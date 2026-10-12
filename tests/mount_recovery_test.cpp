@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <utility>
+#include <set>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -374,6 +375,49 @@ TEST_F(MountRecoveryTest, TheCompletionCheckpointStopsTheNextRecoveryRescanningT
     EXPECT_EQ(second.value().redo_skipped_by_lsn, 0u)
         << "the second mount re-read the records the checkpoint bounded away";
     EXPECT_LT(second.value().records, first.value().records);
+}
+
+// A replay that dirtied more pages than one CHECKPOINT_BEGIN can carry in the
+// log's ring (12 bytes a page, 1 MiB): the completion checkpoint writes them
+// first and begins with an empty table, rather than refusing the mount with
+// "record larger than the ring" - which a crash after a bulk load at
+// `cores = 4`, and a restore of a large backup window, did (BR-S10).
+class ManyDirtyPages final : public wal::CheckpointTarget {
+public:
+    explicit ManyDirtyPages(std::size_t pages) {
+        for (std::size_t i = 0; i < pages; ++i) dirty_.push_back(static_cast<PageId>(1000 + i));
+    }
+    std::vector<wal::CheckpointDirtyPage> DirtyTable() const override {
+        std::vector<wal::CheckpointDirtyPage> table;
+        for (const PageId id : dirty_) table.push_back({id, /*rec_lsn=*/4096});
+        return table;
+    }
+    std::vector<PageId> DirtyPages() override { return dirty_; }
+    Status FlushPages(std::span<const PageId> ids) override {
+        std::set<PageId> flushed(ids.begin(), ids.end());
+        std::erase_if(dirty_, [&](PageId id) { return flushed.count(id) != 0; });
+        return Status::OK();
+    }
+    std::size_t still_dirty() const { return dirty_.size(); }
+
+private:
+    std::vector<PageId> dirty_;
+};
+
+TEST_F(MountRecoveryTest, AReplayThatDirtiedMoreThanTheRingHoldsStillCheckpoints) {
+    WriteStream(/*txn_id=*/7, wal::RecordType::kTxnCommit);
+    sched::ManualClock clock;
+    auto manager = wal::WalManager::Open(device_.get(), clock, /*core_id=*/0);
+    ASSERT_TRUE(manager.ok()) << manager.status().message();
+
+    // Twice what a 1 MiB ring holds as one record of 12-byte entries.
+    ManyDirtyPages target(2 * wal::kDefaultRingCapacity / wal::kDirtyEntrySize);
+    wal::InMemoryCheckpointAnchor published;
+    const Status s = CheckpointAfterRecovery(/*core_id=*/0, *manager.value(), target, published,
+                                             /*log=*/nullptr);
+    ASSERT_TRUE(s.ok()) << s.message();
+    EXPECT_EQ(target.still_dirty(), 0u);
+    EXPECT_EQ(published.publishes(), 1u);
 }
 
 TEST_F(MountRecoveryTest, TheAnchorItPublishesIsHonestAboutTheDurableEnd) {

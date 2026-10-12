@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -256,6 +257,43 @@ TEST(WalArchiverTest, AnArchiveCommandIsHandedThePathAndTheName) {
     ASSERT_TRUE(WaitFor([&] { return !failing.last_error().empty(); }));
     EXPECT_EQ(failing.next_segment(), 0u);
     EXPECT_EQ(failing.floor(), 0u);
+}
+
+// BR-Q2 (a), fail-closed: an archive that keeps failing with less than
+// `kReserveSegments` segments free on the WAL filesystem blocks, and every
+// statement that writes the log is refused by name - through the dispatcher
+// and through the insert path the KWP load stream takes - while reads go on.
+// A segment size no filesystem has four of stands in for a full disk.
+TEST(WalArchiverTest, AFailingArchiveNearAFullDiskRefusesWritesByName) {
+    TempDir dir, live;
+    const fs::path wal = dir.path / "wal";
+    constexpr std::uint64_t kHuge = std::uint64_t{1} << 50;  // 1 PiB a segment
+    FakeSegments(wal, 1, 4096);
+    WalArchiver archiver(WalArchiver::Wiring{{{}, "false"}, wal.string(), 7, kHuge, 0,
+                                             [] { return wal::Lsn{2 * kHuge}; }, {}, nullptr});
+    archiver.Start();
+    ASSERT_TRUE(WaitFor([&] { return archiver.blocking(); }));
+    std::ostringstream meta;
+    archiver.AppendMeta(meta);
+    EXPECT_NE(meta.str().find("wal_archive_blocking=1"), std::string::npos) << meta.str();
+
+    auto opened = Mount(live.path);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    CurrentCoreGuard as(0);
+    Ok(db, "CREATE TABLE t (id int64, v int64)");
+    Ok(db, "INSERT INTO t VALUES (1, 1)");
+    db.dispatcher().set_archiver(&archiver);
+    for (const char* write : {"INSERT INTO t VALUES (2, 2)", "UPDATE t SET v = 3 WHERE id = 1",
+                              "DELETE FROM t WHERE id = 1", "CREATE TABLE u (id int64)",
+                              "DROP TABLE t"}) {
+        const std::string reply = Reply(db, write);
+        EXPECT_TRUE(StartsWith(reply, "ERR")) << write << " -> " << reply;
+        EXPECT_NE(reply.find("WAL archive is failing"), std::string::npos) << reply;
+    }
+    EXPECT_EQ(Ids(db, "SELECT id FROM t"), Range(1, 1));
+    db.dispatcher().set_archiver(nullptr);
+    Ok(db, "INSERT INTO t VALUES (2, 2)");
 }
 
 // ---- Path B, restore, PITR (BR-S5..S7) ---------------------------------------

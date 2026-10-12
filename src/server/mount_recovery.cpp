@@ -376,6 +376,19 @@ Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
     // and not the one after (see the header).
     checkpointer.SetAssertionSource(assertions);
 
+    // **Every page the replay dirtied is written before the run begins**, so
+    // its CHECKPOINT_BEGIN carries an empty dirty table. Nothing else runs at
+    // a mount, and a replay can dirty the whole pool: one dirty table of that
+    // size is a record larger than the log's ring (12 bytes a page, 1 MiB),
+    // and the mount was refused - a crash after a bulk load at `cores = 4`,
+    // and BR-S10's restore of a 3.5 GiB window, found by its measurement.
+    if (const std::vector<PageId> dirty = target.DirtyPages(); !dirty.empty()) {
+        if (Status s = target.FlushPages(dirty); !s.ok()) {
+            return s.WithContext("recovery of core " + std::to_string(core_id) +
+                                 ": completion checkpoint's flush");
+        }
+    }
+
     // Run to completion rather than paced: there is no reactor to spread this
     // across yet, and the whole point is that the mount does not finish until
     // the anchor is durable (wal.md §8-3's ordering is inside Complete()).

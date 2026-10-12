@@ -1,0 +1,129 @@
+{
+ "cores": 1,
+ "host_start": {
+  "loadavg": "2.17 3.38 5.28 1/363 723946",
+  "competing": []
+ },
+ "windows": [
+  {
+   "label": "base-final",
+   "elapsed_s": 40.0,
+   "stmts": 372597,
+   "stmt_per_s": 9314.9,
+   "errors": 0,
+   "all": {
+    "ops": 372597,
+    "p0_us": 38.7,
+    "p25_us": 46.8,
+    "p50_us": 48.5,
+    "p95_us": 70.4,
+    "p99_us": 88.8,
+    "p999_us": 325.9,
+    "max_us": 3007287.6,
+    "mean_us": 106.5,
+    "slow_gt_1ms_n": 129,
+    "slow_gt_1ms_s": 19.4283,
+    "qps": 9314.9
+   },
+   "kinds": {
+    "ins-hot": {
+     "ops": 93150,
+     "p0_us": 38.7,
+     "p25_us": 46.1,
+     "p50_us": 46.8,
+     "p95_us": 63.2,
+     "p99_us": 78.2,
+     "p999_us": 314.9,
+     "max_us": 2248610.4,
+     "mean_us": 106.4,
+     "slow_gt_1ms_n": 35,
+     "slow_gt_1ms_s": 5.2264,
+     "qps": 2328.7
+    },
+    "upd-hot": {
+     "ops": 93149,
+     "p0_us": 39.0,
+     "p25_us": 46.3,
+     "p50_us": 47.0,
+     "p95_us": 62.1,
+     "p99_us": 77.5,
+     "p999_us": 318.2,
+     "max_us": 2251249.5,
+     "mean_us": 105.0,
+     "slow_gt_1ms_n": 32,
+     "slow_gt_1ms_s": 5.1007,
+     "qps": 2328.7
+    },
+    "upd-ballast": {
+     "ops": 93149,
+     "p0_us": 41.0,
+     "p25_us": 47.4,
+     "p50_us": 48.2,
+     "p95_us": 63.7,
+     "p99_us": 79.3,
+     "p999_us": 322.0,
+     "max_us": 3007287.6,
+     "mean_us": 112.6,
+     "slow_gt_1ms_n": 37,
+     "slow_gt_1ms_s": 5.6967,
+     "qps": 2328.7
+    },
+    "sel-hot": {
+     "ops": 93149,
+     "p0_us": 53.6,
+     "p25_us": 60.2,
+     "p50_us": 61.4,
+     "p95_us": 80.3,
+     "p99_us": 98.3,
+     "p999_us": 337.8,
+     "max_us": 1504483.2,
+     "mean_us": 101.9,
+     "slow_gt_1ms_n": 25,
+     "slow_gt_1ms_s": 3.4044,
+     "qps": 2328.7
+    }
+   },
+   "wal_bytes": 0,
+   "fence_waited_delta": 0,
+   "wal_bytes_per_stmt": 0.0
+  }
+ ],
+ "backups": [],
+ "ballast_load_s": 60.9,
+ "ballast_rows": 540000,
+ "meta_end": {
+  "pool_budget": 262144.0,
+  "pool_resident": 135927.0,
+  "pool_slots": 136192.0,
+  "pool_hits": 6555527.0,
+  "pool_misses": 135927.0,
+  "pool_reclaimed_inline": 0.0,
+  "pool_reclaimed_background": 0.0,
+  "pool_batches_inline": 0.0,
+  "pool_batches_background": 0.0,
+  "pool_batches_partial": 0.0,
+  "pool_batch_steps": 0.0,
+  "pool_batch_steps_background": 0.0,
+  "pool_dirty_queued": 0.0,
+  "pool_dirty_drained": 0.0,
+  "pool_refused": 0.0,
+  "wal_syncs": 2644.0,
+  "wal_interval_syncs": 3685.0,
+  "wal_sync_failures": 0.0,
+  "wal_first_segment": 69.0,
+  "wal_segments_removed": 69.0,
+  "wal_remove_failures": 0.0,
+  "wal_group_commits": 0.0,
+  "wal_group_batches": 0.0,
+  "wal_mean_group_batch": 0.0,
+  "wal_group_batch_max": 0.0,
+  "wal_group_batch_min": 0.0,
+  "wal_ring_full": 3668.0,
+  "wal_ring_full_refusals": 0.0,
+  "checkpoint_runs": 15.0
+ },
+ "host_end": {
+  "loadavg": "2.30 3.23 5.03 1/368 724346",
+  "competing": []
+ }
+}

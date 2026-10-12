@@ -439,3 +439,26 @@ where BR-S0 found its premise false (`br-s0-census.md`).
 | BR-Q4 | (a) one backup at a time | adopted as proposed |
 | BR-Q5 | **(b) LSN only** | adopted as proposed: the commit record carries no time (census) |
 | BR-Q6 | (a) a base backup carries its own log | adopted as proposed, and extended to D (census §2: D's log comes from the backup) |
+
+## 11. What was built (2026-10-12, on `br-backup-restore`)
+
+| Stage | Built | Where it deviated from §2-§4, and why |
+|---|---|---|
+| S0 | `br-s0-census.md`, `27f8a0ae` | H4/H5 refuted BR-R5's window images; the census's review found the Waystone map hole and four more (census §3) |
+| S1 | `d861b46a`: superblock 23; `MarkRestoreOwed` rewrites anchor slot 0 and sets `restore_backup_id`; the first publish clears it | the stop lives in slot 0's durable point, not a field of its own (S1's review: one authority, not two copies) |
+| S2 | `BACKUP START/STOP/ABORT/STATUS`; `D` read and pinned under one hold; `BACKUP_BEGIN/END` (31/32); `AppendAndSeal`; the window's log copied under a manifest | STOP copies the log for path D too (census §2); abandonment is an hour idle, not a dropped connection (S2's review: path D's START and STOP may come from two connections) |
+| S3 | `scripts/backup/snapshot-freeze.sh` (waits for every thread stopped), `snapshot-lvm.sh` (reference, not run: H9) | - |
+| S4 | `WalArchiver`: `archive_dir` / `archive_command` (via `posix_spawn`), lineage names, the floor in the recycler's bound, the log device holding detached segments not yet archived, fail-closed writes | no `archive_mode` (a second name for the same quantity); the archiver is a thread off the durable LSN, not a roll hook (H6) |
+| S5 | `BACKUP COPY` through `PageWriteFence`; tail before the stop, maps after | no copy-time CRC verification (census §3 item 2) |
+| S6 | `LayOutRestore`, `kds_server --restore-from/--restore-only/--verify-backup`; `ForgetUnwrittenPages` + `DiscardAdvisoryState` | the restore discards Waystone and `sys.access_stats` (unlogged; found by S8's simulation) |
+| S7 | PITR to an LSN or `latest` through the archive; a damaged archived segment refused | LSN only (BR-Q5 (b)) |
+| S8 | `d861b46a`, `d7ff583a`, `a8110b05`: the simulation's `--backup` op and `SimLoop.ABackupTakenAcrossTheRunRestoresToItsStopOnEveryCommittedSeed`; `tools/br_drill.py` (equivalence B/D/PITR, cases 1, 3-7) | case 2 (a kill between BACKUP_END and the manifest) is covered by construction - no manifest, no backup - and not driven; case 8 by the simulation's reclaims under the pin |
+| S9 | `tools/kds_backup.py` (`base`, `snapshot`, `verify`, `list`, `expire`), `manual/server/backup-restore.md`, `SHOW META` blocks | the runbook was followed in the development VM, not a fresh one |
+| S10 | see the results file named in §12 | - |
+| S11 | `docs/spec/backup.md`, `wal.md` §11/§13, `known-gaps.md`, `CLAUDE.md`'s row | - |
+
+**A recovery defect BR found and fixed (BR-R1)**: a rolled-back DDL's catalog
+compensation was unlogged (`TransactionManager::Compensate`), so a crash or a
+restore replaying from before a rolled-back `DROP TABLE` lost the table in
+silence. The simulation's backup op found it; `docs/inflight/bugs/a-ddl-rollback-compensates-logged-catalog-pages-unlogged.md`
+had recorded the suspicion unverified and is deleted.

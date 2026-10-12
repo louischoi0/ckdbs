@@ -1,0 +1,24 @@
+Terminal output of drivers/dbg_ckpt_ring.py on binary A (fb953f07), quoted from the session (only the last lines of each run were kept; the
+per-20,000-row trace lines were printed and not saved).
+
+python3 drivers/dbg_ckpt_ring.py A 540000 12        (cores = 1, idle 12 s before the kill)
+  after the idle: ckpt_runs 8.0 start_refused 0.0 last_completed 1.0 last_pages 0.0 dirty_at_start 0.0
+  killed -9; restarting the same files
+  mount OK after 0.2 s: recovery_records=2.0 redo_applied=0.0 analysis_us=24127.0 redo_us=24452.0 checkpoint_us=12370.0
+
+python3 drivers/dbg_ckpt_ring.py A 540000 0         (cores = 1, kill at once)
+  t=61.4 rows=540000 ckpt_runs=9.0 start_refused=0.0 last_completed=1.0 dirty_at_start=8266.0 pool_resident=135216.0
+  after the idle: ckpt_runs 9.0 start_refused 0.0 last_completed 1.0 last_pages 8266.0 dirty_at_start 8266.0
+  killed -9; restarting the same files
+  mount OK after 3.4 s: recovery_records=290239.0 redo_applied=72221.0 analysis_us=270957.0 redo_us=454538.0 checkpoint_us=2551027.0
+
+python3 drivers/dbg_ckpt_ring.py A 540000 0 4       (cores = 4, kill at once)
+  t=55.5 rows=540000 ckpt_runs=2.0 start_refused=0.0 last_completed=1.0 dirty_at_start=6546.0 pool_resident=137441.0 durable_lsn=None
+  after the idle: ckpt_runs 2.0 start_refused 0.0 last_completed 1.0 last_pages 6546.0 dirty_at_start 6546.0
+  killed -9; restarting the same files
+  mount FAILED after 3.0 s: A: server exited 1: startup failed: recovery of core 0: completion checkpoint: WalStream: record of 1381352 bytes is larger than the ring
+
+The same refusal from the restore of B's M2 idle backup (drivers/dbg_restore.py on work/m2/bk, cores = 4):
+  rc 1 after 48.5 s
+  stdout: backup 15350963357412918531 laid out: lsn 618004624 .. 4256699640, segments to 63, new lineage 13041106107417790; recovering
+  stderr: startup failed: recovery of core 0: completion checkpoint: WalStream: record of 1408648 bytes is larger than the ring

@@ -1,0 +1,31 @@
+09c82ae38fd1ae4124b39263be51db23cb3322c97b75434aa41aa4cc5ee32892  kds_server-A
+af25c71f63ca09ea60f6a66db89ca2d5664d20c5865cf18108b655fca6696757  kds_server-B
+
+A: fb953f07 (v2.7.0-908-gfb953f07, committed 2026-10-12 22:04:43 +0900 = 13:04:43 UTC; the commit BR opened from).
+   Release build (CMAKE_BUILD_TYPE=Release, KDS_BUILD_TESTS=OFF, KDS_BUILD_SIM=OFF, KDS_BUILD_BENCH=OFF, target kds_server) of
+   `git archive fb953f07` extracted into a scratch directory (no .git, so the binary's version string reads "unknown");
+   source binary mtime 2026-10-12 15:48:18 UTC; its hash equals the hash above.
+B: a8110b05 (v2.7.0-913-ga8110b05, committed 2026-10-12 15:39:32 UTC; BR closed in code).
+   Same flags, `git archive a8110b05`; `diff -rq` of its src/, include/ and CMakeLists.txt against the worktree is empty;
+   source binary mtime 2026-10-12 15:49:46 UTC; its hash equals the hash above.
+   The worktree's own build/ is Debug and was not used.
+
+Measured copies: /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/bin/kds_server-A and -B (cp -p of the source binaries,
+mtime preserved). Both re-hashed at 17:20 UTC, after the last cell: unchanged. Every server of every cell, every
+`--restore-from` and `--verify-backup` started from them.
+
+Drivers (this archive's drivers/): br_overhead_ab.py (M0), br_ckpt.py (M0b), br_cost.py (M1a, M1b, the stall census), br_m2.py (M2),
+br_restore.py (M3), dbg_ckpt_ring.py and dbg_dlag.py (the diagnosis of the backup-window refusal), run_*.sh (cell orders),
+sampler.py (host), analyze_*.py, verdict_m0.py, make_m0_tables.py, hostwin.py, hostsum.py, assemble.py (the results files).
+Frozen tools they import (copied from tools/ at a8110b05, no tracked change in tools/):
+  373cbc4a45ae3f4ec6220b3ef659bd604ad292071fb3adfecaaa3d032a195fbd  bb_overhead_benchmark.py
+  1e4bcec625710777ab3093b4b92dde8d4ab78fc97aa432ec08ccb0add614aa1f  bench_common.py
+  69992380e60e33370d0652eabcd56cbb05c3e7eec4c8b0f78333b42a0e2e9623  ckdbs_cli.py
+  51f707d07f49971d1bbd314fa723a78474f064e813b273c610c6066fd9f17a98  kwp.py
+The drivers carry the run directory /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05 in their paths.
+
+Layout: out/m0/<cell>/n<rows>-r<run>.json (per-run summaries; the raw per-statement files, 12 MB, are not archived),
+out/m0/analysis.json, out/m0b, out/m1a, out/m1a-diag, out/m1b, out/m2/m2.json (the 0.25 s time series), out/m3, out/stall;
+logs/ (driver logs, cells-m0.log, host-samples-*.jsonl, the generated tables); drivers/.
+Cells: relaxed-c1, relaxed-c4 (24 runs per size), aa-c1, aa-c4 (A against A, 12 runs per size), group-c1, group-c4 (10 runs per size);
+-cN is the server's cores. A discarded pilot pass (12 runs per size, killed at 15:55 UTC for a larger count) is not archived.

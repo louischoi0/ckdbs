@@ -1,0 +1,24 @@
+verify {'rc': 0, 's': 5.592, 'stdout': 'backup 15350963357412918531 valid: path B, lsn 618004624 .. 4256699640, segments 9 .. 63, 56 files, lineage 806365680275788170, written by unknown'}
+m2-stop rep0: total 49.314s layout 38.056s recovery 11.258s rc=1 load 2.62
+m2-stop rep1: total 48.959s layout 38.06s recovery 10.899s rc=1 load 1.90
+m2-stop rep2: total 49.264s layout 38.448s recovery 10.816s rc=1 load 1.67
+Traceback (most recent call last):
+  File "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/drivers/br_restore.py", line 138, in <module>
+    main()
+  File "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/drivers/br_restore.py", line 131, in main
+    out["serve"] = timed_restore(args, 99, serve=True)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/drivers/br_restore.py", line 75, in timed_restore
+    c = ServerConnection("127.0.0.1", args.port, timeout=60)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/tools/ckdbs_cli.py", line 175, in __init__
+    self._conn = kwp.Connection(host, port, timeout=timeout)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/tools/kwp.py", line 283, in __init__
+    self.sock = socket.create_connection((host, port), timeout=timeout)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socket.py", line 852, in create_connection
+    raise exceptions[0]
+  File "/usr/lib/python3.12/socket.py", line 837, in create_connection
+    sock.connect(sa)
+ConnectionRefusedError: [Errno 111] Connection refused

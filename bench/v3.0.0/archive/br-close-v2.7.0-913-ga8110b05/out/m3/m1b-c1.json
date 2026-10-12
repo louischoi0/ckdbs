@@ -1,0 +1,176 @@
+{
+ "label": "m1b-c1",
+ "backup": "/home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/m1b-c1/bk-4",
+ "cores": 1,
+ "archive": null,
+ "target": null,
+ "manifest": {
+  "kds-backup-manifest": "1",
+  "backup_id": "18355600794583972943",
+  "label": "6d31622d34",
+  "path": "B",
+  "engine": "unknown",
+  "superblock_version": "23",
+  "page_size": "8192",
+  "segment_size": "67108864",
+  "lineage": "9979339600002024859",
+  "start_lsn": "4966062064",
+  "stop_lsn": "5174875200",
+  "start_segment": "74",
+  "stop_segment": "77",
+  "created_unix": "1791822716",
+  "files": [
+   [
+    "wal/wal-0-74.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-75.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-76.log",
+    67108864
+   ],
+   [
+    "wal/wal-0-77.log",
+    67108864
+   ],
+   [
+    "kds.db",
+    1132462080
+   ]
+  ],
+  "end": "82f6dc54"
+ },
+ "backup_bytes": 1132462562,
+ "verify": {
+  "rc": 0,
+  "s": 1.432,
+  "stdout": "backup 18355600794583972943 valid: path B, lsn 4966062064 .. 5174875200, segments 74 .. 77, 5 files, lineage 9979339600002024859, written by unknown"
+ },
+ "restores": [
+  {
+   "rep": 0,
+   "cold_backup_files": true,
+   "serve": false,
+   "rc": 0,
+   "total_s": 18.928,
+   "layout_s": 10.474,
+   "recovery_s": 8.414,
+   "lines": [
+    "backup 18355600794583972943 laid out: lsn 4966062064 .. 5174875200, segments to 77, new lineage 5173687611053367943; recovering",
+    "restore of backup 18355600794583972943 recovered past its stop lsn 5174875200"
+   ],
+   "meta": null,
+   "host_before": {
+    "loadavg": "1.52 2.29 2.52 2/344 708471",
+    "competing": []
+   },
+   "host_after": {
+    "loadavg": "1.66 2.27 2.51 1/364 708564",
+    "competing": []
+   },
+   "data_bytes": 1132462080,
+   "wal_dir_bytes": 67108864
+  },
+  {
+   "rep": 1,
+   "cold_backup_files": false,
+   "serve": false,
+   "rc": 0,
+   "total_s": 17.111,
+   "layout_s": 8.711,
+   "recovery_s": 8.362,
+   "lines": [
+    "backup 18355600794583972943 laid out: lsn 4966062064 .. 5174875200, segments to 77, new lineage 8076947677561400168; recovering",
+    "restore of backup 18355600794583972943 recovered past its stop lsn 5174875200"
+   ],
+   "meta": null,
+   "host_before": {
+    "loadavg": "1.66 2.27 2.51 1/364 708565",
+    "competing": []
+   },
+   "host_after": {
+    "loadavg": "1.82 2.27 2.51 1/360 708623",
+    "competing": []
+   },
+   "data_bytes": 1132462080,
+   "wal_dir_bytes": 67108864
+  },
+  {
+   "rep": 2,
+   "cold_backup_files": false,
+   "serve": false,
+   "rc": 0,
+   "total_s": 17.159,
+   "layout_s": 8.757,
+   "recovery_s": 8.363,
+   "lines": [
+    "backup 18355600794583972943 laid out: lsn 4966062064 .. 5174875200, segments to 77, new lineage 11257898210008462461; recovering",
+    "restore of backup 18355600794583972943 recovered past its stop lsn 5174875200"
+   ],
+   "meta": null,
+   "host_before": {
+    "loadavg": "1.82 2.27 2.51 8/360 708624",
+    "competing": []
+   },
+   "host_after": {
+    "loadavg": "2.08 2.30 2.51 1/368 708709",
+    "competing": []
+   },
+   "data_bytes": 1132462080,
+   "wal_dir_bytes": 67108864
+  }
+ ],
+ "serve": {
+  "rep": 99,
+  "cold_backup_files": false,
+  "serve": true,
+  "rc": 0,
+  "total_s": 17.224,
+  "layout_s": 8.749,
+  "recovery_s": 8.408,
+  "lines": [
+   "backup 18355600794583972943 laid out: lsn 4966062064 .. 5174875200, segments to 77, new lineage 10849046783438917940; recovering",
+   "restore of backup 18355600794583972943 recovered past its stop lsn 5174875200",
+   "ckdbs on /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/m3-m1b-c1-99-serve/kds.db: 138098 pages, superblock version 23",
+   "logging to /home/cdkbs/bench-runs/br-close-v2.7.0-913-ga8110b05/work/m3-m1b-c1-99-serve/kds.log at level WARN",
+   "listening on 127.0.0.1:31841"
+  ],
+  "meta": {
+   "pool_resident": 35332.0,
+   "wal_durable_lsn": 5234495664.0,
+   "wal_first_segment": 78.0,
+   "recovery_records": 540798.0,
+   "recovery_committed": 121678.0,
+   "recovery_rolled_back": 0.0,
+   "recovery_compensations": 0.0,
+   "recovery_redo_applied": 99841.0,
+   "recovery_pages_healed": 0.0,
+   "recovery_torn_tail": 0.0,
+   "recovery_restore_backup": 1.8355600794583974e+19,
+   "recovery_restore_start": 4966062064.0,
+   "recovery_restore_stop": 5174875200.0,
+   "recovery_analysis_us": 159879.0,
+   "recovery_redo_us": 368863.0,
+   "recovery_high_water_us": 0.0,
+   "recovery_undo_us": 0.0,
+   "recovery_checkpoint_us": 12731.0,
+   "recovery_relations_checked": 2.0,
+   "recovery_relations_missing_pages": 0.0,
+   "recovery_assertions_enforcing": 0.0,
+   "recovery_assertions_unrecovered": 0.0
+  },
+  "host_before": {
+   "loadavg": "2.08 2.30 2.51 1/369 708711",
+   "competing": []
+  },
+  "host_after": {
+   "loadavg": "2.20 2.32 2.51 2/367 708764",
+   "competing": []
+  },
+  "data_bytes": 1132462080,
+  "wal_dir_bytes": 67108864
+ }
+}
