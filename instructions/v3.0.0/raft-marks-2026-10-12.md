@@ -50,3 +50,21 @@ Korean it was typed in.
 | **Mark** | **Adopted whole on W6, not marked per item**: BL-Q16 (a), four levels `transactional`, `normal` (the default), `analytic`, `background`; BL-Q8 (a), declared by the session after the handshake, `transactional` alone gated by the `admin` role (BL-R8), engine-derived levels a later direction; the per-statement demotion folded into the lag limit (BL-R2); BL-Q17 (a), `analytic` not read-only; BL-Q18 (a), `background` the idle class with a floor; BL-Q4 (b), a share and a latency class bounded by the lag limit. Written on `worktree-bl-drop-session-affinity` from `1aebdfe8` as a document-only change |
 | **Does not settle** | The numbers - shares, the 16-page slice, the lag limit L, the floor F - which stay `[provisional]` until BL-S1 and BL-S5; the spelling that declares a level (BL-S4); BL-Q0..Q3, BL-Q7 and BL-Q10..Q15, still unmarked; BL still not opened |
 | **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` header (W5, W6), BL-R2, BL-R7, BL-R8, §4, §6; `index.md`'s BL row |
+
+## 6. BL's priority served by placement first
+
+| | |
+|---|---|
+| **Word** | *"Is scheduling on our own, without leaning on the OS, useful enough to be worth developing? Review it from the over-engineering side."* (W7). CLA answered that the reactor's scheduler is not optional, since the OS cannot see a session that is not a thread; that OS priorities for reactor threads would invert on the page latch's spin-then-yield wait; and that BL's weighted pick outweighed its evidence - a pick cannot cut a running poll, its first draft's review found four defects, and no workload asked for it - so the levels should be served by an interactive/batch core partition and a per-level slice first. The operator answered: *"Amend the BL document as CLA proposed, and push it."* (W8) |
+| **Mark** | **Adopted whole on W8, not marked per item**: W6's four levels and their privileges stand as the user contract; v0 serves them by placement (BL-R2) and the per-level walk slice; BL-R7's four rungs, rungs 3 and 4 built only when the one below misses §5.2's bar (v) and on the operator's ruling; BL-Q4 (b) deferred to rung 4; OS thread priorities a non-goal. Written on `worktree-bl-drop-session-affinity` on top of `f9f0c6fa` as a document-only change, pushed to `main` on W8 in the same change as this record |
+| **Does not settle** | BL-Q19 (the partition's size) and BL-Q20 (borrowing an idle batch core), written with CLA's proposals and left to §7; every number `[provisional]`; BL-Q0 and the other unmarked items; BL still not opened |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` header (W7, W8), §0, BL-R2, BL-R4, BL-R5, BL-R7, BL-R8, BL-R9, BL-S4, §4, §5.1, §5.2, §6; `index.md`'s BL row |
+
+## 7. BL-Q19 and BL-Q20 marked
+
+| | |
+|---|---|
+| **Word** | *"Rule BL-Q19 and BL-Q20 as CLA proposed too."* (W9) |
+| **Mark** | Marked per item, as CLA proposed: **BL-Q19 (a)** - the partition is an engine constant, `max(1, cores / 4)` batch cores, the highest-numbered, never core 0, sized by BL-S5, and not a setting; **BL-Q20 (a)** - an interactive session does not borrow an idle batch core in v0, taken up only if §5.2 shows the idle capacity material. Written on `worktree-bl-drop-session-affinity` on top of `f9f0c6fa` |
+| **Does not settle** | The partition's size as a number, `[provisional]` until BL-S5; BL-Q0 and the other unmarked items; BL still not opened |
+| **Recorded at** | `workorder-bl-session-balancer-priority-affinity.md` header (W9), §4, §6; `index.md`'s BL row |
