@@ -876,6 +876,15 @@ pages and the cases it does not reach.
   - a previous run's undo pages (UP4, `txn.md` §4.1);
   - a dropped assertion's Bound Cabin chain;
   - Waystone pages.
+- **Every restart leaves the previous run's Waystone pages allocated.**
+  Every mount clears each pattern's directory root and empties
+  `sys.access_stats` (`server::DiscardAdvisoryState`, `waystone-concpets.md`),
+  because after a crash a directory page can name a child whose allocation
+  bit never reached the device. The directory and trail pages under a
+  cleared root stay allocated, reached by nothing and freed by nothing, so
+  the volume grows by every run's Waystone pages, restart after restart,
+  clean or not, and a later run builds its trails on new pages. Verified on
+  `fix-sync-publish-and-waystone-crash` at `ec440c2d`.
 - **At `cores > 1`, a reclaim waits for every core's first checkpoint.**
   The durable redo start does not move until every core has published, so
   with `checkpoint_interval_ms = 0` nothing a mount found is freed until a
