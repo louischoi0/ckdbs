@@ -294,3 +294,39 @@ Suite 3690/3692 with the new cell; the two failures
 60 s two-core waits timing out under another session's load, and passed
 3 of 3 each re-run alone on the same build. Overhead not measured;
 measured at the milestone's close.
+
+### BT-S3 — the arming in one lookup, the epoch on the kept paths
+
+What the rejected row stops paying: **#2** the arming asks one vector
+once - `StatementStore`'s `shape_checked` and `kernels` are one
+`std::vector<std::optional<ScanKernel>>`, an entry present once its step's
+check has passed, so "checked" and "has a kernel" cannot fall out of step;
+**#4** the relayout epoch is read under the span on the two paths that
+leave it with a copied row; **#1** `spills_.clear()` is deleted - each
+decode clears its scratch itself (`row_codec.cpp`), so the call was
+redundant on every path.
+
+**Decided mid-stage, adopted on the operator's standing go-ahead of
+2026-10-13 (go-ahead-achieving-milestone):** #2 is not hoisted out of
+`AcceptTupleAt` as §3's row said. BT-R2 keeps a value per row "where
+proving that is not local": `recording_` changes in `WalkAndRecord` and
+`kernels` grows under a nested step's first row, both inside a walk, so the
+arming stays per row and is made one lookup. **#8 is not built:** the
+rejected path returns a `Status` either way, and `ChargeRow()` is inline
+and builds `Status::OK()` straight into that return slot, so a bool form
+generates the same code - BT-S1's D3 priced the counts and the charge
+themselves, which BT-R3 keeps. #7 stays as it is (BT-R3).
+
+**The `critics-developer` review** found no defect: no path reads
+`spills_` before a decode clears it; `observed_epoch` is set on every path
+that reaches a reader, under the span; a present kernel is a checked
+step's. Applied: the clear deleted rather than moved, #8 reverted (a first
+draft had `TryChargeRow`), the two vectors made one, the epoch comment
+corrected. Suite 3690/3692 at the first draft and 3690/3692 here: the
+failures were two-core waits under a host load of 15-19 from other
+sessions - `SortedLeafRigTest.AppendsFromTwoCoresKeepTheTreeWholeAndDense`
+(a load flake named in the BM handoff) and
+`SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`, which
+also failed in BT-S2's run; re-run alone on this build, each passed 4 of 4
+(1.7-2.1 s against the suite's 60 s wait). The close re-runs the suite.
+Overhead not measured; measured at the milestone's close.
