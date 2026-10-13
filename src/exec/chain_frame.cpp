@@ -54,6 +54,21 @@ bool ComparePredicate(std::uint32_t type_val, const StepPredicate& pred,
     return CompareValues(type_val, lhs, rhs, pred.op);
 }
 
+// CheckConjunct's checks as a predicate, so a well-formed conjunct - every
+// one a compiled chain holds - builds no Status (AP02); the message is
+// worded only on failure, by CheckConjunct itself.
+bool ConjunctWellFormed(const std::vector<const catalog::Schema*>& schemas,
+                        const StepPredicate& pred, const ChainFrame& frame) {
+    if (pred.rhs.kind == OperandKind::kLiteral &&
+        pred.rhs.literal.type == parser::ValueType::kParam) {
+        return false;
+    }
+    if (!frame.CanResolve(pred.lhs)) return false;
+    const catalog::Schema* lhs_schema = SchemaFor(schemas, pred.lhs);
+    if (lhs_schema != nullptr && pred.lhs.col_pos >= lhs_schema->columns.size()) return false;
+    return pred.rhs.kind == OperandKind::kLiteral || frame.CanResolve(pred.rhs.column);
+}
+
 // One conjunct's comparison, on a conjunct `CheckConjunct` has passed.
 bool CompareConjunct(const std::vector<const catalog::Schema*>& schemas,
                      const StepPredicate& pred, const ChainFrame& frame) {
@@ -115,7 +130,9 @@ Status CheckConjunct(const std::vector<const catalog::Schema*>& schemas,
 
 StatusOr<bool> EvaluateConjunct(const std::vector<const catalog::Schema*>& schemas,
                                 const StepPredicate& pred, const ChainFrame& frame) {
-    if (Status s = CheckConjunct(schemas, pred, frame); !s.ok()) return s;
+    if (!ConjunctWellFormed(schemas, pred, frame)) {
+        if (Status s = CheckConjunct(schemas, pred, frame); !s.ok()) return s;
+    }
     return CompareConjunct(schemas, pred, frame);
 }
 

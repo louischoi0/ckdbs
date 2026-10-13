@@ -2414,7 +2414,9 @@ private:
         // payload's length check alone. A later conjunct's malformation is
         // refused here even where an earlier conjunct false on every row
         // used to mask it (BM-Q7).
-        if (Status s = CheckStepShapeOnce(step, index, access, slots); !s.ok()) return s;
+        if (!StepShapeChecked(step)) {
+            if (Status s = CheckStepShapeOnce(step, index, access, slots); !s.ok()) return s;
+        }
 
         // Decoded and then, once nothing is live, resolved - one call,
         // because the same three lines at four sites is how one of them
@@ -2657,11 +2659,12 @@ private:
 
     // BM-R6's once: a step's decode shape and residual checked at its first
     // visible row of the statement, by whichever access kind reaches it.
+    // The caller asks `StepShapeChecked` first, so a checked step's row
+    // builds no Status (AP02).
     Status CheckStepShapeOnce(const Step& step, std::size_t index,
                               const catalog::TableAccess& access,
                               std::span<const parser::AstValue> slots) {
         std::vector<bool>& checked = statement_->shape_checked;
-        if (step.step_id < checked.size() && checked[step.step_id]) return Status::OK();
         if (Status s = CheckDecodeShape(access.schema, access.layout, slots); !s.ok()) return s;
         for (const StepPredicate& pred : step.residual) {
             if (Status s = CheckConjunct(schemas_, pred, frame_); !s.ok()) return s;
@@ -2675,15 +2678,20 @@ private:
         return Status::OK();
     }
 
+    // Whether BM-R6's check has run for `step` in this statement: asked
+    // before the call, so a checked step's row builds no Status (AP02).
+    bool StepShapeChecked(const Step& step) const {
+        const std::vector<bool>& checked = statement_->shape_checked;
+        return step.step_id < checked.size() && checked[step.step_id];
+    }
+
     // The step's kernel, if this row may be filtered by it: the switch is on
     // (BM-Q5), the step has passed its check this statement - so the kernel
     // never reads an offset before BM-R6's checks have run - it holds a term,
     // and no Cabin recording of this step is live (BM-R4: a row the other
     // conjuncts reject must still be recorded if its key matches).
     const ScanKernel* ArmedKernel(const Step& step, bool recording_here) const {
-        if (!budget_.scan_kernel() || recording_here) return nullptr;
-        const std::vector<bool>& checked = statement_->shape_checked;
-        if (step.step_id >= checked.size() || !checked[step.step_id]) return nullptr;
+        if (!budget_.scan_kernel() || recording_here || !StepShapeChecked(step)) return nullptr;
         const ScanKernel& kernel = statement_->kernels[step.step_id];
         return kernel.empty() ? nullptr : &kernel;
     }

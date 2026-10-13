@@ -976,6 +976,18 @@ StatusOr<std::vector<std::byte>> EncodeAssigned(const catalog::Schema& schema,
 
 namespace {
 
+// **The predicate first, the Status only on failure.** `Status` carries a
+// `std::string` by value, so a Status-returning check constructs and
+// destroys one even when it passes - and a `kAll` decode asks this per row.
+// `CheckDecodeShape` asks it first too and words a message only on failure,
+// so the shape is stated here alone (workplan AP02).
+bool DecodeShapeHolds(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                      std::span<const parser::AstValue> out) {
+    return !schema.columns.empty() && catalog::IsIntegerTypeVal(schema.columns.front().type_val) &&
+           layout.offsets.size() == schema.columns.size() && layout.row_size != 0 &&
+           out.size() == schema.columns.size();
+}
+
 // The shared front half of both decoders: everything that has to be true
 // before a single cell is read. Under `kPayloadOnly` the caller has passed
 // `CheckDecodeShape` for this schema, layout and span already, and only the
@@ -983,8 +995,8 @@ namespace {
 Status CheckDecodeInputs(const catalog::Schema& schema, const catalog::RowLayout& layout,
                          std::span<const std::byte> payload,
                          std::span<const parser::AstValue> out, DecodeChecks checks) {
-    if (checks == DecodeChecks::kAll) {
-        if (Status s = CheckDecodeShape(schema, layout, out); !s.ok()) return s;
+    if (checks == DecodeChecks::kAll && !DecodeShapeHolds(schema, layout, out)) {
+        return CheckDecodeShape(schema, layout, out);
     }
     // Checked redundancy (invariant 13): the row size is a schema constant,
     // so a stored payload of any other length is not a row this build can
@@ -1002,26 +1014,12 @@ Status CheckDecodeInputs(const catalog::Schema& schema, const catalog::RowLayout
 
 Status CheckDecodeShape(const catalog::Schema& schema, const catalog::RowLayout& layout,
                         std::span<const parser::AstValue> out) {
-    // **The predicate first, the Status only on failure.** `Status` carries
-    // a `std::string` by value, so calling a Status-returning checker
-    // constructs and destroys one even when it passes - and this function
-    // runs once per row per decode, twice per row on the partial path. The
-    // checks are unchanged and their messages still come from the one
-    // function that words them; what is gone is building an empty message
-    // for a row that is fine (workplan AP02).
-    if (schema.columns.empty() ||
-        !catalog::IsIntegerTypeVal(schema.columns.front().type_val)) {
-        return catalog::CheckKeystoneColumn(schema);
-    }
-    if (layout.offsets.size() != schema.columns.size() || layout.row_size == 0) {
-        return CheckLayoutMatches(schema, layout);
-    }
-    if (out.size() != schema.columns.size()) {
-        return Status::InvalidArgument("decode target has " + std::to_string(out.size()) +
-                                        " slot(s) for a schema of " +
-                                        std::to_string(schema.columns.size()) + " column(s)");
-    }
-    return Status::OK();
+    if (DecodeShapeHolds(schema, layout, out)) return Status::OK();
+    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
+    if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
+    return Status::InvalidArgument("decode target has " + std::to_string(out.size()) +
+                                    " slot(s) for a schema of " +
+                                    std::to_string(schema.columns.size()) + " column(s)");
 }
 
 namespace {
