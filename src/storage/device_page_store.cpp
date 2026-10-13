@@ -1278,8 +1278,9 @@ StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(Page
         // **Claimed by somebody, just not resident yet** (AM-S3). Without
         // this the torn-creation reading below applies to a page another
         // core claimed microseconds ago and has not inserted, whose bytes
-        // are therefore still zeros - and two callers walk away with it.
-        if (claiming_.count(page_id) != 0) {
+        // are therefore still zeros - and two callers walk away with it. A
+        // `ClaimNew` claim is the same case held longer: across a split.
+        if (claiming_.count(page_id) != 0 || claimed_.count(page_id) != 0) {
             return Status::AlreadyExists("page id already in use");
         }
         // The bit is set and the caller did not read the device, because it
@@ -1442,6 +1443,21 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     auto reserved = ReserveFrame();
     if (!reserved.ok()) return reserved.status();
     ReservedFrame slot(*this, reserved.value());
+    auto fresh = ClaimFreshId(headerless);
+    if (!fresh.ok()) return fresh.status();
+    const PageId page_id = fresh.value().page_id;
+    if (headerless) {
+        if (Status s = MarkHeaderlessBeforeInsert(page_id); !s.ok()) {
+            ReleaseClaim(page_id, fresh.value().popped);
+            return s;
+        }
+    }
+    auto inserted = PublishFreshPage(page_id, std::move(slot));
+    if (!inserted.ok()) return inserted.status();
+    return std::make_pair(page_id, inserted.value());
+}
+
+StatusOr<DevicePageStore::FreshId> DevicePageStore::ClaimFreshId(bool headerless) {
     PageId page_id = kInvalidPageId;
     // **The free list first** (BF-R6), under the frame table then the map -
     // the declared order - because the pop asks both: the bit is the map's,
@@ -1496,15 +1512,44 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
         ReleaseClaim(page_id, popped);
         return s;
     }
-    if (headerless) {
-        if (Status s = MarkHeaderlessBeforeInsert(page_id); !s.ok()) {
-            ReleaseClaim(page_id, popped);
-            return s;
-        }
-    }
-    auto inserted = PublishFreshPage(page_id, std::move(slot));
-    if (!inserted.ok()) return inserted.status();
-    return std::make_pair(page_id, inserted.value());
+    return FreshId{page_id, popped};
+}
+
+StatusOr<PageId> DevicePageStore::ClaimNewId() {
+    // `CreateNewFrom`'s order: the slot, then the id.
+    auto reserved = ReserveFrame();
+    if (!reserved.ok()) return reserved.status();
+    ReservedFrame slot(*this, reserved.value());
+    auto fresh = ClaimFreshId(/*headerless=*/false);
+    if (!fresh.ok()) return fresh.status();
+    LatchGuard alloc(map_latch());
+    claimed_.emplace(fresh.value().page_id,
+                     HeldClaim{std::exchange(slot.slot_, kNoSlot), fresh.value().popped});
+    return fresh.value().page_id;
+}
+
+std::optional<DevicePageStore::HeldClaim> DevicePageStore::TakeClaim(PageId page_id) noexcept {
+    LatchGuard alloc(map_latch());
+    auto held = claimed_.find(page_id);
+    if (held == claimed_.end()) return std::nullopt;
+    const HeldClaim claim = held->second;
+    claimed_.erase(held);
+    return claim;
+}
+
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateClaimedUnpinned(PageId page_id) {
+    const std::optional<HeldClaim> claim = TakeClaim(page_id);
+    if (!claim.has_value()) return PageStore::CreateClaimedUnpinned(page_id);
+    // The slot is this caller's and the id is claimed and addressable, so
+    // neither the pool nor the device can refuse what is left.
+    return PublishFreshPage(page_id, ReservedFrame(*this, claim->slot));
+}
+
+void DevicePageStore::ReleaseClaimedId(PageId page_id) noexcept {
+    const std::optional<HeldClaim> claim = TakeClaim(page_id);
+    if (!claim.has_value()) return;
+    { const ReservedFrame slot(*this, claim->slot); }  // the slot goes back first
+    ReleaseClaim(page_id, claim->popped);
 }
 
 void DevicePageStore::ReleaseClaim(PageId page_id, bool popped) noexcept {
@@ -1554,9 +1599,11 @@ StatusOr<PageStore::FreeOutcome> DevicePageStore::FreePage(PageId page_id) {
         return Status::Corruption("DevicePageStore: page " + std::to_string(page_id) +
                                   " is headerless and is never freed");
     }
-    // In flight: a fault reading the device, or a `CreateAt` between its
-    // claim and its insert. Either finishes, and the caller asks again.
-    if (loading_.count(page_id) != 0 || claiming_.count(page_id) != 0) {
+    // In flight: a fault reading the device, a `CreateAt` between its claim
+    // and its insert, or a `ClaimNew` claim not yet published or given
+    // back. Each finishes, and the caller asks again.
+    if (loading_.count(page_id) != 0 || claiming_.count(page_id) != 0 ||
+        claimed_.count(page_id) != 0) {
         return FreeOutcome::kDeferred;
     }
     if (auto it = frames_.find(page_id); it != frames_.end()) {
@@ -2539,8 +2586,9 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     // exactly the work step 2b moved off this latch on the fetch side.
     StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> made =
         Status::InvalidArgument("unreachable");
-    if (which == CreateKind::kAt) {
-        auto bytes = CreateAtUnpinned(page_id);
+    if (which == CreateKind::kAt || which == CreateKind::kClaimed) {
+        auto bytes = which == CreateKind::kAt ? CreateAtUnpinned(page_id)
+                                              : CreateClaimedUnpinned(page_id);
         if (!bytes.ok()) return bytes.status();
         made = std::pair<PageId, std::span<std::byte, kPageSize>>(page_id, bytes.value());
     } else {

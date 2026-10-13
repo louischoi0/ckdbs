@@ -187,6 +187,7 @@ The file is growable to the 16 TiB ceiling:
 
 - Growth unit is the extent (§5). `FilePageDevice` grows by `extent_pages` via `posix_fallocate` — real block reservation, not a size change — and a file whose size is not a whole number of pages is `Corruption` rather than rounded. Extension is idempotent on replay.
 - The free map is unlogged (§5), so no `ALLOC` record precedes an extension; a crash between extension and first use leaves pages the allocation floor re-absorbs at recovery.
+- **A creation can be claimed ahead of the write it serves** (`PageStore::ClaimNew`, `PageClaims`). A claim does everything a creation can fail at - it reserves the frame slot, claims the id (the free list first, then the cursor) and makes the device addressable for it - and publishing a claimed page cannot be refused by the pool or the device. A B+ tree split claims every page it will create once its parents are held and before it writes anything, so a file that cannot grow refuses the insert with the tree as it was; claims not used are given back, highest id first so the cursor steps back over them. A claimed id is in flight to `CreateAt` (refused `AlreadyExists`) and to `FreePage` (`kDeferred`). A store with no device claims nothing, and its claimed creations are ordinary ones.
 - Shrinking/truncation is a **non-goal**. A dropped relation's pages are freed and their ids reused (§5), but nothing returns space to the filesystem.
 
 ## 15. mmap Evaluation — Rejected for Data & WAL

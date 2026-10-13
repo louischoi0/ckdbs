@@ -16,6 +16,7 @@
 #include "kds/storage/page_header.hpp"
 
 #include "act_on_fetch_store.hpp"
+#include "device_room.hpp"
 #include "tree_structure.hpp"
 
 // The clustered B+ tree: descent, the split that moves nothing, the level
@@ -1150,6 +1151,60 @@ TEST(BtreeTest, AGrowThatDiesPromotingItsSeparatorLeavesTheLeafChainAlone) {
     }
     EXPECT_EQ(scanned, (std::vector<std::uint64_t>{10, 20, 30}))
         << "a scan must read the ids in ascending order, page by page";
+}
+
+// A divide that needs two pages - its new leaf and the root it grows - where
+// only the first fits the device and the device refuses to grow for the
+// second (`docs/inflight/bugs/a-fetch-refused-after-a-page-write-leaves-the-
+// mutation-half-done.md`). Both are claimed before the leaf is touched, so
+// the refusal leaves the tree as it was. Killed by claiming nothing: the
+// leaf divides and links its new half, the root is never created, and the
+// moved keys are routed to by no parent.
+TEST(BtreeTest, ADivideWhoseSecondPageTheDeviceRefusesWritesNothing) {
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/1, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto opened = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{256},
+                                                 /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    storage::DevicePageStore& store = *opened.value();
+    Tree tree(store);
+
+    constexpr std::size_t kFiller = 1016;  // seven to a leaf
+    for (std::uint64_t id = 10; id <= 70; id += 10) {
+        ASSERT_TRUE(tree.Insert(id, kFiller).ok()) << id;
+    }
+    const PageId root_leaf = tree.root;
+    ASSERT_EQ(BtreeHeight(store, root_leaf).value(), 1u) << "the fill already split";
+
+    testing_device::LeaveRoomForOnePage(*device.value(), store);
+    const std::uint32_t allocated = store.allocated_pages();
+
+    device.value()->FailNextGrow(Status::IoError("injected: the device cannot grow"));
+    auto refused = tree.Insert(15, kFiller);
+    device.value()->ClearInjections();
+    ASSERT_FALSE(refused.ok()) << "the root's creation needed the device to grow";
+    EXPECT_EQ(refused.status().code(), StatusCode::kIoError) << refused.status().message();
+    EXPECT_EQ(store.allocated_pages(), allocated) << "a claim was not given back";
+
+    EXPECT_EQ(tree.root, root_leaf);
+    {
+        auto bytes = store.Get(root_leaf);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        EXPECT_EQ(heap::PageView(bytes.value().bytes()).next_page_id(), kInvalidPageId)
+            << "the leaf divided before the refusal";
+    }
+    for (std::uint64_t id = 10; id <= 70; id += 10) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, id).ok()) << "lost id " << id;
+    }
+
+    // And with room, the same insert divides and grows a root, the two
+    // pages the refused one needed.
+    auto grown = tree.Insert(15, kFiller);
+    ASSERT_TRUE(grown.ok()) << grown.status().message();
+    EXPECT_NE(grown.value().new_root, kInvalidPageId);
+    for (std::uint64_t id : {10u, 15u, 20u, 30u, 40u, 50u, 60u, 70u}) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, id).ok()) << "lost id " << id;
+    }
 }
 
 // A store that runs one action the **second** time a chosen page is

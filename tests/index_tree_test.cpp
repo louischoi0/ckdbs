@@ -14,6 +14,7 @@
 #include "kds/storage/page_header.hpp"
 
 #include "act_on_fetch_store.hpp"
+#include "device_room.hpp"
 #include "tree_structure.hpp"
 
 // The secondary index tree (docs/spec/index.md §4, workplan IX02).
@@ -423,6 +424,56 @@ TEST(IndexTreeTest, AnOrdinaryInsertReportsNoStructureAndASplitReportsBoth) {
     EXPECT_EQ(2, new_pages) << "the sibling and the root are new; the split page is rewritten";
 }
 
+
+TEST(IndexTreeTest, ADivideWhoseSecondPageTheDeviceRefusesWritesNothing) {
+    // btree_test.cpp's cell of the same name, for the index tree: the root
+    // leaf's divide needs its new leaf and a root, the device holds one more
+    // page and refuses to grow for the second. Both are claimed before the
+    // leaf is touched, so the refusal leaves the tree as it was. Killed by
+    // claiming nothing: the leaf divides and links its new half, and no
+    // parent routes to it.
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/1, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto opened = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{256},
+                                                 /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    storage::DevicePageStore& store = *opened.value();
+    const IndexLayout layout = Layout();
+    PageId root = kInvalidPageId;
+    {
+        auto created = store.CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        root = created.value().first;
+        ASSERT_TRUE(FormatRoot(created.value().second.bytes(), layout, /*owner_oid=*/0).ok());
+    }
+    const std::uint16_t per_leaf = MaxLeafEntries(layout);
+    for (std::uint32_t k = 1; k <= per_leaf; ++k) {
+        auto placed = IndexInsert(store, root, layout, Key(2 * k), k, {}, /*owner_oid=*/0);
+        ASSERT_TRUE(placed.ok()) << placed.status().message();
+        ASSERT_EQ(placed.value().new_root, kInvalidPageId) << "the fill already split";
+    }
+
+    testing_device::LeaveRoomForOnePage(*device.value(), store);
+    const std::uint32_t allocated = store.allocated_pages();
+
+    device.value()->FailNextGrow(Status::IoError("injected: the device cannot grow"));
+    auto refused = IndexInsert(store, root, layout, Key(3), per_leaf + 1, {}, /*owner_oid=*/0);
+    device.value()->ClearInjections();
+    ASSERT_FALSE(refused.ok()) << "the root's creation needed the device to grow";
+    EXPECT_EQ(refused.status().code(), StatusCode::kIoError) << refused.status().message();
+    EXPECT_EQ(store.allocated_pages(), allocated) << "a claim was not given back";
+    {
+        auto bytes = store.Get(root);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        IndexLeafView leaf(bytes.value().bytes());
+        EXPECT_EQ(leaf.right_sibling(), kInvalidPageId) << "the leaf divided before the refusal";
+        EXPECT_EQ(leaf.entry_count(), per_leaf);
+    }
+
+    auto grown = IndexInsert(store, root, layout, Key(3), per_leaf + 1, {}, /*owner_oid=*/0);
+    ASSERT_TRUE(grown.ok()) << grown.status().message();
+    EXPECT_NE(grown.value().new_root, kInvalidPageId);
+}
 
 // ---- Two cores in one index (AT-S15) ------------------------------------
 //

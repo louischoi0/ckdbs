@@ -218,6 +218,13 @@ struct Parents {
     // leaf's - taken exclusive and checked to route the key to that node.
     std::array<storage::PageRef, storage::kMaxBtreeDepth> held;
     std::uint16_t count = 0;
+    // Full all the way up: the divide grows a level over the root.
+    bool grows = false;
+
+    // The pages the divide creates, as btree.cpp's `Parents` counts them.
+    std::size_t PagesToCreate() const noexcept {
+        return grows ? std::size_t{count} + 2 : std::size_t{count};
+    }
 };
 
 // The node one level above `path[below]` that routes `sort_key` to it,
@@ -285,6 +292,7 @@ StatusOr<Parents> SecureParents(storage::PageStore& store, const Descent& descen
             ", which is no longer the root: another core grew one over it after this core read "
             "it. Nothing was written");
     }
+    out.grows = true;
     return out;
 }
 
@@ -411,6 +419,11 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // a refusal there leaves the tree as it was, the entry not inserted.
     auto parents = SecureParents(store, descent.value(), layout, entry.subspan(0, sort_key_len));
     if (!parents.ok()) return parents.status();
+    // And every page it creates is claimed before it writes one
+    // (btree.cpp's `PlaceUnderHold` says why): a refusal here leaves the
+    // tree as it was.
+    auto claims = store.ClaimNew(parents.value().PagesToCreate());
+    if (!claims.ok()) return claims.status();
     // What the caller logs under (AT-S21): the leaf and every parent the
     // divide writes, handed out still held once it is done.
     auto hand_out = [&] {
@@ -420,7 +433,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
         }
     };
 
-    auto created = store.CreateNew();
+    auto created = claims.value().CreateNew();
     if (!created.ok()) return created.status();
     auto& [new_leaf_id, new_leaf_bytes_ref] = created.value();
     const std::span<std::byte, kPageSize> new_leaf_bytes = new_leaf_bytes_ref.bytes();
@@ -495,7 +508,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
 
         // A full internal node divides too, and its median separator is
         // *pushed* up rather than copied - see IndexInternalView::SplitInto.
-        auto created_node = store.CreateNew();
+        auto created_node = claims.value().CreateNew();
         if (!created_node.ok()) return created_node.status();
         auto& [new_node_id, new_node_bytes_ref] = created_node.value();
         const std::span<std::byte, kPageSize> new_node_bytes = new_node_bytes_ref.bytes();
@@ -524,7 +537,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // The split reached past the root: grow a level. The old root becomes the
     // new root's leftmost child, so no key changes page.
     const PageId old_root = descent.value().path[0];
-    auto created_root = store.CreateNew();
+    auto created_root = claims.value().CreateNew();
     if (!created_root.ok()) return created_root.status();
     auto& [new_root_id, new_root_bytes_ref] = created_root.value();
     const std::span<std::byte, kPageSize> new_root_bytes = new_root_bytes_ref.bytes();

@@ -305,6 +305,13 @@ public:
     StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override;
     StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override;
 
+    // `PageStore::ClaimNew`'s halves: a claim reserves the frame slot and
+    // claims the id with its device room, a create publishes it, and a
+    // release gives both back (`claimed_`).
+    StatusOr<PageId> ClaimNewId() override;
+    StatusOr<std::span<std::byte, kPageSize>> CreateClaimedUnpinned(PageId page_id) override;
+    void ReleaseClaimedId(PageId page_id) noexcept override;
+
     // ---- Recovery's high-water repair (RV4, workplan RC04) --------------
     //
     // Raises where CreateNew() starts its search (page_store.hpp).
@@ -1446,6 +1453,24 @@ private:
     // (BF-S1's Census A, R1), so no writeback can stamp a checksum - child 1
     // of a directory page - into it while it still reads as headered.
     StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewFrom(bool headerless);
+    // Its id half: a fresh id claimed - the free list first, unless
+    // `headerless` - and made addressable, the claim given back if that
+    // fails. `popped` says where it came from, for `ReleaseClaim`.
+    struct FreshId {
+        PageId page_id = kInvalidPageId;
+        bool popped = false;
+    };
+    StatusOr<FreshId> ClaimFreshId(bool headerless);
+    // The ids `ClaimNewId` claimed and no create has published yet: the slot
+    // each holds and where its id came from. Under `map_latch_`.
+    struct HeldClaim {
+        std::uint32_t slot = 0;
+        bool popped = false;
+    };
+    std::unordered_map<PageId, HeldClaim> claimed_;
+    // Takes `page_id`'s entry out of `claimed_`, or nullopt for an id this
+    // store never claimed.
+    std::optional<HeldClaim> TakeClaim(PageId page_id) noexcept;
     // The headerless arm's zero-write and mark, run on a claimed id with no
     // latch held and no frame inserted yet.
     Status MarkHeaderlessBeforeInsert(PageId headerless_page);

@@ -179,9 +179,12 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
 //   ...            whatever the store reports when a page cannot be
 //                  allocated
 //
-// On failure nothing is reported as structural, but pages *may* already
-// have been allocated, and none is freed here - a free needs BF-R4's replay
-// gate. The new leaf a failed promotion leaves is linked into the leaf
+// **A split claims every page it creates before it writes one**
+// (`PageStore::ClaimNew`), so a store that cannot grow, or a free map it
+// cannot read, refuses the insert with the tree as it was; the claims go
+// back. On a later failure nothing is reported as structural, but pages
+// *may* already have been allocated, and none is freed here - a free needs
+// BF-R4's replay gate. The new leaf a failed promotion leaves is linked into the leaf
 // chain on a dividing split and reached by no descent; an append split's
 // new leaf, and any internal node the promotion created, are reached by
 // neither. A dropped relation's reclaim follows the leaf chain, so it frees
