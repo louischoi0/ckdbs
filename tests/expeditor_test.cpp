@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -451,6 +452,38 @@ TEST_F(ExpeditorTest, ACheckpointsPagesAndDataSyncsAreCounted) {
     const Contention::Snapshot after = Contention::Read();
     EXPECT_GT(after.of(Tally::kCheckpointPagesWritten), before.of(Tally::kCheckpointPagesWritten));
     EXPECT_GT(after.of(Tally::kDataSyncs), before.of(Tally::kDataSyncs));
+}
+
+// Every mount discards the Waystone it finds, a clean stop's included: a
+// crash can leave a directory page on the device naming a child whose
+// allocation bit is not, the cursor would hand that id to a logged page, and
+// the next Waystone write would overwrite it with no record. A mount cannot
+// tell the two stops apart (invariant 8 allows the discard).
+TEST_F(ExpeditorTest, EveryMountDiscardsTheWaystoneItFinds) {
+    Expeditor::Config config = ConfigAt(1);
+    const auto directories = [](Expeditor& db) {
+        auto patterns = db.catalog().ListPatterns();
+        EXPECT_TRUE(patterns.ok());
+        return patterns.ok() ? std::count_if(patterns.value().begin(), patterns.value().end(),
+                                             catalog::HasWaystoneDirectory)
+                             : std::ptrdiff_t{0};
+    };
+    {
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        for (const char* sql : {"CREATE TABLE ws (id int64, v int64)", "INSERT INTO ws VALUES (5)",
+                                "SELECT * FROM ws WHERE id = 1", "SELECT * FROM ws WHERE id = 1"}) {
+            const std::string reply = db.dispatcher().Dispatch(sql).response;
+            ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << sql << ": " << reply;
+        }
+        ASSERT_GT(directories(db), 0) << "nothing was recorded; the cell proves nothing";
+        ASSERT_TRUE(db.Checkpoint().ok());
+    }
+
+    auto reopened = Expeditor::Open(config, /*now_unix_seconds=*/2000);
+    ASSERT_TRUE(reopened.ok()) << reopened.status().message();
+    EXPECT_EQ(directories(*reopened.value()), 0);
 }
 
 TEST_F(ExpeditorTest, APoolBelowTheVolumesFloorIsRefusedAtMountNamingBothNumbers) {

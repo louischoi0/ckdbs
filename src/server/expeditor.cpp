@@ -1069,14 +1069,18 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // failing one.
     auto stats_reset = expeditor->database_->catalog.ResetAccessStatsIfDamaged();
     if (!stats_reset.ok()) return stats_reset.status();
-    // **A restore's unlogged state is not trusted** (BR-S8, `restore.hpp`):
-    // Waystone directories and the access statistic, both advisory, made
-    // unreachable before anything can follow them to a page the layout gave
-    // back. Here, after recovery and before the completion checkpoint that
+    // **No mount trusts the unlogged state** (BR-S8, `restore.hpp`): Waystone
+    // directories and the access statistic, both advisory, made unreachable
+    // before anything can follow them. A restore's can name a page the layout
+    // gave back; any mount's after a crash can name a child whose allocation
+    // bit never reached the device - its parent written back, the map that
+    // carries the bit not - so the cursor would hand the id to a logged page
+    // and the next Waystone write would overwrite it with no record. A mount
+    // cannot tell a crash from a clean stop, so every mount discards
+    // (invariant 8 allows it: a restart costs the trails, never a result).
+    // Here, after recovery and before the completion checkpoint that
     // persists it.
-    if (restoring != 0) {
-        if (Status s = DiscardAdvisoryState(expeditor->database_->catalog); !s.ok()) return s;
-    }
+    if (Status s = DiscardAdvisoryState(expeditor->database_->catalog); !s.ok()) return s;
 
     // H7: collect the spills nothing points at. The assertion catalog -
     // `exec::LogChainInsert`'s one remaining caller since `sys.pattern_defs`

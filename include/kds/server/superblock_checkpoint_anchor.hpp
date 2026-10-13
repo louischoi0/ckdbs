@@ -29,13 +29,16 @@
 // recovery reads the superblock *page*, so a checkpoint whose anchor never
 // reached the platter leaves recovery replaying from the previous one -
 // correct, but it silently gives back the bounded-RTO guarantee the
-// checkpoint was run for. So Publish() encodes the superblock and syncs the
-// store.
+// checkpoint was run for. So Publish() syncs the store, encodes the
+// superblock, and syncs the store again - page 0 after every page it stands
+// for, the cadence publish's order (`Checkpointer`): one `fsync` carrying
+// both could land page 0 and drop a page it names.
 //
-// The sync is whole-store, which is heavier than this one page needs. That
-// is DevicePageStore's only durability point today (page_store.hpp), not a
-// choice made here; it is also harmless, because the checkpoint has just
-// flushed its dirty table through that same store anyway.
+// Each sync is whole-store, which is heavier than page 0 needs. That is
+// DevicePageStore's only durability point here (page_store.hpp), not a
+// choice made here; the second also carries any page dirtied since the
+// first, which the anchor does not stand for and the log above its redo
+// start still covers.
 //
 // ---- Ordering ------------------------------------------------------------
 //
@@ -191,9 +194,13 @@ private:
     // replay-the-whole-log and writes that zero over the real anchor.
     static wal::CheckpointAnchorRecord MountAnchorOf(const SuperBlock& superblock) noexcept;
 
-    // `Publish` without its sync: the fold, the floor and page 0's image,
+    // The core's number into the fold, refusing a core the volume lacks.
+    Status Contribute(const wal::CheckpointAnchorRecord& anchor);
+    // `Publish` without its syncs: the fold, the floor and page 0's image,
     // under the latch; returns what was encoded.
     StatusOr<wal::CheckpointAnchorRecord> EncodeLanding(const wal::CheckpointAnchorRecord& anchor);
+    // One of `Publish`'s two store syncs, logged when it fails.
+    Status SyncForAnchor(const char* what);
     // After page 0's sync: the count, `D` and the recycler.
     void Landed(const wal::CheckpointAnchorRecord& landing);
     wal::CheckpointAnchorRecord encoded_landing_{};  // `Encode`'s, for `Commit`
