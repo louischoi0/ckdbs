@@ -357,7 +357,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                                         const IndexLayout& layout,
                                         std::span<const std::byte> key, std::uint64_t pk,
                                         std::span<const std::byte> covered,
-                                        std::uint64_t owner_oid) {
+                                        std::uint64_t owner_oid, PageId anchor_page) {
     if (Status s = CheckIndexLayout(layout); !s.ok()) return s;
     if (key.size() != layout.key_width || covered.size() != layout.covered_width) {
         return Status::InvalidArgument(
@@ -424,6 +424,12 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // tree as it was.
     auto claims = store.ClaimNew(parents.value().PagesToCreate());
     if (!claims.ok()) return claims.status();
+    // And a growth's anchor pinned (`UnlatchedPin`).
+    if (parents.value().grows) {
+        auto pinned = store.PinUnlatched(anchor_page);
+        if (!pinned.ok()) return pinned.status();
+        out.anchor = std::move(pinned.value());
+    }
     // What the caller logs under (AT-S21): the leaf and every parent the
     // divide writes, handed out still held once it is done.
     auto hand_out = [&] {
@@ -484,9 +490,10 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // not move, so a parent's view stays valid across the CreateNew() below.
     //
     // Peak pins (MG03): the leaf, the `k` held parents and the one node a
-    // level creates - `2 + k`. **Unbounded by a constant**, unlike the
-    // clustered tree's: an index node holds as few separators as its key is
-    // wide allows (eight at a 1,000-byte key), so `k` can pass the six that
+    // level creates - `2 + k`, and `3 + k` for a growth, whose anchor is
+    // pinned. **Unbounded by a constant**, unlike the clustered tree's: an
+    // index node holds as few separators as its key is wide allows (eight at
+    // a 1,000-byte key), so `k` can pass the five that
     // DevicePageStore::kPinCeiling leaves room for, and a debug build at
     // `cores = 1` aborts there. Open, AT-S16's review F1: the ceiling is the
     // operator's to re-derive.

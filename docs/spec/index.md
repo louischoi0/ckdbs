@@ -757,7 +757,9 @@ new right sibling.
   the node below - exact, because that node is held and every change to its
   range is a divide of it. On a miss it re-descends from the root it was
   given, bounded by `storage::kMaxDescentRestarts`. It then claims every
-  page the divide will create (`page.md` §14). Only then does it write,
+  page the divide will create (`page.md` §14) and, when a level grows, pins
+  the relation's anchor with no latch (`page.md` §3), as the clustered tree
+  does. Only then does it write,
   so a refusal - `TxnConflict`, retryable, naming a stale path, or a device
   that cannot grow - leaves the tree as it found it. It is the clustered tree's walk (`heap-and-tuple.md`
   §5), which states why the holds cannot deadlock and why a restart makes

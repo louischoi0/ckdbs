@@ -159,7 +159,9 @@ private:
 // implements and must not depend on the latch primitive, and the two name
 // different things - the accessor's intent here, the word's state there -
 // that happen to coincide today.
-enum class PinMode : std::uint8_t { kShared, kExclusive };
+//
+// `kUnlatched` is a pin and no latch (`UnlatchedPin`).
+enum class PinMode : std::uint8_t { kShared, kExclusive, kUnlatched };
 
 // **Creations claimed ahead of the writes they serve** (`PageStore::ClaimNew`).
 // A split writes a page and then creates the next one, and a creation can
@@ -189,6 +191,33 @@ private:
     PageStore* store_ = nullptr;
     std::vector<PageId> ids_;
     std::size_t next_ = 0;
+};
+
+// A pin with no latch (`PageStore::PinUnlatched`): the frame stays in the
+// pool and nothing more, so a later `Get` of it is a hit neither the pool nor
+// the device can refuse, and the holder takes no place in any latch order.
+// A split that grows a root pins the anchor it will re-publish through this
+// way before it writes anything, and takes the anchor's latch only where it
+// always did, after every tree page - holding the anchor exclusive across
+// the split instead would put it ahead of another core's index pages, and a
+// page latch has no timeout (`docs/spec/page.md` §3). Move-only; the pin
+// drops with the handle, and an empty one holds nothing.
+class UnlatchedPin {
+public:
+    UnlatchedPin() noexcept = default;
+    UnlatchedPin(UnlatchedPin&& other) noexcept
+        : store_(std::exchange(other.store_, nullptr)), page_id_(other.page_id_) {}
+    inline UnlatchedPin& operator=(UnlatchedPin&& other) noexcept;
+    UnlatchedPin(const UnlatchedPin&) = delete;
+    UnlatchedPin& operator=(const UnlatchedPin&) = delete;
+    ~UnlatchedPin() { Release(); }
+    inline void Release() noexcept;
+
+private:
+    friend class PageStore;
+    UnlatchedPin(PageStore* store, PageId page_id) noexcept : store_(store), page_id_(page_id) {}
+    PageStore* store_ = nullptr;
+    PageId page_id_ = kInvalidPageId;
 };
 
 class PageStore {
@@ -303,6 +332,16 @@ public:
             made.value().first, PageRef(this, made.value().first, made.value().second));
     }
 
+    // Faults `page_id` in and pins it with no latch (`UnlatchedPin`);
+    // `kInvalidPageId` pins nothing and answers an empty handle.
+    StatusOr<UnlatchedPin> PinUnlatched(PageId page_id) {
+        if (page_id == kInvalidPageId) return UnlatchedPin();
+        auto bytes = FetchPinned(page_id, PinMode::kUnlatched, /*for_read=*/true,
+                                 FetchHeat::kWarm);
+        if (!bytes.ok()) return bytes.status();
+        return UnlatchedPin(this, page_id);
+    }
+
     // Claims `n` creations ahead (`PageClaims`): every way a creation can
     // fail happens here, before the caller writes anything.
     StatusOr<PageClaims> ClaimNew(std::size_t n) {
@@ -338,6 +377,8 @@ public:
         (void)mode;
     }
     virtual void UnpinFrame(PageId page_id) noexcept { (void)page_id; }
+    // A `kUnlatched` pin's release: the pin alone, there being no latch.
+    virtual void UnpinUnlatchedFrame(PageId page_id) noexcept { (void)page_id; }
     virtual void MarkFrameDirty(PageId page_id) noexcept { (void)page_id; }
 
     // Outstanding pins across the store, for the suspend audit
@@ -676,6 +717,19 @@ private:
 
 inline std::unique_ptr<ScanFetcher> PageStore::OpenScanRing(std::size_t /*frames*/) {
     return std::make_unique<PlainScanFetcher>(*this);
+}
+
+inline UnlatchedPin& UnlatchedPin::operator=(UnlatchedPin&& other) noexcept {
+    if (this != &other) {
+        Release();
+        store_ = std::exchange(other.store_, nullptr);
+        page_id_ = other.page_id_;
+    }
+    return *this;
+}
+
+inline void UnlatchedPin::Release() noexcept {
+    if (store_ != nullptr) std::exchange(store_, nullptr)->UnpinUnlatchedFrame(page_id_);
 }
 
 inline PageClaims::~PageClaims() {

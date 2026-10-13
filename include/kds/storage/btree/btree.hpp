@@ -189,11 +189,14 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
 // new leaf, and any internal node the promotion created, are reached by
 // neither. A dropped relation's reclaim follows the leaf chain, so it frees
 // the first; the rest is a stated leak (`drop-table.md` DT1).
+//
+// `anchor_page` is the anchor a growth pins (`UnlatchedPin`); none pins nothing.
 StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId root,
                                                 std::uint64_t id,
                                                 std::span<const std::byte> payload,
                                                 std::uint64_t trx_id,
-                                                std::uint64_t owner_oid);
+                                                std::uint64_t owner_oid,
+                                                PageId anchor_page = kInvalidPageId);
 
 // Descends to the leaf that owns `id` and finds its live slot. This is the
 // point-lookup the whole structure exists for: O(depth) page fetches plus

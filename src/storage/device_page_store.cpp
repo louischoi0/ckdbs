@@ -2722,6 +2722,7 @@ std::unordered_multiset<PageId>& SharedHoldsHere() {
 // already counted, and a frame with pins > 0 is never an eviction victim
 // (EV4), so it is this frame that is waited for however long the wait is.
 void DevicePageStore::AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode) noexcept {
+    if (mode == PinMode::kUnlatched) return;  // a pin and no latch (`UnlatchedPin`)
 #ifdef NDEBUG
     // Read only by the never-upgrade detector below, which is debug-only.
     // Named rather than dropped from the signature: a release-only unused
@@ -2885,6 +2886,12 @@ void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
         // semantics kept because they are right, not a live defect fixed.
         UncountPin(*frame);
     }
+}
+
+void DevicePageStore::UnpinUnlatchedFrame(PageId page_id) noexcept {
+    // `UnpinFrame` without the page latch, which a `kUnlatched` pin never took.
+    LatchGuard structure(structure_latch());
+    if (auto found = frames_.find(page_id); found != frames_.end()) UncountPin(found->second);
 }
 
 void DevicePageStore::UncountPin(Frame& frame) noexcept {

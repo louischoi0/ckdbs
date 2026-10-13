@@ -2241,15 +2241,16 @@ private:
     // adopted in memory once the record is appended. A log cut therefore
     // keeps the split and its root together or neither. With no log the
     // slot is still written and adopted.
-    Status LogSplit(const storage::InsertPlacement& placed, std::uint64_t txn_id, catalog::Oid oid,
+    Status LogSplit(storage::InsertPlacement& placed, std::uint64_t txn_id, catalog::Oid oid,
                     PageId anchor_page_id);
 
     // The record both trees' splits take: `pages` as one BTREE_SPLIT and,
     // when `new_root` is set, the anchor staged into it and the root
     // adopted after the append (`index_oid` 0 is the clustered root).
+    // `anchor_pin` is the split's pin on the anchor, released once staged.
     Status LogTreeSplit(std::span<const PageId> pages, std::uint64_t txn_id,
                         catalog::Oid rel_oid, std::uint64_t index_oid, PageId new_root,
-                        PageId anchor_page_id);
+                        PageId anchor_page_id, storage::UnlatchedPin* anchor_pin);
 
     // One page's full image, logged and the page stamped behind it.
     //

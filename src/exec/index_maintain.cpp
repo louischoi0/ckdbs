@@ -60,7 +60,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::uint16_t first_col_pos, std::span<const std::byte> row,
                                   std::uint64_t pk,
                                   std::span<const parser::AstValue> previous,
-                                  const IndexWriteLog* log) {
+                                  const IndexWriteLog* log, catalog::Catalog* publish) {
     const bool is_update = !previous.empty();
 
     index::IndexLayout layout;
@@ -144,7 +144,10 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
     if (!touched) return kInvalidPageId;
 
     auto placed = index::IndexInsert(store, ix.root_page_id, layout, key, pk, covered,
-                                     ix.index_oid);
+                                     ix.index_oid,
+                                     log != nullptr || publish != nullptr
+                                         ? access.anchor_page_id
+                                         : kInvalidPageId);
     if (!placed.ok()) {
         // Failed shut. An index missing an entry is a row lost to every
         // later probe, so unlike the Cabin's hook there is nothing to
@@ -178,11 +181,25 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
         write.rel_oid = access.oid;
         write.index_oid = ix.index_oid;
         write.anchor_page_id = access.anchor_page_id;
+        write.anchor_pin = &placed.value().anchor;
         if (Status s = (*log)(write); !s.ok()) return s;
         // The log publishes a root it carries, so there is none to report.
         return kInvalidPageId;
     }
-    return placed.value().new_root;  // the holds drop here, after the log
+    if (publish == nullptr || placed.value().new_root == kInvalidPageId) {
+        return placed.value().new_root;  // the holds drop here, after the log
+    }
+    // A split grew the tree with no log to carry the root, so it is
+    // republished here, under the divide's holds and its pin on the anchor.
+    // The catalog updates the cached entry **in place**, so `access`, and
+    // `ix` inside it, stay valid for the next index and for the caller.
+    if (Status s = publish->PublishRoot(access.oid, ix.index_oid, placed.value().new_root,
+                                        access.anchor_page_id);
+        !s.ok()) {
+        return s.WithContext("republishing the root of index " +
+                             std::to_string(ix.index_oid));
+    }
+    return kInvalidPageId;
 }
 
 Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
@@ -195,23 +212,11 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
     if (access.indexes.empty()) return Status::OK();
 
     for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
+        // With a log the root rides in the split's record
+        // (`IndexWrite::new_root`); without one it is published inside.
         auto moved = AppendIndexEntry(store, access, ix, values, first_col_pos, row, pk,
-                                      previous, log);
+                                      previous, log, &catalog);
         if (!moved.ok()) return moved.status();
-        if (moved.value() == kInvalidPageId) continue;
-
-        // A split grew the tree with no log to carry the root, so this
-        // index's root moved here. Republished through the catalog, which
-        // updates the cached entry **in place** - so `access`, and `ix`
-        // inside it, stay valid for the next iteration and for the caller.
-        // With a log the root rides in the split's record instead
-        // (`IndexWrite::new_root`).
-        if (Status s = catalog.PublishRoot(access.oid, ix.index_oid, moved.value(),
-                                           access.anchor_page_id);
-            !s.ok()) {
-            return s.WithContext("republishing the root of index " +
-                                 std::to_string(ix.index_oid));
-        }
     }
     return Status::OK();
 }

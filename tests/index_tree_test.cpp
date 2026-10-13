@@ -475,6 +475,75 @@ TEST(IndexTreeTest, ADivideWhoseSecondPageTheDeviceRefusesWritesNothing) {
     EXPECT_NE(grown.value().new_root, kInvalidPageId);
 }
 
+TEST(IndexTreeTest, AGrowthWhoseAnchorCannotBeReadWritesNothing) {
+    // btree_test.cpp's cell of the same name, for the index tree: the root
+    // leaf's divide grows a root, whose anchor the device cannot read. It is
+    // pinned before the divide writes, so the refusal leaves the tree as it
+    // was, and the pin outlives the insert's return. Killed by pinning
+    // nothing, and by fetching the anchor without keeping it.
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    const IndexLayout layout = Layout();
+    const std::uint16_t per_leaf = MaxLeafEntries(layout);
+    PageId root = kInvalidPageId;
+    PageId anchor = kInvalidPageId;
+    {
+        auto first = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{256},
+                                                    /*first_new_page_id=*/16);
+        ASSERT_TRUE(first.ok()) << first.status().message();
+        storage::DevicePageStore& store = *first.value();
+        {
+            auto created = store.CreateNew();
+            ASSERT_TRUE(created.ok()) << created.status().message();
+            root = created.value().first;
+            ASSERT_TRUE(FormatRoot(created.value().second.bytes(), layout, /*owner_oid=*/0).ok());
+        }
+        for (std::uint32_t k = 1; k <= per_leaf; ++k) {
+            auto placed = IndexInsert(store, root, layout, Key(2 * k), k, {}, /*owner_oid=*/0);
+            ASSERT_TRUE(placed.ok()) << placed.status().message();
+        }
+        auto made = store.CreateNew();
+        ASSERT_TRUE(made.ok()) << made.status().message();
+        anchor = made.value().first;
+        storage::FormatPage(made.value().second.bytes(), PageType::kAnchor);
+        made.value().second.Release();
+        ASSERT_TRUE(store.Sync().ok());
+    }
+
+    // The tree and the free map's region resident, the anchor not.
+    auto opened = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{256},
+                                                 /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    storage::DevicePageStore& store = *opened.value();
+    ASSERT_TRUE(store.GetForRead(root).ok());
+    ASSERT_TRUE(store.CreateNew().ok());
+
+    device.value()->FailNextRead(Status::IoError("injected: the anchor cannot be read"));
+    auto refused = IndexInsert(store, root, layout, Key(3), per_leaf + 1, {}, /*owner_oid=*/0,
+                               anchor);
+    device.value()->ClearInjections();
+    ASSERT_FALSE(refused.ok()) << "the growth's anchor was not fetched before its writes";
+    EXPECT_NE(refused.status().message().find("the anchor cannot be read"), std::string::npos)
+        << refused.status().message();
+    {
+        auto bytes = store.Get(root);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        IndexLeafView leaf(bytes.value().bytes());
+        EXPECT_EQ(leaf.right_sibling(), kInvalidPageId) << "the leaf divided before the refusal";
+        EXPECT_EQ(leaf.entry_count(), per_leaf);
+    }
+
+    auto grown = IndexInsert(store, root, layout, Key(3), per_leaf + 1, {}, /*owner_oid=*/0,
+                             anchor);
+    ASSERT_TRUE(grown.ok()) << grown.status().message();
+    EXPECT_NE(grown.value().new_root, kInvalidPageId);
+    // The holds dropped, the anchor's pin is what is left, until it is given back.
+    grown.value().held.clear();
+    EXPECT_EQ(store.live_pins(), 1u) << "the growth did not keep its anchor pinned";
+    grown.value().anchor.Release();
+    EXPECT_EQ(store.live_pins(), 0u);
+}
+
 // ---- Two cores in one index (AT-S15) ------------------------------------
 //
 // Since AT-S5 a write runs where its session is, so two cores maintain one

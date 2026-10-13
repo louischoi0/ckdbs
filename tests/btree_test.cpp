@@ -1207,6 +1207,73 @@ TEST(BtreeTest, ADivideWhoseSecondPageTheDeviceRefusesWritesNothing) {
     }
 }
 
+// A split that grows a root re-publishes it through the relation's anchor,
+// and a fetch of the anchor that failed there - after the old root is
+// marked grown over - left the relation unable to grow. The anchor is pinned
+// before the split writes, so a device that cannot read it refuses the
+// insert with the tree as it was, and the pin outlives the insert's return.
+// Killed by pinning nothing (the insert succeeds and leaves the anchor to a
+// fetch that would fail), and by fetching the anchor without keeping it.
+TEST(BtreeTest, AGrowthWhoseAnchorCannotBeReadWritesNothing) {
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    constexpr std::size_t kFiller = 1016;  // seven to a leaf
+    PageId root = kInvalidPageId;
+    PageId anchor = kInvalidPageId;
+    {
+        auto first = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{256},
+                                                    /*first_new_page_id=*/16);
+        ASSERT_TRUE(first.ok()) << first.status().message();
+        Tree tree(*first.value());
+        for (std::uint64_t id = 10; id <= 70; id += 10) {
+            ASSERT_TRUE(tree.Insert(id, kFiller).ok()) << id;
+        }
+        root = tree.root;
+        auto made = first.value()->CreateNew();
+        ASSERT_TRUE(made.ok()) << made.status().message();
+        anchor = made.value().first;
+        storage::FormatPage(made.value().second.bytes(), PageType::kAnchor);
+        made.value().second.Release();
+        ASSERT_TRUE(first.value()->Sync().ok());
+    }
+
+    // A store with the tree resident and the anchor not: the pin's fault is
+    // the insert's one device read.
+    auto opened = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{256},
+                                                 /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    storage::DevicePageStore& store = *opened.value();
+    for (std::uint64_t id = 10; id <= 70; id += 10) {
+        ASSERT_TRUE(BtreeLookup(store, root, id).ok()) << id;
+    }
+    ASSERT_TRUE(store.CreateNew().ok());  // the free map's region, resident too
+
+    device.value()->FailNextRead(Status::IoError("injected: the anchor cannot be read"));
+    auto refused = BtreeInsert(store, root, 15, MakeTuple(15, kFiller), /*trx_id=*/1,
+                               /*owner_oid=*/0, anchor);
+    device.value()->ClearInjections();
+    ASSERT_FALSE(refused.ok()) << "the growth's anchor was not fetched before its writes";
+    EXPECT_NE(refused.status().message().find("the anchor cannot be read"), std::string::npos)
+        << refused.status().message();
+    EXPECT_EQ(BtreeHeight(store, root).value(), 1u);
+    {
+        auto bytes = store.Get(root);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        EXPECT_EQ(heap::PageView(bytes.value().bytes()).next_page_id(), kInvalidPageId)
+            << "the leaf divided before the refusal";
+    }
+
+    auto grown = BtreeInsert(store, root, 15, MakeTuple(15, kFiller), /*trx_id=*/1,
+                             /*owner_oid=*/0, anchor);
+    ASSERT_TRUE(grown.ok()) << grown.status().message();
+    EXPECT_NE(grown.value().new_root, kInvalidPageId);
+    // The holds dropped, the anchor's pin is what is left, until it is given back.
+    grown.value().held.clear();
+    EXPECT_EQ(store.live_pins(), 1u) << "the growth did not keep its anchor pinned";
+    grown.value().anchor.Release();
+    EXPECT_EQ(store.live_pins(), 0u);
+}
+
 // A store that runs one action the **second** time a chosen page is
 // fetched, and forwards everything else. It puts another core's divide
 // exactly where a caller that re-fetches a lookup's page by id would meet

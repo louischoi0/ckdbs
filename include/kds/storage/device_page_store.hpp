@@ -1380,6 +1380,7 @@ private:
         CreateKind which, PageId page_id) override;
 
     void PinFrame(PageId page_id, PinMode mode) noexcept override;
+    void UnpinUnlatchedFrame(PageId page_id) noexcept override;
     void UnpinFrame(PageId page_id) noexcept override;
     void MarkFrameDirty(PageId page_id) noexcept override;
 

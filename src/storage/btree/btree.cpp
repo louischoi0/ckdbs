@@ -509,9 +509,11 @@ StatusOr<Parents> SecureParents(storage::PageStore& store, const Descent& descen
 // next - on either path, since a divide works in the held parent's own
 // bytes. Both split paths release their created leaf before the call, so a
 // split holds at most `2 + k` (`SecureParents`' re-descent reads one page at
-// a time on the same base). That is under DevicePageStore::kPinCeiling for
-// k <= 6; dividing seven 678-way levels takes more leaves than a page id can
-// name, and an index's narrower nodes are index_tree.cpp's to state.
+// a time on the same base), and a split that grows a root one more, its
+// anchor's `UnlatchedPin`. That is under DevicePageStore::kPinCeiling for
+// k <= 5; dividing seven 678-way levels takes more leaves than a page id can
+// name, a growth past four full levels as well, and an index's narrower
+// nodes are index_tree.cpp's to state.
 StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageClaims& claims,
                                                      const Descent& descent, Parents& parents,
                                                      std::uint64_t sep, PageId child,
@@ -963,7 +965,8 @@ namespace {
 StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Descent& descent,
                                                   std::uint64_t id,
                                                   std::span<const std::byte> payload,
-                                                  std::uint64_t trx_id, std::uint64_t owner_oid);
+                                                  std::uint64_t trx_id, std::uint64_t owner_oid,
+                                                  PageId anchor_page);
 
 }  // namespace
 
@@ -971,11 +974,11 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
                                                 std::uint64_t id,
                                                 std::span<const std::byte> payload,
                                                 std::uint64_t trx_id,
-                                                std::uint64_t owner_oid) {
+                                                std::uint64_t owner_oid, PageId anchor_page) {
     if (Status s = RequirePayloadCarries(payload, id); !s.ok()) return s;
     auto descent = DescendTo(store, root, id, /*leaf_for_write=*/true);
     if (!descent.ok()) return descent.status();
-    return PlaceUnderHold(store, descent.value(), id, payload, trx_id, owner_oid);
+    return PlaceUnderHold(store, descent.value(), id, payload, trx_id, owner_oid, anchor_page);
 }
 
 namespace {
@@ -983,7 +986,8 @@ namespace {
 StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Descent& descent,
                                                   std::uint64_t id,
                                                   std::span<const std::byte> payload,
-                                                  std::uint64_t trx_id, std::uint64_t owner_oid) {
+                                                  std::uint64_t trx_id, std::uint64_t owner_oid,
+                                                  PageId anchor_page) {
     const PageId leaf_id = descent.path[descent.depth];
     heap::PageView leaf(descent.leaf.bytes());
 
@@ -1050,9 +1054,18 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     // lose the rows that moved. A refusal here leaves the tree as it was.
     auto claims = store.ClaimNew(parents.value().PagesToCreate());
     if (!claims.ok()) return claims.status();
+    // And a growth's anchor, which the root is re-published through, pinned
+    // so that fetch cannot fail after the old root is marked (`UnlatchedPin`).
+    storage::UnlatchedPin anchor;
+    if (parents.value().grows) {
+        auto pinned = store.PinUnlatched(anchor_page);
+        if (!pinned.ok()) return pinned.status();
+        anchor = std::move(pinned.value());
+    }
     // What the caller logs under (AT-S21): the leaf and every parent the
     // split writes, handed out still held once the split is done.
     auto hand_out = [&](storage::InsertPlacement& placed) {
+        placed.anchor = std::move(anchor);
         placed.held.push_back(std::move(descent.leaf));
         for (std::uint16_t i = 0; i < parents.value().count; ++i) {
             placed.held.push_back(std::move(parents.value().held[i]));

@@ -4627,7 +4627,7 @@ Status CommandDispatcher::LogIndexWrite(const exec::IndexWrite& write, std::uint
     // (`LogTreeSplit`).
     if (!write.restructured.empty()) {
         return LogTreeSplit(write.restructured, txn_id, write.rel_oid, write.index_oid,
-                            write.new_root, write.anchor_page_id);
+                            write.new_root, write.anchor_page_id, write.anchor_pin);
     }
 
     std::vector<std::byte> buf(wal::kIndexInsertFixedSize + write.entry.size());
@@ -4677,6 +4677,7 @@ exec::IndexWriteLog CommandDispatcher::IndexWriteLogFor(const WriteScope& scope,
     return [this, &pending](const exec::IndexWrite& write) -> Status {
         if (write.new_root == kInvalidPageId) {
             pending.push_back(write);
+            pending.back().anchor_pin = nullptr;  // the pin dies with the insert's result
             return Status::OK();
         }
         if (Status s = catalog_.PublishRoot(write.rel_oid, write.index_oid, write.new_root,
@@ -4687,6 +4688,7 @@ exec::IndexWriteLog CommandDispatcher::IndexWriteLogFor(const WriteScope& scope,
         }
         pending.push_back(write);
         pending.back().new_root = kInvalidPageId;
+        pending.back().anchor_pin = nullptr;  // the pin dies with the insert's result
         return Status::OK();
     };
 }
@@ -4856,26 +4858,31 @@ Status CommandDispatcher::LogChainGrowth(const storage::InsertPlacement& placed,
     return Status::OK();
 }
 
-Status CommandDispatcher::LogSplit(const storage::InsertPlacement& placed, std::uint64_t txn_id,
+Status CommandDispatcher::LogSplit(storage::InsertPlacement& placed, std::uint64_t txn_id,
                                    catalog::Oid oid, PageId anchor_page_id) {
     std::vector<PageId> pages;
     pages.reserve(placed.changes().size());
     for (const storage::StructuralChange& change : placed.changes()) {
         pages.push_back(change.page_id);
     }
-    return LogTreeSplit(pages, txn_id, oid, /*index_oid=*/0, placed.new_root, anchor_page_id);
+    return LogTreeSplit(pages, txn_id, oid, /*index_oid=*/0, placed.new_root, anchor_page_id,
+                        &placed.anchor);
 }
 
 Status CommandDispatcher::LogTreeSplit(std::span<const PageId> pages, std::uint64_t txn_id,
                                        catalog::Oid rel_oid, std::uint64_t index_oid,
-                                       PageId new_root, PageId anchor_page_id) {
+                                       PageId new_root, PageId anchor_page_id,
+                                       storage::UnlatchedPin* anchor_pin) {
     // The anchor is taken after every page the split wrote and dropped
     // first. The pages it then latches beside it are ones the split created,
     // which nothing reaches but through a page already held.
     std::optional<storage::PageRef> anchor;
     Status refused = Status::OK();
     if (new_root != kInvalidPageId) {
+        // A hit on the split's pinned frame; the staging's hold makes the pin
+        // redundant, and dropping it keeps the images below under the ceiling.
         auto staged = catalog_.StageAnchorRoot(anchor_page_id, rel_oid, index_oid, new_root);
+        if (anchor_pin != nullptr) anchor_pin->Release();
         if (staged.ok()) {
             anchor.emplace(std::move(staged.value()));
         } else {
@@ -6082,7 +6089,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 return s;
             }
             attempt.emplace(btree::BtreeInsert(page_store_, ta.desc_page_id, row_id, encoded,
-                                               /*trx_id=*/WriterId(scope), ta.oid));
+                                               /*trx_id=*/WriterId(scope), ta.oid,
+                                               ta.anchor_page_id));
         } else {
             attempt.emplace(FromChain(heap::ChainInsertNamed(
                 page_store_, ta.desc_page_id, row_id, encoded,
@@ -6123,7 +6131,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             if (Status s = encode(); !s.ok()) return s;
             if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
             attempt.emplace(btree::BtreeInsert(page_store_, ta.desc_page_id, row_id, encoded,
-                                               /*trx_id=*/WriterId(scope), ta.oid));
+                                               /*trx_id=*/WriterId(scope), ta.oid,
+                                               ta.anchor_page_id));
             if (attempt->ok()) break;
             // Nothing was placed, so the burned id's borrow is given back
             // whatever refused it: a structural refusal inside `BEGIN` is
