@@ -38,9 +38,9 @@ using parser::ValueType;
 bool IsSignedInt(std::uint32_t t) {
     return t == kTypeValInt8 || t == kTypeValInt16 || t == kTypeValInt32 || t == kTypeValInt64;
 }
-bool IsInteger(std::uint32_t t) { return IsSignedInt(t) || t == kTypeValUint64; }
-bool IsDecimal(std::uint32_t t) { return t == kTypeValDecimal || t == kTypeValDecimalWide; }
-bool IsText(std::uint32_t t) { return t == kTypeValVarchar || t == kTypeValChar; }
+bool IsInteger(std::uint32_t t) { return TypeFamilyOf(t) == TypeFamily::kInt; }
+bool IsDecimal(std::uint32_t t) { return TypeFamilyOf(t) == TypeFamily::kDec; }
+bool IsText(std::uint32_t t) { return TypeFamilyOf(t) == TypeFamily::kText; }
 bool IsDateType(const SetType& t) { return t.concrete() && t.type_val == kTypeValDate; }
 
 SetType Concrete(std::uint32_t type_val, std::uint32_t len) {
@@ -189,18 +189,19 @@ SetType DecimalQuotient(const SetType& dividend, std::uint32_t divisor_scale) {
 // What CAST converts between (BJ-S5, BJ-Q3). The classes are the reference
 // dialect's families, restricted to the engine's types; a pair not listed is
 // refused at compile, and `bool` converts to nothing but itself.
-using Family = TypeFamily;
 
-bool CastAdmitted(Family from, Family to) {
+bool CastAdmitted(TypeFamily from, TypeFamily to) {
     switch (from) {
-        case Family::kInt:
-        case Family::kDec: return to == Family::kInt || to == Family::kDec || to == Family::kText;
-        case Family::kText: return to != Family::kBool && to != Family::kOther;
-        case Family::kDate: return to == Family::kText || to == Family::kDate || to == Family::kTimestamp;
-        case Family::kTimestamp:
-            return to == Family::kText || to == Family::kDate || to == Family::kTimestamp;
-        case Family::kBool: return to == Family::kBool;
-        case Family::kOther: return false;
+        case TypeFamily::kInt:
+        case TypeFamily::kDec:
+            return to == TypeFamily::kInt || to == TypeFamily::kDec || to == TypeFamily::kText;
+        case TypeFamily::kText: return to != TypeFamily::kBool && to != TypeFamily::kOther;
+        case TypeFamily::kDate:
+            return to == TypeFamily::kText || to == TypeFamily::kDate || to == TypeFamily::kTimestamp;
+        case TypeFamily::kTimestamp:
+            return to == TypeFamily::kText || to == TypeFamily::kDate || to == TypeFamily::kTimestamp;
+        case TypeFamily::kBool: return to == TypeFamily::kBool;
+        case TypeFamily::kOther: return false;
     }
     return false;
 }
@@ -1349,32 +1350,32 @@ private:
         if (IsNull(v)) return v;
         const SetType& from = e.lhs->type;
         const SetType& to = e.type;
-        const Family source = TypeFamilyOf(from.type_val);
-        const Family target = TypeFamilyOf(to.type_val);
+        const TypeFamily source = TypeFamilyOf(from.type_val);
+        const TypeFamily target = TypeFamilyOf(to.type_val);
 
         // An unscaled value and its scale, for the numeric sources.
         const auto AsDecimal = [&]() -> StatusOr<std::pair<Int128, int>> {
-            if (source == Family::kText) return ParseNumberText(v.str_val, e);
+            if (source == TypeFamily::kText) return ParseNumberText(v.str_val, e);
             auto n = NumberOf(v, from);
             if (!n.ok()) return n.status();
             return std::pair<Int128, int>{
-                n.value(), source == Family::kDec ? static_cast<int>(catalog::DecimalScaleOf(from.len)) : 0};
+                n.value(), source == TypeFamily::kDec ? static_cast<int>(catalog::DecimalScaleOf(from.len)) : 0};
         };
 
         switch (target) {
-            case Family::kInt:
-            case Family::kDec: {
+            case TypeFamily::kInt:
+            case TypeFamily::kDec: {
                 auto d = AsDecimal();
                 if (!d.ok()) return d.status();
                 const int to_scale =
-                    target == Family::kDec ? static_cast<int>(catalog::DecimalScaleOf(to.len)) : 0;
+                    target == TypeFamily::kDec ? static_cast<int>(catalog::DecimalScaleOf(to.len)) : 0;
                 auto rescaled = Rescale(d.value().first, d.value().second, to_scale, e);
                 if (!rescaled.ok()) return rescaled.status();
                 return Checked(rescaled.value(), e);
             }
-            case Family::kText: {
+            case TypeFamily::kText: {
                 std::string text;
-                if (source == Family::kText) {
+                if (source == TypeFamily::kText) {
                     text = v.str_val;
                 } else {
                     text = FormatValue(from.type_val, v);
@@ -1389,10 +1390,10 @@ private:
                 out.str_val = std::move(text);
                 return out;
             }
-            case Family::kDate:
-            case Family::kTimestamp: {
+            case TypeFamily::kDate:
+            case TypeFamily::kTimestamp: {
                 parser::AstValue out;
-                if (source == Family::kText) {
+                if (source == TypeFamily::kText) {
                     catalog::SysColumnRow col{};
                     col.type_val = to.type_val;
                     out = v;
@@ -1405,15 +1406,15 @@ private:
                 out.type = ValueType::kInt;
                 if (source == target) {
                     out.int_val = v.int_val;
-                } else if (target == Family::kTimestamp) {  // date -> timestamp
+                } else if (target == TypeFamily::kTimestamp) {  // date -> timestamp
                     out.int_val = v.int_val * 86400LL * 1000000LL;
                 } else {  // timestamp -> date: the day it falls in, floored
                     out.int_val = FloorEpochDay(v.int_val);
                 }
                 return out;
             }
-            case Family::kBool: return v;
-            case Family::kOther: break;
+            case TypeFamily::kBool: return v;
+            case TypeFamily::kOther: break;
         }
         return Status::Corruption("a CAST between families the typer admitted but cannot run");
     }

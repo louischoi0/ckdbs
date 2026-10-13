@@ -1096,9 +1096,9 @@ rollback (§6), lock-based blocking (§5).
 refused** (operator, 2026-10-13). `COMMIT`, `ROLLBACK` and `ABORT` take one
 optional `TRANSACTION` or `WORK` and nothing after it; `SAVEPOINT`,
 `RELEASE`, `ROLLBACK TO ...` and `COMMIT AND CHAIN` are `Unsupported` with
-the offending word's byte (`RefuseTxnEndTail`). The dispatcher routed on the
-first word, so each was answered as if honoured: `ROLLBACK TO` rolled back
-everything, `COMMIT AND CHAIN` opened nothing. **A refused rollback form
+the offending word's byte (`RefuseTxnEndTail`) - the standard's synonyms
+`COMMIT AND NO CHAIN` and `ROLLBACK AND NO CHAIN` included, since the rule
+admits no word after the noise word. **A refused rollback form
 poisons an open transaction**: the client asked to undo part of its work,
 and left open, a following `COMMIT` would make that work durable. A refused
 `COMMIT` form leaves the transaction open with nothing committed.

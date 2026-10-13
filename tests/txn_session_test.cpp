@@ -136,10 +136,6 @@ TEST_F(TxnSessionTest, ASecondBeginIsRefusedRatherThanNested) {
 }
 
 // ---- A transaction commits or rolls back whole (section 9) ---------------
-//
-// The routing reads the first word, so `ROLLBACK TO SAVEPOINT a` rolled back
-// the whole transaction and `COMMIT AND CHAIN` committed and opened nothing,
-// each answered as if its clause had been honoured.
 
 TEST_F(TxnSessionTest, ThePlainEndingsAndTheirNoiseWordsAreAccepted) {
     Session s;
@@ -190,7 +186,8 @@ TEST_F(TxnSessionTest, ACommitAndChainIsRefusedAndTheTransactionStaysOpen) {
 TEST_F(TxnSessionTest, SavepointAndReleaseAreRefusedByName) {
     Session s;
     ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
-    EXPECT_EQ(Run(s, "SAVEPOINT a").rfind("ERR UNSUPPORTED", 0), 0u);
+    EXPECT_NE(Run(s, "  SAVEPOINT a").find("(byte 2)"), std::string::npos);
+    EXPECT_EQ(s.state(), Session::State::kInTxn);
     EXPECT_EQ(Run(s, "RELEASE SAVEPOINT a").rfind("ERR UNSUPPORTED", 0), 0u);
     // Outside a transaction too, and a trailing clause without one.
     EXPECT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
@@ -1471,6 +1468,12 @@ TEST_F(TxnSessionTest, AnExpiredSessionRefusesWithTheLifetimeDetailUntilItsRollb
         EXPECT_NE(out.response.find("trx_id=" + std::to_string(id)), std::string::npos)
             << out.response;
     }
+    // A refused rollback form says what the sweep did rather than that
+    // nothing was rolled back, and leaves the expiry for ROLLBACK to end.
+    const std::string refused = Run(s, "ROLLBACK TO a");
+    EXPECT_EQ(refused.rfind("ERR UNSUPPORTED", 0), 0u) << refused;
+    EXPECT_NE(refused.find("already rolled this transaction back"), std::string::npos) << refused;
+    EXPECT_EQ(s.expired_trx_id(), id);
     EXPECT_EQ(Run(s, "ROLLBACK"), "ROLLBACK trx_id=" + std::to_string(id));
     EXPECT_EQ(s.state(), Session::State::kIdle);
     EXPECT_EQ(s.expired_trx_id(), 0u);

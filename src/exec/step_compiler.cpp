@@ -146,7 +146,9 @@ Status CheckColumnsCompare(std::uint32_t lhs_type, std::uint32_t lhs_len, std::s
             t.kind = SetType::Kind::kConcrete;
             t.type_val = type_val;
             t.len = len;
-            return SetTypeName(t);
+            // A subquery's side carries a type mod, which is 0 for char.
+            return type_val == catalog::kTypeValChar && len == 0 ? std::string("char")
+                                                                 : SetTypeName(t);
         };
         return Status::InvalidArgument("cannot compare '" + std::string(lhs_name) + "' (" +
                                        name(lhs_type, lhs_len) + ") with '" +

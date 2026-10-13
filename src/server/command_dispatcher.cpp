@@ -125,34 +125,40 @@ std::pair<std::string_view, std::string_view> SplitFirstToken(std::string_view l
 
 // `COMMIT`, `ROLLBACK` and `ABORT` end the whole transaction and take one
 // optional noise word, `TRANSACTION` or `WORK`, and nothing else
-// (docs/spec/txn.md §9). Anything after it is refused `Unsupported` with its
-// byte: the routing reads the first word only, so `ROLLBACK TO SAVEPOINT a`
-// used to roll back the whole transaction and `COMMIT AND CHAIN` to commit
-// and open nothing - each answered as if the clause had been honoured.
+// (docs/spec/txn.md §9); `SAVEPOINT` and `RELEASE` name nothing that exists.
+// `word` is the refused word, a view into `line`, and `what` the refusal.
+Status RefuseWhole(std::string_view line, std::string_view word, const std::string& what) {
+    return Status::Unsupported(what + " (byte " + std::to_string(word.data() - line.data()) +
+                               "): there are no savepoints or chained transactions, and a "
+                               "transaction commits or rolls back whole (docs/spec/txn.md §9)");
+}
+
+// The refusal of any word after an ending's noise word, or OK.
 //
 // **A refused rollback form poisons an open transaction.** The client asked
 // to undo part of its work; left open, a following `COMMIT` would make that
 // work durable. Poisoned, only `ROLLBACK` ends it. A refused `COMMIT` form
 // leaves the transaction as it was: nothing the client meant to undo is at
 // stake, and a plain `COMMIT` is still the client's to send.
-std::optional<DispatchOutcome> RefuseTxnEndTail(std::string_view line, std::string_view cmd,
-                                                std::string_view rest, Session& session) {
-    auto [word, tail] = SplitFirstToken(rest);
+Status RefuseTxnEndTail(std::string_view line, std::string_view cmd, std::string_view rest,
+                        Session& session) {
+    std::string_view word = SplitFirstToken(rest).first;
     if (IEquals(word, "TRANSACTION") || IEquals(word, "WORK")) {
-        std::tie(word, tail) = SplitFirstToken(tail);
+        word = SplitFirstToken(SplitFirstToken(rest).second).first;
     }
-    if (word.empty()) return std::nullopt;
-    const bool rollback = !IEquals(cmd, "COMMIT");
-    if (rollback && session.in_explicit_txn()) session.Poison();
-    const Status s = Status::Unsupported(
-        std::string(cmd) + " takes no '" + std::string(word) + "' (byte " +
-        std::to_string(word.data() - line.data()) +
-        "): there are no savepoints or chained transactions, and a transaction commits or "
-        "rolls back whole (docs/spec/txn.md §9)" +
-        (rollback && session.in_explicit_txn()
-             ? "; nothing was rolled back, and the transaction is failed until ROLLBACK"
-             : ""));
-    return DispatchOutcome{ErrorReply(s), false, 0, s};
+    if (word.empty()) return Status::OK();
+    const Status s = RefuseWhole(line, word, std::string(cmd) + " takes no '" +
+                                                 std::string(word) + "'");
+    if (IEquals(cmd, "COMMIT") || !session.in_explicit_txn()) return s;
+    if (session.expired_trx_id() != 0) {
+        // The lifetime sweep already rolled it back (`Session::Expire`).
+        return s.WithMessage(s.message() +
+                             "; the server already rolled this transaction back at "
+                             "txn_lifetime_ceiling_ms, and ROLLBACK ends it");
+    }
+    session.Poison();
+    return s.WithMessage(s.message() +
+                         "; nothing was rolled back, and the transaction is failed until ROLLBACK");
 }
 
 // Splits `line` at the first token equal to `keyword`, answering
@@ -1292,15 +1298,13 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         return HandleBegin(rest, session);
     }
     if (IEquals(cmd, "COMMIT") || IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT")) {
-        if (auto refused = RefuseTxnEndTail(line, cmd, rest, session); refused.has_value()) {
-            return std::move(*refused);
+        if (Status s = RefuseTxnEndTail(line, cmd, rest, session); !s.ok()) {
+            return {ErrorReply(s), false, 0, s};
         }
         return IEquals(cmd, "COMMIT") ? HandleCommit(session) : HandleRollback(session);
     }
     if (IEquals(cmd, "SAVEPOINT") || IEquals(cmd, "RELEASE")) {
-        const Status s = Status::Unsupported(
-            std::string(cmd) + " is not supported (byte 0): there are no savepoints, and a "
-            "transaction commits or rolls back whole (docs/spec/txn.md §9)");
+        const Status s = RefuseWhole(line, cmd, std::string(cmd) + " is not supported");
         return {ErrorReply(s), false, 0, s};
     }
     if (IEquals(cmd, "SET")) {

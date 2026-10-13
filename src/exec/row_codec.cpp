@@ -825,21 +825,7 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             return Status::OK();
         }
 
-        case kTypeValUint64:
-            if (val.type != parser::ValueType::kInt) {
-                return Status::InvalidArgument("expects an integer, not a string literal");
-            }
-            // The same rule over the unsigned range, which the digits carry
-            // (`ValueAsUint64`): a negative literal or one past 2^64 - 1
-            // names nothing the column holds. Compared, it answered false
-            // under every operator - `!=` and `>` included - and no row.
-            if (!ValueAsUint64(val).ok()) {
-                return Status::OutOfRange("integer literal " + val.raw_int_text +
-                                          " is outside the range of a uint64");
-            }
-            return Status::OK();
-
-        // **The kind the encode takes, or a refusal** (types.md §3.1).
+        // **The kind the encode takes, or a refusal** (types.md §3.1a).
         // These arms compare the value as written, so a literal of another
         // kind reached CompareValues as a kind mismatch and answered false
         // per row: `WHERE a = '20'` over an integer column returned no rows
@@ -851,8 +837,18 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
         case kTypeValInt16:
         case kTypeValInt32:
         case kTypeValInt64:
+        case kTypeValUint64:
             if (val.type != parser::ValueType::kInt) {
-                return Status::InvalidArgument("expects an integer, not a string literal");
+                return Status::InvalidArgument(
+                    "expects an integer literal - unquoted, with no fraction");
+            }
+            // The same rule over the unsigned range, which the digits carry
+            // (`ValueAsUint64`): a negative literal or one past 2^64 - 1
+            // names nothing the column holds. Compared, it answered false
+            // under every operator - `!=` and `>` included - and no row.
+            if (col.type_val == kTypeValUint64 && !ValueAsUint64(val).ok()) {
+                return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                          " is outside the range of a uint64");
             }
             return Status::OK();
         case kTypeValBool:
@@ -1315,20 +1311,24 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
     // told - the answer is the mathematical one: a uint64 column compared
     // with a signed column's -1 is greater, not a non-match.
     if (lhs.type == parser::ValueType::kInt && rhs.type == parser::ValueType::kInt) {
-        const auto wrapped = [](const parser::AstValue& v) {
-            return v.int_val < 0 && !v.raw_int_text.empty() && v.raw_int_text[0] != '-';
-        };
-        if (!wrapped(lhs) && !wrapped(rhs)) return ApplyCompare(lhs.int_val, rhs.int_val, op);
-        const auto exact = [&wrapped](const parser::AstValue& v) -> std::optional<Int128> {
-            if (!wrapped(v)) return static_cast<Int128>(v.int_val);
-            auto u = ParseUint64Text(v.raw_int_text);
+        // Judged by the digits, not by the sign: a literal past 2^64 wraps
+        // to a small non-negative `int_val` (`18446744073709551617` is 1),
+        // and a sign test would compare it as that. A text shorter than 19
+        // characters cannot wrap, so the common pair costs a length test.
+        if (!parser::IntLiteralWrapped(lhs) && !parser::IntLiteralWrapped(rhs)) {
+            return ApplyCompare(lhs.int_val, rhs.int_val, op);
+        }
+        const auto exact = [](const parser::AstValue& v) -> std::optional<Int128> {
+            if (!parser::IntLiteralWrapped(v)) return static_cast<Int128>(v.int_val);
+            auto u = ParseUint64Text(v.raw_int_text);  // refuses a '-' and digits past 2^64 - 1
             if (!u.ok()) return std::nullopt;
             return static_cast<Int128>(u.value());
         };
         const auto a = exact(lhs);
         const auto b = exact(rhs);
-        // Digits past 2^64 - 1 name no integer any column holds; the
-        // compiler refuses such a literal, so this is a guard, not an answer.
+        // Digits outside [-2^63, 2^64 - 1] name no integer any column holds:
+        // the compiler refuses such a literal, and a catalog view, which
+        // compiles nothing, answers it as the non-match it is.
         if (!a.has_value() || !b.has_value()) return false;
         return ApplyCompare(*a, *b, op);
     }

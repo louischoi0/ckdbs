@@ -232,6 +232,15 @@ TEST(RowCodecCompareTest, ASignedOperandAgainstAUint64ComparesByValue) {
     EXPECT_TRUE(CompareValues(catalog::kTypeValUint64, Int(5), Int(-1), parser::CompareOp::kNeq));
 }
 
+TEST(RowCodecCompareTest, ALiteralPast2To64IsNotTheSmallValueItWrappedTo) {
+    // 2^64 + 1 wraps to an `int_val` of 1. A catalog view compares such a
+    // literal without compiling it, so the digits must decide, not the sign.
+    parser::AstValue past = Int(1);
+    past.raw_int_text = "18446744073709551617";
+    EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, Int(1), past, parser::CompareOp::kEq));
+    EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, past, Int(1), parser::CompareOp::kEq));
+}
+
 TEST(RowCodecCompareTest, ASignedColumnAgainstAUint64AboveInt64MaxIsLess) {
     // The left column's type is the only one CompareValues is told, so a
     // signed left side must still read the right side's digits: int_val
