@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -50,6 +51,12 @@ inline constexpr std::string_view kCatalogSchema = "sys";
 // and the rows under them.
 struct CatalogView {
     std::vector<std::string> column_names;
+    // Each column's type, beside its name: `uint64` for every integer a view
+    // holds and `varchar` for every string. Declared rather than read off a
+    // row, so a WHERE literal is judged against the column before any row is
+    // read (docs/spec/types.md §3.1a) and an empty view refuses what a full
+    // one does.
+    std::vector<std::uint32_t> column_types;
     std::vector<std::vector<parser::AstValue>> rows;
 };
 

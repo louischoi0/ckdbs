@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
+#include <utility>
 
 #include "kds/catalog/well_known.hpp"
 
@@ -35,6 +37,19 @@ parser::AstValue Str(std::string v) {
     return out;
 }
 
+// A view's columns, each name with the type its builder emits: `Int` is a
+// uint64 and `Str` a varchar, so these are the only two a view declares.
+constexpr std::uint32_t kInt = catalog::kTypeValUint64;
+constexpr std::uint32_t kStr = catalog::kTypeValVarchar;
+
+void Define(CatalogView& view,
+            std::initializer_list<std::pair<const char*, std::uint32_t>> columns) {
+    for (const auto& [name, type] : columns) {
+        view.column_names.emplace_back(name);
+        view.column_types.push_back(type);
+    }
+}
+
 // Rendered rather than reported as a number: `HEAP` is what a client wrote
 // in the CREATE TABLE clause and what DESCRIBE echoes, so the view says the
 // same thing rather than making the reader map 0 and 1 themselves.
@@ -50,8 +65,12 @@ std::string ClusteredName(catalog::ClusteredType type) {
 
 StatusOr<CatalogView> TablesView(catalog::Catalog& catalog) {
     CatalogView view;
-    view.column_names = {"oid", "namespace_oid", "name", "desc_page_id", "clustered_type",
-                         "next_id"};
+    Define(view, {{"oid", kInt},
+                  {"namespace_oid", kInt},
+                  {"name", kStr},
+                  {"desc_page_id", kInt},
+                  {"clustered_type", kStr},
+                  {"next_id", kInt}});
 
     auto objects = catalog.ListTables();
     if (!objects.ok()) return objects.status();
@@ -76,7 +95,11 @@ StatusOr<CatalogView> TablesView(catalog::Catalog& catalog) {
 
 StatusOr<CatalogView> ObjectsView(catalog::Catalog& catalog) {
     CatalogView view;
-    view.column_names = {"oid", "namespace_oid", "type_oid", "rel_id", "name"};
+    Define(view, {{"oid", kInt},
+                  {"namespace_oid", kInt},
+                  {"type_oid", kInt},
+                  {"rel_id", kInt},
+                  {"name", kStr}});
 
     // ListTables() is the only enumerator the catalog exposes, and it
     // filters to type_oid == kTypeTable. So this view shows table objects
@@ -97,7 +120,13 @@ StatusOr<CatalogView> ObjectsView(catalog::Catalog& catalog) {
 
 StatusOr<CatalogView> ColumnsView(catalog::Catalog& catalog) {
     CatalogView view;
-    view.column_names = {"rel_id", "rel_name", "pos", "name", "type_val", "type", "notnull"};
+    Define(view, {{"rel_id", kInt},
+                  {"rel_name", kStr},
+                  {"pos", kInt},
+                  {"name", kStr},
+                  {"type_val", kInt},
+                  {"type", kStr},
+                  {"notnull", kInt}});
 
     auto objects = catalog.ListTables();
     if (!objects.ok()) return objects.status();
@@ -137,7 +166,7 @@ StatusOr<CatalogView> ColumnsView(catalog::Catalog& catalog) {
 
 StatusOr<CatalogView> TypesView(catalog::Catalog& catalog) {
     CatalogView view;
-    view.column_names = {"oid", "name", "type_val", "len"};
+    Define(view, {{"oid", kInt}, {"name", kStr}, {"type_val", kInt}, {"len", kInt}});
 
     auto types = catalog.ListTypes();
     if (!types.ok()) return types.status();
@@ -155,8 +184,14 @@ StatusOr<CatalogView> PatternsView(catalog::Catalog& catalog) {
     // fetch shape. A row of another `fingerprint_version` holds what that
     // version keyed by - a version-1 row holds a pattern_id - and the
     // version column beside it is how a reader tells.
-    view.column_names = {"oid", "fetch_id", "fingerprint_version", "stmt_class", "use_count",
-                         "last_seen", "waystone_root", "dir_depth"};
+    Define(view, {{"oid", kInt},
+                  {"fetch_id", kInt},
+                  {"fingerprint_version", kInt},
+                  {"stmt_class", kInt},
+                  {"use_count", kInt},
+                  {"last_seen", kInt},
+                  {"waystone_root", kInt},
+                  {"dir_depth", kInt}});
 
     auto patterns = catalog.ListPatterns();
     if (!patterns.ok()) return patterns.status();
