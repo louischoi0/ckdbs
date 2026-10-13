@@ -912,8 +912,8 @@ wrapped.
 
 ```
 BEGIN [TRANSACTION | WORK] [ISOLATION LEVEL {READ COMMITTED | REPEATABLE READ}]
-COMMIT
-ROLLBACK          (ABORT is a synonym)
+COMMIT [TRANSACTION | WORK]
+ROLLBACK [TRANSACTION | WORK]   (ABORT is a synonym)
 SET ISOLATION LEVEL <name>
 ```
 
@@ -940,6 +940,13 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   `BEGIN ISOLATION LEVEL` (this transaction).
 - No nested transactions, no savepoints: a second `BEGIN` is an error.
   `SET ISOLATION LEVEL` inside an open transaction is an error.
+- **A transaction commits or rolls back whole.** `SAVEPOINT`, `RELEASE`,
+  `ROLLBACK TO ...`, `COMMIT AND CHAIN` and any other word after `COMMIT`,
+  `ROLLBACK` or `ABORT` (beyond `TRANSACTION`/`WORK`) are refused
+  `UNSUPPORTED` with the word's byte. A refused `ROLLBACK ...` inside a
+  transaction rolls nothing back and leaves the transaction failed, so
+  the work it meant to undo cannot be committed: only `ROLLBACK` ends it.
+  A refused `COMMIT ...` commits nothing and leaves the transaction open.
 - Write conflicts are first-updater-wins, and a writer meeting an
   undecided holder **waits for it** rather than being refused
   (`docs/spec/txn.md` §5):

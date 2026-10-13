@@ -135,6 +135,69 @@ TEST_F(TxnSessionTest, ASecondBeginIsRefusedRatherThanNested) {
     EXPECT_EQ(Run(s, "BEGIN"), "ERR a transaction is already open; COMMIT or ROLLBACK first");
 }
 
+// ---- A transaction commits or rolls back whole (section 9) ---------------
+//
+// The routing reads the first word, so `ROLLBACK TO SAVEPOINT a` rolled back
+// the whole transaction and `COMMIT AND CHAIN` committed and opened nothing,
+// each answered as if its clause had been honoured.
+
+TEST_F(TxnSessionTest, ThePlainEndingsAndTheirNoiseWordsAreAccepted) {
+    Session s;
+    for (const char* end : {"COMMIT", "COMMIT WORK", "commit transaction", "ROLLBACK",
+                            "ROLLBACK WORK", "ROLLBACK TRANSACTION", "ABORT", "ABORT WORK"}) {
+        ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN") << end;
+        EXPECT_NE(Run(s, end).substr(0, 3), "ERR") << end;
+        EXPECT_EQ(s.state(), Session::State::kIdle) << end;
+    }
+}
+
+TEST_F(TxnSessionTest, ARollbackToASavepointIsRefusedAndLeavesNothingToCommit) {
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, v int32)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "INSERT INTO t VALUES (1, 1)").substr(0, 8), "INSERTED");
+
+    const std::string sql = "ROLLBACK TO SAVEPOINT a";
+    const std::string reply = Run(s, sql);
+    EXPECT_EQ(reply.rfind("ERR UNSUPPORTED", 0), 0u) << reply;
+    EXPECT_NE(reply.find("(byte " + std::to_string(sql.find("TO")) + ")"), std::string::npos)
+        << reply;
+    // Nothing rolled back, and the transaction cannot commit what the
+    // client asked to undo: it is failed until ROLLBACK.
+    EXPECT_EQ(s.state(), Session::State::kFailedTxn);
+    EXPECT_EQ(Run(s, "COMMIT"),
+              "ERR current transaction is aborted; commands are ignored until ROLLBACK");
+    EXPECT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    Session after;
+    EXPECT_TRUE(Rows(after, "SELECT id, v FROM t").empty());
+}
+
+TEST_F(TxnSessionTest, ACommitAndChainIsRefusedAndTheTransactionStaysOpen) {
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, v int32)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "INSERT INTO t VALUES (1, 1)").substr(0, 8), "INSERTED");
+
+    EXPECT_EQ(Run(s, "COMMIT AND CHAIN").rfind("ERR UNSUPPORTED", 0), 0u);
+    // Nothing committed; the plain COMMIT is still the client's to send.
+    EXPECT_EQ(s.state(), Session::State::kInTxn);
+    Session other;
+    EXPECT_TRUE(Rows(other, "SELECT id, v FROM t").empty());
+    EXPECT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+    EXPECT_EQ(Rows(other, "SELECT id, v FROM t").size(), 1u);
+}
+
+TEST_F(TxnSessionTest, SavepointAndReleaseAreRefusedByName) {
+    Session s;
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    EXPECT_EQ(Run(s, "SAVEPOINT a").rfind("ERR UNSUPPORTED", 0), 0u);
+    EXPECT_EQ(Run(s, "RELEASE SAVEPOINT a").rfind("ERR UNSUPPORTED", 0), 0u);
+    // Outside a transaction too, and a trailing clause without one.
+    EXPECT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    EXPECT_EQ(Run(s, "ROLLBACK TO a").rfind("ERR UNSUPPORTED", 0), 0u);
+    EXPECT_EQ(s.state(), Session::State::kIdle);
+}
+
 TEST_F(TxnSessionTest, AFailedStatementPoisonsTheTransactionAndOnlyTheWayOutIsAdmitted) {
     Session s;
     ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, v int32)").substr(0, 7), "CREATED");

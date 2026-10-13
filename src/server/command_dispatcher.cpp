@@ -123,6 +123,38 @@ std::pair<std::string_view, std::string_view> SplitFirstToken(std::string_view l
     return {line.substr(0, sp), Trim(line.substr(sp + 1))};
 }
 
+// `COMMIT`, `ROLLBACK` and `ABORT` end the whole transaction and take one
+// optional noise word, `TRANSACTION` or `WORK`, and nothing else
+// (docs/spec/txn.md §9). Anything after it is refused `Unsupported` with its
+// byte: the routing reads the first word only, so `ROLLBACK TO SAVEPOINT a`
+// used to roll back the whole transaction and `COMMIT AND CHAIN` to commit
+// and open nothing - each answered as if the clause had been honoured.
+//
+// **A refused rollback form poisons an open transaction.** The client asked
+// to undo part of its work; left open, a following `COMMIT` would make that
+// work durable. Poisoned, only `ROLLBACK` ends it. A refused `COMMIT` form
+// leaves the transaction as it was: nothing the client meant to undo is at
+// stake, and a plain `COMMIT` is still the client's to send.
+std::optional<DispatchOutcome> RefuseTxnEndTail(std::string_view line, std::string_view cmd,
+                                                std::string_view rest, Session& session) {
+    auto [word, tail] = SplitFirstToken(rest);
+    if (IEquals(word, "TRANSACTION") || IEquals(word, "WORK")) {
+        std::tie(word, tail) = SplitFirstToken(tail);
+    }
+    if (word.empty()) return std::nullopt;
+    const bool rollback = !IEquals(cmd, "COMMIT");
+    if (rollback && session.in_explicit_txn()) session.Poison();
+    const Status s = Status::Unsupported(
+        std::string(cmd) + " takes no '" + std::string(word) + "' (byte " +
+        std::to_string(word.data() - line.data()) +
+        "): there are no savepoints or chained transactions, and a transaction commits or "
+        "rolls back whole (docs/spec/txn.md §9)" +
+        (rollback && session.in_explicit_txn()
+             ? "; nothing was rolled back, and the transaction is failed until ROLLBACK"
+             : ""));
+    return DispatchOutcome{ErrorReply(s), false, 0, s};
+}
+
 // Splits `line` at the first token equal to `keyword`, answering
 // `{before, from-the-keyword-on}`. `{line, ""}` where the keyword does not
 // appear.
@@ -1156,7 +1188,10 @@ Role RequiredRole(std::string_view cmd, std::string_view rest) {
         IEquals(cmd, "ANALYZE") || IEquals(cmd, "SHOW") || IEquals(cmd, "DESCRIBE") ||
         IEquals(cmd, "DESC") || IEquals(cmd, "TRACE") || IEquals(cmd, "BEGIN") ||
         IEquals(cmd, "START") ||
-        IEquals(cmd, "COMMIT") || IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT")) {
+        IEquals(cmd, "COMMIT") || IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT") ||
+        IEquals(cmd, "SAVEPOINT") || IEquals(cmd, "RELEASE")) {
+        // SAVEPOINT and RELEASE are refused for every role; at this floor a
+        // readonly session is told why rather than that it lacks a role.
         return Role::kReadOnly;
     }
     if (IEquals(cmd, "INSERT") || IEquals(cmd, "UPDATE") || IEquals(cmd, "DELETE")) {
@@ -1256,8 +1291,18 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         // which strips the noise word.
         return HandleBegin(rest, session);
     }
-    if (IEquals(cmd, "COMMIT")) return HandleCommit(session);
-    if (IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT")) return HandleRollback(session);
+    if (IEquals(cmd, "COMMIT") || IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT")) {
+        if (auto refused = RefuseTxnEndTail(line, cmd, rest, session); refused.has_value()) {
+            return std::move(*refused);
+        }
+        return IEquals(cmd, "COMMIT") ? HandleCommit(session) : HandleRollback(session);
+    }
+    if (IEquals(cmd, "SAVEPOINT") || IEquals(cmd, "RELEASE")) {
+        const Status s = Status::Unsupported(
+            std::string(cmd) + " is not supported (byte 0): there are no savepoints, and a "
+            "transaction commits or rolls back whole (docs/spec/txn.md §9)");
+        return {ErrorReply(s), false, 0, s};
+    }
     if (IEquals(cmd, "SET")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "ISOLATION")) return HandleSetIsolation(sub_rest, session);
