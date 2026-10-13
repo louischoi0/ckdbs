@@ -221,11 +221,37 @@ TEST(RowCodecCompareTest, AUint64AboveInt64MaxOutranksEverySmallValue) {
     EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, big, Int(5), parser::CompareOp::kLt));
 }
 
-TEST(RowCodecCompareTest, ANegativeOperandAgainstAUint64IsANonMatch) {
-    // Not an error: a type mismatch is a non-match everywhere else in this
-    // function, and a negative literal is not a uint64.
-    EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, Int(-1), Int(5), parser::CompareOp::kLt));
+TEST(RowCodecCompareTest, ASignedOperandAgainstAUint64ComparesByValue) {
+    // Every integer width and signedness is one family, compared by value
+    // (types.md §3.1a): a signed column's -1 against a uint64 column's 5 is
+    // less, under every operator - not the non-match it once was, which made
+    // `!=` and `>` false too. A negative *literal* never gets here: the
+    // compiler refuses it against a uint64 column.
+    EXPECT_TRUE(CompareValues(catalog::kTypeValUint64, Int(-1), Int(5), parser::CompareOp::kLt));
     EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, Int(-1), Int(5), parser::CompareOp::kGt));
+    EXPECT_TRUE(CompareValues(catalog::kTypeValUint64, Int(5), Int(-1), parser::CompareOp::kNeq));
+}
+
+TEST(RowCodecCompareTest, ALiteralPast2To64IsNotTheSmallValueItWrappedTo) {
+    // 2^64 + 1 wraps to an `int_val` of 1. A catalog view compares such a
+    // literal without compiling it, so the digits must decide, not the sign.
+    parser::AstValue past = Int(1);
+    past.raw_int_text = "18446744073709551617";
+    EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, Int(1), past, parser::CompareOp::kEq));
+    EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, past, Int(1), parser::CompareOp::kEq));
+}
+
+TEST(RowCodecCompareTest, ASignedColumnAgainstAUint64AboveInt64MaxIsLess) {
+    // The left column's type is the only one CompareValues is told, so a
+    // signed left side must still read the right side's digits: int_val
+    // holds 2^64 - 1 wrapped to -1, which would equal a signed -1.
+    parser::AstValue big = Int(0);
+    big.int_val = static_cast<std::int64_t>(18446744073709551615ULL);
+    big.raw_int_text = "18446744073709551615";
+
+    EXPECT_FALSE(CompareValues(catalog::kTypeValInt64, Int(-1), big, parser::CompareOp::kEq));
+    EXPECT_TRUE(CompareValues(catalog::kTypeValInt64, Int(-1), big, parser::CompareOp::kLt));
+    EXPECT_TRUE(CompareValues(catalog::kTypeValInt64, Int(7), big, parser::CompareOp::kLt));
 }
 
 // ---- TY04: the three new types through the codec ------------------------

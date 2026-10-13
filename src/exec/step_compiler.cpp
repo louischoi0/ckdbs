@@ -126,6 +126,72 @@ const catalog::SysColumnRow& ColumnAt(const Scope& scope, const ColumnRef& ref) 
     return s->relations[ref.rel_slot].schema().columns[ref.col_pos];
 }
 
+// Whether two columns' values compare at all (types.md §3.1a). Called for a
+// column-column conjunct and for an outer column against the value a
+// subquery projects, because a pair this refuses would reach CompareValues
+// as a kind mismatch and answer false per row - a statement that can only
+// ever answer no rows is a statement to refuse with a reason, not to run.
+//
+// **No conversion is made.** Two columns compare only inside one family
+// (`TypeFamilyOf`): every integer width and signedness, by value; a decimal
+// of the same width and scale; char and varchar, as the text they hold; a
+// date with a date and a timestamp with a timestamp.
+Status CheckColumnsCompare(std::uint32_t lhs_type, std::uint32_t lhs_len, std::string_view lhs_name,
+                           std::uint32_t rhs_type, std::uint32_t rhs_len, std::string_view rhs_name,
+                           std::uint32_t byte_offset) {
+    const TypeFamily family = TypeFamilyOf(lhs_type);
+    if (family != TypeFamilyOf(rhs_type) || family == TypeFamily::kOther) {
+        const auto name = [](std::uint32_t type_val, std::uint32_t len) {
+            SetType t;
+            t.kind = SetType::Kind::kConcrete;
+            t.type_val = type_val;
+            t.len = len;
+            // A subquery's side carries a type mod, which is 0 for char.
+            return type_val == catalog::kTypeValChar && len == 0 ? std::string("char")
+                                                                 : SetTypeName(t);
+        };
+        return Status::InvalidArgument("cannot compare '" + std::string(lhs_name) + "' (" +
+                                       name(lhs_type, lhs_len) + ") with '" +
+                                       std::string(rhs_name) + "' (" + name(rhs_type, rhs_len) +
+                                       "); this engine converts no type implicitly" +
+                                       Position(byte_offset));
+    }
+    if (family != TypeFamily::kDec) return Status::OK();
+    // Two DECIMALs of different scale compare unscaled integers that mean
+    // different things, so `1.50` would equal `1.500`'s stored 1500 only by
+    // accident of digits. Refused rather than rescaled, because rescaling
+    // either drops digits or invents them - TY6 defers that decision whole.
+    // Different *widths* are refused first: an 8-byte and a 16-byte decimal
+    // can never share a (p, s) - the width is a function of p.
+    if (lhs_type != rhs_type) {
+        return Status::Unsupported(
+            "cannot compare decimal columns of different width: '" + std::string(lhs_name) +
+            "' and '" + std::string(rhs_name) +
+            "' are on opposite sides of the 18-digit precision split; this engine does "
+            "not rescale" + Position(byte_offset));
+    }
+    if (catalog::DecimalScaleOf(lhs_len) != catalog::DecimalScaleOf(rhs_len)) {
+        return Status::Unsupported(
+            "cannot compare decimal columns of different scale: '" + std::string(lhs_name) +
+            "' has scale " + std::to_string(catalog::DecimalScaleOf(lhs_len)) + " and '" +
+            std::string(rhs_name) + "' has scale " +
+            std::to_string(catalog::DecimalScaleOf(rhs_len)) + "; this engine does not rescale" +
+            Position(byte_offset));
+    }
+    return Status::OK();
+}
+
+// An outer column against the one value a subquery projects (`IN`, `NOT IN`,
+// the scalar form): the same pair rule, with the inner side's type read off
+// the compiled sub-chain, whose schemas the outer scope does not hold.
+Status CheckSubqueryValue(const Scope& scope, const ColumnRef& lhs, const StepChain& inner,
+                          std::uint32_t byte_offset) {
+    const catalog::SysColumnRow& outer = ColumnAt(scope, lhs);
+    return CheckColumnsCompare(outer.type_val, outer.len, catalog::NameView(outer.name),
+                               inner.projection_types[0], inner.projection_type_mods[0],
+                               inner.column_names[0], byte_offset);
+}
+
 // The whole right-hand side of one lowered conjunct, coerced or refused.
 //
 // Called from **both** lowering sites - the SELECT chain's and the write
@@ -153,43 +219,9 @@ Status CoercePredicate(const Scope& scope, StepPredicate& pred, std::uint32_t by
         return Status::OK();
     }
 
-    // Column against column. Only one thing is checked here, and it is the
-    // one the runtime cannot recover from: two DECIMALs of different scale
-    // compare unscaled integers that mean different things, so `1.50` would
-    // equal `1.500`'s stored 1500 only by accident of digits. Refused at
-    // compile rather than rescaled, because rescaling either drops digits
-    // or invents them - TY6 defers that decision whole, and a residual is
-    // the worst place to pre-empt it.
     const catalog::SysColumnRow& rhs = ColumnAt(scope, pred.rhs.column);
-    const auto is_decimal = [](std::uint32_t tv) {
-        return tv == catalog::kTypeValDecimal || tv == catalog::kTypeValDecimalWide;
-    };
-    if (is_decimal(lhs.type_val) && is_decimal(rhs.type_val)) {
-        // Different *widths* are refused before scales are even looked at:
-        // an 8-byte and a 16-byte decimal can never share a (p, s) - the
-        // width is a function of p - and letting the pair through would
-        // reach CompareValues as a kind mismatch, which answers false per
-        // row. A statement that can only ever answer no rows is a
-        // statement to refuse with a reason, not to run.
-        if (lhs.type_val != rhs.type_val) {
-            return Status::Unsupported(
-                "cannot compare decimal columns of different width: '" +
-                std::string(catalog::NameView(lhs.name)) + "' and '" +
-                std::string(catalog::NameView(rhs.name)) +
-                "' are on opposite sides of the 18-digit precision split; this engine does "
-                "not rescale" + Position(byte_offset));
-        }
-        if (catalog::DecimalScaleOf(lhs.len) != catalog::DecimalScaleOf(rhs.len)) {
-            return Status::Unsupported(
-                "cannot compare decimal columns of different scale: '" +
-                std::string(catalog::NameView(lhs.name)) + "' has scale " +
-                std::to_string(catalog::DecimalScaleOf(lhs.len)) + " and '" +
-                std::string(catalog::NameView(rhs.name)) + "' has scale " +
-                std::to_string(catalog::DecimalScaleOf(rhs.len)) +
-                "; this engine does not rescale" + Position(byte_offset));
-        }
-    }
-    return Status::OK();
+    return CheckColumnsCompare(lhs.type_val, lhs.len, catalog::NameView(lhs.name), rhs.type_val,
+                               rhs.len, catalog::NameView(rhs.name), byte_offset);
 }
 
 // ---- Function conjuncts (AP-S4) ----------------------------------------
@@ -1494,6 +1526,11 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
                         "a subquery used as a value must project exactly one column" +
                         Position(cond.col.byte_offset));
                 }
+                if (Status s = CheckSubqueryValue(scope, sub.lhs, inner.value(),
+                                                  cond.col.byte_offset);
+                    !s.ok()) {
+                    return s;
+                }
                 sub.value = inner.value().projection[0];
                 sub.has_value = true;
             }
@@ -1717,6 +1754,11 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                     return Status::Unsupported(
                         "a subquery used as a value must project exactly one column" +
                         Position(cond.col.byte_offset));
+                }
+                if (Status s = CheckSubqueryValue(scope, sub.lhs, inner.value(),
+                                                  cond.col.byte_offset);
+                    !s.ok()) {
+                    return s;
                 }
                 sub.value = inner.value().projection[0];
                 sub.has_value = true;

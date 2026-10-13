@@ -206,6 +206,107 @@ TEST_F(TypesPredicateTest, ComparingDecimalColumnsOfTheSameScaleIsFine) {
     EXPECT_TRUE(chain.ok()) << chain.status().message();
 }
 
+// ---- No implicit conversion in a comparison (types.md §3.1a) -------------
+//
+// A literal of the wrong kind, or two columns of different families, used
+// to reach CompareValues as a kind mismatch and answer false per row:
+// `WHERE n = '20'` returned no rows and a DELETE reported `DELETED 0`. Each
+// is now refused at compile, with the byte, whether or not a row would
+// have matched.
+
+class StrictComparisonTest : public TypesPredicateTest {
+protected:
+    void SetUp() override {
+        TypesPredicateTest::SetUp();
+        ASSERT_EQ(Run("CREATE TABLE mix (id int64, n int64, i32 int32, u uint64, "
+                      "s varchar(16), c char(4), dd date, tt timestamp, b bool)")
+                      .substr(0, 7),
+                  "CREATED");
+        ASSERT_EQ(Run("INSERT INTO mix VALUES (1, 20, -1, 5, 'x', 'ab', '2026-10-01', "
+                      "'2026-10-01 00:00:00', 1)")
+                      .substr(0, 8),
+                  "INSERTED");
+    }
+
+    // Asserts `sql` is refused InvalidArgument naming the byte `token` is at.
+    void ExpectRefusedAt(const std::string& sql, const std::string& token) {
+        auto chain = CompileSql(sql);
+        ASSERT_FALSE(chain.ok()) << sql << " must not compile";
+        EXPECT_EQ(chain.status().code(), StatusCode::kInvalidArgument)
+            << sql << ": " << chain.status().message();
+        const std::size_t at = sql.find(token);
+        ASSERT_NE(at, std::string::npos);
+        EXPECT_NE(chain.status().message().find("byte " + std::to_string(at)), std::string::npos)
+            << sql << ": " << chain.status().message();
+    }
+};
+
+TEST_F(StrictComparisonTest, AStringLiteralAgainstAnIntegerColumnIsRefused) {
+    ExpectRefusedAt("SELECT id FROM mix WHERE n = '20'", "'20'");
+    ExpectRefusedAt("SELECT id FROM mix WHERE id = '1'", "'1'");
+    ExpectRefusedAt("SELECT id FROM mix WHERE u = '5'", "'5'");
+    // A bare `20.0` is the string of its spelling (§1), so it is the same
+    // refusal - an integer column holds no fraction to compare it with.
+    ExpectRefusedAt("SELECT id FROM mix WHERE n = 20.0", "20.0");
+}
+
+TEST_F(StrictComparisonTest, AnIntegerLiteralAgainstATextColumnIsRefused) {
+    ExpectRefusedAt("SELECT id FROM mix WHERE s = 5", "5");
+    ExpectRefusedAt("SELECT id FROM mix WHERE c = 5", "5");
+}
+
+TEST_F(StrictComparisonTest, ABoolTakesZeroOrOneOnly) {
+    ExpectRefusedAt("SELECT id FROM mix WHERE b = 2", "2");
+    ExpectRefusedAt("SELECT id FROM mix WHERE b = 'true'", "'true'");
+    EXPECT_TRUE(CompileSql("SELECT id FROM mix WHERE b = 1").ok());
+}
+
+TEST_F(StrictComparisonTest, TheWriteFilterRefusesTheSameLiteral) {
+    // The second lowering site. Nothing is written: the refusal is at
+    // compile, before the walk.
+    EXPECT_EQ(Run("DELETE FROM mix WHERE n = '20'").substr(0, 3), "ERR");
+    EXPECT_EQ(Run("UPDATE mix SET s = 'y' WHERE n = '20'").substr(0, 3), "ERR");
+    EXPECT_EQ(Run("SELECT s FROM mix WHERE n = 20"), "s\\nx");
+}
+
+TEST_F(StrictComparisonTest, TheSpellingsATypeIsWrittenInStillCompile) {
+    // A date, a timestamp and a decimal are written as strings, and an
+    // epoch integer is a date's or a timestamp's own form (§3.2a): none of
+    // these is a conversion, and each stays legal.
+    EXPECT_TRUE(CompileSql("SELECT id FROM mix WHERE dd = '2026-10-01'").ok());
+    EXPECT_TRUE(CompileSql("SELECT id FROM mix WHERE dd = 20727").ok());
+    EXPECT_TRUE(CompileSql("SELECT id FROM mix WHERE tt = '2026-10-01 00:00:00'").ok());
+    EXPECT_TRUE(CompileSql("SELECT id FROM ev WHERE amt = '2.50'").ok());
+    EXPECT_TRUE(CompileSql("SELECT id FROM ev WHERE amt = 2").ok());
+    EXPECT_TRUE(CompileSql("SELECT id FROM mix WHERE s = 'x'").ok());
+    // An integer outside a narrow column's width is a comparison, not a
+    // conversion: it is simply false.
+    EXPECT_TRUE(CompileSql("SELECT id FROM mix WHERE i32 = 5000000000").ok());
+}
+
+TEST_F(StrictComparisonTest, ColumnsOfDifferentFamiliesAreRefused) {
+    ExpectRefusedAt("SELECT id FROM mix WHERE n = s", "n = s");
+    ExpectRefusedAt("SELECT id FROM mix WHERE dd = tt", "dd = tt");
+    ExpectRefusedAt("SELECT id FROM mix WHERE b = n", "b = n");
+}
+
+TEST_F(StrictComparisonTest, IntegerColumnsOfAnyWidthAndSignCompareByValue) {
+    // One family (types.md §3.1a): an int32's -1 against a uint64's 5 is
+    // less, and against an int64 is unequal - the mathematical answers.
+    EXPECT_TRUE(CompileSql("SELECT id FROM mix WHERE i32 = n").ok());
+    EXPECT_EQ(Run("SELECT id FROM mix WHERE i32 < u"), "id\\n1");
+    EXPECT_EQ(Run("SELECT id FROM mix WHERE u != i32"), "id\\n1");
+    EXPECT_EQ(Run("SELECT id FROM mix WHERE u < i32"), "id");
+    // char and varchar are one family: the text they hold.
+    EXPECT_TRUE(CompileSql("SELECT id FROM mix WHERE s = c").ok());
+}
+
+TEST_F(StrictComparisonTest, ASubqueryValueOfAnotherFamilyIsRefused) {
+    ExpectRefusedAt("SELECT id FROM mix WHERE n IN (SELECT s FROM mix)", "n IN");
+    ExpectRefusedAt("SELECT id FROM mix WHERE n = (SELECT s FROM mix WHERE id = 1)", "n =");
+    EXPECT_TRUE(CompileSql("SELECT id FROM mix WHERE i32 IN (SELECT u FROM mix)").ok());
+}
+
 // ---- Comparison itself --------------------------------------------------
 
 TEST_F(TypesPredicateTest, DecimalsCompareOnTheirUnscaledIntegers) {

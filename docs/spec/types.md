@@ -168,6 +168,35 @@ to these types for free. The same holds for `'2026-08-06'` against a
 `DATE` column. A literal that does not parse as the column's type is a
 positioned error at compile, not a row-by-row false.
 
+### 3.1a A comparison converts no type
+
+W3's rule (§3.2b) holds for every comparison a WHERE, an `ON` or a
+subquery predicate compiles, not only for a SET value. A pair the rule
+refuses used to reach `CompareValues` as a kind mismatch and answer false
+per row - `WHERE n = '20'` returned no rows and `DELETE` reported
+`DELETED 0` - so it is refused at compile, `InvalidArgument` with the byte,
+whether or not a row would have matched.
+
+- **A literal takes the kind its column's encode takes**
+  (`CoerceLiteralToColumn`): an integer column and `uint64` an integer
+  literal, `bool` `0` or `1`, `char`/`varchar` a string literal. A bare
+  numeric is the string of its spelling (§1), so `n = 20.0` is refused like
+  `n = '20'`. `date`, `timestamp` and `decimal` keep the spellings §3.1 and
+  §3.2a give them - a string, or an epoch integer for a date or a
+  timestamp, or an integer for a decimal - which are their own forms, not
+  conversions (operator, 2026-10-13: the epoch integer stays). An integer
+  outside a narrow column's width is not refused: compared by value it is
+  simply false.
+- **Two columns compare only inside one family** (`TypeFamilyOf`,
+  `step_compiler`'s `CheckColumnsCompare`), for a column-column conjunct and
+  for an outer column against a subquery's projected value: every integer
+  width and signedness; a decimal of the same width and scale (TY6's
+  `Unsupported`); `char` with `varchar`; a date with a date; a timestamp
+  with a timestamp. **Integers compare by value** (operator, 2026-10-13,
+  option (b)): `CompareValues` reads a `uint64` above `INT64_MAX` through
+  its digits whichever side it is on, so an `int32` -1 is less than a
+  `uint64` 5, and a view's `oid > -1` is true.
+
 ### 3.2 DECIMAL arithmetic
 
 **In a predicate, a select list or an `INSERT` value there is none** - no `+`,
