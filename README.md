@@ -38,8 +38,7 @@ Rows marked *concept* are recorded in [`docs/conceptnotes/`](docs/conceptnotes/)
 - **The engine observes, then reorganizes.** Executions feed a statistics layer. Time-decayed scores classify data and query shapes hot/warm/cold; the physical optimizer creates and retires lookup structures. Statistics change *what exists*, not just how a query runs.
 - **Advisory by construction.** Everything learned — trails, scores, placement hints, engine-created Cabins — is structurally advisory or value-granularly revocable: delete all of it and every query still returns the same rows, just slower. The B+ tree stays the sole unconditional authority. This is a hard invariant with its own test family, not a design preference.
 - **Reliability is a product feature.** One write-ahead log per instance with per-transaction durability classes, page checksums, full-page-image torn-write recovery, recovery at mount, and fault paths exercised by deterministic injection rather than assumed. What is *not* built is stated as plainly as what is — see [Status](#status).
-- **Thread-per-core over shared memory.** One cooperative reactor per core; every statement runs to completion on the core its session is on. Pages, the buffer pool and the log are shared; what serializes access is a **borrow model** — transaction-scoped, waitable *locks* and critical-section-scoped *latches* that are never held across a suspension point. The only cross-core primitive is a reactor kick. All I/O is asynchronous behind an injectable seam, so the entire engine runs under deterministic simulation.
-- **Truthfulness beats convenience.** Every refusal carries the byte position of the offending token. `Unsupported` and `NotImplemented` mean "understood and declined"; `InvalidArgument` means "simply wrong". The engine never accepts a spelling and enforces something other than what was written.
+- **Thread-per-core over shared memory.** One cooperative reactor per core; every statement runs to completion on the core its session is on. Pages, the buffer pool and the log are shared; what serializes access is a **borrow model** — transaction-scoped, waitable *locks* and critical-section-scoped *latches* that are never held across a suspension point. The only cross-core primitive is a reactor kick. All I/O goes through an injectable device seam, so the entire engine runs under deterministic simulation.
 
 ---
 
@@ -80,7 +79,7 @@ The **semi-sorted heap chain** (the same pages without a directory) is suspended
 
 ### The fixed-length rule — tuples that never migrate
 
-**Every tuple is fixed-length**: row size is a schema constant, and each variable-width value occupies one **tagged cell** of `kds.inline_cell_width` bytes (default 64) — `kNull`, `kInline` (fits in the cell), or `kSpilled` (a pointer into the var-heap). So **an UPDATE never migrates a tuple** and a recorded location stays meaningful; the cost is padding on short values. The **var-heap** is append-only, **immutable per version** and never relocated, so an old-version reader's pointer always reaches unchanged bytes; it is logged and checksummed. The cell width is pinned in the superblock, and a tuple whose length disagrees with its relation's constant is `Corruption`.
+**Every tuple is fixed-length**: row size is a schema constant, and each variable-width value occupies one **tagged cell** of `kds.inline_cell_width` bytes (default 64; a `varchar(N)` column uses its own width `N`) — `kNull`, `kInline` (fits in the cell), or `kSpilled` (a pointer into the var-heap). So **an UPDATE never migrates a tuple** and a recorded location stays meaningful; the cost is padding on short values. The **var-heap** is append-only, **immutable per version** and never relocated, so an old-version reader's pointer always reaches unchanged bytes; it is logged and checksummed. The cell width is pinned in the superblock, and a tuple whose length disagrees with its relation's constant is `Corruption`.
 
 ### Step chains — the query is the plan
 
@@ -88,7 +87,7 @@ Every statement compiles at parse time into an ordered list of steps (lookups, p
 
 ### Waystone — the recorded trail of a repeated query
 
-A *pattern* is a statement's shape, fingerprinted at parse time and kept in `sys.patterns`; an instance is that shape with arguments bound. From an instance's second execution on, KDS records its **trail** — the Keystones every touched tuple, tagged by step — so a recurring query can look where the last one found its rows instead of searching.
+A *pattern* is a statement's shape, fingerprinted at parse time and kept in `sys.patterns`; an instance is that shape with arguments bound. From an instance's second execution on, KDS records its **trail** — the Keystone of every tuple it touched, tagged by step — so a recurring query can look where the last one found its rows instead of searching.
 
 > **A trail may replace a lookup. It may never replace a search.**
 
@@ -116,7 +115,7 @@ The WAL is **one stream per instance**: physiological redo plus undo-chain MVCC,
 
 ### Thread-per-core
 
-One cooperative reactor per core; tasks are C++20 stackless coroutines, run to completion, in scheduling groups (foreground / system / maintenance) throttled by SLO rather than preempted. **Every statement runs on the core its session is on** — no relation or range is owned by a core, and there is no placement to get wrong. The buffer pool is one frame table for the instance, so a page one core faulted is read by every other rather than faulted again. Access is serialized by the borrow model: a *lock* is transaction-scoped and waitable by parking; a *latch* is critical-section-scoped and never held across a park. Cross-core signalling is a reactor kick over `eventfd`, and nothing else. There is no canonical in-memory tuple and no identity cache to keep coherent: consistency comes from pin and latch discipline on the page.
+One cooperative reactor per core; tasks are C++20 stackless coroutines, run to completion, in scheduling groups (foreground / system / maintenance) sharing the core by static share weights rather than preemption. **Every statement runs on the core its session is on** — no relation or range is owned by a core, and there is no placement to get wrong. The buffer pool is one frame table for the instance, so a page one core faulted is read by every other rather than faulted again. Access is serialized by the borrow model: a *lock* is transaction-scoped and waitable by parking; a *latch* is critical-section-scoped and never held across a park. Cross-core signalling is a reactor kick over `eventfd`, and nothing else. There is no canonical in-memory tuple and no identity cache to keep coherent: consistency comes from pin and latch discipline on the page.
 
 ---
 
@@ -174,23 +173,15 @@ Beside the query optimizer, runtime access statistics decide *what structures ex
 
 ## Components
 
-| Component | What it does |
+| Component (not covered under Concepts) | What it does |
 |---|---|
 | **KWP wire protocol** | Length-prefixed binary protocol: version/capability handshake with an authentication stage, extended PARSE/BIND/EXECUTE over server-side statement and portal handles, chunked result streaming with explicit flow control, per-transaction durability selection, a structured error registry with retryable classes |
 | **Parser** | Small OLTP grammar — joins and predicate-position subqueries included. Parameterizes literals during the parse (pattern fingerprints come out for free), tags each statement with an execution class, binds catalog names to oids at parse time |
-| **Executor (step VM)** | Every statement is a **step chain** — lookups, probes, scans, nested sub-chains — run in written order on the session's core. Replay-eligible steps consult the trail first (validated per entry); the rest run authoritatively |
-| **Waystone** | The trail store: per pattern instance `(pattern_id, arg_hash)`, the recorded Keystones of the rows it touched, with last-seen locations and step tags. Strictly advisory — droppable wholesale without changing any result |
-| **Cabin** | Per-`(relation, column)` value store, authoritative **for observed values only**: entries hold pks plus an advisory location hint. Append-only maintenance, read-time verification, per-value eviction. Declared per column as `NO CABIN` / `CABIN AUTO` / `CABIN` |
 | **B+ tree** | The authoritative pk → location index, the storage form of every new relation. Append-optimized for monotonic engine-issued ids (rightmost fast path, asymmetric splits); a named key is placed where it sorts, and a full leaf takes an append split when the key is above all its keys, otherwise divides - the rightmost at the insertion point, any other at its median |
 | **Secondary indexes** | Multi-column and covering, for the searches a trail may never replace. Formally "a Cabin that observed everything". An entry is `key || pk`, never a location, and is logged under the index tree's hold |
-| **Assertions** | `CREATE ASSERTION` over `COUNT(*)`/`SUM(col)` group upper bounds, enforced at admission on every core against an O(1) running aggregate held in a pinned, logged **Bound Cabin** |
 | **Foreign keys** | Declared at `CREATE TABLE`, checked on write; see `docs/spec/foreign-keys.md` and the open entry in `known-gaps.md` |
-| **Physical optimizer** | **II — the Cabin controller** *(built; `cabin_optimizer`, off by default)*: creates, extends, heals and drops advisory Cabins from workload statistics under a page budget, a kill switch and a pure fixed-point decision core, with `SHOW CABIN_OPTIMIZER` exposing every decision. **I — relayout** *(shadow-only, heap-gated)*: the decay score, the page epoch at every validation site, and `SHOW RELAYOUT` |
 | **Buffer pool** | One pool for the instance, bounded: `buffer_pool_frames` is required and a hard ceiling. Frames are slots reclaimed by a CLOCK hand in bounded batches, inline and on a background tick; a scan faults cold so it does not displace the working set; a full pool refuses a statement rather than grow. RAII pinned-page handles, WAL-ordering gate enforced in code |
-| **WAL** | One append-only stream per instance. Physiological redo + undo-chain MVCC (writer trx-id + undo pointer; no xmax). Durability classes per transaction: `strict` / `group` / `relaxed`. Fuzzy checkpoints, full-page images, recovery at mount with redo and undo |
-| **Transactions** | Snapshot-LSN read views over shared memory; registered readers with a purge horizon; the lock family (relation, range, slice, tuple) for transaction-scoped waits; latches for critical sections |
-| **Storage** | One growable data file, arithmetic page addressing (`offset = page_id × 8 KiB`), extent-based crash-safe growth, bitmap free-space management, CRC32C page checksums. mmap deliberately rejected — explicit async I/O only |
-| **Scheduler** | Cooperative reactor pinned per core: C++20 stackless coroutines, run to completion, scheduling groups (foreground / system / maintenance) with SLO-based throttling instead of preemption; `eventfd` kick as the sole cross-core primitive |
+| **Storage** | One growable data file, arithmetic page addressing (`offset = page_id × 8 KiB`), extent-based crash-safe growth, bitmap free-space management, CRC32C page checksums. mmap deliberately rejected — explicit I/O through the device seam only |
 | **Deterministic testing** | Clock, randomness, and all I/O are injected. The whole engine runs single-threaded under a simulated scheduler with crash and torn-write injection — durability claims are tested, not asserted |
 
 ## Invariants — the self-imposed constraints
@@ -200,7 +191,7 @@ Never violated, never "temporarily" bypassed. Each is a capability given up for 
 | # | Invariant | Bought |
 |---|---|---|
 | 1 | 8192-byte pages; `uint32_t` page ids; `0xFFFFFFFF` invalid | Arithmetic addressing, no indirection |
-| 2 | A page's `min_key` is immutable after creation | Lock-free range pruning |
+| 2 | A page's `min_key` is immutable after creation, until the page is freed | Lock-free range pruning |
 | 3 | No tuple with `id < min_key(page)` in that page, ever — including by relayout, including transiently | The pruning decision is always sound |
 | 4 | Tuples within a heap page are unordered; a btree leaf is sorted by placement | O(1) append; `ORDER BY <pk>` for free |
 | 5 | The Keystone column is exactly `id:48 \| flags:8 \| reserved:8` | One word names a row |
@@ -209,7 +200,7 @@ Never violated, never "temporarily" bypassed. Each is a capability given up for 
 | 8 | Waystone is advisory: deleting it wholesale may cost performance, never a result | Learning is risk-free |
 | 9 | Waystone is never authoritative — it chooses *where to look*, never *what is visible* | Absence needs no witness |
 | 10 | No canonical in-memory tuple; consistency is page pin + latch discipline | No coherence cache to keep |
-| 11 | Every pk is a unique 48-bit id, carried only by the Keystone word, **never updatable**, never rebound except by `PURGE`; the `INSERT` names it or omits it, per row; `sys.tables.next_id` is a high-water mark on what has been placed and issues each id once; a named key is refused only as a duplicate or exhausted on a btree; a heap also refuses one below its mark (BD-Q4) | Issue-once identity |
+| 11 | Every pk is a unique 48-bit id carried only by the Keystone word, **never updatable**, never rebound except by `PURGE` (see Keystone) | Issue-once identity |
 | 12 | The MVCC header is exactly 20 bytes and there is **no `xmax`** | One fact stored once |
 | 13 | Every tuple is fixed-length; a disagreeing length is `Corruption`, never interpreted | Tuples never migrate |
 | 14 | Var-heap values are immutable per version; `kVarHeap` pages are never relocated | MVCC correctness for free |
@@ -221,7 +212,7 @@ The design is specification-first: every subsystem has a spec carrying its decis
 | Subsystem | Spec |
 |---|---|
 | Row storage, pages, Keystone, invariants *(authoritative)* | `docs/spec/heap-and-tuple.md`, `docs/rules/rule-fixed-length-tuple.md`, `docs/spec/page.md` |
-| Pattern-keyed access trails | `docs/spec/waystone-concpets.md`, `docs/spec/create-pattern-user-defined-patterns-v1.md` |
+| Pattern-keyed access trails | `docs/spec/waystone-concpets.md` (`create-pattern-user-defined-patterns-v1.md` is withdrawn) |
 | Value-observed authoritative store | `docs/spec/cabin.md` |
 | Physical optimizer (relayout + Cabin controller) | `docs/spec/physical-optimizer.md` |
 | Transactions & MVCC | `docs/spec/txn.md` |
@@ -233,8 +224,9 @@ The design is specification-first: every subsystem has a spec carrying its decis
 | Foreign keys | `docs/spec/foreign-keys.md` |
 | Types (DATE, TIMESTAMP, DECIMAL, DECIMAL128, `char(N)`, `varchar(N)`) | `docs/spec/types.md` |
 | Buffer-pool eviction | `docs/spec/eviction.md` |
-| Scheduling; cross-core execution (largely retired at AT-S9) | `docs/spec/sched.md`, `docs/spec/crosscore.md` |
+| Scheduling; cross-core execution | `docs/spec/sched.md`, `docs/spec/crosscore.md` |
 | Wire protocol | `docs/spec/protocol.md` |
+| Backup and restore | `docs/spec/backup.md` |
 | DDL (`ALTER TABLE`, `DROP TABLE`, bulk insert, transactional DDL) | `docs/spec/alter.md`, `docs/spec/drop-table.md`, `docs/spec/bulkinsert.md`, `docs/spec/ddl-transactional.md` |
 | Id issue-once contract | `docs/rules/keystoneid-invariant.md`, `docs/rules/keystoneid-k0-findings.md` |
 | C++ rules | `docs/rules/rules.md` |
@@ -279,7 +271,7 @@ No CTEs or derived tables, no window functions, no cross-dialect SQL compatibili
 
 ## Measurement
 
-Every number comes from a results file under [`bench/`](bench/) that names its `git describe --tags` version, environment and caveats; [`bench/README.md`](bench/README.md) holds the rules a run is invalid without. In short: `build-release` only (Debug has reported the wrong sign), a real filesystem (tmpfs ran the same mix 10× faster than xfs), a noise floor from interleaved A/B repeats in the same run, verification before measurement, and supersession recorded, never overwritten. `bench/v3.0.0/` is a fresh series; the v2-era files describe the engine AR0 replaced, and no v3 number is set beside them.
+Every number comes from a results file under [`bench/`](bench/) that names its `git describe --tags` version, environment and caveats; [`bench/README.md`](bench/README.md) holds the rules a run is invalid without. In short: a release build rebuilt at the measured commit (Debug has reported the wrong sign), a block device and never tmpfs for the data file, a copy of the binary, the host's load recorded per cell, and a chosen port. `bench/v3.0.0/` is a fresh series; the v2-era files describe the engine AR0 replaced, and no v3 number is set beside them.
 
 ---
 
