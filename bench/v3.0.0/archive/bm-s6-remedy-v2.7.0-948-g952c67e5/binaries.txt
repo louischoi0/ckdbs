@@ -1,0 +1,7 @@
+/home/cdkbs/bench-runs/bm-s6/bin/kds_server-A mtime=2026-10-13 04:50:18.986422692 +0000 size=6094056
+/home/cdkbs/bench-runs/bm-s6/bin/kds_server-B mtime=2026-10-13 04:50:18.999423042 +0000 size=6109584
+/tmp/claude-1000/-home-cdkbs-ckdbs--claude-worktrees-bm-scan-kernel-open/382ae513-4d71-443e-8517-51d482efafba/scratchpad/s6r/build/kds_server mtime=2026-10-13 06:11:11.975452909 +0000 size=6109496
+c4f442aebe7e3a7d4ea504b94e16d757c1770ffb4ae71fcae09b075faaab45d6  kds_server-A
+c4f442aebe7e3a7d4ea504b94e16d757c1770ffb4ae71fcae09b075faaab45d6  kds_server-A2
+963894d08781bd2d37b682b1a453be210ba7590e91fc157129ae8b272ce069ca  kds_server-B
+dbb42c2d6f4fba515e56c86b7fadc8a50172da08117e269b16c3e2cd20abf9a4  kds_server-B2

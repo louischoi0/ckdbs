@@ -48,3 +48,12 @@ English**, translated from the Korean it was typed in.
 | **Mark** | BM-S1's results file is written from the first round alone. The second round (a 200-row cell, `pool_misses` per arm, a second writers cell and profile) is stopped and stated as not run |
 | **Does not settle** | Anything the second round was to measure |
 | **Recorded at** | `workorder-bm-scan-row-kernel.md` §6, BM-S1; `bench/v3.0.0/results-bm-s1-scan-row-v2.7.0-942-gf5a7efb2.md` |
+
+## 6. Two standing words: `%%%`, and a measurement's time budget
+
+| | |
+|---|---|
+| **Word** | *"`%%%` means \"tell me the current progress\"."* and *"Unless the operator directs otherwise, a measurement runs within 20 minutes per stage and around 1 hour per milestone; keep this rule until directed otherwise."* |
+| **Mark** | `%%%` is added to CLAUDE.md's operator abbreviations: a request for the progress of the work running in the session, read off its files and logs at the moment of asking. A stage's measurement is planned and run inside 20 minutes and a milestone's close inside about an hour, building included; a design that cannot fit is cut to what fits and the results file says what was cut. BM-S6's close measurement and its remedy re-measure were the first held to it |
+| **Does not settle** | A budget for any measurement the operator sizes separately; what `&*S` means (asked, not answered) |
+| **Recorded at** | CLAUDE.md, *Operator abbreviations* and *Working Rules*; `bench/v3.0.0/results-bm-close-v2.7.0-946-g6b771ec1.md` §1 |

@@ -1,0 +1,11 @@
+prep 06:11:28
+EXIT 0
+prep done 06:11:28
+bn_census start 06:11:28
+bn_census done rc=0 06:14:32
+bm_scan bn start 06:14:32
+bm_scan bn done rc=0 06:15:41
+batch2 start 06:15:42
+batch2 done rc=0 06:17:39
+batch3 start 06:18:02
+batch3 done rc=0 06:19:58

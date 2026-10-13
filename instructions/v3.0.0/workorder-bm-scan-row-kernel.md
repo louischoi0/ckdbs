@@ -27,6 +27,7 @@ gate the marks; its findings are applied (§6, "BM opened"), and where one
 revised an adopted proposal the revision is recorded as adopted on the
 operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone).
 **BM runs to its close on that go-ahead** (`raft-marks-2026-10-13.md` §4).
+**Closed 2026-10-13 at BM-S6** (§6, the place to start).
 
 **Claim tags:**
 - `[source-read]` with `path:line` at `fa80da9d` (re-read at the opening;
@@ -853,3 +854,72 @@ On `worktree-bm-scan-kernel-open` from `7f1d1f70`.
   inline boundary and `varchar(16)` rows; the over-capacity length moved
   inside the payload; the string columns' non-string literal checked; a
   `std::move`; a re-wrapped comment.
+
+### BM-S6 — the close; BM closed 2026-10-13
+
+On `worktree-bm-scan-kernel-open`: measured at `6b771ec1`, remedied at
+`952c67e5`, texts at the commit that carries this entry.
+- **The measurement** (§5.2,
+  `bench/v3.0.0/results-bm-close-v2.7.0-946-g6b771ec1.md`): on BN's shape
+  the scan row is **31.0 ns against A's 70.0 (-54.4 %)**, PostgreSQL 18's
+  29.1 on the same host day, so the ratio the opening measured at 2.41 is
+  **1.07**. `scan_kernel = off` on B reads 56.4 ns: S2's loop is 13.4 ns
+  of the fall, S3's and S4's kernel 25.2. The 13-column relation's row no
+  longer depends on its width (35.6-44.3 ns against 88.7-109.8), a second
+  conjunct costs +0.4 ns against +11.6. Cut to the operator's one-hour
+  budget (`raft-marks-2026-10-13.md` §6): the PostgreSQL twin at 4
+  vacuumed runs and no unvacuumed pass, `bn_census` at 1,000 rows only,
+  the profile on `bn` alone.
+- **BM-Q12's guard, at `6b771ec1`:** the 100 % output scan and the point
+  `SELECT` within the spread; **the every-row `UPDATE` not held**, B +4.2
+  to +4.7 % over A in 13 of 13 runs, the kernel's switch off the same.
+- **Two premises of BM-Q12 as revised were wrong**, and are corrected here
+  rather than in the row, which records what was adopted:
+  - A' came out **byte-identical** to A (one sha256), so the A-vs-A'
+    spread bounds the harness - two server instances of one executable -
+    and holds no code layout. A layout probe (A's source with
+    `-falign-functions=64`) moved the every-row `UPDATE` by -1.8 %, which
+    does not account for +4.2 %;
+  - the every-row `UPDATE` is **not** a layout control: S2's split put a
+    `Status`-returning check on every row it walks - `EvaluateConjunct`
+    through `CheckConjunct`, `CheckDecodeInputs` through
+    `CheckDecodeShape` - and on every `AcceptTupleAt` through
+    `CheckStepShapeOnce`. Each builds a `Status::OK()`, which holds a
+    `std::string`: AP02's cost, back. The cause is a static reading; the
+    remedy's re-measure is its evidence, not an isolation of it.
+- **The remedy** (`952c67e5`), CLA's proposal adopted on the operator's
+  standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone): each
+  check is asked as a predicate first and words a `Status` only on
+  failure - `ConjunctWellFormed`, `DecodeShapeHolds` (which
+  `CheckDecodeShape` now opens with, so the shape is stated once) and
+  `StepShapeChecked`. Review (`critics-developer`): every predicate exact
+  against its check; a comment placement fixed; the decode shape's
+  conditions folded into one place (one message changes on a doubly
+  malformed input). Rejected: folding `ConjunctWellFormed` into
+  `CheckConjunct`, which removes nothing. Deferred: checking
+  `EvaluateConjuncts`'s dispatcher callers once per statement, which
+  would let the per-row conjunct check go - `known-gaps.md`, "The scan row
+  (BM)". Suite 3662/3662.
+- **The re-measure** (20-minute stage budget, 11 minutes used,
+  `bench/v3.0.0/results-bm-s6-remedy-v2.7.0-948-g952c67e5.md`): over 15
+  paired runs B2 is **+8.9 µs (+1.2 %) literal and +3.2 µs (+0.4 %)
+  prepared** over A on the every-row `UPDATE`, against B's +27.8 and
+  +31.7 in the same runs - **within the spread as BM-Q12 is written, and
+  inside the 10 µs typical gap the close set as the remedy's target**.
+  Not cleanly: B2 is slower than A in 12 and 11 of 15 runs, and one of
+  three batches reads +16.9 and +14.8 µs, so a residual of a few µs is
+  likelier present than absent and is recorded in `known-gaps.md`. The
+  point `SELECT` within its spread; the scan row 30.5 ns against A's 66.0
+  in the same run. Not run: `bn_census` at 200 and 10,000 rows, the
+  kernel's switch, the layout probe, `group`/`strict`, `cores > 1`.
+- **Texts:** `parser-v2.md` §7 (the walk and the kernel),
+  `kds.conf.sample` (`scan_kernel`), `step_vm.hpp`'s `rows_examined`
+  comment, `manual/sql/sql.md` (the `ANALYZE` note), CLAUDE.md's
+  query-language row; `known-gaps.md`'s BN scan entry restated with the
+  close's number and the "The scan row (BM)" section written.
+- **Overhead over the milestone's whole change**, `fa80da9d` against
+  `952c67e5`: the scan row as above (`bn` only at `952c67e5`); the point
+  `SELECT` within the spread at both commits; the 100 % output scan within
+  it at `6b771ec1` and **not re-measured at `952c67e5`**, though the
+  remedy's `StepShapeChecked` is on its path; the every-row `UPDATE` with
+  the residual stated.
