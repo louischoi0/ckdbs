@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "kds/base/function_ref.hpp"
@@ -2342,6 +2343,12 @@ private:
     // for it - the same argument `pending_commit_lsn_` makes one line up.
     bool may_park_ = false;
 
+    // Whether the running statement's entry point re-runs a structural
+    // refusal without parking (`Dispatch`'s blocking BA-S14 loop, under
+    // `RerunScope`), so `EndWrite` keeps the note for it as it does under
+    // `may_park_`.
+    bool reruns_structural_ = false;
+
     // **`EndWrite` withheld an explicit transaction's poison for a
     // structural re-run** (BA-S14). Read where the re-runs give up: only a
     // statement whose poison was withheld is poisoned there - a read never
@@ -2416,6 +2423,24 @@ private:
         bool saved_;
         std::uint64_t saved_statement_;
     };
+    // `reruns_structural_`, taken and given back the same way.
+    class RerunScope {
+    public:
+        explicit RerunScope(CommandDispatcher& owner) noexcept
+            : owner_(owner), saved_(std::exchange(owner.reruns_structural_, true)) {}
+        ~RerunScope() { owner_.reruns_structural_ = saved_; }
+        RerunScope(const RerunScope&) = delete;
+        RerunScope& operator=(const RerunScope&) = delete;
+
+    private:
+        CommandDispatcher& owner_;
+        bool saved_;
+    };
+    // BA-S14's re-run test, shared by both entry points: a structural
+    // refusal of a statement `EndWrite` kept the note for, inside the
+    // statement's one deadline (`deadline_ns`, set at the first refusal).
+    // Counts the re-run it admits.
+    bool StructuralRerunDue(const DispatchOutcome& out, sched::MonoTimeNs& deadline_ns);
     // The `DispatchAsync` call whose synchronous window is running, and the
     // last one issued (`MayParkScope`, `DeferredCommit::statement`).
     std::uint64_t parking_statement_ = 0;
