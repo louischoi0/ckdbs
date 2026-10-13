@@ -84,3 +84,45 @@ test('/milestone & with nothing in progress is an error', async ($, on) => {
   expect(r.text).toContain('Error: no milestone in progress')
   expect(r.exitCode).toBe(1)
 })
+
+test('/milestone is registered to run at once when typed mid-turn', async ($, on) => {
+  const registered: { name: string, immediate?: true }[] = []
+  on('command.register', (_$, e) => { registered.push(e); return { value: { command: e.name } } })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  expect(registered.find(c => c.name === 'milestone')?.immediate).toBe(true)
+})
+
+test('a turn-end refresh outrun by a mid-turn re-pin leaves the newer order in the pane', async ($, on) => {
+  const other = 'instructions/v3.0.0/workorder-xx-other.md'
+  const otherDoc = ['# Work order XX — another order', '| stage | what | done when | size |', '|---|---|---|---|', '| XX-S0 | **The other** | x | S |'].join('\n')
+  let hold: (() => void) | null = null
+  let reached: () => void = () => {}
+  const isReached = new Promise<void>(r => { reached = r })
+  on('session.root', () => ({ value: '/repo' }))
+  on('process.run', async () => {
+    if (hold === null && armed) { const gate = new Promise<void>(r => { hold = r }); reached(); await gate }
+    return { value: { stdout: `${file}\n${other}\n`, stderr: '', exitCode: 0, isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('fs.read', (_$, e) => ({ value: e.path.endsWith(other) ? otherDoc : doc }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [{ id: 'milestone' }] } as never))
+  on('turn.complete', () => ({ text: '' }))
+  let armed = false
+  const run = (args: string) => $.command.run({ command: 'milestone', args, presentation: { isFullscreen: true, columns: 120 } } as Parameters<typeof $.command.run>[0])
+
+  await run('ZZ')
+  armed = true
+  const turn = $.turn.complete({ answer: '', durationMs: 0, isAborted: false, turnId: 't', reason: 'answer' })
+  await isReached
+  armed = false
+  const r = await run('XX')
+  expect(r.text).toContain('Milestone **XX**')
+  ;(hold as unknown as () => void)()
+  await turn
+
+  const ui = await $.ui.mount({ plugin: 'milestone-pane', surface: 'terminal', component: 'Pane', requestId: 'milestone', props: PANE })
+  const md = await ui.find({ type: 'Markdown' })
+  expect(md?.text).toContain('XX-S0')
+  await ui.unmount()
+})

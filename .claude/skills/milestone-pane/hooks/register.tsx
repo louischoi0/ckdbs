@@ -58,7 +58,13 @@ async function addedAt($: EngineInterface, root: string, file: string): Promise<
   return Number(log.stdout.split('\n').filter(Boolean).pop() ?? Infinity)
 }
 
-async function refresh($: EngineInterface): Promise<void> {
+/**
+ * Reads the pinned order into the pane and returns it. A turn-end refresh writes only if nothing wrote the
+ * pane since its dispatch began: `/milestone` runs mid-turn, and a dispatch's reads are one moment, so the
+ * pin it read may already be stale.
+ */
+async function refresh($: EngineInterface, isTurnEnd = false): Promise<Summary> {
+  const held = await $.state.get({ plugin: 'milestone-pane', key: 'summary' })
   const root = await $.session.root()
   const letter = await read($, pinned)
   let next: Summary
@@ -69,7 +75,9 @@ async function refresh($: EngineInterface): Promise<void> {
   } catch (err) {
     next = { letter: letter ?? '?', title: '', file: '', stages: [], rulings: [], items: [], gates: [], error: String(err) }
   }
-  await update($, summary, () => next)
+  if (isTurnEnd) await $.state.set({ plugin: 'milestone-pane', key: 'summary' }, next, { ifVersion: held.version })
+  else await update($, summary, () => next)
+  return next
 }
 
 async function isOpen($: EngineInterface): Promise<boolean> {
@@ -81,6 +89,8 @@ export const register: Register = on => {
     await $.command.register({
       name: 'milestone',
       description: '/milestone <name>: progress and what is left, in the side pane; & the milestone in progress (an error if none); list every milestone with a stage open, oldest registered first; bare / pane: the full summary there; off closes it; auto unpins',
+      // Typed mid-turn it runs at once rather than waiting for the turn to end; the hook reads git and the pane, never the turn, and `refresh` keeps a turn's late refresh off what it writes.
+      immediate: true,
     })
     return next(e)
   })
@@ -109,11 +119,10 @@ export const register: Register = on => {
     if (/^auto$/i.test(arg)) await update($, pinned, () => null)
     else if (isName) await update($, pinned, () => arg)
 
-    await refresh($)
-    const s = await read($, summary)
-    if (!s || s.error) {
+    const s = await refresh($)
+    if (s.error) {
       if (isName) await update($, pinned, () => null)
-      return { text: s?.error ?? 'No work order found.' }
+      return { text: s.error }
     }
     // Every view is drawn in the pane; the transcript gets one line, the model the full text.
     const text = (await read($, pinned)) ? report(s) : toMarkdown(s)
@@ -133,7 +142,7 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined && (await isOpen($))) await refresh($)
+    if (e.agentId === undefined && (await isOpen($))) await refresh($, true)
     return next(e)
   })
 
