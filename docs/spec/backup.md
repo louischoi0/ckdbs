@@ -85,6 +85,18 @@ and stop LSN and segments, and every file with its size and CRC32C, closed
 by a CRC32C of the text. An unknown format, another build's superblock or a
 mismatching file is refused by name.
 
+**B9a - Every page and every record a backup carries is checked by its own
+CRC32C** (`restore.hpp`). The data file - path B's copy, or a snapshot's,
+in the backup or named beside it - is walked against its own maps: every
+page they call allocated, and every system page, must pass its checksum
+unless it is headerless or all zeros (never written). STOP's worker runs it
+before the manifest, so a backup holding a torn or damaged page fails and is
+no backup; `--verify-backup` and the restore's layout run it again, the
+layout before it marks anything. The log is scanned from the start: every
+record's CRC32C must decode to at least the stop. The manifest's per-file
+CRC32C says the files are the ones written; these say what was written is
+whole.
+
 **B10 - One backup at a time.** An open backup is ended by `BACKUP ABORT`,
 by an hour idle with nothing running (`[provisional]`), or by a restart;
 none writes BACKUP_END, so none is a backup.

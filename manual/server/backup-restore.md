@@ -126,9 +126,19 @@ tools/kds_backup.py expire /backups --keep 7 --archive /archive/kds
 tools/kds_backup.py expire /backups --keep-since 1760000000 --archive /archive/kds
 ```
 
-`verify` checks the manifest and every file's size and CRC32C, and that
-every segment from the start to the stop is present; on success it stamps
-`last_verified`, which `list` shows. `expire` removes the backups outside the
+`verify` checks the manifest and every file's size and CRC32C, that every
+segment from the start to the stop is present and that the log decodes -
+every record's CRC32C - from the start to the stop, and **every data page by
+its own CRC32C** (allocated pages against the file's own maps; headerless
+pages carry none and never-written pages are zeros). For a snapshot kept
+outside the backup, name its data file: `kds_backup verify DIR
+--snapshot-data FILE`. On success it stamps `last_verified`, which `list`
+shows.
+
+The same page check runs when a backup stops - a data file in the backup
+with a page that fails it fails the backup (`BACKUP STATUS`:
+`last_outcome=failed`, the pages named) and no manifest is written - and
+again when a restore lays a backup out, before it changes anything. `expire` removes the backups outside the
 retention (it refuses a retention that keeps none) and the archived segments
 of a retained backup's lineage below the oldest retained start of that
 lineage. **It never removes a segment a retained backup needs**, and never
@@ -188,6 +198,8 @@ note it before an operation you may want to undo, and restore to it.
 | `backup: manifest format N is not this build's` | another build's backup | restore with the build that wrote it |
 | `backup N: wal/wal-0-K.log is ... the manifest says ...` | a file was changed or damaged | use another backup; the restore wrote nothing |
 | `backup N: segment K (lsn ...) is not in the backup` | a segment is missing | use another backup |
+| `data file: N of M written page(s) fail their checksum (page ...)` | a torn page (a snapshot that did not freeze the filesystem) or damage | take the backup again; for path D use a freezing snapshot |
+| `backup N: its log decodes only to lsn ...` | a damaged segment the manifest's checksum did not catch | use another backup |
 | `restore: ... already holds data` | the target is not empty | an empty target |
 | `restore: target lsn T is below ... stop lsn` | the target precedes the backup's stop | an older backup |
 | `restore: the archive's history ... ends at lsn E ... segment K is missing` | the archive does not reach the target | a lower target, or find segment K |

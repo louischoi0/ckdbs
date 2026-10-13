@@ -68,7 +68,9 @@ constexpr const char* kUsage =
     "                    replay past the stop to the first record at or past\n"
     "                    <lsn>, or through every archived segment\n"
     "  --verify-backup <backup_dir>\n"
-    "                    check a backup's manifest and every file it names\n"
+    "                    check a backup's manifest, every file it names, its log\n"
+    "                    record by record to the stop, and every data page by its\n"
+    "                    checksum (a snapshot's file outside it: --restore-data)\n"
     "\n"
     "Config keys: data_file, port, wal_dir, checkpoint_interval_ms,\n"
     "             tls, tls_cert_file, tls_key_file, auth, users_file,\n"
@@ -374,6 +376,16 @@ int main(int argc, char** argv) {
         kds::Status s = manifest.ok()
                             ? kds::server::VerifyBackupFiles(mode.verify_backup, manifest.value())
                             : manifest.status();
+        if (s.ok()) s = kds::server::VerifyBackupLog(mode.verify_backup, manifest.value());
+        // The data file page by page: the backup's own, or a snapshot's kept
+        // outside it (path D) named by --restore-data.
+        kds::server::DataFileCheck pages;
+        std::string data_file = mode.restore.data_file_from;
+        if (s.ok() && data_file.empty()) {
+            const std::string inside = mode.verify_backup + "/" + kds::server::kBackupDataFileName;
+            if (std::ifstream(inside).good()) data_file = inside;
+        }
+        if (s.ok() && !data_file.empty()) s = kds::server::VerifyDataFilePages(data_file, &pages);
         if (!s.ok()) {
             std::cerr << "backup not valid: " << s.message() << "\n";
             return EXIT_FAILURE;
@@ -382,7 +394,12 @@ int main(int argc, char** argv) {
         std::cout << "backup " << m.backup_id << " valid: path " << m.path << ", lsn "
                   << m.start_lsn << " .. " << m.stop_lsn << ", segments " << m.start_segment
                   << " .. " << m.stop_segment << ", " << m.files.size() << " files, lineage "
-                  << m.lineage_id << ", written by " << m.engine << "\n";
+                  << m.lineage_id << ", written by " << m.engine << "; log decodes to the stop; "
+                  << (data_file.empty() ? std::string("no data file here (path D: name it with "
+                                                      "--restore-data)")
+                                        : std::to_string(pages.pages_checked) +
+                                              " data pages pass their checksum")
+                  << "\n";
         return EXIT_SUCCESS;
     }
     const bool restoring = !mode.restore.backup_dir.empty();

@@ -89,6 +89,13 @@ public:
         const std::string& dir, std::uint32_t core_id = 0,
         std::uint64_t segment_size = kDefaultSegmentSize, std::uint64_t first_needed = 0);
 
+    // The same run, **for reading only** (BR's backup check): no directory is
+    // created, every segment is opened `O_RDONLY`, and a creation or a write
+    // is refused - so a backup on read-only media can be scanned.
+    static StatusOr<std::unique_ptr<FileLogDevice>> OpenReadOnly(
+        const std::string& dir, std::uint32_t core_id, std::uint64_t segment_size,
+        std::uint64_t first_needed);
+
     std::uint64_t segment_size() const noexcept override { return segment_size_; }
     std::uint64_t first_segment() const noexcept override {
         return first_.load(std::memory_order_acquire);
@@ -249,6 +256,12 @@ private:
     // Segment numbers to unlink: detached, or skipped below `first_needed`.
     std::vector<std::uint64_t> detached_;
     std::atomic<std::uint64_t> hold_from_{kNoHold};
+    bool read_only_ = false;  // OpenReadOnly's: nothing created or written
+    static StatusOr<std::unique_ptr<FileLogDevice>> OpenImpl(const std::string& dir,
+                                                             std::uint32_t core_id,
+                                                             std::uint64_t segment_size,
+                                                             std::uint64_t first_needed,
+                                                             bool read_only);
     std::uint64_t removed_ = 0;
 };
 

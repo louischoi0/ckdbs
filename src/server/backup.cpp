@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "kds/base/version.hpp"
+#include "kds/server/restore.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/wal/payload.hpp"
@@ -124,6 +125,7 @@ StatusOr<std::string> BackupControl::Start(const std::string& label, wal::WalMan
     copy_dir_.clear();
     copy_error_.clear();
     pages_copied_.store(0, std::memory_order_relaxed);
+    pages_verified_.store(0, std::memory_order_relaxed);
     log_bytes_copied_.store(0, std::memory_order_relaxed);
     Touch();
     if (wiring_.log != nullptr && wiring_.log->enabled(LogLevel::kInfo)) {
@@ -369,6 +371,18 @@ void BackupControl::RunFinish(BackupManifest manifest, std::string dir) {
         }
         if (Status s = SyncDirectory(dir); !s.ok()) return done(s);
     }
+    // **Every page by its own CRC32C** (`restore.hpp`): the copier's file,
+    // or the data file a snapshot put here. A page that fails is named and
+    // the backup fails - no manifest, so it is no backup.
+    std::error_code ec;
+    if (fs::exists(root / kBackupDataFileName, ec)) {
+        DataFileCheck check;
+        if (Status s = VerifyDataFilePages((root / kBackupDataFileName).string(), &check);
+            !s.ok()) {
+            return done(s);
+        }
+        pages_verified_.store(check.pages_checked, std::memory_order_relaxed);
+    }
     for (std::uint64_t seg = manifest.start_segment; seg <= manifest.stop_segment; ++seg) {
         BackupFile file;
         file.name = std::string(kBackupWalDirName) + "/" + SegmentFileName(seg);
@@ -381,7 +395,6 @@ void BackupControl::RunFinish(BackupManifest manifest, std::string dir) {
         log_bytes_copied_.fetch_add(file.size, std::memory_order_relaxed);
         manifest.files.push_back(std::move(file));
     }
-    std::error_code ec;
     if (fs::exists(root / kBackupDataFileName, ec)) {
         BackupFile file;
         file.name = kBackupDataFileName;
@@ -503,6 +516,7 @@ void BackupControl::AppendMeta(std::ostream& os) const {
     }
     os << " backup_log_bytes_copied=" << log_bytes_copied_.load(std::memory_order_relaxed)
        << " backup_fence_writes_waited=" << wiring_.data_device->write_fence().writes_waited()
+       << " backup_pages_verified=" << pages_verified_.load(std::memory_order_relaxed)
        << " backups_completed=" << completed_.load(std::memory_order_relaxed)
        << " backups_failed=" << failed_.load(std::memory_order_relaxed);
 }

@@ -546,6 +546,13 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
                           });
     };
 
+    // **Nothing at or past the scan's end is redo's**: with no page dirtied in
+    // the window, analysis puts the redo start at the end it reached, and a
+    // log whose last segment is sealed ends at that segment's boundary - the
+    // first LSN of a segment that does not exist, which a scan refuses. A
+    // backup whose window wrote no page ends so (BR), and so does a crash
+    // between a roll's seal and the next segment's creation.
+    if (analysis.redo_start_lsn >= analysis.end_lsn) return stats;
     auto scan = ScanLog(device, core_id, analysis.redo_start_lsn, visit);
     if (!scan.ok()) {
         return scan.status();

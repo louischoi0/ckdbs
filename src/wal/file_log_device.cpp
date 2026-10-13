@@ -164,9 +164,10 @@ Status Prewrite(int fd, std::uint64_t size) {
     return Status::OK();
 }
 
-StatusOr<FileDescriptor> OpenSegmentFile(const std::string& path, bool create_exclusive) {
-    const int flags =
-        O_RDWR | O_CLOEXEC | (create_exclusive ? (O_CREAT | O_EXCL) : 0);
+StatusOr<FileDescriptor> OpenSegmentFile(const std::string& path, bool create_exclusive,
+                                         bool read_only = false) {
+    const int flags = (read_only ? O_RDONLY : O_RDWR) | O_CLOEXEC |
+                      (create_exclusive ? (O_CREAT | O_EXCL) : 0);
     int raw_fd = -1;
     do {
         raw_fd = ::open(path.c_str(), flags, 0600);
@@ -202,13 +203,27 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& 
                                                              std::uint32_t core_id,
                                                              std::uint64_t segment_size,
                                                              std::uint64_t first_needed) {
+    return OpenImpl(dir, core_id, segment_size, first_needed, /*read_only=*/false);
+}
+
+StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::OpenReadOnly(
+    const std::string& dir, std::uint32_t core_id, std::uint64_t segment_size,
+    std::uint64_t first_needed) {
+    return OpenImpl(dir, core_id, segment_size, first_needed, /*read_only=*/true);
+}
+
+StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::OpenImpl(const std::string& dir,
+                                                             std::uint32_t core_id,
+                                                             std::uint64_t segment_size,
+                                                             std::uint64_t first_needed,
+                                                                 bool read_only) {
     if (segment_size == 0) {
         return Status::InvalidArgument("FileLogDevice: segment_size must be non-zero");
     }
 
     std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    if (ec) {
+    if (!read_only) std::filesystem::create_directories(dir, ec);
+    if (ec || (read_only && !std::filesystem::is_directory(dir, ec))) {
         // create_directories reports an error for a directory that already
         // existed on some implementations; only an actually-absent directory
         // is a failure.
@@ -262,6 +277,7 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& 
 
     auto device = std::unique_ptr<FileLogDevice>(
         new FileLogDevice(dir, core_id, segment_size, FileDescriptor(raw_dir_fd)));
+    device->read_only_ = read_only;
     device->first_.store(first_needed, std::memory_order_relaxed);
 
     // BC-R3: below the anchor's segment is a leftover, not opened and not
@@ -283,7 +299,7 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& 
                                       std::to_string(segment_no) + ")");
         }
 
-        auto fd = OpenSegmentFile(path, /*create_exclusive=*/false);
+        auto fd = OpenSegmentFile(path, /*create_exclusive=*/false, read_only);
         if (!fd.ok()) {
             return fd.status();
         }
@@ -381,6 +397,7 @@ void FileLogDevice::BuildAhead(std::uint64_t segment_no) {
 }
 
 Status FileLogDevice::CreateSegment(std::uint64_t segment_no, std::span<const std::byte> header) {
+    if (read_only_) return Status::Unsupported("FileLogDevice: opened read-only (byte 0)");
     SegmentCreateTiming discarded;
     return CreateSegmentTimed(segment_no, header, discarded);
 }
@@ -484,6 +501,7 @@ Status FileLogDevice::CreateSegmentTimed(std::uint64_t segment_no,
 
 Status FileLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                               std::span<const std::byte> in) {
+    if (read_only_) return Status::Unsupported("FileLogDevice: opened read-only (byte 0)");
     if (Status s = CheckSegmentRange(segment_no, offset, in.size(), first_segment(), end_segment(),
                                      segment_size_);
         !s.ok()) {

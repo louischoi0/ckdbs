@@ -160,6 +160,7 @@ private:
     std::atomic<bool> copy_cancel_{false};
     std::atomic<std::uint64_t> pages_copied_{0};
     std::atomic<std::uint64_t> log_bytes_copied_{0};
+    std::atomic<std::uint64_t> pages_verified_{0};  // the last data file's checksummed pages
     std::atomic<std::uint64_t> completed_{0};
     std::atomic<std::uint64_t> failed_{0};
 };

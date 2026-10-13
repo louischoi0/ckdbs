@@ -114,7 +114,10 @@ def server_binary(args):
 
 
 def cmd_verify(args):
-    result = subprocess.run([server_binary(args), "--verify-backup", args.backup])
+    argv = [server_binary(args), "--verify-backup", args.backup]
+    if args.snapshot_data:
+        argv += ["--restore-data", args.snapshot_data]
+    result = subprocess.run(argv)
     if result.returncode == 0:
         with open(os.path.join(args.backup, "last_verified"), "w") as f:
             f.write(f"{int(time.time())}\n")
@@ -228,8 +231,9 @@ def main():
     s.add_argument("--label", default="snapshot")
     s.set_defaults(func=cmd_snapshot)
 
-    v = sub.add_parser("verify")
+    v = sub.add_parser("verify", help="manifest, files, log and every data page's checksum")
     v.add_argument("backup")
+    v.add_argument("--snapshot-data", help="path D: the snapshot's data file, kept outside")
     v.set_defaults(func=cmd_verify)
 
     r = sub.add_parser("restore")

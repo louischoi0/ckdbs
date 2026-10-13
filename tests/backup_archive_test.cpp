@@ -552,5 +552,171 @@ TEST(PointInTimeTest, ARestoreToAnLsnPastTheStopEndsJustBeforeIt) {
     EXPECT_EQ(Ids(*all.value(), "SELECT id FROM u"), Range(1, 5));
 }
 
+
+// ---- Every page by its own CRC32C ---------------------------------------------
+
+// `key=`'s number out of a `DESCRIBE` reply.
+std::uint64_t Described(Expeditor& db, const std::string& table, const std::string& key) {
+    const std::string shape = Reply(db, "DESCRIBE " + table);
+    const std::size_t at = shape.find(key + "=");
+    EXPECT_NE(at, std::string::npos) << shape;
+    return at == std::string::npos ? 0 : std::strtoull(shape.c_str() + at + key.size() + 1, nullptr, 10);
+}
+
+// Half a page overwritten from another write: what a snapshot that did not
+// freeze its filesystem can hold.
+void TearPage(const fs::path& file, PageId id) {
+    std::fstream f(file, std::ios::binary | std::ios::in | std::ios::out);
+    f.seekp(static_cast<std::streamoff>(id) * kPageSize + kPageSize / 2);
+    const std::string garbage(kPageSize / 2, '\x5a');
+    f.write(garbage.data(), static_cast<std::streamsize>(garbage.size()));
+    ASSERT_TRUE(f.good());
+}
+
+// A snapshot's data file put into the backup with a torn page: STOP's worker
+// checks every page against its own CRC32C and fails the backup naming the
+// page, and writes no manifest - so it is no backup.
+TEST(PageChecksumTest, ASnapshotWithATornPageFailsTheBackupByName) {
+    TempDir live, backups;
+    const fs::path dir = backups.path / "torn";
+    auto opened = Mount(live.path);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    CurrentCoreGuard as(0);
+    Ok(db, "CREATE TABLE t (id int64, v int64)");
+    Insert(db, "t", 1, 50);
+    CleanCheckpoint(db);
+    const PageId leaf = static_cast<PageId>(Described(db, "t", "root_page_id"));
+    ASSERT_TRUE(StartsWith(Reply(db, "BACKUP START 'torn'"), "OK "));
+    fs::create_directories(dir);
+    fs::copy_file(live.path / "kds.db", dir / kBackupDataFileName);  // the snapshot
+    TearPage(dir / kBackupDataFileName, leaf);
+    ASSERT_TRUE(StartsWith(Reply(db, "BACKUP STOP TO '" + dir.string() + "'"), "OK "));
+    db.backup().WaitIdle();
+    const std::string status = Reply(db, "BACKUP STATUS");
+    EXPECT_NE(status.find("last_outcome=failed"), std::string::npos) << status;
+    EXPECT_NE(status.find("fail their checksum"), std::string::npos) << status;
+    EXPECT_NE(status.find(std::to_string(leaf)), std::string::npos) << status;
+    EXPECT_FALSE(fs::exists(dir / kBackupManifestName));
+}
+
+// Path D with the snapshot kept outside the backup: the restore checks the
+// file it is handed page by page, refuses a torn one naming the page, and
+// leaves the target as empty as it found it. Untorn, the same file restores.
+TEST(PageChecksumTest, AnExternalSnapshotWithATornPageIsRefusedAtRestore) {
+    TempDir live, backups, target, snapshots;
+    const fs::path dir = backups.path / "d";
+    const fs::path snapshot = snapshots.path / "kds.db";
+    PageId leaf = 0;
+    {
+        auto opened = Mount(live.path);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        Ok(db, "CREATE TABLE t (id int64, v int64)");
+        Insert(db, "t", 1, 50);
+        CleanCheckpoint(db);
+        leaf = static_cast<PageId>(Described(db, "t", "root_page_id"));
+        ASSERT_TRUE(StartsWith(Reply(db, "BACKUP START 'd'"), "OK "));
+        fs::copy_file(live.path / "kds.db", snapshot);  // kept outside the backup
+        ASSERT_TRUE(StartsWith(Reply(db, "BACKUP STOP TO '" + dir.string() + "'"), "OK "));
+        db.backup().WaitIdle();
+    }
+    auto manifest = ReadManifest(dir.string());
+    ASSERT_TRUE(manifest.ok()) << manifest.status().message();
+    EXPECT_EQ(manifest.value().path, 'D');
+    ASSERT_TRUE(VerifyBackupLog(dir.string(), manifest.value()).ok());
+    DataFileCheck clean;
+    ASSERT_TRUE(VerifyDataFilePages(snapshot.string(), &clean).ok());
+    EXPECT_GT(clean.pages_checked, 0u);
+
+    const fs::path torn = snapshots.path / "torn.db";
+    fs::copy_file(snapshot, torn);
+    TearPage(torn, leaf);
+    const std::string data = (target.path / "kds.db").string();
+    const std::string wal = (target.path / "wal").string();
+    const Status refused = LayOutRestore({dir.string(), data, wal, torn.string()});
+    EXPECT_EQ(refused.code(), StatusCode::kCorruption) << refused.message();
+    EXPECT_NE(refused.message().find(std::to_string(leaf)), std::string::npos)
+        << refused.message();
+    EXPECT_FALSE(fs::exists(data));
+    EXPECT_TRUE(!fs::exists(target.path / "wal") || fs::is_empty(target.path / "wal"));
+
+    ASSERT_TRUE(LayOutRestore({dir.string(), data, wal, snapshot.string()}).ok());
+    auto restored = Mount(target.path);
+    ASSERT_TRUE(restored.ok()) << restored.status().message();
+    CurrentCoreGuard as(0);
+    EXPECT_EQ(Ids(*restored.value(), "SELECT id FROM t"), Range(1, 50));
+}
+
+// The log too, record by record: a manifest whose stop lies past where the
+// backup's log decodes is refused, naming both points.
+TEST(PageChecksumTest, ABackupsLogMustDecodeToItsStop) {
+    TempDir live, backups;
+    const fs::path dir = backups.path / "b";
+    {
+        auto opened = Mount(live.path);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        Ok(db, "CREATE TABLE t (id int64, v int64)");
+        Insert(db, "t", 1, 20);
+        CleanCheckpoint(db);
+        (void)TakeBaseBackup(db, dir, [] {});
+    }
+    auto manifest = ReadManifest(dir.string());
+    ASSERT_TRUE(manifest.ok()) << manifest.status().message();
+    ASSERT_TRUE(VerifyBackupLog(dir.string(), manifest.value()).ok());
+    DataFileCheck pages;
+    ASSERT_TRUE(VerifyDataFilePages((dir / kBackupDataFileName).string(), &pages).ok());
+    EXPECT_GT(pages.pages_checked, 0u);
+
+    BackupManifest beyond = manifest.value();
+    beyond.stop_lsn = (beyond.stop_segment + 1) * beyond.segment_size + 4096;
+    const Status s = VerifyBackupLog(dir.string(), beyond);
+    EXPECT_EQ(s.code(), StatusCode::kCorruption) << s.message();
+    EXPECT_NE(s.message().find(std::to_string(beyond.stop_lsn)), std::string::npos) << s.message();
+
+    // On read-only media every check still runs: nothing is opened to write.
+    const auto lock = [&](fs::perms perms) {
+        for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+            fs::permissions(entry.path(), perms, fs::perm_options::remove);
+        }
+        fs::permissions(dir, perms, fs::perm_options::remove);
+    };
+    const auto unlock = [&] {
+        const auto all = fs::perms::owner_write;
+        fs::permissions(dir, all, fs::perm_options::add);
+        for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+            fs::permissions(entry.path(), all, fs::perm_options::add);
+        }
+    };
+    lock(fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write);
+    EXPECT_TRUE(VerifyBackupFiles(dir.string(), manifest.value()).ok());
+    const Status read_only_log = VerifyBackupLog(dir.string(), manifest.value());
+    EXPECT_TRUE(read_only_log.ok()) << read_only_log.message();
+    const Status read_only_pages = VerifyDataFilePages((dir / kBackupDataFileName).string());
+    EXPECT_TRUE(read_only_pages.ok()) << read_only_pages.message();
+    unlock();
+
+    // A flipped byte inside a record: the scan stops at its CRC32C, short of
+    // the stop.
+    {
+        std::fstream f(dir / kBackupWalDirName / SegmentFileName(manifest.value().start_segment),
+                       std::ios::binary | std::ios::in | std::ios::out);
+        f.seekp(static_cast<std::streamoff>(manifest.value().start_lsn %
+                                            manifest.value().segment_size) + 40);
+        f.put('\x7f');
+    }
+    EXPECT_EQ(VerifyBackupLog(dir.string(), manifest.value()).code(), StatusCode::kCorruption);
+
+    // A torn catalog page - a system page, checked whatever its map bit says.
+    constexpr PageId kCatalogPage = 7;
+    TearPage(dir / kBackupDataFileName, kCatalogPage);
+    const Status torn = VerifyDataFilePages((dir / kBackupDataFileName).string());
+    EXPECT_EQ(torn.code(), StatusCode::kCorruption) << torn.message();
+    EXPECT_NE(torn.message().find("page 7"), std::string::npos) << torn.message();
+}
+
 }  // namespace
 }  // namespace kds::server

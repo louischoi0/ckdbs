@@ -1169,9 +1169,11 @@ the procedures are `manual/server/backup-restore.md`.
   concurrent backups, a logical dump, a streaming standby.
 - **A torn page from the device is refused, not healed.** A snapshot that
   does not freeze the filesystem (a cloud disk snapshot) is a crash image,
-  and the per-checkpoint image cadence of `wal.md` §10 is not built, so a
-  page torn in it refuses the restore's mount. Path B's copy cannot tear (the
-  fence); path D needs a freezing snapshot.
+  and the per-checkpoint image cadence of `wal.md` §10 is not built. Every
+  data page's CRC32C is checked when the backup stops, at `verify` and at the
+  restore's layout, so the torn page is named there rather than at the
+  mount; it is not repaired. Path B's copy cannot tear (the fence); path D
+  needs a freezing snapshot.
 - **A restore leaks**: a page the source freed after the copier read its
   map region stays allocated in the restore, as after a crash; Waystone
   pages and `sys.access_stats`' chain, made unreachable at the restore's

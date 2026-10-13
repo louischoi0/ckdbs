@@ -3,6 +3,7 @@
 #include <string>
 
 #include "kds/base/status.hpp"
+#include "kds/server/backup_manifest.hpp"
 #include "kds/server/superblock.hpp"
 
 namespace kds::storage {
@@ -16,23 +17,40 @@ class PageDevice;
 // redo here.
 namespace kds::server {
 
+// **Every page a backup carries is checked by its own CRC32C** (BR): the
+// copied file is walked against its own maps, and every page they call
+// allocated - and every system page - must carry the checksum it was
+// written with, unless it is headerless (Waystone directory interiors carry
+// none) or all zeros (allocated, never written). A failure names the pages:
+// path B's copy is fenced against the engine's own writes, so a failing page
+// there is damage on the source or the target; a snapshot (path D) that did
+// not freeze its filesystem can hold a torn page, found here rather than by
+// the restore's mount or the first read of it.
+struct DataFileCheck {
+    std::uint64_t pages_checked = 0;    // written pages whose checksum was verified
+    std::uint64_t pages_forgotten = 0;  // `ForgetUnwrittenPages`' give-backs
+};
+// Read-only: a backup on read-only media is checked, never written.
+Status VerifyDataFilePages(const std::string& data_file, DataFileCheck* out = nullptr);
+
 // **What a restored volume cannot trust, made unreachable** (BR-S8). The
 // copy holds every page as of some instant of the window; redo brings the
 // logged ones to the stop, and nothing brings the unlogged ones anywhere -
 // Waystone pages and `sys.access_stats` (invariant 8 and CR6 make both
 // advisory). Two halves:
 //
-// `ForgetUnwrittenPages` - offline, on the laid-out data file: every user
-// page the copied maps call allocated whose bytes are all zero (or past the
-// file's end) is given back. A logged one is recreated by its record, which
-// re-sets the bit (`CreateAt`); an unlogged one was never written and would
-// stay allocated and unreadable for good. Headerless pages are left: their
-// zeros are an empty directory.
+// `ForgetUnwrittenPages` - offline, on the laid-out data file: the check
+// above, and then every user page the copied maps call allocated whose
+// bytes are all zero (or past the file's end) is given back - nothing is
+// written unless every page passed. A logged one is recreated by its record,
+// which re-sets the bit (`CreateAt`); an unlogged one was never written and
+// would stay allocated and unreadable for good. Headerless pages are left:
+// their zeros are an empty directory.
 //
 // `DiscardAdvisoryState` - at the restore's mount, after recovery: every
 // pattern's Waystone root is cleared and `sys.access_stats` emptied, so no
 // unlogged structure can reach a page the first half gave back.
-Status ForgetUnwrittenPages(storage::PageDevice& device, std::uint64_t* forgotten = nullptr);
+Status ForgetUnwrittenPages(storage::PageDevice& device, DataFileCheck* out = nullptr);
 
 
 }  // namespace kds::server
@@ -71,6 +89,10 @@ Status MarkRestoreOwedOn(storage::PageDevice& device, const RestoreWindow& windo
 // `ForgetUnwrittenPages`. `LayOutRestore`'s and the simulation's one path.
 Status PrepareRestoredVolume(storage::PageDevice& device, const RestoreWindow& window,
                              std::uint64_t* lineage = nullptr);
+
+// The backup's log, checked record by record: its segments decode - every
+// record's CRC32C - from its start LSN to at least its stop LSN (BR-R8).
+Status VerifyBackupLog(const std::string& backup_dir, const BackupManifest& manifest);
 
 // What to restore, and onto what.
 struct RestoreRequest {

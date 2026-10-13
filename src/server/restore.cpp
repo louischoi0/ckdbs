@@ -128,56 +128,178 @@ Status CutLogAt(const std::string& wal_dir, wal::Lsn cut, std::uint64_t segment_
 
 }  // namespace
 
-Status ForgetUnwrittenPages(storage::PageDevice& device, std::uint64_t* forgotten) {
-    using Page = std::array<std::byte, kPageSize>;
+namespace {
+
+using PageBytes = std::array<std::byte, kPageSize>;
+
+bool AllZero(const PageBytes& p) {
+    return std::all_of(p.begin(), p.end(), [](std::byte b) { return b == std::byte{0}; });
+}
+
+// One read of a copied data file, page by page, against its own maps (BR,
+// `restore.hpp`): every page those maps call allocated - and every system
+// page below the first user id - must carry the checksum it was written
+// with, unless it is headerless (no checksum to carry) or all zeros (never
+// written). With `forget`, every all-zero allocated user page is also given
+// back; its map pages are rewritten only once the whole file has passed.
+Status WalkDataFile(storage::PageDevice& device, bool forget, DataFileCheck* out) {
     const std::uint32_t capacity = device.page_capacity();
-    std::uint64_t count = 0;
-    Page map{}, headerless{}, page{};
-    const auto all_zero = [](const Page& p) {
-        return std::all_of(p.begin(), p.end(), [](std::byte b) { return b == std::byte{0}; });
+    DataFileCheck check;
+    std::vector<std::pair<PageId, PageBytes>> rewritten_maps;
+    std::vector<PageId> failed;
+    PageBytes map{}, headerless{}, page{};
+    const auto verify = [&](PageId id) -> Status {
+        if (Status s = device.ReadPage(id, page); !s.ok()) return s;
+        if (AllZero(page)) return Status::OK();
+        ++check.pages_checked;
+        if (!storage::VerifyPageChecksum(page).ok()) failed.push_back(id);
+        return Status::OK();
     };
     for (std::uint32_t region = 0; storage::FreeMapRegionBase(region) < capacity; ++region) {
         const PageId base = storage::FreeMapRegionBase(region);
         const PageId map_id = storage::FreeMapPageIdFor(base);
         if (map_id >= capacity) break;
         if (Status s = device.ReadPage(map_id, map); !s.ok()) return s;
-        if (all_zero(map)) continue;  // a region whose map was never written: nothing allocated
+        if (AllZero(map)) continue;  // a region whose map was never written: nothing allocated
+        ++check.pages_checked;
         if (Status s = storage::ValidateFreeMapPage(map); !s.ok()) {
-            return s.WithMessage("restore: free map page " + std::to_string(map_id) + ": " +
-                                 s.message());
+            failed.push_back(map_id);
+            continue;  // its bits cannot be trusted; the page is named below
         }
         const PageId headerless_id = storage::HeaderlessMapPageIdFor(base);
         headerless.fill(std::byte{0});
         if (headerless_id < capacity) {
             if (Status s = device.ReadPage(headerless_id, headerless); !s.ok()) return s;
         }
-        const bool has_headerless = !all_zero(headerless);
+        const bool has_headerless = !AllZero(headerless);
+        if (has_headerless) {
+            ++check.pages_checked;
+            if (!storage::ValidateFreeMapPage(headerless, PageType::kHeaderlessMap).ok()) {
+                failed.push_back(headerless_id);
+                continue;
+            }
+        }
         bool changed = false;
         for (std::uint32_t index = 0; index < storage::kFreeMapBitsPerPage; ++index) {
             const PageId id = base + index;
-            if (id < server::kFirstUserPageId || storage::IsMapPageId(id)) continue;
-            if (!storage::FreeMapIsAllocated(map, index)) continue;
-            // A headerless page's zeros are an empty directory, not a hole.
+            if (storage::IsMapPageId(id)) continue;
+            const bool system = id < server::kFirstUserPageId;
+            if (!system && !storage::FreeMapIsAllocated(map, index)) continue;
             if (has_headerless && storage::FreeMapIsAllocated(headerless, index)) continue;
+            // Past the copy's end, or zeros: never written into the copy.
             bool unwritten = id >= capacity;
             if (!unwritten) {
-                if (Status s = device.ReadPage(id, page); !s.ok()) return s;
-                unwritten = all_zero(page);
+                if (Status s = verify(id); !s.ok()) return s;
+                unwritten = AllZero(page);
             }
-            if (!unwritten) continue;
-            storage::FreeMapRelease(map, index);
-            changed = true;
-            ++count;
+            if (!system && forget && unwritten) {
+                storage::FreeMapRelease(map, index);
+                changed = true;
+                ++check.pages_forgotten;
+            }
         }
         if (changed) {
             storage::StampPageChecksum(map);
-            if (Status s = device.WritePage(map_id, map); !s.ok()) return s;
+            rewritten_maps.emplace_back(map_id, map);
         }
     }
-    if (count != 0) {
+    if (!failed.empty()) {
+        std::string ids;
+        for (std::size_t i = 0; i < failed.size() && i < 16; ++i) {
+            ids += (i == 0 ? "" : ", ") + std::to_string(failed[i]);
+        }
+        if (failed.size() > 16) ids += ", ...";
+        return Status::Corruption(
+            "data file: " + std::to_string(failed.size()) + " of " +
+            std::to_string(check.pages_checked) + " written page(s) fail their checksum (page " +
+            ids + "); the copy is torn or damaged and is no backup");
+    }
+    for (const auto& [map_id, bytes] : rewritten_maps) {
+        if (Status s = device.WritePage(map_id, bytes); !s.ok()) return s;
+    }
+    if (!rewritten_maps.empty()) {
         if (Status s = device.Sync(); !s.ok()) return s;
     }
-    if (forgotten != nullptr) *forgotten = count;
+    if (out != nullptr) *out = check;
+    return Status::OK();
+}
+
+}  // namespace
+
+Status ForgetUnwrittenPages(storage::PageDevice& device, DataFileCheck* out) {
+    return WalkDataFile(device, /*forget=*/true, out);
+}
+
+namespace {
+
+// A data file read and nothing else: `O_RDONLY`, so a backup on read-only
+// media can be checked, and every write refused.
+class ReadOnlyPageFile final : public storage::PageDevice {
+public:
+    static StatusOr<std::unique_ptr<ReadOnlyPageFile>> Open(const std::string& path) {
+        const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return Status::IoError("open " + path + ": " + std::strerror(errno));
+        const ::off_t size = ::lseek(fd, 0, SEEK_END);
+        if (size < 0) {
+            ::close(fd);
+            return Status::IoError("size of " + path + ": " + std::strerror(errno));
+        }
+        return std::unique_ptr<ReadOnlyPageFile>(
+            new ReadOnlyPageFile(fd, static_cast<std::uint32_t>(size / kPageSize)));
+    }
+    ~ReadOnlyPageFile() override { ::close(fd_); }
+    std::uint32_t page_capacity() const noexcept override { return pages_; }
+    Status ReadPage(PageId id, std::span<std::byte, kPageSize> out) override {
+        if (id >= pages_) return Status::OutOfRange("page " + std::to_string(id));
+        std::size_t done = 0;
+        while (done < kPageSize) {
+            const ::ssize_t n = ::pread(fd_, out.data() + done, kPageSize - done,
+                                        static_cast<::off_t>(id) * kPageSize + done);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) return Status::IoError("read page " + std::to_string(id));
+            done += static_cast<std::size_t>(n);
+        }
+        return Status::OK();
+    }
+    Status WritePage(PageId, std::span<const std::byte, kPageSize>) override { return Refused(); }
+    Status EnsureCapacity(std::uint32_t) override { return Refused(); }
+    Status Sync() override { return Refused(); }
+
+private:
+    ReadOnlyPageFile(int fd, std::uint32_t pages) : fd_(fd), pages_(pages) {}
+    static Status Refused() { return Status::Unsupported("a data file opened to read (byte 0)"); }
+    int fd_;
+    std::uint32_t pages_;
+};
+
+}  // namespace
+
+Status VerifyDataFilePages(const std::string& data_file, DataFileCheck* out) {
+    auto device = ReadOnlyPageFile::Open(data_file);
+    if (!device.ok()) return device.status();
+    if (Status s = WalkDataFile(*device.value(), /*forget=*/false, out); !s.ok()) {
+        return s.WithMessage(data_file + ": " + s.message());
+    }
+    return Status::OK();
+}
+
+Status VerifyBackupLog(const std::string& backup_dir, const BackupManifest& manifest) {
+    // Every record of the window decodes - its CRC32C included - from the
+    // start to the stop: a scan ends at the first record that does not.
+    // Read-only: a backup on read-only media is scanned, never written.
+    auto device = wal::FileLogDevice::OpenReadOnly(
+        (std::filesystem::path(backup_dir) / kBackupWalDirName).string(), 0,
+        manifest.segment_size, manifest.start_segment);
+    if (!device.ok()) return device.status();
+    auto scanned = wal::ScanLogToEnd(*device.value(), 0, manifest.start_lsn);
+    if (!scanned.ok()) return scanned.status();
+    if (scanned.value().end_lsn < manifest.stop_lsn) {
+        const wal::Lsn end = scanned.value().end_lsn;
+        return Status::Corruption(
+            "backup " + std::to_string(manifest.backup_id) + ": its log decodes only to lsn " +
+            std::to_string(end) + " (segment " + std::to_string(end / manifest.segment_size) +
+            "), short of its stop lsn " + std::to_string(manifest.stop_lsn));
+    }
     return Status::OK();
 }
 
@@ -221,6 +343,7 @@ Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {
             std::to_string(kSuperBlockVersion) + " only");
     }
     if (Status s = VerifyBackupFiles(request.backup_dir, manifest); !s.ok()) return s;
+    if (Status s = VerifyBackupLog(request.backup_dir, manifest); !s.ok()) return s;
 
     // The data file: the backup's own (B), or the snapshot's (D).
     const bool has_data = std::any_of(manifest.files.begin(), manifest.files.end(),
@@ -311,7 +434,8 @@ Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {
                 &lineage);
             !s.ok()) {
             fs::remove(preparing, ec);
-            return s;
+            // Named for the file the operator gave, not the temporary one.
+            return s.WithMessage("restore: " + data_from + ": " + s.message());
         }
     }
     if (::rename(preparing.c_str(), request.data_file.c_str()) != 0) {
