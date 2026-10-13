@@ -2295,9 +2295,11 @@ private:
         {
             PageSpanGuard span;
             observed_epoch = page.RelayoutEpoch();
-            auto tuple = page.ReadTupleIn(slot, nr_slots);
-            if (tuple.ok()) {
-                switch (txn::Classify(snapshot_.view, tuple.value())) {
+            // Read with no Status (BT-S2): a slot ReadTupleIn() would refuse -
+            // out of range, retired, or malformed - is no row here, as before.
+            heap::PageView::Tuple tuple{};
+            if (page.TryReadTupleIn(slot, nr_slots, tuple) == heap::PageView::TupleRead::kRead) {
+                switch (txn::Classify(snapshot_.view, tuple)) {
                     case txn::Visibility::kNoVersion:
                         // No version of this tuple exists for this reader.
                         // Not an error and not a row: the statement simply
@@ -2308,11 +2310,11 @@ private:
                         // R1's copy. Fixed-size, because invariant 13 makes
                         // a row's size a schema constant - the same
                         // property that makes relayout a memcpy.
-                        version_.assign(tuple.value().payload.begin(),
-                                        tuple.value().payload.end());
-                        walk_trx_id = tuple.value().trx_id;
-                        walk_undo_ptr = tuple.value().undo_ptr;
-                        walk_deleted = tuple.value().deleted;
+                        version_.assign(tuple.payload.begin(),
+                                        tuple.payload.end());
+                        walk_trx_id = tuple.trx_id;
+                        walk_undo_ptr = tuple.undo_ptr;
+                        walk_deleted = tuple.deleted;
                         needs_walk = true;
                         break;
                     case txn::Visibility::kVisible:
@@ -2320,7 +2322,7 @@ private:
                         // under the span and the leaf's read hold (BM-R3),
                         // after the length check invariant 13 makes first;
                         // a rejected row is never copied.
-                        if (kernel_rejects(tuple.value().payload)) {
+                        if (kernel_rejects(tuple.payload)) {
                             kernel_rejected = true;
                             break;
                         }
@@ -2331,8 +2333,8 @@ private:
                         // about to reject it on one of them. So the bytes
                         // come out from under the span and the decode
                         // happens below, in two halves.
-                        version_.assign(tuple.value().payload.begin(),
-                                        tuple.value().payload.end());
+                        version_.assign(tuple.payload.begin(),
+                                        tuple.payload.end());
                         decoded = true;
                         break;
                 }

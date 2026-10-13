@@ -268,3 +268,29 @@ residual pattern renamed. Kept: the seven-line once-block at both sites (a
 helper saves nothing, as the review also judged). Suite 3691/3691 (Debug,
 `-LE heap-suspended`). Overhead not measured; measured at the milestone's
 close.
+
+### BT-S2 — the tuple read builds no `Status`
+
+`PageView::TryReadTupleIn` (inline, `heap_page.hpp`) makes every check
+`ReadTupleIn` made - range, retired, BF-R10's slot leaving the page,
+`data_len` past the slot - and returns a `TupleRead` reason;
+`ReadTupleIn` is it plus the wording, so the checks have one body.
+`ReadSlot` and `SlotOffset` moved into the header for it. `AcceptTupleAt`
+reads through it, a reason other than `kRead` being no row as `!ok()` was.
+A new cell pins each reason to `ReadTupleIn`'s code and message
+(`HeapPageTest.TryReadTupleInGivesReadTupleInsReasonForEverySlot`).
+**The `critics-developer` review** found no defect: the check order never
+reads past the frame, codes and messages are identical, R1's span covers
+every use of the payload, the cell fails on any swapped reason. Rejected:
+returning `kOverlongPayload`'s `Corruption` inside the switch and ending
+it with an unreachable marker - C++20 has no `std::unreachable`, and the
+trailing return is the same statement with no marker. **Found, not fixed:**
+`PayloadAt` makes none of BF-R10's checks and can read past the frame on a
+stale or corrupt page - a pre-existing defect outside BT's scope, filed as
+`docs/inflight/bugs/payloadat-reads-a-slot-that-leaves-the-page.md`.
+Suite 3690/3692 with the new cell; the two failures
+(`IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`,
+`SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`) were
+60 s two-core waits timing out under another session's load, and passed
+3 of 3 each re-run alone on the same build. Overhead not measured;
+measured at the milestone's close.
