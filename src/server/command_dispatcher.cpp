@@ -7128,6 +7128,13 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                     "view is materialized, so there is no relation for a sub-chain to "
                     "correlate against", false};
         }
+        // Before anything reads `col`: a boolean conjunct has none (BU-Q4).
+        if (cond.kind == parser::PredicateKind::kBoolTree) {
+            const Status refused = Status::NotImplemented(
+                "a boolean conjunct (OR, NOT, an IN list, LIKE) over a catalog view (byte " +
+                std::to_string(cond.tree->byte_offset) + ")");
+            return {ErrorReply(refused), false, 0, refused};
+        }
         // Before anything reads `col`: a function conjunct has none on a
         // call's side, and the view's evaluator compares `col op val` only.
         if (cond.kind == parser::PredicateKind::kCompareFunction) {
@@ -8495,7 +8502,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // Checked at the first row, as a SELECT's step is (BT-R5): an
         // empty relation refuses nothing.
         if (!conjuncts_checked) {
-            if (Status s = exec::CheckConjuncts(schemas, predicates.value().residual, frame);
+            if (Status s = exec::CheckConjuncts(schemas, predicates.value(), frame);
                 !s.ok()) {
                 return s;
             }
@@ -9682,6 +9689,7 @@ CommandDispatcher::PkWindow CommandDispatcher::FoldPkWindow(
             case parser::CompareOp::kNeq:
             case parser::CompareOp::kIsNull:
             case parser::CompareOp::kIsNotNull:
+            case parser::CompareOp::kLike:  // never flat (BU-S2); refused all the same
                 unread(cond);
                 break;
         }
@@ -10163,6 +10171,7 @@ Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Co
         }
     }
     const std::uint32_t at = cond.lhs_fn.has_value() ? cond.lhs_fn->byte_offset
+                             : cond.tree != nullptr   ? cond.tree->byte_offset
                              : !cond.col.name.empty() ? cond.col.byte_offset
                                                       : where_byte;
     return Status::NotImplemented(
@@ -10459,7 +10468,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         }
         // Checked once at the first row, as UPDATE's (BT-R5).
         if (!conjuncts_checked) {
-            if (Status s = exec::CheckConjuncts(schemas, predicates.value().residual, frame);
+            if (Status s = exec::CheckConjuncts(schemas, predicates.value(), frame);
                 !s.ok()) {
                 return s;
             }

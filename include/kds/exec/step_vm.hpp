@@ -358,7 +358,7 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row. **The
-// caller has run `CheckConjuncts` on `step.residual` against this frame**,
+// caller has run `CheckConjuncts` on `step` against this frame**,
 // once, at its first row (BT-R5, `workorder-bt-accept-tuple-row.md`): this
 // compares and checks nothing.
 //

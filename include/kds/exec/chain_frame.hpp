@@ -116,9 +116,10 @@ private:
 // The check - the `$param` refusal and the malformed-chain checks, with
 // their messages - depends only on the chain and the frame's shape, never
 // on a row, so every caller runs it at its first row and then compares.
-// The first refusal ends it.
-Status CheckConjuncts(const std::vector<const catalog::Schema*>& schemas,
-                      const std::vector<StepPredicate>& predicates, const ChainFrame& frame);
+// It covers the step's `residual` and every comparison inside its
+// `bool_residual` (BU-S1); the first refusal ends it.
+Status CheckConjuncts(const std::vector<const catalog::Schema*>& schemas, const Step& step,
+                      const ChainFrame& frame);
 
 // One conjunct's comparison, on a conjunct CheckConjuncts has passed
 // against this frame - the outward-lhs fallback included. Exposed because
@@ -156,5 +157,25 @@ bool EvaluateAllExceptChecked(const std::vector<const catalog::Schema*>& schemas
 // other conjunct gets (null.md §4).
 StatusOr<bool> EvaluateFunctionConjuncts(const std::vector<FunctionPredicate>& predicates,
                                          const ChainFrame& frame);
+
+// ---- Three-valued logic, collapsed in exactly one place (spec I16) -------
+enum class TriState : std::uint8_t { kFalse, kTrue, kUnknown };
+
+// **The single collapse point.** UNKNOWN becomes false at the root of a
+// conjunct - one function, which the sub-chain kinds (step_vm.cpp) and the
+// boolean conjuncts (chain_frame.cpp) both route through.
+inline bool Collapse(TriState value) noexcept { return value == TriState::kTrue; }
+
+inline bool IsNull(const parser::AstValue& value) noexcept {
+    return value.type == parser::ValueType::kNull;
+}
+
+// Every boolean conjunct attached to one step (step_chain.hpp's
+// BoolPredicate), each in three-valued logic with its unknown collapsed to
+// false at its root (BU-R4); its comparisons have passed CheckConjuncts
+// against this frame. Empty always matches.
+StatusOr<bool> EvaluateBoolConjuncts(const std::vector<const catalog::Schema*>& schemas,
+                                     const std::vector<BoolPredicate>& predicates,
+                                     const ChainFrame& frame);
 
 }  // namespace kds::exec

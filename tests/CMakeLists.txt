@@ -113,6 +113,8 @@ add_executable(kds_tests
     trail_recorder_test.cpp
     waystone_replay_test.cpp
     function_conjunct_test.cpp
+    where_bool_test.cpp
+    where_value_list_test.cpp
     waystone_contract_test.cpp
     cabin_contract_test.cpp
     foreign_key_test.cpp

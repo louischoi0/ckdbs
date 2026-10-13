@@ -413,6 +413,56 @@ void ForEachColumn(const FunctionPredicate& pred, Fn&& fn) {
     }
 }
 
+// ---- The boolean conjunct (BU-S1) -----------------------------------------
+//
+// A conjunct holding `OR` or `NOT`: `a = 1 OR b = 2`, `NOT (c > 3)`
+// (workorder-bu-basic-query-surface.md). **A residual kind of its own, for
+// the function conjunct's reason** (above): its comparisons are
+// `StepPredicate`s, and a reader that took one for a conjunct of the
+// statement would key, bound or probe on a comparison the `OR` makes
+// optional (BU-R5). So it lives in `Step::bool_residual`, which no key,
+// bound, index, Cabin, join-key or build reader walks, and is evaluated
+// beside `fn_residual` at the same two sites.
+//
+// **Three-valued, collapsed once, at the root** (BU-R4): a comparison with
+// a NULL operand is unknown inside the tree, `NOT unknown` is unknown, and
+// only the root's unknown becomes false. `CompareValues` collapses per
+// comparison, which is right for a flat AND-list and wrong under `NOT`.
+struct BoolPredicate {
+    enum class Op : std::uint8_t { kAnd, kOr, kNot, kCompare, kFunction };
+    Op op = Op::kCompare;
+    std::vector<BoolPredicate> children;   // kAnd, kOr (two or more), kNot (one)
+    StepPredicate compare;                 // kCompare
+    std::optional<FunctionPredicate> fn;   // kFunction
+};
+
+// Every column reference a boolean conjunct reads, in no particular order.
+template <typename Fn>
+void ForEachColumn(const BoolPredicate& pred, Fn&& fn) {
+    switch (pred.op) {
+        case BoolPredicate::Op::kCompare:
+            fn(pred.compare.lhs);
+            if (pred.compare.rhs.kind == OperandKind::kColumn) fn(pred.compare.rhs.column);
+            return;
+        case BoolPredicate::Op::kFunction:
+            ForEachColumn(*pred.fn, fn);
+            return;
+        default:
+            for (const BoolPredicate& child : pred.children) ForEachColumn(child, fn);
+            return;
+    }
+}
+
+// Every function term a boolean conjunct calls, for the determinism class.
+template <typename Fn>
+void ForEachFunction(const BoolPredicate& pred, Fn&& fn) {
+    if (pred.op == BoolPredicate::Op::kFunction) {
+        fn(*pred.fn);
+        return;
+    }
+    for (const BoolPredicate& child : pred.children) ForEachFunction(child, fn);
+}
+
 struct Step;
 
 // A predicate-position subquery, lowered (V15). It is a chain in its own
@@ -606,6 +656,10 @@ struct Step {
     // Below the hot fields with `build`, for `build`'s reason: most steps
     // carry none, and the evaluation sites test for empty first.
     std::vector<FunctionPredicate> fn_residual;
+
+    // The boolean conjuncts placed at this step (see BoolPredicate), for
+    // `fn_residual`'s reasons and evaluated after it.
+    std::vector<BoolPredicate> bool_residual;
 };
 
 // Execution shape, dispatched on by a `switch` - there is no plan

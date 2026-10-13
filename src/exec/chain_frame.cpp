@@ -99,10 +99,28 @@ Status CheckConjunct(const std::vector<const catalog::Schema*>& schemas,
 
 }  // namespace
 
-Status CheckConjuncts(const std::vector<const catalog::Schema*>& schemas,
-                      const std::vector<StepPredicate>& predicates, const ChainFrame& frame) {
-    for (const StepPredicate& pred : predicates) {
+namespace {
+
+// A boolean conjunct's comparisons, each through CheckConjunct; a function
+// leaf checks its own sides as it evaluates (`SideValue`).
+Status CheckBoolConjunct(const std::vector<const catalog::Schema*>& schemas,
+                         const BoolPredicate& pred, const ChainFrame& frame) {
+    if (pred.op == BoolPredicate::Op::kCompare) return CheckConjunct(schemas, pred.compare, frame);
+    for (const BoolPredicate& child : pred.children) {
+        if (Status s = CheckBoolConjunct(schemas, child, frame); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
+}  // namespace
+
+Status CheckConjuncts(const std::vector<const catalog::Schema*>& schemas, const Step& step,
+                      const ChainFrame& frame) {
+    for (const StepPredicate& pred : step.residual) {
         if (Status s = CheckConjunct(schemas, pred, frame); !s.ok()) return s;
+    }
+    for (const BoolPredicate& pred : step.bool_residual) {
+        if (Status s = CheckBoolConjunct(schemas, pred, frame); !s.ok()) return s;
     }
     return Status::OK();
 }
@@ -198,6 +216,84 @@ StatusOr<bool> EvaluateFunctionConjuncts(const std::vector<FunctionPredicate>& p
             rhs = std::move(value.value());
         }
         if (!CompareValues(pred.type_val, lhs.value(), rhs, pred.op)) return false;
+    }
+    return true;
+}
+
+namespace {
+
+bool IsNullTest(parser::CompareOp op) {
+    return op == parser::CompareOp::kIsNull || op == parser::CompareOp::kIsNotNull;
+}
+
+TriState Known(bool matched) { return matched ? TriState::kTrue : TriState::kFalse; }
+
+// A comparison inside a tree: unknown when an operand is NULL, which
+// `CompareValues` collapses to false (BU-R4). Sound to ask after the fact:
+// a relational operator is never true on a NULL operand, and `IS [NOT]
+// NULL` is never unknown.
+StatusOr<TriState> CompareTri(const std::vector<const catalog::Schema*>& schemas,
+                              const StepPredicate& pred, const ChainFrame& frame) {
+    const bool matched = EvaluateConjunctChecked(schemas, pred, frame);
+    if (matched || IsNullTest(pred.op)) return Known(matched);
+    const parser::AstValue& rhs =
+        pred.rhs.kind == OperandKind::kLiteral ? pred.rhs.literal : frame.Get(pred.rhs.column);
+    return IsNull(frame.Get(pred.lhs)) || IsNull(rhs) ? TriState::kUnknown : TriState::kFalse;
+}
+
+StatusOr<TriState> FunctionTri(const FunctionPredicate& pred, const ChainFrame& frame) {
+    auto lhs = SideValue(pred.lhs, pred.context, frame);
+    if (!lhs.ok()) return lhs.status();
+    parser::AstValue rhs;
+    if (!IsNullTest(pred.op)) {
+        auto value = SideValue(pred.rhs, pred.context, frame);
+        if (!value.ok()) return value.status();
+        rhs = std::move(value.value());
+        if (IsNull(lhs.value()) || IsNull(rhs)) return TriState::kUnknown;
+    }
+    return Known(CompareValues(pred.type_val, lhs.value(), rhs, pred.op));
+}
+
+// Kleene logic. `AND` stops at the first false and `OR` at the first true,
+// which no unknown can overturn; an unknown is remembered and decides only
+// when nothing decisive follows.
+StatusOr<TriState> EvaluateTri(const std::vector<const catalog::Schema*>& schemas,
+                          const BoolPredicate& pred, const ChainFrame& frame) {
+    switch (pred.op) {
+        case BoolPredicate::Op::kCompare: return CompareTri(schemas, pred.compare, frame);
+        case BoolPredicate::Op::kFunction: return FunctionTri(*pred.fn, frame);
+        case BoolPredicate::Op::kNot: {
+            auto inner = EvaluateTri(schemas, pred.children.front(), frame);
+            if (!inner.ok()) return inner;
+            if (inner.value() == TriState::kUnknown) return TriState::kUnknown;
+            return inner.value() == TriState::kTrue ? TriState::kFalse : TriState::kTrue;
+        }
+        case BoolPredicate::Op::kAnd:
+        case BoolPredicate::Op::kOr: {
+            const TriState decisive = pred.op == BoolPredicate::Op::kAnd ? TriState::kFalse : TriState::kTrue;
+            bool unknown = false;
+            for (const BoolPredicate& child : pred.children) {
+                auto t = EvaluateTri(schemas, child, frame);
+                if (!t.ok()) return t;
+                if (t.value() == decisive) return decisive;
+                unknown = unknown || t.value() == TriState::kUnknown;
+            }
+            if (unknown) return TriState::kUnknown;
+            return decisive == TriState::kFalse ? TriState::kTrue : TriState::kFalse;
+        }
+    }
+    return Status::Corruption("unhandled boolean conjunct node");
+}
+
+}  // namespace
+
+StatusOr<bool> EvaluateBoolConjuncts(const std::vector<const catalog::Schema*>& schemas,
+                                     const std::vector<BoolPredicate>& predicates,
+                                     const ChainFrame& frame) {
+    for (const BoolPredicate& pred : predicates) {
+        auto t = EvaluateTri(schemas, pred, frame);
+        if (!t.ok()) return t.status();
+        if (!Collapse(t.value())) return false;  // at the root (BU-R4)
     }
     return true;
 }
