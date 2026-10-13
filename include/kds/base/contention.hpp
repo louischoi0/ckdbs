@@ -112,6 +112,11 @@ enum class Tally : std::uint8_t {
     kWalDrainLatchWaitNs,   // the WAL drain's waits on the stream latch
     kWalRollBlockedWaits,   // stream-latch waits that overlapped a roll's hold
     kWalRollBlockedWaitNs,  // the part of those waits the roll's hold covered
+    // BM-S1 (`workorder-bm-scan-row-kernel.md` §5.1): a `LookupCommit` - a
+    // read view's question the floor did not answer, or a horizon wait's
+    // (`ResolvedForEveryReader`); under the window latch above one core
+    // (BP-H2).
+    kWindowLookups,
     kCount,
 };
 
@@ -129,6 +134,7 @@ inline constexpr std::array<const char*, kTallyCount> kTallyNames = {
     "inflight_miss_ids_read", "checkpoint_pages_written", "data_syncs",
     "fence_walks",            "wal_drain_latch_wait_us",
     "wal_roll_blocked_waits", "wal_roll_blocked_wait_us",
+    "visibility_window_lookups",
 };
 static_assert(kTallyNames.back() != nullptr, "a Tally without a name");
 

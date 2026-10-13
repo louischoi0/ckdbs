@@ -1916,9 +1916,11 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
             os << " load_c" << k << "_waited_" << kLatchKindNames[i] << "_us=" << ns / 1000;
         }
         // BQ-S1's per-core share of the stream latch: the drain's part of
-        // `_waited_wal_stream_us`, and the waits a segment roll covered.
+        // `_waited_wal_stream_us`, and the waits a segment roll covered;
+        // BM-S1's window lookups (`LookupCommit`, a scan beside a writer's
+        // per-row question among them).
         for (const Tally t : {Tally::kWalDrainLatchWaitNs, Tally::kWalRollBlockedWaits,
-                              Tally::kWalRollBlockedWaitNs}) {
+                              Tally::kWalRollBlockedWaitNs, Tally::kWindowLookups}) {
             const std::uint64_t v = r(c.tallies[static_cast<std::size_t>(t)]);
             if (v == 0) continue;
             os << " load_c" << k << '_' << kTallyNames[static_cast<std::size_t>(t)] << '='
