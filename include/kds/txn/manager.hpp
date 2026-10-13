@@ -514,6 +514,12 @@ public:
     StatusOr<std::uint64_t> AppendUndo(Transaction& txn, UndoRecordFields fields,
                                        std::uint64_t pk, std::span<const std::byte> image);
 
+    // Runs ahead of every `AppendUndo`; a non-OK return fails that append
+    // with nothing written, as a device error on the undo tail would.
+    void SetBeforeUndoAppendForTest(std::function<Status(const UndoRecordFields&)> hook) {
+        before_undo_append_for_test_ = std::move(hook);
+    }
+
     // Records one write for rollback. Never fails: a trail entry is memory,
     // and a write that could not be recorded is a write that cannot be
     // undone - which is why the caller records *before* it mutates.
@@ -753,6 +759,8 @@ public:
 
 private:
     friend class ReaderLease;
+
+    std::function<Status(const UndoRecordFields&)> before_undo_append_for_test_;
 
     // The part of a commit after its record is appended, shared by `Commit`
     // and `FinishDeferredCommit`.

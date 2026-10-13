@@ -71,6 +71,14 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Testing
 
+- **`DropTableReclaimServingTest.ATwoCoreMountReclaimsOnceEveryCoreHasCheckpointedWhileServing`
+  failed once under host load.** On `worktree-bm-scan-kernel-open` at
+  `6b771ec1`'s tree, one full Debug `-j8` suite failed its
+  `IsAllocated(id)` expectation (`tests/drop_table_reclaim_test.cpp:684`)
+  at a host loadavg of 30 from other sessions; the stage (BM-S4, the scan
+  kernel's strings) touches no reclaim path. It then passed 6 of 6 alone
+  and 12 of 12 under `ctest --repeat`. **Owner: none**, no cause observed.
+
 - **`IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
   times out under `-j8`, twice in one day.**
   - **The failures.** On `worktree-ap-s2-trail-on-fetch-id` at `7fc2c57`'s
@@ -1106,13 +1114,47 @@ stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
   - the var-heap tail hint across a `DROP TABLE` reclaim that reuses the
     dropped chain's root id: the cell (`ARootIsBornWithNoHint`) uses the
     in-memory store's id order, not a reclaim on `DevicePageStore`.
-- **A scan row costs twice PostgreSQL's, and no single part of it
-  dominates**: 67 ns of server CPU a row net of the statement at BN's close
-  against PostgreSQL 18's 34 ns on one host and driver
-  (`bench/v3.0.0/results-bn-close-v2.7.0-787-g8679367e.md`). BN-S1's
-  re-profile on the busy census host split it between visibility, decode,
-  the residual and the leaf visit, none above a quarter
-  (`archive/bn-s1-census-v2.7.0-769-gb70f79d8/profB1r-reports.txt`).
+
+## The scan row (BM)
+
+Written at BM's close on `worktree-bm-scan-kernel-open`, verified at `952c67e5`. Owned by
+`instructions/v3.0.0/workorder-bm-scan-row-kernel.md` and `parser-v2.md` §7.
+
+- **A scan row costs 1.07 times PostgreSQL's after BM, and the largest
+  part left is `AcceptTupleAt`'s own body**: 31.0 ns of server CPU a row
+  net of the statement at the close (`6b771ec1`) against PostgreSQL 18's
+  29.1 ns on one host day and driver
+  (`bench/v3.0.0/results-bm-close-v2.7.0-946-g6b771ec1.md`), down from 67
+  against 34 at BN's close. The close's profile (29.3 ns on the
+  frame-pointer build, `bn` only) puts 13.8 ns in per-row checks and
+  counters - `AcceptTupleAt`'s body 9.1, `ReadTupleIn` 3.4,
+  `ExecStats::For` 1.4 - 7.4 in the kernel's compare and 6.2 in the slot
+  loop. Only the `bn` shape was profiled.
+- **A recent row's visibility is not memoized** (BM-R7, BM-S5 struck at
+  BM-S1, `bench/v3.0.0/results-bm-s1-scan-row-v2.7.0-942-gf5a7efb2.md`).
+  Beside a point writer, as BM-Q8's cell specifies, `LookupCommit` and the
+  window latch were 3.8 % of the scan core's CPU against the 10 % gate. The
+  share rises with the rows on the window path: 10.7 % beside an every-row
+  writer, 15.6 % with every row on it and no writer, a lookup costing
+  12-15 ns. Neither of those two shapes is the gate's cell, and a
+  statement scanning rows written since the floor pays them.
+- **A step's first visible row of a statement takes the full path**: the
+  kernel is armed only once that step's checks have run (BM-R6), so a
+  statement whose step sees one row gains nothing from it.
+- **The kernel holds a conjunct against a literal only**: a column on the
+  right, a function conjunct, a spilled `varchar`, a `uint64` pk and
+  `UPDATE` / `DELETE`'s own row loops are filtered as before.
+- **The every-row `UPDATE` may still pay a few µs for BM-S2** (verified
+  at `952c67e5`, `bench/v3.0.0/results-bm-s6-remedy-v2.7.0-948-g952c67e5.md`).
+  S2 put a `Status`-building check on every row of `UPDATE`'s path, +4.2 to
+  +4.7 % at the close; the remedy asks each as a predicate first, and the
+  pooled re-measure reads +8.9 µs literal and +3.2 prepared over A of
+  ~740, within the spread - but B2 is slower than A in 12 and 11 of 15
+  runs, and one batch of three reads +16.9 and +14.8. Measured at 1,000
+  rows, `cores = 1`, `relaxed` only. The per-row conjunct check itself
+  remains for `EvaluateConjuncts`' callers in `command_dispatcher.cpp`,
+  which never pass a per-statement check; checking them once would delete
+  it.
 
 ## Carve and checkpoint stalls
 
@@ -1165,11 +1207,22 @@ Owned by `instructions/v3.0.0/workorder-bp-per-core-residue.md` §7.
   level grew over** (BP-H6): at most 2.7e-4 drops per statement, 0.08 % of
   statement CPU at worst.
 - **The per-core id window** (AT-R4, BP-H8) is unmeasured: `SHOW META`
-  carries no window-size, burn or `LookupCommit` counter, and no skew cell
-  has run.
+  carries no window-size or burn counter, and no skew cell has run. A
+  `LookupCommit` count exists since BM-S1 (`visibility_window_lookups`).
 - **The per-core in-flight table** (AX, BP-H9): a miss reads one id; its
   1,024-slot cap per core was not approached, and the skew case that would
   settle whether one core can reach it while others have room has not run.
+- **A `cores = 1` every-row `UPDATE` runs 3-6 % slower since BQ joined BP's
+  branch, cause not found** (carried open at BP's and BQ's close,
+  2026-10-13). `ccf9cfc1` is the one fast build; every build from the merge
+  `6139c2de` on is slower, about 1 point of it the harness's position
+  offset. About half the gap sits in `WalManager::Append`'s own frame
+  (1.05 % of samples to 2.97-3.60 %), its callee `WalStream::Append` flat.
+  Three bounded attempts (a bisect, aligned builds, a lazy `RollRecord`)
+  did not find it. Point statements and `cores = 4` are within noise
+  (`bench/v3.0.0/results-bp-bq-close-v2.7.0-924-g3e77e7d1.md`).
+- **BP-H10's fence premium is +5.1 %** after BP-S6 at `cores = 8`; its next
+  cut, BP-Q15 (b), is a protocol change for its own order.
 
 ## Backup and restore (BR)
 

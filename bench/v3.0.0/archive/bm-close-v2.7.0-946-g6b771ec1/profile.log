@@ -1,0 +1,2 @@
+{"cell": "bn", "kind": "scan", "rows": 10000, "ops": 20000, "bad": 0, "server_cpu_us": 319.45808555, "wall_us": 354.21202100114897, "dump": "/home/cdkbs/bench-runs/bm-s6/prof/dump.0"}
+{"cell": "bn", "kind": "point", "rows": 10000, "ops": 3000, "bad": 0, "server_cpu_us": 26.080875, "wall_us": 58.02392268863817}

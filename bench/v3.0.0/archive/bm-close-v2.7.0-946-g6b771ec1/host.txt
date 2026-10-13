@@ -1,0 +1,90 @@
+== date
+2026-10-13 05:44:31 UTC
+== uname
+Linux ckdbs-dev 7.0.0-1014-azure #14~24.04.1-Ubuntu SMP PREEMPT Fri Aug 14 17:35:51 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+== lscpu
+CPU(s):                                  8
+Model name:                              AMD EPYC 9V74 80-Core Processor
+Thread(s) per core:                      2
+Core(s) per socket:                      4
+Socket(s):                               1
+L2 cache:                                4 MiB (4 instances)
+L3 cache:                                32 MiB (1 instance)
+== siblings
+cpu0: 0-1
+cpu2: 2-3
+cpu4: 4-5
+cpu6: 6-7
+== mem
+               total        used        free      shared  buff/cache   available
+Mem:           15982        3757        1354          95       11312       12224
+== df -T (data files and WAL under /home/cdkbs/bench-runs/bm-s6, the binaries, the scratchpad)
+Filesystem     Type 1K-blocks      Used Available Use% Mounted on
+/dev/root      ext4 258932720 177582328  81334008  69% /
+/dev/root      ext4 258932720 177582328  81334008  69% /
+/dev/root      ext4 258932720 177582328  81334008  69% /
+== tmpfs mounts
+5
+== git
+6b771ec11701b394870cd60f269545a6a34976cb
+v2.7.0-946-g6b771ec1
+v2.7.0-940-gfa80da9d
+ M CLAUDE.md
+ M docs/inflight/known-gaps.md
+ M docs/spec/parser-v2.md
+ M include/kds/exec/step_vm.hpp
+ M kds.conf.sample
+ M manual/sql/sql.md
+ M tools/bm_scan.py
+ M tools/bn_census.py
+ M tools/bn_parts.json
+ M tools/bn_pg_scan.py
+?? tools/bm_close_table.py
+== commits
+A fa80da9d fa80da9dbd654d3dfd5456d75c45adcf31d50712 committed Tue Oct 13 00:40:21 2026 +0000
+B 6b771ec1 6b771ec11701b394870cd60f269545a6a34976cb committed Tue Oct 13 04:41:04 2026 +0000
+== binaries
+df1e67bae6a60f47ef05cd916c94938215287195bdc802b04730c414b787379f  /home/cdkbs/bench-runs/bm-s6/bin/kds_sampler.so
+c4f442aebe7e3a7d4ea504b94e16d757c1770ffb4ae71fcae09b075faaab45d6  /home/cdkbs/bench-runs/bm-s6/bin/kds_server-A
+c4f442aebe7e3a7d4ea504b94e16d757c1770ffb4ae71fcae09b075faaab45d6  /home/cdkbs/bench-runs/bm-s6/bin/kds_server-A2
+963894d08781bd2d37b682b1a453be210ba7590e91fc157129ae8b272ce069ca  /home/cdkbs/bench-runs/bm-s6/bin/kds_server-B
+1455b6f8597e9a00ac2a8b0962ab0041398ab0a0ffd57d63844dc3845dddb103  /home/cdkbs/bench-runs/bm-s6/bin/kds_server-Bfp
+6bde0dde30bd66e928d75902b9fef97e141b29932a3434acffe528415ed2c8a5  /home/cdkbs/bench-runs/bm-s6/bin/kds_server-Apad
+== source binaries' mtimes (build trees)
+2026-10-13 04:45:27.184485901 +0000 /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s6/build-A/kds_server
+2026-10-13 04:48:49.264998204 +0000 /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s6/build-A2/kds_server
+2026-10-13 04:46:56.266930099 +0000 /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s6/build-B/kds_server
+2026-10-13 04:49:56.662819963 +0000 /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s6/build-Bfp/kds_server
+2026-10-13 04:52:39.368143157 +0000 /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s6/build-Apad/kds_server
+== build type
+A: CMAKE_BUILD_TYPE:STRING=Release CMAKE_CXX_FLAGS:STRING= 
+A2: CMAKE_BUILD_TYPE:STRING=Release CMAKE_CXX_FLAGS:STRING= 
+B: CMAKE_BUILD_TYPE:STRING=Release CMAKE_CXX_FLAGS:STRING= 
+Bfp: CMAKE_BUILD_TYPE:STRING=Release CMAKE_CXX_FLAGS:STRING=-fno-omit-frame-pointer 
+Apad: CMAKE_BUILD_TYPE:STRING=Release CMAKE_CXX_FLAGS:STRING=-falign-functions=64 
+== driver hashes
+1896ef2022a52b20ef5b5fc011163ab57b10d9525191c03ed925393ec08aa362  /home/cdkbs/ckdbs/.claude/worktrees/bm-scan-kernel-open/tools/bm_scan.py
+d7b8076505860855db88e213f12ed17d26daf7c15e1efebed06751e632de8699  /home/cdkbs/ckdbs/.claude/worktrees/bm-scan-kernel-open/tools/bn_census.py
+344342f5a40a344448e4937dc4ac4d565fbb695e5709d6dd05fadb86cb6bf02b  /home/cdkbs/ckdbs/.claude/worktrees/bm-scan-kernel-open/tools/bn_pg_scan.py
+736e0e669f487ac1cc36e561c21d089f01737408c590b41002f1bd5c5edf181e  /home/cdkbs/ckdbs/.claude/worktrees/bm-scan-kernel-open/tools/bm_close_table.py
+91b0c2c328e9f9c807c37b52b7dcac94240035b3cac094736624f4904e3bfbf3  /home/cdkbs/ckdbs/.claude/worktrees/bm-scan-kernel-open/tools/bn_parts.json
+a86c7340497a67f0f4c57ea051b83738a15b59b474f5da438e5a38f2e277dba0  /home/cdkbs/ckdbs/.claude/worktrees/bm-scan-kernel-open/tools/kds_sampler.c
+cf9c82623a86c470c8e507f6f7038d2d2b5e96d5390455d96c5c7b75adcd5b48  /home/cdkbs/ckdbs/.claude/worktrees/bm-scan-kernel-open/tools/kds_sampler_report.py
+== PostgreSQL
+PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+128MB
+2
+on
+on
+15434
+== loadavg
+0.29 0.86 2.01 2/550 1106087
+== top CPU
+    PID %CPU     ELAPSED COMMAND
+ 851779  4.4    04:47:11 claude
+ 449248  3.1    22:12:22 claude
+ 831310  1.6    05:29:00 claude bg-spare --bg-spare /tmp/cc-daemon-1000/fbde1ac8/spare/9ad0f353.claim.sock
+1081078  1.2       47:35 claude --worktree wo-test-hardening --resume enhence-test-suites
+ 972556  0.9    02:11:34 claude
+   1009  0.7 13-05:14:58 /home/cdkbs/autotrade/ckdbs/build-release/kds_server /home/cdkbs/autotrade/store/kds.db --port 15432 --log-dir /home/cdkbs/autotrade/st
+3790494  0.6  1-22:06:34 ./kds_server --config kds.conf

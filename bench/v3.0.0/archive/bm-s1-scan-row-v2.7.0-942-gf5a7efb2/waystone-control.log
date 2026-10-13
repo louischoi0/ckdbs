@@ -1,0 +1,18 @@
+{"run": 0, "recording": true, "pages_allocated": 842}
+{"run": 0, "recording": false, "pages_allocated": 0}
+{"run": 1, "recording": false, "pages_allocated": 0}
+{"run": 1, "recording": true, "pages_allocated": 842}
+{"run": 2, "recording": true, "pages_allocated": 842}
+{"run": 2, "recording": false, "pages_allocated": 0}
+{"run": 3, "recording": false, "pages_allocated": 0}
+{"run": 3, "recording": true, "pages_allocated": 842}
+{"run": 4, "recording": true, "pages_allocated": 842}
+{"run": 4, "recording": false, "pages_allocated": 0}
+{"run": 5, "recording": false, "pages_allocated": 0}
+{"run": 5, "recording": true, "pages_allocated": 842}
+recording on  rows-200  point 24.5 us  scan 37.8 us  net row 66.2 ns [64.1, 67.6]
+recording on  rows-1k   point 26.1 us  scan 90.8 us  net row 64.9 ns [64.2, 66.7]
+recording on  bn        point 24.4 us  scan 680.4 us  net row 65.6 ns [64.6, 68.1]
+recording off rows-200  point 24.1 us  scan 37.8 us  net row 68.3 ns [65.6, 72.4]
+recording off rows-1k   point 24.3 us  scan 91.0 us  net row 66.7 ns [65.4, 69.9]
+recording off bn        point 24.7 us  scan 677.3 us  net row 65.3 ns [64.9, 69.3]

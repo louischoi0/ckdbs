@@ -135,6 +135,8 @@ struct IndexInsertResult {
     // core's insert into the leaf between the write and its record shifts
     // it. The caller logs from the page under this hold, then drops it.
     std::vector<storage::PageRef> held;
+    // A divide that grew a root: its anchor's `UnlatchedPin`.
+    storage::UnlatchedPin anchor;
 
     std::span<const IndexChange> changes() const {
         return std::span<const IndexChange>(structural.data(), n_structural);
@@ -171,15 +173,20 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layou
 //   ...              whatever the store reports when a page cannot be
 //                    allocated
 //
-// On failure pages may already have been allocated, and none is freed here
-// - a free needs BF-R4's replay gate. A leaf a failed propagation leaves is
+// A divide claims every page it creates before it writes one, as the
+// clustered tree's split does (btree.hpp). On a later failure pages may
+// already have been allocated, and none is freed here - a free needs
+// BF-R4's replay gate. A leaf a failed propagation leaves is
 // linked into the right-sibling chain, which a dropped relation's reclaim
 // follows; anything else it leaves is a stated leak (`drop-table.md` DT1).
+//
+// `anchor_page` is the anchor a growth pins (`UnlatchedPin`); none pins nothing.
 StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                                         const IndexLayout& layout,
                                         std::span<const std::byte> key, std::uint64_t pk,
                                         std::span<const std::byte> covered,
-                                        std::uint64_t owner_oid);
+                                        std::uint64_t owner_oid,
+                                        PageId anchor_page = kInvalidPageId);
 
 // The leaf that holds `sort_key`, or that *would* hold it - the descent
 // alone, with no question about whether anything matches.

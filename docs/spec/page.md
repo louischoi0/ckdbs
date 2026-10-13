@@ -79,6 +79,7 @@ Raw spans are unsafe the moment eviction exists; the interface fixes it structur
 
 - `PageRef` is a move-only RAII guard: construction pins the frame, destruction unpins. It exposes `page_id()`, `bytes()` (fixed-extent span, valid exactly as long as the ref lives), `MarkDirty()`, and `page_class()`.
 - `PageStore` contract: `CreateAt(page_id) → StatusOr<PageRef>`, `CreateNew() → StatusOr<pair<PageId, PageRef>>`, `Get(page_id) → StatusOr<PageRef>`, `GetForRead(page_id) → StatusOr<PageRef>`. Unbalanced unpins are impossible by construction; `Frame` is an implementation detail no caller names.
+- **A page can be pinned with no latch** (`PageStore::PinUnlatched`, `UnlatchedPin`, `PinMode::kUnlatched`). The handle keeps the frame resident and nothing more: a later `Get` of the page is a hit that neither the pool nor the device can refuse, and the holder has taken no place in any latch order. It exists for a write that must not fail on a fault it reaches after it has written: a B+ tree split that grows a level pins the relation's anchor before it writes anything (`heap-and-tuple.md` §5). An unlatched pin counts against the pool like any pin (EV4) and is given back as soon as the latched access it prepared has been taken.
 - Pin discipline: holding a `PageRef` across a task suspension point is legal but metered (§11) — suspended portals and long scans are the known holders.
 - A stamp records the frame's `recLSN` (the lowest LSN stamped since the last clean, or since the copy of a clean the dirty generation skipped) — the hook feeding the checkpoint dirty-page table (§8).
 
@@ -187,6 +188,7 @@ The file is growable to the 16 TiB ceiling:
 
 - Growth unit is the extent (§5). `FilePageDevice` grows by `extent_pages` via `posix_fallocate` — real block reservation, not a size change — and a file whose size is not a whole number of pages is `Corruption` rather than rounded. Extension is idempotent on replay.
 - The free map is unlogged (§5), so no `ALLOC` record precedes an extension; a crash between extension and first use leaves pages the allocation floor re-absorbs at recovery.
+- **A creation can be claimed ahead of the write it serves** (`PageStore::ClaimNew`, `PageClaims`). A claim does everything a creation can fail at - it reserves the frame slot, claims the id (the free list first, then the cursor) and makes the device addressable for it - and publishing a claimed page cannot be refused by the pool or the device. A B+ tree split claims every page it will create once its parents are held and before it writes anything, so a file that cannot grow refuses the insert with the tree as it was; claims not used are given back, highest id first so the cursor steps back over them. A claimed id is in flight to `CreateAt` (refused `AlreadyExists`) and to `FreePage` (`kDeferred`). A store with no device claims nothing, and its claimed creations are ordinary ones.
 - Shrinking/truncation is a **non-goal**. A dropped relation's pages are freed and their ids reused (§5), but nothing returns space to the filesystem.
 
 ## 15. mmap Evaluation — Rejected for Data & WAL

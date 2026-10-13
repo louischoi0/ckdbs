@@ -179,18 +179,24 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
 //   ...            whatever the store reports when a page cannot be
 //                  allocated
 //
-// On failure nothing is reported as structural, but pages *may* already
-// have been allocated, and none is freed here - a free needs BF-R4's replay
-// gate. The new leaf a failed promotion leaves is linked into the leaf
+// **A split claims every page it creates before it writes one**
+// (`PageStore::ClaimNew`), so a store that cannot grow, or a free map it
+// cannot read, refuses the insert with the tree as it was; the claims go
+// back. On a later failure nothing is reported as structural, but pages
+// *may* already have been allocated, and none is freed here - a free needs
+// BF-R4's replay gate. The new leaf a failed promotion leaves is linked into the leaf
 // chain on a dividing split and reached by no descent; an append split's
 // new leaf, and any internal node the promotion created, are reached by
 // neither. A dropped relation's reclaim follows the leaf chain, so it frees
 // the first; the rest is a stated leak (`drop-table.md` DT1).
+//
+// `anchor_page` is the anchor a growth pins (`UnlatchedPin`); none pins nothing.
 StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId root,
                                                 std::uint64_t id,
                                                 std::span<const std::byte> payload,
                                                 std::uint64_t trx_id,
-                                                std::uint64_t owner_oid);
+                                                std::uint64_t owner_oid,
+                                                PageId anchor_page = kInvalidPageId);
 
 // Descends to the leaf that owns `id` and finds its live slot. This is the
 // point-lookup the whole structure exists for: O(depth) page fetches plus
@@ -270,6 +276,13 @@ Status BtreeVisit(
 // through it; exposed for callers that own the page loop themselves
 // (exec's RunWalkStep, workplan-crosscore.md P4d-3).
 StatusOr<PageId> BtreeLeftmostLeaf(storage::PageStore& store, PageId root);
+
+// A leaf, fetched under `access` and checked to be one: the page a leaf
+// walk reads its slots from, whether `BtreeVisitLeafPage` drives the slot
+// loop or the caller does (the step VM's walk, BM-R5). A page of another
+// type is `Corruption`, naming it.
+StatusOr<storage::PageRef> BtreeFetchLeaf(storage::PageStore& store, PageId leaf,
+                                          storage::PageAccess access);
 
 // One leaf of the walk BtreeVisit makes: calls `fn` per slot of exactly
 // `leaf`, under the same visitor contract, and returns the right sibling

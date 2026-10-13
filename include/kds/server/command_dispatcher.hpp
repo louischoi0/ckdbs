@@ -435,6 +435,7 @@ struct StatementLimits {
     exec::AggregateLimits aggregate;
     std::size_t sort_max_rows = exec::kDefaultSortMaxRows;
     std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
+    bool scan_kernel = true;
 };
 
 // **The physical optimizer's surface, as one value** (AT-S8, on the
@@ -1726,7 +1727,7 @@ public:
         budget_.set_join_build_max_rows(rows);
     }
 
-    // All five at once, as an instance hands them to each core (AT-S8,
+    // All of them at once, as an instance hands them to each core (AT-S8,
     // `StatementLimits`).
     void set_statement_limits(const StatementLimits& limits) noexcept {
         indexes_enabled_ = limits.indexes;
@@ -1734,6 +1735,7 @@ public:
         set_aggregate_limits(limits.aggregate);
         set_sort_max_rows(limits.sort_max_rows);
         set_join_build_max_rows(limits.join_build_max_rows);
+        budget_.set_scan_kernel(limits.scan_kernel);
     }
 
 
@@ -2222,12 +2224,18 @@ private:
     // before an own transaction's commit, whose durability wait must not run
     // under a latch. `spills` is the manager-less path's: with a manager
     // each spill was noted and logged at its append (`SpillLogFor`).
-    Status LogInsert(storage::InsertPlacement& placed, PageType leaf_type,
+    Status LogInsert(storage::InsertPlacement& placed, bool btree,
                      std::span<const std::byte> tuple, std::uint64_t trx_id,
                      std::uint64_t owner_oid, PageId anchor_page_id,
                      const std::vector<exec::AppendedSpill>& spills,
                      const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
+
+    // Every page a heap insert restructured, in the order redo applies them:
+    // a new tuple page as a PAGE_INIT, left unstamped for the record that
+    // fills it to stamp, and a repointed link as a full page image.
+    Status LogChainGrowth(const storage::InsertPlacement& placed, std::uint64_t txn_id,
+                          std::uint64_t owner_oid);
 
     // A clustered split's one BTREE_SPLIT record and, when it grew the tree
     // a level, the root's publication **inside that record**: the anchor's
@@ -2235,15 +2243,16 @@ private:
     // adopted in memory once the record is appended. A log cut therefore
     // keeps the split and its root together or neither. With no log the
     // slot is still written and adopted.
-    Status LogSplit(const storage::InsertPlacement& placed, std::uint64_t txn_id, catalog::Oid oid,
+    Status LogSplit(storage::InsertPlacement& placed, std::uint64_t txn_id, catalog::Oid oid,
                     PageId anchor_page_id);
 
     // The record both trees' splits take: `pages` as one BTREE_SPLIT and,
     // when `new_root` is set, the anchor staged into it and the root
     // adopted after the append (`index_oid` 0 is the clustered root).
+    // `anchor_pin` is the split's pin on the anchor, released once staged.
     Status LogTreeSplit(std::span<const PageId> pages, std::uint64_t txn_id,
                         catalog::Oid rel_oid, std::uint64_t index_oid, PageId new_root,
-                        PageId anchor_page_id);
+                        PageId anchor_page_id, storage::UnlatchedPin* anchor_pin);
 
     // One page's full image, logged and the page stamped behind it.
     //

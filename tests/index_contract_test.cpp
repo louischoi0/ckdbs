@@ -48,7 +48,7 @@ namespace {
 // because the snapshot case needs real undo and the rest does not care.
 class Instance {
 public:
-    explicit Instance(bool indexes) {
+    explicit Instance(bool indexes, bool scan_kernel = true) {
         auto boot = bootstrap::BootstrapDatabase(store_, 1000);
         EXPECT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
@@ -57,9 +57,11 @@ public:
         undo_.emplace(store_, /*wal=*/nullptr);
         mgr_.emplace(*ids_, *undo_, store_, /*wal=*/nullptr);
 
+        exec::Budget budget;
+        budget.set_scan_kernel(scan_kernel);
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
                             /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kRelaxed,
-                            exec::Budget(), /*recorder=*/nullptr, /*replay=*/false,
+                            budget, /*recorder=*/nullptr, /*replay=*/false,
                             /*access_statistics=*/true, /*cabins=*/nullptr, &*mgr_,
                             txn::IsolationLevel::kReadCommitted, /*core_id=*/0, indexes);
     }
@@ -222,6 +224,22 @@ TEST(IndexContractTest, EveryConfigurationReturnsTheSameBytes) {
         EXPECT_EQ(maintained.Run(sql), expected) << "write-hook-filled index: " << sql;
         EXPECT_EQ(backfilled.Run(sql), expected) << "backfilled index: " << sql;
         EXPECT_EQ(ignored.Run(sql), expected) << "indexes = off: " << sql;
+    }
+}
+
+// BM-S3: every query, indexed and walked, with the scan kernel off and on.
+TEST(IndexContractTest, TheScanKernelSwitchChangesNoReply) {
+    Instance indexed_on(/*indexes=*/true);
+    Instance indexed_off(/*indexes=*/true, /*scan_kernel=*/false);
+    Instance plain_on(/*indexes=*/true);
+    Instance plain_off(/*indexes=*/true, /*scan_kernel=*/false);
+    LoadMaintained(indexed_on);
+    LoadMaintained(indexed_off);
+    LoadPlain(plain_on);
+    LoadPlain(plain_off);
+    for (const std::string& sql : Queries()) {
+        EXPECT_EQ(indexed_on.Run(sql), indexed_off.Run(sql)) << "indexed: " << sql;
+        EXPECT_EQ(plain_on.Run(sql), plain_off.Run(sql)) << "walked: " << sql;
     }
 }
 

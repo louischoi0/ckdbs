@@ -438,9 +438,14 @@ field, read differently:
   overlapped; and `contention_wal_roll_blocked_wait_us`, the part of the wait
   the hold covered. All three stay 0 at `cores = 1`, where the stream latch
   is null.
+- **`contention_visibility_window_lookups`** (BM-S1): every
+  `LookupCommit` - a read view's question its floor did not answer, or a
+  horizon wait's - counted at every core count, under the window latch only
+  above one core.
 - **Per core, beside `load_c<k>_waited_wal_stream_us`**:
-  `load_c<k>_wal_drain_latch_wait_us`, `load_c<k>_wal_roll_blocked_waits` and
-  `load_c<k>_wal_roll_blocked_wait_us`, each absent when 0. The rest of
+  `load_c<k>_wal_drain_latch_wait_us`, `load_c<k>_wal_roll_blocked_waits`,
+  `load_c<k>_wal_roll_blocked_wait_us` and `load_c<k>_visibility_window_lookups`,
+  each absent when 0. The rest of
   `load_c<k>_waited_wal_stream_us` is every other stream-latch acquisition on
   that core - statements, the checkpoint's flush, writeback's, the anchor
   publish's detach, and on core 0 the threads that declared no core.

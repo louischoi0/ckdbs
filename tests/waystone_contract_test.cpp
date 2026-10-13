@@ -45,14 +45,16 @@ namespace {
 // One database, one dispatcher, one configuration.
 class Instance {
 public:
-    Instance(bool record, bool replay) {
+    Instance(bool record, bool replay, bool scan_kernel = true) {
         auto boot = bootstrap::BootstrapDatabase(store_, 1000);
         EXPECT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
         recorder_.emplace(boot_->catalog, store_);
+        exec::Budget budget;
+        budget.set_scan_kernel(scan_kernel);
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
                             /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
-                            exec::Budget(), record ? &*recorder_ : nullptr, replay);
+                            budget, record ? &*recorder_ : nullptr, replay);
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
@@ -281,6 +283,16 @@ TEST(WaystoneContractTest, RecordingAndReplayingChangesNoReply) {
     Instance db(/*record=*/true, /*replay=*/true);
     Load(db);
     ExpectSame(RunAll(db, 3), Reference(), "recording+replay");
+}
+
+// BM-S3: recording and replaying with the scan kernel off answer what the
+// kernel's default answers, byte for byte, every round.
+TEST(WaystoneContractTest, TheScanKernelSwitchChangesNoReply) {
+    Instance on_db(/*record=*/true, /*replay=*/true);
+    Instance off_db(/*record=*/true, /*replay=*/true, /*scan_kernel=*/false);
+    Load(on_db);
+    Load(off_db);
+    ExpectSame(RunAll(on_db, 3), RunAll(off_db, 3), "scan kernel on against off");
 }
 
 TEST(WaystoneContractTest, RecordingWithoutReplayingChangesNoReply) {

@@ -92,6 +92,9 @@ struct IndexWrite {
     catalog::Oid rel_oid = 0;
     catalog::Oid index_oid = 0;
     PageId anchor_page_id = kInvalidPageId;
+    // The divide's pin on that anchor (`IndexInsertResult::anchor`), alive
+    // for the log call this write is handed to; a copy kept past it is null.
+    storage::UnlatchedPin* anchor_pin = nullptr;
 };
 
 // What maintenance hands each write to, **while the tree still holds the
@@ -140,7 +143,10 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
 // `kInvalidPageId` otherwise - which also covers "the write touched nothing
 // this index cares about", since both mean there is nothing to republish.
 // Reporting rather than republishing is what lets the backfill hold its root
-// in a local while the index is still unpublished.
+// in a local while the index is still unpublished. With `publish` and no
+// `log`, a new root is republished here instead, through the catalog and
+// while the divide still pins the anchor (`UnlatchedPin`), and none is
+// reported; the backfill passes neither, and its growth pins nothing.
 StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   const catalog::TableAccess& access,
                                   const catalog::TableAccess::IndexRef& ix,
@@ -148,6 +154,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::uint16_t first_col_pos, std::span<const std::byte> row,
                                   std::uint64_t pk,
                                   std::span<const parser::AstValue> previous = {},
-                                  const IndexWriteLog* log = nullptr);
+                                  const IndexWriteLog* log = nullptr,
+                                  catalog::Catalog* publish = nullptr);
 
 }  // namespace kds::exec

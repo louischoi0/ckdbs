@@ -298,6 +298,14 @@ public:
     // NotFound only if `slot` is out of range or physically retired.
     StatusOr<Tuple> ReadTuple(std::uint16_t slot) const;
 
+    // ReadTuple() with the page header's slot count supplied by the caller,
+    // as PayloadAt() takes it: a walk reads `slot_count()` once per page
+    // rather than five header fields per slot (BM-R5,
+    // `workorder-bm-scan-row-kernel.md`). Every check ReadTuple() makes is
+    // made, with its message; `nr_slots` must be this page's slot_count()
+    // under the hold the caller reads the slots under.
+    StatusOr<Tuple> ReadTupleIn(std::uint16_t slot, std::uint16_t nr_slots) const;
+
     // Just the payload bytes of the tuple at `slot` - ReadTuple() without
     // the MVCC header decode, and without re-reading the page header.
     // `nr_slots` is the caller's already-read slot_count(): a key search

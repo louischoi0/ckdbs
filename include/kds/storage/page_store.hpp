@@ -1,11 +1,13 @@
 #pragma once
 
 #include <array>
+#include <cassert>
 #include <atomic>
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <utility>
+#include <vector>
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
@@ -137,6 +139,7 @@ public:
 
 private:
     friend class PageStore;
+    friend class PageClaims;
     PageRef(PageStore* store, PageId page_id, std::span<std::byte, kPageSize> bytes) noexcept
         : store_(store), page_id_(page_id), data_(bytes.data()) {}
 
@@ -156,7 +159,66 @@ private:
 // implements and must not depend on the latch primitive, and the two name
 // different things - the accessor's intent here, the word's state there -
 // that happen to coincide today.
-enum class PinMode : std::uint8_t { kShared, kExclusive };
+//
+// `kUnlatched` is a pin and no latch (`UnlatchedPin`).
+enum class PinMode : std::uint8_t { kShared, kExclusive, kUnlatched };
+
+// **Creations claimed ahead of the writes they serve** (`PageStore::ClaimNew`).
+// A split writes a page and then creates the next one, and a creation can
+// fail for the device - a file that cannot grow, a free-map region that
+// cannot be read - as well as for the pool; failing after the first write
+// leaves the structure torn (`docs/inflight/bugs/a-fetch-refused-after-a-
+// page-write-leaves-the-mutation-half-done.md`). A claim does everything a
+// creation can fail at - the frame slot, the id, the device's room for it -
+// so `CreateNew` here only publishes a claimed page. Claims not used go
+// back when the handle dies. Past its claims - a store that claims nothing,
+// having no device to fail - `CreateNew` is the store's own.
+class PageClaims {
+public:
+    PageClaims() = default;
+    PageClaims(PageClaims&& other) noexcept
+        : store_(std::exchange(other.store_, nullptr)), ids_(std::move(other.ids_)),
+          next_(other.next_) {}
+    PageClaims& operator=(PageClaims&&) = delete;
+    PageClaims(const PageClaims&) = delete;
+    inline ~PageClaims();
+
+    // The next claimed page, created zeroed and pinned exclusive.
+    inline StatusOr<std::pair<PageId, PageRef>> CreateNew();
+
+private:
+    friend class PageStore;
+    PageStore* store_ = nullptr;
+    std::vector<PageId> ids_;
+    std::size_t next_ = 0;
+};
+
+// A pin with no latch (`PageStore::PinUnlatched`): the frame stays in the
+// pool and nothing more, so a later `Get` of it is a hit neither the pool nor
+// the device can refuse, and the holder takes no place in any latch order.
+// A split that grows a root pins the anchor it will re-publish through this
+// way before it writes anything, and takes the anchor's latch only where it
+// always did, after every tree page - holding the anchor exclusive across
+// the split instead would put it ahead of another core's index pages, and a
+// page latch has no timeout (`docs/spec/page.md` §3). Move-only; the pin
+// drops with the handle, and an empty one holds nothing.
+class UnlatchedPin {
+public:
+    UnlatchedPin() noexcept = default;
+    UnlatchedPin(UnlatchedPin&& other) noexcept
+        : store_(std::exchange(other.store_, nullptr)), page_id_(other.page_id_) {}
+    inline UnlatchedPin& operator=(UnlatchedPin&& other) noexcept;
+    UnlatchedPin(const UnlatchedPin&) = delete;
+    UnlatchedPin& operator=(const UnlatchedPin&) = delete;
+    ~UnlatchedPin() { Release(); }
+    inline void Release() noexcept;
+
+private:
+    friend class PageStore;
+    UnlatchedPin(PageStore* store, PageId page_id) noexcept : store_(store), page_id_(page_id) {}
+    PageStore* store_ = nullptr;
+    PageId page_id_ = kInvalidPageId;
+};
 
 class PageStore {
 public:
@@ -235,12 +297,14 @@ public:
     // `which` picks the raw create rather than three virtuals: the three
     // differ only in how the id is chosen and whether a header is stamped,
     // and a store overriding this needs to know which it is servicing.
-    enum class CreateKind : std::uint8_t { kAt, kNew, kNewHeaderless };
+    // `kClaimed` publishes an id `ClaimNew` claimed.
+    enum class CreateKind : std::uint8_t { kAt, kNew, kNewHeaderless, kClaimed };
 
     virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreatePinned(
         CreateKind which, PageId page_id) {
-        if (which == CreateKind::kAt) {
-            auto bytes = CreateAtUnpinned(page_id);
+        if (which == CreateKind::kAt || which == CreateKind::kClaimed) {
+            auto bytes = which == CreateKind::kAt ? CreateAtUnpinned(page_id)
+                                                  : CreateClaimedUnpinned(page_id);
             if (!bytes.ok()) return bytes.status();
             PinFrame(page_id, PinMode::kExclusive);
             return std::pair<PageId, std::span<std::byte, kPageSize>>(page_id, bytes.value());
@@ -268,6 +332,30 @@ public:
             made.value().first, PageRef(this, made.value().first, made.value().second));
     }
 
+    // Faults `page_id` in and pins it with no latch (`UnlatchedPin`);
+    // `kInvalidPageId` pins nothing and answers an empty handle.
+    StatusOr<UnlatchedPin> PinUnlatched(PageId page_id) {
+        if (page_id == kInvalidPageId) return UnlatchedPin();
+        auto bytes = FetchPinned(page_id, PinMode::kUnlatched, /*for_read=*/true,
+                                 FetchHeat::kWarm);
+        if (!bytes.ok()) return bytes.status();
+        return UnlatchedPin(this, page_id);
+    }
+
+    // Claims `n` creations ahead (`PageClaims`): every way a creation can
+    // fail happens here, before the caller writes anything.
+    StatusOr<PageClaims> ClaimNew(std::size_t n) {
+        PageClaims claims;
+        claims.store_ = this;
+        for (std::size_t i = 0; i < n; ++i) {
+            auto id = ClaimNewId();
+            if (!id.ok()) return id.status();  // the claims so far go back
+            if (id.value() == kInvalidPageId) break;  // a store that claims nothing
+            claims.ids_.push_back(id.value());
+        }
+        return claims;
+    }
+
     // CreateNew() for a page with no common header - see
     // CreateNewHeaderlessUnpinned() for who needs that and why.
     StatusOr<std::pair<PageId, PageRef>> CreateNewHeaderless() {
@@ -289,6 +377,8 @@ public:
         (void)mode;
     }
     virtual void UnpinFrame(PageId page_id) noexcept { (void)page_id; }
+    // A `kUnlatched` pin's release: the pin alone, there being no latch.
+    virtual void UnpinUnlatchedFrame(PageId page_id) noexcept { (void)page_id; }
     virtual void MarkFrameDirty(PageId page_id) noexcept { (void)page_id; }
 
     // Outstanding pins across the store, for the suspend audit
@@ -399,6 +489,18 @@ public:
 
 protected:
     virtual StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) = 0;
+
+    // A claim's two halves and its return (`PageClaims`). The default claims
+    // nothing - `kInvalidPageId` - and is the true implementation for a
+    // store with no device and no pool, whose creation cannot fail after a
+    // write any more than before it.
+    virtual StatusOr<PageId> ClaimNewId() { return kInvalidPageId; }
+    virtual StatusOr<std::span<std::byte, kPageSize>> CreateClaimedUnpinned(PageId page_id) {
+        return Status::InvalidArgument("page " + std::to_string(page_id) +
+                                       " was not claimed from this store");
+    }
+    virtual void ReleaseClaimedId(PageId page_id) noexcept { (void)page_id; }
+    friend class PageClaims;
 
     virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() = 0;
 
@@ -615,6 +717,38 @@ private:
 
 inline std::unique_ptr<ScanFetcher> PageStore::OpenScanRing(std::size_t /*frames*/) {
     return std::make_unique<PlainScanFetcher>(*this);
+}
+
+inline UnlatchedPin& UnlatchedPin::operator=(UnlatchedPin&& other) noexcept {
+    if (this != &other) {
+        Release();
+        store_ = std::exchange(other.store_, nullptr);
+        page_id_ = other.page_id_;
+    }
+    return *this;
+}
+
+inline void UnlatchedPin::Release() noexcept {
+    if (store_ != nullptr) std::exchange(store_, nullptr)->UnpinUnlatchedFrame(page_id_);
+}
+
+inline PageClaims::~PageClaims() {
+    if (store_ == nullptr) return;
+    // Highest first, so a store's cursor steps back over every id it gave.
+    for (std::size_t i = ids_.size(); i-- > next_;) store_->ReleaseClaimedId(ids_[i]);
+}
+
+inline StatusOr<std::pair<PageId, PageRef>> PageClaims::CreateNew() {
+    if (next_ == ids_.size()) {
+        // Only a store that claims nothing gets here: a claiming store run
+        // past its claims is a caller that counted its creations wrong.
+        assert(ids_.empty() && "a claiming store ran past its claims");
+        return store_->CreateNew();
+    }
+    const PageId id = ids_[next_++];
+    auto made = store_->CreatePinned(PageStore::CreateKind::kClaimed, id);
+    if (!made.ok()) return made.status();
+    return std::pair<PageId, PageRef>(id, PageRef(store_, id, made.value().second));
 }
 
 inline PageRef& PageRef::operator=(PageRef&& other) noexcept {

@@ -1,0 +1,22 @@
+# measured copies (every server started from a copy); source binary mtimes
+ac007610a1222fd66accbd20e9c8772aa2939d3a5955a49db45935fe74d30c8d  /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/bin/kds_server-plain-f5a7efb2
+7d86d0ed7354327ad87a84d4182f7132444e85a49f37e930c45ed2bad1cc2cdb  /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/bin/kds_server-fp-f5a7efb2
+8c00fee223a50d36734400246e0fe0d217ea14c5930dc21f7cd9753f3c33b07e  /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/bin/kds_server-fpg-f5a7efb2
+df1e67bae6a60f47ef05cd916c94938215287195bdc802b04730c414b787379f  /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/bin/kds_sampler.so
+2026-10-13 01:24:13.011219448 +0000 /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-plain/kds_server
+2026-10-13 01:25:46.453743417 +0000 /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-fp/kds_server
+2026-10-13 02:19:07.930164054 +0000 /tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-fpg/kds_server
+# builds
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-plain/CMakeCache.txt:CMAKE_BUILD_TYPE:STRING=Release
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-plain/CMakeCache.txt:CMAKE_CXX_FLAGS:STRING=
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-plain/CMakeCache.txt:KDS_BUILD_SIM:BOOL=OFF
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-plain/CMakeCache.txt:KDS_BUILD_TESTS:BOOL=OFF
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-fp/CMakeCache.txt:CMAKE_BUILD_TYPE:STRING=Release
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-fp/CMakeCache.txt:CMAKE_CXX_FLAGS:STRING=-fno-omit-frame-pointer
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-fp/CMakeCache.txt:KDS_BUILD_SIM:BOOL=OFF
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-fp/CMakeCache.txt:KDS_BUILD_TESTS:BOOL=OFF
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-fpg/CMakeCache.txt:CMAKE_BUILD_TYPE:STRING=Release
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-fpg/CMakeCache.txt:CMAKE_CXX_FLAGS:STRING=-fno-omit-frame-pointer -g
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-fpg/CMakeCache.txt:KDS_BUILD_SIM:BOOL=OFF
+/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/build-fpg/CMakeCache.txt:KDS_BUILD_TESTS:BOOL=OFF
+# sampler: gcc -O2 -shared -fPIC -o kds_sampler.so tools/kds_sampler.c

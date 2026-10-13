@@ -230,6 +230,7 @@ public:
     server::SuperBlock& superblock() { return boot_->superblock; }
     storage::MemoryPageDevice& page_device() { return *page_device_; }
     wal::MemoryLogDevice& log_device() { return *log_device_; }
+    txn::TransactionManager& txn_manager() { return *txn_; }
 
 private:
     SimInstance() = default;

@@ -906,6 +906,14 @@ happened (per-step access kinds, rows touched, pages fetched,
 `index_filtered`, etc.). SELECT-class only; a write statement cannot be
 wrapped.
 
+`examined=` counts every row a step filtered, including the rows a scan
+rejected on their stored bytes before building them: a simple
+`column <op> literal` condition is tested on the row as stored first, and
+only a row that passes is decoded and checked in full. The rows returned,
+their order, `examined=` and `sel=` are the same either way; the server's
+`scan_kernel = off` turns the early test off, for comparison
+(`docs/spec/parser-v2.md` §7).
+
 ---
 
 ## 5. Transactions

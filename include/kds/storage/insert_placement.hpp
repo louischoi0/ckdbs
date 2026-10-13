@@ -122,6 +122,8 @@ struct InsertPlacement {
     // before a commit's durability wait, which must not run under a latch.
     // Empty on a placement that holds nothing.
     std::vector<PageRef> held;
+    // A split that grew a root: its anchor's `UnlatchedPin`.
+    UnlatchedPin anchor;
 
     // A heap chain's in the order redo has to apply them, before the
     // `HEAP_INSERT` that describes the tuple itself; a B+ tree's, the pages

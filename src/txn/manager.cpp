@@ -759,6 +759,9 @@ StatusOr<std::uint64_t> TransactionManager::AppendUndo(Transaction& txn,
     fields.txn_prev_undo_ptr = txn.last_undo_ptr_;
     fields.pk = pk;
 
+    if (before_undo_append_for_test_) {
+        if (Status s = before_undo_append_for_test_(fields); !s.ok()) return s;
+    }
     auto ptr = undo_.Append(txn.id_, fields, image);
     if (!ptr.ok()) return ptr.status();
 

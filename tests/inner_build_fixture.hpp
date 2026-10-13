@@ -123,7 +123,7 @@ protected:
     // the sink after that many rows (the LIMIT interaction).
     std::vector<std::string> Run(const std::string& sql, ExecStats* out_stats = nullptr,
                                  std::size_t cap = kDefaultJoinBuildMaxRows,
-                                 std::size_t stop_after = 0) {
+                                 std::size_t stop_after = 0, bool scan_kernel = true) {
         auto parsed = parser::Parse(sql);
         EXPECT_TRUE(parsed.ok()) << parsed.status().message();
         if (!parsed.ok()) return {};
@@ -133,6 +133,7 @@ protected:
 
         Budget budget;
         budget.set_join_build_max_rows(cap);
+        budget.set_scan_kernel(scan_kernel);
         ExecStats local;
         ExecStats& stats = out_stats != nullptr ? *out_stats : local;
         std::vector<std::string> rows;
