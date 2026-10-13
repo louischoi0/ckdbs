@@ -1915,7 +1915,7 @@ private:
     // catalog view is materialized from the catalog's typed readers, not
     // walked out of pages, so it is not a relation a step can read
     // (exec/catalog_view.hpp).
-    DispatchOutcome HandleCatalogView(const parser::SelectStmt& stmt);
+    DispatchOutcome HandleCatalogView(const parser::SelectStmt& stmt, Session& session);
 
     // A full ordered scan of the relation, whichever storage it uses. Both
     // walk sibling/next links left to right, so the row order is identical.

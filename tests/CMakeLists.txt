@@ -194,6 +194,7 @@ add_executable(kds_tests
     kwp_handshake_test.cpp
     kwp_error_test.cpp
     kwp_session_test.cpp
+    show_sugar_contract_test.cpp
     kwp_conformance_test.cpp
     kwp_endpoint_test.cpp
     wire_row_codec_test.cpp

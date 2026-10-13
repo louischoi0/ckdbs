@@ -6800,7 +6800,8 @@ StatusOr<std::size_t> ResolveViewColumn(const exec::CatalogView& view,
 
 }  // namespace
 
-DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& stmt) {
+DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& stmt,
+                                                     Session& session) {
     // **AG12.** A catalog view's rows come from the catalog's typed readers,
     // not from a step chain - so there is no `RowSink` for AG1's fold to
     // wrap and nothing for it to consume. Refused here rather than
@@ -6813,24 +6814,9 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                 false};
     }
 
-    // `ORDER BY` is refused here for the same reason and with the same
-    // shape. `exec::OutputSort` normalizes its keys out of a `ChainFrame`
-    // against `SortKey`s the compiler resolved to column indices in a
-    // Schema; a view has neither, so honouring the clause would mean a
-    // second comparator over `parser::AstValue` living beside the one the
-    // engine already has. `LIMIT`/`OFFSET` below need no such thing - the
-    // quota consumes rows and has no opinion about where they came from -
-    // which is exactly why one clause of the tail is served and the other
-    // is declined rather than accepted and ignored.
-    if (!stmt.order_by.empty()) {
-        return {"ERR ORDER BY over a catalog view (sys." + stmt.from.table_name +
-                    ") is not supported; a view's rows are materialized by the catalog's "
-                    "readers and carry no schema for the sort to resolve against (byte " +
-                    std::to_string(stmt.order_by.front().key.byte_offset) + ")",
-                false};
-    }
-
-    auto view = exec::ReadCatalogView(catalog_, stmt.from.table_name);
+    const std::optional<txn::ReadView> read_view = ViewFor(session);
+    auto view = exec::ReadCatalogView(catalog_, stmt.from.table_name,
+                                      read_view.has_value() ? &*read_view : nullptr);
     if (!view.ok()) {
         return {ErrorReply(view.status()), false, 0, view.status()};
     }
@@ -6848,6 +6834,20 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             if (!found.ok()) return {ErrorReply(found.status()), false, 0, found.status()};
             project.push_back(found.value());
         }
+    }
+
+    // **`ORDER BY` over a view (BO-Q3, W4)**: each key resolved against the
+    // view's columns before any row is read, as the WHERE below is, and
+    // ordered by the engine's one ordering (`exec::OrderKeyOf`, D3) under
+    // the type the view declares - not by a second comparator. No
+    // `sort_max_rows` cap: the cap bounds what a walk would buffer, and a
+    // view's rows are already whole in memory before the sort sees them.
+    std::vector<std::pair<std::size_t, bool>> sort_by;
+    sort_by.reserve(stmt.order_by.size());
+    for (const parser::SortKey& key : stmt.order_by) {
+        auto at = ResolveViewColumn(rows, stmt, key.key.column);
+        if (!at.ok()) return {ErrorReply(at.status()), false, 0, at.status()};
+        sort_by.emplace_back(at.value(), key.descending);
     }
 
     // A WHERE clause still applies. The values are ordinary AstValues by
@@ -6920,20 +6920,26 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         if (!checked.ok()) return {ErrorReply(checked), false, 0, checked};
     }
 
-    std::ostringstream os;
-    bool first_col = true;
+    // **SV5 (BO-R3): a view answers as a relation does** - described and
+    // emitted through the statement's `ResultSink`, typed on KWP and the
+    // header-and-rows text on the newline protocol, never a reply of its
+    // own rendering. A view has no Keystone column, so no field is flagged.
+    TextResultSink text_sink;
+    ResultSink& sink = session.result_sink() != nullptr ? *session.result_sink()
+                                                        : static_cast<ResultSink&>(text_sink);
+    std::vector<std::string> names;
+    std::vector<std::uint32_t> types;
+    names.reserve(project.size());
+    types.reserve(project.size());
     for (std::size_t index : project) {
-        if (!first_col) os << ',';
-        os << rows.column_names[index];
-        first_col = false;
+        names.push_back(rows.column_names[index]);
+        types.push_back(rows.column_types[index]);
+    }
+    if (Status s = sink.Describe(DescribeFields(names, types, {})); !s.ok()) {
+        return {ErrorReply(s), false, 0, s};
     }
 
-    // I11's contract, over the one row source that is not a chain. The
-    // view's rows arrive in the order the reply prints them, so a prefix
-    // of them is a prefix of an order the statement has - the same
-    // sentence `pagination.hpp` makes for a walked relation, and the
-    // reason `LIMIT` needs no `ORDER BY` to be well defined.
-    exec::EmissionQuota quota(stmt.offset, stmt.limit);
+    std::vector<const std::vector<parser::AstValue>*> qualifying;
     for (const std::vector<parser::AstValue>& row : rows.rows) {
         bool matched = true;
         for (std::size_t i = 0; i < stmt.where.size(); ++i) {
@@ -6962,28 +6968,53 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             if (!matched) break;
         }
         if (!matched) continue;
+        qualifying.push_back(&row);
+    }
 
-        // Noted once per *qualifying* row, after the WHERE and before the
-        // formatting: OFFSET skips rows that passed the predicate, and a
-        // skipped row costs no rendering.
+    if (!sort_by.empty()) {
+        // Normalized once per row, as `exec::OutputSort` does; the
+        // qualifying order breaks ties, so the sort is stable.
+        std::vector<std::vector<exec::OrderKey>> keys(qualifying.size());
+        for (std::size_t r = 0; r < qualifying.size(); ++r) {
+            keys[r].reserve(sort_by.size());
+            for (const auto& [at, descending] : sort_by) {
+                auto key = exec::OrderKeyOf(rows.column_types[at], (*qualifying[r])[at]);
+                if (!key.ok()) return {ErrorReply(key.status()), false, 0, key.status()};
+                keys[r].push_back(std::move(key.value()));
+            }
+        }
+        std::vector<std::size_t> order(qualifying.size());
+        for (std::size_t r = 0; r < order.size(); ++r) order[r] = r;
+        std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            for (std::size_t k = 0; k < sort_by.size(); ++k) {
+                const int c = keys[a][k].Compare(keys[b][k]);
+                if (c != 0) return sort_by[k].second ? c > 0 : c < 0;
+            }
+            return false;
+        });
+        std::vector<const std::vector<parser::AstValue>*> sorted;
+        sorted.reserve(order.size());
+        for (std::size_t r : order) sorted.push_back(qualifying[r]);
+        qualifying = std::move(sorted);
+    }
+
+    // I11's contract, over the one row source that is not a chain: a
+    // prefix of the rows in the order above is a prefix of an order the
+    // statement has, so `LIMIT` needs no `ORDER BY` to be well defined.
+    exec::EmissionQuota quota(stmt.offset, stmt.limit);
+    std::vector<parser::AstValue> values(project.size());
+    std::string encoded;
+    for (const std::vector<parser::AstValue>* row : qualifying) {
         const exec::QuotaVerdict verdict = quota.Note();
         if (verdict == exec::QuotaVerdict::kStop) break;
         if (verdict == exec::QuotaVerdict::kSkip) continue;
-
-        os << "\\n";
-        bool first_val = true;
-        for (std::size_t index : project) {
-            if (!first_val) os << ',';
-            // type_val 0 here: rendering consults the column's type only to
-            // tell a DATE or TIMESTAMP from the integer it is stored as, and
-            // no view has one. An integer above INT64_MAX still prints
-            // correctly, because `FormatValue` reads `raw_int_text`.
-            os << exec::FormatValue(/*type_val=*/0, row[index]);
-            first_val = false;
-        }
+        for (std::size_t i = 0; i < project.size(); ++i) values[i] = (*row)[project[i]];
+        Status s = sink.EncodeValueRow(types, values, encoded);
+        if (s.ok()) s = sink.Emit(encoded);
+        if (!s.ok()) return {ErrorReply(s), false, 0, s};
         if (verdict == exec::QuotaVerdict::kEmitThenStop) break;
     }
-    return {os.str(), false};
+    return {text_sink.Take(), false};
 }
 
 namespace {
@@ -7295,7 +7326,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                         "relation for a join step to walk",
                         false};
             }
-            return HandleCatalogView(stmt);
+            return HandleCatalogView(stmt, session);
         }
     }
     if (!stmt.from.schema.empty()) {

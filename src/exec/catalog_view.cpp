@@ -63,7 +63,7 @@ std::string ClusteredName(catalog::ClusteredType type) {
 // shape - the column names and the row builder sit together so a field
 // added to a catalog row cannot be added to one and forgotten in the other.
 
-StatusOr<CatalogView> TablesView(catalog::Catalog& catalog) {
+StatusOr<CatalogView> TablesView(catalog::Catalog& catalog, const txn::ReadView* view_of) {
     CatalogView view;
     Define(view, {{"oid", kInt},
                   {"namespace_oid", kInt},
@@ -72,7 +72,7 @@ StatusOr<CatalogView> TablesView(catalog::Catalog& catalog) {
                   {"clustered_type", kStr},
                   {"next_id", kInt}});
 
-    auto objects = catalog.ListTables();
+    auto objects = catalog.ListTables(view_of);
     if (!objects.ok()) return objects.status();
 
     for (const catalog::SysObjectRow& object : objects.value()) {
@@ -93,7 +93,7 @@ StatusOr<CatalogView> TablesView(catalog::Catalog& catalog) {
     return view;
 }
 
-StatusOr<CatalogView> ObjectsView(catalog::Catalog& catalog) {
+StatusOr<CatalogView> ObjectsView(catalog::Catalog& catalog, const txn::ReadView* view_of) {
     CatalogView view;
     Define(view, {{"oid", kInt},
                   {"namespace_oid", kInt},
@@ -104,7 +104,7 @@ StatusOr<CatalogView> ObjectsView(catalog::Catalog& catalog) {
     // ListTables() is the only enumerator the catalog exposes, and it
     // filters to type_oid == kTypeTable. So this view shows table objects
     // and says so, rather than implying it is every object there is.
-    auto objects = catalog.ListTables();
+    auto objects = catalog.ListTables(view_of);
     if (!objects.ok()) return objects.status();
 
     // The fourth column keeps its name, `rel_id`: the word is
@@ -118,7 +118,7 @@ StatusOr<CatalogView> ObjectsView(catalog::Catalog& catalog) {
     return view;
 }
 
-StatusOr<CatalogView> ColumnsView(catalog::Catalog& catalog) {
+StatusOr<CatalogView> ColumnsView(catalog::Catalog& catalog, const txn::ReadView* view_of) {
     CatalogView view;
     Define(view, {{"rel_id", kInt},
                   {"rel_name", kStr},
@@ -128,7 +128,7 @@ StatusOr<CatalogView> ColumnsView(catalog::Catalog& catalog) {
                   {"type", kStr},
                   {"notnull", kInt}});
 
-    auto objects = catalog.ListTables();
+    auto objects = catalog.ListTables(view_of);
     if (!objects.ok()) return objects.status();
 
     for (const catalog::SysObjectRow& object : objects.value()) {
@@ -164,7 +164,7 @@ StatusOr<CatalogView> ColumnsView(catalog::Catalog& catalog) {
     return view;
 }
 
-StatusOr<CatalogView> TypesView(catalog::Catalog& catalog) {
+StatusOr<CatalogView> TypesView(catalog::Catalog& catalog, const txn::ReadView*) {
     CatalogView view;
     Define(view, {{"oid", kInt}, {"name", kStr}, {"type_val", kInt}, {"len", kInt}});
 
@@ -178,7 +178,7 @@ StatusOr<CatalogView> TypesView(catalog::Catalog& catalog) {
     return view;
 }
 
-StatusOr<CatalogView> PatternsView(catalog::Catalog& catalog) {
+StatusOr<CatalogView> PatternsView(catalog::Catalog& catalog, const txn::ReadView*) {
     CatalogView view;
     // `fetch_id`, not `pattern_id`, since AP-S2: the row is keyed by the
     // fetch shape. A row of another `fingerprint_version` holds what that
@@ -207,7 +207,7 @@ StatusOr<CatalogView> PatternsView(catalog::Catalog& catalog) {
 
 struct ViewEntry {
     std::string_view name;
-    StatusOr<CatalogView> (*read)(catalog::Catalog&);
+    StatusOr<CatalogView> (*read)(catalog::Catalog&, const txn::ReadView*);
 };
 
 // The registry, in the order CatalogViewNames() reports them.
@@ -231,9 +231,10 @@ std::vector<std::string> CatalogViewNames() {
     return out;
 }
 
-StatusOr<CatalogView> ReadCatalogView(catalog::Catalog& catalog, std::string_view name) {
+StatusOr<CatalogView> ReadCatalogView(catalog::Catalog& catalog, std::string_view name,
+                                      const txn::ReadView* view) {
     for (const ViewEntry& entry : kViews) {
-        if (IEquals(name, entry.name)) return entry.read(catalog);
+        if (IEquals(name, entry.name)) return entry.read(catalog, view);
     }
     std::string known;
     for (const ViewEntry& entry : kViews) {

@@ -292,17 +292,15 @@ TEST_F(PaginationExecTest, ACatalogViewsQuotaRunsAfterItsWhere) {
               SliceOf(all, 2, 1));
 }
 
-TEST_F(PaginationExecTest, ACatalogViewRefusesOrderByWithTheByte) {
-    // Declined, not ignored. `OutputSort` normalizes its keys against a
-    // Schema the view does not have, so the clause cannot be served here -
-    // and a clause that cannot be served is refused, never accepted and
-    // dropped (which is what this statement used to do).
-    const std::string reply =
-        dispatcher_->Dispatch("SELECT name FROM sys.tables ORDER BY name DESC").response;
-    EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
-    EXPECT_NE(reply.find("ORDER BY over a catalog view"), std::string::npos) << reply;
-    // The byte of the sort column, which is what the client has to fix.
-    EXPECT_NE(reply.find("(byte 37)"), std::string::npos) << reply;
+TEST_F(PaginationExecTest, ACatalogViewIsOrderedBeforeItsQuota) {
+    // BO-Q3: a view takes `ORDER BY` (it used to be refused here), and
+    // `LIMIT`/`OFFSET` slice the ordered rows, as I11 says for a relation.
+    Run("CREATE TABLE t (id int64, a int64, b int64, c int64)");
+    EXPECT_EQ(Run("SELECT name FROM sys.columns WHERE rel_name = 't' ORDER BY name DESC LIMIT 2"),
+              "name\\nid\\nc");
+    EXPECT_EQ(Run("SELECT name FROM sys.columns WHERE rel_name = 't' ORDER BY name LIMIT 1 "
+                  "OFFSET 1"),
+              "name\\nb");
 }
 
 }  // namespace
