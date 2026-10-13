@@ -143,6 +143,8 @@ std::string FormatBoolPredicate(const BoolPredicate& pred) {
     switch (pred.op) {
         case BoolPredicate::Op::kCompare: return FormatPredicate(pred.compare);
         case BoolPredicate::Op::kFunction: return FormatFunctionPredicate(*pred.fn);
+        // The step's sub-chain of that index, printed under it as `sub<i>`.
+        case BoolPredicate::Op::kSubChain: return "sub" + std::to_string(pred.sub_chain);
         case BoolPredicate::Op::kNot: return "NOT (" + FormatBoolPredicate(pred.children.front()) + ")";
         case BoolPredicate::Op::kAnd:
         case BoolPredicate::Op::kOr: {
@@ -218,9 +220,12 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
         os << Indent(depth + 1) << "filter bool " << FormatBoolPredicate(pred) << '\n';
     }
     // Correlated by placement: a sub-chain attached to a step runs once per
-    // row that step accepts, which is the fact worth seeing next to it.
-    for (const SubChain& sub : step.sub_chains) {
-        PrintSubChain(os, sub, depth + 1, /*hoisted=*/false);
+    // row that step accepts, which is the fact worth seeing next to it. One a
+    // boolean conjunct reads (BU-S3) is named by the leaf that reads it.
+    for (std::size_t i = 0; i < step.sub_chains.size(); ++i) {
+        const SubChain& sub = step.sub_chains[i];
+        if (sub.in_tree) os << Indent(depth + 1) << "sub" << i << '\n';
+        PrintSubChain(os, sub, depth + (sub.in_tree ? 2 : 1), /*hoisted=*/false);
     }
 }
 
@@ -234,9 +239,10 @@ void PrintSubChain(std::ostringstream& os, const SubChain& sub, int depth, bool 
         os << " <- " << FormatColumnRef(sub.value);
     }
     // Stated rather than implied by the indentation: `hoisted` is the
-    // placement and `correlated` is the structural property, and an
-    // uncorrelated sub-chain sitting under a step (which cannot happen
-    // today) would be a compiler bug worth being able to see.
+    // placement and `correlated` is the structural property. An uncorrelated
+    // sub-chain sits under a SELECT's step only below a boolean conjunct's
+    // `subN` line (BU-S3); anywhere else it would be a compiler bug worth
+    // seeing.
     os << (sub.correlated ? " [correlated]" : " [uncorrelated]") << '\n';
 
     // Hoisted first, the execution order: they run before this sub-chain's

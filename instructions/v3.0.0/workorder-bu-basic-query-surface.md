@@ -308,3 +308,38 @@ returns the subtree instead of wrapping it into a conjunct for
 once, with an `IN (SELECT ...)` cell for the copy that had none; the
 `LIKE` lowering merged into the general branch. Kept: the scan-kernel
 guard for `kLike`, which costs a line and keeps "every reader decides".
+
+### BU-S3 - a subquery predicate under `OR` and `NOT` (built 2026-10-13)
+
+On `worktree-bu-basic-query-surface` from `14a05e38`:
+
+- **Parser.** `RefuseSubqueryUnder` is deleted: a subquery predicate is a
+  leaf of a `kBoolTree` conjunct like any other, under the depth cap it
+  always had.
+- **Compile.** The two copies of the subquery lowering (`CompileWhere`,
+  `CompileBlock`) are one `LowerSubquery`. `LowerBoolTree` lowers a subquery
+  leaf through it to a `BoolPredicate::Op::kSubChain` naming a sub-chain
+  marked `SubChain::in_tree`; `AttachBoolConjunct` appends the tree's
+  sub-chains to its step's `sub_chains` and rebases each leaf's index, so
+  every walk of the step tree (step ids, correlation, masks, the bind's
+  declaration, the plan) sees them unchanged. A tree reading one is placed
+  by the sub-chain rule as well as its columns, and **never hoisted**: a
+  false uncorrelated `EXISTS` under an `OR` must not empty the statement.
+- **Evaluate.** The step's conjunct loops pass an `in_tree` sub-chain by.
+  `EvaluateBoolConjuncts` runs in two passes over one list: the trees
+  reading no sub-chain beside the residual, as in S1, and the ones that do
+  after the step's flat sub-chains (`ChainRunner::EvaluateTreeConjuncts`,
+  at `AcceptTupleAt` and `EvaluateConjuncts`), each leaf answered by
+  `EvaluateSubChain` in I16's three values. An uncorrelated
+  `EXISTS`/`NOT EXISTS` leaf - never unknown - answers once per statement
+  from the hoisted answers' store.
+- **Plan.** A leaf prints as `subN`, and its sub-chain under a `subN` line.
+- **Docs.** `parser-v2.md` I10, `null.md` §4, the manual's WHERE notes,
+  the `CLAUDE.md` row.
+- **Tests.** `tests/where_bool_subquery_test.cpp`, 13 cells: the forms
+  (`EXISTS`, `IN`/`NOT IN`, scalar), hoisting, Kleene logic over a NULL in
+  the set, two trees and a flat sub-chain on one step, placement across a
+  join and two levels out, `UPDATE`/`DELETE`, the plan line. The S1 refusal
+  cell drops its two subquery lines.
+
+Overhead not measured; measured at the milestone's close (§5).

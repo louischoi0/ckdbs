@@ -1451,22 +1451,6 @@ std::uint32_t ConditionsIn(const BoolExpr& node) {
     return n;
 }
 
-// BU-S1 builds `OR` and `NOT` over the plain predicates only. A subquery
-// predicate under either is S3's, refused at the leaf rather than evaluated
-// as though the operator were not there.
-Status RefuseSubqueryUnder(const BoolExpr& node) {
-    if (node.op == BoolExpr::Op::kLeaf) {
-        if (!node.leaf.has_subquery()) return Status::OK();
-        return Status::NotImplemented(
-            "a subquery predicate under OR or NOT is not supported yet (byte " +
-            std::to_string(node.byte_offset) + ")");
-    }
-    for (const BoolExpr& child : node.children) {
-        if (Status s = RefuseSubqueryUnder(child); !s.ok()) return s;
-    }
-    return Status::OK();
-}
-
 // The top-level AND-list of a WHERE tree, into `out`: a leaf is an ordinary
 // conjunct and an `AND` - parenthesized or not - is flattened, so a WHERE
 // written without `OR` or `NOT` lowers exactly as it did before BU and keeps
@@ -1491,7 +1475,6 @@ Status Flatten(BoolExpr node, std::vector<Condition>& out) {
         return Status::OK();
     }
     if (ConditionsIn(node) > kMaxBoolConditions) return BoolTooBig(node.byte_offset);
-    if (Status s = RefuseSubqueryUnder(node); !s.ok()) return s;
     out.push_back(TreeCondition(std::move(node)));
     return Status::OK();
 }

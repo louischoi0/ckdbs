@@ -775,8 +775,12 @@ is one of (verified — the `PredicateKind` enum):
   `WHERE id = 1 OR id = 2` walks the relation. It is three-valued like
   every comparison: `NOT (a = 1)` does not keep a row whose `a` is NULL,
   and `a = 1 OR a != 1` does not either. A subquery predicate under `OR`
-  or `NOT` and `OR` over a `sys.*` view answer `NOT_IMPLEMENTED` with
-  their byte; a tree nested deeper than 64 levels or holding more than
+  or `NOT` is answered since BU-S3, in the same three-valued logic - `NOT
+  (k IN (SELECT ...))` keeps no row the subquery's NULL leaves unknown -
+  and is never run once ahead of the statement the way a top-level
+  uncorrelated `EXISTS` is: `EXISTS (SELECT ...) OR a = 1` keeps the
+  `a = 1` rows when the subquery is empty. `OR` over a `sys.*` view
+  answers `NOT_IMPLEMENTED` with its byte; a tree nested deeper than 64 levels or holding more than
   4,096 conditions answers `UNSUPPORTED`. `NOT EXISTS (...)` and
   `col NOT IN (SELECT ...)` are the forms above and keep their meaning.
   `PURGE`'s window still refuses every conjunct that is not a pk

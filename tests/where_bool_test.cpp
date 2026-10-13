@@ -204,14 +204,8 @@ TEST_F(WhereBoolTest, AStatementRunTwiceAnswersTheSameWithItsTrail) {
 // ---- Refusals (BU-R6) -----------------------------------------------------
 
 TEST_F(WhereBoolTest, WhatIsRefusedAndWhere) {
-    // A subquery under OR or NOT is BU-S3's.
-    EXPECT_EQ(Run("SELECT id FROM t WHERE id = 1 OR EXISTS (SELECT id FROM u)"),
-              "ERR NOT_IMPLEMENTED retryable=0 a subquery predicate under OR or NOT is not "
-              "supported yet (byte 33)");
-    EXPECT_EQ(Run("SELECT id FROM t WHERE NOT (k IN (SELECT w FROM u))"),
-              "ERR NOT_IMPLEMENTED retryable=0 a subquery predicate under OR or NOT is not "
-              "supported yet (byte 28)");
-    // NOT EXISTS stays the leaf it was.
+    // A subquery under OR or NOT is answered since BU-S3
+    // (where_bool_subquery_test.cpp). NOT EXISTS stays the leaf it was.
     EXPECT_EQ(Ids("NOT EXISTS (SELECT id FROM u WHERE u.w = t.k)"), "id\\n5\\n6");
     // OR over a catalog view (BU-Q4).
     EXPECT_EQ(Run("SELECT name FROM sys.tables WHERE oid = 1 OR oid = 2"),
