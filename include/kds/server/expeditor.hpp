@@ -443,6 +443,9 @@ public:
         // exec/budget.hpp).
         std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
 
+        // Whether a walk consults its scan kernel (BM-Q5 (a); exec/budget.hpp).
+        bool scan_kernel = true;
+
         // **How long a statement may wait before the engine calls it a
         // fault** (AO-R8, the retired in-doubt ceiling's quantity,
         // re-scoped at AT-S6). Milliseconds in the file,
@@ -529,13 +532,13 @@ public:
         // when log_file is empty, which means "do not log to a file".
         std::string LogPath() const;
 
-        // The five statement limits above as the one value every core's
+        // The statement limits above as the one value every core's
         // dispatcher is handed (AT-S8, `StatementLimits`).
         StatementLimits Limits() const {
             return StatementLimits{indexes, max_insert_rows,
                                    exec::AggregateLimits{aggregate_max_groups,
                                                          aggregate_max_distinct},
-                                   sort_max_rows, join_build_max_rows};
+                                   sort_max_rows, join_build_max_rows, scan_kernel};
         }
 
         // Every key a config file may set (config_file.hpp). Kept next to

@@ -76,6 +76,11 @@ struct StepStats {
     std::uint64_t relation_opens = 0;
     std::uint64_t rows_examined = 0;   // tuples decoded and filtered
     std::uint64_t rows_matched = 0;    // of those, the ones passing the residual
+    // Of `rows_examined`, the ones the scan kernel rejected before any
+    // decode (BM-R2: examined, never matched). A witness for the cells that
+    // the kernel ran, and printed nowhere, so `ANALYZE` reads the same with
+    // `scan_kernel` on and off.
+    std::uint64_t rows_kernel_rejected = 0;
     std::uint64_t sub_chain_runs = 0;  // sub-chain evaluations, hoisted or per row
 
     // V19's meters.

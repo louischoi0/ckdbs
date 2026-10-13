@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -418,6 +419,57 @@ StatusOr<std::uint64_t> ValueAsUint64(const parser::AstValue& value);
 // kept the comparison, which was never the problem.
 bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
                    const parser::AstValue& rhs, parser::CompareOp op);
+
+// ---- The scan kernel (workorder-bm-scan-row-kernel.md BM-R1..R4) ----------
+//
+// One conjunct `column <op> literal`, compiled to the comparison
+// `CompareValues` would make on the decoded column, made instead on the
+// cell's bytes. **A pre-filter, never the answer** (BM-R1): a row it
+// rejects is one the residual rejects too, and every row it passes still
+// goes through the residual unchanged. So the only wrong answer it can
+// introduce is a dropped row, and every arm below compares in exactly the
+// domain the decoder produces (BM-R4):
+//   kInt       the int widths, date, timestamp and narrow decimal,
+//              sign-extended at the cell's width, and bool, zero-extended -
+//              then int64 against the literal's `int_val`, never narrowed
+//              to the cell's width (an out-of-range literal compares as the
+//              int64 it is, as `CompareValues` does);
+//   kUint64    the cell against `ValueAsUint64(literal)`, unsigned;
+//   kWide      the 128-bit pair, high half signed and low half unsigned;
+//   kKeystone  column 0, as the 48-bit id `KeystoneIdOfPayload` reads -
+//              never as its 8-byte cell, whose top two bytes are not the id.
+// A NULL operand (its bit set) is passed, never rejected: `CompareValues`'
+// NULL arm stays the one place UNKNOWN collapses (BM-Q3 (a)).
+struct ScanKernelTerm {
+    enum class Kind : std::uint8_t { kInt, kUint64, kWide, kKeystone };
+    Kind kind = Kind::kInt;
+    parser::CompareOp op = parser::CompareOp::kEq;
+    std::uint16_t column = 0;
+    std::uint8_t width = 0;        // kInt: the cell's bytes
+    bool sign_extend = true;       // kInt: false for bool alone
+    std::int64_t lit = 0;          // kInt, kKeystone; kWide's low half
+    std::int64_t lit_hi = 0;       // kWide's high half
+    std::uint64_t ulit = 0;        // kUint64
+};
+
+using ScanKernel = std::vector<ScanKernelTerm>;
+
+// The term for `schema.columns[column] <op> literal`, or nothing when the
+// pair is outside the kernel's domain: an operator other than the six, a
+// literal of another value kind or scale than the column compares in, a
+// `uint64` literal `ValueAsUint64` refuses, a string type (BM-S4), or a
+// `uint64` pk. Nothing is refused here; a pair the kernel does not hold is
+// the residual's, as it always was.
+std::optional<ScanKernelTerm> CompileScanKernelTerm(const catalog::Schema& schema,
+                                                    const catalog::RowLayout& layout,
+                                                    std::uint16_t column, parser::CompareOp op,
+                                                    const parser::AstValue& literal);
+
+// Whether some term rejects the row in `payload`. The caller has passed
+// `CheckDecodeShape` for this layout and checked `payload` is the layout's
+// row size (BM-R3: the length check comes first, invariant 13).
+bool ScanKernelRejects(const ScanKernel& kernel, const catalog::RowLayout& layout,
+                       std::span<const std::byte> payload);
 
 // ---- Ordering (docs/workplan-order-by.md OB2) ----------------------------
 //

@@ -1337,6 +1337,111 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
     return false;  // incompatible value kinds
 }
 
+std::optional<ScanKernelTerm> CompileScanKernelTerm(const catalog::Schema& schema,
+                                                    const catalog::RowLayout& layout,
+                                                    std::uint16_t column, parser::CompareOp op,
+                                                    const parser::AstValue& literal) {
+    if (op == parser::CompareOp::kIsNull || op == parser::CompareOp::kIsNotNull) return {};
+    if (column >= schema.columns.size()) return {};
+    const catalog::SysColumnRow& col = schema.columns[column];
+    ScanKernelTerm term;
+    term.op = op;
+    term.column = column;
+    term.lit = literal.int_val;
+
+    if (column == 0) {
+        // The Keystone id, compared as the int64 the decoder makes of it. A
+        // `uint64` pk compares through `ValueAsUint64` and is left to the
+        // residual; the id fits 48 bits, so taking it in later is a matter
+        // of the literal's range alone.
+        if (col.type_val == kTypeValUint64 || literal.type != parser::ValueType::kInt) return {};
+        term.kind = ScanKernelTerm::Kind::kKeystone;
+        return term;
+    }
+    switch (col.type_val) {
+        case kTypeValInt8:
+        case kTypeValInt16:
+        case kTypeValInt32:
+        case kTypeValInt64:
+        case kTypeValDate:
+        case kTypeValTimestamp:
+        case kTypeValBool:
+            if (literal.type != parser::ValueType::kInt) return {};
+            term.kind = ScanKernelTerm::Kind::kInt;
+            term.width = static_cast<std::uint8_t>(
+                col.type_val == kTypeValDate        ? 4
+                : col.type_val == kTypeValTimestamp ? 8
+                : col.type_val == kTypeValBool      ? 1
+                                                    : IntWidthFor(col.type_val));
+            term.sign_extend = col.type_val != kTypeValBool;
+            return term;
+        case kTypeValDecimal:
+            if (literal.type != parser::ValueType::kDecimal ||
+                literal.scale != catalog::DecimalScaleOf(col.len)) {
+                return {};
+            }
+            term.kind = ScanKernelTerm::Kind::kInt;
+            term.width = 8;
+            return term;
+        case catalog::kTypeValDecimalWide:
+            if (literal.type != parser::ValueType::kDecimalWide ||
+                literal.scale != catalog::DecimalScaleOf(col.len)) {
+                return {};
+            }
+            term.kind = ScanKernelTerm::Kind::kWide;
+            term.lit_hi = literal.dec_hi;
+            return term;
+        case kTypeValUint64: {
+            if (literal.type != parser::ValueType::kInt) return {};
+            auto u = ValueAsUint64(literal);
+            if (!u.ok()) return {};
+            term.kind = ScanKernelTerm::Kind::kUint64;
+            term.ulit = u.value();
+            return term;
+        }
+        default:
+            return {};
+    }
+}
+
+bool ScanKernelRejects(const ScanKernel& kernel, const catalog::RowLayout& layout,
+                       std::span<const std::byte> payload) {
+    for (const ScanKernelTerm& term : kernel) {
+        // A NOT NULL column has no bit, and `NullBitIsSet` answers false.
+        if (catalog::NullBitIsSet(payload, layout, term.column)) continue;
+        bool keep = true;
+        switch (term.kind) {
+            case ScanKernelTerm::Kind::kKeystone: {
+                auto id = KeystoneIdOfPayload(payload);
+                if (!id.ok()) continue;  // the residual's decode answers it
+                keep = ApplyCompare(static_cast<std::int64_t>(id.value()), term.lit, term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kInt: {
+                const std::uint64_t raw = GetLE(CellOf(layout, payload, term.column), term.width);
+                const std::int64_t v = term.sign_extend ? SignExtend(raw, term.width)
+                                                        : static_cast<std::int64_t>(raw);
+                keep = ApplyCompare(v, term.lit, term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kUint64:
+                keep = ApplyCompare(GetLE(CellOf(layout, payload, term.column), 8), term.ulit,
+                                    term.op);
+                break;
+            case ScanKernelTerm::Kind::kWide: {
+                const auto cell = CellOf(layout, payload, term.column);
+                const auto lo = static_cast<std::int64_t>(GetLE(cell.subspan(0, 8), 8));
+                const auto hi = static_cast<std::int64_t>(GetLE(cell.subspan(8, 8), 8));
+                keep = ApplyCompare(Int128FromHalves(hi, lo),
+                                    Int128FromHalves(term.lit_hi, term.lit), term.op);
+                break;
+            }
+        }
+        if (!keep) return true;
+    }
+    return false;
+}
+
 int OrderKey::Compare(const OrderKey& rhs) const noexcept {
     // D3: NULL orders above every value of its column, and two NULLs tie
     // (the sort's `seq` key makes the order total). Checked before the

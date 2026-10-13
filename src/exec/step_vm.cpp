@@ -272,6 +272,9 @@ struct StatementStore {
     // sub-chain's runner is rebuilt per outer row, and a flag rebuilt per
     // outer row is a check (and an allocation) per outer row.
     std::vector<bool> shape_checked;
+    // Each checked step's scan kernel (BM-R4), compiled with its check, by
+    // step id; an empty one holds no term.
+    std::vector<ScanKernel> kernels;
 };
 
 class ChainRunner {
@@ -2274,6 +2277,21 @@ private:
         // (docs/spec/physical-optimizer.md R4, PX04). One u64 load per
         // accepted tuple.
         std::uint64_t observed_epoch = 0;
+        // **The scan kernel** (BM-R1..R4): armed only once this step's
+        // checks have run in this statement, so its first visible row always
+        // takes the full path below. A row it rejects is one the residual
+        // would reject: it is examined and charged as such (BM-R2), and never
+        // copied or decoded.
+        const bool recording_here =
+            recording_ != nullptr && recording_->step_id == step.step_id;
+        const ScanKernel* kernel = ArmedKernel(step, recording_here);
+        // The length check first (invariant 13; BM-R3): a payload of another
+        // length is the decode's `Corruption`, on the full path.
+        const auto kernel_rejects = [&](std::span<const std::byte> payload) {
+            return kernel != nullptr && payload.size() == access.layout.row_size &&
+                   ScanKernelRejects(*kernel, access.layout, payload);
+        };
+        bool kernel_rejected = false;
         {
             PageSpanGuard span;
             observed_epoch = page.RelayoutEpoch();
@@ -2298,6 +2316,14 @@ private:
                         needs_walk = true;
                         break;
                     case txn::Visibility::kVisible:
+                        // The kernel reads the visible version where it lies,
+                        // under the span and the leaf's read hold (BM-R3),
+                        // after the length check invariant 13 makes first;
+                        // a rejected row is never copied.
+                        if (kernel_rejects(tuple.value().payload)) {
+                            kernel_rejected = true;
+                            break;
+                        }
                         // **The row's bytes, copied; the row itself, not
                         // built yet.** The copy is fixed-size (invariant 13)
                         // and costs a memcpy; building the row costs an
@@ -2334,10 +2360,24 @@ private:
             // which is where the decode below reads from - the same buffer
             // the visible path copies into, and for the same reason: the
             // bytes on the page belong to a version this reader is not
-            // entitled to.
-            decoded = true;
+            // entitled to. **The kernel reads them there too, never the
+            // page** (BM-R3, `[quiet-wrong]`).
+            if (kernel_rejects(version_)) {
+                kernel_rejected = true;
+            } else {
+                decoded = true;
+            }
         }
 
+        if (kernel_rejected) {
+            // What the full path does for a row its residual rejects, in its
+            // order: examined, then charged (so `ResourceExhausted` falls on
+            // the same row), and not matched.
+            StepStats& rejected_stats = stats_.For(step.step_id);
+            ++rejected_stats.rows_examined;
+            ++rejected_stats.rows_kernel_rejected;
+            return budget_.ChargeRow();
+        }
         if (!decoded) return Status::OK();  // dead or out-of-range slot
 
         // ---- Decode what the filter reads, and only that ----------------
@@ -2361,8 +2401,6 @@ private:
         // matches. The full-decode form this replaced priced a recording
         // walk at 2x the FilterScan it shadows
         // (bench/results-scenario3-library.md §7a).
-        const bool recording_here =
-            recording_ != nullptr && recording_->step_id == step.step_id;
         const bool partial = step.filter_columns != Step::kAllColumns;
 
         // **What cannot change within the statement is checked once**
@@ -2376,7 +2414,7 @@ private:
         // payload's length check alone. A later conjunct's malformation is
         // refused here even where an earlier conjunct false on every row
         // used to mask it (BM-Q7).
-        if (Status s = CheckStepShapeOnce(step, access, slots); !s.ok()) return s;
+        if (Status s = CheckStepShapeOnce(step, index, access, slots); !s.ok()) return s;
 
         // Decoded and then, once nothing is live, resolved - one call,
         // because the same three lines at four sites is how one of them
@@ -2619,7 +2657,8 @@ private:
 
     // BM-R6's once: a step's decode shape and residual checked at its first
     // visible row of the statement, by whichever access kind reaches it.
-    Status CheckStepShapeOnce(const Step& step, const catalog::TableAccess& access,
+    Status CheckStepShapeOnce(const Step& step, std::size_t index,
+                              const catalog::TableAccess& access,
                               std::span<const parser::AstValue> slots) {
         std::vector<bool>& checked = statement_->shape_checked;
         if (step.step_id < checked.size() && checked[step.step_id]) return Status::OK();
@@ -2629,7 +2668,24 @@ private:
         }
         if (step.step_id >= checked.size()) checked.resize(step.step_id + 1);
         checked[step.step_id] = true;
+        std::vector<ScanKernel>& kernels = statement_->kernels;
+        if (step.step_id >= kernels.size()) kernels.resize(step.step_id + 1);
+        kernels[step.step_id] = CompileScanKernel(access.schema, access.layout, step.residual,
+                                                  static_cast<std::uint16_t>(index));
         return Status::OK();
+    }
+
+    // The step's kernel, if this row may be filtered by it: the switch is on
+    // (BM-Q5), the step has passed its check this statement - so the kernel
+    // never reads an offset before BM-R6's checks have run - it holds a term,
+    // and no Cabin recording of this step is live (BM-R4: a row the other
+    // conjuncts reject must still be recorded if its key matches).
+    const ScanKernel* ArmedKernel(const Step& step, bool recording_here) const {
+        if (!budget_.scan_kernel() || recording_here) return nullptr;
+        const std::vector<bool>& checked = statement_->shape_checked;
+        if (step.step_id >= checked.size() || !checked[step.step_id]) return nullptr;
+        const ScanKernel& kernel = statement_->kernels[step.step_id];
+        return kernel.empty() ? nullptr : &kernel;
     }
 
     catalog::Catalog& catalog_;
@@ -2863,6 +2919,7 @@ std::uint32_t MaxStepId(const Tree& tree) {
 StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     relation_opens += other.relation_opens;
     rows_examined += other.rows_examined;
+    rows_kernel_rejected += other.rows_kernel_rejected;
     rows_matched += other.rows_matched;
     sub_chain_runs += other.sub_chain_runs;
     probe_memo_hits += other.probe_memo_hits;

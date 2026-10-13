@@ -109,7 +109,8 @@ protected:
 
     // Runs `chain`, collecting each row's column 0; `stop_after` rows, then
     // the sink stops the statement.
-    Ran RunChain(const StepChain& chain, std::size_t stop_after = SIZE_MAX) {
+    Ran RunChain(const StepChain& chain, std::size_t stop_after = SIZE_MAX,
+                 const Budget& budget = Budget()) {
         Ran out;
         ExecStats stats;
         out.status = Execute(
@@ -119,7 +120,7 @@ protected:
                 return out.ids.size() >= stop_after ? storage::VisitControl::kStop
                                                     : storage::VisitControl::kContinue;
             },
-            &stats);
+            &stats, budget);
         out.total = stats.Total();
         return out;
     }
@@ -306,6 +307,43 @@ TEST_F(ScanRowWalkTest, ATrueExistsStopsItsWalkMidLeafForEveryOuterRow) {
         "SELECT t.id FROM t WHERE t.id <= 5 AND EXISTS (SELECT t.id FROM t WHERE t.v = 3)"));
     ASSERT_TRUE(ran.status.ok()) << ran.status.message();
     EXPECT_EQ(ran.ids, (std::vector<std::int64_t>{1, 2, 3, 4, 5}));
+}
+
+// BM-S3 (BM-R2): a row the scan kernel rejects is charged as the residual's
+// rejection is, so the row-touch budget refuses on the same row with the
+// kernel on and off - the rows emitted before the refusal say which.
+TEST_F(ScanRowWalkTest, TheBudgetRefusesOnTheSameRowWithTheKernelOnAndOff) {
+    Load(100);
+    const StepChain chain = CompileSql("SELECT t.id FROM t WHERE v >= 20");
+    Budget on(/*limit=*/40);
+    Budget off(/*limit=*/40);
+    off.set_scan_kernel(false);
+    Ran with = RunChain(chain, SIZE_MAX, on);
+    Ran without = RunChain(chain, SIZE_MAX, off);
+    ASSERT_EQ(with.status.code(), StatusCode::kResourceExhausted) << with.status.message();
+    EXPECT_EQ(with.status.message(), without.status.message());
+    EXPECT_EQ(with.ids, without.ids);
+    EXPECT_EQ(with.ids.size(), 21u) << "rows 20..40 match before the 41st row is refused";
+    EXPECT_EQ(with.total.rows_examined, without.total.rows_examined);
+}
+
+// The control the equivalence cells need: without it, on and off could agree
+// because the kernel never ran. Rows 2..19 of `v >= 20` are the kernel's
+// (row 1, the step's first visible row, takes the full path that checks the
+// step); with the switch off, none are.
+TEST_F(ScanRowWalkTest, TheKernelRejectsEveryRowItHoldsAfterTheFirst) {
+    Load(100);
+    const StepChain chain = CompileSql("SELECT t.id FROM t WHERE v >= 20");
+    Budget off;
+    off.set_scan_kernel(false);
+    Ran with = RunChain(chain);
+    Ran without = RunChain(chain, SIZE_MAX, off);
+    ASSERT_TRUE(with.status.ok()) << with.status.message();
+    EXPECT_EQ(with.ids, without.ids);
+    EXPECT_EQ(with.total.rows_kernel_rejected, 18u);
+    EXPECT_EQ(without.total.rows_kernel_rejected, 0u);
+    EXPECT_EQ(with.total.rows_examined, 100u);
+    EXPECT_EQ(with.total.rows_matched, without.total.rows_matched);
 }
 
 }  // namespace

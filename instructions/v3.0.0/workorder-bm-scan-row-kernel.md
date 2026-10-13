@@ -766,3 +766,60 @@ On `worktree-bm-scan-kernel-open` from `23dfdbb8`.
   `SHOW META`'s own lookups not subtracted, unused `Cell.pg_sql` and
   `rowfn`, a second server class) are taken at the close, where the drivers
   run again; none moves either gate, since each errs upward.
+
+### BM-S3 — the kernel, integer-encoded types
+
+On `worktree-bm-scan-kernel-open` from `c5a724f4`.
+- **Code:**
+  - `ScanKernelTerm` / `ScanKernel`, `CompileScanKernelTerm` and
+    `ScanKernelRejects` in `row_codec.cpp`, beside `CompareValues`, whose
+    domain each arm reproduces: the int widths, date, timestamp and narrow
+    decimal sign-extended at the cell's width, bool zero-extended, `uint64`
+    unsigned against `ValueAsUint64(literal)`, the 128-bit pair through
+    `Int128FromHalves`, and column 0 as `KeystoneIdOfPayload`'s id. A NULL
+    bit, a literal of another kind or scale, a `uint64` pk, the `IS` pair
+    and every string type are the residual's;
+  - `CompileScanKernel` in `chain_frame.cpp`: the step's own column (`up 0`,
+    `rel_slot` the step's slot) against a literal, never a correlated
+    conjunct;
+  - the kernel is compiled with the step's once-per-statement check, kept
+    in `StatementStore`, and armed only once that check has run - so **a
+    step's first visible row always takes the full path**, and its later
+    rows meet the kernel. It reads a visible version on the page under the
+    span, after the length check, before the copy; a reconstructed one in
+    `version_` after the undo walk (BM-R3); never while the step's Cabin
+    recording is live. A rejected row is examined, counted in
+    `rows_kernel_rejected` (a witness `ANALYZE` does not print), and
+    charged;
+  - `scan_kernel = on|off` (BM-Q5 (a)) rides `exec::Budget` from the
+    config through `StatementLimits`, as `join_build_max_rows` does; on by
+    default. `kds.conf.sample` is BM-S6's.
+- **Cells:** `tests/scan_kernel_test.cpp` - the differential matrix (ten
+  types, the six operators, boundary literals, NOT NULL and nullable
+  columns with NULL rows, every reply and its `ANALYZE` compared with the
+  kernel off: over 500 statements); a literal above an `int32` column's
+  range; the budget's refusal; column 0 over a payload with its flags byte
+  set and an id with bit 31 set, for an int64, int32 and int16 pk (at the
+  codec: the walk hands the kernel the payload `ReadTupleIn` returns);
+  every matrix type compiles to a term and a decimal of another scale does
+  not; only an own column against a literal is compiled.
+  `scan_row_walk_test.cpp`: the budget refuses on the same row on and off,
+  and the control - 18 of 100 rows kernel-rejected on, none off.
+  `step_vm_mvcc_test.cpp`: a reconstructed version read from `version_`.
+  The recording cell is the Cabin suite's existing
+  `RecordingIgnoresTheStatementsOtherConjuncts`, whose `qty > 30` is a
+  kernel term. **The contract suites** (waystone, index, cabin,
+  inner-build) each gained a cell comparing the kernel off against on.
+- **Mutations**, each run twice, all killed: `uint64` compared signed;
+  `<=` compiled as `<`; column 0 read as its 8-byte cell; column 0
+  sign-extended at its declared width; a literal truncated to `int32`;
+  sign extension omitted; the `decimal128` pair built with a signed low
+  half; the page read for a reconstructed version; the kernel consulted
+  during recording; a rejected row not charged.
+- **Review** (`critics-developer`): no blocker, no input found where the
+  kernel drops a row the residual keeps. Applied: an id with bit 31 set
+  (the narrow-pk mutant survived id 300); a per-type compile witness for
+  the matrix; the MVCC cell moved out of another section; one guard for
+  both reads; `ScanKernelTerm::nullable` dropped (`NullBitIsSet` answers
+  false for a NOT NULL column); `ScanKernel` an alias; a stray line. The
+  flags cell stays at the codec, stated above.

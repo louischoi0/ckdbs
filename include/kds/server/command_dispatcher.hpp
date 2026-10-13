@@ -435,6 +435,7 @@ struct StatementLimits {
     exec::AggregateLimits aggregate;
     std::size_t sort_max_rows = exec::kDefaultSortMaxRows;
     std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
+    bool scan_kernel = true;
 };
 
 // **The physical optimizer's surface, as one value** (AT-S8, on the
@@ -1726,7 +1727,7 @@ public:
         budget_.set_join_build_max_rows(rows);
     }
 
-    // All five at once, as an instance hands them to each core (AT-S8,
+    // All of them at once, as an instance hands them to each core (AT-S8,
     // `StatementLimits`).
     void set_statement_limits(const StatementLimits& limits) noexcept {
         indexes_enabled_ = limits.indexes;
@@ -1734,6 +1735,7 @@ public:
         set_aggregate_limits(limits.aggregate);
         set_sort_max_rows(limits.sort_max_rows);
         set_join_build_max_rows(limits.join_build_max_rows);
+        budget_.set_scan_kernel(limits.scan_kernel);
     }
 
 

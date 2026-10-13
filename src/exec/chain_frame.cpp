@@ -129,6 +129,20 @@ StatusOr<bool> EvaluateAll(const std::vector<const catalog::Schema*>& schemas,
     return true;
 }
 
+ScanKernel CompileScanKernel(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                             const std::vector<StepPredicate>& residual, std::uint16_t rel_slot) {
+    ScanKernel kernel;
+    for (const StepPredicate& pred : residual) {
+        if (pred.lhs.up != 0 || pred.lhs.rel_slot != rel_slot) continue;
+        if (pred.rhs.kind != OperandKind::kLiteral) continue;
+        if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
+        auto term = CompileScanKernelTerm(schema, layout, pred.lhs.col_pos, pred.op,
+                                          pred.rhs.literal);
+        if (term.has_value()) kernel.push_back(*term);
+    }
+    return kernel;
+}
+
 bool EvaluateAllChecked(const std::vector<const catalog::Schema*>& schemas,
                         const std::vector<StepPredicate>& predicates, const ChainFrame& frame) {
     for (const StepPredicate& pred : predicates) {
