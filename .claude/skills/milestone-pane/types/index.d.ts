@@ -8,6 +8,8 @@ export type Summary = {
   rulings: Entry[]
   items: Entry[]
   gates: string[]
+  /** The close date `index.md` records, when it records one. */
+  closed?: string
   error?: string
 }
 

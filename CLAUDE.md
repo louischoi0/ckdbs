@@ -179,7 +179,14 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
   waived — and still owes two things: **say plainly in the reply what was
   skipped** (the hook, the suite, or both) and **never report an unrun
   suite as a pass**. The Session Workflow's step 4 gate below is a gate on
-  CLA proceeding unasked, never on the operator.
+  CLA proceeding unasked, never on the operator. **A suite already run is
+  not run again by the hook** (operator, 2026-10-12: "if the tests have
+  already run, push with no-verify to shorten the push"): at a milestone's
+  close or a push on the word, CLA pushes with `--no-verify` when the full
+  suite ran green on the very tree being pushed — after step 4's merge, so
+  a merge that brought anything in voids the earlier run and the hook
+  runs. The reply names the hook as skipped and the commit the suite ran
+  at.
 - **Measure in `build-release`, never `./build` (Debug)** — Debug has
   reported the wrong sign. Per-statement fixed costs: server CPU,
   interleaved A/B. **Re-measure a premise before building the fix.**
@@ -273,7 +280,7 @@ what the merge resolved. On the go-ahead, and not before:
 ```
 git checkout main
 git merge --no-ff <branch>
-git push origin main
+git push origin main         # --no-verify when the suite already ran green on this tree
 ```
 
 A failed review, a measured regression, or an unrun test suite stops the

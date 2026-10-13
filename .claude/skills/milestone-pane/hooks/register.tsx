@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Summary } from '../types'
-import { listing, parseWorkOrder, report, toMarkdown } from './parse'
+import { closedMark, listing, parseWorkOrder, report, toMarkdown } from './parse'
 
 const PANE = 'milestone'
 // The terminal docks a pane beside the transcript only in fullscreen from this width.
@@ -30,14 +30,22 @@ async function locate($: EngineInterface, root: string, name: string | null): Pr
   return log.stdout.split('\n').find(Boolean) ?? null
 }
 
-/** Every tracked work order with a stage still open (neither landed nor struck), the one git touched last first. */
+/** A work order read with the close its version's `index.md` records. */
+async function load($: EngineInterface, root: string, file: string): Promise<Summary> {
+  const s = parseWorkOrder(await $.fs.read(`${root}/${file}`), file)
+  const index = await $.fs.read(`${root}/${file.replace(/[^/]*$/, 'index.md')}`).catch(() => '')
+  const closed = closedMark(index, file)
+  return closed ? { ...s, closed, gates: [`Closed ${closed} (index.md)`, ...s.gates] } : s
+}
+
+/** Every tracked work order not closed in `index.md` with a stage still open (neither landed nor struck), the one git touched last first. */
 async function openOrders($: EngineInterface, root: string, firstOnly = false): Promise<Summary[]> {
   const tracked = new Set((await $.process.run(['git', 'ls-files', 'instructions/*/workorder-*.md'], { cwd: root })).stdout.split('\n').filter(Boolean))
   const log = await $.process.run(['git', 'log', '--format=', '--name-only', '--', 'instructions/*/workorder-*.md'], { cwd: root })
   const open: Summary[] = []
   for (const file of new Set(log.stdout.split('\n').filter(f => tracked.has(f)))) {
-    const s = parseWorkOrder(await $.fs.read(`${root}/${file}`), file)
-    if (!s.stages.some(x => !x.note && !x.isStruck)) continue
+    const s = await load($, root, file)
+    if (s.closed || !s.stages.some(x => !x.note && !x.isStruck)) continue
     open.push(s)
     if (firstOnly) break
   }
@@ -57,7 +65,7 @@ async function refresh($: EngineInterface): Promise<void> {
   try {
     const file = await locate($, root, letter)
     if (!file) throw new Error(letter ? `no work order for ${letter}` : 'no work order under instructions/')
-    next = parseWorkOrder(await $.fs.read(`${root}/${file}`), file)
+    next = await load($, root, file)
   } catch (err) {
     next = { letter: letter ?? '?', title: '', file: '', stages: [], rulings: [], items: [], gates: [], error: String(err) }
   }
@@ -88,13 +96,13 @@ export const register: Register = on => {
       const open = await openOrders($, root)
       const added = new Map(await Promise.all(open.map(async s => [s.file, await addedAt($, root, s.file)] as const)))
       open.sort((a, b) => (added.get(a.file) ?? 0) - (added.get(b.file) ?? 0))
-      if (!open.length) return { text: 'No milestone open: every tracked work order has its stages landed or struck.' }
+      if (!open.length) return { text: 'No milestone open: every tracked work order is closed in index.md or has its stages landed or struck.' }
       const text = listing(open)
       return { text, context: [`Open milestones listed by /milestone list:\n${text}`] }
     }
     if (arg === '&') {
       const [s] = await openOrders($, await $.session.root(), true)
-      if (!s) return { text: 'Error: no milestone in progress (every tracked work order has its stages landed or struck).', exitCode: 1 }
+      if (!s) return { text: 'Error: no milestone in progress (every tracked work order is closed in index.md or has its stages landed or struck).', exitCode: 1 }
       await update($, pinned, () => s.letter.toLowerCase())
     }
     const isName = arg !== '' && arg !== '&' && !/^(pane|auto|list)$/i.test(arg)
