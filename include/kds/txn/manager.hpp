@@ -714,7 +714,7 @@ public:
     // branches, the same two `ReadView::Visible` decides by: below the
     // floor, or in the window at or below `ReadHorizon()`. False for a
     // transaction that is live, aborted, or committed above some live
-    // snapshot. The catalog's delete-mark purge is the caller.
+    // snapshot. The delete-mark purges and `CREATE INDEX`'s backfill ask it.
     bool ResolvedForEveryReader(std::uint64_t trx_id) const;
 
     // **What `ResolvedForEveryReader` can change its answer on** (BP-H11):

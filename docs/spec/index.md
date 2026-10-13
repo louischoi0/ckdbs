@@ -534,6 +534,20 @@ calls invisible without a baseline. A **delete-marked** row is walked like
 any other: gone for newer readers, still there for older ones, which is
 exactly the case the undo chain exists for.
 
+**The walk stops where the oldest reader would.** A version whose superseding
+writer is resolved for every live and future reader
+(`TransactionManager::ResolvedForEveryReader`) is reachable by none, and the
+undo purge may already have recycled its record, so the pointer to it is
+stale. The walk appends the version that writer wrote and does not read the
+pointer below it; a row whose current writer is resolved contributes its
+current version alone. A record whose pk is not the row's is refused
+`Corruption`, never indexed. With no transaction manager the walk runs to the
+chain's end.
+
+**A failed append refuses the `CREATE INDEX`**, naming the row: the walk's
+visitor fails by its `Status` (`UndoLog::Walk`), so no version a reader can
+reach is dropped from a published index.
+
 *Distinct* needs no bookkeeping: a version that did not move the key produces
 a byte-identical entry, and `IndexInsert` already reports one rather than
 storing it twice (IX4b).

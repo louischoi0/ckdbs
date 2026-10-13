@@ -16,6 +16,7 @@
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 #include "kds/storage/index/index_tree.hpp"
+#include "kds/txn/manager.hpp"
 #include "kds/txn/undo_log.hpp"
 
 namespace kds::exec {
@@ -58,6 +59,7 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
 // page rather than at one relation.
 struct StagedRow {
     std::uint64_t pk = 0;
+    std::uint64_t trx_id = 0;  // the current version's writer (a delete-mark's deleter)
     std::uint64_t undo_ptr = 0;
     std::vector<std::byte> payload;
 };
@@ -135,15 +137,29 @@ Status AppendVersion(storage::PageStore& store, const catalog::TableAccess& acce
 // A **delete-marked** row is walked like any other: it is gone for newer
 // readers and still there for older ones, which is exactly the case the undo
 // chain exists for.
+//
+// **Every version a reader can reach, and no further.** A version whose
+// superseding writer is resolved for every reader (`ResolvedForEveryReader`)
+// is invisible to every live and future view, so a reader stops above it and
+// the undo purge may already have recycled its record: the pointer to it is
+// stale, and what it names may be another row's version. The walk stops where
+// the oldest reader would, before reading that pointer. `txns` null - a
+// dispatcher with no transaction manager, where no snapshot exists and undo is
+// never recycled - walks to the chain's end.
 StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess& access,
-                          catalog::TableAccess::IndexRef ix) {
+                          catalog::TableAccess::IndexRef ix,
+                          const txn::TransactionManager* txns) {
+    const auto unreachable_below = [txns](std::uint64_t superseder) {
+        return txns != nullptr && txns->ResolvedForEveryReader(superseder);
+    };
     // Reads only, so a locally-built log is correct: Read/Walk resolve a
-    // pointer against pages and carry no allocation state. And safe under
-    // the undo purge for two reasons that must both stay true: this walk
-    // appends nothing, so no growth can trigger a reclaim mid-walk on this
-    // cooperative core; and the statement's own undo appends (the DDL undo
-    // hook's) all happen after the backfill returns, inside
-    // Catalog::CreateIndex.
+    // pointer against pages and carry no allocation state. A pointer is read
+    // only below a writer `unreachable_below` refused, so at or above the
+    // floor every core's undo purge recycles by. That writer can be resolved
+    // between the check and the read, and another core's purge can then
+    // recycle its record. So a read that fails, or returns another row's
+    // version, is asked again: once its superseder is resolved the version is
+    // unreachable and the walk ends there; otherwise it is the failure.
     txn::UndoLog undo(store);
 
     auto first = btree::BtreeLeftmostLeaf(store, access.desc_page_id);
@@ -178,6 +194,7 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 
                 StagedRow row;
                 row.pk = pk.value();
+                row.trx_id = tuple.value().trx_id;
                 row.undo_ptr = tuple.value().undo_ptr;
                 row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
                 staged.push_back(std::move(row));
@@ -191,24 +208,37 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
                 return s;
             }
 
+            // The writer that superseded the version the walk reads next.
+            std::uint64_t superseder = row.trx_id;
+            if (unreachable_below(superseder)) continue;
+
             // A failed append leaves the walk by its Status: the index must
             // not be published without that version's entry or any older one
             // of the row, or an old snapshot reaches its row through no entry.
             Status walked = undo.Walk(
                 row.undo_ptr,
                 [&](const txn::UndoVersion& version) -> StatusOr<storage::VisitControl> {
+                    if (version.pk != row.pk) {
+                        if (unreachable_below(superseder)) return storage::VisitControl::kStop;
+                        return Status::Corruption(
+                            "undo chain of the row with pk " + std::to_string(row.pk) +
+                            " reached a version of pk " + std::to_string(version.pk));
+                    }
                     // A delete-mark's image is empty because a mark changes
                     // no tuple bytes - the version it supersedes is the one
                     // already appended, so there is nothing new here.
-                    if (version.image.empty()) return storage::VisitControl::kContinue;
-                    if (Status s = AppendVersion(store, access, ix, row.pk, version.image);
-                        !s.ok()) {
-                        return s.WithContext("indexing an older version of the row with pk " +
-                                             std::to_string(row.pk));
+                    if (!version.image.empty()) {
+                        if (Status s = AppendVersion(store, access, ix, row.pk, version.image);
+                            !s.ok()) {
+                            return s.WithContext("indexing an older version of the row with pk " +
+                                                 std::to_string(row.pk));
+                        }
                     }
-                    return storage::VisitControl::kContinue;
+                    superseder = version.prior_trx_id;  // wrote this version
+                    return unreachable_below(superseder) ? storage::VisitControl::kStop
+                                                         : storage::VisitControl::kContinue;
                 });
-            if (!walked.ok()) return walked;
+            if (!walked.ok() && !unreachable_below(superseder)) return walked;
         }
 
         leaf = next;
@@ -303,7 +333,7 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
 
 StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableAccess& access,
                                 const catalog::Catalog::IndexDef& def, std::uint64_t trx_id,
-                                wal::WalManager* wal) {
+                                wal::WalManager* wal, const txn::TransactionManager* txns) {
     // The layout the definition's widths encode: `PrepareIndexDef` stored
     // `entry_width` as `leaf_entry_width()`, so the covered width is what
     // is left after the key and the pk. Re-derived rather than carried, and
@@ -353,7 +383,7 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
         building.covered_cols[i] = def.covered_cols[i];
     }
 
-    auto final_root = Backfill(store, access, building);
+    auto final_root = Backfill(store, access, building, txns);
     if (!final_root.ok()) return final_root.status();
 
     // RV3: the built tree travels as full page images, **before** the
@@ -371,14 +401,15 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                      const parser::IndexStmt& stmt, std::uint64_t trx_id,
                                      catalog::CatalogRowRef* written,
-                                     const txn::ReadView* view, wal::WalManager* wal) {
+                                     const txn::ReadView* view, wal::WalManager* wal,
+                                     const txn::TransactionManager* txns) {
     auto prepared = PrepareIndexDef(catalog, stmt, view);
     if (!prepared.ok()) return prepared.status();
     catalog::Catalog::IndexDef& def = prepared.value();
 
     auto access = catalog.InitTableAccess(def.table_oid);
     if (!access.ok()) return access.status();
-    auto root = BuildIndexTree(store, *access.value(), def, trx_id, wal);
+    auto root = BuildIndexTree(store, *access.value(), def, trx_id, wal, txns);
     if (!root.ok()) {
         return root.status().WithContext("building index '" + stmt.index_name + "'");
     }

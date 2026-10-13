@@ -2628,7 +2628,8 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         // must not be built against a relation the caller cannot see.
         auto result = exec::CreateIndex(catalog_, page_store_, stmt, create_ddl.trx_id,
                                         create_ddl.txn != nullptr ? &created_row : nullptr,
-                                        resolve_view.has_value() ? &*resolve_view : nullptr, wal_);
+                                        resolve_view.has_value() ? &*resolve_view : nullptr, wal_,
+                                        txn_);
         // Before the status is read: a create that failed after the catalog
         // row went down still left it there.
         if (create_ddl.txn != nullptr && created_row.page_id != kInvalidPageId) {

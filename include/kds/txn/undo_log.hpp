@@ -172,9 +172,7 @@ public:
     // each version until it returns `kStop`, the chain ends at kNoUndoPtr,
     // or kMaxUndoChainLength steps have been taken - the last of which is
     // Corruption. **A visitor's failure leaves by its Status**, as in every
-    // other walk (`storage/visit.hpp`): a plain `bool` stopped the walk and
-    // answered OK, which is how a failed append inside `CREATE INDEX`'s
-    // backfill went unseen.
+    // other walk (`storage/visit.hpp`).
     //
     // A caller that only needs one step calls Read(); this is for the index
     // backfill, which indexes every version of a row, and for tests that

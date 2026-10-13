@@ -11,6 +11,10 @@
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
 
+namespace kds::txn {
+class TransactionManager;
+}
+
 // `CREATE INDEX` / `DROP INDEX`: the checks, the tree, and the catalog
 // write behind them (docs/spec/index.md §10, workplan IX05).
 //
@@ -84,9 +88,13 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(
 // with a right answer's shape. Nothing can observe the half-built tree in
 // between: no catalog row names it, and the caller holds the relation `X`
 // (AT-S5e). `wal` null = unlogged (tests).
+//
+// The backfill indexes every version a live or future reader can reach: it
+// follows a row's undo chain down to the first version `txns` resolves for
+// every reader, never past it. `txns` null walks every chain to its end.
 StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableAccess& access,
                                 const catalog::Catalog::IndexDef& def, std::uint64_t trx_id,
-                                wal::WalManager* wal);
+                                wal::WalManager* wal, const txn::TransactionManager* txns);
 
 // What a successful CREATE INDEX has to say besides its row (the
 // `IndexDdlResult::warnings` lines). Today one line: the key column
@@ -109,7 +117,8 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
                                      std::uint64_t trx_id = catalog::kBootstrapXid,
                                      catalog::CatalogRowRef* written = nullptr,
                                      const txn::ReadView* view = nullptr,
-                                     wal::WalManager* wal = nullptr);
+                                     wal::WalManager* wal = nullptr,
+                                     const txn::TransactionManager* txns = nullptr);
 
 // Removes the index named by `stmt` and returns its `index_oid`.
 //
