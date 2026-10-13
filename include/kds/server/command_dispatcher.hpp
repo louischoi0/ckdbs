@@ -2222,12 +2222,18 @@ private:
     // before an own transaction's commit, whose durability wait must not run
     // under a latch. `spills` is the manager-less path's: with a manager
     // each spill was noted and logged at its append (`SpillLogFor`).
-    Status LogInsert(storage::InsertPlacement& placed, PageType leaf_type,
+    Status LogInsert(storage::InsertPlacement& placed, bool btree,
                      std::span<const std::byte> tuple, std::uint64_t trx_id,
                      std::uint64_t owner_oid, PageId anchor_page_id,
                      const std::vector<exec::AppendedSpill>& spills,
                      const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
+
+    // Every page a heap insert restructured, in the order redo applies them:
+    // a new tuple page as a PAGE_INIT, left unstamped for the record that
+    // fills it to stamp, and a repointed link as a full page image.
+    Status LogChainGrowth(const storage::InsertPlacement& placed, std::uint64_t txn_id,
+                          std::uint64_t owner_oid);
 
     // A clustered split's one BTREE_SPLIT record and, when it grew the tree
     // a level, the root's publication **inside that record**: the anchor's

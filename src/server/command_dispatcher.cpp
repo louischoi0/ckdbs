@@ -4648,9 +4648,15 @@ std::function<Status(const exec::AppendedSpill&)> CommandDispatcher::SpillLogFor
     const std::uint64_t txn_id = scope.txn->id();
     return [this, &scope, rel_oid, pk, txn_id](const exec::AppendedSpill& spill) -> Status {
         // RV3's order: the undo record that can release the value, then the
-        // records that make it durable.
-        if (Status s = NoteSpills(scope, rel_oid, pk, {spill}); !s.ok()) return s;
-        return exec::LogSpill(wal_, page_store_, spill, txn_id, rel_oid);
+        // records that make it durable. **Logged even when the undo record
+        // failed**: the append already wrote the page - a created page, the
+        // link to it, the slot - and left unlogged, the next append into the
+        // chain logs against a page redo never built, which refuses the mount.
+        // Logged, the value is one leaked slot no row names and no undo
+        // record releases.
+        const Status noted = NoteSpills(scope, rel_oid, pk, {spill});
+        const Status logged = exec::LogSpill(wal_, page_store_, spill, txn_id, rel_oid);
+        return noted.ok() ? logged : noted;
     };
 }
 
@@ -4730,13 +4736,12 @@ Status CommandDispatcher::NoteSpills(const WriteScope& scope, std::uint32_t rel_
     return Status::OK();
 }
 
-Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType leaf_type,
+Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, bool btree,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
                                     std::uint64_t owner_oid, PageId anchor_page_id,
                                     const std::vector<exec::AppendedSpill>& spills,
                                     const std::vector<exec::IndexWrite>& index_writes,
                                     bool own_txn) {
-    const bool btree = leaf_type == PageType::kBtreeLeaf;
     if (wal_ == nullptr) {
         // Nothing to log, and a root the split grew is published all the
         // same.
@@ -4763,26 +4768,10 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
     // placed at. Either comes after the row's spills and index entries, the
     // order the heap's HEAP_INSERT keeps below.
 
-    // Every page a heap insert restructured, in the order the storage layer
-    // says redo has to apply it, and all of it before the tuple's own
-    // record. A brand-new tuple page is a PAGE_INIT that the HEAP_INSERT
-    // below then fills; a link edit is a full page image (insert_placement.hpp).
-    for (const storage::StructuralChange& change :
-         btree ? std::span<const storage::StructuralChange>{} : placed.changes()) {
-        if (change.is_new_page) {
-            if (auto rec = wal::LogPageInit(wal_, txn_id, change.page_id, leaf_type,
-                                            change.min_key, owner_oid);
-                !rec.ok()) {
-                return rec.status();
-            }
-            // Deliberately unstamped: a new tuple page is always the page
-            // the HEAP_INSERT below lands in, and that stamps it. A new
-            // *internal* node is never reported as is_new_page, so it takes
-            // the image arm and is stamped there.
-            continue;
-        }
-
-        if (Status s = LogFullPageImage(change.page_id, txn_id); !s.ok()) return s;
+    // Every page a heap insert restructured, all of it before the tuple's
+    // own record, which fills and stamps the new page.
+    if (!btree) {
+        if (Status s = LogChainGrowth(placed, txn_id, owner_oid); !s.ok()) return s;
     }
 
     // The var-heap values this tuple points at, before the tuple itself.
@@ -4843,6 +4832,26 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
     if (effective_durability_ == wal::DurabilityClass::kGroup &&
         !wal_->IsDurable(commit.value())) {
         pending_commit_lsn_ = commit.value();
+    }
+    return Status::OK();
+}
+
+Status CommandDispatcher::LogChainGrowth(const storage::InsertPlacement& placed,
+                                         std::uint64_t txn_id, std::uint64_t owner_oid) {
+    if (wal_ == nullptr) return Status::OK();
+    for (const storage::StructuralChange& change : placed.changes()) {
+        if (change.is_new_page) {
+            if (auto rec = wal::LogPageInit(wal_, txn_id, change.page_id, PageType::kHeap,
+                                            change.min_key, owner_oid);
+                !rec.ok()) {
+                return rec.status();
+            }
+            // Unstamped (the header says why), and on a take-back left empty
+            // until the next insert's HEAP_INSERT stamps it - its PAGE_INIT
+            // all redo needs until then.
+            continue;
+        }
+        if (Status s = LogFullPageImage(change.page_id, txn_id); !s.ok()) return s;
     }
     return Status::OK();
 }
@@ -6183,18 +6192,29 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // leaf allocated. A split cannot give back a rebuilt page, so there the
     // row's slot is retired, keyless, the split is logged without a live row
     // (`kNoTxnId`: no transaction owns a structural change), and a root it
-    // grew is published as the success path would. A heap relation is
-    // untouched (BD-Q4).
+    // grew is published as the success path would. **A heap's tail gives it
+    // back the same way**: the row is the last its page allocated, the
+    // tail's hold making that true, and a chain the insert grew keeps its
+    // new, now empty page, logged at `kNoTxnId` as the success path would
+    // log it - left unlogged, the next insert into it is a HEAP_INSERT into
+    // a page redo never built.
     const auto take_back = [&](Status failed) -> Status {
-        if (!is_btree) return failed;
         Status undone = [&]() -> Status {
             auto page = page_store_.Get(placed.value().page_id);
             if (!page.ok()) return page.status();
             heap::PageView leaf(page.value().bytes());
-            if (!placed.value().restructured()) return leaf.UnInsertTuple(placed.value().slot);
-            if (Status s = leaf.RetireSlot(placed.value().slot); !s.ok()) return s;
+            const bool restructured = placed.value().restructured();
+            const std::uint16_t slot = placed.value().slot;
+            if (Status s = is_btree && restructured ? leaf.RetireSlot(slot)
+                                                    : leaf.UnInsertTuple(slot);
+                !s.ok()) {
+                return s;
+            }
+            if (!restructured) return Status::OK();
             page.value().Release();
-            if (Status s = LogSplit(placed.value(), wal::kNoTxnId, oid, ta.anchor_page_id);
+            if (Status s = is_btree
+                               ? LogSplit(placed.value(), wal::kNoTxnId, oid, ta.anchor_page_id)
+                               : LogChainGrowth(placed.value(), wal::kNoTxnId, oid);
                 !s.ok()) {
                 return s;
             }
@@ -6202,8 +6222,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             return Status::OK();
         }();
         if (!undone.ok() && logging(LogLevel::kError)) {
-            log_->Error("btree", "taking back the unlogged placement of id " +
-                                     std::to_string(row_id) + " failed: " + undone.message());
+            log_->Error(is_btree ? "btree" : "heap",
+                        "taking back the unlogged placement of id " +
+                            std::to_string(row_id) + " failed: " + undone.message());
         }
         return failed;
     };
@@ -6282,13 +6303,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // through the transaction chain, which is what keeps §3.6's visibility
     // rule intact.
     //
-    // **The spills are noted before the row's trail entry** (BD-S2's review,
-    // C2): noting one appends an undo record and can fail, and a failure
-    // after `NoteInsert` would leave the trail naming a row no record
-    // describes - whose live rollback logs a `SLOT_RETIRE` that redo, never
-    // having placed the row, applies to the neighbour the shift moved up.
-    // Before `NoteInsert` the failure is E5's, and the row is taken back. An
-    // insert undo record with no row behind it is work recovery counts done.
+    // **The spills are already noted**, each at its append (`SpillLogFor`),
+    // so the take-back's last exit is the undo append. An insert undo record
+    // with no row behind it is work recovery counts done.
     if (scope.txn != nullptr) {
         txn::UndoRecordFields rec{};
         rec.prior_trx_id = txn::kNoTrxId;
@@ -6299,7 +6316,6 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         auto ptr = txn_->AppendUndo(*scope.txn, rec, row_id, {});
         if (!ptr.ok()) return take_back(ptr.status());
     }
-    if (Status s = NoteSpills(scope, oid, row_id, spills); !s.ok()) return take_back(s);
     if (scope.txn != nullptr) {
         txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
                          row_id);
@@ -6309,8 +6325,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
 
     // Logged under the holds the placement handed out, and before the client
     // is answered - this class's header's ordering note (AT-S21).
-    if (Status s = LogInsert(placed.value(),
-                             is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded,
+    if (Status s = LogInsert(placed.value(), is_btree, encoded,
                              WriterId(scope), oid, ta.anchor_page_id, spills, index_writes,
                              /*own_txn=*/scope.txn == nullptr);
         !s.ok()) {
@@ -9019,7 +9034,12 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
     // The transaction's reservations become committed entries (§6.2 step
     // 4): flags cleared, ASSERT_COMMIT logged, before the commit record. A
     // failure leaves the transaction open - the client may retry COMMIT or
-    // ROLLBACK, and the pending set is untouched until one succeeds.
+    // ROLLBACK - but **not its pending set**: `CommitTxn` took it before the
+    // settle that failed. A retried COMMIT commits with the unsettled
+    // entries' flags left set; a ROLLBACK finds nothing to unapply and
+    // leaves their group totals counting rows it took back - too high, so
+    // the assertion refuses writes it could admit
+    // (`assertion-reservations-stranded-by-a-failed-settle.md`).
     if (Status s = enforcer_->CommitTxn(page_store_, wal_, id); !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
@@ -9117,10 +9137,15 @@ DispatchOutcome CommandDispatcher::RollbackLocal(Session& session) {
     // The reservations first (§6.2 step 5): each one removed from its
     // group, ASSERT_ROLLBACK logged, before the undo trail replays - so the
     // directory and the pages unwind in the same statement the rows do.
-    if (Status s = enforcer_->AbortTxn(page_store_, wal_, id); !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
-    }
+    //
+    // **A failed unwind does not skip the rollback**, as `AbortOwnedScope`'s
+    // does not: `AbortTxn` has already taken the pending list and given some
+    // reservations back, so returning here left the transaction open with
+    // its rows, and a `COMMIT` after it kept the rows against totals that no
+    // longer counted them - an assertion admitting a violation.
+    Status unwound = enforcer_->AbortTxn(page_store_, wal_, id);
     Status aborted = txn_->Abort(*txn, RowLocatorForRollback());
+    if (!unwound.ok()) aborted = unwound;
     // Its catalog rows were retired by that abort, so there is nothing
     // left for anyone to be isolated from - and nothing that may still be
     // cached about them (DT3c, DT4). Before `Finish()`, which clears the
