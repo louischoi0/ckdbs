@@ -1230,17 +1230,20 @@ TEST_F(CommandDispatcherTest, ACatalogViewRefusesALiteralOfTheWrongKind) {
     ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, owner int64)").response.substr(0, 7),
               "CREATED");
 
-    for (const std::string sql :
-         {"SELECT oid FROM sys.tables WHERE name = 5",
-          "SELECT oid FROM sys.tables WHERE oid = 'acct'",
-          "SELECT oid FROM sys.tables WHERE oid = -1",
-          "SELECT oid FROM sys.tables WHERE oid = 18446744073709551617",
-          "SELECT oid FROM sys.tables WHERE oid BETWEEN 1 AND 'z'",
-          // sys.patterns holds no row on a fresh instance; it refuses all the same.
-          "SELECT oid FROM sys.patterns WHERE fetch_id = 'x'"}) {
-        const std::string reply = d.Dispatch(sql).response;
-        EXPECT_EQ(reply.rfind("ERR ", 0), 0u) << sql << ": " << reply;
-        EXPECT_NE(reply.find("literal at byte "), std::string::npos) << sql << ": " << reply;
+    const std::pair<const char*, StatusCode> cases[] = {
+        {"SELECT oid FROM sys.tables WHERE name = 5", StatusCode::kInvalidArgument},
+        {"SELECT oid FROM sys.tables WHERE oid = 'acct'", StatusCode::kInvalidArgument},
+        {"SELECT oid FROM sys.tables WHERE oid = -1", StatusCode::kOutOfRange},
+        {"SELECT oid FROM sys.tables WHERE oid = 18446744073709551617", StatusCode::kOutOfRange},
+        {"SELECT oid FROM sys.tables WHERE oid BETWEEN 1 AND 'z'", StatusCode::kInvalidArgument},
+        // sys.patterns holds no row on a fresh instance; it refuses all the same.
+        {"SELECT oid FROM sys.patterns WHERE fetch_id = 'x'", StatusCode::kInvalidArgument}};
+    for (const auto& [sql, code] : cases) {
+        const DispatchOutcome out = d.Dispatch(sql);
+        EXPECT_EQ(out.response.rfind("ERR ", 0), 0u) << sql << ": " << out.response;
+        EXPECT_NE(out.response.find("literal at byte "), std::string::npos)
+            << sql << ": " << out.response;
+        EXPECT_EQ(out.status.code(), code) << sql << ": " << out.response;
     }
     EXPECT_EQ(d.Dispatch("SELECT name FROM sys.tables WHERE name = 'acct'").response,
               "name\\nacct");

@@ -6866,6 +6866,10 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     // that data can silence is not a refusal.
     std::vector<std::size_t> where_at;
     where_at.reserve(stmt.where.size());
+    // Each conjunct's literal and BETWEEN high bound, as coerced to the
+    // view's declared type: the rows compare what the check admitted.
+    std::vector<std::pair<parser::AstValue, parser::AstValue>> bounds;
+    bounds.reserve(stmt.where.size());
     for (const parser::Condition& cond : stmt.where) {
         if (cond.has_subquery()) {
             return {"ERR a subquery predicate over a catalog view is not supported: the "
@@ -6899,19 +6903,19 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         // The relation's literal rule (types.md §3.1a), against the type the
         // view declares for the column: `name = 5` and `oid = 'x'` are
         // refused rather than answered with no rows, and so is a negative
-        // or past-2^64 literal against a view's uint64. Judged on a copy -
-        // these two arms rewrite nothing - so the rows compare `cond.val`.
+        // or past-2^64 literal against a view's uint64.
         catalog::SysColumnRow column{};
         column.type_val = rows.column_types[at.value()];
-        const auto check = [&](const parser::AstValue& literal) {
-            parser::AstValue checked = literal;
-            return exec::CoerceLiteralToColumn(column, checked)
+        const auto coerce = [&](parser::AstValue& literal) {
+            const std::uint32_t byte = literal.byte_offset;
+            return exec::CoerceLiteralToColumn(column, literal)
                 .WithContext("column '" + cond.col.name + "' literal at byte " +
-                             std::to_string(literal.byte_offset));
+                             std::to_string(byte));
         };
-        Status checked = check(cond.val);
+        auto& [low, high] = bounds.emplace_back(cond.val, cond.val_high);
+        Status checked = coerce(low);
         if (checked.ok() && cond.kind == parser::PredicateKind::kBetween) {
-            checked = check(cond.val_high);
+            checked = coerce(high);
         }
         if (!checked.ok()) return {ErrorReply(checked), false, 0, checked};
     }
@@ -6935,8 +6939,9 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         for (std::size_t i = 0; i < stmt.where.size(); ++i) {
             const parser::Condition& cond = stmt.where[i];
             const parser::AstValue& value = row[where_at[i]];
-            // Under the type the view declares: a `fetch_id` above INT64_MAX
-            // compares as the uint64 it is (CompareValues reads its digits).
+            // The declared type, as the check above used; integers compare
+            // by their digits whatever the type, so a `fetch_id` above
+            // INT64_MAX is the uint64 it is.
             const std::uint32_t type_val = rows.column_types[where_at[i]];
             const auto Compare = [&](const parser::AstValue& bound, parser::CompareOp op) {
                 return exec::CompareValues(type_val, value, bound, op);
@@ -6951,9 +6956,9 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             // silently meant `oid = 100`, dropping the high bound and most
             // of the answer.
             matched = cond.kind == parser::PredicateKind::kBetween
-                          ? Compare(cond.val, parser::CompareOp::kGte) &&
-                                Compare(cond.val_high, parser::CompareOp::kLte)
-                          : Compare(cond.val, cond.op);
+                          ? Compare(bounds[i].first, parser::CompareOp::kGte) &&
+                                Compare(bounds[i].second, parser::CompareOp::kLte)
+                          : Compare(bounds[i].first, cond.op);
             if (!matched) break;
         }
         if (!matched) continue;
