@@ -1,0 +1,55 @@
+date: 2026-10-13 09:42 UTC
+kernel: 7.0.0-1014-azure
+cpu: Model name: AMD EPYC 9V74 80-Core Processor
+topology: CPU(s):                                  8;Thread(s) per core:                      2;Core(s) per socket:                      4;
+gcc: g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+data device: /dev/root      ext4 258932720 199686080  59230256  78% /
+build cache (B):
+CMAKE_BUILD_TYPE:STRING=Release
+CMAKE_CXX_FLAGS:STRING=
+KDS_BUILD_SIM:BOOL=OFF
+KDS_BUILD_TESTS:BOOL=OFF
+driver sha256:
+1896ef2022a52b20ef5b5fc011163ab57b10d9525191c03ed925393ec08aa362  tools/bm_scan.py
+d7b8076505860855db88e213f12ed17d26daf7c15e1efebed06751e632de8699  tools/bn_census.py
+51f707d07f49971d1bbd314fa723a78474f064e813b273c610c6066fd9f17a98  tools/kwp.py
+373cbc4a45ae3f4ec6220b3ef659bd604ad292071fb3adfecaaa3d032a195fbd  tools/bb_overhead_benchmark.py
+worktree HEAD: 4be1632e (v2.7.0-998-g4be1632e)
+worktree status:
+M  CLAUDE.md
+M  docs/spec/null.md
+M  docs/spec/parser-v2.md
+MM include/kds/exec/chain_frame.hpp
+M  include/kds/exec/step_chain.hpp
+ M include/kds/exec/step_vm.hpp
+M  include/kds/parser/ast.hpp
+M  include/kds/parser/parser.hpp
+UU instructions/v3.0.0/index.md
+A  instructions/v3.0.0/workorder-bu-basic-query-surface.md
+M  manual/sql/sql.md
+MM src/exec/chain_frame.cpp
+M  src/exec/plan_printer.cpp
+M  src/exec/row_codec.cpp
+M  src/exec/step_compiler.cpp
+MM src/exec/step_vm.cpp
+M  src/parser/ast.cpp
+M  src/parser/parser.cpp
+MM src/server/command_dispatcher.cpp
+M  tests/CMakeLists.txt
+M  tests/parser_subquery_test.cpp
+M  tests/testdata/parser_corpus.txt
+A  tests/where_bool_test.cpp
+A  tests/where_value_list_test.cpp
+diff --stat eeb88f47 4274ed81 -- src include:
+ include/kds/exec/chain_frame.hpp       |  77 +++++++++------------
+ include/kds/exec/step_vm.hpp           |   7 +-
+ include/kds/storage/heap/heap_page.hpp |  51 +++++++++++++-
+ src/exec/chain_frame.cpp               |  74 ++++++--------------
+ src/exec/step_vm.cpp                   | 120 ++++++++++++++++-----------------
+ src/server/command_dispatcher.cpp      |  19 ++++++
+ src/storage/heap/heap_page.cpp         |  74 +++++++-------------
+ 7 files changed, 208 insertions(+), 214 deletions(-)
+tools/ unchanged since: 34ab4269 2026-10-13T05:46:56+00:00
+free:
+               total        used        free      shared  buff/cache   available
+Mem:              15           3           7           0           4          11

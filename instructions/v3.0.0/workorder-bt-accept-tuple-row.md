@@ -12,6 +12,12 @@ English (`raft-marks-2026-10-13.md` §7-§8):
   ahead until achieving milestone, I will follow CLA proposal if decision
   needed, keep going in this session."*
 
+**Closed 2026-10-13 at BT-S5** (§6, the place to start): a rejected scan
+row 3.3-4.0 ns (-10.6 % to -11.5 %) cheaper at `4274ed81` than at
+`eeb88f47` (`bn` 27.4 ns against 31.0), the
+every-row `UPDATE` about 3 % cheaper, no guard cell regressed
+(`bench/v3.0.0/results-bt-close-v2.7.0-997-g4274ed81.md`).
+
 BT-Q1..Q3 below were put to the operator with CLA's proposal beside each
 before W1; W1 came without a per-item mark, so **every BT-Q item is adopted
 on the operator's standing go-ahead of 2026-10-13
@@ -330,3 +336,38 @@ sessions - `SortedLeafRigTest.AppendsFromTwoCoresKeepTheTreeWholeAndDense`
 also failed in BT-S2's run; re-run alone on this build, each passed 4 of 4
 (1.7-2.1 s against the suite's 60 s wait). The close re-runs the suite.
 Overhead not measured; measured at the milestone's close.
+
+### BT-S5 — the close; BT closed 2026-10-13
+
+`[measured]` `bench/v3.0.0/results-bt-close-v2.7.0-997-g4274ed81.md`: `eeb88f47`
+against `4274ed81` (`v2.7.0-997-g4274ed81`), interleaved, Release, A' as
+the spread, 08:46-09:35 UTC with B's build (inside the hour). **The scan
+row:** `bn` 27.4 / 27.5 ns against A's 31.0 / 30.9 (-3.3 / -3.5 ns, -10.6 /
+-11.3 %), `wide-h` -4.0 ns (-11.4 / -11.5 %), B below A in 13 of 13 runs on
+both paths, A' within a typical 0.45 ns. **G1 met** at 43-46 % of BT-S1's
+ceiling: B is within 0.2 ns of D2 alone, so S3's parts do not show
+separately - the gap to D-all is the counts and the charge BT-R3 keeps.
+**G2:** rows, digest, `examined=`, `matched=`, `sel=` and `pages=` identical
+across A, A' and B in run 0 of every `bm_scan` file. **The guard cells:** the every-row `UPDATE` 23.9 /
+27.3 µs (-3.1 / -3.5 %) cheaper over 1,000 rows (BT-S4), inside the
+largest A-against-A' gap and so not resolved at this size by BM-Q12's bar;
+the point `SELECT` -0.17 / +0.02 µs. **No regression to remedy.** Against
+PostgreSQL 18's 29.1 ns (the BM close's figure, not re-measured), `bn` is
+0.94 times it.
+
+**The merge of `origin/main`** brought BU (`OR`, `NOT`, value lists,
+`LIKE`; `instructions/v3.0.0/workorder-bu-basic-query-surface.md`), whose boolean conjuncts
+compared their leaves through the `EvaluateConjunct` BT-S4 deleted.
+**Resolved, adopted on the operator's standing go-ahead of 2026-10-13
+(go-ahead-achieving-milestone):** the leaves join BT-R5's once -
+`CheckConjuncts` takes the `Step` and checks its `residual` and every
+comparison inside its `bool_residual`, at the same three places, and BU's
+tree compares with `EvaluateConjunctChecked`. The alternative, a per-row
+`CheckConjunct` in the tree, would have built a `Status` per leaf per row.
+`index.md` took both rows. The merge was not in the measured binaries.
+Suite after the merge (`71861c0e`): 3726/3727 (Debug, `-LE
+heap-suspended`, host load 4-7); the one failure,
+`SortedLeafRigTest.AppendsFromTwoCoresKeepTheTreeWholeAndDense`, refused
+`TXN_CONFLICT` "btree descent ... gave up after 5 attempts" - the open
+defect `docs/inflight/bugs/two-cores-appending-to-one-btree-give-up-a-descent-after-five-attempts.md`,
+not BT's - and passed 5 of 5 re-run alone.
