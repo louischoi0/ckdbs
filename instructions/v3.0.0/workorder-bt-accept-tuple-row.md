@@ -371,3 +371,12 @@ heap-suspended`, host load 4-7); the one failure,
 `TXN_CONFLICT` "btree descent ... gave up after 5 attempts" - the open
 defect `docs/inflight/bugs/two-cores-appending-to-one-btree-give-up-a-descent-after-five-attempts.md`,
 not BT's - and passed 5 of 5 re-run alone.
+
+**The close's `critics-developer` review** (the merge and these texts)
+found no defect in the merge: both callers of `EvaluateBoolConjuncts` are
+behind the once, a function leaf still checks itself, a `$param` in a tree
+is still refused. It corrected the `Status` return's price to BT-S1's "at
+most 0.7-1.0 ns" and four citations. Rejected, both cosmetic: folding the
+two adjacent anonymous namespaces in `chain_frame.cpp` (each sits beside
+the public function it serves) and narrowing BU's `CompareTri` to return
+`TriState` (BU's code, untouched beyond the merge).
