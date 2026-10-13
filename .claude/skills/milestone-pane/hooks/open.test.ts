@@ -85,6 +85,29 @@ test('/milestone & with nothing in progress is an error', async ($, on) => {
   expect(r.exitCode).toBe(1)
 })
 
+test('a bare /milestone toggles the pane: closed it opens, open it closes', async ($, on) => {
+  const opened: string[] = []
+  const closed: string[] = []
+  let isPaneOpen = false
+  on('session.root', () => ({ value: '/repo' }))
+  on('process.run', () => ({ value: { stdout: `${file}\n`, stderr: '', exitCode: 0, isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('fs.read', () => ({ value: doc }))
+  on('ui.open', (_$, e) => { opened.push(e.id); return { value: { isPlaced: true } } })
+  on('ui.close', (_$, e) => { closed.push(e.id); isPaneOpen = false; return { value: undefined } })
+  on('ui.panes', () => ({ value: isPaneOpen ? [{ id: 'milestone' }] : [] } as never))
+  const bare = () => $.command.run({ command: 'milestone', args: '', presentation: { isFullscreen: true, columns: 120 } } as Parameters<typeof $.command.run>[0])
+
+  const first = await bare()
+  expect(opened).toEqual(['milestone'])
+  expect(first.text).toContain('shown in the pane')
+  isPaneOpen = true
+
+  const second = await bare()
+  expect(closed).toEqual(['milestone'])
+  expect(opened).toEqual(['milestone'])
+  expect(second.text).toBe('Milestone pane closed.')
+})
+
 test('/milestone is registered to run at once when typed mid-turn', async ($, on) => {
   const registered: { name: string, immediate?: true }[] = []
   on('command.register', (_$, e) => { registered.push(e); return { value: { command: e.name } } })

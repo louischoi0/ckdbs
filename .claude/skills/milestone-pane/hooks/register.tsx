@@ -88,7 +88,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'milestone',
-      description: '/milestone <name>: progress and what is left, in the side pane; & the milestone in progress (an error if none); list every milestone with a stage open, oldest registered first; bare / pane: the full summary there; off closes it; auto unpins',
+      description: '/milestone <name>: progress and what is left, in the side pane; & the milestone in progress (an error if none); list every milestone with a stage open, oldest registered first; bare: toggles the pane (open closes it, closed opens the full summary); pane: the full summary there; off closes it; auto unpins',
       // Typed mid-turn it runs at once rather than waiting for the turn to end; the hook reads git and the pane, never the turn, and `refresh` keeps a turn's late refresh off what it writes.
       immediate: true,
     })
@@ -97,7 +97,8 @@ export const register: Register = on => {
 
   on('command.run', { command: 'milestone' }, async ($, e) => {
     const arg = e.args.trim()
-    if (/^off$/i.test(arg)) {
+    // Bare, it toggles: an open pane closes, a closed one opens below.
+    if (/^off$/i.test(arg) || (arg === '' && (await isOpen($)))) {
       await $.ui.close({ id: PANE })
       return { text: 'Milestone pane closed.' }
     }
