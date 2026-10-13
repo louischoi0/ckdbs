@@ -35,6 +35,13 @@ bool HeapStorageAllowedForTest() noexcept {
 
 namespace {
 
+bool IEquals(std::string_view a, std::string_view b);
+
+// A contextual word - `AND`, `OR` - is an identifier token spelled that way.
+bool IsWord(const Token& t, std::string_view word) {
+    return t.type == TokenType::kIdent && IEquals(t.text, word);
+}
+
 bool IEquals(std::string_view a, std::string_view b) {
     return a.size() == b.size() &&
            std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
@@ -525,7 +532,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprOr() {
     auto lhs = ParseExprAnd();
     if (!lhs.ok()) return lhs;
     std::shared_ptr<const Expr> acc = std::move(lhs.value());
-    while (lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, "OR")) {
+    while (IsWord(lexer_.Peek(), "OR")) {
         const Token op = lexer_.Next();
         auto rhs = ParseExprAnd();
         if (!rhs.ok()) return rhs;
@@ -539,7 +546,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprAnd() {
     auto lhs = ParseExprNot();
     if (!lhs.ok()) return lhs;
     std::shared_ptr<const Expr> acc = std::move(lhs.value());
-    while (lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, "AND")) {
+    while (IsWord(lexer_.Peek(), "AND")) {
         const Token op = lexer_.Next();
         auto rhs = ParseExprNot();
         if (!rhs.ok()) return rhs;
@@ -1083,28 +1090,13 @@ StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubqueryAfterOpen(std::uint32
 StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
     Condition cond;
 
-    // Leading `EXISTS` / `NOT EXISTS`: the two predicates with no column
-    // on the left at all.
+    // Leading `EXISTS`: a predicate with no column on the left. `NOT
+    // EXISTS` never reaches here - `ParseBoolNot` reads the `NOT` and makes
+    // the pair one leaf, since a bare `NOT` there is the boolean operator.
     const Token& lead = lexer_.Peek();
-    if (lead.type == TokenType::kKeyword &&
-        (lead.kw == Keyword::kExists || lead.kw == Keyword::kNot)) {
-        bool negated = lead.kw == Keyword::kNot;
+    if (lead.type == TokenType::kKeyword && lead.kw == Keyword::kExists) {
         lexer_.Next();
-        if (negated) {
-            // `NOT` here can only introduce `NOT EXISTS`. `NOT IN` is
-            // reached with a column already parsed, below, and bare `NOT`
-            // over an expression is excluded by spec I10 - the grammar has
-            // no expression tree for it to negate.
-            const Token& next = lexer_.Peek();
-            if (next.type != TokenType::kKeyword || next.kw != Keyword::kExists) {
-                return Status::NotImplemented(
-                    "NOT is supported only as `NOT EXISTS (...)` or `NOT IN (...)` (byte " +
-                    std::to_string(lead.byte_offset) + ")");
-            }
-            lexer_.Next();
-        }
-        cond.kind = negated ? PredicateKind::kNotExists : PredicateKind::kExists;
-
+        cond.kind = PredicateKind::kExists;
         auto sub = ParseSubquery(depth);
         if (!sub.ok()) return sub.status();
         cond.subquery = std::move(sub.value());
@@ -1138,7 +1130,8 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
             const Token& in_tok = lexer_.Peek();
             if (in_tok.type != TokenType::kKeyword || in_tok.kw != Keyword::kIn) {
                 return Status::NotImplemented(
-                    "NOT is supported only as `NOT IN (...)` or `NOT EXISTS (...)` (byte " +
+                    "NOT after a column is supported only as `NOT IN (...)`; a negated "
+                    "predicate is written `NOT <predicate>` (byte " +
                     std::to_string(not_at) + ")");
             }
             lexer_.Next();
@@ -1170,7 +1163,7 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
         cond.val = std::move(low.value());
 
         const Token& and_tok = lexer_.Peek();
-        if (and_tok.type != TokenType::kIdent || !IEquals(and_tok.text, "AND")) {
+        if (!IsWord(and_tok, "AND")) {
             return Status::InvalidArgument("expected AND after the low bound of BETWEEN, got '" +
                                             std::string(Describe(and_tok)) + "' (byte " +
                                             std::to_string(and_tok.byte_offset) + ")");
@@ -1335,6 +1328,73 @@ StatusOr<Condition> Parser::ParseFunctionComparison(Condition cond) {
     return cond;
 }
 
+namespace {
+
+// BU-Q2: a boolean conjunct takes the caps a SET expression does. The
+// nesting is counted across the whole statement (`Parser::bool_nest_`), as
+// `expr_depth_` is, so a WHERE inside each of four subqueries shares one
+// stack budget; the size is counted per conjunct, in conditions, and a flat
+// top-level AND-list - flattened into ordinary conjuncts - is not one.
+constexpr std::uint32_t kMaxBoolNest = 64;
+constexpr std::uint32_t kMaxBoolConditions = 4096;
+
+Status BoolTooBig(std::uint32_t byte) {
+    return Status::Unsupported("a WHERE nested deeper than " + std::to_string(kMaxBoolNest) +
+                               " levels, or an OR/NOT group of more than " +
+                               std::to_string(kMaxBoolConditions) +
+                               " conditions, is not supported (byte " + std::to_string(byte) +
+                               ")");
+}
+
+std::uint32_t ConditionsIn(const BoolExpr& node) {
+    if (node.op == BoolExpr::Op::kLeaf) return 1;
+    std::uint32_t n = 0;
+    for (const BoolExpr& child : node.children) n += ConditionsIn(child);
+    return n;
+}
+
+// BU-S1 builds `OR` and `NOT` over the plain predicates only. A subquery
+// predicate under either is S3's, refused at the leaf rather than evaluated
+// as though the operator were not there.
+Status RefuseSubqueryUnder(const BoolExpr& node) {
+    if (node.op == BoolExpr::Op::kLeaf) {
+        if (!node.leaf.has_subquery()) return Status::OK();
+        return Status::NotImplemented(
+            "a subquery predicate under OR or NOT is not supported yet (byte " +
+            std::to_string(node.byte_offset) + ")");
+    }
+    for (const BoolExpr& child : node.children) {
+        if (Status s = RefuseSubqueryUnder(child); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
+// The top-level AND-list of a WHERE tree, into `out`: a leaf is an ordinary
+// conjunct and an `AND` - parenthesized or not - is flattened, so a WHERE
+// written without `OR` or `NOT` lowers exactly as it did before BU and keeps
+// every access path (BU-R5). Anything else is one `kBoolTree` conjunct.
+Status Flatten(BoolExpr node, std::vector<Condition>& out) {
+    if (node.op == BoolExpr::Op::kLeaf) {
+        out.push_back(std::move(node.leaf));
+        return Status::OK();
+    }
+    if (node.op == BoolExpr::Op::kAnd) {
+        for (BoolExpr& child : node.children) {
+            if (Status s = Flatten(std::move(child), out); !s.ok()) return s;
+        }
+        return Status::OK();
+    }
+    if (ConditionsIn(node) > kMaxBoolConditions) return BoolTooBig(node.byte_offset);
+    if (Status s = RefuseSubqueryUnder(node); !s.ok()) return s;
+    Condition cond;
+    cond.kind = PredicateKind::kBoolTree;
+    cond.tree = std::make_shared<const BoolExpr>(std::move(node));
+    out.push_back(std::move(cond));
+    return Status::OK();
+}
+
+}  // namespace
+
 StatusOr<std::vector<Condition>> Parser::ParseOptionalWhere(std::uint32_t depth) {
     std::vector<Condition> conds;
 
@@ -1344,20 +1404,81 @@ StatusOr<std::vector<Condition>> Parser::ParseOptionalWhere(std::uint32_t depth)
     }
     lexer_.Next();  // consume WHERE
 
-    for (;;) {
-        auto cond = ParseOneCondition(depth);
-        if (!cond.ok()) return cond.status();
-        conds.push_back(std::move(cond.value()));
+    auto tree = ParseBoolChain(depth, /*is_or=*/true);
+    if (!tree.ok()) return tree.status();
+    if (Status s = Flatten(std::move(tree.value()), conds); !s.ok()) return s;
+    return conds;
+}
 
-        const Token& next = lexer_.Peek();
-        if (next.type == TokenType::kIdent && IEquals(next.text, "AND")) {
+StatusOr<BoolExpr> Parser::ParseBoolChain(std::uint32_t depth, bool is_or) {
+    const std::string_view word = is_or ? "OR" : "AND";
+    const auto operand = [&]() {
+        return is_or ? ParseBoolChain(depth, /*is_or=*/false) : ParseBoolNot(depth);
+    };
+    const std::uint32_t at = lexer_.Peek().byte_offset;
+    auto first = operand();
+    if (!first.ok() || !IsWord(lexer_.Peek(), word)) return first;
+
+    BoolExpr node;
+    node.op = is_or ? BoolExpr::Op::kOr : BoolExpr::Op::kAnd;
+    node.byte_offset = at;
+    node.children.push_back(std::move(first.value()));
+    while (IsWord(lexer_.Peek(), word)) {
+        lexer_.Next();
+        auto next = operand();
+        if (!next.ok()) return next;
+        node.children.push_back(std::move(next.value()));
+    }
+    return node;
+}
+
+StatusOr<BoolExpr> Parser::ParseBoolNot(std::uint32_t depth) {
+    const Token& lead = lexer_.Peek();
+    const std::uint32_t at = lead.byte_offset;
+
+    if (lead.type == TokenType::kKeyword && lead.kw == Keyword::kNot) {
+        lexer_.Next();
+        // `NOT EXISTS (...)` stays the one leaf it has always been.
+        if (lexer_.Peek().type == TokenType::kKeyword && lexer_.Peek().kw == Keyword::kExists) {
             lexer_.Next();
-            continue;
+            BoolExpr leaf;
+            leaf.byte_offset = at;
+            leaf.leaf.kind = PredicateKind::kNotExists;
+            auto sub = ParseSubquery(depth);
+            if (!sub.ok()) return sub.status();
+            leaf.leaf.subquery = std::move(sub.value());
+            return leaf;
         }
-        break;
+        if (bool_nest_ >= kMaxBoolNest) return BoolTooBig(at);
+        DepthScope scope(bool_nest_);
+        auto operand = ParseBoolNot(depth);
+        if (!operand.ok()) return operand;
+        BoolExpr node;
+        node.op = BoolExpr::Op::kNot;
+        node.byte_offset = at;
+        node.children.push_back(std::move(operand.value()));
+        return node;
     }
 
-    return conds;
+    if (lead.type == TokenType::kLParen) {
+        if (bool_nest_ >= kMaxBoolNest) return BoolTooBig(at);
+        DepthScope scope(bool_nest_);
+        lexer_.Next();
+        auto inner = ParseBoolChain(depth, /*is_or=*/true);
+        if (!inner.ok()) return inner;
+        if (Status s = ExpectToken(TokenType::kRParen, "')' closing a parenthesized condition");
+            !s.ok()) {
+            return s;
+        }
+        return inner;
+    }
+
+    BoolExpr leaf;
+    leaf.byte_offset = at;
+    auto cond = ParseOneCondition(depth);
+    if (!cond.ok()) return cond.status();
+    leaf.leaf = std::move(cond.value());
+    return leaf;
 }
 
 StatusOr<CreateTableStmt> Parser::ParseCreateTable() {

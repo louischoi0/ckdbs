@@ -244,6 +244,12 @@ private:
     Status ParseComparisonRhs(Condition& cond);
     StatusOr<std::vector<Condition>> ParseOptionalWhere(std::uint32_t depth);
 
+    // A WHERE's boolean structure (BU-S1): `OR` binds loosest, then `AND`
+    // (one chain production, `is_or` saying which), then `NOT`; a
+    // parenthesized group or one condition is the primary.
+    StatusOr<BoolExpr> ParseBoolChain(std::uint32_t depth, bool is_or);
+    StatusOr<BoolExpr> ParseBoolNot(std::uint32_t depth);
+
     StatusOr<std::string> ParseIdent();
 
     // A SET value (BJ-S2, BJ-S5): one bare literal into `a.val`, anything
@@ -292,6 +298,9 @@ private:
     // Nesting of parentheses and unary signs in a SET value, bounded so a
     // hostile statement cannot recurse the stack away.
     std::uint32_t expr_depth_ = 0;
+    // The parentheses and `NOT`s around the WHERE node being parsed, across
+    // the whole statement - every subquery's WHERE included (BU-Q2).
+    std::uint32_t bool_nest_ = 0;
     // Set while a SELECT that is a value inside another statement is parsed:
     // a `;` is that statement's end, not a way to end the subquery early.
     bool inside_value_subquery_ = false;

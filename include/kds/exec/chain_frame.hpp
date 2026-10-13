@@ -172,4 +172,23 @@ StatusOr<bool> EvaluateAllExcept(const std::vector<const catalog::Schema*>& sche
 StatusOr<bool> EvaluateFunctionConjuncts(const std::vector<FunctionPredicate>& predicates,
                                          const ChainFrame& frame);
 
+// ---- Three-valued logic, collapsed in exactly one place (spec I16) -------
+enum class TriState : std::uint8_t { kFalse, kTrue, kUnknown };
+
+// **The single collapse point.** UNKNOWN becomes false at the root of a
+// conjunct - one function, which the sub-chain kinds (step_vm.cpp) and the
+// boolean conjuncts (chain_frame.cpp) both route through.
+inline bool Collapse(TriState value) noexcept { return value == TriState::kTrue; }
+
+inline bool IsNull(const parser::AstValue& value) noexcept {
+    return value.type == parser::ValueType::kNull;
+}
+
+// Every boolean conjunct attached to one step (step_chain.hpp's
+// BoolPredicate), each in three-valued logic with its unknown collapsed to
+// false at its root (BU-R4). Empty always matches.
+StatusOr<bool> EvaluateBoolConjuncts(const std::vector<const catalog::Schema*>& schemas,
+                                     const std::vector<BoolPredicate>& predicates,
+                                     const ChainFrame& frame);
+
 }  // namespace kds::exec

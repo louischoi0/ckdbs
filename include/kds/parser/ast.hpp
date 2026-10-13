@@ -240,6 +240,18 @@ enum class PredicateKind : std::uint8_t {
     // It lowers to a function conjunct (step_chain.hpp) and never to a
     // `StepPredicate`, which is what keeps it from ever being a key.
     kCompareFunction,
+
+    // A boolean combination holding `OR` or `NOT` (BU-S1,
+    // workorder-bu-basic-query-surface.md): `a = 1 OR b = 2`,
+    // `NOT (c > 3)`. `tree` holds it; `col`, `op` and `val` are unset.
+    //
+    // **One conjunct of the top-level AND-list, and never a key** (BU-R5).
+    // The parser flattens every top-level AND - parenthesized or not - into
+    // ordinary conjuncts, so only a group containing `OR` or `NOT` becomes
+    // one of these, and every reader that acts on a `kCompareValue` passes
+    // it by, as it passes a `kCompareFunction`. It lowers to
+    // `Step::bool_residual` (step_chain.hpp).
+    kBoolTree,
 };
 
 // What sits on the right of a comparison.
@@ -262,6 +274,8 @@ struct FunctionCall {
     std::vector<ColumnName> args;
     std::uint32_t byte_offset = 0;  // the name's first byte
 };
+
+struct BoolExpr;
 
 struct Condition {
     PredicateKind kind = PredicateKind::kCompareValue;
@@ -300,7 +314,23 @@ struct Condition {
     // parsed; nothing here is ever written through a second time.
     std::shared_ptr<SelectStmt> subquery;
 
+    // kBoolTree only: the combination. Immutable once parsed, and shared
+    // for `subquery`'s reason.
+    std::shared_ptr<const BoolExpr> tree;
+
     bool has_subquery() const noexcept { return subquery != nullptr; }
+};
+
+// A WHERE's boolean structure as written (BU-S1). A leaf is one ordinary
+// condition; `kAnd`/`kOr` have two or more children, `kNot` exactly one.
+// What reaches a statement is not this tree but the flat AND-list
+// `Parser::ParseOptionalWhere` makes of it (see `PredicateKind::kBoolTree`).
+struct BoolExpr {
+    enum class Op : std::uint8_t { kLeaf, kAnd, kOr, kNot };
+    Op op = Op::kLeaf;
+    std::uint32_t byte_offset = 0;  // the node's first token
+    Condition leaf;                 // kLeaf
+    std::vector<BoolExpr> children; // kAnd, kOr, kNot
 };
 
 struct ColumnDef {

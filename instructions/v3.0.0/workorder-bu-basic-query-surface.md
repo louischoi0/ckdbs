@@ -198,3 +198,62 @@ measurement is what says so.
 ### BU-S0 — written 2026-10-13
 
 This document, on `worktree-bu-basic-query-surface` from `eeb88f47`.
+
+### BU-S1 — `OR`, `NOT`, parentheses (built 2026-10-13)
+
+On `worktree-bu-basic-query-surface` from `73435d7b`. `[source-read]` at
+the stage's commit:
+
+- **Parser.** `ParseOptionalWhere` parses a boolean tree
+  (`ParseBoolChain` for `OR` then `AND`, `ParseBoolNot` for `NOT`, a
+  parenthesized group and one condition) and `Flatten`s it: the top-level
+  AND-list, parenthesized or not, becomes ordinary conjuncts, and each
+  group holding `OR` or `NOT` one `PredicateKind::kBoolTree` conjunct over
+  a `parser::BoolExpr`. `NOT EXISTS (...)` stays one leaf. A subquery
+  predicate under `OR`/`NOT` is refused `NotImplemented` at the leaf (S3).
+  Caps (BU-Q2): 64 levels of parentheses and `NOT` across the whole
+  statement (`Parser::bool_nest_`, as BJ's `expr_depth_`), 4,096 conditions
+  per group, both `Unsupported` at the byte; a flat AND-list is not a group
+  and is uncapped as before.
+- **Compile.** `LowerBoolTree` lowers each leaf through the lowering its
+  flat counterpart takes (`LowerComparison`, now shared by `CompileWhere`
+  and `CompileBlock`; `LowerFunctionConjunct`) into an
+  `exec::BoolPredicate` in `Step::bool_residual`, placed at the latest step
+  any of its columns reaches. Every reader of `fn_residual` reads it too
+  (determinism class, correlation, column masks, the inner-build gate, the
+  plan printer's `filter bool`); no key, range, index, Cabin, propagation
+  or build reader sees it (BU-R5).
+- **Evaluate.** `EvaluateBoolConjuncts` (`chain_frame.cpp`) in Kleene logic,
+  collapsed by I16's one `Collapse` (moved to `chain_frame.hpp`, shared with
+  the sub-chain kinds), at `AcceptTupleAt` and `EvaluateConjuncts` - so
+  `SELECT`, every subquery, `UPDATE` and `DELETE` (BU-R4).
+- **Raw readers.** The catalog view refuses a boolean conjunct (BU-Q4);
+  `PurgeConjunctRefusal` names its byte; `PkLiteral`, `PkEqualityTarget`
+  and `FoldPkWindow` pass it by on `kind`.
+- **Fingerprint.** No change: the corpus's two `OR`/`NOT` lines flip their
+  verdict to `ok` with their hashes unmoved.
+- **Docs.** `parser-v2.md` I10 and I16, `null.md` §4, `manual/sql/sql.md`
+  WHERE and §7, the `CLAUDE.md` row.
+- **Tests.** `tests/where_bool_test.cpp`, 23 cells: the operators, Kleene
+  logic, every reader (pk, index after an update, Cabin, join placement,
+  propagation, correlated subquery, the point write), the plan line, the
+  fingerprint, refusals and caps.
+
+Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S1 — the `critics-developer` review, applied
+
+No correctness defect found. Applied: the size cap counted a flat AND-list
+too, refusing the 20,001-conjunct statement `ParserFuzzTest` pins (found by
+the suite before the review, fixed with it); the nesting cap moved from per
+WHERE to per statement (the review: five WHEREs of 64 levels each is about
+1.9 MB of release stack); `ParseBoolOr`/`ParseBoolAnd` merged into
+`ParseBoolChain`; the duplicate `Tri`/`IsNull` deleted for I16's
+`TriState`/`Collapse`; `CompareTri` evaluates once and asks about NULL only
+after a false; `IsWord` used at every contextual-word test in the parser;
+the stale `col NOT` refusal text and the cap message corrected.
+**Rejected, with reasons:** folding `fn_residual` into `bool_residual` (the
+review's largest cut) - it rewrites AP-S4's plan text and cells, outside a
+stage that adds a form; it is the first candidate for BU-S9's cleanup.
+Shrinking `BoolPredicate` with a variant leaf - its size is per conjunct,
+not per row.

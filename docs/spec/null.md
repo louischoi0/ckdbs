@@ -168,6 +168,9 @@ belongs to the doc named.
 - **Three-valued comparison.** `exec::CompareValues()` answers
   true/false/unknown, and every predicate site says what it does with
   unknown. `WHERE` keeps only true, so `col = NULL` matches nothing, ever;
+  under `OR` and `NOT` (BU-S1) the unknown is carried in Kleene logic to
+  the conjunct's root and collapsed there, so `NOT (col = 1)` is unknown,
+  not true, where `col` is NULL (`parser-v2.md` I16);
   `IS NULL` / `IS NOT NULL` is the one spelling that finds NULLs, answered
   from the stored bitmap.
 - **`IN` / `NOT IN`** (`docs/spec/parser-v2.md`). `NOT IN` over a subquery

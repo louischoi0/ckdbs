@@ -255,17 +255,22 @@ TEST(ParserSubqueryTest, AnInValueListIsStillRejectedAndSaysWhat) {
         << parsed.status().message();
 }
 
-TEST(ParserSubqueryTest, BareNotIsRefusedWithAnExplanation) {
-    // `NOT` is reserved but negation is only available in the two forms
-    // spec I10 admits; there is no expression tree for a bare NOT to
-    // negate. Refused by name rather than as a mystery syntax error.
-    for (auto sql : {"SELECT * FROM t WHERE NOT id = 1", "SELECT * FROM t WHERE id NOT = 1"}) {
-        auto parsed = Parse(sql);
-        ASSERT_FALSE(parsed.ok()) << sql;
-        EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented) << sql;
-        EXPECT_NE(parsed.status().message().find("NOT"), std::string::npos)
-            << sql << ": " << parsed.status().message();
-    }
+TEST(ParserSubqueryTest, NotIsAPredicateOperatorAndNothingElse) {
+    // Since BU-S1 a bare `NOT` negates the predicate after it
+    // (workorder-bu-basic-query-surface.md). After a column it is still only
+    // the reserved `NOT IN (...)`, refused by name rather than as a mystery
+    // syntax error.
+    auto negated = Parse("SELECT * FROM t WHERE NOT id = 1");
+    ASSERT_TRUE(negated.ok()) << negated.status().message();
+    const auto& where = std::get<SelectStmt>(negated.value()).where;
+    ASSERT_EQ(where.size(), 1u);
+    EXPECT_EQ(where[0].kind, PredicateKind::kBoolTree);
+
+    auto parsed = Parse("SELECT * FROM t WHERE id NOT = 1");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
+    EXPECT_NE(parsed.status().message().find("NOT"), std::string::npos)
+        << parsed.status().message();
 }
 
 TEST(ParserSubqueryTest, ASemicolonDoesNotEndANestedBlock) {

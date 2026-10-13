@@ -327,16 +327,117 @@ StatusOr<FunctionPredicate> LowerFunctionConjunct(const Scope& scope,
     return out;
 }
 
+// A plain comparison or a `BETWEEN`, lowered into `out`: one
+// `StepPredicate`, or two for a `BETWEEN`. Shared by both WHERE lowerings
+// and by a boolean conjunct's leaves, so a comparison means one thing
+// wherever it is written.
+//
+// `BETWEEN` lowers to its two ordinary conjuncts and nothing else. The
+// range that may later be put on the step is a hint *on top of* these
+// (step_chain.hpp) - so a chain that ignored every range would still return
+// the same rows, which is the property that makes the kind safe to add.
+Status LowerComparison(const Scope& scope, const parser::Condition& cond,
+                       std::vector<StepPredicate>& out) {
+    auto lhs = ResolveColumn(scope, cond.col);
+    if (!lhs.ok()) return lhs.status();
+
+    if (cond.kind == parser::PredicateKind::kBetween) {
+        for (const auto& [op, bound] :
+             {std::pair{parser::CompareOp::kGte, &cond.val},
+              std::pair{parser::CompareOp::kLte, &cond.val_high}}) {
+            StepPredicate pred;
+            pred.lhs = lhs.value();
+            pred.op = op;
+            pred.rhs.kind = OperandKind::kLiteral;
+            pred.rhs.literal = *bound;
+            if (Status s = CoercePredicate(scope, pred, cond.col.byte_offset); !s.ok()) return s;
+            out.push_back(std::move(pred));
+        }
+        return Status::OK();
+    }
+
+    StepPredicate pred;
+    pred.lhs = lhs.value();
+    pred.op = cond.op;
+    if (cond.rhs_kind == parser::RhsKind::kColumn) {
+        // Resolved against the same scope, so an outward reference here is
+        // exactly what makes an enclosing sub-chain correlated.
+        auto rhs = ResolveColumn(scope, cond.rhs_col);
+        if (!rhs.ok()) return rhs.status();
+        pred.rhs.kind = OperandKind::kColumn;
+        pred.rhs.column = rhs.value();
+    } else {
+        pred.rhs.kind = OperandKind::kLiteral;
+        pred.rhs.literal = cond.val;
+    }
+    if (Status s = CoercePredicate(scope, pred, cond.col.byte_offset); !s.ok()) return s;
+    out.push_back(std::move(pred));
+    return Status::OK();
+}
+
+// ---- Boolean conjuncts (BU-S1) -----------------------------------------
+//
+// A `kBoolTree` condition lowered to a BoolPredicate - never to the flat
+// residual, which is what keeps every comparison under an `OR` or a `NOT`
+// from being a key (step_chain.hpp, BU-R5). Each leaf goes through the
+// lowering its flat counterpart takes.
+StatusOr<BoolPredicate> LowerBoolTree(const Scope& scope, const parser::BoolExpr& node) {
+    BoolPredicate out;
+    switch (node.op) {
+        case parser::BoolExpr::Op::kAnd: out.op = BoolPredicate::Op::kAnd; break;
+        case parser::BoolExpr::Op::kOr: out.op = BoolPredicate::Op::kOr; break;
+        case parser::BoolExpr::Op::kNot: out.op = BoolPredicate::Op::kNot; break;
+        case parser::BoolExpr::Op::kLeaf: {
+            const parser::Condition& cond = node.leaf;
+            if (cond.has_subquery() || cond.kind == parser::PredicateKind::kBoolTree) {
+                // The parser refuses a subquery under OR/NOT (BU-S1) and
+                // flattens no tree into a leaf.
+                return Status::Corruption("a boolean conjunct leaf that is not a comparison");
+            }
+            if (cond.kind == parser::PredicateKind::kCompareFunction) {
+                auto fn = LowerFunctionConjunct(scope, cond);
+                if (!fn.ok()) return fn.status();
+                out.op = BoolPredicate::Op::kFunction;
+                out.fn = std::move(fn.value());
+                return out;
+            }
+            std::vector<StepPredicate> preds;
+            if (Status s = LowerComparison(scope, cond, preds); !s.ok()) return s;
+            if (preds.size() == 1) {
+                out.op = BoolPredicate::Op::kCompare;
+                out.compare = std::move(preds.front());
+                return out;
+            }
+            out.op = BoolPredicate::Op::kAnd;  // a BETWEEN's two halves
+            for (StepPredicate& pred : preds) {
+                BoolPredicate leaf;
+                leaf.op = BoolPredicate::Op::kCompare;
+                leaf.compare = std::move(pred);
+                out.children.push_back(std::move(leaf));
+            }
+            return out;
+        }
+    }
+    for (const parser::BoolExpr& child : node.children) {
+        auto lowered = LowerBoolTree(scope, child);
+        if (!lowered.ok()) return lowered.status();
+        out.children.push_back(std::move(lowered.value()));
+    }
+    return out;
+}
+
 // The statement's class: the most volatile purity any function conjunct
 // calls, through every sub-chain, hoisted or placed (AR1 §3).
 DeterminismClass DeterminismOf(const StepChain& chain) {
     DeterminismClass out = DeterminismClass::kD0;
     ForEachStep(chain, [&](const Step& step) {
-        for (const FunctionPredicate& pred : step.fn_residual) {
+        const auto note = [&out](const FunctionPredicate& pred) {
             for (const FunctionSide* side : {&pred.lhs, &pred.rhs}) {
                 if (side->call.has_value()) out = std::max(out, ClassOf(side->call->fn->purity));
             }
-        }
+        };
+        for (const FunctionPredicate& pred : step.fn_residual) note(pred);
+        for (const BoolPredicate& pred : step.bool_residual) ForEachFunction(pred, note);
         return true;
     });
     return out;
@@ -1203,6 +1304,7 @@ std::uint16_t DeepestReferenceIntoThisChain(const std::vector<Step>& steps,
             if (pred.rhs.kind == OperandKind::kColumn) consider(pred.rhs.column);
         }
         for (const FunctionPredicate& pred : step.fn_residual) ForEachColumn(pred, consider);
+        for (const BoolPredicate& pred : step.bool_residual) ForEachColumn(pred, consider);
         if (step.key.has_value() && step.key->kind == OperandKind::kColumn) {
             consider(step.key->column);
         }
@@ -1227,9 +1329,9 @@ bool ReferencesAnOuterChain(const std::vector<Step>& steps) {
         // surely as a predicate's column does; missing it would hoist the
         // sub-chain and run it once for every outer row.
         bool escapes = false;
-        for (const FunctionPredicate& pred : step.fn_residual) {
-            ForEachColumn(pred, [&](const ColumnRef& ref) { escapes = escapes || ref.up > 0; });
-        }
+        const auto escape = [&](const ColumnRef& ref) { escapes = escapes || ref.up > 0; };
+        for (const FunctionPredicate& pred : step.fn_residual) ForEachColumn(pred, escape);
+        for (const BoolPredicate& pred : step.bool_residual) ForEachColumn(pred, escape);
         if (escapes) return true;
         if (step.key.has_value() && OperandEscapes(*step.key)) return true;
         for (const SubChain& sub : step.sub_chains) {
@@ -1289,6 +1391,7 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
             if (pred.rhs.kind == OperandKind::kColumn) note(pred.rhs.column);
         }
         for (const FunctionPredicate& pred : other.fn_residual) ForEachColumn(pred, note);
+        for (const BoolPredicate& pred : other.bool_residual) ForEachColumn(pred, note);
         if (other.key.has_value() && other.key->kind == OperandKind::kColumn) {
             note(other.key->column);
         }
@@ -1362,6 +1465,7 @@ std::uint64_t FilterColumnsOf(const Step& step, std::uint16_t index) {
     // A function conjunct is evaluated beside the residual, on the same
     // decode, so its arguments are what this row must have read too.
     for (const FunctionPredicate& pred : step.fn_residual) ForEachColumn(pred, note);
+    for (const BoolPredicate& pred : step.bool_residual) ForEachColumn(pred, note);
     return mask;
 }
 
@@ -1549,47 +1653,14 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
             continue;
         }
 
-        auto lhs = ResolveColumn(scope, cond.col);
-        if (!lhs.ok()) return lhs.status();
-
-        // `BETWEEN` lowers to its two ordinary conjuncts and nothing else.
-        // The range that may later be put on the step is a hint *on top of*
-        // these (step_chain.hpp) - so a chain that ignored every range would
-        // still return the same rows, which is the property that makes the
-        // kind safe to add.
-        if (cond.kind == parser::PredicateKind::kBetween) {
-            StepPredicate low;
-            low.lhs = lhs.value();
-            low.op = parser::CompareOp::kGte;
-            low.rhs.kind = OperandKind::kLiteral;
-            low.rhs.literal = cond.val;
-            if (Status s = CoercePredicate(scope, low, cond.col.byte_offset); !s.ok()) return s;
-            out.residual.push_back(low);
-
-            StepPredicate high;
-            high.lhs = lhs.value();
-            high.op = parser::CompareOp::kLte;
-            high.rhs.kind = OperandKind::kLiteral;
-            high.rhs.literal = cond.val_high;
-            if (Status s = CoercePredicate(scope, high, cond.col.byte_offset); !s.ok()) return s;
-            out.residual.push_back(high);
+        if (cond.kind == parser::PredicateKind::kBoolTree) {
+            auto tree = LowerBoolTree(scope, *cond.tree);
+            if (!tree.ok()) return tree.status();
+            out.bool_residual.push_back(std::move(tree.value()));
             continue;
         }
 
-        StepPredicate pred;
-        pred.lhs = lhs.value();
-        pred.op = cond.op;
-        if (cond.rhs_kind == parser::RhsKind::kColumn) {
-            auto rhs = ResolveColumn(scope, cond.rhs_col);
-            if (!rhs.ok()) return rhs.status();
-            pred.rhs.kind = OperandKind::kColumn;
-            pred.rhs.column = rhs.value();
-        } else {
-            pred.rhs.kind = OperandKind::kLiteral;
-            pred.rhs.literal = cond.val;
-        }
-        if (Status s = CoercePredicate(scope, pred, cond.col.byte_offset); !s.ok()) return s;
-        out.residual.push_back(pred);
+        if (Status s = LowerComparison(scope, cond, out.residual); !s.ok()) return s;
     }
     // **The mask the caller now keeps** (OPT-001). This used to answer
     // kAllColumns on the grounds that UPDATE and DELETE need every column
@@ -1708,6 +1779,8 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     std::vector<SubChain> sub_chains;
     // Function conjuncts likewise (AP-S4), placed by the same rule.
     std::vector<FunctionPredicate> fn_predicates;
+    // And boolean conjuncts (BU-S1).
+    std::vector<BoolPredicate> bool_predicates;
 
     for (const parser::Condition& cond : stmt.where) {
         if (cond.has_subquery()) {
@@ -1776,50 +1849,14 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             continue;
         }
 
-        auto lhs = ResolveColumn(scope, cond.col);
-        if (!lhs.ok()) return lhs.status();
-
-        // `BETWEEN` lowers to its two ordinary conjuncts and nothing else.
-        // The range that may later be put on the step is a hint *on top of*
-        // these (step_chain.hpp) - so a chain that ignored every range would
-        // still return the same rows, which is the property that makes the
-        // kind safe to add.
-        if (cond.kind == parser::PredicateKind::kBetween) {
-            StepPredicate low;
-            low.lhs = lhs.value();
-            low.op = parser::CompareOp::kGte;
-            low.rhs.kind = OperandKind::kLiteral;
-            low.rhs.literal = cond.val;
-            if (Status s = CoercePredicate(scope, low, cond.col.byte_offset); !s.ok()) return s;
-            predicates.push_back(low);
-
-            StepPredicate high;
-            high.lhs = lhs.value();
-            high.op = parser::CompareOp::kLte;
-            high.rhs.kind = OperandKind::kLiteral;
-            high.rhs.literal = cond.val_high;
-            if (Status s = CoercePredicate(scope, high, cond.col.byte_offset); !s.ok()) return s;
-            predicates.push_back(high);
+        if (cond.kind == parser::PredicateKind::kBoolTree) {
+            auto tree = LowerBoolTree(scope, *cond.tree);
+            if (!tree.ok()) return tree.status();
+            bool_predicates.push_back(std::move(tree.value()));
             continue;
         }
 
-        StepPredicate pred;
-        pred.lhs = lhs.value();
-        pred.op = cond.op;
-        if (cond.rhs_kind == parser::RhsKind::kColumn) {
-            // Resolved against the same scope, so an outward reference
-            // here is exactly what makes an enclosing sub-chain
-            // correlated.
-            auto rhs = ResolveColumn(scope, cond.rhs_col);
-            if (!rhs.ok()) return rhs.status();
-            pred.rhs.kind = OperandKind::kColumn;
-            pred.rhs.column = rhs.value();
-        } else {
-            pred.rhs.kind = OperandKind::kLiteral;
-            pred.rhs.literal = cond.val;
-        }
-        if (Status s = CoercePredicate(scope, pred, cond.col.byte_offset); !s.ok()) return s;
-        predicates.push_back(pred);
+        if (Status s = LowerComparison(scope, cond, predicates); !s.ok()) return s;
     }
 
     // ---- 2a. Close the conjunct list under join-key equality -------------
@@ -1842,6 +1879,16 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             ready_at = std::max(ready_at, AvailableAt(ref));
         });
         chain.steps[ready_at].fn_residual.push_back(std::move(pred));
+    }
+    // A boolean conjunct likewise. Equality propagation above read only
+    // `predicates`, the top-level conjuncts, so nothing under an `OR` or a
+    // `NOT` was ever a source for it (BU-R5).
+    for (BoolPredicate& pred : bool_predicates) {
+        std::uint16_t ready_at = 0;
+        ForEachColumn(pred, [&](const ColumnRef& ref) {
+            ready_at = std::max(ready_at, AvailableAt(ref));
+        });
+        chain.steps[ready_at].bool_residual.push_back(std::move(pred));
     }
 
     // Sub-chains are placed by the same rule. An uncorrelated one depends
@@ -2024,7 +2071,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // bounds what a walk visits, and v1 declines to also build
                 // for it.
                 step.kind = AccessKind::kFilterScan;
-            } else if (inner_build && step.fn_residual.empty()) {
+            } else if (inner_build && step.fn_residual.empty() && step.bool_residual.empty()) {
                 // A step carrying a function conjunct takes no build
                 // (AP-S4): the map holds the rows passing the
                 // *non-correlated* conjuncts, and a function conjunct is

@@ -7128,6 +7128,13 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                     "view is materialized, so there is no relation for a sub-chain to "
                     "correlate against", false};
         }
+        // Before anything reads `col`: a boolean conjunct has none (BU-Q4).
+        if (cond.kind == parser::PredicateKind::kBoolTree) {
+            const Status refused = Status::NotImplemented(
+                "OR or NOT over a catalog view (byte " + std::to_string(cond.tree->byte_offset) +
+                ")");
+            return {ErrorReply(refused), false, 0, refused};
+        }
         // Before anything reads `col`: a function conjunct has none on a
         // call's side, and the view's evaluator compares `col op val` only.
         if (cond.kind == parser::PredicateKind::kCompareFunction) {
@@ -10153,6 +10160,7 @@ Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Co
         }
     }
     const std::uint32_t at = cond.lhs_fn.has_value() ? cond.lhs_fn->byte_offset
+                             : cond.tree != nullptr   ? cond.tree->byte_offset
                              : !cond.col.name.empty() ? cond.col.byte_offset
                                                       : where_byte;
     return Status::NotImplemented(

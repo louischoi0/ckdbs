@@ -227,7 +227,9 @@ ok	4aa155c62d488ef9	78f78f99c4196fe9	16278e48f6c6f5b0	SELECT * FROM t AS a WHERE
 # still have a fingerprint: refusing to parse is not refusing to hash.
 InvalidArgument	5be869c8076bff1f	b5d414774c8002cc	916070fdcb588850	SELECT * FROM t WHERE id BETWEEN 1
 InvalidArgument	97eadbe49c827e47	78f78f99c4196fe9	5f685140876fa356	SELECT * FROM t WHERE id BETWEEN 1 5
-InvalidArgument	4338879b6a60f25b	78f79099c419719c	63c0c9fa3ffd1d0a	SELECT * FROM t WHERE id = 1 OR id = 2
+# [BU-S1] `OR` parses since 2026-10-13 (workorder-bu-basic-query-surface.md);
+# the hashes did not move.
+ok	4338879b6a60f25b	78f79099c419719c	63c0c9fa3ffd1d0a	SELECT * FROM t WHERE id = 1 OR id = 2
 # [V09] pagination. The tail parses since 2026-08-10, and the two hashes
 # that predate it did not move: `order`, `by`, `asc`, `limit` and `offset`
 # were always ordinary identifiers, so becoming parseable changed no shape
@@ -418,7 +420,9 @@ Unsupported	a6d47bc00b1c1048	cbf29ce484222325	e0142405ae5d7287	SELECT * FROM t W
 # than a pk, and `exec::InnerBuild` (join-inner-build.md) now buckets a
 # statement-scoped row set and probes it by a non-pk key. The shape is
 # unbuilt, not excluded.
-NotImplemented	8395ef7c84c6184e	b5d414774c8002cc	d7b4baef5aad1397	SELECT * FROM t WHERE NOT id = 1
+# [BU-S1] a bare `NOT` over a predicate parses since 2026-10-13; the
+# hashes did not move.
+ok	8395ef7c84c6184e	b5d414774c8002cc	d7b4baef5aad1397	SELECT * FROM t WHERE NOT id = 1
 NotImplemented	6a572ac142c50425	cbf29ce484222325	70987933ea91bc56	SELECT * FROM t JOIN (SELECT * FROM u) ON t.id = u.id
 NotImplemented	ea325ba2b616a269	cbf29ce484222325	1aa9b65c676e6550	SELECT * FROM (SELECT * FROM u)
 NotImplemented	-	-	-	WITH x AS (SELECT * FROM u) SELECT * FROM x

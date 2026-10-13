@@ -103,15 +103,8 @@ struct Bound {
 // makes the tri-state free right now, which is the point of paying for it
 // now: when the null bitmap lands, `Collapse` is the one function that
 // changes, and no wrong answer shipped in between.
-enum class TriState : std::uint8_t { kFalse, kTrue, kUnknown };
-
-// **The single collapse point.** UNKNOWN becomes false at the conjunct -
-// one function, and every caller below routes through it.
-bool Collapse(TriState value) noexcept { return value == TriState::kTrue; }
-
-bool IsNull(const parser::AstValue& value) noexcept {
-    return value.type == parser::ValueType::kNull;
-}
+// `TriState`, `Collapse` and `IsNull` live in chain_frame.hpp since BU-S1,
+// whose boolean conjuncts collapse through the same function.
 
 // A `$param` is a value position with nothing bound to it, so a chain
 // carrying one **must never be executed**: any answer it produced would be
@@ -503,6 +496,8 @@ public:
                     case parser::PredicateKind::kBetween:
                     // A function conjunct lowers to `fn_residual` (AP-S4).
                     case parser::PredicateKind::kCompareFunction:
+                    // A boolean conjunct lowers to `bool_residual` (BU-S1).
+                    case parser::PredicateKind::kBoolTree:
                         return Status::Corruption("a plain comparison is not a sub-chain");
                 }
                 return storage::VisitControl::kContinue;
@@ -590,6 +585,7 @@ public:
             // sub-chain kind - the same reason `kCompareValue` falls here.
             case parser::PredicateKind::kBetween:
             case parser::PredicateKind::kCompareFunction:
+            case parser::PredicateKind::kBoolTree:
                 break;
         }
         return Status::Corruption("unhandled sub-chain kind");
@@ -2531,6 +2527,13 @@ private:
             if (!fn_matched.ok()) return fn_matched.status();
             if (!fn_matched.value()) return Status::OK();
         }
+        // The boolean conjuncts (BU-S1), after the function ones. A step
+        // carrying one takes no build annotation either.
+        if (!step.bool_residual.empty()) {
+            auto bool_matched = EvaluateBoolConjuncts(schemas_, step.bool_residual, frame_);
+            if (!bool_matched.ok()) return bool_matched.status();
+            if (!bool_matched.value()) return Status::OK();
+        }
         if (building_here) {
             // The cap (workplan JB5): a row that would push the map past
             // `max_rows` trips `over_cap` instead of entering - the rest
@@ -3022,6 +3025,11 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
         auto fn_matched = EvaluateFunctionConjuncts(step.fn_residual, frame);
         if (!fn_matched.ok()) return fn_matched.status();
         if (!fn_matched.value()) return false;
+    }
+    if (!step.bool_residual.empty()) {
+        auto bool_matched = EvaluateBoolConjuncts(schemas, step.bool_residual, frame);
+        if (!bool_matched.ok()) return bool_matched.status();
+        if (!bool_matched.value()) return false;
     }
     if (step.sub_chains.empty()) return true;
 
