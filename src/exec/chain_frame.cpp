@@ -258,12 +258,18 @@ StatusOr<TriState> FunctionTri(const FunctionPredicate& pred, const ChainFrame& 
 // which no unknown can overturn; an unknown is remembered and decides only
 // when nothing decisive follows.
 StatusOr<TriState> EvaluateTri(const std::vector<const catalog::Schema*>& schemas,
-                          const BoolPredicate& pred, const ChainFrame& frame) {
+                               const BoolPredicate& pred, const ChainFrame& frame,
+                               const SubChainAnswer* sub_chains) {
     switch (pred.op) {
         case BoolPredicate::Op::kCompare: return CompareTri(schemas, pred.compare, frame);
         case BoolPredicate::Op::kFunction: return FunctionTri(*pred.fn, frame);
+        case BoolPredicate::Op::kSubChain:
+            if (sub_chains == nullptr) {
+                return Status::Corruption("a boolean conjunct's subquery evaluated without it");
+            }
+            return (*sub_chains)(pred.sub_chain);
         case BoolPredicate::Op::kNot: {
-            auto inner = EvaluateTri(schemas, pred.children.front(), frame);
+            auto inner = EvaluateTri(schemas, pred.children.front(), frame, sub_chains);
             if (!inner.ok()) return inner;
             if (inner.value() == TriState::kUnknown) return TriState::kUnknown;
             return inner.value() == TriState::kTrue ? TriState::kFalse : TriState::kTrue;
@@ -273,7 +279,7 @@ StatusOr<TriState> EvaluateTri(const std::vector<const catalog::Schema*>& schema
             const TriState decisive = pred.op == BoolPredicate::Op::kAnd ? TriState::kFalse : TriState::kTrue;
             bool unknown = false;
             for (const BoolPredicate& child : pred.children) {
-                auto t = EvaluateTri(schemas, child, frame);
+                auto t = EvaluateTri(schemas, child, frame, sub_chains);
                 if (!t.ok()) return t;
                 if (t.value() == decisive) return decisive;
                 unknown = unknown || t.value() == TriState::kUnknown;
@@ -289,9 +295,10 @@ StatusOr<TriState> EvaluateTri(const std::vector<const catalog::Schema*>& schema
 
 StatusOr<bool> EvaluateBoolConjuncts(const std::vector<const catalog::Schema*>& schemas,
                                      const std::vector<BoolPredicate>& predicates,
-                                     const ChainFrame& frame) {
+                                     const ChainFrame& frame, const SubChainAnswer* sub_chains) {
     for (const BoolPredicate& pred : predicates) {
-        auto t = EvaluateTri(schemas, pred, frame);
+        if (pred.reads_sub_chain != (sub_chains != nullptr)) continue;  // the other pass's
+        auto t = EvaluateTri(schemas, pred, frame, sub_chains);
         if (!t.ok()) return t.status();
         if (!Collapse(t.value())) return false;  // at the root (BU-R4)
     }

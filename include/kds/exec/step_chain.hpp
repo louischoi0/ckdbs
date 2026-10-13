@@ -425,15 +425,25 @@ void ForEachColumn(const FunctionPredicate& pred, Fn&& fn) {
 // a NULL operand is unknown inside the tree, `NOT unknown` is unknown, and
 // only the root's unknown becomes false. `CompareValues` collapses per
 // comparison, which is right for a flat AND-list and wrong under `NOT`.
+//
+// **A subquery predicate is a leaf too since BU-S3**: `kSubChain` names a
+// sub-chain of the step the conjunct is placed at, marked `in_tree` there so
+// every walk of the step tree still sees it and no conjunct loop runs it on
+// its own. A conjunct that reads one is evaluated with the step's sub-chains,
+// after the row's ordinary conjuncts, rather than with the residual.
 struct BoolPredicate {
-    enum class Op : std::uint8_t { kAnd, kOr, kNot, kCompare, kFunction };
+    enum class Op : std::uint8_t { kAnd, kOr, kNot, kCompare, kFunction, kSubChain };
     Op op = Op::kCompare;
     std::vector<BoolPredicate> children;   // kAnd, kOr (two or more), kNot (one)
     StepPredicate compare;                 // kCompare
     std::optional<FunctionPredicate> fn;   // kFunction
+    std::uint32_t sub_chain = 0;           // kSubChain: an index into `Step::sub_chains`
+    bool reads_sub_chain = false;          // a kSubChain at or under this node
 };
 
 // Every column reference a boolean conjunct reads, in no particular order.
+// A `kSubChain` leaf's columns are its sub-chain's, which every reader of
+// `Step::sub_chains` walks already.
 template <typename Fn>
 void ForEachColumn(const BoolPredicate& pred, Fn&& fn) {
     switch (pred.op) {
@@ -443,6 +453,8 @@ void ForEachColumn(const BoolPredicate& pred, Fn&& fn) {
             return;
         case BoolPredicate::Op::kFunction:
             ForEachColumn(*pred.fn, fn);
+            return;
+        case BoolPredicate::Op::kSubChain:
             return;
         default:
             for (const BoolPredicate& child : pred.children) ForEachColumn(child, fn);
@@ -506,6 +518,12 @@ struct SubChain {
     // nothing, since only the existence of a row matters.
     ColumnRef value;
     bool has_value = false;
+
+    // A leaf of a boolean conjunct on the same step (BU-S3): not a conjunct
+    // of its own, so the step's conjunct loops pass it by and the tree that
+    // names it evaluates it. Never hoisted, correlated or not - a false
+    // `EXISTS` under an `OR` must not empty the statement.
+    bool in_tree = false;
 };
 
 struct Step {

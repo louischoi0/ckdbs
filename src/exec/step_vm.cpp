@@ -354,23 +354,48 @@ public:
         std::optional<ChainFrame> empty;
         auto& answers = statement_->hoisted;
         for (const SubChain& sub : hoisted) {
-            if (const auto known = answers.find(&sub); known != answers.end()) {
-                if (!known->second) return false;
-                continue;
-            }
-            if (!empty.has_value()) {
+            if (!answers.contains(&sub) && !empty.has_value()) {
                 empty.emplace();
                 empty->Open({}, /*parent=*/nullptr);
             }
-            auto value = EvaluateSubChain(sub, *empty);
-            if (!value.ok()) return value.status();
-            // Inserted after the walk: a nested hoisted chain's own answer
-            // may have been inserted during it.
-            const bool all = Collapse(value.value());
-            answers.emplace(&sub, all);
-            if (!all) return false;
+            auto all = AnsweredOnce(sub, empty.has_value() ? &*empty : nullptr);
+            if (!all.ok()) return all.status();
+            if (!all.value()) return false;
         }
         return true;
+    }
+
+    // An uncorrelated sub-chain's collapsed answer, walked the first time it
+    // is asked and read from `StatementStore::hoisted` after. Only for a
+    // sub-chain whose answer does not vary per row and is never unknown;
+    // `frame` is walked against only on that first ask.
+    StatusOr<bool> AnsweredOnce(const SubChain& sub, const ChainFrame* frame) {
+        auto& answers = statement_->hoisted;
+        if (const auto known = answers.find(&sub); known != answers.end()) return known->second;
+        auto value = EvaluateSubChain(sub, *frame);
+        if (!value.ok()) return value.status();
+        // Inserted after the walk: a nested hoisted chain's own answer may
+        // have been inserted during it.
+        const bool answer = Collapse(value.value());
+        answers.emplace(&sub, answer);
+        return answer;
+    }
+
+    // The step's boolean conjuncts that read a sub-chain (BU-S3), against
+    // `outer`. An in-tree sub-chain is never hoisted, but an uncorrelated
+    // `EXISTS`/`NOT EXISTS` - never unknown - still answers once per
+    // statement, from the store the hoisted ones answer from.
+    StatusOr<bool> EvaluateTreeConjuncts(const std::vector<const catalog::Schema*>& schemas,
+                                         const Step& step, const ChainFrame& outer) {
+        const auto answer = [&](std::uint32_t index) -> StatusOr<TriState> {
+            const SubChain& sub = step.sub_chains[index];
+            if (sub.correlated || sub.has_value) return EvaluateSubChain(sub, outer);
+            auto exists = AnsweredOnce(sub, &outer);
+            if (!exists.ok()) return exists.status();
+            return exists.value() ? TriState::kTrue : TriState::kFalse;
+        };
+        const SubChainAnswer sub_chains(answer);
+        return EvaluateBoolConjuncts(schemas, step.bool_residual, outer, &sub_chains);
     }
 
     // Evaluates one sub-chain against the *current* frame, which becomes
@@ -2551,9 +2576,17 @@ private:
         // sub-chain is the expensive conjunct, so a cheap one that
         // already rejected the row should never pay for it.
         for (const SubChain& sub : step.sub_chains) {
+            if (sub.in_tree) continue;  // its boolean conjunct's, below
             auto value = EvaluateSubChain(sub, frame_);
             if (!value.ok()) return value.status();
             if (!Collapse(value.value())) return Status::OK();
+        }
+        // The boolean conjuncts that read a sub-chain (BU-S3), last for the
+        // same reason.
+        if (!step.sub_chains.empty() && !step.bool_residual.empty()) {
+            auto matched = EvaluateTreeConjuncts(schemas_, step, frame_);
+            if (!matched.ok()) return matched.status();
+            if (!matched.value()) return Status::OK();
         }
 
         // ---- The trail (workplan P09) ------------------------------------
@@ -2964,12 +2997,13 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
                        /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr, snapshot, /*indexes=*/true);
 
     for (const SubChain& sub : step.sub_chains) {
+        if (sub.in_tree) continue;  // its boolean conjunct's, below
         auto value = runner.EvaluateSubChain(sub, frame);
         if (!value.ok()) return value.status();
         // The same collapse point every other caller uses.
         if (!Collapse(value.value())) return false;
     }
-    return true;
+    return runner.EvaluateTreeConjuncts(schemas, step, frame);
 }
 
 namespace {

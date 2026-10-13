@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "kds/base/function_ref.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/schema.hpp"
 #include "kds/exec/row_codec.hpp"
@@ -164,12 +165,22 @@ inline bool IsNull(const parser::AstValue& value) noexcept {
     return value.type == parser::ValueType::kNull;
 }
 
-// Every boolean conjunct attached to one step (step_chain.hpp's
+// Answers one of the step's sub-chains, named by its index in
+// `Step::sub_chains`, for a `kSubChain` leaf (BU-S3).
+using SubChainAnswer = FunctionRef<StatusOr<TriState>(std::uint32_t)>;
+
+// The boolean conjuncts attached to one step (step_chain.hpp's
 // BoolPredicate), each in three-valued logic with its unknown collapsed to
 // false at its root (BU-R4); its comparisons have passed CheckConjuncts
 // against this frame. Empty always matches.
+//
+// Two passes over one list, so the subquery stays the expensive conjunct
+// that runs last: with no `sub_chains`, the conjuncts that read no
+// sub-chain, beside the residual; with it, only the ones that do, beside
+// the step's sub-chains.
 StatusOr<bool> EvaluateBoolConjuncts(const std::vector<const catalog::Schema*>& schemas,
                                      const std::vector<BoolPredicate>& predicates,
-                                     const ChainFrame& frame);
+                                     const ChainFrame& frame,
+                                     const SubChainAnswer* sub_chains = nullptr);
 
 }  // namespace kds::exec

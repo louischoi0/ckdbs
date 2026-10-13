@@ -84,8 +84,9 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
 // `binding` is what the statement calls the relation, so a qualified
 // predicate can be checked against it.
 // Returns a one-relation Step carrying the clause: `residual` for the
-// ordinary conjuncts, `fn_residual` for the function conjuncts (AP-S4) and
-// `sub_chains` for the subquery ones.
+// ordinary conjuncts, `fn_residual` for the function conjuncts (AP-S4),
+// `bool_residual` for the boolean ones (BU-S1) and `sub_chains` for the
+// subquery ones, a boolean conjunct's leaves among them (`in_tree`, BU-S3).
 //
 // Every sub-chain is attached to the step, including uncorrelated ones -
 // so an uncorrelated subquery is re-evaluated per row here, where a SELECT
