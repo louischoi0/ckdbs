@@ -74,6 +74,7 @@ const char* PredicateKindName(parser::PredicateKind kind) noexcept {
         case parser::PredicateKind::kNotExists: return "NOT EXISTS";
         case parser::PredicateKind::kBetween: return "BETWEEN";
         case parser::PredicateKind::kCompareFunction: return "function";
+        case parser::PredicateKind::kBoolTree: return "bool";
     }
     return "?";
 }
@@ -136,6 +137,27 @@ std::string FormatFunctionPredicate(const FunctionPredicate& pred) {
     return head + " " + FormatFunctionSide(pred.rhs);
 }
 
+// A boolean conjunct (BU-S1), fully parenthesized so the printed tree is
+// the evaluated one whatever precedence a reader assumes.
+std::string FormatBoolPredicate(const BoolPredicate& pred) {
+    switch (pred.op) {
+        case BoolPredicate::Op::kCompare: return FormatPredicate(pred.compare);
+        case BoolPredicate::Op::kFunction: return FormatFunctionPredicate(*pred.fn);
+        case BoolPredicate::Op::kNot: return "NOT (" + FormatBoolPredicate(pred.children.front()) + ")";
+        case BoolPredicate::Op::kAnd:
+        case BoolPredicate::Op::kOr: {
+            const char* word = pred.op == BoolPredicate::Op::kAnd ? " AND " : " OR ";
+            std::string out = "(";
+            for (std::size_t i = 0; i < pred.children.size(); ++i) {
+                if (i > 0) out += word;
+                out += FormatBoolPredicate(pred.children[i]);
+            }
+            return out + ")";
+        }
+    }
+    return "?";
+}
+
 std::string Indent(int depth) { return std::string(static_cast<std::size_t>(depth) * 2, ' '); }
 
 void PrintSubChain(std::ostringstream& os, const SubChain& sub, int depth, bool hoisted);
@@ -191,6 +213,9 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     }
     for (const FunctionPredicate& pred : step.fn_residual) {
         os << Indent(depth + 1) << "filter fn " << FormatFunctionPredicate(pred) << '\n';
+    }
+    for (const BoolPredicate& pred : step.bool_residual) {
+        os << Indent(depth + 1) << "filter bool " << FormatBoolPredicate(pred) << '\n';
     }
     // Correlated by placement: a sub-chain attached to a step runs once per
     // row that step accepts, which is the fact worth seeing next to it.

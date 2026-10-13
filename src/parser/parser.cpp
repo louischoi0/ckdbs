@@ -35,6 +35,57 @@ bool HeapStorageAllowedForTest() noexcept {
 
 namespace {
 
+bool IEquals(std::string_view a, std::string_view b);
+
+// A contextual word - `AND`, `OR` - is an identifier token spelled that way.
+bool IsWord(const Token& t, std::string_view word) {
+    return t.type == TokenType::kIdent && IEquals(t.text, word);
+}
+
+// The comparison that reads the same with its sides swapped.
+CompareOp MirroredOp(CompareOp op) {
+    switch (op) {
+        case CompareOp::kLt: return CompareOp::kGt;
+        case CompareOp::kLte: return CompareOp::kGte;
+        case CompareOp::kGt: return CompareOp::kLt;
+        case CompareOp::kGte: return CompareOp::kLte;
+        default: return op;  // =, != and the forms no literal stands left of
+    }
+}
+
+BoolExpr Leaf(Condition cond, std::uint32_t at) {
+    BoolExpr leaf;
+    leaf.byte_offset = at;
+    leaf.leaf = std::move(cond);
+    return leaf;
+}
+
+BoolExpr Not(BoolExpr child, std::uint32_t at) {
+    BoolExpr node;
+    node.op = BoolExpr::Op::kNot;
+    node.byte_offset = at;
+    node.children.push_back(std::move(child));
+    return node;
+}
+
+// The subquery cap, checked before the recursion it bounds, so the refused
+// level is the one named and no frame for it is pushed. Spec section 2 puts
+// it at 4.
+Status CheckSubqueryDepth(std::uint32_t depth, std::uint32_t open_at) {
+    if (depth + 1 <= kMaxSubqueryDepth) return Status::OK();
+    return Status::Unsupported("subquery nesting deeper than " +
+                               std::to_string(kMaxSubqueryDepth) + " is not supported (byte " +
+                               std::to_string(open_at) + ")");
+}
+
+// A boolean combination as the one conjunct it is (PredicateKind::kBoolTree).
+Condition TreeCondition(BoolExpr node) {
+    Condition cond;
+    cond.kind = PredicateKind::kBoolTree;
+    cond.tree = std::make_shared<const BoolExpr>(std::move(node));
+    return cond;
+}
+
 bool IEquals(std::string_view a, std::string_view b) {
     return a.size() == b.size() &&
            std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
@@ -525,7 +576,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprOr() {
     auto lhs = ParseExprAnd();
     if (!lhs.ok()) return lhs;
     std::shared_ptr<const Expr> acc = std::move(lhs.value());
-    while (lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, "OR")) {
+    while (IsWord(lexer_.Peek(), "OR")) {
         const Token op = lexer_.Next();
         auto rhs = ParseExprAnd();
         if (!rhs.ok()) return rhs;
@@ -539,7 +590,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprAnd() {
     auto lhs = ParseExprNot();
     if (!lhs.ok()) return lhs;
     std::shared_ptr<const Expr> acc = std::move(lhs.value());
-    while (lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, "AND")) {
+    while (IsWord(lexer_.Peek(), "AND")) {
         const Token op = lexer_.Next();
         auto rhs = ParseExprNot();
         if (!rhs.ok()) return rhs;
@@ -1044,14 +1095,7 @@ StatusOr<CompareOp> Parser::ParseCompareOp() {
 StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubquery(std::uint32_t depth) {
     const std::uint32_t open_at = lexer_.Peek().byte_offset;
 
-    // The cap is checked before recursing, so the *refused* level is the
-    // one named in the message and no frame for it is ever pushed. Spec
-    // section 2 puts it at 4.
-    if (depth + 1 > kMaxSubqueryDepth) {
-        return Status::Unsupported(
-            "subquery nesting deeper than " + std::to_string(kMaxSubqueryDepth) +
-            " is not supported (byte " + std::to_string(open_at) + ")");
-    }
+    if (Status s = CheckSubqueryDepth(depth, open_at); !s.ok()) return s;
 
     if (Status s = ExpectToken(TokenType::kLParen, "'(' before a subquery"); !s.ok()) return s;
     return ParseSubqueryAfterOpen(depth + 1);
@@ -1080,35 +1124,44 @@ StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubqueryAfterOpen(std::uint32
     return std::make_shared<SelectStmt>(std::move(inner.value()));
 }
 
-StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
+StatusOr<BoolExpr> Parser::ParseOneCondition(std::uint32_t depth) {
     Condition cond;
 
-    // Leading `EXISTS` / `NOT EXISTS`: the two predicates with no column
-    // on the left at all.
+    // Leading `EXISTS`: a predicate with no column on the left. `NOT
+    // EXISTS` never reaches here - `ParseBoolNot` reads the `NOT` and makes
+    // the pair one leaf, since a bare `NOT` there is the boolean operator.
     const Token& lead = lexer_.Peek();
-    if (lead.type == TokenType::kKeyword &&
-        (lead.kw == Keyword::kExists || lead.kw == Keyword::kNot)) {
-        bool negated = lead.kw == Keyword::kNot;
+    const std::uint32_t at = lead.byte_offset;
+    if (lead.type == TokenType::kKeyword && lead.kw == Keyword::kExists) {
         lexer_.Next();
-        if (negated) {
-            // `NOT` here can only introduce `NOT EXISTS`. `NOT IN` is
-            // reached with a column already parsed, below, and bare `NOT`
-            // over an expression is excluded by spec I10 - the grammar has
-            // no expression tree for it to negate.
-            const Token& next = lexer_.Peek();
-            if (next.type != TokenType::kKeyword || next.kw != Keyword::kExists) {
-                return Status::NotImplemented(
-                    "NOT is supported only as `NOT EXISTS (...)` or `NOT IN (...)` (byte " +
-                    std::to_string(lead.byte_offset) + ")");
-            }
-            lexer_.Next();
-        }
-        cond.kind = negated ? PredicateKind::kNotExists : PredicateKind::kExists;
-
+        cond.kind = PredicateKind::kExists;
         auto sub = ParseSubquery(depth);
         if (!sub.ok()) return sub.status();
         cond.subquery = std::move(sub.value());
-        return cond;
+        return Leaf(std::move(cond), at);
+    }
+
+    // A literal on the left (BU-S2): `100 < amount` is `amount > 100`, the
+    // mirrored comparison, so everything past the parser sees one shape.
+    if (lead.type == TokenType::kIntLit || lead.type == TokenType::kStrLit ||
+        lead.type == TokenType::kNumLit || lead.type == TokenType::kNullLit) {
+        auto val = ParseValue();
+        if (!val.ok()) return val.status();
+        auto op = ParseCompareOp();
+        if (!op.ok()) return op.status();
+        auto rhs = ParseColumnName();
+        if (!rhs.ok()) return rhs.status();
+        if (StartsFunctionCall(rhs.value())) {
+            return Status::NotImplemented(
+                "a function call compared with a literal on its left is not supported yet; "
+                "write the call first (byte " + std::to_string(rhs.value().byte_offset) + ")");
+        }
+        cond.kind = PredicateKind::kCompareValue;
+        cond.col = std::move(rhs.value());
+        cond.op = MirroredOp(op.value());
+        cond.rhs_kind = RhsKind::kLiteral;
+        cond.val = std::move(val.value());
+        return Leaf(std::move(cond), at);
     }
 
     // Qualified or not: a join's WHERE needs `a.x` to say which relation,
@@ -1124,44 +1177,61 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
         if (!call.ok()) return call.status();
         cond.col = ColumnName{};
         cond.lhs_fn = std::move(call.value());
-        return ParseFunctionComparison(std::move(cond));
+        auto fn = ParseFunctionComparison(std::move(cond));
+        if (!fn.ok()) return fn.status();
+        return Leaf(std::move(fn.value()), at);
     }
 
-    // `col IN (...)` / `col NOT IN (...)`.
+    // `col NOT IN`, `col NOT BETWEEN`, `col NOT LIKE`: the form, negated.
+    // `NOT IN (SELECT ...)` keeps the kind it has always had; the other two
+    // become the boolean conjunct `NOT (<form>)` (BU-S2).
+    bool negated = false;
     const Token& after_col = lexer_.Peek();
-    if (after_col.type == TokenType::kKeyword &&
-        (after_col.kw == Keyword::kIn || after_col.kw == Keyword::kNot)) {
-        const bool negated = after_col.kw == Keyword::kNot;
+    if (after_col.type == TokenType::kKeyword && after_col.kw == Keyword::kNot) {
         const std::uint32_t not_at = after_col.byte_offset;
         lexer_.Next();
-        if (negated) {
-            const Token& in_tok = lexer_.Peek();
-            if (in_tok.type != TokenType::kKeyword || in_tok.kw != Keyword::kIn) {
-                return Status::NotImplemented(
-                    "NOT is supported only as `NOT IN (...)` or `NOT EXISTS (...)` (byte " +
-                    std::to_string(not_at) + ")");
-            }
-            lexer_.Next();
+        const Token& form = lexer_.Peek();
+        const bool known = (form.type == TokenType::kKeyword &&
+                            (form.kw == Keyword::kIn || form.kw == Keyword::kBetween)) ||
+                           IsWord(form, "LIKE");
+        if (!known) {
+            return Status::NotImplemented(
+                "NOT after a column is supported only as `NOT IN`, `NOT BETWEEN` or `NOT LIKE`; "
+                "a negated predicate is written `NOT <predicate>` (byte " +
+                std::to_string(not_at) + ")");
         }
-        cond.kind = negated ? PredicateKind::kNotInSubquery : PredicateKind::kInSubquery;
+        negated = true;
+    }
+    const auto negate = [&cond, negated, at]() -> BoolExpr {
+        BoolExpr leaf = Leaf(std::move(cond), at);
+        return negated ? Not(std::move(leaf), at) : leaf;
+    };
 
-        // `IN (1, 2)` - a value list rather than a subquery - is V08's,
-        // and ParseSubquery is what reports it: it consumes the paren and
-        // then says a subquery was expected, naming the token it found.
-        auto sub = ParseSubquery(depth);
-        if (!sub.ok()) return sub.status();
-        cond.subquery = std::move(sub.value());
-        return cond;
+    // `col IN (SELECT ...)` / `col IN (v, ...)`, and their NOT.
+    const Token& form = lexer_.Peek();
+    if (form.type == TokenType::kKeyword && form.kw == Keyword::kIn) {
+        lexer_.Next();
+        const std::uint32_t open_at = lexer_.Peek().byte_offset;
+        if (Status s = ExpectToken(TokenType::kLParen, "'(' after IN"); !s.ok()) return s;
+        if (IsWord(lexer_.Peek(), "SELECT")) {
+            if (Status s = CheckSubqueryDepth(depth, open_at); !s.ok()) return s;
+            cond.kind = negated ? PredicateKind::kNotInSubquery : PredicateKind::kInSubquery;
+            auto sub = ParseSubqueryAfterOpen(depth + 1);
+            if (!sub.ok()) return sub.status();
+            cond.subquery = std::move(sub.value());
+            return Leaf(std::move(cond), at);
+        }
+        return ParseValueList(std::move(cond.col), negated, at);
     }
 
-    // `col BETWEEN <low> AND <high>`. Half of workplan V08; the `IN (list)`
-    // half is still open and still reports through ParseSubquery above.
+    // `col BETWEEN <low> AND <high>`. Half of workplan V08; the value list
+    // above is the other half (BU-S2).
     //
     // Costs the fingerprint nothing: `BETWEEN` has been a reserved keyword
     // since V04 and a keyword hashes exactly as the identifier it used to
     // be, so every pattern_id for a statement containing one is unchanged
     // by this becoming parseable. The corpus pins that.
-    if (after_col.type == TokenType::kKeyword && after_col.kw == Keyword::kBetween) {
+    if (form.type == TokenType::kKeyword && form.kw == Keyword::kBetween) {
         lexer_.Next();
         cond.kind = PredicateKind::kBetween;
 
@@ -1170,7 +1240,7 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
         cond.val = std::move(low.value());
 
         const Token& and_tok = lexer_.Peek();
-        if (and_tok.type != TokenType::kIdent || !IEquals(and_tok.text, "AND")) {
+        if (!IsWord(and_tok, "AND")) {
             return Status::InvalidArgument("expected AND after the low bound of BETWEEN, got '" +
                                             std::string(Describe(and_tok)) + "' (byte " +
                                             std::to_string(and_tok.byte_offset) + ")");
@@ -1180,13 +1250,34 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
         auto high = ParseValue();
         if (!high.ok()) return high.status();
         cond.val_high = std::move(high.value());
-        return cond;
+        return negate();
+    }
+
+    // `col LIKE 'pattern'` (BU-S2, BU-Q6). `LIKE` is a contextual word, not
+    // reserved. Its op travels only inside a boolean conjunct (`Flatten`).
+    if (IsWord(form, "LIKE")) {
+        lexer_.Next();
+        if (lexer_.Peek().type != TokenType::kStrLit) {
+            return Status::InvalidArgument("LIKE takes a string literal pattern (byte " +
+                                            std::to_string(lexer_.Peek().byte_offset) + ")");
+        }
+        auto pattern = ParseValue();
+        if (!pattern.ok()) return pattern.status();
+        if (IsWord(lexer_.Peek(), "ESCAPE")) {
+            return Status::NotImplemented("LIKE ... ESCAPE is not supported (byte " +
+                                          std::to_string(lexer_.Peek().byte_offset) + ")");
+        }
+        cond.kind = PredicateKind::kCompareValue;
+        cond.op = CompareOp::kLike;
+        cond.rhs_kind = RhsKind::kLiteral;
+        cond.val = std::move(pattern.value());
+        return negate();
     }
 
     // `col IS [NOT] NULL` (docs/spec/null.md; NU5).
     auto is_null = ParseIsNull(cond.op);
     if (!is_null.ok()) return is_null.status();
-    if (is_null.value()) return cond;
+    if (is_null.value()) return Leaf(std::move(cond), at);
 
     auto op = ParseCompareOp();
     if (!op.ok()) return op.status();
@@ -1200,7 +1291,7 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
         auto sub = ParseSubquery(depth);
         if (!sub.ok()) return sub.status();
         cond.subquery = std::move(sub.value());
-        return cond;
+        return Leaf(std::move(cond), at);
     }
 
     // A column on the right, rather than a value. This is how a
@@ -1210,7 +1301,7 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
     // an identifier, and an identifier is never a value.
     cond.kind = PredicateKind::kCompareValue;
     if (Status s = ParseComparisonRhs(cond); !s.ok()) return s;
-    return cond;
+    return Leaf(std::move(cond), at);
 }
 
 // One token of lookahead separates a column from a value: a value literal
@@ -1335,6 +1426,78 @@ StatusOr<Condition> Parser::ParseFunctionComparison(Condition cond) {
     return cond;
 }
 
+namespace {
+
+// BU-Q2: a boolean conjunct takes the caps a SET expression does. The
+// nesting is counted across the whole statement (`Parser::bool_nest_`), as
+// `expr_depth_` is, so a WHERE inside each of four subqueries shares one
+// stack budget; the size is counted per conjunct, in conditions, and a flat
+// top-level AND-list - flattened into ordinary conjuncts - is not one.
+constexpr std::uint32_t kMaxBoolNest = 64;
+constexpr std::uint32_t kMaxBoolConditions = 4096;
+
+Status BoolTooBig(std::uint32_t byte) {
+    return Status::Unsupported("a WHERE nested deeper than " + std::to_string(kMaxBoolNest) +
+                               " levels, or an OR/NOT group of more than " +
+                               std::to_string(kMaxBoolConditions) +
+                               " conditions, is not supported (byte " + std::to_string(byte) +
+                               ")");
+}
+
+std::uint32_t ConditionsIn(const BoolExpr& node) {
+    if (node.op == BoolExpr::Op::kLeaf) return 1;
+    std::uint32_t n = 0;
+    for (const BoolExpr& child : node.children) n += ConditionsIn(child);
+    return n;
+}
+
+// BU-S1 builds `OR` and `NOT` over the plain predicates only. A subquery
+// predicate under either is S3's, refused at the leaf rather than evaluated
+// as though the operator were not there.
+Status RefuseSubqueryUnder(const BoolExpr& node) {
+    if (node.op == BoolExpr::Op::kLeaf) {
+        if (!node.leaf.has_subquery()) return Status::OK();
+        return Status::NotImplemented(
+            "a subquery predicate under OR or NOT is not supported yet (byte " +
+            std::to_string(node.byte_offset) + ")");
+    }
+    for (const BoolExpr& child : node.children) {
+        if (Status s = RefuseSubqueryUnder(child); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
+// The top-level AND-list of a WHERE tree, into `out`: a leaf is an ordinary
+// conjunct and an `AND` - parenthesized or not - is flattened, so a WHERE
+// written without `OR` or `NOT` lowers exactly as it did before BU and keeps
+// every access path (BU-R5). Anything else is one `kBoolTree` conjunct.
+Status Flatten(BoolExpr node, std::vector<Condition>& out) {
+    if (node.op == BoolExpr::Op::kLeaf) {
+        // `LIKE` is never a flat conjunct: every reader of a flat comparison
+        // - keys, ranges, the scan kernel - would have to learn an operator
+        // none of them can use, so it is a one-leaf boolean conjunct instead
+        // (BU-S2).
+        if (node.leaf.kind == PredicateKind::kCompareValue && node.leaf.op == CompareOp::kLike) {
+            out.push_back(TreeCondition(std::move(node)));
+            return Status::OK();
+        }
+        out.push_back(std::move(node.leaf));
+        return Status::OK();
+    }
+    if (node.op == BoolExpr::Op::kAnd) {
+        for (BoolExpr& child : node.children) {
+            if (Status s = Flatten(std::move(child), out); !s.ok()) return s;
+        }
+        return Status::OK();
+    }
+    if (ConditionsIn(node) > kMaxBoolConditions) return BoolTooBig(node.byte_offset);
+    if (Status s = RefuseSubqueryUnder(node); !s.ok()) return s;
+    out.push_back(TreeCondition(std::move(node)));
+    return Status::OK();
+}
+
+}  // namespace
+
 StatusOr<std::vector<Condition>> Parser::ParseOptionalWhere(std::uint32_t depth) {
     std::vector<Condition> conds;
 
@@ -1344,20 +1507,100 @@ StatusOr<std::vector<Condition>> Parser::ParseOptionalWhere(std::uint32_t depth)
     }
     lexer_.Next();  // consume WHERE
 
-    for (;;) {
-        auto cond = ParseOneCondition(depth);
-        if (!cond.ok()) return cond.status();
-        conds.push_back(std::move(cond.value()));
+    auto tree = ParseBoolChain(depth, /*is_or=*/true);
+    if (!tree.ok()) return tree.status();
+    if (Status s = Flatten(std::move(tree.value()), conds); !s.ok()) return s;
+    return conds;
+}
 
-        const Token& next = lexer_.Peek();
-        if (next.type == TokenType::kIdent && IEquals(next.text, "AND")) {
+StatusOr<BoolExpr> Parser::ParseBoolChain(std::uint32_t depth, bool is_or) {
+    const std::string_view word = is_or ? "OR" : "AND";
+    const auto operand = [&]() {
+        return is_or ? ParseBoolChain(depth, /*is_or=*/false) : ParseBoolNot(depth);
+    };
+    const std::uint32_t at = lexer_.Peek().byte_offset;
+    auto first = operand();
+    if (!first.ok() || !IsWord(lexer_.Peek(), word)) return first;
+
+    BoolExpr node;
+    node.op = is_or ? BoolExpr::Op::kOr : BoolExpr::Op::kAnd;
+    node.byte_offset = at;
+    node.children.push_back(std::move(first.value()));
+    while (IsWord(lexer_.Peek(), word)) {
+        lexer_.Next();
+        auto next = operand();
+        if (!next.ok()) return next;
+        node.children.push_back(std::move(next.value()));
+    }
+    return node;
+}
+
+StatusOr<BoolExpr> Parser::ParseBoolNot(std::uint32_t depth) {
+    const Token& lead = lexer_.Peek();
+    const std::uint32_t at = lead.byte_offset;
+
+    if (lead.type == TokenType::kKeyword && lead.kw == Keyword::kNot) {
+        lexer_.Next();
+        // `NOT EXISTS (...)` stays the one leaf it has always been.
+        if (lexer_.Peek().type == TokenType::kKeyword && lexer_.Peek().kw == Keyword::kExists) {
             lexer_.Next();
-            continue;
+            BoolExpr leaf;
+            leaf.byte_offset = at;
+            leaf.leaf.kind = PredicateKind::kNotExists;
+            auto sub = ParseSubquery(depth);
+            if (!sub.ok()) return sub.status();
+            leaf.leaf.subquery = std::move(sub.value());
+            return leaf;
         }
-        break;
+        if (bool_nest_ >= kMaxBoolNest) return BoolTooBig(at);
+        DepthScope scope(bool_nest_);
+        auto operand = ParseBoolNot(depth);
+        if (!operand.ok()) return operand;
+        return Not(std::move(operand.value()), at);
     }
 
-    return conds;
+    if (lead.type == TokenType::kLParen) {
+        if (bool_nest_ >= kMaxBoolNest) return BoolTooBig(at);
+        DepthScope scope(bool_nest_);
+        lexer_.Next();
+        auto inner = ParseBoolChain(depth, /*is_or=*/true);
+        if (!inner.ok()) return inner;
+        if (Status s = ExpectToken(TokenType::kRParen, "')' closing a parenthesized condition");
+            !s.ok()) {
+            return s;
+        }
+        return inner;
+    }
+
+    // A leaf, or - a value list, a negated form - the subtree it means.
+    return ParseOneCondition(depth);
+}
+
+StatusOr<BoolExpr> Parser::ParseValueList(ColumnName col, bool negated, std::uint32_t at) {
+    // `col IN (v1, v2)` is `col = v1 OR col = v2`, and `NOT IN` is
+    // `col != v1 AND col != v2` - three-valued exactly as the standard
+    // reads a list: a NULL item is unknown, never a match, so a `NOT IN`
+    // list holding one keeps no row. The `(` is read.
+    BoolExpr node;
+    node.op = negated ? BoolExpr::Op::kAnd : BoolExpr::Op::kOr;
+    node.byte_offset = at;
+    for (;;) {
+        auto val = ParseValue();
+        if (!val.ok()) return val.status();
+        Condition item;
+        item.kind = PredicateKind::kCompareValue;
+        item.col = col;
+        item.op = negated ? CompareOp::kNeq : CompareOp::kEq;
+        item.rhs_kind = RhsKind::kLiteral;
+        item.val = std::move(val.value());
+        node.children.push_back(Leaf(std::move(item), at));
+        if (lexer_.Peek().type != TokenType::kComma) break;
+        lexer_.Next();
+    }
+    if (Status s = ExpectToken(TokenType::kRParen, "')' closing a value list"); !s.ok()) return s;
+    // One item is the plain comparison it means, keys and all.
+    if (node.children.size() == 1) return std::move(node.children.front());
+    return node;
 }
 
 StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
@@ -1954,6 +2197,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
             break;
         case CompareOp::kIsNull:
         case CompareOp::kIsNotNull:
+        case CompareOp::kLike:
             // Unreachable through ParseCompareOp, which never produces the
             // IS forms - they parse in ParseCondition only. Refused rather
             // than defaulted, so a grammar change here has to decide.

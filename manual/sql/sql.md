@@ -745,9 +745,10 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
 
 ### WHERE
 
-`WHERE <cond> [AND <cond>]*` — AND-combined conjuncts, no `OR`, no `NOT`
-over expressions, no parenthesized nesting. Each conjunct is one of
-(verified — the `PredicateKind` enum):
+`WHERE` takes conditions combined with `AND`, `OR` and `NOT`, grouped by
+parentheses (since BU-S1). `OR` binds loosest, then `AND`, then `NOT`:
+`a = 1 OR b = 2 AND c = 3` is `a = 1 OR (b = 2 AND c = 3)`. Each condition
+is one of (verified — the `PredicateKind` enum):
 
 | Form | Kind | Notes |
 |---|---|---|
@@ -760,12 +761,34 @@ over expressions, no parenthesized nesting. Each conjunct is one of
 | `NOT EXISTS (SELECT ...)` | kNotExists | |
 | `col BETWEEN low AND high` | kBetween | inclusive both ends; lowers to `>= low AND <= high`, the range on the step is only a hint |
 | `col IS NULL` / `col IS NOT NULL` | kCompareValue | the one spelling that finds NULLs — answered from the stored bitmap |
+| `col IN (v, ...)` | kBoolTree (one item: kCompareValue) | since BU-S2: `col = v1 OR col = v2 ...`; at most 4,096 items |
+| `col NOT IN (v, ...)` | kCompareValue `!=`, one per item | since BU-S2: `col != v1 AND col != v2 ...`, flattened into the AND-list where it stands at the top; a NULL item is unknown, so `NOT IN (1, NULL)` keeps no row |
+| `col NOT BETWEEN low AND high` | kBoolTree | since BU-S2: `NOT (col BETWEEN low AND high)` |
+| `col [NOT] LIKE 'pattern'` | kBoolTree | since BU-S2: `char`/`varchar` only; `%` any run, `_` one byte, case-sensitive bytes; no `ESCAPE` |
+| `value op col` | kCompareValue | since BU-S2: a literal on the left is the mirrored comparison, `100 < amount` is `amount > 100` |
 
+- **What `OR` and `NOT` cost and what they cannot hold.** A top-level
+  `AND` - with or without parentheses - is executed exactly as it always
+  was, so `WHERE id = 5 AND (a = 1 OR b = 2)` is still a keyed descent on
+  `id`. A group holding `OR` or `NOT` is a filter on the rows something
+  else found and **never a key, an index range or a Cabin probe**:
+  `WHERE id = 1 OR id = 2` walks the relation. It is three-valued like
+  every comparison: `NOT (a = 1)` does not keep a row whose `a` is NULL,
+  and `a = 1 OR a != 1` does not either. A subquery predicate under `OR`
+  or `NOT` and `OR` over a `sys.*` view answer `NOT_IMPLEMENTED` with
+  their byte; a tree nested deeper than 64 levels or holding more than
+  4,096 conditions answers `UNSUPPORTED`. `NOT EXISTS (...)` and
+  `col NOT IN (SELECT ...)` are the forms above and keep their meaning.
+  `PURGE`'s window still refuses every conjunct that is not a pk
+  comparison, `OR` included.
 - Subqueries are **predicate-position only**, correlated included, nested to
   at most `kMaxSubqueryDepth = 4` below the outermost block. The fifth level
   is refused with a position.
-- `IN (1, 2, 3)` — a value list — does **not** exist yet (the open half of
-  workplan V08). It is reported as "expected a subquery".
+- `IN (1, 2, 3)` — a value list — exists since BU-S2. Each item is coerced
+  to the column's type at compile, with its byte. A list of more than one
+  item, like `LIKE` and `NOT BETWEEN`, is a filter and never a key: `WHERE
+  id IN (1, 2)` walks the relation (`IN` of one item is `=`, keys and all;
+  `NOT IN` is a list of `!=`, which no access path keys on either).
 - **No type is converted implicitly** (types.md §3.1a). A literal must be
   written in the compared column's own spelling, and a statement that
   breaks the rule is refused at compile with the literal's byte - whether
@@ -1082,7 +1105,8 @@ they were before the split.
   reference itself: materializing an inner result breaks pk-direct probing
   into the next step and puts a temp relation in the storage layer.
 - **No window functions, no expressions.** The grammar has no expression
-  tree — no arithmetic, no `OR`/`NOT` nesting. Outside the five aggregates
+  tree outside a `SET` value — no arithmetic in a predicate (`OR`, `NOT`
+  and parentheses do exist in a WHERE since BU-S1). Outside the five aggregates
   there are two scalar functions, and they may appear only as one side of a
   WHERE comparison: `DATE(timestamp)`, the UTC day an instant falls on, and
   `NOW()`, the statement's instant (the same value for every call in one
