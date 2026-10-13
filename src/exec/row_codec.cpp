@@ -1326,9 +1326,9 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
         };
         const auto a = exact(lhs);
         const auto b = exact(rhs);
-        // Digits outside [-2^63, 2^64 - 1] name no integer any column holds:
-        // the compiler refuses such a literal, and a catalog view, which
-        // compiles nothing, answers it as the non-match it is.
+        // Digits outside [-2^63, 2^64 - 1] name no integer any column holds,
+        // and every WHERE - a catalog view's included - refuses such a
+        // literal before a row is read; this is a guard, not an answer.
         if (!a.has_value() || !b.has_value()) return false;
         return ApplyCompare(*a, *b, op);
     }
