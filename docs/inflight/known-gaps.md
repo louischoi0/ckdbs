@@ -1153,11 +1153,22 @@ Owned by `instructions/v3.0.0/workorder-bp-per-core-residue.md` §7.
   level grew over** (BP-H6): at most 2.7e-4 drops per statement, 0.08 % of
   statement CPU at worst.
 - **The per-core id window** (AT-R4, BP-H8) is unmeasured: `SHOW META`
-  carries no window-size, burn or `LookupCommit` counter, and no skew cell
-  has run.
+  carries no window-size or burn counter, and no skew cell has run. A
+  `LookupCommit` count exists since BM-S1 (`visibility_window_lookups`).
 - **The per-core in-flight table** (AX, BP-H9): a miss reads one id; its
   1,024-slot cap per core was not approached, and the skew case that would
   settle whether one core can reach it while others have room has not run.
+- **A `cores = 1` every-row `UPDATE` runs 3-6 % slower since BQ joined BP's
+  branch, cause not found** (carried open at BP's and BQ's close,
+  2026-10-13). `ccf9cfc1` is the one fast build; every build from the merge
+  `6139c2de` on is slower, about 1 point of it the harness's position
+  offset. About half the gap sits in `WalManager::Append`'s own frame
+  (1.05 % of samples to 2.97-3.60 %), its callee `WalStream::Append` flat.
+  Three bounded attempts (a bisect, aligned builds, a lazy `RollRecord`)
+  did not find it. Point statements and `cores = 4` are within noise
+  (`bench/v3.0.0/results-bp-bq-close-v2.7.0-924-g3e77e7d1.md`).
+- **BP-H10's fence premium is +5.1 %** after BP-S6 at `cores = 8`; its next
+  cut, BP-Q15 (b), is a protocol change for its own order.
 
 ## Backup and restore (BR)
 

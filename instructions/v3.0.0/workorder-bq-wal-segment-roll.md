@@ -4,6 +4,9 @@
 (`v2.7.0-906-g59c4139f`), on the operator's words W0-W2
 (`raft-marks-2026-10-12.md` §13). **Opened 2026-10-12 by W4** (`raft-marks-2026-10-12.md` §16), with
 BQ-Q1..Q5 marked as CLA proposed on W3.
+**Closed 2026-10-13** on the operator's word (`raft-marks-2026-10-13.md`
+§1), ending at §0.4's row 4; the close's open question, shared with BP, is
+carried to `known-gaps.md`.
 
 **BQ takes BL-S4's ruling 3 out of BL as its subject and does not mark it.**
 The ruling is *whether a roll keeps the stream latch across its device I/O*
@@ -743,3 +746,11 @@ against the other sessions' level bracket it.
 **Where BQ ends:** §0.4's row 4 - nothing below rung 4 met the bar, the
 latch is kept with its cost named, and rung 4 needs the operator's own word.
 Every stage has landed; the close waits at the push gate.
+
+### BQ closed 2026-10-13
+
+On the operator's word (`raft-marks-2026-10-13.md` §1), on
+`worktree-bm-scan-kernel-open` from `fa80da9d`. Nothing moved with the
+mark. Rung 4 (H6, the latch released) still needs its own word (BQ-Q5 (b));
+the shared open question is carried to `known-gaps.md`'s "Per-core
+structures kept (BP)".
