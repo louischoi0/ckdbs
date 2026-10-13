@@ -185,7 +185,11 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
   2026-10-13: "from now on, if the whole test suite has been run by a
   review or a test, push with the --no-verify option, to cut development
   time and cost"): every push CLA makes goes out with `--no-verify` when
-  the full suite - every `ctest` test, not a filter of cells - ran green
+  the full suite - every test the hook runs, `scripts/test.sh`'s `ctest`
+  less the labels it excludes, and not a narrower filter of cells (operator,
+  2026-10-13: "treat the full suite as the range the hook runs"); a cell
+  under an excluded label, such as one BS adds (`workorder-bs-test-hardening.md`
+  §6.1), is not part of it - ran green
   on the build inputs being pushed, whoever ran it: a step's own test
   run, a review's, or a `ck-tester` run. Anything that changes a build
   input after that run voids it and the hook runs: a review's fix applied
