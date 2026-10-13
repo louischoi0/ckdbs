@@ -350,6 +350,7 @@ out.
 | `{…}` | a set of items: `{A, B, C} :>> D` means A, B and C must all be met before D can proceed |
 | `(…)` | any of a set of items: `(A, B, C) :>> D` means any one of A, B or C being met lets D proceed |
 | `...[…]` | enumerate: `...[X]` asks CLA to list X item by item ("enumerate X"), e.g. `...[1 *I's options]` lists every option for issue 1 |
+| `#n` | ordinal: the n-th item of what it qualifies - `#1 option` after an issue token is the first option (proposal, choice) CLA proposed for that issue |
 | `$!` | a choice: when CLA has proposed options `a`, `b` and `c`, the operator's `$!a` chooses option `a`, and the decision is marked as option `a` |
 
 **A relation symbol mirrored reverses its direction** (operator,
