@@ -157,10 +157,11 @@ private:
 };
 
 // §1.4's sequence, one record at a time. Core A's first checkpoint flushes
-// P, which then stays clean; Q's writeback races a write, so Q keeps its
-// first recLSN (`wal.md` §11-2); core B's checkpoint records Q at that
-// recLSN; core A's second has nothing dirty. The fold is B's - `q` - and A's
-// first BEGIN, above it, still seeds P at `r < q`.
+// P, which then stays clean; Q's writeback races a write, so Q stays dirty
+// (`wal.md` §11-2); core B's checkpoint records Q at `q` - its first
+// recLSN, which the store kept before `fix-redirtied-page-rec-lsn` and is
+// still a valid one; core A's second has nothing dirty. The fold is B's -
+// `q` - and A's first BEGIN, above it, still seeds P at `r < q`.
 TEST(WalRecyclePremiseTest, RedoBelowTheAnchorRestoresNothingTheFlooredRedoDoesNot) {
     ScriptedLog log;
     log.Append(RecordType::kTxnBegin, kTxn, kInvalidPageId);
@@ -170,7 +171,7 @@ TEST(WalRecyclePremiseTest, RedoBelowTheAnchorRestoresNothingTheFlooredRedoDoesN
     log.Insert(kQ, 0, 0xB1);
 
     // Core A's checkpoint #1: both pages dirty. P is written back; Q's copy
-    // is raced by the write below and Q stays dirty at its first recLSN.
+    // is raced by the write below and Q stays dirty.
     const Lsn b1 = log.CheckpointBegin({{kP, r}, {kQ, q}});
     log.Flush(kP);
     log.Insert(kQ, 1, 0xB2);
@@ -350,13 +351,14 @@ PageId InsertedPage(const std::string& reply) {
 }
 
 // §1.4's sequence on two real cores, placed rather than waited for. The
-// write that races Q's writeback runs in the seam between Q's copy and its
+// write fetch that races Q's writeback runs in the seam between Q's copy and its
 // clean (`DevicePageStore::SetAfterWritebackCopyForTest`), so the sequence
 // is the same on every run:
 //
 //   1. core 1 dirties P at `r`, core 0 dirties Q at `q > r`;
-//   2. core 0's checkpoint A1 flushes P, which stays clean, and core 1's
-//      write lands on Q between its copy and its clean: Q stays dirty at `q`;
+//   2. core 0's checkpoint A1 flushes P, which stays clean, and core 1
+//      fetches Q for write between its copy and its clean: Q stays dirty
+//      at `q`;
 //   3. core 1's checkpoint B1 sees Q at `q` and flushes it;
 //   4. core 0's checkpoint A2 has nothing older, so the fold is B1's - at or
 //      below `q` - and A1's BEGIN, above it, still seeds P at `r`.
@@ -421,20 +423,27 @@ void RunPlacedSequence(server::TwoCoreRig& rig, int padding_rows) {
     }
 
     // 2. The seam fires on core 0's checkpoint thread, which here is this
-    // one; the write in it is core 1's.
+    // one; the fetch in it is core 1's.
+    //
+    // **A write fetch, not a logged write.** A write stamped between the
+    // copy and the clean moves Q's recLSN up to its own LSN, above A1's
+    // BEGIN (`wal.md` §11-2), and the fold with it. A fetch whose stamp has
+    // not come by the clean moves the generation and stamps nothing, so Q
+    // stays dirty at `q` - the state §1.4 needs, reached in production by a
+    // write fetch after the copy that writes nothing (a refused write) or
+    // has not stamped by the clean. This one fetches and does not write.
     //
     // **Every copy of Q the checkpoint makes is raced, not only the first.**
     // The anchor's publish syncs the whole store
     // (`superblock_checkpoint_anchor.cpp`), which writes Q back a second
-    // time; a write that raced only the checkpoint's own pass is carried out
+    // time; a fetch that raced only the checkpoint's own pass is carried out
     // by that sync and Q comes out clean.
     int raced = 0;
-    std::uint64_t value = 3;
     rig.store().SetAfterWritebackCopyForTest([&](PageId page) {
         if (page != q) return;
         ++raced;
         CurrentCoreGuard as(1);
-        EXPECT_TRUE(Ok(d1, Update(301, ++value)));
+        EXPECT_TRUE(rig.store().Get(q).ok());
     });
     ASSERT_TRUE(rig.core(0).Checkpoint().ok());
     rig.store().SetAfterWritebackCopyForTest(nullptr);
@@ -443,7 +452,7 @@ void RunPlacedSequence(server::TwoCoreRig& rig, int padding_rows) {
     for (const auto& [page, rec_lsn] : rig.store().DirtyPagesWithRecLsn()) {
         if (page == q) q_still_dirty = rec_lsn != 0;
     }
-    ASSERT_TRUE(q_still_dirty) << "the raced write must keep Q dirty at its first recLSN";
+    ASSERT_TRUE(q_still_dirty) << "the raced fetch must keep Q dirty at `q`";
 
     // 3 and 4.
     ASSERT_TRUE(rig.core(1).Checkpoint().ok());

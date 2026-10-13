@@ -179,7 +179,21 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
   waived — and still owes two things: **say plainly in the reply what was
   skipped** (the hook, the suite, or both) and **never report an unrun
   suite as a pass**. The Session Workflow's step 4 gate below is a gate on
-  CLA proceeding unasked, never on the operator.
+  CLA proceeding unasked, never on the operator. **A suite already run is
+  not run again by the hook** (operator, 2026-10-12: "if the tests have
+  already run, push with no-verify to shorten the push"; widened
+  2026-10-13: "from now on, if the whole test suite has been run by a
+  review or a test, push with the --no-verify option, to cut development
+  time and cost"): every push CLA makes goes out with `--no-verify` when
+  the full suite - every `ctest` test, not a filter of cells - ran green
+  on the build inputs being pushed, whoever ran it: a step's own test
+  run, a review's, or a `ck-tester` run. Anything that changes a build
+  input after that run voids it and the hook runs: a review's fix applied
+  since, or a step 4 merge that brought source, tests, CMake files or
+  `scripts/`. A merge that brought no build input - `docs/`, `bench/`,
+  `instructions/`, `manual/`, `.claude/`, this file - does not. The reply
+  names the hook as skipped and the commit the suite ran at, with its
+  pass count.
 - **Measure in `build-release`, never `./build` (Debug)** — Debug has
   reported the wrong sign. Per-statement fixed costs: server CPU,
   interleaved A/B. **Re-measure a premise before building the fix.**
@@ -281,7 +295,7 @@ what the merge resolved. On the go-ahead, and not before:
 ```
 git checkout main
 git merge --no-ff <branch>
-git push origin main
+git push origin main         # --no-verify when the suite already ran green on this tree
 ```
 
 A failed review, a measured regression, or an unrun test suite stops the

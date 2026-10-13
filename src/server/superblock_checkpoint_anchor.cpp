@@ -63,10 +63,7 @@ wal::CheckpointAnchorRecord SuperBlockCheckpointAnchor::FoldedAnchor() const noe
     return lowest == nullptr ? mount_anchor_ : *lowest;
 }
 
-StatusOr<wal::CheckpointAnchorRecord> SuperBlockCheckpointAnchor::EncodeLanding(
-    const wal::CheckpointAnchorRecord& anchor) {
-    // **Always the fold into slot 0** (the header's fold section;
-    // AM-S4(d)).
+Status SuperBlockCheckpointAnchor::Contribute(const wal::CheckpointAnchorRecord& anchor) {
     if (anchor.core_id >= superblock_.core_count()) {
         // Refused rather than recorded: an out-of-range id would set a
         // bit no `core_count` accounts for, releasing the warm-up early
@@ -78,6 +75,17 @@ StatusOr<wal::CheckpointAnchorRecord> SuperBlockCheckpointAnchor::EncodeLanding(
             ", which this database's core count (" + std::to_string(superblock_.core_count()) +
             ") does not have");
     }
+    LatchGuard hold(latch_);
+    per_core_[anchor.core_id] = anchor;
+    published_ |= std::uint64_t{1} << anchor.core_id;
+    return Status::OK();
+}
+
+StatusOr<wal::CheckpointAnchorRecord> SuperBlockCheckpointAnchor::EncodeLanding(
+    const wal::CheckpointAnchorRecord& anchor) {
+    // **Always the fold into slot 0** (the header's fold section;
+    // AM-S4(d)).
+    if (Status s = Contribute(anchor); !s.ok()) return s;
     // The fold, the field and the image under one hold (`SetLatch`) - and
     // page 0's pin with them. The sync below is outside both: a pin kept
     // across it holds page 0's exclusive page latch through the fsync, and
@@ -87,8 +95,6 @@ StatusOr<wal::CheckpointAnchorRecord> SuperBlockCheckpointAnchor::EncodeLanding(
     std::size_t folded = 0;
     {
         LatchGuard hold(latch_);
-        per_core_[anchor.core_id] = anchor;
-        published_ |= std::uint64_t{1} << anchor.core_id;
         landing = FoldedAnchor();
         folded = folded_cores();  // read here: another core's publish writes the mask
         // Never below what an earlier publish encoded (BC-R1): the fold can
@@ -148,25 +154,36 @@ StatusOr<PageId> SuperBlockCheckpointAnchor::Encode(const wal::CheckpointAnchorR
 void SuperBlockCheckpointAnchor::Commit() { Landed(encoded_landing_); }
 
 Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& anchor) {
+    // **Every page the anchor stands for is synced before page 0 is encoded**,
+    // the cadence publish's order: encoded first and synced with them, page 0
+    // could reach the platter in an `fsync` that dropped one of its pages, and
+    // the next mount would start redo past records that page needed. The
+    // contribution goes into the fold first, so a failed sync still leaves
+    // the core's number in the minimum the next publish encodes.
+    if (Status s = Contribute(anchor); !s.ok()) return s;
+    if (Status s = SyncForAnchor("pages"); !s.ok()) return s;
+
     auto encoded = EncodeLanding(anchor);
     if (!encoded.ok()) return encoded.status();
-    const wal::CheckpointAnchorRecord landing = encoded.value();
+    if (Status s = SyncForAnchor("page 0"); !s.ok()) return s;
 
-    if (Status s = store_.Sync(); !s.ok()) {
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("superblock", "anchor sync failed; on-disk anchor is still the "
-                                      "previous one: " + s.message());
-        }
-        // The in-memory anchor now claims more than the platter does. That
+    Landed(encoded.value());
+    return Status::OK();
+}
+
+Status SuperBlockCheckpointAnchor::SyncForAnchor(const char* what) {
+    Status s = store_.Sync();
+    if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
+        // The in-memory anchor may now claim more than the platter does. That
         // is the safe direction - the *previous* anchor is what is on disk,
         // and recovery replaying from an older redo start costs time, never
         // correctness (wal.md section 11) - but the caller is told, because
         // a checkpoint whose anchor did not land bought nothing.
-        return s;
+        log_->Error("superblock", std::string("anchor sync of ") + what +
+                                      " failed; on-disk anchor is still the previous one: " +
+                                      s.message());
     }
-
-    Landed(landing);
-    return Status::OK();
+    return s;
 }
 
 void SuperBlockCheckpointAnchor::Landed(const wal::CheckpointAnchorRecord& landing) {

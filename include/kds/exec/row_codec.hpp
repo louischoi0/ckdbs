@@ -224,7 +224,11 @@ Status DecodeAndResolve(storage::PageStore& store, const catalog::Schema& schema
 //
 // A `'2026-08-07'` against a `DATE` column becomes the epoch integer
 // 20672; a `'12.34'` against a `DECIMAL(10,2)` becomes the unscaled 1234
-// carrying scale 2. Every other column type leaves the value untouched.
+// carrying scale 2. Every other column type leaves the value untouched,
+// once its kind is the one the column's encode takes: a string against an
+// integer column, or an integer against a text one, is refused rather than
+// compared - it can match no row, and an empty answer would hide the typo
+// (types.md §3.1).
 // Errors carry **no byte position** - this has no idea where the literal
 // was written - so a caller holding an offset adds it with
 // `Status::WithContext`.
@@ -247,6 +251,13 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
 // fit (BJ-S3). `value` is not changed. Any other column type is a caller
 // error and answers `InvalidArgument`.
 Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::AstValue& value);
+
+// The family a column type belongs to. Two columns compare only inside one
+// family (docs/spec/types.md §3.1a) - every integer width and signedness is
+// one family, compared by value - and a `CAST` crosses families only where
+// `set_expr`'s table admits it.
+enum class TypeFamily : std::uint8_t { kInt, kDec, kText, kDate, kTimestamp, kBool, kOther };
+TypeFamily TypeFamilyOf(std::uint32_t type_val);
 
 // Rejects a schema that cannot carry a Keystone word: no columns at all,
 // or a first column whose declared type is not an integer one. Exposed so

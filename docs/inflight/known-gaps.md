@@ -318,15 +318,17 @@ statement about an engine that no longer exists; re-verify or strike it.
     (`src/wal/file_log_device.cpp`, `include/kds/wal/stream.hpp`). Its
     comment forbids narrowing that to the tail, because a roll can land
     between the stream capturing its watermark and the device sync.
-  - **Since BC the run is bounded only while checkpoints clean what they
-    copy**: segments wholly below the durable redo start are removed
-    (`wal.md` §11-4). Under a bulk load at `relaxed` the bound did not hold:
-    a page re-dirtied after its writeback copy keeps its first recLSN and
-    pins the fold in segment 0, and 13 of 15 BQ-S1 runs removed 0 segments,
-    with 33-39 live
-    (`bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md` §5;
-    `docs/inflight/bugs/a-page-re-dirtied-after-its-writeback-copy-pins-the-redo-start.md`).
-    Verified at `4cf30270`.
+  - **Since BC the run is bounded only while the fold moves**: segments
+    wholly below the durable redo start are removed (`wal.md` §11-4). Under
+    a bulk load at `relaxed` at `4cf30270` it did not: a page re-dirtied
+    after its writeback copy kept its first recLSN and pinned the fold in
+    segment 0, and 13 of 15 BQ-S1 runs removed 0 segments, with 33-39 live
+    (`bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md` §5).
+    **Since `fix-redirtied-page-rec-lsn` (`0e88060a`) the recLSN moves up to the lowest
+    LSN stamped since the copy** (`wal.md` §11-2); the relaxed cell has not
+    been re-measured, and the gate's rotation - each core one run about
+    every `cores × (period + period / cores)`, 25 s there - still bounds how
+    often the fold can move.
   - Syncing only the segments *written* since the last sync would be
     enough: the previous tail plus any segment created since. Nothing
     records which those are.
@@ -381,9 +383,10 @@ statement about an engine that no longer exists; re-verify or strike it.
     measurement build, not a fix; (ii) rung 4, H6 - releasing the latch for
     steps c-g - is `[quiet-wrong]` and unlicensed (BQ-Q5 (b)): it needs the
     operator's own word.
-  - **Beside it, not BQ's**: at `relaxed` the log is almost never recycled
-    during a bulk load
-    (`docs/inflight/bugs/a-page-re-dirtied-after-its-writeback-copy-pins-the-redo-start.md`).
+  - **Beside it, not BQ's**: at `relaxed` the log was almost never recycled
+    during a bulk load, because a re-dirtied page kept its first recLSN;
+    fixed on `fix-redirtied-page-rec-lsn` at `0e88060a` (`wal.md` §11-2),
+    not re-measured.
 
   Owner: `docs/spec/wal.md` §6, `wal/stream.hpp`'s latch protocol.
 
@@ -884,6 +887,15 @@ pages and the cases it does not reach.
   - a previous run's undo pages (UP4, `txn.md` §4.1);
   - a dropped assertion's Bound Cabin chain;
   - Waystone pages.
+- **Every restart leaves the previous run's Waystone pages allocated.**
+  Every mount clears each pattern's directory root and empties
+  `sys.access_stats` (`server::DiscardAdvisoryState`, `waystone-concpets.md`),
+  because after a crash a directory page can name a child whose allocation
+  bit never reached the device. The directory and trail pages under a
+  cleared root stay allocated, reached by nothing and freed by nothing, so
+  the volume grows by every run's Waystone pages, restart after restart,
+  clean or not, and a later run builds its trails on new pages. Verified on
+  `fix-sync-publish-and-waystone-crash` at `ec440c2d`.
 - **At `cores > 1`, a reclaim waits for every core's first checkpoint.**
   The durable redo start does not move until every core has published, so
   with `checkpoint_interval_ms = 0` nothing a mount found is freed until a
@@ -1251,11 +1263,8 @@ the procedures are `manual/server/backup-restore.md`.
   reserve (4 segments) and the hour that ends an idle backup stay
   `[provisional]`**: BR-S10 measured each at one value only (its results
   file says why each stays).
-- **Two engine defects BR found and did not fix**, each in `bugs/`: a full
-  page image cannot heal an allocated checksum-failed page, and a
-  synchronous anchor publish writes page 0 beside the pages it stands for.
-  An unlogged Waystone page can lose its allocation bit at a crash (the
-  backup's form of it is closed by copying the maps after the stop).
+- **An engine defect BR found and did not fix**, in `bugs/`: a full page
+  image cannot heal an allocated checksum-failed page.
 
 ## Decisions the revision has not taken
 

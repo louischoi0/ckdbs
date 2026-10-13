@@ -27,15 +27,21 @@ function heading(rest: string): string {
 /** Reads one work order's markdown into the pane's summary. */
 export function parseWorkOrder(markdown: string, file: string): Summary {
   const lines = markdown.split('\n')
-  const head = /^#\s+Work order\s+([A-Z]+)\s*[—-]\s*(.*)$/.exec(lines[0] ?? '')
-  const letter = head?.[1] ?? (/workorder-([a-z]+)/.exec(file)?.[1] ?? '?').toUpperCase()
-  const title = head ? clean(head[2] ?? '') : clean((lines[0] ?? '').replace(/^#+\s*/, ''))
+  // The title is the first top-level heading, wherever it sits: a status row may precede it.
+  const top = lines.find(l => /^#\s/.test(l)) ?? ''
+  const letter = (/workorder-([a-z]+)/.exec(file)?.[1] ?? '?').toUpperCase()
   const L = escape(letter)
+  const title = clean(top.replace(/^#\s+(Work order\s+)?/, '').replace(new RegExp(`^${L}\\s*[—-]\\s*`), ''))
 
-  const stageRow = new RegExp(`^\\|\\s*(${L}-S\\d+)\\s*\\|`)
+  const S = `${L}-S\\d+[a-z]?`
+  const stageRow = new RegExp(`^\\|\\s*(${S})\\s*\\|`)
   const itemRow = new RegExp(`^\\|\\s*(${L}-Q\\d+)\\s*\\|`)
   const ruling = new RegExp(`^###\\s+(${L}-R\\d+)\\b(.*)$`)
-  const status = new RegExp(`^###\\s+(${L}-S\\d+)\\b(.*)$`)
+  // A heading may name several ids before its dash: "### BN-S2, BN-S6, BN-S7 — not built", "### AY-Q9 and AY-S3 — built".
+  const status = new RegExp(`^###\\s+((?:${L}-[SQR]\\d+[a-z]?(?:\\s*,\\s*|\\s+and\\s+)?)+)\\s*[—-]\\s*(.*)$`)
+  const leading = new RegExp(`^###\\s+(${S})(?![\\w(])(.*)$`)
+  // A stage row whose text opens with one of these words is a status row (a later row, or the only one).
+  const settled = /^(built|landed|done|filed|written|measured|run|closed|struck|folded|merged|retired|discarded)\b/i
 
   const stages = new Map<string, Entry>()
   const rulings: Entry[] = []
@@ -45,7 +51,11 @@ export function parseWorkOrder(markdown: string, file: string): Summary {
     let m: RegExpExecArray | null
     if ((m = stageRow.exec(line))) {
       const c = cells(line)
-      if (!stages.has((m[1] ?? ''))) stages.set((m[1] ?? ''), { id: (m[1] ?? ''), text: clean(c[1] ?? ''), isStruck: (c[1] ?? '').includes('~~') })
+      const id = m[1] ?? ''
+      const text = clean(c[1] ?? '')
+      const stage = stages.get(id) ?? { id, text, isStruck: (c[1] ?? '').includes('~~') }
+      if (!stages.has(id)) stages.set(id, stage)
+      if (!stage.note && settled.test(text)) stage.note = text
     } else if ((m = itemRow.exec(line))) {
       const c = cells(line)
       const mark = clean(c[4] ?? '')
@@ -60,9 +70,11 @@ export function parseWorkOrder(markdown: string, file: string): Summary {
     } else if ((m = ruling.exec(line))) {
       const text = heading((m[2] ?? ''))
       rulings.push({ id: (m[1] ?? ''), text, isStruck: /^Struck/i.test(text), isQuietWrong: /quiet-wrong/.test((m[2] ?? '')) })
-    } else if ((m = status.exec(line))) {
-      const stage = stages.get((m[1] ?? ''))
-      if (stage) stage.note = heading((m[2] ?? ''))
+    } else if ((m = status.exec(line) ?? leading.exec(line))) {
+      for (const id of (m[1] ?? '').split(/\s*,\s*|\s+and\s+/).map(x => x.trim())) {
+        const stage = stages.get(id)
+        if (stage && !stage.note) stage.note = heading(m[2] ?? '')
+      }
     }
   }
 
@@ -132,6 +144,13 @@ export function toMarkdown(s: Summary): string {
     ...section('Operator items', s.items, x =>
       x.isStruck ? ['struck'] : [x.isOpen ? 'unmarked' : 'marked', ...(x.isQuietWrong ? ['quiet-wrong'] : [])]),
   ].join('\n')
+}
+
+/** The close the version's `index.md` records on a work order's row ("CLOSED 2026-09-08", "Closed 2026-10-10"), else undefined. */
+export function closedMark(index: string, file: string): string | undefined {
+  const name = file.replace(/^.*\//, '')
+  const row = index.split('\n').find(l => l.startsWith(`| \`${name}\` |`))
+  return row && /\bclosed\s+(\d{4}-\d{2}-\d{2})/i.exec(row)?.[1]
 }
 
 /** `/milestone list`: one row per open work order, in the order given - progress and the next stage. */

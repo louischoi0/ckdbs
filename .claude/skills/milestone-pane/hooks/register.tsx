@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Summary } from '../types'
-import { listing, parseWorkOrder, report, toMarkdown } from './parse'
+import { closedMark, listing, parseWorkOrder, report, toMarkdown } from './parse'
 
 const PANE = 'milestone'
 // The terminal docks a pane beside the transcript only in fullscreen from this width.
@@ -26,18 +26,27 @@ async function locate($: EngineInterface, root: string, name: string | null): Pr
     if (found.length > 1) throw new Error(`"${name}" matches ${found.length} work orders: ${found.map(f => f.replace(/^.*\//, '')).join(', ')}`)
     return found[0] ?? null
   }
-  const log = await $.process.run(['git', 'log', '-1', '--format=', '--name-only', '--', 'instructions/*/workorder-*.md'], { cwd: root })
+  // A merge lists no files under --name-only, so the last commit to touch a work order must not be one.
+  const log = await $.process.run(['git', 'log', '-1', '--no-merges', '--format=', '--name-only', '--', 'instructions/*/workorder-*.md'], { cwd: root })
   return log.stdout.split('\n').find(Boolean) ?? null
 }
 
-/** Every tracked work order with a stage still open (neither landed nor struck), the one git touched last first. */
+/** A work order read with the close its version's `index.md` records. */
+async function load($: EngineInterface, root: string, file: string): Promise<Summary> {
+  const s = parseWorkOrder(await $.fs.read(`${root}/${file}`), file)
+  const index = await $.fs.read(`${root}/${file.replace(/[^/]*$/, 'index.md')}`).catch(() => '')
+  const closed = closedMark(index, file)
+  return closed ? { ...s, closed, gates: [`Closed ${closed} (index.md)`, ...s.gates] } : s
+}
+
+/** Every tracked work order not closed in `index.md` with a stage still open (neither landed nor struck), the one git touched last first. */
 async function openOrders($: EngineInterface, root: string, firstOnly = false): Promise<Summary[]> {
   const tracked = new Set((await $.process.run(['git', 'ls-files', 'instructions/*/workorder-*.md'], { cwd: root })).stdout.split('\n').filter(Boolean))
   const log = await $.process.run(['git', 'log', '--format=', '--name-only', '--', 'instructions/*/workorder-*.md'], { cwd: root })
   const open: Summary[] = []
   for (const file of new Set(log.stdout.split('\n').filter(f => tracked.has(f)))) {
-    const s = parseWorkOrder(await $.fs.read(`${root}/${file}`), file)
-    if (!s.stages.some(x => !x.note && !x.isStruck)) continue
+    const s = await load($, root, file)
+    if (s.closed || !s.stages.some(x => !x.note && !x.isStruck)) continue
     open.push(s)
     if (firstOnly) break
   }
@@ -50,18 +59,26 @@ async function addedAt($: EngineInterface, root: string, file: string): Promise<
   return Number(log.stdout.split('\n').filter(Boolean).pop() ?? Infinity)
 }
 
-async function refresh($: EngineInterface): Promise<void> {
+/**
+ * Reads the pinned order into the pane and returns it. A turn-end refresh writes only if nothing wrote the
+ * pane since its dispatch began: `/milestone` runs mid-turn, and a dispatch's reads are one moment, so the
+ * pin it read may already be stale.
+ */
+async function refresh($: EngineInterface, isTurnEnd = false): Promise<Summary> {
+  const held = await $.state.get({ plugin: 'milestone-pane', key: 'summary' })
   const root = await $.session.root()
   const letter = await read($, pinned)
   let next: Summary
   try {
     const file = await locate($, root, letter)
     if (!file) throw new Error(letter ? `no work order for ${letter}` : 'no work order under instructions/')
-    next = parseWorkOrder(await $.fs.read(`${root}/${file}`), file)
+    next = await load($, root, file)
   } catch (err) {
     next = { letter: letter ?? '?', title: '', file: '', stages: [], rulings: [], items: [], gates: [], error: String(err) }
   }
-  await update($, summary, () => next)
+  if (isTurnEnd) await $.state.set({ plugin: 'milestone-pane', key: 'summary' }, next, { ifVersion: held.version })
+  else await update($, summary, () => next)
+  return next
 }
 
 async function isOpen($: EngineInterface): Promise<boolean> {
@@ -72,14 +89,17 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'milestone',
-      description: '/milestone <name>: progress and what is left, in the side pane; & the milestone in progress (an error if none); list every milestone with a stage open, oldest registered first; bare / pane: the full summary there; off closes it; auto unpins',
+      description: '/milestone <name>: progress and what is left, in the side pane; & the milestone in progress (an error if none); list every milestone with a stage open, oldest registered first; bare: toggles the pane (open closes it, closed opens the full summary); pane: the full summary there; off closes it; auto unpins',
+      // Typed mid-turn it runs at once rather than waiting for the turn to end; the hook reads git and the pane, never the turn, and `refresh` keeps a turn's late refresh off what it writes.
+      immediate: true,
     })
     return next(e)
   })
 
   on('command.run', { command: 'milestone' }, async ($, e) => {
     const arg = e.args.trim()
-    if (/^off$/i.test(arg)) {
+    // Bare, it toggles: an open pane closes, a closed one opens below.
+    if (/^off$/i.test(arg) || (arg === '' && (await isOpen($)))) {
       await $.ui.close({ id: PANE })
       return { text: 'Milestone pane closed.' }
     }
@@ -88,24 +108,23 @@ export const register: Register = on => {
       const open = await openOrders($, root)
       const added = new Map(await Promise.all(open.map(async s => [s.file, await addedAt($, root, s.file)] as const)))
       open.sort((a, b) => (added.get(a.file) ?? 0) - (added.get(b.file) ?? 0))
-      if (!open.length) return { text: 'No milestone open: every tracked work order has its stages landed or struck.' }
+      if (!open.length) return { text: 'No milestone open: every tracked work order is closed in index.md or has its stages landed or struck.' }
       const text = listing(open)
       return { text, context: [`Open milestones listed by /milestone list:\n${text}`] }
     }
     if (arg === '&') {
       const [s] = await openOrders($, await $.session.root(), true)
-      if (!s) return { text: 'Error: no milestone in progress (every tracked work order has its stages landed or struck).', exitCode: 1 }
+      if (!s) return { text: 'Error: no milestone in progress (every tracked work order is closed in index.md or has its stages landed or struck).', exitCode: 1 }
       await update($, pinned, () => s.letter.toLowerCase())
     }
     const isName = arg !== '' && arg !== '&' && !/^(pane|auto|list)$/i.test(arg)
     if (/^auto$/i.test(arg)) await update($, pinned, () => null)
     else if (isName) await update($, pinned, () => arg)
 
-    await refresh($)
-    const s = await read($, summary)
-    if (!s || s.error) {
+    const s = await refresh($)
+    if (s.error) {
       if (isName) await update($, pinned, () => null)
-      return { text: s?.error ?? 'No work order found.' }
+      return { text: s.error }
     }
     // Every view is drawn in the pane; the transcript gets one line, the model the full text.
     const text = (await read($, pinned)) ? report(s) : toMarkdown(s)
@@ -125,7 +144,7 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined && (await isOpen($))) await refresh($)
+    if (e.agentId === undefined && (await isOpen($))) await refresh($, true)
     return next(e)
   })
 
