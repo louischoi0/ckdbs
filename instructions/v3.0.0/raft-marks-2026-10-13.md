@@ -57,3 +57,30 @@ English**, translated from the Korean it was typed in.
 | **Mark** | `%%%` is added to CLAUDE.md's operator abbreviations: a request for the progress of the work running in the session, read off its files and logs at the moment of asking. A stage's measurement is planned and run inside 20 minutes and a milestone's close inside about an hour, building included; a design that cannot fit is cut to what fits and the results file says what was cut. BM-S6's close measurement and its remedy re-measure were the first held to it |
 | **Does not settle** | A budget for any measurement the operator sizes separately; what `&*S` means (asked, not answered) |
 | **Recorded at** | CLAUDE.md, *Operator abbreviations* and *Working Rules*; `bench/v3.0.0/results-bm-close-v2.7.0-946-g6b771ec1.md` §1 |
+
+## 7. BT opened
+
+| | |
+|---|---|
+| **Word** | *"`$!a`"* - the operator's only words - choosing CLA's option (a) after BM's close, which CLA had written as: a new milestone on `AcceptTupleAt`'s per-row cost, a read-only survey first, then a work order with its premise measured first |
+| **Mark** | **BT is opened** (`workorder-bt-accept-tuple-row.md`), lettered by CLA. BT-Q1..Q3 were put with CLA's proposals beside them and were not marked item by item |
+| **Does not settle** | BT-Q1..Q3 (§8 adopts them); a push, a merge to `main`, a tag or a version |
+| **Recorded at** | `workorder-bt-accept-tuple-row.md` header and §4; `index.md`'s BT row |
+
+## 8. BT to its close on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | The `go-ahead-achieving-milestone` skill, invoked on BT: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
+| **Mark** | BT runs every stage to its close in this session. BT-Q1 (a), BT-Q2 (a) `[quiet-wrong]` and BT-Q3 (a) are adopted as CLA proposed, recorded as *"adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone)"*, never as the operator's own marks; so is any later decision a stage reaches |
+| **Does not settle** | A push, a merge to `main`, a tag or a version |
+| **Recorded at** | `workorder-bt-accept-tuple-row.md` header, §4 and §6; `index.md`'s BT row |
+
+## 9. BN and BT closed
+
+| | |
+|---|---|
+| **Word** | *"Close the BN and BT milestones."* |
+| **Mark** | **BN closed** and **BT closed** on the operator's word. Both stood closed by CLA under a standing go-ahead - BN at its close on 2026-10-11 (`bench/v3.0.0/results-bn-close-v2.7.0-787-g8679367e.md`), BT at BT-S5 on 2026-10-13 (`bench/v3.0.0/results-bt-close-v2.7.0-997-g4274ed81.md`, on `main` since `5ff40594`) - with no mark of the operator's own; this is that mark. It settles nothing either order left open: BN-S2, S6 and S7 stay not built, each with its number, and BT's remainders stay in `docs/inflight/known-gaps.md` ("The scan row (BM)") and `docs/inflight/bugs/payloadat-reads-a-slot-that-leaves-the-page.md` |
+| **Does not settle** | A tag or a version; the `PayloadAt` fix, which waits for its own word |
+| **Recorded at** | `workorder-bn-opt-read-update-path.md` and `workorder-bt-accept-tuple-row.md` headers; `index.md`'s BN and BT rows |

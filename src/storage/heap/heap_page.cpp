@@ -12,14 +12,6 @@
 
 namespace kds::heap {
 
-namespace {
-
-std::size_t SlotOffset(std::uint16_t idx) {
-    return kHeapHeaderOffset + kHeaderSize + static_cast<std::size_t>(idx) * kSlotOnDiskSize;
-}
-
-}  // namespace
-
 HeapPageHeaderFields PageView::ReadHeader() const {
     HeapPageHeaderFields h{};
     const std::byte* base = page_.data() + kHeapHeaderOffset;
@@ -38,15 +30,6 @@ void PageView::WriteHeader(const HeapPageHeaderFields& h) {
     std::memcpy(base + kHeaderLowerOffset, &h.lower, sizeof(h.lower));
     std::memcpy(base + kHeaderUpperOffset, &h.upper, sizeof(h.upper));
     std::memcpy(base + kHeaderMinKeyOffset, &h.min_key, sizeof(h.min_key));
-}
-
-HeapSlotFields PageView::ReadSlot(std::uint16_t idx) const {
-    HeapSlotFields s{};
-    const std::byte* p = page_.data() + SlotOffset(idx);
-    std::memcpy(&s.offset, p + kSlotOffsetOffset, sizeof(s.offset));
-    std::memcpy(&s.length, p + kSlotLengthOffset, sizeof(s.length));
-    std::memcpy(&s.flags, p + kSlotFlagsOffset, sizeof(s.flags));
-    return s;
 }
 
 void PageView::WriteSlot(std::uint16_t idx, const HeapSlotFields& s) {
@@ -235,42 +218,31 @@ StatusOr<PageView::Tuple> PageView::ReadTuple(std::uint16_t slot_idx) const {
 
 StatusOr<PageView::Tuple> PageView::ReadTupleIn(std::uint16_t slot_idx,
                                                 std::uint16_t nr_slots) const {
-    if (slot_idx >= nr_slots) {
-        return Status::NotFound("slot index out of range");
-    }
-
-    HeapSlotFields slot = ReadSlot(slot_idx);
-    if ((slot.flags & kSlotFlagDead) != 0 || slot.length == 0) {
-        return Status::NotFound("slot is dead");
-    }
-    // **The slot must lie inside the page, header and payload both**
-    // (BF-R10). A page this store hands out is one the slot directory
-    // describes, but a stale location on a reused id can name a page of
-    // another class - a var-heap or an index page - whose bytes read as a
-    // directory entry pointing anywhere. Corruption, never a read past the
-    // frame.
-    if (slot.length < kTupleHeaderOnDiskSize ||
-        static_cast<std::size_t>(slot.offset) + slot.length > kPageSize) {
-        return Status::Corruption("heap page: slot " + std::to_string(slot_idx) + " at offset " +
-                                  std::to_string(slot.offset) + " length " +
-                                  std::to_string(slot.length) + " leaves the page");
-    }
-
-    const std::byte* tuple_base = page_.data() + slot.offset;
     Tuple t{};
-    std::memcpy(&t.trx_id, tuple_base + kTupleTrxIdOffset, sizeof(t.trx_id));
-    std::memcpy(&t.undo_ptr, tuple_base + kTupleUndoPtrOffset, sizeof(t.undo_ptr));
-    t.deleted = (slot.flags & kSlotFlagDeleted) != 0;
-
-    std::uint16_t data_len;
-    std::memcpy(&data_len, tuple_base + kTupleDataLenOffset, sizeof(data_len));
-
-    if (static_cast<std::size_t>(data_len) + kTupleHeaderOnDiskSize > slot.length) {
-        return Status::Corruption("heap page: slot " + std::to_string(slot_idx) +
-                                  " carries a payload longer than its tuple");
+    switch (TryReadTupleIn(slot_idx, nr_slots, t)) {
+        case TupleRead::kRead:
+            return t;
+        case TupleRead::kOutOfRange:
+            return Status::NotFound("slot index out of range");
+        case TupleRead::kRetired:
+            return Status::NotFound("slot is dead");
+        case TupleRead::kLeavesPage: {
+            // **The slot must lie inside the page, header and payload both**
+            // (BF-R10). A page this store hands out is one the slot
+            // directory describes, but a stale location on a reused id can
+            // name a page of another class - a var-heap or an index page -
+            // whose bytes read as a directory entry pointing anywhere.
+            // Corruption, never a read past the frame.
+            const HeapSlotFields slot = ReadSlot(slot_idx);
+            return Status::Corruption("heap page: slot " + std::to_string(slot_idx) +
+                                      " at offset " + std::to_string(slot.offset) + " length " +
+                                      std::to_string(slot.length) + " leaves the page");
+        }
+        case TupleRead::kOverlongPayload:
+            break;
     }
-    t.payload = std::span<const std::byte>(tuple_base + kTupleHeaderOnDiskSize, data_len);
-    return t;
+    return Status::Corruption("heap page: slot " + std::to_string(slot_idx) +
+                              " carries a payload longer than its tuple");
 }
 
 StatusOr<std::span<const std::byte>> PageView::PayloadAt(std::uint16_t slot_idx,

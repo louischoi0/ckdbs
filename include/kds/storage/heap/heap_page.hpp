@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 
 #include "kds/base/common.hpp"
@@ -306,6 +307,43 @@ public:
     // under the hold the caller reads the slots under.
     StatusOr<Tuple> ReadTupleIn(std::uint16_t slot, std::uint16_t nr_slots) const;
 
+    // What TryReadTupleIn() found at a slot: a tuple, or the reason
+    // ReadTupleIn() refuses it.
+    enum class TupleRead : std::uint8_t {
+        kRead,
+        kOutOfRange,      // `slot >= nr_slots`
+        kRetired,         // dead-flagged or zero-length
+        kLeavesPage,      // the slot's span leaves the page (BF-R10)
+        kOverlongPayload  // data_len runs past the slot's span
+    };
+
+    // ReadTupleIn()'s read and every check it makes, with no Status: `out`
+    // is filled only on kRead. **Inline, because a walk reads every slot
+    // through it** and a Status holds a std::string (BT-S2,
+    // `instructions/v3.0.0/workorder-bt-accept-tuple-row.md`); ReadTupleIn()
+    // is this plus the wording of a refusal, so the checks have one body.
+    TupleRead TryReadTupleIn(std::uint16_t slot, std::uint16_t nr_slots,
+                             Tuple& out) const noexcept {
+        if (slot >= nr_slots) return TupleRead::kOutOfRange;
+        const HeapSlotFields s = ReadSlot(slot);
+        if ((s.flags & kSlotFlagDead) != 0 || s.length == 0) return TupleRead::kRetired;
+        if (s.length < kTupleHeaderOnDiskSize ||
+            static_cast<std::size_t>(s.offset) + s.length > kPageSize) {
+            return TupleRead::kLeavesPage;
+        }
+        const std::byte* tuple_base = page_.data() + s.offset;
+        std::uint16_t data_len;
+        std::memcpy(&data_len, tuple_base + kTupleDataLenOffset, sizeof(data_len));
+        if (static_cast<std::size_t>(data_len) + kTupleHeaderOnDiskSize > s.length) {
+            return TupleRead::kOverlongPayload;
+        }
+        std::memcpy(&out.trx_id, tuple_base + kTupleTrxIdOffset, sizeof(out.trx_id));
+        std::memcpy(&out.undo_ptr, tuple_base + kTupleUndoPtrOffset, sizeof(out.undo_ptr));
+        out.deleted = (s.flags & kSlotFlagDeleted) != 0;
+        out.payload = std::span<const std::byte>(tuple_base + kTupleHeaderOnDiskSize, data_len);
+        return TupleRead::kRead;
+    }
+
     // Just the payload bytes of the tuple at `slot` - ReadTuple() without
     // the MVCC header decode, and without re-reading the page header.
     // `nr_slots` is the caller's already-read slot_count(): a key search
@@ -422,7 +460,18 @@ public:
 private:
     HeapPageHeaderFields ReadHeader() const;
     void WriteHeader(const HeapPageHeaderFields& header);
-    HeapSlotFields ReadSlot(std::uint16_t idx) const;
+    // Inline for TryReadTupleIn(); the slot directory starts after the header.
+    static constexpr std::size_t SlotOffset(std::uint16_t idx) noexcept {
+        return kHeapHeaderOffset + kHeaderSize + static_cast<std::size_t>(idx) * kSlotOnDiskSize;
+    }
+    HeapSlotFields ReadSlot(std::uint16_t idx) const noexcept {
+        HeapSlotFields s{};
+        const std::byte* p = page_.data() + SlotOffset(idx);
+        std::memcpy(&s.offset, p + kSlotOffsetOffset, sizeof(s.offset));
+        std::memcpy(&s.length, p + kSlotLengthOffset, sizeof(s.length));
+        std::memcpy(&s.flags, p + kSlotFlagsOffset, sizeof(s.flags));
+        return s;
+    }
     void WriteSlot(std::uint16_t idx, const HeapSlotFields& slot);
 
     std::span<std::byte, kPageSize> page_;

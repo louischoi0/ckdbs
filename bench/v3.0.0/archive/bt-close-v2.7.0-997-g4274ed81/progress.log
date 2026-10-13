@@ -1,0 +1,23 @@
+build start 08:46:04
+start p1 08:49:37
+aborted p1 after run 0 (gate wait 180 s too long on a loaded host); restarting 4 runs QW=30 08:55:29
+start p1b 08:55:42
+end p1b rc=0 09:05:38
+start p2 09:05:38
+end p2 rc=0 09:13:28
+start p3 09:13:28
+end p3 rc=0 09:21:41
+start p4 09:21:41
+end p4 rc=0 09:23:56
+start p5 09:23:56
+end p5 rc=0 09:25:28
+start p6 09:25:28
+end p6 rc=0 09:26:32
+start p7 09:26:32
+end p7 rc=0 09:28:13
+ALL DONE 09:28:13
+start p8 09:28:15
+end p8 rc=0 09:30:11
+start p9 09:30:11
+end p9 rc=0 09:34:50
+ALL DONE 2 09:34:50

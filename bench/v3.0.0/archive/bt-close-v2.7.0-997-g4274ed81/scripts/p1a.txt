@@ -1,0 +1,10 @@
+p1a: the first invocation, started 08:49:37 by an earlier revision of run.sh (phase name "p1", QW=180), cut after run 0 at 08:55:29
+(its driver and run.sh killed by pid while the next run waited in its load gate; out/p1.json and out/p1.log renamed p1a.json and p1a.log).
+
+python3 tools/bm_scan.py census --arm A=/home/cdkbs/bench-runs/bt-close/bin/kds_server-A --arm A2=/home/cdkbs/bench-runs/bt-close/bin/kds_server-A2 \
+  --arm B=/home/cdkbs/bench-runs/bt-close/bin/kds_server-B --workdir /home/cdkbs/bench-runs/bt-close/wd-p1 --port 32811 --runs 5 \
+  --pin-server 2 --pin-driver 4 --cells bn,wide-h --scan-ops 192 --point-ops 3000 --quiet-load 2 --quiet-wait 180 \
+  --cell-quiet-pct 10 --cell-quiet-wait 60 --cell-clean-pct 20 --cell-foreign-pct 15 --cell-retries 1 --out out/p1.json
+
+Its workdir (wd-p1, three servers' data files and logs) was removed before p1b started, so the "111 of 114 servers" statement in the results file
+covers p1b..p9 only.

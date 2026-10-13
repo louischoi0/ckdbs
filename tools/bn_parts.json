@@ -9,7 +9,7 @@
  ["undo and WAL records", "UndoLog::|AppendUndo|WalManager::|WalStream::|NoteOverwrite|LogIndexWrites|EncodeHeapWrite"],
  ["transaction begin, commit, locks", "TransactionManager::(Begin|Commit|PublishCoreBounds)|LockTable|BorrowChain|BeginWrite|EndWrite|ReleaseLocks"],
  ["result encoding", "WireResultSink|EncodeValue|EncodeProjectedRow|RowBatch"],
- ["row walk: residual", "EvaluateConjunct$|EvaluatePredicate|EvaluateAll|CompareValues|ScanKernel"],
+ ["row walk: residual", "EvaluateConjunctChecked|CheckConjunct|EvaluateAll|CompareValues|ScanKernel"],
  ["row decode and encode", "DecodeRow|DecodeColumns|DecodeAndResolve|DecodeOneValue|ResolveSpills|EncodeRow|EncodeAssigned|EncodeOneValue|EncodeColumn|CheckDecodeInputs"],
  ["row walk: visibility", "txn::Classify|ReadView|LookupCommit|ResolveThroughUndo"],
  ["row walk: copy", "chain:^__mem(cpy|move)[^<]*<([^<]*AcceptTupleAt|std::_Function_handler::_M_invoke)(<|$)"],

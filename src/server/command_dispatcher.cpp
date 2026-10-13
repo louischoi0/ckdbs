@@ -8358,6 +8358,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     std::vector<exec::PendingSpill> frame_spills;
     std::vector<exec::PendingSpill> spills;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
+    bool conjuncts_checked = false;
 
     // Stage 2's decode target and what it decodes (BN-R2): every column
     // where a Cabin or an index reads the row (an assertion is asked per
@@ -8520,6 +8521,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                               frame.SlotsFor(0), filter_mask, frame_spills);
             !s.ok()) {
             return s;
+        }
+        // Checked at the first row, as a SELECT's step is (BT-R5): an
+        // empty relation refuses nothing.
+        if (!conjuncts_checked) {
+            if (Status s = exec::CheckConjuncts(schemas, predicates.value(), frame);
+                !s.ok()) {
+                return s;
+            }
+            conjuncts_checked = true;
         }
         auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas, predicates.value(),
                                                frame, /*stats=*/nullptr, budget_, &snapshot);
@@ -10449,6 +10459,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     std::vector<std::byte> payload_copy;
     std::vector<exec::PendingSpill> frame_spills;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
+    bool conjuncts_checked = false;
 
     // ---- Stage 1 of the walk -------------------------------------------
     //
@@ -10478,6 +10489,14 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                                               frame.SlotsFor(0), filter_mask, frame_spills);
             !s.ok()) {
             return s;
+        }
+        // Checked once at the first row, as UPDATE's (BT-R5).
+        if (!conjuncts_checked) {
+            if (Status s = exec::CheckConjuncts(schemas, predicates.value(), frame);
+                !s.ok()) {
+                return s;
+            }
+            conjuncts_checked = true;
         }
         auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas, predicates.value(),
                                                frame, /*stats=*/nullptr, budget_, &snapshot);

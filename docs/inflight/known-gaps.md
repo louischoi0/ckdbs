@@ -1117,19 +1117,24 @@ stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
 
 ## The scan row (BM)
 
-Written at BM's close on `worktree-bm-scan-kernel-open`, verified at `952c67e5`. Owned by
-`instructions/v3.0.0/workorder-bm-scan-row-kernel.md` and `parser-v2.md` §7.
+Written at BM's close on `worktree-bm-scan-kernel-open`, verified at `952c67e5`; the first and
+last entries restated at BT's close, verified at `4274ed81`. Owned by
+`instructions/v3.0.0/workorder-bm-scan-row-kernel.md`,
+`instructions/v3.0.0/workorder-bt-accept-tuple-row.md` and `parser-v2.md` §7.
 
-- **A scan row costs 1.07 times PostgreSQL's after BM, and the largest
-  part left is `AcceptTupleAt`'s own body**: 31.0 ns of server CPU a row
-  net of the statement at the close (`6b771ec1`) against PostgreSQL 18's
-  29.1 ns on one host day and driver
-  (`bench/v3.0.0/results-bm-close-v2.7.0-946-g6b771ec1.md`), down from 67
-  against 34 at BN's close. The close's profile (29.3 ns on the
-  frame-pointer build, `bn` only) puts 13.8 ns in per-row checks and
-  counters - `AcceptTupleAt`'s body 9.1, `ReadTupleIn` 3.4,
-  `ExecStats::For` 1.4 - 7.4 in the kernel's compare and 6.2 in the slot
-  loop. Only the `bn` shape was profiled.
+- **A rejected scan row costs 27.4 ns after BT, and what is left of its
+  fixed cost is what BT-R3 keeps**: `bn`'s net row at `4274ed81` is 27.4 ns
+  of server CPU against 31.0 at `eeb88f47` in the same run
+  (`bench/v3.0.0/results-bt-close-v2.7.0-997-g4274ed81.md`), 0.94 times
+  PostgreSQL 18's 29.1 ns from BM's close (not re-measured). BT-S1's
+  ablations (`bench/v3.0.0/results-bt-s1-premise-v2.7.0-992-geeb88f47.md`)
+  priced what remains: the rejected row's two counters and its row charge
+  about 3 ns together (kept: `ANALYZE`'s counts and the budget's refusal
+  row are BM-R2's), and at most 0.7-1.0 ns for `AcceptTupleAt`'s
+  `Status` return - an upper bound that also holds its `PageSpanGuard` and
+  the call itself (kept: BT-R1 keeps visibility in that one call). No profile was taken after BT;
+  BM's (29.3 ns on the frame-pointer build) put 7.4 ns in the kernel's
+  compare and 6.2 in the slot loop, which BT did not touch.
 - **A recent row's visibility is not memoized** (BM-R7, BM-S5 struck at
   BM-S1, `bench/v3.0.0/results-bm-s1-scan-row-v2.7.0-942-gf5a7efb2.md`).
   Beside a point writer, as BM-Q8's cell specifies, `LookupCommit` and the
@@ -1151,10 +1156,12 @@ Written at BM's close on `worktree-bm-scan-kernel-open`, verified at `952c67e5`.
   pooled re-measure reads +8.9 µs literal and +3.2 prepared over A of
   ~740, within the spread - but B2 is slower than A in 12 and 11 of 15
   runs, and one batch of three reads +16.9 and +14.8. Measured at 1,000
-  rows, `cores = 1`, `relaxed` only. The per-row conjunct check itself
-  remains for `EvaluateConjuncts`' callers in `command_dispatcher.cpp`,
-  which never pass a per-statement check; checking them once would delete
-  it.
+  rows, `cores = 1`, `relaxed` only. BT-S4 deleted the per-row conjunct
+  check (UPDATE's and DELETE's walks check once, BT-R5), and BT's close
+  reads the every-row `UPDATE` 3.1 / 3.5 % under BT's opening - inside the
+  largest A-against-A' gap, so whether BM-S2's residual is gone is not
+  resolved at 1,000 rows; at 200 and 10,000 rows B is below A in 6 of 6
+  runs literal and 5 of 6 prepared (`bench/v3.0.0/results-bt-close-v2.7.0-997-g4274ed81.md`).
 
 ## Carve and checkpoint stalls
 

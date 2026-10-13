@@ -260,14 +260,14 @@ struct StatementStore {
     // runner of its own per row (`EvaluateConjuncts`), so only a statement
     // run by `Execute` - a read - keeps an answer past one row.
     std::unordered_map<const SubChain*, bool> hoisted;
-    // BM-R6's once, by step id: a step whose decode shape and residual have
-    // been checked in this statement. Here and not in the runner because a
-    // sub-chain's runner is rebuilt per outer row, and a flag rebuilt per
-    // outer row is a check (and an allocation) per outer row.
-    std::vector<bool> shape_checked;
-    // Each checked step's scan kernel (BM-R4), compiled with its check, by
-    // step id; an empty one holds no term.
-    std::vector<ScanKernel> kernels;
+    // BM-R6's once, by step id: present once a step's decode shape and
+    // residual have been checked in this statement, holding the scan kernel
+    // (BM-R4) compiled with the check - an empty one holds no term. One
+    // vector, so "checked" and "has a kernel" cannot fall out of step
+    // (BT-S3). Here and not in the runner because a sub-chain's runner is
+    // rebuilt per outer row, and a flag rebuilt per outer row is a check
+    // (and an allocation) per outer row.
+    std::vector<std::optional<ScanKernel>> kernels;
 };
 
 class ChainRunner {
@@ -2267,12 +2267,6 @@ private:
                          const catalog::TableAccess& access, PageId page_id,
                          heap::PageView& page, std::uint16_t slot, std::uint16_t nr_slots) {
         bool decoded = false;
-        // Filled by the decode, drained after the span is released. A
-        // spilled value lives in the var-heap and fetching it is a page
-        // fetch, so it is exactly the thing that must not happen while the
-        // span below is live (row_codec.hpp). Reused across rows so a scan
-        // that never spills allocates nothing extra.
-        spills_.clear();
 
         // ---- MVCC, phase 1 (docs/spec/txn.md section 4.3) --------------------
         //
@@ -2295,8 +2289,10 @@ private:
         // The page's relayout epoch at the moment of access, captured under
         // the span because the trail record below runs after its release -
         // recorded so replay's rule 2 has something real to compare
-        // (docs/spec/physical-optimizer.md R4, PX04). One u64 load per
-        // accepted tuple.
+        // (docs/spec/physical-optimizer.md R4, PX04). One u64 load, on the
+        // two paths that leave the span with a copied row; a visible row the
+        // kernel rejects never reads it, and every reader is past the
+        // rejected return (BT-S3).
         std::uint64_t observed_epoch = 0;
         // **The scan kernel** (BM-R1..R4): armed only once this step's
         // checks have run in this statement, so its first visible row always
@@ -2315,10 +2311,11 @@ private:
         bool kernel_rejected = false;
         {
             PageSpanGuard span;
-            observed_epoch = page.RelayoutEpoch();
-            auto tuple = page.ReadTupleIn(slot, nr_slots);
-            if (tuple.ok()) {
-                switch (txn::Classify(snapshot_.view, tuple.value())) {
+            // Read with no Status (BT-S2): a slot ReadTupleIn() would refuse -
+            // out of range, retired, or malformed - is no row here, as before.
+            heap::PageView::Tuple tuple{};
+            if (page.TryReadTupleIn(slot, nr_slots, tuple) == heap::PageView::TupleRead::kRead) {
+                switch (txn::Classify(snapshot_.view, tuple)) {
                     case txn::Visibility::kNoVersion:
                         // No version of this tuple exists for this reader.
                         // Not an error and not a row: the statement simply
@@ -2329,11 +2326,12 @@ private:
                         // R1's copy. Fixed-size, because invariant 13 makes
                         // a row's size a schema constant - the same
                         // property that makes relayout a memcpy.
-                        version_.assign(tuple.value().payload.begin(),
-                                        tuple.value().payload.end());
-                        walk_trx_id = tuple.value().trx_id;
-                        walk_undo_ptr = tuple.value().undo_ptr;
-                        walk_deleted = tuple.value().deleted;
+                        version_.assign(tuple.payload.begin(),
+                                        tuple.payload.end());
+                        observed_epoch = page.RelayoutEpoch();
+                        walk_trx_id = tuple.trx_id;
+                        walk_undo_ptr = tuple.undo_ptr;
+                        walk_deleted = tuple.deleted;
                         needs_walk = true;
                         break;
                     case txn::Visibility::kVisible:
@@ -2341,7 +2339,7 @@ private:
                         // under the span and the leaf's read hold (BM-R3),
                         // after the length check invariant 13 makes first;
                         // a rejected row is never copied.
-                        if (kernel_rejects(tuple.value().payload)) {
+                        if (kernel_rejects(tuple.payload)) {
                             kernel_rejected = true;
                             break;
                         }
@@ -2352,8 +2350,9 @@ private:
                         // about to reject it on one of them. So the bytes
                         // come out from under the span and the decode
                         // happens below, in two halves.
-                        version_.assign(tuple.value().payload.begin(),
-                                        tuple.value().payload.end());
+                        version_.assign(tuple.payload.begin(),
+                                        tuple.payload.end());
+                        observed_epoch = page.RelayoutEpoch();
                         decoded = true;
                         break;
                 }
@@ -2527,19 +2526,18 @@ private:
         // non-correlated conjuncts decide *bucketing*, the correlated one
         // then decides *emission*. On a well-formed chain the two forms
         // give one verdict - AND over total predicates commutes, and both
-        // run the same EvaluateConjunct body, so the split cannot drift
-        // from the whole. (On a malformed chain they may name *different*
-        // Corruption sites, as any short-circuiting conjunction already
-        // may.) The map holds every row passing the non-correlated
-        // residual (spec §2): a row failing the current outer key's
-        // equality emits nothing today and is precisely what a later
-        // outer row's probe will ask for.
+        // run the same EvaluateConjunctChecked body, so the split cannot
+        // drift from the whole; the step's conjuncts were checked once
+        // above, so a malformed chain never reaches either. The map holds
+        // every row passing the non-correlated residual (spec §2): a row
+        // failing the current outer key's equality emits nothing today and
+        // is precisely what a later outer row's probe will ask for.
         const bool building_here = building_ != nullptr && building_->step_id == step.step_id;
         if (building_here) {
-            auto matched = EvaluateAllExcept(schemas_, step.residual, frame_,
-                                             building_->residual_pos);
-            if (!matched.ok()) return matched.status();
-            if (!matched.value()) return Status::OK();
+            if (!EvaluateAllExceptChecked(schemas_, step.residual, frame_,
+                                          building_->residual_pos)) {
+                return Status::OK();
+            }
         } else if (!EvaluateAllChecked(schemas_, step.residual, frame_)) {
             // Checked once above, so the comparisons alone.
             return Status::OK();
@@ -2594,10 +2592,10 @@ private:
             }
 
             // The correlated conjunct alone decides emission from here on.
-            auto emit =
-                EvaluateConjunct(schemas_, step.residual[building_->residual_pos], frame_);
-            if (!emit.ok()) return emit.status();
-            if (!emit.value()) return Status::OK();
+            if (!EvaluateConjunctChecked(schemas_, step.residual[building_->residual_pos],
+                                         frame_)) {
+                return Status::OK();
+            }
         }
 
         // ---- The row survived: build the rest of what is read ------------
@@ -2700,14 +2698,9 @@ private:
     Status CheckStepShapeOnce(const Step& step, std::size_t index,
                               const catalog::TableAccess& access,
                               std::span<const parser::AstValue> slots) {
-        std::vector<bool>& checked = statement_->shape_checked;
         if (Status s = CheckDecodeShape(access.schema, access.layout, slots); !s.ok()) return s;
-        for (const StepPredicate& pred : step.residual) {
-            if (Status s = CheckConjunct(schemas_, pred, frame_); !s.ok()) return s;
-        }
-        if (step.step_id >= checked.size()) checked.resize(step.step_id + 1);
-        checked[step.step_id] = true;
-        std::vector<ScanKernel>& kernels = statement_->kernels;
+        if (Status s = CheckConjuncts(schemas_, step, frame_); !s.ok()) return s;
+        std::vector<std::optional<ScanKernel>>& kernels = statement_->kernels;
         if (step.step_id >= kernels.size()) kernels.resize(step.step_id + 1);
         kernels[step.step_id] = CompileScanKernel(access.schema, access.layout, step.residual,
                                                   static_cast<std::uint16_t>(index));
@@ -2717,26 +2710,33 @@ private:
     // Whether BM-R6's check has run for `step` in this statement: asked
     // before the call, so a checked step's row builds no Status (AP02).
     bool StepShapeChecked(const Step& step) const {
-        const std::vector<bool>& checked = statement_->shape_checked;
-        return step.step_id < checked.size() && checked[step.step_id];
+        const std::vector<std::optional<ScanKernel>>& kernels = statement_->kernels;
+        return step.step_id < kernels.size() && kernels[step.step_id].has_value();
     }
 
     // The step's kernel, if this row may be filtered by it: the switch is on
     // (BM-Q5), the step has passed its check this statement - so the kernel
     // never reads an offset before BM-R6's checks have run - it holds a term,
     // and no Cabin recording of this step is live (BM-R4: a row the other
-    // conjuncts reject must still be recorded if its key matches).
+    // conjuncts reject must still be recorded if its key matches). One
+    // lookup answers both: a kernel is present only once its step's check
+    // has passed (BT-S3).
     const ScanKernel* ArmedKernel(const Step& step, bool recording_here) const {
-        if (!budget_.scan_kernel() || recording_here || !StepShapeChecked(step)) return nullptr;
-        const ScanKernel& kernel = statement_->kernels[step.step_id];
-        return kernel.empty() ? nullptr : &kernel;
+        if (!budget_.scan_kernel() || recording_here) return nullptr;
+        const std::vector<std::optional<ScanKernel>>& kernels = statement_->kernels;
+        if (step.step_id >= kernels.size()) return nullptr;
+        const std::optional<ScanKernel>& kernel = kernels[step.step_id];
+        return kernel.has_value() && !kernel->empty() ? &*kernel : nullptr;
     }
 
     catalog::Catalog& catalog_;
     storage::PageStore& store_;
 
-    // Scratch for AcceptTupleAt()'s decode, reused across rows so a scan
-    // that spills nothing allocates nothing for the possibility.
+    // Scratch for AcceptTupleAt()'s decode: filled by the decode and drained
+    // by the resolve with no span live, since a spilled value is a var-heap
+    // fetch (row_codec.hpp). Each decode clears it (row_codec.cpp), so a row
+    // the kernel rejects never touches it (BT-S3); reused across rows so a
+    // scan that spills nothing allocates nothing for the possibility.
     std::vector<PendingSpill> spills_;
 
     // The read view every tuple is filtered through, and the log an
@@ -3051,9 +3051,7 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
                                  const std::vector<const catalog::Schema*>& schemas,
                                  const Step& step, const ChainFrame& frame, ExecStats* stats,
                                  const Budget& budget, const txn::Snapshot* snapshot) {
-    auto matched = EvaluateAll(schemas, step.residual, frame);
-    if (!matched.ok()) return matched.status();
-    if (!matched.value()) return false;
+    if (!EvaluateAllChecked(schemas, step.residual, frame)) return false;
     if (!step.fn_residual.empty()) {
         auto fn_matched = EvaluateFunctionConjuncts(step.fn_residual, frame);
         if (!fn_matched.ok()) return fn_matched.status();
