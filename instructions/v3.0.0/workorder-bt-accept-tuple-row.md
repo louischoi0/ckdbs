@@ -16,7 +16,7 @@ English (`raft-marks-2026-10-13.md` §7-§8):
 row 3.3-4.0 ns (-10.6 % to -11.5 %) cheaper at `4274ed81` than at
 `eeb88f47` (`bn` 27.4 ns against 31.0), the
 every-row `UPDATE` about 3 % cheaper, no guard cell regressed
-(`bench/v3.0.0/results-bt-close-v2.7.0-997-g4274ed81.md`).
+(`bench/v3.0.0/results-bt-close-v2.7.0-997-g4274ed81.md`). **Close marked by the operator on 2026-10-13** (`raft-marks-2026-10-13.md` §9).
 
 BT-Q1..Q3 below were put to the operator with CLA's proposal beside each
 before W1; W1 came without a per-item mark, so **every BT-Q item is adopted
