@@ -245,3 +245,26 @@ promise:** D-all is a ceiling - D3 counts nothing and BT-R3 keeps every
 count, so C3 can recover only part of D3; D1 mixes three parts. Rows and
 digest identical across the seven arms; only D3, D-all and D4 change
 `ANALYZE`'s counts, by design.
+
+### BT-S4 — UPDATE's and DELETE's conjuncts checked once
+
+Built while BT-S1 measured, ahead of S2 and S3: BT-Q1 does not gate it.
+UPDATE's and DELETE's walks hold a `conjuncts_checked` bool and call
+`CheckConjuncts` at their first row reaching the `WHERE`;
+`EvaluateConjuncts` compares with `EvaluateAllChecked`. Deleted:
+`ConjunctWellFormed`, `EvaluateConjunct`, `EvaluateAll`, the `StatusOr`
+`EvaluateAllExcept` (now `EvaluateAllExceptChecked`, beside
+`EvaluateConjunctChecked` for the inner build's two sites), the dead
+`EvaluatePredicate`, and `CheckConjunct` from the header (file-local;
+`CheckStepShapeOnce` calls `CheckConjuncts`). **The `critics-developer`
+review** found no correctness defect: every caller of the checked forms is
+preceded by a check against the same frame shape - UPDATE's probed and
+scanned paths both through `apply`, a resumed walk re-entering with the
+flag false, the inner build's sites after `CheckStepShapeOnce` on every
+access kind - and the one behaviour change is BM-Q7's. Applied: the dead
+`EvaluatePredicate` deleted, `CheckConjunct` made file-local, a comment
+rewrapped, DELETE's comment made explicit, `tools/bn_parts.json`'s
+residual pattern renamed. Kept: the seven-line once-block at both sites (a
+helper saves nothing, as the review also judged). Suite 3691/3691 (Debug,
+`-LE heap-suspended`). Overhead not measured; measured at the milestone's
+close.

@@ -357,10 +357,13 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
                          PositionSink* position, const SlicePolicy& slice);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
-// sub-chains - against a frame already holding that step's row.
+// sub-chains - against a frame already holding that step's row. **The
+// caller has run `CheckConjuncts` on `step.residual` against this frame**,
+// once, at its first row (BT-R5, `workorder-bt-accept-tuple-row.md`): this
+// compares and checks nothing.
 //
 // For statements that walk a relation themselves rather than through
-// `Execute`: UPDATE today, DELETE when it lands. They need it so their
+// `Execute`: UPDATE and DELETE. They need it so their
 // WHERE means exactly what a SELECT's does, down to `NOT IN`'s tri-state
 // collapse. A second evaluator would be a second answer to "does this row
 // qualify", and the two would drift on the first NULL.

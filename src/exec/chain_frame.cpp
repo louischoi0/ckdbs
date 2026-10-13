@@ -24,7 +24,7 @@ const catalog::Schema* SchemaFor(const std::vector<const catalog::Schema*>& sche
     return schemas[ref.rel_slot];
 }
 
-// EvaluatePredicate's checks, with its messages: the left side resolves
+// CheckConjunct's in-frame half, with its messages: the left side resolves
 // and is a column of its relation, and a column right side resolves.
 Status CheckPredicate(const catalog::Schema& lhs_schema, const StepPredicate& pred,
                       const ChainFrame& frame) {
@@ -54,38 +54,7 @@ bool ComparePredicate(std::uint32_t type_val, const StepPredicate& pred,
     return CompareValues(type_val, lhs, rhs, pred.op);
 }
 
-// CheckConjunct's checks as a predicate, so a well-formed conjunct - every
-// one a compiled chain holds - builds no Status (AP02); the message is
-// worded only on failure, by CheckConjunct itself.
-bool ConjunctWellFormed(const std::vector<const catalog::Schema*>& schemas,
-                        const StepPredicate& pred, const ChainFrame& frame) {
-    if (pred.rhs.kind == OperandKind::kLiteral &&
-        pred.rhs.literal.type == parser::ValueType::kParam) {
-        return false;
-    }
-    if (!frame.CanResolve(pred.lhs)) return false;
-    const catalog::Schema* lhs_schema = SchemaFor(schemas, pred.lhs);
-    if (lhs_schema != nullptr && pred.lhs.col_pos >= lhs_schema->columns.size()) return false;
-    return pred.rhs.kind == OperandKind::kLiteral || frame.CanResolve(pred.rhs.column);
-}
-
-// One conjunct's comparison, on a conjunct `CheckConjunct` has passed.
-bool CompareConjunct(const std::vector<const catalog::Schema*>& schemas,
-                     const StepPredicate& pred, const ChainFrame& frame) {
-    const catalog::Schema* lhs_schema = SchemaFor(schemas, pred.lhs);
-    const std::uint32_t type_val =
-        lhs_schema == nullptr ? 0 : lhs_schema->columns[pred.lhs.col_pos].type_val;
-    return ComparePredicate(type_val, pred, frame);
-}
-
-}  // namespace
-
-StatusOr<bool> EvaluatePredicate(const catalog::Schema& lhs_schema, const StepPredicate& pred,
-                                 const ChainFrame& frame) {
-    if (Status s = CheckPredicate(lhs_schema, pred, frame); !s.ok()) return s;
-    return ComparePredicate(lhs_schema.columns[pred.lhs.col_pos].type_val, pred, frame);
-}
-
+// One conjunct's check: the `$param` refusal and the malformed-chain checks.
 Status CheckConjunct(const std::vector<const catalog::Schema*>& schemas,
                      const StepPredicate& pred, const ChainFrame& frame) {
     // A `$param` is a value position with nothing bound to it. Nothing
@@ -128,22 +97,22 @@ Status CheckConjunct(const std::vector<const catalog::Schema*>& schemas,
     return Status::OK();
 }
 
-StatusOr<bool> EvaluateConjunct(const std::vector<const catalog::Schema*>& schemas,
-                                const StepPredicate& pred, const ChainFrame& frame) {
-    if (!ConjunctWellFormed(schemas, pred, frame)) {
+}  // namespace
+
+Status CheckConjuncts(const std::vector<const catalog::Schema*>& schemas,
+                      const std::vector<StepPredicate>& predicates, const ChainFrame& frame) {
+    for (const StepPredicate& pred : predicates) {
         if (Status s = CheckConjunct(schemas, pred, frame); !s.ok()) return s;
     }
-    return CompareConjunct(schemas, pred, frame);
+    return Status::OK();
 }
 
-StatusOr<bool> EvaluateAll(const std::vector<const catalog::Schema*>& schemas,
-                           const std::vector<StepPredicate>& predicates, const ChainFrame& frame) {
-    for (const StepPredicate& pred : predicates) {
-        auto matched = EvaluateConjunct(schemas, pred, frame);
-        if (!matched.ok()) return matched.status();
-        if (!matched.value()) return false;  // AND: the first false ends it
-    }
-    return true;
+bool EvaluateConjunctChecked(const std::vector<const catalog::Schema*>& schemas,
+                             const StepPredicate& pred, const ChainFrame& frame) {
+    const catalog::Schema* lhs_schema = SchemaFor(schemas, pred.lhs);
+    const std::uint32_t type_val =
+        lhs_schema == nullptr ? 0 : lhs_schema->columns[pred.lhs.col_pos].type_val;
+    return ComparePredicate(type_val, pred, frame);
 }
 
 ScanKernel CompileScanKernel(const catalog::Schema& schema, const catalog::RowLayout& layout,
@@ -163,19 +132,18 @@ ScanKernel CompileScanKernel(const catalog::Schema& schema, const catalog::RowLa
 bool EvaluateAllChecked(const std::vector<const catalog::Schema*>& schemas,
                         const std::vector<StepPredicate>& predicates, const ChainFrame& frame) {
     for (const StepPredicate& pred : predicates) {
-        if (!CompareConjunct(schemas, pred, frame)) return false;  // AND: the first false ends it
+        // AND: the first false ends it.
+        if (!EvaluateConjunctChecked(schemas, pred, frame)) return false;
     }
     return true;
 }
 
-StatusOr<bool> EvaluateAllExcept(const std::vector<const catalog::Schema*>& schemas,
-                                 const std::vector<StepPredicate>& predicates,
-                                 const ChainFrame& frame, std::size_t skip) {
+bool EvaluateAllExceptChecked(const std::vector<const catalog::Schema*>& schemas,
+                              const std::vector<StepPredicate>& predicates,
+                              const ChainFrame& frame, std::size_t skip) {
     for (std::size_t i = 0; i < predicates.size(); ++i) {
         if (i == skip) continue;
-        auto matched = EvaluateConjunct(schemas, predicates[i], frame);
-        if (!matched.ok()) return matched.status();
-        if (!matched.value()) return false;
+        if (!EvaluateConjunctChecked(schemas, predicates[i], frame)) return false;
     }
     return true;
 }
@@ -187,7 +155,7 @@ StatusOr<parser::AstValue> SideValue(const FunctionSide& side, const StatementCo
                                      const ChainFrame& frame) {
     if (!side.call.has_value()) {
         if (side.plain.kind == OperandKind::kLiteral) {
-            // EvaluateConjunct's `$param` refusal, for the same reason.
+            // CheckConjunct's `$param` refusal, for the same reason.
             if (side.plain.literal.type == parser::ValueType::kParam) {
                 return Status::Corruption("a parameter reached execution with no bound value");
             }

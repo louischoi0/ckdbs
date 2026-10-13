@@ -2506,19 +2506,18 @@ private:
         // non-correlated conjuncts decide *bucketing*, the correlated one
         // then decides *emission*. On a well-formed chain the two forms
         // give one verdict - AND over total predicates commutes, and both
-        // run the same EvaluateConjunct body, so the split cannot drift
-        // from the whole. (On a malformed chain they may name *different*
-        // Corruption sites, as any short-circuiting conjunction already
-        // may.) The map holds every row passing the non-correlated
-        // residual (spec §2): a row failing the current outer key's
-        // equality emits nothing today and is precisely what a later
-        // outer row's probe will ask for.
+        // run the same EvaluateConjunctChecked body, so the split cannot
+        // drift from the whole; the step's conjuncts were checked once
+        // above, so a malformed chain never reaches either. The map holds
+        // every row passing the non-correlated residual (spec §2): a row
+        // failing the current outer key's equality emits nothing today and
+        // is precisely what a later outer row's probe will ask for.
         const bool building_here = building_ != nullptr && building_->step_id == step.step_id;
         if (building_here) {
-            auto matched = EvaluateAllExcept(schemas_, step.residual, frame_,
-                                             building_->residual_pos);
-            if (!matched.ok()) return matched.status();
-            if (!matched.value()) return Status::OK();
+            if (!EvaluateAllExceptChecked(schemas_, step.residual, frame_,
+                                          building_->residual_pos)) {
+                return Status::OK();
+            }
         } else if (!EvaluateAllChecked(schemas_, step.residual, frame_)) {
             // Checked once above, so the comparisons alone.
             return Status::OK();
@@ -2566,10 +2565,10 @@ private:
             }
 
             // The correlated conjunct alone decides emission from here on.
-            auto emit =
-                EvaluateConjunct(schemas_, step.residual[building_->residual_pos], frame_);
-            if (!emit.ok()) return emit.status();
-            if (!emit.value()) return Status::OK();
+            if (!EvaluateConjunctChecked(schemas_, step.residual[building_->residual_pos],
+                                         frame_)) {
+                return Status::OK();
+            }
         }
 
         // ---- The row survived: build the rest of what is read ------------
@@ -2666,9 +2665,7 @@ private:
                               std::span<const parser::AstValue> slots) {
         std::vector<bool>& checked = statement_->shape_checked;
         if (Status s = CheckDecodeShape(access.schema, access.layout, slots); !s.ok()) return s;
-        for (const StepPredicate& pred : step.residual) {
-            if (Status s = CheckConjunct(schemas_, pred, frame_); !s.ok()) return s;
-        }
+        if (Status s = CheckConjuncts(schemas_, step.residual, frame_); !s.ok()) return s;
         if (step.step_id >= checked.size()) checked.resize(step.step_id + 1);
         checked[step.step_id] = true;
         std::vector<ScanKernel>& kernels = statement_->kernels;
@@ -3015,9 +3012,7 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
                                  const std::vector<const catalog::Schema*>& schemas,
                                  const Step& step, const ChainFrame& frame, ExecStats* stats,
                                  const Budget& budget, const txn::Snapshot* snapshot) {
-    auto matched = EvaluateAll(schemas, step.residual, frame);
-    if (!matched.ok()) return matched.status();
-    if (!matched.value()) return false;
+    if (!EvaluateAllChecked(schemas, step.residual, frame)) return false;
     if (!step.fn_residual.empty()) {
         auto fn_matched = EvaluateFunctionConjuncts(step.fn_residual, frame);
         if (!fn_matched.ok()) return fn_matched.status();

@@ -105,42 +105,30 @@ private:
     const ChainFrame* parent_ = nullptr;
 };
 
-// Evaluates one compiled conjunct against a frame.
-//
-// Replaces the name-matching evaluator outright rather than sitting beside
-// it. That one resolved a predicate by comparing column *names* against a
-// single schema, which in a multi-relation world is silently wrong twice
-// over: it cannot tell which relation a name belongs to, and an unknown
-// name returns "no match" - dropping every row instead of failing. Two
-// evaluators would also be two answers to "does this row qualify", and
-// the whole point of `Probe` and `Scan` agreeing row-for-row is that
-// there is exactly one.
-//
-// Fails only on a malformed chain (a reference the frame cannot resolve).
-// A type mismatch is a non-match, not an error, matching what SQL's
+// **The one evaluator of compiled conjuncts.** Two evaluators would be two
+// answers to "does this row qualify", and the whole point of `Probe` and
+// `Scan` agreeing row-for-row is that there is exactly one. A type
+// mismatch is a non-match, not an error, matching what SQL's
 // NULL-comparison semantics would give in the absence of real NULLs.
-StatusOr<bool> EvaluatePredicate(const catalog::Schema& lhs_schema, const StepPredicate& pred,
-                                 const ChainFrame& frame);
+//
+// **A conjunct is checked once and compared per row** (BM-R6,
+// `workorder-bm-scan-row-kernel.md`; BT-R5, `workorder-bt-accept-tuple-row.md`).
+// The check - the `$param` refusal and the malformed-chain checks, with
+// their messages - depends only on the chain and the frame's shape, never
+// on a row, so every caller runs it at its first row and then compares.
+// The first refusal ends it.
+Status CheckConjuncts(const std::vector<const catalog::Schema*>& schemas,
+                      const std::vector<StepPredicate>& predicates, const ChainFrame& frame);
 
-// One conjunct through the full residual discipline - the `$param` refusal
-// and the outward-lhs fallback included. This is EvaluateAll's loop body,
-// exposed because the inner build (workplan JB3) evaluates a step's
-// correlated conjunct separately from the rest; one body, so the split
-// evaluation cannot drift from the whole one.
-StatusOr<bool> EvaluateConjunct(const std::vector<const catalog::Schema*>& schemas,
-                                const StepPredicate& pred, const ChainFrame& frame);
+// One conjunct's comparison, on a conjunct CheckConjuncts has passed
+// against this frame - the outward-lhs fallback included. Exposed because
+// the inner build (workplan JB3) evaluates a step's correlated conjunct
+// apart from the rest; one body, so the split cannot drift from the whole.
+bool EvaluateConjunctChecked(const std::vector<const catalog::Schema*>& schemas,
+                             const StepPredicate& pred, const ChainFrame& frame);
 
-// EvaluateConjunct's checks alone - the `$param` refusal and the
-// malformed-chain checks, with their messages - for a caller that checks a
-// step's conjuncts once and then compares per row (BM-R6,
-// `workorder-bm-scan-row-kernel.md`). They depend only on the chain and the
-// frame's shape, never on a row.
-Status CheckConjunct(const std::vector<const catalog::Schema*>& schemas,
-                     const StepPredicate& pred, const ChainFrame& frame);
-
-// EvaluateAll on conjuncts that have each passed `CheckConjunct` against
-// this frame: the comparisons alone, with no check and no Status. The same
-// verdict EvaluateAll gives on a well-formed chain.
+// Every conjunct attached to one step, each having passed CheckConjuncts
+// against this frame. Empty always matches.
 bool EvaluateAllChecked(const std::vector<const catalog::Schema*>& schemas,
                         const std::vector<StepPredicate>& predicates, const ChainFrame& frame);
 
@@ -153,17 +141,14 @@ bool EvaluateAllChecked(const std::vector<const catalog::Schema*>& schemas,
 ScanKernel CompileScanKernel(const catalog::Schema& schema, const catalog::RowLayout& layout,
                              const std::vector<StepPredicate>& residual, std::uint16_t rel_slot);
 
-// Every conjunct attached to one step. Empty always matches.
-StatusOr<bool> EvaluateAll(const std::vector<const catalog::Schema*>& schemas,
-                           const std::vector<StepPredicate>& predicates, const ChainFrame& frame);
-
-// Every conjunct but the one at `skip` - the inner build's bucketing
-// predicate (join-inner-build.md §2: the map holds every row passing
-// the *non-correlated* residual). Together with the skipped conjunct this
-// is exactly EvaluateAll, which is what keeps emission untouched.
-StatusOr<bool> EvaluateAllExcept(const std::vector<const catalog::Schema*>& schemas,
-                                 const std::vector<StepPredicate>& predicates,
-                                 const ChainFrame& frame, std::size_t skip);
+// Every checked conjunct but the one at `skip` - the inner build's
+// bucketing predicate (join-inner-build.md §2: the map holds every row
+// passing the *non-correlated* residual). Together with the skipped
+// conjunct this is exactly EvaluateAllChecked, which is what keeps
+// emission untouched.
+bool EvaluateAllExceptChecked(const std::vector<const catalog::Schema*>& schemas,
+                              const std::vector<StepPredicate>& predicates,
+                              const ChainFrame& frame, std::size_t skip);
 
 // Every function conjunct attached to one step (step_chain.hpp's
 // FunctionPredicate). Empty always matches. A NULL argument makes the call
