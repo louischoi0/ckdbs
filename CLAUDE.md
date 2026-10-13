@@ -350,6 +350,7 @@ out.
 | `*T` | a task inside a `*M` |
 | `*I` | issue |
 | `&*I` | the issue currently in progress in this session |
+| `&*S` | the stage currently in progress in this session (operator, 2026-10-13) |
 | `*B` | bug |
 | `*P` | progress gate: what must be resolved before the named work can proceed. "Resolving the thread-contamination `*I` is the `*P` of the BK `*M`" means the BK milestone cannot be closed until that issue is resolved |
 | `:>>` | the `*P` relation written as an arrow: `A :>> B` means A must be met before B can proceed (A is B's `*P`) |
