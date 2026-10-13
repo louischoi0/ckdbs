@@ -310,15 +310,17 @@ statement about an engine that no longer exists; re-verify or strike it.
     (`src/wal/file_log_device.cpp`, `include/kds/wal/stream.hpp`). Its
     comment forbids narrowing that to the tail, because a roll can land
     between the stream capturing its watermark and the device sync.
-  - **Since BC the run is bounded only while checkpoints clean what they
-    copy**: segments wholly below the durable redo start are removed
-    (`wal.md` §11-4). Under a bulk load at `relaxed` the bound did not hold:
-    a page re-dirtied after its writeback copy keeps its first recLSN and
-    pins the fold in segment 0, and 13 of 15 BQ-S1 runs removed 0 segments,
-    with 33-39 live
-    (`bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md` §5;
-    `docs/inflight/bugs/a-page-re-dirtied-after-its-writeback-copy-pins-the-redo-start.md`).
-    Verified at `4cf30270`.
+  - **Since BC the run is bounded only while the fold moves**: segments
+    wholly below the durable redo start are removed (`wal.md` §11-4). Under
+    a bulk load at `relaxed` at `4cf30270` it did not: a page re-dirtied
+    after its writeback copy kept its first recLSN and pinned the fold in
+    segment 0, and 13 of 15 BQ-S1 runs removed 0 segments, with 33-39 live
+    (`bench/v3.0.0/results-bq-s1-segment-roll-v2.7.0-909-g4cf30270.md` §5).
+    **Since `fix-redirtied-page-rec-lsn` the recLSN moves up to the lowest
+    LSN stamped since the copy** (`wal.md` §11-2); the relaxed cell has not
+    been re-measured, and the gate's rotation - each core one run about
+    every `cores × (period + period / cores)`, 25 s there - still bounds how
+    often the fold can move.
   - Syncing only the segments *written* since the last sync would be
     enough: the previous tail plus any segment created since. Nothing
     records which those are.

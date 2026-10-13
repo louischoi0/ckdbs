@@ -1675,10 +1675,16 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
 
     SetPageLsn(std::span<std::byte, kPageSize>(*it->second.bytes), lsn);
     it->second.MarkDirty(++dirty_gens_);
-    // First record since the frame was last written back wins: recLSN is
-    // the *oldest* LSN redo must replay to make the page whole, so a later
-    // record must never overwrite it (wal.md section 11-1).
-    if (it->second.rec_lsn == wal::kNoLsn) it->second.rec_lsn = lsn;
+    // recLSN is the *oldest* LSN redo must replay to make the page whole,
+    // so it is the minimum, not the first: a record appended before its
+    // page is taken (`AssertionEnforcer::AbortTxn`) can be stamped after a
+    // higher one (wal.md section 11-1). The same minimum is kept since the
+    // last writeback copy, for a clean that copy cannot make (`WriteBack`).
+    Frame& frame = it->second;
+    if (frame.rec_lsn == wal::kNoLsn || lsn < frame.rec_lsn) frame.rec_lsn = lsn;
+    if (frame.stamped_since_copy == wal::kNoLsn || lsn < frame.stamped_since_copy) {
+        frame.stamped_since_copy = lsn;
+    }
     return Status::OK();
 }
 
@@ -1982,6 +1988,7 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 // can hold the claim and wait on that latch while this one
                 // waits on the claim.
                 page.dirty_gen = page.frame->dirty_gen;
+                page.frame->stamped_since_copy = wal::kNoLsn;
 
                 // (2) checksum, the last thing that touches a page before it
                 // goes out (page.md section 8) - skipped for a headerless
@@ -2073,8 +2080,11 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         // its recLSN intact, so the next writeback retries it. **And only
         // what the copy covered** (step 1b): a generation that moved since
         // the copy is a write fetched after it, whose bytes did not go out;
-        // that frame stays dirty with its recLSN, and a later writeback
-        // carries it.
+        // that frame stays dirty, and a later writeback carries it. **Its
+        // recLSN moves up to the lowest LSN stamped since the copy**, where
+        // a stamp came: the image holds every change stamped before it, and
+        // one still unstamped sets `rec_lsn` by the minimum when it stamps.
+        // With no stamp since, the recLSN it had stays.
         // The claim goes back here too, clean or not, under the same hold: a
         // waiter that sees it gone sees the clean with it.
         {
@@ -2082,7 +2092,12 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
             for (std::size_t k = 0; k < run; ++k) {
                 Frame& frame = *copied[k].frame;  // resident: claimed, so dirty
                 frame.writing = false;
-                if (frame.dirty_gen != copied[k].dirty_gen) continue;
+                if (frame.dirty_gen != copied[k].dirty_gen) {
+                    if (frame.stamped_since_copy != wal::kNoLsn) {
+                        frame.rec_lsn = frame.stamped_since_copy;
+                    }
+                    continue;
+                }
                 frame.dirty = false;
                 frame.rec_lsn = wal::kNoLsn;  // nothing to replay into it
                 if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {

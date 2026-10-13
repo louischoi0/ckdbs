@@ -774,7 +774,8 @@ public:
     // runs once per page a writeback copies, after the copy and the page
     // latch are given back and before the page goes out or is cleaned,
     // holding no latch. A write there is the write that races the copy -
-    // the frame stays dirty with its first recLSN (`wal.md` §11-2) - placed
+    // the frame stays dirty, at the lowest LSN stamped since the copy
+    // (`wal.md` §11-2) - placed
     // where a two-core cell wants it rather than where the threads put it.
     // **It still holds the run's writeback claims**, so the hook must not
     // flush (`Sync`, `FlushPages`, a carve's sync): a `kWait` writeback
@@ -950,9 +951,20 @@ private:
         // access goes through `std::atomic_ref`, and only when the store is
         // armed - unarmed it stays 0 for the frame's whole life.
         std::uint32_t latch = 0;
-        // First log record to dirty this frame since it was last written
+        // Lowest log record to dirty this frame since it was last written
         // back; 0 when nothing logged touched it. See StampPageLsn().
         wal::Lsn rec_lsn = 0;
+        // **The lowest LSN stamped since the last writeback copy**, 0 when
+        // none, under the structure latch like `rec_lsn`: reset where a copy
+        // reads `dirty_gen`, min'd in by every stamp. A clean the generation
+        // skips sets `rec_lsn` to it, where one exists, because every change
+        // the copy missed was stamped after the copy - and a page whose copy
+        // is overtaken every time no longer keeps its first recLSN, which
+        // pinned the instance's redo start and stopped the log recycling.
+        // Never "just above the copy's page_lsn": a record appended before
+        // its page is taken can be stamped after the copy at a lower LSN
+        // (`AssertionEnforcer::AbortTxn`, wal.md §11-2).
+        wal::Lsn stamped_since_copy = 0;
 
         // ---- Reclamation state (docs/inflight/in-progress/workplan-eviction.md EV01) --------
         //
@@ -1019,8 +1031,9 @@ private:
     // 8 KiB page. A 16-bit generation would have fitted the padding and can
     // wrap inside one device write on a hot page, which is the one failure
     // the field exists to rule out. `page_id`, `queued` and `slot` (BE-R1)
-    // took padding and four bytes: 40 -> 48, still under 0.6% of the page.
-    static_assert(sizeof(Frame) == 48, "Frame grew; say why beside this assert");
+    // took padding and four bytes: 40 -> 48. `stamped_since_copy` is a full
+    // LSN and fits no padding: 48 -> 56, still under 0.7% of the page.
+    static_assert(sizeof(Frame) == 56, "Frame grew; say why beside this assert");
     static_assert(std::atomic_ref<std::uint32_t>::required_alignment <= alignof(Frame),
                   "std::atomic_ref needs the word aligned inside the frame");
 
