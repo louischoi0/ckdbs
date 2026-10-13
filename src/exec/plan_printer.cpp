@@ -19,14 +19,10 @@ std::uint8_t StoredAccessKind(AccessKind kind) noexcept {
         case AccessKind::kRange: return 3;
         case AccessKind::kFilterScan: return 4;
         case AccessKind::kScan: return 5;
-        // 6, appended rather than inserted: these numbers are persisted in
-        // sys.access_stats, so a value here may never change meaning and a
-        // new kind takes the next free one however the enum is ordered.
+        // 6 onward appended rather than inserted: these numbers are
+        // persisted in sys.access_stats, so a value never changes meaning
+        // and a new kind takes the next free one however the enum is ordered.
         case AccessKind::kCabinProbe: return 6;
-        // Appended, and the numbers are what `sys.access_stats` stores - so
-        // this mapping is explicit rather than the enum's own values,
-        // precisely so a kind can be inserted where it reads best without
-        // silently re-labelling every row already on disk.
         case AccessKind::kIndexProbe: return 7;
         case AccessKind::kIndexRange: return 8;
     }
@@ -290,13 +286,8 @@ std::string FormatPlan(const StepChain& chain) {
     //
     // **One line, after the steps and instead of the projection**, which is
     // where it sits in execution order: the chain produces rows and the
-    // fold consumes them. Printing it beside a projection an aggregated
-    // chain does not have would describe a statement that does not exist.
-    //
-    // A non-aggregated plan reaches none of this and its output is
-    // byte-identical to what it was before aggregation existed - which is
-    // the property AG08 is done when it has, and one the test checks
-    // rather than assumes.
+    // fold consumes them. A non-aggregated plan reaches none of this (AG08;
+    // a test pins it).
     if (chain.aggregated()) {
         const AggregateSpec& spec = *chain.aggregate;
         os << "aggregate keys=";
@@ -366,10 +357,7 @@ std::string FormatPlan(const StepChain& chain) {
     // After the projection, which is where it sits in execution order: the
     // dispatcher's emission quota gates formatted rows. `offset` before
     // `limit`, since rows are skipped before they are counted. Absent from
-    // an unlimited plan, whose output stays byte-identical to what it was
-    // before the tail existed - the property the fold line above keeps,
-    // kept again. (An aggregated chain never reaches here with one: the
-    // parser refuses the tail over aggregated output.)
+    // an unlimited plan.
     if (chain.limit.has_value() || chain.offset != 0) {
         os << "\nquota";
         if (chain.offset != 0) os << " offset=" << chain.offset;

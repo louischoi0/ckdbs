@@ -8,7 +8,7 @@
 // of the callable. What `std::function` costs per construction - a heap
 // allocation whenever the callable outgrows its small buffer, which any lambda
 // capturing more than two references does - is what the insert path cannot
-// pay per row (BB-S3's review: one or two allocations per `INSERT` row).
+// pay per row (one or two allocations per `INSERT` row, BB-S3).
 //
 // **It does not extend the callable's life.** Bind it to a named callable, or
 // to a temporary in the same full-expression as the call that uses it; never

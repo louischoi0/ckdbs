@@ -167,7 +167,7 @@ StatusOr<AcquireResult> LockTable::AcquireInner(std::uint64_t txn, const LockKey
     // thread which observes the entry observes the counter with it - both
     // are published under the partition mutex below. It does not order a
     // writer that read zero against a taker that has not incremented yet;
-    // the header says why, and closing that is AO-S6's.
+    // the publish-then-verify below closes that (the header's fence note).
     if (fence) FenceCounterFor(key.rel_oid).fetch_add(1, std::memory_order_release);
 
     {
@@ -664,14 +664,9 @@ bool LockTable::ConflictingOverlap(const LockKey& fence, LockMode mode, std::uin
                 // passed in is the caller's copy, not the table's.
                 if (h.txn == txn) continue;
                 // **An intention mode on an interval unit neither fences
-                // nor is fenced** (AO-S6e-b), which is the rule
-                // `FenceCoversKey` has stated from the other side since
-                // AO-S6b ("an intention mode on a range key is not one and
-                // fences nothing") and which this side did not carry.
-                // Nothing held one until the read borrow, so the two sides
-                // could not disagree; now a positioned reader holds a slice
-                // `IS` and this scan is what a writer's declared range
-                // would meet it with.
+                // nor is fenced** (AO-S6e-b) - `FenceCoversKey`'s rule from
+                // this side: a positioned reader's slice `IS` is what a
+                // writer's declared range meets here.
                 //
                 // Why the rule and not raw compatibility: the read borrow
                 // declares **where a statement is**, so that an operation

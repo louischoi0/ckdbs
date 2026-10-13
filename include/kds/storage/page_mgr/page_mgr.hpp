@@ -9,11 +9,10 @@
 #include "kds/wal/durability.hpp"
 
 // Buffer pool / page manager: a fixed-capacity table of frames tracking
-// which pages are resident, with pin counts and dirty flags. Deliberately
-// a first cut - no eviction (a full pool is OutOfSpace) and no
-// dirty-list/checkpointer integration beyond exposing
-// is_dirty()/MarkClean(). Both are follow-ups; the frame-reclamation
-// policy is an open decision in CLAUDE.md.
+// which pages are resident, with pin counts and dirty flags. No eviction
+// (a full pool is OutOfSpace). Not on the server's path - the engine's
+// bounded pool is `storage::DevicePageStore` (eviction.md); this class
+// serves tests (and `BufferPoolCheckpointTarget`).
 //
 // **There is no copy here, and that is the thing to understand about this
 // file.** A buffer pool normally caches disk pages into RAM frames, which
@@ -26,9 +25,7 @@
 // storage medium - pin/unpin (so nothing frees or reuses a page a caller
 // still holds), dirty tracking (the integration point for a flush and
 // checkpointer), and bounded resident-page admission control (the fixed
-// frame count). Once a disk-backed PageStore is the norm here, Flush()
-// becomes real I/O instead of bookkeeping, and the API shape is meant to
-// survive that unchanged.
+// frame count).
 //
 // Concurrency: single-threaded - pin counts and frame state are plain
 // (non-atomic) fields, and nothing shares one PageMgr across threads
@@ -44,14 +41,9 @@
 // clean is by having been flushed. That is what "unbypassable" means in
 // page.md section 8, and page.md section 18-4 is the test for it.
 //
-// The wait is currently a synchronous EnsureDurable() on the injected
-// WalDurability seam rather than a task suspension: every I/O path in the
-// engine is still synchronous, so syncing the log inline *is* the wait,
-// and the flushing task has nothing to suspend into. When the reactor and
-// an async backend land, this becomes a suspension; the gate's position in
-// the code does not move. Time spent there is counted (stats().wal_waits)
-// because page.md section 11 wants flush stall attributable to WAL waits
-// as a product metric.
+// The wait is a synchronous EnsureDurable() on the injected WalDurability
+// seam. Time spent there is counted (stats().wal_waits), so flush stall is
+// attributable to WAL waits (page.md section 11).
 //
 // A pool with no seam injected may only flush pages that were never logged
 // (page_lsn 0). A dirty frame carrying a real page_lsn with no WAL to ask
@@ -157,9 +149,8 @@ public:
     // path without needing 4096 pages.
     explicit BufferPool(PageStore& backing, std::uint32_t nr_frames = kDefaultNrFrames);
 
-    // Injects the WAL-before-data seam. Null until the WAL is wired up on
-    // a given path, in which case the pool may only flush never-logged
-    // pages (see the file comment). `wal` must outlive the pool.
+    // Injects the WAL-before-data seam. While null the pool may only flush
+    // never-logged pages (see the file comment). `wal` must outlive the pool.
     void SetWalDurability(wal::WalDurability* wal) noexcept { wal_ = wal; }
     wal::WalDurability* wal_durability() const noexcept { return wal_; }
 

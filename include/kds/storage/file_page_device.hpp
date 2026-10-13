@@ -33,15 +33,13 @@
 // data and WAL on write-ordering, core-stalling, SIGBUS-error, and
 // testability grounds.
 //
-// O_DIRECT is not enabled yet: it is bound up with the still-open I/O
-// backend decision (CLAUDE.md), and it would impose alignment
-// requirements on caller buffers that the buffer pool's aligned slab
-// (page.md section 9) does not exist yet to satisfy. Nothing in this
-// class's shape blocks it later.
+// O_DIRECT is not used: the file is opened O_RDWR | O_CREAT | O_CLOEXEC,
+// and O_DIRECT would impose alignment requirements on caller buffers.
+// Nothing in this class's shape blocks it later.
 //
 // Concurrency: **reads and writes take no lock; growth takes one of its
-// own** (AM-R11, 2026-09-06; the growth half on the operator's decision of
-// 2026-09-08, `rules.md` §3's device row). Concurrent ReadPage/ReadPageRun
+// own** (AM-R11; the growth half on the operator's decision of 2026-09-08,
+// `rules.md` §3's device row). Concurrent ReadPage/ReadPageRun
 // of *distinct* pages from distinct threads is permitted by
 // `page_device.hpp`'s contract, and this class holds no per-read state to
 // synchronise: every transfer is a pread/pwrite at an offset computed from
@@ -49,8 +47,7 @@
 // no shared file offset; the caller owns the buffer; and the loop's
 // `offset`, `buffer` and `remaining` are locals. The one mutable member a
 // read touches is `page_capacity_`, and **any core may grow it**: a peer
-// allocating through the instance's free map reaches `EnsureCapacity`
-// (since `2663001`, and from two more paths since AW-S1b), so the field
+// allocating through the instance's free map reaches `EnsureCapacity`, so the field
 // is a `std::atomic<uint32_t>` - a reader loads a bound that only rises -
 // and the grow itself is serialised by `grow_mu_`, so two cores running
 // off the end of the file at once produce one `posix_fallocate` and one
@@ -61,15 +58,11 @@
 // across a park, since the grow is a synchronous syscall. **A page latch
 // is outer to it**: what reaches the grow is a split or a chain growth,
 // which holds its page exclusive across `PageStore::CreateNew()`
-// (`heap_chain.cpp`'s `tail_bytes`, `btree.cpp`'s `descent.leaf`). Neither
+// (`heap_chain.cpp`'s predecessor page, `btree.cpp`'s `descent.leaf`). Neither
 // of the store's own latches is held there - the frame table's structure
 // latch drops across the device read (`page.md` §6) and the free map's
 // `map_latch_` never spans device work (`page.md` §5) - so the order is
 // the page latch, then this, and nothing under it.
-//
-// (This said "core-local, like every PageDevice" until AM-R11, and "core 0
-// alone grows the file" until 2026-09-08; neither had been true since one
-// device began serving every core's store.)
 
 namespace kds::storage {
 
@@ -106,10 +99,7 @@ public:
     Status EnsureCapacity(std::uint32_t nr_pages) override;
 
     // fsync, not fdatasync: after EnsureCapacity() the file's size and
-    // block map have changed, and those are metadata. A data-only
-    // durability verb would be a separate entry point, added with the I/O
-    // backend decision that defines the metadata-durability contract
-    // (page.md section 14).
+    // block map have changed, and those are metadata (page.md section 14).
     Status Sync() override;
 
 private:

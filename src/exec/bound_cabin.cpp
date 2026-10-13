@@ -181,14 +181,11 @@ Status BoundCabin::AdoptGroupId(const std::string& key, std::uint32_t group_id) 
         // Refused rather than guessed: attributing it would need the allocation
         // order the id exists to replace.
         //
-        // **Not "a pre-AS6a stream", which an earlier comment here claimed.** A
-        // record written before the field existed does not decode `group_id` as
-        // 0 - `kAssertEntryFixedSize` grew 16 -> 20, so the field reads the
-        // *entry bytes* that used to start at offset 16, i.e. the pk's low 32
-        // bits. The genuinely-zero case is a **page** entry, which AST04 wrote as
-        // a literal zero, and the cabin-page walk skips those
-        // (`assertion_recover.cpp`). So this branch defends a corrupt or
-        // hand-built record, which is worth refusing on its own terms.
+        // A replayed record cannot legitimately carry 0 (a pre-AS6a record
+        // decodes other bytes there, since `kAssertEntryFixedSize` grew
+        // 16 -> 20); the zero case is a pre-AS6a **page** entry, which the
+        // cabin-page walk skips (`assertion_recover.cpp`). So this branch
+        // defends a corrupt or hand-built record.
         return Status::Corruption(
             "bound cabin: a replayed record carries group id 0, which is the reserved 'no group' "
             "value (docs/spec/assertion.md §5.1)");

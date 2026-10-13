@@ -12,23 +12,19 @@
 //
 // ---- Why one relation's spills leak and every other's does not -----------
 //
-// Since 2026-08-28 a rolled-back spill is released like any other write: the
+// A rolled-back spill is released like any other write: the
 // `VARHEAP_APPEND` is a link in the loser's own undo chain, so a live
-// rollback and recovery's undo phase both reach it. That closed the general
-// case and left one hole, which is what this file is for.
+// rollback and recovery's undo phase both reach it. This file covers the
+// one hole left.
 //
 // `exec::LogChainInsert` logs its spills under `wal::kNoTxnId`, and **one**
 // caller takes that path: the assertion catalog, which stores a
 // declaration's source text. `kNoTxnId` means *no transaction owns this
 // write*, so there is no undo chain to link the append into and no
 // compensation to run: a rolled-back `CREATE ASSERTION`'s spilled body
-// stays in the var-heap, referenced by nothing, forever.
-//
-// It was two callers until 2026-08-31 - `sys.pattern_defs` held `CREATE
-// PATTERN`'s body text the same way - and the operator's withdrawal of
-// declared patterns removed the second. The sweep is unchanged by that: the
-// hole is the `kNoTxnId` logging path, not the relation, so one caller
-// leaves it exactly as open as two did.
+// stays in the var-heap, referenced by nothing - as does a dropped
+// assertion's, whose retire releases nothing. The hole is the `kNoTxnId`
+// logging path, not the relation.
 //
 // **The answer is a sweep rather than an undo record**, and the reason is
 // the envelope rather than convenience. Giving these writes a real

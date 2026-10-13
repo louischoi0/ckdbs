@@ -12,14 +12,11 @@
 // names, move the two allocators past all of them - **before the store can
 // serve an allocation.**
 //
-// ---- The hazard, and a correction to how RV4 states it -------------------
+// ---- The hazard ----------------------------------------------------------
 //
-// RV4 words this as "the superblock's high-water mark is unlogged". The
-// superblock holds no such mark: `server/superblock.hpp` says in as many
-// words that it "deliberately does not hold allocation state - no page-id
-// counter, no total/free page counts", and that which ids exist is answered
-// by `DevicePageStore`'s free-map page. The *hazard* survives that
-// correction unchanged, because the free map is unlogged too:
+// Which page ids exist is `DevicePageStore`'s free map, not the superblock
+// (which holds no allocation state, `server/superblock.hpp`; RV4's wording
+// says otherwise), and the free map is unlogged:
 //
 //   1. a page is allocated - a bit set in the in-memory free map;
 //   2. its PAGE_INIT and its writes are logged, and the log is synced;
@@ -31,11 +28,8 @@
 // and that a durable undo record still points at by `(page_id, slot)`. It
 // is the difference between a leaked page and a corrupted one.
 //
-// Where the correction *does* bite is on how much is left to repair.
 // Redo's own `CreateAt()` re-establishes the bit for every page it writes
-// through a PAGE_INIT or a full page image, so the common case is already
-// closed by the phase before this one. What is not closed, and what makes
-// this task a fix rather than a formality:
+// through a PAGE_INIT or a full page image. What redo does not close:
 //
 //   - **a page the log names that redo never visits.** A CHECKPOINT_BEGIN
 //     dirty-page entry with a recLSN of 0 is dirty-but-described-by-no-
@@ -43,10 +37,9 @@
 //     ever set - and analysis still counts it in `max_page_id`, correctly,
 //     because the log named it.
 //   - **the floor itself.** `DevicePageStore::Open` starts every mount at
-//     the same constant `first_new_page_id`, which is a property of the
-//     build and not of the database in front of it. Safety today rests on
-//     the free map being complete; this makes it rest on the log instead,
-//     which is the one record a crash cannot revert.
+//     the same constant `first_new_page_id`, a property of the build; this
+//     makes safety rest on the log, which a crash cannot revert, rather
+//     than on the free map being complete.
 //
 // ---- What it costs -------------------------------------------------------
 //

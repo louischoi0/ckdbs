@@ -13,7 +13,7 @@
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/type_literals.hpp"
 
-// KWP v0's socket half (docs/inflight/in-progress/workplan-kwp-load.md KL02/KL03). The syscall
+// KWP v0's socket half (`workplan-kwp-load.md` KL02/KL03, at 1769487). The syscall
 // idioms are tcp_server.cpp's, including the MSG_NOSIGNAL lesson: a client
 // hanging up without reading must cost a closed connection, never the
 // process. Everything engine-shaped goes through CommandDispatcher's
@@ -314,12 +314,10 @@ bool KwpLoadServer::HandleFrame(int client_fd, Connection& conn,
                 CloseClient(client_fd);
                 return false;
             }
-            // **The one `S_HELLO` payload** (`wire::EncodeServerHello`).
-            // The frame *numbers* were unified on 2026-08-31; writing a
-            // different payload under a shared number is the same defect
-            // one layer in, and worse than the split was - a client pointed
-            // at the wrong endpoint used to fail on an unknown type and
-            // would now decode garbage.
+            // **The one `S_HELLO` payload** (`wire::EncodeServerHello`):
+            // the frame numbers are shared with the default port, so a
+            // different payload under the same number would decode as
+            // garbage at a client pointed at the wrong endpoint.
             //
             // This endpoint mints no session id and no cancel key: it has
             // no cancel connection and no session state to name, so both

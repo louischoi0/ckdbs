@@ -17,9 +17,9 @@
 // It holds the pair a kick needs - the destination's `sleeping` flag and its
 // `Waker`. Both halves belong to the destination's reactor.
 //
-// **This is the instance's only wake registry** (AU-S1b), and since AT-S10d
-// the only cross-core path there is: a stop, a lock-table decide and a
-// connection handoff kick through it.
+// **This is the instance's only wake registry** (AU-S1b), and every
+// cross-core wake kicks through it - a stop, a lock release, a ceiling
+// lift, a WAL sync for a parked commit, a connection handoff.
 //
 // ---- The seam, and why it is the table rather than the waker ------------
 //
@@ -27,20 +27,11 @@
 // `WakerTable` is its one production implementation. The interface exists for exactly one other
 // implementation, `SimWakerTable` (`sim_waker_table.hpp`), which *wraps* a
 // real table for the two-core rig: it logs `(tick, dst)` per kick and
-// forwards at a seeded tick. AU-R3 first placed the seam on `Waker` itself
-// ("a `Waker`-shaped seam"), and that could not be built: `Waker::Wake()`
-// is not virtual and `Kick` calls it statically, so a derived waker through
-// the table's pointer would run the base and write to an eventfd it does not
-// own (`workorder-av-two-core-rig.md` AV-R1). The operator took the table
-// instead (AV-R1's mark, 2026-09-07): `Waker` gains no vtable, the wake path
-// keeps its static call, and the cost sits on the *kick* path rather than
-// the wake's - one indirect call per cross-core `Kick`, and with it the
-// flag load and the skip behind a pointer the caller cannot devirtualize,
-// since what it holds may be the sim. That is the trade the mark accepts,
-// stated as what it is. What the wrap buys over a second implementation is
-// that there is no second implementation: the flag read and the skip
-// counter live once, below, and a rig cannot disagree with the protocol it
-// is testing.
+// forwards at a seeded tick. The seam is the table, not `Waker` (AV-R1,
+// 2026-09-07): `Waker::Wake()` stays non-virtual, and the cost is one
+// indirect call per cross-core `Kick`. Because the sim wraps rather than
+// reimplements, the flag read and the skip counter live once, below, and a
+// rig cannot disagree with the protocol it is testing.
 //
 // ---- Why the flag, and what a missed kick costs -------------------------
 //

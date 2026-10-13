@@ -10,12 +10,9 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/manager.hpp"
 
-// The records a row-codec system relation's writes owe the log - what
-// closed RV3's "Open remainder" (docs/workplan-rv3-catalog-recovery.md):
-// `sys.assertions` - and `sys.pattern_defs`, withdrawn 2026-08-31 - wrote
-// through ChainInsert and a VarHeapSink with nothing logged, so a
-// declaration survived a crash only to the last checkpoint, and for an
-// assertion that meant an *enforcing* constraint could vanish silently.
+// The records a row-codec system relation's writes (`sys.assertions`) owe
+// the log, so a declaration - an *enforcing* constraint - survives a crash
+// by redo rather than only to the last checkpoint (RV3).
 //
 // The order is the DML path's, and it is load-bearing (wal.md §11a): the
 // new page's PAGE_INIT and the spilled values precede the row record that

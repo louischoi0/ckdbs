@@ -20,10 +20,9 @@
 // by construction; the completion edges flow back through the controller's
 // `NoteCreated`/`NoteBuildFailed`/`NoteDropped`, which is PO5's lifecycle
 // executing "as single home-core steps". **A write can interleave with a
-// build's scan since AT-S5** - writes run on every core, so the AST06
-// builder's run-to-completion argument no longer covers it, and this path
-// does not announce: `BuildSeededSets` (the .cpp) and `known-gaps.md` say
-// what that loses and why it is sound today.
+// build's scan** (writes run on every core since AT-S5), so
+// `BuildSeededSets` announces each seed before its walk (`cabin.md` §6) and
+// the banking gate declines what the announce cannot cover (§6a).
 //
 // ---- What each action means in this engine -------------------------------
 //
@@ -34,8 +33,7 @@
 // and §II.5's "observation-based population" applies literally: the
 // ordinary n=2 machinery populates it from traffic. A **policy refusal**
 // (`NO CABIN`) parks the candidate in BUILDING rather than failing it
-// back to CANDIDATE: a permanent "no" retried every confirm cycle would
-// be churn wearing diligence's clothes.
+// back to CANDIDATE, so a permanent "no" is not retried every cycle.
 //
 // **EXTEND** is where the ring-routed build earns its keep: the seed is
 // `SightedUnobservedOf(cabin_id)` - the values traffic probed that no set
@@ -44,7 +42,7 @@
 // finished (the superset invariant's precondition, stated at both ends
 // exactly as the VM's recording branch states it). An **empty** collected
 // set commits too: an observed value with no rows is the authoritative
-// zero-rows answer, the thing a Cabin exists to give. The scan judges
+// zero-rows answer. The scan judges
 // rows by latest settled state (`txn::CheckVisibility`) and **aborts on a
 // busy row** - an in-flight writer's row can neither be counted nor
 // skipped without breaking completeness one way or the other (AST06's

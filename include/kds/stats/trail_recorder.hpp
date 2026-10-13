@@ -25,17 +25,15 @@
 // client ever sends; waiting longer misses short-lived hot instances. Two
 // is the smallest n that excludes the one-shot case.
 //
-// A **user-declared** pattern recorded at `n = 1` - a declaration was the
-// evidence n=2 waits for - until the operator withdrew declared patterns on
-// 2026-08-31. One threshold is the whole policy now, which is what lets the
-// recorder answer a first sighting without reading the catalog at all.
+// One threshold is the whole policy (user-declared patterns, recorded at
+// `n = 1`, were withdrawn on 2026-08-31), which is what lets the recorder
+// answer a first sighting without reading the catalog at all.
 //
 // ---- What this deliberately does not do ---------------------------------
 //
-// **Nothing reads a trail.** Replay is P11. Until it lands this class is
-// pure write side: it cannot change a query's result, only spend some
-// pages. That is what makes "results are identical with recording on and
-// off" checkable now rather than asserted.
+// **It does not read a trail.** Replay is `exec/trail_replay.cpp` (P11);
+// this class is pure write side and cannot change a query's result, only
+// spend some pages.
 //
 // **It never fails a statement.** Every path returns void. A trail that
 // cannot be written is a trail that does not exist, which is the state

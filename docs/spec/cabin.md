@@ -79,8 +79,8 @@ Two corollaries fall out:
   no multi-column keys, no range observation. The v1 shape is
   `Cabin(relation, column)` with per-value entry sets, full stop.
 - Single relation only. Join acceleration stays with Waystone (§7);
-  a Cabin never spans relations — the write hook must remain core-local
-  (§6).
+  a Cabin never spans relations, so the write hook touches one relation's
+  sets under one partition latch (§6).
 
 ## 3. Data model
 
@@ -134,8 +134,8 @@ parallel implementation — two verifiers would be where the bugs live):
 fetch hinted page → epoch match → Keystone id at slot equals entry pk →
 then the mandatory MVCC + key re-check of §4. Any failure falls back
 to pk descent — results never change — and the hint is **healed in
-place** after a successful fallback (cheap under core-local
-serialization, and WAL-free in the unlogged class of §9). Hints cost
+place** after a successful fallback (under the set's partition latch, and
+WAL-free in the unlogged class of §9). Hints cost
 nothing to produce: the recording scan and the insert hook both hold
 the location in hand when they write the entry. They also enable a
 serve-time optimization: sorting a value's entries by page_id batches
@@ -150,7 +150,8 @@ fallback**; nothing about the *data* influences the plan.
 
 At execution, for key value `v`:
 
-1. Probe the observed set (core-local hash over the directory).
+1. Probe the observed set (the instance's store, under the cabin's
+   partition latch).
 2. **Hit** → serve the entry set authoritatively. Per entry: try the
    location hint first (C6 verification — epoch, then id-at-slot);
    on hint failure resolve the pk via the clustered tree and heal the
@@ -312,8 +313,8 @@ value round-trip (`v→v′→v`) duplicates an id under append-only
 maintenance. Serving dedupes with a seen-set.
 
 Cost honesty: a relation with cabins pays one directory probe per write
-per Cabin. Core-local, in-memory, O(1) — but not zero, and it is the
-price of authority. Relations with no Cabin pay nothing.
+per Cabin. In-memory, O(1), one partition latch above one core — but not
+zero, and it is the price of authority. Relations with no Cabin pay nothing.
 
 ## 6. Why this is sound in KDS specifically
 
@@ -477,12 +478,10 @@ Distinct trust classes, cooperative operation; none replaces another:
   guessed from raw traffic: an auto-registered pattern's shape names the
   filtered columns, and the observed shape is the only source — there is
   no user-declared pattern.
-- **Waystone senses.** Per-instance `use_count` says how often a value
-  recurs; the recording scan measures its exact cardinality. Both are
-  measuring instruments for promotion (`cold → trail (advisory, free) →
-  Cabin (authoritative, earns its write hook)`, decided by §8.1's
-  controller). Waystone is Cabin's measuring instrument, not its
-  competitor.
+- **Waystone does not feed promotion.** A trail header's `use_count` is
+  written 0 and advanced by nothing, and §8.1's controller reads its own
+  three signals (`physical-optimizer.md` PO2); the recording scan measures
+  a value's exact cardinality. Waystone and Cabin are not competitors.
 - **Cabin serves; Waystone still accelerates.** In a chain like
   `…FROM account JOIN trade ON trade.account_id = account.id WHERE
   trade.sym = $sym`, the sym step is served by the Cabin
@@ -587,7 +586,9 @@ promise holds only while the system is up and the write hook is live, so
 a restart declares every Cabin fully unobserved and traffic rebuilds them
 — invariant-preserving by C1's own terms, and it keeps the write hook
 WAL-free (the probe+append never touches the log). The directory and the
-entry sets are core-local and memory-resident; no page class holds them.
+entry sets are the instance's one store (`stats/cabin_store.hpp`: 16
+partitions by `cabin_id`, a latch each, armed above one core only) and
+memory-resident; no page class holds them.
 The Bound class is logged (§12).
 
 ## 10. Catalog

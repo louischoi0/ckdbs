@@ -9,12 +9,10 @@
 //
 // ---- Why this exists ------------------------------------------------------
 //
-// Until it did, the server installed **no signal handling at all**: `systemctl
-// stop`, a container stop and Ctrl-C each terminated the process mid-flight, so
-// the final sync and the shutdown checkpoint never ran and the next mount
-// recovered as if from a crash. The only route to `Expeditor::Serve`'s shutdown
-// tail was a client typing `STOP`, which is not how anything is operated
-// (`docs/inflight/known-gaps.md`).
+// Without it `systemctl stop`, a container stop and Ctrl-C would terminate the
+// process mid-flight, so the final sync and the shutdown checkpoint would not
+// run and the next mount would recover as if from a crash; `STOP` reaches
+// `Expeditor::Serve`'s shutdown tail only from the debug text port.
 //
 // ---- Why a signalfd and not a handler ------------------------------------
 //

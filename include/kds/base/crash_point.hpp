@@ -4,17 +4,14 @@
 #include <string>
 #include <string_view>
 
-// Deterministic crash points, for the RP7 correctness gate
-// (`instructions/v2.4.0/2pc.md` §5: *"Kill -9 at each protocol point, on
-// each side"*).
+// Deterministic crash points: the process killing itself at a source line
+// it names, because a window microseconds wide is never hit by an external
+// killer and this host has no `gdb`. Built for the 2PC gate (RP7,
+// `instructions/v2.4.0/2pc.md` §5).
 //
-// Why this exists in the engine rather than in the harness. The protocol's
-// windows are microseconds wide, so an external killer racing them lands in
-// one essentially never - `bench/shipped_kill_recovery_probe.py` kills
-// "wherever it lands" and says so, which answers a different question. The
-// other way to stop a process at a named source line is a debugger, and
-// this host has no `gdb`. What is left is the process killing itself at a
-// line it names.
+// **No engine call site exists**: the cross-owner commit path's points
+// retired with 2PC (AT-S6; history at cf889b63). The facility and
+// `tests/crash_point_test.cpp` remain for the next protocol point.
 //
 // What "crash" means here is exactly what `kill -9` means: `SIGKILL` to
 // self. No destructor runs, no buffer is flushed, no `atexit` fires, and
@@ -28,10 +25,8 @@
 // environment cannot reach a kill. There is no config key, no `SHOW META`
 // field and no wire surface, so nothing a client can send arms one.
 //
-// Cost when unarmed - which is every production process - is an
+// Cost of a call when unarmed - every production process - is an
 // out-of-line call, the once-guard's acquire load, and an `empty()` test.
-// Its call sites on the cross-owner commit path retired with 2PC (AT-S6);
-// their history is at cf889b63.
 //
 // Syntax: `KDS_CRASH_POINT=<name>` fires at the first hit of `<name>`;
 // `KDS_CRASH_POINT=<name>:<n>` fires at the n-th (1-based). The ordinal is
@@ -58,7 +53,7 @@ CrashPointArm ParseCrashPointArm(std::string_view spec) noexcept;
 void CrashPointHit(std::string_view name) noexcept;
 
 // The armed point's name, or empty when nothing is armed. For tests of the
-// facility itself; the engine calls `CrashPointHit` only.
+// facility itself.
 std::string_view ArmedCrashPoint() noexcept;
 
 }  // namespace kds::base

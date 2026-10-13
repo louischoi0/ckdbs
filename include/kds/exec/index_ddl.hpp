@@ -20,16 +20,15 @@
 // which the catalog may know about. `Catalog::CreateIndex` takes the widths
 // already computed and writes the row.
 //
-// ---- Three halves (workplan-peer-writer.md §7c, PW1c-6b-1) ---------------
+// ---- Three halves ----------------------------------------------------------
 //
 // `CreateIndex` is `PrepareIndexDef`, then `BuildIndexTree`, then
-// `Catalog::CreateIndex`. The halves stay as the order the statement runs
-// in, with `CreateIndex` their one caller; the owner-built split that made
-// them three retired (AT-S5e), and its history is at cf889b63.
+// `Catalog::CreateIndex`, and is their one caller (the owner-built split
+// that made them three retired at AT-S5e; history at cf889b63).
 //
 // ---- The error / warning line --------------------------------------------
 //
-// The same line `cabin_ddl.hpp` and `pattern_ddl.hpp` draw. An **error** is a
+// The same line `cabin_ddl.hpp` draws. An **error** is a
 // declaration that could never do what it says - an index on a heap relation,
 // on the primary key, on a column the relation has not got, on a type with no
 // order. A **warning** is one that works and will disappoint.
@@ -83,8 +82,8 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(
 // root, or leaves an unreachable tree and no row: a failure here is the
 // safe direction, where a row over a partial tree would be a wrong answer
 // with a right answer's shape. Nothing can observe the half-built tree in
-// between - DDL is one statement on one cooperative thread.
-// `wal` null = unlogged, the pre-RV3 path every socket-free test runs.
+// between: no catalog row names it, and the caller holds the relation `X`
+// (AT-S5e). `wal` null = unlogged (tests).
 StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableAccess& access,
                                 const catalog::Catalog::IndexDef& def, std::uint64_t trx_id,
                                 wal::WalManager* wal);
@@ -97,7 +96,7 @@ std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
                                                const catalog::Catalog::IndexDef& def,
                                                std::string_view key_column);
 
-// The three halves back to back, for a relation whose pages this core owns.
+// The three halves back to back.
 //
 // `trx_id` / `written` make the DDL transactional
 // (workplan-ddl-transactional.md DT5): the catalog row is stamped with

@@ -27,21 +27,17 @@
 // Segment files are created at full size - posix_fallocate for the space
 // promise, then zero-filled and fsynced - so a later append cannot fail for
 // lack of space after the record it belongs to was already accepted, and so
-// the commit path never writes into an unwritten extent. That second half
-// is a latency property: converting a reserved extent to a written one is a
-// journal transaction, and paying it inside the fsync a commit waits for
-// measured as the difference between a ~950us flush and a ~2,100us one
-// (bench/results-scenario2-freight.md). Creation therefore costs one
-// sequential segment-sized write, and every commit-path Sync() is
-// data-only fdatasync.
+// the commit path never writes into an unwritten extent, whose conversion
+// is a journal transaction inside the commit's fsync (measured ~950us
+// against ~2,100us per flush). Creation therefore costs one sequential
+// segment-sized write, and every commit-path Sync() is data-only fdatasync.
 //
 // pwrite/pread rather than seek+write: no shared file offset means no
 // hidden state between calls, matching FilePageDevice.
 //
-// O_DIRECT is not enabled, for the same reason as FilePageDevice: it is
-// bound up with the still-open I/O backend decision (CLAUDE.md) and would
-// impose alignment requirements on the ring buffer that nothing satisfies
-// yet. Nothing here blocks it later.
+// O_DIRECT is not enabled, as for FilePageDevice: it is bound up with the
+// open I/O backend decision (wal.md section 2) and would impose alignment
+// requirements on the ring buffer that nothing satisfies.
 //
 // Concurrency: one device per stream, and the stream is either one core's
 // or the instance's (`wal/stream.hpp`, `wal/log_device.hpp`'s contract).
@@ -186,9 +182,7 @@ private:
     //
     // Over `dir_fd_`, which `Open` opened once and keeps: a roll at the
     // descriptor limit then fails at the segment's own open, before any
-    // file exists, rather than at the directory's after one does - which
-    // stranded a full-size headerless segment until BC-S2 (the bug entry,
-    // deleted with the fix, is at `19e1dc1f`).
+    // file exists, never stranding a headerless segment (BC-S2, `19e1dc1f`).
     Status SyncDirectory();
 
     std::string dir_;

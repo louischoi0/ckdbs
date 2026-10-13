@@ -62,19 +62,17 @@
 //
 // ---- What is injected, and why -----------------------------------------
 //
-// Both tables come from seams rather than concrete types. The transaction
-// manager does not exist yet, so ActiveTransactions is how the checkpoint
-// asks for the live set; and the superblock's per-core WAL anchor is a
-// *required but unlanded* spec amendment (wal.md section 14-3), so the
-// anchor is a seam with an in-memory implementation instead of a
-// superblock write this file would have to invent a format for. When the
-// amendment lands, a superblock-backed CheckpointAnchor drops in with no
-// change here.
+// The live set, the pages and the anchor come from seams, so this file
+// depends on neither the transaction layer nor the storage layer nor the
+// superblock: `txn::TransactionManager` is the ActiveTransactions,
+// `server::SuperBlockCheckpointAnchor` the anchor, and the storage
+// targets (`BufferPoolCheckpointTarget`, `PageStoreCheckpointTarget`) the
+// CheckpointTarget.
 
 namespace kds::wal {
 
-// The live transaction set at the moment of the snapshot. Implemented by
-// the transaction manager when it exists.
+// The live transaction set at the moment of the snapshot
+// (`txn::TransactionManager`).
 class ActiveTransactions {
 public:
     virtual ~ActiveTransactions() = default;
@@ -98,11 +96,9 @@ public:
 // RC07). A WAL-layer shape rather than `exec::BoundCabin`'s own, for the reason
 // `CheckpointTarget` is a seam: this file must not depend on the assertion
 // engine, and the assertion registry is what converts.
-// One group as the seam hands it over. The key is **owned** rather than a span:
-// a directory's keys live in its own headers, and every implementation of the
-// seam would otherwise have to keep a parallel buffer alive across the call -
-// which the first one written did, with a `mutable` vector, before this changed.
-// The checkpointer views into these when it encodes.
+// One group as the seam hands it over. The key is **owned** rather than a span,
+// so no implementation has to keep a parallel buffer alive across the call;
+// the checkpointer views into these when it encodes.
 struct AssertionSnapshotGroup {
     std::uint32_t group_id = 0;
     std::int64_t count = 0;
@@ -171,9 +167,9 @@ public:
 };
 
 // The pages a checkpoint has to get on disk, and the way to do it. The
-// per-core BufferPool is the real implementation (BufferPoolCheckpointTarget
-// below); the seam keeps this file from depending on the storage layer and
-// lets the crash tests drive a scripted one.
+// storage layer implements it (`storage/page_store_checkpoint_target.hpp`,
+// `storage/page_mgr/checkpoint_target.hpp`); the seam lets the crash tests
+// drive a scripted one.
 class CheckpointTarget {
 public:
     virtual ~CheckpointTarget() = default;
@@ -220,10 +216,8 @@ struct CheckpointAnchorRecord {
     Lsn redo_start_lsn = 0;
     Lsn durable_lsn = 0;      // stream's durable end when the anchor was published
     // Segment holding redo_start_lsn. Derivable from the LSN and the
-    // device's segment size, and recorded anyway so the anchor names the
-    // file recovery must open before it has a device to ask - the segment
-    // size is [OPEN] (wal.md section 15) and may differ from this build's
-    // default in a database written by another one.
+    // segment size (a format constant, wal.md section 4.1), and recorded so
+    // the anchor names the file recovery must open before it has a device.
     std::uint64_t segment_no = 0;
 };
 
@@ -246,8 +240,7 @@ public:
 };
 
 // Holds the last anchor in memory. Correct only for a process that never
-// restarts - it is what the tests use, and what runs until the superblock
-// amendment (wal.md section 14-3) lands.
+// restarts - the tests' anchor; the server's is `SuperBlockCheckpointAnchor`.
 class InMemoryCheckpointAnchor final : public CheckpointAnchor {
 public:
     Status Publish(const CheckpointAnchorRecord& anchor) override {
@@ -478,8 +471,8 @@ private:
     Status LogBegin(std::span<const CheckpointActiveTxn> active_txns,
                     std::span<const CheckpointDirtyPage> dirty_pages);
 
-    // AS6a: every live cabin's group headers, chunked so no record outgrows a
-    // segment. Emitted immediately after CHECKPOINT_BEGIN, which is what puts
+    // AS6a: every live cabin's group headers, chunked so no record outgrows
+    // `usable_payload_bytes()`. Emitted immediately after CHECKPOINT_BEGIN, which is what puts
     // the base ahead of every record folded onto it.
     Status LogAssertionSnapshots();
 

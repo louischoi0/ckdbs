@@ -23,13 +23,13 @@ assumed.
 Related documents: `heap-and-tuple.md` §7 (the normative relayout section
 this file expands), `rule-fixed-length-tuple.md` (tuple mobility),
 `eviction.md` (EV1's temperature hook), `pattern-tracking-levels.md`
-(decay-ranked trail eviction), `waystone-concpets.md` §3.1 (epoch validation),
+(decay-ranked trail eviction), `waystone-concpets.md` §2 rule 2 (epoch validation),
 `cabin.md` (relocation invariance), `index.md` (IX3),
 `txn.md` §4.1 (reader registration; the horizon's two consumers),
 `parser-v2.md` I7/V11.
 
 **On the numbering.** `eviction.md` EV1 and `pattern-tracking-levels.md`
-§3 cite "the physical-optimizer lazy-decay score (R1)", and **R1 is the
+cite "the physical-optimizer lazy-decay score (R1)", and **R1 is the
 lazy-decay score** here so those citations resolve. `parser-v2.md` I15
 also names an "R1" (the no-fetch-under-span rule): cite the file with the
 number.
@@ -232,7 +232,7 @@ The decisions that would open a gate are not recorded here.
 - **Waystone**: the recorder stores the page's current epoch in the trail
   entry; replay compares recorded against current, and a mismatch is a
   per-entry miss with the ordinary fall-through (`waystone-concpets.md`
-  §3.1 rule 2).
+  §2 rule 2).
 - **Cabin**: `CabinEntry::page_epoch` is recorded from the header and
   compared in `exec/tuple_verify.hpp` — the one shared verifier, so Waystone
   and Cabin get the real check at one site.
@@ -327,15 +327,10 @@ costs performance only, never correctness: stale hints heal on read,
 dangling entries are discarded, and a dropped Cabin merely returns the
 system to its baseline.
 
-The component carries the plain technical name — **cabin optimizer**
-(class `CabinOptimizer`) — rather than a frontier-lineage codename; it
-is engine machinery, not a user-facing storage concept like Keystone,
-Waystone, or Cabin.
-
-The cabin optimizer is one background controller for the instance that consumes
-workload statistics and issues a closed vocabulary of actions over
-Observational Cabins. It is experimental, runtime-switchable, and every
-decision it makes is logged with the inputs that produced it.
+It is one background controller for the instance, issuing a closed
+vocabulary of actions over Observational Cabins; experimental,
+runtime-switchable, and every decision is logged with the inputs that
+produced it.
 
 ## II.2 Decision Record
 
@@ -346,7 +341,7 @@ decision it makes is logged with the inputs that produced it.
 | PO3 | Decision model: **cost–benefit formula** (§II.4). Determinism requirements: the decision core is a **pure function** from a statistics snapshot to an action set, computed in **fixed-point integer arithmetic** (no floats), with hysteresis built in as asymmetric margin factors and cooldowns — a raw cost model oscillates; the margins are load-bearing, not tuning sugar. |
 | PO4 | Execution: **one controller for the instance**, ticked by a background-group task on core 0's cadence (AT-S8 step 3: every core's dispatcher is handed the one `OptimizerSurface` - the switch, the collector every core feeds, and the controller and executor behind a view latch). **A build announces each seed's set before its scan and asks the banking gate** (AY-S6; `cabin.md` §6, §6a), as the serve path's build does, so a write another core lands behind the walk is in the set it banks - which the foreign key's clearing return relies on (`foreign-keys.md` §3a). Until AY-S6 it walked and then committed, and such a write was lost. All build/extend scans go through the **scan ring (EV6)** — mandatory, so the cabin optimizer can never displace the foreground working set it is trying to serve. |
 | PO5 | Lifecycle state machine per managed Cabin: `CANDIDATE → BUILDING → ACTIVE → DECAYING → DROPPED`, with `DECAYING → ACTIVE` recovery on score rebound and `BUILDING → discard` on failure/interruption. All transitions execute as single steps of the controller's tick. |
-| PO6 | Budget: one page budget for the instance's optimizer-managed Cabins (`cabin_optimizer_page_budget`). Over-budget CREATE is admitted only in **exchange** for dropping the lowest-net-benefit ACTIVE Cabin (explicit replacement rule — optimization within a budget, not open-ended growth). Memory residency is the buffer pool's concern (Observational Cabin pages are evictable, EV3); this budget governs disk and upkeep. |
+| PO6 | Budget: one page budget for the instance's optimizer-managed Cabins (`cabin_optimizer_page_budget`). Over-budget CREATE is admitted only in **exchange** for dropping the lowest-net-benefit ACTIVE Cabin (explicit replacement rule — optimization within a budget, not open-ended growth). Observational entry sets are memory-resident (`cabin.md` §9), so a Cabin's "pages" are a pricing proxy, 1 + entries / 254 (`CabinOptimizerExecutor::PagesProxyOf`); the budget governs that size and upkeep. |
 | PO7 | Refresh strategy: quality surveillance, not eager maintenance. Hint-failure rate above threshold ⇒ HEAL; if quality does not recover after HEAL (e.g., mass relocation by bulk UPDATE) ⇒ DROP — demand, if real, re-nominates the candidate. "Discard and re-observe" over "repair at any cost" is the correct posture for advisory structures. |
 | PO8 | Safety: experimental status; runtime kill switch `SET cabin_optimizer = on\|off`. Turning off halts new decisions and in-flight builds but leaves existing Cabins untouched (no destructive path on disable). Every action is recorded in a decision log with the input-score snapshot. |
 | PO9 | Observability: `SHOW CABIN_OPTIMIZER` — per managed Cabin: state, net-benefit score, hint hit rate, coverage, pages, last action + reason; production counters per action type and budget utilization; ANALYZE's Cabin-hit output carries `cabin_optimizer=true` on an optimizer-managed Cabin. |
@@ -410,14 +405,12 @@ C(c) = P_rel / T_amort  +  h_fail(c) × f_lookup(c) × k_heal
   pages) amortized over window `T_amort`, expressed in R1 decay
   half-lives so build cost and benefit decay on the same clock.
   **`T_amort` is 64 half-lives** (`cabin_optimizer_amort_windows`; 0 is
-  refused, since a zero window prices every Cabin free). The value was
-  chosen from a business-days scenario measured against the `bench/` tree
-  at `1769487`: survival is log₂(B/C) + 2×T_amort half-lives of silence,
-  a market overnight at the default 600 s half-life is ~105 half-lives,
-  and at a window of 1 the lifecycle is a nightly rebuild loop by the
-  model's own arithmetic. The window is **one belief read by both
-  sides**: raising it lowers the admission bar by the same factor (a
-  structure serving for a day need only pay for itself over a day), and
+  refused, since a zero window prices every Cabin free), chosen so a
+  Cabin survives a market overnight (~105 half-lives at the default 600 s;
+  survival is log₂(B/C) + 2×T_amort half-lives of silence) where a window
+  of 1 is a nightly rebuild loop (a business-days scenario against
+  `bench/` at `1769487`). The window is **one belief read by both
+  sides**: raising it lowers the admission bar by the same factor, and
   PO6's budget, not the bar, bounds the population.
 - `h_fail` — hint failure rate (S3), `f_lookup` — decayed lookup
   frequency, `k_heal` — pages per heal event (PROPOSED 2).
@@ -487,9 +480,8 @@ waits. This makes the budget a solved ranking problem, not a growth valve.
   widening if the decision so specifies). Interruption or kill-switch ⇒
   discard, log, return to CANDIDATE.
 - **ACTIVE**: normal advisory service; quality counters accumulate.
-- **DECAYING**: no EXTEND/HEAL spending; pages remain (buffer pool evicts
-  cold ones naturally per EV3); recoverable.
-- **DROPPED**: pages reclaimed, catalog state removed, decision logged.
+- **DECAYING**: no EXTEND/HEAL spending; the sets remain; recoverable.
+- **DROPPED**: sets discarded, catalog state removed, decision logged.
   Re-nomination starts from scratch as CANDIDATE.
 
 Jurisdiction invariant: the cabin optimizer enumerates only Observational
@@ -513,7 +505,8 @@ Cabins and manually-declared Cabins are invisible to it.
 The cabin optimizer does not relocate or cluster heap tuples (Part I's
 gated territory); does not manage Bound Cabins (assertion-owned,
 permanently outside its jurisdiction); takes no buffer-pool-miss signal,
-coordinates across no cores, and uses no learned decision model (a learned
+runs no per-core controller (PO4: one for the instance), and uses no
+learned decision model (a learned
 model conflicts with the determinism contract); creates and drops no
 index — its vocabulary is Cabins only; and accepts no user-facing hint
 (`PIN`, `FORBID`).

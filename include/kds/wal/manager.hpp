@@ -26,9 +26,8 @@
 // the split is what keeps "D2 batches, D1 does not" from being smeared
 // through the append path.
 //
-// Concurrency: **one manager per core, over a stream that is either that
-// core's or the instance's** (AR0 M0, `instructions/v3.0.0/workorder-al-m0-single-wal.md`
-// AL-R1). Everything a manager holds itself - the statistics, the group
+// Concurrency: **one manager per core, over the instance's one stream**
+// (AR0 M0, `instructions/v3.0.0/workorder-al-m0-single-wal.md` AL-R1). Everything a manager holds itself - the statistics, the group
 // batch, the D3 clock - is its core's and is touched by no other thread.
 // The page store keeps that by asking each core's own manager for its
 // writebacks (`SetCoreWalGate`, BA-S1), and `Sync()`'s owning arm checks
@@ -135,20 +134,10 @@ struct WalStats {
     std::uint64_t group_commits = 0;    // D2 commits registered
     std::uint64_t group_batches = 0;    // syncs that resolved at least one
 
-    // **The batch's spread, not just its mean.** `mean_group_batch_size()`
-    // below answers "how much amortisation happened"; these two answer
-    // "was it the same every time", which is the question a mean cannot.
-    // Added 2026-09-02 to decide one specific reading: the batch measures
-    // `n/2` at every session count (`bench/peer_group_batch_probe.py`), and
-    // the explanation offered for it - that a session awaiting its reply
-    // cannot stage, so half the population is always out of the running -
-    // predicts a **tight** distribution at n/2. A mix of full and singleton
-    // batches averaging the same number would mean something else entirely,
-    // and the mean cannot tell those apart.
-    //
-    // `group_batch_min` is over **non-empty** batches, so it is never the 0
-    // a sync with nothing staged would contribute; 0 means no batch has
-    // completed, which is what `group_batches == 0` says too.
+    // The batch's spread, which `mean_group_batch_size()` cannot show
+    // (added 2026-09-02 to tell a tight n/2 batch from a mix of full and
+    // singleton batches). `group_batch_min` is over non-empty batches; 0
+    // means no batch has completed, as `group_batches == 0` says too.
     std::uint64_t group_batch_max = 0;
     std::uint64_t group_batch_min = 0;
     std::uint64_t relaxed_commits = 0;
@@ -166,13 +155,9 @@ struct WalStats {
     std::uint64_t ring_full_drains = 0;
 
     // Appends that exhausted `kRingDrainAttempts` and were refused
-    // `OutOfSpace`. **A different event from the one above and a far worse
-    // one**: a drain that worked cost the appender a synchronous flush, and
-    // this is a statement that failed. It became reachable when AL-R1
-    // replaced the single retry with a bound - under an unshared ring one
-    // drain was a proof of progress - so nothing counted it before and a
-    // shared ring is exactly where it can happen. Zero is the expected
-    // reading at every load; nonzero is a sizing bug, not a slow device.
+    // `OutOfSpace` - a failed statement, not a stall (reachable since AL-R1
+    // bounded the retry over a shared ring). Zero is the expected reading at
+    // every load; nonzero is a sizing bug, not a slow device.
     std::uint64_t ring_full_refusals = 0;
 
     // Mean records per group-commit sync, the number section 16-7 is
@@ -250,17 +235,10 @@ public:
     Lsn flushed_lsn() const noexcept { return stream_->flushed_lsn(); }
 
     // WalDurability. The comparison against a record LSN is strict - see
-    // durability.hpp.
-    // **The writer thread's watermark, not the stream's** (wal/writer.hpp).
-    // The stream stages bytes and writes them into the page cache; making
-    // them durable belongs to the writer, so it owns the number that says
-    // so. Without a writer - every in-process test, every tool - the stream
-    // syncs on the caller's stack and its own watermark is the answer.
-    // **The higher of the two watermarks**, because two things can make
-    // bytes durable now: the reactor, for any sync a caller is waiting on,
-    // and the writer thread, for D3's loss-window tick that nobody waits
-    // on (DrainOnce). Both only ever move forwards, so the max is the
-    // answer and neither can pull it back.
+    // durability.hpp. **The higher of the stream's and the writer's
+    // watermarks**: a sync on the caller's stack moves the first, one the
+    // writer thread performs moves the second (writer.hpp). Both only move
+    // forwards, so the max is the answer; with no writer it is the stream's.
     Lsn durable_lsn() const noexcept override {
         const Lsn by_stream = stream_->durable_lsn();
         const Lsn by_writer = writer_ != nullptr ? writer_->durable_lsn() : 0;
@@ -288,14 +266,10 @@ public:
     void StartWriter();
 
     // The writer thread's own device syncs and failures; 0 where no writer
-    // was started (XD0, `instructions/v2.7.1/measurement-xd.md`). The
-    // other half of this core's device cost - `stats().syncs` is the rest.
-    //
-    // **0 on an attached manager, and that is the truthful per-core
-    // answer**: the writer is the instance's, not this core's, and every
-    // reader of these is per core (`SHOW META`, whose fields are summed by
-    // nobody but would be wrong to sum if N cores each reported the same
-    // shared count). The instance's number lives on the owner.
+    // was started - `stats().syncs` is the rest of this core's device cost.
+    // **0 on an attached manager**: the writer is the instance's, so its
+    // count lives on the owner and no per-core reader (`SHOW META`) counts
+    // it N times.
     std::uint64_t writer_syncs() const noexcept {
         return owned_writer_ != nullptr ? owned_writer_->syncs() : 0;
     }
@@ -304,12 +278,9 @@ public:
     }
     Status EnsureDurable(Lsn lsn) override;
 
-    // Appends one record and returns its LSN. A full ring is drained
-    // inline rather than reported: every I/O path is still synchronous, so
-    // the flush *is* the drain wal.md section 6-4 tells the appender to
-    // wait for, and there is no reactor to suspend into. When the async
-    // backend lands this becomes a real suspension and the signature does
-    // not change. The stall is counted either way (stats().ring_full_drains).
+    // Appends one record and returns its LSN. A full ring is drained inline
+    // (wal.md section 6-4's wait), up to `kRingDrainAttempts` times, then
+    // refused `OutOfSpace` (stats().ring_full_drains / ring_full_refusals).
     StatusOr<Lsn> Append(const RecordSpec& spec, std::span<const std::byte> payload = {});
 
     // Appends TXN_COMMIT and applies `durability`, returning the commit
@@ -453,8 +424,7 @@ private:
     // **Blocking**: on return every byte staged when the call began is on
     // the platter, or a failure says why. On an owning manager that is the
     // device sync, on this thread. On an attached one it is a flush, a
-    // request to the writer, and a wait on the writer's watermark - the
-    // same wait, one hand-off further away (AL-2 owes the measurement).
+    // request to the writer, and a wait on the writer's watermark.
     // The three callers are the ones whose whole meaning is "wait": a D1
     // commit, `EnsureDurable`'s gate, and `SyncAll`.
     Status Sync();
@@ -472,11 +442,9 @@ private:
     std::unique_ptr<WalStream> owned_stream_;
 
     // Null until StartWriter() on an owning manager; the instance's on an
-    // attached one. On an owning manager it takes D3's loss-window tick
-    // and nothing else - every waited-on sync stays on the reactor, in
-    // Sync() (this comment claimed the opposite until XD0 read the code,
-    // `instructions/v2.7.1/measurement-xd.md`). On an attached manager it
-    // takes every sync, waited on or not.
+    // attached one. On an owning manager it takes what StartWriter() lists -
+    // D3's tick and the `RequestSyncNow` syncs - while Sync() stays on the
+    // reactor. On an attached manager it takes every sync.
     WalWriter* writer_ = nullptr;
     std::unique_ptr<WalWriter> owned_writer_;
     const sched::Clock& clock_;

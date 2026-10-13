@@ -13,15 +13,9 @@ namespace kds::parser {
 namespace {
 // SUS-1's bypass (parser.hpp).
 //
-// **Atomic, and the first version's argument for a plain `bool` was wrong.**
-// It said "one statement parses at a time per core" - true of the *reads*,
-// and silent about the writes. `SuspendHeapStorageForTest` writes this from
-// a cell while the binary's multi-threaded reactor fixtures may be parsing
-// on another thread. gtest is sequential so it is safe today, but AS-R6's
-// resume condition is "at `cores = 4` **under tsan**", and a plain bool
-// written from one thread while another reads it is a race tsan reports
-// whether or not it can hurt. Relaxed ordering: nothing is published through
-// this flag, so there is nothing to order against it.
+// **Atomic**: `SuspendHeapStorageForTest` writes it from a cell while a
+// multi-threaded reactor fixture may parse on another thread, a race tsan
+// reports (AS-R6 runs under tsan). Relaxed: nothing is published through it.
 std::atomic<bool> g_heap_storage_allowed_for_test{false};
 }  // namespace
 
@@ -101,11 +95,9 @@ std::string_view Describe(const Token& tok) {
 
 // The aggregate `name` spells, or false if it spells none.
 //
-// `AVG` was deliberately absent until 2026-08-07, when aggregate.md
-// §10's open question was decided (see AggFunc's note in ast.hpp); the
-// grammar half is now ordinary and the type half - decimal columns only -
-// is the compiler's `CheckAggregateArgType`, where every other per-type
-// aggregate rule already lives.
+// `AVG`'s type rule - decimal columns only (aggregate.md §10, 2026-08-07) -
+// is the compiler's `CheckAggregateArgType`, with every other per-type
+// aggregate rule.
 bool AggFuncOf(std::string_view name, AggFunc& out) noexcept {
     if (IEquals(name, "COUNT")) { out = AggFunc::kCount; return true; }
     if (IEquals(name, "SUM")) { out = AggFunc::kSum; return true; }
@@ -129,15 +121,10 @@ Status Parser::ExpectKeyword(std::string_view keyword) {
 Status Parser::ExpectToken(TokenType type, std::string_view desc) {
     Token tok = lexer_.Next();
     if (tok.type != type) {
-        // **The byte, on every refusal this function produces.** CLAUDE.md's
-        // rule is engine-wide - "every refusal carries the byte position of
-        // the offending token" - and this one function is the shortest path
-        // between a grammar production and a message, so a production that
-        // routes its arity error through it used to lose the position
-        // silently. `char(8, 1)` and `decimal(8)` were both landing here
-        // without one (the phase-A review's C-1); fixing it here rather
-        // than at each call site is what keeps a future production from
-        // inheriting the same gap.
+        // **The byte, on every refusal this function produces** (the
+        // engine-wide position rule): many productions route their arity
+        // errors through here (`char(8, 1)`, `decimal(8)`), so it is fixed
+        // once rather than at each call site.
         return Status::InvalidArgument("expected " + std::string(desc) + ", got '" +
                                         std::string(Describe(tok)) + "' at byte " +
                                         std::to_string(tok.byte_offset));
@@ -264,18 +251,9 @@ void Parser::ConsumeOptionalSemicolon() {
 StatusOr<AstValue> Parser::ParseValue() {
     Token tok = lexer_.Next();
 
-    // Every literal carries where it was written, not just `$param`.
-    // A literal is now something a *later* stage can reject - the step
-    // compiler coerces one against its column's type (types.md §3.1),
-    // and `WHERE d = '2026-02-30'` fails there, long after the token is
-    // gone. Without the offset that failure can only say which column it
-    // was about; with it, it can point at the byte.
-    //
-    // Nothing downstream compares it: chain identity renders operand
-    // *values* (the aggregate contract suite's RenderOperand), Cabin keys
-    // are built from the value's kind and contents, and the fingerprint is
-    // folded from tokens. So this adds a fact to error messages and
-    // changes no plan, no `pattern_id`, and no comparison.
+    // Every literal carries where it was written, so a later stage's
+    // refusal (the compiler's type coercion, types.md §3.1) can name the
+    // byte. Nothing compares it (AstValue::byte_offset).
     switch (tok.type) {
         case TokenType::kIntLit: {
             AstValue v;
@@ -315,15 +293,10 @@ StatusOr<AstValue> Parser::ParseValue() {
             return v;
         }
         case TokenType::kNamedParam:
-            // Accepted by **no** production. It was legal in exactly one
-            // place - the body of a `CREATE PATTERN` - and the operator
-            // withdrew that grammar on 2026-08-31, so `$x` now reaches this
-            // refusal wherever it is written. The token still lexes and
-            // still fingerprints as a value (token.hpp): it stays reserved
-            // for the extended protocol's named binds (D4), and refusing it
-            // by name and position is what tells a client that, rather than
-            // leaving them to read "expected value" and guess the sigil was
-            // a typo.
+            // Accepted by **no** production (`CREATE PATTERN`, its one
+            // user, was withdrawn 2026-08-31). The token stays reserved for
+            // the extended protocol's named binds (D4) and is refused here
+            // by name and position rather than as "expected value".
             return Status::Unsupported("parameter '$" + std::string(tok.text) +
                                        "' is not bindable in the newline protocol (byte " +
                                        std::to_string(tok.byte_offset) + ")");
@@ -1103,11 +1076,9 @@ StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubquery(std::uint32_t depth)
 
 StatusOr<std::shared_ptr<SelectStmt>> Parser::ParseSubqueryAfterOpen(std::uint32_t select_depth,
                                                                       std::uint32_t* close_at) {
-    // One token of lookahead is enough to know a subquery from anything
-    // else here, because a predicate has no parenthesized expressions (spec
-    // I10; a SET value tells its own `(` apart before calling this) - a '('
-    // in predicate position can only open a SELECT or a value list, and the
-    // value list is V08's.
+    // Every caller has already told its `(` apart - a WHERE group (BU-S1),
+    // an `IN` value list, a SET value - and calls this only where a subquery
+    // is the one legal form, so anything but SELECT here is refused.
     const Token& head = lexer_.Peek();
     if (head.type != TokenType::kIdent || !IEquals(head.text, "SELECT")) {
         return Status::InvalidArgument("expected a subquery `(SELECT ...)`, got '" +
@@ -1224,13 +1195,8 @@ StatusOr<BoolExpr> Parser::ParseOneCondition(std::uint32_t depth) {
         return ParseValueList(std::move(cond.col), negated, at);
     }
 
-    // `col BETWEEN <low> AND <high>`. Half of workplan V08; the value list
-    // above is the other half (BU-S2).
-    //
-    // Costs the fingerprint nothing: `BETWEEN` has been a reserved keyword
-    // since V04 and a keyword hashes exactly as the identifier it used to
-    // be, so every pattern_id for a statement containing one is unchanged
-    // by this becoming parseable. The corpus pins that.
+    // `col BETWEEN <low> AND <high>` (V08). Free to the fingerprint: a
+    // keyword hashes as an identifier, which the corpus pins.
     if (form.type == TokenType::kKeyword && form.kw == Keyword::kBetween) {
         lexer_.Next();
         cond.kind = PredicateKind::kBetween;
@@ -1751,20 +1717,12 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
     // both have to hash, since CREATE is not patternable. Anything else is
     // left untouched for the trailing-garbage check at the top level.
     //
-    // The key-mode words are what the 2026-08-25 removal left behind:
-    //
-    //   `EXPLICIT` is **accepted and does nothing**. It used to select a
-    //   mode; it now states what is true of every relation - the caller may
-    //   name this relation's keys - so accepting it keeps written SQL
-    //   working and says nothing false. It sets no field because there is no
-    //   field left to set.
-    //
-    //   `ASSIGNED` is **refused**, `Unsupported` with its byte. Accepting it
-    //   would be accepting a spelling and enforcing something other than
-    //   what was written (CLAUDE.md's truthfulness rule): the word means
-    //   "the engine issues every id and supplying one is refused", and on
-    //   the relation this statement creates, supplying one is admitted.
-    //   Ignoring it would be worse than refusing it.
+    // The key-mode words, since the mode's removal (2026-08-25):
+    // `EXPLICIT` is **accepted and does nothing** - it states what is true
+    // of every relation, that the caller may name keys. `ASSIGNED` is
+    // **refused** `Unsupported` with its byte: it means "supplying an id is
+    // refused", which this relation would not enforce (the truthfulness
+    // rule).
     bool storage_given = false;
     bool key_word_given = false;
     for (;;) {
@@ -1788,18 +1746,10 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
                     std::to_string(word.byte_offset) + ")");
             }
             // **SUS-1: heap relations are suspended.** Refused rather than
-            // quietly turned into a btree, for the reason `ASSIGNED` below
-            // is refused rather than ignored: accepting a spelling and
-            // enforcing something else is the one thing CLAUDE.md's
-            // truthfulness rule forbids outright.
-            //
-            // `Unsupported` is the operator's choice (AS-R1) and it stretches
-            // `status.hpp`'s test, which reads it as "what the architecture
-            // cannot admit" - the heap is *built*, and every existing heap
-            // relation still mounts and serves. That is why the message
-            // carries the reason and names the order: a reader who meets
-            // only the code would conclude the engine cannot do something it
-            // plainly can.
+            // quietly turned into a btree (the truthfulness rule).
+            // `Unsupported` is the operator's choice (AS-R1) though the heap
+            // is built and existing heaps still serve, so the message
+            // carries the reason and names the order.
             if (is_heap && !HeapStorageAllowedForTest()) {
                 return Status::Unsupported(
                     "HEAP storage is suspended (SUS-1) and no new heap relation is created "
@@ -1835,12 +1785,9 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
     return stmt;
 }
 
-// `CREATE PATTERN` / `DROP PATTERN` and their two bracketed-list helpers
-// stood here until 2026-08-31, when the operator withdrew user-declared
-// patterns (`docs/spec/create-pattern-user-defined-patterns-v1.md`, marked
-// withdrawn and kept as the design record). Nothing took their place: the
-// `$param` production above is now a refusal, and a pattern is what the
-// fingerprint and `sys.patterns` say it is.
+// `CREATE PATTERN` / `DROP PATTERN` were withdrawn on 2026-08-31
+// (`docs/spec/create-pattern-user-defined-patterns-v1.md`); nothing took
+// their place.
 
 StatusOr<CabinStmt> Parser::ParseCabin(bool drop) {
     CabinStmt stmt;
@@ -1985,12 +1932,9 @@ StatusOr<IndexStmt> Parser::ParseIndex(bool drop) {
 // `{CREATE | DROP} NAMESPACE <name>` (AF-T3, AF-6's operator-taken shape
 // (a)), with both leading words already consumed.
 //
-// `NAMESPACE` is matched by text like every clause head this grammar has
-// grown, so **nothing is reserved by it**: a column may still be named
-// `namespace`, and `kFingerprintVersion` does not move - a keyword hashes
-// exactly as an identifier does (fingerprint.hpp's bump rule, which asks
-// whether an *already fingerprintable* statement would hash differently;
-// this statement did not parse at all before).
+// `NAMESPACE` is matched by text, so **nothing is reserved by it**: a
+// column may still be named `namespace`, and CREATE/DROP are not
+// patternable, so no fingerprint moves.
 //
 // There is no `IF NOT EXISTS`: implicit or absorbed creation is exactly
 // what made shape (b) lose, because it leaves a typo indistinguishable from
@@ -2026,11 +1970,12 @@ StatusOr<NamespaceStmt> Parser::ParseNamespace(bool drop) {
 // and then discovered unenforceable by a builder or - worse - by a write path.
 // The refusals split three ways and the split is deliberate:
 //
-//   * `Unsupported` for a form this engine understands and declines - a lower
-//     bound (AS11), `DEFERRABLE` (AS3), `NOT VALID` (AS7), an aggregate
-//     outside {COUNT, SUM} (§10). These are reserved grammar: they parse, so
-//     the answer names the decision rather than pointing at a syntax error
-//     somewhere else, and the grammar will not shift when any of them lands.
+//   * `NotImplemented` for a form nobody built - a lower bound or `=`
+//     (AS11), an aggregate outside {COUNT, SUM} (§10), `DISTINCT`,
+//     `COUNT(<column>)` - and `Unsupported` for the constraint-timing
+//     clauses the architecture declines (`DEFERRABLE` AS3, `NOT VALID` AS7).
+//     These are reserved grammar: they parse, so the answer names the
+//     decision rather than pointing at a syntax error somewhere else.
 //   * `InvalidArgument` for a declaration that is simply wrong - a negative
 //     bound, `!=`, a degenerate predicate that could never admit a row.
 //   * Nothing at all for the catalog's questions. Whether the relation
@@ -2204,15 +2149,9 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
             return Status::Unsupported("an assertion bound takes a relational operator (byte " +
                                        std::to_string(op_at) + ")");
         case CompareOp::kEq:
-            // **AS11 as revised 2026-08-08.** `=` was briefly accepted and
-            // documented as meaning `aggregate <= N`. That is refused now,
-            // and the reason is truthfulness rather than cost: the engine
-            // would have enforced something other than what the operator
-            // wrote, and a constraint that quietly means less than it says is
-            // worse than one that is refused outright. Enforcing real
-            // equality means enforcing a *lower* bound too, which is the
-            // DELETE and decreasing-UPDATE write path v1 excludes - so `=`
-            // costs exactly what `>=` costs, and is refused beside it.
+            // AS11 (revised 2026-08-08): reading `=` as `<=` would enforce
+            // less than was written, and real equality needs the lower
+            // bound v1 excludes - so `=` is refused beside `>=`.
             return Status::NotImplemented(
                 "equality assertions (=) are not supported (byte " + std::to_string(op_at) +
                 "); enforcing = means enforcing a lower bound, which v1 excludes, and reading "
@@ -2579,18 +2518,12 @@ Status Parser::ParseGroupBy(SelectStmt& stmt) {
 // aggregate name it through one production. Sharing it is what keeps
 // `count(distinct x)` mean the same thing in a select list and here.
 //
-// What this production decides is shape, and it decides three things: the
-// conjuncts are AND-combined, `IS [NOT] NULL` is a predicate with no right
-// side, and every other right side is a **literal**. The last is the one
-// worth arguing: a post-fold predicate has no row to read a column from,
-// and an aggregate on the right would need an expression grammar this
-// language does not have (AG9's argument, two clauses over). Both are
-// refused here with the offending token's own byte rather than left to
-// fail as trailing garbage somewhere past it.
-//
-// What it does *not* decide: whether the aggregate typechecks, and whether
-// a plain column is a grouping key. Both are catalog questions, and HV-2
-// answers them where catalog knowledge lives.
+// What this production decides is shape: the conjuncts are AND-combined,
+// `IS [NOT] NULL` has no right side, and every other right side is a
+// **literal** - a post-fold predicate has no row to read a column from.
+// A column or aggregate on the right is refused here with its own byte.
+// Typing and grouping-key questions are the compiler's - which today
+// refuses every HAVING `NotImplemented` (step_compiler.cpp).
 Status Parser::ParseHaving(SelectStmt& stmt) {
     for (;;) {
         HavingCondition cond;
@@ -2697,19 +2630,14 @@ Status Parser::ParseHaving(SelectStmt& stmt) {
 // the column exists, and whether the order asked for is one the chain
 // already emits are all catalog questions, answered in the compiler (OB3).
 //
-// Tokens from `Peek()` are bound **by value** throughout. A reference is
-// safe today only because `Token` is trivially copyable and `Next()`
-// leaves the peeked token intact; the day `Token` owns anything, every
-// reference held across a `Next()` becomes a use-after-move, silently.
+// Tokens from `Peek()` are bound **by value** throughout: a reference held
+// across a `Next()` is safe only while `Token` owns nothing.
 Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint32_t depth) {
     if (const Token order = lexer_.Peek();
         order.type == TokenType::kIdent && IEquals(order.text, "ORDER")) {
-        // Over aggregated output this used to be a refusal citing "an
-        // output sort this engine does not have". The sort exists (OB4) and
-        // `docs/inflight/in-progress/workplan-having.md` HV4 decides the half AG's `[PROPOSED]`
-        // row left open, so the clause is parsed over a fold too - with an
-        // aggregate admitted as a key, since `ORDER BY COUNT(*)` names
-        // something no column reference can.
+        // Parsed over a fold too, with an aggregate admitted as a key
+        // (`docs/inflight/in-progress/workplan-having.md` HV4); the compiler
+        // refuses an aggregated ORDER BY `NotImplemented` (step_compiler.cpp).
         //
         // A subquery's rows feed a predicate - IN's set, EXISTS's witness,
         // a scalar's one value - and no order of them is observable, so an
@@ -3025,9 +2953,8 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
 
     // HAVING is read by text exactly where it would be written, past the
     // GROUP BY list and before the tail, and it is the third thing that can
-    // make a statement aggregated (HV-1). AG7's refusal used to be here;
-    // `docs/inflight/in-progress/workplan-having.md` retracts it, and the clause it refused is
-    // now parsed in its place.
+    // make a statement aggregated (HV-1). It is refused `NotImplemented` at
+    // compile (step_compiler.cpp).
     if (const Token having = lexer_.Peek();
         having.type == TokenType::kIdent && IEquals(having.text, "HAVING")) {
         lexer_.Next();
@@ -3307,11 +3234,10 @@ StatusOr<Statement> Parser::Parse() {
             stmt = std::move(s.value());
         }
     } else if (IEquals(tok.text, "DROP")) {
-        // Tables, cabins, indexes and assertions can be dropped; saying so
-        // here beats a syntax error that points at the object's name - the
-        // list in the message is the whole of what exists. `DROP PATTERN`
-        // was in it until 2026-08-31, when the operator withdrew declared
-        // patterns, and it is now refused by that list like any other word.
+        // Tables, namespaces, cabins, indexes and assertions can be
+        // dropped; saying so here beats a syntax error that points at the
+        // object's name - the list in the message is the whole of what
+        // exists (`DROP PATTERN`, withdrawn 2026-08-31, is refused by it).
         const Token& what = lexer_.Peek();
         if (what.type == TokenType::kIdent && IEquals(what.text, "INDEX")) {
             lexer_.Next();

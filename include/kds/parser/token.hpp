@@ -9,18 +9,13 @@
 //
 // `Token::text` is a `std::string_view` **into the statement the lexer was
 // given**, not a copy of it. A `Token` is therefore trivially copyable and
-// costs nothing to move around, and lexing a statement allocates nothing at
-// all - where it used to allocate one `std::string` per identifier or
-// literal longer than the small-string limit, which on a statement with
-// real relation names is most of them.
+// costs nothing to move around, and lexing a statement allocates nothing.
 //
 // **The rule that makes this safe: a token must not outlive the SQL it was
-// lexed from.** In practice tokens never escape a parse - the AST copies
-// every name and value it keeps into its own `std::string` (docs/parser.md
-// I4's copy-at-the-boundary rule), so a `Statement` is self-contained and
-// the source can go away the moment `Parse()` returns. Anything that
-// collects `Token`s into a container and outlives the source is a
-// use-after-free, and there is nothing here that can catch it for you.
+// lexed from.** Tokens never escape a parse - the AST copies every name and
+// value it keeps into its own `std::string` (docs/spec/parser-v2.md I4), so
+// a `Statement` is self-contained once `Parse()` returns. Anything that
+// keeps `Token`s past the source is a use-after-free nothing here catches.
 
 namespace kds::parser {
 
@@ -29,11 +24,9 @@ namespace kds::parser {
 // FROM t WHERE in = 1` stops parsing here rather than reading `in` as an
 // identifier.
 //
-// The list is exactly what the v2 grammar needs to *see*; needing to see a
-// word is not the same as being able to execute it. `NOT` and `EXISTS` are
-// reserved by V04 and answer with a real error until V07 implements them,
-// which is the point - a truthful "not supported yet, at byte 23" beats a
-// syntax error pointing at the wrong thing.
+// The list is exactly what the v2 grammar needs to *see*; a reserved word
+// the grammar cannot execute is refused with its position rather than
+// misread (the outer-join words below).
 //
 // Not reserved, deliberately: `SELECT`, `FROM`, `WHERE`, `AND`, `INSERT`,
 // `UPDATE`, `SET`, `VALUES`, `CREATE`, `TABLE`, `HEAP`, `BTREE`. Those are
@@ -50,15 +43,10 @@ enum class Keyword : std::uint8_t {
     kNot,
     kBetween,
 
-    // Reserved by V05 and rejected by it: an outer join answers
-    // `NotImplemented` with the keyword's own position (spec I9). Reserved
-    // *now*, before they are implementable, so a client gets a truthful
-    // "not supported, here" instead of a syntax error pointing somewhere
-    // else - and so the grammar does not shift when they land.
-    //
-    // Costs nothing to the fingerprint: they were identifiers to the lexer
-    // before, and a keyword hashes exactly as an identifier does. That is
-    // the property V04 bought by giving all keywords one token type.
+    // Reserved and refused (V05): an outer join answers `NotImplemented`
+    // with the keyword's own position (spec I9), and the grammar will not
+    // shift if they land. Free to the fingerprint: a keyword hashes exactly
+    // as an identifier does (one token type, below).
     kLeft,
     kRight,
     kFull,
@@ -93,23 +81,14 @@ enum class TokenType {
 
     // A reserved word (see Keyword above); which one is in Token::kw.
     //
-    // One token type for all of them rather than one per word, for a
-    // reason that outlives the parser: the fingerprint must hash a keyword
-    // exactly as it hashes an identifier, or every stored pattern_id
-    // containing one of these words moves and every waystone recorded
-    // under it is retired (fingerprint.hpp's bump rule). With one type
-    // that is one line in ShapeTagOf() which cannot be forgotten when the
-    // next keyword is reserved; with seven it is seven chances to get it
-    // wrong, growing with the grammar.
+    // One token type for all of them: the fingerprint must hash a keyword
+    // exactly as an identifier, or every stored pattern_id containing one
+    // moves and its waystones are retired (fingerprint.hpp's bump rule).
+    // One type makes that one line in ShapeTagOf() for every keyword.
     kKeyword,
 
-    // Bind-parameter placeholder: `?`. Lexed but not accepted by any
-    // production - the parser rejects it exactly as it rejected the
-    // kError this used to be, because there is no BIND stage in the
-    // newline protocol to supply a value. It exists so fingerprinting can
-    // see the placeholder (fingerprint.hpp): `WHERE id = 42` and
-    // `WHERE id = ?` must reduce to one pattern_id, and a token type is
-    // the only way to tell a placeholder from a lexing failure.
+    // Bind-parameter placeholder: `?`. Lexed so the fingerprint can see it
+    // (`WHERE id = 42` and `WHERE id = ?` reduce to one pattern_id).
     kParam,
 
     // A named parameter: `$flag`. `Token::text` carries the name with the
@@ -118,30 +97,18 @@ enum class TokenType {
     // what the client actually typed while a comparison stays case
     // insensitive.
     //
-    // Accepted by **no** production. It was accepted by exactly one - the
-    // body of `CREATE PATTERN`
-    // (docs/spec/create-pattern-user-defined-patterns-v1.md section 3.1) -
-    // until the operator withdrew declared patterns on 2026-08-31, so the
-    // parser now refuses `$x` with a position wherever it is written. The
-    // token stays *reserved* for the extended protocol's named binds (D4),
-    // and nothing wires that yet.
+    // Accepted by **no** production: the parser refuses `$x` with a
+    // position wherever it is written. Background: the body of the
+    // withdrawn `CREATE PATTERN` accepted it until 2026-08-31
+    // (docs/spec/create-pattern-user-defined-patterns-v1.md). The token
+    // stays reserved for the extended protocol's named binds (D4), which
+    // nothing wires yet.
     //
-    // Still a separate type from kParam rather than a spelling of it. The
-    // two agree in what the fingerprint does with them (both are
-    // ShapeTag::kValue) and differ in what a client is told - `?` is a
-    // placeholder with no BIND stage behind it, `$x` is a name - which is
-    // the distinction the two refusal messages carry. Folding them together
-    // would buy nothing and lose that.
-    //
-    // **The sigil is why a re-designed declaration grammar would be
-    // possible at all**, and is recorded here because it is the one part of
-    // the withdrawn feature that lived in the lexer. Identifiers are
-    // case-folded, so a parameter named `a` and an alias written `AS a`
-    // would collide, and "value position" cannot disambiguate them because
-    // a join predicate puts columns in value position too
-    // (`ON t.id = a.id`). Removing the ambiguity at the token level is what
-    // meant no collision check against aliases or column names was needed
-    // anywhere above.
+    // A separate type from kParam: both fingerprint as ShapeTag::kValue,
+    // but the refusal message differs (`?` is a placeholder, `$x` a name).
+    // The sigil keeps a parameter name from colliding with a case-folded
+    // alias or column, which "value position" cannot disambiguate
+    // (`ON t.id = a.id`).
     kNamedParam,
 
     // punctuation
@@ -151,9 +118,8 @@ enum class TokenType {
     kSemicolon,
     kStar,
 
-    // Qualifier separator in `a.x`. Until V04 this was a kError, so a
-    // qualified name could not be tokenized at all and no statement
-    // containing one had a fingerprint.
+    // Qualifier separator in `a.x` (V04; a kError before, so no stored
+    // pattern contains one).
     kDot,
 
     // comparison operators
@@ -201,10 +167,7 @@ struct Token {
     // end of input, `byte_offset` is the length of the input and `length`
     // is 0.
     //
-    // This is what makes J2's promise - `Unsupported` with an *exact*
-    // position - something the parser can keep. A message that says only
-    // "derived tables are not supported" makes the client hunt for which
-    // parenthesis was the problem.
+    // This is what lets every refusal carry an exact position (J2).
     std::uint32_t byte_offset = 0;
     std::uint32_t length = 0;
 
@@ -214,12 +177,8 @@ struct Token {
     // kIntLit: the digit run with the sign stripped, in the spelling the
     // client used.
     //
-    // `int_val` is a signed decode that silently wraps past 64 bits, so it
-    // cannot judge whether a literal is inside the pk's id space - the
-    // range check at V30 needs the digits themselves, and so does anything
-    // else that must distinguish "large" from "wrapped to small". Keeping
-    // both is cheaper than deciding here which one every future caller
-    // wanted.
+    // `int_val` is a signed decode that silently wraps past 64 bits, so a
+    // range check (the pk's id space, V30) needs the digits themselves.
     //
     // A view into this token's own `text`, and so into the source behind
     // it - valid exactly as long as that is.

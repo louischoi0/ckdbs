@@ -15,13 +15,9 @@
 
 ## 1. Background & Rationale
 
-Two confirmed positions make tuple mobility a first-order concern in KDS. Relayout is the product — the physical optimizer's value compounds with anything that makes moving tuples cheaper or unintended movement rarer. And trails bet on location stability — every Waystone entry is a recorded `(page_id, slot, epoch)`, so the trail hit rate is a direct function of how often tuples sit still.
+Relayout is the product, and every Waystone entry is a recorded `(page_id, slot, epoch)`, so tuple mobility is first-order: a variable-length row that grows on UPDATE can be forced to move (Postgres's broken HOT chains, InnoDB's row migration), and in KDS would also burn trail entries through epoch churn. Fixed length removes that at the root: **an UPDATE can never migrate a tuple**, and with the immutable `min_key` a tuple's address is stable until the physical optimizer moves it on purpose. Secondary gains: relayout is cell-`memcpy` with exact fill-factor math, slot addressing is arithmetic, and the row codec reads static offsets.
 
-Variable-length rows attack exactly this: an UPDATE that grows a row can force it to move (Postgres pays as broken HOT chains, InnoDB as row migration), and in KDS the same event would additionally burn trail entries through epoch churn. Fixing the tuple length removes the disease at the root: **an UPDATE can never migrate a tuple**, and combined with the immutable `min_key`, a tuple's address is stable for life — until the physical optimizer moves it on purpose.
-
-Secondary gains, each real: relayout becomes cell-`memcpy` with exact fill-factor math; in-page slot addressing becomes index arithmetic; the row codec reads static offsets (the engine's existing fixed-record discipline — Waystone entries, trail pages, frame headers — extended to user tuples); and the threshold at which relayout pays drops because moves got cheaper.
-
-The honest cost, accepted knowingly: variable-length management is **relocated, not eliminated** — it moves into the var-heap (§5), and fixed cells spend space on padding for short values. The acceptance argument: the hot heap is where fixed length matters; the var-heap is deliberately boring (V2 makes it immovable); and on target OLTP schemas — short, uniform strings — a sane inline width keeps the common case entirely inline.
+The cost, accepted knowingly: variable-length management is **relocated, not eliminated** — into the var-heap (§5), which V2 makes immovable — and fixed cells pad short values. On target OLTP schemas (short, uniform strings) a sane inline width keeps the common case inline.
 
 ## 2. The Rule (normative)
 
@@ -110,8 +106,8 @@ A value too long to inline spills, and storage is invisible above the codec.
 
 | Piece | Where |
 |---|---|
-| `VARHEAP_APPEND` | `RecordType::kVarHeapAppend = 16`, `include/kds/wal/payload.hpp`, `docs/spec/wal.md` §5.2 |
-| `kVarHeap` | `PageType::kVarHeap = 10`, `include/kds/storage/varheap.hpp`, `docs/spec/page.md` §5a |
+| `VARHEAP_APPEND` | `RecordType::kVarHeapAppend = 16` (`include/kds/wal/record.hpp`), its payload in `include/kds/wal/payload.hpp`, `docs/spec/wal.md` §5.2 |
+| `kVarHeap` | `PageType::kVarHeap = 10` (`include/kds/base/common.hpp`), the page format in `include/kds/storage/varheap.hpp`, `docs/spec/page.md` §5a |
 | The spill path | `storage::EncodeSpilledCell` + `varheap::ChainAppend`, driven from `EncodeRow`'s `VarHeapSink` |
 | The chain root | `sys.tables.varheap_page_id` |
 | The fetch path | `varheap::Fetch` via `exec::ResolveSpills` |
@@ -123,7 +119,7 @@ Five rules the implementation carries:
 - **Decode does not resolve; it reports.** `DecodeRowInto` records a spilled cell as a *pending* spill and the caller fetches afterwards through `ResolveSpills` — `parser-v2.md` I15's rule R1, no page-frame span live across a nested fetch, which the step VM's `PageSpanGuard` exists to catch. A row with nothing spilled pays nothing for the split.
 - **The tail is held as the tail.** `varheap::ChainAppend` walks the chain shared, takes the page whose link it read invalid exclusive, and reads that link again under the hold: a page another core grew the chain past in between is not the tail, and the walk continues from its link. Only the page whose link is still invalid under the exclusive hold is appended into or linked from, so two cores growing one chain at once never write two links on one page - a second link would leak the first grower's page, reachable from no walk and never appended into or freed again. The heap chain's rule, BB-R7 (`docs/spec/heap-and-tuple.md`), on the var-heap. **The walk starts at the chain's last known tail since BN-R8** (`heap-and-tuple.md` §3.4), and the re-check is the same from wherever it starts.
 - **`VARHEAP_APPEND` precedes the `HEAP_INSERT` that points at it.** A replay must never reach a cell whose pointer resolves to nothing, whereas a value with no tuple is merely unreferenced. No var-heap-specific recovery logic exists (§5).
-- **Max value is one page, 8144 bytes**, refused `Unsupported` by `varheap::ChainAppend`. This is *not* the §9 cap being decided: a larger value needs a multi-page representation, and a future cap can be lower (a policy check above the layer) or higher (chaining behind the same `Append`/`Fetch` pair).
+- **Max value is one page, 8144 bytes**, refused `NotImplemented` by `varheap::ChainAppend` (values spanning pages are not built). This is *not* the §9 cap being decided: a larger value needs a multi-page representation, and a future cap can be lower (a policy check above the layer) or higher (chaining behind the same `Append`/`Fetch` pair).
 
 `float` columns are refused at `CREATE TABLE` (`catalog::RowLayout::Build`): a fixed row size has to reserve a width for every column, and `float` has no decided on-disk encoding.
 

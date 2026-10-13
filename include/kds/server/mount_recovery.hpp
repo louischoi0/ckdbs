@@ -18,61 +18,40 @@
 #include "kds/wal/manager.hpp"
 #include "kds/wal/recovery.hpp"
 
-// Recovery at mount (docs/workplan-wal-recovery.md RV1/RV2) - the caller
-// `wal/recovery.hpp` declined to be, and that nothing else was.
+// Recovery at mount (RV1/RV2, `docs/spec/wal.md`): the caller
+// `wal/recovery.hpp`'s driver leaves to the server layer (RC04a, RC11).
 //
-// RC04a built the driver and left three things "to its caller": reading the
-// anchor, applying `HighWaterRepair::next_trx_id`, and looping the cores. No
-// task owned that caller, so nothing ran a phase at mount. The workplan's RC11
-// entry carries the history; what belongs here is the contract below.
+// ---- Once, for the instance's one stream ----------------------------------
 //
-// ---- One core, and why the loop is not here ------------------------------
-//
-// RV2 makes each stream independent, and the engine already opens one WAL
-// stack per core in two places - `Expeditor` for core 0, `CoreRuntime` for
-// every peer. Each calls this for the stream it owns. Writing the loop here
-// instead would mean one core reaching into another's store and log, and
-// would put an order between streams that `workplan-crosscore.md`
-// guideline 3 forbids.
+// `Expeditor::Open` calls `RecoverCoreAtMount` once, as core 0, before any
+// peer is built; one stream holds every core's records (AL-R5), so a peer
+// runs no pass and reports `MountRecovery::ran == false`.
 //
 // ---- What this adds that the driver could not ----------------------------
 //
 // Two `server`-layer facts, and `wal/` sits below `server/`:
 //
 //   1. **The anchor becomes an `AnalysisStart`.** A zeroed slot is not an
-//      error - it means no checkpoint was ever published, so the scan
-//      starts at the head of the stream and the durable-point check is
-//      disabled (`analysis.hpp`). That is the state of every database this
-//      engine has ever written before RC08.
+//      error - no checkpoint was ever published, so the scan starts at the
+//      head of the stream and the durable-point check is disabled
+//      (`analysis.hpp`).
 //   2. **The undo phase is installed.** `txn::RecoveryUndo` over the
 //      caller's undo log and WAL manager. Not optional: `RecoverCore`
-//      refuses a stream that has losers and no phase, so passing null
-//      would be choosing that refusal over recovering.
+//      refuses a stream that has losers and no phase.
 //
 // The anchor is passed **in** rather than read from a `SuperBlock&` here,
-// because a peer's superblock is not the live one: `CoreRuntime` holds a
-// default-constructed copy whose anchor slots are all zero, while the
-// anchor a peer's checkpointer published lives in the instance's page 0
-// (`server/superblock_checkpoint_anchor.hpp`). A function reading the
-// superblock in front of it would therefore recover core 0 from its anchor
-// and every peer from the head of its stream, silently.
+// because the caller selects it: slot 0 of the mounted image, which a
+// restore has already rewritten to the backup's start (BR-R2).
 //
 // ---- The two obligations this leaves the caller, by name -----------------
 //
-//   1. **Persist the transaction ceiling.** `next_trx_id` is the id the
-//      sequence must not sit below, and `txn::TrxIdSequence` **caches it at
-//      construction** (`txn/trx_id.hpp`) - so the caller owes
-//      `SuperBlock::SetNextTrxId` plus a persist *before* it builds the
-//      sequence, not after. Raising it afterwards changes a field nothing
-//      reads again.
-//   2. RC04's named obligation 1: every core allocates through the store's
-//      allocation floor, which this pass raises past `page_floor`. Its
-//      extent-allocator form retired with the extent leases (AW-S1b); its
-//      history is at cf889b63.
-//
-// The first is not done here, because page 0's image and its persist are the
-// caller's (`Expeditor::Open` holds them): this function reports the
-// ceiling and the caller raises it, before it builds any sequence.
+//   1. **Persist the transaction ceiling.** `txn::TrxIdSequence` **caches
+//      `next_trx_id` at construction** (`txn/trx_id.hpp`), so the caller
+//      owes `SuperBlock::SetNextTrxId` plus a persist *before* it builds the
+//      sequence. Page 0's image and its persist are the caller's
+//      (`Expeditor::Open`), so this function only reports the ceiling.
+//   2. Every core allocates through the store's allocation floor, which
+//      this pass raises past `page_floor` (RC04's obligation 1).
 
 namespace kds::server {
 
@@ -80,14 +59,9 @@ namespace kds::server {
 // the mount log line. Counted rather than inferred: a phase that silently
 // did nothing is the failure mode this whole plan is written against.
 struct MountRecovery {
-    // **Whether this core ran a pass at all** (AR0 M0, AL-R5). False on a
-    // peer under one stream, where core 0's pass covered every core's
-    // records and this one recovered nothing.
-    //
-    // It exists because the alternative reading of the zeroes below is
-    // "this mount found an empty log", which is what an operator would
-    // otherwise have to guess between. A zeroed block that says *why* it is
-    // zero is a measurement; one that does not is an absence of one.
+    // **Whether this core ran a pass at all** (AL-R5). False on a peer,
+    // where core 0's pass covered every core's records - so the zeroes below
+    // are not misread as "this mount found an empty log".
     bool ran = true;
 
     // ---- What the log held ----
@@ -102,8 +76,7 @@ struct MountRecovery {
     // ---- What redo wrote ----
     std::uint64_t redo_applied = 0;
     std::uint64_t redo_skipped_by_lsn = 0;  // already on the page (RV5)
-    // The PW1c-2 not-dirty filter's count, lifted here so it is checkable
-    // at a real mount, not only in gtest (the f19ead1 review's deferred item).
+    // The PW1c-2 not-dirty filter's count, checkable at a real mount.
     std::uint64_t redo_skipped_not_dirty = 0;
     std::uint64_t pages_healed = 0;         // checksum detected, an FPI healed
     // Redo's start and, when its floor raised it (BC-R2), what analysis had
@@ -165,9 +138,7 @@ struct MountRecovery {
     // (H7, `exec/varheap_sweep.hpp`). The leak it exists for is a
     // rolled-back `CREATE ASSERTION`'s spilled body text: `LogChainInsert`
     // logs its spills under `kNoTxnId`, so there is no transaction to chain
-    // an undo record to and no compensation runs. A rolled-back `CREATE
-    // PATTERN`'s body leaked the same way until declared patterns were
-    // withdrawn on 2026-08-31.
+    // an undo record to and no compensation runs.
     //
     // **Not a leak count.** `varheap::PageRelease` is idempotent and cannot
     // tell a live slot it is killing from a tombstone it is rewriting, so
@@ -235,9 +206,8 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
 // Assertion enforcement, resumed (RC07's mount wiring, AS6a).
 //
 // `assertion.md` §7 promises enforcement "immediately at restart - no
-// rebuild scan, no enforcement gap", and until this ran the engine contradicted
-// it: `SHOW ASSERTIONS` reported `enforcing=0` for every surviving assertion,
-// honestly, because the registry is memory-resident and nothing refilled it.
+// rebuild scan, no enforcement gap"; the registry is memory-resident, so
+// this is what refills it.
 //
 // Three steps per surviving assertion, and each can fail on its own without
 // costing the mount:
@@ -260,12 +230,9 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
 // ---- Whose assertions these are (AT-S5d) ----------------------------------
 //
 // **Every one the catalog declares, into the one registry `enforcer` is.**
-// The resume took only the relations the calling core owned until AT-S5d,
-// counting the rest foreign, because each core's registry enforced its own
-// relations' writes and nobody else's; the registry is the instance's now
-// and a write on any core checks it, so the resume runs once - at core 0's
-// mount, before any peer is built - and a peer handed the instance's registry
-// does not call this at all (`CoreRuntime::Open`).
+// The registry is the instance's and a write on any core checks it, so the
+// resume runs once - at core 0's mount, before any peer is built - and a
+// peer handed the instance's registry does not call this (`CoreRuntime::Open`).
 //
 // A declaration whose cabin cannot be revived is recorded through
 // `AssertionEnforcer::NoteUnenforceable`, which is what makes the write path
@@ -285,13 +252,11 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
 //
 // ---- Why a mount without one is a mount that gets slower ------------------
 //
-// Recovery starts where the anchor says, and until this ran nothing published
-// an anchor after replaying - so every mount scanned from wherever the last
-// periodic checkpoint left off, and a database that had never completed one
-// scanned its whole stream, every time, forever. The cost of this call is one
-// flush of the dirty table plus two records; what it buys is that the next
-// recovery starts here instead. (Numbers live in the workplan and in `bench/`,
-// which name the commit they were measured at; a header cannot.)
+// Recovery starts where the anchor says; without an anchor published after
+// replaying, every mount would scan from the last periodic checkpoint, and a
+// database that never completed one would scan its whole stream every time.
+// The cost is one flush of the dirty table plus two records; the next
+// recovery starts here instead.
 //
 // ---- Why the active-transaction table is empty, and why that is a fact ----
 //

@@ -165,9 +165,7 @@ Status EncodeValue(std::uint32_t type_val, std::uint32_t type_mod,
     //
     // The scale is read from `type_mod` directly rather than through a
     // `SysColumnRow` built for the purpose: this runs **per value, per
-    // row**, on the cross-core batch writer as well as the wire's, and the
-    // struct it used to construct carries a name array and eight other
-    // fields, all zero-initialised, so two callers could read one word.
+    // row**, and that struct carries a name array and eight other fields.
     const std::uint8_t decimal_scale = catalog::DecimalScaleOf(type_mod);
     if (value.type == parser::ValueType::kNull) {
         // -1, the one NULL convention (protocol.md §6). Decided before the

@@ -41,8 +41,7 @@ forbids (`include/kds/base/status.hpp`, `docs/spec/protocol.md` §11).
 Every cross-object reference in the engine is by oid, never by name:
 `sys.fkeys` stores parent/child oids, `sys.indexes` its relation's oid,
 `sys.cabins` likewise, and the assertion registry keys on the oid. So a
-rename **dangles
-nothing**: FK enforcement, index maintenance and serving, Cabin
+rename **dangles nothing**: FK enforcement, index maintenance and serving, Cabin
 observation and the write hook, and every compiled chain in flight keep
 working, unmodified, because none of them ever read the name again after
 resolution. The tests exist to pin that claim, not to hope it.
@@ -84,9 +83,9 @@ coarser refusal is never wrong.
 A rename ends with `Catalog::BumpVersion()` — the one invalidation choke
 point — so every cached `name → oid` mapping, `TableAccess`, and bound
 statement stamped with an older `catalog_version` drops or revalidates.
-The in-place-update exceptions (`SetPatternWaystoneRoot`,
-`SetPatternOrigin`) do not apply: their argument was "read by nothing
-else", and a name is read by *resolution itself*. Cross-core, the
+The in-place-update exception (`ClaimPatternWaystoneRoot`) does not
+apply: its argument is "read by nothing else", and a name is read by
+*resolution itself*. Cross-core, the
 schema version word carries the bump and every other core's next boundary
 re-reads (`catalog.md` CT2); this spec adds no new coherency mechanism.
 

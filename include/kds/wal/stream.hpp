@@ -103,15 +103,11 @@
 //
 // ---- The ring ------------------------------------------------------------
 //
-// The core-local ring of wal.md section 6 is, today, a preallocated linear
-// staging buffer: append is a memcpy plus a cursor bump, and Flush() hands
-// the whole staged range to the device in one write and resets the cursor.
-// It is not circular: since BA-S12 a flush in flight writes the *other*
-// buffer (`flush_buf_`), so appenders stage into a fresh linear ring while
-// it runs, and a circular buffer would buy nothing but the inability to
-// encode a record that straddles the wrap point. When an asynchronous
-// backend lands (the [OPEN] I/O decision), this becomes a real ring; the
-// interface above it does not change.
+// The ring of wal.md section 6 is a preallocated linear staging buffer:
+// append is a memcpy plus a cursor bump, and Flush() hands the whole staged
+// range to the device in one write and resets the cursor. It is not
+// circular: a flush in flight writes the *other* buffer (`flush_buf_`,
+// BA-S12), so appenders stage into a fresh linear ring while it runs.
 //
 // **Fail-stop** (operator, 2026-10-07): a device write this stream issues
 // that fails - a flush of the staged bytes, or a roll's segment creation or
@@ -130,9 +126,8 @@
 // not stop the stream.
 //
 // Backpressure is a Status, not a suspension: a full ring fails the append
-// with OutOfSpace and the caller drains it. wal.md section 6-4 wants the
-// appending task suspended instead, which needs the reactor - when that
-// exists, it is the reactor that turns this Status into a suspension.
+// with OutOfSpace and the caller (`WalManager::Append`) drains and retries,
+// bounded; wal.md section 6-4's suspension is not built.
 //
 // ---- What this layer does not do ----------------------------------------
 //
@@ -145,9 +140,9 @@
 
 namespace kds::wal {
 
-// Proposed ring capacity - [OPEN] in wal.md section 15, so it is a
-// parameter with a default, never a constant anything may depend on. Must
-// be at least kMinRingCapacity so a record of any legal size can be staged.
+// Default ring capacity - a parameter with a default, never a constant
+// anything may depend on. Must be at least kMinRingCapacity so a record of
+// any legal size can be staged.
 inline constexpr std::size_t kDefaultRingCapacity = 1024 * 1024;
 
 // The largest BTREE_SPLIT record: 32 + 8 + 34 x 8,200 = 278,840 bytes, a
@@ -378,19 +373,15 @@ private:
     //
     // An offset of exactly 0 is **one past the end of a segment an append
     // just filled**, never a position inside one - every segment opens
-    // with its header block, so no record ever sits at offset 0. The
-    // unguarded form answered a full segment there, which is the wedge
-    // the bulk-insert bench found (bench/results-bulk-insert.md): the
-    // roll was skipped, the next record was placed at the start of a
-    // segment that had never been created, and every later Flush refused
-    // the boundary-spanning range - permanently, at ~300K logged rows.
+    // with its header block. Answering a full segment there skipped the
+    // roll and wedged every later Flush (found by the bulk-insert bench).
     std::uint64_t SegmentRemaining() const noexcept {
         const std::uint64_t offset = OffsetOf(append_lsn());
         return offset == 0 ? 0 : segment_size_ - offset;
     }
 
     // **Every private method below runs with the latch already held**; the
-    // four public ones take it. The latch is not recursive, so a private
+    // public entries take it. The latch is not recursive, so a private
     // method must never call a public one - which is why the roll on
     // Append's path reaches the flush and the seal through the two
     // `*Locked` names rather than through `Flush()` and `Seal()`.

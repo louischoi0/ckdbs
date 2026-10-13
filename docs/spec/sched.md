@@ -176,8 +176,9 @@ post-task hook running after phase 4 (`expeditor.cpp`). A rule that let the
 reactor block between the staging and the hook's sync would put the WAL
 drain interval on *every commit* — trading a spin for a durability
 regression. That is why `SetPostTaskHook` takes a `std::function<bool()>`
-and why both drain sites answer it with `HasPendingGroupCommits()`, read
-before the drain clears it.
+and why both drain sites (`Expeditor`, `CoreRuntime`) answer it with
+`WalManager::StagedCommitIsWork()`, read before the drain clears it - false
+once the writer kicks a parked committer instead (above one core, BA-R4).
 
 **The cost of sleeping** falls where the core was idle anyway: a reactor
 that spins notices its reply in nanoseconds, and one that sleeps has to be
@@ -190,13 +191,14 @@ indistinguishable from one that has a wake it never needed.
 
 | Park site | Predicate | What satisfies it | Ends the block? |
 |---|---|---|---|
-| `command_dispatcher.cpp:737` (**group commit**) | `wal_->IsDurable(lsn)` | the post-task hook on **this** core, once per iteration (`expeditor.cpp:1953`), with the drain timer as backstop | on-core: nothing to wake. Any "parked is not ready" rule must count the hook's own work as progress, or every commit gains a drain interval |
+| `CommandDispatcher::DispatchAsync` (**group commit**) | `wal_->IsDurable(lsn) \|\| wal_->stopped()` | at one core, the post-task hook on **this** core, once per iteration (`Expeditor`'s and `CoreRuntime`'s `SetPostTaskHook`), with the drain timer as backstop; above one core, the WAL writer's sync, which kicks the parked committer's core (BA-R4, `wal.md` §3) | at one core on-core: nothing to wake, and any "parked is not ready" rule must count the hook's own work as progress, or every commit gains a drain interval; above one core the writer's kick → **wake** |
 | `tcp_server.cpp` `RunHost` (**D19's handoff**, a peer's hosting task; only where the port cannot be shared) | `handoff->Pending(core)`, or the server gone | core 0's `Offer`, which sets `pending` under the inbox latch and then kicks | the kick → **wake**. There is no pre-block re-check (§5, and above), so an offer racing the reactor into its block is noticed at the block's ceiling, one idle block late, never lost |
 
 Each row is named with what covers it. **Not in the table and owed to it**: the
-lock family's two parks (`command_dispatcher.cpp`'s `decided` and
-`freed` predicates, AO), each bounded by the fault net read inside its
-predicate.
+lock family's two parks (`CommandDispatcher::AwaitWriteBlock`'s `released`
+and `AwaitRelationLock`'s `freed` predicates), each woken by its slot's
+flip and kick where the refused ask handed one back, otherwise by a poll,
+and each bounded by the fault net read inside its predicate.
 
 ## 8. Deterministic Simulation
 
@@ -235,7 +237,7 @@ clock, so a held kick ends a real idle block only when the cell says so.
 ## 9. Invariants
 
 1. One pinned worker thread per core; no thread creation after startup.
-2. All scheduler state is core-local but the sleep flag and `Waker` of §7 and, since BL-S1, the core's **load slot** (`sched/core_load.hpp`): above one core the reactor publishes, at its iteration end, the fraction of the last 50 ms window it was busy and spent polling `foreground`, and its queued `foreground` count, for any core to read with relaxed loads; every field has the one writer, a stale value places a transaction on a busier core and never on a wrong one, and at one core nothing is written (`rules.md` §3). `SHOW META` prints each core's slot as `load_c<k>_*`, none at one core, with that core's contention slot beside it as `load_c<k>_waited_<latch>_us` and, since BQ-S1, `load_c<k>_wal_drain_latch_wait_us`, `load_c<k>_wal_roll_blocked_waits` and `load_c<k>_wal_roll_blocked_wait_us`, and since BM-S1 `load_c<k>_visibility_window_lookups`, each absent when 0; slot 0 also carries the threads that declared no core. The scheduler takes no lock. **The reactor is not lock-free, and the exception is named rather than general** (AR0-2): a task appending to the WAL takes the log's latch (`wal.md` §3), a task syncing takes the log device's segment-table lock under it, and a peer's wait on the writer takes the writer's mutex with the latch released. Those three were the whole list until six joined them, and two more at AT-S5d. **AO-S8 counted the list rather than appending to it**, and found it three short of the tree — the enumeration is the invariant, so a lock missing from it is the defect this clause names, not a documentation debt. Each carries its order in `rules.md` §3's table and in its own header:
+2. All scheduler state is core-local but the sleep flag and `Waker` of §7 and, since BL-S1, the core's **load slot** (`sched/core_load.hpp`): above one core the reactor publishes, at its iteration end, the fraction of the last 50 ms window it was busy and spent polling `foreground`, and its queued `foreground` count, for any core to read with relaxed loads; every field has the one writer, a stale value places a transaction on a busier core and never on a wrong one, and at one core nothing is written (`rules.md` §3). `SHOW META` prints each core's slot as `load_c<k>_*`, none at one core, with that core's contention slot beside it as `load_c<k>_waited_<latch>_us` and, since BQ-S1, `load_c<k>_wal_drain_latch_wait_us`, `load_c<k>_wal_roll_blocked_waits` and `load_c<k>_wal_roll_blocked_wait_us`, and since BM-S1 `load_c<k>_visibility_window_lookups`, each absent when 0; slot 0 also carries the threads that declared no core. The scheduler takes no lock. **The reactor is not lock-free, and the exception is named rather than general** (AR0-2): a task appending to the WAL takes the log's latch (`wal.md` §3), a task syncing takes the log device's segment-table lock under it, and a peer's wait on the writer takes the writer's mutex with the latch released. **The enumeration is the invariant** (AO-S8 recounted it against the tree): a lock missing from it is a defect, not a documentation debt. Each carries its order in `rules.md` §3's table and in its own header:
 
     - the **visibility window latch** (`txn/instance_visibility.hpp`, AN-S1), a leaf;
     - the **page frame's latch word** (`device_page_store.hpp`, `page.md` §6, AM-S1), outer to the WAL stream latch;

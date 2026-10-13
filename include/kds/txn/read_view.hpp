@@ -9,29 +9,16 @@
 // (docs/spec/txn.md section 4.1). **A commit-LSN snapshot over the instance
 // read view** since AN-S2 (`instructions/v3.0.0/workorder-an-read-view.md`
 // AN-R3, AN-R7): a transaction is visible when its commit record's LSN is
-// at or below the LSN this view was minted at.
-//
-// ---- Why not a bound on transaction ids -----------------------------------
-//
-// Until AN-S2 a view was an exclusive high-water mark over trx ids plus the
-// ids in flight when it was minted, and "committed before my snapshot"
-// collapsed to "below the mark and not in the set". That holds only while
-// issue order is id order, and each core carves its ids in disjoint
-// blocks (`trx_id.hpp`), so across cores it is not: a commit on a core
-// holding a higher block reads as "not yet started" (AN-3 E's H1), and a
-// transaction begun after the mint out of a lower core's unspent range
-// reads as committed (H2). Commit order is the commit record's LSN - one
-// stream, one latch, one total order (AR0 M0) - and
-// `instance_visibility.hpp` is where that order is published.
+// at or below the LSN this view was minted at. Not a bound on trx ids,
+// because across cores issue order is not id order
+// (`instance_visibility.hpp`'s header says why, and publishes the order).
 //
 // ---- A POD, deliberately --------------------------------------------------
 //
 // Copyable, no heap allocation, fixed size: two integers, a pointer and two
 // flags. The reactor body allocates nothing in steady state
 // (docs/spec/sched.md), and a read view is minted per statement under READ
-// COMMITTED. The 64-entry in-flight array and the bound on live
-// transactions it implied went with the trx-id predicate; nothing here
-// bounds anything.
+// COMMITTED.
 //
 // ---- What is copied and what is read live ---------------------------------
 //
@@ -93,15 +80,12 @@ struct ReadView {
     // from a view that could not see an in-flight writer's rows is missing
     // them the moment that writer commits.
     //
-    // **The instance's fact since AT-S7, not the minting core's.** It was
-    // stamped from that core's own `live_` list, which was the whole
-    // question while a Cabin store was a core's own; one store serves
-    // every core, so a transaction in flight anywhere writes rows this
-    // view cannot see. The mint asks both - its own list, and
-    // `InstanceVisibility::AnyUnresolved` - and the banking gate asks the
-    // instance again at the instant it announces the build, because a
-    // fact stamped at the mint says nothing about a transaction that
-    // began after it.
+    // **The instance's fact, not the minting core's** (AT-S7): one Cabin
+    // store serves every core, so the mint stamps
+    // `InstanceVisibility::AnyUnresolved` (`MintCheckView`), and the
+    // banking gate asks the instance again at the instant it announces the
+    // build, because a fact stamped at the mint says nothing about a
+    // transaction that began after it.
     bool in_flight_at_mint = false;
 
     // txn.md section 4.1's predicate, in `ratification-an-commit-order.md`
@@ -131,10 +115,7 @@ struct ReadView {
     }
 
     // The view a caller with no transaction manager holds: every writer
-    // visible, nothing consulted. This is exactly what the engine did
-    // before MVCC existed - every row carried kBootstrapXid and every row
-    // was visible - which is why wiring the predicate in behind one of
-    // these changes no pre-existing behaviour. Its `snapshot_lsn` is the
+    // visible, nothing consulted. Its `snapshot_lsn` is the
     // unbounded bound so that, registered, it holds no horizon: a view that
     // admits every writer needs no superseded version, ever.
     static ReadView Everything() noexcept {

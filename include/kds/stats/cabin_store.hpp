@@ -62,12 +62,11 @@ class OptimizerSignals;
 // ---- Why a scan can safely fill it --------------------------------------
 //
 // The classic build-by-observation hazard is a write slipping between the
-// recording scan and the mark. A write runs where the session is (AT-S5),
-// a read too (AT-S6), and one store serves every core (AT-S7), so two
-// reactors reach one set. The owning-core argument that once ruled the
-// hazard out retired (AT-S5); its history is at cf889b63.
+// recording scan and the mark. A write and a read run where the session
+// is, and one store serves every core (AT-S5..S7), so two reactors reach
+// one set (the owning-core argument's history is at cf889b63).
 //
-// What replaces it is `BeginRecording`, and it is the reason a build is
+// What closes it is `BeginRecording`, and it is the reason a build is
 // announced rather than simply committed. Announcing installs the set
 // **empty and unservable**, so the write hook appends into it from the
 // instant the walk begins: a write on any core during the walk is in the
@@ -87,14 +86,10 @@ class OptimizerSignals;
 // per-cabin operation takes one latch rather than all of them.
 //
 // **What a reader holds while it works is a `CabinSet`, never a pointer
-// into a table.** Until AT-S7 `Find` returned `std::vector<CabinEntry>*`
-// and the serve iterated it in place, which was sound for the stated
-// reason - *"the store is core-local, so the caller is the only thing
-// running"* - and is exactly what one store removes: another core's
-// append would reallocate the vector under the loop, and an `Unobserve`
-// would erase it. The handle holds the set alive through a `shared_ptr`
-// and reads each entry under its partition's latch, so nothing is held
-// across the page reads the serve makes.
+// into a table**: another core's append would reallocate a vector under
+// the loop, and an `Unobserve` would erase it. The handle holds the set
+// alive through a `shared_ptr` and reads each entry under its partition's
+// latch, so nothing is held across the page reads the serve makes.
 //
 // It **never fails a statement**: every policy path returns void or a bool,
 // exactly as `TrailRecorder` does. A Cabin that cannot record is a Cabin
@@ -273,8 +268,7 @@ public:
     //
     // 16 rather than a core count: the store is not per core and the
     // contention it spreads is per *cabin*, so the number to beat is how
-    // many cabins are written at once, which no measurement has yet named
-    // (AO-S7's "no contender" finding no longer describes the engine).
+    // many cabins are written at once, which no measurement has yet named.
     static constexpr std::size_t kPartitions = 16;
 
     // Sightings held before the table is cleared. `TrailRecorder`'s policy
@@ -293,11 +287,9 @@ public:
     // one-shot value should not buy.
     //
     // `n = 1` for a **declared** Cabin - `CREATE CABIN`, or a `CABIN` clause
-    // on the column at CREATE TABLE. The argument is the one TrailRecorder
-    // applied to a declared pattern until those were withdrawn on
-    // 2026-08-31: the declaration *is* the evidence n=2 waits for, and an
-    // operator who wrote `CABIN` on a column has already said it is probed
-    // by value. This is where it still has a declaration to rest on.
+    // on the column at CREATE TABLE: the declaration *is* the evidence n=2
+    // waits for - an operator who wrote `CABIN` on a column has already
+    // said it is probed by value.
     static constexpr std::uint8_t kAutoRecordThreshold = 2;
     static constexpr std::uint8_t kDeclaredRecordThreshold = 1;
 
@@ -438,9 +430,9 @@ public:
     // - and a false answer means the caller must not walk-and-commit.
     //
     // **Why an announce exists at all**: the write hook is a no-op on an
-    // unobserved value, so every write between the walk's start and its
-    // commit used to vanish, and with one store for the instance those
-    // writes come from cores the walk cannot stop. An announced set
+    // unobserved value, so without one every write between the walk's
+    // start and its commit would vanish - writes from cores the walk
+    // cannot stop. An announced set
     // collects them instead, and `Commit` merges the walk's matches into
     // what the hook has already put there. A surplus entry is legal (§1);
     // a missing one is the C1 break.

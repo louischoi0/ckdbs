@@ -15,17 +15,8 @@
 // uses (docs/inflight/in-progress/workplan-kwp-load.md KW2, docs/spec/protocol.md §4,
 // docs/spec/bulkinsert.md §3.1).
 //
-// **The frame numbering left this file on 2026-08-31** (milestone KW).
-// It held `ClientFrame`/`ServerFrame` for the load endpoint alongside
-// `kwp.hpp`'s `ClientFrameType`/`ServerFrameType` for the query surface,
-// and the two collided on five values in the base block. The promise made
-// here - "the base block is deliberately left sparse so the query surface
-// can take the spec's own ordering when it lands" - is what the merge
-// kept: the query surface took the base block as `kwp.hpp` numbered it,
-// and the load block moved to `kwp.hpp` at the 16+ numbers it already
-// held. The five that collided (`kPing`/`kTerminate` client,
-// `kError`/`kComplete`/`kPong` server) changed value, which is why this
-// happened before a second endpoint existed rather than after.
+// **The frame numbering lives in `kwp.hpp`** (one registry per direction,
+// milestone KW, 2026-08-31); the load frames sit there at 16+.
 //
 // What stays here is what it always was minus the enums: the capability
 // bit, the payload readers and writers, and the v0 load payloads.
@@ -66,10 +57,7 @@ public:
     // limit invented by a length field - a bulk `INSERT ... VALUES` can
     // exceed it, and refusing one for that reason would be indefensible.
     //
-    // `docs/spec/protocol.md` §2 says both, since 2026-08-31; it used to
-    // say `{u32 len, bytes}` for every variable-length field, which no
-    // frame ever did - the v0 hello and the row description were u16 from
-    // the day they were written.
+    // `docs/spec/protocol.md` §2 states both widths.
     void Str(std::string_view s) {
         U16(static_cast<std::uint16_t>(s.size()));
         Bytes(s);

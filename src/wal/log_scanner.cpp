@@ -102,13 +102,9 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
     // payload does not outlive its call, which is what makes that legal.
     std::vector<std::byte> header_block(kSegmentHeaderSize);
 
-    // **Allocated once and never zeroed**, and that is a measured decision, not
-    // a micro-optimisation. `body.assign(body_bytes, std::byte{0})` per segment
-    // was **78% of a scan's cost** - zeroing 64 MiB that the very next `ReadAt`
-    // overwrites in full (`bench/results-wal-recovery.md`: 30.3 ms to
-    // alloc+zero, 8.4 ms to read it). A mount runs two of these scans, three
-    // once an assertion is declared, so it was ~60-90 ms of startup spent
-    // writing bytes nobody reads.
+    // **Allocated once and never zeroed**, a measured decision: zeroing 64 MiB
+    // per segment that the next `ReadAt` overwrites was most of a scan's cost,
+    // and a mount runs two or three scans.
     //
     // `make_unique_for_overwrite` is the one allocation that skips value
     // initialisation. Every byte handed to `RecordReader` below has been written
@@ -164,20 +160,12 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
 
         out.sealed = sealed;
         if (!sealed) {
-            // **A segment can be sealed without a PAD, and this used to be
-            // read as the end of the stream.**
-            //
-            // `WalStream::Seal` writes the marker only when the tail can hold
-            // a record header; a shorter tail is "left as the zeroes the
-            // segment was created with" (stream.cpp), because a PAD is
-            // header-only and there is nowhere to put one. That is a seal, and
-            // the stream continues in the next segment.
-            //
-            // Read as a torn tail instead, the scan returned here and **every
-            // record in every later segment was silently dropped** - which
-            // recovery reported as acknowledged rows missing after a restart,
-            // once a run was long enough to roll a segment. Found by SIM04's
-            // crash loop at 3500 ops, 2026-08-12.
+            // **A segment can be sealed without a PAD.** `WalStream::Seal`
+            // writes the marker only when the tail can hold a record header;
+            // a shorter tail is left zeroed (stream.cpp), and the stream
+            // continues in the next segment. Read as a torn tail, every record
+            // in every later segment would be silently dropped (found by the
+            // simulator's crash loop, 2026-08-12).
             //
             // The remainder is what tells a seal from a tear, and it is
             // measured against the same constant the writer decided with:

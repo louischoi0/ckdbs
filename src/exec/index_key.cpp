@@ -167,10 +167,9 @@ Status EncodeIndexKeyColumn(const catalog::SysColumnRow& col, const parser::AstV
     }
 
     if (value.type == parser::ValueType::kNull) {
-        // The discriminator byte exists for this, and writing it would
-        // settle where NULLs sort - which is a decision, not an
-        // implementation detail, and one nothing can exercise while the row
-        // codec refuses to encode a NULL.
+        // Unreachable through DDL: a nullable column cannot enter an index
+        // (null.md D2, index_ddl.cpp), so no NULL reaches a key. The
+        // discriminator byte is reserved for the day one may.
         return Status::NotImplemented(
             "index key column '" + NameOf(col) +
             "' was handed a NULL; NULLs are not storable yet and their position in the key "

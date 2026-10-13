@@ -14,10 +14,10 @@
 #include "kds/wire/kwp_types.hpp"
 #include "kds/wire/row_codec.hpp"
 
-// KWP v0: the load endpoint (docs/inflight/in-progress/workplan-kwp-load.md KW1-KW7). A second
-// listener speaking exactly the subset T2 needs - the handshake and the
-// modal load session - while the query surface stays on the newline
-// protocol. TcpServer's shape deliberately: a reactor participant with
+// KWP v0: the load endpoint (`workplan-kwp-load.md` KW1-KW7, at 1769487). A
+// second listener, on `kwp_port`, speaking exactly the subset T2 needs - the
+// handshake and the modal load session - while the query surface is the
+// default port's KWP/1. TcpServer's shape deliberately: a reactor participant with
 // fd-keyed connections, as thin as possible around the syscalls; the
 // engine-facing work all happens through CommandDispatcher's public
 // surface (ExecuteInsert and the session statements), so a load and a T1

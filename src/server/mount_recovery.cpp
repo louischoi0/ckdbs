@@ -117,9 +117,7 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
         // `GetSysTableRow`, not `InitTableAccess`: the row read is never cached
         // (`catalog.hpp` - `next_id` forbids it), while an access **is**, so an
         // audit built on the cached path answers from memory for any relation
-        // something already opened and reports nothing. That is not a
-        // theoretical difference: the first version of this function missed one
-        // of two dead relations for exactly that reason, and at a real mount the
+        // something already opened and reports nothing; at a real mount the
         // cache is cold only by accident of ordering.
         auto row = catalog.GetSysTableRow(object.oid);
         if (!row.ok()) {
@@ -246,8 +244,8 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
         targets.push_back(target);
     }
 
-    // The *stream's* core, not this core's: the scanner validates every
-    // segment header against it (the header says why the two differ).
+    // The *stream's* core, 0 under one stream: the scanner validates every
+    // segment header against it.
     auto recovered = exec::RecoverAssertions(device, stream_core, from_lsn, store, targets, log);
     if (!recovered.ok()) {
         // Reported, not fatal: a mount that refused here would refuse to open a

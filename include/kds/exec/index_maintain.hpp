@@ -48,9 +48,7 @@
 //
 // **Key columns come from `values`**, coerced through
 // `exec::CoerceLiteralToColumn` - the one path from a written literal to a
-// value the engine keys on. A second coercion is how the Cabin came to key
-// its writes on one form and its reads on another, silently losing every row
-// inserted after a value was observed (`docs/spec/types.md` §3.1).
+// value the engine keys on (`docs/spec/types.md` §3.1).
 //
 // **Covered columns come from `row`**, the encoded tuple, sliced at the
 // layout's offsets. They are stored as their inline cell bytes verbatim, so
@@ -100,10 +98,9 @@ struct IndexWrite {
 // What maintenance hands each write to, **while the tree still holds the
 // pages it names** (AT-S21): the leaf, and on a divide the parents it
 // wrote. A caller with a log appends and stamps here, from bytes read under
-// that hold; the hold drops when the call returns. Before AT-S21 the writes
-// were collected and logged after the heap write, by which time another
-// core's insert could have shifted the slot - and the entry was re-read at
-// that slot, so the record could carry another row's.
+// that hold; the hold drops when the call returns. Logged after release,
+// another core's insert could shift the slot and the record carry another
+// row's entry (the AT-S21 ground).
 using IndexWriteLog = std::function<Status(const IndexWrite&)>;
 
 // Appends this row's entries to every index on `access` that the write

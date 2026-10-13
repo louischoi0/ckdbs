@@ -21,35 +21,24 @@
 // (BP-H2), the Cabin store's latches (BP-H3), the assertion registry's, and
 // the statement epochs' fences (BP-H1, fences rather than a latch).
 //
-// **A `std::mutex`, not a spin latch, and the reason is what the sections
-// actually do.** The first draft of this header was a spinning
-// `exchange`/`yield` pair, justified as guarding "a critical section
-// measured in nanoseconds". Three of the WAL stream's four sections are
-// not that: the flush holds it across a `pwrite`, and the segment roll
-// holds it across `posix_fallocate`, a 64 MiB zero-filling prewrite and
-// two `fsync`s (`wal/file_log_device.cpp`'s `CreateSegment`; since BA-S12
-// the body is usually built ahead and the flush writes outside the latch,
-// but a roll still syncs the segment it leaves under it). Against a
-// holder blocked in `fsync`, `sched_yield` on Linux returns immediately
-// when no other thread is runnable on that CPU, so N-1 pinned reactor
-// threads would burn at 100% for the length of a segment creation. A
-// futex sleep is the right answer for a wait of that length, and
-// uncontended it is the same single atomic operation the spin took.
+// **A `std::mutex`, not a spin latch, because of what the sections do**:
+// a WAL segment roll still syncs the segment it leaves under the stream
+// latch (`wal/file_log_device.cpp`; BA-S12 moved the rest of the I/O
+// out). Against a holder blocked in `fsync`, `sched_yield` returns at
+// once on an otherwise idle CPU, so pinned reactor threads would spin at
+// 100%; a futex sleeps, and uncontended it is the same single atomic
+// operation a spin would be (AR0-M2: the spin primitive was deleted at
+// `7839a29`).
 //
 // Not a reader/writer lock and not recursive: no ownership check, so a
 // second acquisition on one thread hangs. A subsystem that takes this
 // documents its acquisition order at the top of its own file
 // (`docs/rules/rules.md` §3).
 //
-// **`HoldsLatch` is the debug half of that sentence** (AM-S3). "A second
-// acquisition on one thread hangs" is a fact a reader has to keep in their
-// head across every call an accessor makes; a hang is also the worst
-// possible way to be told, because it names nothing. So debug builds track
-// which latches this thread holds, and a structure that guards its public
-// readers asserts it is not already inside one. The census AM-S3 needed -
-// which of `DevicePageStore`'s free-map readers are reached from under the
-// hold - is that assertion plus the suite, which is how AM-S1 found the
-// two S-then-X sites for the page latch.
+// **`HoldsLatch` is the debug half of that sentence** (AM-S3): a hang
+// names nothing, so debug builds track which latches this thread holds,
+// and a structure that guards its public readers asserts it is not
+// already inside one.
 //
 // Debug only, and the tracking is a thread-local vector of pointers: at
 // the depths this engine reaches (two, and only inside the store) a linear

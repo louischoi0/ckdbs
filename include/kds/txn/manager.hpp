@@ -27,24 +27,19 @@
 //
 // ---- What it does not have ------------------------------------------------
 //
-// **This paragraph said "no lock manager, no waiting, no deadlock
-// detection" until M2, and all three are now false.** There is a lock
-// family (`txn/lock_table.hpp`), a writer meeting an undecided holder
-// waits for its decide rather than being refused, and a waiter that would
-// close a cycle is refused naming deadlock. What is unchanged: the write
-// conflict itself is still decided from the tuple header alone
-// (first-updater-wins, `docs/spec/txn.md` §5), the loser is still aborted
-// retryably where no wait can get past the refusal, and the **Keystone
-// lock byte stays unused** — AO-R3 keeps the family entirely in memory.
-// Stricter than PostgreSQL's READ COMMITTED, which re-reads.
+// The lock family (`txn/lock_table.hpp`, M2) makes a writer meeting an
+// undecided holder wait for its decide, and refuses a waiter that would
+// close a cycle naming deadlock. The write conflict itself is decided from
+// the tuple header alone (first-updater-wins, `docs/spec/txn.md` §5), the
+// loser is aborted retryably where no wait can get past the refusal, and
+// the **Keystone lock byte stays unused** (AO-R3: the family is in memory
+// only). Stricter than PostgreSQL's READ COMMITTED, which re-reads.
 //
-// **No SnapshotTooOld.** RegisterReader/ReadHorizon
-// (docs/workplan-reader-registration.md) record which snapshots exist so a
-// purge can prove no live view still needs a version, and two purges are
-// built on that: the catalog delete-mark purge, and the undo purge this
-// class arms on the log at construction (docs/inflight/in-progress/workplan-undo-purge.md).
-// Both are horizon-only - they free nothing a live view can reach - so the
-// error stays structurally unreachable by decision, not by omission.
+// **No SnapshotTooOld.** RegisterReader/ReadHorizon record which snapshots
+// exist so a purge can prove no live view still needs a version; the
+// catalog delete-mark purge and the undo purge this class arms at
+// construction are both horizon-only - they free nothing a live view can
+// reach - so the error is structurally unreachable (`txn.md`).
 //
 // **No cross-core protocol.** One manager per core, over the instance's one
 // WAL stream; a transaction runs on the core that began it and never
@@ -78,12 +73,11 @@
 // checkable without a latch: nothing suspends between reading a tuple's
 // header and overwriting it.
 //
-// **That premise is narrower since M2, and `lock_table.hpp` names this
-// comment when it says so.** A writer meeting an undecided holder now
-// parks, so the *statement* suspends. What stayed true is the span: the
-// park happens in `DispatchAsync` with no page span held, so the header is
-// still read and overwritten inside one uninterrupted stretch, which is
-// all the check needs.
+// **The premise is the span's, not the statement's** (`lock_table.hpp`
+// names this comment): a writer meeting an undecided holder parks, but in
+// `DispatchAsync` with no page span held, so the header is still read and
+// overwritten inside one uninterrupted stretch, which is all the check
+// needs.
 
 namespace kds::txn {
 
@@ -91,11 +85,9 @@ enum class IsolationLevel : std::uint8_t {
     // Default. A read view per **statement**: a statement sees everything
     // committed before it began. Chosen over REPEATABLE READ because
     // holding one view for a whole transaction converts more concurrent
-    // writes into retryable aborts (section 1) - and, since M2, narrows
-    // what a write may wait for as well, a repeatable-read waiter being
-    // excluded against the writer of the row it wants. The clause "with no
-    // waiting" stood here until AO-S8 and is no longer true of the engine.
-    // Matches PostgreSQL and Oracle, differs from InnoDB.
+    // writes into retryable aborts (section 1) - and narrows what a write
+    // may wait for as well, a repeatable-read waiter being excluded against
+    // the writer of the row it wants. Matches PostgreSQL and Oracle, differs from InnoDB.
     kReadCommitted = 1,
     // A read view per **transaction**, taken at BEGIN.
     kRepeatableRead = 2,
@@ -190,9 +182,8 @@ private:
     // **The borrows this transaction holds** (AO-R6). Bounded by
     // `max_locks_per_txn`, released as the last act of a decide - after the
     // commit is published, so a waiter woken by the release re-checks
-    // against a holder it can already see as decided. Empty on every path
-    // until AO-S3 gives the table a caller; a manager with no lock table
-    // never touches it.
+    // against a holder it can already see as decided. A manager with no
+    // lock table never touches it.
     LockHoldings borrows_;
     std::uint64_t last_undo_ptr_ = kNoUndoPtr;
     bool active_ = false;
@@ -256,13 +247,8 @@ private:
 };
 
 // Implements `wal::ActiveTransactions`, which is how a checkpoint asks for
-// the live set. That interface's own comment says "implemented by the
-// transaction manager when it exists" - this is it. Before this, the
-// expeditor passed `NoActiveTransactions`, which was a *correct* answer
-// only while no transaction could be live; with real transactions an empty
-// CHECKPOINT_BEGIN table would tell recovery's analysis phase that nothing
-// was in flight when something was, and every uncommitted row of those
-// transactions would be treated as a winner.
+// the live set: an empty CHECKPOINT_BEGIN table while a transaction is live
+// would make recovery's analysis treat its uncommitted rows as winners.
 class TransactionManager final : public wal::ActiveTransactions {
 public:
     // `wal` may be null - the unlogged path the socket-free tests run on.
@@ -277,15 +263,12 @@ public:
     // second predicate to fall back to. `core` names the slot this manager
     // owns.
     // `locks` is the instance's lock table (AO-R2), borrowed on the same
-    // terms as `visibility`. **Every production owner passes one** - AO-S5(a)
-    // gave the `Expeditor` and every `CoreRuntime` the instance's table -
-    // and null is what a fixture that wants no lock family gets: every
-    // decide then releases nothing, which is exactly the behaviour before
-    // AO-S2. **Passing it here is not optional for an owner that also calls
-    // `set_locks` on its dispatcher**: the dispatcher is what *takes* a
-    // borrow and this manager is what gives it back, so wiring one and not
-    // the other builds a family whose tenancies accumulate for the life of
-    // the instance. A fixture did exactly that until AO-S6c-a.
+    // terms as `visibility`. **Every production owner passes one**; null is
+    // a fixture with no lock family, whose decides release nothing.
+    // **Passing it here is not optional for an owner that also calls
+    // `set_locks` on its dispatcher**: the dispatcher *takes* a borrow and
+    // this manager gives it back, so wiring one and not the other builds a
+    // family whose tenancies accumulate for the life of the instance.
     TransactionManager(TrxIdSequence& ids, UndoLog& undo, storage::PageStore& store,
                        wal::WalManager* wal = nullptr,
                        InstanceVisibility* visibility = nullptr,
@@ -299,12 +282,8 @@ public:
           visibility_(visibility != nullptr ? visibility : own_visibility_.get()),
           core_(core),
           locks_(locks) {
-        // **`noexcept` came off here when the floor did.** `Reclaim()` takes
-        // the window latch, and `std::mutex::lock` is a throwing call - so
-        // the old `noexcept` would have turned a lock failure into
-        // `std::terminate` instead of an exception nobody catches either
-        // way. Nothing in the tree constructs this in a nothrow context;
-        // the keyword was a claim, not a requirement.
+        // Not `noexcept`: `Reclaim()` takes the window latch, and
+        // `std::mutex::lock` can throw.
         // Before any transaction runs on this core. The floor may not rise
         // past a cursor it has never seen, so a core that has not published
         // one is a core the floor treats as unattached (instance_visibility.hpp).
@@ -323,8 +302,7 @@ public:
         // computes the floor, so attaching runs one pass over an empty
         // window rather than growing a second way to raise it.
         visibility_->Reclaim();
-        // Arms the undo purge (docs/inflight/in-progress/workplan-undo-purge.md): the log's
-        // only appender is this manager, so `this` is alive at every call
+        // Arms the undo purge: the log's only appender is this manager, so `this` is alive at every call
         // by construction. Structural, like the snapshot lease - a
         // manager-owned log purges, a bare one (tests, tools) does not.
         //
@@ -346,11 +324,8 @@ public:
         });
     }
 
-    // Uninstalls the horizon source. The lambda above dangles past this
-    // point, and "only this class ever calls it" is exactly the kind of
-    // assumption the reader-registration review watched break (its B1) -
-    // so the destructor removes the question instead of relying on it.
-    // Uninstalls the horizon source, and **gives back the borrows of every
+    // Uninstalls the horizon source - the lambda above dangles past this
+    // point - and **gives back the borrows of every
     // transaction that is still live** (AO-R6's other end). The lock table
     // is the instance's and outlives this manager, so a core torn down with
     // an open transaction would otherwise leave that transaction's holders
@@ -378,10 +353,6 @@ public:
         undo_.SetHorizonSource(nullptr);
     }
 
-    // Starts a transaction and takes its first read view. **No bound on how
-    // many may be live** since AN-S2: the 64 was the width of the view's
-    // in-flight array, and a view is now a snapshot LSN that tracks no
-    // set. What bounds the population is the sessions holding it.
     // The instance's schema version word (AT-S2), moved by a decide of a
     // transaction that wrote catalog rows before its borrows are released
     // (`Transaction::NoteWroteCatalog`, AT-S5e). Null - a fixture's shape -
@@ -391,9 +362,13 @@ public:
     // How many `Transaction` objects this manager still holds, active or
     // not - a decided one leaves only at `Release`. A cell's reading: a
     // statement that begins a transaction of its own and never releases it
-    // grows this for the life of the core (the AT-S5e review's C5).
+    // grows this for the life of the core (AT-S5e).
     std::size_t tracked_transactions() const noexcept { return live_.size(); }
 
+    // Starts a transaction and takes its first read view. A view is a
+    // snapshot LSN and tracks no set, so nothing here bounds how many are
+    // live; the per-core in-flight table does (`kInFlightSlotsPerCore`,
+    // refused `ResourceExhausted` past it).
     StatusOr<Transaction*> Begin(IsolationLevel isolation);
 
     // Re-mints the read view at a statement boundary. A no-op under
@@ -466,7 +441,7 @@ public:
     // ordinary logged page mutation (section 6), then TXN_ABORT with no
     // durability wait - a transaction whose abort record did not survive is
     // a transaction with no commit record, which recovery rolls back
-    // anyway. Undo pages are not freed.
+    // anyway. Undo pages are not freed here; the undo purge recycles them.
     Status Abort(Transaction& txn, const RowLocator& locate_row = {});
 
     // ---- First-updater-wins (section 5) --------------------------------
@@ -566,10 +541,8 @@ public:
     }
 
     // A read view for a statement outside any transaction - autocommit's
-    // read path, and the one every SELECT takes today. **Cannot fail** since
-    // AN-S2: a mint is one read of the instance's snapshot ceiling and a
-    // walk of `live_` for the Cabin's one bit, where it used to fill a
-    // bounded array.
+    // read path. **Cannot fail**: a mint lowers this core's slot and reads
+    // the instance's snapshot ceiling, nothing else.
     //
     // **A held snapshot**: the caller registers it (`AutocommitSnapshot`)
     // or holds it on a transaction (`Begin`, `StartStatement`), and this
@@ -798,9 +771,8 @@ private:
     std::unique_ptr<InstanceVisibility> own_visibility_;
     InstanceVisibility* visibility_;
     std::uint32_t core_;
-    // The instance lock table (AO-R2), borrowed on `visibility_`'s terms
-    // and null everywhere until AO-S3 constructs one. Null means a decide
-    // releases nothing, which is the behaviour that stood before AO-S2.
+    // The instance lock table (AO-R2), borrowed on `visibility_`'s terms.
+    // Null (a fixture's shape) means a decide releases nothing.
     LockTable* locks_ = nullptr;
     void MoveSchemaWordIfCatalogWriter(const Transaction& txn) noexcept;
     std::atomic<std::uint64_t>* schema_word_ = nullptr;  // AT-S5e

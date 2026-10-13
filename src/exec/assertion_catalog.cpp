@@ -250,10 +250,9 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
     auto placed = heap::ChainInsert(store, rel.desc_page_id, id, payload.value(),
                                     catalog::kBootstrapXid, rel.oid);
     if (!placed.ok()) return placed.status();
-    // Logged since 2026-08-19, closing RV3's loudest remainder: this row
-    // is what RC07 rebuilds the *enforcing* registry from at mount, so an
-    // acknowledged declaration must survive a crash by redo like any
-    // other catalog write (exec/wal_row_log.hpp; the order note is there).
+    // Logged: this row is what RC07 rebuilds the *enforcing* registry from
+    // at mount, so an acknowledged declaration must survive a crash by redo
+    // like any other catalog write (exec/wal_row_log.hpp has the order).
     return LogChainInsert(wal, store, placed.value(), payload.value(),
                           catalog::kBootstrapXid, rel.oid, spills);
 }
@@ -600,10 +599,8 @@ StatusOr<AssertionDdlResult> CreateAssertion(
     // `Catalog::BumpVersion` is private on purpose, called only by catalog
     // mutators from which something cached is derived, and nothing cached is
     // derived from a `sys.assertions` row - no CatalogCache entry, and no
-    // compiled plan consults assertions. The task that changes the second
-    // fact (AST07, whose check steps make a plan a function of the
-    // assertion set) is the task that must make this publish invalidate
-    // plans, and it owns choosing the door.
+    // compiled plan consults assertions (the write paths call the enforcer
+    // directly - assertion_check.hpp).
     if (Status s = InsertAssertion(catalog, store, wal, assertion_id,
                                    prepared.value().target_oid, stmt.name, stmt.source_text,
                                    cabin_root);
@@ -734,13 +731,13 @@ StatusOr<std::uint64_t> DropAssertion(catalog::Catalog& catalog, storage::PageSt
                                 std::to_string(stmt.byte_offset) + ")");
     }
     const std::uint64_t id = found.value()->id;
-    // The record before the row - WAL before data, though the row itself is
-    // unlogged: a stream must not end holding live-looking ASSERT records
-    // for an assertion whose catalog row is already gone.
+    // The record before the row's retire - WAL before data: a stream must
+    // not end holding live-looking ASSERT records for an assertion whose
+    // catalog row is already gone.
     if (Status s = EmitAssertDrop(wal, id, found.value()->cabin_root); !s.ok()) return s;
     if (Status s = DeleteAssertion(catalog, store, wal, stmt.name); !s.ok()) return s;
     // No BumpVersion(), CreateAssertion's reasoning: nothing cached is
-    // derived from these rows until AST07's check steps are.
+    // derived from these rows.
     return id;
 }
 

@@ -35,7 +35,7 @@
 // (two NULLs are one group), this encodes *order*. One function doing both
 // would do one of them badly.
 //
-// ---- The coercion rule, which is the one that has already cost rows -----
+// ---- The coercion rule ---------------------------------------------------
 //
 // **Every value reaching this file must already be in its column's storage
 // form.** A `DATE` arrives as an epoch-day integer, a `DECIMAL(10,2)` as an
@@ -44,14 +44,10 @@
 // `exec::CoerceLiteralToColumn` (docs/spec/types.md §3.1), and this file
 // **refuses** anything else rather than parsing it itself.
 //
-// That refusal is deliberate and load-bearing. There were briefly two
-// coercion paths in this engine: the Cabin's write hook keyed on the raw
-// literal while its read path keyed on the coerced one, so an observed DATE
-// value silently stopped seeing rows inserted after it was observed - fewer
-// rows, a plausible answer, and no error anywhere. A second parser here
-// would reproduce that failure with an index's blast radius. So the
-// encoder takes storage values only, and a caller that has a literal
-// coerces first or gets an InvalidArgument naming the type it was handed.
+// A second parser here would reproduce the two-coercions failure
+// `CoerceLiteralToColumn`'s comment records (fewer rows, no error) with an
+// index's blast radius; a caller holding a literal coerces first or gets an
+// InvalidArgument naming the type it was handed.
 //
 // ---- Truncation (spec §6) ----------------------------------------------
 //
@@ -90,11 +86,10 @@ inline constexpr std::uint32_t kIndexStringKeyBytes = 32;
 
 // Each column's encoding is preceded by one discriminator byte.
 //
-// It is always `kIndexKeyPresent` today, because the row codec refuses to
-// encode a NULL and so no NULL can reach a key. The byte is spent anyway,
-// deliberately: when NULLs become storable, giving them a place in the key
-// must be a *semantic* change (which end they sort at) and not a **format**
-// change that invalidates every index page ever written.
+// It is always `kIndexKeyPresent`: a nullable column cannot enter an index
+// (`docs/spec/null.md` D2), so no NULL reaches a key. The byte is spent
+// anyway, so admitting nullable keys would be a *semantic* change, not a
+// **format** change that invalidates every index page ever written.
 inline constexpr std::uint32_t kIndexKeyDiscriminatorSize = 1;
 inline constexpr std::uint8_t kIndexKeyNull = 0x00;
 inline constexpr std::uint8_t kIndexKeyPresent = 0x01;
@@ -124,8 +119,8 @@ StatusOr<std::uint32_t> IndexKeyWidth(std::span<const catalog::SysColumnRow> key
 //                    only from a written literal - a decoded row cannot
 //                    produce one - and a *compile-time* answer for the
 //                    caller, never a per-row one
-//   Unsupported      a NULL, whose position in the key order is undecided
-//                    (see kIndexKeyNull), or a float column
+//   NotImplemented   a NULL (unreachable: see kIndexKeyNull)
+//   Unsupported      a float column
 Status EncodeIndexKeyColumn(const catalog::SysColumnRow& col, const parser::AstValue& value,
                             std::span<std::byte> out);
 

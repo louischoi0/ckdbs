@@ -197,17 +197,11 @@ struct SysColumnRow {
     //              `type_val` alone.
     //
     // The decimal reading is an **overload of an existing field, chosen
-    // over widening this row** (docs/spec/types.md TY9, workplan TY02).
-    // Widening it is a data-file format change: `SysColumnRow` has no spare
-    // byte, so `(p, s)` would have cost a superblock version bump and every
-    // pre-existing data file would stop mounting - which is what the last
-    // four bootstrap-relation additions each cost. `len` was already dead
-    // weight for a decimal column, so the pair rides in it for free.
+    // over widening this row** (docs/spec/types.md TY9): `SysColumnRow` has
+    // no spare byte, and `len` was dead weight for a decimal column.
     //
-    // The price, stated so nobody has to find it: `len` is no longer
-    // readable as "a width" without knowing the type. Two display paths
-    // consulted it that way - `sys.columns` and `DESCRIBE` - and both now
-    // render the type instead.
+    // The price: `len` is not readable as "a width" without knowing the
+    // type; `sys.columns` and `DESCRIBE` render the type instead.
     std::uint32_t len;
 
     // Defaulted true, which is D1's ratified semantics (`workplan-null.md`):
@@ -636,15 +630,8 @@ static_assert(SysPatternRow::kOnDiskSize == 41);
 // concept is not this feature's alone - `SysCabinRow` mirrors it below with
 // kCabinOriginAuto/kCabinOriginUser.
 //
-// **Only kOriginAuto is ever written now.** What the distinction decided
-// while it had a writer, kept because a re-designed declaration would
-// decide the same things: recording probation (a declaration *is* the
-// evidence n=2 waits for, so a user pattern recorded from its first
-// execution) and what a fingerprint version bump does to the row - an auto
-// row holds only a hash and retires, a user row re-fingerprinted from its
-// stored source text. It was never the trust model: a replayed entry is
-// validated identically whatever its origin, for the same reason the engine
-// keeps one evaluator and one step-kind table.
+// **Only kOriginAuto is ever written.** It was never the trust model: a
+// replayed entry is validated identically whatever its origin.
 inline constexpr std::uint8_t kOriginAuto = 0;
 inline constexpr std::uint8_t kOriginUser = 1;
 

@@ -19,12 +19,10 @@
 //
 // ---- Why this type has to exist ------------------------------------------
 //
-// `CommandDispatcher::Dispatch()` was stateless and `TcpServer` shares one
-// dispatcher across every connection, so there was nowhere for "this
-// connection is inside a transaction" to live. Everything transactional
-// needs that: which read view a statement takes, whether a write joins an
-// open transaction or commits on its own, and whether a failed statement
-// poisons what follows.
+// One dispatcher serves every connection on a core, so "this connection is
+// inside a transaction" lives here: which read view a statement takes,
+// whether a write joins an open transaction or commits on its own, and
+// whether a failed statement poisons what follows.
 //
 // A Session is owned by the connection and outlives no statement boundary
 // it should not. It holds a `txn::Transaction*` borrowed from the manager,
@@ -57,8 +55,10 @@
 //
 // ---- Concurrency ----------------------------------------------------------
 //
-// Core-local. A session belongs to one connection on one core, and two
-// sessions never touch each other's state - they interact only through the
+// One connection's, touched by one core at a time: a session with no
+// transaction open may move whole to another core at a transaction's head
+// (BL-S3, `load_placer.hpp`), and a transaction never crosses. Two sessions
+// never touch each other's state - they interact only through the
 // manager's live set, which is what makes their read views differ.
 
 namespace kds::server {
@@ -79,8 +79,8 @@ namespace kds::server {
 // **Why skipping is sound across a park.** Resuming at
 // `(page, slot)` skips every earlier page of the chain and every lower
 // slot of this page. A row can appear in one
-// of those places while this statement is parked - another session on this
-// core may insert - but such a row is invisible to this statement's
+// of those places while this statement is parked - another session may
+// insert - but such a row is invisible to this statement's
 // snapshot, which was minted before the park, so skipping it changes no
 // answer. Heap pages append slots and a heap chain never loses a page, so
 // nothing this walk already passed moves to a position it has yet to reach.
@@ -238,7 +238,7 @@ public:
         state_ = State::kInTxn;
     }
 
-    // ---- AO-S3b: a write statement parked in the middle of its walk -----
+    // ---- A write statement parked in the middle of its walk (AO-S3b) ----
     //
     // Everything the resume needs that the coroutine above it does not
     // have: the scope it must **keep open** (the rows already written live
@@ -318,7 +318,8 @@ public:
     }
 
     // The home core, the ship identity and the participant list retired
-    // (AT-S6, AT-S9); their history is at cf889b63. A session is one core's.
+    // (AT-S6, AT-S9); their history is at cf889b63. A transaction is one
+    // core's, whole.
 
     // **When BL's balancer last moved this session** (BL-R4's dwell,
     // `load_placer.hpp`), on the instance's clock; 0 for never. Kept on the

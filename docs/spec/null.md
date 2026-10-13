@@ -22,36 +22,20 @@ and the fixed-length rule), `docs/spec/heap-and-tuple.md` §3.3 (row layout),
 
 ## 1. Why not Oracle's representation
 
-The obvious model is Oracle's, and it is the one this spec rejects. Recorded
-because it is the first thing anyone proposes, and the reasons are not matters
-of taste.
+Oracle's model — `[length][data]` per column, NULL as length `0xFF`, trailing
+NULLs omitted — is rejected on two grounds, both correctness rather than taste:
 
-Oracle stores each column as `[length][data]`, encodes NULL as a length byte of
-`0xFF` with no data, and **omits trailing NULLs entirely** — the row simply
-ends early. That is where its space win comes from, and it makes the row
-variable-length.
+- **It contradicts invariant 13.** A variable-length row breaks
+  `docs/rules/rule-fixed-length-tuple.md` §2 (row size is a per-relation
+  constant, asserted in the row codec), and with it in-page slot arithmetic,
+  `PageView::OverwriteTuple()` always fitting, and the stable `(page_id, slot)`
+  address that Waystone, the Cabin and the physical optimizer rely on.
+- **It conflates `''` with NULL**, the defect
+  `docs/rules/rule-fixed-length-tuple.md` §3 gives as the reason for the tag
+  byte.
 
-**It contradicts invariant 13.** `docs/rules/rule-fixed-length-tuple.md` §2: a
-relation's row size is a per-relation constant, and *"no code path may produce
-a tuple whose size differs from its relation's constant. This is asserted in
-the row codec, not policed by convention."* The invariant is not decoration —
-it is what makes in-page slot addressing arithmetic, what lets
-`PageView::OverwriteTuple()` always fit so an UPDATE cannot migrate a tuple,
-and therefore what makes a `(page_id, slot)` pair a stable address for the life
-of a row. Waystone trails, the Cabin's location hints and the physical
-optimizer are all built on that stability. Adopting a variable-length row means
-retracting invariant 13 and everything standing on it.
-
-**It re-introduces a defect this engine already designed around.** Because a
-zero-length value *is* Oracle's NULL encoding, Oracle cannot distinguish `''`
-from NULL in `VARCHAR2`. `docs/rules/rule-fixed-length-tuple.md` §3 gives exactly
-that case as the *rationale* for the tag byte: *"NULL, empty string, and
-spilled must be distinguishable without reading the var-heap."* The tag exists
-because someone already declined this trade.
-
-What Oracle's model does have — a NULL costing no space — is worth keeping as a
-goal, and §2 keeps most of it by a different route: a relation with no nullable
-column pays nothing at all.
+Its merit — a NULL costing no space — is kept by §2's route: a relation with
+no nullable column pays nothing.
 
 ---
 
@@ -93,12 +77,9 @@ Derived in `RowLayout::Build()` from the schema alone, like every other member
 it carries — which is what keeps a second, disagreeing notion of "which bit is
 this column's" from being computed on an execute path.
 
-**Trailing, not leading, and the reason is the zero-fill.** Placing the bitmap
-after the columns leaves every existing column offset where it is, and a
-zero-filled payload reads as "nothing is NULL" — which is exactly what a row
-written before nullable columns existed means. The same argument that let
-`group_id` ride in the Bound Cabin entry's zero padding
-(`docs/spec/assertion.md` §5.1).
+**Trailing, not leading, because of the zero-fill**: every existing column
+offset stays put, and a zero-filled payload reads as "nothing is NULL" —
+what a row written before nullable columns existed means.
 
 ### 2.2 Why this costs an all-`NOT NULL` relation nothing
 
@@ -110,16 +91,13 @@ column therefore has a nullable-column count of zero and
 columns rather than by all columns:
 
 - **No format break and no migration.** `row_size` is byte-identical for every
-  relation that declares no nullable column, so no data file needs rewriting
-  and no superblock version has to move. Contrast the decimal `(precision,
-  scale)` decision (`docs/spec/types.md` §4a), which rode inside an existing
-  field precisely because widening `SysColumnRow` would have stopped every
-  pre-existing data file from mounting.
+  relation that declares no nullable column, so no data file is rewritten and
+  no superblock version moves.
 - **Pay-per-use.** A 40-column relation with no nullable column pays 0 bytes,
   not 5.
-- **No catalog change at all.** The flag, its on-disk offset, its display and
-  its codec predate the feature; what the feature added is a grammar that can
-  set it false and a row codec that honours it.
+- **No catalog change.** The flag, its offset, its display and its codec
+  predate the feature; it added a grammar that sets it false and a row codec
+  that honours it.
 
 ### 2.3 The `NOT NULL` grammar, and the default (D1)
 
@@ -138,8 +116,8 @@ with the byte.
 
 ## 3. `kNull` and the bitmap: one authority, not two
 
-`storage::CellTag::kNull` exists, written by `WriteNullCell()` and reported by
-`DecodeCell()`. That leaves a varchar column with two candidate places to
+`storage::CellTag::kNull` exists, written by `storage::EncodeNullCell()` and
+reported by `storage::DecodeCell()`. That leaves a varchar column with two candidate places to
 record nullness, which is two things that can disagree.
 
 **The rule: the bitmap decides; the tag is the defined filler.** A NULL varchar
@@ -149,14 +127,11 @@ bitmap and never the tag. A cell whose tag says `kNull` while the bitmap says
 present is `Corruption`, never interpreted, on the same footing as a payload
 whose length disagrees with the schema constant.
 
-The rejected alternative, recorded with its real merit: let the tag be
-authoritative for variable-width columns and the bitmap cover only fixed-width
-ones. It gives each column exactly one home for its nullness and a smaller
-bitmap, and a reader already dispatches on column type anyway. It is declined
-because every NULL-aware operation — `IS NULL`, three-valued comparison,
-`GROUP BY` key encoding, aggregate skipping — would then carry two code paths
-that must agree, and the cheap whole-row question ("does this row contain any
-NULL at all?") stops being one masked read.
+Rejected alternative: the tag authoritative for variable-width columns and the
+bitmap for fixed-width ones only. Declined because every NULL-aware operation
+(`IS NULL`, three-valued comparison, `GROUP BY` encoding, aggregate skipping)
+would carry two code paths that must agree, and "does this row hold any NULL?"
+would stop being one masked read.
 
 ---
 

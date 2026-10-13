@@ -20,8 +20,7 @@ that follows directly from standing engine contracts:
   copy, and `buffer_pool_frames` is an undivided instance total. What
   synchronizes it is a structure latch on every frame-table operation and a
   per-frame latch word, both armed only at `cores > 1`. **The armed cost is
-  not a number**: AM-S1's `cores = 1` A/B bounded the compile-out at −1.9%
-  group and +2.4% strict, and the armed cost is not measured.
+  not measured** (AM-S1 measured only the `cores = 1` compile-out).
 
   **G2 keeps a single core free of it**: unarmed, the structure latch is a
   null pointer and the guard is a branch, the latch word is never touched,
@@ -43,7 +42,7 @@ that follows directly from standing engine contracts:
 | EV3 | Pinning is a **page-class attribute**, not a per-page runtime flag. v1 pinned classes: **fixed catalog pages** and **Bound Cabin pages** (`docs/spec/assertion.md` §5). Waystone/trail pages and meta-pool pages are evictable (Waystone is advisory — loss is a performance event, never a correctness event; the meta pool has its own entry-level eviction and is not double-pinned at page level). Debug builds assert on any eviction attempt against a pinned class. PageRef (S2) pins are, as always, absolute: a frame with a live pin is never a sweep candidate. |
 | EV4 | **One pool for the instance** (AR0 M1): one frame table under a structure latch (§1), `kds.buffer_pool_frames` an undivided total rather than a per-core share, and no frame stealing or rebalancing because there is nothing to steal from. The sharing rests on the volume having one WAL stream, since the writeback gate is a property of the log; a volume with more than one is refused at mount, so it is unconditional. No core owns a relation's pages (`crosscore.md` CC7). |
 | EV5 | Eviction trigger: **low-watermark background sweep with an on-demand fallback**. The background task keeps the free-frame reserve above a configured low watermark; foreground allocation takes frames from the free list in O(1). If allocation finds the free list empty, it runs the sweep inline (on-demand fallback). **Built at BE-S3**: the reserve is the instance's one pool, kept between capacity / 16 and capacity / 8 on core 0's writeback tick, and the inline fallback runs in bounded batches (§3.2, §4). |
-| EV6 | Scan resistance: bulk sequential scans in the background group (CREATE ASSERTION builder, aggregate full scans, maintenance scans) run through a **small dedicated ring buffer** of frames, cycling within it and **not bumping usage counters**, so foreground OLTP working sets are never displaced by a scan. |
+| EV6 | Scan resistance: background bulk scans (the Cabin optimizer's build walk and the relayout survey, §5) run through a **small dedicated ring buffer** of frames, cycling within it and **not bumping usage counters**, so foreground OLTP working sets are never displaced by a scan. |
 | EV7 | No page-kind priorities in v1: **uniform CLOCK** across all evictable classes. B+tree inner nodes are protected naturally by their access frequency. No artificial weighting (e.g., elevated initial usage counts for index pages) without a measurement that justifies it. |
 | EV8 | Pool exhaustion (every frame pinned or un-flushable): **bounded cooperative retry, then a truthful statement error.** The allocating step yields to the event loop up to a configured retry budget, giving writeback a chance to produce clean frames; on budget exhaustion the statement fails with `ResourceExhausted`. No waiting, ever. Occurrences are counted in production stats; the operational meaning is documented as "pool undersized for the workload." **Built at BE-S4, with three differences from this row** (§3.3): the retry re-walks without yielding, since a fault has no event loop to yield to; a refusal is admitted only before a mutation's first write (the no-refuse window, BE-Q11); and drain mode - recovery, rollback, the assertion loops - writes back on the fault path, waiting on the log's durability, rather than be refused. |
 | EV9 | Observability: production counters for the pool (per store; `SHOW META`'s `pool_*`, BE-S3) — hits, misses, evictions, dirty writebacks, sweep rotations, ring-buffer scan frames served, `ResourceExhausted` occurrences. ANALYZE statements report page-cache hit/miss for their execution (per the standing ANALYZE goals). Sweep timing histograms are dev-mode only (dev/production profiling split). |
@@ -217,27 +216,20 @@ implementation (single code path, deterministic tests cover both callers).
 Bulk sequential readers declare ring mode on their scan handle:
 
 - Frames come from a small ring, one per `OpenScanRing` call and not per
-  core (`kds.scan_ring_frames`, PROPOSED 32), reused cyclically; pages read through the ring bypass the page table
+  core (`kScanRingFrames`, `PROPOSED` 32, `storage/page_store.hpp`), reused cyclically; pages read through the ring bypass the page table
   insert-for-retention path (they are mapped while in the ring, then
   dropped) and never bump usage counters.
 - **The ring holds a shared pin, and the page latch, on exactly the page
   its last `Fetch` returned; every other slot is an ordinary evictable
-  frame** (AM-R8, 2026-09-06). That is what makes "the span is valid until
-  the next `Fetch`" a statement about the pool rather than about there
-  being one thread: the pin is dropped on the next `Fetch`, before the
-  rotation, and in the ring's destructor. Bypassing the retention insert
-  and the usage bump is what a ring is for; a pin was never on that list.
-  The latch is the other half — without it a scan reads a page a writer on
-  another core is in the middle of, which is a wrong answer rather than a
-  slow one. It is armed only where the page latch is, at `cores > 1`,
-  which is the only configuration where that writer can exist. It runs in
-  both directions: a foreground **exclusive** request on the page the ring
-  is holding waits until the ring's next `Fetch`, where the read below
-  does not. A consumer therefore finishes with the span before the next
-  `Fetch` **and does not park while it holds one**, which is `heap_chain`'s
-  rule about which walks may take a fetcher, stated once more at the seam
-  because a ring's span is the one page handle in the tree that is not a
-  `PageRef`.
+  frame** (AM-R8, 2026-09-06). The pin makes "the span is valid until the
+  next `Fetch`" true of a shared pool; it is dropped on the next `Fetch`,
+  before the rotation, and in the ring's destructor. The latch keeps a scan
+  from reading a page a writer on another core is mid-way through - a wrong
+  answer, not a slow one - and is armed only at `cores > 1`. A foreground
+  **exclusive** request on the ring's page waits until the ring's next
+  `Fetch`. A consumer therefore finishes with the span before the next
+  `Fetch` **and does not park while it holds one** (`heap_chain`'s rule): a
+  ring's span is the one page handle in the tree that is not a `PageRef`.
 - **A slot rotates only when the fetch faulted.** A page found resident —
   the foreground's frame, or one this ring already faulted — is used in
   place and costs no slot. The fetch itself reports which it was, rather
@@ -250,9 +242,7 @@ Bulk sequential readers declare ring mode on their scan handle:
 - Consumers, as the tree has them: the Cabin optimizer's build walk
   (`src/exec/cabin_optimizer_exec.cpp`, where PO4 makes ring routing
   structural) and the relayout planner's survey
-  (`src/stats/relayout_planner.cpp`). This line read "the CREATE ASSERTION
-  builder and aggregate full scans" until 2026-09-06; neither has ever
-  opened a ring.
+  (`src/stats/relayout_planner.cpp`).
 - A ring-mode dirty write is not expected in v1 (scans are read paths); a
   writer that needs ring mode must go through the standard dirty
   protocol — the ring never bypasses flush-before-evict.
@@ -264,7 +254,7 @@ Bulk sequential readers declare ring mode on their scan handle:
 | `buffer_pool_frames` | **required; no default** (ruled 2026-10-07, built at BE-S4) | The pool's **maximum**, in 8 KiB frames, for the whole instance: one pool every core shares (EV4). A config without it, a `0`, and a server started with no config are refused `InvalidArgument` naming the key. It must cover the volume's resident-class pages plus a working minimum of 256 frames (BE-Q6), checked before the mount and again after it; a value below is refused naming both numbers |
 | free watermark | capacity / 16 (`low`), refilled to capacity / 8 (`high`) | §4. A constant function of the capacity since BE-Q5, not a key |
 | retry bound | 8 | §3.3. A constant since BE-Q5, not a key |
-| `kds.scan_ring_frames` | 32 per ring | EV6; a ring is per `OpenScanRing` call, not per core (§5) |
+| ring size | 32 per ring | EV6; `kScanRingFrames`, a parameter of `OpenScanRing` and not a config key; a ring is per call, not per core (§5) |
 | usage counter cap | 5 | compile-time constant |
 
 ## 7. Non-goals (v1, documented)

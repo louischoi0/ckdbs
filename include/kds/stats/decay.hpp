@@ -140,9 +140,8 @@ inline void Touch(DecayState& s, const sched::Clock* clock, sched::MonoTimeNs ha
 // 256 scaled units, and 256 >> 8 is 1). Past that point every idle score
 // reads exactly 0 and no comparison can order them - which cost the cabin
 // optimizer the thing it most wanted from a decayed score: a Cabin worth
-// 2^30 should take ~30 half-lives to fall below a threshold, not 16.
-// Measured as "for 89% of the DECAYING dwell the DROP is a timeout, not a
-// judgement" (`bench/results-cabin-optimizer-days.md`).
+// 2^30 should take ~30 half-lives to fall below a threshold, not 16 (most
+// of the DECAYING dwell's DROPs were timeouts, not judgements).
 //
 // **The information was never lost in the state** - only in the read.
 // `scaled` and `last_bump` still hold the whole history; it is the

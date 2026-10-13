@@ -19,10 +19,8 @@ and the fingerprint is accumulated during the parse. The corpus
 (`tests/testdata/parser_corpus.txt`) is the enumeration of verdicts, verdict
 by verdict.
 
-Two facts a reader needs that no item below otherwise states: `IN (value
-list)` is refused — `InvalidArgument`, "expected a subquery" — while
-`IN (SELECT …)` and `BETWEEN` are served; and `CREATE TABLE` takes no
-`WITH (...)` option table (I7).
+`IN (value list)` is served since BU-S2 (I10) beside `IN (SELECT …)` and
+`BETWEEN`; `CREATE TABLE` takes no `WITH (...)` option table (I7).
 
 ---
 
@@ -142,7 +140,7 @@ Execution order is textual order: the chain runs front to back, nested-looping i
 
 **Equality propagation is the one sanctioned predicate rewrite, and it adds conjuncts, never removes, rewrites or reorders one.** From `A = B` — two columns of one chain — and `B = <literal>`, the compiler appends the implied `A = <literal>` to the flat conjunct list before attachment, so the step owning `A` can be *keyed* on it: a join whose restriction is written against the other relation stops compiling the keyed side to a full walk per outer row. Its constraints, each load-bearing:
 
-- **Results are unchanged by transitivity.** Joins are inner-only (I9) and no `NULL` exists to make `=` non-transitive; the derived conjunct is *appended*, so the residual still carries every written conjunct and any step downgraded to a scan filters to identical rows.
+- **Results are unchanged by transitivity.** Joins are inner-only (I9), and a NULL in `A` or `B` makes a written conjunct unknown, which drops the row whatever the derived one says; the derived conjunct is *appended*, so the residual still carries every written conjunct and any step downgraded to a scan filters to identical rows.
 - **Plans may only be strengthened.** Derived conjuncts sit after every written one, and the pk-equality choice takes the first usable equality in residual order — so a written key is never displaced by a derived one. A derived conjunct *can* do more than fill a scan: it may promote a written `kRange` to a `kLookup` (a strictly stronger trust class under invariant 9), change which secondary index a step enters, reach a `CabinProbe`, or flip a statement's class to `kPointSelect` when it proves the driving step a point. Every one of those is a stronger access to the same rows; none weakens one.
 - **At most one conjunct is derived per column**, and only for a column carrying no written equality-to-literal of its own — the first descriptor-matching literal in its class, in written order. A second literal on one column is plan-inert (a keyed candidate already exists) and result-inert (the written conjuncts fully express the predicate, contradiction included); without the bound, a class of *M* columns carrying *L* literals appends `L·(M−1)` conjuncts, which is a compile-time and per-row blowup an adversarial statement can drive to seconds.
 - **Still `f(shape, catalog)`.** First-seen order everywhere, no data consulted; `docs/spec/index.md` §9's purity claim is unchanged.
@@ -166,7 +164,7 @@ A nested sub-chain step and a join probe both perform storage access *inside* an
 - **R1 — decode before descending.** At every step, the row is decoded into that step's owning frame buffer before any nested access. No span into a page frame — a tuple payload, or a descent's carried-out leaf — may be live across a call that can fetch another page.
 - **R2 — nested steps are read-only.** Every nested walk uses read access, enforced structurally: the nested driver has no parameter for it. This makes the Halloween problem unreachable rather than merely absent, and stops a read-only statement from dirtying frames.
 - **R3 — recursion is bounded**, at compile *and* at execute: the §2 depth cap is `parser::kMaxSubqueryDepth`, refused at each end. The chain-hop budget is a corruption guard, not a plan guard; the plan guard is §7's row-touch budget.
-- **R4 — a walk must be stoppable.** `ChainVisit`/`BtreeVisit` callbacks return an outcome, and "stop" ends the walk successfully — `Exists` ("stop at the first qualifying row"), `LIMIT` and every cost guard depend on it. **"Stop" is never encoded as a `Status`** — no cancellation code exists engine-side, deliberately, and control flow through the error channel makes "did it fail or did it finish?" unanswerable at the call site.
+- **R4 — a walk must be stoppable.** `ChainVisit`/`BtreeVisit` callbacks return an outcome, and "stop" ends the walk successfully — `Exists` ("stop at the first qualifying row"), `LIMIT` and every cost guard depend on it. **"Stop" is never encoded as a `Status`**: control flow through the error channel makes "did it fail or did it finish?" unanswerable at the call site. A client's `C_CANCEL` is not a stop — it is `kCancelled`, a failure, taken only at a walking `SELECT`'s slice boundary (`protocol.md` §10, BA-S15).
 
 A stopping visitor touches no page beyond the one it stopped on.
 
@@ -189,7 +187,7 @@ The check is free at runtime: the producing row is already decoded by R1 and the
 
 ## 7. Executor
 
-A small step VM in `src/exec/`: compile once (AST → `StepChain`, alongside class tagging), then iterate — a linear loop over steps, a nested loop for sub-chain steps, run to completion on the core its session is on. Cursor and row state live in the chain frame: no allocation per row, bounded by depth cap × per-step state. The VM is the compile contract J4 preserves.
+A small step VM in `src/exec/`: compile once (AST → `StepChain`, alongside class tagging), then iterate — a linear loop over steps, a nested loop for sub-chain steps, on the core its session is on; only a `SELECT`'s outermost walk yields, every 64 pages (BA-S15, `sched.md` §3), and nested walks and write walks run to completion. Cursor and row state live in the chain frame: no allocation per row, bounded by depth cap × per-step state. The VM is the compile contract J4 preserves.
 
 Two things the VM inherits from I15 rather than choosing: frames own their decoded rows (R1), and nested steps are read-only (R2). One thing it must not do: hold a `TableAccess` pointer across anything that can bump the catalog version.
 
@@ -200,11 +198,11 @@ Two things the VM inherits from I15 rather than choosing: frames own their decod
 - **It reads only what the walk holds** (R1): a visible version on the page under the walk's read hold, after the length check and before the copy; a version reconstructed through undo from the reader's own buffer, never the page; no fetch. It is armed once the step's check has run, so a step's first visible row takes the full path, and never while that step's Cabin recording is live.
 - **Same rows, order and counts.** A rejected row is examined, not matched, and charged to the row-touch budget in the order the residual's rejection is, so `examined=`, `sel=` and `ResourceExhausted` read the same; what falls is work - copies, decodes, spill fetches. `scan_kernel = on|off` (`kds.conf.sample`) is a read-path switch, on by default, and the contract suites compare replies across it.
 
-**Cost.** Nothing suspends mid-statement on a cooperative core, so an unbounded correlated scan is a denial of service on a shared engine. A per-statement row-touch budget (`max_rows_touched`, default `exec::kDefaultRowTouchBudget` = 100,000,000) stops the walk through R4 and fails the statement with a clear status; failing is the kinder answer.
+**Cost.** Outside the outermost `SELECT` walk's yield nothing suspends mid-statement on a cooperative core, so an unbounded correlated scan is a denial of service on a shared engine. A per-statement row-touch budget (`max_rows_touched`, default `exec::kDefaultRowTouchBudget` = 100,000,000) stops the walk through R4 and fails the statement with a clear status; failing is the kinder answer.
 
 ## 8. Open decisions — do not assume
 
-The decisions this section listed are unrecorded here.
+None recorded.
 
 ## 9. Testing requirements
 
@@ -222,11 +220,11 @@ The decisions this section listed are unrecorded here.
 
 ## 10. Required amendments (gate)
 
-Nothing pending: every amendment this section once listed is in the document that owns it.
+None pending.
 
 ## Addendum — `DELETE`
 
-`DELETE FROM <t> [WHERE <cond> [AND <cond>]*]` is a statement head.
+`DELETE FROM <t> [WHERE <predicate>]` is a statement head.
 
 - **The WHERE is the same production `UPDATE` uses** (`ParseOptionalWhere`
   at depth 0), compiled through the same `exec::CompileWhere`, so a

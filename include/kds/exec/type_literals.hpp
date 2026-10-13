@@ -69,8 +69,8 @@ inline constexpr std::int64_t kMaxEpochMicros =
 
 // DECIMAL's bounds (TY2). `p > 18` is a *separate type* carrying an
 // int128 - a different schema constant, so the two coexist - and never a
-// widening of this one. Built 2026-08-07: `decimal(p, s)` with `p >= 19`
-// selects `kTypeValDecimalWide` at the one DDL site, and the wide bounds
+// widening of this one: `decimal(p, s)` with `p >= 19` selects
+// `kTypeValDecimalWide` at the one DDL site, and the wide bounds
 // below are exclusive of the narrow ones on purpose - one declaration
 // selects exactly one type, so `decimal128(10, 2)` is refused toward
 // `decimal(10, 2)` rather than stored twice as wide.

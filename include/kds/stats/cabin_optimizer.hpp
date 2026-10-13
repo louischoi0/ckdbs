@@ -22,9 +22,10 @@
 //
 // Decide (here, pure over its own state) and Execute (PHY04, effectful)
 // are separate phases by construction: this header includes nothing that
-// can touch a page, a socket, or a catalog. The build/drop *outcomes* flow
-// back through the three Note* edges below, which PHY04 will call and
-// PHY02's tests call directly.
+// can touch a page, a socket, or a catalog. The build/drop/extend
+// *outcomes* flow back through the Note* edges below, which the executor
+// calls (PHY04, `exec/cabin_optimizer_exec.cpp`) and PHY02's tests call
+// directly.
 //
 // ---- The model (§II.4), and where v1 simplifies it -----------------------
 //
@@ -45,8 +46,9 @@
 // discovered: EXTEND's marginal pair is modeled as the coverage-miss share
 // of B against the same share of C; a CREATE's budget admission uses the
 // page estimate P_rel / kCreateEstimateDivisor until NoteCreated reports
-// the real count; and the ACTIVE baseline is the live recomputation rather
-// than PHY03's frozen P_scan, until PHY03 exists to freeze it.
+// the real count; and an ACTIVE or DECAYING entry is priced against the
+// P_scan frozen at its CREATE decision (`Managed::frozen_p_scan`), not
+// the live recomputation its own Cabin has made cheap.
 //
 // ---- Jurisdiction (PO1) ---------------------------------------------------
 //
@@ -121,34 +123,23 @@ struct CabinOptimizerConfig {
     std::uint64_t k_heal_pages = 2;     // pages per heal event (PROPOSED)
     // T_amort in decay half-lives - the one number expressing one belief:
     // a Cabin's expected useful lifetime. It is deliberately fused into
-    // both sides of the model (PO2's "build cost and benefit decay on the
-    // same clock"): the cost C = P_rel / T_amort prices the build over
-    // the window, and the DROP cooldown is 2 x T_amort half-lives.
-    // **Default 64, operator-ratified 2026-08-10** from the business-days
-    // finding (bench/results-cabin-optimizer-days.md): at T_amort = 1 the
-    // lifecycle was a nightly rebuild loop by the model's own arithmetic
-    // (survival = log2(B/C) + 2 half-lives of silence; a market overnight
-    // at the default 600 s half-life is ~105). 64 makes the cooldown
-    // alone 128 half-lives = 21 h 20 m at defaults, so a Cabin survives
-    // any close-to-open gap and the morning rebound recovers it
-    // DECAYING -> ACTIVE without a rebuild. Two consequences, stated:
-    // a *weekend* still drops it - deliberate, since re-nomination costs
-    // ~3 ticks and two silent days of staleness is what DROP is for -
-    // and the admission bar falls by the same factor, which is the same
-    // belief read forward (a structure serving for a day need only pay
-    // for itself over a day); PO6's budget, not the bar, is what bounds
-    // the population.
+    // the cost side of the model (PO2's "build cost and benefit decay on
+    // the same clock"): C = P_rel / T_amort prices the build over the
+    // window. **Default 64, operator-ratified 2026-08-10** from the
+    // business-days finding: at T_amort = 1 the lifecycle was a nightly
+    // rebuild loop (a market overnight at the default 600 s half-life is
+    // ~105 half-lives). The admission bar falls by the same factor - a
+    // structure serving for a day need only pay for itself over a day;
+    // PO6's budget, not the bar, bounds the population.
     Fix16 amort_windows = 64 * kFixOne;
 
     // T_cooldown: how long a DECAYING entry is given to rebound before it
-    // is dropped, in **whole decay half-lives**. Its own parameter since
-    // 2026-08-10; it was `2 x T_amort`, and the two are different
-    // questions wearing one number - T_amort is how long a build is
-    // believed to pay for itself, T_cooldown is how much silence is
-    // proof of death. The default 128 is exactly what the old expression
-    // yielded at the shipped T_amort = 64, so decoupling changed no
-    // behaviour and `bench/results-cabin-optimizer-days.md`'s measured
-    // 128.14 s cooldown still describes the shipped configuration.
+    // is dropped, in **whole decay half-lives** - how much silence is
+    // proof of death, a different question from T_amort's (decoupled from
+    // `2 x T_amort` on 2026-08-10, keeping its value). The default 128 is
+    // 21 h 20 m at the 600 s half-life: a Cabin survives any close-to-open
+    // gap and the morning rebound recovers it DECAYING -> ACTIVE without a
+    // rebuild, while a *weekend* still drops it, deliberately.
     //
     // **It cannot usefully be set below a workload's longest expected
     // quiet period.** A dead Cabin and an overnight-quiet one emit the

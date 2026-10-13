@@ -1,17 +1,15 @@
 # Bulk ingestion: multi-row VALUES and the KWP load stream
 
-> **SUS-1 (2026-09-05): heap relations are suspended, and this subsystem is
-> heap-gated — so for every relation created since the suspension, the sorted-fill fast path below is never taken
-> (`src/server/command_dispatcher.cpp:7416` requires `clustered_type == kHeap`).
-> Nothing here is deprecated or wrong; it is **unreachable for new
-> relations** until the suspension lifts, and it still serves every
-> relation created before it. The order, its rulings and its resume
-> condition are `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`;
-> AS-Q5 is where the operator's word on this banner goes.**
+> **SUS-1 (2026-09-05): heap relations are suspended, and Tier 3's sorted
+> fill (§8) is heap-gated** (`CommandDispatcher::SortedFillEligible`
+> requires `clustered_type == kHeap`), so it is never taken for a relation
+> created since the suspension; it still serves every heap relation created
+> before it. Tiers 1 and 2 are unaffected. The order and its resume
+> condition are `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`.
 
-How rows arrive in KDS in quantity. Three tiers exist by design: **Tier 1**
-(multi-row `VALUES`) and **Tier 2** (the KWP load stream) are built; Tier 3
-(§8) is not. Consistent with `docs/spec/protocol.md`, `docs/spec/wal.md`,
+How rows arrive in KDS in quantity, in three tiers: **Tier 1** (multi-row
+`VALUES`), **Tier 2** (the KWP load stream) and **Tier 3** (§8, a heap-only
+sorted fill under Tier 1). Consistent with `docs/spec/protocol.md`, `docs/spec/wal.md`,
 `docs/spec/assertion.md`, `docs/spec/index.md`, `docs/spec/cabin.md`,
 `docs/spec/eviction.md`, `docs/rules/rules.md`.
 
@@ -21,8 +19,8 @@ How rows arrive in KDS in quantity. Three tiers exist by design: **Tier 1**
 
 | # | Decision | Choice |
 |---|---|---|
-| BI1 | Scope | Three tiers: **T1** multi-row `VALUES`, **T2** KWP binary load stream, **T3** sorted fast-path build. T1 and T2 are built; T3 is not (§8) |
-| BI2 | Correctness shortcut | **None, ever.** Every row through T1/T2 runs the full single-row write pipeline — FK check, assertion admission, Keystone allocation, encode + var-heap spill, placement, Cabin witness, index maintenance, WAL — **in the same per-row order** as a single-row `INSERT` (§4). Bulk buys amortization of parse/framing/round-trip, never of authority |
+| BI1 | Scope | Three tiers: **T1** multi-row `VALUES`, **T2** KWP binary load stream, **T3** sorted heap fill. All three are built; T3 is heap-only and narrowly gated (§8) |
+| BI2 | Correctness shortcut | **None, ever.** Every row through T1/T2 runs the full single-row write pipeline — FK check, assertion admission, Keystone allocation, encode + var-heap spill, placement, Cabin witness, index maintenance, WAL — **in the same per-row order** as a single-row `INSERT` (§4). Bulk buys amortization of parse/framing/round-trip, never of authority; T3 places and logs by page only where its gate leaves the per-row steps nothing to do (§8) |
 | BI3 | T1 grammar | `INSERT INTO t VALUES (…), (…) [, …]` — comma-separated row lists; per-statement row cap `max_insert_rows` (config key, default **1024**, `parser::kDefaultMaxInsertRows`) |
 | BI4 | Atomicity | A bulk statement (T1) and a load session (T2) are **atomic**: all rows or none, unwound by the existing transaction scope. Any per-row refusal fails the whole statement with the 1-based row ordinal in the message. No partial-accept mode, no error table, no slow path |
 | BI5 | Fingerprint | An N-row INSERT fingerprints **identically to the 1-row INSERT** on the same relation — row count is not part of the template. Existing 1-row fingerprints are byte-stable (cf. `types.md` TY3). T2 never parses, so it never fingerprints |
@@ -30,7 +28,7 @@ How rows arrive in KDS in quantity. Three tiers exist by design: **Tier 1**
 | BI7 | Flow control | Windowed chunk acknowledgment: at most `window` unacknowledged chunks in flight (server-announced in `S_LOAD_READY`, **4**), chunk payload ≤ the announced byte cap (**256 KiB**). Explicit and deterministic, in the spirit of `protocol.md` §7 portal suspension — no TCP-buffer guesswork |
 | BI8 | Durability | Orthogonal, unchanged: the transaction's WAL class applies. **D3 relaxed is the documented recommendation for bulk load** — the use `wal.md` §1 named for it. No new class |
 | BI9 | Keystone budget | Per-row `AllocateRowId`; a refused row burns no id (admission precedes allocation, per row). An **aborted** bulk statement burns the ids of rows placed before the failure — a documented K4 budget consumption, the same class of product constraint as the budget itself. No id pre-reservation |
-| BI10 | WAL records | Per-row redo records exactly as for a single-row `INSERT`; there is no batched multi-row record type, and recovery (`wal.md` §12) sees nothing new |
+| BI10 | WAL records | T1/T2: per-row redo records exactly as for a single-row `INSERT`. T3: one full-page image per touched page (§8). There is no batched multi-row record kind, and recovery (`wal.md` §12) sees nothing new |
 | BI11 | T2 transactions | A load is one implicit transaction: `C_LOAD_BEGIN` runs the session's `BEGIN`, `C_LOAD_END` commits, `C_LOAD_ABORT` (or connection loss mid-load) rolls back. Cross-core: the load runs on the core its session is on, whole, as every transaction does (`crosscore.md` CC3) |
 | BI13 | Observability | `S_COMPLETE` tag `LOAD` (or `ABORT`) with `rows_affected` |
 | BI14 | Resume / dedup | **None.** A load has no resume token, `chunk_seq` must arrive strictly increasing from 0, and the engine deduplicates nothing — replaying chunks after a crash duplicates rows. Restart-safety is the client's (truncate-and-reload) |
@@ -58,7 +56,8 @@ The one-sentence trust model, stated once and enforced everywhere below:
 
 This is BI2, and it is why the tiers are ordered the way they are: T1 and T2
 remove costs that sit *around* the write pipeline (parsing, framing, round
-trips); only T3 would reach *into* it.
+trips); only T3 reaches *into* it, and only where the gate leaves nothing
+for the skipped steps to do (§8).
 
 | Cost | Removed by |
 |---|---|
@@ -66,7 +65,7 @@ trips); only T3 would reach *into* it.
 | one parse + text decode per row | T1 partially (one parse for N rows), T2 fully (binary, no parser) |
 | one dispatcher entry + catalog lookup per row | T1/T2 (one `TableAccess` borrow per statement / chunk) |
 | per-row pipeline (FK, admission, id, encode, place, witness, index, log) | **nothing** — this is the authority, BI2 |
-| per-tuple tree descent + node splits | T3 only, which is not built (§8) |
+| per-row placement and per-row log record | T3 only, heap relations under its gate (§8) |
 | one durability point per transaction | already solved: durability classes + explicit transactions |
 
 ---
@@ -285,10 +284,27 @@ and for a million.
 
 ---
 
-## 8. Tier 3 — the sorted fast path
+## 8. Tier 3 — the sorted heap fill
 
-Not built. Nothing here is a contract: every row of every tier becomes
-durable through §4's per-row pipeline.
+Built for heap relations only, and reached only from a multi-row T1
+statement (T2 enters through T1's path, `kwp_load_server.cpp`). **The gate**
+(`CommandDispatcher::SortedFillEligible`, plus the caller's per-statement
+half): more than one row, every row omits its pk, a heap relation, no
+var-heap root, no secondary index, no Cabin, and no assertion on the
+relation. Ineligibility is not a refusal: the statement takes §4's per-row
+path.
+
+Inside the gate (`CommandDispatcher::SortedFillInner`): FK parents resolved
+once and every row's arity and FK checked before anything burns (BI9's
+order); one contiguous id block carved by `AllocateRowIdRange` under the
+tail's hold (BB-R7) with one `Range` lock over exactly that block; rows
+appended page-at-a-time by `heap::ChainAppendCarved`; one undo record per
+row; then one full-page image per touched page as the WAL record (T3-4).
+The steps the gate excludes (spill, index, Cabin witness, assertion) have
+nothing to do, which is how BI2 holds.
+
+Since SUS-1 no new heap relation exists, so the fill serves only relations
+created before the suspension.
 
 ---
 

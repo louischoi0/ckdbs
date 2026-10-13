@@ -26,11 +26,9 @@ constexpr std::uint64_t kEntriesPerPageProxy = 254;
 txn::ReadView CabinOptimizerExecutor::MintCheckView() {
     // No manager means no transactions: every row carries kBootstrapXid and
     // is committed, which is what the all-visible view says. With one, the
-    // mint cannot fail (AN-S2) - which retired the arm that used to stand
-    // here for a failed mint, and its argument that the all-visible view
-    // is the one fallback this site may never take, because under it
-    // `CheckVisibility` can never answer kBusy and the banked set is then
-    // missing a live pk (cabin.md §6a's break exactly).
+    // mint cannot fail (AN-S2). The all-visible view is never a fallback
+    // here: under it `CheckVisibility` never answers kBusy and a banked set
+    // can miss a live pk (cabin.md §6a).
     if (txn_ == nullptr) return txn::ReadView::Everything();
     return txn_->MintCheckView(txn::kNoTrxId);
 }
@@ -218,10 +216,8 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
         // the pair `S(heap leaf) -> S(var-heap page)` is on
         // `device_page_store.hpp`'s page-against-page list because of
         // this loop. Two shares never block each other, so nothing waits
-        // here today. What this loop must not do is *park*: a fetcher's
-        // pin and latch outlive the call that returned the span, and
-        // AR2 R2 forbids holding a latch across a suspension. It does
-        // not - there is no `co_await` in this file.
+        // here. This loop must not *park* (AR2 R2: no latch across a
+        // suspension); there is no `co_await` in this file.
         //
         // Phase 2: decode and collect. Spill fetches are legal here - the
         // page span is finished with - and they go through the ordinary
@@ -273,11 +269,9 @@ Status CabinOptimizerExecutor::ApplyCreate(const stats::ActionItem& action,
         // resetting to CANDIDATE, or the controller would retry a settled
         // refusal every confirm cycle forever. A transient failure resets
         // and retries.
-        // `kNotImplemented` sits beside `kUnsupported` here, and must
-        // (2026-08-31): the two differ in what a *client* should do across
-        // releases, never in whether this process can retry. Reading a
-        // `NotImplemented` refusal as transient would retry a settled refusal every
-        // confirm cycle forever, which is the bug this test exists to stop.
+        // `kNotImplemented` sits beside `kUnsupported`: the two differ in
+        // what a *client* should do across releases, never in whether this
+        // process can retry.
         if (created.status().code() != StatusCode::kInvalidArgument &&
             created.status().code() != StatusCode::kUnsupported &&
             created.status().code() != StatusCode::kNotImplemented &&

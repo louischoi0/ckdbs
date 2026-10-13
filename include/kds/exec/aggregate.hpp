@@ -48,12 +48,10 @@
 //
 // Every aggregate's running state supports `Merge`, such that folding a row
 // stream in one pass and folding two disjoint partitions of it then merging
-// give the same output rows. Nothing in v1 calls it. It was kept for the
-// step pipeline's partial aggregates, which retired (AT-S10; its history
-// is at cf889b63), and the invariant stays pinned by its test. `AVG` landed 2026-08-07 carried as the `(sum, count)` pair
-// this paragraph reserved for it: partial sums and counts merge by
-// addition and the divide waits for `Finish`, where merging two partial
-// quotients would have been unrecoverable rounding.
+// give the same output rows. Nothing calls it since the step pipeline's
+// partial aggregates retired (AT-S10; history at cf889b63); the invariant
+// stays pinned by its test. `AVG` is carried as a `(sum, count)` pair for
+// it: partials merge by addition and the divide waits for `Finish`.
 
 namespace kds::exec {
 
@@ -66,8 +64,9 @@ using AggregateSink = std::function<Status(std::span<const parser::AstValue>)>;
 // discipline Cabin's caps state, and for the same reason: a truncated group
 // set is a wrong answer with a right answer's shape.
 //
-// The defaults are spec §6's `[PROPOSED]` numbers. Nothing may depend on
-// either value, only on the rule they enforce; AG07 makes them config keys.
+// The defaults are spec §6's numbers, overridden by the config keys
+// `aggregate_max_groups` / `aggregate_max_distinct`. Nothing may depend on
+// either value, only on the rule they enforce.
 struct AggregateLimits {
     std::size_t max_groups = 65536;
     std::size_t max_distinct = 1048576;
@@ -130,9 +129,8 @@ public:
     // groups are appended in their own order, so first-seen determinism
     // (AG6) survives a merge with a defined partition order.
     //
-    // **Nothing in v1 calls it, and the test is its only consumer.** It was
-    // built for the retired step pipeline's partial aggregates (AT-S10); the
-    // header says why the invariant stays.
+    // **Nothing calls it; the test is its only consumer** - the header says
+    // why the invariant stays.
     Status Merge(Aggregator&& other);
 
     // How many groups the fold founded. The global form is always 1.
@@ -189,8 +187,8 @@ private:
         // lives here and not on the aggregator.
         //
         // Null unless this item declared the word *and* the function is one
-        // it changes: `MIN`/`MAX` accept DISTINCT and ignore it (spec §3.2
-        // `[PROPOSED]`), since an extreme of a set equals the extreme of
+        // it changes: `MIN`/`MAX` accept DISTINCT and ignore it (AG2's
+        // no-op), since an extreme of a set equals the extreme of
         // its support - so building one would cost memory and a cap budget
         // to compute an identical answer. A statement without the word
         // allocates nothing at all for the feature.

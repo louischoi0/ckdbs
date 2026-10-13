@@ -31,12 +31,9 @@
 // division (libstdc++ indexes buckets with `hash % prime`), which a
 // power-of-two mask replaces.
 //
-// This is not a free-standing preference: the build is paid **per inner
-// row, on the walk the statement was going to run anyway**, so its
-// constant is what decides at which k the build beats the per-row walk.
-// The measured history, all in `docs/workplan-join-inner-build.md`: 83.7
-// ns/row with a vector per key (break-even k ≈ 2.6), 43.2 with the arena
-// and a Keystone-word pk (k ≈ 1.8), and this table is the third cut.
+// The build is paid **per inner row**, so its constant decides at which k
+// it beats the per-row walk; this table is the third and fastest cut
+// measured (`docs/workplan-join-inner-build.md`, at 1769487).
 //
 // What is deliberately *not* traded away for speed: the key is still the
 // Cabin's whole value identity (`stats::MakeValueKey`), compared in full
@@ -49,9 +46,9 @@
 // No lock, no atomic, deliberately: an InnerBuild is statement-lifetime
 // execution state — owned by one executor frame (JB3), filled by that
 // statement's own walk, probed by that statement's own later rows,
-// destroyed with the frame. The executor parks at page boundaries (P4d)
-// and other statements interleave on the core, but never on this frame,
-// and nothing else can reach the map.
+// destroyed with the frame. The executor yields at slice boundaries
+// (BA-S15) and other statements interleave on the core, but never on this
+// frame, and nothing else can reach the map.
 //
 // What a parking, extending caller may hold across a suspension — stated
 // here because JB4's replay and JB6's resumed walk rely on it: **a `Bucket`
@@ -211,16 +208,10 @@ private:
         // tag taken from them would agree with the index and filter
         // nothing.
         //
-        // **The hash is used as `CabinKeyHash` produced it, unmixed**, and
-        // that is measured rather than assumed. `CabinKeyHash` maps a
-        // small integer key to a near-consecutive value, so consecutive
-        // keys take consecutive slots: the fill writes the table
-        // sequentially and collides almost never. A finalizing mix
-        // (murmur3's) scatters them instead and measured *worse* on every
-        // cell of the map micro-benchmark - 15.1 to 16.3 ns/row on the
-        // 10,000-rows-over-2,000-keys shape, 22.9 to 43.8 on all-distinct
-        // keys. The locality is worth more than the tag's filtering, and
-        // a full key compare stands behind the tag in any case.
+        // **The hash is used as `CabinKeyHash` produced it, unmixed**:
+        // consecutive integer keys take consecutive slots, and a finalizing
+        // mix (murmur3's) measured worse on every cell of the map
+        // micro-benchmark. A full key compare stands behind the tag.
         return static_cast<std::uint32_t>(hash >> 32);
     }
 

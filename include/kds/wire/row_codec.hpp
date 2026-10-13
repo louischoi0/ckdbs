@@ -46,34 +46,25 @@
 // **A length prefix on fixed-width fields is redundant and is kept anyway.**
 // Two reasons, both about who reads this: a consumer can skip a field it
 // does not understand without a type table, and NULL needs a representation
-// that is not "a value of the right width". Paying 4 bytes per field to
-// make the stream self-describing is what lets the cross-core consumer and
-// the wire consumer share a decoder.
+// that is not "a value of the right width". 4 bytes per field buys a
+// self-describing stream.
 //
 // ---- Types ---------------------------------------------------------------
 //
 // Covers exactly what the engine can store (`src/exec/row_codec.cpp`): the
-// signed ints, `uint64`, `bool`, `char`, `varchar`, and - since the types
-// work (`docs/spec/types.md`) - `date`, `timestamp` and `decimal(p, s)`.
+// signed ints, `uint64`, `bool`, `char`, `varchar`, `date`, `timestamp`,
+// `decimal(p, s)` and the wide decimal (`docs/spec/types.md`).
 // `float` is refused at CREATE TABLE, so no column can hold one and
 // nothing here encodes one.
 //
-// **DECIMAL on the wire** (the decision protocol.md §6 held `[OPEN]`,
-// settled 2026-08-07): the value is the **unscaled int64, LE, 8 bytes** -
-// the exact integer storage holds, in TIMESTAMP's shape - and the scale
-// travels **in the row description, once**, never per value. A per-value
-// scale would be 2 bytes of redundancy per field that can only ever agree
-// with the column or be a defect; the description states the fact once,
-// which is the same reasoning that put `(p, s)` in one catalog word
-// (TY02). `FieldDescription::type_mod` carries that word - literally the
-// catalog's packed `len`, read through `catalog::DecimalPrecisionOf` /
-// `DecimalScaleOf`, so there is one packing with two readers and no
-// second scheme. A `p > 18` decimal is a *future separate type* (TY2)
-// with its own type_val and its own 16-byte width; nothing here forecloses
-// it, which is what "scaled-int, width follows the type" buys over the
-// rejected string encoding - text would cost a per-value parse on an
-// all-binary protocol and reintroduce the two-readings drift the type
-// system just removed.
+// **DECIMAL on the wire** (protocol.md §6, settled 2026-08-07): the value
+// is the **unscaled int64, LE, 8 bytes** - the exact integer storage
+// holds, in TIMESTAMP's shape - and the scale travels **in the row
+// description, once**, never per value. `FieldDescription::type_mod`
+// carries the catalog's packed `len`, read through
+// `catalog::DecimalPrecisionOf` / `DecimalScaleOf` - one packing, two
+// readers. The wide decimal (TY2) is its own type with a 16-byte field
+// (`DecodeDecimalWide`), scale in the description the same way.
 
 namespace kds::wire {
 
@@ -223,13 +214,10 @@ private:
 // already owns: "the same encoding carries bound parameters, so a NULL
 // going in and a NULL coming back are spelled identically" (file header).
 //
-// **A parameter carries its own `type_oid`, and §5 did not say so** (added
-// 2026-08-31, P09). The frame as specified was `{i32 len, bytes}` per
-// parameter and nothing else, which cannot be decoded: eight bytes are an
-// int64, a timestamp, an unscaled decimal or eight bytes of text, and the
-// server has no way to choose. Every value travelling *outward* is typed by
-// `S_ROW_DESC`; this is the same fact travelling inward, and without it the
-// protocol's own "binary, little-endian end to end" (D5) has no reading.
+// **A parameter carries its own `type_oid`** (P09): eight bytes alone are
+// an int64, a timestamp, an unscaled decimal or eight bytes of text, and
+// the server has no way to choose. Every value travelling *outward* is
+// typed by `S_ROW_DESC`; this is the same fact travelling inward.
 //
 // `type_mod` rides along for the same reason it does on a field
 // description: a decimal's unscaled integer means nothing without its

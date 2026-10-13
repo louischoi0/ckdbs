@@ -70,11 +70,9 @@ coercion path, no carve-outs — a bare `1.5` into a varchar column stores
 the string `1.5`, as the quoted form always did. There is no scientific
 notation: `1e5` lexes as an integer and an identifier.
 
-Fusing the token moved the hash only of statements containing
-digit-dot-digit, which lexed but parsed in no production — fingerprintable
-yet unrecordable — so no stored `pattern_id` moved and `kFingerprintVersion`
-did not move (`src/parser/fingerprint.cpp` at kNumLit, pinned by the golden
-corpus).
+Fusing the token moved no stored `pattern_id` (digit-dot-digit parsed in no
+production before), so `kFingerprintVersion` did not move
+(`src/parser/fingerprint.cpp` at `kNumLit`, pinned by the golden corpus).
 
 ## 2b. `char(N)` and `varchar(N)` `[CONFIRMED]`
 
@@ -180,7 +178,7 @@ whether or not a row would have matched.
 - **A literal takes the kind its column's encode takes**
   (`CoerceLiteralToColumn`): an integer column and `uint64` an integer
   literal, `bool` `0` or `1`, `char`/`varchar` a string literal. A bare
-  numeric is the string of its spelling (§1), so `n = 20.0` is refused like
+  numeric is the string of its spelling (§2), so `n = 20.0` is refused like
   `n = '20'`. `date`, `timestamp` and `decimal` keep the spellings §3.1 and
   §3.2a give them - a string, or an epoch integer for a date or a
   timestamp, or an integer for a decimal - which are their own forms, not
@@ -454,9 +452,10 @@ so they cannot come to disagree. `sys.columns` exposes `type` rather than
 
 `FLOAT64` (TY1) · time zones and `timestamptz` (TY4) · cross-scale
 DECIMAL comparison and rescaling (TY6) · cross-width DECIMAL comparison
-(§2a) · `p > 38` (§2a) · date/decimal arithmetic and value functions (TY8)
-· scientific notation and a leading-dot literal (§2) · casts between these
-types and anything (`'2026-08-06'` into a varchar column stays a plain
+(§2a) · `p > 38` (§2a) · arithmetic, value functions and `CAST` outside a
+`SET` value (TY8, §3.2, §3.2b), beyond §3.2a's two WHERE functions ·
+scientific notation and a leading-dot literal (§2) · any implicit
+conversion (§3.1a; `'2026-08-06'` into a varchar column stays a plain
 string).
 
 ## 6. Contract tests
@@ -481,8 +480,8 @@ string).
    a string-literal statement.
 7. **Rendering**: §3.3's formats pinned, including trailing-zero scale and
    the `type_val = 0` compatibility of every existing `FormatValue` caller.
-8. **Catalog**: `(p, s)` survives restart; a pre-types data file opens and
-   serves unchanged.
+8. **Catalog**: `(p, s)` survives a restart, and the types are visible
+   through the catalog views.
 
 ## 7. Open items — do not assume
 

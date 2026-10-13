@@ -47,10 +47,8 @@ bool HeapStorageAllowedForTest() noexcept;
 // to observe the refusal has to put it back. Restores what it found, so
 // nothing leaks into the next cell.
 //
-// There is deliberately no `AllowHeapStorageForTest` counterpart: one existed
-// briefly, had zero call sites, and was byte-identical to this but for a
-// literal. If both directions are ever wanted, one `HeapStorageForTest(bool)`
-// replaces this rather than sitting beside it.
+// There is deliberately no `AllowHeapStorageForTest` counterpart; if both
+// directions are ever wanted, one `HeapStorageForTest(bool)` replaces this.
 class SuspendHeapStorageForTest {
 public:
     SuspendHeapStorageForTest() noexcept : saved_(HeapStorageAllowedForTest()) {
@@ -293,9 +291,9 @@ private:
     Status ExpectToken(TokenType type, std::string_view desc);
     void ConsumeOptionalSemicolon();
 
-    // The statement text as handed in, kept so a declaration's body can be
-    // sliced out of it verbatim (ast.hpp explains why verbatim matters).
-    // Non-owning: a Parser does not outlive the string it was given.
+    // The statement text as handed in, kept so text can be sliced out of it
+    // verbatim: an assertion's `source_text` and a SET value subquery's
+    // `subquery_sql`. Non-owning: a Parser does not outlive its string.
     std::string_view sql_;
 
     Lexer lexer_;

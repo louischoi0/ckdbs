@@ -45,12 +45,10 @@
 // Construction is one step under the collector's latch (the concurrency
 // note below). PHY02's `Decide` takes the snapshot and nothing else.
 //
-// Concurrency: **the instance's, latched above one core** (AT-S8). Every
-// core's dispatcher notes executions into it and the one Cabin store
-// forwards every core's lookups - the second since AT-S7 made the store the
-// instance's, which made this a data race on two unsynchronised maps until
-// AT-S8 gave it `SetLatch`. Each public method holds the latch for its
-// body; it is innermost, taken holding nothing but the controller view's
+// Concurrency: **the instance's, latched above one core** (AT-S8,
+// `SetLatch`). Every core's dispatcher notes executions into it and the one
+// Cabin store forwards every core's lookups. Each public method holds the
+// latch for its body; it is innermost, taken holding nothing but the controller view's
 // latch (`OptimizerSurface::view_latch`, outer, across a tick).
 
 namespace kds::stats {

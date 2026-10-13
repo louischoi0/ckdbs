@@ -12,13 +12,10 @@
 #include "kds/wal/record.hpp"
 #include "kds/wal/stream.hpp"
 
-// The one FULL_PAGE_IMAGE writer (review S1 of
-// docs/workplan-rv3-catalog-recovery.md). Four sites used to hand-copy
-// these lines - the dispatcher's structural changes, the catalog's
-// chain-link edit, the built index tree, the assertion build - and the
-// dispatcher's own comment named the failure mode: "the stamp is the half
-// a hand-copied block loses". Redo gates on `page_lsn`, so an unstamped
-// image replays a record whose effect the page already holds.
+// The one FULL_PAGE_IMAGE writer: append the image, then stamp the page.
+// One function so the stamp cannot be lost from a hand-copied block - redo
+// gates on `page_lsn`, so an unstamped image replays a record whose effect
+// the page already holds.
 //
 // Lives in storage rather than wal because the WAL layer owns no
 // PageStore by design (wal.md: segments are not pages); storage already

@@ -7,8 +7,9 @@
 > errors. The newline text protocol is an **off-by-default loopback debug
 > surface** — Appendix A, `debug_text_port`.
 >
-> The statement surface is the same on either port: §3's command
-> reference is SQL, and SQL does not depend on how the bytes are framed.
+> The statement surface is the same on either port: the command
+> reference is SQL (`manual/sql/sql.md`), and SQL does not depend on how
+> the bytes are framed.
 
 How to talk to the `kds_server` process from a client: the wire protocol,
 the full command reference, and how to use the bundled CLI tool. This
@@ -20,7 +21,7 @@ documents the *client-facing* surface only - for server internals see
 ## 1. Connecting
 
 `kds_server` listens on a TCP socket, loopback only, port `15432` by
-default (see `kDefaultPort` in `src/server/main.cpp`), and that port
+default (`Expeditor`'s `port` in `include/kds/server/expeditor.hpp`), and that port
 speaks **KWP/1** (§2). Authentication is off by default; when it is on,
 the exchange runs inside the handshake and no statement is admitted
 before it succeeds.
@@ -84,11 +85,12 @@ Start the server:
 
 ```sh
 ./build.sh
-./build/kds_server                        # defaults: kds.db, port 15432, ./kdb.log
-./build/kds_server --config kds.conf      # or from a settings file
+./build/kds_server --config kds.conf     # buffer_pool_frames is required, so a config is too
 ```
 
-It prints the data file, the log destination, and the port it bound.
+It prints the data file, the log destination, and the port it bound. A
+start with no config is refused, because `buffer_pool_frames` has no
+default (below).
 
 ### Configuration
 
@@ -106,7 +108,8 @@ defaults → config file (`--config <path>`) → command-line flags.** See
 | `auth` | — | `off` | `off` or `scram`. `scram` gates every connection behind a SCRAM-SHA-256 exchange (see "Connecting"); named values only, so a future method is a new word rather than a reinterpreted boolean. |
 | `users_file` | `--users-file` | — | The user store: one `<username> <role> <verifier>` per line, `#` comments. Required (and non-empty) when `auth = scram`; a malformed line, unknown role, or missing role column refuses startup naming the line. Written by `--add-user`, never by the running server. |
 | `wal_dir` | — | `<data_file>.wal` | WAL segment directory. |
-| `isolation` | — | `read committed` | The level a connection starts at, and so the level an autocommit statement runs at (`docs/spec/txn.md` §1). `read committed` takes a read view per **statement**; `repeatable read` takes one per **transaction**. READ COMMITTED is the default for a reason specific to this engine: holding one view for a whole transaction turns more concurrent writes into retryable aborts, and it also **narrows what a write can wait for** — a repeatable-read statement waits on a holder of a coarser unit or on an `INSERT`'s refusal, never on the writer of the row it wants, because that commit is invisible to a view minted at `BEGIN` (`docs/spec/txn.md` §5). The clause "with little waiting" stood here until AO-S8 and is no longer true of the engine: a writer meeting an undecided holder waits for its decide. `serializable` and `read uncommitted` are refused by name, each with its reason. This is the server rung of a three-level chain — a connection overrides it with `SET ISOLATION LEVEL`, one transaction with `BEGIN ISOLATION LEVEL`. Names are case-insensitive and accept `-`/`_`. |
+| `buffer_pool_frames` | — | **required** | The buffer pool's hard ceiling in frames, for the whole instance (`docs/spec/eviction.md`). A missing key, `0`, or a value below the volume's floor (resident-class pages plus 256) refuses startup. |
+| `isolation` | — | `read committed` | The level a connection starts at, and so the level an autocommit statement runs at (`docs/spec/txn.md` §1). `read committed` takes a read view per **statement**; `repeatable read` takes one per **transaction**. READ COMMITTED is the default for a reason specific to this engine: holding one view for a whole transaction turns more concurrent writes into retryable aborts, and it also **narrows what a write can wait for** — a repeatable-read statement waits on a holder of a coarser unit or on an `INSERT`'s refusal, never on the writer of the row it wants, because that commit is invisible to a view minted at `BEGIN` (`docs/spec/txn.md` §5). A writer meeting an undecided holder waits for its decide. `serializable` and `read uncommitted` are refused by name, each with its reason. This is the server rung of a three-level chain — a connection overrides it with `SET ISOLATION LEVEL`, one transaction with `BEGIN ISOLATION LEVEL`. Names are case-insensitive and accept `-`/`_`. |
 | `checkpoint_interval_ms` | — | `5000` | How often dirty pages are flushed (`docs/spec/wal.md` §11). `0` disables the cadence, leaving `SYNC`/shutdown as the only durability points. |
 | `durability` | — | `group` | Durability class for every **logged** statement — `INSERT`, `UPDATE` and `DELETE` (`docs/spec/wal.md` §1). It is applied at `COMMIT`, so inside an explicit transaction one wait covers every statement in it rather than one per statement. `strict`/`d1` fsyncs before replying; `group`/`d2` is the same durability point with the fsync amortized over concurrent committers; `relaxed`/`d3` replies immediately and syncs on the drain below. Names are case-insensitive. |
 | `wal_drain_interval_us` | — | `1000` | How often the WAL drain runs. Bounds a `relaxed` commit's loss window; a tick with nothing staged does no I/O. `0` disables it. |
@@ -299,51 +302,24 @@ hold on the debug port too (Appendix A gives the text spellings).
   design admits and this release has not built — outer joins, CTEs,
   `UNIQUE`, `ALTER TABLE ADD COLUMN` — so a client may feature-detect and
   try again against a newer server.
-- **`REPEATABLE READ` is one snapshot, and there is one core to read it
-  on.** A transaction pins its view at `BEGIN` and every statement of it -
-  read and write - runs where the session is, so the promise needs no
-  protocol to hold across cores. It had one until v3.0.0's M3: a
-  transaction could reach another core, and the snapshot its `BEGIN`
-  pinned was carried there and adopted for that transaction's life. What a
-  client sees is unchanged; what it can no longer see is a statement of
-  its transaction running anywhere else.
-- **The four statements are not atomic** *as the tool runs them*. The
-  engine has transactions (`BEGIN`/`COMMIT`/`ROLLBACK`), but the tool does
-  not wrap the four in one — so a failure between them leaves a trade
-  recorded against balances that never moved, and those are counted and
-  reported as `torn`. That number is a property of the tool's choices
-  rather than of the engine.
-- **Balances are computed client-side** (the tool predates `SET col = col +
-  <n>`, which computes server-side since BJ; it has not been changed to use
-  it). Each trader process owns a
-  *disjoint* partition of accounts, which is what makes that safe without
-  locks; `--verify` reads a sample back and compares stored against
-  expected.
+- **`REPEATABLE READ` is one snapshot on one core.** A transaction pins
+  its view at `BEGIN` and every statement of it - read and write - runs
+  where the session is, so the promise needs no cross-core protocol
+  (background: until v3.0.0's M3 a transaction could reach another core
+  and carried its snapshot there).
 - **Money is `int64` minor units, or `decimal(p, s)`.** `float` columns are refused
   at `CREATE TABLE`.
+- **The instance holds roughly 7,600 user columns**: catalog relations
+  chain into a reserved range of low page ids
+  (`docs/rules/keystoneid-k0-findings.md`). `DROP TABLE` retires a
+  relation's column rows (`docs/spec/drop-table.md`), so a long-lived file
+  that creates and never drops will eventually refuse a `CREATE TABLE`.
 
-Storage is chosen per relation and the choice is part of the measurement:
-`accounts`/`users`/`assets` are `BTREE` because every access is `WHERE id =
-<n>`, and on a heap relation that would be a full chain scan - the update
-number would then be a function of `--users` rather than of the engine.
-`trades` and `user_periodic_profit` are `HEAP`: insert-only, never probed
-by pk, so a tail append is exactly right.
+## 4. Using `tools/ckdbs_cli.py`
 
-One operational limit worth knowing: catalog relations chain into a
-reserved range of low page ids, so the whole instance holds roughly **7,800
-user columns** (`docs/rules/keystoneid-k0-findings.md`), and these five
-relations spend 27 per run. `DROP TABLE` retires a relation's column rows
-(`docs/spec/drop-table.md`); a long-lived scratch file that never drops
-will eventually refuse a `CREATE TABLE`, and the tool says so by name
-rather than passing on the storage error underneath.
-
-**Put the data file on a real disk.** The tool's footer says so and it is
-not a formality: `INSERT` is logged and `fsync` on tmpfs is free, so a
-tmpfs number here is not a fast result, it is a different measurement.
-
-Exit code is 0 regardless of whether the server replied `OK`/`PONG` or
-`ERR ...` - the CLI does not interpret the reply, it only fails (exit 1)
-if it cannot connect at all.
+A one-shot command's exit code is 0 whatever the server replied - the CLI
+does not interpret the reply. It exits 1 if it cannot connect, if a `-f`
+file cannot be read, or if any statement of a `-f` run replied `ERR`.
 
 **Interactive REPL** - omit the command:
 
@@ -352,22 +328,10 @@ python3 tools/ckdbs_cli.py
 ckdbs> PING
 PONG
 ckdbs> DESCRIBE accounts
-oid=4000 root_page_id=128 clustered_type=HEAP next_id=1 columns=2
-pos=0 name=id type=int64 len=8 notnull=yes pk=yes autoincrement=yes
-pos=1 name=name type=varchar len=0 notnull=yes pk=no autoincrement=no
-ckdbs> help        # local-only, not sent to the server
-  PING                    -> PONG
-  SHOW META               -> superblock stats
-  SHOW TABLES             -> space-separated table names
-  SHOW PAGE <page_id> [VALUES]
-                          -> heap page header + slot directory, pretty-printed
-  DESCRIBE <name>         -> table header + one section per column
-  CREATE TABLE <name> (<col> <type> [, ...]) [HEAP|BTREE]
-  BEGIN [ISOLATION LEVEL READ COMMITTED|REPEATABLE READ]
-  COMMIT | ROLLBACK   -> ends the transaction; ROLLBACK undoes every write
-  SET ISOLATION LEVEL <level>   -> applies to the next transaction
-  DELETE FROM <name> [WHERE ...]  -> delete-mark, not removal
-  STOP                    -> shuts the whole server down (not just this client)
+oid=4000 root_page_id=128 clustered_type=BTREE next_id=1 columns=2
+pos=0 name=id type=int64 notnull=yes pk=yes autoincrement=if-omitted
+pos=1 name=name type=varchar notnull=yes pk=no autoincrement=no
+ckdbs> help        # local-only hint list (KNOWN_COMMANDS), not sent to the server
 ckdbs> exit         # local-only: closes this connection, does NOT stop the server
 ```
 
@@ -376,15 +340,14 @@ the server's own `STOP` command instead shuts the whole server down, and
 the REPL detects that and exits automatically since there is nothing left
 to talk to.
 
-**`SHOW META` gained the log's recycling at BC** (`docs/spec/wal.md`
+**`SHOW META`'s log recycling block** (BC, `docs/spec/wal.md`
 §11-4), on core 0 only: `wal_first_segment` (the oldest segment the log
 still holds), `wal_segments_removed` and `wal_remove_failures`. A failed
 removal refuses nothing; the log is only larger than it needs to be. The
 recovery block prints `recovery_redo_start` and
 `recovery_redo_start_recomputed` only when redo's floor raised the start.
 
-**`SHOW META` gained a `contention` block at BA-S2**
-(`instructions/v3.0.0/workorder-ba-parallelism.md` BA-R0;
+**`SHOW META`'s `contention` block** (BA-S2,
 `include/kds/base/contention.hpp`). Unlike the WAL block it is the
 instance's, summed over every core when read, so it reads the same from any
 session. Per latch kind - `other`, `frame_table`, `free_map`, `free_map_flush`, `window`,
@@ -406,12 +369,11 @@ Since BA-S14 a clustered-tree refusal is re-run inside the engine rather
 answered, for a statement that wrote nothing before it, and
 `contention_structural_reruns` counts the re-runs. Every
 field is printed at every core count; at `cores = 1` only the latches that
-are armed there (the window, the superblock, the WAL sync gate, the Cabin
-store's) can move, and only if another thread takes them - the sync gate
+are armed there (the window, the superblock, the WAL sync gate) can move, and only if another thread takes them - the sync gate
 does, since the WAL writer thread syncs through it beside the reactor.
 
-**`SHOW META` gained the WAL segment roll's instruments at BQ-S1**
-(`instructions/v3.0.0/workorder-bq-wal-segment-roll.md`). Three kinds of
+**`SHOW META`'s WAL segment roll instruments** (BQ-S1,
+`instructions/v3.0.0/workorder-bq-wal-segment-roll.md`). Three kinds of
 field, read differently:
 
 - **The stream's totals, the same on every core and never summed across
@@ -540,7 +502,7 @@ a TCP socket and write newline-terminated text:
 printf 'PING\n' | nc 127.0.0.1 <debug_text_port>
 ```
 
-Everything §3's command reference says about statements applies unchanged
+Everything the command reference (`manual/sql/sql.md`) says about statements applies unchanged
 — the difference is only how the bytes are framed and how the answer is
 rendered.
 

@@ -11,7 +11,7 @@
 #include "kds/wal/record.hpp"
 
 // Recovery's analysis phase (docs/spec/wal.md §12-1,
-// docs/workplan-wal-recovery.md RC02): one forward scan of a core's stream
+// docs/workplan-wal-recovery.md RC02): one forward scan of the stream
 // that answers the two questions redo and undo are about to ask - **which
 // pages need replaying, and which transactions were left unfinished.**
 //
@@ -71,13 +71,10 @@ enum class TxnOutcome : std::uint8_t {
 // What analysis knows about one transaction: its verdict, and - for a loser
 // - where its undo chain starts.
 //
-// The head is RV10's whole point (`docs/workplan-wal-recovery.md` §4b).
-// Enumerating a loser's writes from the records in the replay range is
-// **incomplete**: a page written back before a checkpoint has its recLSN
-// cleared, so the redo start can advance past a still-uncommitted write and
-// the record naming it is never scanned. Walking `txn_prev_undo_ptr`
-// backwards from this pointer reaches every record the transaction wrote,
-// however far below the scan it lies.
+// The head (RV10): the replay range alone is **incomplete**, since a page
+// written back before a checkpoint lets the redo start pass a
+// still-uncommitted write. Walking `txn_prev_undo_ptr` back from the head
+// reaches every record the transaction wrote, however far below the scan.
 //
 // Two sources, and the later always wins because the scan is forward:
 // `CHECKPOINT_BEGIN`'s active table seeds it for a transaction that was
@@ -131,10 +128,9 @@ struct AnalysisResult {
     // when the range named none. RV4's input, and the repair reads it
     // through `wal/high_water.hpp`.
     //
-    // The hazard: the durable record of which page ids exist is unlogged -
-    // the free-map page, **not** the superblock, which holds no allocation
-    // state at all (server/superblock.hpp; RV4 misnames it and
-    // high_water.hpp corrects it). A crash can revert that map while the
+    // The hazard: the durable record of which page ids exist is the
+    // unlogged free map, **not** the superblock, which holds no allocation
+    // state (server/superblock.hpp). A crash can revert that map while the
     // log still names pages above it, after which an allocation would hand
     // out a page redo has already written. Recovery raises the store's
     // allocation floor past this before it can serve one.

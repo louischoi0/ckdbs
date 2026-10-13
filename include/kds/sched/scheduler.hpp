@@ -173,12 +173,8 @@ public:
 
     // ---- Group accounting, read from outside (sched.md §4) --------------
     //
-    // §4's last bullet states the gap this exists to make measurable:
-    // *"reactor time spent outside task polls (the drain, the idle block) is
-    // charged to no group"*. `bench/v2.1.0` §11-5 could not report on it at
-    // all - `consumed_ns_` is private, `SHOW META` never printed it, and a
-    // measurement run may not add instrumentation - and left it owed by
-    // whoever next touched §4. These are that accessor.
+    // What makes §4's gap measurable: *"reactor time spent outside task
+    // polls (the drain, the idle block) is charged to no group"*.
     //
     // Two counters per group, because one cannot answer the question:
     //
@@ -253,7 +249,7 @@ public:
     // Diagnostic log, null (discard) by default; `log` must outlive the
     // scheduler. The reactor has no caller to return a Status to - Run()
     // is the top of the stack - so an io-backend failure has nowhere else
-    // to go. That is the gap RunOnce() used to mark with a (void) cast.
+    // to go.
     void SetLogger(Logger* log) noexcept { log_ = log; }
 
     // Requests Run() to return after the current iteration. Idempotent.
@@ -358,10 +354,8 @@ private:
     // which by construction is an iteration with nothing ready to run.
     std::atomic<std::uint64_t> idle_blocks_{0};
     // Idle blocks taken with tasks still sitting in the ready queues - all
-    // of them parked. Every one of these is an iteration the reactor used
-    // to spin through (§7's "parked is not ready"), so this counter is the
-    // fix's own measure of itself: zero on a build without parks, and
-    // climbing on exactly the workload that used to burn a core.
+    // of them parked (§7's "parked is not ready"): each is an iteration a
+    // reactor that treated parked as ready would have spun through.
     std::atomic<std::uint64_t> parked_idle_blocks_{0};
     // How long this reactor has actually spent inside the block (D7 of the
     // v2.3.0 order). A plain integer, unlike the two counters above: nothing

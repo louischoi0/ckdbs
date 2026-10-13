@@ -38,10 +38,8 @@
 //     something to skip (wal.md section 5.2).
 //
 // TXN_BEGIN, TXN_COMMIT, TXN_ABORT and PAD have no payload: the envelope's
-// txn_id already says everything they carry. TXN_BEGIN's durability class
-// (wal.md section 1) is not encoded here yet - it belongs in the record
-// header's per-type `flags` byte, and the class enum lives in the
-// not-yet-written transaction layer.
+// txn_id already says everything they carry. No record carries a durability
+// class; it is chosen at commit (`WalManager::Commit`, durability.hpp).
 
 namespace kds::wal {
 
@@ -63,11 +61,9 @@ inline constexpr std::size_t kPageInitPageTypeOffset = 8;
 inline constexpr std::size_t kPageInitReservedOffset = 9;
 inline constexpr std::size_t kPageInitReserved2Offset = 12;
 inline constexpr std::size_t kPageInitOwnerOidOffset = 16;
-// 8+1+3+4+8 = 24 bytes on disk. Before §2a (2026-08-13) the payload was
-// the first 12 bytes; DecodePageInit still accepts a payload that short,
-// reading owner 0 — the same compatible-zero rule as the header field's
-// arrival. It is a *floor*, not an exact length: DecodeRecord returns the
-// record's 8-byte-aligned tail, so a 12-byte payload comes back as 16.
+// 8+1+3+4+8 = 24 bytes on disk. DecodePageInit accepts the pre-§2a
+// 12-byte form (2026-08-13), reading owner 0; it is a floor, not an exact
+// length, since DecodeRecord returns the 8-byte-aligned tail.
 inline constexpr std::size_t kPageInitPayloadSize = 24;
 inline constexpr std::size_t kPageInitPayloadSizeLegacy = 12;
 
@@ -326,11 +322,8 @@ StatusOr<HeapDeleteUnmarkPayload> DecodeHeapDeleteUnmark(std::span<const std::by
 // above.
 //
 // **Who owns it depends on who emitted it** (docs/spec/txn.md section 6's
-// amendment). This comment used to say no transaction owns a SLOT_RETIRE
-// and its envelope therefore carries kNoTxnId. That is true of a purge
-// pass and false of a rollback compensation, which *is* owned by the
-// aborting transaction - stamping kNoTxnId there would hide the rollback
-// from recovery's analysis phase. So:
+// amendment): a rollback compensation is owned by the aborting transaction -
+// kNoTxnId there would hide the rollback from recovery's analysis. So:
 //
 //   emitted by rollback     the aborting transaction's id
 //   emitted by a purge pass kNoTxnId
@@ -361,9 +354,8 @@ StatusOr<SlotRetirePayload> DecodeSlotRetire(std::span<const std::byte> in);
 // undo_ptr - which is what lets a reader reconstruct validity intervals with
 // no xmax stored anywhere (wal.md sections 5.1, 5.2).
 //
-// The undo page's own layout is [OPEN] (wal.md section 15), so `offset` is
-// deliberately just a byte offset within the page: this codec describes the
-// bytes written, not where the undo allocator chose to put them.
+// `offset` is a byte offset within the undo page (layout: txn/undo_page.hpp):
+// this codec describes the bytes written, not where the allocator put them.
 
 struct UndoWritePayload {
     std::uint64_t prior_trx_id;    // writer of the version being superseded
@@ -487,14 +479,10 @@ struct CheckpointDirtyPage {
 
 // One live transaction, as a checkpoint records it.
 //
-// **`last_undo_ptr` was added at RV10** (docs/workplan-wal-recovery.md §4b)
-// and it is the reason this is a struct rather than the bare `uint64_t` id
-// it used to be: it is the **head of the transaction's undo chain**, and
-// walking that chain is how recovery's undo phase learns what a loser
-// wrote. Without it the only source is the WAL inside the replay range, and
-// a page written back before this checkpoint puts a still-uncommitted write
-// outside that range - so the write survives undo and `txn.md` §8's gap
-// then reads it as committed.
+// `last_undo_ptr` (RV10) is the **head of the transaction's undo chain**,
+// which recovery's undo phase walks to learn what a loser wrote: a page
+// written back before this checkpoint puts an uncommitted write outside the
+// WAL replay range, so without the chain it would survive undo.
 //
 // `kNoUndoPtr` (0) is legal and means the transaction had written nothing
 // when the checkpoint ran. Undo owes such a transaction no compensation.
@@ -509,7 +497,7 @@ inline constexpr std::size_t kCheckpointBeginFixedSize = 8;
 // Then `txn_count` entries of:
 inline constexpr std::size_t kActiveTxnIdOffset = 0;
 inline constexpr std::size_t kActiveTxnLastUndoPtrOffset = 8;
-inline constexpr std::size_t kActiveTxnEntrySize = 16;  // was 8, an id alone
+inline constexpr std::size_t kActiveTxnEntrySize = 16;
 // then `dirty_count` entries of:
 inline constexpr std::size_t kDirtyPageIdOffset = 0;
 inline constexpr std::size_t kDirtyRecLsnOffset = 4;
@@ -578,12 +566,9 @@ struct AssertEntryPayload {
     std::uint16_t key_len;       // bytes of group key that follow the entry
     std::uint16_t reserved;      // 0
 
-    // **AS6a.** The group the entry belongs to, so replay reads the id rather
-    // than re-deriving it - which it could not do correctly anyway: ids are
-    // dense per cabin and assigned in group-creation order, so re-deriving one
-    // would mean reproducing the live run's allocation order from a record
-    // range that may start mid-cabin. Appended past `reserved`, so no existing
-    // offset moved.
+    // The entry's group (AS6a), carried because replay cannot re-derive it:
+    // ids are dense per cabin in creation order, and the replayed range may
+    // start mid-cabin.
     std::uint32_t group_id;
 };
 
@@ -607,14 +592,9 @@ static_assert(offsetof(AssertEntryPayload, key_len) == kAssertEntryKeyLenOffset)
 static_assert(offsetof(AssertEntryPayload, reserved) == kAssertEntryReservedOffset);
 static_assert(offsetof(AssertEntryPayload, group_id) == kAssertEntryGroupIdOffset);
 
-// **No `sizeof` assert, and the reason is the one `undo_page.hpp` records.**
-// The serialized payload is 20 bytes and unpadded by design - the codec
-// memcpy's through the offsets above - while the C++ struct pads its tail to
-// 24 for the `uint64_t` at offset 0. Asserting `sizeof` against the wire size
-// would compare a layout with a format and could never hold; every offset that
-// the codec actually uses is asserted instead, which is the property that
-// matters. (This is the same shape as the RV10 asserts that shipped broken at
-// RC06 - see `docs/inflight/known-gaps.md`.)
+// No `sizeof` assert: the wire form is 20 unpadded bytes while the struct
+// pads to 24 for its leading u64, so the offsets the codec uses are asserted
+// instead (undo_page.hpp's rule).
 static_assert(kAssertEntryFixedSize == 20);
 
 struct DecodedAssertEntry {
@@ -837,7 +817,7 @@ struct DecodedAssertSnapshot {
 // count on disk and the blocks on disk cannot disagree. Fails with
 // InvalidArgument on a key longer than a uint32 length, an output too small, or
 // a chunk place no run has (`chunk_count` 0, or `chunk_index` past it); the
-// decoder answers Corruption for the same two.
+// decoder answers Corruption for a bad chunk place or a short payload.
 StatusOr<std::size_t> EncodeAssertSnapshot(std::span<std::byte> out,
                                           const AssertSnapshotPayload& fields,
                                           std::span<const SnapshotGroupEntry> groups);

@@ -61,19 +61,14 @@ public:
     // retained by reference.
     //
     // **False means do not render it.** Under a `LIMIT`, most rows of a
-    // large relation are beaten by the heap's worst retained row and will
-    // never be seen, and formatting them was pure waste: before this split,
-    // `ORDER BY val LIMIT 20` over 10,000 rows spent *more* server CPU than
-    // returning the whole relation unsorted, because it rendered 9,980 rows
-    // and threw them away. Deciding first is worth 94-104 ns a skipped row
-    // and takes that statement to 0.60× a full scan's CPU
-    // (`bench/results-order-by.md`).
+    // large relation are beaten by the heap's worst retained row; rendering
+    // them first once made `ORDER BY val LIMIT 20` cost more than an
+    // unsorted full scan (`bench/results-order-by.md`, at 1769487).
     //
-    // **What this bounds is formatting, not work.** The walk still decodes
-    // every qualifying row - 83% of what that statement now costs - because
-    // a sorted `LIMIT` cannot stop early, which is the quota's whole reason
-    // for moving downstream. Memory is bounded by the heap, formatting by
-    // this call, and work by the row-touch budget and nothing else.
+    // **What this bounds is formatting, not work**: a sorted `LIMIT` cannot
+    // stop early, so the walk still decodes every qualifying row. Memory is
+    // bounded by the heap, formatting by this call, and work by the
+    // row-touch budget.
     //
     // Split into two calls rather than a predicate the caller could forget:
     // `Take` completes exactly the row the immediately preceding `Admit`

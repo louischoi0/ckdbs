@@ -7,12 +7,8 @@
 
 // The one home of field-wise page access (invariant 6's discipline: every
 // persisted encoding moves through explicit offsets and memcpy, never an
-// overlay struct or a compiler bitfield). Before this header each page
-// class kept a private copy of the same two templates; the anchor page was
-// the third, which is when a copy stops being an idiom and starts being a
-// divergence risk (the 3f07eda review's S1). page_header.cpp adopted it
-// with the anchor; the waystone page keeps its private pair until a change
-// next touches that file, per the deferred-cleanup rule.
+// overlay struct or a compiler bitfield). Used by page_header.cpp and
+// anchor_page.cpp; `stats/waystone_page.cpp` still keeps a private pair.
 
 namespace kds::storage {
 

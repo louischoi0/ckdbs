@@ -17,25 +17,19 @@
 
 namespace kds::server {
 
-// The header states the rule; this is all it takes. Dropping the optional
-// destroys the ready queues, and with them every unfinished `CoroTask` and
-// the coroutine frame it owns - while `txn_manager_`, `catalog_` and
-// `store_` are still standing, which is exactly what those frames' locals
-// need.
+// The header states the rule. `DiscardTasks` below destroys every unfinished
+// `CoroTask` and the frame it owns while `txn_manager_`, `catalog_` and
+// `store_` are still standing, which is what those frames' locals need.
 //
-// **The listener goes first, and it has to be said here rather than left to
-// declaration order** (PW5): this body runs before any member destructor, so
-// dropping the scheduler here would leave `~TcpServer`'s `Detach()` - which
-// unregisters the listening fd and every client fd - calling into a reactor
-// that no longer exists. Detaching first is also exactly what core 0 does
-// (`Expeditor::Serve` detaches its listener before its scheduler leaves
-// scope), so a peer's teardown is the same sequence as the system core's.
+// **The listener goes first** (PW5): `~TcpServer`'s `Detach()` unregisters
+// the listening fd and every client fd from the reactor, so it runs before
+// the body touches the scheduler - the same sequence core 0's teardown has
+// (`Expeditor` detaches its listener before its scheduler goes).
 CoreRuntime::~CoreRuntime() {
     // **This runs as this core, wherever it is called from** (AM-S2 step 3).
     // The Expeditor calls this on a peer from *core 0's* thread on the way
-    // down, and the work below writes pages: `StampPageLsn` records the
-    // core beside the page_lsn, so without this the peer's pages would go
-    // out stamped core 0's - a mislabel `SHOW PAGE` would print.
+    // down, and the work below takes page latches and asks the store for
+    // the caller's WAL gate, both keyed by `CurrentCore()`.
     const CurrentCoreGuard as_this_core(core_id());
     listener_.reset();
     // **Queued statements go while what they borrow is still here**
@@ -59,14 +53,10 @@ CoreRuntime::~CoreRuntime() {
     if (dispatcher_.has_value()) {
         dispatcher_->set_scheduler_view(nullptr);
     }
-    // **`scheduler_.reset()` used to stand here and is deliberately gone.**
-    // It inverted declaration order to enforce a contract that declaration
-    // order already keeps: `scheduler_` is declared above every borrower,
-    // so reverse-order destruction drops every one of them first. Dropping
-    // it here instead did the opposite of what its own comment argued for.
-    // The hand-nulled borrows
-    // above stay: they are for members declared *below* the dispatcher,
-    // which reverse order takes first, and that order no line here can fix.
+    // No `scheduler_.reset()` here: `scheduler_` is declared above every
+    // borrower, so reverse-order destruction drops each of them first. The
+    // hand-nulled borrows above are for members declared *below* the
+    // dispatcher, which reverse order takes first.
 }
 
 StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
@@ -75,9 +65,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // **Before anything else, because everything below may read it.** The
     // volume's image is required rather than optional: a `CoreRuntime` that
     // does not know what volume it is on answers a legal, silent, wrong
-    // zero for every field it was not individually told about, which is the
-    // shape three separate defects have now taken (`core_runtime.hpp`'s
-    // `Config::superblock`).
+    // zero for every field it was not individually told about
+    // (`core_runtime.hpp`'s `Config::superblock`).
     if (config.superblock == nullptr) {
         return Status::InvalidArgument(
             "CoreRuntime: core " + std::to_string(config.core_id) +
@@ -95,12 +84,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
 
     // **This whole pass acts as the core it is opening** (AM-S2 step 3,
     // `base/current_core.hpp`). `Open` runs on the *startup* thread, not on
-    // the reactor thread this core will get, and it takes page latches -
-    // recovery's redo does, with no second thread alive. Declaring the
-    // identity here rather than letting it default to 0 is what makes the
-    // page latch's owner field exact instead of harmless-by-accident: today
-    // nothing contends with the mount pass, and step 3 is not the place to
-    // start relying on that.
+    // this core's reactor thread, and takes page latches; declaring the
+    // identity keeps the page latch's owner field exact rather than a
+    // default 0.
     const CurrentCoreGuard as_this_core(config.core_id);
 
     auto runtime = std::unique_ptr<CoreRuntime>(new CoreRuntime(config, log));
@@ -122,7 +108,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // **The reactor learns its core here**, with no registry: `RunOnce`
     // sets the thread's `CurrentCore()` from it every iteration, so a
     // reactor left at the default runs as core 0 - re-entering core 0's
-    // exclusive page latches and stamping core 0's stream. The instance's
+    // exclusive page latches and taking core 0's WAL gate. The instance's
     // `AttachWakerTable` sets it again with the same id, and a runtime that
     // never gets one keeps this.
     if (Status s = runtime->scheduler_->AttachWakerTable(nullptr, config.core_id); !s.ok()) {
@@ -130,12 +116,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     }
 
     // **The instance's one stream** (AR0 M0, AL-S1c; AM-S4(d)). This core
-    // opens no log device at all: it appends through core 0's stream under
-    // its latch and asks the writer for every sync, which is what takes
-    // `fdatasync` off this reactor (AL-2's case for the whole milestone).
-    //
-    // This core has no `wal_dir` to open and holds no `log_device_`: a
-    // volume with more than one stream does not mount.
+    // opens no log device: it appends through core 0's stream under its
+    // latch and asks the writer for every sync, keeping `fdatasync` off this
+    // reactor. A volume with more than one stream does not mount.
     if (config.shared_stream == nullptr || config.shared_writer == nullptr) {
         // A peer with no stream to attach to would silently open one of
         // its own and write records nobody replays.
@@ -192,26 +175,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // yet, because `TrxIdSequence` caches the transaction ceiling at
     // construction (txn/trx_id.hpp).
     //
-    // **The stamp identity needs no ordering here** (AM-S2 step 3).
-    // Recovery's undo phase writes compensations through `StampPageLsn`,
-    // whose identity is the thread's, and the
-    // `CurrentCoreGuard` at the top of this function covers the whole pass.
-    // The page latch (AM-S1): armed from the instance's core count, which
-    // bootstrap recorded in the superblock and `Expeditor::Open` copied here -
-    // after the identity above, so the owner field the word records is this
-    // core's. `core_count > 1` alone, as the WAL's own arming predicate
-    // is. At one core the word is
-    // never touched (device_page_store.hpp, "The page latch").
-    // **The pinner count, not just the arm** (AM-S2). `kPinCeiling` bounds
-    // *one operation*'''s pin stack, and `live_pins_` is a proxy for it only
-    // while one thread reaches this store. That holds today and stops
-    // holding at step 3, where N threads each running a 7-deep descent
-    // against one store would trip a debug abort on correct traffic. Passing
-    // the count here scales the bound with the operations that can be in
-    // flight, and only ever loosens a debug assert.
-    // Core 0 armed a shared store when it opened it, with the same two
-    // numbers; re-arming would be harmless and re-stating it here would
-    // still be a second place for the decision to live.
+    // The page latch (AM-S1): armed from the instance's core count, after
+    // the `CurrentCoreGuard` above so the owner field the word records is
+    // this core's; `core_count > 1` alone, as the WAL's own arming predicate
+    // is. At one core the word is never touched (device_page_store.hpp,
+    // "The page latch"). The core count also scales `kPinCeiling`'s debug
+    // bound, since `live_pins_` counts every thread reaching the store
+    // (AM-S2). Only an owned store is armed here: core 0 armed a shared one
+    // with the same two numbers when it opened it.
     if (runtime->owned_store_ != nullptr) {
         runtime->store_->SetLatchArmed(config.core_count > 1, config.core_count);
     }
@@ -221,21 +192,11 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // there, so an untimed recovery here would silently drop the phase
     // numbers *and* the completion checkpoint's, which the end of `Open` times.
     //
-    // **Under one stream a peer recovers nothing** (AR0 M0, AL-R5). There
-    // is one log, core 0 recovered it whole before this core was built, and
-    // a second pass over the same records would not merely be wasted work:
-    // this core would redo pages core 0 already redid and undo losers
-    // core 0 has already rolled back. The recovery report stays
-    // zeroed, which is the truth for a core that recovered nothing, and
-    // `SHOW META`'s block reads that way on a peer.
-    //
-    // **Timed, though nothing was recovered.** `SHOW META` prints the
-    // whole `_us` block only where a clock was supplied
-    // (`command_dispatcher.cpp`), and this core still measures the
-    // completion checkpoint at the end of `Open` - so leaving this false
-    // would hide a number that was taken, and print a peer's recovery
-    // block as a subset of core 0's rather than the same block reading
-    // zero.
+    // **Under one stream a peer recovers nothing** (AR0 M0, AL-R5): core 0
+    // recovered the one log whole before this core was built, and a second
+    // pass would redo redone pages and undo rolled-back losers. The report
+    // stays zeroed, but timed: this core still measures the completion
+    // checkpoint at the end of `Open`.
     runtime->recovery_.timings.timed = true;
     // Says why the numbers below it are zero: this core did not scan,
     // rather than scanning and finding nothing.
@@ -280,11 +241,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // The undo log is already built - recovery wrote its compensations
     // through it above, before this stack existed.
     // The lock table: the instance's when handed one (AO-S5), else this
-    // runtime's own at one core - see the member's declaration for the
-    // boundary. Settled before the manager so the manager can take it: a
-    // decide is where borrows and wait-for edges go back (AO-R6), and a
-    // manager without it would leave the dispatcher's own clear as the
-    // only cleaner.
+    // runtime's own at one core. Settled before the manager, which releases
+    // borrows and wait-for edges at a decide (AO-R6).
     if (config.locks != nullptr) {
         runtime->locks_ = config.locks;
     } else if (config.core_count == 1) {
@@ -331,8 +289,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // The lock-wait fault net, copied from core 0's config (R6-5), so a
     // writer waiting on this core is bounded by the instance's one value.
     runtime->dispatcher_->set_lock_wait_fault_net_ns(config.lock_wait_fault_net_ns);
-    // The wait-for graph and the admission it gates, on every core since
-    // AO-S4b - the member's declaration says why that is safe now.
+    // The wait-for graph and the admission it gates, on every core (AO-S4b).
     runtime->dispatcher_->set_locks(runtime->locks_);
     // And the instance's assertion registry (AT-S5d), on the same terms: one
     // directory per assertion is what makes a write on this core checked
@@ -343,8 +300,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // on every core, peer or not: the accounting question is about a
     // reactor, and every core runs one. Set on the startup thread, before
     // this runtime's worker exists, so the reactor-local read rule holds.
-    // The view is dropped in `~CoreRuntime`, which destroys the scheduler
-    // *ahead* of the dispatcher - declaration order alone would not do it.
+    // `~CoreRuntime` nulls the view by hand before members are destroyed.
     runtime->dispatcher_->set_scheduler_view(&*runtime->scheduler_);
     // The catalog's one-writer rule, `PeerDdlRefused`, `SetCatalogReadOnly`
     // and the access batch retired (AT-S5, AT-S7); their history is at cf889b63.
@@ -436,11 +392,8 @@ void CoreRuntime::Run() {
     // As this core, wherever called from - see `~CoreRuntime` (AM-S2 step 3).
     const CurrentCoreGuard as_this_core(core_id());
 
-    // The two `system`-group cadences Expeditor already ran on the single
-    // core, now per core. Both are no-ops on a core with nothing logged -
-    // which today is every core but 0 (see the header) - so arming them
-    // costs a timer and buys the property that a core which *starts*
-    // logging needs no new wiring.
+    // The `system`-group cadences, per core: the WAL drain below and the
+    // checkpoint tick further down.
     auto drain = [this]() -> bool {
         // The bool is for the post-task hook below, and through it for the
         // idle policy: **a tick that had a commit staged did work that a
@@ -483,9 +436,8 @@ void CoreRuntime::Run() {
     }
 
     // The `system`-group checkpoint cadence of wal.md §11, per core since
-    // PW3 - core 0 has run one since RC08 and a peer ran none, so a peer
-    // that wrote left an anchor that never advanced and a stream every
-    // later mount replayed whole. A no-op where `checkpointer_` is unset.
+    // PW3 (a peer with none left the anchor unadvanced). A no-op where
+    // `checkpointer_` is unset.
     //
     // **Staggered by core** (AT-S8): the run is the instance's
     // (`wal::CheckpointGate`), and every core arms this within milliseconds
@@ -511,14 +463,9 @@ void CoreRuntime::Run() {
     // the startup thread would leave every worker unguarded. The core's
     // own store rides along for the pin half of the rule (P4d-3).
     // **The pin half of the audit is this core's only where the store is**
-    // (AM-S2 step 3). `step_vm.cpp`'s `g_audit_store` tests `live_pins() != 0`
-    // at a park, on the premise its own comment states - "each core has its
-    // own store". On a borrowed pool that count is the instance's sum, so a
-    // peer parking while core 0 holds a pin would record a park-with-pin
-    // that never happened. The audit is a debug recorder, so a false entry
-    // costs a diagnostic rather than a run; a false entry is still worse
-    // than a missing one, because it makes the record untrustworthy where a
-    // gap is merely narrower. The coroutine half is unaffected and stays.
+    // (AM-S2 step 3): on a borrowed pool `live_pins()` is the instance's sum,
+    // so a peer would record a park-with-pin that never happened. The
+    // coroutine half is unaffected.
     exec::InstallSuspendAudit(owned_store_ != nullptr ? store_ : nullptr);
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
@@ -606,9 +553,8 @@ Status CoreRuntime::AttachListener(TcpServer server, const TcpServer::ClientSetu
         return s;
     }
     // STOP accepted on this core must stop the *instance*, not this
-    // reactor (the review's BUG 2: a stopped peer's socket keeps
-    // receiving a kernel share of new connections nobody drains while
-    // core 0 reports healthy). So it routes,
+    // reactor: a stopped peer's socket would keep receiving a kernel share
+    // of new connections nobody drains. So it routes,
     // through the instance's hook, straight to core 0's stop flag - atomic
     // since AU-S3 - plus a kick to end the block it is sitting in; Serve's
     // ordinary tail then broadcasts shutdown to every peer, one stop path

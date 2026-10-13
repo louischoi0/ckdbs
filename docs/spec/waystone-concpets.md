@@ -111,7 +111,7 @@ Waystone header:
 | 18 | 2 | `flags` |
 | 20 | 4 | `next_page_id` — reserved; a trail is never continued (§9) |
 | 24 | 8 | `recorded_ts` |
-| 32 | 4 | `use_count` |
+| 32 | 4 | `use_count` — written 0, advanced by nothing |
 | 36 | 4 | `reserved` |
 
 Entry — 32 bytes, one per Keystone in the trail:
@@ -155,7 +155,7 @@ Numbered as `docs/spec/heap-and-tuple.md` §8 numbers them.
 
 ## 9. Open decisions — do not assume
 
-The decisions this section once listed — retention and eviction, persistence class, completeness caching, collision policy, decay — are unrecorded here. What holds today, each a fact and not a plan:
+None is recorded here. What holds today, each a fact and not a plan:
 
 - **Recording policy is `n = 2`** (`docs/spec/parser-v2.md` J5 owns it): the first execution of an instance only counts; the second records. An execution that *collects nothing* is not counted at all, since it can never produce a trail however often it repeats. Sightings live in a bounded core-local in-memory table of `[PROPOSED]` 4096 entries (`TrailRecorder::kMaxSightings`), cleared wholesale on overflow; eviction from it merely restarts the count — a performance event, never a correctness one.
 - **A trail is one page (253 entries), and a trail that would exceed it is not recorded at all.** A truncated trail covers only the first rows of an execution and **no reader can tell it from a complete one**, so replay would serve a partial answer believing it whole. Not recording leaves the instance in the state every instance starts in, which every consumer already handles. `next_page_id` stays reserved and unused.
@@ -165,13 +165,7 @@ The decisions this section once listed — retention and eviction, persistence c
 
 ## 10. Why not a pk-direct index
 
-The obvious alternative — a per-relation structure mapping every pk to its location, addressed by arithmetic — was built and then removed. The argument against it is what shapes this design, so it is worth stating.
-
-A pk-direct waystone is a radix tree over the same key the clustered B+ tree already indexes. At a fanout of 2048 both reach a leaf in the same handful of page touches, so the O(1)-versus-O(log n) distinction does not survive contact with real fanout. What the tree has and the radix structure does not: it is authoritative, it answers ranges, and it costs space proportional to *live rows* rather than to *issued ids*. Addressing entries by pk also forces a dense, monotonically issued id sequence on the whole engine — a constraint paid across every layer to buy a duplicate of an index that already exists.
-
-This design duplicates nothing. **No index maps a pattern instance to a cross-relation tuple set**, and that gap is what Waystone fills.
-
-The headerless-page facility that structure left behind — `DevicePageStore::CreateNewHeaderless()` and the durable `kHeaderlessMap` bitmap page — now serves the directory's interior pages (§5). The waystone pages themselves stay headered; it is only the structure that finds them that gives up its checksum.
+A per-relation structure mapping every pk to its location by arithmetic was built and removed (before 2026-09-02). It was a radix tree over the key the clustered B+ tree already indexes, reaching a leaf in the same handful of page touches at a fanout of 2048, while being non-authoritative, answering no range, costing space per *issued id* rather than per live row, and forcing a dense, monotonically issued id sequence on the whole engine. **No index maps a pattern instance to a cross-relation tuple set**; that gap is what Waystone fills. Its headerless-page facility (`CreateNewHeaderless()`, `kHeaderlessMap`) now serves the directory's interior pages (§5).
 
 ## 11. Testing requirements
 

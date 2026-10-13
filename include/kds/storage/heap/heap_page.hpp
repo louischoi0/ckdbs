@@ -36,20 +36,17 @@
 // (page.md section 10); a heap page is one of the headered page classes.
 // The page is full when upper - lower is smaller than the next slot +
 // tuple need. A PostgreSQL-style slotted page: slots are stable
-// references, and physical compaction of dead slots is a separate
-// operation that does not exist yet - there is no VACUUM equivalent.
+// references, and this view never compacts dead slots. The one compaction
+// is the B+ tree's: a full leaf with retired slots is rebuilt in place
+// before it splits (`btree.cpp`'s `CompactLeafAndInsert`, BH-S5); a heap
+// page is never compacted - there is no VACUUM equivalent.
 //
 // Concurrency: PageView has no internal synchronization. It is a thin view
-// over caller-owned bytes; the caller (eventually a buffer-pool frame) is
-// responsible for ensuring exclusive access to the underlying buffer
-// across any mutating call. There is no locking here because there is no
-// buffer pool yet to hold a lock in - that's a separate, not-yet-built
-// subsystem.
+// over caller-owned bytes; the caller holds the frame's page latch
+// (`PageRef` from the store) - exclusive across any mutating call.
 //
-// This first cut covers: page init, insert, read, delete-mark,
-// retire-slot, in-place overwrite, free-space accounting, and the
-// next-page link. This file stores trx_id/undo_ptr but does not interpret
-// them - visibility is the reader's job once snapshots exist.
+// This file stores trx_id/undo_ptr but does not interpret them -
+// visibility is the reader's job (txn.md).
 
 namespace kds::heap {
 
@@ -250,9 +247,10 @@ public:
 
     // The common header's relayout epoch (docs/spec/physical-optimizer.md
     // R4), surfaced here because the callers that need it at tuple-access
-    // time hold a PageView, not the raw span. Read-only on purpose: bumping
-    // is the mover's act, through storage::BumpRelayoutEpoch on the span it
-    // holds exclusively.
+    // time hold a PageView, not the raw span. Read-only on purpose: the
+    // epoch is moved on the span under an exclusive hold - by the B+ tree's
+    // leaf division and compaction (`btree.cpp`, storage::SetRelayoutEpoch),
+    // and by the physical optimizer's mover were it to move anything.
     std::uint64_t RelayoutEpoch() const noexcept { return storage::GetRelayoutEpoch(page_); }
 
     // A tuple read back out of the page. `payload` is a view into the
@@ -404,13 +402,12 @@ public:
     // it and by nothing else.
     Status ClearDeleteMark(std::uint16_t slot, std::uint64_t trx_id, std::uint64_t undo_ptr);
 
-    // Marks `slot` dead; its bytes are not reclaimed (no page compaction -
-    // an open item until a transaction manager can determine that no
-    // snapshot still needs the space). Fails with NotFound if `slot` is already out of range/dead.
+    // Marks `slot` dead; its bytes are not reclaimed here (only a B+ tree
+    // leaf's rebuild before a split drops them, BH-S5). Fails with NotFound
+    // if `slot` is already out of range/dead.
     Status RetireSlot(std::uint16_t slot);
 
-    // Writes a tuple at a **named** slot, for redo
-    // (docs/workplan-wal-recovery.md RC03). The counterpart of
+    // Writes a tuple at a **named** slot, for redo. The counterpart of
     // txn::UndoPageWriteAt, and it exists for the same reason: replay must
     // reproduce the exact position the original write chose, because that
     // position is *durably referenced elsewhere* - an undo record names

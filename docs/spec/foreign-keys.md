@@ -28,12 +28,10 @@ Decisions:
 - **F3 — the check fails fast; the statement waits.** A constraint check
   that meets a conflicting *in-flight* writer returns `kBusy` immediately
   — the check itself never blocks, running as it does inside a write
-  path with no suspension point. **What the statement does with that
-  answer changed at AO-S3**: it parks on the writer's decide and runs
-  again, on the same core, instead of handing the wait to the client's
-  retry loop. What the fail-fast check keeps is the deterministic-error
-  semantic, which is the one unique checks use, and the code the client
-  eventually sees. The busy verdict is `FkVerdict::kBusy` → `Status::TxnConflict`,
+  path with no suspension point. **The statement** parks on the
+  writer's decide and runs again, on the same core (AO-S3), rather than
+  handing the wait to the client; the check keeps the deterministic-error
+  semantic unique checks use, and the code the client eventually sees. The busy verdict is `FkVerdict::kBusy` → `Status::TxnConflict`,
   wire-spelled `ERR TXN_CONFLICT retryable=1` — **one retryable code
   wide**, no separate busy code. A violation is `kFkViolation`,
   `ERR FK_VIOLATION retryable=0`. Retry-versus-wrong stays
@@ -228,8 +226,7 @@ writer of that row on whichever core either runs (§3a).
   and a wait that would close a cycle is refused naming deadlock.
 - **Counted against `max_locks_per_txn`**, one `S` per distinct parent a
   transaction references, and refused `ResourceExhausted` past it: no
-  escalation (AO-R10). Until AY-S5 the check asked the table with the cap
-  ignored, holding nothing after the ask.
+  escalation (AO-R10).
 - **The self-referencing arm** is not hoisted (a parent the same statement
   writes would read "no such parent" at the fork) and checks per row. It
   takes the same pair per row - `IS`, which the write's `IX` already covers,
@@ -260,10 +257,9 @@ byte, rather than run against a partial set.
 The write admission gate (`CheckWriteAdmission`) does not refuse a
 write for carrying a foreign key.
 
-**The load path is in scope.** `CheckForeignKeyOnWrite`'s third caller is
-the KWP load path, which takes the same hoist at its own batch boundary.
-It never had text to re-run with and never needs any: nothing it does can
-park.
+**The load path is in scope.** The KWP load path enters through T1's
+`ExecuteInsert` (`kwp_load_server.cpp`), so each chunk takes the same
+hoist; it has no statement text to re-run, and handles no lock wait.
 
 ### 2c. What the held `S` costs (AY-Q1, AY-Q4)
 
@@ -364,8 +360,8 @@ would read a child committed since as never inserted. **A row an undecided `UPDA
 another value in its page**, so the key test alone would skip it; the walk
 copies such a row out and, after the walk, reads the version before it
 through the undo log, answering busy if that version references the
-parent. Until AY-S5 the walk skipped it, and the writer's rollback left a
-child of a deleted parent with nothing refused.
+parent; skipping it would let the writer's rollback leave a child of a
+deleted parent.
 
 **The Cabin finds a child and clears a parent** (F6; restored at AY-S6).
 A hit is authoritative and returns without walking, and so is an

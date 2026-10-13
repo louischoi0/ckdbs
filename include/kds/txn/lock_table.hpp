@@ -17,12 +17,11 @@
 
 // The borrow model's **lock family** (AR2 §2) - AR0 D2's lock manager.
 //
-// Built for AO-S1 of `instructions/v3.0.0/workorder-ao-m2-lock-family.md`,
-// which owns the rulings this implements: AO-R1 (named by its family, not
-// "borrow" - that word is the genus covering this and the page latch),
-// AO-R2 (the table and its order), AO-R3 (no persisted bit), AO-R10 (the
-// cap) and AO-R11 (modes and units). `docs/rules/rules.md` §3 carries the
-// declared-shared row; AO-S8 moves it to `docs/spec/txn.md` §5.
+// Built in AO (M2, closed 2026-09-09) under
+// `instructions/v3.0.0/workorder-ao-m2-lock-family.md`, which owns the
+// rulings: AO-R1 (the name), AO-R2 (the table and its order), AO-R3 (no
+// persisted bit), AO-R10 (the cap), AO-R11 (modes and units).
+// `docs/spec/txn.md` §5 owns the contract.
 //
 // **Units** relation -> range -> {slice, tuple}, AR2-R3's chain; the page
 // is not in it and belongs to the latch family
@@ -31,109 +30,58 @@
 // interval, and a fence over it must outlive the btree leaf division that
 // moves keys between pages.
 //
-// **Modes** `IS`, `IX`, `S`, `X`; no `SIX` and no update mode in v1 (E1).
+// **Modes** `IS`, `IX`, `S`, `X`; no `SIX` and no update mode (E1).
 //
-// ---- What this stage is, and what it is not -------------------------------
+// ---- The engine's ask, and the wait ---------------------------------------
 //
-// AO-S1 built **the pure core**: the table, its keys, modes,
-// compatibility, the fence gate and the cap. **AO-S2 adds the wait** - a
-// refused `Acquire` hands back a slot the waiter parks on with
-// `sched::WaitUntil`, and a decide flips the slots of everyone queued on
-// what it released. What is still absent is a *caller*: the wait-for graph
-// is AO-S4a's, and the cutover that makes a statement take a borrow is
-// AO-S3, so a writer still meets the first-updater-wins refusal at
-// `src/txn/manager.cpp` today.
+// **The engine asks with `TryAcquire`**, which never queues: a conflict is
+// reported with the holder it lost to and a wake registration, and the
+// statement parks outside every page-latched span (`DispatchAsync`), then
+// re-runs. `Acquire`, the queueing ask, has no engine caller; the cells
+// drive it.
 //
 // **The re-check after a park is mandatory, and the slot does not replace
-// it** (AO-3's finding G). `manager.hpp`'s premise - "nothing suspends
-// between reading a tuple's header and overwriting it" - is exactly what a
-// wait breaks, so a woken waiter must ask again rather than assume the
-// grant it was woken for is still there. `Acquire` *is* that re-ask: the
-// waiter calls it again, and the slot only says "something changed, look".
-// A slot flipped for a grant another waiter took is therefore a wasted
-// poll and never a wrong answer.
+// it** (AO-3's finding G). A wait breaks `manager.hpp`'s premise that
+// nothing suspends between reading a tuple's header and overwriting it, so
+// a woken waiter asks again; the slot only says "something changed, look",
+// and a slot flipped for a grant another waiter took is a wasted poll,
+// never a wrong answer. The registration is made **under the latch that
+// observed the refusing holder** (`AcquireResult::wake`), so it lands
+// before that holder's removal, whose release flips it, or the holder was
+// never seen - no lost wake without AO-R4's disjunctive predicate.
 //
-// **A departure from AO-R4, and why it is sound here.** AO-R4 specifies
-// the predicate as a disjunction - "the slot flipped **or** the holder is
-// decided" - with the waiter registering before its last read of the
-// holder's state, because it assumes that last read is of the window or
-// `IsInFlight`, outside any lock the registration takes. This
-// implementation reads the holder's state from **the table's own holder
-// list, in the same critical section as the registration and the slot's
-// clear**, so "the registration precedes the last check" is true by
-// construction rather than by discipline and the second disjunct is
-// redundant. It is also tighter: "the holder is decided" would wake a
-// waiter that still conflicts with a *second* holder the disjunct never
-// named.
+// **Cross-core, a wake is write-then-kick** (AU-S2, AR0-6-R1). Whoever
+// flips a waiter's slot - a decide's `WakeWaiters`, a withdrawal's
+// `DequeueWaiter` - kicks the core it parked on through the wake registry
+// (`sched/waker_table.hpp`, installed with `SetWakeRegistry`) **after**
+// releasing the partition latch. A waiter on the decider's own core is not
+// kicked; from a non-reactor thread `CurrentCore()` is 0 and a core-0
+// waiter goes unkicked. None is installed at `cores = 1`. A skipped or lost
+// kick costs one idle block (`max_idle_block_ms`), never liveness: the
+// park is level-triggered and re-polled after every block.
 //
-// **The premise dies at AO-S3.** There the re-check becomes
-// `CheckWriteConflict` re-run - a read of the tuple header and the window,
-// outside this latch - and the registration is no longer in the same
-// critical section as the last state read. S3 must re-argue this rather
-// than inherit it: either AO-R4's disjunction returns, or the borrow is
-// taken before the header is read.
-//
-// **Cross-core, a wake is write-then-kick** (AU-S2, AR0-6-R1, AO-R4 as
-// AU-S3 amended it). A slot flip from a foreign thread is not one of the
-// three things that end a sleeping reactor's idle block
-// (`Scheduler::IdleTimeoutMs`: an fd, a timer, the waker), so until AU-S2 a
-// waiter whose reactor had gone idle learned of the flip when the block
-// expired - `max_idle_block_ms`, 10 ms - not when it happened. Now every
-// waiter records the core it parks on, and whoever flips its slot - a
-// decide's `WakeWaiters`, a withdrawal's `DequeueWaiter` - kicks that core
-// through the instance's wake registry (`sched/waker_table.hpp`'s
-// `WakeRegistry`, installed with `SetWakeRegistry`) **after** releasing the
-// partition latch. A waiter on the decider's own core is not kicked - the
-// decide runs on that reactor, where it runs on one at all; from any other
-// thread `CurrentCore()` is 0 and a core-0 waiter goes unkicked, which
-// costs it a block and never a wake. At `cores = 1` no registry is
-// installed, so the single-core path pays nothing. A kick that finds the
-// waiter's reactor awake is skipped by the registry, and a kick lost to the
-// registry's accepted race costs one idle block - AR0-6-R1's stated cost,
-// never liveness, because the park is level-triggered: a parked task is
-// re-polled after every block, so the reactor re-reads nothing before it
-// blocks and none is owed.
-//
-// Two consequences of having no caller yet, stated so they are not read as
-// finished work:
-//
-//   - **the cap's refusal carries no wire detail here.**
-//     `wire::ResourceDetail::kLockCap` is numbered and frozen in the golden
-//     list, and the `Status` this returns is the one a session will map
-//     through it - but the mapping happens where a session exists, which is
-//     AO-S3;
-//   - **the caller owes the ancestor chain and nothing here enforces it.**
-//     A relation `X` and a tuple `X` under it are both granted by this
-//     table, because AR2-R3's whole design is that the conflict is caught
-//     at the relation entry *by the writer taking `IX` there*. A caller
-//     that borrows a tuple without the intention chain above it gets a
-//     wrong answer quietly. AO-S3 is where the callers appear and where
-//     that obligation becomes checkable; `TheTableDoesNotInferTheAncestorChain`
-//     pins the behaviour meanwhile.
+// **The caller owes the ancestor chain and nothing here enforces it.** A
+// relation `X` and a tuple `X` under it are both granted by this table,
+// because AR2-R3's design catches the conflict at the relation entry *by
+// the writer taking `IX` there*. A caller that borrows a tuple without the
+// intention chain above it gets a wrong answer quietly
+// (`TheTableDoesNotInferTheAncestorChain` pins the behaviour).
 //
 // ---- Concurrency (docs/rules/rules.md §3's lock-table row) ----------------
 //
-// **One table for the instance**, to be owned by the expeditor and handed
-// to every core the way `InstanceVisibility` is - the wiring AO-S3 adds to
-// `server/core_runtime.hpp`'s `Config`, not present today. This comment is
-// the declaration `rules.md` §3 requires of any lock.
+// **One table for the instance**, created by the expeditor and handed to
+// every core (`server/core_runtime.hpp`'s `Config::locks`). This comment
+// is the declaration `rules.md` §3 requires of any lock.
 //
 // **Partitioned 64 ways at every core count** (`kLockPartitions`; BP-S6,
-// BP-Q15 (a) - AO-S7 had it `64 x cores`),
-// keyed by `(rel_oid, unit kind, lo)` so that a relation's own entry and
-// the units beneath it hash apart: the relation entry is touched by every
-// writer's `IX` and every positioned reader's `IS`, and sharing its
-// partition with its tuples would serialize exactly the traffic the
-// partitioning exists to spread. The unit kind is in the key because
-// `Relation(r)`, `Tuple(r, 0)`, `Slice(r, 0, h)` and `Range(r, 0, h)` all
-// carry `lo = 0` and would otherwise collide by construction rather than
-// by chance.
+// BP-Q15 (a)), keyed by `(rel_oid, unit kind, lo)` so a relation's own
+// entry - touched by every writer's `IX` and every positioned reader's
+// `IS` - hashes apart from the units beneath it. The unit kind is in the
+// key because `Relation(r)`, `Tuple(r, 0)`, `Slice(r, 0, h)` and
+// `Range(r, 0, h)` all carry `lo = 0`.
 //
-// **A `Latch*` per partition, null at `cores = 1`** - `base/latch.hpp`'s
-// shape, which keeps G2 a property of the code rather than of a build
-// flag. A `std::mutex` and not a spin primitive: AR0-M2 records that the
-// spin primitive was deleted at `7839a29`, and re-introducing one is a
-// decision AO-S7's numbers can ask for and this stage does not take.
+// **A `Latch*` per partition, null at `cores = 1`** (AO-R9,
+// `base/latch.hpp`'s shape).
 //
 // **Acquisition order.** A partition latch is taken
 //
@@ -145,10 +93,8 @@
 //   - **never under the WAL stream latch** or the visibility window latch;
 //   - **released before any park.**
 //
-// **Nothing enforces those four.** They are prose here and structurally
-// true only for the second; the census that would arm them is AO-S3's,
-// where callers exist to violate them - the same shape AM-S1 needed for
-// the page latch.
+// Only the second is structural; the other three are discipline, with no
+// assertion behind them.
 //
 // ---- The fence probe, in place of a persisted bit (AO-R3) -----------------
 //
@@ -205,48 +151,25 @@
 // ---- The wait-for graph and the victim (AO-R7, D12) -----------------------
 //
 // A wait is an edge `waiter -> holder`, and a cycle among them is a
-// deadlock. AO-S4a records the edges here, beside the borrows, because
-// AO-S4b's detector runs on core 0 over edges from every core and needs
-// one place to read them.
+// deadlock. The dispatcher records one for every park - the write-block
+// wait and the lock wait (`command_dispatcher.cpp`, `NoteWaitFor`) - and
+// never for a read holder, which never waits.
 //
-// **Which waits are edges, exactly.** The dispatcher's write-block wait
-// (`command_dispatcher.cpp`) is one. **`Acquire`'s own queue wait is
-// not** - the slot a refusal hands back parks a caller with no edge
-// recorded anywhere - and nothing in this file registers one but
-// `NoteWaitFor`. Today that gap is unreachable, because no dispatch path
-// calls `Acquire`; AO-S6 is the stage that wires one, and it must close
-// this or a transaction will hold rows under the write-block graph while
-// waiting on a lock queue that the graph cannot see.
+// **The graph is functional: one out-edge per waiter**, which makes the
+// walk a unique chain and the cycle test decisive; a waiter re-registering
+// replaces its edge. A refusal names **one** conflicting holder
+// (`AcquireResult::blocking_txn`), so a waiter on a unit several hold in
+// `S` draws an edge to one of them only, and a cycle through another is
+// left to the fault net.
 //
-// **The graph is functional: one out-edge per waiter**, which is what
-// makes the walk below a unique chain and the cycle test decisive. A
-// waiter re-registering replaces its edge rather than adding one. That
-// holds while a wait has exactly one blocker, and it stops being true the
-// moment a waiter can wait on *all* holders of a shared unit - `S` held by
-// three transactions against an `X` request - so AO-S6 owes the container
-// as well as the edge.
-//
-// A waiter registers its own edges from its own statement. The FK probe
-// fan-out that once gave one waiter two blockers retired (AT-S5f); its
-// history is at cf889b63.
-//
-// **Detection happens when the edge is added, not on a cadence, and that
-// is a departure from AO-R7 worth stating.** AO-R7 specifies a
-// `system`-group task on core 0 walking the edges every 100 ms. For the
-// same-core case that cadence buys nothing and costs the victim up to
-// 100 ms of stalling: a cycle can only close at the instant some waiter
-// adds the edge that closes it, and that waiter is holding the partition
-// latch and can walk the chain itself in the same breath. Checking there
-// makes the answer immediate and makes AO-R7's victim rule - "it aborts
-// the transaction whose edge closed it", PostgreSQL's detecting-waiter
-// choice - literally true rather than approximately.
-//
-// **The cadence AO-S4b owed is not built, and its reason is gone.**
-// Visibility was never the problem: the table is the instance's and
-// `wait_latch_` orders every core's registrations, so a registration-time
-// walk sees every core's edges. What a periodic walk was for is a wait
-// that registered *no* edge, and none is left: the edgeless parks retired
-// (AT-S6, AT-S5f).
+// **Detection happens when the edge is added, not on a cadence** - a
+// departure from AO-R7's 100 ms core-0 walk. A cycle can only close at the
+// instant a waiter adds the edge that closes it, and that waiter holds the
+// graph latch and walks the chain itself, so AO-R7's victim rule - "it
+// aborts the transaction whose edge closed it" - is exactly true. The
+// table is the instance's and `wait_latch_` orders every core's
+// registrations, so the walk sees every core's edges; no edgeless park is
+// left for a periodic walk to catch (AT-S6, AT-S5f; history at cf889b63).
 //
 // ---- The cap (AO-R10, E2) -------------------------------------------------
 //
@@ -383,10 +306,9 @@ struct LockKey {
     }
 };
 
-// AO-R10's value, and the default behind `max_locks_per_txn` since AO-S6a
-// wired the key through `Expeditor::Config` (`server/expeditor.hpp`).
-// `[provisional]` on the operator's mark of 2026-09-08 until AO-S7 names
-// it. One name for the quantity: nothing else spells this number.
+// AO-R10's value and the default behind `max_locks_per_txn`
+// (`Expeditor::Config`, `server/expeditor.hpp`), kept on 2026-09-28 (AT-0
+// item 3). One name for the quantity: nothing else spells this number.
 inline constexpr std::size_t kMaxLocksPerTxnDefault = 65536;
 
 // AO-R2's partition count, fixed at every core count since BP-S6 (BP-Q15
@@ -422,17 +344,10 @@ inline constexpr bool IsReadHolder(std::uint64_t holder) noexcept {
 // never touches the holder) and is logged as the fault it is.
 //
 // **The net is 1 s** (D12): no holder waits on another core for anything,
-// so the longest honest wait is a local statement's own work. The 2PC
-// phase deadline that once set it to 11 s retired (AT-S6); its history is
-// at cf889b63.
-//
-// **The default, and the key that overrides it.** `lock_wait_fault_net_ms`
-// is `in_doubt_ceiling_ms` re-scoped and renamed (AT-0 item 7, AO-R8's own
-// plan): the quantity the old key named - how long a statement may wait before the
-// engine calls it a fault - is this one. A second key would have been a
-// second name for it (`CLAUDE.md`'s rule), and deleting it would have left
-// an operator's file silently ignored, so the old spelling is **refused at
-// startup naming its successor**.
+// so the longest honest wait is a local statement's own work (the 11 s 2PC
+// deadline retired at AT-S6; history at cf889b63). `lock_wait_fault_net_ms`
+// overrides it - `in_doubt_ceiling_ms` re-scoped (AT-0 item 7), whose old
+// spelling is **refused at startup naming its successor**.
 inline constexpr std::uint64_t kLockWaitFaultNetNs = 1ull * 1000 * 1000 * 1000;
 
 // What a parked waiter polls. The table owns it and a decide flips it;
@@ -504,8 +419,7 @@ inline bool LockWaitReady(const std::shared_ptr<LockWaitSlot>& slot) noexcept {
 }
 
 // The per-transaction half of the borrow: the bounded list AO-R6 puts on
-// `Transaction`, its own type so this stage can be built and tested before
-// the manager is opened in AO-S2. A transaction owns exactly one, so it is
+// `Transaction`. A transaction owns exactly one, so it is
 // **move-only** - a copy would let two owners release the same borrows, and
 // the second release would corrupt the fence counter.
 //
@@ -589,12 +503,9 @@ public:
     // `DispatchAsync`, outside every span. That is why `blocker` exists.
     //
     // **`blocker`, when given, receives the transaction this ask lost to**
-    // (AO-S6c-b). It is what makes the lock the wait rather than merely the
-    // ledger: before it, the waiting statement learned who to wait for from
-    // the *tuple header*, which can only ever name the row's own writer -
-    // so a transaction blocked by a range fence had nothing to name and no
-    // wait to take. Untouched on a grant, and untouched by the cap's
-    // refusal, which is not a conflict and names nobody.
+    // (AO-S6c-b) - what a fence-blocked writer waits on, since a tuple
+    // header names only the row's own writer. Untouched on a grant and by
+    // the cap's refusal, which is not a conflict and names nobody.
     //
     // **`wake`, when given, receives a slot to park on** (AO-S6e-b). The
     // ask stays non-queueing - no queue position, nothing recorded in
@@ -705,9 +616,8 @@ public:
     // borrows, which the intention rule catches at the relation entry.
     // `want` is the mode the asker is taking, and the compatibility table
     // decides against it - so an `S` fence covers an `X` write of a key it
-    // spans and admits an `S` read of the same key. It defaults to `X`,
-    // which is the probe's original question ("is this key fenced at all")
-    // and what every caller written before AO-S6b meant by it.
+    // spans and admits an `S` read of the same key. It defaults to `X`
+    // ("is this key fenced at all").
     //
     // `holder`, when given, receives the covering transaction's id, which
     // is what a refused caller reports as its blocker.

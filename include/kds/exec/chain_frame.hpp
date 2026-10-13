@@ -15,11 +15,8 @@
 //
 // ---- Why one buffer, not one vector per step ---------------------------
 //
-// A chain of n relations decodes one row per step per output row. Giving
-// each step its own `std::vector<AstValue>` means n allocations per
-// candidate row and n more frees, on the hot path of every join - which is
-// how an O(1)-allocation scan becomes an O(rows) one without anybody
-// deciding to make it so. Instead every step's values live in one buffer
+// A vector per step would cost n allocations per candidate row on every
+// join's hot path. Instead every step's values live in one buffer
 // at a fixed base offset, and the buffer is sized once when the frame is
 // opened. `ColumnRef{up, rel_slot, col_pos}` resolves in one add.
 //
@@ -60,9 +57,7 @@ public:
     }
 
     // Where slot `rel_slot`'s values end: the next slot's base, or the end
-    // of the buffer for the last slot. One home for it, because both callers
-    // below need exactly this and a second copy is a second thing to get
-    // right. `std::size_t` in the parameter rather than the caller's
+    // of the buffer for the last slot. `std::size_t` in the parameter rather than the caller's
     // uint16_t, so `+ 1` never promotes to *int* and the comparison against
     // size() is never signed-vs-unsigned.
     std::size_t EndOfSlot(std::size_t rel_slot) const {
@@ -108,8 +103,7 @@ private:
 // **The one evaluator of compiled conjuncts.** Two evaluators would be two
 // answers to "does this row qualify", and the whole point of `Probe` and
 // `Scan` agreeing row-for-row is that there is exactly one. A type
-// mismatch is a non-match, not an error, matching what SQL's
-// NULL-comparison semantics would give in the absence of real NULLs.
+// mismatch is a non-match, not an error.
 //
 // **A conjunct is checked once and compared per row** (BM-R6,
 // `workorder-bm-scan-row-kernel.md`; BT-R5, `workorder-bt-accept-tuple-row.md`).

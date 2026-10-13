@@ -74,8 +74,8 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
     };
 
     const auto visit = [&](const DecodedRecord& record) -> Status {
-        // **A retired kind is refused, never skipped** (BP-R4): no build that
-        // writes superblock 22 appends one, so a log carrying one is not this
+        // **A retired kind is refused, never skipped** (BP-R4): no build
+        // since superblock 22 appends one, so a log carrying one is not this
         // build's (`IsRetiredRecordType`).
         if (IsRetiredRecordType(record.type())) {
             return RetiredRecordRefusal("wal analysis", record.type(), record.header.lsn);
@@ -118,8 +118,8 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // its chain. The pointer is (page_id, offset) packed the way
         // `txn::EncodeUndoPtr` packs it - reproduced here rather than
         // called, because `wal/` sits below `txn/` and this is the one
-        // place the layering costs a duplicated shift. The shape is pinned
-        // by a static_assert-style test in wal_analysis_test.cpp.
+        // place the layering costs a duplicated shift. Pinned by
+        // `AnalysisUndoPtrTest` (wal_analysis_test.cpp).
         if (record.type() == RecordType::kUndoWrite) {
             auto decoded = DecodeUndoWrite(record.payload);
             if (!decoded.ok()) {

@@ -165,14 +165,11 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                                                   Budget* budget) {
     // ---- Scope: this check answers for the whole child (AT-S5f) ---------
     //
-    // **There is no scope question left to ask**: every core reads every
-    // page through the one pool (AM-S2 step 3), so the walk below covers
-    // the child's one structure, and an answer
-    // from this core is an answer for the whole relation. The range-scope
-    // refusal and its fan-out retired with the split relation; their
-    // history is at cf889b63. The Cabin is handled where
-    // it is read rather than by a guard over the whole function: a set may
-    // *find* a child and, since AY-S6, *clear* a parent (below).
+    // Every core reads every page through the one pool (AM-S2), so the walk
+    // covers the child's one structure and answers for the whole relation
+    // (the range-scope refusal retired with the split relation; history at
+    // cf889b63). A Cabin set may *find* a child and, since AY-S6, *clear* a
+    // parent (below).
 
     FkReverseOutcome outcome;
 
@@ -315,20 +312,9 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
 
     // ---- The walk (§3) --------------------------------------------------
     //
-    // **The walk records nothing into the Cabin, and that is a correction to
-    // F6 rather than an omission.** F6 expects a reverse check's observation
-    // to be "naturally driven by exactly the parents that get deleted" - but
-    // the value a reverse check would record is *the pk being deleted*, and a
-    // given pk is deleted once. The set would be taught a value no check can
-    // ever ask about again, while `cabin_max_values` is a cap that **refuses
-    // to observe** once full: recording here would spend a bounded budget on
-    // dead values and could crowd out the live ones a query would have used.
-    //
-    // A Cabin on a child's fk column still pays for the reverse check - the
-    // hit path above is real - but its values arrive the ordinary way, from
-    // queries that filter children by parent id. That is the workload where
-    // such a Cabin is justified anyway, so the two now agree instead of one
-    // subsidizing the other.
+    // **The walk records nothing into the Cabin** - a correction to F6 the
+    // header states: a deleted pk is dead by construction and would spend
+    // `cabin_max_values`' bounded budget.
     FkVerdict verdict = FkVerdict::kPass;
     Status inner = Status::OK();
     std::vector<parser::AstValue> scratch;

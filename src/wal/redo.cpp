@@ -90,11 +90,7 @@ Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& 
     if (type == PageType::kCabinBound) {
         // Not the generic arm below: BoundCabinPage::Format writes a body -
         // entry_count 0 and next_page_id = kInvalidPageId - and a zeroed
-        // body reads next_page_id as page 0, so AdoptChain on a redone root
-        // walked into the superblock and the assertion could not be revived
-        // (found when the sys.assertions row first survived a crash;
-        // pre-existing since the chain's PAGE_INIT was first logged).
-        // The record's owner_oid is deliberately ignored: Format stamps 0,
+        // body reads next_page_id as page 0, the superblock. The record's owner_oid is deliberately ignored: Format stamps 0,
         // Grow logs 0, and honoring a nonzero one here would be the
         // divergence, not the fidelity.
         if (Status s = storage::cabin::BoundCabinPage::Format(page); !s.ok()) {
@@ -132,14 +128,7 @@ Status ApplyDeleteMark(std::span<std::byte, kPageSize> page, const DecodedRecord
     // DeleteMark re-stamps rather than failing on an already-marked slot,
     // so this is idempotent without a special case - and rollback's clear
     // is HEAP_DELETE_UNMARK, a *different* record, so redo never has to
-    // guess which direction a mark record meant.
-    //
-    // **That was not true until 2026-08-11 and this comment asserted it
-    // anyway.** `TransactionManager::Compensate` logged kHeapDeleteMark to
-    // clear a mark, so redo replayed a rollback's compensation as a second
-    // delete - and a transaction that delete-marked a row and then aborted
-    // came back from recovery with the row still deleted. RC05 added the
-    // record type the comment had already assumed.
+    // guess which direction a mark record meant (RC05, 2026-08-11).
     return view.DeleteMark(fields.value().slot, fields.value().trx_id);
 }
 
@@ -175,11 +164,9 @@ Status ApplySlotRetire(std::span<std::byte, kPageSize> page, const DecodedRecord
 
 // The record carries the undo record's **tail** - its bytes from
 // `target_page_id` onward - plus the two chain links as payload fields
-// (docs/spec/txn.md §3.5). Reassembling those two halves is the whole applier,
-// and it is only possible because `LogUndoWrite` was corrected on
-// 2026-08-10 to log the tail: before that the three fields naming *which
-// tuple* a before-image belongs to lived on the page and nowhere in the
-// log, and a chain rebuilt from it would have named page 0 slot 0.
+// (docs/spec/txn.md §3.5). Reassembling those two halves is the whole
+// applier; the tail carries the fields naming *which tuple* a before-image
+// belongs to, so the log alone rebuilds the chain.
 Status ApplyUndoWrite(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
     auto decoded = DecodeUndoWrite(record.payload);
     if (!decoded.ok()) {
@@ -256,7 +243,7 @@ Status ApplyIndexInsert(std::span<std::byte, kPageSize> page, const DecodedRecor
     return Status::OK();
 }
 
-// The siblings' stance (the 3f07eda review's C2): a record that is not this
+// The siblings' stance (3f07eda's review, C2): a record that is not this
 // page's is refused, never applied - a heap page's body+4 read as an entry
 // count is exactly the forged bound the anchor accessors refuse.
 Status ApplyAnchorUpdate(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
@@ -354,7 +341,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         [&](const DecodedRecord& record, PageId page_id, bool is_image,
             FunctionRef<Status(std::span<std::byte, kPageSize>)> apply) -> Status {
 
-        // PW1c-2's filter: a record for a page analysis holds no dirty
+        // The dirty filter (PW1c-2): a record for a page analysis holds no dirty
         // entry for - or one below that entry's recLSN - describes state
         // already in the durable image, and is skipped **before the load**,
         // because a page recovery owes nothing to must not even be faulted.
@@ -386,8 +373,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // The pin outlives the branch that took it. A `PageRef` local
         // declared inside one of the `CreateAt` arms below would unpin at
         // that arm's closing brace, leaving `page_bytes` pointing into a
-        // frame nothing holds - the exact lifetime the migration exists to
-        // make visible (workplan-pageref.md §3, Shape C).
+        // frame nothing holds (page.md §3's pin model).
         storage::PageRef created_ref;
         auto got = store.Get(page_id);
         if (got.ok()) {
@@ -440,10 +426,8 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             return Status::OK();
         }
 
-        // No foreign-stamp check here: every core's records are in this one
-        // log by construction (AM-S4(d)), so a page stamped by core 2 met in
-        // core 0's mount pass is evidence of nothing lost. The stamp is a
-        // diagnostic (`page_header.hpp`), and redo leaves it alone.
+        // No stream-stamp check: there is one log for the instance, and no
+        // branch reads the page's old stream stamp (BP-H5, `page_header.hpp`).
         //
         // RV5, the whole of idempotence. An image is gated too: a page
         // already at or past this LSN does not need its image restored.
@@ -492,9 +476,9 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             return Status::OK();
         }
         if (IsAssertionRecord(record.type())) {
-            // RC07's, and blocked on assertion.md §7's genesis
-            // decision. Counted rather than dropped so the deferral shows
-            // up in the report instead of being assumed.
+            // Not redo's: `ASSERT_*` records are folded by assertion
+            // recovery (`exec/assertion_recover.hpp`, RC07). Counted so the
+            // hand-off shows in the report.
             ++stats.deferred_assertions;
             return Status::OK();
         }

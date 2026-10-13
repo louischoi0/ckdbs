@@ -8,8 +8,7 @@
 
 // A PageStore backed by plain heap-allocated pages in an unordered_map -
 // no disk, no eviction, everything lives in process memory for as long as
-// the store does. Useful today for catalog/ tests and early bring-up;
-// replace with a real buffer-pool-backed PageStore once one exists.
+// the store does. A test double; the server runs on DevicePageStore.
 
 namespace kds::storage {
 

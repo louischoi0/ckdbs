@@ -9,7 +9,7 @@
 #include "kds/stats/waystone.hpp"
 #include "kds/storage/keystone.hpp"
 
-// A recorded trail, indexed for replay (docs/inflight/in-progress/waystone-workplan.md P11/P13).
+// A recorded trail, indexed for replay (`docs/spec/waystone-concpets.md` §2).
 //
 // The read side of what `exec::TrailCollector` writes. Built once when a
 // statement opens, consulted once per keyed step, and thrown away with the
@@ -31,9 +31,9 @@
 //
 // ---- Rule 0 is the lookup key, deliberately ------------------------------
 //
-// `docs/inflight/in-progress/waystone-workplan.md` P13's amendment adds a rule the storage-level
-// checks cannot supply: **re-derive the probe key from the current outer row
-// and require it to equal the entry's `pk`**. Every rule in spec section 2
+// Spec §2 rule 0 is the one the storage-level checks cannot supply:
+// **re-derive the probe key from the current outer row and require it to
+// equal the entry's `pk`**. Every other rule in spec section 2
 // validates the trail against *storage*, and none looks at the query - so if
 // a driving row's join column is updated between recording and replay, an
 // entry for the old key passes `rel_oid`, the Keystone id, the epoch and
@@ -47,12 +47,10 @@
 //
 // ---- What this deliberately cannot check ---------------------------------
 //
-// **The page epoch is no longer on this list** (2026-08-09, workplan PX04):
-// entries carry the epoch the recorder observed, `TrailLocation` carries it
-// to the consult site, and `exec/tuple_verify.hpp` compares it against the
-// page's current epoch - spec section 2's rule 2, enforceable at last.
-// Until a mover exists every comparison is between two zeros; the
-// hand-bumped-epoch contract test is what proves the check would fire.
+// **Not the page epoch**, which is checked: entries carry the epoch the
+// recorder observed, `TrailLocation` carries it to the consult site, and
+// `exec/tuple_verify.hpp` compares it against the page's current epoch
+// (spec §2 rule 2; a btree leaf division bumps it).
 //
 // **That a page still belongs to the relation it was recorded from** is two
 // checks. `Build()` checks `entry.rel_oid` against the step's - a check

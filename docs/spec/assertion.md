@@ -59,7 +59,7 @@ correct.
 | AS7 | `CREATE ASSERTION` performs a full scan of the target relation to build the Bound Cabin and initial aggregates. Any existing violation fails the CREATE and discards the build. `NOT VALID` is reserved grammar, `Unsupported`. |
 | AS8 | v1 assertions target exactly one relation. Multi-relation assertions: `Unsupported`. |
 | AS9 | A violation is a **statement error** that poisons like every other write failure (§4.4). New Status code `AssertionViolation`; the error carries the assertion name and the violating group key. |
-| AS10 | Catalog: `sys.assertions` storing the full declaration `source_text` (same model as `sys.pattern_defs`). `DROP ASSERTION` supported. Dropping a relation referenced by an assertion is `RESTRICT`. ANALYZE reports per-statement assertion check counts and reservation failures. |
+| AS10 | Catalog: `sys.assertions` storing the full declaration `source_text`, in user tuple format (§8.2). `DROP ASSERTION` supported. Dropping a relation referenced by an assertion is `RESTRICT`. ANALYZE reports per-statement assertion check counts and reservation failures. |
 | AS11 | v1 supports **upper-bound constraints only**: comparison operators `<` and `<=`. Lower bounds (`>`, `>=`) are refused — they would require checking on DELETE and on decreasing UPDATE paths. **`=` is refused with them** (§3.1a): enforcing real equality needs the lower-bound half, so `=` costs exactly what `>=` costs. Consequently DELETE never requires an assertion check. |
 
 **Which refusal code** (`include/kds/base/status.hpp`): **`NotImplemented`**
@@ -379,11 +379,9 @@ On a checked write (per §4.2), executed inline in the writing statement:
    and subtract their deltas from the group headers. Emit the compensating
    WAL records.
 
-Properties. **Three of these were rewritten at AO-S6e-c** (census row 11,
-`instructions/v3.0.0/workorder-ao-m2-lock-family.md`), which turned the
-last one from an accepted outcome into a wait; what each said before is
-kept beside what it says now, because a property list is cited and a
-silent replacement would leave the citations pointing at the wrong claim.
+Properties. AO-S6e-c (M2, `instructions/v3.0.0/workorder-ao-m2-lock-family.md`
+census row 11) turned a refusal behind an undecided reservation from an
+accepted outcome into a wait; the bullets below state the result.
 
 - **No waiting inside the check; a wait after it.** Admission is a
   computation under the registry's directory latch, and contenders on two
@@ -394,16 +392,13 @@ silent replacement would leave the citations pointing at the wrong claim.
   and a statement that fails, or parks and re-runs, between the two gives
   it back. An `UPDATE` holds its arrival's full contribution, whatever
   was checked, because its departure is applied first and a group lowered
-  by it with nothing held would read low to another core in between. What
-  changed at AO-S6e-c is what happens *after* a refusal:
-  where the aggregate that refused includes a reservation of a transaction
-  still in flight, the statement waits for that decide rather than
-  failing. It was *"never blocked"*.
-- **Deterministic failure, no retry storm, no livelock.** The half that
-  survives. It was also *"the loser of a race fails **immediately**"*, and
-  that is now false by construction: the loser of a race against an
-  undecided reservation waits for it. The failure it eventually gets is
-  still deterministic and still truthful.
+  by it with nothing held would read low to another core in between. After
+  a refusal whose aggregate includes a reservation of a transaction still
+  in flight, the statement waits for that decide rather than failing.
+- **Deterministic failure, no retry storm, no livelock.** The loser of a
+  race against an undecided reservation waits for it rather than failing
+  immediately; the failure it eventually gets is deterministic and
+  truthful.
 - **No false admissions.** Unchanged. Reservations are counted in the
   aggregate from the moment of admission - as a hold until their record is
   appended, since AT-S5d. A negative contribution is held as zero, so a
@@ -412,10 +407,7 @@ silent replacement would leave the citations pointing at the wrong claim.
   and all four are ordinary.** A statement refused because of a reservation
   belonging to a transaction that later aborts waits for the decide and is
   admitted when the reservation goes; when the reservation **commits**, the
-  refusal was true and is delivered then. It was *"bounded false rejections
-  … accepted and documented (identical in spirit to unique-index insertion
-  behavior)"*, and the analogy went with it — a unique index has nothing to
-  wait for.
+  refusal was true and is delivered then.
 
   The conditions, stated here because this is the bullet that gets cited:
   the statement must be on a path that can **park** (the synchronous
@@ -649,9 +641,9 @@ assertion on a relation.
 
 ### 8.1 CREATE
 
-The build runs **synchronously inside the CREATE statement**, not in a
-background scheduling group: the engine has no suspendable statement path
-(`crosscore.md` P4), and the index backfill set the precedent. On one
+The build runs **synchronously inside the CREATE statement**
+(`exec::BuildBoundCabin`, which never yields), not in a background
+scheduling group, as the index backfill does. On one
 cooperative core this means no write can interleave with the build, so
 §8.1a's membership protocol is met trivially. **On more than one core the
 build holds the relation `X`** (AT-S5e, the operator's mark on
@@ -753,16 +745,20 @@ and the protocol is not built.
 
 ### 8.2 Catalog
 
-`sys.assertions` (fixed-page bootstrap, same pattern as `sys.patterns`):
+`sys.assertions` (bootstrapped on its fixed page, `Catalog::BootstrapAssertions`), in schema order:
 
 | Column | Type | Notes |
 |---|---|---|
-| assertion_id | u32 | engine-issued |
+| id | int64 | the row's own Keystone id, which is the assertion's id (K1: never reused) |
+| target_oid | int32 | RESTRICT on relation drop |
+| cabin_root | int64 | Bound Cabin anchor page id |
+| flags | int32 | reserved (deferrable/not-valid bits), written 0 |
 | name | varchar | unique |
-| target_oid | u32 | RESTRICT on relation drop |
-| source_text | varchar | full declaration verbatim (sys.pattern_defs model; single row, no params table) |
-| cabin_root | page id | Bound Cabin anchor |
-| flags | u32 | reserved (deferrable/not-valid bits) |
+| source_text | varchar | full declaration verbatim; the `GROUP BY` list is recovered by re-parsing it, so there is no column cap and no sibling relation |
+
+**The only catalog relation in user tuple format** (`catalog/well_known.hpp`
+`kSysAssertionsTable`): its text is var-heap spilled like any user cell, so
+its readers live above `catalog/` (`exec/assertion_catalog.hpp`).
 
 ### 8.3 DROP
 

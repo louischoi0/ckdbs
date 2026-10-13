@@ -7,12 +7,10 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
 
-// The relation anchor page (PageType::kAnchor; workplan-peer-writer.md
-// §7a, PW2's decision): one fixed page per relation holding its entry
-// points, so that a root move writes a relation page and never a catalog
-// page. The indirection stays because the `sys.tables` row is
-// CREATE-fixed; the ownership rules PW2 decided it under retired (AT-S5,
-// AW-S1b), and their history is at cf889b63.
+// The relation anchor page (PageType::kAnchor; background: PW2,
+// workplan-peer-writer.md §7a): one fixed page per relation holding its
+// entry points, so that a root move writes a relation page and never a
+// catalog page - the `sys.tables` row is CREATE-fixed.
 //
 // Layout, packed at kPageBodyOffset, every field read and written through
 // explicit offsets and memcpy (invariant 6's discipline - no overlay
@@ -29,9 +27,9 @@
 // this header says why, and what shape it takes when it arrives.
 //
 // Mutation protocol: under the page latch, like every relation page - any
-// core's statement may write it since AT-S5. Every mutation is WAL-logged by
-// the caller (PW2-3's record) and stamped through StampPageLsn; this
-// header only moves bytes.
+// core's statement may write it. Every mutation is WAL-logged by the caller
+// (`ANCHOR_UPDATE`) and stamped through StampPageLsn; this header only
+// moves bytes.
 
 namespace kds::storage {
 
@@ -53,9 +51,8 @@ void SetAnchorClusteredRoot(std::span<std::byte, kPageSize> page, PageId root);
 
 // `nr_index` duplicates a schema constant, so every reader treats it as
 // **checked redundancy** (docs/rules/rules.md): compared against the bound,
-// Corruption on disagreement, never computed from - a forged count was an
-// ASan-demonstrated out-of-bounds read, and one branch over, a write
-// (this file's 3f07eda review, C1).
+// Corruption on disagreement, never computed from - a forged count is an
+// out-of-bounds read or write otherwise (3f07eda's review, C1).
 
 // Every `{index_oid, root}` slot the anchor holds, in slot order - a
 // dropped index's and a rolled-back one's included, since no slot is ever
@@ -79,25 +76,17 @@ StatusOr<PageId> AnchorIndexRoot(std::span<const std::byte, kPageSize> page,
 // implementation, two callers.
 //
 // It is separate so the refusal can be asked for **before** a caller
-// allocates the pages it would then record here. `CREATE INDEX` builds
-// the whole tree and seeds the anchor afterwards, so on a full table
-// every attempt allocated an index tree - 32 pages - and threw it away.
-// No anchor slot names a tree thrown away there, so no reclaim reaches it
-// (BF §0) and those pages are gone for the life of the database.
-// The storm that measured it, and its numbers, are in
-// `docs/inflight/known-gaps.md`; they are not restated here, so there is one
-// figure to keep true.
+// allocates the pages it would then record here: `CREATE INDEX` builds the
+// whole tree and seeds the anchor afterwards, and a tree no anchor slot
+// names is never reclaimed (BF §0) - leaked for the life of the database.
 Status CheckAnchorRoomForIndex(std::span<const std::byte, kPageSize> page,
                                std::uint64_t index_oid);
 
 // Inserts or updates the entry for `index_oid`. Refuses exactly as
-// CheckAnchorRoomForIndex does. The cap is **not** unreachable (the
-// f5686f8 review's C4.2 corrected the first claim here): entries
-// accumulate across DROP INDEX - no removal exists yet, and index oids
-// never reissue - so ~679 create-then-drop cycles on one relation fill
-// the table, and the next index's first root split fails an ordinary
-// INSERT. Remote, and named as the debt it is in
-// workplan-peer-writer.md §7a.
+// CheckAnchorRoomForIndex does. The cap is reachable: entries accumulate
+// across DROP INDEX - no removal exists, and index oids never reissue - so
+// ~679 create-then-drop cycles on one relation fill the table, and the next
+// index's first root split fails an ordinary INSERT.
 Status SetAnchorIndexRoot(std::span<std::byte, kPageSize> page, std::uint64_t index_oid,
                           PageId root);
 

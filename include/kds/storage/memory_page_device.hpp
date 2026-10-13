@@ -87,8 +87,7 @@ public:
         // One-shot injections that actually fired. A driver that arms a
         // fault cannot otherwise tell whether it was consumed, and
         // "this error had an injected cause" is exactly what the
-        // simulation harness's fault runs assert (bench/workplan-
-        // teststrategy SIM05).
+        // simulation harness's fault runs assert (`sim/faults.hpp`).
         std::uint64_t injections_fired = 0;
     };
 
@@ -100,10 +99,9 @@ public:
     static StatusOr<std::unique_ptr<MemoryPageDevice>> Create(
         std::uint32_t extent_pages = kDefaultExtentPages, std::uint32_t initial_pages = 0);
 
-    // Atomic loads, the one read this class answers outside `mu_` (the
-    // operator's decision of 2026-09-08, `rules.md` section 3's device
-    // row): any core grows the device, and a store asks the bound on every
-    // allocation.
+    // Atomic loads, the one read this class answers outside `mu_`
+    // (`rules.md` section 3's device row): any core grows the device, and a
+    // store asks the bound on every allocation.
     std::uint32_t page_capacity() const noexcept override {
         return page_capacity_.load(std::memory_order_acquire);
     }
@@ -148,7 +146,7 @@ public:
     // Disarms every pending injection. For a driver that injects during
     // one phase and needs the next phase clean: a one-shot fault that was
     // never consumed would otherwise fire into the phase that must not
-    // have faults in it (SIM05's quiescence probe).
+    // have faults in it (the simulator's quiescence probe).
     void ClearInjections() noexcept;
 
     // Discards every write and every capacity growth since the last
@@ -198,12 +196,9 @@ private:
     // Sparse, and split so Crash() can drop exactly the un-synced half.
     // Reads see pending_ overlaid on durable_.
     // **Guards every mutating operation below** (AM-S2 R8). One device
-    // serves every core's store, and `core_runtime_test.cpp` already runs a
-    // worker thread per `CoreRuntime` over one of these - so two threads
-    // reach `ReadPageRun` concurrently, where the trace `push_back`
-    // reallocates a vector and three `stats_` fields increment. **That race
-    // predates AM-S2**; 2b's concurrent reads of different pages are a
-    // second way to reach it, not the first.
+    // serves every core's store, so two threads reach `ReadPageRun`
+    // concurrently, where the trace `push_back` reallocates a vector and
+    // `stats_` fields increment.
     //
     // Coarse on purpose: this is the test and simulator device, the
     // simulator is single-threaded so the mutex is uncontended there, and a

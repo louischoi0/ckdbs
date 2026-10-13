@@ -36,11 +36,9 @@ using SpillRef = std::pair<PageId, std::uint16_t>;
 // The single entry satisfies both. A relation that satisfies one and not
 // the other needs its own list, not an entry here.
 //
-// **It is a list of one, and stays a list.** `sys.pattern_defs` was the
-// other entry until the operator withdrew declared patterns on 2026-08-31;
-// collapsing the list into a constant would put the two consumers back to
-// naming the relation themselves, which is the duplication CB2 removed, and
-// the next catalog relation to gain a var-heap joins here by CR1.
+// **It is a list of one, and stays a list**: a constant would put the two
+// consumers back to naming the relation themselves (the duplication CB2
+// removed), and the next catalog relation to gain a var-heap joins here.
 inline constexpr catalog::Oid kVarHeapCatalogRelations[] = {
     catalog::kSysAssertionsTable,
 };

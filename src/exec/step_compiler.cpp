@@ -8,11 +8,9 @@
 #include <string_view>
 #include <vector>
 
-// For `CoerceLiteralToColumn`. The literal parsers themselves are no
-// longer reached from here: the compiler asks the codec to coerce, and the
-// codec owns which parser that means - which is what keeps the value a
-// predicate compares and the value a write keys on identical by
-// construction rather than by two call sites agreeing.
+// For `CoerceLiteralToColumn`: the codec owns literal coercion, so the
+// value a predicate compares and the value a write keys on are identical by
+// construction.
 #include "kds/storage/keystone.hpp"  // kIdSpaceEnd - a bind's whole-relation declaration
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/row_codec.hpp"
@@ -203,10 +201,8 @@ Status CoercePredicate(const Scope& scope, StepPredicate& pred, std::uint32_t by
     if (pred.rhs.kind == OperandKind::kLiteral) {
         // The shared coercion (row_codec.hpp), so the value a predicate
         // compares and the value the write path keys a Cabin on are
-        // produced by one routine. They were not, once: the Cabin's write
-        // hook keyed on the raw literal while the read path keyed on the
-        // coerced one, and an observed date silently stopped seeing new
-        // rows.
+        // produced by one routine (two routines once let a Cabin's write
+        // hook and read path key one date differently).
         //
         // Errors come back unpositioned - the parsers have no idea where a
         // literal was written - so the position is added here, where the
@@ -672,8 +668,8 @@ std::uint16_t PredicateReadyAt(const StepPredicate& pred) {
 }
 
 bool IsPrimaryKey(const ColumnRef& ref) {
-    // Invariant 11: a relation's first column is its system-generated pk,
-    // carried by the Keystone word. It is the only column a descent can
+    // Invariant 11: a relation's first column is its pk, carried by the
+    // Keystone word. It is the only column a descent can
     // address, so it is the only one that can make a step a lookup.
     return ref.col_pos == 0;
 }
@@ -702,14 +698,10 @@ bool IsOwnColumn(const ColumnRef& ref, std::uint16_t slot) {
 //    one column is plan-inert (a keyed candidate already exists there) and
 //    result-inert (the written conjuncts fully express the predicate,
 //    contradiction included) - and without the bound, a class of M columns
-//    carrying L written literals appends L*(M-1) conjuncts, which turned a
-//    10 KB statement into seconds of compile and tens of thousands of
-//    per-row comparisons when measured.
+//    carrying L written literals appends L*(M-1) conjuncts.
 //
 // Derived conjuncts carry `StepPredicate::derived`, so ANALYZE can mark
-// them and name only what the client wrote. `CREATE PATTERN`'s parameter
-// checks were the second reader of the mark, for the same reason, until
-// that statement was withdrawn on 2026-08-31.
+// them and name only what the client wrote.
 void PropagateEqualities(const Scope& scope, std::vector<StepPredicate>& predicates) {
     // Equivalence classes over this chain's columns (`up == 0` on both
     // sides) connected by written column-column equalities, in first-seen
@@ -784,7 +776,7 @@ void PropagateEqualities(const Scope& scope, std::vector<StepPredicate>& predica
 }
 
 // A non-negative integer literal, as a pk bound. Anything else - a string,
-// a NULL, a declared `$param`, a negative number - is not a pk value
+// a NULL, a `$param`, a negative number - is not a pk value
 // (invariant 7: ids are zero-extended, kKeystoneIdBits wide), so it cannot bound a range.
 std::optional<std::uint64_t> PkBound(const Operand& operand) {
     if (operand.kind != OperandKind::kLiteral) return std::nullopt;
@@ -891,13 +883,11 @@ const parser::AstValue* EqualityOnColumn(const Step& step, std::uint16_t slot,
         if (pred.op != parser::CompareOp::kEq) continue;
         if (pred.rhs.kind != OperandKind::kLiteral) continue;
         if (!IsOwnColumn(pred.lhs, slot) || pred.lhs.col_pos != col_pos) continue;
-        // A `$param` never enters an index. Nothing constructs one since
-        // declared patterns were withdrawn (ast.hpp), so this is
-        // unreachable - and it stays because the failure it prevents is
-        // silent rather than loud: a kParam borrows `str_val` for the
-        // parameter's *name*, so encoding one as a key on a varchar column
-        // would index the name and return a wrong answer, where every other
-        // consumer of this kind refuses it outright.
+        // A `$param` never enters an index. Unreachable (nothing constructs
+        // one since declared patterns were withdrawn, ast.hpp) and kept
+        // because the failure it prevents is silent: a kParam borrows
+        // `str_val` for the parameter's *name*, so encoding one as a varchar
+        // key would index the name and return a wrong answer.
         if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
         return &pred.rhs.literal;
     }
@@ -1037,10 +1027,8 @@ bool SameDescriptor(const catalog::SysColumnRow& a, const catalog::SysColumnRow&
 // The correlated index probe (docs/spec/index.md §8a), or nullopt: an index
 // whose **leading** key column is bound by equality to a column of an
 // *earlier* step or an enclosing chain - a join key - so the descent is
-// keyed per outer row instead of the relation being walked per outer row.
-// This is what an index-served inner join side is; before it, a join on an
-// indexed non-pk column read the whole inner relation once per outer row
-// (bench/results-scenario3-library.md §9a.6 named the gap).
+// keyed per outer row instead of the relation being walked per outer row:
+// an index-served inner join side.
 //
 // Reached only after `IndexProbeOf` declined, so a literal equality that
 // can be encoded at compile time always wins over a deferred one - it
@@ -1208,8 +1196,8 @@ std::optional<BuildKey> BuildKeyOf(const Scope& scope, const catalog::TableAcces
         // Nothing bounds a statement's conjunct count - the parser's WHERE
         // loop appends while `AND` follows and stops at no cap - so a
         // position past the field's width is expressible. A truncated
-        // `residual_pos` would name a *different* conjunct, and JB3 would
-        // then partition the residual around the wrong one: the build
+        // `residual_pos` would name a *different* conjunct, and the build would
+        // then partition the residual around the wrong one: it
         // would bucket only the first outer row's matches and every later
         // probe would miss rows the walk returns. Declining is always
         // legal, so the arm declines rather than narrowing.
@@ -1440,10 +1428,8 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
 
     // A Cabin's miss walk records the key column and the pk. At execute
     // time the walk decodes `filter_columns` per row, plus the pk for a
-    // row whose key matches (step_vm.cpp - the full-decode form it
-    // replaced was scenario3 §7's cost inversion), and naming both here
-    // keeps the survivors' remaining-columns decode honest about what was
-    // already read.
+    // row whose key matches (step_vm.cpp), and naming both here keeps the
+    // survivors' remaining-columns decode honest about what was already read.
     if (step.cabin.has_value() && step.cabin->col_pos < 64) {
         mask |= std::uint64_t{1} << step.cabin->col_pos;
         mask |= 1;
@@ -1675,13 +1661,10 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 
         if (Status s = LowerComparison(scope, cond, out.residual); !s.ok()) return s;
     }
-    // **The mask the caller now keeps** (OPT-001). This used to answer
-    // kAllColumns on the grounds that UPDATE and DELETE need every column
-    // of a *matching* row anyway - true, and irrelevant to a rejected one,
-    // which is most of them: both walk the whole relation, so a point
-    // UPDATE on a 2,000-row heap decoded 2,000 rows to write one. The
-    // dispatcher now decodes this mask, tests the predicate, and completes
-    // the row only once it matches, exactly as the step VM does.
+    // **The mask the caller keeps** (OPT-001). UPDATE and DELETE need every
+    // column of a *matching* row, not of a rejected one, so the dispatcher
+    // decodes this mask, tests the predicate, and completes the row only
+    // once it matches, exactly as the step VM does.
     //
     // Two gates, both structural, both matching the step VM's:
     //   - a **sub-chain** can correlate to any column of this row and reads
@@ -1930,7 +1913,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         chain.steps[ready_at].sub_chains.push_back(std::move(sub));
     }
 
-    // ---- 4. What each step must decode before it can filter -------------
+    // ---- 3a. What each step must decode before it can filter ------------
     //
     // Last, because it reads the residual and the residual is only final
     // once every conjunct has been placed. A step carrying a **sub-chain**
@@ -2001,14 +1984,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // returns the correct empty answer rather than probing an
                 // enormous unsigned key.
                 //
-                // A declared pattern's `$param` was pk-eligible here, so a
-                // `WHERE id = $x` body compiled to kLookup and the
-                // declaration's replayability warning read true - the
-                // access kind *is* Waystone's trust model
-                // (step_chain.hpp). That was the one place `kParam` was
-                // consumed rather than refused, and it went with declared
-                // patterns on 2026-08-31; a kParam now falls through this
-                // check like any other non-integer literal.
+                // A kParam falls through this check like any other
+                // non-integer literal (background: it was pk-eligible here
+                // until declared patterns were withdrawn, 2026-08-31).
                 if (!PkBound(*candidate).has_value()) continue;
                 step.kind = AccessKind::kLookup;
                 step.key = candidate;
@@ -2116,19 +2094,15 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // residuals and access columns of an aggregated statement are the ones
     // its unaggregated twin compiles to, bit for bit (AG1). The chain
     // identity test is what keeps that from drifting.
-    // ---- The post-fold consumers, until HV-2 and HV-4 --------------------
+    // ---- The post-fold consumers -----------------------------------------
     //
-    // HV-1 parses `HAVING` and an aggregated `ORDER BY`; the fold's filter
-    // and the fold's sort are the next two tasks (docs/inflight/in-progress/workplan-having.md).
-    // Refused here, positioned, and **never dropped**: a clause parsed,
-    // accepted and silently ignored is the failure parser-v2.md I11 records
-    // having already made once on a catalog view, and it is worse than the
-    // refusal it replaces because the client is answered rather than told.
+    // `HAVING` and an aggregated `ORDER BY` parse (HV-1) and are not built.
+    // Refused here, positioned, and **never dropped**: a clause parsed and
+    // silently ignored answers the client wrongly (parser-v2.md I11).
     //
-    // Outside the `aggregated()` arm below, deliberately. A HAVING makes a
-    // statement aggregated at parse, so the two conditions coincide today -
-    // and a refusal that can only be reached through a second fact is one
-    // that stops holding the day that fact changes.
+    // Outside the `aggregated()` arm below, deliberately: a HAVING makes a
+    // statement aggregated at parse, and a refusal reachable only through
+    // that second fact would stop holding the day it changes.
     if (!stmt.having.empty()) {
         return Status::NotImplemented(
             "HAVING is not supported yet (byte " +
@@ -2189,7 +2163,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     for (const parser::SortKey& written : stmt.order_by) {
         // Every key here is a plain column reference: an aggregate one is
         // parseable only over a fold, and the fold's whole tail is refused
-        // above until HV-4.
+        // above.
         auto ref = ResolveColumn(scope, written.key.column);
         if (!ref.ok()) return ref.status();
         if (ref.value().up != 0) {
@@ -2202,12 +2176,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
 
     // ---- The elision: an order the chain already emits needs no sort -----
     //
-    // One key, ascending, on the driving relation's pk is exactly V09's
-    // accepted form, and V09's argument for it still holds: it names the
-    // order the chain already emits (I12 - written order across steps, pk
-    // order within one), so there is nothing to do. Dropping the keys here
-    // rather than sorting-and-noticing-it-was-sorted is what keeps that
-    // path at literally zero cost instead of merely at low cost.
+    // One key, ascending, on the driving relation's pk names the order the
+    // chain already emits (V09; I12 - written order across steps, pk order
+    // within one), so the keys are dropped and the path costs nothing.
     //
     // The premise is that step 0 emits in pk order. A walk or range does
     // (page-wise `min_key`, which a division preserves); an index step does
@@ -2254,8 +2225,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     //
     // Last of all, because it reads the projection, the fold and the sort
     // keys, which sections 5 and 5a only just resolved. Everything above
-    // this line is unchanged
-    // by it - the steps, kinds, residuals and class an aggregated statement
+    // this line is unchanged by it - the steps, kinds, residuals and class an aggregated statement
     // compiles to are still its unaggregated twin's, which is AG1 and which
     // the contract suite pins.
     const bool sub_chains_anywhere = HasAnySubChain(chain);

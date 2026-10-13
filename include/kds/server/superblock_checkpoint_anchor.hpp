@@ -164,8 +164,7 @@ public:
     std::uint64_t publishes() const noexcept { return publishes_.load(std::memory_order_relaxed); }
 
     // How many distinct cores have published into the fold. The warm-up is
-    // over when this reaches the volume's core count; 0 under per-core
-    // streams, where nothing folds.
+    // over when this reaches the volume's core count; 0 until any has.
     std::size_t folded_cores() const noexcept {
         return static_cast<std::size_t>(std::popcount(published_));
     }
@@ -180,11 +179,9 @@ private:
 
     // The floor the warm-up holds to: the lowest redo start over the anchor
     // slots the mount found **that were ever published into**, which is slot 0
-    // alone, since nothing else is ever written. Nothing converts in place
-    // (AL-R3) and no volume carrying another published slot mounts
-    // (AM-S4(d)), so the loop over 64 entries is a canary rather than a
-    // case: one pass over 64 entries, once, and the
-    // thing that would notice if either of those stopped holding.
+    // alone, since nothing else is ever written (AL-R3) and no volume
+    // carrying another published slot mounts (AM-S4(d)); the loop over the
+    // 64 entries is a canary for either of those ceasing to hold.
     //
     // **Skipping the never-published slots is not a detail.** A zero
     // `redo_start_lsn` means "this core has never checkpointed"

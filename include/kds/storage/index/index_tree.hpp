@@ -12,7 +12,7 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/storage/visit.hpp"
 
-// The secondary index B+ tree (docs/spec/index.md §4, workplan IX02).
+// The secondary index B+ tree (docs/spec/index.md §4).
 //
 // ---- Why this is not storage/btree/ -------------------------------------
 //
@@ -87,8 +87,8 @@
 
 namespace kds::index {
 
-// One page an insert created or restructured, as the WAL will need it
-// described (spec §12.1, built by IX08).
+// One page an insert created or restructured, as the WAL needs it
+// described (spec §12.1).
 struct IndexChange {
     PageId page_id = kInvalidPageId;
     // A brand-new page, which `INDEX_PAGE_INIT` describes completely.

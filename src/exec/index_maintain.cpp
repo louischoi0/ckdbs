@@ -18,7 +18,8 @@ namespace {
 // The coercion is the whole reason this is a function rather than an index
 // into `values`: `values` holds literals as written on an INSERT, so a DATE
 // column's value is still the string, while the key encoding compares epoch
-// integers. See the header for what a second coercion path cost the Cabin.
+// integers. `CoerceLiteralToColumn` (row_codec.hpp) says why it is the only
+// coercion path.
 StatusOr<parser::AstValue> ValueFor(const catalog::TableAccess& access,
                                     std::span<const parser::AstValue> values,
                                     std::uint16_t first_col_pos, std::uint16_t col) {

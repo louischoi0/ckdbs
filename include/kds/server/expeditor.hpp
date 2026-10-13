@@ -61,34 +61,19 @@
 // main() is the platform layer around this: it reads argv and the clock
 // and prints, and does nothing else (rules.md #4).
 //
-// ---- The reactor, and why durability stopped depending on STOP ----------
+// ---- The reactor and the WAL ----------------------------------------------
 //
-// Serve() runs a `sched::Scheduler` (sched.md section 2), not a loop of its
-// own. TcpServer attaches its sockets to it, and a `system`-group timer
-// fires the checkpointer every `checkpoint_interval_ns`. Before this, the
-// process sat blocked in accept()/read() for its whole life, so the only
-// moments anything reached the platter were an explicit SYNC and the final
-// Sync() after STOP - a server nobody typed SYNC into held every mutation
-// in memory indefinitely.
+// Serve() runs a `sched::Scheduler` (sched.md section 2). TcpServer attaches
+// its sockets to it; `system`-group timers run the checkpoint cadence
+// (wal.md section 11) through PageStoreCheckpointTarget and the WAL drain
+// that bounds a relaxed commit's loss window.
 //
-// The checkpoint is what closes that: it flushes the store's dirty pages
-// on a cadence (wal.md section 11-2) through PageStoreCheckpointTarget.
-//
-// ---- What the WAL covers, and what it does not --------------------------
-//
-// Open() installs the store's WAL gate and hands the dispatcher a
-// WalManager, so INSERT is logged and ordered: its records are durable to
-// the configured class before the reply, and no dirty page reaches the
-// device ahead of them. A second `system`-group timer drains the log,
-// which is what bounds a relaxed commit's loss window.
-//
-// Two gaps remain, and neither is small. **Recovery does not exist**
-// (wal.md section 12): nothing reads the stream back, so a logged insert
-// is recoverable in principle and not in practice - what protects a
-// restart today is still the flush. And **INSERT is the only logged
-// statement**; CREATE TABLE, UPDATE and the catalog rows under both still
-// mutate pages outside the log, so for them the checkpoint remains what
-// it was - a bound on the loss window, not a crash guarantee.
+// Open() installs the store's WAL gate and hands every dispatcher a
+// WalManager over the instance's one stream: every data mutation is logged
+// (wal.md section 8; the free map is the exception), durable to its class
+// before the reply, and no dirty page reaches the device ahead of its
+// records. Open() runs mount recovery over the stream before any core
+// serves (`mount_recovery.hpp`).
 
 namespace kds::server {
 
@@ -151,12 +136,11 @@ public:
         // cannot be waited out.
         std::size_t max_locks_per_txn = txn::kMaxLocksPerTxnDefault;
 
-        // Direct TLS on the text port (docs/spec/protocol.md §1, decided
-        // 2026-08-13): with `tls = on` the first byte every client sends
-        // is a ClientHello, and there is no plaintext fallback and no
-        // STARTTLS-style upgrade on the same port. Off by default because
-        // the port is loopback-only today; TLS is the precondition for
-        // that ever changing, not a decoration on loopback.
+        // Direct TLS on the default (KWP) port (docs/spec/protocol.md §1):
+        // with `tls = on` the first byte every client sends there is a
+        // ClientHello, with no plaintext fallback and no STARTTLS-style
+        // upgrade; `debug_text_port` never carries TLS. Off by default
+        // because every listener binds loopback only.
         //
         // Both paths must be set when `tls` is (ApplyFile refuses
         // otherwise), must be PEM, and are read once at Serve(). On a
@@ -168,11 +152,12 @@ public:
         std::string tls_cert_file;
         std::string tls_key_file;
 
-        // Connection authentication (docs/spec/protocol.md D8's auth stage,
-        // on the text protocol until KWP P07). `auth = off` (default)
-        // admits every connection, today's behaviour; `auth = scram`
-        // requires every connection to complete a SCRAM-SHA-256
-        // exchange before its first statement - STOP included.
+        // Connection authentication (docs/spec/protocol.md D8's auth stage).
+        // `auth = off` (default) admits every connection; `auth = scram`
+        // requires every connection on the default port (KWP `C_AUTH`) and
+        // on `debug_text_port` to complete a SCRAM-SHA-256 exchange before
+        // its first statement - STOP included. It refuses `kwp_port`, whose
+        // v0 load endpoint has no auth stage.
         //
         // `users_file` is required when auth is on: the flat verifier
         // store (auth.hpp), loaded whole at startup, provisioned with
@@ -203,11 +188,9 @@ public:
         // which puts durability back on SYNC and STOP alone.
         sched::MonoTimeNs checkpoint_interval_ns = 5'000'000'000;  // 5 s
 
-        // Durability class applied to every logged statement (wal.md
-        // section 1). Per-transaction in the design and per-server here,
-        // because the newline protocol has nowhere to carry it - KWP/1
-        // makes it a protocol field (protocol.md), and this key retires
-        // into that default when it does.
+        // The server's default durability class (wal.md section 1): every
+        // session starts at it (`ClientSetup::durability`), and KWP/1's
+        // durability frame changes it per session (protocol.md).
         //
         // kGroup is the default because it is the one that is both durable
         // and able to amortize: with one connection it costs the same sync
@@ -220,10 +203,9 @@ public:
         // refused with ResourceExhausted (exec/budget.hpp). 0 is
         // unlimited.
         //
-        // It exists because nothing suspends mid-statement on a
-        // cooperative core: an unbounded statement holds that core against
-        // every other client on it, so a bounded failure is the kinder
-        // answer than a connection that never replies.
+        // It exists because a cooperative core yields mid-statement only in
+        // a `SELECT`'s outermost walk (BA-S15): any other unbounded
+        // statement holds that core against every other client on it.
         std::uint64_t max_rows_touched = exec::kDefaultRowTouchBudget;
 
         // BI3's per-statement row cap for a multi-row INSERT
@@ -245,12 +227,9 @@ public:
         // documented loopback debug surface", not a second production
         // surface. Loopback only, like every listener this server binds.
         //
-        // **`STOP` lives here** for the duration of milestone KW (KW-D4):
-        // it stays an unauthenticated line command rather than becoming a
-        // capability-gated admin statement, so cutting the text port to
-        // off-by-default makes `STOP` reachable only on this port. A
-        // deployment that stops its server by connecting and typing STOP
-        // needs this port open until that deferral is taken up.
+        // **`STOP` lives here** (KW-D4): it is a line command, not a KWP
+        // statement, so it is reachable only on this port, and a deployment
+        // that stops its server by typing STOP needs this port open.
         std::uint16_t debug_text_port = 0;
 
         // ---- `isolation` (docs/spec/txn.md section 1) -----------------------
@@ -277,10 +256,9 @@ public:
         // (`waystone_recording`, default on).
         //
         // Off is a valid production setting, not a debug switch: recording
-        // costs a page write per newly-hot instance and buys nothing until
-        // replay exists (workplan P11). It is also the switch that makes
-        // "results are identical either way" a thing an operator can check
-        // on their own data rather than take on trust.
+        // costs a page write per newly-hot instance. It is also the switch
+        // that makes "results are identical either way" a thing an operator
+        // can check on their own data.
         bool waystone_recording = true;
 
         // Whether a SELECT may be served from a trail a previous execution
@@ -315,9 +293,7 @@ public:
         // because that is the clock's). 600 s is the spec's `[PROPOSED]`
         // default, pinned here and nowhere else; nothing may depend on the
         // number, only on the rule — one half-life halves, exactly.
-        // Consumed by the planner (workplan PX05); until then the key
-        // parses, validates, and steers nothing, which is stated in the
-        // spec rather than discovered.
+        // Consumed by the relayout planner and the Cabin controller.
         sched::MonoTimeNs decay_half_life_ns = 600'000'000'000ULL;  // 600 s
 
         // ---- Cabin optimizer, §II.6 (workplan PHY05) --------------------
@@ -330,8 +306,7 @@ public:
         // Thresholds are **percent integers** because the config file
         // parses no decimals: 300 means θ = 3.0. Validation enforces the
         // one rule the hysteresis stands on - θ_drop < 100 < θ_create -
-        // and every number is `[PROPOSED]`, consumed by PHY04's task when
-        // it exists and by nothing until then, stated plainly.
+        // and every number is `[PROPOSED]`.
         bool cabin_optimizer = false;
         std::uint64_t cabin_optimizer_page_budget = 1024;
         std::uint32_t cabin_optimizer_theta_create_pct = 300;
@@ -345,9 +320,8 @@ public:
         // `stats::CabinOptimizerConfig::amort_windows`.
         std::uint32_t cabin_optimizer_amort_windows = 64;
         // T_cooldown in whole decay half-lives - the DECAYING dwell, its
-        // own parameter since 2026-08-10 (it was `2 x T_amort`). 128 is
-        // what that expression yielded at the shipped window, so the
-        // default changed no behaviour. Read the floor note on
+        // own parameter since 2026-08-10 (formerly `2 x T_amort`, which the
+        // default 128 preserves). Read the floor note on
         // `stats::CabinOptimizerConfig::cooldown_half_lives` before
         // lowering it: below a workload's longest quiet period it retires
         // live Cabins, not dead ones.
@@ -476,14 +450,9 @@ public:
         sched::MonoTimeNs wal_drain_interval_ns = 1'000'000;  // 1 ms
 
         // How long a `relaxed` commit may sit unsynced - D3's loss window
-        // (docs/spec/wal.md). Exposed because it is not only a durability dial:
-        // the sync that enforces it runs on the reactor thread, so whatever
-        // statement is in flight when it fires pays the device's full
-        // latency. Measured on an EBS volume, the default produces one
-        // ~2.2 ms statement every 12 ms and is the whole of `relaxed`'s tail
-        // (bench/results-latency-matrix.md). Raising it lengthens the loss
-        // window and thins the stalls out; it cannot remove them while the
-        // sync is on this thread.
+        // (docs/spec/wal.md). Enforced by core 0's drain, which hands the
+        // sync to the WAL writer thread (`WalManager::DrainOnce`), so no
+        // statement pays for it where a writer runs.
         sched::MonoTimeNs relaxed_flush_interval_ns = 10'000'000;  // 10 ms
 
         // How many bytes every variable-width value occupies inside a
@@ -584,12 +553,9 @@ public:
     // but **core 0's reactor has not been entered**, so no client statement
     // has run.
     //
-    // **That gap is the whole reason the split exists** (AM-S0(a)). `cores_`
-    // used to be filled 350 lines inside a function that then blocked for
-    // the life of the process, so the multi-core assembly - who opens the
-    // log, who attaches, what a peer is handed - was reachable from no test
-    // at all, and M0 shipped two defects that lived in it.
-    // `tests/expeditor_test.cpp` is what the seam is for.
+    // **That gap is the reason for the split** (AM-S0(a)): it makes the
+    // multi-core assembly - who opens the log, who attaches, what a peer is
+    // handed - reachable from `tests/expeditor_test.cpp`.
     //
     // On failure nothing is left running: every thread this call started is
     // stopped and joined before it returns, so a caller may drop the
@@ -606,9 +572,8 @@ public:
     // would then report a clean stop of an instance that never started.
     Status RunUntilStopped();
 
-    // Writes everything back to stable storage. Still what SYNC and the
-    // shutdown path call; no longer the *only* thing that persists, now
-    // that the checkpoint timer runs (see the file comment).
+    // Writes everything back to stable storage: what SYNC and the shutdown
+    // path call, beside the checkpoint cadence.
     //
     // The log goes first, and unconditionally: the store's WAL gate only
     // syncs the log as far as the pages it is about to write require, so a
@@ -636,8 +601,7 @@ public:
     // `DevicePageStore::PersistPage`) - callable from any core, because the
     // encode is under the superblock latch and the writeback takes the
     // page's claim. Page 0 is unlogged, so its writeback waits on no log
-    // record; until BA-S13 this synced the whole pool, and a carve waited
-    // for every dirty page's writeback and every one of their records.
+    // record and on no other page.
     Status PersistTrxIdCeiling();
 
     // Runs one checkpoint to completion: snapshot the dirty table, flush
@@ -749,8 +713,9 @@ private:
     // recorder has to outlive every statement that reports to it.
     std::optional<stats::TrailRecorder> trail_recorder_;
 
-    // The core-local Cabin store: one per core, holding every observed
-    // value's entry set. Empty when `cabins = off`. It outlives the
+    // **The instance's one Cabin store** (AT-S7), holding every observed
+    // value's entry set; every peer borrows it
+    // (`CoreRuntime::Config::cabins_store`). Empty when `cabins = off`. It outlives the
     // dispatcher that borrows it, which is the whole of its lifetime
     // contract - the sets are memory-resident by design (§9: a crash
     // declares every Cabin unobserved and traffic rebuilds it).
@@ -785,22 +750,15 @@ private:
     // `CoreRuntime::Config::locks`, so a decide on any core releases into
     // the one table and wakes - and kicks, through `wakers_` - a waiter
     // queued from any other (AU-S2). Declared above the manager that holds
-    // it, so it outlives it.
-    //
-    // **Until AO-S5 no server had a lock table at all.** `CoreRuntime`
-    // built one at `core_count == 1`, and a server's core 0 is this class
-    // rather than a `CoreRuntime` - so AO-S4a's detector, wired "at one
-    // core, where per-core and instance-wide are the same object", ran in
-    // every fixture and in no instance. The manager took the table at
-    // AO-S5(a) and the dispatcher at AO-S4b, so a server admits a holding
-    // waiter under AO-S4a's rule and the graph it checks spans every core.
+    // it, so it outlives it. Core 0's dispatcher takes it too, so AO-S4a's
+    // deadlock detector's graph spans every core.
     std::unique_ptr<txn::LockTable> locks_;
 
     // **The instance's schema version word** (AT-S2; AR0-5 §2.1, D21).
     // Memory-resident and never persisted: every cache is empty at mount.
     // Core 0's catalog and every peer's read and bump it through
-    // `Catalog::SetSchemaWord`; it replaced the flush-then-broadcast every
-    // DDL used to send. Declared beside the lock table for the same
+    // `Catalog::SetSchemaWord`; no DDL is broadcast to a core. Declared
+    // beside the lock table for the same
     // lifetime reason: every catalog that holds a pointer to it is below.
     std::atomic<std::uint64_t> schema_version_{0};
     // **The instance's object-oid sequence** (AT-S5b; `Catalog::SetOidSequence`).
@@ -898,9 +856,8 @@ private:
     // building one.
     //
     // Core 0's reactor is *not* here: it is the one Serve() runs on the
-    // calling thread, with the listener and dispatcher attached, exactly as
-    // it was before this existed. That asymmetry is deliberate - it is what
-    // makes the single-core path unchanged rather than merely equivalent.
+    // calling thread, with the listener and dispatcher attached, so the
+    // single-core path is this object alone.
     //
     // AU-S3: how core 0 reaches a peer's reactor, and since AT-S10d how any
     // core reaches any other (AR0-6-R1). Sized at open and registered into
@@ -970,12 +927,11 @@ private:
     // armed above one core only.
     OptimizerSurface Optimizer();
 
-    // The live set a checkpoint records now comes from the transaction
-    // manager, which implements wal::ActiveTransactions. `NoActiveTransactions`
-    // was correct only while nothing could be live.
+    // Core 0's checkpointer; the live set it records comes from the
+    // transaction manager, which implements wal::ActiveTransactions.
     std::optional<wal::Checkpointer> checkpointer_;
 
-    // **What `Serve()` used to hold on its own stack**: the io backend, the
+    // **The running instance's own state**: the io backend, the
     // TLS context and credential store, the three listeners, core 0's
     // reactor, the reactor-borrow guard, and the peer threads. Defined in
     // `expeditor.cpp`, which is what its field order and its destructor are

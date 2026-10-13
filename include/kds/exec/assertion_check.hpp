@@ -25,15 +25,11 @@
 //
 // ---- The FK shape, for FK's reason ----------------------------------------
 //
-// The spec says "compile the check into the step chain"; that mechanism does
-// not exist to use, exactly as `fk_check.hpp` records - INSERT compiles to
-// no chain and UPDATE/DELETE walk a single Step outside the step VM. So this
-// is a helper called from the three write paths, **one implementation, no
-// trigger machinery**, which is the part of the placement decision that is
-// not up for discussion. A consequence worth naming: because no compiled
-// plan embeds a check step, the plan cache does not depend on the assertion
-// set, and CREATE/DROP ASSERTION need no plan invalidation - the door
-// `assertion_catalog.cpp`'s publish comment left to this task closes itself.
+// A helper called from the three write paths - **one implementation, no
+// trigger machinery** - because writes do not run through compiled chains
+// (`fk_check.hpp`). No compiled plan embeds a check step, so the plan cache
+// does not depend on the assertion set and CREATE/DROP ASSERTION need no
+// plan invalidation.
 //
 // ---- Every write is a departure, an arrival, or both (§4.2) ---------------
 //
@@ -64,9 +60,9 @@
 // ---- Page spans -----------------------------------------------------------
 //
 // Reserving fetches cabin pages. UPDATE and DELETE call this from inside
-// their own relation walk, which is the pre-existing exposure `fk_check.hpp`
-// names and this shares rather than creates - safe only because nothing
-// evicts.
+// their own relation walk - the exposure `fk_check.hpp` names, shared rather
+// than created here. The pool evicts (`docs/spec/eviction.md`); what a
+// caller holds stays pinned by its `PageRef`.
 //
 // ---- Concurrency: one registry for the instance (AT-S5d, AT-R15) ----------
 //
@@ -197,13 +193,10 @@ public:
     // ---- What the instance knows about but cannot enforce (PW1c-6c) -----
     //
     // An assertion whose declaration can be read and whose Bound Cabin could
-    // not be revived. What the knowledge buys is the *refusal*: the
-    // relation's writes are declined by name instead of admitted unchecked,
-    // which is the failure
-    // `bench/v2.2.0/results-shipping-part-a-v2.2.0-11-g925f483.md`
-    // Finding 2 measured. What reaches this set is a revive that failed or
-    // a checkpoint whose snapshots do not cover the base
-    // (`server/mount_recovery.cpp`).
+    // not be revived (a failed revive, or a checkpoint whose snapshots do not
+    // cover the base - `server/mount_recovery.cpp`). What it buys is the
+    // *refusal*: the relation's writes are declined by name instead of
+    // admitted unchecked.
     //
     // Deliberately not a `LiveAssertion`: nothing is enforced from this,
     // and holding a directory nobody may append to would put a second

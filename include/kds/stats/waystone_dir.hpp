@@ -23,11 +23,8 @@
 //
 // ---- A hash directory, not a radix index --------------------------------
 //
-// The structure this replaces walked digits of a *pk*: a dense key issued
-// in order, where a directory of depth d covered exactly the ids below
-// 2048^d * 256 and anything above that was a caller bug to be refused.
-// Nothing of that survives the rekey. An `arg_hash` is a 64-bit hash with
-// no order, no density and no ceiling, which changes two things:
+// An `arg_hash` is a 64-bit hash with no order, no density and no ceiling
+// (the pk-keyed radix directory it replaced had all three), so:
 //
 //   1. **No key is ever out of range.** A depth-d walk consumes the low
 //      11*d bits and ignores the rest, so every hash addresses something.
@@ -43,12 +40,10 @@
 // ---- What GrowPatternDirectory really costs ------------------------------
 //
 // Growth relinks the root, per spec §5: a new root whose slot 0 points at
-// the old one, O(1), nothing rewritten. On the dense pk key that preserved
-// every prior mapping, because a key below the old coverage had a zero in
-// the new top digit by construction. **A hash does not**, and no O(1)
-// growth can make it: after growing to depth d+1 an instance is still
-// reachable only if bits [11d, 11d+11) of its `arg_hash` are zero, which
-// is 1 in 2048 of them.
+// the old one, O(1), nothing rewritten. **That does not preserve a hash's
+// mapping**, and no O(1) growth can: after growing to depth d+1 an
+// instance is still reachable only if bits [11d, 11d+11) of its `arg_hash`
+// are zero, which is 1 in 2048 of them.
 //
 // So a growth is, in practice, a cache flush. That is *safe* and not a
 // correctness question - invariant 8, deleting waystones wholesale may
@@ -70,8 +65,7 @@
 // DevicePageStore stamps a checksum at byte offset 4 of every headered
 // frame it writes - which on one of these pages is child 1. They are
 // therefore allocated through PageStore::CreateNewHeaderless(), which
-// records the fact durably. This is the caller spec §10 says the mechanism
-// no longer had; waystone *pages* stayed headered, their directory did not.
+// records the fact durably; waystone *pages* stay headered.
 //
 // The cost is that interior pages carry no checksum. A damaged one leads a
 // walk to a page that is not the instance's waystone, which the header

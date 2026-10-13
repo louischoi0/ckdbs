@@ -123,8 +123,8 @@ Every production drop **delete-marks** its dependent rows and records the
 `ROLLBACK` restores the relation and its rows. That includes an autocommit
 drop, which runs in the implicit transaction `BeginWrite` opens. The marks
 retire once settled, through the §5d purge or at the next mount. Only a
-drop at the bootstrap id retires outright, and only tests reach one (BF-Q12
-(a): the code governs, and this text was restated to it). The drop is **atomic but
+drop at the bootstrap id retires outright, and only tests reach one
+(BF-Q12 (a)). The drop is **atomic but
 not isolated** — other sessions see it before it commits;
 `docs/spec/ddl-transactional.md` §5a says why.
 
@@ -136,68 +136,47 @@ a `sys.*` relation refused; the DT3 blockers named with their objects.
 
 ## DT7 — It waits for a statement already using the relation
 
-Since AO-S6e-b the drop takes the relation in `X` from the lock family
-(`txn.md` §5, AR2 §3's DDL row) before its first catalog write, and a
-**positioned reader holds the same entry in `IS`** — the read borrow a
-walk declares. So a drop that arrives while a scan of the relation is
-running waits for that scan to finish and then runs whole, instead of
-retiring the relation under it.
+The drop takes the relation in `X` from the lock family (`txn.md` §5, AR2
+§3's DDL row) before its first catalog write. Every statement that names
+the relation - `FROM`, `JOIN`, subquery, or the target of an
+`INSERT`/`UPDATE`/`DELETE` - holds a read borrow in `IS` from the bind to
+the end of the statement, and every writer of the relation holds `IX` until
+its transaction decides. So a drop waits for a running statement on the
+relation and for an open writer of it, then runs whole. Background:
+AO-S6e-b (2026-09) introduced the `X` and the scan borrow; AT-S1 moved the
+borrow to the bind (`workorder-at-m3-uniformity.md` AT-R1).
 
-**What that buys, exactly, and it is one sentence**: a reader that was
-already walking finishes its statement against a live schema, rather than
-meeting the clean error the post-park re-`Bind` gives it
-(`exec/step_vm.cpp`) when a DDL invalidates the catalog beneath it.
+**What that buys**: a reader already walking finishes against a live
+schema, instead of meeting the clean error the post-park re-`Bind` gives
+it (`exec/step_vm.cpp`), and a writer's relation is not retired under it.
 
-**What it does not buy, and DT5 is unchanged**: the drop is still not
-isolated. A read that *starts* after the drop has taken the relation takes
-no borrow at all — a refused read borrow leaves the reader holding nothing
-and reading on. A fresh resolution answers `NotFound` once the drop's
-catalog write is made; the readers that read on are the ones whose memo
-predates the drop, and they stay correct because no page of the relation is
-freed while one of them runs (DT1's statement epoch) and the oid is never
-reissued (DT2). So the guarantee is
-"a positioned reader is not overtaken", never "no reader sees the drop
+**What it does not buy - DT5 is unchanged**: the drop is not isolated. A
+read that *starts* after the drop has taken the relation is refused its
+borrow and reads on holding nothing. A fresh resolution answers `NotFound`
+once the drop's catalog write is made; a reader whose memo predates the
+drop stays correct because no page of the relation is freed while it runs
+(DT1's statement epoch) and the oid is never reissued (DT2). The guarantee
+is "a positioned reader is not overtaken", never "no reader sees the drop
 before it commits".
 
-**Since AT-S1 the borrow is taken at the bind, not at the first page**
-(`workorder-at-m3-uniformity.md` AT-R1), and it widens what a drop waits
-for: a relation that is a join's inner side, a subquery's relation, or the
-target of an `INSERT`/`UPDATE`/`DELETE` holds the `IS` for the whole
-statement - from the bind to the end - where only a scan's outermost walk
-held it before. Under a
-continuous stream of such statements a drop reaches the lock family's
-fault net and is refused where it used to succeed, which is the sentence
-above with a larger population of readers behind it. **The net is 1 s**
-(AT-S6), and `lock_wait_fault_net_ms` is what an operator who wants a
-longer bound sets.
+Consequences:
 
-**And it is not only readers.** A relation `X` is refused by the `IX`
-every writer of the relation holds, so a drop also waits for a transaction
-that has written a row of it - until that transaction decides, since a
-write's borrow is the transaction's and not the statement's. Before this
-the drop retired the relation under such a writer. Two things follow: the
-wait can be long where a client holds a transaction open, and a drop
-**inside a transaction that holds rows** can be half of a deadlock cycle -
-which is why the wait registers an edge in the wait-for graph there and
-refuses the statement naming deadlock rather than waiting for a holder that
-is waiting for it (`txn.md` §5). An autocommit drop holds nothing while it
-waits and registers none.
-
-Four consequences worth stating rather than discovering:
-
-- **The wait is bounded by the lock family's fault net**, 1 s since AT-S6
-  (`txn.md` §5), and reaching it refuses the drop `TxnConflict`, retryable.
-  A `DROP TABLE` under a continuous stream of readers can therefore be
-  refused where it used to succeed: readers do not queue behind it, so a
-  second reader may take the relation between the release the drop was
-  woken for and its next ask.
-- **The refusal names a reader, not a transaction.** A read borrow is a
-  statement's and holds under an identity that is not a transaction id, so
-  the message says "held by a positioned reader".
+- **The wait is bounded by the lock family's fault net**, 1 s
+  (`lock_wait_fault_net_ms`, AT-S6), and reaching it refuses the drop
+  `TxnConflict`, retryable. Readers do not queue behind the drop, so under
+  a continuous stream of statements on the relation a drop can be refused.
+  Where a client holds a writing transaction open, the wait can reach the
+  net.
+- **A drop inside a transaction that holds rows can close a deadlock
+  cycle**: its wait registers an edge in the wait-for graph and is refused
+  naming deadlock (`txn.md` §5). An autocommit drop holds nothing while it
+  waits and registers none.
+- **A refusal by a read borrow names "a positioned reader"**, not a
+  transaction: the borrow is a statement's, held under an identity that is
+  not a transaction id (`command_dispatcher.cpp`, `txn::IsReadHolder`).
 - **A drop reached over the synchronous path is refused rather than
-  waited**, since there is no reactor to park on — the same division every
-  other wait in the dispatcher draws.
-- **Inside a transaction the failed drop does not poison it while the wait
-  is still possible**: the statement wrote nothing, so it is re-run after
-  the wait, and only the refusal that ends the wait poisons - the rule
-  `txn.md` §5 already states for a write refused by an undecided holder.
+  waited**, there being no reactor to park on.
+- **Inside a transaction the drop does not poison it while the wait is
+  still possible**: the statement wrote nothing and is re-run after the
+  wait; only the refusal that ends the wait poisons (`txn.md` §5's rule for
+  a write refused by an undecided holder).

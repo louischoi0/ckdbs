@@ -38,7 +38,9 @@ statement writes nothing between its build and its probes, but another
 core may, and a leaf places a row where its key sorts, shifting the rows
 after it. So a probe reads a btree entry through `VerifyTupleAt` - the
 Keystone id at the slot against the bucketed pk - and resolves a miss by a
-pk lookup. A heap page never shifts, and its hint is read as recorded.
+pk lookup. A heap page never shifts, so a heap entry goes through the same
+verifier and a miss there is a page that changed class or owner under the
+statement, refused `Corruption` (BF-R10; `step_vm.cpp`'s build probe).
 
 ## 3. Why this does not break the written-order contract
 
@@ -98,23 +100,14 @@ sub-chain pays it only on the prefix it walks anyway (§6). The
 crossover a planner needs statistics to find is dissolved rather than
 estimated — the same move the correlated Cabin probe made.
 
-The constant is a real quantity and belongs in this rule: it is **paid
-on every bucketed inner row of the first walk**. Measured against the
-`bench/` tree at `1769487`, it is **37.2 ns/row** at 10,000 inner rows,
-which puts the plain join's break-even **under k = 2 at every row-set
-size**; k = 1 pays it with no payback. Two rules follow:
-
-- **The build's own cost is the constant, and driving it down is the
-  design work** — not deciding *when* to pay it. Lowering it moves
-  break-even and shrinks the k = 1 loss in one motion, where any arming
-  policy can only move the loss from one k to another.
-- **Deferring the build to the second outer row is declined.** It would
-  make k = 1 free by paying the walk *and* the build at k = 2, moving
-  the loss rather than removing it and giving back most of the win
-  above it, for a shape whose entire reason to exist is k ≫ 1. The
-  decline rests on arithmetic over the measured parts, not on a
-  measured deferring build; reopening it means building one and
-  measuring it.
+The constant is **paid on every bucketed inner row of the first walk**
+(37.2 ns/row at 10,000 inner rows, measured against `bench/` at `1769487`,
+which puts the plain join's break-even under k = 2); k = 1 pays it with no
+payback. Driving the constant down is the design work, not deciding when
+to pay it. **Deferring the build to the second outer row is declined**: it
+moves the k = 1 loss to k = 2 rather than removing it, an argument from
+arithmetic over the measured parts; reopening it means building and
+measuring one.
 
 Ladder order is also the economics: a converged Cabin serve beats any
 per-statement rebuild, so banked structures stay ahead of the build, and
@@ -154,10 +147,8 @@ and the map is total from the second outer row on.
 What the prefix trades is **the sum of the per-outer-row walks for the
 longest single walk, plus the build constant on every row of that walk**,
 so the crossover is where the sum exceeds the max by more than the
-constant. Measured against the `bench/` tree at `1769487` at the
-37.2 ns/row constant, that crossover is **k ≈ 5**, with k = 4 at +8% (100
-rows per key) to +11% (5 rows per key) and k = 16 at −18% to −59%; the
-rule holds at every k, its cost does not.
+constant (k ≈ 5 against `bench/` at `1769487`); the rule holds at every k,
+its cost does not.
 
 The class is what compiles to an `Exists`-kind stopping walk —
 `EXISTS`, `NOT EXISTS` (its hit proves existence, its completed miss
@@ -217,12 +208,7 @@ of the same shape would be two structures answering one question.
 
 `tools/scenario3_library.py`'s `join-no-literal` and `exists-correlated`
 phases under `--index-mode none` (no `--cabin`) are the build's cells,
-with `--verify`'s ordered row-for-row checks as the correctness gate. The
-join cell's acceptance is a **ratio against the walk**, never a
-wall-clock class: the walk statement's other cost — client, socket, the
-outer range, and the one inner pass — is what no map reaches.
-
-## 10. Ratification
-
-Discharged: §3 is `parser-v2.md` §5's third sanctioned mechanism, and the
-decisions §7 and §8 leave unrecorded are carried in `CLAUDE.md`'s index.
+`--verify`'s ordered row-for-row checks the correctness gate; the join
+cell's acceptance is a ratio against the walk, never a wall-clock class.
+§3 is `parser-v2.md` §5's third sanctioned mechanism; the decisions §7 and
+§8 leave unrecorded are recorded nowhere.

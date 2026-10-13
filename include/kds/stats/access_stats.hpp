@@ -8,12 +8,9 @@
 // Recording what a statement's steps actually did, per access *shape*
 // (`docs/spec/heap-and-tuple.md` §7).
 //
-// §7 has said "KDS collects access statistics and uses them to physically
-// optimize tuple placement" since the spec was written, immediately followed
-// by "*Nothing here is implemented*". This is the collecting half. The
-// optimizing half - relayout - is still not implemented, and nothing here
-// pretends otherwise: this produces the input a physical optimizer would
-// need and stops there.
+// This is the collecting half. The optimizing half - relayout - is
+// shadow-only (`physical-optimizer.md`: every move is gated), so this
+// produces the input a physical optimizer needs and stops there.
 //
 // ---- One call, no per-kind branch ---------------------------------------
 //

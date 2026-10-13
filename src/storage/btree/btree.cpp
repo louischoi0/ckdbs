@@ -48,12 +48,9 @@ struct Descent {
     std::array<PageId, storage::kMaxBtreeDepth> path{};
     std::uint16_t depth = 0;  // index of the leaf within `path`
     // The leaf, **held**: the descent's pin rides in the struct, so the
-    // bytes stay valid for exactly as long as the Descent does. This used
-    // to be a bare span with the pin dropped at DescendTo's return - the
-    // one Shape C the stopped review never reached, found by finishing its
-    // checklist: any fault between the descent and the caller's read (a
-    // split's CreateNew is the everyday case) could walk the leaf's usage
-    // down and reclaim it mid-operation. Peak pins (MG03): 1 here, and 2 for the
+    // bytes stay valid for exactly as long as the Descent does - a fault
+    // between the descent and the caller's read (a split's CreateNew) could
+    // otherwise reclaim the leaf mid-operation. Peak pins (MG03): 1 here, and 2 for the
     // span of `LeafStillCoversKey`, which takes the right sibling shared
     // and drops it before the descent returns (AT-S5c).
     //
@@ -106,8 +103,8 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, heap::PageView& lea
     // `min_key` lives in the heap page *body*, not the common header, so on
     // anything that is not a leaf those bytes are another view's fields -
     // an arbitrary number, which can read as "covered" and admit the write
-    // this function exists to refuse. Every other fetch in this file checks
-    // its type; this one was the exception (AT-S5c's review, C4).
+    // this function exists to refuse. So the type is checked, as every
+    // fetch in this file does.
     if (Status s = RequireType(bytes.value().bytes(), right, PageType::kBtreeLeaf); !s.ok()) {
         return s;
     }
@@ -139,15 +136,12 @@ using storage::kMaxDescentRestarts;
 // nobody. A write runs where the session is (AT-S5), so two cores reach one
 // relation's leaves and the window is real.
 //
-// **And the window is wider than that re-fetch**, which is the correction
-// this stage's own cell forced. There is no latch coupling here: an
-// internal node is read, its child chosen, and the node released before the
-// child is asked for. So the child's key range can shrink between the
-// parent read and the leaf's arrival - before this descent has touched the
-// leaf at all, leaving nothing to compare a later reading against. A first
-// draft of this check captured the leaf's right link under the shared hold
-// and compared it after the exclusive one; it closed the re-fetch window,
-// and `btree_race_test.cpp` still failed.
+// **And the window is wider than that re-fetch.** There is no latch
+// coupling here: an internal node is read, its child chosen, and the node
+// released before the child is asked for. So the child's key range can
+// shrink between the parent read and the leaf's arrival - before this
+// descent has touched the leaf at all, leaving nothing to compare a later
+// reading against (`btree_race_test.cpp` pins it).
 //
 // **So what is checked is coverage itself**, which is what a descent
 // promises - `BtreeInsert` says it in its own words, *"the descent is
@@ -184,15 +178,15 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
                 // happens only on the insert path where a WAL append
                 // dwarfs it. The read handle is dropped **first**, because
                 // asking for the latch exclusive while this task's own
-                // share is live is the one self-deadlock in the tree's
-                // access patterns, found by the census.
+                // share is live is a self-deadlock.
                 bytes.value().Release();
                 auto writable = store.Get(current);
                 if (!writable.ok()) return writable.status();
-                // Still a leaf. Nothing turns one into an internal node and
-                // no page id is ever reused, so this is unreachable rather
-                // than defensive - and it costs one byte's compare to read
-                // as a diagnosis instead of as a misparsed slot directory.
+                // Still a leaf. Nothing turns one into an internal node, and
+                // a freed id is reused only once its relation is dropped and
+                // no statement can reach it (BF), so this is unreachable
+                // rather than defensive - one byte's compare that reads as a
+                // diagnosis instead of as a misparsed slot directory.
                 if (Status s = RequireType(writable.value().bytes(), current,
                                            PageType::kBtreeLeaf);
                     !s.ok()) {
@@ -225,10 +219,8 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
     // is now the leftmost subtree every time, so a key outside that subtree
     // exhausts the bound without anything racing at all. Retryable is right
     // for both (the dispatcher's re-run since BA-S14, or a client's retry,
-    // crosses a task boundary, where
-    // `Revalidate()` drops the memo and the fill re-reads the anchor), so
-    // the code does not change - the message stops naming a cause it cannot
-    // tell (AT-S5c's review, C5).
+    // crosses a task boundary, where `Revalidate()` drops the memo and the
+    // fill re-reads the anchor), so the message names both causes.
     Contention::Add(Tally::kRefusalBtreeDescend);
     storage::NoteStructuralRefusal();
     return Status::TxnConflict("btree descent for key " + std::to_string(key) + " from page " +
@@ -252,7 +244,7 @@ StatusOr<bool> SeparatorAboveEveryEntry(const InternalView& parent, std::uint64_
     return sep >= highest.value().sep_key;
 }
 
-// ---- Dividing a full internal node (workplan-key-mode.md PK09) -----------
+// ---- Dividing a full internal node ---------------------------------------
 //
 // The leaf division's shape, one level up, and simpler: an internal entry is
 // a fixed `(sep_key, child)` pair, so there is no payload to copy and no
@@ -834,8 +826,8 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageClaims& claim
 
     // ---- The old leaf is rebuilt, not edited in place ---------------------
     //
-    // `RetireSlot` marks a slot dead; it does not give the bytes back, since
-    // reclamation is a purge pass's job (heap_page.hpp). Retiring the moved
+    // `RetireSlot` marks a slot dead; it does not give the bytes back
+    // (heap_page.hpp). Retiring the moved
     // half would therefore leave this page exactly as full as it was, and the
     // division would make room for nothing - which is the whole point of it.
     // So the page is reformatted and the staying half written back.
@@ -1156,10 +1148,8 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     // is pinned *and* its dirty flag is flipped, and the pin rides in
     // `Descent` exactly so the bytes stay valid for its lifetime (a pinned
     // frame is never a victim, and its bytes are a `unique_ptr` allocation
-    // the frame map cannot move). The re-fetch that used to stand here
-    // guarded against a frame move a held pin already forbids, duplicated a
-    // write fetch already made, and could **fail** - which is how the engine
-    // reached the state this ordering exists to prevent.
+    // the frame map cannot move). A re-fetch here could **fail**, reaching
+    // the state this ordering exists to prevent.
     leaf.set_next_page_id(new_leaf_id);
 
     // The new leaf, the ancestors, then the old leaf carrying the link - all

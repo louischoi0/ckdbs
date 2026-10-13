@@ -14,34 +14,25 @@
 //
 // ---- Bump-ahead, and what it does and does not buy ------------------------
 //
-// Persisting a ceiling per id would be one durable write per transaction.
-// `bench/results-keystone-alloc.md` measured that exact scheme for row ids:
-// **2629x** the cost of an in-memory bump, against **1.24x** for a block of
-// 4096 - and 43x for a block of 64, which is why the block size is a floor
-// established by measurement rather than a preference. So a block is
-// reserved and persisted once, ids are handed out of memory, and a crash
-// burns the unspent remainder.
+// Persisting a ceiling per id would be one durable write per transaction,
+// so a block of `kTrxIdBlockSize` is reserved and persisted once, ids are
+// handed out of memory, and a crash burns the unspent remainder (the v2
+// row-id measurement this rests on: a block of 4096 cost 1.24x an
+// in-memory bump, a write per id 2629x).
 //
 // What that buys: ids are **unique and monotonic**, never reissued across a
-// restart. What it does not buy: gaplessness, which nothing needs, and
-// crash-*safety* of the ceiling itself, which is the next paragraph.
+// restart. What it does not buy: gaplessness, which nothing needs.
 //
-// ---- The exposure this shares with the row-id allocator -------------------
+// ---- Durable before issued ------------------------------------------------
 //
-// The superblock is **unlogged**. `Persist` writes the page and syncs it,
-// so a clean shutdown and an explicit SYNC are covered - but a crash
-// between the ceiling being raised in memory and the page reaching the
-// platter loses the raise, and the next boot reissues the block. That is
-// the same shape of exposure `docs/rules/keystoneid-k0-findings.md` records for
-// `sys.tables.next_id`, and it closes the same way: logged catalog writes
-// and recovery, neither of which exists. It is stated here rather than
-// discovered later.
-//
-// It compounds with txn.md section 8's accepted gap rather than being
-// separate from it - after a crash, an uncommitted row already reads as
-// committed, and a reissued id would make two transactions' rows
-// indistinguishable on top of that. Both close with recovery and neither
-// closes without it.
+// The superblock is **unlogged**, so the ceiling's crash safety is the
+// carve's order: `Carve` raises the ceiling under the superblock latch,
+// then persists page 0 and syncs the data file (`persist`,
+// `DevicePageStore::PersistPage`) **before** it returns the block. No id
+// is issued from a block whose ceiling is not durable, so a crash can
+// only burn ids, never reissue one. A failed persist returns the error and
+// leaves the in-memory ceiling raised - the safe direction (trx_id.cpp).
+// With no `persist` (a fixture) nothing is durable at all.
 //
 // ---- One ceiling, a window per core (AT-S10b, AT-R4) -----------------------
 //
@@ -89,8 +80,7 @@ public:
     // A null `persist` means the ceiling is raised in memory only: the
     // unlogged path every socket-free test runs on, and the same shape as
     // CommandDispatcher's optional WalManager. Ids stay unique within the
-    // run and may be reissued after a restart, which is exactly what the
-    // pre-MVCC dispatcher already did.
+    // run and may be reissued after a restart.
     TrxIdSequence(server::SuperBlock& superblock, std::function<Status()> persist = nullptr)
         : superblock_(superblock),
           persist_(std::move(persist)),
@@ -171,9 +161,7 @@ private:
 
     server::SuperBlock& superblock_;
     std::function<Status()> persist_;
-    // `next_` and `ceiling_` keep the offsets they had before PW1, ahead of
-    // what it added. Reordering them measured inside `kds_txn_bench`'s own
-    // noise floor either way, so this is free rather than proven.
+    // `next_` and `ceiling_` first: the hot offsets.
     std::uint64_t next_;
     std::uint64_t ceiling_;
     Latch* superblock_latch_ = nullptr;  // SetLatch; off the hot offsets

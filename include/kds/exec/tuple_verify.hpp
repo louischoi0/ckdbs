@@ -33,10 +33,8 @@
 //
 // ---- The epoch check (docs/spec/physical-optimizer.md R4, PX04) ----------
 //
-// **The page epoch is checked here since 2026-08-09**, which is Waystone
-// spec §2's rule 2 made enforceable and the Cabin's `page_epoch` made a
-// real comparison - landed *here*, once, so both callers got it at once,
-// which was the whole argument for this file existing. The recorded epoch
+// **The page epoch is checked here**, once for both callers (Waystone spec
+// §2 rule 2, the Cabin's `page_epoch`). The recorded epoch
 // comes in from the caller's entry; the page's current epoch is read off
 // the fetched bytes; a mismatch is a miss like every other outcome. A btree
 // leaf division bumps its page's epoch (`btree.cpp`), so the check fires in
@@ -128,10 +126,8 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
 // The one producer, beside `VerifyTupleAt`'s one consumer, and here for the
 // same reason that one is: a writer that stamps 0 against a bumped page
 // records a hint that misses on every later resolve and is re-healed
-// forever. Its callers are the three sites that mint or repair a hint - the
-// read path's in-place heal, the optimizer's batch heal, and the Cabin
-// write hook - and a fourth that spelled the rule again would be where the
-// two came to disagree.
+// forever. Every site that mints or repairs a hint calls it rather than
+// spelling the rule again.
 //
 // 0 on an unreadable page is deliberately the same value "never relayouted"
 // carries: the entry is about to be verified against the page anyway, so

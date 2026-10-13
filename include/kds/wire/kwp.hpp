@@ -98,17 +98,9 @@ struct FrameHeader {
 // as two separate catalogs).
 
 // **One registry per direction, and this is it** (unified 2026-08-31,
-// milestone KW). `kwp_types.hpp` held a second pair of enums for the v0
-// load endpoint - `ClientFrame`/`ServerFrame` - whose base block collided
-// with this one on five values: client 2/3 (kParse/kBind there kPing/
-// kTerminate) and server 2/3/4 (kReady/kParseOk/kBindOk there kError/
-// kComplete/kPong). Two numbering spaces on one `type` byte is not a
-// naming problem: a frame's meaning would have depended on which endpoint
-// received it, and the two endpoints are the same protocol. That file's
-// own comment had already promised the base block to "the spec's own
-// ordering when it lands", so the load block moved onto this numbering
-// rather than the reverse, and its four in-tree speakers moved with it.
-// The load frames are appended here at 16+, the block they already held.
+// milestone KW): a frame's meaning may not depend on which endpoint
+// receives it, so the v0 load endpoint's frames share this numbering,
+// appended at 16+.
 enum class ClientFrameType : std::uint8_t {
     kHello = 1,
     kParse,
@@ -193,22 +185,17 @@ enum class DurabilityLevel : std::uint8_t {
 // kds::StatusCode (kds/base/status.hpp). kInternal/kProtocol have no
 // engine-level Status equivalent - they are wire/session-only
 // categories that can occur before or outside any engine call (e.g. a
-// malformed frame is kProtocol, not any kind of Status). kUnsupported was
-// in that list until docs/spec/parser-v2.md I18 gave the language a use for it
-// at the engine level; StatusCode::kUnsupported now exists and maps here.
-// kCancelled was in it until BA-S15 gave a walk a cancel to observe;
-// StatusCode::kCancelled maps here.
-// The Status -> ErrorCategory mapping table for the categories that DO
-// overlap is not part of this header; it lands with the error registry
-// (docs/inflight/in-progress/protocol-wp.md P12, src/wire/error_registry.cpp), including its
+// malformed frame is kProtocol, not any kind of Status). kUnsupported
+// (parser-v2.md I18) and kCancelled (BA-S15) have engine codes and map
+// from them.
+// The Status -> ErrorCategory mapping table is the error registry
+// (`wire/error_registry.hpp`, src/wire/error_registry.cpp), with its
 // append-only golden-list guard.
 //
-// kTxnConflict has an engine-level equivalent:
-// StatusCode::kTxnConflict maps here with **retryable = 1**, which
-// docs/spec/protocol.md §11 makes part of the compatibility surface. It is the
-// only retryable category (kds::IsRetryable is the engine-side spelling of
-// the same fact), so P12's registry must not derive the bit per category by
-// hand - it should ask IsRetryable for the codes that map from a Status.
+// StatusCode::kTxnConflict maps to kTxnConflict with **retryable = 1**,
+// which docs/spec/protocol.md §11 makes part of the compatibility surface;
+// the registry takes the bit from kds::IsRetryable, never per category by
+// hand (error_registry.hpp R1).
 enum class ErrorCategory : std::uint16_t {
     kInvalidArgument = 0,
     kNotFound,
@@ -262,21 +249,16 @@ enum class ErrorCategory : std::uint16_t {
 };
 
 // Packs a wire error code as `category u16 << 16 | detail u16` (spec
-// §11). Detail codes are append-only per category; this header does not
-// define a detail taxonomy yet (skeleton only, per docs/inflight/in-progress/protocol-wp.md P05).
+// §11). Detail codes are append-only per category; the taxonomies are in
+// `wire/error_registry.hpp` (`ProtocolDetail`, `ResourceDetail`).
 constexpr std::uint32_t MakeErrorCode(ErrorCategory category, std::uint16_t detail) noexcept {
     return (static_cast<std::uint32_t>(category) << 16) | detail;
 }
 
 // ---- Handshake payloads (docs/spec/protocol.md §3) ------------------------------
-// **They live in kwp_types.hpp, with their codecs** (moved 2026-08-31).
-// This header declared `ClientHelloPayload`/`ServerHelloPayload` as a
-// decoded-form-only sketch while `kwp_types.hpp` held a `ClientHello` that
-// an endpoint actually encoded and decoded - two names for one frame's
-// payload, of which only one was ever on a wire. The sketch is gone;
-// `ClientHello`/`ServerHello` are the payloads, `EncodeClientHello` and
-// friends are their codecs, and the *negotiation* over them is
-// `wire/handshake.hpp` (P07). One struct, one codec, one place.
+// **They live in kwp_types.hpp, with their codecs**: `ClientHello` /
+// `ServerHello` are the payloads, `EncodeClientHello` and friends their
+// codecs, and the *negotiation* over them is `wire/handshake.hpp` (P07).
 
 // ---- Frame codec (docs/inflight/in-progress/protocol-wp.md P06; bodies in frame_codec.cpp) -----
 

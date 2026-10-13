@@ -11,77 +11,58 @@
 
 #include "kds/catalog/well_known.hpp"
 
-// AST for the KDS SQL subset. The whole grammar:
+// AST for the KDS SQL subset. The core of the grammar:
 //
 //   CREATE TABLE <name> (<col> <type> [, ...])
 //       [HEAP | BTREE] [EXPLICIT];   -- either order, each once; EXPLICIT is vacuous
-//   INSERT INTO  <name> VALUES (<val> [, ...]);
-//   SELECT <list> FROM  <rel> [<join>]* [WHERE <cond> [AND <cond>]*]
+//   INSERT INTO  <name> VALUES (<val> [, ...]) [, (...)]*;
+//   SELECT <list> FROM  <rel> [<join>]* [WHERE <where>]
 //       [GROUP BY <col> [, ...]] [HAVING <hcond> [AND <hcond>]*]
-//       [ORDER BY <key> [ASC]] [LIMIT <int>] [OFFSET <int>];
-//   UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*];
+//       [ORDER BY <key> [ASC | DESC] [, ...]] [LIMIT <int>] [OFFSET <int>];
+//   UPDATE <name> SET <col> = <expr> [, ...] [WHERE <where>];
+//   DELETE FROM <name> [WHERE <where>];   PURGE FROM <name> WHERE <where>;
 //
 //   <rel>   ::= <name> [AS <alias>]
 //   <join>  ::= JOIN <rel> ON <qcol> = <qcol>
 //   <qcol>  ::= <relation-binding> . <col>
-//   <cond>  ::= <col> <op> <val>
+//   <where> ::= a boolean tree of <cond> under AND / OR / NOT / ( ) (BU-S1)
+//   <cond>  ::= <col> <op> <val> | <col> [NOT] IN (...) | [NOT] BETWEEN
+//             | [NOT] LIKE | IS [NOT] NULL | a function comparison | a
+//             predicate-position subquery
 //   <op>    ::= = | != | < | <= | > | >=
-//   <val>   ::= integer literal | 'string literal' | NULL
+//   <val>   ::= integer or numeric literal | 'string literal' | NULL
 //   <list>  ::= * | <item> [, <item>]*
 //   <item>  ::= <col> | <agg> ( [DISTINCT] <col> | * )
-//   <agg>   ::= COUNT | SUM | MIN | MAX
+//   <agg>   ::= COUNT | SUM | MIN | MAX | AVG
 //   <hcond> ::= <item> <op> <val> | <item> IS [NOT] NULL
 //   <key>   ::= <item>
 //
-// Deliberate limitations: no expressions; WHERE and HAVING are each a flat
-// AND-only conjunct list (no OR; NOT only in the reserved negation forms),
-// with predicate-position subqueries per V07 and explicit select lists per
-// V06. HAVING compares an aggregate against a literal and nothing else
-// (docs/inflight/in-progress/workplan-having.md HV3). No quote-escaping in string literals.
-// docs/spec/parser-v2.md specifies the grammar this is growing into.
+// plus the DDL statements below. HAVING is a flat AND-only list comparing
+// an aggregate against a literal; a value expression exists only as a SET
+// value (`Expr`). No quote-escaping in string literals.
+// docs/spec/parser-v2.md is the grammar's spec.
 //
-// Two decisions worth stating, because both push work downstream on
-// purpose:
-//
-//   - A column's type stays as the raw parsed name (ColumnDef::type_name)
-//     rather than being resolved to an on-disk type_val/len here. There is
-//     no type registry yet, and resolving names would make the parser
-//     depend on an unbuilt subsystem; as it stands it is a pure syntax
-//     layer and the consumer resolves against sys.types.
-//   - AstValue likewise stays in its parsed form (int/string/null) rather
-//     than being encoded to on-disk bytes, which needs a resolved column
-//     type first.
+// A column's type stays the raw parsed name (ColumnDef::type_name) and an
+// AstValue its parsed form (int/string/null/decimal): the parser is a pure
+// syntax layer, and the consumer resolves types and encodes values.
 
 namespace kds::parser {
 
 // What sits in a value position.
 //
-// `kParam` is a value **position** with no value in it: the `$name` of a
-// user-declared pattern, which the operator withdrew on 2026-08-31
-// (docs/spec/create-pattern-user-defined-patterns-v1.md, marked withdrawn).
-// **Nothing constructs one now** - `$x` was accepted by exactly one
-// production, the body of `CREATE PATTERN`, and that production is gone, so
-// the parser refuses the token everywhere.
+// `kParam` is a value **position** with no value in it: the `$name` of the
+// withdrawn user-declared pattern (2026-08-31,
+// docs/spec/create-pattern-user-defined-patterns-v1.md). **Nothing
+// constructs one** - the parser refuses `$x` everywhere. The enumerator
+// stays, and the consuming paths (exec/row_codec.cpp, exec/step_vm.cpp,
+// exec/aggregate.cpp) keep unreachable refusals of it.
 //
-// The enumerator stays rather than leaving the enum a hole: every path
-// that would consume a
-// value already refuses it by name (exec/row_codec.cpp, exec/step_vm.cpp,
-// exec/aggregate.cpp), which is cheaper to keep than to re-derive if the
-// re-design brings a placeholder back. Those refusals are now unreachable
-// arms over a kind nothing produces, and each says so where it sits.
-// `kDecimal` is the **one** kind the type work added, and TY5 is explicit
-// that it is one rather than three: a `DATE` *is* an integer - days since
-// the epoch - and a `TIMESTAMP` is microseconds since it, so both reuse
-// `kInt` and differ only in how they render, which happens at the emission
-// boundary and not in the value. A decimal cannot reuse it, because its
-// unscaled integer means nothing without the scale beside it.
-// `kDecimalWide` is the 16-byte decimal's kind (`decimal(p, s)`, p 19..38,
-// stored as int128 - docs/spec/types.md TY2's separate type, built
-// 2026-08-07). A kind of its own rather than a width flag on `kDecimal`,
-// deliberately: one kind hiding two widths would make every consumer that
-// reads `int_val` silently truncate a wide value, where a new enumerator
-// makes the compiler surface each switch that has to decide. The value is
-// `Int128FromHalves(dec_hi, int_val)`.
+// `kDecimal` is the one kind TY5 added: `DATE` (days since the epoch) and
+// `TIMESTAMP` (microseconds) reuse `kInt` and differ only in rendering, but
+// a decimal's unscaled integer means nothing without its scale.
+// `kDecimalWide` is the 16-byte decimal (`decimal(p, s)`, p 19..38, int128,
+// types.md TY2), a kind of its own so no consumer reading `int_val` can
+// silently truncate one. The value is `Int128FromHalves(dec_hi, int_val)`.
 enum class ValueType { kInt, kStr, kNull, kParam, kDecimal, kDecimalWide };
 
 struct AstValue {
@@ -89,12 +70,9 @@ struct AstValue {
 
     // Where the value sits in the statement text.
     //
-    // Set for every literal the parser produces. It was kParam's alone
-    // until TY05, when a literal became something a *later* stage can
-    // reject: the step compiler coerces one against its column's type
-    // (docs/spec/types.md §3.1), so `WHERE d = '2026-02-30'` fails long
-    // after the token is gone, and without the offset that failure can name
-    // the column but not the byte.
+    // Set for every literal the parser produces (TY05): the step compiler
+    // coerces a literal against its column's type (docs/spec/types.md
+    // §3.1) long after the token is gone, and its refusal names this byte.
     //
     // **Nothing compares it.** Chain identity renders operand values, not
     // offsets; Cabin keys are built from the value's kind and contents; the
@@ -104,23 +82,17 @@ struct AstValue {
 
     std::int64_t int_val = 0;  // valid when type == kInt
 
-    // kStr: the string value. **kParam: the parameter's name**, without the
-    // sigil and as written - which nothing produces since the declaration
-    // grammar was withdrawn, and which the unreachable arms still quote in
-    // their refusals.
-    //
-    // Sharing the field rather than adding one is deliberate. A kParam
-    // carries no string value, so nothing is being overloaded away; and an
-    // AstValue is what a chain frame holds one of per column per relation,
-    // so a field used by one value kind on a path that never executes would
-    // be paid for on every scanned row.
+    // kStr: the string value. kParam: the parameter's name, as written
+    // (nothing produces one; the unreachable arms quote it). Shared rather
+    // than a second field, since a chain frame holds an AstValue per column
+    // per relation and would pay for it on every scanned row.
     std::string str_val;
 
     // For kInt only: the literal's original digit text, preserved
     // alongside int_val. int_val is signed and cannot represent the upper
-    // half of an unsigned 64-bit value; once a type registry exists,
-    // encoding a uint64 column from this raw text rather than from
-    // int_val is how that full range survives.
+    // half of an unsigned 64-bit value, so a uint64 column is encoded from
+    // this text when it is set (exec/row_codec.cpp `ValueAsUint64`; a
+    // decoded row leaves it empty).
     std::string raw_int_text;
 
     // kDecimal and kDecimalWide: the scale the unscaled value is scaled
@@ -290,14 +262,10 @@ struct Condition {
     // value that reads as a legal equality - `op` to `kEq`, and for a
     // `kBetween` `val` holds a real integer literal (the low bound) - so a
     // consumer that reads them without checking `kind` sees
-    // `WHERE id BETWEEN 2 AND 5` as `WHERE id = 2`. That is not
-    // hypothetical: it has happened twice, in two different consumers of a
-    // raw `Condition` - the catalog view's bound reader, and
-    // `CommandDispatcher::PkEqualityTarget`, where it made an UPDATE or
-    // DELETE write the low bound's row alone and answer `UPDATED 1`.
-    // Anything lowered through `exec::CompileWhere` is safe, because it
-    // splits a `kBetween` into two conjuncts first; the hazard belongs to
-    // the sites that read this struct directly.
+    // `WHERE id BETWEEN 2 AND 5` as `WHERE id = 2` (a past bug in two
+    // direct readers, once making an UPDATE write the low bound's row
+    // alone). Anything lowered through `exec::CompileWhere` is safe - it
+    // splits a `kBetween` first; the hazard is in sites reading this struct.
 
     RhsKind rhs_kind = RhsKind::kLiteral;
     AstValue val;       // rhs_kind == kLiteral; the low bound for kBetween
@@ -386,7 +354,7 @@ struct ColumnDef {
     // `catalog::kCabinPolicy*`. Written as an optional suffix on the column:
     //
     //     sym varchar CABIN            -- enabled: a cabin now, n=1
-    //     sym varchar CABIN AUTO       -- auto: the engine may decide (unbuilt)
+    //     sym varchar CABIN AUTO       -- auto: the Cabin controller decides
     //     sym varchar NO CABIN         -- disabled: never, by any route
     //     sym varchar                  -- unset, which reads as auto
     //
@@ -446,7 +414,8 @@ struct ColumnDef {
 // What a qualifier *is*, then, is an assertion the engine checks:
 //
 //   - at `CREATE TABLE ns.t` it **selects** the namespace, which is the one
-//     place it decides anything - and through AF-T2 that decides the core;
+//     place it decides anything (the namespace's affinity is declared and
+//     read by nothing, docs/spec/namespace.md);
 //   - everywhere else it is verified against the relation's stored
 //     `namespace_oid` and a disagreement is refused by name with its byte
 //     (`Catalog::CheckRelationQualifier`). Accepting a false qualifier
@@ -481,36 +450,26 @@ struct CreateTableStmt {
     std::string table_name;
     // The namespace this relation is created in - and the only qualifier
     // in the grammar that *decides* rather than asserts. Empty means
-    // `public` (AF-T2 then leaves the relation on the creating core).
+    // `public`.
     std::string schema;
     std::uint32_t table_byte_offset = 0;
     std::vector<ColumnDef> columns;
     // **BTREE since SUS-1** (2026-09-05,
     // `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md`): heap
     // relations are suspended, so an unqualified `CREATE TABLE` makes a
-    // btree one. The default is spelled **three** times - here, in
-    // `HandleCreateTableSql`'s `clustered_given` fallback, and in
-    // `HandleCreateTable`'s call for the bare debug form - and all three
-    // are `kBtree`. The work order counted two and the third was missed on
-    // the first pass, so the count is written down: the dispatch path reads
-    // the fallback, several test fixtures read this field straight off the
-    // parsed statement, and the bare form reads neither.
+    // btree one. The default is spelled **three** times, all `kBtree`:
+    // here (test fixtures read it off the parsed statement),
+    // `HandleCreateTableSql`'s `clustered_given` fallback, and
+    // `HandleCreateTable`'s call for the bare debug form.
     catalog::ClusteredType clustered = catalog::ClusteredType::kBtree;
 
-    // There is no key-mode field. The trailing `ASSIGNED` | `EXPLICIT` word
-    // set one until 2026-08-25; the mode is gone (docs/spec/heap-and-tuple.md
-    // §4.1), so `EXPLICIT` is now accepted as the vacuous statement of what
-    // every relation is and `ASSIGNED` is refused in the parser with its
-    // byte. Neither reaches this struct - there is nothing left for the
-    // dispatcher to resolve.
+    // There is no key-mode field (removed 2026-08-25, heap-and-tuple.md
+    // §4.1): `EXPLICIT` is accepted as vacuous and `ASSIGNED` is refused in
+    // the parser with its byte.
 
     // Whether the statement *said* a storage word, as opposed to landing on
-    // `clustered`'s default above. The field cannot answer this itself,
-    // because the default is one of the two values the writer may name: it
-    // used to be `kHeap`, so `kHeap` meant both "the writer asked for a
-    // heap" and "the writer said nothing"; since SUS-1 it is `kBtree` and
-    // `kBtree` carries the same ambiguity. The flip moved which value is
-    // ambiguous, never removed the need for this flag.
+    // `clustered`'s default - which is one of the two nameable values, so
+    // the field alone cannot tell.
     bool clustered_given = false;
 };
 
@@ -539,14 +498,10 @@ struct InsertStmt {
 // One relation in a FROM list, with the name predicates will use to refer
 // to it.
 struct RelationRef {
-    // Schema qualifier, empty when written unqualified. The only one that
-    // resolves is `sys`, which names the catalog views - the catalog's own
-    // relations, readable through typed readers because their on-disk rows
-    // are not row-codec tuples (fixed offsets, no Keystone word).
-    //
-    // Not a general namespace mechanism: user tables live in one flat
-    // space and `public.t` is not accepted. Adding one is a catalog
-    // change, not a parser change.
+    // Schema qualifier, empty when written unqualified: a user namespace
+    // (the namespace-qualifier rule above) or `sys`, which names the
+    // catalog views - the catalog's own relations, read through typed
+    // readers because their rows are not row-codec tuples.
     std::string schema;
 
     std::string table_name;
@@ -561,8 +516,8 @@ struct RelationRef {
 
 // `JOIN <relation> ON <left> = <right>`. Inner equi-join only: one
 // equality, both sides qualified. `LEFT`/`RIGHT`/`FULL`/`OUTER` are
-// reserved words that answer Unsupported with a position (spec I9), so the
-// grammar does not shift when they land.
+// reserved words that answer NotImplemented with a position (spec I9), so
+// the grammar does not shift if they land.
 struct JoinClause {
     RelationRef relation;
     ColumnName left;   // always qualified
@@ -571,15 +526,11 @@ struct JoinClause {
 
 // The aggregate functions the fold computes (docs/spec/aggregate.md AG2).
 //
-// `kAvg` joined on 2026-08-07, when §10's open question - return scale,
-// rounding rule, divide semantics, "three questions, one answer" - was
-// decided rather than expired: **AVG answers at exactly the scale the
-// schema declared, rounding half-even**, so `AVG(DECIMAL(p,s))` returns a
-// decimal of scale `s` and a column that declared no scale (the integer
-// types) is refused at compile - a fractional answer would invent digits
-// and a scale-0 one would silently drop them, and this engine's answer to
-// "which wrong number would you like" has always been neither. The state
-// is the `(sum, count)` pair AG-M mandated in advance.
+// `kAvg` (2026-08-07, aggregate.md §10): **AVG answers at exactly the scale
+// the schema declared, rounding half-even**, so `AVG(DECIMAL(p,s))` returns
+// scale `s` and a column with no declared scale (the integer types) is
+// refused at compile - neither inventing nor dropping digits. The state is
+// the `(sum, count)` pair.
 enum class AggFunc : std::uint8_t { kCount, kSum, kMin, kMax, kAvg };
 
 // The canonical lower-case spelling, for the column label a fold's output
@@ -620,12 +571,10 @@ struct SelectItem {
 // `ASC` and a bare key are the same key - the standard's default - so only
 // descending needs a bit.
 //
-// **A `SelectItem` and not a `ColumnName`**, since HV4 lets an aggregated
-// statement order by an aggregate: `ORDER BY COUNT(*) DESC` names something
-// no column reference can. A `SelectItem` with `is_aggregate == false` *is*
-// a column reference with an offset, so the non-aggregated path means
-// exactly what it meant - which is why this is one carrier rather than a
-// column plus an optional aggregate beside it.
+// **A `SelectItem` and not a `ColumnName`** (HV4): over an aggregated
+// statement a key may parse as an aggregate (`ORDER BY COUNT(*) DESC`),
+// which the compiler then refuses `NotImplemented` (step_compiler.cpp). A
+// `SelectItem` with `is_aggregate == false` *is* a column reference.
 struct SortKey {
     SelectItem key;
     bool descending = false;
@@ -633,12 +582,13 @@ struct SortKey {
 
 // One conjunct of a `HAVING` clause (docs/inflight/in-progress/workplan-having.md HV1, HV3).
 //
-// The clause is a flat AND-only list, like WHERE and for WHERE's reason:
-// this grammar has no expression tree, and an OR would need one. What
-// differs from WHERE is the two ends - the left side is an *aggregate*
-// (HV2), and the right side is a literal and nothing else, because a
-// post-fold predicate has no row to read a column from and no place to put
-// a sub-chain (HV3).
+// Parsed, and refused `NotImplemented` at compile (step_compiler.cpp's
+// post-fold consumers): the fold has no HAVING filter built.
+//
+// The clause is a flat AND-only list (no OR, unlike WHERE since BU-S1).
+// The left side is an *aggregate* (HV2), and the right side is a literal
+// and nothing else, because a post-fold predicate has no row to read a
+// column from and no place to put a sub-chain (HV3).
 struct HavingCondition {
     // What is being compared: the fold's answer for this aggregate.
     //
@@ -666,8 +616,8 @@ struct SelectStmt {
     // Projection shape must never affect the statement's class - two
     // statements differing only in which columns they name read the same
     // rows by the same access path, so they are the same kind of
-    // statement. Nothing tags a class yet; when something does (V14), it
-    // must not read this field.
+    // statement. The chain's class (`exec::StatementClass`) must not read
+    // this field.
     std::vector<ColumnName> projection;
 
     // The FROM list in **written order**, which spec §1 makes a client
@@ -693,8 +643,7 @@ struct SelectStmt {
     // fold, because it emits one row per group rather than one per row.
     std::vector<SelectItem> agg_items;
 
-    // The GROUP BY list in written order. Column references only (AG9) -
-    // the grammar has no expressions and GROUP BY does not grow one.
+    // The GROUP BY list in written order. Column references only (AG9).
     std::vector<ColumnName> group_by;
 
     // The `HAVING` conjuncts in written order, AND-combined, empty when no
@@ -708,15 +657,14 @@ struct SelectStmt {
 
     // ---- The pagination tail (docs/spec/parser-v2.md I11, workplan V09) ------
     //
-    // `[ORDER BY <key> [ASC]] [LIMIT <n>] [OFFSET <m>]`, clauses in that
-    // order and each independently optional, parsed on a depth-0 block - a
-    // subquery's tail is refused at parse with a position.
+    // `[ORDER BY <key> [ASC|DESC] [, ...]] [LIMIT <n>] [OFFSET <m>]`,
+    // clauses in that order and each independently optional, parsed on a
+    // depth-0 block - a subquery's tail is refused at parse with a position.
     //
-    // **`[AMENDED 2026-08-24 — docs/inflight/in-progress/workplan-having.md HV4]`** `ORDER BY`
-    // is parsed over an aggregated statement too, where a key may be an
-    // aggregate; `LIMIT` and `OFFSET` stay refused there (HV5), because
-    // serving them would promote AG6's deterministic fold order into a
-    // client contract.
+    // Over an aggregated statement `ORDER BY` parses (HV4; a key may be an
+    // aggregate) and is refused at compile; `LIMIT` and `OFFSET` are refused
+    // at parse (HV5), since serving them would promote AG6's fold order
+    // into a client contract.
     //
     // `LIMIT` without `ORDER BY` is well-defined here in a way general SQL
     // cannot promise: emission order is already a client contract (I12 -
@@ -941,14 +889,10 @@ struct AlterStmt {
     std::uint32_t new_name_byte_offset = 0;
 };
 
-// `CREATE PATTERN` / `DROP PATTERN` stood here until 2026-08-31, when the
-// operator withdrew user-declared patterns
-// (`docs/spec/create-pattern-user-defined-patterns-v1.md`, marked withdrawn
-// and kept as the design record). A pattern is a fingerprint-identified
-// case tracked by statistics, and the declaration path was a second model
-// of that one thing. Nothing replaces these statements: `sys.patterns`, the
-// fingerprint, the waystone directory and the trail recorder never read the
-// declaration, which is what made removing it safe.
+// `CREATE PATTERN` / `DROP PATTERN` were withdrawn on 2026-08-31
+// (`docs/spec/create-pattern-user-defined-patterns-v1.md`): a pattern is
+// fingerprint-identified, and nothing in the Waystone path read the
+// declaration.
 
 // `DROP TABLE <name>` (docs/spec/drop-table.md). Catalog-scoped: the
 // relation becomes unreachable and its oid is tombstoned, never reissued
@@ -1059,18 +1003,10 @@ struct AssertionStmt {
     IndexColumnRef sum_column;
 
     // `<` or `<=`, and nothing else (AS11 as revised 2026-08-08).
-    //
-    // `>` and `>=` parse and are refused as `NotImplemented`: a lower bound
-    // would have to be checked on DELETE and on every decreasing UPDATE,
-    // which is the whole reason v1 can leave DELETE uninstrumented.
-    //
-    // **`=` is refused for the same reason, and that is the revision.** It
-    // was briefly accepted and documented as meaning `aggregate <= N`, on
-    // the grounds of syntactic familiarity. That was a truthfulness
-    // violation: the engine would have enforced something other than what
-    // the operator wrote, and a constraint that quietly means less than it
-    // says is worse than one that is refused. Enforcing real equality needs
-    // the lower-bound half, so `=` costs exactly what `>=` costs.
+    // `>`, `>=` and `=` parse and are refused `NotImplemented`: a lower
+    // bound would have to be checked on DELETE and on every decreasing
+    // UPDATE, which v1 leaves uninstrumented, and reading `=` as `<=` would
+    // enforce less than was written.
     CompareOp op = CompareOp::kLte;
 
     // The declared bound: a non-negative integer literal (§3.1 - literals

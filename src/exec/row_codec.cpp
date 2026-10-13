@@ -112,12 +112,8 @@ StatusOr<std::uint64_t> ParseUint64Text(const std::string& text) {
 // appends or decides a size: the size was decided by the schema.
 Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& val,
                        std::span<std::byte> cell, const VarHeapSink& varheap) {
-    // **The name is built only where an error is built.** This is called
-    // once per column per row, and constructing a std::string here
-    // unconditionally - for messages that are almost never produced - was
-    // measured as most of the per-column decode cost (workplan AP02,
-    // bench/results-aggregate.md). `NameOf` costs nothing on the path that
-    // succeeds, which is every path in a working system.
+    // **The name is built only where an error is built**: a per-column
+    // std::string was most of the per-column cost (workplan AP02).
     const auto NameOf = [&col] { return std::string(catalog::NameView(col.name)); };
 
     if (val.type == parser::ValueType::kNull) {
@@ -474,9 +470,8 @@ bool LikeMatch(std::string_view value, std::string_view pattern) {
 
 // A `char(N)` cell's value: its bytes back to the first NUL and no further -
 // a char(N) cell is N bytes whatever the value's length, and the padding is
-// not part of the value (see the char(N) note at the top of this file).
-// memchr finds the terminator in one pass instead of testing and pushing a
-// byte at a time. **The one reading of a char cell**: the decoder and the
+// not part of the value (which is why the encoder refuses a NUL in one).
+// **The one reading of a char cell**: the decoder and the
 // scan kernel both take it from here, so the value the kernel compares is
 // the value the residual compares (BM-R1).
 std::span<const std::byte> CharCellValue(std::span<const std::byte> cell) {
@@ -489,16 +484,9 @@ std::span<const std::byte> CharCellValue(std::span<const std::byte> cell) {
 // Copies value bytes into a slot the caller already owns, reusing that
 // slot's capacity: one memcpy, no allocation once the frame has settled.
 //
-// This is what "assigning rather than appending" below actually requires.
-// Building a std::string and move-assigning it looks like an assign and is
-// not one: the move frees the slot's buffer and adopts a fresh one, so any
-// value past libstdc++'s 15-byte SSO cost a malloc and a free per string
-// column per decoded row, on every scan
-// (CIP/OPT-002-string-slot-assign/proposal.md). The measured win was
-// largest on the UPDATE and DELETE walks, which then decoded every scanned
-// row whole before testing the WHERE; OPT-001 has since narrowed that to
-// the filter's columns, so the numbers in that entry's results file price
-// a decode order this tree no longer has.
+// Move-assigning a built std::string is not an assign: it trades the
+// slot's buffer for a fresh one, a malloc and free per string column per
+// row past the 15-byte SSO (CIP/OPT-002-string-slot-assign).
 void AssignBytes(std::string& out, std::span<const std::byte> bytes) {
     if (bytes.empty()) {
         out.clear();
@@ -519,9 +507,7 @@ void AssignBytes(std::string& out, std::span<const std::byte> bytes) {
 Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std::byte> cell,
                            std::size_t column_index, parser::AstValue& out,
                            std::vector<PendingSpill>* spills) {
-    // Built only where an error is built - see EncodeOneValue above. This
-    // one is the hotter of the two: every column of every row every scan
-    // decodes came through here and paid for a name nobody read.
+    // Built only where an error is built - see EncodeOneValue above.
     const auto NameOf = [&col] { return std::string(catalog::NameView(col.name)); };
 
     switch (col.type_val) {
@@ -533,12 +519,9 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             std::int64_t v = SignExtend(GetLE(cell, width), width);
             out.type = parser::ValueType::kInt;
             out.int_val = v;
-            // **Left empty on purpose.** `raw_int_text` exists to carry a
-            // value `int_val` cannot hold, which for a signed column is
-            // never - and FormatValue() falls back to std::to_string(int_val)
-            // for exactly this case, so the rendering is identical. Writing
-            // it here cost a string conversion per integer column per row
-            // decoded, on every scan and twice per UPDATE.
+            // **Left empty on purpose**: `raw_int_text` carries only a value
+            // `int_val` cannot hold, never one of a signed column, and
+            // FormatValue() renders from `int_val` when it is empty.
             out.raw_int_text.clear();
             out.str_val.clear();
             return Status::OK();
@@ -622,14 +605,9 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
                 "(see row_codec.hpp)");
         // ---- DATE / TIMESTAMP / DECIMAL -------------------------------
         //
-        // **Integers out, no strings, no formatting** (TY5, workplan TY04).
-        // A date's value *is* its epoch day, and rendering it is the
-        // emission boundary's job - so nothing here allocates, exactly as
-        // the int arm above documents, and a scan that never emits a row
-        // never builds a single character of text.
-        //
-        // No re-validation either: these bytes were proven by
-        // EncodeOneValue, which is the only gate (TY7).
+        // **Integers out, no strings, no formatting** (TY5): rendering is
+        // the emission boundary's job, so a scan builds no text for rows it
+        // rejects. No re-validation: EncodeOneValue is the only gate (TY7).
         case kTypeValDate: {
             out.type = parser::ValueType::kInt;
             out.int_val = SignExtend(GetLE(cell, 4), 4);
@@ -672,22 +650,13 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
     }
 }
 
-// ---- Literal coercion (TY05, moved here at TY07) ------------------------
+// ---- Literal coercion (types.md §3.1) -----------------------------------
 //
-// `WHERE price = '12.34'` against a `DECIMAL(10,2)` column compiles to a
-// comparison whose right side is **already the scaled integer 1234**
-// (docs/spec/types.md §3.1). The string is parsed once, here, by the same
-// routines `EncodeOneValue` calls - one parser, two callers, zero drift -
-// so a literal that stores and a literal that compares can never come to
-// disagree about what it means.
-//
-// Two properties follow, and both are the point rather than side effects.
-// Per-row evaluation stays an **int64 comparison**, which keeps the
-// residual path on the cost profile the scan attribution work demands. And
-// a literal that does not parse is a **positioned compile error**, not a
-// row-by-row false: `WHERE d = '2026-02-30'` is a statement that cannot be
-// satisfied by any row, and answering it with zero rows would hide the
-// typo behind a plausible-looking empty result.
+// `WHERE price = '12.34'` against a `DECIMAL(10,2)` column compiles to the
+// scaled integer 1234, parsed by the same routines `EncodeOneValue` calls,
+// so a literal that stores and one that compares cannot disagree. Per-row
+// evaluation stays an int64 comparison, and a literal that does not parse
+// (`'2026-02-30'`) is a positioned compile error, never an empty answer.
 Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& val) {
     // A parameter is never evaluated - nothing constructs one since
     // declared patterns were withdrawn (ast.hpp) - and NULL matches nothing
@@ -764,18 +733,10 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             // drift TY01's one-parser rule exists to prevent. So it is
             // rendered and handed to that parser instead: one small string
             // per predicate at *compile*, never per row.
-            // **Already in storage form: accept it and change nothing.**
-            // The date and timestamp arms above have always done this - an
-            // epoch integer coerces to itself - and this arm not doing so
-            // made the function non-idempotent for exactly two types.
-            //
-            // That is not academic. A write hook re-coerces a *decoded* row
-            // (an UPDATE carries one), so a decimal column reached here as
-            // kDecimal and was refused. The Cabin's hook absorbs a coercion
-            // failure by un-observing, so a Cabin on a decimal column was
-            // silently destroyed by the first UPDATE that touched its
-            // relation; the index hook, which cannot absorb, would have
-            // failed the statement. Found by workplan IX06.
+            // **Already in storage form: accept it and change nothing**, so
+            // the coercion is idempotent: a write hook re-coerces a decoded
+            // row (an UPDATE carries one), and a refusal here once silently
+            // dropped a Cabin on a decimal column (workplan IX06).
             //
             // The scale still has to agree, and a disagreement is refused
             // rather than rescaled - the same answer EncodeOneValue gives,
@@ -1129,13 +1090,9 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
     if (spills != nullptr) spills->clear();
     if (Status s = CheckDecodeInputs(schema, layout, payload, out, checks); !s.ok()) return s;
 
-    // **Iterate the mask's set bits, not the relation's columns.** A fold or
-    // a projection reading one column of twelve used to test twelve bits to
-    // find it; this visits exactly the columns named. `countr_zero` on a
-    // cleared-lowest-bit loop is the standard idiom and needs no bound of
-    // its own - the mask cannot name a column past 63, which is why the
-    // compiler answers kAllColumns for a relation that wide (step_compiler
-    // section 4) and why this can no longer silently skip a tail.
+    // **Iterate the mask's set bits, not the relation's columns.** The mask
+    // cannot name a column past 63, which is why the compiler answers
+    // kAllColumns for a relation that wide (step_compiler section 4).
     // NU8's zero-cost gate: every relation with no nullable column skips
     // the bitmap read entirely - null_bitmap_bytes is on the cache line the
     // decoders already read row_size from, where null_bits is a separate
@@ -1155,9 +1112,7 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
             continue;
         }
         if (has_nulls && catalog::NullBitIsSet(payload, layout, i)) {
-            // The bitmap decides here exactly as in DecodeRowInto below -
-            // this is the executor's per-column path, and it was the
-            // bypass the first NULL E2E test caught.
+            // The bitmap decides here exactly as in DecodeRowInto below.
             SetNullSlot(out[i]);
             continue;
         }
@@ -1175,12 +1130,8 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
                      std::vector<PendingSpill>* spills, DecodeChecks checks) {
     if (spills != nullptr) spills->clear();
     // The same four checks DecodeColumnsInto makes, through the same
-    // function - which is the point. Calling the two Status-returning
-    // checkers directly constructed and destroyed a Status per decoded row
-    // even when both passed, the cost AP02 removed from the sibling path
-    // and left standing here; and stating the checks twice invited the two
-    // statements of them to drift
-    // (CIP/OPT-004-decoderowinto-preconditions/proposal.md).
+    // predicate-first function, so no Status is built per row and the two
+    // cannot drift (CIP/OPT-004-decoderowinto-preconditions).
     if (Status s = CheckDecodeInputs(schema, layout, payload, out, checks); !s.ok()) return s;
 
     auto id = KeystoneIdOfPayload(payload);

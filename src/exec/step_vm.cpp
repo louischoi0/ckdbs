@@ -38,13 +38,10 @@ namespace {
 // A relation walk hands the visitor a span into a live page frame. If the
 // visitor descends into the next step while still holding it, a page fetch
 // happens with that span registered - and nothing pins the frame it points
-// into. Today no page store evicts, so the span stays valid by accident;
-// the moment one does, this becomes a use-after-free that reads as
-// occasional wrong rows.
-//
-// So the rule is enforced now, while it is free: a step registers its span,
-// decodes, and releases before descending. Any fetch made while a span is
-// registered trips the guard.
+// into. The pool evicts, so that is a use-after-free that reads as
+// occasional wrong rows. A step registers its span, decodes, and releases
+// before descending; any fetch made while a span is registered trips the
+// guard.
 //
 // Core-local rather than atomic: the engine is thread-per-core and a chain
 // executes on one core (docs/rules/rules.md §3). An atomic here would suggest a
@@ -93,18 +90,12 @@ struct Bound {
 
 // ---- Three-valued logic, collapsed in exactly one place (spec I16) -------
 //
-// `NOT IN` is not `!IN`. Under SQL's standard semantics, if the subquery
-// result contains a NULL and the probe matches nothing, `x NOT IN (S)` is
-// UNKNOWN rather than TRUE - so a boolean negation is silently wrong the
-// day NULLs become storable.
-//
-// The engine is two-valued today: the row codec rejects NULL, so the only
-// reachable NULL is an inline literal or a zero-row scalar subquery. That
-// makes the tri-state free right now, which is the point of paying for it
-// now: when the null bitmap lands, `Collapse` is the one function that
-// changes, and no wrong answer shipped in between.
-// `TriState`, `Collapse` and `IsNull` live in chain_frame.hpp since BU-S1,
-// whose boolean conjuncts collapse through the same function.
+// `NOT IN` is not `!IN`: if the subquery result contains a NULL and the
+// probe matches nothing, `x NOT IN (S)` is UNKNOWN rather than TRUE, so a
+// boolean negation would be wrong (docs/spec/null.md: WHERE is
+// three-valued). `TriState`, `Collapse` and `IsNull` live in
+// chain_frame.hpp since BU-S1, whose boolean conjuncts collapse through
+// the same function.
 
 // A `$param` is a value position with nothing bound to it, so a chain
 // carrying one **must never be executed**: any answer it produced would be
@@ -148,16 +139,10 @@ StatusOr<std::uint64_t> KeyFromOperand(const Operand& operand, const ChainFrame&
 // executor did" is one identifier a reader can follow.
 const txn::Snapshot kSeesEverything{};
 
-// One chain's execution state. Recreated per sub-chain, which is what
-// makes the frame stack a stack.
-// Drives a spine coroutine to completion synchronously - the two walk
-// visitor call sites and the sync Execute() wrapper use it. Correct
-// precisely while nothing suspends beneath (P4d-2's contract), and as of
-// P4d-3 that contract is *enforced* rather than assumed: a coroutine that
-// parks on a wait beneath this driver is a hard error, because the driver
-// is synchronous and cannot deliver what the wait waits for - resuming
-// past it would fabricate the reply (the 5ec61da review finding).
-// Multi-step descent through this seam is P4d-4's batching to dissolve.
+// Drives a spine coroutine to completion synchronously (the walk visitor
+// call sites and the sync Execute() wrapper). A coroutine that parks on a
+// wait beneath it is a hard error: the driver cannot deliver what the wait
+// waits for, and resuming past it would fabricate the reply (P4d-3).
 Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
     while (!coro.done()) {
         if (!coro.TryResumeDeepest()) {
@@ -270,6 +255,8 @@ struct StatementStore {
     std::vector<std::optional<ScanKernel>> kernels;
 };
 
+// One chain's execution state. Recreated per sub-chain, which is what
+// makes the frame stack a stack.
 class ChainRunner {
 public:
     // `statement` is the statement's store, shared the way `stats` and
@@ -281,15 +268,10 @@ public:
                 TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
                 const txn::Snapshot* snapshot, bool indexes,
                 StatementStore* statement = nullptr, PositionSink* position = nullptr)
-        // Listed in declaration order, which is the order they are actually
-        // initialized in - `snapshot_` sits third among the members even
-        // though it is eleventh in the parameter list. Every initializer but
-        // the last reads a constructor parameter, so no value here depends on
-        // the order. `statement_` is the one that names a member - it stores
-        // `&owned_statement_` - but only takes its address, which is valid
-        // whatever the order, so the list is order-independent in fact as
-        // well as in value. Recorded because a reorder that *dereferenced*
-        // a member would not be, and this is the line to check first.
+        // In declaration order. No initializer dereferences a member
+        // (`statement_` only takes `&owned_statement_`'s address), so the
+        // list is order-independent; a reorder that dereferenced one would
+        // not be.
         : catalog_(catalog), store_(store),
           snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), sink_(sink),
           depth_(depth), parent_(parent), stats_(stats), budget_(budget), trail_(trail),
@@ -404,11 +386,10 @@ public:
         if (!sub.steps.empty()) {
             StepStats& sub_stats = stats_.For(sub.steps[0].step_id);
             ++sub_stats.sub_chain_runs;
-            // `correlated_scans` - the quadratic-shape signal - is counted
-            // at the walk itself (RunWalkStep), not from the compile-time
-            // kind here: a kFilterScan driver walks every run and a
-            // correlated CabinProbe walks on a miss, and the old kind test
-            // reported zero for both while the statement stayed quadratic.
+            // `correlated_scans` is counted at the walk itself
+            // (RunWalkStep), not from the compile-time kind here: a
+            // kFilterScan driver walks every run and a correlated
+            // CabinProbe walks only on a miss.
         }
 
         const bool wants_value = sub.has_value;
@@ -593,13 +574,9 @@ public:
 
 private:
 
-    // Emits, or descends. The recursion is over *steps*, not over rows:
-    // one frame holds every bound relation, so reaching the end means one
-    // complete output row is sitting in it.
     // The terminal emit, shared by RunStep's index==size edge and by
     // AcceptTupleAt's inlined terminal descent - the split that keeps a
-    // coroutine frame off the per-tuple path (coro.hpp's rule; measured at
-    // ~55 ns/row before this, bench/results-p4d-executor.md). A row only
+    // coroutine frame off the per-tuple path (coro.hpp's rule). A row only
     // ever awaits at a step boundary above, never per emit.
     Status EmitRow() {
         auto outcome = sink_(frame_);
@@ -612,6 +589,9 @@ private:
         return Status::OK();
     }
 
+    // Emits, or descends. The recursion is over *steps*, not over rows:
+    // one frame holds every bound relation, so reaching the end means one
+    // complete output row is sitting in it.
     sched::Coro RunStep(const std::vector<Step>& steps, std::size_t index) {
         if (stopped_) co_return Status::OK();
         if (index == steps.size()) {
@@ -760,11 +740,7 @@ private:
         NoteFetch();
         ++step_stats.pages_fetched;
         // Spec section 2 rules 1-2, through the one verifier both this and
-        // Cabin's location hints go through (exec/tuple_verify.hpp). The
-        // page gone, the slot retired, and a different tuple at the target
-        // are all the same answer here - the caller descends - which is
-        // deliberate: a caller that could tell them apart would be tempted
-        // to treat one of them as authoritative.
+        // Cabin's location hints go through (exec/tuple_verify.hpp).
         // Verified against the derived `key`, not an entry pk - the
         // location carries none - which is rule 0's second hold.
         VerifiedTuple verified =
@@ -1063,8 +1039,8 @@ private:
     // key's equality, which emit nothing and enter the map under their own
     // value. WalkAndRecord's pattern with the one difference stated up
     // front: the Cabin records the probed key's set, this records the
-    // whole map, because one full pass is the point. A later walk of a
-    // built step still walks - JB4 replaces that branch with the probe.
+    // whole map, because one full pass is the point. A later outer row of
+    // a built step probes the map (ProbeBuild, JB4) instead of walking.
     sched::Coro WalkAndBuild(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
         if (!BuildIsArmable(step, access)) {
@@ -1269,13 +1245,10 @@ private:
         // per-entry count would price the probe above the walk it beat.
         //
         // **A btree entry is verified, and a miss resolved by its pk** (BD-R3
-        // E3). The walk released each leaf it bucketed from, and since a
-        // leaf places a row where its key sorts, another core's insert below
-        // a bucketed row shifts it - the statement's own writes are not the
-        // only ones any more. `VerifyTupleAt` reads the slot's pk against
-        // the entry's; a miss descends for the pk, as the Cabin serve does.
-        // A heap page never shifts, so its miss has no pk to fall back on
-        // and is refused (BF-R10, below).
+        // E3, the second bullet above): `VerifyTupleAt` reads the slot's pk
+        // against the entry's; a miss descends for the pk, as the Cabin
+        // serve does. A heap page never shifts, so its miss has no pk to
+        // fall back on and is refused (BF-R10, below).
         const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
         PageId last_page = kInvalidPageId;
         for (const stats::CabinEntry& entry : bucket) {
@@ -1353,14 +1326,11 @@ private:
     //     will be dropped avoid its base descent, and nothing more.
     sched::Coro RunIndexStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
-        // Any reason to decline takes the walk, which is what the step would
-        // have compiled to had the index not existed - and returns the
-        // identical rows, because the equalities are still in the residual.
-        // `indexes = off`: take the walk the step would have taken had the
-        // index not existed. The chain is **unchanged** - the kind is still
-        // kIndexProbe and ANALYZE still says so - which is what keeps the
-        // plan `f(shape, catalog)` and makes the A/B comparison compare
-        // execution rather than compilation.
+        // Any reason to decline - `indexes = off` among them - takes the
+        // walk the step would have compiled to had the index not existed,
+        // and returns the identical rows, because the equalities are still
+        // in the residual. The chain is **unchanged** (still kIndexProbe in
+        // ANALYZE), which keeps the plan `f(shape, catalog)`.
         if (!indexes_ || !step.index.has_value()) co_return co_await RunWalkStep(steps, index, step, access);
         const IndexProbe& probe = *step.index;
 
@@ -1519,20 +1489,13 @@ private:
         // descent per element of it.
         std::sort(index_scratch_.begin(), index_scratch_.end());
 
-        // **Moved out of the member for phase 2, and that is a correctness
-        // property.** The descent below re-enters `RunStep` for the *next*
-        // step, which may itself be an index step on this same runner - and
-        // phase 1 above starts by clearing this vector. A chain with two
-        // index steps (`... FROM b AS a JOIN b AS c ON a.qty = c.qty WHERE
-        // a.owner = 1 AND c.owner = 2`) therefore had the inner step clear
-        // and refill the very buffer the outer loop was walking, so the
-        // outer step resolved the *inner* step's pks and the reply silently
-        // lost rows - an accelerator changing a query result, which
-        // index.md §1 forbids outright.
-        //
-        // The buffer is handed back after the loop, so the single-index-step
-        // chain - the common one - still reuses one allocation across rows,
-        // which is why the scratch lives on the runner at all.
+        // **Moved out of the member for phase 2, a correctness property.**
+        // The descent below re-enters `RunStep` for the next step, which may
+        // be another index step on this runner whose phase 1 clears this
+        // vector - the outer loop would then resolve the inner step's pks
+        // and lose rows (`FROM b AS a JOIN b AS c ON a.qty = c.qty WHERE
+        // a.owner = 1 AND c.owner = 2`), which index.md §1 forbids. Handed back
+        // after the loop so a single index step reuses one allocation.
         std::vector<std::uint64_t> pks;
         pks.swap(index_scratch_);
 
@@ -1723,15 +1686,11 @@ private:
         std::vector<Located> located;
         located.swap(serve_scratch_);
 
-        // **Sorted into the walk's order before emission - IX8a's rule,
-        // and a bug until 2026-08-19.** A committed set starts in that
-        // order (WalkAndRecord sorts by page and slot) but the write hook
-        // appends at the *end*, so an UPDATE that moves an earlier row
-        // into an observed value leaves the set out of order, and serving
-        // it in entry order reordered a reply against I12's within-step
-        // contract. Found by the §4a join queries, which emit a set whole
-        // where the original list's one exposed value was always filtered
-        // down to a single row.
+        // **Sorted into the walk's order before emission** (IX8a; fixed
+        // 2026-08-19). A committed set starts in that order (WalkAndRecord
+        // sorts by page and slot) but the write hook appends at the *end*,
+        // so served in entry order a set could reorder a reply against
+        // I12's within-step contract.
         //
         // **That order is pk order**: every page's slot order is its key
         // order - a btree leaf's by placement (BD-R1), a heap page's by its
@@ -1844,13 +1803,9 @@ private:
         // the first page whose min_key exceeds the high bound proves that
         // nothing after it can qualify, and the walk can stop.
         //
-        // **This prunes the tail, not the head.** A page whose min_key is
-        // below `low` may still hold qualifying rows, and nothing here can
-        // tell without looking - skipping leading pages needs a seek to the
-        // first qualifying leaf, which `BtreeLookup` is close to providing
-        // and the heap chain would need lookahead for. So a range near the
-        // start of a relation is cheap and one near the end is not, which
-        // is worth knowing before quoting a number.
+        // **This prunes the tail, not the head.** Leading pages are skipped
+        // by the head seek below, on a btree only; a heap walk starts at
+        // its head.
         //
         // Rows below `low` are dropped by the residual, which still carries
         // both bounds (step_chain.hpp) - so this is an accelerator that
@@ -1859,10 +1814,8 @@ private:
             step.range.has_value() ? step.range->high : 0;
         const bool pruning = step.range.has_value();
 
-        // The PageId used to be discarded here. It is the tuple's address,
-        // and a trail that has to re-derive an address is a trail that has
-        // to search for it - which is the search the trail exists to avoid
-        // (workplan P09).
+        // The page the visitor is on: the tuple's address, which a trail
+        // records rather than re-derives by searching (workplan P09).
         PageId walk_last_page = kInvalidPageId;
         // The min_key of the page the visitor is on, for the read borrow
         // (AO-S6e-b). Taken from the header the visitor already holds, on
@@ -2040,8 +1993,7 @@ private:
         // at the beginning. A `BETWEEN` on a btree relation descends to the
         // leaf holding the low bound and walks siblings from there, so a
         // range near the end of the relation costs the range rather than
-        // everything before it - measured at 44% of a full scan when the
-        // bound is drawn uniformly (bench/results-scenario1-vs-pg.md).
+        // everything before it.
         //
         // **A heap relation still starts at the head**, and that is not an
         // oversight: it has no index to descend, so finding the low bound
@@ -2080,8 +2032,7 @@ private:
 
         // ---- The page loop, owned by the coroutine (P4d-3) ---------------
         //
-        // The walk used to hand the whole chain to storage; now this
-        // coroutine steps it page by page. Each *OnePage call holds its
+        // This coroutine steps the relation page by page. Each call holds its
         // page's pin only for the call, so the bottom of this loop - no
         // pin, no span - is the executor's one legal suspension point.
         // Since BA-S15 the statement's own outermost walk yields there every
@@ -2155,10 +2106,9 @@ private:
             //
             // Btree only. A heap chain is not key-ordered - invariant 4
             // leaves a page's tuples unordered - so `min_key` of the page a
-            // heap walk is on is not a bound on what it has yet to read;
-            // there the relation
-            // reported above is the whole declaration. Since SUS-1 every
-            // relation created is a btree.
+            // heap walk is on is not a bound on what it has yet to read; there
+            // the relation reported above is the whole declaration. Since SUS-1
+            // every relation created is a btree.
             // `parent_ == nullptr`: a sub-chain's walk is `index == 0` in
             // its own runner and would otherwise re-take a slice per outer
             // row, over-declaring a position the relation `IS` above
@@ -2201,13 +2151,9 @@ private:
     // **The pk comes out of the Keystone word, not out of a column
     // decode.** The id sits at a fixed offset precisely so finding it
     // costs no schema walk (`KeystoneIdOfPayload`, keystone.hpp), and an entry
-    // wants the id - not an AstValue holding it. The decode this replaced
-    // measured **11.6 ns of the build's 83.7 ns/row constant** on the
-    // walked join at 10,000 inner rows (the JB5 gate's follow-up), which
-    // is what the recording walk paid per recorded row too. It also drops
-    // a signed-to-unsigned guard that could only ever have hidden a
-    // corrupt decode: a Keystone id is kKeystoneIdBits wide and unsigned by
-    // construction.
+    // wants the id - not an AstValue holding it (a column decode cost
+    // ~12 ns a row at JB5's gate). A Keystone id is kKeystoneIdBits wide
+    // and unsigned by construction, so no sign guard is needed.
     //
     // The epoch was captured under this row's span - the hint names the
     // page as it was at observation (R4).
@@ -2381,9 +2327,8 @@ private:
         // relation's columns does the residual look at" (step_chain.hpp).
         // Decoding those, testing, and building the rest only for a row that
         // survives is what separates *reading* a row from *materialising*
-        // one: a 12-column scan returning 8 rows of 60,480 was paying twelve
-        // AstValues on every row it rejected, which measured as 75% of the
-        // scan (bench/results-scenario1-vs-pg.md).
+        // one: a rejected row builds no AstValue for a column the residual
+        // does not read.
         //
         // A step with a sub-chain, or a relation wider than 64 columns,
         // carries kAllColumns and takes the whole row here as before.
@@ -2392,10 +2337,8 @@ private:
         // **Recording a Cabin adds nothing to this decode.** The cabined
         // equality *is* this step's filter, so the key column already sits
         // in `filter_columns` (the invariant WalkAndRecord's guard checks);
-        // the pk is decoded on demand below, only for a row whose key
-        // matches. The full-decode form this replaced priced a recording
-        // walk at 2x the FilterScan it shadows
-        // (bench/results-scenario3-library.md §7a).
+        // the pk is read from the Keystone word below, only for a row whose
+        // key matches.
         const bool partial = step.filter_columns != Step::kAllColumns;
 
         // **What cannot change within the statement is checked once**
@@ -2490,9 +2433,8 @@ private:
         // Charged where the tuple was actually decoded, which is the unit
         // that tracks work: a page fetch amortizes over its tuples, but
         // every tuple is decoded and filtered on its own. Below the
-        // completion exit, so it is unconditional again on the plain walk -
-        // the guard form measured as ~2 ns on every examined row of every
-        // walk in the engine (bench/results-scenario3-library.md §7c.5).
+        // completion exit, so the plain walk charges unconditionally, with
+        // no per-row guard.
         if (Status s = budget_.ChargeRow(); !s.ok()) return s;
 
         // ---- The inner build's bucketing (workplan JB3) -----------------
@@ -2541,8 +2483,8 @@ private:
             // made *before* the cap is consulted, so an unkeyable row - a
             // NULL keys nothing, no equality matches it (MakeValueKey's
             // contract) - neither consumes a slot nor trips a cap it
-            // never pressed. Real since null.md landed (NU1-NU8,
-            // 2026-08-20); the contract suite's NULL case pins it.
+            // never pressed (null.md; the contract suite's NULL case pins
+            // it).
             if (!building_->over_cap) {
                 if (auto key = stats::MakeValueKey(slots[building_->col_pos]);
                     key.has_value()) {
@@ -2581,14 +2523,9 @@ private:
         // *previous* row's values, so this is not an optimization to skip:
         // it is what makes the partial decode above correct.
         //
-        // **`read_columns`, not everything else** (workplan AP01). The
-        // filter's mask narrows the decode of a row about to be *rejected*
-        // and does nothing for one that survives, so a statement with no
-        // WHERE got no benefit at all - every row survived and every row
-        // decoded every column. `SELECT COUNT(*) FROM t` built an AstValue
-        // per column per row to fold none of them, which made adding a
-        // predicate 3.1x *faster* than not having one
-        // (`bench/results-aggregate.md`).
+        // **`read_columns`, not everything else** (workplan AP01): the
+        // filter's mask narrows only a rejected row's decode, so a surviving
+        // row decodes what the statement reads and nothing more.
         //
         // A step that reads nothing further - a bare `COUNT(*)` over a
         // relation with no predicate - decodes nothing here, and the walk
@@ -2734,38 +2671,6 @@ private:
     // the execution.
     TrailCollector* trail_ = nullptr;
 
-    // ---- The one-entry probe memo (V19) ---------------------------------
-    //
-    // A probe step descends for the key its outer row produced. The outer
-    // chain walks its relation in page order, and a heap page's ids are
-    // ascending by construction (invariant 3 plus a system-issued
-    // sequence), so a foreign key that repeats - many trades for one
-    // account, the ordinary shape - repeats *consecutively*. One entry is
-    // therefore worth almost as much as a full cache and costs a
-    // comparison.
-    //
-    // It must be provably result-identical, not merely usually right, so
-    // it caches only the *location*: the page id and slot the descent
-    // returned. The row is re-read and re-filtered from that location
-    // exactly as a fresh descent's would be, so a memo hit and a memo miss
-    // run the same code from the tuple onward.
-    //
-    // **The memo is per step, and `memo_step_` is what makes that true.**
-    // The paragraph above reasons about one probe step descending for its
-    // outer row's key - but a ChainRunner owns one memo and runs *every*
-    // step of its chain through it. Without the step in the key, a chain
-    // with two pk-descending steps whose keys happen to coincide - say a
-    // `WHERE c.id = 7` lookup followed by a probe into another relation on
-    // `c.parent_id`, when that row's parent_id is also 7 - serves the
-    // second step the *first* relation's location. The row is then decoded
-    // with the wrong schema.
-    //
-    // The failure is data-dependent and rare (it needs two keys to
-    // collide), and its two outcomes are not equally visible: relations of
-    // different row widths give a Corruption error, and relations of the
-    // *same* width silently return a row from the wrong table. Found by
-    // tools/join_benchmark.py, which hit it once in 1000 point joins over
-    // 2000 rows - almost exactly the 1/2000 the coincidence predicts.
     // The statement's recorded trail, or null when nothing is replaying.
     // Shared with every sub-chain for the reason the collector is: step ids
     // are global across the statement.
@@ -2775,6 +2680,21 @@ private:
     // descend. Scratch, valid only across that call and its return.
     bool replayed_ = false;
 
+    // ---- The one-entry probe memo (V19) ---------------------------------
+    //
+    // A probe step descends for the key its outer row produced, and a
+    // foreign key that repeats - many trades for one account - repeats
+    // consecutively in the outer walk's order, so one entry costs a
+    // comparison and catches most repeats. It caches only the *location*;
+    // the row is re-verified, re-read and re-filtered exactly as a fresh
+    // descent's would be, so a hit and a miss run the same code from the
+    // tuple onward.
+    //
+    // **The memo is per step, and `memo_step_` is what makes that true**:
+    // one runner runs every step of its chain through one memo, and without
+    // the step in the key two pk-descending steps whose keys coincide would
+    // serve the second step the first relation's location - a Corruption
+    // or, at equal row widths, a silent row from the wrong table.
     bool memo_valid_ = false;
     std::uint32_t memo_step_ = 0;
     std::uint64_t memo_key_ = 0;
@@ -2784,7 +2704,8 @@ private:
 
     // ---- Cabin (docs/spec/cabin.md) --------------------------------------
     //
-    // The core-local observed sets, or null when no Cabin is configured.
+    // The instance's observed sets (one store for every core), or null when
+    // no Cabin is configured.
     // Shared with every sub-chain for the reason the collector and the
     // replay index are: a Cabin belongs to a relation, and a sub-chain reads
     // relations too. Non-owning; the caller outlives the execution.
@@ -2852,8 +2773,7 @@ private:
 
     // RunIndexStep's phase-1 output and its covered-column decode slot. Held
     // on the runner rather than built per step, for TrailCollector's reason:
-    // a per-statement allocation on the read path measured as most of an 18%
-    // regression once.
+    // a per-statement allocation on the read path is measurable.
     std::vector<std::uint64_t> index_scratch_;
     parser::AstValue covered_scratch_;
     // The pks every entry of which the covering filter has rejected so far:
@@ -2940,9 +2860,6 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     trail_replays += other.trail_replays;
     trail_misses += other.trail_misses;
     range_pages_pruned += other.range_pages_pruned;
-    // The index trio was missing from this sum until 2026-08-09, so
-    // Total() silently dropped them - found while adding pages_fetched,
-    // fixed beside it.
     index_entries_scanned += other.index_entries_scanned;
     index_entries_filtered += other.index_entries_filtered;
     index_rows_resolved += other.index_rows_resolved;
@@ -2969,9 +2886,11 @@ void ResetPageSpanGuard() noexcept { g_guard_tripped = false; }
 
 int LivePageSpans() noexcept { return g_live_spans; }
 
-// The installing core's store, for the audit's pin check. Thread-local
-// for the reason g_live_spans is: the audit is installed per core, on the
-// core's own thread, and each core has its own store.
+// The installing core's store, for the audit's pin check, or null.
+// Thread-local for the reason g_live_spans is: the audit is installed per
+// core, on the core's own thread. `live_pins()` counts every thread pinning
+// the store, so only a core that owns its store installs one
+// (core_runtime.cpp); a borrowing core installs null.
 thread_local const storage::PageStore* g_audit_store = nullptr;
 
 void InstallSuspendAudit(const storage::PageStore* store) noexcept {
@@ -2980,8 +2899,8 @@ void InstallSuspendAudit(const storage::PageStore* store) noexcept {
     // R1 already forbids a page *fetch* under a live span, because nothing
     // pins the frame the span points into. Suspending under one is strictly
     // worse: the span stays live for arbitrary wall time, across every other
-    // statement that runs on this core in between - so a store that ever
-    // evicts turns it from a latent bug into a routine one.
+    // statement that runs on this core in between, while the pool may
+    // evict.
     //
     // The pin half is the same rule one layer down (P4d-3): a span is a
     // window into a pinned frame, and a suspension holding *any* pin keeps
@@ -3039,7 +2958,7 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
     // sub-chain evaluation, which builds its own sink per sub-chain.
     static const RowSink kUnused = nullptr;
     // No collector: this path evaluates one already-located row's
-    // conjuncts for UPDATE, which is not a chain execution and has no trail
+    // conjuncts for UPDATE or DELETE, which is not a chain execution and has no trail
     // of its own to contribute to.
     ChainRunner runner(catalog, store, kUnused, /*depth=*/0, /*parent=*/nullptr, counters, spend,
                        /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr, snapshot, /*indexes=*/true);
@@ -3055,8 +2974,9 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
 
 namespace {
 
-// Execute's body as a coroutine, because the runner's steps are; it never
-// parks, and `Execute` drives it to completion inline.
+// Execute's body as a coroutine, because the runner's steps are. It yields
+// only under a slice policy (ExecuteAsync); `Execute` passes none and
+// drives it to completion inline.
 sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats,
                          const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
@@ -3067,8 +2987,7 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
     }
 
     // Locals live in this coroutine's frame, which outlives every
-    // suspension beneath - the same lifetime Execute's stack gave them
-    // while nothing suspended.
+    // suspension beneath.
     ExecStats local;
     ExecStats& counters = stats != nullptr ? *stats : local;
 
@@ -3121,8 +3040,8 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
                const RowSink& sink, ExecStats* stats, const Budget& budget,
                TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
                const txn::Snapshot* snapshot, bool indexes, PositionSink* position) {
-    // Nothing beneath parks, so the gated driver completes the coroutine
-    // inline, bit-identical to the pre-coroutine executor.
+    // No slice policy, so nothing beneath parks and the gated driver
+    // completes the coroutine inline.
     return RunToCompletionAtWalkBoundary(ExecuteChain(catalog, store, chain, sink, stats, budget,
                                                       trail, replay, cabins, snapshot, indexes,
                                                       position));

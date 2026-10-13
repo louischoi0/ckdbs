@@ -33,13 +33,17 @@ struct BootstrapResult {
 // Brings a database up on `store`:
 //   - If a valid SuperBlock image (correct magic) is already at
 //     kds::server::kSuperBlockPageId, loads it, stamps last_mount_time to
-//     `now_unix_seconds`, and persists that stamp immediately. The
+//     `now_unix_seconds`, and encodes it into the page's frame (nothing here
+//     syncs it; the store writes it back like any dirty page). The
 //     catalog's fixed pages are assumed to already exist and are left
 //     untouched - Catalog::Bootstrap() is NOT called on this path.
-//   - Otherwise (no page there yet, or one that doesn't decode as a
-///    valid SuperBlock), treats this as a fresh database: creates and
-//     persists a brand-new SuperBlock, then runs Catalog::Bootstrap() to
-//     allocate the fixed catalog pages and populate their bootstrap rows.
+//   - If a page is there but does not decode as a SuperBlock, refuses with
+//     the decode's error and touches nothing - a corrupt database is never
+//     mistaken for a fresh one.
+//   - Otherwise (NotFound: no page there yet), treats this as a fresh
+//     database: creates the page and encodes a brand-new SuperBlock, then
+//     runs Catalog::Bootstrap() to allocate the fixed catalog pages and
+//     populate their bootstrap rows.
 //
 // `inline_cell_width` is the running configuration's kds.inline_cell_width
 // (storage/tagged_cell.hpp). On the fresh path it is **pinned** into the
@@ -50,18 +54,15 @@ struct BootstrapResult {
 // database opened under a different one decodes every row at the wrong
 // offsets rather than failing.
 //
-// `cores` is the running configuration's `cores`
-// (docs/inflight/in-progress/workplan-crosscore.md M6), and is pinned and validated by exactly
-// the same rule and at exactly the same two moments. Its check is not about
-// tuple layout but about the WAL: streams are per core, so a database
-// created for N cores holds N streams, and mounting it at M leaves the
-// difference with nothing to replay them. Recovery under a changed core
-// count is [OPEN] (wal.md section 3) - the refusal is what keeps this
-// function from settling it silently.
+// `cores` is the running configuration's `cores`, **recorded, not pinned**
+// (AT-S9): nothing on the volume names a core and the WAL is one stream, so
+// a mount at another count rewrites the superblock's count and logs the
+// change (`crosscore.md` CC7-CC10).
 //
 // Fails if `store` reports an unexpected error at any step, if
-// `inline_cell_width` or `cores` is outside its legal range or disagrees
-// with the pinned one, or if Catalog::Bootstrap() fails on the fresh path.
+// `inline_cell_width` or `cores` is outside its legal range, if the width
+// disagrees with the pinned one, or if Catalog::Bootstrap() fails on the
+// fresh path.
 //
 // `log` (optional, component tag "bootstrap") receives the one fact this
 // function decides and nothing else can recover afterwards: whether this

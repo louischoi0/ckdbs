@@ -54,20 +54,18 @@
 //
 // CreateNewHeaderless() marks a page as such, and the mark is **durable**,
 // in a second bitmap page of the same shape as the free map
-// (kHeaderlessMapPageId). It cannot be an in-memory side table: this store
-// never evicts, so a page comes off the device exactly once, on first touch
-// after open - which is exactly when a verify would reject it. It cannot be
-// recomputed from the catalog either, because the store is opened before
-// bootstrap has a catalog to ask.
+// (kHeaderlessMapPageId). It cannot be an in-memory side table: the pool
+// evicts (BE), so a page is read off the device on every miss, the first
+// one right after open, and every such read must know whether to verify.
+// It cannot be recomputed from the catalog either, because the store is
+// opened before bootstrap has a catalog to ask.
 //
-// The cost is that these pages carry no damage detection at all, so the
-// mechanism is only appropriate for a structure whose corruption is
-// *survivable* - one a reader validates against an authoritative source
-// and can fall back from. Exactly one page class qualifies today: the
-// interior pages of the waystone directory (stats/waystone_dir.hpp), whose
-// 2048 child ids tile the page exactly and whose damage costs a lookup that
-// falls through to the authoritative path. A database with no waystone
-// directory pays one reserved page for the bitmap and nothing else.
+// These pages carry no damage detection, so the mechanism suits only a
+// structure whose corruption is survivable. One class qualifies: the
+// Waystone directory's interior pages (stats/waystone_dir.hpp), whose 2048
+// child ids tile the page and whose damage costs a lookup that falls
+// through to the authoritative path. A database with no Waystone directory
+// pays one reserved id per region and nothing else.
 //
 // **A bounded pool** (eviction.md, BE): frames are slots in chunks that
 // never move, at most `buffer_pool_frames` of them, reclaimed by a CLOCK hand
@@ -78,39 +76,28 @@
 //
 // Not here, deliberately:
 //   - Dirty tracking is by which accessor the caller chose, not by what it
-//     actually wrote: Get() marks the frame dirty, GetForRead() leaves it
-//     alone, and both hand out the same raw mutable span. A reader that
-//     calls Get() costs a needless write-back; a writer that calls
-//     GetForRead() loses its write. PageRef (page.md section 3) is what
-//     replaces the convention with a type.
-//   - The free map is region-based (page.md section 5); beyond
-//     that is OutOfRange, not silently unmapped.
+//     wrote: Get() marks the frame dirty, GetForRead() does not, and both
+//     hand out a mutable span. A writer that calls GetForRead() loses its
+//     write.
+//   - The free map is region-based (page.md section 5); beyond its ceiling
+//     is OutOfRange, not silently unmapped.
 //
 // ---- The WAL gate (page.md section 8, wal.md section 8-1) ---------------
 //
 // A dirty page may reach the device only once the log records describing
-// its modifications are durable. That rule is enforced here rather than
-// asked of callers: every write path below (Flush, Sync, FlushPages) first
-// calls EnsureDurable() on the highest page_lsn among the pages it is
-// about to write. With no gate installed the store behaves exactly as it
-// did before one existed, which is what the WAL-free unit tests rely on -
-// and which is sound only for a caller that logs nothing.
+// its modifications are durable. Enforced here, not asked of callers:
+// every write path (WriteBack, so Flush, Sync, FlushPages) first calls
+// EnsureDurable() on the highest page_lsn of the batch - one call per
+// batch, a no-op once the watermark has passed. With no gate installed the
+// store writes ungated, which the WAL-free unit tests rely on and which is
+// sound only for a caller that logs nothing.
 //
 // **Which gate: the calling core's** (BA-S1). SetWalGate() installs the
-// default, and SetCoreWalGate() gives one core a gate of its own; a
-// writeback asks the gate of the core it runs as (CurrentCore()), the
-// default where that core has none, and asks the same one for the whole
-// writeback. Any core's manager would answer correctly for every page -
-// there is one log - but answering means syncing, and a manager's sync
-// writes that manager's own state, which is its core's alone
-// (wal/manager.hpp). With one gate for the instance, a peer's writeback ran
-// core 0's inline sync on the peer's thread. Each peer registers its
-// attached manager instead, which flushes through the stream latch and
-// waits on the writer; core 0 keeps the default, its owning manager.
-//
-// The gate is one call per flush batch, not per page: EnsureDurable() is a
-// no-op once the watermark has passed, so gating on the batch maximum
-// costs at most one sync for the whole batch instead of one per page.
+// default, SetCoreWalGate() one core's own; a writeback asks the gate of
+// CurrentCore(), or the default. Every manager answers for the one log,
+// but a manager's sync writes its own core's state (wal/manager.hpp), so a
+// peer registers its attached manager (flush through the stream latch,
+// wait on the writer) and core 0 keeps the default, its owning manager.
 //
 // StampPageLsn() is the other half. A mutation path appends its record,
 // then calls it with the record's LSN; that both records the page_lsn the
@@ -120,19 +107,19 @@
 // correct (wal.md section 11-1). A frame keeps that value until it is
 // written back, then drops it.
 //
-// Concurrency: core-local, no internal synchronization (rules.md #3) -
-// **but for the page latch word**, below, which is the first thing in the
-// storage layer another thread may touch.
+// Concurrency: one store serves every core. Four latches, all armed only
+// at `cores > 1` and null otherwise: the page latch word per frame (below),
+// the structure latch over the frame table (`frames_latch_`), the free
+// map's latch (`map_latch_`) and the map write barrier
+// (`map_flush_latch_`). Each says at its declaration what it guards.
 //
 // ---- The page latch (AM-R3, AR2-R2) ---------------------------------------
 //
 // Every frame carries one 32-bit word (`Frame::latch`, page_latch.hpp): an
 // exclusive bit, the owning core, and a count. **Armed only at `cores > 1`**
-// (SetLatchArmed, from the superblock's core_count - the same fact the
-// stream latch arms on, without its topology conjunct: frames have no
-// stream); unarmed - `cores = 1`, every hand-built store, the simulator -
-// the accessors never read or write the word, which is G2's zero overhead
-// as a property of the code rather than of a build flag. In debug builds
+// (SetLatchArmed, from the superblock's core_count); unarmed - `cores = 1`,
+// every hand-built store, the simulator - the accessors never touch the
+// word, G2's zero overhead as a property of the code. In debug builds
 // `KDS_TEST_PAGE_LATCH=1` arms every store so the whole suite runs armed.
 //
 // What it protects: a frame against a concurrent reader or writer on
@@ -149,14 +136,11 @@
 // holding a pin. A discipline, not a gate: exec::InstallSuspendAudit
 // records a violation in debug builds and is not fatal, and a park under a
 // latch would be a silent second exclusive grant to the next task on this
-// core (a per-task owner is AM-S2's escalation if the audit ever records
-// one). **Never upgraded**: a task holding a page shared may not ask for
-// it exclusive. That is a self-deadlock, aborted in debug naming the page
-// (PinFrame - a thread-local multiset of the pages this thread holds
-// shared, since AM-S2 step 3b; it read this store's own `pins > 1` as
-// "the shares are mine", which one table serving every core makes
-// indistinguishable from two cores holding one pin each) and an unbounded spin on the reactor thread in release, which
-// a recursive std::mutex at least blocks on (base/latch.hpp).
+// core. **Never upgraded**: a task holding a page shared may not ask for
+// it exclusive. That is a self-deadlock - aborted in debug naming the page
+// (PinFrame's thread-local multiset of the pages this thread holds
+// shared, AM-S2 step 3b), an unbounded spin on the reactor thread in
+// release (base/latch.hpp).
 //
 // Acquisition order (rules.md section 3's row):
 //   - **Outer to the WAL stream latch.** A task appends while holding its
@@ -172,29 +156,23 @@
 //     latch can be held across an append's section, a segment roll
 //     included; a reader of that page elsewhere spins, then yields.
 //   - **Held across a durability wait by no path in the tree** (BB-S1's
-//     census corrected this bullet, which read "only on the fault path").
-//     WriteBack takes the WAL gate (EnsureDurable: a wait on the writer
-//     thread for a peer, an inline sync for core 0) before it writes any
-//     byte. It takes each page's latch shared for the copy since AT-S8 step
-//     1b, one page at a time and released before the gate, so no frame of
+//     census). WriteBack takes the WAL gate (EnsureDurable: a wait on the
+//     writer thread for a peer, an inline sync for core 0) before it writes
+//     any byte. It takes each page's latch shared for the copy (AT-S8 step
+//     1b), one page at a time and released before the gate, so no frame of
 //     its own is latched across the wait - waiting for a foreign exclusive
 //     holder on a flush, trying once and skipping in the background drain
 //     (`WriteBack`'s `HeldFrames`). An ordinary fault does not reach
 //     WriteBack: its sweep (`SweepLocked`, at a fill's reservation) only
 //     queues a dirty frame, and every WriteBack caller holds no page latch.
 //     **Drain mode is the one fault path that does** (BE-Q11: recovery, a
-//     rollback, the assertion loops), and only on a thread holding no pin,
-//     in `kSkip` - the one shape that is sound, because a writeback is sound
-//     from the fault path only in `kSkip`, and only if it skips a frame its
-//     own core holds:
-//     neither the writer thread nor core 0's inline sync takes a page
-//     latch, but a shared try re-enters this core's own exclusive hold
-//     (`page_latch.hpp`'s `Next`), so the writeback could copy a page
-//     mid-write. **AM-S2 inherits one obligation here**: AwaitWalGate reads
-//     each frame's page_lsn *before* the gate call, so whatever latch that
-//     scan comes to need must be dropped before EnsureDurable, or the wait
-//     acquires exactly the "latched across a durability wait" shape this
-//     bullet rules out.
+//     rollback, the assertion loops), in `kSkip` and only on a thread
+//     holding no pin: a shared try re-enters this core's own exclusive
+//     hold (`page_latch.hpp`'s `Next`), so a writeback from a thread
+//     holding one could copy a page mid-write.
+//     `HighestDirtyPageLsn` reads the batch's page_lsns under the structure
+//     latch and drops it before EnsureDurable, so that scan holds nothing
+//     across the wait either.
 //   - **The writeback claim** (AT-S10e, `Frame::writing`): taken under
 //     the structure latch before the copy's page latch, held across the
 //     WAL gate and the device write, given back at the clean. A writeback
@@ -203,42 +181,31 @@
 //     flush caller holds a page latch across the flush (`WriteBack`'s
 //     `kWait` note).
 //   - **Outer to the visibility window latch, which is a leaf** (BB-S1's
-//     census corrected this bullet, which read "never nested ... in either
-//     direction"): it is taken by a visibility read, by undo growth's
+//     census): it is taken by a visibility read, by undo growth's
 //     reclaim under whatever page the write holds, and by the delete-mark
 //     purge under a catalog page; nothing holding it asks for a page
 //     latch, and no path holds a PageRef at commit.
 //   - **Never across a park**: the suspend audit's `live_pins() != 0`
 //     covers it in debug builds, recording rather than failing, because
 //     the pin and the latch share a handle; nothing covers it in release.
-//   - **Page against page: unordered through M1, and AM-S2 owes the
-//     rule.** Two page latches are held at once on every split (the old
-//     leaf and its new sibling), every chain growth (the old tail and
-//     the new page), and - since AM-R8 - **a scan ring's shared hold on a
-//     heap leaf across its consumer's var-heap fetches**: the ring drops
-//     its hold at the *next* `Fetch`, so the Cabin build's spill fetches
-//     (`cabin_optimizer_exec.cpp`, phase 2) run inside it, `S(leaf)` then
-//     `S(var-heap page)`. Shares never block shares, so a cycle needs an
-//     exclusive waiter on both. A write runs where the session is (AT-S5),
-//     so the pair is taken from any core: the only two users of
-//     `OpenScanRing` are the Cabin build and the relayout planner, which
-//     SUS-1 leaves dark for every relation created since 2026-09-05, and
-//     the order below is owed. The owner-core invariant that once ruled the
-//     cycle out retired (AT-S5, AT-S7); its history is at cf889b63.
-//     A descent holds one at a time, its handle dying per
-//     iteration. The shared pool is where an ABBA
-//     becomes possible, and the tree's own shapes - a leaf then its
-//     parents, bottom-up (`SecureParents`, AT-S16), a leaf then its right
-//     neighbour, old before new - are the order.
-//     A write walk's `WHERE` sub-chain breaks them, reading leaves on
+//   - **Page against page: the tree's own shapes are the order.** Two
+//     page latches are held at once on every split (the old leaf and its
+//     new sibling), every chain growth (the old tail and the new page), a
+//     split's parents (a leaf then its parents, bottom-up, `SecureParents`,
+//     AT-S16), and a scan ring's shared hold on a heap leaf across its
+//     consumer's var-heap fetches (AM-R8: `S(leaf)` then `S(var-heap
+//     page)`, the Cabin build's phase 2 - the ring's two users, the Cabin
+//     build and the relayout planner, are dark for every relation created
+//     since SUS-1). The order: old before new, leaf before parent, a leaf
+//     before its right neighbour. A descent holds one at a time. Since the
+//     owner-core invariant retired (AT-S5, AT-S7; history at cf889b63) any
+//     core may take any pair, so an ABBA is possible against a path that
+//     breaks the order - a write walk's `WHERE` sub-chain reads leaves on
 //     either side under the walk's exclusive hold
 //     (`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`,
-//     found by BB-S1's census). AM-S2 also
-//     inherits: the self-deadlock check's `pins` proxy (PinFrame); a
-//     re-validation after the re-fetch btree.cpp's and index_tree.cpp's
-//     leaf-for-write paths now do on a dropped read handle; and starvation
-//     - shared is granted whenever X is clear, with no writer preference,
-//     so a hot page's steady readers can starve an exclusive request.
+//     BB-S1's census). Starvation is not ruled out: shared is granted
+//     whenever X is clear, so a hot page's readers can starve an exclusive
+//     request.
 //   - **A user relation page, then a `sys.tables` chain page** (BB-R4),
 //     stated beside the two cross-relation pairs declared where they are
 //     taken (a relation page before a Bound Cabin page, `assertion.md`
@@ -314,18 +281,11 @@ public:
 
     // ---- Recovery's high-water repair (RV4, workplan RC04) --------------
     //
-    // Raises where CreateNew() starts its search (page_store.hpp).
-    //
-    // **Note what this does not do: it does not set a free-map bit.** The
-    // map is the durable record of which ids *exist*, and marking an id
-    // allocated that no page was ever written at would turn Get()'s honest
-    // NotFound into a read of whatever bytes the device happens to hold
-    // there. The floor is a separate fact - "do not hand this out" - and
-    // keeping the two apart is what lets recovery close the hazard without
-    // inventing pages.
-    //
-    // Every core allocates from the one free map, so the floor it raises is
-    // the floor every core searches from.
+    // Raises where CreateNew() starts its search (page_store.hpp), for every
+    // core - there is one free map. **It sets no free-map bit**: the map
+    // records which ids exist, and marking one no page was written at would
+    // turn Get()'s NotFound into a read of whatever the device holds. The
+    // floor is the separate fact "do not hand this out".
     Status RaiseAllocationFloor(PageId first_allocatable_page_id) override;
 
     // Get() that leaves the frame clean (page_store.hpp). Without it a
@@ -342,10 +302,9 @@ public:
     // not exist, which is the safe answer: an unknown page is treated as
     // headered and therefore verified.
     //
-    // **Takes the free map's latch** (AM-S3), and the reason is sharper
-    // than the bitmap's own: the headerless bitmap is a `unique_ptr` installed
-    // lazily on first use (FM6), so this reads a pointer another core may
-    // be storing to, not merely bits it may be setting.
+    // **Takes the free map's latch** (AM-S3): the headerless bitmap is a
+    // `unique_ptr` installed lazily (FM6), so this reads a pointer another
+    // core may be storing to.
     bool IsHeaderless(PageId page_id) const noexcept;
 
     // Writes dirty frames back in page-id order, which is file order
@@ -395,14 +354,14 @@ public:
     // (`DrainDirtyEvictionQueue`, on core 0's cadence), which owes no
     // barrier and so has no reason to wait.
     //
-    // **What `kWait` rests on, stated because nothing enforces it**: no flush
-    // caller holds a page latch across the flush. Waiting while holding X(Q)
-    // on a writer of P that then wants Q is a cycle; and since AT-S10e so is
-    // holding X(P) itself - another writeback can claim P and wait on that
-    // latch while this flush waits on the claim. Today every caller releases
-    // first (the anchor publish, `PersistSuperBlock`, the carve's persist,
-    // the checkpointer, SYNC), and "no task parks holding a pin" - audited
-    // in debug builds only - is what keeps the writer it waits for running.
+    // **What `kWait` rests on, unenforced**: no flush caller holds a page
+    // latch across the flush. Holding X(Q) while waiting on a writer of P
+    // that wants Q is a cycle, and so is holding X(P) - another writeback can
+    // claim P and wait on that latch while this flush waits on the claim.
+    // Every caller releases first (the anchor publish, `PersistSuperBlock`,
+    // the carve's persist, the checkpointer, SYNC), and "no task parks
+    // holding a pin" - audited in debug only - keeps the awaited writer
+    // running.
     //
     // Returns how many pages it wrote.
     //
@@ -627,83 +586,52 @@ public:
     // `log` must outlive the store.
     void SetLogger(Logger* log) noexcept { log_ = log; }
 
-    // ---- Frame reclamation (docs/inflight/in-progress/workplan-eviction.md EV01-EV02) -------
+    // ---- Frame reclamation (eviction.md; EV01-EV02 at 1769487) ----------
     //
-    // Read that document's §0 before changing anything here. The short of
-    // it: raw spans from `Get()` are only safe because nothing evicts, so
-    // the pinned accessors below are the seam EV03 migrates every caller
-    // onto, and **eviction must stay off until it has** (EV2).
+    // The pool evicts (BE), so a frame is safe only under a pin: every
+    // accessor returns a pinned `PageRef` (`page.md` §3), and a raw span
+    // from an `*Unpinned` accessor is valid only while nothing can reclaim
+    // its frame.
 
-    // A move-only RAII handle that keeps its frame resident for as long as
-    // it lives (`page.md` S2). Construction pins, destruction unpins.
-    //
-    // Copy is deleted rather than refcounted: two handles to one frame is
-    // not a thing any caller needs, and making it expressible would make
-    // "who unpins" a question. Move leaves the source empty, which is what
-    // lets a handle be returned from a factory without a double unpin.
-    // The engine-wide pinned handle (page_store.hpp, MG01). This used to be
-    // a nested class with exactly the same shape; the base one replaced it
-    // when the pin hooks became PageStore virtuals, and the alias keeps the
-    // existing spelling `DevicePageStore::PageRef` meaning the same thing.
+    // The engine-wide pinned handle (page_store.hpp, MG01): move-only RAII,
+    // construction pins, destruction unpins. The alias keeps the spelling
+    // `DevicePageStore::PageRef`.
     using PageRef = storage::PageRef;
 
-    // The pre-MG01 spellings of the pinned accessors, kept for their
-    // existing callers until MG06 folds them into plain Get()/GetForRead().
+    // The pre-MG01 spellings of the pinned accessors, kept for
+    // eviction_test.cpp's callers.
     StatusOr<PageRef> PinnedGet(PageId page_id) { return Get(page_id); }
     StatusOr<PageRef> PinnedGetForRead(PageId page_id) { return GetForRead(page_id); }
 
-    // Whether `page_id` belongs to a **pinned class**
-    // (`docs/spec/eviction.md` EV3): never a sweep candidate at any
-    // pressure. v1's classes are the fixed catalog pages and - when AST04
-    // lands - Bound Cabin pages.
-    //
-    // **A finding against EV3, recorded here because it changes how the rule
-    // can be implemented.** EV3 says pinning is "a page-class attribute …
-    // resolved from page kind at load", and for a Bound Cabin that works,
-    // because it gets a page type of its own. It does **not** work for the
-    // fixed catalog pages: they are formatted `PageType::kHeap`, exactly as
-    // a user relation's pages are, so the page kind cannot tell them apart.
-    // The id range is the only thing that can, and it is a sound
-    // discriminator because those ids are reserved and fixed
-    // (`catalog/well_known.hpp`). So the rule is implemented as
-    // *id-range-or-kind*, and EV3's "resolved from page kind" is true of one
-    // of its two v1 classes rather than both.
-    //
-    // **Both halves are live.** The kind half answers for
-    // `PageType::kCabinBound` (AST04): a Bound Cabin page carries the
-    // aggregate an admission check reads, so reclaiming one takes a
-    // *constraint* out of memory. It is asked only of a resident frame -
-    // reading a header off the device to answer would turn a skip test into
-    // an I/O, and a non-resident page cannot be a sweep candidate anyway.
+    // Whether `page_id` belongs to a **pinned class** (`eviction.md` EV3):
+    // never a sweep candidate at any pressure. Implemented as
+    // *id-range-or-kind*, not EV3's "resolved from page kind" alone: the
+    // fixed catalog pages are formatted `PageType::kHeap` like any user
+    // relation's, so only their reserved id range (`catalog/well_known.hpp`)
+    // tells them apart. The kind half answers for `PageType::kCabinBound`,
+    // whose pages carry the aggregate an admission check reads, and is
+    // asked only of a resident frame - a non-resident page is no sweep
+    // candidate, and a header read would turn a skip test into an I/O. A
+    // free-map region's page ids answer true by arithmetic (FM8).
     bool IsPinnedClass(PageId page_id) const noexcept;
 
-    // Raises the pinned id range's upper bound. **Additive only** - the
-    // limit never falls, because a structure that declared itself
-    // un-evictable and then found itself evictable is exactly the failure
-    // the declaration exists to prevent.
+    // Raises the pinned id range's upper bound. **Additive only**: a
+    // structure that declared itself un-evictable must not become evictable.
+    // A residency-only knob, read as no authorization (its write-boundary
+    // arm retired at AT-S5/AT-S18; history at cf889b63). The one value
+    // installed is the volume's layout boundary (`server::kFirstUserPageId`).
+    // A Bound Cabin page must not be made resident through this - raising
+    // the floor past it would pin every user page beneath it; the kind half
+    // of `IsPinnedClass` covers it.
     //
-    // **A residency-only knob**: nothing reads this as an authorization.
-    // Its write-boundary arm retired (AT-S5, AT-S18); its history is at cf889b63.
-    //
-    // The only value any caller installs is still the volume's own layout
-    // boundary (`server::kFirstUserPageId`). **AST04 must not use this**:
-    // a Bound Cabin page is allocated above the system range, and declaring
-    // it resident by raising the floor past it would pin every user page
-    // beneath it. Its residency needs the kind half of `IsPinnedClass`
-    // (which already answers for `PageType::kCabinBound`) or a pin, not this.
-    //
-    // **Install-time only**, and that is what makes it safe to read
-    // unlatched: the member is a plain `PageId` that `IsPinnedClass` reads
-    // from every core's thread, so a raise after the peers exist would be a
-    // data race on the shared store. `Expeditor::Open` sets it before the
-    // first peer is built.
+    // **Install-time only**, which is what makes the unlatched read sound:
+    // `Expeditor::Open` sets it before the first peer is built, and a
+    // `CoreRuntime` opened on a store of its own sets it at its open.
     void SetResidentLimit(PageId first_evictable_page_id) noexcept;
 
-    // The floor, for the assembly cell that checks it was installed. The
-    // *mechanism* has cells of its own (`eviction_test.cpp`); what has no
-    // other witness is whether anything called the setter, which is the
-    // failure this class has now seen twice - a wiring line whose absence
-    // changes no result and no cell (`AttachWakers`, AU-S1b).
+    // The floor, for the assembly cell that checks the setter was called -
+    // a wiring line whose absence changes no other result (as
+    // `AttachWakers` was, AU-S1b).
     PageId first_evictable_page_id() const noexcept { return first_evictable_page_id_; }
 
     // ---- The capacity (BE-R3) ------------------------------------------
@@ -741,24 +669,14 @@ public:
     // ---- The page latch's switch (AM-S1) ---------------------------------
     //
     // Armed from the superblock's core count by the assembly (core 0 in
-    // Expeditor::Open, a peer in CoreRuntime::Open) and by nothing else:
-    // a store nobody armed - `cores = 1`, every hand-built one - never
-    // touches a latch word. The header's "The page latch" section says
-    // what arming buys and what it costs.
+    // Expeditor::Open, a peer in CoreRuntime::Open) and by nothing else.
     // The debug census (`KDS_TEST_PAGE_LATCH=1`, Open()) arms first and
-    // wins: the assembly's own call cannot disarm a store the census armed,
-    // or every assembly-driven fixture would run the census unarmed at one
-    // core and the "whole suite ran armed" claim would be narrower than it
-    // reads.
-    // `concurrent_pinners` re-scopes `kPinCeiling` rather than adding a
-    // second knob for the same quantity (`CLAUDE.md`'s rule). **The ceiling
-    // is a *per-operation* bound and `live_pins_` was only ever a valid
-    // proxy for it because one core ran one operation at a time.** AM-S2
-    // breaks that coupling: once several threads pin one store, the global
-    // sum is the per-operation bound times the number of operations in
-    // flight, and asserting the unscaled value aborts the process on
-    // entirely correct traffic - measured, at nine concurrent readers.
-    // Callers that pin from one thread pass nothing and get today's bound.
+    // wins: the assembly's call cannot disarm it, so "the whole suite ran
+    // armed" holds for assembly-driven fixtures too.
+    // `concurrent_pinners` scales `kPinCeiling`, a *per-operation* bound,
+    // into a bound on `live_pins_`, the sum over every thread pinning this
+    // store (AM-S2: the unscaled assert aborted correct traffic at nine
+    // concurrent readers). One-thread callers pass nothing.
     void SetLatchArmed(bool armed, std::uint32_t concurrent_pinners = 1) noexcept {
         latch_armed_ = armed || latch_forced_;
         pin_ceiling_ = kPinCeiling * (concurrent_pinners == 0 ? 1 : concurrent_pinners);
@@ -819,15 +737,14 @@ public:
     // "nothing allowed", which are very different states under pressure.
     //
     // **Never reclaims a pinned frame or a resident-class one**, at any
-    // budget. That is the guarantee `docs/workplan-assertion.md` AST04
-    // rests on, and `EvictionTest` asserts it against a sweep that is
-    // reclaiming other frames in the same pass, so it is not a tautology.
+    // budget - what a Bound Cabin's residency rests on (AST04);
+    // `EvictionTest` asserts it against a sweep reclaiming other frames in
+    // the same pass.
     //
     // **A dirty frame at usage zero is queued, not reclaimed** (§3.2's
-    // fourth branch). The writeback that would clean it is EVT03's - a
-    // background-group task doing durable-then-write-then-clean - and
-    // reclaiming before that runs would lose a write. `DirtyEvictionQueue()`
-    // is what EVT03 will drain.
+    // fourth branch): reclaiming it would lose a write.
+    // `DrainDirtyEvictionQueue` writes the queue back, after which a later
+    // sweep may reclaim the frame.
     //
     // Every accessor returns a pinned `PageRef`, which is what makes a sweep
     // safe (`page.md` §3); its callers are named at `EvictColdFrames` below.
@@ -849,14 +766,12 @@ public:
     std::size_t EvictColdFrames(std::size_t budget);
 
     // Pages the sweep found dirty at usage zero, in the order it found them
-    // - §4's dirty queue, populated here and drained by EVT03's writeback
-    // task. Cleared by `TakeDirtyEvictionQueue()`.
+    // - §4's dirty queue, returned and cleared; `DrainDirtyEvictionQueue`
+    // takes it here.
     std::vector<PageId> TakeDirtyEvictionQueue();
 
-    // Under the hold (AM-S2 step 3f): `size()` on a table another core may
-    // be growing is a read of a member the growth writes. Not `noexcept` any
-    // more - `LatchGuard` locks a `std::mutex`, which may throw - and no
-    // caller relied on it: the log line in `Sync` and the eviction cells.
+    // Under the hold (AM-S2 step 3f): another core may be growing the
+    // table. Not `noexcept`: `LatchGuard` locks a `std::mutex`.
     std::size_t resident_pages() const {
         LatchGuard structure(structure_latch());
         return frames_.size();
@@ -867,53 +782,32 @@ public:
     // returns to its floor.
     std::size_t pinned_frames() const;
 
-    // The per-operation pin ceiling (MG04, `docs/workplan-pageref.md` §7's
-    // open decision, given a first value here). Derivation, from the MG03
-    // audit rather than from air: a btree grow path holds `2 + k` for a
-    // split that climbs `k` levels - its leaf, the `k` parents
+    // The per-operation pin ceiling (MG04; `docs/workplan-pageref.md` §7 at
+    // 1769487). Derivation (MG03 audit): a btree grow path holds `2 + k`
+    // for a split that climbs `k` levels - its leaf, the `k` parents
     // `SecureParents` holds (AT-S16) and a level's created node
-    // (btree.cpp's `PromoteSeparator`) - 3 in the ordinary case of one
-    // parent with room, and `k` is at most 6 on a 678-way tree. **An
-    // index's `k` has no such bound** (index_tree.cpp's walk up): open,
-    // AT-S16's review F1. **Since AT-S21 an insert keeps its leaf and
-    // parents held until its record is stamped**, so an index's split path
-    // stacks on the clustered one's for the statement's tail rather than
-    // following it; an outer chain
-    // walk adds 1, and index maintenance stacked under a statement adds 2
-    // more of its own split path. 8 bounds the ordinary case with room to
-    // spare, and a clustered split under an outer walk up to `k = 5`;
-    // the debug assert in PinFrame() is what turns the estimate into a
-    // measurement, because a workload that exceeds it aborts naming the
-    // count rather than quietly holding more of the pool than EV8 assumes.
+    // (btree.cpp's `PromoteSeparator`) - 3 in the ordinary case, and `k` is
+    // at most 6 on a 678-way tree. **An index's `k` has no such bound**
+    // (index_tree.cpp's walk up): open, AT-S16's review F1. Since AT-S21 an
+    // insert keeps its leaf and parents held until its record is stamped,
+    // so an index's split path stacks on the clustered one's; an outer
+    // chain walk adds 1, and index maintenance under a statement adds 2.
+    // 8 bounds the ordinary case, and a clustered split under an outer walk
+    // up to `k = 5`. The debug assert in PinFrame() aborts naming the count
+    // when a workload exceeds it.
     //
-    // **A scan ring adds 1 to a walk, not `kds.scan_ring_frames`**
-    // (AM-R13): it holds one pin, on the page its last Fetch returned. The
-    // slot-pinning ring this milestone tried first held one per occupied
-    // slot - up to 32 - against a ceiling that scales with *cores* and not
-    // with rings, so a Cabin build walking a 17-page relation at
-    // `cores = 2` would have aborted a debug build on entirely correct
-    // traffic. No cell reached it, and not because the walks are short -
-    // `eviction_test.cpp`'s four-slot ring walks twelve pages. What bounded
-    // the old model was the *slot* count, since a rotation released the
-    // previous occupant's pin, and no cell opens a ring wider than four;
-    // the two consumers that take the 32-slot default - the relayout
-    // survey and the Cabin build - are reached in the suite only over an
-    // `InMemoryPageStore`, whose `OpenScanRing` is the pass-through
-    // fetcher. Which is the whole reason to write the arithmetic down here
-    // rather than trust the suite.
-    //
-    // The number is unchanged because the ring's cost is now the same 1 an
-    // outer chain walk already contributes.
+    // **A scan ring adds 1, not `kds.scan_ring_frames`** (AM-R13): it pins
+    // only the page its last Fetch returned. The suite would not catch a
+    // regression here - the ring's two 32-slot consumers run in it only
+    // over `InMemoryPageStore`'s pass-through fetcher - so the arithmetic
+    // is the check.
     static constexpr std::size_t kPinCeiling = 8;
 
     std::uint32_t allocated_pages() const noexcept;
-    // **Takes the free map's latch** (AM-S3), not the frame table's - the
-    // two are nested and one latch would hang (see `map_latch_`). The free
-    // map is one structure every core reads and grows, and this predicate sits on the fault
-    // path, the writeback path and the WAL gate - so it is the most
-    // frequent reader of the map a peer may be inserting a region into.
-    // A caller already inside the hold wants `IsAllocatedLocked`; asking
-    // here would hang, and debug builds abort naming the reader instead.
+    // **Takes the free map's latch** (AM-S3), not the frame table's (see
+    // `map_latch_`): another core may be inserting a region. A caller
+    // already inside the hold wants `IsAllocatedLocked`; asking here would
+    // hang, and debug builds abort naming the reader instead.
     bool IsAllocated(PageId page_id) const noexcept;
 
 private:
@@ -971,25 +865,13 @@ private:
         // the order LSNs are stamped in (wal.md §11-2).
         wal::Lsn stamped_since_copy = 0;
 
-        // ---- Reclamation state (docs/inflight/in-progress/workplan-eviction.md EV01) --------
+        // ---- Reclamation state (eviction.md; EV01 at 1769487) ----------
         //
-        // How many live `PageRef`s hold this frame. **Plain, non-atomic,
-        // core-local** - `page.md` §6 makes that the model rather than a
-        // shortcut: one pool per core, and through M1 cross-core page
-        // access does not exist (the latch word above is the one field a
-        // shared pool will read from another core; the pin count is not).
-        // **AM-S2 decided against making this atomic** - the pointer this
-        // sentence used to carry to "AM-S2 owns that change" is retired:
-        // step 1 put pin *accounting* under the structure latch, so an
-        // atomic here would be redundant with it. **Every mutation is now
-        // latched**: the last unlatched one was `ResidentBytes`' inline-sweep
-        // guard pin, which went when the sweep moved to the reservation
-        // (BE-S2), before any frame of the fill exists.
-        //
-        // A frame with pins > 0 is never a victim, at any pressure (EV4
-        // answers OutOfSpace instead of waiting), and all three erasers read
-        // this field under the structure latch - so that exclusion rests on
-        // the latch now rather than on one thread reaching a store.
+        // How many live `PageRef`s hold this frame. **Plain, not atomic**:
+        // every read and write of it is under the structure latch (AM-S2
+        // step 1), which is what the exclusion rests on. A frame with
+        // pins > 0 is never a victim at any pressure, and all three erasers
+        // read this field under that latch.
         std::uint32_t pins = 0;
 
         // The CLOCK usage counter (`docs/spec/eviction.md` EV1 / §3.1-2):
@@ -1031,13 +913,10 @@ private:
             dirty_gen = gen;
         }
     };
-    // The latch word landed in existing padding at AM-S1; `dirty_gen` did
-    // not, and grew the frame 32 -> 40 bytes at AT-S8 step 1b - 8 bytes per
-    // 8 KiB page. A 16-bit generation would have fitted the padding and can
-    // wrap inside one device write on a hot page, which is the one failure
-    // the field exists to rule out. `page_id`, `queued` and `slot` (BE-R1)
-    // took padding and four bytes: 40 -> 48. `stamped_since_copy` is a full
-    // LSN and fits no padding: 48 -> 56, still under 0.7% of the page.
+    // 56 bytes, under 0.7% of the page: `dirty_gen` is 32 bits because a
+    // 16-bit one can wrap inside one device write on a hot page (AT-S8 step
+    // 1b), `page_id`/`queued`/`slot` came with BE-R1, and
+    // `stamped_since_copy` is a full LSN.
     static_assert(sizeof(Frame) == 56, "Frame grew; say why beside this assert");
     static_assert(std::atomic_ref<std::uint32_t>::required_alignment <= alignof(Frame),
                   "std::atomic_ref needs the word aligned inside the frame");
@@ -1045,27 +924,17 @@ private:
     // One region's pair of bitmaps: the unit of residency, and the unit of
     // dirtiness.
     //
-    // One flag for both pages, deliberately kept from the single-map form:
-    // they are written together, in the same order, at the same points, and
-    // a flag per page would only create a state where one is on disk and
-    // the other is not. What FM2 made per-*region* is the pair, not the
-    // page - region 5 being clean says nothing about region 0.
+    // One dirty flag for both pages: they are written together, at the same
+    // points, so a flag per page would only add a state where one is on
+    // disk and the other is not (FM2: per region, not per page).
     struct MapRegion {
         Page free_map{};
-        // **Null until this region holds a headerless page** (FM6, D2(a)).
-        // The headerless class is Waystone directory interior pages and
-        // nothing else - `src/stats/waystone_dir.cpp` is the engine's only
-        // caller of CreateNewHeaderless - so a database with no Waystone
-        // directory has no headerless pages anywhere, and building a bitmap
-        // to say so costs a page of memory and a page of mount I/O per
-        // region to record a fact that is already implied by the bitmap's
-        // absence.
-        //
-        // The id is still **reserved** in free_map at region creation, so
-        // an ordinary allocation can never take it and the bitmap can
-        // always be created later at its computed id. Only the bytes are
-        // deferred, never the reservation - which is why allocated_pages()
-        // still counts two for a fresh region.
+        // **Null until this region holds a headerless page** (FM6, D2(a)):
+        // the one headerless class is the Waystone directory's interior
+        // pages (`src/stats/waystone_dir.cpp`), so the bitmap is built only
+        // where it records something. Its id is still **reserved** in
+        // free_map at region creation - only the bytes are deferred - which
+        // is why allocated_pages() counts two for a fresh region.
         std::unique_ptr<Page> headerless_map;
         bool dirty = false;
     };
@@ -1097,29 +966,22 @@ private:
 
     // ---- Allocation, with the free map's latch held ----------------------
     //
-    // **The claim and the mark are one step, and that is the whole of it**
-    // (AM-S2). They used to be two calls in two functions -
-    // `FreeMapFindFirstFree` chose an id in `CreateNewUnpinned` and
-    // `FreeMapAllocate` marked it inside `CreateAtUnpinned` - so any number
-    // of threads could scan the same clear bit before one of them set it.
-    // Measured at four threads: **~14% of allocations handed the same id to
-    // two callers** (`tests/alloc_race_test.cpp`). No latch that fails to
-    // span the gap fixes that, which is why this is a split rather than a
-    // guard added at the top of what was there.
+    // **The claim and the mark are one step** (AM-S2): as two calls, any
+    // number of threads could scan the same clear bit before one set it
+    // (~14% of allocations doubled at four threads,
+    // `tests/alloc_race_test.cpp`).
     //
-    // **The device work stays outside the hold**, which is the rule this
-    // latch has had since 2b: `EnsureRegionResident` may read the device or
-    // grow the file, so a scan that runs into a region this store has not
-    // loaded returns `kInvalidPageId` and names the region in
-    // `missing_region`. The caller drops the hold, loads it, and asks again
-    // - the retry idiom `FetchPinned` already uses for a page in flight.
-    // What is left under the hold is a bitmap scan over one 8 KiB page.
+    // **The device work stays outside the hold**: `EnsureRegionResident`
+    // may read the device or grow the file, so a scan that reaches a region
+    // not loaded returns `kInvalidPageId` and names it in `missing_region`;
+    // the caller drops the hold, loads it and asks again. What is left
+    // under the hold is a bitmap scan over one 8 KiB page.
     StatusOr<PageId> ClaimNextFreeIdLocked(std::uint32_t* missing_region);
 
     // The named-id half, and it decides one question out of **two**
     // structures: the bit is the free map's and the in-use test
     // `frames_.count` is the frame table's, so its caller holds both, frames
-    // outer (AM-S3). It held one latch when there was one. `device_zeros` is the answer to
+    // outer (AM-S3). `device_zeros` is the answer to
     // `DeviceHoldsOnlyZeros(page_id)` read *outside* the hold, and
     // `zeros_known` says whether it was read at all - a caller that found
     // the bit clear has no need for it, and gets `AlreadyExists`'s
@@ -1133,13 +995,6 @@ private:
     // enough to hold, or whose map page reads as never-written, does not
     // exist and must not be created by the act of looking.
     Status LoadRegionIfPresent(std::uint32_t region);
-
-    // **`maps_dirty()` is gone** (AM-S3). It walked `map_regions_` to answer
-    // whether `FlushMaps` had anything to do, and every caller then walked
-    // it again inside `FlushMaps` - two unsynchronised passes to answer one
-    // question, and a window between them in which another core's flush
-    // could take the work. `FlushMaps` returns how many regions it wrote
-    // instead, which is the same answer taken once and under the hold.
 
     // The free map's readers, without the hold, for callers that already
     // have it. Never public: the acquisition is what a caller from outside
@@ -1157,17 +1012,11 @@ private:
     // latch itself. Between the two the page is allocated, not resident,
     // and its bytes on the device are still all zeros - which is exactly
     // the signature `ClaimNamedIdLocked` reads as a **torn creation** and
-    // re-claims. So a second caller naming the same id in that window was
-    // handed a page the first had already been given: two callers, one live
-    // id, which is the class `tests/alloc_race_test.cpp` exists to forbid
-    // on the other allocation path.
-    //
-    // **Pre-existing, and found by AM-S3's own cell rather than by its
-    // survey** - the window does not depend on which latch guards the
-    // claim, so it was there before the free map had one. The set is the
-    // same shape `loading_` uses for a fault in flight: an id here is
-    // claimed by somebody, so the torn-creation reading does not apply to
-    // it. Guarded by `map_latch_`, and erased by an RAII guard so a failed
+    // re-claims - so without this set a second caller naming the id in that
+    // window got a page the first already held (found by AM-S3's cell). An
+    // id here is claimed by somebody, so the torn-creation reading does not
+    // apply to it - the same shape `loading_` uses for a fault in flight.
+    // Guarded by `map_latch_`, and erased by an RAII guard so a failed
     // `EnsureAddressable` or a throwing allocation does not strand an id.
     std::unordered_set<PageId> claiming_;
 
@@ -1215,13 +1064,7 @@ private:
     // Debug: a public free-map reader must not be reached from inside the
     // *map* hold, because `Latch` is not recursive (`base/latch.hpp`) and a
     // second acquisition **hangs**, naming nothing. This aborts naming the
-    // reader instead, and running the suite armed with it in place is the
-    // census AM-S3 used - the same method AM-S1's never-upgrade detector
-    // used for the page latch, and it is what found that `FetchPinned`'s
-    // hit path reaches `IsAllocated` and `IsHeaderless` under the frame
-    // table's hold, which is why the map has a latch of its own.
-    //
-    // Holding `frames_latch_` here is fine and expected: that is the
+    // reader instead (AM-S3's census). Holding `frames_latch_` here is the
     // declared order.
     void AssertNotUnderMapHold(const char* reader) const noexcept;
 
@@ -1236,10 +1079,8 @@ public:
     // `resident_pages` and twice that is what FM6's deferred headerless
     // bitmaps save.
     //
-    // **Under the hold** (AM-S3): it walks every region and reads each
-    // one's headerless pointer, which is exactly what a concurrent
-    // `EnsureRegionResident` inserts into and `EnsureHeaderlessMap` stores
-    // to.
+    // **Under the hold** (AM-S3): a concurrent `EnsureRegionResident`
+    // inserts regions and `EnsureHeaderlessMap` stores the pointers it reads.
     MapResidency map_residency() const noexcept override {
         AssertNotUnderMapHold("map_residency");
         LatchGuard map(map_latch());
@@ -1260,33 +1101,22 @@ private:
     void StampIfHeadered(PageId page_id, std::span<std::byte, kPageSize> page) const;
 
     // Writes every dirty region's bitmap pair out, after the data pages
-    // they describe - the ordering rule the free map always followed, since
-    // a page is only reachable once the map says so - and answers **how
-    // many regions it wrote** (AM-S3) - which is what tells a caller whether a
-    // sync is owed. It used to return `Status` and callers asked
-    // `maps_dirty()` first; that was two unsynchronised walks of the region
-    // map to answer one question, with a window between them in which
-    // another core's flush could take the work and leave the caller
-    // syncing nothing.
+    // they describe (a page is reachable only once the map says so), and
+    // answers **how many regions it wrote** (AM-S3) - what tells a caller
+    // whether a sync is owed, taken once and under the hold.
     //
-    // **Copy under the hold, write outside it.** The device calls may not
-    // run under the latch (this class's rule since AM-S2 2b), so the bytes
-    // are checksummed and copied into a local while the map is held and
-    // the dirty flags are cleared *there*. Clearing at copy time rather
-    // than after the write is what makes a concurrent allocation re-dirty
+    // **Copy under the hold, write outside it** (no device call under the
+    // latch): the bytes are checksummed and copied, and the dirty flags
+    // cleared, while the map is held, so a concurrent allocation re-dirties
     // the region instead of being lost. **A failed write re-marks that
-    // region and every one after it**, because the flags of the whole batch
-    // were cleared at the copy and the tail was never written - leaving it
-    // clean would mean its allocation bits never reach the platter and a
-    // restart re-issues live pages.
+    // region and every one after it**: the batch's flags were cleared at
+    // the copy, and a tail left clean would never reach the device, so a
+    // restart would re-issue live pages.
     //
-    // It also answers "who runs the map writeback when one store serves
-    // every core" without a rule: N checkpointers each call this, the first
-    // copies and clears the flags, and **every later caller waits on the map
-    // write barrier until that copy is written** (BF-R5), so a returning
-    // `Sync` or `PersistMaps` covers every region state copied before it
-    // began. Before the barrier it need not have: a caller arriving between
-    // another's copy and write found nothing dirty and returned.
+    // With one store for every core, the first caller copies and every
+    // later one **waits on the map write barrier until that copy is
+    // written** (BF-R5), so a returning `Sync` or `PersistMaps` covers every
+    // region state copied before it began.
     StatusOr<std::size_t> FlushMaps();
 
     // Waits, through `gate`, for the log records of `page_ids` to be durable
@@ -1325,51 +1155,28 @@ private:
     // no-ops.
     void ReleaseScanSlot(PageId page_id) noexcept;
 
-    // `PinForScan` stood here until AM-S2-P S-P1, under a doc block that
-    // argued a ring "may not" take the page latch because it would deadlock
-    // against the foreground. That argument is retired: `UnpinFrame`
-    // releases the page latch with the pin, so every `PageRef` in the tree
-    // already holds one across arbitrary caller code, and the hazard it
-    // reached for - a latch held across a *park* - is `heap_chain.hpp`'s
-    // rule about which walks may take a fetcher, not a reason to omit the
-    // latch. The function itself faulted through
-    // `ResidentBytes` **outside** the loading set and then re-found the
-    // frame under the latch, up to eight times, answering a lost race
-    // with `ResourceExhausted`. That re-created in one function the race
-    // step 2b closed for every other accessor, and the retry loop was the
-    // symptom rather than the remedy. The ring fetches through
-    // `FetchAndPin` now (AM-R8a), where the pin is taken under the hold
-    // that made the frame resident and there is nothing left to retry.
+    // The ring fetches through `FetchAndPin` (AM-R8a): its pin is taken
+    // under the hold that made the frame resident, and it holds the page
+    // latch like any `PageRef`. It replaced `PinForScan`, which faulted
+    // outside the loading set and retried a lost race (AM-S2-P S-P1).
 
     class ScanRing;  // the ScanFetcher over this store; defined in the .cpp
 
     // PageRef's callbacks, overriding the base no-ops onto Frame metadata
-    // (MG01). Private on purpose - overriding with narrower access is legal,
-    // and a pin is only ever taken and dropped by a handle through the base
-    // interface: a caller that could unpin by hand could unpin someone
-    // else's frame.
-    // AM-S2: the fetch-and-pin pair, held together (`page_store.hpp`'s
-    // recorded obligation). See the definition for what this does and does
-    // not yet close.
+    // (MG01). Private on purpose: a pin is only ever taken and dropped by a
+    // handle through the base interface, so no caller can unpin someone
+    // else's frame by hand.
+    // AM-S2: the fetch-and-pin pair, held together (`page_store.hpp`).
     StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
                                                          bool for_read, FetchHeat heat) override;
 
-    // `FetchPinned`'s whole body, plus the one answer the scan ring needs
-    // and no other caller does: **did this call fault the page in, or find
-    // it resident?** The ring rotates a slot only on a fault (AM-R8), and
-    // the answer comes from here rather than from a residency probe of the
-    // ring's own because a probe outside this function's hold is stale
-    // before the fetch acts on it. `faulted` may be null, and `FetchPinned`
-    // passes null: the virtual seam stays four parameters, since nothing
-    // reachable through `PageStore` has a use for the fifth.
-    //
-    // **Meaningful only on the ok arm.** A rounded miss sets it before the
-    // pin, so an error returned on a later turn of the loop leaves it true;
-    // the ring reads it after `bytes.ok()` and nothing else reads it at
-    // all. It over-reports in one other place, and correctly: if another
-    // core loaded the page while this call was outside the latch, the miss
-    // arm inserted nothing and this still says faulted, because the
-    // question it answers is "did this call take the branch that loads".
+    // `FetchPinned`'s whole body, plus the answer only the scan ring needs:
+    // **did this call take the branch that loads?** The ring rotates a slot
+    // only on a fault (AM-R8), and a residency probe outside this hold would
+    // be stale. `faulted` may be null (`FetchPinned` passes null).
+    // **Meaningful only on the ok arm**: an error on a later turn of the
+    // loop leaves it true. It also says true when another core loaded the
+    // page while this call was outside the latch.
     StatusOr<std::span<std::byte, kPageSize>> FetchAndPin(PageId page_id, PinMode mode,
                                                           bool for_read, FetchHeat heat,
                                                           bool* faulted);
@@ -1386,9 +1193,8 @@ private:
 
     // The two halves of taking a pin, split because `FetchPinned`'s armed
     // path reaches them already holding the structure latch and cannot call
-    // `PinFrame` (which takes it). One definition each: writing the
-    // increments out at the second site is what silently took the MG04
-    // ceiling and the never-upgrade census off the armed path.
+    // `PinFrame` (which takes it). One definition each, so the MG04 ceiling
+    // and the never-upgrade census run on every path.
     //
     // `CountPin` runs **under** the structure latch, `AcquirePageLatch`
     // **outside** it - the order that keeps neither latch held across the
@@ -1402,26 +1208,18 @@ private:
     // `AcquirePageLatch` keeps. Always true on an unarmed store.
     bool TryAcquirePageLatchShared(PageId page_id, Frame& frame) noexcept;
 
-    // **The pin tail, with `hold` held on entry** (AM-S2). One copy, because
-    // `FetchPinned`'s hit and miss arms had grown into the same seven lines
-    // - find, pin, take the span, release the structure latch, wait for the
-    // page latch - and the miss arm's comment said "exactly as the hit path
-    // above", which is a duplication warning written in prose.
+    // **The pin tail, with `hold` held on entry** (AM-S2), shared by
+    // `FetchPinned`'s hit and miss arms: find, pin, take the span, release
+    // the structure latch, wait for the page latch.
     //
-    // `nullopt` means the frame is gone, **with `hold` still held**: nothing
-    // was unlocked on that arm, so both callers answer it by rounding the
-    // loop and re-testing from the top. On the value arm `hold` is released
-    // before the page latch is waited for, which is the ordering the whole
-    // stage is about.
+    // `nullopt` means the frame is gone, **with `hold` still held**; both
+    // callers round the loop and re-test. On the value arm `hold` is
+    // released before the page latch is waited for.
     //
-    // **It does not re-apply the dirty mark, and that is a conclusion
-    // rather than an omission** (AM-S2-P F-1). The frame this pins need not
-    // be the one the caller loaded - the miss arm runs outside the latch -
-    // so a frame evicted and re-faulted clean in that window would take a
-    // `Get`'s write and never carry it. What makes that unreachable is the
-    // loading set, not this function: see `ScanRing::Fetch` for the one
-    // path that used to insert without publishing to it, and which S-P1
-    // removed.
+    // **It does not re-apply the dirty mark** (AM-S2-P F-1): a frame
+    // evicted and re-faulted clean between the caller's load and this pin
+    // would drop a `Get`'s write, and what makes that unreachable is the
+    // loading set: every fault publishes its id there first.
     std::optional<std::span<std::byte, kPageSize>> PinResidentAndRelease(
         PageId page_id, PinMode mode, std::unique_lock<Latch>& hold) noexcept;
     static PageLatchMode LatchModeFor(PinMode mode) noexcept {
@@ -1650,88 +1448,44 @@ private:
 
     // ---- AM-S2's structure latch --------------------------------------
     //
-    // The frame **table** has never had one. AM-S1 gave each *frame* a latch
-    // word; `frames_`, `clock_hand_`, `live_pins_`, `pin_high_water_`,
-    // `dirty_eviction_queue_` and `Frame::pins` were plain, because through
-    // M1 one pool serves one core (`page.md` §6). AM-S2 shares the pool, and
-    // this is what a shared table runs under: the pin accounting (step 1),
-    // the insert (2b), and **all three erasers** - `ReleaseScanSlot`,
-    // `FreePage` (BF-R5, which replaced `EvictClean`) and
-    // `EvictColdFrames`. What is still outside it is every *reader* of the
-    // table that is not one of those, which is step 3's list and is stated
-    // below rather than implied.
+    // Guards the frame **table** and its bookkeeping: `frames_`, the slot
+    // array and free list, `clock_hand_`, `live_pins_`, `pin_high_water_`,
+    // `dirty_eviction_queue_`, `window_promised_`, `dirty_gens_` and each
+    // frame's `pins`, `dirty`, `rec_lsn`, `writing` and `dirty_gen`. Under
+    // it: the pin accounting, the insert, all three erasers
+    // (`ReleaseScanSlot`, `FreePage`, the sweep), the stamp and dirty mark
+    // (AM-S2 step 3e) and the dirty enumerations (step 3f). Still read
+    // without it: the `*Unpinned` accessors' path through `Resolve`,
+    // `IsPinnedClass`'s lookup and the test hooks.
     //
-    // **Null where the store is not shared**, which is `LatchGuard`'s whole
-    // shape and what keeps G2: at `cores = 1` the guard is a null test and
-    // no atomic (`base/latch.hpp`). Armed by the same switch as the page
-    // latch, so the two cannot disagree about whether this store is shared.
+    // **Null where the store is not shared** (`LatchGuard`'s shape, G2: a
+    // null test at `cores = 1`). Armed by the same switch as the page latch.
     //
     // **Acquisition order: the page latch is taken OUTSIDE this one, and
-    // this one is never held across device I/O.** Both halves matter.
-    // Holding the structure latch while spinning for a page latch would put
-    // every core's frame lookup behind one page's contention; holding it
-    // across a read would put them behind a disk. `PinFrame` therefore takes
-    // the pin *first*, under this latch, and only then waits for the page
-    // latch - the pin is what keeps the frame from being evicted while it
-    // waits, so the two are ordered without either being held across the
-    // other.
+    // this one is never held across device I/O.** `PinFrame` takes the pin
+    // under this latch, releases it, then waits for the page latch - the pin
+    // keeps the frame from eviction while it waits. A miss drops it before
+    // the device read (the `loading_` set below), and `FetchPinned` /
+    // `CreatePinned` latch across fetch-and-pin, so no frame is evicted
+    // between the two.
     //
-    // **What is under it and what is not, stated so nobody reads more into
-    // it.** The two gaps step 1 named are closed, and by the stages that
-    // said they would be:
-    //
-    //   1. The lookup-and-fault path. Closed at 2b by the `loading_` set
-    //      below: a miss releases the latch before the device read instead
-    //      of holding one across it, and a second core missing the same page
-    //      waits rather than issuing a duplicate read.
-    //   2. **The fetch-and-pin pair.** Closed by `FetchPinned` and
-    //      `CreatePinned` - one operation each, latched across the pair, so
-    //      the window where a frame could be evicted between the fetch and
-    //      the pin no longer exists. It cost a `PageStore` interface change,
-    //      which is why it was never something this class could do alone.
-    //
-    // **What is still outside is everything else**, stated as a rule rather
-    // than a list because the list is long and a short one would read as
-    // exhaustive: every `frames_` access that is not a pin, an insert or an
-    // erase runs with no hold. That includes **writers**, not only readers -
-    // `ResidentBytes`' resident branch sets `dirty` and bumps `usage`,
-    // `StampPageLsn` and `MarkFrameDirty` set `dirty`, `WriteBack` clears it
-    // and `rec_lsn` with it - as well as
-    // `CreateAtUnpinned`'s in-use test, `ScanRing::Fetch`, `AwaitWalGate`,
-    // `Flush`, the dirty-page enumerations, `IsPinnedClass`,
-    // `resident_pages()` and the test hooks. Step 3 takes them one at a
-    // time; the erasers went first because a reader racing an erase is a
-    // torn read, while an *eraser* racing a pin is a freed frame under a
-    // live handle.
-    // **`mutable`, because the const readers need it too** (AM-S2 step 3f).
-    // `DirtyPageIds`, `DirtyPagesWithRecLsn` and `resident_pages()` walk or
-    // measure the table and are `const` - const of the *logical* state,
-    // which a latch does not change. This is the standard reason a mutex is
-    // mutable, and the alternative was to un-const three accessors whose
-    // callers correctly treat them as reads.
+    // `mutable` so the const readers (`DirtyPageIds`,
+    // `DirtyPagesWithRecLsn`, `resident_pages()`) can take it.
     mutable Latch frames_latch_{LatchKind::kFrameTable};
     Latch* structure_latch() const noexcept { return latch_armed_ ? &frames_latch_ : nullptr; }
 
     // ---- The free map's latch, and the order (AM-S3) ---------------------
     //
-    // **A second latch, not a second use of the first**, and the reason is
-    // not contention - it is that the two are *nested*. `FetchPinned`'s hit
-    // path holds the frame table across `Resolve`, and `Resolve` begins with
-    // `IsAllocated`; `ResidentBytes` under the same hold asks
-    // `IsHeaderless`. Both are free-map reads, so guarding the map with
-    // `frames_latch_` would be a second acquisition on one thread, which
-    // `base/latch.hpp` says plainly is a hang. The AM-S2 review already
-    // named the shape: *structure -> allocation, allocation the inner
-    // leaf*. This is that leaf.
+    // **A second latch because the two are nested**: `FetchPinned`'s hit
+    // path holds the frame table across `Resolve`, which asks `IsAllocated`,
+    // and `ResidentBytes` asks `IsHeaderless` - free-map reads that would
+    // re-acquire a non-recursive latch (`base/latch.hpp`) if the map shared
+    // `frames_latch_`.
     //
     // **The declared order is `frames_latch_` then `map_latch_`, never the
-    // reverse** (`docs/rules/rules.md` §3). Nothing takes the frame table
-    // while holding the map: the two allocation paths end their map hold
-    // before calling `InsertFrame`, which is the edge AM-S2's review moved
-    // for exactly this reason, and `EnsureRegionResidentLocked` does its
-    // device work outside both. `AssertOrderBeforeFrames` is the debug
-    // enforcement, so the order is a checked statement rather than a
-    // comment.
+    // reverse** (`docs/rules/rules.md` §3): the allocation paths end their
+    // map hold before `InsertFrame`, and region loading does its device
+    // work outside both. `AssertOrderBeforeFrames` checks it in debug.
     //
     // What it guards: `map_regions_` itself - a `std::map` that region
     // creation *inserts* into while other cores are inside `find` - and
@@ -1753,16 +1507,12 @@ private:
     //
     // **What it buys is the dedup**: a second core missing the same page
     // **waits** instead of reserving a second slot and issuing a duplicate
-    // read whose `InsertFrame` would race the first. The cover it once gave
-    // an inline sweep that ran outside every hold went when the sweep moved
-    // under the latch, and since BE-S2 the sweep runs at the reservation,
-    // before any frame of this fill exists.
+    // read whose `InsertFrame` would race the first.
     std::unordered_set<PageId> loading_;
     // Broadcast when a load finishes, either way. Waiters re-check their own
     // page and sleep again if it was not theirs: loads are rare against
-    // hits, so spurious wakes are cheaper than a condition variable per
-    // frame - which would also make `Frame` non-movable, and the table
-    // moves frames in.
+    // hits, and a fault in flight has no frame to hang a condition variable
+    // on (BE-R1).
     std::condition_variable_any loading_done_;
 
     // FM2: the resident map pages, keyed by region (free_map.hpp's
@@ -1770,11 +1520,10 @@ private:
     // regions in ascending id order - deterministic, and the order
     // WriteBack's run coalescing would want if map pages ever joined it.
     //
-    // **Not frames.** D4 of docs/inflight/in-progress/workplan-multi-free-map.md keeps them
-    // store-owned, which is what makes FlushMaps' write-maps-after-data
-    // ordering trivially true and keeps them out of the checkpoint dirty
-    // table and away from PageRef. The cost accepted is this second
-    // caching mechanism inside the store.
+    // **Not frames** (D4 of docs/inflight/in-progress/workplan-multi-free-map.md
+    // at 1769487): store-owned, which makes FlushMaps' maps-after-data order
+    // trivially true and keeps them out of the checkpoint dirty table and
+    // away from PageRef, at the cost of a second cache in the store.
     //
     // Every region the device holds is loaded at mount, so "resident" and
     // "exists" are the same set and a missing key means the region was
@@ -1784,34 +1533,21 @@ private:
     std::map<std::uint32_t, MapRegion> map_regions_;
 
     // FM6's whole-instance fast path: false until some region holds a
-    // headerless bitmap. IsHeaderless sits on the fault path, the
-    // write-back path and the WAL gate, and for every database with no
-    // Waystone directory this answers all three with no lookup at all.
-    // Seeded at mount from what loaded, and moved by the one writer that
-    // can change it.
-    // **Atomic, and it is the gate rather than the data** (AM-S3's review).
-    // `IsHeaderless` reads this *before* the map hold, deliberately - a
-    // database with no Waystone directory has no headerless page anywhere,
-    // and that answer costs no lookup. But it is written when the first
-    // bitmap is installed, on another core, so a plain `bool` here is a
-    // torn read that decides whether the latched half runs at all: a stale
-    // `false` sends `StampIfHeadered` on to write a checksum into the body
-    // of a headerless page, which is silent corruption of authoritative
-    // data (invariant 14).
-    //
+    // headerless bitmap, so a database with no Waystone directory answers
+    // IsHeaderless (fault path, writeback, WAL gate) with no lookup. Seeded
+    // at mount, moved by the one writer that can change it.
+    // **Atomic, because it gates the latched read** (AM-S3's review):
+    // `IsHeaderless` reads it before the map hold, and a torn read of a
+    // `bool` set on another core would let `StampIfHeadered` write a
+    // checksum into a headerless page - silent corruption (invariant 14).
     // Release on the store, acquire on the load: a reader that sees `true`
-    // sees the bitmap the writer installed before setting it. It never goes
-    // back to `false` - nothing removes a headerless page, and `FreePage`
-    // refuses one `Corruption` - so a stale
-    // `false` costs one extra pass through the latched path and never a
-    // wrong answer in the other direction.
+    // sees the installed bitmap. It never returns to `false` - nothing
+    // removes a headerless page, and `FreePage` refuses one `Corruption`.
     std::atomic<bool> any_headerless_{false};
 
     // D8(a): the instance's allocated-page count, maintained rather than
-    // swept. Seeded at mount - which already reads every region, so the
-    // seed is free - moved up by each of the sites that sets a free-map
-    // bit and down by `FreePage` (BF-R5). O(1) at every print, where the sweep it replaced was O(regions)
-    // and is printed at mount, at shutdown and by SHOW META.
+    // swept. Seeded at mount, raised by every site that sets a free-map bit
+    // and lowered by `FreePage` (BF-R5); under `map_latch_`.
     std::uint32_t allocated_pages_ = 0;
     PageId next_new_page_id_;
     // `Open`'s `first_new_page_id`: the system range below it is never
@@ -1821,16 +1557,13 @@ private:
     // First id that may ever be evicted; everything below is resident by
     // class (EV3).
     //
-    // **0 means nothing has been declared resident**, which is the honest
-    // default rather than a gap: this layer must not know the catalog's page
-    // layout, so it cannot invent the boundary, and a structure's real
-    // protection is its *pin* and not its class. `Expeditor::Open` installs
-    // it, as the first id that is not a fixed system structure.
+    // **0 means nothing has been declared resident**: this layer does not
+    // know the catalog's page layout. `Expeditor::Open` installs the first
+    // id that is not a fixed system structure (`SetResidentLimit`).
     PageId first_evictable_page_id_ = 0;
 
-    // §4's dirty queue: what the sweep found dirty at usage zero. Drained by
-    // the writeback task (EVT03), which does not exist yet - so today it is
-    // an accurate record of what a sweep *would* have had cleaned.
+    // §4's dirty queue: what the sweep found dirty at usage zero, written
+    // back by `DrainDirtyEvictionQueue` (core 0's cadence, and drain mode).
     std::vector<PageId> dirty_eviction_queue_;
 
     // The clock hand (BE-R1): the slot index the next sweep step visits,

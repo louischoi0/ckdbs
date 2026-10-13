@@ -12,14 +12,9 @@
 #include "kds/wal/log_device.hpp"
 #include "kds/wal/redo.hpp"
 
-// One core's recovery, end to end (docs/spec/wal.md §12,
-// docs/workplan-wal-recovery.md RV1/RV2).
-//
-// The phases exist as separate, separately-tested functions - `Analyze`,
-// `Redo`, `RaiseHighWater` - and until this file nothing put them in order.
-// `workplan-wal-recovery.md` §2 named the entry point and attributed it to
-// "RC02-RC05", but no task's *Done when* mentioned it, so it was written by
-// nobody. This is it.
+// Recovery of the log, end to end (docs/spec/wal.md §12,
+// docs/workplan-wal-recovery.md RV1/RV2): the separately-tested phases
+// `Analyze`, `Redo`, `RaiseHighWater` and the injected undo, in order.
 //
 // ---- Order, and why each step is where it is -----------------------------
 //
@@ -34,20 +29,13 @@
 //
 // ---- Undo is injected, and its absence refuses the mount -----------------
 //
-// RC05 is unbuilt. That is not a reason for this function to skip the phase
-// and return success, and the reason is sharper than tidiness: **redo
-// without undo is worse than no recovery at all.** Redo deliberately
-// restores uncommitted writes, and `txn.md` §8's accepted gap is that a
-// surviving uncommitted row reads as *committed* on the next boot - its
-// writer id is below the new high-water mark and in no live set. So a
-// recovery that replays and stops has not left the database as it found it;
-// it has published every loser's writes.
-//
-// Hence `UndoPhase`. With one installed, losers are rolled back. Without
-// one, a stream that analysis found losers in **fails the mount**, naming
-// RC05 - which is `txn.md` §8's "do not attempt a partial recovery" applied
-// to the one partial state this code could otherwise produce. A stream with
-// no losers needs no undo and recovers completely today.
+// **Redo without undo is worse than no recovery at all**: redo restores
+// uncommitted writes, and a surviving one reads as *committed* on the next
+// boot (its writer id is below the new high-water mark and in no live set).
+// So with an `UndoPhase` installed (the mount's is `txn::RecoveryUndo`)
+// losers are rolled back; without one, a stream with losers **fails the
+// mount** - `txn.md` §8's "do not attempt a partial recovery". A stream with
+// no losers needs no undo.
 //
 // ---- What this deliberately leaves to its caller -------------------------
 //
@@ -56,16 +44,14 @@
 // above `wal/` - the boundary `analysis.hpp` drew and this file keeps. The
 // caller passes an `AnalysisStart` in and applies the report's ceiling out.
 //
-// **The core loop.** RV2 makes each stream independent, so recovery of a
-// database is this function once per core, ordered by nothing. Introducing
-// an ordering between streams is the thing `workplan-crosscore.md`
-// guideline 3 forbids.
+// **When it runs.** Once per log, at mount (`server/mount_recovery.cpp`);
+// `core_id` names the stream's segment files and the log lines.
 //
 // **The completion checkpoint** (RC08) and the operator report (RC09).
 
 namespace kds::wal {
 
-// Recovery's fourth phase, supplied by whoever implements it (RC05).
+// Recovery's fourth phase (RC05; `txn::RecoveryUndo`).
 //
 // An interface rather than a function pointer because undo needs state a
 // callback would have to capture - the undo log, the transaction manager's
@@ -122,15 +108,12 @@ struct RecoveryReport {
     // show the records below the floor change no page.
     Lsn redo_start_floored_from = 0;
 
-    // Records whose page the store could not resolve to a live relation -
-    // RV3's honest counter, so a catalog the crash lost reads as a number
-    // rather than as silence. **Always 0 today**: RC09 owns populating it,
-    // and a field that is present and zero is what keeps its absence from
-    // being mistaken for its being fine.
+    // Records whose page the store could not resolve to a live relation
+    // (RV3's counter). **Always 0: nothing populates it** (RC09's, unbuilt).
     std::uint64_t orphaned_records = 0;
 };
 
-// Runs the phases above against one core's stream.
+// Runs the phases above against the stream on `device`.
 //
 // Fails, and so refuses the mount (RV1), when:
 //   - analysis cannot honestly reach the anchor's durable point, or the

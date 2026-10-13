@@ -85,8 +85,7 @@ with AT-S6, one ruled in:**
    sweep walks connections and reaches no read view, and no task re-mints
    on a ceiling's account; this is a second mechanism on a different
    object, not this one.
-3. **Prepared contexts** — gone at AT-S6 with the protocol that made a
-   context prepared (D4's exclusion: `git show cf889b63:docs/spec/txn.md`).
+3. **Prepared contexts** — gone at AT-S6 with the protocol that prepared one.
 4. **A KWP load session is exempt** (the operator's ruling of 2026-10-12:
    "exclude load sessions from the ceiling too"). A load stream is one
    explicit transaction from `C_LOAD_BEGIN` to its end
@@ -395,9 +394,8 @@ in_flight_at_mint  another transaction was live on the minting core (cabin.md §
 ```
 
 A copyable POD with no heap allocation — the reactor body allocates nothing in
-steady state (`sched.md`). Nothing here bounds anything: the 64-entry
-in-flight array, and the `OutOfSpace` past 64 live transactions that was its
-width, went with the trx-id predicate at AN-S2.
+steady state (`sched.md`). The view carries no in-flight array and bounds no
+transaction count (AN-S2).
 
 ```
 Visible(t):  t == kAlwaysVisibleTrxId  -> true      (§4.2, unconditional and permanent)
@@ -406,19 +404,16 @@ Visible(t):  t == kAlwaysVisibleTrxId  -> true      (§4.2, unconditional and pe
              otherwise                 -> window holds t, and commit_lsn(t) <= snapshot_lsn
 ```
 
-**A commit-LSN snapshot, not a bound on transaction ids.** Until AN-S2 a view
-was an exclusive high-water mark over trx ids plus the ids in flight when it
-was minted. That is sound only while issue order is id order, and each core
-issues from its own disjoint block of `kTrxIdBlockSize` (§4.2), so across
-cores it is not: a commit on a core holding a higher block read as "not yet
-started" until the reader's core burned its own block (H1), and a transaction
-begun after the mint out of a lower core's unspent range read as committed
-before it had started (H2). One stream gives every commit one LSN in one
-order (`wal.md` §3), and the **instance read view** carries it: a window
-`trx_id → commit_lsn` for every transaction committed and not yet reclaimed,
-a **floor**, a slot per core, and the ceiling a mint reads. `instance_visibility.hpp`
-owns the mechanism; `instructions/v3.0.0/workorder-an-read-view.md` AN-3 E
-is the source read that found H1 and H2, and its AN-8 the build.
+**A commit-LSN snapshot, not a bound on transaction ids.** Ground: each
+core issues from its own disjoint block of `kTrxIdBlockSize` (§4.2), so id
+order is not issue order across cores and a trx-id bound reads a commit as
+not started (H1) or a later transaction as committed (H2). One stream gives
+every commit one LSN in one order (`wal.md` §3), and the **instance read
+view** carries it: a window `trx_id → commit_lsn` for every transaction
+committed and not yet reclaimed, a **floor**, a slot per core, and the
+ceiling a mint reads. `instance_visibility.hpp` owns the mechanism.
+Background: AN-S2 replaced the trx-id high-water view
+(`instructions/v3.0.0/workorder-an-read-view.md` AN-3 E, AN-8).
 
 **Why no commit table older than the window is needed, and the condition on
 that.** Above the floor the window answers; below it the answer is
@@ -676,9 +671,8 @@ is a fixed number of bytes because invariant 13 makes a row's size a schema
 constant, and it is taken **only** when the writer is invisible — a visible
 writer costs no copy at all: a bootstrap row or the view's own writer one
 comparison, a writer below the floor one atomic load, and a writer above it
-one latched window lookup, which is the cost AN-S5 measures. `Classify()`
-is no longer `constexpr` for that last reason; it still fetches no page,
-which is the property the span rule needs.
+one latched window lookup. `Classify()` is not `constexpr` for that last
+reason; it fetches no page, which is the property the span rule needs.
 
 `heap::ChainVisit` remains a purely physical walk. Visibility belongs to its
 callback: that keeps `storage/` free of a dependency on `txn/`, and keeps
@@ -689,18 +683,15 @@ callback: that keeps `storage/` free of a dependency on `txn/`, and keeps
 A conflict is detected from the tuple header alone, and the Keystone lock byte
 stays unused — **the lock family holds no bit on the page** (AO-R3: no
 persisted lock bit, no page bit, no superblock field; a crash releases every
-lock because the loser is rolled back at mount). **The header is no longer the only source of one**
-(AO-S6c-b): a transaction may hold a *unit* rather than a row - a range
-declared by a predicate-covering write (AO-0 item 14) - and the header of a
-row inside that range names whoever wrote it last, which says nothing about
-the holder. A borrow the lock table refuses is therefore a conflict of its
-own, reported in the same shape and naming the **holder** rather than the
-writer, because that is who the waiter is waiting for. Where a dispatcher
-has no lock table the header is all there is and this section reads as it
-always did. **What follows the detection is no longer a refusal alone**
-(M2, `instructions/v3.0.0/workorder-ao-m2-lock-family.md`, until AO-S8
-moves it here): a writer meeting an undecided holder waits for its decide
-(AO-S3), on whichever core the holder runs since AX-S1 made the in-flight
+lock because the loser is rolled back at mount). **The lock table is a
+second source** (AO-S6c-b): a transaction may hold a *unit* rather than a
+row - a range declared by a predicate-covering write (AO-0 item 14) - and a
+row's header inside it names its last writer, not the holder. A borrow the
+lock table refuses is a conflict of its own, reported in the same shape and
+naming the **holder**. Where a dispatcher has no lock table the header is
+all there is. **Detection is followed by a wait, not a refusal** (M2,
+AO-S3): a writer meeting an undecided holder waits for its decide, on
+whichever core the holder runs since AX-S1 made the in-flight
 test the instance's - where the refused ask handed back a slot the wait
 is on that slot, flipped at the holder's release and kicked across
 (AX-S2b). A refusal on the ask's own key is registered there, and one the
@@ -732,16 +723,12 @@ snapshot and its write; KDS aborts retryably rather than re-reading. That is
 stricter than PostgreSQL's `READ COMMITTED` and was a deliberate simplification —
 there is no re-read loop.
 
-**"And no lock to wait on" is no longer true, and for one shape the verdict
-above is now reached less often** (the operator's mark of 2026-09-08, built
-in AO-S6c-c). A write whose predicate covers a key window declares that
+**A key-window write waits before it walks** (AO-S6c-c, the operator's mark
+of 2026-09-08). A write whose predicate covers a key window declares that
 window and borrows it **before it walks** (AO-0 item 14). If the unit is
-held, the statement waits having written nothing — and an autocommit
-statement's re-run mints a fresh read view, so it proceeds where the same
-statement used to write part of its rows, meet a held one, and be refused
-with the written rows compensated. For that shape autocommit is now closer
-to PostgreSQL's `READ COMMITTED` than to the rule this section states,
-which is what AR2-A §1 measures M2 by: a refusal converted into a wait.
+held, the statement waits having written nothing, and an autocommit re-run
+mints a fresh read view and proceeds - for that shape closer to
+PostgreSQL's `READ COMMITTED` than to the verdict table above.
 
 **The widest case is a write with no `WHERE` at all**, and it is worth
 naming because it is the commonest bulk shape: it declares **the whole id
@@ -753,24 +740,16 @@ can join a deadlock cycle where before it could not. It is the price of the
 guarantee the declaration buys — the statement's whole walk sees one state —
 and it is paid only by writes that name no key window.
 
-**The unit it declares is a range and not the relation** (AO-S6e-b), and
-the difference matters in exactly one direction. The relation *unit* means
-the relation as an **object** — its existence and its schema — which is
-what DDL claims and what a positioned reader declares its `IS` on; a
-write's claim is over **keys**. Collapsing a `WHERE`-less write onto the
-relation entry was cheaper (one entry, no fence counter raised) and put it
-against a reader's `IS` there by the intention rule, for rows the reader's
-snapshot already answers. Against *writers* nothing changes: a key of `t`
-is inside `[0, kIdSpaceEnd)`, so the overlap scan finds it where the
-relation entry used to, and a concurrent DDL still meets the `IX` this
-takes above its range. Two consequences are worth stating rather than
-discovering: a transaction holding a bare `IX` and no key at all no longer
-conflicts with it, which is a transaction holding nothing this write
-touches; and the relation's fence counter now rises for the length of the
-write, so a writer of the same relation pays the all-partition probe
-AO-R3's counter gates — the same cost a range-shaped bulk write has always
-had, and paid by the declaring transaction's *own* later single-row writes
-as well, which reach the probe before its `h.txn == txn` test spares them.
+**The unit it declares is a range, `[0, kIdSpaceEnd)`, not the relation**
+(AO-S6e-b). The relation unit is the relation as an **object** - what DDL
+claims and a positioned reader's `IS` names; a write's claim is over
+**keys**, so it does not meet a reader's `IS`. Against writers the overlap
+scan finds every key of `t`, and a concurrent DDL still meets the `IX`
+taken above the range. Consequences: a transaction holding a bare `IX` and
+no key does not conflict with it; and the relation's fence counter is
+raised for the write's length, so every writer of the relation - the
+declaring transaction's own later single-row writes included - pays the
+all-partition probe AO-R3's counter gates.
 
 Three things bound it, and none of them is a re-read loop. An **explicit
 transaction** keeps its read view across the re-run, so `REPEATABLE READ`
@@ -863,9 +842,9 @@ Every step of a statement runs under the session's borrow.
   kicks the waiter's core wherever the holder runs, and nothing kicks a
   poll of `IsInFlight`; an `INSERT` asks for that `IX` ahead
   of its assertion admission (`InsertParsed`, AT-0 item 13), so a build
-  cannot slip between a writer's check and its row. AO-R12 puts the read borrow there for a *mover*,
-  and no mover exists (`physical-optimizer.md` is shadow-only), so what a
-  position is declared to today is the drop that must not overtake it.
+  cannot slip between a writer's check and its row. AO-R12 meant the
+  position for a *mover*; none exists (`physical-optimizer.md` is
+  shadow-only).
   **That `X` is refused by a writer's `IX` too**, so the drop waits for an
   open writer of the relation as well - transaction-length, since a write's
   borrow is the transaction's. A drop **inside a transaction that holds
@@ -903,17 +882,16 @@ Every step of a statement runs under the session's borrow.
   point, index or Cabin read on the path that serves it, and a write. Each
   is bound, so each holds the relation `IS`; the slice is the outermost
   walk's alone, and each of the three reads falls through to that walk when
-  its own path cannot answer. **What takes none: the foreign-key check
-  family** - an `INSERT`'s or `UPDATE`'s parent and a `DELETE`'s children,
-  both read on the core the statement runs on - because
-  those checks are helpers beside the executor and not steps
-  (`fk_check.hpp`: "`exec::Compile()` is SELECT-only"), so none of them
-  passes the compiler seam AT-S1 threaded. The following letter's, with
-  D9(a), whose `S` fence is the borrow that path needs.
+  its own path cannot answer. **The foreign-key checks are helpers beside
+  the executor, not steps** (`fk_check.hpp`: "`exec::Compile()` is
+  SELECT-only"), so neither passes the compiler seam AT-S1 threaded: the
+  forward check takes the parent relation's `IS` and the parent row's `S`
+  itself, before it descends (D9(a), AY-S5, `foreign-keys.md`); a
+  `DELETE`'s reverse walk over the children takes no borrow, under the
+  parent row's `X`.
 
-**The table itself, and what serializes it** — `rules.md` §3's row, moved
-here at AO-S8 because §3's own rule is that a declared-shared structure is
-declared in the spec that owns the subsystem, and this is that spec:
+**The table itself, and what serializes it** — the declared-shared row
+`rules.md` §3 points here for (moved at AO-S8):
 
 > The **lock table** is the lock family's partitioned table, **one for the
 > instance** — built by the `Expeditor` for every core count, borrowed by
@@ -930,17 +908,13 @@ declared in the spec that owns the subsystem, and this is that spec:
 >
 > **The order.** A partition latch is taken with **no park under a page
 > latch** — AR2-R2's intent, *"so a lock wait, which may park, can never
-> park a latched page"*, to which BB-R4 amended this clause on 2026-10-06
-> (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`). It read
-> *"with no page latch held"*, and that was already false in the tree at
-> `6dc792c9`: `UPDATE`'s and `DELETE`'s per-row tuple borrows run inside
-> the walk's write hold of the page, and a named-key `INSERT`'s
-> `before_mark` hook borrows under page 7 exclusive (`catalog.cpp:2558`,
-> `:2594`), which BB-S3 removes. A heap insert borrows its issued id under
-> the exclusive hold of the chain's tail (BB-R2, kept for the heap by
-> BD-Q4 (a)); a btree insert borrowed under its leaf's hold from BB-S3
-> until BD-S3, and borrows before its descent, holding no page, since
-> (BD-R6). What holds
+> park a latched page"*, as BB-R4 amended it on 2026-10-06 from "with no
+> page latch held" (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`).
+> A partition latch *is* taken under a page latch: `UPDATE`'s and
+> `DELETE`'s per-row tuple borrows run inside the walk's write hold of the
+> page, and a heap insert borrows its issued id under the exclusive hold of
+> the chain's tail (BB-R2, kept for the heap by BD-Q4 (a)); a btree insert
+> borrows before its descent, holding no page (BD-R6). What holds
 > is that nothing parks there: a refused borrow comes back as a refusal
 > and the park is `DispatchAsync`'s, once every hold is released. In
 > BB-R4's order - **a user relation page, a `sys.tables` chain page, a
@@ -952,13 +926,11 @@ declared in the spec that owns the subsystem, and this is that spec:
 > partition held across that park would be held against the very core
 > that would end it.
 >
-> **Stated, not enforced**, and the distinction is `rules.md` §3's own
-> ("a stated order that nothing checks is a comment"): `lock_table.hpp`
-> says only the second of the four is structurally true, and the thing
-> that would check the fourth — a suspend audit that trips on a park with
-> a span held — was AO-S2's and was not delivered. It holds in the tree
-> today because every guard in `src/txn/lock_table.cpp` is function-scoped
-> and the file contains no `co_await`.
+> **Stated, not enforced** (`rules.md` §3: "a stated order that nothing
+> checks is a comment"): `lock_table.hpp` says only the second of the four
+> is structurally true; no suspend audit checks the fourth. It holds
+> because every guard in `src/txn/lock_table.cpp` is function-scoped and
+> the file contains no `co_await`.
 >
 > Nothing of it is persisted (AO-R3): no WAL record type, no page bit, no
 > superblock field. A crash releases every lock because the loser is rolled
@@ -1078,19 +1050,21 @@ DDL is transactional and durable, specified in
 
 What stays unlogged is named in `wal.md` §11a.
 
-## 8. MVCC ships before recovery — a known correctness gap
+## 8. Recovery precedes service
 
-Closed. Recovery runs at mount (`wal.md` §12): analysis, redo and undo per
-core, then a completion checkpoint, so a crash loser's rows are rolled back
-before the database is served rather than read as committed under §4.1's
-predicate. A stream that analysis found losers in, recovered with no undo
-phase installed, refuses the mount rather than replaying and stopping.
+Recovery runs at mount, once for the instance's one log (`wal.md` §12):
+analysis, redo, high-water and undo, then a completion checkpoint, so a
+crash loser's rows are rolled back before the database is served rather
+than read as committed under §4.1's predicate. A stream that analysis found
+losers in, recovered with no undo phase installed, refuses the mount: do
+not attempt a partial recovery - half a recovery publishes uncommitted
+writes, which is worse than none.
 
 ## 9. Open Decisions — do not assume
 
 The open decisions of this subsystem are unrecorded here. Explicitly **not**
 open, and out of scope: `SERIALIZABLE` (§1), savepoints and statement-level
-rollback (§6), lock-based blocking (§5).
+rollback (§6). Lock-based waiting is built (§5).
 
 **A transaction commits or rolls back whole, and every other spelling is
 refused** (operator, 2026-10-13). `COMMIT`, `ROLLBACK` and `ABORT` take one

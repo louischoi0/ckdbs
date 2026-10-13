@@ -19,8 +19,7 @@ Status RowSpills(const catalog::TableAccess& access, std::span<const std::byte> 
         // `char` is fixed by declaration and every numeric type by its
         // width, so neither can exceed its cell and neither carries a tag.
         // Column 0 is the Keystone word, a raw u64. Decoding any of them as
-        // a cell reads a payload byte as a tag - which is what the first
-        // form of this did, and it failed the sweep on tag 21 of an integer.
+        // a cell reads a payload byte as a tag.
         if (col >= access.schema.columns.size()) continue;
         if (access.schema.columns[col].type_val != catalog::kTypeValVarchar) continue;
         const std::uint32_t offset = access.layout.offsets[col];

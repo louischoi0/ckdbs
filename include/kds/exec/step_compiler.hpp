@@ -12,14 +12,10 @@
 #include "kds/txn/read_view.hpp"
 #include "kds/parser/ast.hpp"
 
-// `Compile(AST) -> StepChain` (docs/inflight/in-progress/parser-v2-workplan.md V14).
-//
-// This is the seam the whole v2 plan is built around. The parser is a
-// bolt-on to the existing recursive-descent one and will be replaced by
-// the blueprint parser in phase V-6; the acceptance criterion for that
-// rewrite is that it emits **identical chains** over V01's corpus. That is
-// a checkable statement only because compilation is a separate, pure step
-// with a named contract - which is this.
+// `Compile(AST) -> StepChain` (docs/spec/parser-v2.md; background: the
+// parser-v2 workplan's V14, at `1769487`). Compilation is a separate, pure
+// step with a named contract, so a parser change is checkable as "emits
+// identical chains".
 //
 // Pure in the sense that matters: same statement plus same catalog gives
 // the same chain, bit for bit, every time. No clock, no randomness, no
@@ -29,8 +25,7 @@
 // of `fetch_id` (AP-S2) - which is what makes a trail recorded under one
 // execution replayable under the next, and under another select list.
 //
-// Name resolution lives here rather than in the parser (spec I5, under the
-// bolt-on). The parser produces `ColumnName{qualifier, name}`; this turns
+// Name resolution lives here rather than in the parser (spec I5). The parser produces `ColumnName{qualifier, name}`; this turns
 // it into `ColumnRef{up, rel_slot, col_pos}` and nothing downstream ever
 // sees a name again.
 
@@ -38,12 +33,18 @@ namespace kds::exec {
 
 // Compiles one SELECT statement.
 //
-// Fails with:
-//   NotFound        a relation the statement names is not in the catalog
-//   InvalidArgument a column that resolves to no relation, or to more
-//                   than one; the message carries the byte position
-//   Unsupported     a form the compiler does not yet lower - today that
-//                   is any predicate carrying a subquery (V15)
+// Fails with (among others):
+//   the catalog's status  a relation the statement names does not resolve
+//                         (`Catalog::FindTableOidByName`)
+//   InvalidArgument       a column that resolves to no relation, or to more
+//                         than one, or a mistyped comparison; the message
+//                         carries the byte position
+//   Unsupported           what the architecture declines - a comparison
+//                         across decimal widths or scales, `SUM` over
+//                         uint64, a value subquery projecting more than one
+//                         column, nesting past `parser::kMaxSubqueryDepth`
+//   NotImplemented        `HAVING`, `ORDER BY` over an aggregated statement
+//
 // `view`, when given, is the reader's catalog visibility
 // (workplan-ddl-transactional.md DT3c): a relation whose creating
 // transaction it cannot see does not resolve, so the statement is refused
@@ -51,22 +52,16 @@ namespace kds::exec {
 // not exist for this reader. Null is "see everything", which is every
 // caller outside a session and the fast path while no DDL is in flight.
 //
-// `declare` is the statement's read borrow, and this is the one home of
-// why it is a compile-time parameter rather than something the caller does
-// after the chain comes back (AT-R1, `workorder-at-m3-uniformity.md`). A
-// statement that resolves a relation and *then* declares it leaves a
-// window: a DDL committing inside it releases its relation `X` before the
-// reader ever asks for `IS`. Declaring **at** the bind, before the schema
-// is read, means the ask meets the `X` if one stands - and once the ask is
-// granted, no DDL can take the `X` until the statement ends, which is what
-// protects the schema this compile reads and the plan it builds. The ask
-// is non-blocking and a refusal is not an error: a read borrow never
-// refuses a read (`read_borrow.hpp` states what makes that sound, and what
-// the defence therefore is and is not). It is `PositionSink` and not a
-// new interface because a bind's declaration is exactly a position over
-// the whole id space - the relation - which is what that sink's
-// whole-space case already means. Null is "declare nothing", which is
-// every caller that is not executing a client's statement.
+// `declare` is the statement's read borrow, declared **at** the bind,
+// before the schema is read (AT-R1, `workorder-at-m3-uniformity.md`):
+// declared after resolution, a DDL committing in between would release its
+// `X` before the reader asked for `IS`. Once granted, no DDL takes the `X`
+// until the statement ends, which protects the schema this compile reads.
+// The ask is non-blocking and a refusal is not an error - a read borrow
+// never refuses a read (`read_borrow.hpp` says what that defends and what
+// it does not). A bind's declaration is a `PositionSink` position over the
+// whole id space. Null is "declare nothing", every caller that is not
+// executing a client's statement.
 //
 // `context`, when given, is the statement's `NOW()` instead of a fresh
 // reading: a scalar subquery of an UPDATE reads its UPDATE's (BJ-S7), so
@@ -82,25 +77,21 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
 // DELETE have instead of a chain.
 //
 // Exists so those statements evaluate predicates through the *same*
-// resolved-index path a chain does. The alternative is a second evaluator
-// that matches column names against one schema, which is what V16 deleted
-// and why: it cannot say which relation a name belongs to, and an unknown
-// name comes back as "no match" - dropping every row instead of failing.
-// Two evaluators would also be two answers to "does this row qualify".
+// resolved-index path a chain does: one answer to "does this row qualify",
+// and an unknown name refused rather than read as "no match" (V16 deleted
+// the name-matching second evaluator for that).
 //
 // `binding` is what the statement calls the relation, so a qualified
-// predicate can be checked against it. Predicates carrying subqueries are
-// Unsupported here until V18.
+// predicate can be checked against it.
 // Returns a one-relation Step carrying the clause: `residual` for the
 // ordinary conjuncts, `fn_residual` for the function conjuncts (AP-S4) and
 // `sub_chains` for the subquery ones.
 //
 // Every sub-chain is attached to the step, including uncorrelated ones -
 // so an uncorrelated subquery is re-evaluated per row here, where a SELECT
-// would hoist it and run it once. Correct but wasteful, and deliberately
-// so: UPDATE walks the relation itself rather than through the step VM, so
-// it has no "before the chain opens" to hoist into. Worth revisiting if
-// UPDATE ever runs through a chain.
+// would hoist it and run it once. Correct but wasteful: UPDATE walks the
+// relation itself rather than through the step VM, so it has no "before the
+// chain opens" to hoist into.
 // `view` as on `Compile` above: it reaches the subqueries this lowers,
 // which resolve relations of their own.
 // `declare` as on `Compile` above, and for the same reason: `access` is

@@ -27,8 +27,7 @@ class WalManager;
 // One row per assertion, holding the **declaration verbatim** and four fixed
 // fields. The parsed form - the group columns, the aggregate, the operator,
 // the bound - is *not* stored: it is recovered by re-parsing `source_text`,
-// which is the model AS10 names after `sys.pattern_defs` (withdrawn
-// 2026-08-31, and this relation is now its only user). Two things follow.
+// which is AS10's model. Two things follow.
 //
 // The `GROUP BY` list needs no cap, because a longer list costs text rather
 // than a wider catalog row; §3 declares none and this layer invents none.
@@ -43,10 +42,8 @@ class WalManager;
 // long to inline - because a declaration's text is neither fixed-width nor
 // small. Reading such a row needs `exec::DecodeRowInto`, and `exec/` depends
 // on `catalog/`, so these readers cannot live on `Catalog` without a
-// dependency cycle. `stats/pattern_defs.hpp` was the same file for the same
-// reason until declared patterns were withdrawn; this one lives in `exec/`
-// because an assertion is a constraint, which is where `fk_check.hpp` and
-// `index_ddl.hpp` already are.
+// dependency cycle; `exec/` is where the other constraints (`fk_check.hpp`,
+// `index_ddl.hpp`) already are.
 //
 // ---- Two rules every function below honours ------------------------------
 //
@@ -62,8 +59,9 @@ class WalManager;
 // against - so a marked row would still be found by name, and DROP followed
 // by CREATE of the same name would collide with a row nobody can see.
 //
-// Concurrency: core-local, like the catalog it reads through. No internal
-// synchronization (rules.md #3).
+// Concurrency: the readers take no latch of their own; `InsertAssertion`
+// checks the name and inserts under one exclusive hold of the relation's root
+// page (AT-S17), the order root, then var-heap, never the reverse.
 
 namespace kds::exec {
 
@@ -174,13 +172,12 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
 // Removes the assertion named `name`, case-insensitively. `NotFound` if there
 // is none.
 //
-// The var-heap bytes its text occupied are **not** reclaimed: nothing
-// reclaims var-heap space, because reclamation rides on purge and purge does
-// not exist. That is the same leak every superseded varchar value already
-// produces, bounded here by how often assertions are dropped.
+// The slot is retired (`SLOT_RETIRE`, no transaction); the var-heap bytes its
+// text occupied are **not** released here - no `VARHEAP_RELEASE` is logged;
+// the next mount's sweep collects them (`varheap_sweep.hpp`).
 //
-// It does **not** tear down a Bound Cabin, because there is none to tear down
-// until AST04 builds one. `ASSERT_DROP` (§7, AST05) is where that lands.
+// It does **not** tear down the Bound Cabin: `DropAssertion` logs
+// `ASSERT_DROP` (§7) and its caller evicts the live directory.
 Status DeleteAssertion(catalog::Catalog& catalog, storage::PageStore& store,
                        wal::WalManager* wal, std::string_view name);
 
@@ -195,7 +192,7 @@ struct AssertionDdlResult {
 };
 
 // The live half of a **surviving** assertion, rebuilt from its stored
-// declaration (RC07's mount wiring, `docs/workplan-wal-recovery.md`).
+// declaration at mount (RC07).
 //
 // §8.2 keeps `source_text` as the canon precisely so this is possible: the
 // group columns are not stored as positions, they are "recovered by re-parsing
@@ -233,15 +230,14 @@ StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::Page
 // **The order is validate → build → publish** (§8.1): the full scan runs
 // before the `sys.assertions` row exists, so an assertion is published
 // complete or not at all, and the publish - the row carrying `cabin_root`,
-// plus the catalog version bump - is the single commit point §8.1a
-// requires. A failed build leaves an unreachable page chain, a burned row
+// with no catalog version bump (nothing cached derives from the row) - is
+// the single commit point §8.1a requires. A failed build leaves an unreachable page chain, a burned row
 // id, an `ASSERT_DROP` discard marker in the log when one is attached, and
 // **no catalog row** - `index_ddl.cpp`'s precedent.
 //
 // `check_view` is the visibility the scan reads under (latest settled
 // state; `ReadView::Everything()` from a caller with no transaction
-// manager, which is the pre-MVCC engine exactly). `wal` may be null: the
-// build is then unlogged, like every other DDL today.
+// manager). `wal` may be null (a fixture): the build is then unlogged.
 //
 // **The build is adopted into `enforcer` before the row is written**, with
 // its publish run (`AdoptLogged`, AZ-S2), and evicted if the row is refused.
@@ -265,9 +261,9 @@ StatusOr<catalog::Oid> AssertionTargetOid(catalog::Catalog& catalog,
                                           const parser::AssertionStmt& stmt,
                                           const txn::ReadView* view = nullptr);
 
-// `DROP ASSERTION`: the catalog row retired, `ASSERT_DROP` logged when
-// `wal` is attached (before the row goes - WAL before data), and the
-// catalog version bumped. Returns the dropped assertion's id so the caller
+// `DROP ASSERTION`: `ASSERT_DROP` logged when `wal` is attached (before the
+// row goes - WAL before data), then the catalog row retired; no catalog
+// version bump. Returns the dropped assertion's id so the caller
 // can evict its live directory; the entry pages are not reclaimed - a
 // dropped relation's reclaim is the only one, and it never frees a Bound
 // Cabin page (`drop-table.md` DT1's stated leaks).

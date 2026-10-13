@@ -39,16 +39,14 @@ namespace {
 // reports NotFound for a dead slot) are skipped.
 // **GetForRead, not Get.** A scan reads and modifies nothing, and Get()
 // marks the frame dirty by convention rather than by what the caller
-// actually wrote (page_store.hpp) - so every catalog lookup used to dirty a
-// catalog page, and every checkpoint wrote every one of them back having
-// changed none.
+// actually wrote (page_store.hpp), so a lookup through Get() would dirty a
+// catalog page for every checkpoint to write back unchanged.
 //
 // **`view`, when given, is the reader's visibility** (DT3): a catalog row
 // stamped by a transaction that this view cannot see is not there for this
 // reader, exactly as an uncommitted user row is not. Null means "see
 // everything", which is what bootstrap, recovery and every internal read
-// pass - and what every caller passed before DT3 existed, so a null view
-// reproduces the old behaviour byte for byte.
+// pass.
 //
 // **A null view is not the absence of a rule, it is one rule: an object
 // exists from the moment its row is written until its removal commits**
@@ -140,10 +138,9 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
 // Walks the chain and lets `fn` act on the first row it accepts.
 //
 // Every catalog mutation has the same shape - find the row that matches,
-// change it or retire it, stop - and each used to spell out its own loop
-// over a single page's slots. That loop is what chaining breaks, so there
-// is now one of it: `fn` returns false to keep looking, true when it has
-// acted, or a failure, which is reported as-is.
+// change it or retire it, stop - over the whole chain, so there is one
+// loop: `fn` returns false to keep looking, true when it has acted, or a
+// failure, which is reported as-is.
 //
 // **kWrite**, unconditionally: every caller of this writes. A reader uses
 // ScanAll, which fetches read-only so a lookup does not dirty a catalog
@@ -228,10 +225,10 @@ Status LogCatRow(wal::WalManager* wal, storage::PageStore& store, wal::RecordTyp
     // from the payload), and analysis notes every named transaction as a
     // loser until a TXN_COMMIT in range says otherwise - so a write that
     // belongs to no bracketed transaction must travel under kNoTxnId,
-    // which note_txn skips by design. Naming the header's writer here was
-    // the review's B1: a next_id bump logged under the relation's creator
-    // made every mount past that creator's checkpointed commit invent a
-    // phantom crash loser and write a spurious TXN_ABORT for it.
+    // which note_txn skips by design. Naming the header's writer instead
+    // (a next_id bump under the relation's creator, say) would make every
+    // mount past that creator's checkpointed commit invent a phantom loser
+    // and write a spurious TXN_ABORT for it.
     if (env_trx == kBootstrapXid) env_trx = wal::kNoTxnId;
     std::vector<std::byte> payload(wal::kHeapWriteFixedSize + bytes.size());
     const wal::HeapWritePayload fields{hdr_trx, hdr_undo, slot,
@@ -318,8 +315,7 @@ Status LogCatPageInit(wal::WalManager* wal, std::uint64_t trx_id, PageId page_id
 // common header, so the roots ride ANCHOR_UPDATE - the same record a
 // root move writes. Stamps, unlike LogCatPageInit: this IS the first
 // record that lands in the page, and an anchor is not an empty
-// formatted page - its roots are body content (the 3f07eda review's
-// C3). Replay stays safe without ordering care because the redo range
+// formatted page - its roots are body content. Replay stays safe without ordering care because the redo range
 // is a suffix: a replayed PAGE_INIT that wipes the body is necessarily
 // followed in-range by every ANCHOR_UPDATE that refills it, and by every
 // BTREE_SPLIT that carries the page whole after a root growth.
@@ -693,17 +689,10 @@ Status Catalog::Bootstrap() {
     //
     // It must come after phase 4: AssertionsSchema() names its column types
     // by the type_val tags phase 4 just registered.
-    //
-    // `sys.pattern_defs` was phase 5 and had this shape for the same
-    // reasons, until the operator withdrew user-declared patterns on
-    // 2026-08-31 and bootstrap stopped creating it.
     if (Status s = BootstrapAssertions(); !s.ok()) return s;
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         // + 1: sys.assertions (phase 5) is bootstrapped outside the array.
-        // The line said "+ 2" while sys.pattern_defs was bootstrapped
-        // beside it, and "+ 1" from AST03 to 2026-08-27, when it
-        // under-counted by one.
         log_->Info("catalog", "bootstrapped " + std::to_string(std::size(kSysTables) + 1) +
                                   " system tables and " + std::to_string(kTypes.size()) +
                                   " types on the fixed catalog pages");
@@ -729,11 +718,8 @@ Schema AssertionsSchema() {
     // longer list costs text rather than a wider row. A decoded sibling table
     // would be a second copy that can drift from the canon.
     //
-    // `cabin_root` is the Bound Cabin anchor and is written kInvalidPageId
-    // here: AST04 builds the structure, AST06 fills the field in. Reserved
-    // now rather than added later because it is in §8.2's table and because
-    // adding a catalog column costs the same superblock bump this relation
-    // already cost - paying it twice would be paying it for nothing.
+    // `cabin_root` is the Bound Cabin anchor, written by `CREATE ASSERTION`
+    // (`exec/assertion_catalog.cpp`).
     //
     // `name` and `source_text` are varchar, so the relation can spill and
     // gets a var-heap chain. A declaration longer than one var-heap page is
@@ -2265,10 +2251,8 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
 
     TableAccess access{};
     // The relation's namespace comes from its sys.tables row rather than
-    // from the caller. It used to be a parameter echoed straight into the
-    // result, which is untenable once the entry is shared: whichever caller
-    // filled it first would decide the field for everyone else. CreateTable
-    // already persists the right value.
+    // from the caller: the entry is shared, so a caller-supplied value would
+    // let whichever caller filled it first decide it for everyone.
     access.namespace_oid = table_row.value().namespace_oid;
     access.oid = oid;
     access.schema = std::move(schema.value());
@@ -2294,12 +2278,11 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     // bumped at the repoint (`AdoptRoot`), so a stale memo is dropped at
     // the next task boundary.
     // The owner-scoped fill retired (AT-S5c); its history is at cf889b63.
-    // Held for the whole fill (the 96b0343 review's C2): the first form
-    // dropped the ref and re-fetched per index row - an N+1 that, under a
-    // sized pool, could fail mid-fill and leave the access half-anchored
-    // (clustered root from the anchor, index roots from the CREATE-time
-    // rows - a silently wrong tree for maintenance to append into). One
-    // read, one failure decision, no tear expressible.
+    // Held for the whole fill: a re-fetch per index row could fail mid-fill
+    // under a sized pool and leave the access half-anchored (clustered root
+    // from the anchor, index roots from the CREATE-time rows - a silently
+    // wrong tree for maintenance to append into). One read, one failure
+    // decision.
     std::optional<storage::PageRef> anchor_held;
     if (access.anchor_page_id != kInvalidPageId) {
         auto anchor = store_.GetForRead(access.anchor_page_id);
@@ -2309,8 +2292,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
                 !s.ok()) {
                 return s;
             }
-            // Checked redundancy one level up (the f5686f8 review's C5): a
-            // row naming another relation's anchor would silently walk the
+            // Checked redundancy one level up: a row naming another relation's anchor would silently walk the
             // wrong tree; the owner stamp is what refuses it.
             if (storage::GetOwnerOid(anchor.value().bytes()) != oid) {
                 return Status::Corruption(
@@ -2323,13 +2305,12 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
             anchor_held.emplace(std::move(anchor.value()));
         } else {
             // **An unfaultable anchor is a refusal, not a fall-through**
-            // (AT-S5c's review, C3): a fall-back would land on the
-            // **CREATE-time** root of a relation another core may
-            // have grown, which is exactly the silent wrong answer this
-            // stage exists to remove, and for the *index* roots filled from
-            // this same anchor the coverage check underneath (AT-S15)
-            // refuses only a key outside the stale subtree, not the level
-            // growth a divide there would make.
+            // (AT-S5c): a fall-back would land on the **CREATE-time** root
+            // of a relation another core may have grown - a silent wrong
+            // answer - and for the *index* roots filled from this same
+            // anchor the coverage check underneath (AT-S15) refuses only a
+            // key outside the stale subtree, not the level growth a divide
+            // there would make.
             //
             // Refusing is recoverable and admitting is not, which is the
             // rule this engine states elsewhere; a caller that cannot read
@@ -2774,8 +2755,8 @@ StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t fetch_id,
     // an older revision does not count as existing - GetSysPatternRow()
     // does not return one - so a version bump leaves every shape
     // re-learnable rather than permanently blocked. The stale row stays
-    // where it is; reclaiming it is retention's job (P15), and rewriting it
-    // here would be an overwrite of a live tuple for no gain.
+    // where it is - nothing reclaims it (retention, P15, is unbuilt) - and
+    // rewriting it here would be an overwrite of a live tuple for no gain.
     // **The relation's root page, held exclusive across the whole call**
     // (AT-S7), for `RecordAccess`'s reason and against the same hazard:
     // every core registers patterns now, and the check below and the
@@ -2919,20 +2900,16 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
     // would split in two and stay split, which is the one way an advisory
     // statistic can mislead the mover rather than merely thin out.
     //
-    // **What it costs is stated rather than discovered, and it is not
-    // measured.** This runs once per step per statement on every core, so
-    // at `cores > 1` every core's statement end takes one exclusive latch
+    // **What it costs, unmeasured:** once per step per statement on every
+    // core, so at `cores > 1` every statement end takes one exclusive latch
     // on one page; the hold spans a chain walk bounded by
     // `kMaxAccessShapes` and, on the admit path, an `InsertRow` that may
-    // grow the chain. That is the shape `access_statistics = off` exists
-    // for, and the stage that wrote this line ran no A/B - the interleaved
-    // overhead measurement is suspended.
+    // grow the chain. `access_statistics = off` is the way out.
     auto held = store_.Get(kCatalogPageAccessStats);
     if (!held.ok()) return held.status();
 
     // `live` counts every row the walk passed, across every page of the
-    // chain - which is what the cap below has to be measured against now
-    // that the relation is not one page.
+    // chain - what the cap below is measured against.
     std::size_t live = 0;
     auto acted = ForFirstRow<SysAccessStatRow>(
         store_, kCatalogPageAccessStats,

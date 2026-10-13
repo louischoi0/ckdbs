@@ -40,10 +40,8 @@
 // appending "wherever the page ends" would reproduce the bytes and break
 // every one of those references.
 //
-// The heap and the var-heap had no such primitive and gained one for this
-// (`PageView::RedoWriteTuple`, `varheap::PageWriteAt`); the undo page
-// already had `UndoPageWriteAt`, written when the undo format was - that
-// path anticipated recovery and the other two did not.
+// The primitives: `PageView::RedoWriteTuple`, `varheap::PageWriteAt`,
+// `UndoPageWriteAt`.
 //
 // ---- What this phase deliberately does not do ---------------------------
 //
@@ -51,10 +49,9 @@
 // structure. Waystone pages are headerless and are never a replay target
 // (`page.md` §1); Cabins declare themselves unobserved after a restart
 // (`cabin.md` §9); both are RV7. The assertion records are recognised
-// and **deferred, not skipped silently** - rebuilding a Bound Cabin's group
-// directory is RC07's, and it is blocked on the checkpoint-genesis
-// decision (`assertion.md` §7). They are counted so the deferral is
-// visible rather than assumed.
+// and **left to assertion recovery** (RC07, `exec/assertion_recover.hpp`),
+// which replays them from the last checkpoint; redo counts them
+// (`deferred_assertions`) rather than dropping them silently.
 
 namespace kds::wal {
 

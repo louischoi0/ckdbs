@@ -24,14 +24,9 @@ std::uint8_t MaxSupportedFormatVersion(PageType type) noexcept {
         case PageType::kVarHeap:
         case PageType::kIndexInternal:
         case PageType::kIndexLeaf:
-        // Missing until 2026-08-24, and not cosmetically: falling through to
-        // the 0 below made `FormatPage` stamp format_version 0 on every
-        // Bound Cabin page, which `ValidatePageHeader` then reads as
-        // Corruption ("version == 0 || version > supported", with supported
-        // also 0). Nothing on the live path asks - `BoundCabinPage::Open`
-        // checks the type byte itself - so no page was ever rejected, but
-        // the first caller that did validate one would have called every
-        // Bound Cabin page in the database corrupt.
+        // Listed explicitly (since 2026-08-24): falling through to the 0
+        // below would stamp format_version 0, which `ValidatePageHeader`
+        // reads as Corruption.
         case PageType::kCabinBound:
         case PageType::kAnchor:
             return 1;

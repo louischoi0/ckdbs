@@ -7,7 +7,7 @@
 #include "kds/base/common.hpp"
 
 // What the executor tells Waystone about the tuples a statement found
-// (docs/inflight/in-progress/waystone-workplan.md P09).
+// (`docs/spec/waystone-concpets.md`; P09 of the Waystone workplan at 1769487).
 //
 // ---- Why this type knows nothing about Waystone -------------------------
 //
@@ -55,8 +55,7 @@ struct TouchedTuple {
     PageId page_id = kInvalidPageId;
 
     // The page's relayout epoch at the moment of access
-    // (docs/spec/physical-optimizer.md R4, since PX04 - it was absent while
-    // the engine had no epoch). Reported **verbatim** as the header's u64:
+    // (docs/spec/physical-optimizer.md R4). Reported **verbatim** as the header's u64:
     // the executor states the fact, and each store that keeps it owns its
     // stored width - trail_store.hpp narrows to its entry format's u32 and
     // says why that is safe.
