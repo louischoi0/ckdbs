@@ -229,3 +229,19 @@ the standing go-ahead); #9, `AcceptTupleAt`'s `Status` return, priced by
 D4; where BT-R5's once lives; #3 kept by choice. **Rejected:** collapsing
 the adoption wording in §4 into one "per the header" mark - the
 go-ahead's rule is that every adopted item carries who decided and how.
+
+### BT-S1 — the premise measured; BT-Q1 passes for S2 and S3
+
+`[measured]` `bench/v3.0.0/results-bt-s1-premise-v2.7.0-992-geeb88f47.md`,
+2026-10-13 07:36-07:42 UTC, `bm_scan` `bn`, 5 runs, seven arms. The net
+row at `eeb88f47` is 32.0 ns literal and 32.4 prepared; A' is +0.1 and
+-0.2 ns from A. D1 saves 2.6 / 2.5 ns, D2 3.1 / 3.3, D3 3.2 / 3.2, D-all
+7.1 / 8.1 - every one below A in 5 of 5 runs on both paths but D1 literal
+(4 of 5). **BT-Q1 (a) as revised passes**: D-all is over 3.0 ns and each
+stage's ablation over 1.0 ns and the A-against-A' gap, so BT-S2 and BT-S3
+are built. D4 - D-all, `AcceptTupleAt`'s `Status` return, reads 0.7-1.0
+ns: at the bar and forbidden by BT-R1, not built. **What the gate does not
+promise:** D-all is a ceiling - D3 counts nothing and BT-R3 keeps every
+count, so C3 can recover only part of D3; D1 mixes three parts. Rows and
+digest identical across the seven arms; only D3, D-all and D4 change
+`ANALYZE`'s counts, by design.
