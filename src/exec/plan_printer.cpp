@@ -239,10 +239,9 @@ void PrintSubChain(std::ostringstream& os, const SubChain& sub, int depth, bool 
         os << " <- " << FormatColumnRef(sub.value);
     }
     // Stated rather than implied by the indentation: `hoisted` is the
-    // placement and `correlated` is the structural property. An uncorrelated
-    // sub-chain sits under a SELECT's step only below a boolean conjunct's
-    // `subN` line (BU-S3); anywhere else it would be a compiler bug worth
-    // seeing.
+    // placement and `correlated` is the structural property: an uncorrelated
+    // `IN`, a scalar, or a boolean conjunct's leaf (BU-S3) sits under a step
+    // and runs per row.
     os << (sub.correlated ? " [correlated]" : " [uncorrelated]") << '\n';
 
     // Hoisted first, the execution order: they run before this sub-chain's

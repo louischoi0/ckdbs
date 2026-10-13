@@ -178,6 +178,18 @@ TEST_F(WhereBoolSubqueryTest, AnUpdateAndADeleteWriteTheRowsTheSelectFinds) {
     EXPECT_EQ(Ids("id > 0"), "id\\n2\\n3\\n4");
 }
 
+// A write's subquery over its own relation sees the statement's earlier rows
+// (docs/inflight/bugs/a-write-walks-subquery-sees-its-own-statements-writes.md):
+// the flat form and the OR form alike. Disabled until that entry's fix.
+TEST_F(WhereBoolSubqueryTest, DISABLED_AWritesSubqueryOverItsOwnRelationSeesNoneOfItsWrites) {
+    const std::string first = "NOT EXISTS (SELECT id FROM t AS x WHERE x.id < t.id)";
+    EXPECT_EQ(Ids(first), "id\\n1");
+    // Answers DELETED 6: each delete makes the next row the first. The flat
+    // `WHERE` + first takes the same path.
+    EXPECT_EQ(Run("DELETE FROM t WHERE id = 99 OR " + first), "DELETED 1");
+    EXPECT_EQ(Ids("id > 0"), "id\\n2\\n3\\n4\\n5\\n6");
+}
+
 // ---- The plan ---------------------------------------------------------------
 
 TEST_F(WhereBoolSubqueryTest, APlanNamesTheSubqueryUnderItsLeaf) {

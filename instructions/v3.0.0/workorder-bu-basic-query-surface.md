@@ -343,3 +343,21 @@ On `worktree-bu-basic-query-surface` from `14a05e38`:
   cell drops its two subquery lines.
 
 Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S3 - the `critics-developer` review, applied
+
+No correctness defect found in the stage. Applied: the two copies of the
+tree lowering are one `LowerBoolConjunct`; the hoisted path and the tree
+path share one `AnsweredOnce` for the per-statement answer; the plan
+printer's comment on where an uncorrelated sub-chain sits, which was false
+for a flat uncorrelated `IN` or scalar, is corrected; `CompileWhere`'s
+header no longer says subqueries are refused. **Rejected, with reasons:**
+making the two-pass switch of `EvaluateBoolConjuncts` an explicit argument
+or a second list on `Step`. The list would be a field every walker has to
+learn, and the switch is one documented pointer.
+
+The review found **a defect that predates BU**, which BU-S3 makes reachable
+through `OR`: a write's subquery over its own relation sees the statement's
+own writes. It is recorded in
+`docs/inflight/bugs/a-write-walks-subquery-sees-its-own-statements-writes.md`
+with a `DISABLED_` cell, and its fix waits for the operator's ruling.

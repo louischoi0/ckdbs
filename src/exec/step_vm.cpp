@@ -372,23 +372,31 @@ public:
         std::optional<ChainFrame> empty;
         auto& answers = statement_->hoisted;
         for (const SubChain& sub : hoisted) {
-            if (const auto known = answers.find(&sub); known != answers.end()) {
-                if (!known->second) return false;
-                continue;
-            }
-            if (!empty.has_value()) {
+            if (!answers.contains(&sub) && !empty.has_value()) {
                 empty.emplace();
                 empty->Open({}, /*parent=*/nullptr);
             }
-            auto value = EvaluateSubChain(sub, *empty);
-            if (!value.ok()) return value.status();
-            // Inserted after the walk: a nested hoisted chain's own answer
-            // may have been inserted during it.
-            const bool all = Collapse(value.value());
-            answers.emplace(&sub, all);
-            if (!all) return false;
+            auto all = AnsweredOnce(sub, empty.has_value() ? &*empty : nullptr);
+            if (!all.ok()) return all.status();
+            if (!all.value()) return false;
         }
         return true;
+    }
+
+    // An uncorrelated sub-chain's collapsed answer, walked the first time it
+    // is asked and read from `StatementStore::hoisted` after. Only for a
+    // sub-chain whose answer does not vary per row and is never unknown;
+    // `frame` is walked against only on that first ask.
+    StatusOr<bool> AnsweredOnce(const SubChain& sub, const ChainFrame* frame) {
+        auto& answers = statement_->hoisted;
+        if (const auto known = answers.find(&sub); known != answers.end()) return known->second;
+        auto value = EvaluateSubChain(sub, *frame);
+        if (!value.ok()) return value.status();
+        // Inserted after the walk: a nested hoisted chain's own answer may
+        // have been inserted during it.
+        const bool answer = Collapse(value.value());
+        answers.emplace(&sub, answer);
+        return answer;
     }
 
     // The step's boolean conjuncts that read a sub-chain (BU-S3), against
@@ -400,13 +408,9 @@ public:
         const auto answer = [&](std::uint32_t index) -> StatusOr<TriState> {
             const SubChain& sub = step.sub_chains[index];
             if (sub.correlated || sub.has_value) return EvaluateSubChain(sub, outer);
-            auto& answers = statement_->hoisted;
-            if (const auto known = answers.find(&sub); known != answers.end()) {
-                return known->second ? TriState::kTrue : TriState::kFalse;
-            }
-            auto value = EvaluateSubChain(sub, outer);
-            if (value.ok()) answers.emplace(&sub, Collapse(value.value()));
-            return value;
+            auto exists = AnsweredOnce(sub, &outer);
+            if (!exists.ok()) return exists.status();
+            return exists.value() ? TriState::kTrue : TriState::kFalse;
         };
         const SubChainAnswer sub_chains(answer);
         return EvaluateBoolConjuncts(schemas, step.bool_residual, outer, &sub_chains);

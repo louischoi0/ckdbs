@@ -461,6 +461,15 @@ struct BoolConjunct {
     std::vector<SubChain> subs;
 };
 
+StatusOr<BoolConjunct> LowerBoolConjunct(const Scope& scope, const parser::BoolExpr& tree,
+                                         SubqueryLowering lower) {
+    BoolConjunct out;
+    auto pred = LowerBoolTree(scope, tree, lower, out.subs);
+    if (!pred.ok()) return pred.status();
+    out.pred = std::move(pred.value());
+    return out;
+}
+
 void RebaseSubChains(BoolPredicate& pred, std::uint32_t base) {
     if (!pred.reads_sub_chain) return;
     if (pred.op == BoolPredicate::Op::kSubChain) pred.sub_chain += base;
@@ -1732,11 +1741,9 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
         }
 
         if (cond.kind == parser::PredicateKind::kBoolTree) {
-            BoolConjunct conjunct;
-            auto tree = LowerBoolTree(scope, *cond.tree, lower_subquery, conjunct.subs);
-            if (!tree.ok()) return tree.status();
-            conjunct.pred = std::move(tree.value());
-            AttachBoolConjunct(out, std::move(conjunct));
+            auto conjunct = LowerBoolConjunct(scope, *cond.tree, lower_subquery);
+            if (!conjunct.ok()) return conjunct.status();
+            AttachBoolConjunct(out, std::move(conjunct.value()));
             continue;
         }
 
@@ -1882,11 +1889,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         }
 
         if (cond.kind == parser::PredicateKind::kBoolTree) {
-            BoolConjunct conjunct;
-            auto tree = LowerBoolTree(scope, *cond.tree, lower_subquery, conjunct.subs);
-            if (!tree.ok()) return tree.status();
-            conjunct.pred = std::move(tree.value());
-            bool_conjuncts.push_back(std::move(conjunct));
+            auto conjunct = LowerBoolConjunct(scope, *cond.tree, lower_subquery);
+            if (!conjunct.ok()) return conjunct.status();
+            bool_conjuncts.push_back(std::move(conjunct.value()));
             continue;
         }
 
