@@ -99,8 +99,8 @@
 // then the directory latch, then the WAL stream latch. Nothing takes the
 // directory latch and then a page latch: commit takes it, releases it, and
 // only then touches a page; abort takes the page first and the directory
-// latch inside it, so its record is appended under the page's hold. Nothing parks under either - every call
-// here is synchronous.
+// latch inside it, so its record is appended under the page's hold.
+// Nothing parks under either - every call here is synchronous.
 //
 // **The admission holds its delta** (§6.2 steps 2-3 made one step across
 // cores). `AdmitInsert` checks and *holds* the row's contribution under the

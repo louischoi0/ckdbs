@@ -2085,11 +2085,13 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         // recLSN moves up to the lowest LSN stamped since the copy**, where
         // a stamp came: the image holds every change stamped before it, and
         // one still unstamped lowers `rec_lsn` to its LSN when it stamps.
-        // That rests on every path changing a page's bytes before it
-        // appends their record (`AssertionEnforcer::AbortTxn` was the one
-        // exception): a record not yet stamped then describes bytes already
-        // in the frame, which any later copy - a checkpoint's flush among
-        // them - carries. With no stamp since, the recLSN it had stays.
+        // That rests on every record's change being in the frame when the
+        // record is appended, or made under a page hold taken before the
+        // append and kept to the stamp (`CommitTxn`, `AbortTxn`, the undo
+        // recycle): an unstamped record then describes bytes already in the
+        // frame or behind a hold no copy enters, and any later copy - a
+        // checkpoint's flush among them - carries them. With no stamp since,
+        // the recLSN it had stays.
         // The claim goes back here too, clean or not, under the same hold: a
         // waiter that sees it gone sees the clean with it.
         {

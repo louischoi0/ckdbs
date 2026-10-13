@@ -150,11 +150,12 @@ TEST_F(WritebackRecLsnTest, AWriteWithNoStampSinceTheCopyKeepsTheRecLsn) {
     ExpectRecLsnCoversTheDevice();
 }
 
-TEST_F(WritebackRecLsnTest, ARecordAppendedBeforeAHigherStampIsCoveredWhenStampedAfterTheCopy) {
-    // A stamp below the copy's page_lsn, after the copy (wal.md §11-2): a
-    // record logged after its page is released can land that way. "Just
-    // above the copy's page_lsn" would set the recLSN to L2 + 1 and lose L1
-    // to the recycler.
+TEST_F(WritebackRecLsnTest, AStampBelowTheCopysPageLsnKeepsTheRecLsnAtTheMinimum) {
+    // Pins the minimum, not a reachable order: a change made after the copy
+    // whose stamp is below the copy's page_lsn. Since `AbortTxn` holds its
+    // page from the append on, production does not build it; the cell
+    // keeps the recLSN the minimum since the copy (wal.md §11-2), which
+    // "just above the copy's page_lsn" would not be.
     constexpr wal::Lsn kL1 = 200;
     constexpr wal::Lsn kL2 = 300;
     Change(0, 100);

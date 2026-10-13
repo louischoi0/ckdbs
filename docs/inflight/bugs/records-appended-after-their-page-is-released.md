@@ -34,6 +34,6 @@ unpublished-tree rows cost only a flush ordering. All are unscheduled.
 (`instructions/v3.0.0/workorder-ay-following-letter.md`): `AllocateCatalogPage`
 returns the new page's `PageRef`, held until the row's `HEAP_INSERT` stamps
 it.
-**`AssertionEnforcer::AbortTxn`'s row left it on `fix-redirtied-page-rec-lsn`**:
+**`AssertionEnforcer::AbortTxn`'s row left it on `fix-redirtied-page-rec-lsn` at `bb7ea672`**:
 it appended `ASSERT_ROLLBACK` before taking its Bound Cabin page, and now
 holds the page from before the append to after the stamp.

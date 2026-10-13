@@ -959,9 +959,9 @@ private:
         // skips sets `rec_lsn` to it, where one exists (`WriteBack` says why
         // that is sound), so a page whose copy is overtaken every time no
         // longer keeps its first recLSN, which pinned the instance's redo
-        // start and stopped the log recycling. Never "just above the copy's
-        // page_lsn": a record logged after its page is released can be
-        // stamped after the copy at a lower LSN (wal.md §11-2).
+        // start and stopped the log recycling. The minimum rather than "just
+        // above the copy's page_lsn" by choice: it needs no argument about
+        // the order LSNs are stamped in (wal.md §11-2).
         wal::Lsn stamped_since_copy = 0;
 
         // ---- Reclamation state (docs/inflight/in-progress/workplan-eviction.md EV01) --------
