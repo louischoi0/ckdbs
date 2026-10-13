@@ -5,7 +5,10 @@ operator's words W0-W1. **Opened 2026-10-13 for S0 and S1 only** (BS-Q0
 (b), §6); S2-S8 wait for BR's close. **Every question in §5 marked by the
 operator on 2026-10-13, each on CLA's proposal** (§6). **Every test BS
 adds stays out of the push gate** (the operator's ruling of 2026-10-13,
-§6.1). The rules BS-R1..R4 remain proposals.
+§6.1). The rules BS-R1..R4 remain proposals. **S0 done 2026-10-13**
+(`bs-s0-census.md`, measured at `691beee3`): clang is not on the host,
+gcc 13's TSan needs `setarch -R`, and `tests/alloc_counter.cpp` aborts the
+suite under ASan until its `nothrow` forms are replaced - S1 starts there.
 
 The operator's words, translated:
 
@@ -251,7 +254,11 @@ What it obliges:
   `-LE`, as `heap-suspended` is excluded (AS-R4); a sweep, fuzzer, sanitizer
   configuration or checker BS adds is a target or script the hook never
   builds or runs. The label's name is S1's to choose and is stated where it
-  is registered in `tests/CMakeLists.txt`.
+  is registered in `tests/CMakeLists.txt`. Two mechanics follow from the
+  tree as it is: `scripts/test.sh` excludes with one `-LE`, so the new label
+  joins `heap-suspended` in one regular expression rather than a second
+  flag; and `scripts/build.sh` builds every default target, so a sweep or
+  fuzz target is `EXCLUDE_FROM_ALL` or behind an option that defaults off.
 - **S3's "strided sample in the suite" is withdrawn**: the sample runs in
   the nightly with the full sweep, never in the gate.
 - **The nightly runner (S1) is where these tests run.** Until it reports,
