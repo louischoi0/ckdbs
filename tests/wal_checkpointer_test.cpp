@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -53,10 +54,9 @@ public:
             return Status::IoError("injected: flush failed");
         }
         ++batches_;
-        for (PageId id : page_ids) {
-            flushed_.push_back(id);
-            std::erase_if(dirty_, [id](const CheckpointDirtyPage& p) { return p.page_id == id; });
-        }
+        flushed_.insert(flushed_.end(), page_ids.begin(), page_ids.end());
+        const std::set<PageId> batch(page_ids.begin(), page_ids.end());
+        std::erase_if(dirty_, [&](const CheckpointDirtyPage& p) { return batch.count(p.page_id) != 0; });
         return Status::OK();
     }
 
@@ -188,6 +188,46 @@ TEST_F(CheckpointerTest, ANeverLoggedPageDoesNotHideAnOlderOne) {
     auto checkpointer = MakeCheckpointer();
     ASSERT_TRUE(checkpointer->RunToCompletion().ok());
     EXPECT_EQ(checkpointer->redo_start_lsn(), 250u);
+}
+
+// A dirty table larger than one record carries (12 bytes a page against the
+// 1 MiB ring) used to refuse every cadence checkpoint at its BEGIN. The record
+// carries what fits and keeps the highest page id - analysis' allocation floor,
+// which only it can say for a recLSN-0 page - while the redo start and the
+// writeback are still the whole table's.
+TEST_F(CheckpointerTest, ADirtyTableLargerThanOneRecordIsCutAndStillCoveredWhole) {
+    const std::size_t pages = 2 * kDefaultRingCapacity / kDirtyEntrySize;
+    std::vector<CheckpointDirtyPage> dirty;
+    for (std::size_t i = 0; i < pages; ++i) {
+        dirty.push_back({static_cast<PageId>(1000 + i), 5000});
+    }
+    // Both past any cut: the oldest recLSN, and the highest id at recLSN 0.
+    dirty[pages - 2].rec_lsn = 300;
+    dirty[pages - 1] = {static_cast<PageId>(900000), 0};
+    target_.SetDirty(dirty);
+    CheckpointerConfig config;
+    config.pages_per_step = 8192;
+    auto checkpointer = MakeCheckpointer(config);
+
+    const Status ran = checkpointer->RunToCompletion();
+    ASSERT_TRUE(ran.ok()) << ran.message();
+    EXPECT_EQ(checkpointer->redo_start_lsn(), 300u);
+    EXPECT_EQ(target_.flushed().size(), pages);
+    EXPECT_EQ(anchor_.anchor().redo_start_lsn, 300u);
+
+    auto records = DurableRecords();
+    ASSERT_FALSE(records.empty());
+    ASSERT_EQ(records.front().type(), RecordType::kCheckpointBegin);
+    auto begin = DecodeCheckpointBegin(records.front().payload);
+    ASSERT_TRUE(begin.ok()) << begin.status().message();
+    const std::vector<CheckpointDirtyPage>& logged = begin.value().dirty_pages;
+    // Bounded by the largest split, not the ring: a ring-sized record fits
+    // only an empty ring, which a shared stream rarely has.
+    EXPECT_EQ(logged.size(),
+              (kLargestSplitRecord - kRecordHeaderSize - CheckpointBeginSize(0, 0)) / kDirtyEntrySize);
+    EXPECT_TRUE(std::ranges::any_of(logged, [](const CheckpointDirtyPage& p) {
+        return p.page_id == 900000;
+    })) << "the highest page id was cut";
 }
 
 // ---- Checkpoint honesty (wal.md 8-3) -------------------------------------

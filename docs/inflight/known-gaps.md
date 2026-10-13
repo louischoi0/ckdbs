@@ -1196,10 +1196,6 @@ the procedures are `manual/server/backup-restore.md`.
   reserve (4 segments) and the hour that ends an idle backup stay
   `[provisional]`**: BR-S10 measured each at one value only (its results
   file says why each stays).
-- **A cadence checkpoint whose dirty table exceeds the WAL ring is refused**
-  (`bugs/a-checkpoint-whose-dirty-table-exceeds-the-ring-is-refused.md`); the
-  mount's completion checkpoint - a restore's included - writes its pages
-  first and no longer meets it.
 - **Two engine defects BR found and did not fix**, each in `bugs/`: a full
   page image cannot heal an allocated checksum-failed page, and a
   synchronous anchor publish writes page 0 beside the pages it stands for.
