@@ -368,9 +368,15 @@ tree compares with `EvaluateConjunctChecked`. The alternative, a per-row
 Suite after the merge (`71861c0e`): 3726/3727 (Debug, `-LE
 heap-suspended`, host load 4-7); the one failure,
 `SortedLeafRigTest.AppendsFromTwoCoresKeepTheTreeWholeAndDense`, refused
-`TXN_CONFLICT` "btree descent ... gave up after 5 attempts" - the open
-defect `docs/inflight/bugs/two-cores-appending-to-one-btree-give-up-a-descent-after-five-attempts.md`,
-not BT's - and passed 5 of 5 re-run alone.
+`TXN_CONFLICT` "btree descent ... gave up after 5 attempts" - the
+synchronous `Dispatch` answering a stale descent's structural refusal
+instead of re-running it, not BT's - and passed 5 of 5 re-run alone.
+`origin/main` fixed exactly that at `df07c3f1` ("Dispatch re-runs a
+structural refusal as DispatchAsync does") and closed its bug entry at
+`d83bd502`; the second merge brought both.
+**The second merge** (`f43a8148`, 18 files from `origin/main`, clean)
+brought those two commits and nothing BT touched. **Suite at `f43a8148`:
+3727/3727** (Debug, `-LE heap-suspended`, host load 8-9).
 
 **The close's `critics-developer` review** (the merge and these texts)
 found no defect in the merge: both callers of `EvaluateBoolConjuncts` are
