@@ -2,7 +2,7 @@
 
 // The page census BF's reclaim cells share (`drop_table_reclaim_test.cpp`,
 // `in_run_reclaim_test.cpp`): fill a relation, read its oid and root from
-// `DESCRIBE`, and list the pages stamped with an owner.
+// `sys.tables`, and list the pages stamped with an owner.
 
 #include <cstdint>
 #include <cstdlib>
@@ -18,6 +18,7 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/free_map.hpp"
 #include "kds/storage/page_header.hpp"
+#include "view_text.hpp"
 
 namespace kds::reclaim_census {
 
@@ -34,16 +35,12 @@ inline void Fill(server::CommandDispatcher& d, const std::string& table, int row
     }
 }
 
-// The relation's `key=` field (`oid`, `root_page_id`), from `DESCRIBE`.
+// The relation's `sys.tables` column `key` (`oid`, `root_page_id`).
 inline std::uint64_t DescribeField(server::CommandDispatcher& d, const std::string& table,
                                    const std::string& key) {
-    const std::string shape = d.Dispatch("DESCRIBE " + table).response;
-    const std::string field = key + "=";
-    std::size_t at = shape.rfind(field, 0) == 0 ? 0 : shape.find(" " + field);
-    EXPECT_NE(at, std::string::npos) << shape;
-    if (at == std::string::npos) return 0;
-    if (at != 0) ++at;
-    return std::strtoull(shape.c_str() + at + field.size(), nullptr, 10);
+    const auto value = testing_view::RelationField(d, "tables", table, key);
+    EXPECT_TRUE(value.has_value()) << table << "." << key;
+    return value.has_value() ? std::strtoull(value->c_str(), nullptr, 10) : 0;
 }
 
 // Every allocated id at or above the first user page, with its header's

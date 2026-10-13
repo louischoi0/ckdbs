@@ -20,6 +20,7 @@
 #include "kds/stats/trail_store.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "view_text.hpp"
 
 // Replay: serving a keyed step from a recorded location instead of
 // descending for it (docs/inflight/in-progress/waystone-workplan.md P11/P13).
@@ -383,12 +384,12 @@ TEST_F(WaystoneReplayTest, AVersionOneRowIsNeverFoundAndTheStatementRecordsAgain
     EXPECT_NE(analyzed.find("replays=1"), std::string::npos) << analyzed;
     EXPECT_EQ(Run(sql), first);
 
-    // Listed stale, and under the name of what it holds: a version-1 key
-    // is a pattern_id, so it is never shown as a fetch_id.
+    // Listed, with the version that says what its key is: under version 1
+    // the `fetch_id` column holds a pattern_id (`sys.patterns`' rule).
     const std::string shown = Run("SHOW PATTERNS");
-    EXPECT_NE(shown.find("stale=v1"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("pattern_id=0x" + Hex(fetch_id) + " oid=999999"), std::string::npos)
-        << shown;
+    const auto view = testing_view::ReadViewText(shown);
+    EXPECT_EQ(view.Find("oid", "999999", "fingerprint_version"), "1") << shown;
+    EXPECT_EQ(view.Find("oid", "999999", "fetch_id"), std::to_string(fetch_id)) << shown;
 }
 
 // ---- What must never be replayed -----------------------------------------

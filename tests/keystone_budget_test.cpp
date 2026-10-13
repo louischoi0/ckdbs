@@ -13,6 +13,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/keystone.hpp"
+#include "view_text.hpp"
 
 // K-M4: an operator can see budget consumption without arithmetic, and
 // crossing the threshold is visible (`docs/rules/keystoneid-invariant.md` §5).
@@ -140,64 +141,61 @@ protected:
     std::optional<server::CommandDispatcher> dispatcher_;
 };
 
-TEST_F(KeystoneBudgetSurfaceTest, DescribeReportsConsumptionBesideTheSequence) {
+// `acct`'s budget column in `sys.relation_stats`.
+std::optional<std::string> Budget(server::CommandDispatcher& d, std::string_view column) {
+    return testing_view::RelationField(d, "relation_stats", "acct", column);
+}
+
+TEST_F(KeystoneBudgetSurfaceTest, TheRelationsRowReportsConsumptionBesideTheSequence) {
     ASSERT_EQ(Run("INSERT INTO acct VALUES (1)").substr(0, 8), "INSERTED");
     ASSERT_EQ(Run("INSERT INTO acct VALUES (2)").substr(0, 8), "INSERTED");
 
-    const std::string out = Run("DESCRIBE acct");
-    EXPECT_NE(out.find("next_id=3"), std::string::npos) << out;
+    EXPECT_EQ(Budget(*dispatcher_, "next_id"), "3");
     // Two ids spent, and the remaining count is stated rather than left to
     // be worked out from the ceiling - which is K-M4's whole acceptance.
-    EXPECT_NE(out.find("ids_issued=2"), std::string::npos) << out;
-    EXPECT_NE(out.find("ids_remaining=281474976710653"), std::string::npos) << out;
-    EXPECT_NE(out.find("budget_used=0.000%"), std::string::npos) << out;
-    EXPECT_EQ(out.find("budget_warning"), std::string::npos) << out;
+    EXPECT_EQ(Budget(*dispatcher_, "ids_issued"), "2");
+    EXPECT_EQ(Budget(*dispatcher_, "ids_remaining"), "281474976710653");
+    EXPECT_EQ(Budget(*dispatcher_, "budget_used_ppm"), "0");
+    EXPECT_EQ(Budget(*dispatcher_, "budget_warning"), "0");
 }
 
 TEST_F(KeystoneBudgetSurfaceTest, ShowBudgetListsEveryRelationIncludingTheCatalogsOwn) {
     const std::string out = Run("SHOW BUDGET");
-    EXPECT_EQ(out.substr(0, 10), "relations=") << out;
-    EXPECT_NE(out.find("rel=acct issued=0"), std::string::npos) << out;
+    const auto shown = testing_view::ReadViewText(out);
+    EXPECT_EQ(shown.Find("name", "acct", "ids_issued"), "0") << out;
     // Catalog relations that genuinely issue ids. Hiding them would hide
     // the only consumption an operator does not control. `pattern_defs` was
     // one of these until declared patterns were withdrawn on 2026-08-31.
-    EXPECT_NE(out.find("rel=patterns "), std::string::npos) << out;
-    EXPECT_NE(out.find("rel=assertions "), std::string::npos) << out;
-    // The threshold is stated, so the listing explains its own warn column.
-    EXPECT_NE(out.find("warn_at=90.000%"), std::string::npos) << out;
-    EXPECT_NE(out.find("warning=0"), std::string::npos) << out;
-    // K4's per-relation budget, 2^48 - 1, stated once in the summary.
-    EXPECT_NE(out.find("capacity=281474976710655"), std::string::npos) << out;
+    EXPECT_TRUE(shown.Find("name", "patterns", "oid").has_value()) << out;
+    EXPECT_TRUE(shown.Find("name", "assertions", "oid").has_value()) << out;
+    // K4's per-relation budget, 2^48 - 1: what an unused relation has left.
+    EXPECT_EQ(shown.Find("name", "acct", "ids_remaining"), "281474976710655") << out;
 }
 
-TEST_F(KeystoneBudgetSurfaceTest, CrossingTheThresholdIsVisibleInTheSummaryLine) {
-    // The acceptance criterion, literally: an operator must not have to
-    // read every row to learn a relation is in trouble.
-    const std::string before = Run("SHOW BUDGET");
-    EXPECT_NE(before.find("warning=0 exhausted=0"), std::string::npos) << before;
+TEST_F(KeystoneBudgetSurfaceTest, CrossingTheThresholdIsOneFilterAway) {
+    // The acceptance criterion: an operator must not have to read every row
+    // to learn a relation is in trouble. The summary line is gone (BO-Q3:
+    // no aggregation over a view); a filter on the flag is the answer.
+    const std::string warned = "SELECT name FROM sys.relation_stats WHERE budget_warning = 1";
+    EXPECT_TRUE(testing_view::ReadViewText(Run(warned)).rows.empty());
 
     SetNextId(static_cast<std::uint64_t>(
         static_cast<double>(catalog::kKeystoneBudgetCapacity) * 0.95));
 
-    const std::string after = Run("SHOW BUDGET");
-    EXPECT_NE(after.find("warning=1 exhausted=0"), std::string::npos) << after;
-    EXPECT_NE(after.find("rel=acct"), std::string::npos) << after;
-    EXPECT_NE(after.find("warn=yes"), std::string::npos) << after;
-    EXPECT_NE(after.find("used=95.000%"), std::string::npos) << after;
-
-    // And on the per-relation surface too.
-    EXPECT_NE(Run("DESCRIBE acct").find("budget_warning=yes"), std::string::npos);
+    EXPECT_EQ(testing_view::ReadViewText(Run(warned)).Column("name"),
+              std::vector<std::string>{"acct"});
+    // Floored: `next_id` at 95 % of the capacity has issued one id fewer.
+    EXPECT_EQ(Budget(*dispatcher_, "budget_used_ppm"), "949999");
+    EXPECT_EQ(Budget(*dispatcher_, "budget_exhausted"), "0");
 }
 
-TEST_F(KeystoneBudgetSurfaceTest, AnExhaustedRelationSaysSoOnBothSurfaces) {
+TEST_F(KeystoneBudgetSurfaceTest, AnExhaustedRelationSaysSo) {
     SetNextId(kMaxKeystoneId + 1);
 
-    const std::string out = Run("SHOW BUDGET");
-    EXPECT_NE(out.find("warning=1 exhausted=1"), std::string::npos) << out;
-    EXPECT_NE(out.find("remaining=0 used=100.000% warn=yes exhausted=yes"), std::string::npos)
-        << out;
-
-    EXPECT_NE(Run("DESCRIBE acct").find("budget_exhausted=yes"), std::string::npos);
+    EXPECT_EQ(Budget(*dispatcher_, "ids_remaining"), "0");
+    EXPECT_EQ(Budget(*dispatcher_, "budget_used_ppm"), "1000000");
+    EXPECT_EQ(Budget(*dispatcher_, "budget_warning"), "1");
+    EXPECT_EQ(Budget(*dispatcher_, "budget_exhausted"), "1");
 
     // And the report is true: the next insert is refused, so the surface
     // and the allocator agree about what "exhausted" means.

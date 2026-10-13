@@ -12,6 +12,7 @@
 #include "kds/server/session.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
+#include "view_text.hpp"
 
 // End-to-end cover for caller-supplied primary keys (docs/spec/heap-and-tuple.md
 // §4.1). The unit-level pieces are tested where they live - the admission
@@ -119,9 +120,7 @@ TEST_F(SuppliedKeySqlTest, TheShippedStorageDefaultIsBtreeSinceSUS1) {
     auto d = Dispatcher();
     ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, qty int64)").response.substr(0, 7), "CREATED");
 
-    auto described = d.Dispatch("DESCRIBE t");
-    EXPECT_NE(described.response.find("clustered_type=BTREE"), std::string::npos)
-        << described.response;
+    EXPECT_EQ(testing_view::RelationField(d, "tables", "t", "clustered_type"), "BTREE");
 
     // And it takes a named key like any other relation, ascending - which
     // is the whole of what a heap accepts.
@@ -731,7 +730,7 @@ TEST_F(SuppliedKeySqlTest, HeapExplicitIsCreatedRatherThanRefused) {
     // relation now, and `EXPLICIT` is the vacuous word it has become.
     auto named = d.Dispatch("CREATE TABLE h (id int64, qty int64) HEAP EXPLICIT");
     EXPECT_EQ(named.response.substr(0, 7), "CREATED") << named.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE h").response.find("clustered_type=HEAP"), std::string::npos);
+    EXPECT_EQ(testing_view::RelationField(d, "tables", "h", "clustered_type"), "HEAP");
     EXPECT_EQ(d.Dispatch("INSERT INTO h VALUES (5, 1)").response.substr(0, 8), "INSERTED");
 
     // And bare EXPLICIT no longer drags storage to btree with it - the
@@ -743,7 +742,7 @@ TEST_F(SuppliedKeySqlTest, HeapExplicitIsCreatedRatherThanRefused) {
     // the word dragged it to.
     auto defaulted = d.Dispatch("CREATE TABLE h2 (id int64, qty int64) EXPLICIT");
     EXPECT_EQ(defaulted.response.substr(0, 7), "CREATED") << defaulted.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE h2").response.find("clustered_type=BTREE"), std::string::npos);
+    EXPECT_EQ(testing_view::RelationField(d, "tables", "h2", "clustered_type"), "BTREE");
 }
 
 TEST_F(SuppliedKeySqlTest, AssignedIsRefusedAtCreateWithItsByte) {

@@ -11,6 +11,7 @@
 #include "kds/exec/index_key.hpp"
 #include "kds/storage/index/index_page.hpp"
 #include "kds/txn/manager.hpp"
+#include "view_text.hpp"
 
 // **The index contract** (docs/spec/index.md §1, workplan IX12), modelled on
 // `waystone_contract_test.cpp` and holding an index to a *higher* bar than
@@ -332,8 +333,9 @@ TEST(IndexContractTest, ADeletedRowsEntrySurvivesAndStillReturnsNothing) {
     EXPECT_EQ(db.Run("SELECT id FROM b WHERE owner = 5"),
               plain.Run("SELECT id FROM b WHERE owner = 5"));
     // The entry is still there - that is the point.
-    EXPECT_NE(db.Run("SHOW INDEXES").find("entries=2"), std::string::npos)
-        << db.Run("SHOW INDEXES");
+    const std::string shown = db.Run("SELECT name, entries FROM sys.indexes");
+    EXPECT_EQ(testing_view::ReadViewText(shown).Find("name", "by_owner", "entries"), "2")
+        << shown;
 }
 
 // ---- Truncation: two keys sharing a prefix -------------------------------

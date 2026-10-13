@@ -1,18 +1,20 @@
 #include <gtest/gtest.h>
 
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "view_text.hpp"
 
-// `SHOW RELAYOUT` (docs/spec/physical-optimizer.md §5/§8, workplan PX06):
-// the shadow report's surface. The planner's own behavior is pinned in
-// relayout_planner_test.cpp; this file pins the rendering, the off notice,
-// the refusals, and the advisory family's standing assertion - a report
-// changes no reply.
+// `SHOW RELAYOUT`, a `SELECT` over `sys.relayout` (docs/spec/physical-optimizer.md
+// §5/§8, workplan PX06): the shadow report's surface. The planner's own
+// behavior is pinned in relayout_planner_test.cpp; this file pins the view's
+// rows, the off refusal, the refusals, and the advisory family's standing
+// assertion - a report changes no reply.
 
 namespace kds::server {
 namespace {
@@ -60,36 +62,38 @@ TEST(ShowRelayoutTest, TheBareFormListsShapesPlansAndGates) {
     Load(db);
 
     const std::string report = db.Run("SHOW RELAYOUT");
-    EXPECT_EQ(report.substr(0, 20), "relayout_relations=2") << report;
+    const auto shown = testing_view::ReadViewText(report);
+    const std::vector<std::string> names = shown.Column("name");
+    EXPECT_EQ(std::set<std::string>(names.begin(), names.end()),
+              (std::set<std::string>{"h", "b"}))
+        << report;
 
     // The heap relation: three candidate plans, each naming its gate, none
     // surveyed - the bare form has no walk to back a number with.
-    EXPECT_NE(report.find("rel=h clustered=heap"), std::string::npos) << report;
-    EXPECT_NE(report.find("plan=compact blocked_on=reader-horizon surveyed=0"),
-              std::string::npos)
-        << report;
-    EXPECT_NE(report.find("plan=cluster blocked_on=ordered-between"), std::string::npos)
-        << report;
-    EXPECT_NE(report.find("plan=defrag blocked_on=page-reuse"), std::string::npos) << report;
-    EXPECT_EQ(report.find("survey "), std::string::npos)
-        << "the bare form walked a relation: " << report;
+    EXPECT_EQ(shown.Find("plan", "compact", "name"), "h") << report;
+    EXPECT_EQ(shown.Find("plan", "compact", "clustered"), "heap") << report;
+    EXPECT_EQ(shown.Find("plan", "compact", "blocked_on"), "reader-horizon") << report;
+    EXPECT_EQ(shown.Find("plan", "compact", "surveyed"), "0") << report;
+    EXPECT_EQ(shown.Find("plan", "cluster", "blocked_on"), "ordered-between") << report;
+    EXPECT_EQ(shown.Find("plan", "defrag", "blocked_on"), "page-reuse") << report;
+    for (const std::string& pages : shown.Column("survey_pages")) {
+        EXPECT_EQ(pages, "NULL") << "the bare form walked a relation: " << report;
+    }
 
-    // The scan shape it recorded, weighted (no clock: raw count in Q24.8).
-    EXPECT_NE(report.find("shape kind=Scan"), std::string::npos) << report;
+    // The scan shape it recorded (its detail is `sys.access_stats`').
+    EXPECT_EQ(shown.Find("plan", "compact", "shapes"), "1") << report;
 
     // The btree relation: shapes, and an empty candidate set with the
     // reason - not three plans nobody could ever enact (R5).
-    EXPECT_NE(report.find("rel=b clustered=btree"), std::string::npos) << report;
-    EXPECT_NE(report.find("plans=none reason=btree-outside-v1-mover-scope"), std::string::npos)
-        << report;
+    EXPECT_EQ(shown.Find("name", "b", "clustered"), "btree") << report;
+    EXPECT_EQ(shown.Find("name", "b", "plan"), "none") << report;
+    EXPECT_EQ(shown.Find("name", "b", "blocked_on"), "btree-outside-v1-mover-scope") << report;
 
     // Catalog relations are outside the mover's jurisdiction, and the bare
     // report skips them rather than listing gates that can never open.
     // Two spellings, because the skip is by oid and not by storage format:
     // `assertions` is the one stored in user tuple format, `patterns` is a
-    // typed-row one, and neither may appear.
-    EXPECT_EQ(report.find("rel=assertions"), std::string::npos) << report;
-    EXPECT_EQ(report.find("rel=patterns"), std::string::npos) << report;
+    // typed-row one, and neither may appear - the set above has neither.
 }
 
 TEST(ShowRelayoutTest, ACatalogRelationAskedByNameAnswersWithTheReason) {
@@ -97,10 +101,12 @@ TEST(ShowRelayoutTest, ACatalogRelationAskedByNameAnswersWithTheReason) {
     Load(db);
 
     const std::string report = db.Run("SHOW RELAYOUT assertions");
-    EXPECT_NE(report.find("plans=none reason=catalog-relation-outside-mover-jurisdiction"),
-              std::string::npos)
+    const auto shown = testing_view::ReadViewText(report);
+    EXPECT_EQ(shown.Find("name", "assertions", "plan"), "none") << report;
+    EXPECT_EQ(shown.Find("name", "assertions", "blocked_on"),
+              "catalog-relation-outside-mover-jurisdiction")
         << report;
-    EXPECT_EQ(report.find("survey "), std::string::npos)
+    EXPECT_EQ(shown.Find("name", "assertions", "survey_pages"), "NULL")
         << "a catalog relation must not be walked: " << report;
 }
 
@@ -109,37 +115,49 @@ TEST(ShowRelayoutTest, ThePerRelationFormSurveysAndPredicts) {
     Load(db);
 
     const std::string report = db.Run("SHOW RELAYOUT h");
-    EXPECT_EQ(report.substr(0, 20), "relayout_relations=1") << report;
-    EXPECT_NE(report.find("survey pages=1 live=5 delete_marked=3"), std::string::npos)
+    const auto shown = testing_view::ReadViewText(report);
+    const std::vector<std::string> names = shown.Column("name");
+    EXPECT_EQ(std::set<std::string>(names.begin(), names.end()), std::set<std::string>{"h"})
         << report;
-    EXPECT_NE(report.find("plan=compact blocked_on=reader-horizon surveyed=1"),
-              std::string::npos)
-        << report;
+    EXPECT_EQ(shown.Find("plan", "compact", "survey_pages"), "1") << report;
+    EXPECT_EQ(shown.Find("plan", "compact", "survey_live"), "5") << report;
+    EXPECT_EQ(shown.Find("plan", "compact", "survey_delete_marked"), "3") << report;
+    EXPECT_EQ(shown.Find("plan", "compact", "blocked_on"), "reader-horizon") << report;
+    EXPECT_EQ(shown.Find("plan", "compact", "surveyed"), "1") << report;
     // Five live rows still fit the one page the chain holds, so the honest
     // prediction is zero pages saved - measured, not absent.
-    EXPECT_NE(report.find("predicted_pages_saved=0"), std::string::npos) << report;
+    EXPECT_EQ(shown.Find("plan", "compact", "predicted_pages_saved"), "0") << report;
 
     const std::string btree = db.Run("SHOW RELAYOUT b");
-    EXPECT_EQ(btree.find("survey "), std::string::npos)
+    const auto b = testing_view::ReadViewText(btree);
+    EXPECT_EQ(b.Find("name", "b", "survey_pages"), "NULL")
         << "a btree relation must not be walked: " << btree;
-    EXPECT_NE(btree.find("plans=none"), std::string::npos) << btree;
+    EXPECT_EQ(b.Find("name", "b", "plan"), "none") << btree;
 }
 
-TEST(ShowRelayoutTest, OffAnswersTheOneLineNotice) {
+TEST(ShowRelayoutTest, OffIsRefusedNamingTheSwitch) {
     Instance db;
     Load(db);
     db.dispatcher().set_relayout(PhysicalOptimizerMode::kOff, 600'000'000'000ULL);
 
-    EXPECT_EQ(db.Run("SHOW RELAYOUT"), "RELAYOUT off (physical_optimizer=off)");
-    EXPECT_EQ(db.Run("SHOW RELAYOUT h"), "RELAYOUT off (physical_optimizer=off)");
+    for (const char* sql : {"SHOW RELAYOUT", "SHOW RELAYOUT h", "SELECT * FROM sys.relayout"}) {
+        const std::string reply = db.Run(sql);
+        EXPECT_EQ(reply.rfind("ERR", 0), 0u) << sql << ": " << reply;
+        EXPECT_NE(reply.find("(physical_optimizer=off)"), std::string::npos) << sql << ": "
+                                                                             << reply;
+    }
 }
 
-TEST(ShowRelayoutTest, RefusalsNameTheProblem) {
+TEST(ShowRelayoutTest, RefusalsNameTheProblemAndItsByte) {
     Instance db;
     Load(db);
 
-    EXPECT_EQ(db.Run("SHOW RELAYOUT nope"), "ERR unknown relation 'nope'");
-    EXPECT_EQ(db.Run("SHOW RELAYOUT h b"), "ERR SHOW RELAYOUT takes at most one relation name");
+    const std::string unknown = db.Run("SHOW RELAYOUT nope");
+    EXPECT_EQ(unknown.rfind("ERR", 0), 0u) << unknown;
+    EXPECT_NE(unknown.find("unknown relation 'nope' (byte 14)"), std::string::npos) << unknown;
+    const std::string two = db.Run("SHOW RELAYOUT h b");
+    EXPECT_EQ(two.rfind("ERR", 0), 0u) << two;
+    EXPECT_NE(two.find("takes at most one relation name (byte 16)"), std::string::npos) << two;
 }
 
 TEST(ShowRelayoutTest, TheReportChangesNoReply) {

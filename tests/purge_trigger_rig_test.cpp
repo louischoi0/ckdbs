@@ -16,17 +16,15 @@
 #include <gtest/gtest.h>
 
 #include "kds/server/session.hpp"
+#include "view_text.hpp"
 
 namespace kds::server {
 namespace {
 
 std::uint64_t MetaField(CommandDispatcher& d, const std::string& key) {
     Session s;
-    const std::string meta = d.Dispatch("SHOW META", &s).response;
-    const std::string want = " " + key + "=";
-    const std::size_t at = meta.find(want);
-    if (at == std::string::npos) return UINT64_MAX;
-    return std::stoull(meta.substr(at + want.size()));
+    const auto value = testing_view::MetaField(d.Dispatch("SHOW META", &s).response, key);
+    return value.has_value() ? std::stoull(*value) : UINT64_MAX;
 }
 
 std::unique_ptr<TwoCoreRig> OpenRig() {

@@ -8,6 +8,7 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "view_text.hpp"
 
 // TY07 - the new types end to end through the dispatcher
 // (docs/workplan-types.md).
@@ -422,18 +423,21 @@ TEST(TypesEndToEnd, TheCharacterTypesRenderTheWidthTheyWereDeclaredWith) {
                      "note varchar, flag char, price decimal(10, 2))")
                   .substr(0, 7),
               "CREATED");
-    const std::string described = db.Run("DESCRIBE decl");
+    // `type` last: `decimal(10,2)` holds a comma.
+    const std::string described =
+        db.Run("SELECT name, type FROM sys.columns WHERE rel_name = 'decl'");
+    const auto shown = testing_view::ReadViewText(described);
 
-    EXPECT_NE(described.find("name=code type=char(8)"), std::string::npos) << described;
-    EXPECT_NE(described.find("name=sym type=varchar(32)"), std::string::npos) << described;
-    EXPECT_NE(described.find("name=price type=decimal(10,2)"), std::string::npos) << described;
+    EXPECT_EQ(shown.Find("name", "code", "type"), "char(8)") << described;
+    EXPECT_EQ(shown.Find("name", "sym", "type"), "varchar(32)") << described;
+    EXPECT_EQ(shown.Find("name", "price", "type"), "decimal(10,2)") << described;
     // `char` is char(1), so it renders the width it actually got - the
     // standard's default, and what this engine has always stored.
-    EXPECT_NE(described.find("name=flag type=char(1)"), std::string::npos) << described;
+    EXPECT_EQ(shown.Find("name", "flag", "type"), "char(1)") << described;
     // A bare varchar renders **no** width: its cell is the instance's
     // kds.inline_cell_width, which is not a property of this column and
     // must not be reported as one.
-    EXPECT_NE(described.find("name=note type=varchar "), std::string::npos) << described;
+    EXPECT_EQ(shown.Find("name", "note", "type"), "varchar") << described;
 }
 
 TEST(TypesEndToEnd, ADeclaredWidthIsInvisibleToAValueThatFitsEitherWay) {
@@ -466,8 +470,11 @@ TEST(TypesEndToEnd, AWideDecimalDeclaresByPrecisionAndReadsBackExactly) {
     // declared; DESCRIBE renders the type it *got*.
     ASSERT_EQ(db.Run("CREATE TABLE fund (id int64, nav decimal(24, 6))").substr(0, 7),
               "CREATED");
-    const std::string described = db.Run("DESCRIBE fund");
-    EXPECT_NE(described.find("name=nav type=decimal128(24,6)"), std::string::npos) << described;
+    const std::string described =
+        db.Run("SELECT name, type FROM sys.columns WHERE rel_name = 'fund'");
+    EXPECT_EQ(testing_view::ReadViewText(described).Find("name", "nav", "type"),
+              "decimal128(24,6)")
+        << described;
 
     // Values no int64 can hold, both signs, and an exact read-back.
     ASSERT_EQ(db.Run("INSERT INTO fund VALUES ('123456789012345678.123456')").substr(0, 8),

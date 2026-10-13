@@ -9,6 +9,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
+#include "view_text.hpp"
 
 // The secondary-index write hook (docs/spec/index.md §2, workplan IX06).
 //
@@ -20,7 +21,7 @@
 // `CabinContractTest.AnUpdateThatDoesNotTouchTheKeyColumnAppendsNothing`
 // exists to catch.
 //
-// Everything is observed through `SHOW INDEXES`, which walks the real tree.
+// Everything is observed through `sys.indexes`, which walks the real tree.
 // That is deliberate: an assertion against an internal counter would pass on
 // an index that was maintained into the wrong page.
 
@@ -55,16 +56,18 @@ protected:
         ASSERT_NE(out.rfind("ERR", 0), 0u) << sql << " -> " << out;
     }
 
-    // The entry count `SHOW INDEXES` walked out of the tree.
+    // `column` of the index's `sys.indexes` row, which walks the tree. Its
+    // `keys` and `covering` hold commas, so a read names its columns.
+    std::string IndexField(const std::string& index_name, const std::string& column) {
+        const std::string shown = Run("SELECT name, " + column + " FROM sys.indexes");
+        const auto value = testing_view::ReadViewText(shown).Find("name", index_name, column);
+        EXPECT_TRUE(value.has_value()) << shown;
+        return value.value_or("<absent>");
+    }
+
+    // The entry count `sys.indexes` walked out of the tree.
     int Entries(const std::string& index_name) {
-        const std::string shown = Run("SHOW INDEXES");
-        const std::size_t at = shown.find("name=" + index_name + " ");
-        EXPECT_NE(at, std::string::npos) << shown;
-        if (at == std::string::npos) return -1;
-        const std::size_t entries = shown.find(" entries=", at);
-        EXPECT_NE(entries, std::string::npos) << shown;
-        if (entries == std::string::npos) return -1;
-        return std::atoi(shown.c_str() + entries + 9);
+        return std::atoi(IndexField(index_name, "entries").c_str());
     }
 
     storage::InMemoryPageStore store_{server::kFirstUserPageId};
@@ -222,7 +225,7 @@ TEST_F(IndexMaintainTest, ARelationWithNoIndexIsUnaffected) {
     for (int i = 0; i < 5; ++i) Ok("INSERT INTO t VALUES (" + std::to_string(i) + ")");
     Ok("UPDATE t SET a = 9 WHERE id = 1");
     Ok("DELETE FROM t WHERE id = 2");
-    EXPECT_NE(Run("SHOW INDEXES").find("indexes=0"), std::string::npos);
+    EXPECT_TRUE(testing_view::ReadViewText(Run("SELECT name FROM sys.indexes")).rows.empty());
 }
 
 // ---- The backfill (docs/spec/index.md §10a, workplan IX09) --------------
@@ -263,16 +266,9 @@ TEST_F(IndexMaintainTest, ABackfilledIndexIsIndistinguishableFromAMaintainedOne)
     EXPECT_EQ(Entries("built_ix"), 300);
     EXPECT_EQ(Entries("grown_ix"), 300);
 
-    const std::string shown = Run("SHOW INDEXES");
-    const std::size_t built = shown.find("name=built_ix");
-    const std::size_t grown = shown.find("name=grown_ix");
-    ASSERT_NE(built, std::string::npos);
-    ASSERT_NE(grown, std::string::npos);
     // Same height too, which is what says the tree has the same shape and
     // not merely the same count.
-    EXPECT_EQ(shown.substr(built, 200).find("height=1") != std::string::npos,
-              shown.substr(grown, 200).find("height=1") != std::string::npos)
-        << shown;
+    EXPECT_EQ(IndexField("built_ix", "height"), IndexField("grown_ix", "height"));
 }
 
 TEST_F(IndexMaintainTest, ADeletedRowIsStillBackfilled) {

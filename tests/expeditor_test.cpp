@@ -33,6 +33,7 @@
 #include "kds/wire/kwp.hpp"
 #include "kds/wire/kwp_types.hpp"
 #include "kds/wire/row_codec.hpp"
+#include "view_text.hpp"
 
 // **The multi-core assembly, run rather than modelled** (AM-S0(a)).
 //
@@ -347,10 +348,10 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     // beside it (AL-S9). Read through `SHOW META`, which is where every
     // wrong answer reached a client.
     const std::string peer_meta = peer.dispatcher().Dispatch("SHOW META").response;
-    EXPECT_NE(peer_meta.find("wal_topology=single"), std::string::npos) << peer_meta;
-    EXPECT_NE(peer_meta.find(" core=1 "), std::string::npos) << peer_meta;
-    EXPECT_EQ(peer_meta.find("version=0 "), std::string::npos) << peer_meta;
-    EXPECT_EQ(peer_meta.find("create_time=0 "), std::string::npos) << peer_meta;
+    EXPECT_EQ(testing_view::MetaField(peer_meta, "wal_topology"), "single") << peer_meta;
+    EXPECT_EQ(testing_view::MetaField(peer_meta, "core"), "1") << peer_meta;
+    EXPECT_NE(testing_view::MetaField(peer_meta, "version"), "0") << peer_meta;
+    EXPECT_NE(testing_view::MetaField(peer_meta, "create_time"), "0") << peer_meta;
 
     // **The recovery report.** A fresh volume's log holds nothing, and under
     // one stream a peer runs no pass of its own in any case - core 0's is
@@ -359,7 +360,7 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     // it.
     EXPECT_EQ(peer.recovery().records, 0u);
     EXPECT_EQ(peer.recovery().redo_applied, 0u);
-    EXPECT_NE(peer_meta.find("recovery_by=core0"), std::string::npos) << peer_meta;
+    EXPECT_EQ(testing_view::MetaField(peer_meta, "recovery_by"), "core0") << peer_meta;
 
     // **The catalog cache.** The peer reads the same catalog through its own
     // cache, and a peer that came up with an empty one answers `NotFound`
@@ -378,9 +379,9 @@ TEST_F(ExpeditorTest, TwoCoresComeUpOnOneLogAndEachHoldsTheVolumesOwnImage) {
     // rather than trusted: `sched.md` §4 is one of the three blocks
     // `SHOW META` is required to carry.
     const std::string core0_meta = db.dispatcher().Dispatch("SHOW META").response;
-    EXPECT_NE(core0_meta.find("sched_iterations="), std::string::npos) << core0_meta;
-    EXPECT_NE(core0_meta.find("sched_foreground_polls="), std::string::npos) << core0_meta;
-    EXPECT_NE(core0_meta.find(" core=0 "), std::string::npos) << core0_meta;
+    EXPECT_NE(testing_view::MetaField(core0_meta, "sched_iterations"), std::nullopt) << core0_meta;
+    EXPECT_NE(testing_view::MetaField(core0_meta, "sched_foreground_polls"), std::nullopt) << core0_meta;
+    EXPECT_EQ(testing_view::MetaField(core0_meta, "core"), "0") << core0_meta;
 
     // And then it serves, and stops the way an operator stops it.
     RunningInstance running(db, config.debug_text_port);
@@ -409,9 +410,8 @@ TEST_F(ExpeditorTest, TheTickRetiresADropsMarksWithNoFurtherDdl) {
     std::uint64_t purged = 0;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (purged == 0 && std::chrono::steady_clock::now() < deadline) {
-        const std::string meta = SendLine(c, "SHOW META");
-        const std::size_t at = meta.find(" catalog_marks_purged=");
-        if (at != std::string::npos) purged = std::stoull(meta.substr(at + 22));
+        const auto field = testing_view::MetaField(SendLine(c, "SHOW META"), "catalog_marks_purged");
+        if (field.has_value()) purged = std::stoull(*field);
         if (purged == 0) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     EXPECT_GE(purged, 1u) << "no tick retired the drop's marks within 5 s";
@@ -706,7 +706,7 @@ TEST_F(ExpeditorTest, AtOneCoreThereIsNoWakeRegistry) {
     // omitting it: `sched_wakes_sent` is 0 because nothing can be woken,
     // which is a different statement from "the block is missing".
     const std::string meta = db.dispatcher().Dispatch("SHOW META").response;
-    EXPECT_NE(meta.find("sched_wakes_sent=0"), std::string::npos) << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "sched_wakes_sent"), "0") << meta;
 }
 
 TEST_F(ExpeditorTest, AtOneCoreTheStreamsLatchIsNeverArmed) {
@@ -945,11 +945,19 @@ public:
                                                                                    : "ERR txn";
     }
 
-    // The core `SHOW META` says this session runs on, or -1.
+    // The core `sys.meta` says this session runs on, or -1.
     int Core() {
-        const std::string meta = Run("SHOW META");
-        const std::size_t at = meta.find("core=");
-        return at == std::string::npos ? -1 : std::atoi(meta.c_str() + at + 5);
+        const std::string core = Run("SELECT value FROM sys.meta WHERE field = 'core'");
+        return core.empty() || core.rfind("ERR", 0) == 0 ? -1 : std::atoi(core.c_str());
+    }
+
+    // One `sys.meta` field over KWP, as its text; empty when absent.
+    std::string Meta(std::string_view field) {
+        std::string value =
+            Run("SELECT value FROM sys.meta WHERE field = '" + std::string(field) + "'");
+        // A row is its value and a separating space, then a newline.
+        while (!value.empty() && (value.back() == '\n' || value.back() == ' ')) value.pop_back();
+        return value;
     }
 
 private:
@@ -1054,7 +1062,7 @@ private:
                 }
             } else if (type == wire::ServerFrameType::kComplete) {
                 if (!parse_ok || !bind_ok) return "ERR completed without its S_PARSE_OK/S_BIND_OK";
-                // A one-line answer (`SHOW META`, a write's) is the tag
+                // A one-line answer (a write's) is the tag
                 // itself, carried in this frame's payload.
                 if (text.empty()) {
                     wire::PayloadReader r(f->payload);
@@ -1207,22 +1215,24 @@ TEST_F(ExpeditorTest, EveryCoresLoadIsReadFromAnyCoreAndNoneAtOneCore) {
         ASSERT_TRUE(running.Run());
         ASSERT_TRUE(client.Hello());
         const int core = client.Core();
-        const std::string meta = client.Run("SHOW META");
         if (cores == 1) {
-            EXPECT_EQ(meta.find("load_c"), std::string::npos) << "a load word at one core";
+            const std::string load = client.Run("SELECT field FROM sys.meta WHERE section = 'load'");
+            ASSERT_EQ(load.rfind("ERR", 0), std::string::npos) << load;
+            EXPECT_EQ(load.find("load_c"), std::string::npos) << "a load word at one core";
         } else {
+            const std::string mine = "load_c" + std::to_string(core) + "_";
+            // Read first: this statement is the session's second head.
+            const std::string heads = client.Meta(mine + "heads");
+            ASSERT_FALSE(heads.empty());
+            EXPECT_GE(std::atoi(heads.c_str()), 2)
+                << "the session's two statements were not counted as heads";
+            const std::string sessions = client.Meta(mine + "sessions");
+            ASSERT_FALSE(sessions.empty());
+            EXPECT_GE(std::atoi(sessions.c_str()), 1);
             for (int k = 0; k < 2; ++k) {
-                EXPECT_NE(meta.find("load_c" + std::to_string(k) + "_busy_ppm="), std::string::npos)
+                EXPECT_FALSE(client.Meta("load_c" + std::to_string(k) + "_busy_ppm").empty())
                     << "no load block for core " << k;
             }
-            const std::string mine = "load_c" + std::to_string(core) + "_";
-            const std::size_t sessions = meta.find(mine + "sessions=");
-            const std::size_t heads = meta.find(mine + "heads=");
-            ASSERT_NE(sessions, std::string::npos);
-            ASSERT_NE(heads, std::string::npos);
-            EXPECT_GE(std::atoi(meta.c_str() + sessions + mine.size() + 9), 1);
-            EXPECT_GE(std::atoi(meta.c_str() + heads + mine.size() + 6), 2)
-                << "the session's two statements were not counted as heads";
         }
         EXPECT_TRUE(running.Stop().ok());
     }
@@ -1278,9 +1288,10 @@ TEST_F(ExpeditorTest, APipelinedStatementTravelsWithTheConnectionThatMoved) {
 
     const int other = 1 - client.Core();
     placer.target = other;
-    const auto [first, second] = client.RunTwo("SHOW META", "SHOW META");
-    EXPECT_NE(first.find("core=" + std::to_string(other)), std::string::npos) << first;
-    EXPECT_NE(second.find("core=" + std::to_string(other)), std::string::npos) << second;
+    const std::string core = "SELECT value FROM sys.meta WHERE field = 'core'";
+    const auto [first, second] = client.RunTwo(core, core);
+    EXPECT_EQ(first, std::to_string(other) + " \n") << first;
+    EXPECT_EQ(second, std::to_string(other) + " \n") << second;
     EXPECT_TRUE(running.Stop().ok());
 }
 

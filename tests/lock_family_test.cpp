@@ -23,6 +23,7 @@
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wire/error_registry.hpp"
+#include "view_text.hpp"
 
 // The lock family on one core, driven through the dispatcher's served path
 // (`instructions/v3.0.0/workorder-ay-following-letter.md`, AY-S1).
@@ -2535,16 +2536,15 @@ TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesAnAppendSplitUnderThePark) {
         << "the park must be at the seventh key, inside the leaf the append grows";
 
     // **The leaf count before and after, so the cell cannot pass
-    // vacuously.** `DESCRIBE`'s whole line will not do: it carries
+    // vacuously.** The relation's whole row will not do: it carries
     // `ids_issued`, which moves with every insert whether or not a leaf
-    // ever split, so comparing the lines would assert nothing about the
-    // tree. The assertion is on `leaves=` itself.
+    // ever split, so comparing the rows would assert nothing about the
+    // tree. The assertion is on `leaves` itself.
     const auto leaf_count = [&]() -> int {
-        const std::string shape = Local("DESCRIBE tb");
-        const std::size_t at = shape.find("leaves=");
-        EXPECT_NE(at, std::string::npos) << shape;
-        if (at == std::string::npos) return -1;
-        return std::atoi(shape.c_str() + at + std::string("leaves=").size());
+        const auto leaves = testing_view::RelationField(*dispatcher_, "relation_stats", "tb",
+                                                        "leaves");
+        EXPECT_TRUE(leaves.has_value());
+        return leaves.has_value() ? std::atoi(leaves->c_str()) : -1;
     };
     const int leaves_before = leaf_count();
     ASSERT_EQ(leaves_before, 1)
@@ -2623,16 +2623,15 @@ TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesALeafSplitUnderThePark) {
         << "the park must be at the seventh key for the split to straddle it";
 
     // **The leaf count before and after, so the cell cannot pass
-    // vacuously.** `DESCRIBE`'s whole line will not do: it carries
+    // vacuously.** The relation's whole row will not do: it carries
     // `ids_issued`, which moves with every insert whether or not a leaf
-    // ever divided, so comparing the lines would assert nothing about the
-    // tree. The assertion is on `leaves=` itself.
+    // ever divided, so comparing the rows would assert nothing about the
+    // tree. The assertion is on `leaves` itself.
     const auto leaf_count = [&]() -> int {
-        const std::string shape = Local("DESCRIBE ts");
-        const std::size_t at = shape.find("leaves=");
-        EXPECT_NE(at, std::string::npos) << shape;
-        if (at == std::string::npos) return -1;
-        return std::atoi(shape.c_str() + at + std::string("leaves=").size());
+        const auto leaves = testing_view::RelationField(*dispatcher_, "relation_stats", "ts",
+                                                        "leaves");
+        EXPECT_TRUE(leaves.has_value());
+        return leaves.has_value() ? std::atoi(leaves->c_str()) : -1;
     };
     const int leaves_before = leaf_count();
     ASSERT_EQ(leaves_before, 1)

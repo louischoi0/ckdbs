@@ -29,6 +29,7 @@
 #include "kds/storage/page_header.hpp"
 #include "kds/wal/file_log_device.hpp"
 #include "kds/wal/log_scanner.hpp"
+#include "view_text.hpp"
 
 namespace kds::server {
 namespace {
@@ -214,12 +215,11 @@ void RestoreStartsAtTheBackupsStart(std::uint32_t cores) {
         EXPECT_FALSE(db.superblock().restore_owed());
         EXPECT_EQ(db.superblock().lineage_id(), lineage);
         const std::string meta = db.dispatcher().Dispatch("SHOW META").response;
-        EXPECT_NE(meta.find("recovery_restore_backup=77"), std::string::npos) << meta;
-        EXPECT_NE(meta.find("recovery_restore_stop=" + std::to_string(fuzzy.stop)),
-                  std::string::npos)
+        EXPECT_EQ(testing_view::MetaField(meta, "recovery_restore_backup"), "77") << meta;
+        EXPECT_EQ(testing_view::MetaField(meta, "recovery_restore_stop"),
+                  std::to_string(fuzzy.stop))
             << meta;
-        EXPECT_NE(meta.find("wal_lineage=" + std::to_string(lineage)), std::string::npos)
-            << meta;
+        EXPECT_EQ(testing_view::MetaField(meta, "wal_lineage"), std::to_string(lineage)) << meta;
         Insert(db, 31, 31);
     }
     {
@@ -316,7 +316,7 @@ TEST(BackupControlTest, StartPinsTheDurableRedoStartAndOneRunsAtATime) {
     EXPECT_TRUE(StartsWith(second, "ERR")) << second;
     EXPECT_NE(second.find(std::to_string(id)), std::string::npos) << second;
     EXPECT_NE(Reply(db, "BACKUP STATUS").find("state=open"), std::string::npos);
-    EXPECT_NE(Reply(db, "SHOW META").find("backup_state=open"), std::string::npos);
+    EXPECT_EQ(testing_view::MetaField(Reply(db, "SHOW META"), "backup_state"), "open");
 
     const std::string aborted = Reply(db, "BACKUP ABORT");
     ASSERT_TRUE(StartsWith(aborted, "OK ")) << aborted;

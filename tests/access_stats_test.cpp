@@ -11,6 +11,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "view_text.hpp"
 
 // `sys.access_stats` (docs/spec/heap-and-tuple.md §7): how often each access
 // *shape* ran, and when it last ran.
@@ -204,10 +205,14 @@ TEST_F(AccessStatsTest, ShowAccessNamesTheIndexKinds) {
     Run("SELECT * FROM b WHERE flag = 1");
     Run("SELECT * FROM b WHERE flag BETWEEN 1 AND 2");
 
-    const std::string shown = Run("SHOW ACCESS");
-    EXPECT_NE(shown.find("kind=IndexProbe"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("kind=IndexRange"), std::string::npos) << shown;
-    EXPECT_EQ(shown.find("kind=?"), std::string::npos) << shown;
+    const std::string shown = Run("SELECT kind FROM sys.access_stats");
+    const std::vector<std::string> kinds = testing_view::ReadViewText(shown).Column("kind");
+    const auto has = [&kinds](const char* kind) {
+        return std::find(kinds.begin(), kinds.end(), kind) != kinds.end();
+    };
+    EXPECT_TRUE(has("IndexProbe")) << shown;
+    EXPECT_TRUE(has("IndexRange")) << shown;
+    EXPECT_FALSE(has("?")) << shown;
 }
 
 TEST_F(AccessStatsTest, AnIndexShapeCountsUsesLikeAnyOther) {

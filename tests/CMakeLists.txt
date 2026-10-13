@@ -99,7 +99,6 @@ add_executable(kds_tests
     catalog_row_test.cpp
     waystone_page_test.cpp
     waystone_dir_test.cpp
-    trace_test.cpp
     range_scan_test.cpp
     access_stats_test.cpp
     decay_test.cpp

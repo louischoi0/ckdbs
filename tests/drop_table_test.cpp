@@ -10,6 +10,7 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
+#include "view_text.hpp"
 
 // DT04 - DROP TABLE (docs/spec/drop-table.md DT1-DT6).
 //
@@ -94,7 +95,7 @@ TEST_F(DropTableTest, AReferencingForeignKeyRestrictsByName) {
     // Dropping the child retires its fk rows with it; the parent frees.
     EXPECT_EQ(Run("DROP TABLE c").rfind("ERR", 0), std::string::npos);
     EXPECT_EQ(Run("DROP TABLE p").rfind("ERR", 0), std::string::npos);
-    EXPECT_EQ(Run("SHOW FKEYS"), "fkeys=0");
+    EXPECT_EQ(testing_view::ReadViewText(Run("SHOW FKEYS")).rows.size(), 0u);
 }
 
 TEST_F(DropTableTest, AnAssertionRestrictsByName) {
@@ -139,7 +140,7 @@ TEST_F(DropTableTest, APatternGhostIsHarmless) {
                                 wal::DurabilityClass::kGroup, exec::Budget(), &recorder);
     recording.Dispatch("SELECT v FROM t WHERE id = 1");
     recording.Dispatch("SELECT v FROM t WHERE id = 1");
-    ASSERT_NE(Run("SHOW PATTERNS").find("patterns=1"), std::string::npos);
+    ASSERT_EQ(testing_view::ReadViewText(Run("SHOW PATTERNS")).rows.size(), 1u);
 
     EXPECT_EQ(Run("DROP TABLE t").rfind("ERR", 0), std::string::npos);
     EXPECT_NE(Run("SHOW PATTERNS").rfind("ERR", 0), 0u);

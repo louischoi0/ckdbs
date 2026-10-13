@@ -9,6 +9,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "view_text.hpp"
 
 // `sys.assertions` — the catalog half of ASSERTION (docs/spec/assertion.md
 // §8.2, workplan AST03).
@@ -337,25 +338,27 @@ TEST_F(AssertionCatalogTest, ADuplicateNameIsRefusedAndLeavesTheFirstAlone) {
 
 TEST_F(AssertionCatalogTest, ShowAssertionsNamesTheRelationAndPrintsTheDeclaration) {
     CreatePurchases();
-    EXPECT_NE(Run("SHOW ASSERTIONS").response.find("assertions=0"), std::string::npos);
+    EXPECT_EQ(testing_view::ReadViewText(Run("SHOW ASSERTIONS").response).rows.size(), 0u);
 
     ASSERT_NE(Run("CREATE ASSERTION lim ON purchases GROUP BY (user_id) CHECK COUNT(*) <= 5")
                   .response.find("CREATED"),
               std::string::npos);
 
     const std::string shown = Run("SHOW ASSERTIONS").response;
-    EXPECT_NE(shown.find("assertions=1"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("name=lim"), std::string::npos) << shown;
-    // The relation by name, resolved at print time rather than stored - the
+    const auto view = testing_view::ReadViewText(shown);
+    ASSERT_EQ(view.rows.size(), 1u) << shown;
+    // The relation by name, resolved at read time rather than stored - the
     // row holds an oid so it stays narrow.
-    EXPECT_NE(shown.find("rel=purchases"), std::string::npos) << shown;
+    EXPECT_EQ(view.Find("name", "lim", "rel_name"), "purchases") << shown;
     // 0, and correctly so: this fixture's Run() builds a fresh dispatcher
     // per statement, so SHOW here runs on an empty registry - which is the
     // restart case, and an assertion whose directory is gone is not
     // enforced however durable its catalog row is. The same-dispatcher
     // answer (1) is assertion_enforce_test's to pin.
-    EXPECT_NE(shown.find("enforcing=0"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("CHECK COUNT(*) <= 5"), std::string::npos) << shown;
+    EXPECT_EQ(view.Find("name", "lim", "enforcing"), "0") << shown;
+    EXPECT_NE(view.Find("name", "lim", "def").value_or("").find("CHECK COUNT(*) <= 5"),
+              std::string::npos)
+        << shown;
 }
 
 // ---- Durability ---------------------------------------------------------

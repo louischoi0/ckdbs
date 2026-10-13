@@ -11,6 +11,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/anchor_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "view_text.hpp"
 
 // `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES` (docs/spec/index.md §10,
 // workplan IX05): the grammar, the DDL layer under it, and the reply.
@@ -167,15 +168,16 @@ TEST_F(IndexDdlTest, CreateThenShowThenDrop) {
     // creating an index indexes nothing that is not written after it.
     EXPECT_NE(created.response.find("entries=0"), std::string::npos) << created.response;
 
+    // One key and one covered column, so neither list holds a comma.
     const std::string shown = Run("SHOW INDEXES").response;
-    EXPECT_NE(shown.find("indexes=1"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("name=by_owner"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("keys=(owner)"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("covering=(amount)"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("height=1"), std::string::npos) << shown;
+    const auto view = testing_view::ReadViewText(shown);
+    ASSERT_EQ(view.rows.size(), 1u) << shown;
+    EXPECT_EQ(view.Find("name", "by_owner", "keys"), "owner") << shown;
+    EXPECT_EQ(view.Find("name", "by_owner", "covering"), "amount") << shown;
+    EXPECT_EQ(view.Find("name", "by_owner", "height"), "1") << shown;
 
     EXPECT_NE(Run("DROP INDEX by_owner").response.find("DROPPED INDEX"), std::string::npos);
-    EXPECT_NE(Run("SHOW INDEXES").response.find("indexes=0"), std::string::npos);
+    EXPECT_EQ(testing_view::ReadViewText(Run("SHOW INDEXES").response).rows.size(), 0u);
     EXPECT_NE(Run("DROP INDEX by_owner").response.find("ERR"), std::string::npos);
 }
 
@@ -215,8 +217,8 @@ TEST_F(IndexDdlTest, ARelationThatHasHeldRowsIsBackfilledRatherThanRefused) {
 
     const std::string out = Run("CREATE INDEX ix ON t (owner)").response;
     EXPECT_NE(out.find("CREATED INDEX"), std::string::npos) << out;
-    EXPECT_NE(Run("SHOW INDEXES").response.find("entries=2"), std::string::npos)
-        << Run("SHOW INDEXES").response;
+    const std::string shown = Run("SELECT name, entries FROM sys.indexes").response;
+    EXPECT_EQ(testing_view::ReadViewText(shown).Find("name", "ix", "entries"), "2") << shown;
 }
 
 TEST_F(IndexDdlTest, AFloatlessTypeSetMeansEveryDeclarableColumnCanBeAKey) {

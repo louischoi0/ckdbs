@@ -26,6 +26,7 @@
 #include <gtest/gtest.h>
 
 #include "two_core_rig.hpp"
+#include "view_text.hpp"
 
 #include "kds/server/expeditor.hpp"
 #include "kds/wal/record.hpp"
@@ -95,12 +96,11 @@ inline std::vector<std::uint64_t> Ids(CommandDispatcher& d, const std::string& s
     return out;
 }
 
-// The leaf count `DESCRIBE` reports for `table`.
+// The leaf count `sys.relation_stats` reports for `table`.
 inline int Leaves(CommandDispatcher& d, const std::string& table) {
-    const std::string shape = d.Dispatch("DESCRIBE " + table).response;
-    const std::size_t at = shape.find("leaves=");
-    EXPECT_NE(at, std::string::npos) << shape;
-    return at == std::string::npos ? -1 : std::atoi(shape.c_str() + at + 7);
+    const auto leaves = testing_view::RelationField(d, "relation_stats", table, "leaves");
+    EXPECT_TRUE(leaves.has_value()) << table;
+    return leaves.has_value() ? std::atoi(leaves->c_str()) : -1;
 }
 
 // ---- The log, cut at a record boundary ------------------------------------

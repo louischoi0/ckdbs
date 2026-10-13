@@ -25,6 +25,7 @@
 #include "kds/wal/stream.hpp"
 #include "sim/instance.hpp"
 #include "two_core_rig.hpp"
+#include "view_text.hpp"
 
 // BQ-S1 (`instructions/v3.0.0/workorder-bq-wal-segment-roll.md`): the
 // segment roll's instruments. A roll's hold of the stream latch is timed
@@ -76,6 +77,12 @@ std::int64_t Field(const std::string& text, const std::string& name) {
     const auto at = text.find(key);
     if (at == std::string::npos) return -1;
     return std::stoll(text.substr(at + key.size()));
+}
+
+// A `sys.meta` field of a `SHOW META` reply, or -1 when absent.
+std::int64_t Meta(const std::string& meta, const std::string& name) {
+    const auto value = testing_view::MetaField(meta, name);
+    return value.has_value() ? std::stoll(*value) : -1;
 }
 
 // A `FileLogDevice` whose sync can be held - the writer thread parks inside
@@ -436,7 +443,7 @@ TEST(WalRollInstrumentsTest, ARollThatMeetsABuildInProgressWaitsForItAndSaysSo) 
     std::filesystem::remove_all(dir);
 }
 
-// `SHOW META` prints the roll totals, the stream's byte position and the
+// `sys.meta` carries the roll totals, the stream's byte position and the
 // three contention tallies, in microseconds where the name says so, and
 // the totals move once statements roll.
 TEST(WalRollInstrumentsTest, ShowMetaPrintsTheRollTotals) {
@@ -456,17 +463,17 @@ TEST(WalRollInstrumentsTest, ShowMetaPrintsTheRollTotals) {
 
     const std::string meta = db.Execute("SHOW META");
     for (const char* name : kRollStatNames) {
-        EXPECT_NE(meta.find(std::string(" ") + name + "="), std::string::npos) << name;
+        EXPECT_GE(Meta(meta, name), 0) << name;
     }
-    EXPECT_NE(meta.find(" wal_append_lsn="), std::string::npos) << meta;
+    EXPECT_GE(Meta(meta, "wal_append_lsn"), 0) << meta;
     for (const char* name :
          {"wal_drain_latch_wait_us", "wal_roll_blocked_waits", "wal_roll_blocked_wait_us"}) {
-        EXPECT_NE(meta.find(std::string(" contention_") + name + "="), std::string::npos) << name;
+        EXPECT_GE(Meta(meta, std::string("contention_") + name), 0) << name;
     }
-    EXPECT_GE(Field(meta, "wal_rolls"), 1) << "40 inserts of 100 rows never rolled";
+    EXPECT_GE(Meta(meta, "wal_rolls"), 1) << "40 inserts of 100 rows never rolled";
     // Microseconds, not nanoseconds: inside the time the inserts took.
-    const std::int64_t hold_us = Field(meta, "wal_roll_hold_us");
-    const std::int64_t hold_max_us = Field(meta, "wal_roll_hold_max_us");
+    const std::int64_t hold_us = Meta(meta, "wal_roll_hold_us");
+    const std::int64_t hold_max_us = Meta(meta, "wal_roll_hold_max_us");
     EXPECT_LE(hold_max_us, hold_us);
     EXPECT_LE(hold_us, static_cast<std::int64_t>(elapsed_us));
 }
@@ -480,11 +487,11 @@ TEST(WalRollInstrumentsTest, AnAttachedCorePrintsTheSameRollTotals) {
     const std::string peer = rig->core(1).dispatcher().Dispatch("SHOW META").response;
     const std::string owner = rig->core(0).dispatcher().Dispatch("SHOW META").response;
     for (const char* name : kRollStatNames) {
-        EXPECT_NE(peer.find(std::string(" ") + name + "="), std::string::npos) << name;
+        EXPECT_GE(Meta(peer, name), 0) << name;
     }
-    ASSERT_GE(Field(peer, "wal_append_lsn"), 0) << peer;
-    EXPECT_EQ(Field(peer, "wal_append_lsn"), Field(owner, "wal_append_lsn"));
-    EXPECT_EQ(Field(peer, "wal_rolls"), Field(owner, "wal_rolls"));
+    ASSERT_GE(Meta(peer, "wal_append_lsn"), 0) << peer;
+    EXPECT_EQ(Meta(peer, "wal_append_lsn"), Meta(owner, "wal_append_lsn"));
+    EXPECT_EQ(Meta(peer, "wal_rolls"), Meta(owner, "wal_rolls"));
 }
 
 }  // namespace

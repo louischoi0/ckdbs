@@ -19,6 +19,7 @@
 #include "kds/storage/tagged_cell.hpp"
 #include "kds/storage/varheap.hpp"
 #include "kds/storage/visit.hpp"
+#include "view_text.hpp"
 
 // The fixed-length rule, end to end (docs/rules/rule-fixed-length-tuple.md
 // section 8).
@@ -510,12 +511,14 @@ TEST_F(FixedLengthTupleTest, TheThreeNewTypesRoundTripThroughTheCatalog) {
                   .substr(0, 7),
               "CREATED");
 
-    const std::string described = Run("DESCRIBE ty");
-    EXPECT_NE(described.find("name=d type=date"), std::string::npos) << described;
-    EXPECT_NE(described.find("name=ts type=timestamp"), std::string::npos) << described;
+    // `type` last: `decimal(10,2)` holds a comma.
+    const std::string described = Run("SELECT name, type FROM sys.columns WHERE rel_name = 'ty'");
+    const auto shown = testing_view::ReadViewText(described);
+    EXPECT_EQ(shown.Find("name", "d", "type"), "date") << described;
+    EXPECT_EQ(shown.Find("name", "ts", "type"), "timestamp") << described;
     // The declared form, parameters included - which is what TY02's
     // packing made necessary and `ColumnTypeText` makes uniform.
-    EXPECT_NE(described.find("name=price type=decimal(10,2)"), std::string::npos) << described;
+    EXPECT_EQ(shown.Find("name", "price", "type"), "decimal(10,2)") << described;
 }
 
 TEST_F(FixedLengthTupleTest, DecimalBoundsAreRefusedAtCreateTable) {

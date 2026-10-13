@@ -53,6 +53,7 @@
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/server/session.hpp"
+#include "view_text.hpp"
 
 namespace kds::server {
 namespace {
@@ -587,14 +588,13 @@ TEST(FkCrossCoreRigTest, AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRol
 // every child writer that sets the fk to 7 on `S(7)`, which the `DELETE`'s
 // `X(7)` refuses (`foreign-keys.md` §3a).
 
-// `uses=` of the `SHOW ACCESS` line for `kind` on `rel`, or 0 without one.
+// `uses` of the `sys.access_stats` row for `kind` on `rel`, or 0 without one.
 std::uint64_t AccessUses(CommandDispatcher& d, const std::string& kind, const std::string& rel) {
-    const std::string shown = d.Dispatch("SHOW ACCESS").response;
-    const std::string anchor = "kind=" + kind + " rel=" + rel + " ";
-    const std::size_t at = shown.find(anchor);
-    if (at == std::string::npos) return 0;
-    const std::size_t uses = shown.find("uses=", at);
-    return uses == std::string::npos ? 0 : std::stoull(shown.substr(uses + 5));
+    const std::string shown =
+        d.Dispatch("SELECT kind, uses FROM sys.access_stats WHERE rel_name = '" + rel + "'")
+            .response;
+    const auto uses = testing_view::ReadViewText(shown).Find("kind", kind, "uses");
+    return uses.has_value() ? std::stoull(*uses) : 0;
 }
 
 // A child committed on core 1 is found in core 0's banked set, and once the

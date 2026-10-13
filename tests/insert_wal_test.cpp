@@ -27,6 +27,7 @@
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
+#include "view_text.hpp"
 
 // INSERT as a *logged* statement (command_dispatcher.hpp's WAL section,
 // wal.md sections 1, 5.2, 8-1). Three questions, and nothing else here:
@@ -984,11 +985,9 @@ TEST_F(InsertWalTest, ShowMetaReportsTheGroupCommitBatch) {
     ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, v int32)").response.substr(0, 7), "CREATED");
 
     const auto field = [](const std::string& meta, const std::string& key) {
-        const std::size_t at = meta.find(" " + key + "=");
-        EXPECT_NE(at, std::string::npos) << key << " absent from: " << meta;
-        if (at == std::string::npos) return std::string();
-        const std::size_t from = at + key.size() + 2;
-        return meta.substr(from, meta.find(' ', from) - from);
+        const auto value = testing_view::MetaField(meta, key);
+        EXPECT_TRUE(value.has_value()) << key << " absent from: " << meta;
+        return value.value_or(std::string());
     };
 
     for (int i = 0; i < 4; ++i) {
@@ -1020,13 +1019,13 @@ TEST_F(InsertWalTest, TheBatchIsCountedPerClassAndRelaxedFormsNone) {
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (7)").response.substr(0, 8), "INSERTED");
 
     const std::string meta = d.Dispatch("SHOW META").response;
-    EXPECT_NE(meta.find(" wal_group_commits=0 "), std::string::npos) << meta;
-    EXPECT_NE(meta.find(" wal_group_batches=0 "), std::string::npos) << meta;
-    EXPECT_NE(meta.find(" wal_mean_group_batch=0.000"), std::string::npos) << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_group_commits"), "0") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_group_batches"), "0") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_mean_group_batch"), "0.000") << meta;
     // No batch completed, so the spread has nothing to report and says so
     // with 0 rather than with a 1 that would read as "a batch of one".
-    EXPECT_NE(meta.find(" wal_group_batch_max=0 "), std::string::npos) << meta;
-    EXPECT_NE(meta.find(" wal_group_batch_min=0"), std::string::npos) << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_group_batch_max"), "0") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_group_batch_min"), "0") << meta;
 }
 
 // ---- The ring's backpressure, in SHOW META ------------------------------
@@ -1046,8 +1045,8 @@ TEST_F(InsertWalTest, ShowMetaReportsTheRingBackpressure) {
     // session against the default ring never fills it. A nonzero refusal
     // count here would be a sizing bug rather than a slow device, which is
     // exactly the distinction the second counter exists to make.
-    EXPECT_NE(meta.find(" wal_ring_full=0 "), std::string::npos) << meta;
-    EXPECT_NE(meta.find(" wal_ring_full_refusals=0"), std::string::npos) << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_ring_full"), "0") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_ring_full_refusals"), "0") << meta;
 }
 
 }  // namespace

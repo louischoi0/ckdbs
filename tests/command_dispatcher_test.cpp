@@ -21,6 +21,7 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
+#include "view_text.hpp"
 
 namespace kds::server {
 namespace {
@@ -37,29 +38,30 @@ protected:
     std::optional<bootstrap::BootstrapResult> boot_;
 };
 
-// ---- SHOW PATTERNS (docs/spec/waystone-concpets.md section 4) ------------------
+// ---- SHOW PATTERNS: `sys.patterns` (docs/spec/waystone-concpets.md section 4) --
 
 TEST_F(CommandDispatcherTest, ShowPatternsOnAFreshDatabaseReportsNone) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    auto out = d.Dispatch("SHOW PATTERNS");
-    EXPECT_EQ(out.response, "patterns=0");
+    const auto shown = testing_view::ReadViewText(d.Dispatch("SHOW PATTERNS").response);
+    EXPECT_FALSE(shown.columns.empty());
+    EXPECT_TRUE(shown.rows.empty());
 }
 
 TEST_F(CommandDispatcherTest, ShowPatternsListsARegisteredPattern) {
     ASSERT_TRUE(boot_->catalog.RegisterPattern(0xABCD, catalog::kStmtClassUnclassified).ok());
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    auto out = d.Dispatch("SHOW PATTERNS");
-
-    EXPECT_NE(out.response.find("patterns=1"), std::string::npos) << out.response;
-    // Hex, because comparing two 64-bit fingerprints in decimal is not a
-    // thing anyone can do by eye.
-    EXPECT_NE(out.response.find("fetch_id=0xabcd"), std::string::npos) << out.response;
-    EXPECT_NE(out.response.find("uses=0"), std::string::npos) << out.response;
-    // No trail has been recorded, so there is no directory - and the
-    // report must say so rather than printing a root of page 0.
-    EXPECT_NE(out.response.find("waystone=none"), std::string::npos) << out.response;
-    EXPECT_EQ(out.response.find("stale="), std::string::npos) << out.response;
+    const std::string reply = d.Dispatch("SHOW PATTERNS").response;
+    const auto shown = testing_view::ReadViewText(reply);
+    ASSERT_EQ(shown.rows.size(), 1u) << reply;
+    const std::string id = std::to_string(0xABCD);
+    EXPECT_EQ(shown.Find("fetch_id", id, "use_count"), "0") << reply;
+    // No trail has been recorded, so there is no directory - and the view
+    // says so with NULL rather than a root of page 0 or the invalid id.
+    EXPECT_EQ(shown.Find("fetch_id", id, "waystone_root"), "NULL") << reply;
+    EXPECT_EQ(shown.Find("fetch_id", id, "fingerprint_version"),
+              std::to_string(parser::kFingerprintVersion))
+        << reply;
 }
 
 TEST_F(CommandDispatcherTest, ShowPatternsReportsAWaystoneDirectory) {
@@ -67,8 +69,10 @@ TEST_F(CommandDispatcherTest, ShowPatternsReportsAWaystoneDirectory) {
     ASSERT_TRUE(boot_->catalog.ClaimPatternWaystoneRoot(7, 4096, 2).ok());
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    auto out = d.Dispatch("SHOW PATTERNS");
-    EXPECT_NE(out.response.find("waystone=root=4096,depth=2"), std::string::npos) << out.response;
+    const std::string reply = d.Dispatch("SHOW PATTERNS").response;
+    const auto shown = testing_view::ReadViewText(reply);
+    EXPECT_EQ(shown.Find("fetch_id", "7", "waystone_root"), "4096") << reply;
+    EXPECT_EQ(shown.Find("fetch_id", "7", "dir_depth"), "2") << reply;
 }
 
 TEST_F(CommandDispatcherTest, ShowPatternsMarksRowsFromAnotherFingerprintVersion) {
@@ -87,12 +91,15 @@ TEST_F(CommandDispatcherTest, ShowPatternsMarksRowsFromAnotherFingerprintVersion
     ASSERT_TRUE(page.InsertTuple(encoded, catalog::kBootstrapXid).ok());
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    auto out = d.Dispatch("SHOW PATTERNS");
+    const std::string reply = d.Dispatch("SHOW PATTERNS").response;
 
     // Listed, not hidden: this is an inspection surface, and a row nothing
-    // will ever look up again is exactly what an operator needs to see.
-    EXPECT_NE(out.response.find("fetch_id=0x5151"), std::string::npos) << out.response;
-    EXPECT_NE(out.response.find("stale=v"), std::string::npos) << out.response;
+    // will ever look up again is exactly what an operator needs to see. Its
+    // version column is how a reader tells it is stale.
+    EXPECT_EQ(testing_view::ReadViewText(reply).Find("fetch_id", std::to_string(0x5151),
+                                                     "fingerprint_version"),
+              std::to_string(parser::kFingerprintVersion + 1))
+        << reply;
 
     // But it is still invisible to a lookup, which is where the version
     // rule lives.
@@ -135,13 +142,13 @@ TEST_F(CommandDispatcherTest, Stop) {
 TEST_F(CommandDispatcherTest, ShowMetaReportsSuperblockFields) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto out = d.Dispatch("SHOW META");
-    EXPECT_NE(out.response.find("version=" + std::to_string(kSuperBlockVersion)),
-              std::string::npos);
+    using testing_view::MetaField;
+    EXPECT_EQ(MetaField(out.response, "version"), std::to_string(kSuperBlockVersion));
     // The fixture bootstraps a real database, so its log is the instance's
     // one stream (AR0 M0) - and the anchor count then says nothing a reader
     // could act on, always being 1, so the topology is printed instead.
-    EXPECT_NE(out.response.find("wal_topology=single"), std::string::npos) << out.response;
-    EXPECT_EQ(out.response.find("wal_anchor_count="), std::string::npos)
+    EXPECT_EQ(MetaField(out.response, "wal_topology"), "single") << out.response;
+    EXPECT_EQ(MetaField(out.response, "wal_anchor_count"), std::nullopt)
         << "a field that can only ever say one thing: " << out.response;
     EXPECT_FALSE(out.should_stop);
 }
@@ -182,8 +189,8 @@ TEST_F(CommandDispatcherTest, ShowMetaOmitsGroupAccountingWithNoReactorAttached)
     // and printing zeroes would be one.
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     const std::string meta = d.Dispatch("SHOW META").response;
-    EXPECT_EQ(meta.find("sched_wall_us="), std::string::npos) << meta;
-    EXPECT_EQ(meta.find("sched_foreground_polls="), std::string::npos) << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "sched_wall_us"), std::nullopt) << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "sched_foreground_polls"), std::nullopt) << meta;
 }
 
 TEST_F(CommandDispatcherTest, ShowMetaReportsGroupAccountingAgainstWallTime) {
@@ -203,20 +210,16 @@ TEST_F(CommandDispatcherTest, ShowMetaReportsGroupAccountingAgainstWallTime) {
     clock.Advance(7'000'000);                // 7 ms outside every poll
 
     const std::string meta = d.Dispatch("SHOW META").response;
-    // Whole tokens: `find("...=10000")` also matches `=100000`, and a
-    // counter that grew by a factor of ten is exactly the defect worth
-    // catching here.
-    const auto token = [&meta](std::string_view key) {
-        const std::size_t at = meta.find(key);
-        if (at == std::string::npos) return std::string("<absent>");
-        const std::size_t end = meta.find(' ', at);
-        return meta.substr(at, end == std::string::npos ? end : end - at);
+    // Whole values: a counter that grew by a factor of ten is exactly the
+    // defect worth catching here.
+    const auto field = [&meta](std::string_view key) {
+        return testing_view::MetaField(meta, key).value_or("<absent>");
     };
-    EXPECT_EQ(token("sched_wall_us="), "sched_wall_us=10000") << meta;
-    EXPECT_EQ(token("sched_system_polled_us="), "sched_system_polled_us=3000") << meta;
-    EXPECT_EQ(token("sched_system_polls="), "sched_system_polls=1") << meta;
-    EXPECT_EQ(token("sched_foreground_polled_us="), "sched_foreground_polled_us=0") << meta;
-    EXPECT_EQ(token("sched_maintenance_polls="), "sched_maintenance_polls=0") << meta;
+    EXPECT_EQ(field("sched_wall_us"), "10000") << meta;
+    EXPECT_EQ(field("sched_system_polled_us"), "3000") << meta;
+    EXPECT_EQ(field("sched_system_polls"), "1") << meta;
+    EXPECT_EQ(field("sched_foreground_polled_us"), "0") << meta;
+    EXPECT_EQ(field("sched_maintenance_polls"), "0") << meta;
     // 10 ms of wall against 3 ms of polls: the 7 ms difference is the time
     // sched.md §4 says is charged to no group, and this is the first build
     // in which a client can compute it.
@@ -230,14 +233,15 @@ TEST_F(CommandDispatcherTest, ShowTablesIncludesBootstrapTables) {
     EXPECT_NE(out.response.find("columns"), std::string::npos);
 }
 
-TEST_F(CommandDispatcherTest, DescribeReportsTheHeaderTheOldFindTableDid) {
+TEST_F(CommandDispatcherTest, TheTablesViewReportsTheHeaderTheOldFindTableDid) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    auto out = d.Dispatch("DESCRIBE tables");
-    EXPECT_NE(out.response.find("oid=" + std::to_string(catalog::kSysTablesTable)),
-              std::string::npos);
-    EXPECT_NE(out.response.find("root_page_id=" + std::to_string(catalog::kCatalogPageTables)),
-              std::string::npos);
-    EXPECT_NE(out.response.find("clustered_type=HEAP"), std::string::npos);
+    const std::string reply =
+        d.Dispatch("SELECT name, oid, root_page_id, clustered_type FROM sys.tables").response;
+    const auto shown = testing_view::ReadViewText(reply);
+    EXPECT_EQ(shown.Find("name", "tables", "oid"), std::to_string(catalog::kSysTablesTable));
+    EXPECT_EQ(shown.Find("name", "tables", "root_page_id"),
+              std::to_string(catalog::kCatalogPageTables));
+    EXPECT_EQ(shown.Find("name", "tables", "clustered_type"), "HEAP");
 }
 
 TEST_F(CommandDispatcherTest, DescribeListsColumnsAndMarksThePrimaryKey) {
@@ -245,46 +249,45 @@ TEST_F(CommandDispatcherTest, DescribeListsColumnsAndMarksThePrimaryKey) {
     ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar)").response.substr(0, 7),
               "CREATED");
 
-    auto out = d.Dispatch("DESCRIBE acct");
-    EXPECT_NE(out.response.find("columns=2"), std::string::npos) << out.response;
+    const std::string reply = d.Dispatch("DESCRIBE acct").response;
+    const auto shown = testing_view::ReadViewText(reply);
+    EXPECT_EQ(shown.rows.size(), 2u) << reply;
     // The declared type name round-trips back out of sys.types.
-    EXPECT_NE(out.response.find("name=id type=int32"), std::string::npos) << out.response;
-    EXPECT_NE(out.response.find("name=name type=varchar"), std::string::npos) << out.response;
+    EXPECT_EQ(shown.Find("name", "id", "type"), "int32") << reply;
+    EXPECT_EQ(shown.Find("name", "name", "type"), "varchar") << reply;
     // Column 0 is the Keystone pk; nothing else is.
-    EXPECT_NE(out.response.find("name=id type=int32 notnull=yes pk=yes autoincrement=if-omitted"),
-              std::string::npos)
-        << out.response;
-    EXPECT_NE(out.response.find("pk=no autoincrement=no"), std::string::npos) << out.response;
-    // One "\n"-escaped section per column, and never a raw newline byte.
-    EXPECT_EQ(out.response.find('\n'), std::string::npos);
+    EXPECT_EQ(shown.Find("name", "id", "notnull"), "1") << reply;
+    EXPECT_EQ(shown.Find("name", "id", "pk"), "1") << reply;
+    EXPECT_EQ(shown.Find("name", "name", "pk"), "0") << reply;
+    // One "\n"-escaped line per column, and never a raw newline byte.
+    EXPECT_EQ(reply.find('\n'), std::string::npos);
 }
 
 // ---- The pk in DESCRIBE (heap-and-tuple.md §4.1) --------------------------
 //
 // `key_mode=` was a declaration and is gone with the mode, and `key_order=`
-// with `kUnordered` (BB-Q11 (a)). The pk column's `autoincrement=` is
-// `if-omitted` on every relation - the sequence runs when the INSERT omits
-// the key and does not when the INSERT names one, and both are legal
-// everywhere, so neither `yes` nor `no` would be true.
+// with `kUnordered` (BB-Q11 (a)); neither is a column of `sys.columns` or
+// `sys.tables`.
 
 TEST_F(CommandDispatcherTest, DescribeCarriesNoKeyOrderField) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, qty int64)").response.substr(0, 7),
               "CREATED");
 
-    auto out = d.Dispatch("DESCRIBE acct");
-    // Beside the storage, which is the DDL-only fact on the line.
-    EXPECT_NE(out.response.find("clustered_type=BTREE next_id="), std::string::npos)
-        << out.response;
-    EXPECT_EQ(out.response.find("key_order="), std::string::npos) << out.response;
-    EXPECT_NE(out.response.find("name=id type=int64 notnull=yes pk=yes autoincrement=if-omitted"),
-              std::string::npos)
-        << out.response;
+    const std::string reply = d.Dispatch("DESCRIBE acct").response;
+    const auto shown = testing_view::ReadViewText(reply);
+    EXPECT_EQ(reply.find("key_order"), std::string::npos) << reply;
+    EXPECT_EQ(shown.Find("name", "id", "pk"), "1") << reply;
+    // The storage, the DDL-only fact, is the relation's row.
+    const std::string tables =
+        d.Dispatch("SELECT name, clustered_type FROM sys.tables WHERE name = 'acct'").response;
+    EXPECT_EQ(testing_view::ReadViewText(tables).Find("name", "acct", "clustered_type"), "BTREE");
+    EXPECT_EQ(tables.find("key_order"), std::string::npos) << tables;
 }
 
 TEST_F(CommandDispatcherTest, DescAbbreviationIsAccepted) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    EXPECT_EQ(d.Dispatch("DESC tables").response.substr(0, 4), "oid=");
+    EXPECT_EQ(d.Dispatch("DESC tables").response.substr(0, 7), "rel_id,");
 }
 
 TEST_F(CommandDispatcherTest, DescribeMissingNameIsError) {
@@ -373,13 +376,15 @@ TEST_F(CommandDispatcherTest, ShowPageReportsHeaderAndSlots) {
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto out = d.Dispatch("SHOW PAGE " + std::to_string(kPageId));
+    const auto shown = testing_view::ReadViewText(out.response);
 
-    EXPECT_NE(out.response.find("page_id=500\\n"), std::string::npos);
-    EXPECT_NE(out.response.find("min_key=42\\n"), std::string::npos);
-    EXPECT_NE(out.response.find("nr_slots=2\\n"), std::string::npos);
-    EXPECT_NE(out.response.find("slot[0]"), std::string::npos);
-    EXPECT_NE(out.response.find("slot[1]"), std::string::npos);
-    EXPECT_NE(out.response.find("dead=1"), std::string::npos);
+    // The header row (`slot` NULL), then a row per slot.
+    ASSERT_EQ(shown.rows.size(), 3u) << out.response;
+    EXPECT_EQ(shown.Find("slot", "NULL", "page_id"), "500");
+    EXPECT_EQ(shown.Find("slot", "NULL", "min_key"), "42");
+    EXPECT_EQ(shown.Find("slot", "NULL", "nr_slots"), "2");
+    EXPECT_EQ(shown.Find("slot", "0", "dead"), "0");
+    EXPECT_EQ(shown.Find("slot", "1", "dead"), "1");
     EXPECT_EQ(out.response.find('\n'), std::string::npos);  // one wire line, only escaped "\n"
 }
 
@@ -420,15 +425,10 @@ TEST_F(CommandDispatcherTest, ShowPageValuesIncludesLiveTuplePayloadHexEncoded) 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto out = d.Dispatch("SHOW PAGE " + std::to_string(kPageId) + " VALUES");
 
-    EXPECT_NE(out.response.find("value=68656c6c6f"), std::string::npos);
+    const auto shown = testing_view::ReadViewText(out.response);
+    EXPECT_EQ(shown.Find("slot", "0", "value"), "68656c6c6f") << out.response;
     // Dead slot's value must not be read/shown.
-    auto slot1_pos = out.response.find("slot[1]");
-    ASSERT_NE(slot1_pos, std::string::npos);
-    auto next_slot_marker = out.response.find("\\n", slot1_pos);
-    std::string slot1_section = out.response.substr(
-        slot1_pos, next_slot_marker == std::string::npos ? std::string::npos
-                                                          : next_slot_marker - slot1_pos);
-    EXPECT_EQ(slot1_section.find("value="), std::string::npos);
+    EXPECT_EQ(shown.Find("slot", "1", "value"), "NULL") << out.response;
 }
 
 TEST_F(CommandDispatcherTest, ShowPageWithoutValuesOmitsPayload) {
@@ -445,7 +445,8 @@ TEST_F(CommandDispatcherTest, ShowPageWithoutValuesOmitsPayload) {
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto out = d.Dispatch("SHOW PAGE " + std::to_string(kPageId));
-    EXPECT_EQ(out.response.find("value="), std::string::npos);
+    ASSERT_EQ(out.response.rfind("ERR", 0), std::string::npos) << out.response;
+    EXPECT_EQ(testing_view::ReadViewText(out.response).columns.back(), "child") << out.response;
 }
 
 TEST_F(CommandDispatcherTest, ShowPageUnknownOptionIsError) {
@@ -460,8 +461,8 @@ TEST_F(CommandDispatcherTest, CreateTableCreatesNewTable) {
     EXPECT_EQ(out.response.substr(0, 8), "CREATED ");
     EXPECT_NE(out.response.find("oid="), std::string::npos);
 
-    auto found = d.Dispatch("DESCRIBE accounts");
-    EXPECT_EQ(found.response.substr(0, 4), "oid=");
+    const auto found = testing_view::ReadViewText(d.Dispatch("DESCRIBE accounts").response);
+    EXPECT_EQ(found.Find("name", "id", "pk"), "1");
 }
 
 // The bare, pre-parser form asks for a zero-column table, and every
@@ -526,7 +527,7 @@ TEST_F(CommandDispatcherTest, HeapStorageIsRefusedWhileSuspendedAndSaysWhy) {
     // and it is created rather than refused.
     auto created = d.Dispatch("CREATE TABLE t (id int64)");
     EXPECT_EQ(created.response.substr(0, 7), "CREATED") << created.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("clustered_type=BTREE"), std::string::npos);
+    EXPECT_EQ(testing_view::RelationField(d, "tables", "t", "clustered_type"), "BTREE");
 }
 
 TEST_F(CommandDispatcherTest, DISABLED_HeapSuspensionIsLifted) {
@@ -551,7 +552,7 @@ TEST_F(CommandDispatcherTest, DISABLED_HeapSuspensionIsLifted) {
 
     auto created = d.Dispatch("CREATE TABLE h (id int64, v int64) HEAP");
     EXPECT_EQ(created.response.substr(0, 7), "CREATED") << created.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE h").response.find("clustered_type=HEAP"), std::string::npos);
+    EXPECT_EQ(testing_view::RelationField(d, "tables", "h", "clustered_type"), "HEAP");
 }
 
 TEST_F(CommandDispatcherTest, ASuspendedHeapRelationStillMountsAndServes) {
@@ -584,7 +585,7 @@ TEST_F(CommandDispatcherTest, ASuspendedHeapRelationStillMountsAndServes) {
     catalog::Catalog reopened(store_);
     CommandDispatcher d(boot_->superblock, reopened, store_);
 
-    EXPECT_NE(d.Dispatch("DESCRIBE h").response.find("clustered_type=HEAP"), std::string::npos);
+    EXPECT_EQ(testing_view::RelationField(d, "tables", "h", "clustered_type"), "HEAP");
     EXPECT_NE(d.Dispatch("SELECT id, v FROM h").response.find("1,10"), std::string::npos);
     ASSERT_EQ(d.Dispatch("INSERT INTO h VALUES (2, 20)").response.substr(0, 8), "INSERTED");
     EXPECT_EQ(d.Dispatch("UPDATE h SET v = 99 WHERE id = 1").response.substr(0, 7), "UPDATED");
@@ -605,7 +606,7 @@ TEST_F(CommandDispatcherTest, CreateTableNoLongerRefusesAnExplicitHeapRelation) 
     // is no pairing of the two words left to refuse.
     auto spelled = d.Dispatch("CREATE TABLE t (id int64) HEAP EXPLICIT");
     EXPECT_EQ(spelled.response.substr(0, 7), "CREATED") << spelled.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("clustered_type=HEAP"), std::string::npos);
+    EXPECT_EQ(testing_view::RelationField(d, "tables", "t", "clustered_type"), "HEAP");
 
     // And a bare EXPLICIT still moves storage nowhere - that resolution
     // existed only to keep the refusal above reachable from a written word
@@ -613,8 +614,7 @@ TEST_F(CommandDispatcherTest, CreateTableNoLongerRefusesAnExplicitHeapRelation) 
     // rather than anything this word did.
     auto implied = d.Dispatch("CREATE TABLE t2 (id int64) EXPLICIT");
     EXPECT_EQ(implied.response.substr(0, 7), "CREATED") << implied.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE t2").response.find("clustered_type=BTREE"),
-              std::string::npos);
+    EXPECT_EQ(testing_view::RelationField(d, "tables", "t2", "clustered_type"), "BTREE");
 }
 
 TEST_F(CommandDispatcherTest, CreateTableIsIdempotentWhenAlreadyExists) {
@@ -671,12 +671,12 @@ TEST_F(CommandDispatcherTest, SupplyingThePrimaryKeyOnInsertIsAdmittedAndMovesTh
 
     auto out = d.Dispatch("INSERT INTO acct VALUES (7, 'alice')");
     EXPECT_NE(out.response.find("id=7"), std::string::npos) << out.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE acct").response.find("next_id=8"), std::string::npos);
+    EXPECT_EQ(testing_view::RelationField(d, "tables", "acct", "next_id"), "8");
 
     // A refused key still burns nothing: below the mark on a heap relation.
     auto refused = d.Dispatch("INSERT INTO acct VALUES (3, 'bob')");
     EXPECT_EQ(refused.response.substr(0, 4), "ERR ") << refused.response;
-    EXPECT_NE(d.Dispatch("DESCRIBE acct").response.find("next_id=8"), std::string::npos);
+    EXPECT_EQ(testing_view::RelationField(d, "tables", "acct", "next_id"), "8");
 }
 
 TEST_F(CommandDispatcherTest, RepeatedInsertsOfTheSameValuesGetDistinctKeys) {
@@ -689,8 +689,7 @@ TEST_F(CommandDispatcherTest, RepeatedInsertsOfTheSameValuesGetDistinctKeys) {
     ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('alice')").response.substr(0, 8), "INSERTED");
     ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('alice')").response.substr(0, 8), "INSERTED");
 
-    auto out = d.Dispatch("DESCRIBE acct");
-    EXPECT_NE(out.response.find("next_id=3"), std::string::npos) << out.response;
+    EXPECT_EQ(testing_view::RelationField(d, "tables", "acct", "next_id"), "3");
 }
 
 TEST_F(CommandDispatcherTest, TheIdSequenceDoesNotRestartAfterReopeningTheCatalog) {
@@ -1265,11 +1264,11 @@ TEST_F(CommandDispatcherTest, ANamespaceIsCreatedListedAndDropped) {
 
     // The two that exist before any DDL are listed by their SQL spellings,
     // not by the registry names their rows carry.
-    EXPECT_EQ(d.Dispatch("SHOW NAMESPACES").response, "sys public");
+    EXPECT_EQ(testing_view::ReadViewText(d.Dispatch("SHOW NAMESPACES").response).Column("name"), (std::vector<std::string>{"sys", "public"}));
 
     auto created = d.Dispatch("CREATE NAMESPACE orders");
     EXPECT_EQ(created.response.substr(0, 18), "CREATED NAMESPACE ") << created.response;
-    EXPECT_EQ(d.Dispatch("SHOW NAMESPACES").response, "sys public orders");
+    EXPECT_EQ(testing_view::ReadViewText(d.Dispatch("SHOW NAMESPACES").response).Column("name"), (std::vector<std::string>{"sys", "public", "orders"}));
 
     // Name-unique, and the second attempt says so rather than making a
     // second namespace of one name.
@@ -1278,7 +1277,7 @@ TEST_F(CommandDispatcherTest, ANamespaceIsCreatedListedAndDropped) {
 
     auto dropped = d.Dispatch("DROP NAMESPACE orders");
     EXPECT_EQ(dropped.response.substr(0, 18), "DROPPED NAMESPACE ") << dropped.response;
-    EXPECT_EQ(d.Dispatch("SHOW NAMESPACES").response, "sys public");
+    EXPECT_EQ(testing_view::ReadViewText(d.Dispatch("SHOW NAMESPACES").response).Column("name"), (std::vector<std::string>{"sys", "public"}));
 }
 
 TEST_F(CommandDispatcherTest, TheTwoReservedSpellingsAreRefusedAndSysStillMeansTheViews) {
@@ -1324,7 +1323,7 @@ TEST_F(CommandDispatcherTest, ACreatesQualifierSelectsTheNamespaceAndIsNeverImpl
         << typo.response;
     EXPECT_NE(typo.response.find("byte "), std::string::npos)
         << "the refusal carried no byte: " << typo.response;
-    EXPECT_EQ(d.Dispatch("SHOW NAMESPACES").response, "sys public orders")
+    EXPECT_EQ(testing_view::ReadViewText(d.Dispatch("SHOW NAMESPACES").response).Column("name"), (std::vector<std::string>{"sys", "public", "orders"}))
         << "a typo created a namespace";
 
     // **And the typo is refused when the *name* already exists**, which is

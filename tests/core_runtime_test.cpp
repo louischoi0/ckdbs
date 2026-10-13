@@ -37,6 +37,7 @@
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/wal/log_scanner.hpp"
 #include "kds/wal/payload.hpp"
+#include "view_text.hpp"
 
 // One core's stack, and the shutdown protocol that stops it
 // (docs/inflight/in-progress/workplan-crosscore.md P2).
@@ -671,7 +672,7 @@ TEST_F(CoreRuntimeTest, APeerHandedTheOptimizerSurfaceSetsTheInstancesSwitchAndS
     EXPECT_TRUE(instance_switch.load()) << "the peer's SET moved a flag the controller never reads";
 
     const std::string show = d.Dispatch("SHOW CABIN_OPTIMIZER").response;
-    EXPECT_EQ(show.find("absent"), std::string::npos) << "the peer cannot see the controller: " << show;
+    EXPECT_NE(show.rfind("ERR", 0), 0u) << "the peer cannot see the controller: " << show;
 
     // And the read waits out a tick: the view latch held here as core 0's
     // cadence holds it. **Mutation**: drop the handler's guard and the SHOW
@@ -986,16 +987,16 @@ TEST_F(CoreRuntimeTest, APeersOwnSuperblockAnswersForTheVolumeAndNotWithZeros) {
     // Asserted through `SHOW META` rather than through the fields, because
     // the report is where every wrong answer reached a client.
     const std::string meta = peer.value()->dispatcher().Dispatch("SHOW META").response;
-    EXPECT_NE(meta.find("wal_topology=single"), std::string::npos) << meta;
-    EXPECT_EQ(meta.find("wal_anchor_count="), std::string::npos)
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_topology"), "single") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_anchor_count"), std::nullopt)
         << "printed only under per-core, and this volume is not: " << meta;
     // The three the review found live. `version=0` is not a version this
     // build ever wrote, and a zero `create_time` renders as the epoch - the
     // reading an operator would act on.
-    EXPECT_EQ(meta.find("version=0 "), std::string::npos) << meta;
-    EXPECT_EQ(meta.find("create_time=0 "), std::string::npos) << meta;
-    EXPECT_EQ(meta.find("last_mount_time=0 "), std::string::npos) << meta;
-    EXPECT_NE(meta.find("version=" + std::to_string(kSuperBlockVersion)), std::string::npos)
+    EXPECT_NE(testing_view::MetaField(meta, "version"), "0") << meta;
+    EXPECT_NE(testing_view::MetaField(meta, "create_time"), "0") << meta;
+    EXPECT_NE(testing_view::MetaField(meta, "last_mount_time"), "0") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "version"), std::to_string(kSuperBlockVersion))
         << "a peer must answer the volume's version, not its copy's: " << meta;
 }
 
@@ -1866,9 +1867,9 @@ TEST_F(CoreRuntimeTest, APeerMaintainsInsertsIntoAnIndexCore0BuiltAndReadsAnswer
     rig.Pump(8);
 
     // Entries before: the backfill covered the three rows the rig wrote.
-    const std::string before =
-        rig.peer->dispatcher().Dispatch("SHOW INDEXES").response;
-    EXPECT_NE(before.find("entries=3"), std::string::npos) << before;
+    const std::string entries = "SELECT name, entries FROM sys.indexes";
+    const std::string before = rig.peer->dispatcher().Dispatch(entries).response;
+    EXPECT_EQ(testing_view::ReadViewText(before).Find("name", "mix", "entries"), "3") << before;
 
     // A run of INSERTs, each admitted and maintained.
     for (int v : {40, 50, 60, 70}) {
@@ -1878,9 +1879,8 @@ TEST_F(CoreRuntimeTest, APeerMaintainsInsertsIntoAnIndexCore0BuiltAndReadsAnswer
                 .response;
         ASSERT_NE(ins.rfind("ERR", 0), 0u) << ins;
     }
-    const std::string after =
-        rig.peer->dispatcher().Dispatch("SHOW INDEXES").response;
-    EXPECT_NE(after.find("entries=7"), std::string::npos)
+    const std::string after = rig.peer->dispatcher().Dispatch(entries).response;
+    EXPECT_EQ(testing_view::ReadViewText(after).Find("name", "mix", "entries"), "7")
         << "the four INSERTs were not all maintained: " << after;
 
     // Every value present reads whole through the index; an absent one

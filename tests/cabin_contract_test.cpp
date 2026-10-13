@@ -13,6 +13,7 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
+#include "view_text.hpp"
 
 // **The cabin contract** (docs/spec/cabin.md, workplan CB10). The Waystone
 // suite's shape, pointed at a structure with the opposite trust class - and
@@ -673,8 +674,8 @@ TEST(CabinContractTest, ColumnPolicyDecidesWhoMayCreateACabin) {
 
     // `CABIN` created one already; the other three did not.
     const std::string listed = db.Run("SHOW CABINS");
-    EXPECT_NE(listed.find("cabins=1"), std::string::npos) << listed;
-    EXPECT_NE(listed.find("column=a"), std::string::npos) << listed;
+    EXPECT_EQ(testing_view::ReadViewText(listed).Column("column"), std::vector<std::string>{"a"})
+        << listed;
 
     EXPECT_EQ(db.Run("CREATE CABIN ON p(b)").substr(0, 3), "ERR");  // disabled
     EXPECT_EQ(db.Run("CREATE CABIN ON p(c)").substr(0, 7), "CREATED");  // auto permits asking
@@ -686,18 +687,10 @@ TEST(CabinContractTest, ColumnPolicyDecidesWhoMayCreateACabin) {
 
     // And DESCRIBE reports the effective policy per column.
     const std::string described = db.Run("DESCRIBE p");
-    EXPECT_NE(described.find("name=a type=varchar notnull=yes pk=no autoincrement=no "
-                             "cabin=yes"),
-              std::string::npos)
-        << described;
-    EXPECT_NE(described.find("name=b type=varchar notnull=yes pk=no autoincrement=no "
-                             "cabin=no"),
-              std::string::npos)
-        << described;
-    EXPECT_NE(described.find("name=c type=varchar notnull=yes pk=no autoincrement=no "
-                             "cabin=auto"),
-              std::string::npos)
-        << described;
+    const auto shown = testing_view::ReadViewText(described);
+    EXPECT_EQ(shown.Find("name", "a", "cabin"), "yes") << described;
+    EXPECT_EQ(shown.Find("name", "b", "cabin"), "no") << described;
+    EXPECT_EQ(shown.Find("name", "c", "cabin"), "auto") << described;
 }
 
 TEST(CabinContractTest, ADeclaredCabinObservesOnFirstSelection) {

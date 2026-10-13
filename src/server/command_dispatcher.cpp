@@ -173,24 +173,6 @@ std::pair<std::string_view, std::string_view> SplitBeforeClause(std::string_view
     return {Trim(line), std::string_view{}};
 }
 
-// Hex-encodes a tuple payload for SHOW PAGE ... VALUES. Hex rather than
-// raw text: an arbitrary tuple payload can contain any byte value,
-// including a literal '\n' - embedding that directly would desync a
-// client's one-line-per-response framing (see the escaping note in
-// HandleShowPage). Hex output is plain ASCII by construction, so it is
-// always safe to splice into the single response line.
-std::string HexEncode(std::span<const std::byte> bytes) {
-    static constexpr char kHexDigits[] = "0123456789abcdef";
-    std::string out;
-    out.reserve(bytes.size() * 2);
-    for (std::byte b : bytes) {
-        auto v = static_cast<unsigned char>(b);
-        out.push_back(kHexDigits[v >> 4]);
-        out.push_back(kHexDigits[v & 0x0F]);
-    }
-    return out;
-}
-
 }  // namespace
 
 // ---- The error surface (docs/spec/txn.md section 5, protocol.md section 11) ---
@@ -878,37 +860,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     last_refusal_detail_ = wire::kNoDetail;
     statement_trail_mark_ = 0;
 
-    // ---- H6 step 2: the trace, when this session asked for one ----------
-    //
-    // **Manual sampling** (`TRACE ON`), which is `observability.md` §9's
-    // decision taken at H6: nothing is collected unless a session said so,
-    // which makes zero-cost-when-off trivially true rather than argued.
-    // `trace_` is null on every other statement and `SpanScope` over a null
-    // context reads no clock at all - the property §6 sets the budget by.
-    //
-    // The context lives on the dispatcher for `DispatchInner`'s whole
-    // subtree rather than being threaded through it, which is the same
-    // trade `pending_commit_lsn_` above states and for the same reason: one
-    // statement runs at a time on a core (`sched.md` §3), so there is no
-    // second value to confuse it with, and threading it would put a
-    // parameter on a dozen signatures. §5's *rejection* of a thread-local
-    // stack is untouched by that - the danger there is a cooperative task
-    // yielding mid-span and leaving the stack describing another task, and
-    // a per-dispatcher context is per-core-per-statement, not per-thread.
-    std::optional<stats::TraceContext> trace;
-    if (tracing_ && traces_ != nullptr) {
-        trace.emplace(traces_->NextId(), clock_, std::string(line));
-        trace_ = &*trace;
-    }
-    DispatchOutcome outcome;
-    {
-        stats::SpanScope request(trace_, stats::Layer::kRequest);
-        outcome = DispatchInner(line, active);
-    }
-    if (trace.has_value()) {
-        trace_ = nullptr;
-        traces_->Add(std::move(*trace));
-    }
+    DispatchOutcome outcome = DispatchInner(line, active);
     // Read back out of the member the write paths set: threading it through
     // InsertInner/UpdateInner/EndWrite and every handler between would be a
     // parameter on a dozen signatures for one number, and one statement runs
@@ -1114,7 +1066,7 @@ Role RequiredRole(std::string_view cmd, std::string_view rest) {
     // write *inside* it is judged as itself.
     if (IEquals(cmd, "PING") || IEquals(cmd, "SELECT") || IEquals(cmd, "WITH") ||
         IEquals(cmd, "ANALYZE") || IEquals(cmd, "SHOW") || IEquals(cmd, "DESCRIBE") ||
-        IEquals(cmd, "DESC") || IEquals(cmd, "TRACE") || IEquals(cmd, "BEGIN") ||
+        IEquals(cmd, "DESC") || IEquals(cmd, "BEGIN") ||
         IEquals(cmd, "START") ||
         IEquals(cmd, "COMMIT") || IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT") ||
         IEquals(cmd, "SAVEPOINT") || IEquals(cmd, "RELEASE")) {
@@ -1252,30 +1204,10 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // in RequiredRole (sub-token classified, admin by default).
     if (IEquals(cmd, "SHOW")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
-        if (IEquals(sub, "META")) return HandleShowMeta();
-        if (IEquals(sub, "TABLES")) return HandleListTables(session);
-        if (IEquals(sub, "NAMESPACES")) return HandleShowNamespaces(session);
-        if (IEquals(sub, "PAGE")) return HandleShowPage(sub_rest);
-        if (IEquals(sub, "PATTERNS")) return HandleShowPatterns();
-        if (IEquals(sub, "ACCESS")) return HandleShowAccess();
-        if (IEquals(sub, "BUDGET")) return HandleShowBudget();
-        if (IEquals(sub, "CABINS")) return HandleShowCabins();
-        if (IEquals(sub, "INDEXES")) return HandleShowIndexes(session);
-        if (IEquals(sub, "FKEYS")) return HandleShowFkeys();
-        if (IEquals(sub, "ASSERTIONS")) return HandleShowAssertions();
-        if (IEquals(sub, "RELAYOUT")) return HandleShowRelayout(sub_rest);
-        if (IEquals(sub, "CABIN_OPTIMIZER")) return HandleShowCabinOptimizer();
-        // H6 step 3: `TRACES` is the ring, `TRACE <id>` one span tree.
-        if (IEquals(sub, "TRACES")) return HandleShowTraces();
-        if (IEquals(sub, "TRACE")) return HandleShowTrace(sub_rest);
-        return {"ERR unknown SHOW target", false};
+        return HandleShow(line, sub, sub_rest, session);
     }
-    // H6 step 3: manual sampling, which is `observability.md` §9's sampling
-    // decision taken at H6 - nothing is collected unless a session asks, so
-    // zero-cost-when-off is a property rather than an argument.
-    if (IEquals(cmd, "TRACE")) return HandleTrace(rest);
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
-        return HandleDescribe(rest, session);
+        return HandleShow(line, "DESCRIBE", rest, session);
     }
     // **A DDL runs where the session is** (AT-S5, AT-R5): every core writes
     // the catalog's pages under the page latch, the DDL's own relation `X`
@@ -1549,8 +1481,18 @@ DispatchOutcome CommandDispatcher::HandleSync() {
     return {"OK synced", false};
 }
 
-DispatchOutcome CommandDispatcher::HandleShowMeta() {
+// The meta view's fields (`sys.meta`, BO-Q4): each section's `key=value`
+// tokens, space-separated, in print order. A section whose source is absent
+// - the absent-rather-than-zeroed rule - has empty text and so no row.
+std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSections() {
+    std::vector<std::pair<std::string_view, std::string>> sections;
     std::ostringstream os;
+    const auto section = [&](std::string_view name) {
+        if (!sections.empty()) sections.back().second = os.str();
+        os.str("");
+        sections.emplace_back(name, std::string());
+    };
+    section("volume");
     os << "version=" << superblock_.version() << " create_time=" << superblock_.create_time()
        << " last_mount_time=" << superblock_.last_mount_time()
        // The archive lineage (BR-R10): the history this volume's log is,
@@ -1562,7 +1504,6 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        // volume, not a setting that varies. A literal, because there is no
        // field to read it from.
        << " wal_topology=single"
-       << " cabin_optimizer=" << (cabin_optimizer_enabled() ? "on" : "off")
        // The core serving this session (PW6, docs/inflight/in-progress/workplan-peer-writer.md).
        // Every core listens (AT-S8), so the kernel picks the accepting core and
        // a client cannot choose it (PW5), so a client that needs to know -
@@ -1577,6 +1518,43 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        << " catalog_marks_purged=" << catalog_marks_purged_
        << " catalog_purge_sweeps=" << catalog_purge_sweeps_;
 
+    // **The Cabin controller's own numbers** (PHY06), which `SHOW
+    // CABIN_OPTIMIZER`'s header printed; its managed entries are
+    // `sys.cabin_optimizer`'s rows. The switch is always printed; the rest
+    // only where an instance runs a controller, under the view latch the
+    // entries are read under (AT-S8). The executor's counters are what it
+    // applied, beside what the controller decided.
+    section("cabin_optimizer");
+    os << " cabin_optimizer=" << (cabin_optimizer_enabled() ? "on" : "off");
+    {
+        const LatchGuard latched(cabin_optimizer_view_latch_);
+        if (cabin_controller_ != nullptr) {
+            os << " cabin_optimizer_managed=" << cabin_controller_->managed_count()
+               << " cabin_optimizer_pages_committed=" << cabin_controller_->pages_committed()
+               << " cabin_optimizer_page_budget=" << cabin_controller_->config().page_budget;
+        }
+        if (cabin_executor_ != nullptr) {
+            const exec::CabinOptimizerExecutor::Counters& c = cabin_executor_->counters();
+            os << " cabin_optimizer_ticks=" << c.ticks << " cabin_optimizer_creates=" << c.creates
+               << " cabin_optimizer_extends=" << c.extends << " cabin_optimizer_heals=" << c.heals
+               << " cabin_optimizer_drops=" << c.drops
+               << " cabin_optimizer_deferred=" << c.builds_deferred
+               << " cabin_optimizer_failures=" << c.build_failures;
+        }
+    }
+
+    // **The Cabin store's instance-wide half** (cabin.md §6a), which `SHOW
+    // CABINS`' header printed and no `sys.cabins` row can carry: a walk
+    // declines to bank a set while its view could still be contradicted,
+    // and that is the transaction's property, not a Cabin's. With the cap's
+    // refusals they separate "nobody probed this column" from "every probe
+    // that would have recorded was refused". Absent where no store runs.
+    section("cabins");
+    if (cabins_ != nullptr) {
+        os << " cabins_unbankable_views=" << cabins_->stats().unbankable_views
+           << " cabins_cap_refusals=" << cabins_->stats().cap_refusals;
+    }
+
     // FM10 (docs/inflight/in-progress/workplan-multi-free-map.md): what the allocation map
     // costs, printed unconditionally because a one-region database's `1`
     // is the answer that says the multi-page map is costing nothing here.
@@ -1585,6 +1563,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // bitmap at all, and `headerless_pages=0` is the fact that lets
     // IsHeaderless answer with no lookup on the fault, write-back and
     // WAL-gate paths.
+    section("map");
     const auto map = page_store_.map_residency();
     os << " map_regions=" << map.regions << " map_pages_resident=" << map.resident_pages
        << " map_coverage_ids=" << map.coverage_ids
@@ -1595,6 +1574,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // plateau in `pages_allocated` with `pages_reused` rising is what says
     // a create-drop workload reuses rather than grows - the undo pages'
     // precedent below.
+    section("allocation");
     const auto allocation = page_store_.allocation_counters();
     os << " pages_allocated=" << allocation.allocated << " pages_freed=" << allocation.freed
        << " pages_reused=" << allocation.reused;
@@ -1609,6 +1589,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // `pool_batches_inline` is the inline walk's mean, which BE-R2 bounds;
     // it and `pool_batch_steps_background` over `pool_slots` are the
     // hand's laps (BG-S1).
+    section("pool");
     const auto pool = page_store_.pool_counters();
     os << " pool_budget=" << pool.budget << " pool_resident=" << pool.resident
        << " pool_slots=" << pool.slots << " pool_hits=" << pool.hits
@@ -1626,6 +1607,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // live pages plateauing under a write-heavy loop is the feature, and
     // the recycle count is what proves the plateau came from reuse rather
     // than idleness. Absent without a manager, like the transaction rows.
+    section("undo");
     if (txn_ != nullptr) {
         os << " undo_pages_live=" << txn_->undo().LivePages()
            << " undo_pages_recycled=" << txn_->undo().PagesRecycled();
@@ -1651,6 +1633,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     //
     // Absent where the dispatcher has no WAL - the absent-rather-than-
     // zeroed rule - which is an in-process dispatcher, never a served core.
+    section("wal");
     if (wal_ != nullptr) {
         const wal::WalStats& wal_stats = wal_->stats();
         // The log's durable end - the instance's one stream, so every core
@@ -1741,6 +1724,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // the reactor time charged to no group: the idle block, the WAL drain's
     // `fdatasync`, timer callbacks, the io drain. Absent rather than zeroed
     // where no reactor is attached, the rule the recovery block follows.
+    section("sched");
     if (scheduler_view_ != nullptr) {
         os << " sched_wall_us=" << scheduler_view_->run_wall_ns() / 1000
            << " sched_iterations=" << scheduler_view_->iterations()
@@ -1799,6 +1783,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
 
     // BI-S1's run record for this core (`sched/checkpoint_census.hpp`): the
     // runs it took and its last run whole, per phase.
+    section("checkpoint");
     {
         const CheckpointCensus::Slot& ckpt = CheckpointCensus::Of(core_id_);
         const auto load = [](const std::atomic<std::uint64_t>& v) {
@@ -1827,6 +1812,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // the one block here that does not describe only the asking session's
     // core. `load_c<k>_*` for each of the instance's cores; none at one core,
     // where nothing writes them (BL-R9).
+    section("load");
     for (std::uint32_t k = 0; k < sched::CoreLoad::Cores(); ++k) {
         const sched::CoreLoad::Slot& s = sched::CoreLoad::Of(k);
         const auto r = [](const auto& v) { return v.load(std::memory_order_relaxed); };
@@ -1865,6 +1851,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // report is installed - a dispatcher built without one (every socket-free
     // test) has not "recovered nothing", it has no answer, and printing zeroes
     // would be an answer.
+    section("recovery");
     if (recovery_ != nullptr) {
         // **Where the pass ran** (AR0 M0). Printed only where it was not
         // here: on core 0 its absence means "these numbers are mine".
@@ -1931,6 +1918,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     }
     // **The backup block** (BR): the instance's one control, so every core
     // prints the same state; absent where nothing mounted a volume.
+    section("backup");
     if (backup_ != nullptr) backup_->AppendMeta(os);
     if (archiver_ != nullptr) archiver_->AppendMeta(os);
     // **BA's census block** (BA-R0, BA-S2; `base/contention.hpp`): the
@@ -1938,6 +1926,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     // above, which is this core's. Every latch kind is printed, `other`
     // included, so a latch no row describes still shows its waits; each
     // count is the contended acquisitions only.
+    section("contention");
     const Contention::Snapshot contention = Contention::Read();
     for (std::size_t i = 0; i < kLatchKindCount; ++i) {
         os << " contention_" << kLatchKindNames[i] << "_waits=" << contention.waits[i]
@@ -1951,7 +1940,8 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     for (std::size_t i = 0; i < kLongestCount; ++i) {
         os << " contention_" << kLongestNames[i] << "=" << contention.longest_ns[i] / 1000;
     }
-    return {os.str(), false};
+    sections.back().second = os.str();
+    return sections;
 }
 
 DispatchOutcome CommandDispatcher::HandleSetCabinOptimizer(std::string_view rest) {
@@ -1978,310 +1968,6 @@ DispatchOutcome CommandDispatcher::HandleSetCabinOptimizer(std::string_view rest
             false};
 }
 
-DispatchOutcome CommandDispatcher::HandleShowPatterns() {
-    auto rows = catalog_.ListPatterns();
-    if (!rows.ok()) {
-        return {ErrorReply(rows.status()), false, 0, rows.status()};
-    }
-
-    // Every pattern prints as hex: declared patterns, the only named ones,
-    // were withdrawn on 2026-08-31.
-    //
-    // Same one-line-per-response contract as DESCRIBE and SHOW PAGE: a
-    // count line, then one "\n"-escaped section per pattern, never a raw
-    // newline byte.
-    std::ostringstream os;
-    os << "patterns=" << rows.value().size();
-
-    for (const catalog::SysPatternRow& row : rows.value()) {
-        // fetch_id in hex, because it is a hash: the decimal form of a
-        // 64-bit fingerprint is 20 unreadable digits, and the thing an
-        // operator does with this value is compare it to another one -
-        // `ANALYZE`'s `fetch_id=` (AP-S2). A version-1 row was keyed by the
-        // statement's pattern_id, and is labelled with what it holds.
-        os << "\\n" << (row.fingerprint_version == 1 ? "pattern_id=0x" : "fetch_id=0x")
-           << std::hex << row.fetch_id << std::dec << " oid=" << row.oid;
-
-        // Origin and pinning are separate fields and are printed
-        // separately, which is how the row stores them (rows.hpp). Both
-        // read `auto` and `no` on every row since declared patterns, their
-        // only writer, were withdrawn; this prints what they hold. `uses`
-        // and `last_seen` likewise read 0 since BL-S4's ruling 1 deleted
-        // their writer (rows.hpp).
-        os << " origin=" << (row.origin == catalog::kOriginUser ? "user" : "auto")
-           << " pinned=" << ((row.flags & catalog::kPatternPinned) != 0 ? "yes" : "no")
-           << " class=" << static_cast<int>(row.stmt_class)
-           << " uses=" << row.use_count
-           << " last_seen=" << row.last_seen
-           << " waystone=";
-        // dir_depth is the authority on whether a directory exists
-        // (rows.hpp); reporting the root alone would print page 0 for a
-        // pattern that has none.
-        if (catalog::HasWaystoneDirectory(row)) {
-            os << "root=" << row.waystone_root << ",depth=" << static_cast<int>(row.dir_depth);
-        } else {
-            os << "none";
-        }
-        // A row this build cannot resolve is still listed, and saying so is
-        // the point of listing it: it is dead weight from a fingerprint
-        // version bump, and nothing will ever look it up again.
-        if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version)) {
-            os << " stale=v" << row.fingerprint_version;
-        }
-    }
-    return {os.str(), false};
-}
-
-DispatchOutcome CommandDispatcher::HandleShowAccess() {
-    auto rows = catalog_.ListAccessStats();
-    if (!rows.ok()) {
-        return {ErrorReply(rows.status()), false, 0, rows.status()};
-    }
-
-    // Relation and column *names*, resolved here rather than stored: the
-    // statistics row holds oids and a bitmap, which is what keeps it fixed
-    // width, and this is an inspection surface that can afford a lookup.
-    std::ostringstream os;
-    os << "access_shapes=" << rows.value().size();
-
-    for (const catalog::SysAccessStatRow& row : rows.value()) {
-        os << "\\n";
-
-        auto kind = exec::AccessKindOfStored(row.kind);
-        os << "kind=" << (kind.has_value() ? exec::AccessKindName(*kind) : "?");
-
-        auto access = catalog_.InitTableAccess(row.rel_id);
-        os << " rel=";
-        if (access.ok()) {
-            // Unfiltered by design (DT3c): a diagnostic answers "what does
-            // this instance hold" - ddl-transactional.md §5.
-            auto name = catalog_.ListTables();
-            bool named = false;
-            if (name.ok()) {
-                for (const catalog::SysObjectRow& obj : name.value()) {
-                    if (obj.oid != row.rel_id) continue;
-                    os << catalog::NameView(obj.name);
-                    named = true;
-                    break;
-                }
-            }
-            if (!named) os << "oid=" << row.rel_id;
-        } else {
-            // The relation is gone or unreadable. The statistic outlives it
-            // - nothing removes these rows - so say so rather than fail the
-            // listing.
-            os << "oid=" << row.rel_id;
-        }
-
-        os << " columns=[";
-        bool first = true;
-        for (std::uint16_t col = 0; col < 64; ++col) {
-            if ((row.column_mask & (std::uint64_t{1} << col)) == 0) continue;
-            if (!first) os << ',';
-            first = false;
-            if (access.ok() && col < access.value()->schema.columns.size()) {
-                os << catalog::NameView(access.value()->schema.columns[col].name);
-            } else {
-                os << col;
-            }
-        }
-        os << ']';
-
-        os << " uses=" << row.use_count << " last_seen=" << row.last_seen;
-    }
-    return {os.str(), false};
-}
-
-namespace {
-
-// A budget fraction as a percentage, at a precision chosen for the one
-// question this field answers: *is this relation near the threshold?*
-// Three decimals put 90.000% and 0.000% on the same scale; the exact
-// consumption is `issued`, which is printed beside it and is a count
-// rather than a rounding.
-std::string PercentString(double fraction) {
-    std::ostringstream os;
-    os << std::fixed << std::setprecision(3) << (fraction * 100.0);
-    return os.str();
-}
-
-}  // namespace
-
-DispatchOutcome CommandDispatcher::HandleShowBudget() {
-    // Unfiltered by design (DT3c): a diagnostic surface answers "what does
-    // this instance hold", not "what may this statement touch" - see
-    // ddl-transactional.md §5.
-    auto tables = catalog_.ListTables();
-    if (!tables.ok()) {
-        return {ErrorReply(tables.status()), false, 0, tables.status()};
-    }
-
-    // Built in two passes so the summary line can carry the warning count.
-    // An operator scanning a long listing should not have to read every
-    // row to learn that none of them is in trouble - K-M4's acceptance is
-    // that crossing the threshold is *visible*, and a count at the top is
-    // what makes it visible without a search.
-    std::ostringstream rows;
-    std::size_t listed = 0;
-    std::size_t warning = 0;
-    std::size_t exhausted = 0;
-
-    for (const catalog::SysObjectRow& obj : tables.value()) {
-        auto table_row = catalog_.GetSysTableRow(obj.oid);
-        if (!table_row.ok()) {
-            // A sys.objects row of type table with no sys.tables row is a
-            // catalog inconsistency. Reported in place, for the reason
-            // DESCRIBE gives about a bad type_val: seeing *which* relation
-            // is broken is the point of an inspection command.
-            rows << "\\n"
-                 << "rel=" << catalog::NameView(obj.name) << " oid=" << obj.oid
-                 << " error=" << table_row.status().message();
-            ++listed;
-            continue;
-        }
-
-        const catalog::KeystoneBudget budget =
-            catalog::BudgetOf(table_row.value().next_id);
-        ++listed;
-        if (budget.warn) ++warning;
-        if (budget.exhausted) ++exhausted;
-
-        rows << "\\n"
-             << "rel=" << catalog::NameView(obj.name) << " issued=" << budget.issued
-             << " remaining=" << budget.remaining
-             << " used=" << PercentString(budget.used_fraction) << "%"
-             << " warn=" << (budget.warn ? "yes" : "no")
-             << " exhausted=" << (budget.exhausted ? "yes" : "no");
-    }
-
-    // `capacity` belongs to the summary rather than to every row: it is the
-    // same constant for every relation (K4's per-relation id space), and
-    // repeating it once per line would be the widest column in the listing
-    // carrying the least information.
-    std::ostringstream os;
-    os << "relations=" << listed << " warning=" << warning << " exhausted=" << exhausted
-       << " capacity=" << catalog::kKeystoneBudgetCapacity
-       << " warn_at=" << PercentString(catalog::kKeystoneBudgetWarnFraction) << "%";
-    os << rows.str();
-    return {os.str(), false};
-}
-
-DispatchOutcome CommandDispatcher::HandleListTables(Session& session) {
-    // Listed under the session's view (DT4): `SHOW TABLES` is a route
-    // into "what relations exist", so it answers the same question
-    // DESCRIBE and SELECT do and must answer it the same way.
-    const std::optional<txn::ReadView> view = ViewFor(session);
-    auto tables = catalog_.ListTables(view.has_value() ? &*view : nullptr);
-    if (!tables.ok()) {
-        return {ErrorReply(tables.status()), false, 0, tables.status()};
-    }
-
-    std::ostringstream os;
-    bool first = true;
-    for (const auto& row : tables.value()) {
-        if (!first) os << ' ';
-        os << catalog::NameView(row.name);
-        first = false;
-    }
-    return {os.str(), false};
-}
-
-DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
-    if (args.empty()) {
-        return {"ERR SHOW PAGE requires a page id", false};
-    }
-
-    auto [id_token, option] = SplitFirstToken(args);
-
-    bool show_values = false;
-    if (!option.empty()) {
-        if (!IEquals(option, "VALUES")) {
-            return {"ERR unknown SHOW PAGE option: " + std::string(option), false};
-        }
-        show_values = true;
-    }
-
-    PageId page_id;
-    auto [ptr, ec] = std::from_chars(id_token.data(), id_token.data() + id_token.size(), page_id);
-    if (ec != std::errc() || ptr != id_token.data() + id_token.size()) {
-        return {"ERR invalid page id: " + std::string(id_token), false};
-    }
-
-    // **GetForRead, not Get** - everything below only formats bytes.
-    // `Get()` marks the frame dirty (page_store.hpp), which would make a
-    // diagnostic a *write*, to be written back by the next Sync,
-    // checkpoint or eviction; this one is a read.
-    auto page = page_store_.GetForRead(page_id);
-    if (!page.ok()) {
-        return {ErrorReply(page.status()), false, 0, page.status()};
-    }
-
-    // A B+ tree internal node has no slot directory and no tuples, so it
-    // gets its own render rather than a heap dump of nonsense - SHOW PAGE
-    // is the tool someone reaches for when a descent went somewhere
-    // unexpected, and it is useless if it cannot show the separators that
-    // sent it there.
-    if (storage::RawPageType(page.value().bytes()) ==
-        static_cast<std::uint8_t>(PageType::kBtreeInternal)) {
-        btree::InternalView node(page.value().bytes());
-        std::ostringstream os;
-        os << "page_id=" << page_id << "\\n"
-           << "page_type=BTREE_INTERNAL\\n"
-           << "page_lsn=" << storage::GetPageLsn(page.value().bytes()) << "\\n"
-           << "level=" << node.level() << "\\n"
-           << "nr_entries=" << node.entry_count() << "\\n"
-           << "max_entries=" << btree::kInternalMaxEntries << "\\n"
-           << "leftmost_child=" << node.leftmost_child();
-        for (std::uint16_t i = 0; i < node.entry_count(); ++i) {
-            auto entry = node.Entry(i);
-            if (!entry.ok()) continue;
-            os << "\\n"
-               << "entry[" << i << "] sep_key=" << entry.value().sep_key
-               << " child=" << entry.value().child;
-        }
-        return {os.str(), false};
-    }
-
-    heap::PageView view(page.value().bytes());
-    const bool is_leaf = storage::RawPageType(page.value().bytes()) ==
-                         static_cast<std::uint8_t>(PageType::kBtreeLeaf);
-
-    // The wire protocol allows exactly one response line per command (see
-    // this class's header comment / docs/spec/client-manual.md section 2), so a
-    // raw newline byte can't appear here - it would desync any client that
-    // reads "up to the next \n" as one reply. Instead, sections are joined
-    // with the two-character escape "\n" (backslash + n); the bundled CLI
-    // (tools/ckdbs_cli.py) unescapes it back into real newlines before
-    // printing, giving a readable multi-line dump for developers without
-    // breaking the one-line-per-response contract on the wire.
-    std::ostringstream os;
-    os << "page_id=" << page_id << "\\n"
-       << "page_type=" << (is_leaf ? "BTREE_LEAF" : "HEAP") << "\\n"
-       << "page_lsn=" << storage::GetPageLsn(page.value().bytes()) << "\\n"
-       << "min_key=" << view.min_key() << "\\n"
-       << "nr_slots=" << view.slot_count() << "\\n"
-       << "lower=" << view.lower() << "\\n"
-       << "upper=" << view.upper() << "\\n"
-       << "free_space=" << view.free_space() << "\\n"
-       << "next_page_id=" << view.next_page_id();
-
-    for (std::uint16_t i = 0; i < view.slot_count(); ++i) {
-        auto slot = view.DebugSlotInfo(i);
-        if (!slot.ok()) continue;
-        os << "\\n"
-           << "slot[" << i << "] offset=" << slot.value().offset
-           << " length=" << slot.value().length << " dead=" << (slot.value().dead ? 1 : 0);
-
-        if (show_values && !slot.value().dead) {
-            auto tuple = view.ReadTuple(i);
-            if (tuple.ok()) {
-                os << " value=" << HexEncode(tuple.value().payload);
-            }
-        }
-    }
-
-    return {os.str(), false};
-}
 
 // `t` or `ns.t` in a **raw argument** (AF-T3). The debug surface's commands
 // take a bare token rather than a parse - `DESCRIBE`, `SHOW RELAYOUT`, the
@@ -2292,15 +1978,11 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
 // A trailing or leading dot is left alone: the halves come back as written
 // and the catalog refuses the empty one by name, which beats this helper
 // inventing a syntax error for a surface that has no byte offsets.
-namespace {
-
 std::pair<std::string_view, std::string_view> SplitQualifiedArg(std::string_view arg) {
     const std::size_t dot = arg.find('.');
     if (dot == std::string_view::npos) return {std::string_view{}, arg};
     return {arg.substr(0, dot), arg.substr(dot + 1)};
 }
-
-}  // namespace
 
 DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
                                                      Session& session) {
@@ -2349,172 +2031,6 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
         }
         return {"CREATED oid=" + std::to_string(oid.value()), false};
     });
-}
-
-DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
-                                                  Session& session) {
-    if (args.empty()) {
-        return {"ERR DESCRIBE requires a table name", false};
-    }
-
-    const auto [qualifier, name] = SplitQualifiedArg(args);
-    const std::optional<txn::ReadView> view = ViewFor(session);
-    auto oid = catalog_.FindTableOidByName(name, view.has_value() ? &*view : nullptr);
-    if (!oid.ok()) {
-        return {ErrorReply(oid.status()), false, 0, oid.status()};
-    }
-    if (Status s = catalog_.CheckRelationQualifier(qualifier, name, oid.value(),
-                                                   /*byte_offset=*/0,
-                                                   view.has_value() ? &*view : nullptr);
-        !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
-    }
-
-    auto table_row = catalog_.GetSysTableRow(oid.value());
-    if (!table_row.ok()) {
-        return {ErrorReply(table_row.status()), false, 0, table_row.status()};
-    }
-
-    // A relation with no registered columns is a fact, not a failure: the
-    // bootstrap catalog tables encode their rows through their own
-    // SysXxxRow::Encode() rather than the schema-driven row codec, so they
-    // have no sys.columns entries. Reporting the header with columns=0
-    // beats refusing to describe them at all.
-    catalog::Schema schema;
-    auto built = catalog_.BuildSchemaFromColumns(oid.value());
-    if (built.ok()) {
-        schema = std::move(built.value());
-    } else if (built.status().code() != StatusCode::kNotFound) {
-        return {ErrorReply(built.status()), false, 0, built.status()};
-    }
-
-    const char* clustered =
-        table_row.value().clustered_type == catalog::ClusteredType::kBtree ? "BTREE" : "HEAP";
-
-    // Same one-line-per-response contract as SHOW PAGE and SELECT: a
-    // summary line, then one "\n"-escaped section per column, never a raw
-    // newline byte.
-    // PW2-3: the row's desc_page_id is the CREATE-time root; the current
-    // one lives in the anchor. Read directly, not through InitTableAccess:
-    // DESCRIBE resolves its name through the session's view, and filling
-    // the unfiltered shared cache from a view-filtered read breaks DT3 -
-    // and an anchor Corruption should reach the operator, not a fallback.
-    PageId current_root = table_row.value().desc_page_id;
-    if (table_row.value().anchor_page_id != kInvalidPageId) {
-        auto anchor = page_store_.GetForRead(table_row.value().anchor_page_id);
-        if (anchor.ok() &&
-            storage::ValidatePageHeader(anchor.value().bytes(), PageType::kAnchor).ok()) {
-            current_root = storage::AnchorClusteredRoot(anchor.value().bytes());
-        } else if (!anchor.ok() && anchor.status().code() == StatusCode::kCorruption) {
-            return {ErrorReply(anchor.status()), false, 0, anchor.status()};
-        }
-    }
-    std::ostringstream os;
-    os << "oid=" << oid.value() << " root_page_id=" << current_root
-       << " clustered_type=" << clustered
-       << " next_id=" << table_row.value().next_id
-       << " columns=" << schema.columns.size();
-
-    // K4's lifetime budget, beside the sequence it is derived from. Here as
-    // well as in SHOW BUDGET because this is where someone already looks
-    // after reading `next_id` and wondering what it means - and because
-    // "without arithmetic" (K-M4) is a claim about the place the number is
-    // read, not about one command.
-    //
-    // `ids_issued` is deliberately not `rows`: it counts ids spent, gaps
-    // included (keystone_budget.hpp).
-    const catalog::KeystoneBudget budget = catalog::BudgetOf(table_row.value().next_id);
-    os << " ids_issued=" << budget.issued << " ids_remaining=" << budget.remaining
-       << " budget_used=" << PercentString(budget.used_fraction) << "%";
-    if (budget.warn) {
-        os << " budget_warning=yes";
-    }
-    if (budget.exhausted) {
-        os << " budget_exhausted=yes";
-    }
-
-    // The tree's shape, which is the thing you actually want to know about
-    // a btree relation and cannot get from anywhere else. Reported
-    // best-effort: a relation whose index pages are unreadable still has a
-    // describable schema, and refusing the whole command over it would
-    // remove the tool at the moment it is needed.
-    if (table_row.value().clustered_type == catalog::ClusteredType::kBtree) {
-        // current_root, not the row: since PW2-3 the row is the CREATE-time
-        // root, and a height from a superseded page would contradict the
-        // root printed two fields up.
-        auto height = btree::BtreeHeight(page_store_, current_root);
-        auto leaves = btree::BtreeLeafCount(page_store_, current_root);
-        os << " height=" << (height.ok() ? std::to_string(height.value()) : std::string("?"))
-           << " leaves=" << (leaves.ok() ? std::to_string(leaves.value()) : std::string("?"));
-    }
-
-    // The relation's access entry, for the facts that are not on a
-    // sys.columns row - today its foreign keys. Best-effort like the btree
-    // shape above: a bootstrap catalog relation has no sys.columns rows and
-    // therefore no access entry, and that is a relation with no foreign keys
-    // rather than a DESCRIBE that should fail.
-    auto access = catalog_.InitTableAccess(oid.value());
-
-    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
-        const catalog::SysColumnRow& col = schema.columns[i];
-
-        // A type_val with no sys.types row is a catalog inconsistency, not
-        // a reason to fail the whole DESCRIBE - report it in place, since
-        // seeing *which* column is broken is the point of the command.
-        auto type_row = catalog_.ResolveTypeByVal(col.type_val);
-        const std::string base_name = type_row.ok()
-                                          ? std::string(catalog::NameView(type_row.value().name))
-                                          : "?type_val=" + std::to_string(col.type_val);
-        // The declared form - `decimal(10,2)`, `char(8)`, `int64` - rather
-        // than a bare name beside a `len` a reader would have to interpret.
-        // For a decimal `len` is the packed (p, s) pair, so printing it as
-        // a width would be actively misleading (catalog/rows.hpp).
-        const std::string type_name = catalog::ColumnTypeText(col, base_name);
-
-        // Column 0 is the Keystone primary key by construction, not by a
-        // stored flag - heap-and-tuple.md section 4 makes it positional.
-        const bool is_pk = i == 0;
-
-        // Neither `yes` nor `no` is true of a pk any more, and printing
-        // either would be printing something untrue for a field's
-        // convenience: the sequence runs when the INSERT omits the key and
-        // does not when the INSERT names one, and both are legal on every
-        // relation (heap-and-tuple.md section 4.1). So the pk says which -
-        // `if-omitted` - and every other column keeps the `no` it always had.
-        os << "\\n"
-           << "pos=" << col.pos << " name=" << catalog::NameView(col.name) << " type=" << type_name
-           << " notnull=" << (col.notnull ? "yes" : "no")
-           << " pk=" << (is_pk ? "yes" : "no")
-           << " autoincrement=" << (is_pk ? "if-omitted" : "no");
-
-        // The declared cabin policy (docs/spec/cabin.md), printed for every
-        // non-pk column. The *effective* value, so `auto` covers both "the
-        // engine may decide" and "nothing was said" - the difference is
-        // recorded on disk and matters only to whoever writes the promotion
-        // pipeline, where a listing that showed it would be noise. Whether a
-        // Cabin actually exists is `SHOW CABINS`; this is what the schema
-        // permits.
-        if (!is_pk) {
-            const std::uint8_t policy = catalog::EffectiveCabinPolicy(col.cabin_policy);
-            os << " cabin=" << (policy == catalog::kCabinPolicyDisabled  ? "no"
-                                : policy == catalog::kCabinPolicyEnabled ? "yes"
-                                                                         : "auto");
-
-            // What this column references, if anything
-            // (docs/spec/foreign-keys.md §1). Read from the relation's own
-            // outgoing list rather than by asking the catalog per column,
-            // which is the same absence rule the cabin mask follows.
-            if (access.ok()) {
-                if (const catalog::ForeignKeyRef* fk =
-                        access.value()->ForeignKeyOn(static_cast<std::uint16_t>(i));
-                    fk != nullptr) {
-                    os << " references=" << RelationNameOf(fk->rel_oid);
-                }
-            }
-        }
-    }
-
-    return {os.str(), false};
 }
 
 namespace {
@@ -2647,104 +2163,8 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     });
 }
 
-DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
-    // **A schema question, read under the session's view** (DT3c): "which
-    // indexes exist" must give the answer every schema route gives, so an
-    // uncommitted `DROP INDEX` stays hidden from other sessions.
-    const std::optional<txn::ReadView> view = ViewFor(session);
-    auto rows = catalog_.ListIndexes(view.has_value() ? &*view : nullptr);
-    if (!rows.ok()) {
-        return {ErrorReply(rows.status()), false, 0, rows.status()};
-    }
-
-    std::ostringstream os;
-    os << "indexes=" << rows.value().size();
-
-    for (const catalog::SysIndexRow& row : rows.value()) {
-        os << "\\n";
-        os << "index_oid=" << row.index_oid << " name=" << catalog::NameView(row.name);
-
-        // Names resolved here rather than stored, exactly as SHOW CABINS and
-        // SHOW ACCESS do: the row holds oids so it stays fixed width, and an
-        // inspection surface can afford the lookup.
-        auto access = catalog_.InitTableAccess(row.table_oid);
-        os << " rel=";
-        bool named = false;
-        // Unfiltered by design (DT3c): a diagnostic surface answers "what
-        // does this instance hold" - ddl-transactional.md §5.
-        if (auto tables = catalog_.ListTables(); tables.ok()) {
-            for (const catalog::SysObjectRow& obj : tables.value()) {
-                if (obj.oid != row.table_oid) continue;
-                os << catalog::NameView(obj.name);
-                named = true;
-                break;
-            }
-        }
-        if (!named) os << "oid=" << row.table_oid;
-
-        const auto write_columns = [&](const char* label, const std::uint16_t* cols,
-                                       std::size_t n) {
-            os << ' ' << label << "=(";
-            for (std::size_t i = 0; i < n; ++i) {
-                if (i > 0) os << ',';
-                if (access.ok() && cols[i] < access.value()->schema.columns.size()) {
-                    os << catalog::NameView(access.value()->schema.columns[cols[i]].name);
-                } else {
-                    os << cols[i];
-                }
-            }
-            os << ')';
-        };
-        // Declared order, which is the order the key encoding concatenates
-        // them in - so what is printed is what a probe must match a prefix
-        // of, not a sorted set.
-        write_columns("keys", row.key_cols.data(), row.nkeys);
-        if (row.ncovered > 0) {
-            write_columns("covering", row.covered_cols.data(), row.ncovered);
-        }
-
-        // The anchored root, not the row's: since PW2-3 the sys.indexes row
-        // is CREATE-fixed and the access entry resolves the current root
-        // through the anchor.
-        PageId shown_root = row.root_page_id;
-        if (access.ok()) {
-            for (const auto& ref : access.value()->indexes) {
-                if (ref.index_oid == row.index_oid) {
-                    shown_root = ref.root_page_id;
-                    break;
-                }
-            }
-        }
-        os << " root_page=" << shown_root << " key_width=" << row.key_width
-           << " entry_width=" << row.entry_width;
-
-        // The physical half. Height and entry count are what say whether an
-        // index is worth its write hook, and the catalog cannot answer
-        // either: it stores that an index exists, never what is in it.
-        const index::IndexLayout layout{row.key_width,
-                                        static_cast<std::uint16_t>(row.entry_width -
-                                                                   row.key_width -
-                                                                   index::kIndexPkWidth)};
-        auto height = index::IndexHeight(page_store_, shown_root, layout);
-        auto entries = index::IndexEntryCount(page_store_, shown_root, layout);
-        if (height.ok() && entries.ok()) {
-            os << " height=" << height.value() << " entries=" << entries.value();
-        } else {
-            // Not zeros: an unreadable tree is unknown, and printing zeros
-            // would read as "empty" when the truth is "could not be walked".
-            os << " height=- entries=-";
-        }
-    }
-    return {os.str(), false};
-}
-
 DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
-    // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
-    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
-    auto parsed = [&] {
-        stats::SpanScope span(trace_, stats::Layer::kParse);
-        return parser::Parse(line);
-    }();
+    auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
     }
@@ -2802,12 +2222,7 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
 
 DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
                                                Session& session) {
-    // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
-    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
-    auto parsed = [&] {
-        stats::SpanScope span(trace_, stats::Layer::kParse);
-        return parser::Parse(line);
-    }();
+    auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
     }
@@ -2889,12 +2304,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
 DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                                    Session& session) {
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
-        // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
-    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
-    auto parsed = [&] {
-        stats::SpanScope span(trace_, stats::Layer::kParse);
-        return parser::Parse(line);
-    }();
+        auto parsed = parser::Parse(line);
         if (!parsed.ok()) {
             return {ErrorReply(parsed.status()), false, 0, parsed.status()};
         }
@@ -3078,31 +2488,6 @@ DispatchOutcome CommandDispatcher::HandleNamespace(std::string_view line, Sessio
     });
 }
 
-// `SHOW NAMESPACES` (`docs/spec/namespace.md` NS9): `sys.objects` filtered
-// by type, the way `SHOW TABLES` filters by `kTypeTable`. The two
-// bootstrap namespaces are listed first and by their **SQL spellings** -
-// `sys` and `public` - rather than by the registry names their rows carry
-// ("namespaceSys"/"namespacePublic"), because what a user needs from this
-// command is the word they would write in a statement.
-DispatchOutcome CommandDispatcher::HandleShowNamespaces(Session& session) {
-    // Under the session's view, exactly as `SHOW TABLES` is (DT4): a
-    // namespace is a schema object, so the route that reports which ones
-    // exist has to answer the way every other resolution route does. A
-    // surface that leaked an uncommitted `CREATE NAMESPACE` would be the
-    // `SHOW INDEXES` defect again, one object kind over.
-    const std::optional<txn::ReadView> view = ViewFor(session);
-    auto live = catalog_.ListNamespaces(view.has_value() ? &*view : nullptr);
-    if (!live.ok()) {
-        return {ErrorReply(live.status()), false, 0, live.status()};
-    }
-    std::ostringstream os;
-    os << catalog::kNamespaceSysName << ' ' << catalog::kNamespacePublicName;
-    for (const catalog::SysObjectRow& row : live.value()) {
-        os << ' ' << catalog::NameView(row.name);
-    }
-    return {os.str(), false};
-}
-
 DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Session& session) {
     parser::Parser parser(line);
     auto parsed = parser.Parse();
@@ -3244,376 +2629,10 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleShowAssertions() {
-    auto rows = exec::ListAssertions(catalog_, page_store_);
-    if (!rows.ok()) {
-        return {ErrorReply(rows.status()), false, 0, rows.status()};
-    }
-
-    std::ostringstream os;
-    os << "assertions=" << rows.value().size();
-
-    for (const exec::AssertionDef& def : rows.value()) {
-        os << "\\n";
-        os << "assertion_id=" << def.id << " name=" << def.name;
-
-        // The relation's name, resolved here rather than stored - exactly as
-        // SHOW CABINS and SHOW INDEXES do. The row holds an oid so it stays
-        // narrow, and an inspection surface can afford the lookup.
-        os << " rel=";
-        bool named = false;
-        // Unfiltered by design (DT3c): a diagnostic surface answers "what
-        // does this instance hold" - ddl-transactional.md §5.
-        if (auto tables = catalog_.ListTables(); tables.ok()) {
-            for (const catalog::SysObjectRow& obj : tables.value()) {
-                if (obj.oid != def.target_oid) continue;
-                os << catalog::NameView(obj.name);
-                named = true;
-                break;
-            }
-        }
-        if (!named) os << "oid=" << def.target_oid;
-
-        // Three conditions, each honest on its own: the structure was built
-        // (a root), the write path checks (AST07's constant), and the
-        // instance's registry holds the directory - which a restart empties
-        // until recovery replays it, so a surviving catalog row reports 0
-        // rather than claiming a check that cannot run. The same answer from
-        // every core (AT-S5d).
-        os << " enforcing="
-           << ((def.cabin_root != kInvalidPageId && kWritePathEnforcesAssertions &&
-                enforcer_->Holds(def.id))
-                   ? 1
-                   : 0);
-        // §9's production counters, printed only while the registry holds
-        // the assertion: they live and die with the directory, so an
-        // unenforced row prints no numbers rather than zeros that would
-        // read as "counted, and nothing happened".
-        if (const auto counters = enforcer_->CountersOf(def.id); counters.has_value()) {
-            os << " checks=" << counters->checks << " violations=" << counters->violations
-               << " reserved=" << counters->reserved << " aborted=" << counters->aborted;
-        }
-        os << " def=" << def.source_text;
-    }
-    return {os.str(), false};
-}
-
-DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
-    // The physical optimizer's shadow report (docs/spec/physical-optimizer.md
-    // §5, workplan PX06). Read-only by construction: the bare form's planner
-    // takes no PageStore, and the per-relation form's walk is a census
-    // priced through the statement budget.
-    if (relayout_mode_ == PhysicalOptimizerMode::kOff) {
-        return {"RELAYOUT off (physical_optimizer=off)", false};
-    }
-
-    auto [name, extra] = SplitFirstToken(Trim(rest));
-    if (!Trim(extra).empty()) {
-        return {"ERR SHOW RELAYOUT takes at most one relation name", false};
-    }
-
-    std::vector<stats::RelationReport> reports;
-    if (name.empty()) {
-        auto all = stats::PlanAllRelations(catalog_, clock_, decay_half_life_ns_);
-        if (!all.ok()) return {ErrorReply(all.status()), false, 0, all.status()};
-        reports = std::move(all.value());
-    } else {
-        const auto [qualifier, bare] = SplitQualifiedArg(name);
-        auto oid = catalog_.FindTableOidByName(bare);
-        if (!oid.ok()) {
-            return {"ERR unknown relation '" + std::string(name) + "'", false};
-        }
-        if (Status s = catalog_.CheckRelationQualifier(qualifier, bare, oid.value()); !s.ok()) {
-            return {ErrorReply(s), false, 0, s};
-        }
-        // A fresh budget at the configured ceiling: the walk is priced like
-        // any other relation read, and a spent budget refuses the survey
-        // rather than serving a half-count.
-        exec::Budget budget(budget_.limit());
-        auto one = stats::PlanRelation(catalog_, page_store_, oid.value(), budget, clock_,
-                                       decay_half_life_ns_);
-        if (!one.ok()) return {ErrorReply(one.status()), false, 0, one.status()};
-        reports.push_back(std::move(one.value()));
-    }
-
-    std::ostringstream os;
-    os << "relayout_relations=" << reports.size();
-    for (const stats::RelationReport& report : reports) {
-        os << "\\n";
-        os << "rel=" << report.name << " clustered="
-           << (report.clustered_type == catalog::ClusteredType::kBtree ? "btree" : "heap")
-           << " shapes=" << report.shapes.size()
-           << " walk_weight_q8=" << stats::WalkWeightOf(report.shapes);
-
-        for (const stats::ShapeWeight& shape : report.shapes) {
-            os << "\\n";
-            os << "shape kind=" << exec::AccessKindName(shape.kind) << " columns_mask=0x"
-               << std::hex << shape.column_mask << std::dec << " uses=" << shape.use_count
-               << " weight_q8=" << shape.decayed_weight;
-        }
-
-        if (report.survey.has_value()) {
-            os << "\\n";
-            os << "survey pages=" << report.survey->chain_pages
-               << " live=" << report.survey->live_tuples
-               << " delete_marked=" << report.survey->delete_marked
-               << " tuples_per_page=" << report.survey->tuples_per_page;
-        }
-
-        if (report.plans.empty()) {
-            // Out of jurisdiction, not "nothing to do": a btree relation has
-            // no v1 mover candidate (R5), and a catalog relation may never
-            // have one (§4's must-not list). Each names its reason so an
-            // empty candidate set cannot be read as a clean bill of health.
-            os << "\\n";
-            os << (report.system_relation
-                       ? "plans=none reason=catalog-relation-outside-mover-jurisdiction"
-                       : "plans=none reason=btree-outside-v1-mover-scope");
-            continue;
-        }
-        for (const stats::RelayoutPlan& plan : report.plans) {
-            os << "\\n";
-            os << "plan=" << stats::RelayoutPlanKindName(plan.kind)
-               << " blocked_on=" << stats::RelayoutGateName(plan.blocked_on)
-               << " surveyed=" << (plan.survey_backed ? 1 : 0)
-               << " predicted_pages_saved=" << plan.predicted_pages_saved
-               << " predicted_benefit=" << plan.predicted_benefit
-               << " measured_pages_saved=" << plan.measured_pages_saved;
-        }
-    }
-    return {os.str(), false};
-}
-
-DispatchOutcome CommandDispatcher::HandleShowCabins() {
-    auto rows = catalog_.ListCabins();
-    if (!rows.ok()) {
-        return {ErrorReply(rows.status()), false, 0, rows.status()};
-    }
-
-    std::ostringstream os;
-    os << "cabins=" << rows.value().size();
-    // The store-wide half, which no per-cabin row can carry: a walk
-    // declines to bank a set when its view could still be contradicted
-    // (§6a), and that is a property of the transaction in flight, not of
-    // the Cabin being probed. Together with `cap_refusals` these are what
-    // separate "nobody probed this column by equality" from "every probe
-    // that would have recorded was refused", which `observed=0 hits=0`
-    // cannot. Printed as zeros rather than suppressed, for the reason the
-    // per-row branch below gives: absent must mean *unknown*, and a
-    // suppressed zero reads as absent.
-
-    if (cabins_ != nullptr) {
-        os << " unbankable_views=" << cabins_->stats().unbankable_views
-           << " cap_refusals=" << cabins_->stats().cap_refusals;
-    }
-
-    for (const catalog::SysCabinRow& row : rows.value()) {
-        os << "\\n";
-        os << "cabin_id=" << row.cabin_id;
-
-        // Names resolved here rather than stored, exactly as SHOW ACCESS
-        // does: the row holds oids so it stays fixed width, and an
-        // inspection surface can afford the lookup.
-        auto access = catalog_.InitTableAccess(row.rel_oid);
-        os << " rel=";
-        bool named = false;
-        // Unfiltered by design (DT3c): a diagnostic surface answers "what
-        // does this instance hold" - ddl-transactional.md §5.
-        if (auto tables = catalog_.ListTables(); tables.ok()) {
-            for (const catalog::SysObjectRow& obj : tables.value()) {
-                if (obj.oid != row.rel_oid) continue;
-                os << catalog::NameView(obj.name);
-                named = true;
-                break;
-            }
-        }
-        if (!named) os << "oid=" << row.rel_oid;
-
-        os << " column=";
-        if (access.ok() && row.column_no < access.value()->schema.columns.size()) {
-            os << catalog::NameView(access.value()->schema.columns[row.column_no].name);
-        } else {
-            os << row.column_no;
-        }
-
-        os << " origin=" << (row.origin == catalog::kCabinOriginUser ? "user" : "auto");
-        os << " status="
-           << (row.status == catalog::kCabinStatusActive
-                   ? "active"
-                   : (row.status == catalog::kCabinStatusBuilding ? "building" : "demoted"));
-
-        // The runtime half, from the instance's store. These are the
-        // numbers that say whether a Cabin is earning its write hook -
-        // which is the question §8's demotion policy will need to answer,
-        // and the one the catalog cannot: it stores that a Cabin exists,
-        // never what it has observed.
-        //
-        // `observed=0 hits=0` on an old Cabin means the column is declared
-        // and never probed by equality. `observed>0 hits=0` means the
-        // values being probed are not the ones being observed.
-        //
-        // **It is the instance's figure** (AT-S7): one store, so a Cabin's
-        // counters are the same numbers whichever core is asked.
-        // The per-core store, its owner test and `scope_declines` retired
-        // (AT-S7, AT-S10); their history is at cf889b63.
-        if (cabins_ != nullptr) {
-            const stats::CabinStore::CabinInfo info = cabins_->InfoFor(row.cabin_id);
-            os << " observed=" << info.values << " entries=" << info.entries
-               << " hits=" << info.hits << " misses=" << info.misses;
-        } else {
-            // Not "0": the store is off, so every count is unknown rather
-            // than zero, and printing zeros would read as "nothing has
-            // happened" when the truth is "nothing is being recorded".
-            os << " observed=- entries=- hits=- misses=- (cabins = off)";
-        }
-    }
-    return {os.str(), false};
-}
-
 // ---- H6 step 3: the three inspection commands ---------------------------
 //
 // The one-line `\n`-escaped convention `SHOW PAGE` established
 // (`client-manual.md`), so a text client reads them the same way.
-
-DispatchOutcome CommandDispatcher::HandleTrace(std::string_view rest) {
-    auto [word, tail] = SplitFirstToken(rest);
-    if (!tail.empty()) {
-        return {"ERR TRACE takes ON or OFF and nothing else", false};
-    }
-    if (traces_ == nullptr) {
-        // **Refused rather than silently accepted**: a session told `TRACE
-        // ON` that then finds an empty ring would read the absence as "the
-        // statement was too fast to show anything", which is the
-        // misdiagnosis this whole instrument exists to prevent.
-        return {"ERR tracing is not available on this dispatcher; no trace sink is installed",
-                false};
-    }
-    if (IEquals(word, "ON")) {
-        tracing_ = true;
-        return {"OK tracing on", false};
-    }
-    if (IEquals(word, "OFF")) {
-        tracing_ = false;
-        return {"OK tracing off", false};
-    }
-    return {"ERR TRACE takes ON or OFF", false};
-}
-
-DispatchOutcome CommandDispatcher::HandleShowTraces() {
-    if (traces_ == nullptr) return {"ERR no trace sink is installed", false};
-    return {stats::RenderTraceList(*traces_), false};
-}
-
-DispatchOutcome CommandDispatcher::HandleShowTrace(std::string_view rest) {
-    if (traces_ == nullptr) return {"ERR no trace sink is installed", false};
-    auto [id_text, tail] = SplitFirstToken(rest);
-    if (id_text.empty() || !tail.empty()) {
-        return {"ERR SHOW TRACE takes one trace id (SHOW TRACES lists them)", false};
-    }
-    std::uint64_t id = 0;
-    for (char c : id_text) {
-        if (c < '0' || c > '9') return {"ERR trace id must be a number", false};
-        id = id * 10 + static_cast<std::uint64_t>(c - '0');
-    }
-    const stats::TraceContext* trace = traces_->Find(id);
-    if (trace == nullptr) {
-        // The ring is drop-oldest, so "gone" and "never existed" are one
-        // answer here and the message says which is likelier.
-        return {"ERR no trace " + std::to_string(id) +
-                    " in the ring; it may have been evicted (SHOW TRACES lists what is held)",
-                false};
-    }
-    return {stats::RenderTrace(*trace), false};
-}
-
-DispatchOutcome CommandDispatcher::HandleShowCabinOptimizer() {
-    // PO9's view (workplan PHY06). Rendering only: every number is read
-    // from a surface that exists on its own merits - the controller's
-    // managed table and decision log, the executor's applied counters, the
-    // collector's S3 quality - so the view cannot disagree with the engine
-    // about anything, only omit.
-    //
-    // Under the view latch (AT-S8): the controller and executor are the
-    // instance's, and core 0's cadence mutates both across a tick held
-    // under it; a read from any core waits the tick out rather than
-    // walking a table mid-rebuild. Outer to the collector's own latch,
-    // which `QualityOf` below takes - the tick's order.
-    const LatchGuard view(cabin_optimizer_view_latch_);
-    if (cabin_controller_ == nullptr) {
-        // Not an empty table: with no controller nothing is managing, and
-        // an empty listing would read as "managing nothing yet" when the
-        // truth is "not constructed" - SHOW CABINS' `cabins = off` rule.
-        // The instance has one controller and every core is handed it
-        // (AT-S8), so absent is the instance's answer, not this core's.
-        return {"CABIN_OPTIMIZER absent (no cabin optimizer on this instance)", false};
-    }
-
-    const stats::CabinOptimizerConfig& config = cabin_controller_->config();
-    std::ostringstream os;
-    os << "cabin_optimizer=" << (cabin_optimizer_enabled() ? "on" : "off")
-       << " managed=" << cabin_controller_->managed_count()
-       << " pages_committed=" << cabin_controller_->pages_committed()
-       << " page_budget=" << config.page_budget;
-    if (cabin_executor_ != nullptr) {
-        // Applied, not decided: the per-entry `last_action` below is what
-        // Decide wanted, these are what Execute did, and the gap between
-        // the two is the diagnostic (a deferral, a policy refusal).
-        const exec::CabinOptimizerExecutor::Counters& c = cabin_executor_->counters();
-        os << " ticks=" << c.ticks << " creates=" << c.creates << " extends=" << c.extends
-           << " heals=" << c.heals << " drops=" << c.drops
-           << " deferred=" << c.builds_deferred << " failures=" << c.build_failures;
-    }
-
-    const std::vector<stats::DecisionRecord> log = cabin_controller_->DecisionLog();
-    for (const stats::ManagedEntryView& entry : cabin_controller_->ManagedEntries()) {
-        os << "\\n";
-        os << "rel=" << RelationNameOf(entry.rel_oid);
-
-        // Names resolved here rather than stored, SHOW CABINS' rule: an
-        // inspection surface can afford the lookup.
-        os << " column=";
-        auto access = catalog_.InitTableAccess(entry.rel_oid);
-        if (access.ok() && entry.col_pos < access.value()->schema.columns.size()) {
-            os << catalog::NameView(access.value()->schema.columns[entry.col_pos].name);
-        } else {
-            os << entry.col_pos;
-        }
-
-        os << " state=" << entry.state << " cabin_id=" << entry.cabin_id
-           << " pages=" << entry.pages << " streak=" << entry.confirm_streak
-           << " benefit_q16=" << entry.benefit << " cost_q16=" << entry.cost;
-
-        // S3 quality as integer percentages - the Q8 scale cancels in the
-        // ratio. Failure and miss rates rather than their complements,
-        // because they are what the θ_heal and θ_extend rules compare.
-        if (entry.cabin_id != 0 && optimizer_signals_ != nullptr) {
-            const stats::SnapshotCabin q = optimizer_signals_->QualityOf(entry.cabin_id);
-            const std::uint64_t lookups = q.lookups_q8;
-            os << " hint_fail_pct="
-               << (lookups == 0 ? 0 : (std::uint64_t{q.hint_failures_q8} * 100) / lookups)
-               << " coverage_miss_pct="
-               << (lookups == 0 ? 0 : (std::uint64_t{q.coverage_misses_q8} * 100) / lookups);
-        }
-
-        // The newest logged decision for this candidate. The log is
-        // oldest-first, so the final match wins; a candidate no decision
-        // ever fired on says so rather than printing nothing.
-        const stats::DecisionRecord* last = nullptr;
-        for (const stats::DecisionRecord& record : log) {
-            if (record.item.rel_oid == entry.rel_oid && record.item.col_pos == entry.col_pos) {
-                last = &record;
-            }
-        }
-        if (last != nullptr) {
-            os << " last_action=" << stats::CabinActionName(last->item.action)
-               << " reason=" << stats::ActionReasonName(last->item.reason)
-               << " epoch=" << last->decay_epoch;
-        } else {
-            os << " last_action=none";
-        }
-    }
-    return {os.str(), false};
-}
 
 // ---- Foreign-key checks (docs/spec/foreign-keys.md §§2-4) ----------------
 
@@ -4064,47 +3083,10 @@ std::string CommandDispatcher::RelationNameOf(catalog::Oid oid) {
     return "oid=" + std::to_string(oid);
 }
 
-DispatchOutcome CommandDispatcher::HandleShowFkeys() {
-    auto rows = catalog_.ListForeignKeys();
-    if (!rows.ok()) {
-        return {ErrorReply(rows.status()), false, 0, rows.status()};
-    }
-
-    std::ostringstream os;
-    os << "fkeys=" << rows.value().size();
-
-    for (const catalog::SysFkeyRow& row : rows.value()) {
-        os << "\\n";
-        os << "fk_id=" << row.fk_id;
-        os << " child=" << RelationNameOf(row.child_rel_oid);
-
-        os << " column=";
-        auto child = catalog_.InitTableAccess(row.child_rel_oid);
-        if (child.ok() && row.child_column_no < child.value()->schema.columns.size()) {
-            os << catalog::NameView(child.value()->schema.columns[row.child_column_no].name);
-        } else {
-            os << row.child_column_no;
-        }
-
-        // The parent column is not printed because there is not one: the
-        // reference is to the parent's Keystone id, always (F1). Printing
-        // the pk's name would suggest a choice was made.
-        os << " parent=" << RelationNameOf(row.parent_rel_oid);
-        os << " action=RESTRICT";
-        os << " nullable=" << ((row.flags & catalog::kFkNullable) != 0 ? "yes" : "no");
-    }
-    return {os.str(), false};
-}
-
 DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                                                         Session& session) {
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
-        // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
-    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
-    auto parsed = [&] {
-        stats::SpanScope span(trace_, stats::Layer::kParse);
-        return parser::Parse(line);
-    }();
+        auto parsed = parser::Parse(line);
         if (!parsed.ok()) {
             return {ErrorReply(parsed.status()), false, 0, parsed.status()};
         }
@@ -5202,12 +4184,7 @@ sched::Coro CommandDispatcher::CompleteSelect(std::string_view line, DispatchOut
 }
 
 DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope) {
-    // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
-    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
-    auto parsed = [&] {
-        stats::SpanScope span(trace_, stats::Layer::kParse);
-        return parser::Parse(line);
-    }();
+    auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
     }
@@ -6809,6 +5786,124 @@ ResultSink& SinkFor(Session& session, TextResultSink& text) {
 
 }  // namespace
 
+// **Every `SHOW` is one `SELECT` over one view** (SV1, SV4): the spelling
+// is turned into the `SELECT`'s AST - not its text, so an argument keeps the
+// byte the client wrote it at (SV2) - and answered by the function the
+// `SELECT` path calls. `DESCRIBE <t>` is one more spelling of the same kind.
+DispatchOutcome CommandDispatcher::HandleShow(std::string_view line, std::string_view target,
+                                              std::string_view arg, Session& session) {
+    const auto byte_of = [&](std::string_view token) {
+        return static_cast<std::uint32_t>(token.data() - line.data());
+    };
+    const auto refuse = [&](std::string what) {
+        const Status s = Status::InvalidArgument(std::move(what));
+        return DispatchOutcome{ErrorReply(s), false, 0, s};
+    };
+    struct Spelling {
+        std::string_view target;
+        std::string_view view;
+        // The projection, empty for `*`.
+        std::initializer_list<std::string_view> columns;
+    };
+    static constexpr std::string_view kBudget[] = {
+        "oid", "name", "next_id", "ids_issued", "ids_remaining", "budget_used_ppm",
+        "budget_warning", "budget_exhausted"};
+    static constexpr std::string_view kPage[] = {
+        "page_id", "page_type", "page_lsn", "level", "min_key", "nr_slots", "lower", "upper",
+        "free_space", "next_page_id", "slot", "offset", "length", "dead", "sep_key", "child"};
+    static constexpr std::pair<std::string_view, std::string_view> kPlain[] = {
+        {"META", "meta"},           {"TABLES", "tables"},
+        {"NAMESPACES", "namespaces"}, {"PATTERNS", "patterns"},
+        {"ACCESS", "access_stats"}, {"BUDGET", "relation_stats"},
+        {"CABINS", "cabins"},       {"INDEXES", "indexes"},
+        {"FKEYS", "fkeys"},         {"ASSERTIONS", "assertions"},
+        {"CABIN_OPTIMIZER", "cabin_optimizer"}, {"RELAYOUT", "relayout"},
+        {"PAGE", "page_slots"},     {"DESCRIBE", "columns"}};
+
+    std::string_view view;
+    for (const auto& [name, v] : kPlain) {
+        if (IEquals(target, name)) view = v;
+    }
+    if (view.empty()) {
+        return refuse("unknown SHOW target '" + std::string(target) + "' (byte " +
+                      std::to_string(byte_of(target)) + ")");
+    }
+
+    parser::SelectStmt stmt;
+    stmt.from.schema = std::string(exec::kCatalogSchema);
+    stmt.from.table_name = std::string(view);
+    stmt.from.byte_offset = byte_of(target);
+    const auto project = [&](std::span<const std::string_view> columns) {
+        for (std::string_view c : columns) {
+            parser::ColumnName col;
+            col.name = std::string(c);
+            col.byte_offset = byte_of(target);
+            stmt.projection.push_back(std::move(col));
+        }
+    };
+    // `key = <arg>`, the literal at the byte the client wrote it.
+    const auto where_key = [&](std::string_view column, std::string_view token, bool integer) {
+        parser::Condition cond;
+        cond.kind = parser::PredicateKind::kCompareValue;
+        cond.op = parser::CompareOp::kEq;
+        cond.rhs_kind = parser::RhsKind::kLiteral;
+        cond.col.name = std::string(column);
+        cond.col.byte_offset = byte_of(token);
+        cond.val.byte_offset = byte_of(token);
+        if (integer) {
+            std::uint64_t v = 0;
+            const auto [ptr, ec] = std::from_chars(token.data(), token.data() + token.size(), v);
+            if (ec != std::errc() || ptr != token.data() + token.size()) {
+                return false;
+            }
+            cond.val.type = parser::ValueType::kInt;
+            cond.val.int_val = static_cast<std::int64_t>(v);
+            if (v > static_cast<std::uint64_t>(INT64_MAX)) cond.val.raw_int_text = std::string(token);
+        } else {
+            cond.val.type = parser::ValueType::kStr;
+            cond.val.str_val = std::string(token);
+        }
+        stmt.where.push_back(std::move(cond));
+        return true;
+    };
+
+    auto [first, extra] = SplitFirstToken(Trim(arg));
+    if (view == "relayout" || view == "columns") {
+        if (!Trim(extra).empty()) {
+            return refuse(std::string(target) + " takes at most one relation name (byte " +
+                          std::to_string(byte_of(Trim(extra))) + ")");
+        }
+        if (first.empty() && view == "columns") {
+            return refuse("DESCRIBE requires a table name (byte " +
+                          std::to_string(byte_of(target) + target.size()) + ")");
+        }
+        if (!first.empty()) where_key(view == "columns" ? "rel_name" : "name", first, false);
+    } else if (view == "page_slots") {
+        if (first.empty()) {
+            return refuse("SHOW PAGE requires a page id (byte " +
+                          std::to_string(byte_of(target) + target.size()) + ")");
+        }
+        if (!where_key("page_id", first, true)) {
+            return refuse("invalid page id '" + std::string(first) + "' (byte " +
+                          std::to_string(byte_of(first)) + ")");
+        }
+        const std::string_view option = Trim(extra);
+        if (option.empty()) {
+            project(kPage);  // `VALUES` adds the payload column
+        } else if (!IEquals(option, "VALUES")) {
+            return refuse("unknown SHOW PAGE option '" + std::string(option) + "' (byte " +
+                          std::to_string(byte_of(option)) + ")");
+        }
+    } else {
+        if (!first.empty()) {
+            return refuse("SHOW " + std::string(target) + " takes no argument (byte " +
+                          std::to_string(byte_of(first)) + ")");
+        }
+        if (view == "relation_stats") project(kBudget);
+    }
+    return HandleCatalogView(stmt, session);
+}
+
 DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& stmt,
                                                      Session& session) {
     // **AG12.** A catalog view's rows come from the catalog's typed readers,
@@ -6823,9 +5918,44 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                 false};
     }
 
-    const std::optional<txn::ReadView> read_view = ViewFor(session);
-    auto view = exec::ReadCatalogView(catalog_, stmt.from.table_name,
-                                      read_view.has_value() ? &*read_view : nullptr);
+    const SysViewSpec* spec = FindSysView(stmt.from.table_name);
+    if (spec == nullptr) {
+        const Status s = Status::NotFound("no catalog view named 'sys." + stmt.from.table_name +
+                                          "'");
+        return {ErrorReply(s), false, 0, s};
+    }
+    // **A view's key** (BO-Q12, `sys_views.hpp`): the conjunct
+    // `key = <literal>`, coerced to the key's type, is handed to the builder
+    // as a bound on what it reads; a required key not written is refused.
+    std::optional<parser::AstValue> key;
+    if (spec->key_mode != ViewKeyMode::kNone) {
+        for (const parser::Condition& cond : stmt.where) {
+            if (cond.kind != parser::PredicateKind::kCompareValue ||
+                cond.op != parser::CompareOp::kEq || cond.rhs_kind != parser::RhsKind::kLiteral ||
+                !IEquals(cond.col.name, spec->key_column)) {
+                continue;
+            }
+            catalog::SysColumnRow column{};
+            column.type_val = spec->key_type;
+            parser::AstValue literal = cond.val;
+            if (Status s = exec::CoerceLiteralToColumn(column, literal)
+                               .WithContext("column '" + cond.col.name + "' literal at byte " +
+                                            std::to_string(cond.val.byte_offset));
+                !s.ok()) {
+                return {ErrorReply(s), false, 0, s};
+            }
+            key = std::move(literal);
+            break;
+        }
+        if (!key.has_value() && spec->key_mode == ViewKeyMode::kRequired) {
+            const Status s = Status::InvalidArgument(
+                "sys." + std::string(spec->name) + " is read one key at a time: write WHERE " +
+                std::string(spec->key_column) + " = <literal> (byte " +
+                std::to_string(stmt.from.byte_offset) + ")");
+            return {ErrorReply(s), false, 0, s};
+        }
+    }
+    auto view = ReadSysView(*spec, session, key.has_value() ? &*key : nullptr);
     if (!view.ok()) {
         return {ErrorReply(view.status()), false, 0, view.status()};
     }
@@ -7311,13 +6441,13 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     if (!stmt.from.schema.empty() || !stmt.joins.empty()) {
         const bool from_is_view =
             IEquals(stmt.from.schema, exec::kCatalogSchema) &&
-            exec::IsCatalogView(stmt.from.table_name);
+            FindSysView(stmt.from.table_name) != nullptr;
         // The same test the FROM relation gets: under a user namespace a
         // non-empty qualifier is not a view (AF-T3).
         bool any_join_is_view = false;
         for (const parser::JoinClause& join : stmt.joins) {
             if (IEquals(join.relation.schema, exec::kCatalogSchema) &&
-                exec::IsCatalogView(join.relation.table_name)) {
+                FindSysView(join.relation.table_name) != nullptr) {
                 any_join_is_view = true;
             }
         }
@@ -7346,7 +6476,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         // exists to avoid.
         if (IEquals(stmt.from.schema, exec::kCatalogSchema)) {
             std::string known;
-            for (const std::string& name : exec::CatalogViewNames()) {
+            for (const std::string& name : SysViewNames()) {
                 if (!known.empty()) known += ", ";
                 known += "sys." + name;
             }
@@ -7585,7 +6715,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // to a chain walk, loses its yields with it (SUS-1: no new heap).
     const exec::AccessKind outer = compiled.steps.front().kind;
     const bool descends = outer == exec::AccessKind::kLookup || outer == exec::AccessKind::kProbe;
-    if (!may_park_ || trace_ != nullptr || descends) return run->RunInline();
+    if (!may_park_ || descends) return run->RunInline();
     run->HoldAcrossSuspension();
     DispatchOutcome handed;
     handed.select_run = run;
@@ -7977,12 +7107,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // after all (see the stop's arm below).
     bool parked_on_row = false;
     Status blocked_verdict;
-    // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
-    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
-    auto parsed = [&] {
-        stats::SpanScope span(trace_, stats::Layer::kParse);
-        return parser::Parse(line);
-    }();
+    auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
     }
@@ -9943,12 +9068,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // AO-S3b, and `UpdateInner`'s site states the argument.
     bool parked_on_row = false;
     Status blocked_verdict;
-    // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
-    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
-    auto parsed = [&] {
-        stats::SpanScope span(trace_, stats::Layer::kParse);
-        return parser::Parse(line);
-    }();
+    auto parsed = parser::Parse(line);
     if (!parsed.ok()) return {ErrorReply(parsed.status()), false, 0, parsed.status()};
     if (!std::holds_alternative<parser::DeleteStmt>(parsed.value())) {
         return {"ERR expected a DELETE statement", false};

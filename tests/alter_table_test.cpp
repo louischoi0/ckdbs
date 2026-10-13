@@ -10,6 +10,7 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
+#include "view_text.hpp"
 
 // ALT04 - the oid-identity proof (docs/spec/alter.md AL2).
 //
@@ -196,7 +197,7 @@ TEST_F(AlterTableTest, AnOrphanedPatternDiesQuietlyWithTheOldName) {
                                 wal::DurabilityClass::kGroup, exec::Budget(), &recorder);
     recording.Dispatch("SELECT v FROM t WHERE id = 1");
     recording.Dispatch("SELECT v FROM t WHERE id = 1");
-    ASSERT_NE(Run("SHOW PATTERNS").find("patterns=1"), std::string::npos)
+    ASSERT_EQ(testing_view::ReadViewText(Run("SHOW PATTERNS")).rows.size(), 1u)
         << "the shape has to be registered before the rename can orphan it";
 
     EXPECT_EQ(Run("ALTER TABLE t RENAME TO u"), "RENAMED TABLE t TO u");
@@ -204,7 +205,7 @@ TEST_F(AlterTableTest, AnOrphanedPatternDiesQuietlyWithTheOldName) {
     // The orphaned row is still listed and still harmless.
     const std::string patterns = Run("SHOW PATTERNS");
     EXPECT_NE(patterns.rfind("ERR", 0), 0u) << patterns;
-    EXPECT_NE(patterns.find("patterns=1"), std::string::npos) << patterns;
+    EXPECT_EQ(testing_view::ReadViewText(patterns).rows.size(), 1u) << patterns;
 
     // Old-name traffic fails resolution; new-name traffic answers - and
     // is a different shape, so the dead pattern is never consulted for it.

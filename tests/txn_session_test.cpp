@@ -13,6 +13,7 @@
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
+#include "view_text.hpp"
 
 // docs/spec/txn.md sections 10-5, 10-6, 10-7 and 10-8, end to end: two sessions
 // on **one dispatcher**, which is what the shared-dispatcher design makes
@@ -1249,8 +1250,8 @@ TEST_F(TxnSessionTest, ACommittedDropsMarksArePurgedByTheNextTick) {
     ASSERT_TRUE(mount.ok()) << mount.status().message();
     EXPECT_EQ(mount.value(), 0u) << "the tick's purge left marks for the mount sweep";
     const std::string meta = Run(s, "SHOW META");
-    EXPECT_NE(meta.find("catalog_marks_purged="), std::string::npos) << meta;
-    EXPECT_EQ(meta.find("catalog_marks_purged=0"), std::string::npos) << meta;
+    EXPECT_NE(testing_view::MetaField(meta, "catalog_marks_purged"), std::nullopt) << meta;
+    EXPECT_NE(testing_view::MetaField(meta, "catalog_marks_purged"), "0") << meta;
 
     EXPECT_EQ(Run(s, "SHOW INDEXES").find("by_owner"), std::string::npos);
 }
@@ -1321,9 +1322,9 @@ TEST_F(TxnSessionTest, ShowMetaCarriesTheUndoPurgeCounters) {
     ASSERT_EQ(Run(s, "INSERT INTO t VALUES (1)").substr(0, 8), "INSERTED");
 
     const std::string meta = Run(s, "SHOW META");
-    EXPECT_NE(meta.find("undo_pages_live="), std::string::npos) << meta;
-    EXPECT_NE(meta.find("undo_pages_recycled="), std::string::npos) << meta;
-    EXPECT_EQ(meta.find("undo_pages_live=0"), std::string::npos)
+    EXPECT_NE(testing_view::MetaField(meta, "undo_pages_live"), std::nullopt) << meta;
+    EXPECT_NE(testing_view::MetaField(meta, "undo_pages_recycled"), std::nullopt) << meta;
+    EXPECT_NE(testing_view::MetaField(meta, "undo_pages_live"), "0")
         << "an INSERT wrote an undo record, so at least one page must be live: " << meta;
 }
 

@@ -24,6 +24,7 @@
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
+#include "view_text.hpp"
 
 // K-M1: what the engine *does* with Keystone ids today
 // (`docs/rules/keystoneid-invariant.md` §5).
@@ -284,7 +285,7 @@ TEST_F(KeystoneIdCrashTest, AnUnsyncedCrashLosesTheSequenceAndTheTuplesTogether)
 
     Boot([](CommandDispatcher& d, catalog::Catalog&, storage::PageStore&) {
         // The sequence is back at 1...
-        EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("next_id=1"), std::string::npos);
+        EXPECT_EQ(testing_view::RelationField(d, "tables", "t", "next_id"), "1");
         // ...and so is the relation, so re-issuing 1 collides with nothing.
         // The reply is the "id" header and no rows, so it carries no digit.
         const std::string rows = d.Dispatch("SELECT id FROM t").response;

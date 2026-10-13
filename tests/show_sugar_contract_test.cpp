@@ -9,6 +9,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/kwp_session.hpp"
+#include "kds/stats/cabin_optimizer.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
@@ -59,6 +60,7 @@ protected:
                             /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kRelaxed,
                             exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
                             /*access_statistics=*/true, /*cabins=*/nullptr, &*mgr_);
+        dispatcher_->set_cabin_optimizer_view(&cabin_controller_, /*executor=*/nullptr);
 
         wire::HandshakeConfig config;
         config.capabilities = wire::kServerCapabilities;
@@ -143,6 +145,9 @@ protected:
     std::optional<txn::TrxIdSequence> ids_;
     std::optional<txn::UndoLog> undo_;
     std::optional<txn::TransactionManager> mgr_;
+    // A controller with nothing managed: `sys.cabin_optimizer` refuses on an
+    // instance that runs none, and the SV2 cell needs one that answers.
+    stats::CabinOptimizer cabin_controller_{stats::CabinOptimizerConfig{}};
     std::optional<CommandDispatcher> dispatcher_;
     sched::ManualClock clock_{1000};
     std::optional<Session> engine_session_;
@@ -252,7 +257,7 @@ constexpr Spelling kSpellings[] = {
     {"SHOW PATTERNS", "SELECT * FROM sys.patterns"},
     {"SHOW ACCESS", "SELECT * FROM sys.access_stats"},
     {"SHOW BUDGET",
-     "SELECT oid, name, next_id, ids_issued, ids_remaining, budget_used, budget_warning, "
+     "SELECT oid, name, next_id, ids_issued, ids_remaining, budget_used_ppm, budget_warning, "
      "budget_exhausted FROM sys.relation_stats"},
     {"SHOW CABINS", "SELECT * FROM sys.cabins"},
     {"SHOW INDEXES", "SELECT * FROM sys.indexes"},
@@ -261,7 +266,11 @@ constexpr Spelling kSpellings[] = {
     {"SHOW RELAYOUT", "SELECT * FROM sys.relayout"},
     {"SHOW RELAYOUT t", "SELECT * FROM sys.relayout WHERE name = 't'"},
     {"SHOW CABIN_OPTIMIZER", "SELECT * FROM sys.cabin_optimizer"},
-    {"SHOW PAGE 4", "SELECT * FROM sys.page_slots WHERE page_id = 4"},
+    {"SHOW PAGE 4",
+     "SELECT page_id, page_type, page_lsn, level, min_key, nr_slots, lower, upper, free_space, "
+     "next_page_id, slot, offset, length, dead, sep_key, child FROM sys.page_slots "
+     "WHERE page_id = 4"},
+    {"SHOW PAGE 4 VALUES", "SELECT * FROM sys.page_slots WHERE page_id = 4"},
     {"DESCRIBE t", "SELECT * FROM sys.columns WHERE rel_name = 't'"},
 };
 
@@ -316,6 +325,21 @@ TEST_F(ShowSugarTest, ShowMetaIsTheMetaViewsFieldsWhoseValuesMove) {
         return out;
     };
     EXPECT_EQ(fields(show), fields(select));
+    // A field is filed under the block that prints it.
+    EXPECT_EQ(Text("SELECT section, field FROM sys.meta WHERE field = 'version'"),
+              "section,field\\nvolume,version");
+    EXPECT_EQ(Text("SELECT section FROM sys.meta WHERE field = 'pool_budget'"),
+              "section\\npool");
+}
+
+TEST_F(ShowSugarTest, ASurfaceTheInstanceDoesNotRunIsRefusedTheSameByBothSpellings) {
+    // SV2's refusal half: with no controller the view reports the surface
+    // absent rather than an empty table, and the `SHOW` says it in the same
+    // words.
+    dispatcher_->set_cabin_optimizer_view(nullptr, nullptr);
+    const std::string selected = Text("SELECT * FROM sys.cabin_optimizer");
+    EXPECT_EQ(selected.rfind("ERR", 0), 0u) << selected;
+    EXPECT_EQ(Text("SHOW CABIN_OPTIMIZER"), selected);
 }
 
 TEST_F(ShowSugarTest, TheTraceSurfaceIsRetired) {

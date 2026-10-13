@@ -37,8 +37,9 @@
 #include "kds/sched/coro.hpp"
 
 
-#include "kds/stats/trace.hpp"
 #include "kds/server/result_sink.hpp"
+#include "kds/server/sys_views.hpp"
+#include "kds/exec/catalog_view.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -1016,28 +1017,10 @@ private:
     void TakeLockWait(std::optional<DispatchOutcome::LockWait>& into,
                       DispatchOutcome::LockWait wait);
 
-    DispatchOutcome HandleShowMeta();
-    DispatchOutcome HandleListTables(Session& session);
-
-    // `SHOW NAMESPACES` (`docs/spec/namespace.md` NS9). `sys.objects`
-    // filtered by type, the way `SHOW TABLES` filters by `kTypeTable`.
-    DispatchOutcome HandleShowNamespaces(Session& session);
 
     // `{CREATE | DROP} NAMESPACE <name>` (AF-T3). One handler for both, as
     // the parser has one production - see `NamespaceStmt` (ast.hpp).
     DispatchOutcome HandleNamespace(std::string_view line, Session& session);
-    DispatchOutcome HandleDescribe(std::string_view args, Session& session);
-    DispatchOutcome HandleShowPage(std::string_view args);
-    DispatchOutcome HandleShowPatterns();
-    DispatchOutcome HandleShowAccess();
-
-    // `SHOW BUDGET` - every relation's Keystone id consumption
-    // (`docs/rules/keystoneid-invariant.md` K-M4). Listed for *every* relation
-    // including the catalog's own, because some of those - sys.patterns,
-    // sys.cabins, sys.assertions - genuinely issue ids, and a listing that
-    // hid them would hide the only relations whose consumption an operator
-    // does not control.
-    DispatchOutcome HandleShowBudget();
 
     // Both take the session so a `CREATE TABLE` inside an explicit
     // transaction stamps its catalog rows with that transaction's id and
@@ -1191,14 +1174,6 @@ private:
     // tombstone-and-retire; the in-memory Cabin sets are forgotten after.
     DispatchOutcome HandleDropTable(std::string_view line, Session& session);
 
-    // `SHOW CABINS` - every declared Cabin, with what it has observed.
-    //
-    // The line joins two sources on purpose: the catalog's declaration
-    // (relation, column, who declared it, whether it serves - DDL, durable)
-    // and the instance's store (values observed, entries, probes - runtime
-    // state, which by §9 does not survive a restart), so "this Cabin exists
-    // but has never been probed" is visible.
-    DispatchOutcome HandleShowCabins();
 
     // Emits one INDEX_INSERT per index mutation, or one BTREE_SPLIT of the
     // pages a split restructured, with the anchor when it grew a root.
@@ -1230,7 +1205,6 @@ private:
     // for both, for HandleCabin's reason. Both take the relation `X` before
     // their first catalog write and build where the session is (AT-S5e).
     DispatchOutcome HandleIndex(std::string_view line, Session& session);
-    DispatchOutcome HandleShowIndexes(Session& session);
 
     // `CREATE ASSERTION` / `DROP ASSERTION` (docs/spec/assertion.md §3,
     // workplan AST03). One handler for both, for HandleCabin's reason.
@@ -1246,34 +1220,8 @@ private:
     // writer's when the build's relation `X` is refused (AT-S5e).
     DispatchOutcome HandleAssertion(std::string_view line, Session& session);
 
-    // `SHOW ASSERTIONS` - every declared assertion, with the relation it is
-    // on and its declaration verbatim.
-    //
-    // The `SHOW` surface rather than `SELECT * FROM sys.assertions`: a
-    // catalog *view* is read through `catalog::Catalog` alone, and a
-    // row-codec relation's rows need a `PageStore` to resolve their
-    // var-heap spills. So the one row-codec catalog relation is surfaced by
-    // `SHOW`, which has one. `sys.pattern_defs` had no view for the same
-    // reason until it was withdrawn on 2026-08-31.
-    DispatchOutcome HandleShowAssertions();
-    DispatchOutcome HandleShowRelayout(std::string_view rest);
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
 
-    // `SHOW CABIN_OPTIMIZER` - PO9's view (workplan PHY06): the switch and
-    // budget line, the executor's applied-action counters, and one line
-    // per managed candidate with its state, last B/C scores, S3 quality
-    // rates and last logged action. Everything it prints already exists on
-    // an inspection surface (`ManagedEntries`, `DecisionLog`, `counters`,
-    // `QualityOf`) - this handler renders and never computes.
-    DispatchOutcome HandleShowCabinOptimizer();
-
-    // H6 step 3 (`observability.md` §10): `TRACE ON|OFF` is the manual
-    // sampler, `SHOW TRACES` the ring, `SHOW TRACE <id>` one span tree with
-    // self-time separated from child-time - which is the number that finds
-    // the culprit, where total only says which subtree to open next.
-    DispatchOutcome HandleTrace(std::string_view rest);
-    DispatchOutcome HandleShowTraces();
-    DispatchOutcome HandleShowTrace(std::string_view rest);
 
     // ---- Foreign-key checks (docs/spec/foreign-keys.md §§2-4) -----------
     //
@@ -1373,11 +1321,6 @@ private:
     // execution is what parser-v2.md I11 forbids.
     std::string RelationNameOf(catalog::Oid oid);
 
-    // Every declared foreign key (docs/spec/foreign-keys.md §1). One line
-    // per sys.fkeys row: which relation references which, through which
-    // column. Prints `action=RESTRICT` unconditionally, because v1 has one
-    // action (F2) - a stored action field would have exactly one value.
-    DispatchOutcome HandleShowFkeys();
     DispatchOutcome HandleInsert(std::string_view line, Session& session);
 
     // The statement itself, inside a write scope the wrapper opened and
@@ -1539,11 +1482,6 @@ public:
     }
 
 
-    // H6: the core-local trace ring this dispatcher records into when a
-    // session has asked for it (`TRACE ON`). A dispatcher never told
-    // collects nothing, which is every configuration that does not want the
-    // instrument. `sink` must outlive this.
-    void SetTraceSink(stats::TraceSink* sink) noexcept { traces_ = sink; }
 
     // The instance's reclaim counters (BF-R11), which `SHOW META` prints on
     // every core; null - every hand-built dispatcher - prints none of the
@@ -1916,6 +1854,41 @@ private:
     // walked out of pages, so it is not a relation a step can read
     // (exec/catalog_view.hpp).
     DispatchOutcome HandleCatalogView(const parser::SelectStmt& stmt, Session& session);
+
+    // `SHOW <target> [<arg>]` and `DESCRIBE <t>`: one `SELECT` over one
+    // view each (SV1), built as an AST so an argument keeps its byte.
+    DispatchOutcome HandleShow(std::string_view line, std::string_view target,
+                               std::string_view arg, Session& session);
+
+    // ---- The `sys` views (src/server/sys_views.cpp) ----------------------
+    //
+    // One builder per view; `ReadSysView` dispatches on the registry entry.
+    // `key` is the view's key literal where the statement wrote one
+    // (`sys_views.hpp`), null otherwise; a schema-object view reads under
+    // `view` (BO-Q2), null for unfiltered.
+    StatusOr<exec::CatalogView> ReadSysView(const SysViewSpec& spec, Session& session,
+                                            const parser::AstValue* key);
+    StatusOr<exec::CatalogView> TablesView(const txn::ReadView* view);
+    StatusOr<exec::CatalogView> ObjectsView(const txn::ReadView* view);
+    StatusOr<exec::CatalogView> ColumnsView(const txn::ReadView* view,
+                                            const parser::AstValue* rel_name);
+    StatusOr<exec::CatalogView> TypesView();
+    StatusOr<exec::CatalogView> PatternsView();
+    StatusOr<exec::CatalogView> NamespacesView(const txn::ReadView* view);
+    StatusOr<exec::CatalogView> IndexesView(const txn::ReadView* view);
+    StatusOr<exec::CatalogView> FkeysView(const txn::ReadView* view);
+    StatusOr<exec::CatalogView> AccessStatsView();
+    StatusOr<exec::CatalogView> RelationStatsView();
+    StatusOr<exec::CatalogView> CabinsView();
+    StatusOr<exec::CatalogView> AssertionsView();
+    StatusOr<exec::CatalogView> RelayoutView(const parser::AstValue* name);
+    StatusOr<exec::CatalogView> CabinOptimizerView();
+    StatusOr<exec::CatalogView> PageSlotsView(const parser::AstValue& page_id);
+    StatusOr<exec::CatalogView> MetaView();
+    // The clustered root a relation's anchor names, or its descriptor page.
+    StatusOr<PageId> CurrentRootOf(const catalog::SysTableRow& row);
+    // `sys.meta`'s fields as one `key=value` line.
+    std::vector<std::pair<std::string_view, std::string>> MetaSections();
 
     // A full ordered scan of the relation, whichever storage it uses. Both
     // walk sibling/next links left to right, so the row order is identical.
@@ -2429,18 +2402,6 @@ private:
     // never constructed (`cabins = off`, or a test that wired neither).
     const stats::CabinOptimizer* cabin_controller_ = nullptr;
     const exec::CabinOptimizerExecutor* cabin_executor_ = nullptr;
-    // ---- H6: per-request tracing (`observability.md` §10 steps 1-3) -----
-    //
-    // `traces_` is the core-local ring; `tracing_` is the session's
-    // `TRACE ON`; `trace_` is the context of the statement in flight, null
-    // on every untraced one - which is what every `SpanScope` in this file
-    // branches on and the whole of the disabled path.
-    //
-    // Members for `pending_commit_lsn_`'s reason (one statement at a time on
-    // a core). Off by default.
-    stats::TraceSink* traces_ = nullptr;
-    stats::TraceContext* trace_ = nullptr;
-    bool tracing_ = false;
 
     // This core's reactor, set_scheduler_view(); null off a reactor.
     const sched::Scheduler* scheduler_view_ = nullptr;

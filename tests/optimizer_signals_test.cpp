@@ -13,6 +13,7 @@
 #include "kds/sched/clock.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "view_text.hpp"
 
 // The cabin optimizer's input signals (physical-optimizer.md §II.2,
 // workplan PHY01). Three claims carry the acceptance: decayed accumulation
@@ -269,14 +270,14 @@ TEST(OptimizerSignalsTest, TwoSelectListsOverOneFetchAreTwoFingerprints) {
 
 TEST(OptimizerSignalsTest, SetCabinOptimizerTogglesAndShowMetaReports) {
     Instance db;
-    EXPECT_NE(db.Run("SHOW META").find("cabin_optimizer=off"), std::string::npos);
+    EXPECT_EQ(testing_view::MetaField(db.Run("SHOW META"), "cabin_optimizer"), "off");
 
     EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER ON"), "OK cabin_optimizer=on");
-    EXPECT_NE(db.Run("SHOW META").find("cabin_optimizer=on"), std::string::npos);
+    EXPECT_EQ(testing_view::MetaField(db.Run("SHOW META"), "cabin_optimizer"), "on");
 
     // Both spellings read naturally on a terminal; both work.
     EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER = OFF"), "OK cabin_optimizer=off");
-    EXPECT_NE(db.Run("SHOW META").find("cabin_optimizer=off"), std::string::npos);
+    EXPECT_EQ(testing_view::MetaField(db.Run("SHOW META"), "cabin_optimizer"), "off");
 
     EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER maybe").substr(0, 3), "ERR");
     EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER on off").substr(0, 3), "ERR");

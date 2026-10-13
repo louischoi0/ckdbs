@@ -330,8 +330,10 @@ TEST_F(KwpSessionTest, AWriteAnswersACompletionWithItsRowCountAndNoDescription) 
 }
 
 TEST_F(KwpSessionTest, AMultiLineDiagnosticArrivesAsAOneColumnTextResultSet) {
+    // `ANALYZE` - a plan, not a table - is the one text-lines reply BO-R3
+    // leaves; every `sys` view and `SHOW` answers as a typed result set.
     Handshake();
-    auto frames = RunStatement("DESCRIBE t");
+    auto frames = RunStatement("ANALYZE SELECT * FROM t");
     ASSERT_EQ(frames.size(), 3u);
     auto desc = wire::DecodeRowDescription(frames[0].payload);
     ASSERT_TRUE(desc.ok());
@@ -348,15 +350,15 @@ TEST_F(KwpSessionTest, ASingleLineDiagnosticIsTheCompletionTagItself) {
     // The rule, stated where it can be checked: a statement with no typed
     // result set answers with its reply as the tag, and only a reply
     // carrying lines becomes a text result set - because a tag has no
-    // lines. `SHOW META` is one line, so it is a tag.
+    // lines. `PING` is one line, so it is a tag.
     Handshake();
-    auto frames = RunStatement("SHOW META");
+    auto frames = RunStatement("PING");
     ASSERT_EQ(frames.size(), 1u);
     ASSERT_EQ(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kComplete));
     wire::PayloadReader r(frames[0].payload);
     auto tag = r.Text();
     ASSERT_TRUE(tag.has_value() && tag->has_value());
-    EXPECT_NE((**tag).find("version="), std::string::npos);
+    EXPECT_EQ(**tag, "PONG");
 }
 
 // ---- P08: named statements, portals and their caps ------------------------

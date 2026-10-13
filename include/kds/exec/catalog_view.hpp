@@ -60,25 +60,4 @@ struct CatalogView {
     std::vector<std::vector<parser::AstValue>> rows;
 };
 
-// True when `name` is one of the views below. Case-insensitive.
-bool IsCatalogView(std::string_view name) noexcept;
-
-// Every view name, for an error message that can say what does exist.
-std::vector<std::string> CatalogViewNames();
-
-// Materializes one view.
-//
-// **`view` is the session's read view, and a schema-object view reads
-// under it** (BO-Q2, `docs/spec/ddl-transactional.md` §5a): `tables`,
-// `objects` and `columns` list what the session can see, exactly as
-// `SHOW TABLES` does, so another transaction's open `CREATE TABLE` is in
-// neither. `types` and `patterns` report engine state and ignore it. Null
-// reads unfiltered.
-//
-// Fails with NotFound when `name` is not a view - callers that have
-// already checked IsCatalogView will not see it - and propagates whatever
-// the catalog reports when a row cannot be read.
-StatusOr<CatalogView> ReadCatalogView(catalog::Catalog& catalog, std::string_view name,
-                                      const txn::ReadView* view);
-
 }  // namespace kds::exec

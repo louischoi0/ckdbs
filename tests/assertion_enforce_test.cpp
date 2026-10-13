@@ -10,6 +10,7 @@
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
+#include "view_text.hpp"
 
 // The write-path reservation protocol (docs/spec/assertion.md §§4.2, 6.2;
 // workplan AST07), tested through the statement surface - which is where the
@@ -278,7 +279,7 @@ TEST_F(AssertionEnforceTest, EndToEndLifecycleLeavesNoResidue) {
     // Drop: enforcement ends at once, the catalog row is gone, and the
     // name is free - no residue a client can observe.
     ASSERT_EQ(Run("DROP ASSERTION cap").substr(0, 7), "DROPPED");
-    EXPECT_NE(Run("SHOW ASSERTIONS").find("assertions=0"), std::string::npos);
+    EXPECT_EQ(testing_view::ReadViewText(Run("SHOW ASSERTIONS")).rows.size(), 0u);
     EXPECT_EQ(Run("INSERT INTO trades VALUES (7, 999)").substr(0, 8), "INSERTED");
     EXPECT_EQ(Run("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK SUM(qty) <= 5000")
                   .substr(0, 7),
@@ -301,19 +302,23 @@ TEST_F(AssertionEnforceTest, CountersAreMonotonicAndPrintedOnlyWhileHeld) {
 
     // 4 admission checks (3 autocommit inserts + the txn's), 1 violation,
     // 3 reservations applied (the refusal reserved nothing), 1 aborted.
-    const std::string shown = Run("SHOW ASSERTIONS");
-    EXPECT_NE(shown.find("checks=4"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("violations=1"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("reserved=3"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("aborted=1"), std::string::npos) << shown;
+    const std::string counters =
+        "SELECT rel_name, checks, violations, reserved, aborted FROM sys.assertions";
+    const std::string shown = Run(counters);
+    const auto view = testing_view::ReadViewText(shown);
+    EXPECT_EQ(view.Find("rel_name", "trades", "checks"), "4") << shown;
+    EXPECT_EQ(view.Find("rel_name", "trades", "violations"), "1") << shown;
+    EXPECT_EQ(view.Find("rel_name", "trades", "reserved"), "3") << shown;
+    EXPECT_EQ(view.Find("rel_name", "trades", "aborted"), "1") << shown;
 
-    // A dispatcher whose registry does not hold the assertion prints no
-    // counters at all - zeros would claim a count that never ran.
+    // A dispatcher whose registry does not hold the assertion has no
+    // counters - NULL, since zeros would claim a count that never ran.
     CommandDispatcher second(boot_->superblock, boot_->catalog, store_, nullptr, nullptr,
                              nullptr, wal::DurabilityClass::kRelaxed, exec::Budget(), nullptr,
                              false, true, nullptr, &*mgr_);
-    const std::string cold = second.Dispatch("SHOW ASSERTIONS").response;
-    EXPECT_EQ(cold.find("checks="), std::string::npos) << cold;
+    const std::string cold = second.Dispatch(counters).response;
+    EXPECT_EQ(testing_view::ReadViewText(cold).Find("rel_name", "trades", "checks"), "NULL")
+        << cold;
 }
 
 TEST_F(AssertionEnforceTest, AFreshDispatcherOverTheSameStoreReportsAndDoesNotEnforce) {
@@ -331,8 +336,10 @@ TEST_F(AssertionEnforceTest, AFreshDispatcherOverTheSameStoreReportsAndDoesNotEn
     CommandDispatcher second(boot_->superblock, boot_->catalog, store_, nullptr, nullptr,
                              nullptr, wal::DurabilityClass::kRelaxed, exec::Budget(), nullptr,
                              false, true, nullptr, &*mgr_);
-    const std::string shown = second.Dispatch("SHOW ASSERTIONS").response;
-    EXPECT_NE(shown.find("enforcing=0"), std::string::npos) << shown;
+    const std::string shown =
+        second.Dispatch("SELECT rel_name, enforcing FROM sys.assertions").response;
+    EXPECT_EQ(testing_view::ReadViewText(shown).Find("rel_name", "trades", "enforcing"), "0")
+        << shown;
     EXPECT_EQ(second.Dispatch("INSERT INTO trades VALUES (7, 1)").response.substr(0, 8),
               "INSERTED");
 }
@@ -356,7 +363,7 @@ TEST_F(AssertionEnforceTest, ACreateOnARelationTheSessionCannotSeeIsRefusedAndBu
     const std::string out =
         Run("CREATE ASSERTION cap ON ghost GROUP BY (g) CHECK COUNT(*) <= 1");
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
-    EXPECT_NE(Run("SHOW ASSERTIONS").find("assertions=0"), std::string::npos)
+    EXPECT_EQ(testing_view::ReadViewText(Run("SHOW ASSERTIONS")).rows.size(), 0u)
         << "the refused create published an assertion: " << Run("SHOW ASSERTIONS");
 
     // The creator's own table is untouched by the refusal.

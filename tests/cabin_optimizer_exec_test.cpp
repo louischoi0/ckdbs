@@ -15,6 +15,7 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "view_text.hpp"
 
 // PHY04 - the cabin optimizer's executor. The acceptance: each action end
 // to end on small relations, a mid-build interruption discarding cleanly,
@@ -337,9 +338,11 @@ TEST(CabinOptimizerExecTest, TheViewReportsTheLifecycleAndTheCountersCount) {
     ASSERT_EQ(db.Run("CREATE TABLE h (id int64, sym varchar)").substr(0, 7), "CREATED");
     ASSERT_EQ(db.Run("INSERT INTO h VALUES ('aaa')").substr(0, 8), "INSERTED");
 
-    // No view wired yet: the surface reports absence, never a zero-filled
+    // No view wired yet: the surface is refused as absent, never an empty
     // table wearing a fresh face.
-    EXPECT_EQ(db.Run("SHOW CABIN_OPTIMIZER").substr(0, 23), "CABIN_OPTIMIZER absent ");
+    const std::string absent = db.Run("SHOW CABIN_OPTIMIZER");
+    EXPECT_EQ(absent.rfind("ERR", 0), 0u) << absent;
+    EXPECT_NE(absent.find("runs no cabin optimizer"), std::string::npos) << absent;
 
     stats::CabinOptimizerConfig config;
     config.p_cabin_pages = 0;
@@ -365,15 +368,21 @@ TEST(CabinOptimizerExecTest, TheViewReportsTheLifecycleAndTheCountersCount) {
     EXPECT_EQ(executor.counters().creates, 1u);
     EXPECT_EQ(executor.counters().drops, 0u);
 
-    // The view: header with the budget line, one managed entry in ACTIVE,
-    // named by relation and column, carrying its last logged action.
+    // The controller's numbers are `sys.meta` fields; the view is one
+    // managed entry in ACTIVE, named by relation and column, carrying its
+    // last logged action.
+    const std::string meta = db.Run("SHOW META");
+    EXPECT_EQ(testing_view::MetaField(meta, "cabin_optimizer"), "on") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "cabin_optimizer_managed"), "1") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "cabin_optimizer_page_budget"), "1024") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "cabin_optimizer_creates"), "1") << meta;
     const std::string view = db.Run("SHOW CABIN_OPTIMIZER");
-    EXPECT_EQ(view.substr(0, 19), "cabin_optimizer=on ") << view;
-    EXPECT_NE(view.find("managed=1"), std::string::npos) << view;
-    EXPECT_NE(view.find("page_budget=1024"), std::string::npos) << view;
-    EXPECT_NE(view.find("rel=h column=sym state=ACTIVE"), std::string::npos) << view;
-    EXPECT_NE(view.find("last_action=CREATE reason=sustained-benefit"), std::string::npos)
-        << view;
+    const auto shown = testing_view::ReadViewText(view);
+    ASSERT_EQ(shown.rows.size(), 1u) << view;
+    EXPECT_EQ(shown.Find("rel_name", "h", "column"), "sym") << view;
+    EXPECT_EQ(shown.Find("rel_name", "h", "state"), "ACTIVE") << view;
+    EXPECT_EQ(shown.Find("rel_name", "h", "last_action"), "CREATE") << view;
+    EXPECT_EQ(shown.Find("rel_name", "h", "reason"), "sustained-benefit") << view;
 
     // ANALYZE marks the optimizer-managed probe (PO9): the operator can
     // see the serving structure is one the engine may drop on its own.
@@ -418,10 +427,13 @@ TEST(CabinOptimizerExecTest, TheFullLifecycleObservedThroughTheView) {
         ASSERT_TRUE(executor.Tick(db.signals(), kAlwaysOn).ok());
     }
     ASSERT_EQ(executor.counters().creates, 1u);
-    std::string view = db.Run("SHOW CABIN_OPTIMIZER");
-    EXPECT_NE(view.find("state=ACTIVE"), std::string::npos) << view;
-    EXPECT_NE(view.find("last_action=CREATE reason=sustained-benefit"), std::string::npos)
-        << view;
+    const auto state = [&db](const std::string& column) {
+        return testing_view::ReadViewText(db.Run("SHOW CABIN_OPTIMIZER"))
+            .Find("rel_name", "h", column);
+    };
+    EXPECT_EQ(state("state"), "ACTIVE");
+    EXPECT_EQ(state("last_action"), "CREATE");
+    EXPECT_EQ(state("reason"), "sustained-benefit");
 
     // Phase 2 - the Cabin serves: two probes observe the value (auto is
     // n=2), the next is a served hit on a marked-managed probe, and the
@@ -437,20 +449,18 @@ TEST(CabinOptimizerExecTest, TheFullLifecycleObservedThroughTheView) {
     // score, and the next tick moves the entry to DECAYING.
     db.clock().Advance(50 * kHalfLife);
     ASSERT_TRUE(executor.Tick(db.signals(), kAlwaysOn).ok());
-    view = db.Run("SHOW CABIN_OPTIMIZER");
-    EXPECT_NE(view.find("state=DECAYING"), std::string::npos) << view;
+    EXPECT_EQ(state("state"), "DECAYING");
 
     // Phase 4 - the cooldown elapses and the DROP retires the catalog row,
     // the entry sets and the controller entry.
     db.clock().Advance(50 * kHalfLife);
     ASSERT_TRUE(executor.Tick(db.signals(), kAlwaysOn).ok());
     EXPECT_EQ(executor.counters().drops, 1u);
-    view = db.Run("SHOW CABIN_OPTIMIZER");
-    EXPECT_NE(view.find("managed=0"), std::string::npos) << view;
+    EXPECT_TRUE(testing_view::ReadViewText(db.Run("SHOW CABIN_OPTIMIZER")).rows.empty());
 
     // No residue: the catalog is clean, the probe compiles back to the
     // walk it started as, and the reply still never moved.
-    EXPECT_EQ(db.Run("SHOW CABINS").substr(0, 8), "cabins=0");
+    EXPECT_EQ(testing_view::ReadViewText(db.Run("SHOW CABINS")).rows.size(), 0u);
     EXPECT_EQ(db.Run("ANALYZE " + probe).find(" cabin="), std::string::npos);
     EXPECT_EQ(db.Run(probe), baseline);
 }

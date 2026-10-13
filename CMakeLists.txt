@@ -77,6 +77,7 @@ add_library(kds
     src/catalog/catalog.cpp
     src/bootstrap/bootstrap.cpp
     src/server/command_dispatcher.cpp
+    src/server/sys_views.cpp
     src/server/expeditor.cpp
     src/server/config_file.cpp
     src/server/tcp_server.cpp
@@ -111,7 +112,6 @@ add_library(kds
     src/exec/catalog_spills.cpp
     src/exec/purge_key.cpp
     src/exec/varheap_sweep.cpp
-    src/stats/trace.cpp
     src/exec/index_key.cpp
     src/exec/fk_check.cpp
     src/exec/plan_printer.cpp
@@ -124,7 +124,6 @@ add_library(kds
     src/exec/chain_frame.cpp
     src/exec/step_vm.cpp
     src/exec/budget.cpp
-    src/exec/catalog_view.cpp
     src/exec/trail_replay.cpp
     src/exec/tuple_verify.cpp
     src/exec/wal_row_log.cpp

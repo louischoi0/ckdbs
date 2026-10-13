@@ -20,6 +20,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/tagged_cell.hpp"
 #include "kds/storage/varheap.hpp"
+#include "view_text.hpp"
 
 // The simulation harness's own regression suite (bench/workplan-teststrategy
 // SIM01-SIM04). The committed seed corpus in tests/testdata/sim_seeds.txt is
@@ -571,10 +572,11 @@ TEST_F(Rv3CrashTest, ACommittedCreateAssertionEnforcesAfterACrash) {
     Status rebooted = instance_->Reboot();
     ASSERT_TRUE(rebooted.ok()) << rebooted.message();
 
-    const std::string shown = Run("SHOW ASSERTIONS");
-    EXPECT_NE(shown.find("cap"), std::string::npos)
+    const std::string shown = Run("SELECT name, enforcing FROM sys.assertions");
+    const auto enforcing = testing_view::ReadViewText(shown).Find("name", "cap", "enforcing");
+    ASSERT_TRUE(enforcing.has_value())
         << "an acknowledged CREATE ASSERTION vanished across the crash: " << shown;
-    EXPECT_NE(shown.find("enforcing=1"), std::string::npos) << shown;
+    EXPECT_EQ(*enforcing, "1") << shown;
 
     // The constraint must not merely be listed - it must refuse. Two more
     // rows into the surviving group of one crosses the bound of 2.
@@ -1167,8 +1169,10 @@ TEST(SimFindings, ACabinSetIsNotBankedWhileAnotherTransactionIsInFlight) {
 
     // And for the stated reason: the guard fired rather than the answer
     // happening to be right for some other cause.
-    const std::string cabins = db.Execute("SHOW CABINS");
-    EXPECT_EQ(cabins.find("unbankable_views=0"), std::string::npos) << cabins;
+    const std::string meta = db.Execute("SHOW META");
+    const auto unbankable = testing_view::MetaField(meta, "cabins_unbankable_views");
+    ASSERT_TRUE(unbankable.has_value()) << meta;
+    EXPECT_NE(*unbankable, "0") << meta;
 }
 
 
