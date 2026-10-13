@@ -431,6 +431,15 @@ TEST(ContentionCountersTest, TheWindowAndTheLockTableCountUnderTheirOwnKinds) {
     EXPECT_EQ(WaitsOf(LatchKind::kLockWaitFor) - wait_for, 1u);
 }
 
+// BM-S1: every `LookupCommit` counts once, whatever it answers.
+TEST(ContentionCountersTest, AWindowLookupCountsOncePerLookupCommit) {
+    std::unique_ptr<TwoCoreRig> rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    const std::uint64_t lookups = Of(Tally::kWindowLookups);
+    (void)rig->visibility().LookupCommit(/*trx_id=*/std::uint64_t{1} << 40);
+    EXPECT_EQ(Of(Tally::kWindowLookups) - lookups, 1u);
+}
+
 TEST(ContentionCountersTest, AnOwningManagersSyncCountsAsInline) {
     auto device = wal::MemoryLogDevice::Create(wal::kDefaultSegmentSize);
     ASSERT_TRUE(device.ok()) << device.status().message();

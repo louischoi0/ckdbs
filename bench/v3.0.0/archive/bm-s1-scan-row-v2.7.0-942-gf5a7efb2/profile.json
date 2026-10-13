@@ -1,0 +1,154 @@
+{
+ "args": {
+  "mode": "profile",
+  "bin": "/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/bin/kds_server-fp-f5a7efb2",
+  "workdir": "/home/cdkbs/bench-runs/bm-s1/prof",
+  "port": 32121,
+  "pin_server": "2",
+  "pin_driver": "4",
+  "pin_writer": "0",
+  "reactor_cpus": "2,6",
+  "runs": 8,
+  "blocks": 12,
+  "scan_ops": 192,
+  "point_ops": 3000,
+  "cells": null,
+  "variant": "point,range",
+  "writer_block_ops": 100,
+  "settle_s": 0.15,
+  "quiet_load": 0.0,
+  "quiet_wait": 600.0,
+  "sampler": "/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/bin/kds_sampler.so",
+  "sampler_dir": "/home/cdkbs/bench-runs/bm-s1/prof",
+  "profile_cells": "bn,wide-h,wide-h-k",
+  "profile_scans": 20000,
+  "profile_writer_scans": 4000,
+  "writers": true,
+  "child_cpu": "0",
+  "avoid_core": 1,
+  "out": "/tmp/claude-1000/-home-cdkbs-ckdbs/cf0ad77a-b48f-47e8-b714-576faa5dc6c9/scratchpad/bm-s1/work/final/profile.json"
+ },
+ "profile": [
+  {
+   "cell": "bn",
+   "kind": "scan",
+   "rows": 10000,
+   "ops": 20000,
+   "bad": 0,
+   "server_cpu_us": 723.52359605,
+   "wall_us": 766.6361061506905,
+   "dump": "/home/cdkbs/bench-runs/bm-s1/prof/dump.0"
+  },
+  {
+   "cell": "bn",
+   "kind": "point",
+   "rows": 10000,
+   "ops": 3000,
+   "bad": 0,
+   "server_cpu_us": 25.568918,
+   "wall_us": 58.299928282698
+  },
+  {
+   "cell": "wide-h",
+   "kind": "scan",
+   "rows": 10000,
+   "ops": 20000,
+   "bad": 0,
+   "server_cpu_us": 902.1959531,
+   "wall_us": 985.5485100997612,
+   "dump": "/home/cdkbs/bench-runs/bm-s1/prof/dump.1"
+  },
+  {
+   "cell": "wide-h",
+   "kind": "point",
+   "rows": 10000,
+   "ops": 3000,
+   "bad": 0,
+   "server_cpu_us": 28.144479,
+   "wall_us": 78.22366198524833
+  },
+  {
+   "cell": "wide-h-k",
+   "kind": "scan",
+   "rows": 10000,
+   "ops": 20000,
+   "bad": 0,
+   "server_cpu_us": 1029.2877552500001,
+   "wall_us": 1117.2439859015867,
+   "dump": "/home/cdkbs/bench-runs/bm-s1/prof/dump.2"
+  },
+  {
+   "cell": "wide-h-k",
+   "kind": "point",
+   "rows": 10000,
+   "ops": 3000,
+   "bad": 0,
+   "server_cpu_us": 37.952010333333334,
+   "wall_us": 92.67883468419313
+  },
+  {
+   "cell": "writers-point",
+   "kind": "writer",
+   "ops": 4000,
+   "bad": 0,
+   "server_total_us_per_stmt": 826.228982,
+   "reactor_us_per_stmt": {
+    "0": 40.760510499999995,
+    "1": 765.973983
+   },
+   "wall_us": 814.8926922585815,
+   "lookups": 4330215,
+   "window_wait_us": 340,
+   "dump": "/home/cdkbs/bench-runs/bm-s1/prof/dumpwpoint.0",
+   "updates": 2666,
+   "update_bad": 0
+  },
+  {
+   "cell": "writers-point",
+   "kind": "alone",
+   "ops": 4000,
+   "bad": 0,
+   "server_total_us_per_stmt": 714.4984802500001,
+   "reactor_us_per_stmt": {
+    "0": 8.3297875,
+    "1": 706.0434395
+   },
+   "wall_us": 751.982239249628,
+   "lookups": 0,
+   "window_wait_us": 0,
+   "dump": "/home/cdkbs/bench-runs/bm-s1/prof/dumpwpoint.1"
+  },
+  {
+   "cell": "writers-range",
+   "kind": "writer",
+   "ops": 4000,
+   "bad": 0,
+   "server_total_us_per_stmt": 2338.5990975,
+   "reactor_us_per_stmt": {
+    "0": 725.0026885000001,
+    "1": 1588.548395
+   },
+   "wall_us": 1661.4113435498439,
+   "lookups": 46401748,
+   "window_wait_us": 64189,
+   "dump": "/home/cdkbs/bench-runs/bm-s1/prof/dumpwrange.0",
+   "updates": 185,
+   "update_bad": 0
+  },
+  {
+   "cell": "writers-range",
+   "kind": "alone",
+   "ops": 4000,
+   "bad": 0,
+   "server_total_us_per_stmt": 824.124179,
+   "reactor_us_per_stmt": {
+    "0": 9.56775625,
+    "1": 813.60864025
+   },
+   "wall_us": 859.1544137452729,
+   "lookups": 40000000,
+   "window_wait_us": 0,
+   "dump": "/home/cdkbs/bench-runs/bm-s1/prof/dumpwrange.1"
+  }
+ ]
+}

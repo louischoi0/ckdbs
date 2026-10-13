@@ -277,6 +277,13 @@ Status BtreeVisit(
 // (exec's RunWalkStep, workplan-crosscore.md P4d-3).
 StatusOr<PageId> BtreeLeftmostLeaf(storage::PageStore& store, PageId root);
 
+// A leaf, fetched under `access` and checked to be one: the page a leaf
+// walk reads its slots from, whether `BtreeVisitLeafPage` drives the slot
+// loop or the caller does (the step VM's walk, BM-R5). A page of another
+// type is `Corruption`, naming it.
+StatusOr<storage::PageRef> BtreeFetchLeaf(storage::PageStore& store, PageId leaf,
+                                          storage::PageAccess access);
+
 // One leaf of the walk BtreeVisit makes: calls `fn` per slot of exactly
 // `leaf`, under the same visitor contract, and returns the right sibling
 // the walk continues at - kInvalidPageId when `fn` stopped the walk or

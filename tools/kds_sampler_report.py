@@ -10,7 +10,9 @@ whose regular expression matches any function on its chain - so a part
 list reads "this sample is in the parser if any frame of it is", and an
 earlier part wins a sample two parts would claim; list the narrow parts
 (the parser, the codec) before the broad ones (the dispatcher).
-PARTS.json is a list of [name, regex] pairs; a sample no part claims is
+PARTS.json is a list of [name, regex] pairs; a regex prefixed `chain:` is
+matched against the whole chain, leaf first, joined by "<" ("called
+from"), so a part can name a frame by its caller. A sample no part claims is
 "other".
 
 Symbolization is `addr2line -f -C` per mapped file, one process per file,
@@ -100,12 +102,18 @@ def main():
         print("%6.2f%% %6d  %s" % (100.0 * c / total, c, n))
     result = {"samples": total}
     if a.parts:
-        parts = [(p, re.compile(rx)) for p, rx in json.load(open(a.parts))]
+        spec = json.load(open(a.parts))
+        chained = {p: rx.startswith("chain:") for p, rx in spec}
+        parts = [(p, re.compile(rx[len("chain:"):] if chained[p] else rx)) for p, rx in spec]
         part_c = collections.Counter()
         for fn in chains:
             got = "other"
+            # A `chain:` part matches the whole chain, leaf first and joined
+            # by '<' ("called from"), so it can name a frame by its caller -
+            # a memcpy under the row walk, not every memcpy (BM-S1).
+            joined = "<".join(fn)
             for p, rx in parts:
-                if any(rx.search(n) for n in fn):
+                if rx.search(joined) if chained[p] else any(rx.search(n) for n in fn):
                     got = p
                     break
             part_c[got] += 1

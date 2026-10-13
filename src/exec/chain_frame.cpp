@@ -24,10 +24,10 @@ const catalog::Schema* SchemaFor(const std::vector<const catalog::Schema*>& sche
     return schemas[ref.rel_slot];
 }
 
-}  // namespace
-
-StatusOr<bool> EvaluatePredicate(const catalog::Schema& lhs_schema, const StepPredicate& pred,
-                                 const ChainFrame& frame) {
+// EvaluatePredicate's checks, with its messages: the left side resolves
+// and is a column of its relation, and a column right side resolves.
+Status CheckPredicate(const catalog::Schema& lhs_schema, const StepPredicate& pred,
+                      const ChainFrame& frame) {
     if (!frame.CanResolve(pred.lhs)) {
         return Status::Corruption("a compiled predicate references a column the frame cannot "
                                   "resolve; the chain is malformed");
@@ -37,29 +37,64 @@ StatusOr<bool> EvaluatePredicate(const catalog::Schema& lhs_schema, const StepPr
                                   std::to_string(pred.lhs.col_pos) + " of a relation with " +
                                   std::to_string(lhs_schema.columns.size()) + " column(s)");
     }
-
-    const parser::AstValue& lhs = frame.Get(pred.lhs);
-    const std::uint32_t type_val = lhs_schema.columns[pred.lhs.col_pos].type_val;
-
-    if (pred.rhs.kind == OperandKind::kLiteral) {
-        return CompareValues(type_val, lhs, pred.rhs.literal, pred.op);
-    }
-    if (!frame.CanResolve(pred.rhs.column)) {
+    if (pred.rhs.kind != OperandKind::kLiteral && !frame.CanResolve(pred.rhs.column)) {
         return Status::Corruption("a compiled predicate references a column the frame cannot "
                                   "resolve; the chain is malformed");
     }
-    return CompareValues(type_val, lhs, frame.Get(pred.rhs.column), pred.op);
+    return Status::OK();
 }
 
-StatusOr<bool> EvaluateConjunct(const std::vector<const catalog::Schema*>& schemas,
-                                const StepPredicate& pred, const ChainFrame& frame) {
+// The comparison alone, on a predicate its check has passed. `type_val` is
+// the left column's declared type, or 0 for an outward left side.
+bool ComparePredicate(std::uint32_t type_val, const StepPredicate& pred,
+                      const ChainFrame& frame) {
+    const parser::AstValue& lhs = frame.Get(pred.lhs);
+    const parser::AstValue& rhs =
+        pred.rhs.kind == OperandKind::kLiteral ? pred.rhs.literal : frame.Get(pred.rhs.column);
+    return CompareValues(type_val, lhs, rhs, pred.op);
+}
+
+// CheckConjunct's checks as a predicate, so a well-formed conjunct - every
+// one a compiled chain holds - builds no Status (AP02); the message is
+// worded only on failure, by CheckConjunct itself.
+bool ConjunctWellFormed(const std::vector<const catalog::Schema*>& schemas,
+                        const StepPredicate& pred, const ChainFrame& frame) {
+    if (pred.rhs.kind == OperandKind::kLiteral &&
+        pred.rhs.literal.type == parser::ValueType::kParam) {
+        return false;
+    }
+    if (!frame.CanResolve(pred.lhs)) return false;
+    const catalog::Schema* lhs_schema = SchemaFor(schemas, pred.lhs);
+    if (lhs_schema != nullptr && pred.lhs.col_pos >= lhs_schema->columns.size()) return false;
+    return pred.rhs.kind == OperandKind::kLiteral || frame.CanResolve(pred.rhs.column);
+}
+
+// One conjunct's comparison, on a conjunct `CheckConjunct` has passed.
+bool CompareConjunct(const std::vector<const catalog::Schema*>& schemas,
+                     const StepPredicate& pred, const ChainFrame& frame) {
+    const catalog::Schema* lhs_schema = SchemaFor(schemas, pred.lhs);
+    const std::uint32_t type_val =
+        lhs_schema == nullptr ? 0 : lhs_schema->columns[pred.lhs.col_pos].type_val;
+    return ComparePredicate(type_val, pred, frame);
+}
+
+}  // namespace
+
+StatusOr<bool> EvaluatePredicate(const catalog::Schema& lhs_schema, const StepPredicate& pred,
+                                 const ChainFrame& frame) {
+    if (Status s = CheckPredicate(lhs_schema, pred, frame); !s.ok()) return s;
+    return ComparePredicate(lhs_schema.columns[pred.lhs.col_pos].type_val, pred, frame);
+}
+
+Status CheckConjunct(const std::vector<const catalog::Schema*>& schemas,
+                     const StepPredicate& pred, const ChainFrame& frame) {
     // A `$param` is a value position with nothing bound to it. Nothing
     // constructs one since declared patterns were withdrawn (ast.hpp), so
     // this arm is unreachable; it stays because the enumerator does, and
     // because what it prevents is a wrong answer rather than an error.
     //
-    // Checked once, here, because every residual conjunct in the engine
-    // is evaluated through this body; the other way a value reaches a
+    // Checked here, because every residual conjunct in the engine is
+    // checked through this body; the other way a value reaches a
     // comparison is a probe key, guarded at KeyFromOperand(). Corruption
     // rather than a quiet false: it sits beside the other malformed-chain
     // checks here, and a false would turn the defect that produced it into
@@ -72,31 +107,33 @@ StatusOr<bool> EvaluateConjunct(const std::vector<const catalog::Schema*>& schem
     }
 
     const catalog::Schema* lhs_schema = SchemaFor(schemas, pred.lhs);
-    if (lhs_schema == nullptr) {
-        // An outward lhs. The value is bound and comparable, but this
-        // frame does not hold the schema that says how - so the
-        // comparison falls back to the value kinds themselves, which
-        // is what CompareValues does for every type but uint64.
-        //
-        // Reachable only from a correlated sub-chain whose predicate
-        // is written `outer.col = inner.col`; the compiler emits the
-        // inner column on the left for the common spelling.
-        if (!frame.CanResolve(pred.lhs)) {
-            return Status::Corruption("a compiled predicate references an unresolvable outer "
-                                      "column; the chain is malformed");
-        }
-        const parser::AstValue& lhs = frame.Get(pred.lhs);
-        if (pred.rhs.kind == OperandKind::kLiteral) {
-            return CompareValues(/*type_val=*/0, lhs, pred.rhs.literal, pred.op);
-        }
-        if (!frame.CanResolve(pred.rhs.column)) {
-            return Status::Corruption("a compiled predicate references an unresolvable "
-                                      "column; the chain is malformed");
-        }
-        return CompareValues(/*type_val=*/0, lhs, frame.Get(pred.rhs.column), pred.op);
-    }
+    if (lhs_schema != nullptr) return CheckPredicate(*lhs_schema, pred, frame);
 
-    return EvaluatePredicate(*lhs_schema, pred, frame);
+    // An outward lhs. The value is bound and comparable, but this frame
+    // does not hold the schema that says how - so the comparison falls
+    // back to the value kinds themselves, which is what CompareValues does
+    // for every type but uint64.
+    //
+    // Reachable only from a correlated sub-chain whose predicate is
+    // written `outer.col = inner.col`; the compiler emits the inner column
+    // on the left for the common spelling.
+    if (!frame.CanResolve(pred.lhs)) {
+        return Status::Corruption("a compiled predicate references an unresolvable outer "
+                                  "column; the chain is malformed");
+    }
+    if (pred.rhs.kind != OperandKind::kLiteral && !frame.CanResolve(pred.rhs.column)) {
+        return Status::Corruption("a compiled predicate references an unresolvable "
+                                  "column; the chain is malformed");
+    }
+    return Status::OK();
+}
+
+StatusOr<bool> EvaluateConjunct(const std::vector<const catalog::Schema*>& schemas,
+                                const StepPredicate& pred, const ChainFrame& frame) {
+    if (!ConjunctWellFormed(schemas, pred, frame)) {
+        if (Status s = CheckConjunct(schemas, pred, frame); !s.ok()) return s;
+    }
+    return CompareConjunct(schemas, pred, frame);
 }
 
 StatusOr<bool> EvaluateAll(const std::vector<const catalog::Schema*>& schemas,
@@ -105,6 +142,28 @@ StatusOr<bool> EvaluateAll(const std::vector<const catalog::Schema*>& schemas,
         auto matched = EvaluateConjunct(schemas, pred, frame);
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return false;  // AND: the first false ends it
+    }
+    return true;
+}
+
+ScanKernel CompileScanKernel(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                             const std::vector<StepPredicate>& residual, std::uint16_t rel_slot) {
+    ScanKernel kernel;
+    for (const StepPredicate& pred : residual) {
+        if (pred.lhs.up != 0 || pred.lhs.rel_slot != rel_slot) continue;
+        if (pred.rhs.kind != OperandKind::kLiteral) continue;
+        if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
+        auto term = CompileScanKernelTerm(schema, layout, pred.lhs.col_pos, pred.op,
+                                          pred.rhs.literal);
+        if (term.has_value()) kernel.push_back(std::move(*term));
+    }
+    return kernel;
+}
+
+bool EvaluateAllChecked(const std::vector<const catalog::Schema*>& schemas,
+                        const std::vector<StepPredicate>& predicates, const ChainFrame& frame) {
+    for (const StepPredicate& pred : predicates) {
+        if (!CompareConjunct(schemas, pred, frame)) return false;  // AND: the first false ends it
     }
     return true;
 }

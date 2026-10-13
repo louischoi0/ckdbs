@@ -444,6 +444,20 @@ bool ApplyCompare(const T& a, const T& b, parser::CompareOp op) {
     return false;
 }
 
+// A `char(N)` cell's value: its bytes back to the first NUL and no further -
+// a char(N) cell is N bytes whatever the value's length, and the padding is
+// not part of the value (see the char(N) note at the top of this file).
+// memchr finds the terminator in one pass instead of testing and pushing a
+// byte at a time. **The one reading of a char cell**: the decoder and the
+// scan kernel both take it from here, so the value the kernel compares is
+// the value the residual compares (BM-R1).
+std::span<const std::byte> CharCellValue(std::span<const std::byte> cell) {
+    if (cell.empty()) return cell;
+    const void* nul = std::memchr(cell.data(), 0, cell.size());
+    if (nul == nullptr) return cell;
+    return cell.first(static_cast<std::size_t>(static_cast<const std::byte*>(nul) - cell.data()));
+}
+
 // Copies value bytes into a slot the caller already owns, reusing that
 // slot's capacity: one memcpy, no allocation once the frame has settled.
 //
@@ -530,21 +544,8 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             return Status::OK();
         }
         case kTypeValChar: {
-            // Read back to the first NUL and no further - a char(N) cell is
-            // N bytes whatever the value's length, and the padding is not
-            // part of the value (see the char(N) note at the top of this
-            // file). memchr finds the terminator in one pass instead of
-            // testing and pushing a byte at a time.
-            std::size_t len = cell.size();
-            if (!cell.empty()) {
-                const void* nul = std::memchr(cell.data(), 0, cell.size());
-                if (nul != nullptr) {
-                    len = static_cast<std::size_t>(static_cast<const std::byte*>(nul) -
-                                                   cell.data());
-                }
-            }
             out.type = parser::ValueType::kStr;
-            AssignBytes(out.str_val, cell.first(len));
+            AssignBytes(out.str_val, CharCellValue(cell));
             out.raw_int_text.clear();
             return Status::OK();
         }
@@ -1019,29 +1020,27 @@ StatusOr<std::vector<std::byte>> EncodeAssigned(const catalog::Schema& schema,
 
 namespace {
 
+// **The predicate first, the Status only on failure.** `Status` carries a
+// `std::string` by value, so a Status-returning check constructs and
+// destroys one even when it passes - and a `kAll` decode asks this per row.
+// `CheckDecodeShape` asks it first too and words a message only on failure,
+// so the shape is stated here alone (workplan AP02).
+bool DecodeShapeHolds(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                      std::span<const parser::AstValue> out) {
+    return !schema.columns.empty() && catalog::IsIntegerTypeVal(schema.columns.front().type_val) &&
+           layout.offsets.size() == schema.columns.size() && layout.row_size != 0 &&
+           out.size() == schema.columns.size();
+}
+
 // The shared front half of both decoders: everything that has to be true
-// before a single cell is read.
+// before a single cell is read. Under `kPayloadOnly` the caller has passed
+// `CheckDecodeShape` for this schema, layout and span already, and only the
+// row's own check runs.
 Status CheckDecodeInputs(const catalog::Schema& schema, const catalog::RowLayout& layout,
                          std::span<const std::byte> payload,
-                         std::span<parser::AstValue> out) {
-    // **The predicate first, the Status only on failure.** `Status` carries
-    // a `std::string` by value, so calling a Status-returning checker
-    // constructs and destroys one even when it passes - and this function
-    // runs once per row per decode, twice per row on the partial path. The
-    // checks are unchanged and their messages still come from the one
-    // function that words them; what is gone is building an empty message
-    // for a row that is fine (workplan AP02).
-    if (schema.columns.empty() ||
-        !catalog::IsIntegerTypeVal(schema.columns.front().type_val)) {
-        return catalog::CheckKeystoneColumn(schema);
-    }
-    if (layout.offsets.size() != schema.columns.size() || layout.row_size == 0) {
-        return CheckLayoutMatches(schema, layout);
-    }
-    if (out.size() != schema.columns.size()) {
-        return Status::InvalidArgument("decode target has " + std::to_string(out.size()) +
-                                        " slot(s) for a schema of " +
-                                        std::to_string(schema.columns.size()) + " column(s)");
+                         std::span<const parser::AstValue> out, DecodeChecks checks) {
+    if (checks == DecodeChecks::kAll && !DecodeShapeHolds(schema, layout, out)) {
+        return CheckDecodeShape(schema, layout, out);
     }
     // Checked redundancy (invariant 13): the row size is a schema constant,
     // so a stored payload of any other length is not a row this build can
@@ -1054,6 +1053,20 @@ Status CheckDecodeInputs(const catalog::Schema& schema, const catalog::RowLayout
     }
     return Status::OK();
 }
+
+}  // namespace
+
+Status CheckDecodeShape(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                        std::span<const parser::AstValue> out) {
+    if (DecodeShapeHolds(schema, layout, out)) return Status::OK();
+    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
+    if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
+    return Status::InvalidArgument("decode target has " + std::to_string(out.size()) +
+                                    " slot(s) for a schema of " +
+                                    std::to_string(schema.columns.size()) + " column(s)");
+}
+
+namespace {
 
 // A decoded NULL slot, whole: type decides, and every value field is
 // cleared - int_val, scale and dec_hi included - so no consumer that
@@ -1083,9 +1096,10 @@ Status DecodeKeystoneInto(std::span<const std::byte> payload, parser::AstValue& 
 
 Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                          std::span<const std::byte> payload, std::span<parser::AstValue> out,
-                         std::uint64_t columns, std::vector<PendingSpill>* spills) {
+                         std::uint64_t columns, std::vector<PendingSpill>* spills,
+                         DecodeChecks checks) {
     if (spills != nullptr) spills->clear();
-    if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
+    if (Status s = CheckDecodeInputs(schema, layout, payload, out, checks); !s.ok()) return s;
 
     // **Iterate the mask's set bits, not the relation's columns.** A fold or
     // a projection reading one column of twelve used to test twelve bits to
@@ -1130,7 +1144,7 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
 
 Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                      std::span<const std::byte> payload, std::span<parser::AstValue> out,
-                     std::vector<PendingSpill>* spills) {
+                     std::vector<PendingSpill>* spills, DecodeChecks checks) {
     if (spills != nullptr) spills->clear();
     // The same four checks DecodeColumnsInto makes, through the same
     // function - which is the point. Calling the two Status-returning
@@ -1139,7 +1153,7 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     // and left standing here; and stating the checks twice invited the two
     // statements of them to drift
     // (CIP/OPT-004-decoderowinto-preconditions/proposal.md).
-    if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
+    if (Status s = CheckDecodeInputs(schema, layout, payload, out, checks); !s.ok()) return s;
 
     auto id = KeystoneIdOfPayload(payload);
     if (!id.ok()) return id.status();
@@ -1216,10 +1230,13 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
 Status DecodeAndResolve(storage::PageStore& store, const catalog::Schema& schema,
                         const catalog::RowLayout& layout, std::span<const std::byte> payload,
                         std::span<parser::AstValue> out, std::uint64_t columns,
-                        std::vector<PendingSpill>& scratch) {
+                        std::vector<PendingSpill>& scratch, DecodeChecks checks) {
     if (columns == kAllColumnsMask) {
-        if (Status s = DecodeRowInto(schema, layout, payload, out, &scratch); !s.ok()) return s;
-    } else if (Status s = DecodeColumnsInto(schema, layout, payload, out, columns, &scratch);
+        if (Status s = DecodeRowInto(schema, layout, payload, out, &scratch, checks); !s.ok()) {
+            return s;
+        }
+    } else if (Status s =
+                   DecodeColumnsInto(schema, layout, payload, out, columns, &scratch, checks);
                !s.ok()) {
         return s;
     }
@@ -1369,6 +1386,136 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
         return ApplyCompare<std::string_view>(lhs.str_val, rhs.str_val, op);
     }
     return false;  // incompatible value kinds
+}
+
+std::optional<ScanKernelTerm> CompileScanKernelTerm(const catalog::Schema& schema,
+                                                    const catalog::RowLayout& layout,
+                                                    std::uint16_t column, parser::CompareOp op,
+                                                    const parser::AstValue& literal) {
+    if (op == parser::CompareOp::kIsNull || op == parser::CompareOp::kIsNotNull) return {};
+    if (column >= schema.columns.size()) return {};
+    const catalog::SysColumnRow& col = schema.columns[column];
+    ScanKernelTerm term;
+    term.op = op;
+    term.column = column;
+    term.lit = literal.int_val;
+
+    if (column == 0) {
+        // The Keystone id, compared as the int64 the decoder makes of it. A
+        // `uint64` pk compares through `ValueAsUint64` and is left to the
+        // residual; the id fits 48 bits, so taking it in later is a matter
+        // of the literal's range alone.
+        if (col.type_val == kTypeValUint64 || literal.type != parser::ValueType::kInt) return {};
+        term.kind = ScanKernelTerm::Kind::kKeystone;
+        return term;
+    }
+    switch (col.type_val) {
+        case kTypeValInt8:
+        case kTypeValInt16:
+        case kTypeValInt32:
+        case kTypeValInt64:
+        case kTypeValDate:
+        case kTypeValTimestamp:
+        case kTypeValBool:
+            if (literal.type != parser::ValueType::kInt) return {};
+            term.kind = ScanKernelTerm::Kind::kInt;
+            term.width = static_cast<std::uint8_t>(
+                col.type_val == kTypeValDate        ? 4
+                : col.type_val == kTypeValTimestamp ? 8
+                : col.type_val == kTypeValBool      ? 1
+                                                    : IntWidthFor(col.type_val));
+            term.sign_extend = col.type_val != kTypeValBool;
+            return term;
+        case kTypeValDecimal:
+            if (literal.type != parser::ValueType::kDecimal ||
+                literal.scale != catalog::DecimalScaleOf(col.len)) {
+                return {};
+            }
+            term.kind = ScanKernelTerm::Kind::kInt;
+            term.width = 8;
+            return term;
+        case catalog::kTypeValDecimalWide:
+            if (literal.type != parser::ValueType::kDecimalWide ||
+                literal.scale != catalog::DecimalScaleOf(col.len)) {
+                return {};
+            }
+            term.kind = ScanKernelTerm::Kind::kWide;
+            term.lit_hi = literal.dec_hi;
+            return term;
+        case kTypeValChar:
+        case kTypeValVarchar:
+            if (literal.type != parser::ValueType::kStr) return {};
+            term.kind = col.type_val == kTypeValChar ? ScanKernelTerm::Kind::kChar
+                                                     : ScanKernelTerm::Kind::kVarchar;
+            term.text = literal.str_val;
+            return term;
+        case kTypeValUint64: {
+            if (literal.type != parser::ValueType::kInt) return {};
+            auto u = ValueAsUint64(literal);
+            if (!u.ok()) return {};
+            term.kind = ScanKernelTerm::Kind::kUint64;
+            term.ulit = u.value();
+            return term;
+        }
+        default:
+            return {};
+    }
+}
+
+bool ScanKernelRejects(const ScanKernel& kernel, const catalog::RowLayout& layout,
+                       std::span<const std::byte> payload) {
+    for (const ScanKernelTerm& term : kernel) {
+        // A NOT NULL column has no bit, and `NullBitIsSet` answers false.
+        if (catalog::NullBitIsSet(payload, layout, term.column)) continue;
+        bool keep = true;
+        switch (term.kind) {
+            case ScanKernelTerm::Kind::kKeystone: {
+                auto id = KeystoneIdOfPayload(payload);
+                if (!id.ok()) continue;  // the residual's decode answers it
+                keep = ApplyCompare(static_cast<std::int64_t>(id.value()), term.lit, term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kInt: {
+                const std::uint64_t raw = GetLE(CellOf(layout, payload, term.column), term.width);
+                const std::int64_t v = term.sign_extend ? SignExtend(raw, term.width)
+                                                        : static_cast<std::int64_t>(raw);
+                keep = ApplyCompare(v, term.lit, term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kUint64:
+                keep = ApplyCompare(GetLE(CellOf(layout, payload, term.column), 8), term.ulit,
+                                    term.op);
+                break;
+            case ScanKernelTerm::Kind::kWide: {
+                const auto cell = CellOf(layout, payload, term.column);
+                const auto lo = static_cast<std::int64_t>(GetLE(cell.subspan(0, 8), 8));
+                const auto hi = static_cast<std::int64_t>(GetLE(cell.subspan(8, 8), 8));
+                keep = ApplyCompare(Int128FromHalves(hi, lo),
+                                    Int128FromHalves(term.lit_hi, term.lit), term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kChar: {
+                const auto value = CharCellValue(CellOf(layout, payload, term.column));
+                keep = ApplyCompare<std::string_view>(
+                    std::string_view(reinterpret_cast<const char*>(value.data()), value.size()),
+                    term.text, term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kVarchar: {
+                // Only an inline value the cell codec vouches for; anything
+                // else - spilled, NULL-tagged, refused - is the residual's.
+                auto cell = storage::DecodeCell(CellOf(layout, payload, term.column));
+                if (!cell.ok() || cell.value().tag != storage::CellTag::kInline) continue;
+                const auto bytes = cell.value().bytes;
+                keep = ApplyCompare<std::string_view>(
+                    std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
+                    term.text, term.op);
+                break;
+            }
+        }
+        if (!keep) return true;
+    }
+    return false;
 }
 
 int OrderKey::Compare(const OrderKey& rhs) const noexcept {

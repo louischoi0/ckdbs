@@ -6,6 +6,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/schema.hpp"
+#include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/parser/ast.hpp"
 
@@ -128,6 +129,29 @@ StatusOr<bool> EvaluatePredicate(const catalog::Schema& lhs_schema, const StepPr
 // evaluation cannot drift from the whole one.
 StatusOr<bool> EvaluateConjunct(const std::vector<const catalog::Schema*>& schemas,
                                 const StepPredicate& pred, const ChainFrame& frame);
+
+// EvaluateConjunct's checks alone - the `$param` refusal and the
+// malformed-chain checks, with their messages - for a caller that checks a
+// step's conjuncts once and then compares per row (BM-R6,
+// `workorder-bm-scan-row-kernel.md`). They depend only on the chain and the
+// frame's shape, never on a row.
+Status CheckConjunct(const std::vector<const catalog::Schema*>& schemas,
+                     const StepPredicate& pred, const ChainFrame& frame);
+
+// EvaluateAll on conjuncts that have each passed `CheckConjunct` against
+// this frame: the comparisons alone, with no check and no Status. The same
+// verdict EvaluateAll gives on a well-formed chain.
+bool EvaluateAllChecked(const std::vector<const catalog::Schema*>& schemas,
+                        const std::vector<StepPredicate>& predicates, const ChainFrame& frame);
+
+// The scan kernel for one step (BM-R4, row_codec.hpp's `ScanKernel`): the
+// conjuncts whose left side is a column of the step's own relation -
+// `up == 0`, `rel_slot` the step's frame slot - and whose right side is a
+// literal, each compiled if the codec holds its type. A correlated conjunct
+// (a column on the right) is never a candidate, so the inner build's
+// bucketing predicate is never in a kernel. Empty when nothing qualifies.
+ScanKernel CompileScanKernel(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                             const std::vector<StepPredicate>& residual, std::uint16_t rel_slot);
 
 // Every conjunct attached to one step. Empty always matches.
 StatusOr<bool> EvaluateAll(const std::vector<const catalog::Schema*>& schemas,

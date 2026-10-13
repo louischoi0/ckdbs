@@ -1,0 +1,59 @@
+{
+ "args": {
+  "mode": "profile",
+  "bin": "/home/cdkbs/bench-runs/bm-s6/bin/kds_server-Bfp",
+  "arm": null,
+  "scan_kernel": null,
+  "workdir": "/home/cdkbs/bench-runs/bm-s6/prof",
+  "port": 32421,
+  "pin_server": "2",
+  "pin_driver": "4",
+  "pin_writer": "0",
+  "reactor_cpus": null,
+  "runs": 8,
+  "blocks": 12,
+  "scan_ops": 192,
+  "point_ops": 3000,
+  "cells": null,
+  "variant": "point",
+  "writer_block_ops": 100,
+  "settle_s": 0.15,
+  "quiet_load": 0.0,
+  "quiet_wait": 600.0,
+  "cell_quiet_pct": 0.0,
+  "cell_quiet_wait": 600.0,
+  "cell_clean_pct": 20.0,
+  "cell_foreign_pct": 5.0,
+  "cell_retries": 3,
+  "sampler": "/home/cdkbs/bench-runs/bm-s6/bin/kds_sampler.so",
+  "sampler_dir": "/home/cdkbs/bench-runs/bm-s6/prof",
+  "profile_cells": "bn",
+  "profile_scans": 20000,
+  "profile_writer_scans": 4000,
+  "writers": false,
+  "child_cpu": "0",
+  "avoid_core": 1,
+  "out": "/home/cdkbs/bench-runs/bm-s6/prof/profile.json"
+ },
+ "profile": [
+  {
+   "cell": "bn",
+   "kind": "scan",
+   "rows": 10000,
+   "ops": 20000,
+   "bad": 0,
+   "server_cpu_us": 319.45808555,
+   "wall_us": 354.21202100114897,
+   "dump": "/home/cdkbs/bench-runs/bm-s6/prof/dump.0"
+  },
+  {
+   "cell": "bn",
+   "kind": "point",
+   "rows": 10000,
+   "ops": 3000,
+   "bad": 0,
+   "server_cpu_us": 26.080875,
+   "wall_us": 58.02392268863817
+  }
+ ]
+}

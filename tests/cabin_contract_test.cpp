@@ -206,6 +206,20 @@ TEST(CabinContractTest, TheSwitchAloneChangesNoReply) {
     ExpectSame(RunAll(db, 4), Reference(), "cabins on, none declared");
 }
 
+// BM-S3: recording and serving with the scan kernel off answer what they
+// answer with it on (the default), byte for byte, every round.
+TEST(CabinContractTest, TheScanKernelSwitchChangesNoReply) {
+    exec::Budget off;
+    off.set_scan_kernel(false);
+    Instance on_db(/*cabins=*/true);
+    Instance off_db(/*cabins=*/true, stats::CabinLimits{}, off);
+    Load(on_db);
+    Load(off_db);
+    DeclareCabins(on_db);
+    DeclareCabins(off_db);
+    ExpectSame(RunAll(on_db, 4), RunAll(off_db, 4), "scan kernel on against off");
+}
+
 TEST(CabinContractTest, ServingFromACabinChangesNoReply) {
     Instance db(/*cabins=*/true);
     Load(db);

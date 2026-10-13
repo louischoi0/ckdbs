@@ -1,0 +1,23 @@
+date: 2026-10-13 06:20 UTC
+kernel: 7.0.0-1014-azure
+cpu: Model name: AMD EPYC 9V74 80-Core Processor
+gcc: g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+data device: /dev/root      ext4 258932720 186471768  72444568  73% /
+build cache:
+CMAKE_BUILD_TYPE:STRING=Release
+CMAKE_CXX_FLAGS:STRING=
+KDS_BUILD_SIM:BOOL=OFF
+KDS_BUILD_TESTS:BOOL=OFF
+driver sha256:
+d7b8076505860855db88e213f12ed17d26daf7c15e1efebed06751e632de8699  tools/bn_census.py
+1896ef2022a52b20ef5b5fc011163ab57b10d9525191c03ed925393ec08aa362  tools/bm_scan.py
+B2 source: git describe v2.7.0-948-g952c67e5 ; commit time 2026-10-13T06:09:54+00:00
+worktree HEAD: 952c67e5 ; status:
+ M CLAUDE.md
+ M docs/inflight/known-gaps.md
+ M docs/spec/parser-v2.md
+ M include/kds/exec/step_vm.hpp
+ M instructions/v3.0.0/raft-marks-2026-10-13.md
+ M kds.conf.sample
+ M manual/sql/sql.md
+?? bench/v3.0.0/archive/bm-s6-remedy-v2.7.0-948-g952c67e5/

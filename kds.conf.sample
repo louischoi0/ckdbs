@@ -504,6 +504,16 @@ cabins = on
 # comparison is over execution rather than over planning.
 indexes = on
 
+# ---- The scan kernel (docs/spec/parser-v2.md §7) ---------------------------
+#
+# Whether a walk may reject a row on its cell's bytes before decoding it,
+# for a `column <op> literal` conjunct the kernel holds. A pre-filter only:
+# it rejects nothing the WHERE clause would keep, and every row it passes is
+# filtered exactly as before. **A read-path switch, like `indexes`:** off
+# changes the work a scan does and never an answer, and the contract suites
+# compare replies byte for byte across it. On by default.
+scan_kernel = on
+
 # How much one Cabin may hold: distinct observed values, and entries per
 # value. `[PROPOSED]` - docs/spec/cabin.md section 8 leaves the budget open,
 # so these are configurable rather than compiled in, and nothing depends on

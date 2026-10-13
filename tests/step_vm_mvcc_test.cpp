@@ -321,6 +321,29 @@ TEST_F(StepVmMvccTest, ADeleteMarkIsReadFromBothSides) {
     EXPECT_EQ(Run("SELECT id, v FROM t", &after), (std::vector<std::string>{"2|20"}));
 }
 
+// BM-S3 (BM-R3, `[quiet-wrong]`): the scan kernel reads a version
+// reconstructed through undo from `version_`, never from the page, where a
+// version this reader cannot see lies. A committed `w = 5` updated to
+// `w = 6` by a writer the reader does not see is still `w = 5` to it. The
+// first row is a filler: a step's first visible row takes the full path,
+// so the kernel is armed by the time it reaches the superseded one.
+TEST_F(StepVmMvccTest, TheScanKernelReadsAReconstructedVersionNotThePage) {
+    Create("CREATE TABLE t (id int64, w int64)");
+    Insert("t", {Int(1)});
+    const Placed row = Insert("t", {Int(5)});
+    SupersedeWith("t", row, {Int(6)}, /*writer=*/60);
+
+    const txn::Snapshot before = ViewUpTo(60);
+    EXPECT_EQ(Run("SELECT id, w FROM t WHERE w = 5", &before),
+              (std::vector<std::string>{"2|5"}));
+    EXPECT_TRUE(Run("SELECT id, w FROM t WHERE w = 6", &before).empty());
+
+    const txn::Snapshot after = ViewUpTo(61);
+    EXPECT_TRUE(Run("SELECT id, w FROM t WHERE w = 5", &after).empty());
+    EXPECT_EQ(Run("SELECT id, w FROM t WHERE w = 6", &after),
+              (std::vector<std::string>{"2|6"}));
+}
+
 // ---- txn.md section 10-9: probe and scan agree ---------------------------
 //
 // Run on both storage forms, because only a btree relation takes the

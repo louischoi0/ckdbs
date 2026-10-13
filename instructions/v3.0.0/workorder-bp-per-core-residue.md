@@ -28,6 +28,11 @@ of the shared-nothing concept (CLAUDE.md and other documents)."*
 - The order was renamed from `workorder-bp-shared-nothing-residue.md` under
   W2; its W0 quotation above is the operator's words and stays as said.
 
+**Closed 2026-10-13** on the operator's word, recorded in English
+(`raft-marks-2026-10-13.md` §1): *"First, leave close marks for BP and
+BQ."* The close's open question (§7, BP-S8) is not answered by it; it is
+carried to `known-gaps.md`'s "Per-core structures kept (BP)".
+
 **The `critics-developer` review owed at BP-S0** ran at the opening (§7).
 
 **Claim tags:**
@@ -1425,3 +1430,12 @@ change for its own order.
 
 Every stage has landed (S5 by its gate not run); the close waits at the
 push gate.
+
+### BP closed 2026-10-13
+
+On the operator's word (`raft-marks-2026-10-13.md` §1), on
+`worktree-bm-scan-kernel-open` from `fa80da9d`. The close is the code and
+texts already on `main` since `441f8f75`; nothing moved with the mark. The
+open question above stays unanswered and is carried to `known-gaps.md`'s
+"Per-core structures kept (BP)", with BP-Q15 (b) as the named next cut of
+BP-H10's fence premium.
