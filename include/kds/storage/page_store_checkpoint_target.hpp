@@ -13,15 +13,14 @@
 //
 // ---- What this target promises ------------------------------------------
 //
-// The gate and the dirty table are both the store's (since
-// INSERT started logging): DevicePageStore's WAL gates (SetWalGate(), and
-// SetCoreWalGate() since BA-S1) order every one
-// of its write paths against the log, and DirtyPagesWithRecLsn() carries a
+// The gate and the dirty table are both the store's: DevicePageStore's WAL
+// gates (SetWalGate(), SetCoreWalGate()) order every one of its write paths
+// against the log, and DirtyPagesWithRecLsn() carries a
 // real per-frame recLSN, so this adapter is a straight projection of both
 // and holds no policy of its own.
 //
-// A page reports recLSN 0 when nothing *logged* dirtied it - catalog rows
-// and bootstrap, which still write outside the log. The checkpointer reads
+// A page reports recLSN 0 when nothing *logged* dirtied it - an unlogged
+// write, such as an advisory Waystone page's. The checkpointer reads
 // that as "nothing to replay for this page" and leaves it out of the redo
 // start, which is accurate for those paths and would be a lie for a logged
 // one. That is why every logged mutation must call StampPageLsn(); the

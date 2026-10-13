@@ -13,9 +13,9 @@
 
 // A relation's heap as a linked chain of pages, walked through the
 // `next_page_id` link every heap page already reserves (heap_page.hpp's
-// tail reservation). Until this file existed a relation *was* one page:
-// the dispatcher wrote straight into `sys.tables.desc_page_id` and an
-// INSERT failed with OutOfSpace once 8 KB of tuples had landed there.
+// tail reservation). No new heap relation is created since SUS-1
+// (`heap-and-tuple.md` §3.1b); existing ones, and the `sys.assertions`
+// chain, still place through here.
 //
 // ---- What this does, and what it deliberately does not ------------------
 //
@@ -23,22 +23,20 @@
 // chain has no room, a brand-new page is allocated, linked on, and given
 // `min_key` = the id of the tuple that caused the growth. No existing
 // page's contents are ever divided, and no `min_key` is ever chosen for a
-// page that already holds tuples - which is what keeps the heap page
-// **split policy** (an open decision in CLAUDE.md: how a full page's
-// contents get divided and where the new boundary goes) genuinely open.
-// When a split policy is decided it slots in beside this, and pages this
-// file produced stay valid, because everything below rests only on the
-// confirmed invariants:
+// page that already holds tuples. Everything below rests only on these
+// invariants:
 //
 //   - `min_key` is immutable after page creation (invariant 2).
 //   - No tuple with `id < min_key(page)` ever lands in that page
 //     (invariant 3) - enforced here, at the one place tuples enter.
-//   - Ids are system-issued, unique and monotonically increasing per
-//     relation (invariant 10, `Catalog::AllocateRowId`).
+//   - Every id placed is at or above the relation's mark at its placement,
+//     and the mark moves past it under the tail's hold - an issued id is the
+//     mark, a named key below it is refused `OutOfRange` (invariant 11,
+//     BB-R7, BB-R12) - so placement order is id order.
 //
 // ---- The ordering property that falls out ------------------------------
 //
-// Because ids only increase and every insert goes to the tail, each page's
+// Because placed ids only increase and every insert goes to the tail, each page's
 // ids are entirely below the next page's `min_key`:
 //
 //   page A: [min_key(A) .. x]   page B: [min_key(B) .. y]   with x < min_key(B)
@@ -50,22 +48,17 @@
 //   1. A duplicate of an id being inserted could only be in the tail page,
 //      because every earlier page holds ids strictly below the tail's
 //      `min_key`. So the duplicate check is O(1) pages, not O(chain) - the
-//      difference between an O(n) and an O(n^2) bulk load. It is still a
-//      sanity check on the id sequence, not a uniqueness index; that is
-//      the B+ tree's job when it exists.
+//      difference between an O(n) and an O(n^2) bulk load.
 //   2. An id *below* the tail's `min_key` cannot be placed at all without
 //      violating invariant 3, and means the id sequence has gone backwards
 //      (a rolled-back or corrupted `sys.tables.next_id`). Refused loudly
 //      rather than written somewhere it does not belong.
 //
-// ---- What is not here yet -----------------------------------------------
+// ---- What is not here ---------------------------------------------------
 //
 // No free-space reuse: a page that fills, then has rows deleted, is not
-// revisited - the chain only ever grows at the tail. Reclaiming that space
-// needs page compaction, which needs a transaction manager to know no
-// snapshot still needs the bytes (heap_page.hpp's RetireSlot comment).
-// Consequently a delete-heavy relation grows monotonically, which is worth
-// knowing before pointing a benchmark at it.
+// revisited - the chain only grows at the tail, and no heap page is ever
+// compacted, so a delete-heavy relation grows monotonically.
 //
 // Concurrency (BB-R7): a user row's insert holds the chain's last page
 // exclusive *as* the last page - the walk takes each page exclusive while
@@ -120,11 +113,8 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head);
 // chain, extending it if the tail page is full.
 //
 // `tail_hint`, when given, is where the tail *search* starts and where the
-// landing page is written back - the fix for what the bulk-insert bench
-// measured (bench/results-bulk-insert.md): walking to the tail from the
-// head on every insert is O(pages-resident) per row, which made bulk
-// loads quadratic in total rows and was, after T1, the whole remaining
-// per-row cost. With the hint an insert touches O(1) pages again.
+// landing page is written back, so an insert touches O(1) pages rather than
+// walking from the head per row (quadratic bulk loads otherwise).
 //
 // **A hint can be behind, never wrong**, and that is the whole safety
 // argument: `next_page_id` is written exactly once (kInvalid -> the new
@@ -135,7 +125,7 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head);
 // handing in some other chain's page is a logic error upstream that this
 // layer cannot detect - which is why the contract is stated here: the
 // hint must be a value this function previously wrote back for this
-// chain, or kInvalidPageId. Null is the pre-hint behavior, byte for byte.
+// chain, or kInvalidPageId. Null walks from `head`.
 //
 // Fails with:
 //   AlreadyExists  a live tuple in the tail page already carries `id`
@@ -187,8 +177,8 @@ StatusOr<ChainInsertResult> ChainInsertNamed(storage::PageStore& store, PageId h
                                              PageId* tail_hint = nullptr);
 
 // One row's landing place, and the per-page facts a batch fill produces
-// for the caller's logging (docs/inflight/in-progress/workplan-t3.md T3-4: a batch-filled page
-// is described by its image, so the caller needs the touched-page list).
+// for the caller's logging (a batch-filled page is described by its image,
+// so the caller needs the touched-page list; bulkinsert.md T3-4).
 struct BatchPlacement {
     PageId page_id;
     std::uint16_t slot;
@@ -246,11 +236,10 @@ StatusOr<ChainAppendBatchResult> ChainAppendCarved(storage::PageStore& store, Pa
 // overwrites or delete-marks, and passing kRead from one of those loses
 // the write.
 // `fetcher`, when given and `access` is not kWrite, routes the page fetches
-// through it - ring mode for a bulk scan (docs/spec/eviction.md §5,
-// workplan EVT06), so the walk reuses a few frames cyclically instead of
-// flooding the pool. Null is the ordinary path, byte-identical to before
-// the parameter existed. Ignored for a write walk: the ring never
-// bypasses the dirty protocol.
+// through it - ring mode for a bulk scan (docs/spec/eviction.md §5), so the
+// walk reuses a few frames cyclically instead of flooding the pool. Null is
+// the ordinary path. Ignored for a write walk: the ring never bypasses the
+// dirty protocol.
 Status ChainVisit(
     storage::PageStore& store, PageId head, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
@@ -262,8 +251,7 @@ Status ChainVisit(
 // chain ends here (the two need no telling apart: either way the walk is
 // over, successfully).
 //
-// It exists so a caller can own the page loop (exec's RunWalkStep,
-// workplan-crosscore.md P4d-3): the page's pin is held only inside this
+// It exists so a caller can own the page loop (exec's RunWalkStep): the page's pin is held only inside this
 // call, so the gap between two calls - no pin, no span - is a legal
 // suspension point, which a whole-chain walk driving a visitor can never
 // offer. **That promise holds for the no-fetcher forms only**: a

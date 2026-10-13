@@ -70,15 +70,9 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
 
     std::memcpy(&f.version, base + kVersionOffset, sizeof(f.version));
     if (f.version != kSuperBlockVersion) {
-        // No migration path exists and none is wanted: an image this build
-        // did not write is refused, not guessed at. Recreate the database
-        // instead.
-        //
-        // **Since 17 that is D14 rather than caution** (AM-R4): a
-        // version-16 image's `page_lsn` is an offset into one of several
-        // log streams, and those LSNs are not comparable, so nothing could be
-        // migrated - the refusal is the migration story, not a placeholder
-        // for one.
+        // No migration path exists and none is wanted (D14, and the
+        // standing order of 2026-10-07): an image this build did not write
+        // is refused, not guessed at. Recreate the database instead.
         return Status::Corruption("superblock version " + std::to_string(f.version) +
                                   " is not this build's (" +
                                   std::to_string(kSuperBlockVersion) + ")");
@@ -86,13 +80,10 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
     std::memcpy(&f.log_topology, base + kLogTopologyOffset, sizeof(f.log_topology));
     if (f.log_topology != kSingleStream) {
         // **`kSingleStream` is the only topology this build reads**
-        // (AM-S4(d), on AM-R4a and D14). The version test above already
-        // refuses every image this build did not write, and this build
-        // writes `kSingleStream` and has no way to write anything else -
-        // so reaching here means a version-17 image whose topology word
-        // was corrupted or hand-edited, and the honest answer is the same
-        // refusal a bad version gets. A field this build cannot read is one
-        // it must refuse by name rather than assume.
+        // (AM-S4(d), D14). The version test above already refuses every
+        // image this build did not write, and this build writes nothing
+        // else - so reaching here means a corrupted or hand-edited topology
+        // word, refused by name rather than assumed.
         return Status::Corruption("superblock: log topology " +
                                   std::to_string(f.log_topology) + " is not single (" +
                                   std::to_string(kSingleStream) +
@@ -123,11 +114,9 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
 
     std::memcpy(&f.core_count, base + kCoreCountOffset, sizeof(f.core_count));
     if (Status s = CheckCoreCount(f.core_count); !s.ok()) {
-        // A count this build could never have written - most likely a zero
-        // read out of an older image's reserved tail. Refused here rather
-        // than defaulted, because "how many streams does this database
-        // have" is not a question to guess at: the wrong answer leaves
-        // streams unreplayed.
+        // A count this build could never have written. Refused here rather
+        // than defaulted: a zero is "boot with no cores", not "unset"
+        // (superblock.hpp's `core_count`).
         return Status::Corruption("superblock: " + s.message());
     }
 

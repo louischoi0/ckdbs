@@ -138,20 +138,16 @@ public:
         // **The statement limits core 0's dispatcher is given** (AT-S8),
         // copied like every other shared setting. A session runs on the
         // core that accepted it since every core listens, and a peer's
-        // dispatcher built with its own defaults answered a statement
-        // core 0 would have refused - or refused one core 0 would have
-        // served - under the same config file: `indexes = off`, a lowered
-        // `sort_max_rows` and the rest simply did not reach it. Each
-        // default is the dispatcher's own, so a fixture's peer is built as
-        // an unconfigured instance's is.
+        // dispatcher with its own defaults would answer differently from
+        // core 0 under the same config file. Each default is the
+        // dispatcher's own, so a fixture's peer is built as an unconfigured
+        // instance's is.
         StatementLimits statement_limits;
 
         // **The instance's optimizer surface** (AT-S8, `OptimizerSurface`):
         // the relayout mode, the one collector, the one `CABIN_OPTIMIZER`
-        // switch and the controller view. A peer handed none of it used to
-        // answer `SET CABIN_OPTIMIZER` with an OK that moved nothing the
-        // controller reads. Default-constructed, the dispatcher keeps its own
-        // - a fixture's shape.
+        // switch and the controller view. Default-constructed, the
+        // dispatcher keeps its own - a fixture's shape.
         OptimizerSurface optimizer;
 
         // Whether this core records access shapes at all. **The
@@ -169,45 +165,30 @@ public:
         bool waystone_recording = true;
         bool waystone_replay = true;
 
-        // This core's WAL anchor, copied out of core 0's superblock on the
-        // startup thread - where recovery starts this stream's scan (RV1/RV2,
-        // server/mount_recovery.hpp). It cannot be read from `superblock_`
-        // below: that is a default-constructed copy whose anchor slots are
-        // all zero, and a peer's checkpointer publishes into the instance's
-        // anchor (`checkpoint_anchor` below) rather than into its own.
-        // A zeroed anchor is legal and means "no checkpoint yet, scan from
-        // the head of the stream" - which is why the mistake would be silent.
+        // The stream's WAL anchor (slot 0), copied out of core 0's superblock
+        // on the startup thread. `Open` reads only its `redo_start_lsn`, as
+        // the start of the assertion resume's scan on a runtime that owns
+        // its registry (a fixture). A peer's checkpointer publishes into the
+        // instance's anchor (`checkpoint_anchor` below), not into this copy.
+        // A zeroed anchor is legal ("no checkpoint yet, scan from the head").
         //
         // Value-initialized, and that brace is load-bearing:
         // `WalAnchorFields` is a plain on-disk layout with no member
         // initializers (superblock.hpp), so a caller that left this field
-        // alone would otherwise hand recovery whatever was on the stack.
-        // Which is not a subtle failure - it is `ScanLog: lsn 1065353216
-        // names segment 15`, and a mount that refuses because of a
-        // caller's stack contents.
+        // alone would hand the scan whatever was on the stack.
         WalAnchorFields anchor{};
 
         // **The volume's superblock, and it is required** — `Open` refuses
         // without it. Copied wholesale into `superblock_` below, which is
         // what closes a class of bug rather than an instance of one.
         //
-        // Three fields used to live here individually — the transaction-id
-        // ceiling (PW1), the log topology (AL-S1c) and, before them, the
-        // WAL anchor — each added after a peer was caught answering a
-        // *legal, silent, wrong zero* off a default-constructed
-        // `superblock_`. The AL-S9 review found the next three already
-        // live: `version`, `create_time` and `last_mount_time`, which a
-        // peer's `SHOW META` printed as `0` and as the epoch under
-        // `peer_listeners = on`, contradicting `crosscore.md` CC11's *every
-        // core reads with the same authority*. Field-by-field was never
-        // going to end, because nothing listed which fields a peer was
-        // entitled to answer and nothing checked.
-        //
+        // Background (PW1, AL-S1c, AL-S9): fields copied one at a time
+        // kept leaving a peer answering a legal, silent, wrong zero off a
+        // default-constructed `superblock_` (`SHOW META`'s `version`,
+        // `create_time`, `last_mount_time`), against `crosscore.md` CC11.
         // So the peer gets the whole decoded image and the pointer is
-        // mandatory: a `CoreRuntime` cannot be constructed without being
-        // told what volume it is on. `anchor` above stays separate because
-        // it is a *selection* — the fold's slot 0 — not a field the image
-        // is missing.
+        // mandatory. `anchor` above stays separate because it is a
+        // *selection* - the fold's slot 0 - not a field the image lacks.
         //
         // **A borrowed pointer, read once and not retained.** `Open` copies
         // through it in its first statement, on the startup thread, after
@@ -307,13 +288,11 @@ public:
         TrxIdCeiling trx_id_ceiling;
     };
 
-    // Opens this core's WAL stream, page store, catalog and dispatcher, and
-    // builds its reactor. `device` is the shared page device and must
-    // outlive this runtime; the store built over it is this core's own.
-    //
-    // The WAL segment files are named `wal-<core_id>-<segment_no>.log`
-    // (file_log_device.hpp), so N cores in one directory do not collide -
-    // that naming predates multicore and is why it needed no change.
+    // Attaches this core to the instance's WAL stream and page store
+    // (`Config::shared_stream`, `Config::shared_store`), builds its catalog,
+    // transaction stack and dispatcher, and builds its reactor. `device` is
+    // the shared page device and must outlive this runtime; a store is
+    // opened over it only where `shared_store` is null (a fixture).
     static StatusOr<std::unique_ptr<CoreRuntime>> Open(Config config,
                                                        storage::PageDevice& device,
                                                        const sched::Clock& clock, Logger* log);
@@ -560,9 +539,9 @@ private:
     // The client listener this core accepts on (PW5, AT-S8). It borrows
     // the scheduler and the dispatcher, and
     // `~TcpServer` calls back into the scheduler to unregister its fds - so
-    // it is dropped explicitly at the top of `~CoreRuntime`, ahead of the
-    // scheduler. Declaration order alone would not do it: that destructor's
-    // *body* drops the scheduler before any member destructor runs.
+    // it is dropped explicitly at the top of `~CoreRuntime`, before the
+    // body discards the scheduler's queued tasks, as core 0 detaches its
+    // listener first.
     std::optional<TcpServer> listener_;
 
     // Last, because it borrows every one of them: the WAL, the target and

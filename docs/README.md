@@ -11,33 +11,24 @@ this file says only where a document goes.
 | `conceptnotes/` | **concept notes** (opened 2026-09-08 with CN-1): an idea recorded with its boundaries and its open decisions, before anything is built and possibly before anything ever is | nothing in it is decided, so it opens no stage and gates nothing; every note carries a status line, its claim tags, the commit it was written against, and what it does not license |
 | `pending/` | **pending discussions** (opened 2026-10-08): a question the operator raised and deferred, with the tree as read and the options | it decides nothing; on the operator's ruling the entry is deleted and the ruling goes to the document that owns the question |
 
-Outside `docs/`, and named here because the boundary is what people get
-wrong: **`instructions/<version>/`** holds the operator's work orders and
-ratifications — an open plan lives there, never in `inflight/` — and
-**`bench/<version>/`** holds every measurement.
+Outside `docs/`: **`instructions/<version>/`** holds the operator's work
+orders and ratifications — an open plan lives there, never in `inflight/` —
+and **`bench/<version>/`** holds every measurement.
 
-## The three directories that were emptied, and the citation rule
+## The citation rule for the three emptied directories
 
 `instructions/`, `bench/` and `docs/inflight/` were emptied on 2026-09-02
-ahead of the big-bang change to the architecture, rules and constraints,
-because each described work against the engine that change replaces. The
-last commit holding them is `1769487` — `git show 1769487:<path>` retrieves
-any file, `git ls-tree -r --name-only 1769487 <dir>` lists a tree.
-
-**All three have since reopened**: `instructions/v3.0.0/` on 2026-09-02,
-`bench/` and `docs/inflight/` on 2026-09-03. So the citation rule carries a
-qualifier and is wrong without it:
+ahead of the big-bang change; the last commit holding their old contents is
+`1769487` (`git show 1769487:<path>`). All three reopened (`instructions/v3.0.0/`
+on 2026-09-02, `bench/` and `docs/inflight/` on 2026-09-03), so:
 
 > A citation to one of those paths resolves against `1769487` **unless the
 > path exists in the working tree.**
 
-The qualifier is load-bearing rather than pedantic. `src/server/command_dispatcher.cpp`
-carries a comment citing
-`docs/inflight/in-progress/workplan-peer-writer.md` — and `in-progress/` is
-*not* a reopened bucket, so the qualified rule resolves it correctly at
-`1769487` while the unqualified one is right only by accident.
+The qualifier is load-bearing: source comments still cite
+`docs/inflight/in-progress/...` (`src/parser/parser.cpp`'s HAVING
+comments), and `in-progress/` is not a reopened bucket.
 
 A workplan whose every task is built is **deleted**, not archived — the
-spec that owns the subsystem carries everything durable, and git history
-carries the rest (`git show 925f483:docs/workplan-index.md` for the plans
-closed before 2026-08-26; `1769487` for everything that was still open).
+owning spec carries everything durable; `git show 925f483:docs/workplan-index.md`
+lists the plans closed before 2026-08-26.

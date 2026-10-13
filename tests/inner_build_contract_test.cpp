@@ -40,6 +40,34 @@ TEST_F(InnerBuildContractTest, EveryCapAnswersTheSameBytes) {
     }
 }
 
+// BM-S3: the scan kernel off and on answer the same rows at every cap. The
+// kernel never holds the build's correlated conjunct, and a row it rejects
+// is one no bucket and no emission would have kept.
+TEST_F(InnerBuildContractTest, TheScanKernelSwitchChangesNoRowAtAnyCap) {
+    const char* statements[] = {
+        "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id WHERE tr.qty <= 30",
+        "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id WHERE tr.qty > 10",
+        "SELECT au.name FROM au WHERE EXISTS (SELECT tr.id FROM tr WHERE tr.au_id = au.id "
+        "AND tr.qty >= 20)",
+    };
+    for (const char* sql : statements) {
+        for (std::size_t cap : {std::size_t{0}, std::size_t{1}, std::size_t{2}, std::size_t{5},
+                                kDefaultJoinBuildMaxRows}) {
+            ExecStats on_stats;
+            ExecStats off_stats;
+            const auto on = Run(sql, &on_stats, cap, 0, /*scan_kernel=*/true);
+            const auto off = Run(sql, &off_stats, cap, 0, /*scan_kernel=*/false);
+            EXPECT_EQ(on, off) << sql << " at cap " << cap;
+            EXPECT_EQ(on_stats.Total().rows_examined, off_stats.Total().rows_examined)
+                << sql << " at cap " << cap;
+            EXPECT_EQ(on_stats.Total().rows_matched, off_stats.Total().rows_matched)
+                << sql << " at cap " << cap;
+            EXPECT_EQ(on_stats.Total().build_rows, off_stats.Total().build_rows)
+                << sql << " at cap " << cap;
+        }
+    }
+}
+
 TEST_F(InnerBuildContractTest, TheCapDeclinesMidBuildAndNeverErrors) {
     // Cap 2 against a 5-row inner: the first walk buckets two entries,
     // trips, and the publish site declines the step - later outer rows

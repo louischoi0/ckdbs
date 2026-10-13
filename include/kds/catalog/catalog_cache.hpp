@@ -16,10 +16,8 @@
 // catalog pages on every statement. Each of those derivations is a full
 // page scan that heap-allocates a vector of every live row on the page and
 // memcpy-decodes each one (ScanAll() in catalog.cpp); BuildSchemaFromColumns
-// decodes every column row of *every* relation before filtering by rel_id.
-// Measured server-side, that work is the dominant cost of a statement: a
-// DESCRIBE (3 scans + one type lookup per column) costs as much as a whole
-// INSERT.
+// decodes every column row of *every* relation before filtering by rel_id -
+// uncached, the dominant server-side cost of a statement.
 //
 // What may live here is decided by one question: can the fact change
 // without DDL? If yes, it is not cacheable.

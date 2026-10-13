@@ -19,13 +19,11 @@
 // page.md sections 6-10). A PageDevice is pure addressed I/O over a flat
 // page-indexed space.
 //
-// Synchronous for now. page.md section 12 puts the real miss path on an
-// async submission through an I/O backend whose flavour (plain O_DIRECT vs
-// io_uring vs pluggable) is still an open decision in CLAUDE.md, and the
-// coroutine/future machinery it needs does not exist yet. Every operation
-// here is shaped so an async variant can be added beside it without moving
-// the boundary: the caller always owns the buffer, the buffer always
-// outlives the call, and nothing returns a span into device-owned memory.
+// Synchronous: every call blocks its calling thread. Each operation is
+// shaped so an async variant (page.md section 12) could be added beside it
+// without moving the boundary: the caller always owns the buffer, the
+// buffer always outlives the call, and nothing returns a span into
+// device-owned memory.
 //
 // The run forms exist because docs/spec/page.md section 13 names them as the
 // concrete payoff of the single-file layout (S5): page-id order is
@@ -36,42 +34,25 @@
 // Concurrency: **one instance serves every core's store** - `Expeditor`
 // hands the same reference to each `CoreRuntime::Open` - and it is on
 // `rules.md` section 3's declared shared list. **Any core grows it**, and
-// an implementation owes the synchronisation that takes (the operator's
-// decision of 2026-09-08, closing
-// `device-growth-is-not-core-0s-any-more.md`): a peer allocating through
-// the instance's free map reaches `EnsureCapacity` (since `2663001`, and
-// from two more paths since AW-S1b), so `page_capacity()` is an atomic
-// load of a bound that only rises - a reader with a stale value under-reads
+// an implementation owes the synchronisation that takes (operator,
+// 2026-09-08): a peer allocating through the instance's free map reaches
+// `EnsureCapacity`, so `page_capacity()` is an atomic load of a bound that
+// only rises - a reader with a stale value under-reads
 // the bound and faults nothing it should not - and the grow itself is
 // serialised inside the device, so two cores running off the end at once
 // produce one grow. How each implementation does that is its own
 // header's to state.
 //
-// **That argument covers `page_capacity_` and nothing else** (AM-S2 R8).
-// It is about a monotonically rising bound read racily; it says nothing
-// about whether two threads may be *inside* an operation at once. They may,
-// and already are: one device serves every core's store, so two cores
-// faulting different pages are both inside `ReadPage` - which
-// `core_runtime_test.cpp` has been doing over a shared `MemoryPageDevice`
-// with a worker thread per core since before AM-S2. AM-S2's step 2b, which
-// drops the frame table's latch before the read, adds a second route to the
-// same place rather than the first.
-//
-// **The contract, stated rather than inferred**: `ReadPage`/`ReadPageRun`
-// may be called concurrently, including with each other, and an
-// implementation owes internal synchronisation for whatever state they
-// touch. `MemoryPageDevice` did not - its trace `push_back` reallocates a
-// vector under a concurrent reader - and now takes a latch over its whole
-// mutating surface. `FilePageDevice` reads through `pread`, which is
-// thread-safe for distinct offsets, and holds no per-read state - **read
-// rather than assumed** (AM-R11, 2026-09-06): every transfer is a `pread`
-// or `pwrite` at an offset computed from the page id
-// (`file_page_device.cpp`'s `ReadAt` and `WriteAt`), never `lseek` plus
-// `read`, and the loop's `offset`, `buffer` and `remaining` are locals. It
-// needed no change; its own header's "core-local" claim did.
-// **Growth is the device's own to serialise** since 2026-09-08, per the
-// paragraph above; write and sync remain the caller's, and nothing here
-// promises they are safe against a concurrent read.
+// **Reads are concurrent** (AM-S2 R8, AM-R11): one device serves every
+// core's store, so `ReadPage`/`ReadPageRun` may be called concurrently,
+// including with each other, and an implementation owes internal
+// synchronisation for whatever state they touch. `MemoryPageDevice` takes a
+// latch over its whole mutating surface; `FilePageDevice` holds no per-read
+// state - every transfer is a `pread`/`pwrite` at an offset computed from
+// the page id (`file_page_device.cpp`'s `ReadAt`, `WriteAt`). Growth is the
+// device's own to serialise, per the paragraph above; write and sync remain
+// the caller's, and nothing here promises they are safe against a
+// concurrent read.
 
 namespace kds::storage {
 

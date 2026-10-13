@@ -1,0 +1,18 @@
+start 2026-10-13 07:30:43
+variant A []
+833501d0226cbfa0dfad4d87caaca67ab04e52c69b6a7d96476f9e74183c5c8d  /home/cdkbs/bench-runs/bt-s1/bin/kds_server-A
+built A 2026-10-13 07:31:52
+variant D1 ['D1']
+4f3426ce846dba70a3195e3859ff56b84b2b413f267ab348c13102299c6ca447  /home/cdkbs/bench-runs/bt-s1/bin/kds_server-D1
+built D1 2026-10-13 07:32:38
+variant D2 ['D2']
+80252cf82363cbfb124d958ef087ca030dc0a143e01c66650dfee9192af0b2b7  /home/cdkbs/bench-runs/bt-s1/bin/kds_server-D2
+built D2 2026-10-13 07:33:29
+variant D3 ['D3']
+408aabd70d734333f5c3af246e78b0c01fc54b7135885d9b0f4b0bfee6b24bb1  /home/cdkbs/bench-runs/bt-s1/bin/kds_server-D3
+built D3 2026-10-13 07:34:20
+variant all ['D1', 'D2', 'D3']
+97717fcb3b8b851f4784f0aae95f4a7be91e6ee36ed701f7fb4ca265ea1f088e  /home/cdkbs/bench-runs/bt-s1/bin/kds_server-all
+built all 2026-10-13 07:34:56
+variant A []
+end 2026-10-13 07:34:56

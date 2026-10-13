@@ -397,5 +397,59 @@ TEST(HeapPageTest, TupleHeaderIsTwentyBytesWithTrxIdFirst) {
     EXPECT_EQ(StringOf(page.ReadTuple(slot.value()).value().payload), "payload");
 }
 
+// BT-S2: TryReadTupleIn() makes ReadTupleIn()'s checks with no Status, and
+// ReadTupleIn() is it plus the wording - so each reason maps to the code and
+// message a reader of ReadTupleIn() has always seen, and a read fills the
+// same tuple. A reason that drifted from its wording would show here.
+TEST(HeapPageTest, TryReadTupleInGivesReadTupleInsReasonForEverySlot) {
+    PageBuf buf{};
+    auto created = PageView::CreateEmpty(AsSpan(buf), 0);
+    ASSERT_TRUE(created.ok());
+    PageView page = created.value();
+    for (int i = 0; i < 4; ++i) {
+        ASSERT_TRUE(page.InsertTuple(BytesOf("row"), /*trx_id=*/7, /*undo_ptr=*/9).ok());
+    }
+    ASSERT_TRUE(page.RetireSlot(1).ok());
+    // Slot 2 leaves the page; slot 3's data_len runs past its slot.
+    std::byte* slots = buf.data() + kHeapHeaderOffset + kHeaderSize;
+    const std::uint16_t past = kPageSize - 4;
+    std::memcpy(slots + 2 * kSlotOnDiskSize + kSlotOffsetOffset, &past, sizeof(past));
+    std::uint16_t off3 = 0;
+    std::memcpy(&off3, slots + 3 * kSlotOnDiskSize + kSlotOffsetOffset, sizeof(off3));
+    const std::uint16_t too_long = 4096;
+    std::memcpy(buf.data() + off3 + kTupleDataLenOffset, &too_long, sizeof(too_long));
+
+    const std::uint16_t n = page.slot_count();
+    PageView::Tuple t{};
+    ASSERT_EQ(page.TryReadTupleIn(0, n, t), PageView::TupleRead::kRead);
+    EXPECT_EQ(t.trx_id, 7u);
+    EXPECT_EQ(t.undo_ptr, 9u);
+    EXPECT_FALSE(t.deleted);
+    EXPECT_EQ(StringOf(t.payload), "row");
+    EXPECT_EQ(StringOf(page.ReadTupleIn(0, n).value().payload), "row");
+
+    struct Case {
+        std::uint16_t slot;
+        PageView::TupleRead reason;
+        StatusCode code;
+        std::string_view message;
+    };
+    for (const Case& c : {Case{1, PageView::TupleRead::kRetired, StatusCode::kNotFound,
+                               "slot is dead"},
+                          Case{2, PageView::TupleRead::kLeavesPage, StatusCode::kCorruption,
+                               "leaves the page"},
+                          Case{3, PageView::TupleRead::kOverlongPayload,
+                               StatusCode::kCorruption, "payload longer than its tuple"},
+                          Case{4, PageView::TupleRead::kOutOfRange, StatusCode::kNotFound,
+                               "slot index out of range"}}) {
+        EXPECT_EQ(page.TryReadTupleIn(c.slot, n, t), c.reason) << c.slot;
+        auto worded = page.ReadTupleIn(c.slot, n);
+        ASSERT_FALSE(worded.ok()) << c.slot;
+        EXPECT_EQ(worded.status().code(), c.code) << c.slot;
+        EXPECT_NE(worded.status().message().find(c.message), std::string::npos)
+            << worded.status().message();
+    }
+}
+
 }  // namespace
 }  // namespace kds::heap

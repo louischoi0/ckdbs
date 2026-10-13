@@ -16,6 +16,7 @@
 #include "kds/storage/page_header.hpp"
 
 #include "act_on_fetch_store.hpp"
+#include "device_room.hpp"
 #include "tree_structure.hpp"
 
 // The clustered B+ tree: descent, the split that moves nothing, the level
@@ -1150,6 +1151,127 @@ TEST(BtreeTest, AGrowThatDiesPromotingItsSeparatorLeavesTheLeafChainAlone) {
     }
     EXPECT_EQ(scanned, (std::vector<std::uint64_t>{10, 20, 30}))
         << "a scan must read the ids in ascending order, page by page";
+}
+
+// A divide that needs two pages - its new leaf and the root it grows - where
+// only the first fits the device and the device refuses to grow for the
+// second (`docs/inflight/bugs/a-fetch-refused-after-a-page-write-leaves-the-
+// mutation-half-done.md`). Both are claimed before the leaf is touched, so
+// the refusal leaves the tree as it was. Killed by claiming nothing: the
+// leaf divides and links its new half, the root is never created, and the
+// moved keys are routed to by no parent.
+TEST(BtreeTest, ADivideWhoseSecondPageTheDeviceRefusesWritesNothing) {
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/1, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto opened = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{256},
+                                                 /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    storage::DevicePageStore& store = *opened.value();
+    Tree tree(store);
+
+    constexpr std::size_t kFiller = 1016;  // seven to a leaf
+    for (std::uint64_t id = 10; id <= 70; id += 10) {
+        ASSERT_TRUE(tree.Insert(id, kFiller).ok()) << id;
+    }
+    const PageId root_leaf = tree.root;
+    ASSERT_EQ(BtreeHeight(store, root_leaf).value(), 1u) << "the fill already split";
+
+    testing_device::LeaveRoomForOnePage(*device.value(), store);
+    const std::uint32_t allocated = store.allocated_pages();
+
+    device.value()->FailNextGrow(Status::IoError("injected: the device cannot grow"));
+    auto refused = tree.Insert(15, kFiller);
+    device.value()->ClearInjections();
+    ASSERT_FALSE(refused.ok()) << "the root's creation needed the device to grow";
+    EXPECT_EQ(refused.status().code(), StatusCode::kIoError) << refused.status().message();
+    EXPECT_EQ(store.allocated_pages(), allocated) << "a claim was not given back";
+
+    EXPECT_EQ(tree.root, root_leaf);
+    {
+        auto bytes = store.Get(root_leaf);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        EXPECT_EQ(heap::PageView(bytes.value().bytes()).next_page_id(), kInvalidPageId)
+            << "the leaf divided before the refusal";
+    }
+    for (std::uint64_t id = 10; id <= 70; id += 10) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, id).ok()) << "lost id " << id;
+    }
+
+    // And with room, the same insert divides and grows a root, the two
+    // pages the refused one needed.
+    auto grown = tree.Insert(15, kFiller);
+    ASSERT_TRUE(grown.ok()) << grown.status().message();
+    EXPECT_NE(grown.value().new_root, kInvalidPageId);
+    for (std::uint64_t id : {10u, 15u, 20u, 30u, 40u, 50u, 60u, 70u}) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, id).ok()) << "lost id " << id;
+    }
+}
+
+// A split that grows a root re-publishes it through the relation's anchor,
+// and a fetch of the anchor that failed there - after the old root is
+// marked grown over - left the relation unable to grow. The anchor is pinned
+// before the split writes, so a device that cannot read it refuses the
+// insert with the tree as it was, and the pin outlives the insert's return.
+// Killed by pinning nothing (the insert succeeds and leaves the anchor to a
+// fetch that would fail), and by fetching the anchor without keeping it.
+TEST(BtreeTest, AGrowthWhoseAnchorCannotBeReadWritesNothing) {
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    constexpr std::size_t kFiller = 1016;  // seven to a leaf
+    PageId root = kInvalidPageId;
+    PageId anchor = kInvalidPageId;
+    {
+        auto first = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{256},
+                                                    /*first_new_page_id=*/16);
+        ASSERT_TRUE(first.ok()) << first.status().message();
+        Tree tree(*first.value());
+        for (std::uint64_t id = 10; id <= 70; id += 10) {
+            ASSERT_TRUE(tree.Insert(id, kFiller).ok()) << id;
+        }
+        root = tree.root;
+        auto made = first.value()->CreateNew();
+        ASSERT_TRUE(made.ok()) << made.status().message();
+        anchor = made.value().first;
+        storage::FormatPage(made.value().second.bytes(), PageType::kAnchor);
+        made.value().second.Release();
+        ASSERT_TRUE(first.value()->Sync().ok());
+    }
+
+    // A store with the tree resident and the anchor not: the pin's fault is
+    // the insert's one device read.
+    auto opened = storage::DevicePageStore::Open(*device.value(), storage::FrameCapacity{256},
+                                                 /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    storage::DevicePageStore& store = *opened.value();
+    for (std::uint64_t id = 10; id <= 70; id += 10) {
+        ASSERT_TRUE(BtreeLookup(store, root, id).ok()) << id;
+    }
+    ASSERT_TRUE(store.CreateNew().ok());  // the free map's region, resident too
+
+    device.value()->FailNextRead(Status::IoError("injected: the anchor cannot be read"));
+    auto refused = BtreeInsert(store, root, 15, MakeTuple(15, kFiller), /*trx_id=*/1,
+                               /*owner_oid=*/0, anchor);
+    device.value()->ClearInjections();
+    ASSERT_FALSE(refused.ok()) << "the growth's anchor was not fetched before its writes";
+    EXPECT_NE(refused.status().message().find("the anchor cannot be read"), std::string::npos)
+        << refused.status().message();
+    EXPECT_EQ(BtreeHeight(store, root).value(), 1u);
+    {
+        auto bytes = store.Get(root);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        EXPECT_EQ(heap::PageView(bytes.value().bytes()).next_page_id(), kInvalidPageId)
+            << "the leaf divided before the refusal";
+    }
+
+    auto grown = BtreeInsert(store, root, 15, MakeTuple(15, kFiller), /*trx_id=*/1,
+                             /*owner_oid=*/0, anchor);
+    ASSERT_TRUE(grown.ok()) << grown.status().message();
+    EXPECT_NE(grown.value().new_root, kInvalidPageId);
+    // The holds dropped, the anchor's pin is what is left, until it is given back.
+    grown.value().held.clear();
+    EXPECT_EQ(store.live_pins(), 1u) << "the growth did not keep its anchor pinned";
+    grown.value().anchor.Release();
+    EXPECT_EQ(store.live_pins(), 0u);
 }
 
 // A store that runs one action the **second** time a chosen page is

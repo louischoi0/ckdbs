@@ -23,7 +23,7 @@
 #include "kds/wal/manager.hpp"
 
 // **The KWP/1 session state machine** (`docs/spec/protocol.md` §5, §7, §9,
-// §10; `docs/inflight/in-progress/protocol-wp.md` P08, P10, P11).
+// §10; P08, P10, P11 of `docs/inflight/in-progress/protocol-wp.md` at 1769487).
 //
 // One of these per connection. It owns the protocol's state - the phase,
 // the named statements, the portals, the skip-to-`C_SYNC` posture - and it
@@ -33,13 +33,10 @@
 //
 // ---- It lives in `server/`, not `wire/` ----------------------------------
 //
-// The workplan puts this at `src/wire/session.cpp`. It cannot be there:
 // KW-D1 binds it to the real `CommandDispatcher`, and `kds::wire` sits
-// *below* `kds::server` - the row codec is in `wire` precisely so the
-// server and the cross-core path can both use it (`wire/row_codec.hpp`'s
-// "one encoder, two consumers"). A dispatcher-dependent state machine in
-// `wire` would invert that arrow. What stays in `wire` is what has no
-// engine dependency: the frame codec, the handshake, the error registry.
+// *below* `kds::server`. What stays in `wire` is what has no engine
+// dependency: the frame codec, the row codec, the handshake, the error
+// registry.
 //
 // ---- The dispatch is the caller's, and that is not a stub ---------------
 //
@@ -63,37 +60,19 @@
 // **delivery**, not execution: the statement runs whole into the portal's
 // buffered batches, and `max_rows` decides how many rows leave now.
 //
-// Three consequences, all stated rather than discovered:
-//
-//   - A suspended portal holds **memory**, not pins. That is not a
-//     regression: the newline protocol already materialised every result
-//     set into one reply string, so the bytes were always spent - a portal
-//     spends them in a better shape and releases them when it closes.
-//   - The portal-idle timeout (§10, KW-D3) therefore bounds memory rather
-//     than pins, which is why its refusal is `kResourceExhausted` and not
-//     a protocol error.
-//   - A **true** cursor is reachable without redesigning this: a walk
-//     streamed under credit and parked at the page boundary is the
-//     mechanism a row-bounded EXECUTE needs, and the retired
-//     `RemoteStepServer` was one (AT-S10; its history is at cf889b63). It
-//     is a later task, not a different design.
+// So a suspended portal holds **memory**, not pins, released when it
+// closes, and the portal-idle timeout (§10, KW-D3) bounds memory - which is
+// why its refusal is `kResourceExhausted` and not a protocol error.
 //
 // ---- Bound parameters are substituted, and why ---------------------------
 //
 // `C_BIND`'s parameters become **SQL literals in the statement text**,
-// which the dispatcher then runs. The alternative - binding values into a
-// parsed statement - needs the parser to accept `?` in value positions and
-// the compiler to carry a parameter vector, which is `parser-v2.md`'s work
-// and not this milestone's.
-//
-// Substitution is not a workaround here; it is what this engine's own
-// fingerprint design already assumes. `?` and a literal emit the **same**
-// shape marker (waystone-workplan.md P01: "a bind parameter's type is
-// unknown at parse, so distinguishing int-shaped from string-shaped holes
-// would break convergence"), so the `pattern_id` of the `?` form and of the
-// substituted form are equal by construction, and the `arg_hash` differs
-// per parameter set exactly as §5 wants. `KwpSessionTest` asserts that
-// equality rather than assuming it.
+// which the dispatcher then runs; binding into a parsed statement would
+// need `?` in value positions and a parameter vector in the compiler
+// (`parser-v2.md`). The fingerprint already assumes it: `?` and a literal
+// emit the **same** shape marker, so the `?` form and the substituted form
+// share a pattern while `arg_hash` differs per parameter set, as §5 wants
+// (`KwpSessionTest` asserts the equality).
 //
 // **One value cannot be bound, and it is the grammar's limit rather than
 // the protocol's**: a `TEXT`/`CHAR`/`VARCHAR` parameter containing an ASCII
@@ -108,17 +87,9 @@ namespace kds::server {
 
 // KW-D3: 60 seconds on the injected clock.
 //
-// The derivation is the ratification's: this tree spent 60 s on the two
-// waits whose event was human-or-network-scale (the retired index and
-// assertion build reply deadlines) against 10 s for the machine-scale ones
-// (the retired statement-shipping and 2PC deadlines, AT-S6). **An idle
-// portal waits on a client**, so it takes
-// the first number, and reusing one rather than inventing a third is the
-// point.
-//
-// Defensible, not measured: no workload has ever held a portal open in this
-// engine, because portals did not exist. KW-D3 says so and says P16's
-// conformance run is the first place a real number could come from.
+// **An idle portal waits on a client**, so it takes the 60 s this tree
+// gave human-or-network-scale waits rather than a third number. Defensible,
+// not measured (KW-D3).
 inline constexpr sched::MonoTimeNs kPortalIdleTimeoutNs = 60ull * 1000 * 1000 * 1000;
 
 // §10's "server may cap statement/portal counts (`ERROR(LIMIT)` beyond)".
@@ -168,9 +139,7 @@ public:
     // One sealed batch: the payload, and the row count already inside it.
     //
     // The count is carried rather than re-read out of the payload's first
-    // two bytes, which is what `Deliver` used to do - one fact with two
-    // readings, and the re-read was an unchecked index into a buffer whose
-    // size nothing had asserted.
+    // two bytes: one fact, one reading.
     struct Batch {
         std::uint16_t rows = 0;
         std::vector<std::byte> payload;
@@ -288,10 +257,8 @@ private:
         std::string sql;        // that statement's text with parameters substituted
         bool executed = false;
         // Its `S_COMPLETE` has gone out, so the portal is spent: a further
-        // `C_CONTINUE` must be refused rather than answered. Without it a
-        // second `C_CONTINUE` re-sent a diagnostic answer's whole batch -
-        // duplicate rows - and a second `S_COMPLETE` carrying the full
-        // `rows_affected` again.
+        // `C_CONTINUE` must be refused rather than answered, or it would
+        // re-send the batch and a second `S_COMPLETE`.
         bool complete_sent = false;
         // What its `C_EXECUTE` asked for, remembered so a `C_CONTINUE`
         // knows whether this portal meters (a cap) or drains (0). Handed to

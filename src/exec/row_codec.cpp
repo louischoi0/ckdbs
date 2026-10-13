@@ -112,12 +112,8 @@ StatusOr<std::uint64_t> ParseUint64Text(const std::string& text) {
 // appends or decides a size: the size was decided by the schema.
 Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& val,
                        std::span<std::byte> cell, const VarHeapSink& varheap) {
-    // **The name is built only where an error is built.** This is called
-    // once per column per row, and constructing a std::string here
-    // unconditionally - for messages that are almost never produced - was
-    // measured as most of the per-column decode cost (workplan AP02,
-    // bench/results-aggregate.md). `NameOf` costs nothing on the path that
-    // succeeds, which is every path in a working system.
+    // **The name is built only where an error is built**: a per-column
+    // std::string was most of the per-column cost (workplan AP02).
     const auto NameOf = [&col] { return std::string(catalog::NameView(col.name)); };
 
     if (val.type == parser::ValueType::kNull) {
@@ -439,24 +435,58 @@ bool ApplyCompare(const T& a, const T& b, parser::CompareOp op) {
         case parser::CompareOp::kGte: return a >= b;
         case parser::CompareOp::kIsNull:
         case parser::CompareOp::kIsNotNull:
+        case parser::CompareOp::kLike:  // text only, answered before this
             return false;
     }
     return false;
 }
 
+// `LIKE` over bytes (BU-Q6): `%` matches any run, `_` any one byte, every
+// other byte itself, case-sensitively. Iterative with one backtrack point -
+// the last `%` - so a pattern of many `%`s costs O(value x pattern) at
+// worst, never the exponential a recursive matcher reaches. A pattern `%` is
+// tested before the literal arm: a `%` byte in the value must not consume a
+// pattern `%` as itself (`'a%b' LIKE 'a%'`).
+bool LikeMatch(std::string_view value, std::string_view pattern) {
+    std::size_t v = 0, p = 0;
+    std::size_t star = std::string_view::npos, star_v = 0;
+    while (v < value.size()) {
+        if (p < pattern.size() && pattern[p] == '%') {
+            star = p++;
+            star_v = v;
+        } else if (p < pattern.size() && (pattern[p] == '_' || pattern[p] == value[v])) {
+            ++v;
+            ++p;
+        } else if (star != std::string_view::npos) {
+            p = star + 1;
+            v = ++star_v;
+        } else {
+            return false;
+        }
+    }
+    while (p < pattern.size() && pattern[p] == '%') ++p;
+    return p == pattern.size();
+}
+
+// A `char(N)` cell's value: its bytes back to the first NUL and no further -
+// a char(N) cell is N bytes whatever the value's length, and the padding is
+// not part of the value (which is why the encoder refuses a NUL in one).
+// **The one reading of a char cell**: the decoder and the
+// scan kernel both take it from here, so the value the kernel compares is
+// the value the residual compares (BM-R1).
+std::span<const std::byte> CharCellValue(std::span<const std::byte> cell) {
+    if (cell.empty()) return cell;
+    const void* nul = std::memchr(cell.data(), 0, cell.size());
+    if (nul == nullptr) return cell;
+    return cell.first(static_cast<std::size_t>(static_cast<const std::byte*>(nul) - cell.data()));
+}
+
 // Copies value bytes into a slot the caller already owns, reusing that
 // slot's capacity: one memcpy, no allocation once the frame has settled.
 //
-// This is what "assigning rather than appending" below actually requires.
-// Building a std::string and move-assigning it looks like an assign and is
-// not one: the move frees the slot's buffer and adopts a fresh one, so any
-// value past libstdc++'s 15-byte SSO cost a malloc and a free per string
-// column per decoded row, on every scan
-// (CIP/OPT-002-string-slot-assign/proposal.md). The measured win was
-// largest on the UPDATE and DELETE walks, which then decoded every scanned
-// row whole before testing the WHERE; OPT-001 has since narrowed that to
-// the filter's columns, so the numbers in that entry's results file price
-// a decode order this tree no longer has.
+// Move-assigning a built std::string is not an assign: it trades the
+// slot's buffer for a fresh one, a malloc and free per string column per
+// row past the 15-byte SSO (CIP/OPT-002-string-slot-assign).
 void AssignBytes(std::string& out, std::span<const std::byte> bytes) {
     if (bytes.empty()) {
         out.clear();
@@ -477,9 +507,7 @@ void AssignBytes(std::string& out, std::span<const std::byte> bytes) {
 Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std::byte> cell,
                            std::size_t column_index, parser::AstValue& out,
                            std::vector<PendingSpill>* spills) {
-    // Built only where an error is built - see EncodeOneValue above. This
-    // one is the hotter of the two: every column of every row every scan
-    // decodes came through here and paid for a name nobody read.
+    // Built only where an error is built - see EncodeOneValue above.
     const auto NameOf = [&col] { return std::string(catalog::NameView(col.name)); };
 
     switch (col.type_val) {
@@ -491,12 +519,9 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             std::int64_t v = SignExtend(GetLE(cell, width), width);
             out.type = parser::ValueType::kInt;
             out.int_val = v;
-            // **Left empty on purpose.** `raw_int_text` exists to carry a
-            // value `int_val` cannot hold, which for a signed column is
-            // never - and FormatValue() falls back to std::to_string(int_val)
-            // for exactly this case, so the rendering is identical. Writing
-            // it here cost a string conversion per integer column per row
-            // decoded, on every scan and twice per UPDATE.
+            // **Left empty on purpose**: `raw_int_text` carries only a value
+            // `int_val` cannot hold, never one of a signed column, and
+            // FormatValue() renders from `int_val` when it is empty.
             out.raw_int_text.clear();
             out.str_val.clear();
             return Status::OK();
@@ -530,21 +555,8 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             return Status::OK();
         }
         case kTypeValChar: {
-            // Read back to the first NUL and no further - a char(N) cell is
-            // N bytes whatever the value's length, and the padding is not
-            // part of the value (see the char(N) note at the top of this
-            // file). memchr finds the terminator in one pass instead of
-            // testing and pushing a byte at a time.
-            std::size_t len = cell.size();
-            if (!cell.empty()) {
-                const void* nul = std::memchr(cell.data(), 0, cell.size());
-                if (nul != nullptr) {
-                    len = static_cast<std::size_t>(static_cast<const std::byte*>(nul) -
-                                                   cell.data());
-                }
-            }
             out.type = parser::ValueType::kStr;
-            AssignBytes(out.str_val, cell.first(len));
+            AssignBytes(out.str_val, CharCellValue(cell));
             out.raw_int_text.clear();
             return Status::OK();
         }
@@ -593,14 +605,9 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
                 "(see row_codec.hpp)");
         // ---- DATE / TIMESTAMP / DECIMAL -------------------------------
         //
-        // **Integers out, no strings, no formatting** (TY5, workplan TY04).
-        // A date's value *is* its epoch day, and rendering it is the
-        // emission boundary's job - so nothing here allocates, exactly as
-        // the int arm above documents, and a scan that never emits a row
-        // never builds a single character of text.
-        //
-        // No re-validation either: these bytes were proven by
-        // EncodeOneValue, which is the only gate (TY7).
+        // **Integers out, no strings, no formatting** (TY5): rendering is
+        // the emission boundary's job, so a scan builds no text for rows it
+        // rejects. No re-validation: EncodeOneValue is the only gate (TY7).
         case kTypeValDate: {
             out.type = parser::ValueType::kInt;
             out.int_val = SignExtend(GetLE(cell, 4), 4);
@@ -643,22 +650,13 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
     }
 }
 
-// ---- Literal coercion (TY05, moved here at TY07) ------------------------
+// ---- Literal coercion (types.md §3.1) -----------------------------------
 //
-// `WHERE price = '12.34'` against a `DECIMAL(10,2)` column compiles to a
-// comparison whose right side is **already the scaled integer 1234**
-// (docs/spec/types.md §3.1). The string is parsed once, here, by the same
-// routines `EncodeOneValue` calls - one parser, two callers, zero drift -
-// so a literal that stores and a literal that compares can never come to
-// disagree about what it means.
-//
-// Two properties follow, and both are the point rather than side effects.
-// Per-row evaluation stays an **int64 comparison**, which keeps the
-// residual path on the cost profile the scan attribution work demands. And
-// a literal that does not parse is a **positioned compile error**, not a
-// row-by-row false: `WHERE d = '2026-02-30'` is a statement that cannot be
-// satisfied by any row, and answering it with zero rows would hide the
-// typo behind a plausible-looking empty result.
+// `WHERE price = '12.34'` against a `DECIMAL(10,2)` column compiles to the
+// scaled integer 1234, parsed by the same routines `EncodeOneValue` calls,
+// so a literal that stores and one that compares cannot disagree. Per-row
+// evaluation stays an int64 comparison, and a literal that does not parse
+// (`'2026-02-30'`) is a positioned compile error, never an empty answer.
 Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& val) {
     // A parameter is never evaluated - nothing constructs one since
     // declared patterns were withdrawn (ast.hpp) - and NULL matches nothing
@@ -735,18 +733,10 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             // drift TY01's one-parser rule exists to prevent. So it is
             // rendered and handed to that parser instead: one small string
             // per predicate at *compile*, never per row.
-            // **Already in storage form: accept it and change nothing.**
-            // The date and timestamp arms above have always done this - an
-            // epoch integer coerces to itself - and this arm not doing so
-            // made the function non-idempotent for exactly two types.
-            //
-            // That is not academic. A write hook re-coerces a *decoded* row
-            // (an UPDATE carries one), so a decimal column reached here as
-            // kDecimal and was refused. The Cabin's hook absorbs a coercion
-            // failure by un-observing, so a Cabin on a decimal column was
-            // silently destroyed by the first UPDATE that touched its
-            // relation; the index hook, which cannot absorb, would have
-            // failed the statement. Found by workplan IX06.
+            // **Already in storage form: accept it and change nothing**, so
+            // the coercion is idempotent: a write hook re-coerces a decoded
+            // row (an UPDATE carries one), and a refusal here once silently
+            // dropped a Cabin on a decimal column (workplan IX06).
             //
             // The scale still has to agree, and a disagreement is refused
             // rather than rescaled - the same answer EncodeOneValue gives,
@@ -1019,29 +1009,27 @@ StatusOr<std::vector<std::byte>> EncodeAssigned(const catalog::Schema& schema,
 
 namespace {
 
+// **The predicate first, the Status only on failure.** `Status` carries a
+// `std::string` by value, so a Status-returning check constructs and
+// destroys one even when it passes - and a `kAll` decode asks this per row.
+// `CheckDecodeShape` asks it first too and words a message only on failure,
+// so the shape is stated here alone (workplan AP02).
+bool DecodeShapeHolds(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                      std::span<const parser::AstValue> out) {
+    return !schema.columns.empty() && catalog::IsIntegerTypeVal(schema.columns.front().type_val) &&
+           layout.offsets.size() == schema.columns.size() && layout.row_size != 0 &&
+           out.size() == schema.columns.size();
+}
+
 // The shared front half of both decoders: everything that has to be true
-// before a single cell is read.
+// before a single cell is read. Under `kPayloadOnly` the caller has passed
+// `CheckDecodeShape` for this schema, layout and span already, and only the
+// row's own check runs.
 Status CheckDecodeInputs(const catalog::Schema& schema, const catalog::RowLayout& layout,
                          std::span<const std::byte> payload,
-                         std::span<parser::AstValue> out) {
-    // **The predicate first, the Status only on failure.** `Status` carries
-    // a `std::string` by value, so calling a Status-returning checker
-    // constructs and destroys one even when it passes - and this function
-    // runs once per row per decode, twice per row on the partial path. The
-    // checks are unchanged and their messages still come from the one
-    // function that words them; what is gone is building an empty message
-    // for a row that is fine (workplan AP02).
-    if (schema.columns.empty() ||
-        !catalog::IsIntegerTypeVal(schema.columns.front().type_val)) {
-        return catalog::CheckKeystoneColumn(schema);
-    }
-    if (layout.offsets.size() != schema.columns.size() || layout.row_size == 0) {
-        return CheckLayoutMatches(schema, layout);
-    }
-    if (out.size() != schema.columns.size()) {
-        return Status::InvalidArgument("decode target has " + std::to_string(out.size()) +
-                                        " slot(s) for a schema of " +
-                                        std::to_string(schema.columns.size()) + " column(s)");
+                         std::span<const parser::AstValue> out, DecodeChecks checks) {
+    if (checks == DecodeChecks::kAll && !DecodeShapeHolds(schema, layout, out)) {
+        return CheckDecodeShape(schema, layout, out);
     }
     // Checked redundancy (invariant 13): the row size is a schema constant,
     // so a stored payload of any other length is not a row this build can
@@ -1054,6 +1042,20 @@ Status CheckDecodeInputs(const catalog::Schema& schema, const catalog::RowLayout
     }
     return Status::OK();
 }
+
+}  // namespace
+
+Status CheckDecodeShape(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                        std::span<const parser::AstValue> out) {
+    if (DecodeShapeHolds(schema, layout, out)) return Status::OK();
+    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
+    if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
+    return Status::InvalidArgument("decode target has " + std::to_string(out.size()) +
+                                    " slot(s) for a schema of " +
+                                    std::to_string(schema.columns.size()) + " column(s)");
+}
+
+namespace {
 
 // A decoded NULL slot, whole: type decides, and every value field is
 // cleared - int_val, scale and dec_hi included - so no consumer that
@@ -1083,17 +1085,14 @@ Status DecodeKeystoneInto(std::span<const std::byte> payload, parser::AstValue& 
 
 Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                          std::span<const std::byte> payload, std::span<parser::AstValue> out,
-                         std::uint64_t columns, std::vector<PendingSpill>* spills) {
+                         std::uint64_t columns, std::vector<PendingSpill>* spills,
+                         DecodeChecks checks) {
     if (spills != nullptr) spills->clear();
-    if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
+    if (Status s = CheckDecodeInputs(schema, layout, payload, out, checks); !s.ok()) return s;
 
-    // **Iterate the mask's set bits, not the relation's columns.** A fold or
-    // a projection reading one column of twelve used to test twelve bits to
-    // find it; this visits exactly the columns named. `countr_zero` on a
-    // cleared-lowest-bit loop is the standard idiom and needs no bound of
-    // its own - the mask cannot name a column past 63, which is why the
-    // compiler answers kAllColumns for a relation that wide (step_compiler
-    // section 4) and why this can no longer silently skip a tail.
+    // **Iterate the mask's set bits, not the relation's columns.** The mask
+    // cannot name a column past 63, which is why the compiler answers
+    // kAllColumns for a relation that wide (step_compiler section 4).
     // NU8's zero-cost gate: every relation with no nullable column skips
     // the bitmap read entirely - null_bitmap_bytes is on the cache line the
     // decoders already read row_size from, where null_bits is a separate
@@ -1113,9 +1112,7 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
             continue;
         }
         if (has_nulls && catalog::NullBitIsSet(payload, layout, i)) {
-            // The bitmap decides here exactly as in DecodeRowInto below -
-            // this is the executor's per-column path, and it was the
-            // bypass the first NULL E2E test caught.
+            // The bitmap decides here exactly as in DecodeRowInto below.
             SetNullSlot(out[i]);
             continue;
         }
@@ -1130,16 +1127,12 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
 
 Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                      std::span<const std::byte> payload, std::span<parser::AstValue> out,
-                     std::vector<PendingSpill>* spills) {
+                     std::vector<PendingSpill>* spills, DecodeChecks checks) {
     if (spills != nullptr) spills->clear();
     // The same four checks DecodeColumnsInto makes, through the same
-    // function - which is the point. Calling the two Status-returning
-    // checkers directly constructed and destroyed a Status per decoded row
-    // even when both passed, the cost AP02 removed from the sibling path
-    // and left standing here; and stating the checks twice invited the two
-    // statements of them to drift
-    // (CIP/OPT-004-decoderowinto-preconditions/proposal.md).
-    if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
+    // predicate-first function, so no Status is built per row and the two
+    // cannot drift (CIP/OPT-004-decoderowinto-preconditions).
+    if (Status s = CheckDecodeInputs(schema, layout, payload, out, checks); !s.ok()) return s;
 
     auto id = KeystoneIdOfPayload(payload);
     if (!id.ok()) return id.status();
@@ -1216,10 +1209,13 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
 Status DecodeAndResolve(storage::PageStore& store, const catalog::Schema& schema,
                         const catalog::RowLayout& layout, std::span<const std::byte> payload,
                         std::span<parser::AstValue> out, std::uint64_t columns,
-                        std::vector<PendingSpill>& scratch) {
+                        std::vector<PendingSpill>& scratch, DecodeChecks checks) {
     if (columns == kAllColumnsMask) {
-        if (Status s = DecodeRowInto(schema, layout, payload, out, &scratch); !s.ok()) return s;
-    } else if (Status s = DecodeColumnsInto(schema, layout, payload, out, columns, &scratch);
+        if (Status s = DecodeRowInto(schema, layout, payload, out, &scratch, checks); !s.ok()) {
+            return s;
+        }
+    } else if (Status s =
+                   DecodeColumnsInto(schema, layout, payload, out, columns, &scratch, checks);
                !s.ok()) {
         return s;
     }
@@ -1366,9 +1362,143 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
     // reason TY5 reused kInt for them. A date column is never compared with
     // a timestamp one; the compiler refuses the pair (types.md §3.1a).
     if (lhs.type == parser::ValueType::kStr && rhs.type == parser::ValueType::kStr) {
+        if (op == parser::CompareOp::kLike) return LikeMatch(lhs.str_val, rhs.str_val);
         return ApplyCompare<std::string_view>(lhs.str_val, rhs.str_val, op);
     }
     return false;  // incompatible value kinds
+}
+
+std::optional<ScanKernelTerm> CompileScanKernelTerm(const catalog::Schema& schema,
+                                                    const catalog::RowLayout& layout,
+                                                    std::uint16_t column, parser::CompareOp op,
+                                                    const parser::AstValue& literal) {
+    if (op == parser::CompareOp::kIsNull || op == parser::CompareOp::kIsNotNull ||
+        op == parser::CompareOp::kLike) {
+        return {};
+    }
+    if (column >= schema.columns.size()) return {};
+    const catalog::SysColumnRow& col = schema.columns[column];
+    ScanKernelTerm term;
+    term.op = op;
+    term.column = column;
+    term.lit = literal.int_val;
+
+    if (column == 0) {
+        // The Keystone id, compared as the int64 the decoder makes of it. A
+        // `uint64` pk compares through `ValueAsUint64` and is left to the
+        // residual; the id fits 48 bits, so taking it in later is a matter
+        // of the literal's range alone.
+        if (col.type_val == kTypeValUint64 || literal.type != parser::ValueType::kInt) return {};
+        term.kind = ScanKernelTerm::Kind::kKeystone;
+        return term;
+    }
+    switch (col.type_val) {
+        case kTypeValInt8:
+        case kTypeValInt16:
+        case kTypeValInt32:
+        case kTypeValInt64:
+        case kTypeValDate:
+        case kTypeValTimestamp:
+        case kTypeValBool:
+            if (literal.type != parser::ValueType::kInt) return {};
+            term.kind = ScanKernelTerm::Kind::kInt;
+            term.width = static_cast<std::uint8_t>(
+                col.type_val == kTypeValDate        ? 4
+                : col.type_val == kTypeValTimestamp ? 8
+                : col.type_val == kTypeValBool      ? 1
+                                                    : IntWidthFor(col.type_val));
+            term.sign_extend = col.type_val != kTypeValBool;
+            return term;
+        case kTypeValDecimal:
+            if (literal.type != parser::ValueType::kDecimal ||
+                literal.scale != catalog::DecimalScaleOf(col.len)) {
+                return {};
+            }
+            term.kind = ScanKernelTerm::Kind::kInt;
+            term.width = 8;
+            return term;
+        case catalog::kTypeValDecimalWide:
+            if (literal.type != parser::ValueType::kDecimalWide ||
+                literal.scale != catalog::DecimalScaleOf(col.len)) {
+                return {};
+            }
+            term.kind = ScanKernelTerm::Kind::kWide;
+            term.lit_hi = literal.dec_hi;
+            return term;
+        case kTypeValChar:
+        case kTypeValVarchar:
+            if (literal.type != parser::ValueType::kStr) return {};
+            term.kind = col.type_val == kTypeValChar ? ScanKernelTerm::Kind::kChar
+                                                     : ScanKernelTerm::Kind::kVarchar;
+            term.text = literal.str_val;
+            return term;
+        case kTypeValUint64: {
+            if (literal.type != parser::ValueType::kInt) return {};
+            auto u = ValueAsUint64(literal);
+            if (!u.ok()) return {};
+            term.kind = ScanKernelTerm::Kind::kUint64;
+            term.ulit = u.value();
+            return term;
+        }
+        default:
+            return {};
+    }
+}
+
+bool ScanKernelRejects(const ScanKernel& kernel, const catalog::RowLayout& layout,
+                       std::span<const std::byte> payload) {
+    for (const ScanKernelTerm& term : kernel) {
+        // A NOT NULL column has no bit, and `NullBitIsSet` answers false.
+        if (catalog::NullBitIsSet(payload, layout, term.column)) continue;
+        bool keep = true;
+        switch (term.kind) {
+            case ScanKernelTerm::Kind::kKeystone: {
+                auto id = KeystoneIdOfPayload(payload);
+                if (!id.ok()) continue;  // the residual's decode answers it
+                keep = ApplyCompare(static_cast<std::int64_t>(id.value()), term.lit, term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kInt: {
+                const std::uint64_t raw = GetLE(CellOf(layout, payload, term.column), term.width);
+                const std::int64_t v = term.sign_extend ? SignExtend(raw, term.width)
+                                                        : static_cast<std::int64_t>(raw);
+                keep = ApplyCompare(v, term.lit, term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kUint64:
+                keep = ApplyCompare(GetLE(CellOf(layout, payload, term.column), 8), term.ulit,
+                                    term.op);
+                break;
+            case ScanKernelTerm::Kind::kWide: {
+                const auto cell = CellOf(layout, payload, term.column);
+                const auto lo = static_cast<std::int64_t>(GetLE(cell.subspan(0, 8), 8));
+                const auto hi = static_cast<std::int64_t>(GetLE(cell.subspan(8, 8), 8));
+                keep = ApplyCompare(Int128FromHalves(hi, lo),
+                                    Int128FromHalves(term.lit_hi, term.lit), term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kChar: {
+                const auto value = CharCellValue(CellOf(layout, payload, term.column));
+                keep = ApplyCompare<std::string_view>(
+                    std::string_view(reinterpret_cast<const char*>(value.data()), value.size()),
+                    term.text, term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kVarchar: {
+                // Only an inline value the cell codec vouches for; anything
+                // else - spilled, NULL-tagged, refused - is the residual's.
+                auto cell = storage::DecodeCell(CellOf(layout, payload, term.column));
+                if (!cell.ok() || cell.value().tag != storage::CellTag::kInline) continue;
+                const auto bytes = cell.value().bytes;
+                keep = ApplyCompare<std::string_view>(
+                    std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
+                    term.text, term.op);
+                break;
+            }
+        }
+        if (!keep) return true;
+    }
+    return false;
 }
 
 int OrderKey::Compare(const OrderKey& rhs) const noexcept {

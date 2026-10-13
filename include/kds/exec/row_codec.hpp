@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -14,14 +15,9 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/storage/varheap.hpp"
 
-// Encodes/decodes one heap tuple payload to/from a row of parsed SQL
-// values (parser::AstValue), positionally aligned with a
-// catalog::Schema's columns (which BuildSchemaFromColumns() now returns
-// sorted by `pos` - see catalog.cpp). This is the missing piece the
-// project's not-yet-ported type registry was blocking (see ast.hpp's and
-// command_dispatcher.hpp's file comments): rather than wait on that
-// subsystem, this resolves against whatever Catalog::ResolveTypeByName()
-// can already look up in sys.types (well_known.hpp's kTypeVal* tags).
+// Encodes/decodes one tuple payload to/from a row of parsed SQL values
+// (parser::AstValue), positionally aligned with a catalog::Schema's columns
+// (sorted by `pos`), typed by sys.types' kTypeVal* tags (well_known.hpp).
 //
 // ---- Every tuple is fixed-length (invariant 13) --------------------------
 //
@@ -43,17 +39,13 @@
 // `data_len` carry no information the schema does not already give, so
 // they are checked redundancy (heap-and-tuple.md section 3.2).
 //
-// Scope, deliberately narrow:
-//   - No NULLs. AstValue{type=kNull} is rejected by EncodeRow(); every
-//     column must have a value on INSERT. The tagged cell format already
-//     carries a kNull tag (storage/tagged_cell.hpp) and DecodeRow()
-//     reports it, so the day NULLs land the *format* does not change -
-//     what changes is CompareValues() and the NOT IN tri-state collapse,
-//     which is a different piece of work.
-//   - kTypeValFloat/kTypeValDecimal columns can no longer be declared at
-//     all: catalog::RowLayout::Build() refuses them, because a fixed row
-//     size has to reserve a width for every column and reserving one for
-//     an undecided encoding is half of deciding it (see schema.hpp).
+// Scope:
+//   - NULL lives in the row's tail bitmap, the sole authority
+//     (docs/spec/null.md §3): EncodeRow sets the bit for a nullable column
+//     and refuses NULL into a NOT NULL one; a NULL tagged cell is filler.
+//   - kTypeValFloat cannot be declared: catalog::RowLayout::Build() refuses
+//     it (types.md TY1). DATE, TIMESTAMP and DECIMAL/DECIMAL128 are fixed
+//     width (4, 8, 8/16 bytes - row_layout.cpp).
 //   - Fixed-width columns (int8/16/32/64, uint64, bool, char) occupy their
 //     natural widths, each field written byte-by-byte (rules.md #5: no
 //     bitfields, no reinterpret_cast of the buffer). `varchar` occupies
@@ -184,23 +176,35 @@ inline const parser::AstValue kUndecoded = [] {
 
 // Decode `columns` of one row into `out`, then resolve whatever spilled.
 //
-// **One rule, one place.** Every walker that filters before it completes a
-// row spells the same three lines - kAllColumns takes the whole-row
-// decoder, anything else takes the masked one, and either way the pending
-// spills are fetched once nothing spans the page. It was written out at
-// four sites (the step VM's filter decode and its complement, UPDATE's and
-// DELETE's row bodies), and the fourth is the dangerous one: a site that
-// drifts from the others does not fail loudly, it hands the caller a slot
-// still holding the **previous row's value**.
+// **One rule, one place**: kAllColumns takes the whole-row decoder, any
+// other mask the masked one, and the pending spills are fetched once
+// nothing spans the page. A caller spelling this itself and drifting hands
+// back a slot still holding the **previous row's value**.
 //
 // `scratch` is the caller's pending-spill buffer, hoisted so a row loop
 // allocates once rather than per row; the decoders clear it themselves. It
 // is left filled on return, which is what lets a caller count what it
 // fetched (the step VM's `spill_fetches`).
+// **Which of the decode's front checks a call runs** (BM-R6,
+// `workorder-bm-scan-row-kernel.md`). Three of the four depend only on the
+// schema, the layout and the target span, which a walk binds once; the
+// fourth, the payload's length, depends on the row (invariant 13).
+// `kPayloadOnly` is for a caller that has already passed
+// `CheckDecodeShape` for this schema, layout and span - the step VM, once
+// per step per statement - and keeps the per-row check.
+enum class DecodeChecks : std::uint8_t { kAll, kPayloadOnly };
+
+// The schema-and-layout half of the decode's checks, with the messages the
+// decoders give: the Keystone column, the layout against the schema, the
+// target span's size.
+Status CheckDecodeShape(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                        std::span<const parser::AstValue> out);
+
 Status DecodeAndResolve(storage::PageStore& store, const catalog::Schema& schema,
                         const catalog::RowLayout& layout, std::span<const std::byte> payload,
                         std::span<parser::AstValue> out, std::uint64_t columns,
-                        std::vector<PendingSpill>& scratch);
+                        std::vector<PendingSpill>& scratch,
+                        DecodeChecks checks = DecodeChecks::kAll);
 
 // Rewrites a literal into the storage form of `col`'s type, in place
 // (docs/spec/types.md §3.1).
@@ -216,16 +220,11 @@ Status DecodeAndResolve(storage::PageStore& store, const catalog::Schema& schema
 // was written - so a caller holding an offset adds it with
 // `Status::WithContext`.
 //
-// **There is exactly one of these because there were once two.** The step
-// compiler coerced a predicate's literal here; the Cabin's write hook
-// keyed on the *raw* literal it got from the statement. So a read of a
-// DATE column keyed on 20672 and a write keyed on the string
-// `"2026-08-07"`, the two never met, and an observed value silently
-// stopped seeing rows inserted after it was observed - a Cabin returning
-// fewer rows than exist, which is the one failure mode
-// `docs/spec/cabin.md` §5 calls out as invisible without a baseline to
-// compare against. Any path that turns a written literal into a value the
-// engine compares or keys on must come through here.
+// **Any path that turns a written literal into a value the engine compares
+// or keys on must come through here.** Ground: a second coercion (the
+// Cabin write hook keying on the raw literal) once made a DATE read key on
+// 20672 and a write on `"2026-08-07"`, so a Cabin silently returned fewer
+// rows than exist - the failure `docs/spec/cabin.md` §5 calls invisible.
 Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& value);
 
 // Whether an integer `value` fits the integer or `uint64` column `col`, by
@@ -254,19 +253,19 @@ Status CheckKeystoneColumn(const catalog::Schema& schema);
 // The payload is `[Keystone word][columns 1..n-1]`: the first schema
 // column IS the primary key and is carried by the Keystone word's id
 // field, so `values` supplies only the columns after it. `id` is the
-// system-generated key (catalog::Catalog::AllocateRowId) - the pk is
-// never encoded into the body as well, since two copies of one value is
-// how the two come to disagree.
+// row's Keystone id, issued or named - the pk is never encoded into the
+// body as well, since two copies of one value is how the two come to
+// disagree.
 //
 // `layout` must have been built for `schema` (catalog::RowLayout::Build);
 // a mismatched pair is InvalidArgument rather than a silently wrong row.
 //
 // Fails with InvalidArgument if the schema has no usable Keystone column,
 // values.size() != schema.columns.size() - 1, `id` exceeds the Keystone
-// word's id space, any value is NULL, any int value doesn't fit its
-// column's width, or a string value doesn't fit a fixed-width `char`
-// column; and with Unsupported for a varchar value too long to store
-// inline (see the file comment).
+// word's id space, a NULL meets a NOT NULL column, any int value doesn't
+// fit its column's width, or a string value doesn't fit a fixed-width
+// `char` column; and with Unsupported for a varchar value too long to
+// store inline when no var-heap sink is given (see the spilling note).
 StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
                                             const catalog::RowLayout& layout, std::uint64_t id,
                                             const std::vector<parser::AstValue>& values,
@@ -310,30 +309,18 @@ StatusOr<std::vector<parser::AstValue>> DecodeRow(const catalog::Schema& schema,
                                                    std::span<const std::byte> payload,
                                                    std::vector<PendingSpill>* spills = nullptr);
 
-// The same decode, writing into storage the caller already owns (V16).
-//
-// `out` must have exactly one slot per schema column; the values are
-// written in place. This is what makes a chain scan allocate O(1) rather
-// than O(rows): a chain frame sizes its buffer once when the statement
-// opens and every row decodes into the same slots, where DecodeRow()
-// returns a fresh vector - one allocation per row per step, on the hot
-// path of every join.
-//
-// DecodeRow() above is now a thin wrapper over this, so there is one
-// decoder and no possibility of the two drifting.
+// DecodeRowInto: the same decode, into storage the caller already owns
+// (V16) - `out` has exactly one slot per schema column, so a chain scan
+// allocates O(1) rather than O(rows). DecodeRow() is a thin wrapper over it.
 // `spills`, when given, is cleared and filled with the spilled cells this
 // row carries; the caller resolves them once its page span is released.
 // When null, a spilled cell is refused with Unsupported - a caller that
 // cannot resolve one must not silently return an empty value for it.
-// Decodes only the columns `columns` selects - a bit per `col_pos` - leaving
-// every other slot of `out` untouched.
 //
-// **The point is not to skip reads; it is to skip *building*.** Reading all
-// twelve cells of a `daily_stats` row costs 13 ns and decoding it costs 355,
-// because each column materialises an 80-byte `AstValue` carrying two
-// `std::string`s (`bench/results-scenario1-vs-pg.md`). A scan that filters
-// on one column and returns 8 rows of 60,480 was paying the 355 on every row
-// it rejected.
+// DecodeColumnsInto decodes only the columns `columns` selects - a bit per
+// `col_pos` - leaving every other slot of `out` untouched. It skips
+// *building* AstValues, which is where a decode's cost is, for rows a
+// filter then rejects.
 //
 // The caller is responsible for what it left behind: a slot outside the mask
 // holds whatever it held before, so a row that *matches* must be completed
@@ -344,11 +331,13 @@ StatusOr<std::vector<parser::AstValue>> DecodeRow(const catalog::Schema& schema,
 // happen after the caller's span is released.
 Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                          std::span<const std::byte> payload, std::span<parser::AstValue> out,
-                         std::uint64_t columns, std::vector<PendingSpill>* spills);
+                         std::uint64_t columns, std::vector<PendingSpill>* spills,
+                         DecodeChecks checks = DecodeChecks::kAll);
 
 Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                      std::span<const std::byte> payload, std::span<parser::AstValue> out,
-                     std::vector<PendingSpill>* spills = nullptr);
+                     std::vector<PendingSpill>* spills = nullptr,
+                     DecodeChecks checks = DecodeChecks::kAll);
 
 // One column, from a cell the caller located itself.
 //
@@ -376,13 +365,10 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
 // exists only for rows actually emitted, which is what keeps a scan from
 // building text for every row it rejects.
 //
-// **Pass 0 when there is no column type**, which renders exactly as this
-// function did before types existed: a plan's compiled literal, a
-// catalog view's value, an aggregate's group label. There is no
-// single-argument overload on purpose - the sweep that added the
-// parameter has to be complete, and a defaulted one would let a caller
-// that *should* pass a type silently keep rendering an epoch day as
-// `20672`.
+// **Pass 0 when there is no column type** (a plan's compiled literal, a
+// catalog view's value, an aggregate's group label). No defaulted overload
+// exists on purpose: a caller that should pass a type would silently render
+// an epoch day as `20672`.
 //
 // A `DECIMAL` needs no `type_val`: it is the one kind whose value carries
 // its own scale, so `12.30` renders from the value alone.
@@ -402,15 +388,70 @@ StatusOr<std::uint64_t> ValueAsUint64(const parser::AstValue& value);
 // how to read them - uint64 columns compare through their digit text,
 // since int_val cannot represent the upper half of the range.
 //
-// A type mismatch is a non-match rather than an error, which is what SQL's
-// NULL-comparison semantics would give here in the absence of real NULLs.
-//
-// This is the comparison the *whole engine* uses. It used to be reachable
-// only through MatchesWhere(), which resolved columns by name against one
-// schema; V16 deleted that evaluator (see chain_frame.hpp for why) and
-// kept the comparison, which was never the problem.
+// A value-kind mismatch is a non-match rather than an error, and so is any
+// comparison with a NULL operand (three-valued collapse, null.md §4);
+// IS NULL / IS NOT NULL read the lhs alone. This is the comparison the
+// whole engine uses.
 bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
                    const parser::AstValue& rhs, parser::CompareOp op);
+
+// ---- The scan kernel (workorder-bm-scan-row-kernel.md BM-R1..R4) ----------
+//
+// One conjunct `column <op> literal`, compiled to the comparison
+// `CompareValues` would make on the decoded column, made instead on the
+// cell's bytes. **A pre-filter, never the answer** (BM-R1): a row it
+// rejects is one the residual rejects too, and every row it passes still
+// goes through the residual unchanged. So the only wrong answer it can
+// introduce is a dropped row, and every arm below compares in exactly the
+// domain the decoder produces (BM-R4):
+//   kInt       the int widths, date, timestamp and narrow decimal,
+//              sign-extended at the cell's width, and bool, zero-extended -
+//              then int64 against the literal's `int_val`, never narrowed
+//              to the cell's width (an out-of-range literal compares as the
+//              int64 it is, as `CompareValues` does);
+//   kUint64    the cell against `ValueAsUint64(literal)`, unsigned;
+//   kWide      the 128-bit pair, high half signed and low half unsigned;
+//   kKeystone  column 0, as the 48-bit id `KeystoneIdOfPayload` reads -
+//              never as its 8-byte cell, whose top two bytes are not the id;
+//   kChar      a `char(N)` cell read back to its first NUL, as the decoder
+//              trims it, then bytes against the literal's;
+//   kVarchar   a `varchar` cell through `DecodeCell` only, and only when it
+//              answers an inline value: a spilled value, a NULL tag and a
+//              refusal all pass to the residual, which answers or refuses
+//              them as it does today (BM-S4).
+// A NULL operand (its bit set) is passed, never rejected: `CompareValues`'
+// NULL arm stays the one place UNKNOWN collapses (BM-Q3 (a)).
+struct ScanKernelTerm {
+    enum class Kind : std::uint8_t { kInt, kUint64, kWide, kKeystone, kChar, kVarchar };
+    Kind kind = Kind::kInt;
+    parser::CompareOp op = parser::CompareOp::kEq;
+    std::uint16_t column = 0;
+    std::uint8_t width = 0;        // kInt: the cell's bytes
+    bool sign_extend = true;       // kInt: false for bool alone
+    std::int64_t lit = 0;          // kInt, kKeystone; kWide's low half
+    std::int64_t lit_hi = 0;       // kWide's high half
+    std::uint64_t ulit = 0;        // kUint64
+    std::string text;              // kChar, kVarchar
+};
+
+using ScanKernel = std::vector<ScanKernelTerm>;
+
+// The term for `schema.columns[column] <op> literal`, or nothing when the
+// pair is outside the kernel's domain: an operator other than the six, a
+// literal of another value kind or scale than the column compares in, a
+// `uint64` literal `ValueAsUint64` refuses, or a `uint64` pk. Nothing is
+// refused here; a pair the kernel does not hold is the residual's, as it
+// always was.
+std::optional<ScanKernelTerm> CompileScanKernelTerm(const catalog::Schema& schema,
+                                                    const catalog::RowLayout& layout,
+                                                    std::uint16_t column, parser::CompareOp op,
+                                                    const parser::AstValue& literal);
+
+// Whether some term rejects the row in `payload`. The caller has passed
+// `CheckDecodeShape` for this layout and checked `payload` is the layout's
+// row size (BM-R3: the length check comes first, invariant 13).
+bool ScanKernelRejects(const ScanKernel& kernel, const catalog::RowLayout& layout,
+                       std::span<const std::byte> payload);
 
 // ---- Ordering (docs/workplan-order-by.md OB2) ----------------------------
 //

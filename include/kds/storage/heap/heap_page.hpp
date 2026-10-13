@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 
 #include "kds/base/common.hpp"
@@ -35,20 +36,17 @@
 // (page.md section 10); a heap page is one of the headered page classes.
 // The page is full when upper - lower is smaller than the next slot +
 // tuple need. A PostgreSQL-style slotted page: slots are stable
-// references, and physical compaction of dead slots is a separate
-// operation that does not exist yet - there is no VACUUM equivalent.
+// references, and this view never compacts dead slots. The one compaction
+// is the B+ tree's: a full leaf with retired slots is rebuilt in place
+// before it splits (`btree.cpp`'s `CompactLeafAndInsert`, BH-S5); a heap
+// page is never compacted - there is no VACUUM equivalent.
 //
 // Concurrency: PageView has no internal synchronization. It is a thin view
-// over caller-owned bytes; the caller (eventually a buffer-pool frame) is
-// responsible for ensuring exclusive access to the underlying buffer
-// across any mutating call. There is no locking here because there is no
-// buffer pool yet to hold a lock in - that's a separate, not-yet-built
-// subsystem.
+// over caller-owned bytes; the caller holds the frame's page latch
+// (`PageRef` from the store) - exclusive across any mutating call.
 //
-// This first cut covers: page init, insert, read, delete-mark,
-// retire-slot, in-place overwrite, free-space accounting, and the
-// next-page link. This file stores trx_id/undo_ptr but does not interpret
-// them - visibility is the reader's job once snapshots exist.
+// This file stores trx_id/undo_ptr but does not interpret them -
+// visibility is the reader's job (txn.md).
 
 namespace kds::heap {
 
@@ -249,9 +247,10 @@ public:
 
     // The common header's relayout epoch (docs/spec/physical-optimizer.md
     // R4), surfaced here because the callers that need it at tuple-access
-    // time hold a PageView, not the raw span. Read-only on purpose: bumping
-    // is the mover's act, through storage::BumpRelayoutEpoch on the span it
-    // holds exclusively.
+    // time hold a PageView, not the raw span. Read-only on purpose: the
+    // epoch is moved on the span under an exclusive hold - by the B+ tree's
+    // leaf division and compaction (`btree.cpp`, storage::SetRelayoutEpoch),
+    // and by the physical optimizer's mover were it to move anything.
     std::uint64_t RelayoutEpoch() const noexcept { return storage::GetRelayoutEpoch(page_); }
 
     // A tuple read back out of the page. `payload` is a view into the
@@ -297,6 +296,51 @@ public:
     // versus `trx_id`, which is not this layer's decision. Fails with
     // NotFound only if `slot` is out of range or physically retired.
     StatusOr<Tuple> ReadTuple(std::uint16_t slot) const;
+
+    // ReadTuple() with the page header's slot count supplied by the caller,
+    // as PayloadAt() takes it: a walk reads `slot_count()` once per page
+    // rather than five header fields per slot (BM-R5,
+    // `workorder-bm-scan-row-kernel.md`). Every check ReadTuple() makes is
+    // made, with its message; `nr_slots` must be this page's slot_count()
+    // under the hold the caller reads the slots under.
+    StatusOr<Tuple> ReadTupleIn(std::uint16_t slot, std::uint16_t nr_slots) const;
+
+    // What TryReadTupleIn() found at a slot: a tuple, or the reason
+    // ReadTupleIn() refuses it.
+    enum class TupleRead : std::uint8_t {
+        kRead,
+        kOutOfRange,      // `slot >= nr_slots`
+        kRetired,         // dead-flagged or zero-length
+        kLeavesPage,      // the slot's span leaves the page (BF-R10)
+        kOverlongPayload  // data_len runs past the slot's span
+    };
+
+    // ReadTupleIn()'s read and every check it makes, with no Status: `out`
+    // is filled only on kRead. **Inline, because a walk reads every slot
+    // through it** and a Status holds a std::string (BT-S2,
+    // `instructions/v3.0.0/workorder-bt-accept-tuple-row.md`); ReadTupleIn()
+    // is this plus the wording of a refusal, so the checks have one body.
+    TupleRead TryReadTupleIn(std::uint16_t slot, std::uint16_t nr_slots,
+                             Tuple& out) const noexcept {
+        if (slot >= nr_slots) return TupleRead::kOutOfRange;
+        const HeapSlotFields s = ReadSlot(slot);
+        if ((s.flags & kSlotFlagDead) != 0 || s.length == 0) return TupleRead::kRetired;
+        if (s.length < kTupleHeaderOnDiskSize ||
+            static_cast<std::size_t>(s.offset) + s.length > kPageSize) {
+            return TupleRead::kLeavesPage;
+        }
+        const std::byte* tuple_base = page_.data() + s.offset;
+        std::uint16_t data_len;
+        std::memcpy(&data_len, tuple_base + kTupleDataLenOffset, sizeof(data_len));
+        if (static_cast<std::size_t>(data_len) + kTupleHeaderOnDiskSize > s.length) {
+            return TupleRead::kOverlongPayload;
+        }
+        std::memcpy(&out.trx_id, tuple_base + kTupleTrxIdOffset, sizeof(out.trx_id));
+        std::memcpy(&out.undo_ptr, tuple_base + kTupleUndoPtrOffset, sizeof(out.undo_ptr));
+        out.deleted = (s.flags & kSlotFlagDeleted) != 0;
+        out.payload = std::span<const std::byte>(tuple_base + kTupleHeaderOnDiskSize, data_len);
+        return TupleRead::kRead;
+    }
 
     // Just the payload bytes of the tuple at `slot` - ReadTuple() without
     // the MVCC header decode, and without re-reading the page header.
@@ -358,13 +402,12 @@ public:
     // it and by nothing else.
     Status ClearDeleteMark(std::uint16_t slot, std::uint64_t trx_id, std::uint64_t undo_ptr);
 
-    // Marks `slot` dead; its bytes are not reclaimed (no page compaction -
-    // an open item until a transaction manager can determine that no
-    // snapshot still needs the space). Fails with NotFound if `slot` is already out of range/dead.
+    // Marks `slot` dead; its bytes are not reclaimed here (only a B+ tree
+    // leaf's rebuild before a split drops them, BH-S5). Fails with NotFound
+    // if `slot` is already out of range/dead.
     Status RetireSlot(std::uint16_t slot);
 
-    // Writes a tuple at a **named** slot, for redo
-    // (docs/workplan-wal-recovery.md RC03). The counterpart of
+    // Writes a tuple at a **named** slot, for redo. The counterpart of
     // txn::UndoPageWriteAt, and it exists for the same reason: replay must
     // reproduce the exact position the original write chose, because that
     // position is *durably referenced elsewhere* - an undo record names
@@ -414,7 +457,18 @@ public:
 private:
     HeapPageHeaderFields ReadHeader() const;
     void WriteHeader(const HeapPageHeaderFields& header);
-    HeapSlotFields ReadSlot(std::uint16_t idx) const;
+    // Inline for TryReadTupleIn(); the slot directory starts after the header.
+    static constexpr std::size_t SlotOffset(std::uint16_t idx) noexcept {
+        return kHeapHeaderOffset + kHeaderSize + static_cast<std::size_t>(idx) * kSlotOnDiskSize;
+    }
+    HeapSlotFields ReadSlot(std::uint16_t idx) const noexcept {
+        HeapSlotFields s{};
+        const std::byte* p = page_.data() + SlotOffset(idx);
+        std::memcpy(&s.offset, p + kSlotOffsetOffset, sizeof(s.offset));
+        std::memcpy(&s.length, p + kSlotLengthOffset, sizeof(s.length));
+        std::memcpy(&s.flags, p + kSlotFlagsOffset, sizeof(s.flags));
+        return s;
+    }
     void WriteSlot(std::uint16_t idx, const HeapSlotFields& slot);
 
     std::span<std::byte, kPageSize> page_;

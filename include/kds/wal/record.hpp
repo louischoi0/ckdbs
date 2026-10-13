@@ -114,13 +114,9 @@ enum class RecordType : std::uint8_t {
     // SLOT_RETIRE's rollback rule.
     kAssertRollback = 20,
     // One entry materialized by the CREATE-time builder (AST06): the same
-    // payload shape as ASSERT_RESERVE - HEAP_INSERT/HEAP_OVERWRITE's
-    // precedent - but owned by no transaction and with kEntryReserved
-    // clear, because §8.1a's build applies its deltas at commit time and
-    // what the builder writes is committed by construction. Per entry, not
-    // per batch: a batched sibling is an append-only addition the day the
-    // build's log volume asks for one, and guessing its shape before a
-    // builder exists is how a record nobody can write gets assigned.
+    // payload shape as ASSERT_RESERVE, but owned by no transaction and with
+    // kEntryReserved clear - §8.1a's build applies its deltas at commit, so
+    // what it writes is committed by construction. One record per entry.
     kAssertBuild = 21,
     // Teardown (DROP ASSERTION): the directory forgets the assertion. Its
     // pages are not freed - no record and no reclaim frees a Bound Cabin
@@ -128,24 +124,12 @@ enum class RecordType : std::uint8_t {
     kAssertDrop = 22,
     // ---- Clearing a delete-mark (RC05, 2026-08-11) ----------------------
     //
-    // Rollback's compensation for a DELETE, and it needs a type of its own
-    // because **HEAP_DELETE_MARK cannot say which direction it meant**.
-    //
-    // This is a bug that shipped, found writing RC05. `redo.cpp`'s applier
-    // asserted the opposite in a comment - "rollback's ClearDeleteMark is a
-    // *different* record, so redo never has to guess which direction a mark
-    // record meant" - and it was not: `TransactionManager::Compensate`
-    // logged `kHeapDeleteMark` to *clear* a mark, with a payload
-    // `{trx_id, slot}` identical in shape to the one that *sets* it. Redo
-    // replays both by calling `DeleteMark`, so a transaction that
-    // delete-marked a row and then aborted came back from recovery with the
-    // row still deleted - the abort silently undone by its own
-    // compensation.
-    //
-    // A distinct type rather than a flag in the payload: the two operations
-    // are different operations, and a reader that has to consult a bit to
-    // know whether a record adds or removes state is one substitution away
-    // from the same defect.
+    // Rollback's compensation for a DELETE: a type of its own because a
+    // HEAP_DELETE_MARK cannot say which direction it meant. Background: RC05
+    // found compensation logging kHeapDeleteMark to *clear* a mark, which
+    // redo replayed as a set, so an aborted delete came back deleted. A
+    // distinct type, never a payload flag, so no reader has to consult a bit
+    // to know whether a record adds or removes state.
     kHeapDeleteUnmark = 23,
     // One Bound Cabin's group headers as of a checkpoint (AS6a): the base
     // assertion replay folds onto, so the fold starts at the last checkpoint
@@ -163,8 +147,8 @@ enum class RecordType : std::uint8_t {
     // One anchor-page slot update (storage/anchor_page.hpp; PW2,
     // workplan-peer-writer.md §7a): the clustered root (index_oid 0) or
     // one index's root moved. The record every growth-path catalog write
-    // becomes - a root move writes the mover's own anchor page in its own
-    // stream, never sys.tables/sys.indexes - and the second half of a
+    // becomes - a root move writes the relation's anchor page, never
+    // sys.tables/sys.indexes - and the second half of a
     // fresh anchor's durable story, since PAGE_INIT rebuilds only the
     // common header and the roots are body content. Physiological like
     // every page record: the envelope names the anchor page, the payload
@@ -223,28 +207,16 @@ enum class RecordType : std::uint8_t {
     // backup.
     kBackupBegin = 31,
     kBackupEnd = 32,
-    // **INDEX_PAGE_INIT is not assigned either, and spec §12.1 proposed it.**
-    // The proposal assumed a new index page could be described by its header
-    // the way a new heap page is, with the following record filling it. A
-    // dividing split does not work that way: the new sibling leaves the
-    // operation holding half the entries, so only a full page image
-    // describes it - which is exactly what the clustered tree's internal
-    // nodes already do. A record type nothing can write is worse than none.
+    // INDEX_PAGE_INIT (index.md §12.1's proposal) is not assigned: a new
+    // index page leaves a divide holding half the entries, so only a full
+    // page image describes it.
 };
 
-// The highest assigned type, **derived from the enum rather than typed as a
-// number** - and that is a bug fix, not tidiness.
-//
-// `EncodeRecord` refuses any type above this bound, so a hand-maintained value
-// silently un-assigns whatever was appended after it. That is exactly what
-// happened: RC05 added `kHeapDeleteUnmark = 23` and left the constant at 22,
-// so **the record could not be written at all** - `TransactionManager::Compensate`
-// and `txn::RecoveryUndo` both failed with "unassigned record type" when
-// rolling back a DELETE, and every test that covers that path runs unlogged
-// (`wal = nullptr`), which is what hid it until 2026-08-12.
-//
-// Keep this pinned to the last enumerator when appending a type; the test that
-// every named type encodes is what proves it stayed pinned.
+// The highest assigned type, derived from the last enumerator: `EncodeRecord`
+// refuses any type above it, so a stale bound un-assigns whatever was
+// appended (RC05's kHeapDeleteUnmark could not be written until 2026-08-12).
+// Keep it pinned to the last enumerator; the test that every named type
+// encodes proves it.
 inline constexpr std::uint8_t kMaxAssignedRecordType =
     static_cast<std::uint8_t>(RecordType::kBackupEnd);
 
@@ -405,31 +377,14 @@ inline constexpr std::size_t kSegmentHeaderSize = 4096;
 static_assert(kSegmentUsedSize <= kSegmentHeaderSize);
 
 inline constexpr std::uint64_t kSegmentMagic = 0x314C41575344584BULL;  // "KXDSWAL1"
-// **2 since 2026-08-12**, and the bump is the D2 decision `docs/inflight/known-gaps.md`
-// carried: two record payloads moved under the licence "free today, no WAL
-// stream has ever been read back", and `6d7b91b` - inside the same handful of
-// commits - is what makes streams get read back.
-//
-// What moved: `AssertEntryPayload` gained `group_id` (AS6a), taking
-// `kAssertEntryFixedSize` from 16 to 20 so every byte after offset 16 shifted;
-// and RC03's `UNDO_WRITE` correction moved under the same argument. Version 1
-// therefore names a stream this build cannot decode.
+// 2 since 2026-08-12: AS6a's `group_id` (AssertEntryPayload 16 -> 20 bytes)
+// and RC03's UNDO_WRITE correction moved payload offsets, so a version-1
+// stream cannot be decoded.
 inline constexpr std::uint32_t kSegmentFormatVersion = 2;
 
-// **The oldest stream this build will read**, and it is deliberately equal to
-// the current version rather than 1.
-//
-// A version field alone does not refuse anything: `DecodeSegmentHeader` rejects
-// only what is *newer* than this build, so bumping the version without this
-// floor would leave a v1 segment accepted and its `ASSERT_*` records decoded at
-// the wrong offsets - a short read at best, four bytes of someone else's field
-// at worst. Refusing outright is what the bump is for.
-//
-// Raised with `kSegmentFormatVersion` while no compatibility promise exists
-// (pre-1.0, and no v1 database is known). The day one does exist, this stops
-// tracking the current version and a decoder per supported version is what
-// takes its place - which is a decision to make then, with a migration story,
-// not a default to inherit now.
+// The oldest stream this build reads, raised with kSegmentFormatVersion while
+// no compatibility promise exists: without the floor a v1 segment would be
+// accepted and its ASSERT_* records decoded at the wrong offsets.
 inline constexpr std::uint32_t kMinReadableSegmentFormatVersion = 2;
 static_assert(kMinReadableSegmentFormatVersion <= kSegmentFormatVersion);
 
@@ -438,8 +393,8 @@ static_assert(kMinReadableSegmentFormatVersion <= kSegmentFormatVersion);
 Status EncodeSegmentHeader(std::span<std::byte> out, const SegmentHeaderFields& fields);
 
 // Fails with Corruption on a bad magic, a CRC mismatch, or a
-// format_version this build does not know - a newer segment is refused
-// rather than misparsed.
+// format_version outside [kMinReadableSegmentFormatVersion,
+// kSegmentFormatVersion] - refused rather than misparsed.
 StatusOr<SegmentHeaderFields> DecodeSegmentHeader(std::span<const std::byte> in);
 
 }  // namespace kds::wal

@@ -15,10 +15,8 @@
 //
 // Every token produced is fed to a `FingerprintAccumulator`, so a parse
 // yields the statement's `pattern_id`/`arg_hash` for free and nothing has
-// to lex twice. `FingerprintOf()` used to be that second lex, and on the
-// statement path it cost more than the work it enabled - measured at ~13%
-// of a point join's latency, three times the cost of the recording it was
-// for (bench/results-waystone-v2.md).
+// to lex twice (a separate `FingerprintOf()` lex once cost ~13% of a point
+// join's latency, bench/results-waystone-v2.md at `1769487`).
 //
 // **The hook is in ReadToken(), not in Next().** `Peek()` caches, so a
 // peeked token is produced once and consumed later; hooking the consumer

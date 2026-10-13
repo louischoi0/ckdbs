@@ -1,0 +1,107 @@
+samples 6366
+
+-- self --
+ 28.48%   1813  kds::exec::::ChainRunner::AcceptTupleAt
+ 23.31%   1484  kds::exec::ScanKernelRejects
+ 19.35%   1232  kds::exec::::ChainRunner::RunWalkStep::{lambda#1}::operator const
+ 10.52%    670  kds::heap::PageView::ReadTupleIn const
+  4.32%    275  kds::exec::ExecStats::For
+  4.30%    274  __libc_send
+  1.15%     73  kds::txn::LockTable::AcquireInner
+  0.97%     62  epoll_wait
+  0.55%     35  std::_Hashtable::find [clone .isra.0]
+  0.44%     28  kds::txn::LockTable::PartitionOf const
+  0.42%     27  __GI___libc_read
+  0.25%     16  kds::exec::::CompileBlock
+  0.22%     14  __GI___libc_free
+  0.20%     13  __GI___libc_malloc
+  0.17%     11  kds::storage::DevicePageStore::Resolve
+  0.16%     10  kds::txn::LockTable::ReleaseHeld
+  0.16%     10  tcache_get_n
+  0.14%      9  kds::parser::FingerprintAccumulator::Feed
+  0.11%      7  kds::server::ReadBorrow::Position
+  0.11%      7  kds::exec::::ChainRunner::RunWalkStep [clone .actor]
+  0.09%      6  kds::server::CommandDispatcher::HandleSelect
+  0.09%      6  kds::heap::PageView::slot_count const
+  0.09%      6  [vdso]+0x99a
+  0.09%      6  kds::parser::SelectStmt::~SelectStmt
+  0.09%      6  kds::btree::BtreeFetchLeaf
+  0.08%      5  kds::exec::StepChain::~StepChain
+  0.08%      5  kds::sched::Scheduler::RunOnce
+  0.08%      5  kds::exec::::ChainRunner::~ChainRunner
+  0.08%      5  kds::sched::CoroTask::Poll
+  0.08%      5  kds::txn::LockTable::ReleaseOne
+  0.06%      4  kds::parser::Parser::ParseRelationRef
+  0.06%      4  kds::server::KwpSession::OnBind
+  0.06%      4  bool kds::exec::detail::VisitSteps
+  0.06%      4  kds::server::KwpSession::OnParse
+  0.06%      4  kds::server::WireResultSink::EncodeProjectedRow
+  0.06%      4  std::__cxx11::basic_string::basic_string
+  0.06%      4  kds::storage::DevicePageStore::ResidentBytes
+  0.06%      4  __memcpy_avx512_unaligned_erms
+  0.06%      4  __GI_tolower
+  0.06%      4  kds::wire::EncodeValue
+
+-- inclusive --
+100.00%   6366  _start
+100.00%   6366  __libc_start_call_main
+100.00%   6366  kds::server::Expeditor::Serve
+100.00%   6366  __libc_start_main_impl
+100.00%   6366  main
+100.00%   6366  kds::sched::Scheduler::Run
+100.00%   6366  kds::server::Expeditor::RunUntilStopped
+ 99.98%   6365  kds::sched::Scheduler::RunOnce
+ 97.63%   6215  kds::sched::Scheduler::RunReadyTasks
+ 97.49%   6206  kds::sched::CoroTask::Poll
+ 89.84%   5719  kds::exec::::ChainRunner::RunWalkStep [clone .actor]
+ 86.55%   5510  kds::exec::::ChainRunner::RunWalkStep::{lambda#1}::operator const
+ 64.58%   4111  kds::exec::::ChainRunner::AcceptTupleAt
+ 23.31%   1484  kds::exec::ScanKernelRejects
+ 10.52%    670  kds::heap::PageView::ReadTupleIn const
+  4.68%    298  kds::server::TcpServer::OnStatementComplete
+  4.32%    275  kds::exec::ExecStats::For
+  4.30%    274  __libc_send
+  4.30%    274  kds::server::TcpServer::FlushOutbox
+  2.31%    147  kds::server::ReadBorrow::Position
+  1.74%    111  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+  1.68%    107  kds::server::CommandDispatcher::DispatchAndStage
+  1.59%    101  kds::server::CommandDispatcher::DispatchInner
+  1.54%     98  kds::txn::LockTable::TryAcquire
+  1.49%     95  kds::server::CommandDispatcher::HandleSelect
+  1.32%     84  kds::txn::LockTable::AcquireInner
+  1.21%     77  kds::server::TcpServer::OnClientReadable
+  0.99%     63  kds::sched::EpollIoBackend::PollReady
+  0.97%     62  epoll_wait
+  0.83%     53  kds::server::TcpServer::DrainFrames
+  0.79%     50  kds::storage::DevicePageStore::FetchPinned
+  0.77%     49  kds::btree::BtreeFetchLeaf
+  0.71%     45  kds::storage::DevicePageStore::FetchAndPin
+  0.64%     41  kds::txn::LockTable::ReleaseOne
+  0.64%     41  kds::server::KwpSession::OnFrame
+  0.60%     38  kds::storage::DevicePageStore::Resolve
+  0.55%     35  kds::parser::Parser::Parse
+  0.55%     35  std::_Hashtable::find [clone .isra.0]
+  0.53%     34  kds::server::SelectRun::Execute [clone .actor]
+  0.52%     33  kds::exec::Compile
+
+-- parts --
+  4.30%    274  socket send
+  1.41%     90  socket read and wait
+  0.79%     50  kwp frames (decode, PARSE scan and fingerprint, BIND substitute, encode)
+  0.55%     35  parse
+  0.58%     37  compile
+  0.25%     16  waystone and access statistics
+  0.00%      0  var-heap append
+  0.00%      0  undo and WAL records
+  2.14%    136  transaction begin, commit, locks
+  0.17%     11  result encoding
+ 23.31%   1484  row walk: residual
+  0.11%      7  row decode and encode
+  0.00%      0  row walk: visibility
+  0.00%      0  row walk: copy
+ 43.31%   2757  row walk: per-row checks and counters
+ 19.35%   1232  row walk: loop and callback
+  0.97%     62  descent and page access
+  2.03%    129  statement scaffolding
+  0.72%     46  scheduler and checkpoint
+  0.00%      0  other

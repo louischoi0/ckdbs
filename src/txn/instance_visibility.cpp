@@ -324,6 +324,7 @@ InstanceVisibility::CommitLookup InstanceVisibility::LookupCommit(std::uint64_t 
     // floor under this same latch, so what this returns is either wholly
     // before that pass or wholly after it - never the half-and-half that
     // answers "not committed" for a reclaimed winner.
+    Contention::Add(Tally::kWindowLookups);
     LatchGuard guard(window_latch_);
     CommitLookup found;
     auto it = window_.find(trx_id);

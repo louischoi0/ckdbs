@@ -52,12 +52,8 @@ public:
     // The same field, case-folded as it is hashed.
     //
     // **Identical bytes to `Field(fold(s))`** - the fold is one-to-one on
-    // bytes so the length prefix does not move - but with no buffer to
-    // build it in. That matters here and nowhere else: this runs once per
-    // identifier and keyword of every statement, and the `std::string` it
-    // replaces was an allocation per token past the small-string limit,
-    // which would have quietly undone zero-copy tokens for exactly the
-    // tokens that motivated them.
+    // bytes so the length prefix does not move - with no buffer, since this
+    // runs once per identifier and keyword of every statement.
     void FoldedField(std::string_view s) noexcept {
         Byte(static_cast<std::uint8_t>(s.size() & 0xFF));
         Byte(static_cast<std::uint8_t>((s.size() >> 8) & 0xFF));
@@ -90,18 +86,12 @@ enum class ShapeTag : std::uint8_t {
     kLte = 11,
     kGt = 12,
     kGte = 13,
-    // Appended by V04 with the `.` token. Appending is free: no statement
-    // that hashes today contains a dot, because a dot was a kError and
-    // kError returns nullopt. Statements with qualified names go from
-    // "no fingerprint" to "a fingerprint", which the bump rule in
-    // fingerprint.hpp names explicitly as the case that does *not* need a
-    // version bump - nothing already stored changes meaning.
+    // Appended by V04 with the `.` token, and by BJ-S2 below: each was a
+    // kError before, so no stored hash contains one and appending needs no
+    // version bump (fingerprint.hpp's bump rule).
     kDot = 14,
-    // Appended by BJ-S2 with the arithmetic tokens, on the same argument as
-    // kDot: each lexed as kError until then, so no statement containing one
-    // had a fingerprint and no stored pattern_id changes. A `-` that fuses
-    // with a following digit is still a signed literal (kValue), which is
-    // what keeps `WHERE x = -7` where it was (BJ-Q9 (a)).
+    // A `-` that fuses with a following digit is still a signed literal
+    // (kValue), which keeps `WHERE x = -7` where it was (BJ-Q9 (a)).
     kPlus = 15,
     kMinus = 16,
     kSlash = 17,
@@ -143,45 +133,23 @@ bool IsPatternableLeadingWord(std::string_view word) noexcept {
 
 bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
     switch (type) {
-        // A reserved word hashes as an identifier, tag and all. This is
-        // not a convenience: before V04 reserved these seven words they
-        // *were* identifiers to this lexer, so any other tag would move
-        // the pattern_id of every statement containing `IN`, `EXISTS`,
-        // `AS`, `NOT`, `BETWEEN`, `JOIN` or `ON` - a format break retiring
-        // every waystone stored under one, for a lexer change that altered
-        // no statement's meaning. The same holds for every keyword
-        // reserved after this one, which is why they share a token type.
+        // A reserved word hashes as an identifier, tag and all: every
+        // reserved word was an identifier to the lexer before it was
+        // reserved (V04 and after), so any other tag would move every
+        // stored pattern_id containing one - a format break for a lexer
+        // change that altered no statement's meaning.
         case TokenType::kKeyword:
         case TokenType::kIdent: out = ShapeTag::kIdent; return true;
         // The convergence point: an int literal, a string literal, a `?`
         // and a `$param` all emit the same marker, which is what makes
         // `WHERE id = 42`, `WHERE id = ?` and `WHERE id = $x` one pattern.
+        // `$param` is refused by every production (token.hpp); its arm
+        // stays so the hash would not move if named binds (D4) land.
         //
-        // The last of those was the whole of `CREATE PATTERN`
-        // (docs/spec/create-pattern-user-defined-patterns-v1.md section
-        // 3.2, withdrawn 2026-08-31): a declaration's body never ran, live
-        // traffic did, and live traffic carries no declaration - so a
-        // `$param` that hashed as anything else would have made every
-        // declared pattern match nothing. Neither the parameter's *name*
-        // nor its type entered the stream, for the same reason. The arm
-        // stays where it is: the token still lexes, it is reserved for the
-        // extended protocol's named binds (D4), and moving it would change
-        // hashes for no gain.
-        // kNumLit is in the group by the phase-2 rule (types.md TY3):
-        // a bare `12.34` *is* the quoted `'12.34'`, so it must land where
-        // every other bindable literal lands or the two spellings of one
-        // statement would grow two pattern_ids.
-        //
-        // The fingerprint analysis that gated this token, recorded where it
-        // is load-bearing: `12.34` lexed *before* this token existed - as
-        // kIntLit, kDot, kIntLit, all valid - so a statement containing it
-        // was fingerprintable, and fusing the three tokens moves that
-        // statement's hash. `kFingerprintVersion` did not move for it, because
-        // the bump rule protects what is *stored*, and no such hash was
-        // ever storable: int-dot-int parses in no production, a statement
-        // that cannot parse cannot execute, and recording happens only on
-        // the execution path. A hash that can never reach `sys.patterns`
-        // has no on-disk meaning to preserve.
+        // kNumLit is in the group by the phase-2 rule (types.md TY3): a
+        // bare `12.34` *is* the quoted `'12.34'`. Fusing `12.34` from
+        // kIntLit/kDot/kIntLit moved only hashes no production accepts, so
+        // no stored hash and no version bump (fingerprint.hpp's refinement).
         case TokenType::kIntLit:
         case TokenType::kNumLit:
         case TokenType::kStrLit:
@@ -411,10 +379,8 @@ void FingerprintAccumulator::Feed(const Token& tok) noexcept {
         }
         case TokenType::kParam:
         case TokenType::kNamedParam:
-            // Contributes to the shape and nothing else. A `?`'s value
-            // arrives at BIND, which is where arg_hash is completed; a
-            // `$param` has no value at all, because a declaration is not an
-            // execution (spec section 3.3).
+            // Contributes to the shape and nothing else: a `?`'s value
+            // arrives at BIND, and a `$param` is refused by every production.
             ++param_count_;
             break;
         default:

@@ -58,8 +58,9 @@ word, and other cores re-read the root from the anchor.
 **Asked at a task boundary, and never inside one.** `Catalog::Revalidate()`
 is one acquire load; on a mismatch the cache is dropped and the value
 adopted. It runs between tasks, at two sites:
-`CommandDispatcher::DispatchAndStage`'s head and the Cabin optimizer's
-tick (`CabinOptimizerExecutor::Tick`).
+`CommandDispatcher::DispatchAndStage`'s head (its `StatementEpochScope`,
+which publishes the statement epoch around the read, BF-R9) and the Cabin
+optimizer's tick (`CabinOptimizerExecutor::Tick`).
 **It is never called from a cached read**, because a drop frees every
 `const TableAccess*` and `Schema&` a running statement holds
 (`catalog_cache.hpp`'s entries are reference-stable *until the next
@@ -126,36 +127,23 @@ walks that range id by id, taking the first that is free; the probe loop
 treats only `AlreadyExists` as "try the next id". What admits exactly one caller per id is the claim itself -
 `ClaimNamedIdLocked` under the structure latch and the map latch, which
 answers every loser `AlreadyExists` - and that is a property of the claim
-and not of the asking core (`page.md` §5). **Two cells between them, and
-neither alone**: `free_map_race_test.cpp`'s
-`OnlyOneCallerEverPlacesAPageAtAChosenId` races eight cores for one id in
-the user range;
-`device_page_store_test.cpp`'s
-`APeerPlacesAPageAtAChosenIdInTheSystemRange` reads the system half and is
-single-threaded.
+and not of the asking core (`page.md` §5). Pinned by
+`free_map_race_test.cpp`'s `OnlyOneCallerEverPlacesAPageAtAChosenId`
+(eight cores, one user-range id) and `device_page_store_test.cpp`'s
+`APeerPlacesAPageAtAChosenIdInTheSystemRange` (the system range,
+single-threaded).
 
 ## CT6 — The three words the instance keeps
 
-`Expeditor` owns three atomics and hands each to every core's catalog. They
-arrived one stage apart, and each keeps its own rule in the table below.
-What they share is the shape `CoreRuntime::Config` already carries for the
+`Expeditor` owns three atomics and hands each to every core's catalog;
+each keeps its own rule in the table below. What they share is the shape `CoreRuntime::Config` already carries for the
 lock table and the instance read view - `Expeditor` builds it, every core
 borrows a pointer, and a null pointer leaves a bare catalog on its own
 local copy, which is what a fixture and the sim hold.
 
-**Three pointers rather than one struct, and the reason is a threshold and
-not a principle.** The three are identical in lifetime, plumbing, default
-and wiring sites, and they are mirrored in three fixtures, so each new word
-costs about a dozen edits - a struct would collapse those to one. What it
-would also do is re-open AT-S2's shipped schema-word wiring, which is a
-landed stage's declared seam (CT1, CT2), for a saving of two setters and
-two `Config` fields. At three words that does not pay; at four it does, and
-AT-0 item 11 is where the fourth decides it. The argument first written
-here - *"three facts with three owning rules, and a stage that moves one
-should not have to move the other two"* - was refuted by AT-S5b's own
-review and is recorded rather than kept: a struct creates no shared *rule*,
-each field keeping its comment and its owning doc, and removing a field
-from a struct is one deletion rather than three.
+**Three pointers rather than one struct, by threshold, not principle**
+(AT-S5b): a struct would save two setters and two `Config` fields but
+re-open AT-S2's schema-word wiring; a fourth word tips it (AT-0 item 11).
 
 | word | what it is | rule |
 |---|---|---|
@@ -167,9 +155,9 @@ from a struct is one deletion rather than three.
 CAS from zero to `HighestIssuedUserOid() + 1`; zero is the unseeded value
 and no oid can be zero, so one word carries both states. Two cores seeding
 at once agree - one CAS wins and the loser's read is the winner's. A
-per-catalog counter would issue one oid twice once a second core runs
-`CREATE TABLE`: each catalog seeds *lazily*, so the first create on each core reads the other's rows and the
-**second** issues from a counter seeded before they existed.
+per-catalog counter would issue one oid twice: each catalog seeds lazily,
+so a core's second create issues from a counter seeded before another
+core's rows existed.
 
 **The mark count is a delta at the sweep, not an assignment.** The purge
 resettles the count to what it saw unsettled; with more than one core
@@ -231,12 +219,10 @@ what the check asks, below, not the latch. `RegisterPattern` (page 9) and
   - a rename is `Unsupported` — it lands for good, and the drop's rollback
     would restore the name beside it; commit the drop first.
 
-  Until AT-S17 the table case was asked by the dispatcher, and only when
-  the *asking* core had DDL open (a bare `ERR`); the namespace and rename
-  cases not at all; the index case through `ScanAll`'s core-local in-flight
-  test (DT9). Each read another core's open drop as done. The refusal is
-  asked in the catalog now, so in the SQL `CREATE TABLE` it comes after the
-  column types and the foreign keys are resolved.
+  Background: before AT-S17 each case was asked core-locally or not at all,
+  and read another core's open drop as done. Asked in the catalog, the SQL
+  `CREATE TABLE`'s refusal comes after its column types and foreign keys
+  are resolved.
 
 **Assertion names have no pending drop to ask about**: `DROP ASSERTION`
 retires its row outside any transaction (`ddl-transactional.md` §5).
@@ -246,7 +232,7 @@ growth, the allocator for it, the WAL, a transactional write's undo page
 (a sink that asks no catalog page), and for `sys.assertions` its own
 var-heap chain — never another catalog relation's page; `InsertAssertion`'s
 `OpenAssertions` under page 14 is a cache hit, filled before the hold
-(`assertion_catalog.cpp:195`). That is why the oids and ids above are
+(`InsertAssertion`, `assertion_catalog.cpp`). That is why the oids and ids above are
 issued before their holds: `GenerateUserOid`'s first use seeds from
 `sys.columns`, and `AllocateRowId` writes `sys.tables`. `RegisterPattern`,
 outside this table, issues under page 9 and so takes page 7 under it;
@@ -271,9 +257,7 @@ page 6's hold drops. The create is refused, or the drop sees its row - on any
 core. Both use `CheckNameFree`'s walk and instance check view, so an undecided
 drop counts across cores: a namespace another transaction is dropping -
 or is still creating, whose rollback would leave the relation in nothing
-(AT-S17b's review) - is `TxnConflict` to a create; a relation another transaction is dropping is still
-in its namespace, `TxnConflict` to the RESTRICT (the asker's own drop
-`InvalidArgument`, as before). The `sys.tables` check this replaced settled a
-relation drop's delete-mark by the asking core's in-flight test (DT9), so it
-read another core's open `DROP TABLE` as done. `CreateTable` now refuses a
-namespace oid no row names, which two cells had leaned on.
+- is `TxnConflict` to a create; a relation another transaction is
+dropping is still in its namespace, `TxnConflict` to the RESTRICT (the
+asker's own drop `InvalidArgument`). `CreateTable` refuses a namespace oid
+no row names.

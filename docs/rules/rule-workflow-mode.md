@@ -43,7 +43,7 @@ re-made.
 Two things can supply that plan:
 
 - **A named instruction file** — open the session in a git worktree
-  (`CLAUDE.md` §1), activate workflow mode, and name a file under
+  (`CLAUDE.md`'s Session Workflow step 1), activate workflow mode, and name a file under
   `instructions/`, ckdbs's own convention for a work order.
   `intermediary-agent` reads it once, sets the run's **goal** from what
   the file states it delivers, and registers the file's own task table —
@@ -206,13 +206,8 @@ the go-ahead gate below:
   it. Undocumented is not allowed; undecided is not an option workflow
   mode has.
 - **This does not reach the go-ahead gate.** Deciding an open technical
-  question autonomously is not the same act as pushing to `origin main`
-  — a different kind of check, over who may take an irreversible,
-  shared-repo action, and one this file cannot delegate to an agent no
-  matter how the rest of the loop is scoped: **that push is the user's
-  decision, always.** A task can be fully decided, built and tested, and
-  still stop short of it; that is the one point in the loop still built
-  to wait for a person, and it is a push gate, not a question.
+  question is not pushing to `origin main`: **that push is the user's
+  decision, always** (step 3 below).
 
 ## Documentation — where the reasoning has to live
 
@@ -224,8 +219,8 @@ never optional, wherever one task's output feeds the next: **research,
 a follow-up fix, or a revision that continues inside one milestone must
 land its background, its reasoning and any measured metrics in the doc
 that owns the subsystem** — `docs/spec/` if the thing is decided and
-built, and otherwise the tree's bucket for unfinished work (`docs/inflight/`
-held it until `1769487`) — never only in the cws report. The next
+built, the milestone's work order under `instructions/` if it is planned,
+and otherwise `docs/inflight/` — never only in the cws report. The next
 iteration that picks up where this one left off has no memory but what
 is written there.
 
@@ -281,16 +276,12 @@ under it with their priorities, builds nothing, and hands the plan to
    before anything is built on the guess, and the review is read from
    every aspect the change touches, not one.
 3. **The push gate does not move, and it is not a task outcome.**
-   `CLAUDE.md` §4 requires an explicit go-ahead before anything pushes to
-   `origin main`; workflow mode grants none of its own authority, and
-   cannot — that push stays the user's decision, not the loop's,
-   regardless of how autonomously the rest of the task was decided.
-   **But nothing in the loop waits on it.** Work that is finished, gated
-   and committed on its branch is `done` — the push is a separate act by
-   a different party, not a state the task sits in. There is no
-   `awaiting go-ahead` outcome: the concept here is self-enhanced
-   development, and a queue full of tasks parked on a human is the
-   opposite of it. Unpushed branches accumulate; the loop keeps moving.
+   `CLAUDE.md`'s Session Workflow step 4 requires an explicit go-ahead
+   before anything pushes to `origin main`, and workflow mode grants none
+   of its own. **But nothing in the loop waits on it**: work finished,
+   gated and committed on its branch is `done`, and there is no
+   `awaiting go-ahead` outcome. Unpushed branches accumulate; the loop
+   keeps moving.
 4. `intermediary-agent` reports the task's outcome — done, blocked,
    failed, or no task found — back to the loop driver.
 5. **If the task turned up unscoped work** — a fix that needs its own
@@ -388,11 +379,10 @@ result**, never a finished task left at `inprogress`. Note that
 **The claim lease.** `POST /tasks/{id}/claim/` and `/release/`, an
 exclusive 30-minute lease so two sessions can't work one task at once,
 with `GET /tasks/?claimable=true` as its advisory filter.
-`intermediary-agent` claims at the moment work starts — step 4 of its
-work phase — because **a claim is how this schema says "in progress"**:
-a task row has no status column, `status` lives only on results, and a
-result is a finished signal that would drop the task out of the pending
-list mid-work. Re-claiming refreshes the lease, which a task outrunning
+`intermediary-agent` claims at the moment work starts, not at pick
+time, and then sets `inprogress` (the `state` column above); a result is
+a finished signal that drops the task out of the pending list, so it is
+never posted mid-work. Re-claiming refreshes the lease, which a task outrunning
 30 minutes must do or be stolen; reporting a result releases the lease on
 its own.
 

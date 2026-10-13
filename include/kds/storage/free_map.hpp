@@ -77,8 +77,8 @@ std::uint32_t FreeMapCountAllocated(std::span<const std::byte, kPageSize> page) 
 // Placement: which bitmap pages cover an id (docs/spec/page.md section 5)
 // ---------------------------------------------------------------------
 //
-// D1 of docs/inflight/in-progress/workplan-multi-free-map.md section 7, settled 2026-08-26 as
-// that section's candidate A. Region N is the ids
+// Settled 2026-08-26 (D1 of workplan-multi-free-map.md §7, at 1769487).
+// Region N is the ids
 // [N * kFreeMapBitsPerPage, (N+1) * kFreeMapBitsPerPage), and its two
 // bitmaps are the first two ids inside it:
 //

@@ -20,7 +20,8 @@
 // ---- What this is, next to heap_chain.hpp -------------------------------
 //
 // A heap-clustered relation is a linked list of pages: point lookup by pk
-// is O(pages), and a range scan has to start at the head. This is the same tuple storage with an index above it - the
+// is O(pages), and a range scan has to start at the head. This is the
+// same tuple storage with an index above it - the
 // leaves *are* heap pages (heap_page.hpp's CreateEmptyAs under a
 // kBtreeLeaf header), linked by the same `next_page_id`, holding the same
 // slotted tuples with the same MVCC header. What is added is the internal
@@ -45,8 +46,10 @@
 // one binary search every caller asks. An insert logs `BTREE_INSERT`, whose
 // redo shifts as the placement did.
 //
-// **A full leaf grows three ways**, and every page a split writes is logged
-// as an image in one `BTREE_SPLIT` record that carries the row (BD-R12):
+// **A full leaf with a retired slot is first compacted in place** when the
+// result fits (`CompactLeafAndInsert`, BH-S5); otherwise **it grows three
+// ways**. Every page a split or a compaction writes is logged as an image
+// in one `BTREE_SPLIT` record that carries the row (BD-R12):
 //
 //   - **append** - the id sorts above every key the leaf holds: a new leaf
 //     whose low key is the id, nothing moved, the old leaf linked to it and
@@ -57,18 +60,20 @@
 //   - **median** - any other divide (`SplitLeafAndInsert`): the keys cut at
 //     their median, the upper half moved to a new leaf.
 //
-// A divide bumps the old leaf's `relayout_epoch`, and a separator sorting
+// A divide or a compaction moves the old leaf's `relayout_epoch` one past
+// its value, and a separator sorting
 // inside a full internal node divides that node. docs/spec/heap-and-tuple.md
 // section 4.1 carries why a divide keeps invariants 2 and 3.
 //
 // Two consequences worth stating because they are easy to assume away:
 //
-//   1. **A placement and a divide move rows; nothing rewrites a `min_key`**,
-//      so a leaf's `min_key` is immutable exactly as a heap page's is
-//      (invariant 2). There is no relayout and no compaction. A `(page,
-//      slot)` is therefore true only under the leaf's hold (`Location`).
-//   2. Leaves are never merged, and nothing reuses space freed by DELETE,
-//      for the same missing page compaction as the heap chain's.
+//   1. **A placement, a compaction and a divide move rows; nothing
+//      rewrites a `min_key`**, so a leaf's `min_key` is immutable exactly as
+//      a heap page's is (invariant 2). A `(page, slot)` is therefore true
+//      only under the leaf's hold (`Location`).
+//   2. Leaves are never merged. A deleted row's bytes come back only once
+//      its slot is retired (rollback or `PURGE`) and its full leaf is
+//      compacted before a split; a delete-marked row keeps its bytes.
 //
 
 // ---- Structural changes are reported, not logged here -------------------
@@ -179,18 +184,24 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
 //   ...            whatever the store reports when a page cannot be
 //                  allocated
 //
-// On failure nothing is reported as structural, but pages *may* already
-// have been allocated, and none is freed here - a free needs BF-R4's replay
-// gate. The new leaf a failed promotion leaves is linked into the leaf
-// chain on a dividing split and reached by no descent; an append split's
+// **A split claims every page it creates before it writes one**
+// (`PageStore::ClaimNew`), so a store that cannot grow, or a free map it
+// cannot read, refuses the insert with the tree as it was; the claims go
+// back. On a later failure nothing is reported as structural, but pages
+// *may* already have been allocated, and none is freed here - a free needs
+// BF-R4's replay gate. The new leaf a failed promotion leaves is linked
+// into the leaf chain on a dividing split and reached by no descent; an append split's
 // new leaf, and any internal node the promotion created, are reached by
 // neither. A dropped relation's reclaim follows the leaf chain, so it frees
 // the first; the rest is a stated leak (`drop-table.md` DT1).
+//
+// `anchor_page` is the anchor a growth pins (`UnlatchedPin`); none pins nothing.
 StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId root,
                                                 std::uint64_t id,
                                                 std::span<const std::byte> payload,
                                                 std::uint64_t trx_id,
-                                                std::uint64_t owner_oid);
+                                                std::uint64_t owner_oid,
+                                                PageId anchor_page = kInvalidPageId);
 
 // Descends to the leaf that owns `id` and finds its live slot. This is the
 // point-lookup the whole structure exists for: O(depth) page fetches plus
@@ -244,8 +255,7 @@ StatusOr<std::optional<Location>> BtreeHoldTombstone(storage::PageStore& store, 
 // It exists for a range: `WHERE id BETWEEN low AND high` on a clustered
 // relation should start at `low`, not at the leftmost leaf. Walking from the
 // head and stopping at the tail reads everything before the range, which for
-// a uniformly drawn bound is half the relation - measured at 44% of a full
-// scan on a 60,480-row table (bench/results-scenario1-vs-pg.md).
+// a uniformly drawn bound is half the relation.
 //
 // The distinction from BtreeLookup is the whole point: a lookup answers
 // NotFound when the key is absent, and a range's low bound very often is.
@@ -268,8 +278,15 @@ Status BtreeVisit(
 
 // The leftmost leaf - where a full walk starts. BtreeVisit descends
 // through it; exposed for callers that own the page loop themselves
-// (exec's RunWalkStep, workplan-crosscore.md P4d-3).
+// (exec's RunWalkStep).
 StatusOr<PageId> BtreeLeftmostLeaf(storage::PageStore& store, PageId root);
+
+// A leaf, fetched under `access` and checked to be one: the page a leaf
+// walk reads its slots from, whether `BtreeVisitLeafPage` drives the slot
+// loop or the caller does (the step VM's walk, BM-R5). A page of another
+// type is `Corruption`, naming it.
+StatusOr<storage::PageRef> BtreeFetchLeaf(storage::PageStore& store, PageId leaf,
+                                          storage::PageAccess access);
 
 // One leaf of the walk BtreeVisit makes: calls `fn` per slot of exactly
 // `leaf`, under the same visitor contract, and returns the right sibling

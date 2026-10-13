@@ -1,8 +1,6 @@
 # KDS Wire Protocol (KWP/1)
 
-The protocol KDS speaks: length-prefixed binary frames, a version and capability handshake, and an extended PARSE/BIND/EXECUTE statement model over server-side statement and portal handles. The newline text protocol in `docs/spec/client-manual.md` survives as an off-by-default loopback debug surface (§12). Consistent with `docs/rules/rules.md`, `docs/spec/sched.md`, `docs/spec/wal.md`, `docs/spec/waystone-concpets.md`.
-
-The default port speaks KWP/1: handshake, `C_AUTH` exchange, PARSE/BIND/EXECUTE over server-side statement and portal handles, typed row batches, portal suspension, transaction and durability frames, the structured error registry. The newline text protocol is `debug_text_port`'s loopback debug surface (§12), off unless configured.
+The protocol the default port speaks: length-prefixed binary frames, a version and capability handshake with a `C_AUTH` exchange, PARSE/BIND/EXECUTE over server-side statement and portal handles, typed row batches, portal suspension, transaction and durability frames, the structured error registry. The newline text protocol in `docs/spec/client-manual.md` is `debug_text_port`'s loopback debug surface (§12), off unless configured. Consistent with `docs/rules/rules.md`, `docs/spec/sched.md`, `docs/spec/wal.md`, `docs/spec/waystone-concpets.md`.
 
 ## 0. Decision Record
 
@@ -10,7 +8,7 @@ The default port speaks KWP/1: handshake, `C_AUTH` exchange, PARSE/BIND/EXECUTE 
 |---|---|---|
 | D1 | Protocol strategy | **Custom protocol (KWP)** — no PostgreSQL wire compatibility; KDS ships its own client libraries |
 | D2 | Framing | **Length-prefixed binary frames** with version/capability handshake |
-| D3 | Cross-core access | **Server-side forwarding** — clients are core-topology-unaware |
+| D3 | Cross-core access | **Clients are core-topology-unaware** — a statement runs on its session's core (§8); nothing is forwarded |
 | D4 | Statement model | **Extended**: PARSE / BIND / EXECUTE with server-side statement handles |
 | D5 | Data encoding | **Binary, little-endian** end to end |
 | D6 | Results | **Chunked row-batch streaming** with portal suspension |
@@ -76,7 +74,7 @@ Unknown frame types: server responds `ERROR(PROTOCOL)`; clients must treat unkno
 
 PG-shaped phases, KDS semantics:
 
-- **`C_PARSE`** `{stmt_name str, sql str}` → server parses to the `Statement` AST and — this is the Waystone tie-in — computes the **query-template fingerprint at parse time**. `S_PARSE_OK` returns `{pattern_id u64}` (informational; clients may log it, never interpret it). It is the statement's whole shape. `SHOW PATTERNS` has keyed its rows by `fetch_id` since AP-S2 - the shape with the select list left out, which `ANALYZE` prints beside `pattern_id` - and the frame does not carry it: `pattern_id` stays what it was, and adding a field is a wire change nobody has asked for (`workorder-ap-function-catalog-fetch-id.md` AP-Q4). Named statements are session-scoped and survive until `C_CLOSE` or disconnect; the unnamed statement (`""`) is overwritten by the next PARSE.
+- **`C_PARSE`** `{stmt_name str, sql str}` → server parses to the `Statement` AST and — this is the Waystone tie-in — computes the **query-template fingerprint at parse time**. `S_PARSE_OK` returns `{pattern_id u64}` (informational; clients may log it, never interpret it). It is the statement's whole shape; `SHOW PATTERNS` keys its rows by `fetch_id` (the shape without the select list, which `ANALYZE` prints beside `pattern_id`), and the frame does not carry it (AP-S2, AP-Q4). Named statements are session-scoped and survive until `C_CLOSE` or disconnect; the unnamed statement (`""`) is overwritten by the next PARSE.
 - **`C_BIND`** `{portal_name Str, stmt_name Str, param_count u16, params: [{type_oid u32, type_mod u32, i32 len | -1=NULL, bytes}]}` — parameters are binary LE per the type table (§6). `S_BIND_OK`.
 
   **A parameter carries its own type.** Eight bytes are an `int64`, a `TIMESTAMP`, an unscaled `DECIMAL` or eight bytes of text, and the server has no other way to choose. Every value travelling *outward* is typed by `S_ROW_DESC`; this is the same fact travelling inward. `type_mod` rides along for the reason it does on a field description — a decimal's unscaled integer means nothing without its scale.

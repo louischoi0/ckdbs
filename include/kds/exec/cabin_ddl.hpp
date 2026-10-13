@@ -13,7 +13,7 @@
 //
 // ---- The error / warning line --------------------------------------------
 //
-// The same line `pattern_ddl.hpp` draws, and for the same reason: an
+// The same line `index_ddl.hpp` draws: an
 // **error** is a declaration that could never do what it says - a Cabin on
 // the primary key, on a column the relation does not have, on a column that
 // already has one. A **warning** is a declaration that works and will

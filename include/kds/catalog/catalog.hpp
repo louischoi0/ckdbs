@@ -45,19 +45,15 @@ class WalManager;
 //     rooted at `desc_page_id`; what differs is what grows out of it
 //     (heap_chain.hpp vs btree.hpp).
 //   - Rows written here are stamped kBootstrapXid **unless a caller
-//     supplies a transaction id** (workplan-ddl-transactional.md DT2).
-//     kBootstrapXid is visible to every read view, permanently, which is
-//     what bootstrap rows require and what every caller still gets by
-//     default. A real id only means anything once catalog *reads* filter
-//     by visibility (DT3); until then this parameter is a seam and
-//     nothing passes a real id.
+//     supplies a transaction id** (`ddl-transactional.md`, DT2): a DDL
+//     under a transaction passes its id and catalog reads filter by
+//     visibility (DT3); kBootstrapXid, visible to every read view
+//     permanently, is what bootstrap rows and every default caller get.
 //   - Object oids (GenerateUserOid()) are unique for the life of the
 //     database. The counter is recovered from the catalog's own rows on
 //     first use rather than persisted; see that function and
-//     kUserOidStart in well_known.hpp. This was a KNOWN GAP until
-//     2026-08-08 - the counter was in-memory and restarted every boot,
-//     so a clean restart plus one CREATE TABLE produced two relations
-//     sharing an oid (docs/rules/keystoneid-k0-findings.md §6).
+//     kUserOidStart in well_known.hpp
+//     (docs/rules/keystoneid-k0-findings.md §6).
 //
 // Logging (component tag "catalog"): catalog pages are the pages whose
 // contents explain every other page, so the writes are logged at Info
@@ -317,40 +313,21 @@ public:
     // because afterwards a mark may belong to a transaction that is still
     // open, and retiring one of those destroys the row a rollback needs.
     //
-    // It exists because DT9 made a mark's meaning depend on whether its
-    // deleter is in flight, and a mark that outlived its mount has no
-    // deleter to ask about. The id could even be **reissued** — the
-    // transaction-id ceiling is unlogged (`txn/trx_id.hpp`), so a crash
-    // reissues the block — and then a live transaction wearing a dead
-    // one's id would make a committed drop read as open, re-arm a dropped
-    // index, and answer probes from a btree missing every row written
-    // since. Finalizing at mount deletes that question instead of
-    // answering it.
+    // Sound at mount because recovery has already rolled every loser back:
+    // every mark left belongs to a committed deleter, and a mark that
+    // outlived its mount has no live deleter for DT9 to ask about.
     //
-    // **Retiring is the only available answer, not the conservative one.**
-    // A mark whose transaction committed should be gone. A mark whose
-    // transaction did not commit cannot be rolled back either: the trail
-    // that would compensate it died with the process, and the catalog is
-    // not recovered (RV3), so nothing can reconstruct the intent. Both
-    // already read as gone to every unfiltered reader before DT9. What
-    // this changes is that they stop being ambiguous.
-    //
-    // Second effect, and the reason it is worth a page sweep on its own:
-    // nothing else ever purges these rows. A transactional `DROP TABLE`
-    // leaves one mark per column, index and foreign key, forever, re-read
-    // on every catalog cache miss.
-    //
-    // Unlogged, like every catalog write (RV3). A crash mid-sweep leaves
-    // some marks retired and some not, which is exactly the state it
-    // started from and what the next mount sweeps again.
+    // Each retire is logged (`SLOT_RETIRE` at `kNoTxnId`, RV3), so a
+    // crash mid-sweep leaves a prefix retired and the next mount sweeps the
+    // rest.
     StatusOr<std::uint64_t> FinalizeDeleteMarksAtMount();
 
     // The in-mount sibling of the sweep above: retires every delete-marked
     // catalog row whose deleter every live and future reader on any core
     // sees as committed (`TransactionManager::ResolvedForEveryReader`, the
-    // instance's floor and horizon since AN-S2), and answers how many.
+    // instance's floor and horizon), and answers how many.
     // Callable while the listener is bound; no version
-    // bump, unlogged like every catalog write; a held-back mark survives
+    // bump, each retire logged as at mount; a held-back mark survives
     // to the next call or to the mount sweep. The caller is core 0's
     // `system` tick (`CommandDispatcher::SweepSettledDeleteMarks`, BP-H11),
     // on **one** core - a placement, so that two cores do not walk the same
@@ -400,34 +377,24 @@ public:
     // relation would be invisible to the recovery and reissued after a
     // restart. Nothing else in the engine takes its ids from here - patterns,
     // cabins, foreign keys and indexes each use their own persistent
-    // per-relation `next_id` sequence - so the contract holds today, and the
+    // per-relation `next_id` sequence - so the contract holds, and the
     // scan is where to extend it if that changes.
     //
-    // Fallible now, where it used to be `noexcept`: reading the catalog can
-    // fail, and an oid guessed after a failed read is exactly the collision
-    // this exists to prevent.
+    // Fallible: reading the catalog can fail, and an oid guessed after a
+    // failed read is exactly the collision this exists to prevent.
     StatusOr<Oid> GenerateUserOid();
 
     // Creates a new table: allocates its storage root page, formats it for
     // the requested clustered type, and inserts the corresponding
     // sys.objects/sys.tables/sys.columns rows.
     //
-    // There is no key-mode parameter. Until 2026-08-25 there was, and it was
-    // required rather than defaulted because getting it wrong made a relation
-    // refuse every INSERT its author wrote; the mode is gone (section 4.1),
-    // every relation now takes a supplied pk or issues one per row, and the
-    // parameter went with it.
+    // No key-mode parameter: every relation takes a supplied pk or issues
+    // one per row (heap-and-tuple.md §4.1; the mode went 2026-08-25).
     // `trx_id` stamps the `sys.objects` / `sys.tables` / `sys.columns`
-    // rows this writes (workplan-ddl-transactional.md DT2). Defaulting to
-    // `kBootstrapXid` is what keeps every existing caller - bootstrap,
-    // tests, recovery - byte-identical, and it is the *correct* value for
-    // them: those rows must be visible to a read view minted before any
-    // transaction existed (ddl-transactional.md §3).
-    //
-    // **Passing a real id is only correct once catalog reads filter by
-    // visibility** (DT3). Until then a real id would make the rows
-    // invisible to nobody and visible to everybody, which is what they
-    // already are - so DT2 changes no behaviour anywhere, deliberately.
+    // rows this writes (DT2). `kBootstrapXid` is the default and the
+    // correct value for bootstrap, tests and recovery: those rows must be
+    // visible to a read view minted before any transaction existed
+    // (ddl-transactional.md §3). A DDL under a transaction passes its id.
     // `written`, when given, receives every catalog row this created, in
     // write order, so a transactional caller can register them for
     // rollback (DT3a). Filled even when the create fails partway: rows
@@ -547,7 +514,7 @@ public:
     // cannot see **does not exist** for this caller, and the lookup
     // neither reads nor fills the shared cache - see the definition for
     // why that bypass is the whole of the isolation. Null (the default)
-    // is every pre-DT3 caller and behaves exactly as it always did.
+    // reads unfiltered, through the cache.
     //
     // **This is the gate.** SQL reaches a relation by name and never by
     // oid, so a name that does not resolve is a relation that cannot be
@@ -763,7 +730,7 @@ public:
     // different fingerprinting rules names a shape that is not the one it
     // claims, so the only safe reading of it is that this pattern has not
     // been seen. The caller registers it afresh and the stale row becomes
-    // garbage for retention to reclaim (P15). A version mismatch is never
+    // garbage (retention, P15, is unbuilt). A version mismatch is never
     // an error - nothing about it should fail a statement.
     StatusOr<const PatternAccess*> FindPattern(std::uint64_t fetch_id);
 
@@ -777,9 +744,8 @@ public:
     // will resolve. Removing the parameter is what makes "the cache holds
     // current-version entries only" true by construction.
     //
-    // Registration bumps **no** catalog version, and that is worth stating
-    // because the deleted per-relation Waystone got it wrong in exactly
-    // this spot. Nothing cached can go stale from a pattern appearing:
+    // Registration bumps **no** catalog version. Nothing cached can go
+    // stale from a pattern appearing:
     // absences are never cached (catalog_cache.hpp), so no entry claims
     // this pattern is missing, and no other cached fact mentions it. The
     // consequence matters on the statement path - registering a pattern
@@ -791,9 +757,9 @@ public:
     // persistent sequence in sys.patterns' own sys.tables row. That is a
     // repurposing worth naming: catalog rows carry no Keystone word, so
     // this is the sequence used as an oid source rather than as a tuple id.
-    // The alternative, GenerateUserOid(), is in-memory and restarts at
-    // kUserOidStart every boot (well_known.hpp), which for a *persisted*
-    // row means two patterns sharing an oid across a restart.
+    // GenerateUserOid() is not used: its recovery reads back only
+    // `sys.objects` and `sys.columns`, so an oid written only here would be
+    // reissued after a restart (its contract, above).
     //
     // Fails with AlreadyExists if `fetch_id` is already registered at
     // the current version. A row left by an older revision does not count
@@ -803,9 +769,8 @@ public:
     // The row is written kOriginAuto, unpinned, and with **no waystone
     // directory** - the directory arrives through the one writer of that
     // pair, ClaimPatternWaystoneRoot(), when the first trail is recorded.
-    // `origin` and `flags` were parameters until 2026-08-31: `CREATE
-    // PATTERN` passed kOriginUser and kPatternPinned, and withdrawing
-    // declared patterns left one caller and one value for each.
+    // (`origin`/`flags` went from the signature with `CREATE PATTERN`,
+    // 2026-08-31.)
     StatusOr<const PatternAccess*> RegisterPattern(std::uint64_t fetch_id,
                                                     std::uint8_t stmt_class);
 
@@ -843,13 +808,9 @@ public:
                                                                       PageId root,
                                                                       std::uint8_t depth);
 
-    // A `SetPatternOrigin()` stood here - the in-place rewrite of a
-    // pattern's `origin` and `flags`, which `CREATE PATTERN` called to
-    // *adopt* an auto-registered row rather than replace it. It went with
-    // declared patterns on 2026-08-31: every row is `kOriginAuto` now and
-    // nothing writes `kPatternPinned`. The two fields stay on disk
-    // (rows.hpp says why), so a re-designed declaration would restore a
-    // writer rather than change the row.
+    // No `SetPatternOrigin()` or `RetirePattern()`: both went with
+    // declared patterns on 2026-08-31. Every row is `kOriginAuto`, nothing
+    // writes `kPatternPinned`, and the two fields stay on disk (rows.hpp).
 
     // A `TouchPattern()` stood here - the trail recorder's catalog half,
     // which bumped `use_count` and stamped `last_seen` on every recorded
@@ -858,11 +819,6 @@ public:
     // `SELECT` waited on the one WAL behind any bulk writer. The two fields
     // stay on disk, written 0 at registration and advanced by nothing.
 
-    // A `RetirePattern()` stood here - `DROP PATTERN`'s catalog half, and
-    // the first path in the engine that removed a catalog row. It went with
-    // declared patterns on 2026-08-31; `DropCabin()` below carries the
-    // retire-rather-than-delete-mark argument it used to state.
-
     // Every sys.patterns row, in page order.
     //
     // **Unfiltered, unlike GetSysPatternRow()** - rows from another
@@ -870,7 +826,7 @@ public:
     // rule: the rule protects *lookup by fetch_id*, so a stale row can
     // never resolve as the pattern it names. This is an inspection surface,
     // and the stale rows are exactly what an operator wants to see - they
-    // are the garbage a version bump left behind, waiting on retention.
+    // are the garbage a version bump left behind (retention is unbuilt).
     // A caller that wants the version rule applied asks for a pattern by
     // id; a caller that wants to look at the relation reads this.
     StatusOr<std::vector<SysPatternRow>> ListPatterns();
@@ -1065,9 +1021,8 @@ public:
     // in.
     // `anchor_page_id` defaults to kInvalidPageId, the bootstrap value -
     // rows.hpp owns the rule (a system relation carries no anchor).
-    // The one anchor write path (the f5686f8 review's S1): validate the
-    // page and its owner stamp (the 96b0343 review's C3 - the write is
-    // where damage is created), set the slot (index_oid 0 = the clustered
+    // The one anchor write path: validate the page and its owner stamp
+    // (the write is where damage is created), set the slot (index_oid 0 = the clustered
     // root, the record's own discriminator), log and stamp. Three callers
     // - both movers and the CREATE INDEX seed - so the PW2 ordering
     // discipline lives once.
@@ -1265,8 +1220,7 @@ private:
     // rows at fixed oids (docs/spec/assertion.md §8.2, workplan AST03).
     // Split out because it is the one bootstrap relation that is not just a
     // page and two rows, and folding it into Bootstrap() would bury the
-    // reason it differs. `BootstrapPatternDefs()` stood beside it in the
-    // same shape until 2026-08-31, when declared patterns were withdrawn.
+    // reason it differs.
     Status BootstrapAssertions();
 
     // `cabin_policy` is one of the `kCabinPolicy*` values (rows.hpp) and

@@ -76,11 +76,10 @@ Fix16 FromWhole(std::uint64_t whole) noexcept {
 }
 
 // The DECAYING dwell in nanoseconds: whole half-lives x the half-life.
-// **Both operands are integers and neither passes through 16.16**, which
-// is the point - this used to be `2 x amort_windows` in fixed point, and
-// lifting a nanosecond count into 16.16 saturated for every half-life
-// above about two seconds, collapsing a configured 20-minute cooldown to
-// 4.29 s. Saturating rather than wrapping: a cooldown so long it
+// **Both operands are integers and neither passes through 16.16**: a
+// nanosecond count lifted into 16.16 saturates for every half-life above
+// about two seconds (it once collapsed a 20-minute cooldown to 4.29 s).
+// Saturating rather than wrapping: a cooldown so long it
 // overflows u64 is a configuration asking never to drop, which is the
 // direction it should err.
 sched::MonoTimeNs CooldownNs(std::uint32_t half_lives, sched::MonoTimeNs half_life_ns) noexcept {
@@ -445,13 +444,11 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
             case State::kActive: {
                 assert(m.cabin_id != 0);
                 // The onset test, and the one place the log domain earns
-                // its keep. It used to read "zero benefit decays whatever
-                // the cost", because a linear zero made the comparison
-                // vacuous - and that flattened every deeply-idle Cabin
-                // into the same instant, so a shape worth 2^30 left ACTIVE
-                // exactly when one worth 2^10 did. In the log domain the
-                // margin survives, so time-to-DECAYING is proportional to
-                // demonstrated value again. A score that is *truly* zero
+                // its keep: a linear zero would flatten every deeply-idle
+                // Cabin into the same instant (a shape worth 2^30 leaving
+                // ACTIVE exactly when one worth 2^10 does). In the log
+                // domain the margin survives, so time-to-DECAYING is
+                // proportional to demonstrated value. A score that is *truly* zero
                 // still decays: its log is negative infinity.
                 if (below(scored, config_.theta_drop)) {
                     m.state = State::kDecaying;

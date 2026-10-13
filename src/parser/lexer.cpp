@@ -189,14 +189,9 @@ Token Lexer::ScanToken() {
     }
 
     // Named parameter: `$flag`. The sigil is consumed and the name is kept
-    // as written, so `Token::text` reads exactly like an identifier's -
-    // which is what lets the parser compare declared against used with the
-    // same case-insensitive fold it uses everywhere else.
-    //
-    // A `$` with no identifier after it falls through to the switch below
-    // and lexes as kError, the same answer it gave before this token
-    // existed. There is no such thing as an anonymous named parameter, and
-    // reporting the bad character is more use than inventing an empty name.
+    // as written, like an identifier's; every production refuses it
+    // (token.hpp). A `$` with no identifier after it falls through to the
+    // switch below and lexes as kError.
     if (c == '$' && pos_ + 1 < src_.size() && IsIdentStart(src_[pos_ + 1])) {
         ++pos_;  // the sigil
         std::size_t start = pos_;

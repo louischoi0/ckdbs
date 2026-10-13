@@ -9,10 +9,11 @@
 #include "kds/server/scram.hpp"
 
 // The connection-level authentication gate (docs/spec/protocol.md D8's auth
-// stage, on the text protocol until KWP P07 exists). TcpServer routes
-// every line of an unauthenticated connection here instead of to the
-// dispatcher, so a statement cannot run - and STOP cannot stop the
-// server - before the client proves who it is.
+// stage), for both protocols. On the text protocol TcpServer routes every
+// line of an unauthenticated connection here instead of to the dispatcher;
+// a KWP connection's gate moves into its `KwpSession` and runs from
+// `C_AUTH` frames. Either way a statement cannot run - and STOP cannot stop
+// the server - before the client proves who it is.
 //
 // The exchange, one SCRAM message per line, raw (SCRAM messages are
 // printable and comma-separated; they cannot contain a newline):
@@ -23,7 +24,7 @@
 //   S: AUTH+ <server-final-message>        and the connection is open
 //
 // Any other line before authentication, and any failed step, answers
-// "ERR ..." and severs the connection. KWP will carry these same SCRAM
+// "ERR ..." and severs the connection. KWP carries these same SCRAM
 // message bodies in handshake frames; only this line framing is
 // protocol-specific.
 //

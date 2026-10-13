@@ -41,7 +41,7 @@ ruling, §4's item, §6's entry).
 `v2.7.0-787-g8679367e`; on `main` since `2f4f7c61`, pushed 2026-10-11): BN-S1, S3, S4, S5, S9 built; BN-S2, S6,
 S7 not built, each with its number (§2's BN-R1, BN-R5, BN-R6, §4's BN-Q13,
 §6's "not built" entry); measured once at the close
-(`bench/v3.0.0/results-bn-close-v2.7.0-787-g8679367e.md`).
+(`bench/v3.0.0/results-bn-close-v2.7.0-787-g8679367e.md`). **Close marked by the operator on 2026-10-13** (`raft-marks-2026-10-13.md` §9).
 
 **Claim tags:**
 - `[source-read]` with `path:line` at `e623fb5`;

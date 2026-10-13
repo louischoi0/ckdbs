@@ -37,17 +37,12 @@
 //     not enforced, by exec::InstallSuspendAudit in debug builds; the word
 //     itself cannot tell two tasks on one core apart;
 //   - **never upgraded**: an exclusive request against shared holders is
-//     `kBusy`, whoever holds the shares. The word cannot tell whose they
-//     are, and **neither can the store's pin count any more**: that read
-//     ("its pins are this core's through M1") was exact only while each core
-//     had a frame table of its own, and AM-S2 step 3 gives one table to
-//     every core, where `pins > 1` is two cores holding one pin each as
-//     readily as one core holding two. The diagnosis is the *thread's* own
-//     record now (`device_page_store.cpp`'s `SharedHoldsHere`), which is
-//     exact on the premise the engine already keeps - one reactor per
-//     thread, no handle crossing threads - and it still reports "held
-//     shared here and asked for exclusive" as the self-deadlock it is: a
-//     debug abort naming the page, a hang in release, as a recursive
+//     `kBusy`, whoever holds the shares. Neither the word nor the shared
+//     frame table's pin count can tell whose they are (AM-S2 step 3), so
+//     the diagnosis is the *thread's* own record (`device_page_store.cpp`'s
+//     `SharedHoldsHere`), exact because one reactor runs per thread and no
+//     handle crosses threads: "held shared here and asked for exclusive" is
+//     a debug abort naming the page, a hang in release, as a recursive
 //     std::mutex acquisition is (base/latch.hpp);
 //   - release: under `X` the owner must be this core, and the word returns
 //     to free when the depth reaches zero; otherwise one shared holder
@@ -208,13 +203,8 @@ public:
 
     // True when shared holders exist and nobody holds it exclusive - the
     // state an exclusive request cannot pass.
-    //
-    // **Its only callers are this word's own cells, since AM-S2 step 3b.**
-    // The store used to read it to tell an upgrade from a foreign reader,
-    // and the half of that pair which named *whose* shares they were was the
-    // pin count - which a shared frame table no longer answers. Kept because
-    // it decodes the word for the tests that assert on it, not because
-    // anything in the engine still asks.
+    // Only tests call it (AM-S2 step 3b moved the store's upgrade check to
+    // `SharedHoldsHere`).
     static bool HasSharedHolders(const std::uint32_t& word) noexcept {
         const PageLatchWord w =
             DecodePageLatch(std::atomic_ref<const std::uint32_t>(word).load(std::memory_order_acquire));

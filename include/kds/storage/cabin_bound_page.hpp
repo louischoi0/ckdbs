@@ -25,7 +25,8 @@
 // |    0   |   8   | pk (48) | flags (8) | reserved (8) - the Keystone word  |
 // |    8   |   8   | location hint: page_id (32) | epoch (16) | slot (16)    |
 // |   16   |   8   | aggregate value, int64                                  |
-// |   24   |   8   | padding to 32                                           |
+// |   24   |   4   | group_id (AS6a)                                         |
+// |   28   |   4   | padding to 32                                           |
 //
 // **The pk is authoritative and the hint is advisory**, which is C2 carried
 // over from the observational class unchanged. Under K1 a stored Keystone id
@@ -43,10 +44,9 @@
 // entries and nothing else. For a `COUNT(*)` assertion it is written 1, which
 // makes re-summation one code path rather than two.
 //
-// The 8 bytes of padding are real padding and not a reservation: §5.1 fixes
-// the entry at 32 bytes, and 24 would have done. It is here because a
-// power-of-two entry makes `entry_index × 32` a shift, and because the day a
-// field is needed there is somewhere to put it without a format change.
+// The last 4 bytes are padding: §5.1 fixes the entry at 32 bytes so
+// `entry_index × 32` is a shift, and `group_id` took the first half of what
+// was 8 bytes of padding without a format change.
 //
 // ---- Page layout -----------------------------------------------------------
 //
@@ -58,8 +58,7 @@
 // Concurrency: none of its own. The pages sit under the page latch like any
 // page, and the structure they hold is guarded by the instance's assertion
 // registry under its directory latch since AT-S5d (`bound_cabin.hpp`,
-// `docs/spec/assertion.md` §6.1); until then a relation's pages belonged to
-// its home core and the structure was one core's. No atomics here.
+// `docs/spec/assertion.md` §6.1). No atomics here.
 
 namespace kds::storage::cabin {
 
@@ -95,32 +94,20 @@ inline constexpr std::uint8_t kEntryDeparture = 0x4;
 // that rides on purge - but they are no longer any group's, and this is what
 // says so on the page itself.
 //
-// **Why the page has to carry it** (`docs/spec/assertion.md` §7, the AS6b
-// decision taken 2026-08-12). A live abort removes the entry from the group's
-// list in memory, so the directory is right and `VerifyAgainstEntries` holds.
-// A *recovered* directory rebuilds that linkage by scanning these pages
-// (`exec/assertion_recover.cpp`), and a scan cannot tell an aborted entry from
-// a live one: it re-attached the orphan, and §5.2's proof - "the entries remain
-// the authority, the snapshot is a derived cache, and `VerifyAgainstEntries` is
-// what proves one against the other" - then reported `Corruption` for a
-// directory that was correct. The aggregate was right either way, so what was
-// broken was the check, which is the one thing that must not be.
-//
-// The two rejected alternatives, because the reasoning is the durable part:
-// letting the `ASSERT_*` fold own linkage and stopping the page walk from
-// attaching costs AS6a's `Unapply` ordering note (a reservation made before a
-// checkpoint and rolled back after it has no entry to remove); narrowing §5.2
-// to live cabins only keeps every byte as it was and gives up the proof exactly
-// where recovery makes it worth having.
+// **Why the page has to carry it** (`docs/spec/assertion.md` §7, AS6b,
+// 2026-08-12). A live abort removes the entry from the group's list in
+// memory, but a *recovered* directory rebuilds that linkage by scanning these
+// pages (`exec/assertion_recover.cpp`), and a scan cannot otherwise tell an
+// aborted entry from a live one: it would re-attach the orphan and
+// `VerifyAgainstEntries` (§5.2) would report `Corruption` for a correct
+// directory.
 //
 // **This flag meets that same ordering note from the other side**, and §7 says
 // where it is answered: once a mark is durable the walk skips an entry whose
 // `ASSERT_ROLLBACK` the fold still has to compensate, so `ReplayRollback`
 // restores the linkage the walk declined before un-applying it.
 //
-// Free at bit 3: AST04 shipped three flags and every entry on every page in
-// existence reads 0 here, so the 32-byte width (§5.1) does not move and an
-// older page reads as "nothing aborted" - which is what it means.
+// Bit 3 was free, so the 32-byte width (§5.1) did not move.
 inline constexpr std::uint8_t kEntryOrphaned = 0x8;
 
 // One entry, exactly 32 bytes on disk (§5.1's normative width).
@@ -134,12 +121,12 @@ struct BoundCabinEntry {
     std::uint64_t pk = 0;  // kKeystoneIdBits used; the bits above are always 0
     std::uint8_t flags = 0;
 
-    // The advisory location. `page_epoch` is written 0 and checked trivially,
-    // because this engine has **no per-page epoch** - the same gap
-    // `stats/cabin_store.hpp` and `exec/trail_replay.hpp` document. The field
-    // is here rather than added later because §5.1 fixes the 32-byte layout,
-    // and because the day the epoch lands there must be nowhere for it *not*
-    // to be checked.
+    // The advisory location. Every Bound Cabin writer stores `page_epoch` 0
+    // (`exec/assertion_build.cpp`, `exec/assertion_check.cpp`) although pages
+    // do carry a `relayout_epoch` (page_header.hpp) that a btree leaf division
+    // bumps; `exec/tuple_verify.hpp` compares the two, so a hint into a page
+    // whose epoch moved fails verification and costs a descent - never a
+    // wrong answer, the pk being the authority.
     PageId page_id = kInvalidPageId;
     std::uint16_t page_epoch = 0;
     std::uint16_t slot = 0;
@@ -157,9 +144,8 @@ struct BoundCabinEntry {
     // the stored key, which an entry does not carry - so an entry holding a
     // hash could not be attributed between two colliding groups.
     //
-    // It occupies the first 4 bytes of what AST04 shipped as padding and wrote
-    // as a literal zero, so the 32-byte width is unchanged and every entry on
-    // every page in existence already reads as `group_id = 0`.
+    // It occupies the first 4 bytes of the former padding, so the 32-byte
+    // width is unchanged.
     std::uint32_t group_id = 0;
 
     bool reserved() const noexcept { return (flags & kEntryReserved) != 0; }

@@ -232,11 +232,9 @@ struct TlsChannel::Impl {
     // record that was never TLS.
     //
     // **Whether an alert exists at all is the library's choice, not this
-    // channel's** (corrected 2026-08-26; this comment used to say a peer
-    // whose bytes were never TLS "gets nothing", which was true of an
-    // older OpenSSL and is not true here). The contract the tests pin is
-    // the one this code can keep: whatever the wbio holds is handed to the
-    // caller verbatim, and nothing the peer sent is ever among it.
+    // channel's.** The contract the tests pin is the one this code can
+    // keep: whatever the wbio holds is handed to the caller verbatim, and
+    // nothing the peer sent is ever among it.
 
     Status Handshake(std::string& wire_out) {
         if (init_done()) return Status::OK();

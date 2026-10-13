@@ -21,7 +21,8 @@
 // A headerless page class never passes through here (page.md section 1) -
 // a property of its layout, an exact power-of-two tiling a header would
 // break. Headerless also means no page_lsn, so such a class cannot be
-// WAL-logged as it stands. No such class exists today.
+// WAL-logged; the one that exists, the waystone directory's interior pages,
+// is advisory and unlogged.
 //
 // Encoding rules per rules.md sections 2 and 5: a mirror struct with
 // offsetof static_asserts, field-wise memcpy through named offsets, fixed
@@ -144,14 +145,14 @@ std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page);
 
 // ---- Relayout epoch (docs/spec/physical-optimizer.md R4) ----------------
 //
-// Bumped only by the physical optimizer's mover when tuples on the page
-// move; INSERT, UPDATE and DELETE never bump it, because the fixed-length
-// rule makes them address-stable — that stability is what keeps every
-// recorded location valid today. **Nothing calls Bump yet**: the mover
-// does not exist (physical-optimizer.md §6's gates), and the API is
-// here ahead of it — the eviction sweep's precedent — so the consumers'
-// comparisons (Waystone replay rule 2, Cabin entry verification, workplan
-// PX04) are real code now rather than promises.
+// Moved when tuples on the page change slot or page. Its one writer today
+// is the B+ tree: a leaf division and an in-place leaf compaction set the
+// rewritten page's epoch to one past its old value (`btree.cpp`,
+// `SetRelayoutEpoch`). The physical optimizer's mover, which would also
+// bump it, moves nothing (physical-optimizer.md §6's gates). An ordinary
+// INSERT, UPDATE or DELETE never moves it - the fixed-length rule makes
+// them address-stable. The consumers' comparisons (Waystone replay rule 2,
+// Cabin entry verification, `exec/tuple_verify.hpp`) are live.
 //
 // The pairing rule, stated where a consumer will read it: **no consumer
 // may accept a location on epoch equality alone.** The epoch is a fast

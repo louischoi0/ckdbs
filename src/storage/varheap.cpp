@@ -161,17 +161,10 @@ Status PageWriteAt(std::span<std::byte, kPageSize> page, std::uint16_t slot,
         // **Already released**, which is a no-op: the value this record
         // would restore is one a later record killed.
         //
-        // Not reachable today - for redo to apply an append at L1 the page
-        // must be older than L1, and a tombstone in that image would mean a
-        // release at L2 > L1 was applied and stamped, so the page cannot be
-        // older than L1 after all. The one crack is a release whose
-        // `StampPageLsn` failed after the tombstone went in, and the answer
-        // there is this same no-op.
-        //
-        // It is kept as **forward protection**, not as dead weight: page
-        // recycling is exactly what stops a slot number from identifying
-        // one value across a page's lifetime, and this is where a stale
-        // append would land if it did.
+        // Reachable only through a release whose `StampPageLsn` failed
+        // after the tombstone went in (otherwise the page's LSN would be past
+        // the append's); kept as forward protection should pages ever be
+        // recycled, where a slot number stops naming one value.
         if (existing.status().code() == StatusCode::kNotFound) return Status::OK();
         if (!existing.ok()) {
             return existing.status();
@@ -323,10 +316,9 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
     // and its link read again under that hold, because another core may
     // have grown the chain past it between the two (the latch has no
     // upgrade, so the shared hold is dropped first). A tail that links on
-    // is not the tail: the walk continues from the link. Until this
-    // re-check a second grower overwrote the first one's link and leaked
-    // its page - the heap chain's BB-R7 gap, in the var-heap. Bounded so a
-    // cycle fails rather than hangs.
+    // is not the tail: the walk continues from the link - without the
+    // re-check a second grower would overwrite the first one's link and
+    // leak its page (BB-R7). Bounded so a cycle fails rather than hangs.
     //
     // **The walk starts at the chain's last known tail** (BN-R8): the store
     // remembers the page the last append to this chain landed in, so an
@@ -439,10 +431,8 @@ StatusOr<std::span<const std::byte>> Fetch(storage::PageStore& store, VarHeapPtr
         return s;
     }
     // The returned span points into the frame, so the caller owns the pin
-    // for as long as it reads (MG03's Shape C: this function returned a
-    // span into an unpinned frame, and a second Fetch in the same loop
-    // could evict the first one's page - the MG05 ASan run caught exactly
-    // that in ResolveSpills' two-spill row).
+    // for as long as it reads: a second Fetch in the same loop could
+    // otherwise evict the first one's page (MG03).
     std::span<std::byte, kPageSize> page = bytes.value().bytes();
     pin = std::move(bytes.value());
     return PageRead(page, ptr.slot);

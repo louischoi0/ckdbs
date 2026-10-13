@@ -59,7 +59,7 @@ namespace kds::exec {
 // `up` is a de Bruijn level: 0 is the chain this reference appears in, 1
 // its parent, and so on. It maps one-to-one onto the execute-time frame
 // stack, which is what lets a predicate be independent of which sub-chain
-// it landed in. Only 0 occurs until sub-chains land (V15).
+// it landed in.
 struct ColumnRef {
     std::uint16_t up = 0;
     std::uint16_t rel_slot = 0;  // step index within that chain
@@ -73,8 +73,8 @@ struct ColumnRef {
 enum class AccessKind : std::uint8_t {
     // pk equality against a value known before the chain runs.
     kLookup,
-    // pk equality against a value produced by an earlier step (or, once
-    // sub-chains exist, by an outer row).
+    // pk equality against a value produced by an earlier step or by an
+    // enclosing chain's row.
     kProbe,
     // pk range through the leaf chain, from `BETWEEN <low> AND <high>` on
     // the relation's primary key. Emitted since the BETWEEN half of V08.
@@ -303,8 +303,8 @@ struct IndexProbe {
     std::optional<ColumnRef> key_from;
 };
 
-// The walked-join annotation (docs/spec/join-inner-build.md §5, workplan
-// JB1): the statement-local inner build's compile half.
+// The walked-join annotation (docs/spec/join-inner-build.md §5): the
+// statement-local inner build's compile half.
 //
 // **An annotation on a kScan, never a kind.** Set when every structure arm
 // declined and the step's residual still binds an own column by equality to
@@ -318,8 +318,6 @@ struct IndexProbe {
 // What makes one build serve every outer row: `PkBound` accepts literals
 // only, so no scan bound varies per outer row - a kScan inner is always the
 // full relation, and one walk's map answers every later key (spec §5).
-// Consumed by the executor from JB3 on; until then it is compiled state
-// with no reader.
 struct BuildKey {
     // The own join column's schema position - what the map is keyed on.
     std::uint16_t col_pos = 0;
@@ -331,7 +329,7 @@ struct BuildKey {
 
     // Where in `Step::residual` the correlated conjunct sits, so the build
     // can bucket rows on every *other* conjunct (the non-correlated
-    // residual) and the probe can re-evaluate the full list (JB3/JB4).
+    // residual) and the probe can re-evaluate the full list.
     std::uint16_t residual_pos = 0;
 };
 
@@ -356,8 +354,7 @@ struct StepPredicate {
     // (docs/spec/parser-v2.md §5) rather than one the client wrote. Execution
     // ignores it; the consumer is diagnostic truthfulness - ANALYZE marks
     // the line, so a plan never shows a predicate the client cannot find in
-    // their text. `CREATE PATTERN`'s parameter checks were the second
-    // consumer, for the same reason, until 2026-08-31.
+    // their text.
     bool derived = false;
 };
 
@@ -413,6 +410,68 @@ void ForEachColumn(const FunctionPredicate& pred, Fn&& fn) {
     }
 }
 
+// ---- The boolean conjunct (BU-S1) -----------------------------------------
+//
+// A conjunct holding `OR` or `NOT`: `a = 1 OR b = 2`, `NOT (c > 3)`
+// (workorder-bu-basic-query-surface.md). **A residual kind of its own, for
+// the function conjunct's reason** (above): its comparisons are
+// `StepPredicate`s, and a reader that took one for a conjunct of the
+// statement would key, bound or probe on a comparison the `OR` makes
+// optional (BU-R5). So it lives in `Step::bool_residual`, which no key,
+// bound, index, Cabin, join-key or build reader walks, and is evaluated
+// beside `fn_residual` at the same two sites.
+//
+// **Three-valued, collapsed once, at the root** (BU-R4): a comparison with
+// a NULL operand is unknown inside the tree, `NOT unknown` is unknown, and
+// only the root's unknown becomes false. `CompareValues` collapses per
+// comparison, which is right for a flat AND-list and wrong under `NOT`.
+//
+// **A subquery predicate is a leaf too since BU-S3**: `kSubChain` names a
+// sub-chain of the step the conjunct is placed at, marked `in_tree` there so
+// every walk of the step tree still sees it and no conjunct loop runs it on
+// its own. A conjunct that reads one is evaluated with the step's sub-chains,
+// after the row's ordinary conjuncts, rather than with the residual.
+struct BoolPredicate {
+    enum class Op : std::uint8_t { kAnd, kOr, kNot, kCompare, kFunction, kSubChain };
+    Op op = Op::kCompare;
+    std::vector<BoolPredicate> children;   // kAnd, kOr (two or more), kNot (one)
+    StepPredicate compare;                 // kCompare
+    std::optional<FunctionPredicate> fn;   // kFunction
+    std::uint32_t sub_chain = 0;           // kSubChain: an index into `Step::sub_chains`
+    bool reads_sub_chain = false;          // a kSubChain at or under this node
+};
+
+// Every column reference a boolean conjunct reads, in no particular order.
+// A `kSubChain` leaf's columns are its sub-chain's, which every reader of
+// `Step::sub_chains` walks already.
+template <typename Fn>
+void ForEachColumn(const BoolPredicate& pred, Fn&& fn) {
+    switch (pred.op) {
+        case BoolPredicate::Op::kCompare:
+            fn(pred.compare.lhs);
+            if (pred.compare.rhs.kind == OperandKind::kColumn) fn(pred.compare.rhs.column);
+            return;
+        case BoolPredicate::Op::kFunction:
+            ForEachColumn(*pred.fn, fn);
+            return;
+        case BoolPredicate::Op::kSubChain:
+            return;
+        default:
+            for (const BoolPredicate& child : pred.children) ForEachColumn(child, fn);
+            return;
+    }
+}
+
+// Every function term a boolean conjunct calls, for the determinism class.
+template <typename Fn>
+void ForEachFunction(const BoolPredicate& pred, Fn&& fn) {
+    if (pred.op == BoolPredicate::Op::kFunction) {
+        fn(*pred.fn);
+        return;
+    }
+    for (const BoolPredicate& child : pred.children) ForEachFunction(child, fn);
+}
+
 struct Step;
 
 // A predicate-position subquery, lowered (V15). It is a chain in its own
@@ -459,6 +518,12 @@ struct SubChain {
     // nothing, since only the existence of a row matters.
     ColumnRef value;
     bool has_value = false;
+
+    // A leaf of a boolean conjunct on the same step (BU-S3): not a conjunct
+    // of its own, so the step's conjunct loops pass it by and the tree that
+    // names it evaluates it. Never hoisted, correlated or not - a false
+    // `EXISTS` under an `OR` must not empty the statement.
+    bool in_tree = false;
 };
 
 struct Step {
@@ -536,14 +601,10 @@ struct Step {
     // step's own relation. It exists so a scan can decide whether a row
     // qualifies **before** building the whole row.
     //
-    // That ordering is the difference between reading a row and materialising
-    // one. A `WHERE session_no = <n>` over 60,480 rows returning 8 used to
-    // decode twelve values per row and throw away 60,472 of them; the decode
-    // was 75% of the scan and 96% of the decode was building `AstValue`s
-    // rather than reading cells (`bench/results-scenario1-vs-pg.md`).
-    //
-    // Computed here rather than per row for the obvious reason, and it is
-    // exactly the kind of thing the compiler exists to answer once.
+    // That ordering is the difference between reading a row and
+    // materialising one: a selective filter otherwise decodes every column
+    // of every rejected row (background: measured pre-v3,
+    // `bench/results-scenario1-vs-pg.md` at `1769487`).
     //
     // **`kAllColumns` means "decode everything"** - set when a referenced
     // column sits past bit 63, and the value a zero-initialised Step would
@@ -559,16 +620,10 @@ struct Step {
     // or probe key, the projection, the fold's items and group keys, the
     // trail's pk. A step decodes `filter_columns` before the residual and
     // then only `read_columns & ~filter_columns` after it, instead of
-    // everything else (workplan AP01).
-    //
-    // **Why this is not a micro-optimization.** Without it, `filter_columns`
-    // narrows the decode of a row that is about to be *rejected* and does
-    // nothing for one that survives - so a statement with no WHERE at all
-    // gets no benefit, because every row survives. `SELECT COUNT(*) FROM t`
-    // built an AstValue for every column of every row to fold none of them,
-    // which measured at 2.7x the cost of the same statement on a two-column
-    // relation, and made `SELECT COUNT(*) FROM t WHERE a = 1` **3.1x faster
-    // than dropping the WHERE** (`bench/results-aggregate.md`).
+    // everything else (workplan AP01). `filter_columns` alone narrows only a
+    // rejected row's decode; this narrows a surviving one's, so `SELECT
+    // COUNT(*) FROM t` decodes no column (`bench/results-aggregate.md` at
+    // `1769487`).
     //
     // **The rule that keeps it correct: this must be a superset of every
     // reader.** A slot outside it still holds the *previous* row's value,
@@ -590,22 +645,23 @@ struct Step {
     // than the compiler decodes everything and is merely slow.
     std::uint64_t read_columns = kAllColumns;
 
-    // The walked-join annotation (workplan JB1). Unlike the per-kind
-    // fields above it marks no kind - the step stays kScan. `BuildKey`
-    // owns the whole contract.
+    // The walked-join annotation. Unlike the per-kind fields above it
+    // marks no kind - the step stays kScan. `BuildKey` owns the contract.
     //
-    // **Deliberately last.** Inserting this field mid-struct measured a
-    // real ~1.7% wall regression on the correlated-inner shapes by moving
-    // `residual` onto a different cache line (the JB1 A/B round, fc44ac6
-    // vs 080f73a) - the arm's own cost was unmeasurable. Cold compiled
-    // state sits below the hot execution fields; JB3 adds its reader here,
-    // not above.
+    // **Deliberately last**: cold compiled state sits below the hot
+    // execution fields. Inserted mid-struct it moved `residual` onto another
+    // cache line, a ~1.7% wall regression on correlated-inner shapes (JB1,
+    // fc44ac6 vs 080f73a, 2026-08).
     std::optional<BuildKey> build;
 
     // The function conjuncts placed at this step (see FunctionPredicate).
     // Below the hot fields with `build`, for `build`'s reason: most steps
     // carry none, and the evaluation sites test for empty first.
     std::vector<FunctionPredicate> fn_residual;
+
+    // The boolean conjuncts placed at this step (see BoolPredicate), for
+    // `fn_residual`'s reasons and evaluated after it.
+    std::vector<BoolPredicate> bool_residual;
 };
 
 // Execution shape, dispatched on by a `switch` - there is no plan
@@ -778,11 +834,10 @@ struct StepChain {
 
     // Whether the statement was written `SELECT *`.
     //
-    // **Projection empty *and* no aggregate.** An aggregated chain names its
-    // output and still leaves `projection` empty - the fold's items are what
-    // it emits, not a list of chain columns - so the old one-field test would
-    // have the dispatcher answer an aggregated statement with whole rows.
-    // The same trap `parser::SelectStmt::star()` has to avoid, one layer up.
+    // **Projection empty *and* no aggregate.** An aggregated chain also
+    // leaves `projection` empty - the fold's items are what it emits - so
+    // testing `projection` alone would answer it with whole rows; the same
+    // trap `parser::SelectStmt::star()` avoids one layer up.
     bool star() const noexcept { return projection.empty() && !aggregated(); }
 
     // ---- The pagination tail (docs/spec/parser-v2.md I11, workplan V09) ------
@@ -853,18 +908,14 @@ bool ForEachStep(const Step& step, Fn fn) {
 // Whether any step anywhere in `chain` - sub-chains included - is one a
 // Waystone trail may replace.
 //
-// Two callers, asking the same question for opposite reasons. `CREATE
-// PATTERN` warns when the answer is false, because such a pattern's trail
-// could never replay. The dispatcher skips the whole Waystone path when it
-// is false, because a chain with no keyed step can neither record nor
-// replay - and asking costs a fingerprint, which is the most expensive
-// thing on that path.
+// The dispatcher skips the whole Waystone path when it is false: a chain
+// with no keyed step can neither record nor replay, and asking costs a
+// fingerprint, the most expensive thing on that path.
 bool HasReplayableStep(const StepChain& chain) noexcept;
 
 // The value `SysAccessStatRow::kind` stores for an access kind.
 //
-// **Not a cast**, for the reason `StoredStatementClass` already had to
-// learn: `kLookup` is 0 and so is a zeroed catalog row, so a straight cast
+// **Not a cast**, for `StoredStatementClass`'s reason: `kLookup` is 0 and so is a zeroed catalog row, so a straight cast
 // would make every never-written row read as a recorded pk lookup. Mapping
 // it explicitly also means this enum can gain a value or be reordered
 // without silently changing what stored statistics mean.

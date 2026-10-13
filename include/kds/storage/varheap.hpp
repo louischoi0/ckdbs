@@ -40,10 +40,8 @@
 //
 // ---- The one operation that ends a value: Release() ----------------------
 //
-// This file said "no Update() and no **Free()**" until 2026-08-28, and
-// nothing reclaimed. `PageRelease` is that gap closed, and it weakens no
-// line above it - its contract is stated once, on its own declaration
-// below.
+// `PageRelease` (since 2026-08-28) tombstones a slot and weakens no line
+// above; its contract is stated on its own declaration below.
 //
 // **Who may release, and when, is not this layer's decision.** A value dies
 // with the newest version naming it: at the rollback of the transaction
@@ -54,15 +52,15 @@
 // `docs/spec/txn.md` §3.3 and §6 and `heap-and-tuple.md` §3.4 own the
 // lifetime.
 //
-// A page whose every slot is a tombstone holds nothing reachable and is
-// **reformatted in place** to become an append target again - which is why
-// there is no free list here and no call into the free map: the chain stops
-// growing without either.
+// A page whose every slot is a tombstone holds nothing reachable, and
+// `PageLiveSlots` is the predicate that says so - but **nothing reformats
+// such a page today**: `ChainAppend` only appends at the tail, so released
+// bytes come back only when DROP TABLE's reclaim frees the chain (BF-R7).
 //
-// The accepted cost, recorded rather than hidden: churn-heavy string
-// updates consume space until the release drains, which makes drain cadence
-// a capacity input rather than a background detail. And a crash forgets the
-// pending-release set, leaking those slots until a mount-time sweep exists.
+// The accepted cost: a value whose version merely died - superseded or
+// deleted - is not released at all; its bytes stay until `PURGE` retires
+// the tombstone naming it, which makes purge cadence a sizing input
+// (`heap-and-tuple.md` §3.4).
 //
 // ---- Authoritative, not advisory -----------------------------------------
 //
@@ -135,17 +133,14 @@ inline constexpr std::uint16_t kHeaderFlagInitialized = 0x1;
 
 // ---- Slot directory ------------------------------------------------------
 //
-// Two fields, and no flags - including for the lifetime a slot gained in
-// 2026-08-28, which needed no flags byte because a released slot is
-// expressible in the field the format already had (see `offset` below). A
-// value still has no lifetime of its own; it has its owner's.
+// Two fields, and no flags: a released slot is expressed in `offset`
+// (below). A value has no lifetime of its own; it has its owner's.
 
 struct VarHeapSlotFields {
     // Absolute page offset of the value bytes, or **0 for a released
     // slot**. Zero is an unambiguous tombstone rather than a chosen
     // sentinel: a live value's offset is never below the page header, so no
-    // legal value can carry it. That is what let a lifetime arrive here
-    // without a format change or a flags byte.
+    // legal value can carry it.
     std::uint16_t offset;
     // Value length in bytes. Kept across a release, so a tombstone still
     // says how much it held.
@@ -230,8 +225,7 @@ Status FormatPage(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid 
 StatusOr<std::uint16_t> PageAppend(std::span<std::byte, kPageSize> page,
                                     std::span<const std::byte> value);
 
-// Writes a value at a **named** slot, for redo
-// (docs/workplan-wal-recovery.md RC03). The counterpart of
+// Writes a value at a **named** slot, for redo. The counterpart of
 // PageView::RedoWriteTuple and txn::UndoPageWriteAt, and it exists for the
 // reason VARHEAP_APPEND records its slot at all: the tuple cell that points
 // here already carries `(page_id, slot)`, so a value that came back at a
@@ -264,9 +258,8 @@ StatusOr<std::span<const std::byte>> PageRead(std::span<const std::byte, kPageSi
 // crash (`recovery_undo.hpp` - no CLR) and as a redo application.
 //
 // **Frees no space.** Slots are dense and values are packed from the tail,
-// so one dead value in a live page is a hole nothing can use. Space comes
-// back a whole page at a time, when every slot is a tombstone and the page
-// is reformatted - which is what `PageLiveSlots` is for.
+// so one dead value in a live page is a hole nothing can use, and a page of
+// tombstones is not reused either (no reformat is built; see the header).
 //
 // Fails with Corruption for a page that is not a kVarHeap page, and for a
 // slot past this page's directory - both meaning "this record is not this
@@ -274,8 +267,8 @@ StatusOr<std::span<const std::byte>> PageRead(std::span<const std::byte, kPageSi
 Status PageRelease(std::span<std::byte, kPageSize> page, std::uint16_t slot);
 
 // How many of the page's slots still hold a value. `0` on a page whose
-// `PageSlotCount` is non-zero means every value it ever held is dead, and
-// the page can be reformatted in place and re-used.
+// `PageSlotCount` is non-zero means every value it ever held is dead, so the
+// page could be reformatted in place; no engine path does so today.
 std::uint16_t PageLiveSlots(std::span<const std::byte, kPageSize> page);
 
 std::uint16_t PageSlotCount(std::span<const std::byte, kPageSize> page);
@@ -296,15 +289,10 @@ StatusOr<PageId> CreateChain(storage::PageStore& store, std::uint64_t owner_oid)
 //
 // **Why this is a struct and not just a pointer.** A `VARHEAP_APPEND` record
 // says "these bytes, at this slot, on this page". It does not say the page was
-// *created*, and it does not say the previous tail's next-page link now points
-// at it - and both of those happen here, in memory, through the store's plain
-// allocation path. A caller that logged only the append left recovery with a
-// record naming a page nothing creates (redo refuses the mount) or a value
-// page that exists and is unreachable (silent loss). The heap and btree paths
-// already report their structural changes for exactly this reason
-// (`insert_placement.hpp`, and `command_dispatcher.cpp`'s loop over them);
-// this is the var-heap's, and its absence was `docs/inflight/known-gaps.md`'s var-heap
-// entry.
+// *created*, nor that the previous tail's link now points at it; a caller
+// logging only the append would leave recovery a record naming a page nothing
+// creates, or an unreachable value page. The heap and btree paths report
+// their structural changes the same way (`insert_placement.hpp`).
 struct ChainAppendResult {
     VarHeapPtr ptr;
 

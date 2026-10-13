@@ -15,8 +15,8 @@ Scheduler::Scheduler(const Clock& clock, IoBackend& io_backend, SchedulerConfig 
     : clock_(clock), io_backend_(io_backend), config_(config) {
     // RunReadyTasks' second floor - one poll per ready group per iteration -
     // needs a budget of at least one poll per group, or a small budget
-    // would hand every iteration to group 0 and starve the rest outright
-    // (the PW7 review's C3). Clamped here so the floor is a fact of the
+    // would hand every iteration to group 0 and starve the rest outright.
+    // Clamped here so the floor is a fact of the
     // scheduler, not of the configuration. Zero keeps its meaning - phase 4
     // runs nothing at all, which is how a test observes the drain alone.
     if (config_.max_tasks_per_iteration > 0 &&
@@ -177,11 +177,8 @@ int Scheduler::IdleTimeoutMs() const noexcept {
     // A task that suspends goes back on its queue, so a queue is a poor
     // test of whether there is work: a statement waiting for a peer's reply
     // sits in one for the whole wait, answering "still false" to a
-    // predicate a few nanoseconds at a time. Reading that as runnable is
-    // what made a reactor with a single parked waiter burn ~90% of a core
-    // (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §7: 3.1M
-    // polls/s at 0.059 µs each, the cost per poll flat while the count
-    // climbed).
+    // predicate a few nanoseconds at a time. Reading that as runnable burns
+    // ~90% of a core for a single parked waiter (v2.2: 3.1M polls/s).
     //
     // The test is therefore not "is a queue non-empty" but "did the last
     // full iteration change anything" - any I/O event, any timer, any

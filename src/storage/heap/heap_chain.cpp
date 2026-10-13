@@ -28,11 +28,9 @@ namespace {
 // Each page is taken exclusive while its link is read, and the walk stops
 // only at a page whose link is still invalid under that hold - so the page
 // handed back is the tail and stays the tail until released: a growth must
-// write the tail's link, which needs this hold. Until BB the walk held
-// nothing at the end (`ChainTail`) and the caller took the page it named
-// exclusive without asking again, so a page another core had linked on in
-// between was overwritten by a second link and its rows orphaned (AT-S10b's
-// review C2; its bug entry went with this fix, BB-S4).
+// write the tail's link, which needs this hold. Without it a page another
+// core linked on in between would be overwritten by a second link and its
+// rows orphaned (fixed in BB-S4).
 struct HeldTail {
     PageId id = kInvalidPageId;
     storage::PageRef page;

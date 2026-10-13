@@ -12,8 +12,7 @@
 #include "kds/wal/record.hpp"
 
 // Reading a stream back (docs/workplan-wal-recovery.md RC01) - the piece
-// recovery's analysis and redo phases both walk, and the first code in the
-// engine that consumes the log rather than producing it.
+// recovery's analysis and redo phases both walk.
 //
 // `RecordReader` (record.hpp) already walks the records in **one buffer**
 // and already stops at the durable end the way wal.md section 4.2 defines
@@ -51,11 +50,9 @@
 //
 // ---- Concurrency and cost ------------------------------------------------
 //
-// Core-local like everything under it: one device, one stream, one core.
-// A segment's body is read whole into a caller-owned buffer, which is what
-// WalStream::ScanTail already does and is fine at the sizes recovery sees;
-// at a 64 MiB segment size this becomes a streaming read and nothing about
-// the walk below changes.
+// One thread: a scan runs at mount or open, before anything appends. Each
+// segment's body is read whole into one buffer reused across segments (64
+// MiB at the format's segment size), as WalStream::ScanTail does.
 
 namespace kds::wal {
 

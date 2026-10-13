@@ -74,9 +74,9 @@ inline constexpr std::uint64_t kUnlimitedRowTouchBudget = 0;
 // disables the build outright: no map can hold a row - **the opposite of
 // the row-touch limit's zero above, deliberately**, because "unlimited
 // map" has a number (the relation's size) where "unlimited work" does
-// not. Scoping across a chain with two walked inners is `[OPEN]`
-// (CLAUDE.md) - one knob, checked per build, which keeps both readings
-// implementable.
+// not. Scoping across a chain with two walked inners is open
+// (join-inner-build.md §7) - one knob, checked per build, which keeps both
+// readings implementable.
 inline constexpr std::size_t kDefaultJoinBuildMaxRows = 65536;
 
 class Budget {
@@ -88,12 +88,18 @@ public:
     std::size_t join_build_max_rows() const noexcept { return join_build_max_rows_; }
     void set_join_build_max_rows(std::size_t rows) noexcept { join_build_max_rows_ = rows; }
 
+    // Whether a walk may consult its step's scan kernel (BM-Q5 (a),
+    // `workorder-bm-scan-row-kernel.md`): `scan_kernel = on|off`, a
+    // read-path switch like `indexes`. The kernel only rejects rows the
+    // residual would reject (BM-R1), so off changes work and never an
+    // answer - which is what the contract suites compare.
+    bool scan_kernel() const noexcept { return scan_kernel_; }
+    void set_scan_kernel(bool on) noexcept { scan_kernel_ = on; }
+
     // A copy of the limits and knobs with the spend counter at zero - what
     // an entry point takes, so a Budget stays reusable across statements
     // without a caller resetting it. A new field is carried by being a
-    // member; no entry point can forget one (one already did: the
-    // limit-only copy this replaced silently dropped `join_build_max_rows`
-    // until a contract test caught it). Deliberately not the copy
+    // member, so no entry point can forget one. Deliberately not the copy
     // constructor - a copy that silently zeroes a counter is a lie.
     Budget Fresh() const noexcept {
         Budget out = *this;
@@ -123,6 +129,7 @@ private:
     std::uint64_t limit_;
     std::uint64_t touched_ = 0;
     std::size_t join_build_max_rows_ = kDefaultJoinBuildMaxRows;
+    bool scan_kernel_ = true;
 };
 
 }  // namespace kds::exec

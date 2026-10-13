@@ -39,12 +39,9 @@ Status ConfigureAcceptedSocket(int fd, std::uint32_t keepalive_s) {
     // TCP_NODELAY, unconditionally. Without it Nagle holds a small reply
     // until the previous one is ACKed, and a client that has several
     // requests in flight is not sending anything to carry that ACK - so it
-    // waits out the peer's delayed-ACK timer, ~40ms, once per batch. That
-    // turned pipelining from the fastest way to talk to this server into
-    // 30x slower than one-request-at-a-time, and cost a pipelined bulk load
-    // 33% of its throughput (bench/results-bulk-insert.md Part IV). There is
-    // nothing here for Nagle to coalesce that the outbox does not already
-    // coalesce better.
+    // waits out the peer's delayed-ACK timer, ~40ms, once per batch - which
+    // made pipelining slower than one request at a time. The outbox already
+    // coalesces what Nagle would.
     const int nodelay = 1;
     ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
@@ -140,10 +137,7 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
       auth_gate_factory_(std::move(other.auth_gate_factory_)),
       // **The configuration moves with the socket.** A listener is
       // configured and *then* moved into the optional that owns it, so a
-      // member left out here is a setting silently dropped - which is
-      // exactly what happened to `protocol_` first time round: the debug
-      // port was configured for the text protocol, moved, and then served
-      // KWP on it while the KWP port served KWP too.
+      // member left out here is a setting silently dropped.
       protocol_(other.protocol_),
       durability_(other.durability_),
       keepalive_s_(other.keepalive_s_),
@@ -225,8 +219,7 @@ Status TcpServer::Attach(sched::Scheduler& scheduler, CommandDispatcher& dispatc
     log_ = log;
 
     // Non-blocking from here on: the reactor decides when to wait, and it
-    // waits in exactly one place (the io backend). A blocking accept() here
-    // would re-create the problem this class exists to solve.
+    // waits in exactly one place (the io backend).
     if (listen_fd_ >= 0) {
         if (Status s = SetNonBlocking(listen_fd_); !s.ok()) return s;
         if (Status s = scheduler_->RegisterIoHandler(
@@ -237,10 +230,8 @@ Status TcpServer::Attach(sched::Scheduler& scheduler, CommandDispatcher& dispatc
         }
     }
 
-    // **The portal-idle timeout's caller** (§10, KW-D3). Without one the
-    // 60 s bound was a constant and a method with no producer, and the
-    // memory a suspended portal holds - which is what the spec's amended §7
-    // says the timeout bounds - was bounded by nothing.
+    // **The portal-idle timeout's caller** (§10, KW-D3): what bounds the
+    // memory a suspended portal holds (§7).
     //
     // A sweep rather than a timer per portal: portals are few (64 a
     // session), the sweep is a walk over one map per connection, and a
@@ -375,8 +366,7 @@ void TcpServer::AdoptConnection(int client_fd) {
         // Defense in depth: a gated connection starts at the floor, so
         // "never admin unless the gate said so" is a structural property
         // of this line, not an argument about the drain loop's control
-        // flow. Unreachable today - the gate absorbs every pre-auth
-        // line - and cheap to make untrue-by-construction anyway.
+        // flow (the gate absorbs every pre-auth line).
         fresh.session.set_role(Role::kReadOnly);
     }
     auto [entry, inserted] = clients_.emplace(client_fd, std::move(fresh));
@@ -514,12 +504,9 @@ void TcpServer::OnClientReadable(int client_fd) {
     // is generous, and an authenticated connection is uncapped as before.
     // (A pre-auth *deadline* needs a timer and is future hardening.)
     constexpr std::size_t kPreAuthInboxCap = 4096;
-    // **"Pre-auth" is not `auth_gate != nullptr` any more.** A KWP
-    // connection's gate is *moved* into its session at accept, so that
-    // pointer is null on every one of them and the cap never fired - an
-    // anonymous peer could push a 16 MiB frame at the decoder where a text
-    // client was held to 4 KiB. The condition is now "this connection has
-    // not finished its handshake", which is what the cap always meant.
+    // **"Pre-auth" is "has not finished its handshake", not
+    // `auth_gate != nullptr`**: a KWP connection's gate is *moved* into its
+    // session at accept, so that pointer is null on every one of them.
     const bool pre_auth = conn.auth_gate != nullptr ||
                           (conn.kwp.has_value() && !conn.kwp->handshake_done());
     if (pre_auth && conn.inbox.size() + static_cast<std::size_t>(n) > kPreAuthInboxCap) {
@@ -599,8 +586,7 @@ bool TcpServer::FlushFrames(int client_fd, Connection& conn) {
     // **Nothing touches `conn` after a false.** `AppendReplyBytes` closes
     // the connection on a channel failure, and `CloseClient` erases the map
     // entry whenever no statement is in flight - which is every caller of
-    // this function. Clearing the buffer afterwards wrote into the freed
-    // Connection.
+    // this function.
     if (!AppendReplyBytes(client_fd, conn, bytes)) return false;
     conn.frames_out.clear();
     return true;
@@ -767,12 +753,6 @@ bool TcpServer::FlushOutbox(int client_fd, Connection& conn) {
         // terminate the process - so a client that hangs up without reading
         // its reply could kill the server. MSG_NOSIGNAL turns that into a
         // plain EPIPE, which the error path below already handles.
-        //
-        // The hole predates the async dispatch seam and was simply hard to
-        // hit: one write() per readable event gave a client a narrow window
-        // to disappear in. A reply per statement completion widened it
-        // enough that a pipelined client hanging up killed the process every
-        // time, which is how it was found.
         ssize_t n = ::send(client_fd, conn.outbox.data() + sent, conn.outbox.size() - sent,
                            MSG_NOSIGNAL);
         if (n > 0) {
@@ -980,10 +960,9 @@ void TcpServer::OnStatementComplete(int client_fd) {
     if (!AppendReplyLine(client_fd, conn, std::move(response))) return;
 
     if (stop) {
-        // Best effort, exactly as the per-command write() it replaces was:
-        // the socket is non-blocking, so a full send buffer loses the
-        // goodbye. Nothing downstream depends on the client seeing it, and
-        // the alternative is blocking the reactor on shutdown.
+        // Best effort: the socket is non-blocking, so a full send buffer
+        // loses the goodbye. Nothing downstream depends on the client
+        // seeing it, and the alternative is blocking the reactor on shutdown.
         (void)FlushOutbox(client_fd, conn);
         if (logging(LogLevel::kInfo)) {
             log_->Info("client", "STOP from fd=" + std::to_string(client_fd) +

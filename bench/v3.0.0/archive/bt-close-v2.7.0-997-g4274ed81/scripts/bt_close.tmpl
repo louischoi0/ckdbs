@@ -1,0 +1,238 @@
+# BT close (BT-S5): a rejected scan row costs 3.3-4.0 ns less at `4274ed81` than at `eeb88f47` (-10.6 % to -11.5 %), the every-row `UPDATE` about 3 % less, and no guard cell regressed
+
+**Thesis.** On `bt-accept-tuple-row`, with the engine at `4274ed81` (`v2.7.0-997-g4274ed81`, **B**) against BT's opening `eeb88f47` (`v2.7.0-992-geeb88f47`, **A**), a `bn` row (`SELECT * FROM s WHERE w = ?`, 10,000 rows, `cores = 1`, `relaxed`, every page resident) costs **27.4 ns of server CPU on the literal path and 27.5 ns on the prepared path against A's 31.0 and 30.9 ns: -3.3 ns (-10.6 %) and -3.5 ns (-11.3 %), paired by run, B below A in 13 of 13 runs on both paths.** `wide-h` (13 columns, `WHERE h = ?`, 10,000 rows) falls by 4.0 ns (-11.4 % and -11.5 %), also in 13 of 13. A' - the bytes of A started as a second server, the in-run control - differs from A by a typical 0.45 / 0.48 ns on `bn` (largest 2.21 / 2.33) and 0.24 / 0.14 ns on `wide-h` (largest 2.46 / 1.20): the saving is 7 times the typical gap and 1.5 times the largest on `bn`, and 17-29 times the typical gap on `wide-h`. The net row is (scan CPU - point `SELECT` CPU on the same relation, arm, path and run) / rows.
+
+- **G1 is met, at 43-46 % of BT-S1's ceiling.** BT-S1's ablation D-all, which also deleted the counts and the charge, saved 7.1 / 8.1 ns (literal / prepared); B saves 3.3 / 3.5. The real change is within 0.2 ns of D2 alone (the tuple read: 3.1 / 3.3), so what the order built beyond BT-S2 - the arming in one lookup, the epoch read on the kept paths, the deleted `spills_.clear()` - does not show separately in this run (section 10). The 3.0 ns bar the work order set for the whole order is passed by 0.3-0.5 ns.
+- **G2 holds where this driver can see it.** Rows, digest, `examined=`, `matched=`, `sel=` and `pages=` are identical in A, A' and B in run 0 of every `bm_scan` file, and no reply was wrong in any of the 660 recorded arm-cells of the 38 runs. The row-touch budget's refusal row, Waystone trails and Cabin recording are not checked by these drivers and are the contract suites' (section 4).
+- **BT-S4 shows on the every-row `UPDATE`:** over 1,000 rows B is **23.9 µs (-3.1 %) literal and 27.3 µs (-3.5 %) prepared cheaper per statement** than A in the pooled median of 15 paired runs (B slower than A in 2 and 5 of 15), against a typical A-against-A' gap of 12.5 / 12.6 µs. That is 1.9-2.2 times the typical gap and **inside the largest gap (27.8 and 83.9 µs)**, so at this size alone the bar BM-Q12 set (the largest gap) does not resolve it, and the three groups of five runs disagree on its size (literal -15.8, -33.6, -12.6 µs; prepared +0.7, -42.9, -14.1 µs; the quiet-host group U3 alone reads -1.6 % and -1.8 %). The 200-row (-7.4 / -8.8 µs, quiet host) and 10,000-row (-366 / -367 µs, 3 runs) cells, both with B started last, give 37-44 ns and 37 ns per updated row against 24-27 ns at 1,000 rows, with B below A in 6 of 6 and 5 of 6 of those runs: the sign is established, the size is 2-5 % depending on the group and the row count.
+- **The point `SELECT` is unchanged:** B - A = -0.17 µs (-0.55 %) literal and +0.02 µs (+0.05 %) prepared of 30 and 28 µs, against a typical gap of 0.33 / 0.59 µs (15 runs). **No guard cell (the every-row `UPDATE`, the point `SELECT`) regressed beyond the A-against-A' spread.**
+- **Against the floor,** PostgreSQL 18.6's 29.1 ns for `bn` (the BM close's figure, not re-measured here): B is 0.94 times it and A 1.07 times. A floor is a league check and not a target.
+
+Section 1 states what was run, 2 the scan row, 3 the guard cells, 4 the identity check, 5 the row-count sweep, 6 the latency distributions, 7 the waits, 8 the delta against BT-S1's prediction and the engine's last numbers, 9 the noise floor and host, 10 what the run teaches, 11 what was cut. The drivers are documented in their own docstrings (`bench/README.md`: `bench/docs/` stays closed); the exact invocations are in `archive/bt-close-v2.7.0-997-g4274ed81/scripts/run.sh` and `run2.sh`.
+
+| Item | Value |
+|---|---|
+| Executed | 2026-10-13, UTC. B built 08:46:04-08:48:25. Measurement 08:49:37-09:34:50 in ten phases (`progress.log`): p1a 08:49:37-08:55:29 (cut after its first run, section 9), p1b 08:55:42-09:05:38, p2 09:05:38-09:13:28, p3 09:13:28-09:21:41, p4 09:21:41-09:23:56, p5 09:23:56-09:25:28, p6 09:25:28-09:26:32, p7 09:26:32-09:28:13, p8 09:28:15-09:30:11, p9 09:30:11-09:34:50 |
+| Worktree / branch | `bt-accept-tuple-row`, branch `worktree-bt-accept-tuple-row`. HEAD was `4274ed81` (`v2.7.0-997-g4274ed81`, committed 2026-10-13 08:45:12 UTC) when the run began and **moved to `4be1632e` (`v2.7.0-998-g4be1632e`, committed 09:22:05) during p3**, by a commit that changes `docs/spec/parser-v2.md` alone (`git diff --stat 4274ed81 4be1632e`); `src/`, `include/` and `tools/` are the same at both, so the engine measured is HEAD's |
+| Commits measured | **A** = `eeb88f47ea158c816f31ae38fd17a459ed6b7faa`, `v2.7.0-992-geeb88f47`, committed 07:24:18 UTC (BT's opening). **B** = `4274ed8151d07cba6533964473e33eb4d48fb49c`, `v2.7.0-997-g4274ed81` (BT-S2, BT-S3, BT-S4 and the BT-S1 results). `git diff --stat eeb88f47 4274ed81 -- src include`: 7 files, 208 insertions, 214 deletions (`chain_frame.hpp/.cpp`, `step_vm.hpp/.cpp`, `heap_page.hpp/.cpp`, `command_dispatcher.cpp`); the rest of the range is the work order, `tests/heap_page_test.cpp`, `tools/bn_parts.json`, a bug entry and the BT-S1 results, none of it in a binary |
+| Tree | B was built from `git archive 4274ed81` exported to `/home/cdkbs/bench-runs/bt-close/src`, never from the worktree. **The worktree was dirty** at 08:49 in `docs/spec/parser-v2.md` alone; by 09:42 (`archive/.../host.txt`, regenerated then to correct its CPU line; the 08:49 version differed only in that line, the date, HEAD `4274ed81` and that one-file status) it also carried a merge in progress staged by another operation in the worktree after 09:22 (files under `src/`, `include/`, `tests/`, `docs/` and `instructions/`, `UU instructions/v3.0.0/index.md`). None of it is in a binary. The drivers were read from the worktree's `tools/` throughout; their mtimes (07:26:28) and sha256 are the same at 08:49 and 09:42. A is BT-S1's A, built from `git archive eeb88f47`, untouched since |
+| Binary provenance | Copies in `/home/cdkbs/bench-runs/bt-close/bin/`, hashed after the copy, every server started from them (`archive/.../binaries.txt`). **A and A'** (the same file started as two servers) sha256 `833501d0226cbfa0dfad4d87caaca67ab04e52c69b6a7d96476f9e74183c5c8d`, source mtime 2026-10-13 07:31:52.43 UTC (7 min 34 s after A's commit), equal to the hash BT-S1 recorded. **B** `0243f8d50bc481f6607a71ad6ea1ab75b2c8d7b5d718528051ad02a754730a74`, source `rel/kds_server` mtime 08:48:25.46 UTC (3 min 13 s after B's commit). Neither binary is older than its commit, and `sha256sum` of the three copies after the last phase (09:43) gave the same hashes |
+| Build | `CMAKE_BUILD_TYPE=Release` (read from `CMakeCache.txt`), no extra flags, `-DKDS_BUILD_TESTS=OFF -DKDS_BUILD_SIM=OFF`, target `kds_server`, `-j8`, gcc 13.3.0. B's build took 2 min 21 s and finished before any measurement started; no build of this session overlapped a measurement |
+| Host / device | 8 vCPU AMD EPYC 9V74 (4 cores x 2 threads), Linux 7.0.0-1014-azure, 16 GB. **Data files and WAL under `/home/cdkbs/bench-runs/bt-close/wd-*/` on `/dev/root`, ext4, not tmpfs** (`df -T`); the binaries' copies are on the same device |
+| Pinning | Servers (one process per arm, one busy at a time) on CPU 2, the driver on CPU 4; the SMT siblings 3 and 5 and CPUs 0, 1, 6, 7 were left to whatever else ran. **The host was shared** (section 9) |
+| Server config | `cores = 1`, `durability = relaxed`, `buffer_pool_frames = 65536`, `log_level = warn`, Waystone at its defaults, `scan_kernel` not written (default, on); a fresh server and data file per arm per run; ports 32811-32891 (not the default 15432). Of the 114 servers, the 111 whose directories survive (all but p1a's three) have an empty server log and a stderr of the four start-up and stop lines |
+| Drivers | `tools/bm_scan.py` sha256 `1896ef20...`, `tools/bn_census.py` `d7b80765...`, `tools/kwp.py` `51f707d0...`, unchanged since `34ab4269` (the BM-S6 results commit). Tables: `archive/.../scripts/bt_close_scan.py`, `bt_close_bn.py`, `ident.py`, `hostsummary.py`; this file is `assemble.py` over `bt_close.tmpl`, so no table was typed |
+| Suite | **Not executed in this session.** The close's full-suite run is not part of this measurement; the work order's BT-S2 and BT-S3 rows record 3690/3692 each, the two failures being two-core waits that timed out under other sessions' load and passed on re-run |
+
+## 1. What was run
+
+Two drivers, three arms each: **A** (`eeb88f47`), **A'** (A's bytes as a second server, the spread) and **B** (`4274ed81`). Per run a fresh server per arm and a fresh data file; the same relations loaded into each; every cell measured on all three block by block (12 blocks), the server order rotating per block and per run and the two driver paths alternating inside a block, so a server's position and host drift fall on every arm alike. The measure is the server's on-CPU time (the sum of `/proc/<pid>/task/*/schedstat`); wall time is the client's. The gate flags are BM-S6's (`--cell-quiet-pct 10 --cell-quiet-wait 60 --cell-clean-pct 20 --cell-foreign-pct 15 --cell-retries 1`, `--quiet-load 2`); the run-level load gate's wait was capped at 180 s in p1a and 30 s elsewhere (section 9).
+
+| group | driver | cell / shape | rows | start order | runs | per-run work (equal across arms) | phases |
+|---|---|---|---|---|---|---|---|
+| S1 | `bm_scan.py census` | `bn`, `wide-h` (+ their point cells) | 10,000 | A, A', B | 5 | 192 scans per path per arm (16 per block), 3,000 point `SELECT`s per path | p1a (1 run) + p1b (4 runs) |
+| S2 | same | same | 10,000 | B, A', A | 3 | same | p4 |
+| S3 | same | same | 10,000 | A, A', B | 5 | same | p8 |
+| Z | same | `rows-200`, `rows-1k` | 200; 1,000 | A, A', B | 4 | same | p5 |
+| U1 | `bn_census.py` | `select-pk`, `update-range` | 1,000 | A, A', B | 5 | 240 every-row `UPDATE`s and 3,000 point `SELECT`s per path per arm | p2 |
+| U2 | same | same | 1,000 | B, A', A | 5 | same | p3 |
+| U3 | same | same | 1,000 | B, A, A' | 5 | same | p9 |
+| Z200 | same | same | 200 | A, A', B | 3 | 600 `UPDATE`s, 3,000 `SELECT`s | p6 |
+| Z10000 | same | same | 10,000 | A, A', B | 3 | 60 `UPDATE`s, 3,000 `SELECT`s | p7 |
+
+**Row counts and flags.** `bm_scan.py --cells bn` is relation `s`, 10,000 rows `(id, v, w)`; `wide-h` is `wd`, 10,000 rows of 13 columns (`h decimal(30,4)`, one `varchar` that spills); `rows-200` and `rows-1k` are `s200` and `s1k`. `--scan-ops 192` is the scans per path per arm per run, `--point-ops 3000` the point statements. In `bn_census.py`, `--rows N` is both the table's size and the number of rows the every-row `UPDATE r SET v = ? WHERE id >= 1` writes; `--range-ops` is its statements per path per arm per run; `--scan-rows` and `--scan-ops` belong to the `scan` shape, which `--only select-pk,update-range` does not run.
+
+**Start order.** The drivers start the servers in `--arm` order and rotate only the statement order. A server started last is a position the driver does not balance, so each shape has batches of both orders (S1 and S3 against S2; U1 against U2 and U3), and the tables give the groups separately and pooled.
+
+## 2. The scan row: -3.3 ns on `bn`, -4.0 ns on `wide-h`, in 13 of 13 runs
+
+Each group moves the same way, which is the result: B - A on `bn` literal is -3.2, -3.3 and -3.4 ns in S1, S2 and S3, and on `wide-h` -4.0, -4.0 and -3.9 ns, with different start orders and a host that went from load 15 to load 1 between S1 and S3. Net row, ns; B - A paired by run; the spread is |A' - A| per run (typical = median, largest = max).
+
+{{T:scan_groups}}
+
+The pooled tables, with rows/s derived as 1e9 / the median net row and every run, clean or not, included:
+
+{{T:scan_net_all}}
+
+Two `wide-h` windows and two `point:s` windows were marked unclean by the driver (p1b runs 1 and 2: a foreign task on the pinned CPUs or a sibling above 20 % busy after the one retry; section 9). Dropping the affected (run, cell) pairs moves `bn` by 0.1 ns and leaves `wide-h` where it was:
+
+{{T:scan_net_clean}}
+
+The per-run net rows (S1a and S1b are the two files of group S1; S1b's run 1 is the contaminated `wide-h` window at 63-67 ns, in which B - A is still negative):
+
+{{T:scan_runs}}
+
+## 3. The guard cells: the every-row `UPDATE` is about 3 % cheaper, the point `SELECT` is level
+
+The every-row `UPDATE` is the guard BM-S6 set (BM-Q12) and the cell BT-S4 changed (`ConjunctWellFormed` and its per-row calls deleted, `CheckConjuncts` once per statement). **Server CPU per statement, µs.** B - A paired by run; the spread is |A' - A| per run.
+
+{{T:bn_groups}}
+
+The pooled cells in full, with the statements/s derived (1e6 / the median server CPU) and the effect of the start order:
+
+{{T:bn_guard}}
+
+Reading it. B - A on the `UPDATE` is negative in all three groups and both paths but one (U1 prepared, +0.7 µs): -15.8, -33.6, -12.6 µs literal and +0.7, -42.9, -14.1 µs prepared. The group in which A was started last (U2) reads the largest saving and the group in which B was started last (U1) the smallest, which is the direction a penalty on the last-started server would push; U3 (A' last, the quiet host) sits between and is the smallest on the prepared path after U1. The groups differ by more than their own typical gaps (10-20 µs), so the pooled median, which has all three orders, is the figure to carry, and the sizes below (both started B last) are the stricter evidence for the sign. **Against the spread:** the pooled B - A is 1.9 (literal) and 2.2 (prepared) times the typical A' - A gap and inside the largest (27.8 and 83.9 µs; the latter is one run, U1 run 0, in which A' read 893 µs); by the bar BM-Q12 set (the largest gap) the 1,000-row cell does not resolve the gain, by the typical gap it does, and the sizes in section 5 settle the sign. **The point `SELECT`** reads B - A = -0.17 µs literal and +0.02 µs prepared, 0.5 and 0.03 times the typical gap; B is slower than A in 6 and 8 of 15 runs and group U3 reads +0.34 µs (+1.2 %) in 5 of 5 prepared runs, a sign that U1 and U2 do not share, so the cell carries no direction. Every per-run end-state check (`range_v_ok`, `spill_txt_ok`: the final column values of every row) passed in all arms of all 15 runs, and the `UPDATE` cells were clean in every run; the four unclean windows in these files are point `SELECT` cells, and leaving them out moves the point `SELECT`'s pooled B - A to -0.09 and +0.02 µs.
+
+Per run, `update-range`, server CPU per statement (µs):
+
+{{T:bn_runs}}
+
+## 4. The same answer (BT-R3, G2)
+
+`bm_scan` records each arm's `ANALYZE` of one statement and a digest of its rows in run 0 of every file; the table is all of them. **No arm differs from another in the digest, `examined=`, `matched=`, `sel=` or `pages=`**, in any of the five `bm_scan` files, and `bad` (a reply that was not the expected tag) is 0 in every cell of every run, `bn_census`'s included.
+
+{{T:ident}}
+
+The counts B reports equal A's. The cells these drivers cannot see - the row-touch budget refusing on the same row, Waystone trails, Cabin recording, `sel=` on a non-zero selectivity - are the contract suites' (waystone, index, cabin, inner-build), **not run in this session**. The `bn_census` end-state checks (the final values of every row after the every-row `UPDATE`s, and the pages allocated by the spilled and unspilled update passes):
+
+```
+{{T:bn_end}}
+```
+
+## 5. The row-count sweep: at least 3.2 ns of the scan saving is per row, and the `UPDATE`'s is per row
+
+The scan row at 200, 1,000 and 10,000 rows (4, 4 and 13 runs) and the `UPDATE` at 200, 1,000 and 10,000 rows (3, 15 and 3 runs). The scan saving per row is not smaller at the small sizes (5.9, 4.5 and 3.3 ns literal). Read as S(rows) = a + b x rows, the 10,000- and 1,000-row cells give b = 3.2 ns per row and a = 1.3 µs per statement; the 200-row cell (4 runs, largest |A' - A| 7.7 ns per row, 1.5 µs per statement) cannot separate a from zero. So 3.2 ns of the saving is per row, and a fixed part of up to about 1.3 µs per statement is possible and not established.
+
+{{T:scan_sizes}}
+
+Net row detail for the two small sizes (the 10,000-row cell is section 2):
+
+{{T:scan_sizes_net}}
+
+**The `UPDATE` per updated row.** B - A divided by the rows written: 200 rows 37 ns literal and 44 ns prepared (-7.4, -8.8 µs), 1,000 rows 24 and 27 ns, 10,000 rows 37 ns on both paths (-366, -367 µs). The 200- and 10,000-row cells have 3 runs each; the 10,000-row cell is noisy (B - A from -96 to -940 µs literal) and its sign is what it proves. The point `SELECT` does not scale with rows, and shows it: A reads 26.8 / 30.1 / 28.2 µs literal at 200 / 1,000 / 10,000 rows, with B - A between -0.5 and -0.2 µs at 200 and 10,000 rows, inside the spread.
+
+{{T:bn_sizes}}
+
+## 6. Latency distributions
+
+The scan statement as the driver sees it (wall time, client to reply), pooled over the clean windows of the 13 runs; linear-interpolated percentiles; scans/s at p50 is derived (1e6 / p50). The body falls with the row cost (`bn` literal: p0 347.0 to 315.5 µs, p25 364.4 to 330.0, p50 375.3 to 340.0: 31-35 µs, which brackets the 33 µs that 3.3 ns x 10,000 rows predicts); **the p99 of 2,300-2,500 samples is about the 25th-worst and carries host hiccups**, not code. The two unclean `wide-h` windows are left out of this table; with them the `wide-h` literal p90-p99 read 590-1,757 µs for A.
+
+{{T:scan_pct}}
+
+The every-row `UPDATE` and the point `SELECT` (percentiles are the median over runs of each run's percentile; n is the statements pooled):
+
+{{T:bn_pct}}
+
+B's `UPDATE` body sits 15-36 µs below A's from p0 to p50 (p0 -32 / -36 µs, p25 -28 / -27, p50 -27 / -15, literal / prepared) and its p90 21-32 µs below; the p99 (1,300-2,200 µs) is not ordered by arm. The point `SELECT` shows no ordering at any percentile.
+
+## 7. Waits
+
+A latency is a sum. The scan statement is 75-83 % per-row server work (rows x net row), 27-30 µs the fixed statement cost (a point `SELECT`), and the rest is the client and socket round trip; the table is medians over all runs (the per-row term is 10,000 x the pooled median net row; the last-but-one column is the wall mean minus the server CPU, so it carries the tail).
+
+{{T:scan_waits}}
+
+The client-and-socket term is level across arms on `bn` (34.6-42.9 µs) and moves between arms on `wide-h` literal (A 62.2, A' 64.7, B 70.2 µs) without a pattern on the prepared path (61.6, 60.1, 61.2 µs): it carries the tail of the wall mean, which the per-row term does not, so on the literal path B's `wide-h` wall mean falls by 30.8 µs while its per-row term falls by 38.9 (prepared: 39.4 and 38.6). The terms close to the wall mean by construction here (the client term is wall mean minus server CPU), not as an independent partition.
+
+| wait type | this engine at this configuration |
+|---|---|
+| durability / commit (fsync) | not applicable to a scan; **the every-row `UPDATE` ran under `relaxed` only**: no commit wait was measured, so `group` and `strict`, which add a commit wait to the statement, are unmeasured, and a 24-27 µs saving would be a smaller share of such a statement |
+| write statement | the every-row `UPDATE` is write work: server CPU is 98-100 % of its wall p50 (table below); the driver's 5 % overlaps it. The split of the 750-780 µs between the walk, the per-row write and the MVCC bookkeeping needs a profile and was not taken |
+| read | the per-row term above. `pool_misses` = 0 in every scan cell (every page resident; the point cells' first-touch misses are equal in the three arms, counters above); `lookups` = 0 and `lookups_instance` = 0 in every cell: no row took a commit-window lookup, so every `Classify` ran on the floor path |
+| client and socket round trip | 35-43 µs of the `bn` scan's wall mean (9-11 %), 60-70 µs of `wide-h`'s; the driver's own CPU is 42-45 and 74-77 µs of it and overlaps the server's |
+| lock or conflict wait | none: `window_wait_us` = 0 in every cell (one connection, no writer) |
+
+The `UPDATE` and point `SELECT` decomposition (wall p50 against server and driver CPU; the three overlap, so the last column is negative):
+
+{{T:bn_waits}}
+
+## 8. Against BT-S1's prediction, the engine's last numbers, and the floor
+
+**What BT-S1 predicted and what B delivers.** BT-S1 priced the order by ablation at `eeb88f47` (`results-bt-s1-premise-v2.7.0-992-geeb88f47.md`; savings are paired medians against that run's A, 5 runs). The real change is one number, and it can be read against the ablations only as an enclosure:
+
+| BT-S1 ablation | saved, literal | saved, prepared | built in B? | what B delivers against it |
+|---|---|---|---|---|
+| D2 (#5, the tuple read) | 3.1 ns | 3.3 ns | yes: `TryReadTupleIn`, BT-S2 | B is 106 % of D2 on both paths |
+| D1 (#1, #2, #4, row invariants) | 2.6 ns | 2.5 ns | #1 deleted, #4 under the span on the kept paths, #2 as one lookup rather than a hoist (BT-S3) | not separable from D2 here |
+| D3 (#7, #8, counters and charge) | 3.2 ns | 3.2 ns | **no**: BT-R3 keeps the counts and #8's bool form generated the same code (BT-S3) | - |
+| D-all (D1 + D2 + D3) | 7.1 ns | 8.1 ns | partly | B: 3.3 / 3.5 ns = **46 % / 43 %** |
+| D4 (the walk rejects first) | 7.9 ns | 8.8 ns | no: forbidden by BT-R1 | B is 42 % / 40 % |
+| **B, `4274ed81`, this run (13 runs)** | **3.3 ns** [2.9, 5.5] | **3.5 ns** [2.0, 5.5] | - | - |
+
+The ceiling was a ceiling: BT-S1 said D-all "is a ceiling for S2 + S3, not a forecast", and the order's own bar (the whole order passes at 3.0 ns) is met by 0.3 and 0.5 ns. B reaches the tuple read's saving and not the counts' (D3 removed work BT-R3 keeps). The remaining distance to D-all is 3.8 / 4.6 ns (7.1 - 3.3, 8.1 - 3.5), to D4 4.6 / 5.3.
+
+**Against the engine's last numbers.** The baseline for this shape is BT-S1's A, which is this run's A byte for byte (`833501d0`); its A read 1.0 and 1.5 ns higher about two hours earlier. That difference is a session effect and **not a finding**: the same binary moved by more than the typical A-against-A' gap between two sessions (BM-S6's results saw the same `bn` baseline move 4 ns between sessions).
+
+| `bn` net row | A, BT-S1 (`eeb88f47`, 5 runs) | A, this run | B, this run | D-all, BT-S1 | B, BM close (`6b771ec1`, 8 runs) | PostgreSQL 18.6 (BM close, not re-measured) |
+|---|---|---|---|---|---|---|
+| literal | 32.0 ns [31.3, 33.1] (31.2 M rows/s) | 31.0 ns [29.3, 36.0] (32.3 M rows/s) | **27.4 ns** [26.1, 32.1] (36.5 M rows/s) | 24.7 ns (40.5 M rows/s) | 31.0 ns [30.8, 32.6] (32.3 M rows/s) | 29.1 ns [28.6, 29.5] (34.4 M rows/s) |
+| prepared | 32.4 ns [31.5, 34.5] (30.8 M rows/s) | 30.9 ns [29.8, 34.5] (32.4 M rows/s) | **27.5 ns** [26.4, 32.0] (36.3 M rows/s) | 24.5 ns (40.7 M rows/s) | 31.2 ns [30.8, 32.5] (32.1 M rows/s) | not measured (simple protocol only) |
+
+| `wide-h` net row | A, this run | B, this run | B, BM close (`6b771ec1`) | PostgreSQL 18.6 (BM close, not re-measured) |
+|---|---|---|---|---|
+| literal | 34.7 ns [34.1, 67.4] (28.8 M rows/s) | **30.9 ns** [30.1, 56.5] (32.4 M rows/s) | 35.6 ns [34.9, 37.2] | 68.5 ns [67.7, 75.8] |
+| prepared | 34.7 ns [34.1, 63.4] (28.8 M rows/s) | **30.9 ns** [30.1, 56.6] (32.4 M rows/s) | 35.6 ns [34.7, 36.6] | not measured |
+
+(The 56-67 ns maxima are the one contaminated window of section 9; the medians are not affected.) B is 0.94 times PostgreSQL's `bn` figure and 0.45 times its `wide-h` figure, A 1.07 and 0.51: the engine is below the floor on these shapes. **The floor was not measured in this run**, and a result is neither good because it beat PostgreSQL nor bad because it did not. B's `bn` figure is 3.6 ns (11.6 %) under the BM close's B, from a different session and a different commit chain; read that as the direction BT-S1's A already showed, not as a delta of its own.
+
+**The `UPDATE` and `SELECT` against the last baseline for the shape** (`results-bm-s6-remedy-v2.7.0-948-g952c67e5.md`: B2 `952c67e5`, 15 runs, server CPU per statement). The sessions are not comparable in absolute terms (A reads 779.3 and 773.7 µs here against 737.0 and 738.3 there, +42 and +35 µs for the same kind of arm), so only the paired gap carries:
+
+| shape | B2 - A, BM-S6 | B - A, this run | A' - A typical / largest, BM-S6 | A' - A typical / largest, this run |
+|---|---|---|---|---|
+| every-row `UPDATE`, 1,000 rows, literal | +8.9 µs (+1.2 %) | **-23.9 µs (-3.1 %)** | 14.7 / 41.8 µs | 12.5 / 27.8 µs |
+| every-row `UPDATE`, 1,000 rows, prepared | +3.2 µs (+0.4 %) | **-27.3 µs (-3.5 %)** | 7.5 / 28.9 µs | 12.6 / 83.9 µs |
+| point `SELECT`, literal | +0.15 µs | -0.17 µs | 0.08 / 0.35 µs | 0.33 / 1.28 µs |
+| point `SELECT`, prepared | +0.43 µs | +0.02 µs | 0.17 / 0.58 µs | 0.59 / 1.95 µs |
+
+## 9. The noise floor and the host
+
+**The control, inside the run.** A' is A's bytes; their per-run difference on the net row is the spread. On `bn` it is -0.1 / +0.4 ns at the median (typical 0.45 / 0.48, largest 2.21 / 2.33 ns, literal / prepared), on `wide-h` 0.0 / 0.0 (typical 0.24 / 0.14, largest 2.46 / 1.20); the largest values are single runs and the smallest per-run B - A on `bn` (-2.0 ns, prepared, in S2) is inside the largest gap while the median is 1.5 times above it. On the `UPDATE` the typical gap is 12.5 / 12.6 µs and the largest 27.8 / 83.9; on the point `SELECT` 0.33 / 0.59 and 1.28 / 1.95 µs. **A delta under the typical gap is not reported as a finding**: the point `SELECT`'s B - A is under it at every size; the 1,000-row `UPDATE` is reported with its position effect and its size sweep (sections 3 and 5) because it is 1.9-2.2 times the typical gap and has the same sign and a per-row size of the same order at 200 and 10,000 rows.
+
+**The host was not quiet, and the gates saw it.** At 08:48, right after B's build, `ps` showed another session's `cc1plus` jobs on six CPUs and another session's test binary on CPU 2; the 1-minute load average stayed at 4-16 until 09:21 and fell to 0.7-2.3 from 09:24, with a rise to 7.0 near the end of p9 (its run 4 has one unclean point `SELECT` window). Sampled every 10 s into `hostwatch.log` (`competing` is the count of processes whose command line matches `cc1plus|cmake --build|ctest`; it is at least 3 in every sample because other sessions' shells carry those words, so it is not a count of running builds):
+
+{{T:hostsummary}}
+
+The run-level load gate (`--quiet-load 2`) did not open for the 1-minute average in p1a-p3 and the first two runs of p4: it waited 180 s in p1a's run 0 (load at release 7.11) and the 30 s cap in every run after it (load at release 2.7-13.1), and released by itself (0-25 s, load 0.7-1.9) from p4's third run on. The per-cell gate, which measures the pinned CPUs and their siblings rather than the load average, did what it is for: **the driver's clean test (siblings at most 20 % busy, a foreign task at most 15 % of the pinned CPUs) passed in all but 8 of the (run, cell, path) windows, and each of those was retried once and kept with `clean = False`**: p1b run 1 `wide-h` (both paths: a sibling 99.3 % busy, a foreign task on 80.5 % of the driver's CPU), p1b run 2 `point:s` (both paths, a sibling 51.2 % busy), and four point `SELECT` windows in the `bn_census` files (p2 run 0, p3 runs 1 and 2, p9 run 4). The `UPDATE` windows were all clean. The driver's `competing` flag was true in every cell, as the `hostwatch` count shows, so it does not discriminate here. The per-run records follow.
+
+Scan files (S1 = p1a + p1b, S2 = p4, S3 = p8; the arm order of each run is in the JSON):
+
+{{T:scan_host}}
+
+`bn_census` files (U1 = p2, U2 = p3, U3 = p9):
+
+{{T:bn_host}}
+
+The size cells' host records (p5: scan sizes; p6, p7: `UPDATE` sizes). Their loads were 0.7-2.0 and every window was clean:
+
+{{T:scan_sizes_host}}
+
+{{T:bn_sizes_host}}
+
+**What was done about the gate, and what it cost.** The first invocation (p1a, 5 runs, `--quiet-wait 180`) spent 180 s of its first run's gate waiting for a lull that did not come (load 7.1 at release and 14.9 at the first cell) and was cut after that run to fit the budget; its run 0 is kept as group S1's first run (it differs from p1b only in the gate wait) and p1b ran 4 more with `--quiet-wait 30`. The remaining phases kept the 30 s cap: a longer wait would have bought nothing while the sessions around kept building and testing, and would not have fit the one-hour budget; the cell gate and the pairing are what protect the numbers. When the host went quiet (p4 onward) two extra batches (p8, p9) were added with the time that freed. S1 and U1/U2 ran loaded, S3, U3 and the size cells quiet; the scan row's B - A is the same in both (-3.2 to -3.4 ns), the `UPDATE`'s is not stable between groups (section 3).
+
+## 10. What the run teaches
+
+1. **BT built the cheap half of the ceiling.** The tuple read is a per-row cost of about 3 ns because it returns a `Status` through memory on the success path; B removes it (B - A is 106 % of BT-S1's D2), and nothing else in the order - the deleted `spills_.clear()`, the epoch read moved under the span, the arming in one lookup - shows above the 0.2 ns by which B exceeds D2, which is under the typical A-against-A' gap (0.45 / 0.48 ns). This run measures the sum of the order and cannot attribute a share to S3, so "S3 delivered nothing" is not what the data say; "S3 delivered less than this run can resolve" is. BT-S1 expected the real S3 to land at or below D1 + D3 less their overlap (at most 5.7 ns) and said the premise priced it worst; B's total of 3.3 / 3.5 ns, S2 included, is well below even that.
+2. **The counts and the charge are the largest unbuilt piece.** D3 priced them at 3.2 / 3.2 ns, BT-R3 requires them and BT-S3 found the `Status`-free charge compiles to the same code, so the remaining 3.8 / 4.6 ns to the ceiling is mostly work the engine does on purpose. The row after BT is 27.4 / 27.5 ns; BT-S1's floor (D4, 24.0 / 23.7 ns in another session) is 3-4 ns under it, and what is left of the row is BM's: the kernel's compare, the slot loop, the visibility decision and the walk (BT-S1's insight 5).
+3. **The saving is larger on the wider relation.** `wide-h` saves 4.0 ns against `bn`'s 3.3 on both paths, in every group (-3.9 to -4.0 against -3.2 to -3.4 literal): 0.7 ns, 1.6 times the typical gap on `bn`. `wd` is 13 columns and 304 pages against `s`'s 3 columns and 61, with a spilled `varchar`; this run does not say why the saving is larger there. A is also 3.7 ns higher on `wide-h` (34.7 against 31.0 ns).
+4. **BT-S4's effect per updated row is an order of magnitude the scan's per-row saving.** 24-44 ns per updated row against 3.3 ns per rejected row. The only B-side change specific to `UPDATE` is `ConjunctWellFormed`'s deletion (BT-S4); `ReadTupleIn` (BT-S2) may also be reached by `UPDATE`'s walk, and the cell carries all of the order's changes, so **this run supports "the `UPDATE` got cheaper, by about 3 % at 1,000 rows and 2-5 % across groups and sizes" and not "BT-S4 is worth X"**. The per-row size is steady within a factor of 1.8 across 200, 1,000 and 10,000 rows (37-44, 24-27, 37 ns), which is what a per-row deletion predicts. BM-S6's deferred note (`known-gaps.md`, "The scan row (BM)": checking once per statement deletes the per-row test) acquires its first data point: the guard that read "within the spread, not proven zero" at the remedy reads below A here.
+5. **A busy host moved the medians by less than a session does.** A reads 31.0 ns here with the load average at 5-15 for the first half and 1-2 for the second, and 32.0 ns in BT-S1 at load 1; the groups S1 (loaded) and S3 (quiet) give B - A of -3.2 and -3.4 ns. What load did produce was two outliers at twice the median, which the driver's clean flag identified. For a per-row CPU saving of 10 %, the paired design with a same-bytes control carried the result through a noisy host; the 1,000-row `UPDATE` (a 3 % effect on a 750 µs statement with a typical gap of 12-13 µs) is where it did not carry it alone.
+6. **The `UPDATE` cell is group-sensitive; the scan row is not.** B - A on the 1,000-row `UPDATE` is -15.8 / -33.6 / -12.6 µs literal and +0.7 / -42.9 / -14.1 prepared across U1 (B last), U2 (A last) and U3 (A' last), a spread of 21-44 µs for a pooled -24 / -27: the direction of a last-started penalty, not proof of one. The scan row, whose effect is seven times the gap, is -3.2 / -3.3 / -3.4 ns across S1 (B last), S2 (A last) and S3 (B last) and shows nothing of it. A 3 % effect on a 750 µs statement needs the size sweep and 15 runs to be read at all, as BM-S6 found.
+7. **No open decision in `CLAUDE.md` acquired a data point.** BT-Q1's bar (D-all at 3.0 ns or more) was passed by the ablation at 7.1 / 8.1 ns; the order as built passes the same 3.0 ns at 3.3 / 3.5 ns, so the gate's ceiling was 2.2-2.3 times what was built.
+
+## 11. What was cut, and what was not run
+
+Cut to the operator's time budget (about one hour including the build: 08:45 to the end of the measurement at 09:35):
+
+- **Runs.** The scan row ran 13 runs in three groups (5 + 3 + 5) instead of 5; `bn_census` ran 15 runs in three groups (5 + 5 + 5) instead of 10; both were extended when the host went quiet. The size cells ran 4 (scan, 200 and 1,000 rows) and 3 (`UPDATE`, 200 and 10,000 rows) runs.
+- **The load gate.** `--quiet-wait` 180 s for one run, 30 s for the rest, against a host that stayed above the 2.0 gate for about 35 minutes (section 9); p1a was cut after its first run, whose data is kept.
+- **Not run:** the other `bm_scan` cells (`sel-0`..`sel-100`, `wide-h-k`, `wide-a`..`wide-m`, `nul-0`, `nul-50`, `bn-recent`, `rows-100k`, `out-200`, `out-1k`): **B's kept-row paths (BT-S3 moved the epoch read onto them) are therefore not measured here**, and neither is a rejected row of any column type but `wide-h`'s decimal(30,4); `scan_kernel = off`; the layout probe; the profile (no sampler build, so no share of the row is attributed); a split of B into BT-S2, BT-S3 and BT-S4 (only A and B are binaries); PostgreSQL 18 (the floor is the BM close's figure); `durability = group` and `strict` for the `UPDATE`; `cores > 1`; `bn_census`'s `update-lit`, `scan` and other write-path shapes; the contract suites and the full test suite on `4274ed81`.
+- **Nothing here is extrapolated across a cut.** The 200- and 10,000-row `UPDATE` cells are 3 runs each and read as signs and orders of magnitude.
+
+## Appendix. Reproducing
+
+All from `/home/cdkbs/ckdbs/.claude/worktrees/bt-accept-tuple-row` (`tools/` unchanged since `34ab4269`), copies in `/home/cdkbs/bench-runs/bt-close/bin/` (`kds_server-A` and `kds_server-A2` the same file, copied from `/home/cdkbs/bench-runs/bt-s1/bin/kds_server-A`; `kds_server-B` from `git archive 4274ed81` built with `cmake -DCMAKE_BUILD_TYPE=Release -DKDS_BUILD_TESTS=OFF -DKDS_BUILD_SIM=OFF` and `cmake --build --target kds_server -j8`). `GATE="--cell-quiet-pct 10 --cell-quiet-wait 60 --cell-clean-pct 20 --cell-foreign-pct 15 --cell-retries 1"`, `QW` 30 (180 for p1a):
+
+    python3 tools/bm_scan.py census --arm A=<A> --arm A2=<A copy> --arm B=<B> --workdir <dir> --port 32811 --runs 4 \
+        --pin-server 2 --pin-driver 4 --cells bn,wide-h --scan-ops 192 --point-ops 3000 --quiet-load 2 --quiet-wait $QW $GATE --out p1b.json   # S1
+    python3 tools/bm_scan.py census --arm B=<B> --arm A2=<A copy> --arm A=<A> ... --runs 3 ... --out p4.json                                     # S2 (start order reversed)
+    python3 tools/bm_scan.py census --arm A=<A> --arm A2=<A copy> --arm B=<B> ... --runs 5 ... --out p8.json                                     # S3
+    python3 tools/bm_scan.py census ... --runs 4 --cells rows-200,rows-1k ... --out p5.json                                                      # sizes
+    python3 tools/bn_census.py --arm A=<A> --arm A2=<A copy> --arm B=<B> --workdir <dir> --port 32821 --runs 5 --pin-server 2 --pin-driver 4 \
+        --rows 1000 --scan-rows 1000 --ops 3000 --scan-ops 800 --range-ops 240 --blocks 12 --only select-pk,update-range \
+        --quiet-load 2 --quiet-wait $QW $GATE --out p2.json                                                                                      # U1
+    (p3: --arm B --arm A2 --arm A;  p9: --arm B --arm A --arm A2;  p6: --rows 200 --scan-rows 200 --range-ops 600, 3 runs;  p7: --rows 10000 --scan-rows 10000 --scan-ops 200 --range-ops 60, 3 runs)
+
+Tables: `scripts/bt_close_scan.py net|groups|runs|pct|waits|host|identity S1=<file> ...` (`CLEAN=1` drops windows the driver marked unclean, `NOPOOL=1` omits the pooled row), `scripts/bt_close_bn.py guard|groups|runs|pct|waits|host|end U1=<file> ...`, `scripts/ident.py`, `scripts/hostsummary.py`, and `scripts/assemble.py bt_close.tmpl out.md`, which fills every table in this file from the JSON (it ran in `/home/cdkbs/bench-runs/bt-close` over `out/p*.json`; to re-run from the archive, gunzip the `*.json.gz` into `out/`, put `hostwatch.log` in `out/` and `progress.log` as `progress` beside it). p1a's invocation was p1b's with `--runs 5` and `--quiet-wait 180` (`scripts/p1a.txt`).
+
+Raw output: `bench/v3.0.0/archive/bt-close-v2.7.0-997-g4274ed81/` - the ten JSON files and logs (gzip), `binaries.txt`, `host.txt` (device, toolchain, build cache, driver hashes, tree status, the diff stat), `hostwatch.log` (load average and competing count every 10 s), `progress.log`, `watch.log`, `build.out` and the run, table and assembly scripts.

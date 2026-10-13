@@ -115,7 +115,7 @@ with the binaries' hashes).
 - `[design]` Even on a wholly WAL-bound path this costs at most about 13%.
   It does not account for 3x.
 
-### 2.5 What `cores > 1` changes on this path
+### 2.5 What `cores > 1` changed on this path, at `0446b3b0`
 
 - `[source-read]` Every core schedules its own checkpoint at the cadence:
   peers at `src/server/core_runtime.cpp:539` (run gated at `:578`), core 0
@@ -129,6 +129,11 @@ with the binaries' hashes).
   `cores = 1` has one, matching the extra syncs counted in §2.3.
 - `[source-read]` Only peers are pinned (`src/server/expeditor.cpp:1825`).
   Core 0 inherits the process's affinity.
+- Since this was read, BI (closed at `ec827a19`) made the cadence's run a
+  `system` task that parks for every sync on the instance's data-sync
+  thread; its `pwrite`s stay on the reactor. Every core still checkpoints
+  in its turn (BP kept it, BP-Q5 (b) not taken; `known-gaps.md`, Per-core
+  structures kept).
 
 ## 3. What is not established
 

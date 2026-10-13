@@ -90,10 +90,10 @@ inline void ClearStructuralRefusal() noexcept { detail::g_structural_refusal = f
 // kMaxBtreeDepth - 1`, since depth indexes a kMaxBtreeDepth-element path),
 // and one new root.
 //
-// Two per level, not one, since PK09: a full internal node is *divided* -
-// its upper half moved to a new node and the lower half written back - so
-// both pages change and both need an image. The right-split-with-no-movement
-// case still touches only one, and this bound covers the worse of the two.
+// Two per level: a full internal node is *divided* - its upper half moved
+// to a new node and the lower half written back - so both pages change and
+// both need an image. The no-movement right split touches only one; this
+// bound covers the worse of the two.
 inline constexpr std::size_t kMaxStructuralChanges =
     2 + 2 * (static_cast<std::size_t>(kMaxBtreeDepth) - 1) + 1;
 
@@ -122,6 +122,8 @@ struct InsertPlacement {
     // before a commit's durability wait, which must not run under a latch.
     // Empty on a placement that holds nothing.
     std::vector<PageRef> held;
+    // A split that grew a root: its anchor's `UnlatchedPin`.
+    UnlatchedPin anchor;
 
     // A heap chain's in the order redo has to apply them, before the
     // `HEAP_INSERT` that describes the tuple itself; a B+ tree's, the pages
@@ -143,7 +145,7 @@ struct InsertPlacement {
 
 // ---- A heap row's id, fixed under its tail's hold (BB-R1, BB-R7) ---------
 //
-// `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`. A heap row's id
+// (`instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md`.) A heap row's id
 // is fixed under the exclusive hold of the chain's tail, held as the tail, so
 // placement order is issue order and the tail's slot order is its key order,
 // at every core count: a heap page cannot sort itself (invariant 4). **A

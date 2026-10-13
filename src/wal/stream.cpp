@@ -196,14 +196,9 @@ Status WalStream::ScanTail(std::uint64_t segment_no) {
         return header.status();
     }
 
-    // The whole body at once. Fine at the sizes recovery sees today; when
-    // segments are 64 MiB this becomes a streaming read, which changes
-    // nothing about the walk below.
-    //
-    // Unzeroed, for `log_scanner.cpp`'s measured reason: a `vector<byte>(n)`
-    // here value-initialises 64 MiB that the `ReadAt` on the next line
-    // overwrites entirely. Every byte the walk below touches was written by that
-    // call.
+    // The whole body at once (a 64 MiB segment by default). Unzeroed, for
+    // `log_scanner.cpp`'s reason: every byte the walk below touches is
+    // written by the `ReadAt` on the next line.
     const std::size_t body_bytes = static_cast<std::size_t>(segment_size_ - kSegmentHeaderSize);
     auto body_storage = std::make_unique_for_overwrite<std::byte[]>(body_bytes);
     const std::span<std::byte> body(body_storage.get(), body_bytes);
@@ -340,14 +335,9 @@ Status WalStream::SealLocked() {
         append_lsn_.store(lsn + written.value(), std::memory_order_relaxed);
     }
     // A tail too short to hold even a record header is left as the zeroes the
-    // segment was created with. **This is a seal, and a reader has to be told
-    // so explicitly** - the comment here used to claim the zeroes "mean
-    // exactly what the marker means" to a reader, and they did not:
-    // `ScanLog` read the missing marker as a torn tail and stopped, dropping
-    // every record in every later segment (fixed 2026-08-12, and
-    // `log_scanner.cpp` now tells the two apart by this same
-    // `kRecordHeaderSize` bound). `WalStream::ScanTail` was never wrong about
-    // it, because it only ever reads the *last* segment.
+    // segment was created with. **This is a seal**, and `log_scanner.cpp`
+    // tells it from a torn tail by this same `kRecordHeaderSize` bound
+    // (2026-08-12); read as torn, it would drop every later segment.
 
     if (Status s = FlushLocked(); !s.ok()) {
         return s;

@@ -9,7 +9,7 @@
 #include "kds/exec/type_literals.hpp"
 #include "kds/parser/fingerprint.hpp"
 
-// The KWP/1 session (protocol-wp.md P08, P10, P11). Every rule is argued on
+// The KWP/1 session (`docs/spec/protocol.md`). Every rule is argued on
 // the header; this file is the frames.
 
 namespace kds::server {
@@ -138,10 +138,8 @@ StatusOr<std::string> LiteralOf(const wire::BoundParam& param) {
 // A placeholder is a `?` that is neither inside a string literal nor inside
 // a comment. Both exclusions are the lexer's own rules read back
 // (`src/parser/lexer.cpp`): a literal runs from `'` to the next `'` with no
-// escaping, and `--` runs to the end of the line. Missing the comment rule
-// was a real refusal - `WHERE v = ? -- don't` has an apostrophe in a
-// comment, which left the scan believing the statement ended inside a
-// string literal and rejected a statement the parser accepts.
+// escaping, and `--` runs to the end of the line (so `WHERE v = ? -- don't`
+// does not read its apostrophe as opening a literal).
 //
 // `on_placeholder` is called for each one, in order, and answers the text
 // to splice in; `out`, when given, collects the rewritten statement. Two
@@ -470,10 +468,9 @@ FrameAction KwpSession::OnAuth(std::span<const std::byte> payload, std::vector<s
         return Refuse(out, wire::ProtocolError(ProtocolDetail::kMalformedPayload,
                                                "C_AUTH: truncated payload", Severity::kFatal));
     }
-    // The gate's own line protocol, byte for byte: `auth.hpp` says "KWP
-    // will carry these same SCRAM message bodies in handshake frames; only
-    // this line framing is protocol-specific", and this is that sentence
-    // built rather than restated. One gate serves both surfaces.
+    // The gate's own line protocol, byte for byte (`auth.hpp`: KWP carries
+    // the same SCRAM message bodies; only the line framing is
+    // protocol-specific). One gate serves both surfaces.
     AuthGate::Result result = auth_gate_->OnLine(**body);
     wire::PayloadWriter w;
     w.Text(result.reply);
@@ -717,31 +714,17 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
     // `Corruption` and the rest reach the client as themselves. The
     // fallback is `StatusFromErrorReply`, which recovers exactly the four
     // spellings `ErrorReply` gives a token to and folds every other into
-    // `InvalidArgument` - right for the cross-core path it was written for,
-    // where a rendered line is genuinely all there is, and a floor rather
-    // than the answer here.
+    // `InvalidArgument` - a floor for a reply that carried no status.
     if (Status failed = !outcome.status.ok() ? outcome.status
                                              : StatusFromErrorReply(outcome.response);
         !failed.ok()) {
         // **XG-R8: the portal goes with the statement that failed.**
         //
-        // It used to have its sink reset and its entry kept, and the client
-        // was expected to close it - which §5's skip-to-sync makes it
-        // unable to do: after this `Refuse` arms the skip, every frame up
-        // to the next `C_SYNC` is discarded, **including a `C_CLOSE` the
-        // client pipelined behind this statement**. So the close was
-        // dropped on exactly the statements that most needed it, the portal
-        // leaked, and at `kMaxSessionPortals` every further `C_BIND` was
-        // refused until the 60 s idle sweep freed one - a retrying client
-        // running at one statement per portal lifetime. Clients worked
-        // around it by sending `C_CLOSE` as its own frame after `S_READY`,
-        // at a round trip on every *successful* statement.
-        //
-        // Erased here rather than admitting `C_CLOSE` into the skip, which
-        // was the other option: this is where the portal is already in
-        // hand, it needs no new rule about what "skipping" means, and it
-        // makes the client's close a no-op instead of a requirement.
-        // `protocol.md` §7 states the lifecycle a client sees for it - a
+        // The client cannot close it: after this `Refuse` arms §5's skip,
+        // a `C_CLOSE` pipelined behind the statement is discarded, and a
+        // kept portal would leak toward `kMaxSessionPortals`. Erased here
+        // rather than admitting `C_CLOSE` into the skip, so the client's
+        // close is a no-op; `protocol.md` §7 states the lifecycle - a
         // portal ceases to exist when its statement fails.
         //
         // No `sink.Reset()`: the whole portal goes, and `portal` dangles
@@ -799,11 +782,8 @@ FrameAction KwpSession::OnContinue(std::span<const std::byte> payload,
                                         "suspended portal"));
     }
     if (portal->complete_sent) {
-        // A portal that has answered `S_COMPLETE` is spent. Without this a
-        // second `C_CONTINUE` re-sent a diagnostic answer's whole batch -
-        // duplicate rows - and a duplicate completion carrying the full
-        // count again; and after a *failed* statement it answered an empty
-        // tag rather than refusing.
+        // A portal that has answered `S_COMPLETE` is spent: a further
+        // `C_CONTINUE` is refused, never answered with its rows again.
         return Refuse(out, Protocol(ProtocolDetail::kUnexpectedFrame,
                                     "portal '" + *name +
                                         "' has already completed; bind again to run its "
@@ -897,9 +877,8 @@ void KwpSession::Deliver(const std::string& name, Portal& portal, std::vector<st
     // **No quota arithmetic here.** The `max_rows` a `C_EXECUTE` asked for
     // was given to the sink before the statement ran, so the batches are
     // already sealed on the boundary the client named: one batch per
-    // `C_EXECUTE`/`C_CONTINUE` is exactly the quota. Metering at this end
-    // could only ever stop on a boundary the sink had already chosen, which
-    // is how `max_rows = 1` used to deliver a whole result set.
+    // `C_EXECUTE`/`C_CONTINUE` is exactly the quota; metering at this end
+    // could only stop on a boundary the sink had already chosen.
     auto& batches = portal.sink.batches();
     if (portal.next_batch < batches.size()) {
         Send(out, ServerFrameType::kRowBatch, 0, batches[portal.next_batch].payload);
@@ -1012,8 +991,8 @@ void KwpSession::ExpireIdlePortals() {
     for (auto it = portals_.begin(); it != portals_.end();) {
         // A portal whose statement is in flight is not idle: the running
         // statement holds `&sink` (the session's result sink), and its
-        // completion needs the portal to answer. Erasing it here freed the
-        // sink under a statement parked on a wait and dropped its reply.
+        // completion needs the portal to answer; erasing it would free the
+        // sink under a parked statement and drop its reply.
         if (now - it->second.idle_since < kPortalIdleTimeoutNs || it->first == running_portal_) {
             ++it;
             continue;

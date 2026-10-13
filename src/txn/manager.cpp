@@ -59,17 +59,11 @@ StatusOr<IsolationLevel> ParseIsolationLevel(std::string_view text) {
     if (folded == "read committed" || folded == "rc") return IsolationLevel::kReadCommitted;
     if (folded == "repeatable read" || folded == "rr") return IsolationLevel::kRepeatableRead;
     if (folded == "serializable") {
-        // Out of scope and **not** [OPEN] (section 1). **Both halves of
-        // the reason this used to give are now false** (AR0-M1 flagged the
-        // second; AO-S3 makes the first stale): readers *are* registered
-        // (`txn.md` §4.1), and a lock manager exists
-        // (`txn/lock_table.hpp`). What still holds is narrower and is what
-        // the refusal now says - the lock family has no **predicate** lock.
-        // Its finest fence is a slice, a bounded key interval, which
-        // cannot express "every row a `WHERE` matches" over a non-key
-        // column, and SSI's alternative needs per-row read tracking that
-        // nothing records. AO-S8 owes the same correction to `txn.md` §1's
-        // four SR texts.
+        // Out of scope and **not** [OPEN] (section 1): the lock family has
+        // no **predicate** lock - its finest fence is a slice, a bounded
+        // key interval, which cannot express "every row a `WHERE` matches"
+        // over a non-key column - and SSI's alternative needs per-row read
+        // tracking that nothing records.
         return Status::Unsupported(
             "SERIALIZABLE is out of scope: it needs predicate locking or read-tracking, and this "
             "engine's lock family fences key intervals rather than predicates and tracks no "
@@ -312,8 +306,8 @@ void TransactionManager::FinishCommitBody(Transaction& txn, wal::Lsn lsn,
     visibility_->PublishCommit(txn.id_, lsn);
     txn.active_ = false;
     PublishCoreBounds();
-    // **The marker lifts before the borrows go** (the AT-S5e review's C8),
-    // the order AO-R6 below states and the scope used to invert: a waiter
+    // **The marker lifts before the borrows go** (AT-S5e), the order AO-R6
+    // below states: a waiter
     // this release wakes on another core can mint a view at once - a
     // `CREATE ASSERTION` granted the relation mints its build's - and with
     // the marker still set that view is capped below this commit, reading
@@ -390,11 +384,9 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
         // oversight** (AO-R6). The append failed, so this transaction is
         // still active and may yet be rolled back; releasing its tenancies
         // now would admit another writer to rows this one can still undo.
-        // The caller owes an `Abort`, which releases them -
-        // `command_dispatcher.cpp`'s failed-commit path does exactly that
-        // and says why. The autocommit write scope does **not**, and
-        // already leaks the `Transaction` itself; AO-S3 inherits that as a
-        // borrow leak and owns fixing it.
+        // The caller owes an `Abort`, which releases them - the
+        // dispatcher's failed-commit path and the autocommit write scope's
+        // (`AbortOwnedScope`) both do.
         if (!committed.ok()) return committed.status();
         lsn = committed.value();
     }
@@ -581,7 +573,7 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
     // 2): its marker lifts first. Nothing will publish, so a view that now
     // covers the record's LSN finds the transaction in flight and then
     // absent - invisible either way - and the borrows below go after it, as
-    // at commit (the AT-S5e review's C8).
+    // at commit.
     txn.deferred_marker_.reset();
 
     // **In reverse**, and as ordinary logged page mutations - the shape
@@ -620,18 +612,16 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
     PublishCoreBounds();
     // The schema word before the borrows, as at commit: the compensations
     // above put a rolled-back DDL's catalog rows back, and a writer this
-    // release wakes must re-run through a boundary that sees them. The shape
-    // that made it load-bearing - a `DROP INDEX` undone here restoring an
-    // index a peer's memo had left out while the drop was open (the AT-S5e
-    // review's C1) - is gone since AX-S2 made that memo keep the index, and
-    // no cell now kills this line's removal (`known-gaps.md`, Testing).
+    // release wakes must re-run through a boundary that sees them. No cell
+    // kills this line's removal since AX-S2 made a peer's memo keep a
+    // dropped index (`known-gaps.md`, Testing).
     MoveSchemaWordIfCatalogWriter(txn);
     // And the borrows, last and for the same reason as at commit: the
     // compensations above have already put every page back, so a waiter
     // woken here reads the prior version rather than a half-undone one.
     if (locks_ != nullptr) locks_->Release(txn.id_, txn.borrows_);
-    // Undo pages are **not** freed; purge is a non-goal (section 9). Nor is
-    // this transaction's undo separable from anyone else's - one page holds
+    // Undo pages are **not** freed by rollback - the undo purge recycles
+    // them (`txn.md` §4.1). Nor is this transaction's undo separable from anyone else's - one page holds
     // many transactions' records (undo_log.hpp).
     return first_failure;
 }
@@ -759,6 +749,9 @@ StatusOr<std::uint64_t> TransactionManager::AppendUndo(Transaction& txn,
     fields.txn_prev_undo_ptr = txn.last_undo_ptr_;
     fields.pk = pk;
 
+    if (before_undo_append_for_test_) {
+        if (Status s = before_undo_append_for_test_(fields); !s.ok()) return s;
+    }
     auto ptr = undo_.Append(txn.id_, fields, image);
     if (!ptr.ok()) return ptr.status();
 

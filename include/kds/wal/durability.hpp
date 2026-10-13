@@ -7,11 +7,11 @@
 //
 // The rule it exists to enforce: a dirty page may be written to the data
 // file only once the log records describing its modifications are durable.
-// wal.md moved that from caller discipline into code - the per-core
-// BufferPool holds one of these and refuses to flush a frame until the
-// frame's page_lsn is durable - so the interface lives in its own header,
-// small enough that the storage layer can depend on it without depending
-// on the WAL implementation.
+// wal.md moved that from caller discipline into code - `BufferPool` and
+// `DevicePageStore` (its WAL gate) hold one of these and refuse to write a
+// frame back until its page_lsn is durable - so the interface lives in its
+// own header, small enough that the storage layer can depend on it
+// without depending on the WAL implementation.
 //
 // ---- LSN comparison is strict, and that is not an off-by-one ------------
 //

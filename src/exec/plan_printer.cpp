@@ -19,14 +19,10 @@ std::uint8_t StoredAccessKind(AccessKind kind) noexcept {
         case AccessKind::kRange: return 3;
         case AccessKind::kFilterScan: return 4;
         case AccessKind::kScan: return 5;
-        // 6, appended rather than inserted: these numbers are persisted in
-        // sys.access_stats, so a value here may never change meaning and a
-        // new kind takes the next free one however the enum is ordered.
+        // 6 onward appended rather than inserted: these numbers are
+        // persisted in sys.access_stats, so a value never changes meaning
+        // and a new kind takes the next free one however the enum is ordered.
         case AccessKind::kCabinProbe: return 6;
-        // Appended, and the numbers are what `sys.access_stats` stores - so
-        // this mapping is explicit rather than the enum's own values,
-        // precisely so a kind can be inserted where it reads best without
-        // silently re-labelling every row already on disk.
         case AccessKind::kIndexProbe: return 7;
         case AccessKind::kIndexRange: return 8;
     }
@@ -74,6 +70,7 @@ const char* PredicateKindName(parser::PredicateKind kind) noexcept {
         case parser::PredicateKind::kNotExists: return "NOT EXISTS";
         case parser::PredicateKind::kBetween: return "BETWEEN";
         case parser::PredicateKind::kCompareFunction: return "function";
+        case parser::PredicateKind::kBoolTree: return "bool";
     }
     return "?";
 }
@@ -136,6 +133,29 @@ std::string FormatFunctionPredicate(const FunctionPredicate& pred) {
     return head + " " + FormatFunctionSide(pred.rhs);
 }
 
+// A boolean conjunct (BU-S1), fully parenthesized so the printed tree is
+// the evaluated one whatever precedence a reader assumes.
+std::string FormatBoolPredicate(const BoolPredicate& pred) {
+    switch (pred.op) {
+        case BoolPredicate::Op::kCompare: return FormatPredicate(pred.compare);
+        case BoolPredicate::Op::kFunction: return FormatFunctionPredicate(*pred.fn);
+        // The step's sub-chain of that index, printed under it as `sub<i>`.
+        case BoolPredicate::Op::kSubChain: return "sub" + std::to_string(pred.sub_chain);
+        case BoolPredicate::Op::kNot: return "NOT (" + FormatBoolPredicate(pred.children.front()) + ")";
+        case BoolPredicate::Op::kAnd:
+        case BoolPredicate::Op::kOr: {
+            const char* word = pred.op == BoolPredicate::Op::kAnd ? " AND " : " OR ";
+            std::string out = "(";
+            for (std::size_t i = 0; i < pred.children.size(); ++i) {
+                if (i > 0) out += word;
+                out += FormatBoolPredicate(pred.children[i]);
+            }
+            return out + ")";
+        }
+    }
+    return "?";
+}
+
 std::string Indent(int depth) { return std::string(static_cast<std::size_t>(depth) * 2, ' '); }
 
 void PrintSubChain(std::ostringstream& os, const SubChain& sub, int depth, bool hoisted);
@@ -192,10 +212,16 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     for (const FunctionPredicate& pred : step.fn_residual) {
         os << Indent(depth + 1) << "filter fn " << FormatFunctionPredicate(pred) << '\n';
     }
+    for (const BoolPredicate& pred : step.bool_residual) {
+        os << Indent(depth + 1) << "filter bool " << FormatBoolPredicate(pred) << '\n';
+    }
     // Correlated by placement: a sub-chain attached to a step runs once per
-    // row that step accepts, which is the fact worth seeing next to it.
-    for (const SubChain& sub : step.sub_chains) {
-        PrintSubChain(os, sub, depth + 1, /*hoisted=*/false);
+    // row that step accepts, which is the fact worth seeing next to it. One a
+    // boolean conjunct reads (BU-S3) is named by the leaf that reads it.
+    for (std::size_t i = 0; i < step.sub_chains.size(); ++i) {
+        const SubChain& sub = step.sub_chains[i];
+        if (sub.in_tree) os << Indent(depth + 1) << "sub" << i << '\n';
+        PrintSubChain(os, sub, depth + (sub.in_tree ? 2 : 1), /*hoisted=*/false);
     }
 }
 
@@ -209,9 +235,9 @@ void PrintSubChain(std::ostringstream& os, const SubChain& sub, int depth, bool 
         os << " <- " << FormatColumnRef(sub.value);
     }
     // Stated rather than implied by the indentation: `hoisted` is the
-    // placement and `correlated` is the structural property, and an
-    // uncorrelated sub-chain sitting under a step (which cannot happen
-    // today) would be a compiler bug worth being able to see.
+    // placement and `correlated` is the structural property: an uncorrelated
+    // `IN`, a scalar, or a boolean conjunct's leaf (BU-S3) sits under a step
+    // and runs per row.
     os << (sub.correlated ? " [correlated]" : " [uncorrelated]") << '\n';
 
     // Hoisted first, the execution order: they run before this sub-chain's
@@ -265,13 +291,8 @@ std::string FormatPlan(const StepChain& chain) {
     //
     // **One line, after the steps and instead of the projection**, which is
     // where it sits in execution order: the chain produces rows and the
-    // fold consumes them. Printing it beside a projection an aggregated
-    // chain does not have would describe a statement that does not exist.
-    //
-    // A non-aggregated plan reaches none of this and its output is
-    // byte-identical to what it was before aggregation existed - which is
-    // the property AG08 is done when it has, and one the test checks
-    // rather than assumes.
+    // fold consumes them. A non-aggregated plan reaches none of this (AG08;
+    // a test pins it).
     if (chain.aggregated()) {
         const AggregateSpec& spec = *chain.aggregate;
         os << "aggregate keys=";
@@ -341,10 +362,7 @@ std::string FormatPlan(const StepChain& chain) {
     // After the projection, which is where it sits in execution order: the
     // dispatcher's emission quota gates formatted rows. `offset` before
     // `limit`, since rows are skipped before they are counted. Absent from
-    // an unlimited plan, whose output stays byte-identical to what it was
-    // before the tail existed - the property the fold line above keeps,
-    // kept again. (An aggregated chain never reaches here with one: the
-    // parser refuses the tail over aggregated output.)
+    // an unlimited plan.
     if (chain.limit.has_value() || chain.offset != 0) {
         os << "\nquota";
         if (chain.offset != 0) os << " offset=" << chain.offset;

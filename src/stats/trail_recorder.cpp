@@ -8,12 +8,8 @@ namespace kds::stats {
 bool TrailRecorder::WouldRecord(std::uint8_t sightings) const noexcept {
     // An instance waits for its second sighting. The first execution only
     // counts - which is what keeps a one-shot query from paying for a page
-    // write it will never read back (waystone-concpets.md section 9).
-    //
-    // This took an `origin` and answered `sightings >= 1` for a declared
-    // pattern until 2026-08-31, when the operator withdrew declared
-    // patterns: every pattern is observed now, so there is one threshold
-    // and it is this one.
+    // write it will never read back (waystone-concpets.md section 9). One
+    // threshold for every pattern since declared patterns went (2026-08-31).
     return sightings >= kAutoRecordThreshold;
 }
 

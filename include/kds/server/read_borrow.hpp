@@ -20,9 +20,9 @@
 // visibility passes through here - the snapshot decides what a reader sees,
 // as it always has (AN-S2) - and nothing about permission: this is a
 // position, published so that an operation which changes where a key lives
-// can wait for the reader rather than run out from under it. In M2 the one
-// such operation is DDL's relation `X` (AO-R12: no mover exists), which
-// meets this at the relation entry by the intention rule.
+// can wait for the reader rather than run out from under it. The one such
+// operation is DDL's relation `X` (AO-R12: no mover exists), which meets
+// this at the relation entry by the intention rule.
 //
 // **A read borrow never refuses a read and never makes one wait.** Every
 // ask is a non-queueing `TryAcquire`; a refused ask leaves the reader
@@ -40,13 +40,11 @@
 // **So the defence the bind-time ask gives is one-directional, and it is
 // stated as such.** Once the `IS` is *granted*, no DDL can take the
 // relation `X` until the statement ends - a reader that has resolved a
-// schema is not overtaken, which since AT-S1 covers a join's inner
-// relation, every subquery relation and a write's own relation, not only
-// the outermost walk. When the ask is
-// *refused* the DDL was there first,
-// and the three facts above are what make the reader's answer right; the
-// lock does not, and `ar0-5-amendment-uniformity.md` §8's "a stale parse
-// cannot be executed" is true of the first direction only (AT-7 item 10).
+// schema is not overtaken, for every relation it binds (AT-S1). When the
+// ask is *refused* the DDL was there first, and the three facts above, not
+// the lock, are what make the reader's answer right: "a stale parse cannot
+// be executed" (`ar0-5-amendment-uniformity.md` §8) is true of the first
+// direction only (AT-7 item 10).
 //
 // The cap is not special-cased for the same reason: `TryAcquire` refuses
 // at `max_locks_per_txn` and the reader carries on. The ledger holds one

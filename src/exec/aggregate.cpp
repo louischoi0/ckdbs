@@ -503,9 +503,8 @@ bool DecodeInt(std::string_view encoded, std::int64_t& out) {
     }
     // A decimal entry: tag, scale byte, then the unscaled integer - which
     // is exactly what the accumulator folds, so the scale byte is skipped
-    // rather than interpreted. This arm predates nothing: SUM(DISTINCT)
-    // over a decimal column always stored these entries, and a merge of one
-    // failed as "non-integer" until AVG's tests forced the question.
+    // rather than interpreted - SUM(DISTINCT) over a decimal column stores
+    // these entries, and a merge must read them.
     if (encoded.size() == 2 + sizeof(std::int64_t) && encoded[0] == kTagDecimal) {
         std::memcpy(&out, encoded.data() + 2, sizeof(out));
         return true;

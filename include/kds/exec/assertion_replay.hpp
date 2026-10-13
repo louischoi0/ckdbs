@@ -29,26 +29,18 @@
 // the type byte), which is general recovery's record, not an assertion one.
 // This fold assumes the envelope's page exists and is formatted.
 //
-// **Where replay starts** - decided, and still not this file's business.
-// A directory folded from records needs a durable base to fold onto, and
-// until 2026-08-11 nothing held one, so the fold would have had to start at
-// the cabin's birth. `assertion.md` **AS6a** settles it: the checkpoint
-// snapshots each cabin's group headers, every entry carries a `group_id` so
-// the header->entry linkage is rebuilt from the cabin's own pages, and replay
-// folds from the last checkpoint forward. `docs/workplan-wal-recovery.md`
-// RC07 builds that.
-//
-// **None of it changes this fold.** It was written correct for whatever
-// record range the caller feeds it, and AS6a decides the range - so RC07
-// supplies a base and a narrower range, and calls exactly what is here.
+// **Where replay starts** is the caller's (`assertion.md` AS6a): the
+// checkpoint snapshots each cabin's group headers, every entry carries a
+// `group_id`, and recovery (RC07) folds from the last checkpoint forward.
+// This fold is correct for whatever record range it is fed.
 //
 // ---- The skip rule --------------------------------------------------------
 //
 // A record whose assertion the context does not resolve is **skipped whole,
 // page half included**, and that is a correctness rule rather than lenience:
 // the one legitimate way an id becomes unknown is ASSERT_DROP further down
-// the stream, whose teardown freed the cabin's pages - so a later allocation
-// may have reused the envelope's page id, and touching it would corrupt an
+// the stream, and a dropped assertion's pages are no longer its own to
+// write - were they ever freed and reused, touching one would corrupt an
 // unrelated page. The context is where "unknown because dropped" and
 // "unknown because the catalog is gone" are told apart; this fold cannot.
 //

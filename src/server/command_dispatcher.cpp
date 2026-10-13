@@ -78,9 +78,8 @@ std::string_view Trim(std::string_view s) {
 }
 
 // Who a waiter is held by, in words (AO-S6e-b). A read borrow holds under
-// an id from a space of its own (`txn::kReadHolderBit`), so rendering it as
-// "transaction 9223372036854775809" would send an operator looking for a
-// transaction that does not exist and never did.
+// an id from a space of its own (`txn::kReadHolderBit`) and is no
+// transaction.
 std::string HolderName(std::uint64_t holder) {
     return txn::IsReadHolder(holder) ? std::string("a positioned reader")
                                      : "transaction " + std::to_string(holder);
@@ -101,17 +100,6 @@ bool IEquals(std::string_view a, std::string_view b) {
                       std::tolower(static_cast<unsigned char>(y));
            });
 }
-
-// CheckWhereQualifiers lived here from V06 to V17. It checked a qualified
-// WHERE column against the statement's one binding, and refused subquery
-// and column-on-the-right predicates - all three because the old
-// name-matching evaluator would have answered them *wrongly* rather than
-// failing.
-//
-// It is gone rather than kept: exec::CompilePredicates resolves the same
-// clause against the same relation and produces the same three answers,
-// and a second resolver is a second opinion about what a name means. The
-// one that stayed is the one execution actually uses.
 
 // Splits `line` into the first whitespace-delimited token and "the rest"
 // (trimmed), so multi-word commands like "SHOW META"/"FIND TABLE x" can
@@ -238,9 +226,7 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     // are read.
     {StatusCode::kFkViolation, "FK_VIOLATION retryable=0 "},
     // The third constraint spelling (docs/spec/assertion.md §4.4, AS9),
-    // shaped exactly like FK_VIOLATION and for its reason. Its spelling
-    // landed before its producer did, because a client written against it
-    // must not see the message arrive as a bare "ERR ..." in the meantime.
+    // shaped exactly like FK_VIOLATION and for its reason.
     {StatusCode::kAssertionViolation, "ASSERTION_VIOLATION retryable=0 "},
     // Statement shipping, this spelling's producer, retired (AT-S6); its
     // history is at cf889b63. The spelling stays because the wire pins it. Its own spelling
@@ -250,11 +236,9 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     // correct response is to read the data back - not to retry, which
     // against engine-issued primary keys would insert twice.
     {StatusCode::kUnknownOutcome, "UNKNOWN_OUTCOME retryable=0 "},
-    // The refusal pair (2026-08-31; status.hpp carries the test that
-    // separates them). Both are spelled, and spelled together, because the
-    // distinction only pays at the client: a bare `ERR ...`, which is what
-    // both wore until today, answers neither "can I rewrite this?" nor
-    // "should I ask a newer server?".
+    // The refusal pair (status.hpp carries the test that separates them),
+    // spelled because the distinction pays only at the client: "can I
+    // rewrite this?" versus "should I ask a newer server?".
     {StatusCode::kUnsupported, "UNSUPPORTED retryable=0 "},
     {StatusCode::kNotImplemented, "NOT_IMPLEMENTED retryable=0 "},
 };
@@ -291,19 +275,15 @@ Status StatusFromErrorReply(std::string_view reply) {
     // The bare arm. kInvalidArgument stands for every code that renders
     // bare - which is what makes this lossy, and harmless: `ErrorReply`
     // renders all of them identically, so the line the client is handed is
-    // the line the dispatcher wrote whichever of them it was. Two codes
-    // left this arm on 2026-08-31: kUnsupported and kNotImplemented come
-    // back as themselves.
+    // the line the dispatcher wrote whichever of them it was.
     return Status::InvalidArgument(std::string(reply));
 }
 
-// Whether a write is checked against a Bound Cabin - true as of AST07,
+// Whether a write is checked against a Bound Cabin - true since AST07,
 // whose enforcer runs in the three write paths. Still a conjunct rather
 // than a constant `1` in the replies, because enforcement also needs the
-// *registry* to hold the assertion: the entry pages survive a restart, the
-// directories do not (recovery replays AST05's records; recovery does not
-// exist), and an assertion whose directory is gone is not enforced however
-// true this constant is.
+// *registry* to hold the assertion: one the registry cannot enforce is not
+// enforced however true this constant is (`assertion.md` §6.1, §8.1).
 constexpr bool kWritePathEnforcesAssertions = true;
 
 sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* session,
@@ -311,11 +291,10 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
                                                sched::MonoTimeNs* statement_deadline_ns) {
     // ---- R6-5: D5's bounded wait on an undecided row --------------------
     //
-    // A writer of a row held by a transaction on this core that has not
-    // decided **blocks**, with a bounded ceiling ending in a named refusal
-    // - rather than being refused retryably up front, which would surface
-    // an engine-internal state to a client that can do nothing with it but
-    // spin. D5 ratified it; AO-S3 widened it to any undecided holder.
+    // A writer of a row held by an undecided transaction **blocks**, with a
+    // bounded ceiling ending in a named refusal, rather than being refused
+    // up front with an internal state it can only spin on (D5; any
+    // undecided holder since AO-S3, on any core since AX-S1).
     //
     // **The wait is on the statement, not on the row**, because there is
     // nowhere inside a write path to park: a conflict is found under a page
@@ -333,75 +312,43 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
     // reachable" true of a shape that would otherwise be a loop with a
     // bounded body.
     //
-    // **The discriminator is at the recording site, not here.**
-    // `CheckWriteConflictBlocking` notes a blocker only under `may_park_`
-    // and a live clock, which is exactly this path - so a blocker reaching
-    // here is one something can act on. The two tests below are the second
-    // line of that same rule rather than the thing that enforces it, and
-    // they are kept because what they guard is a dereference and a
-    // never-reached deadline (`NowNs()` answers 0 with no clock, so a
-    // deadline built from it would make the bounded wait unbounded).
+    // **The discriminator is at the recording site**: `CheckWriteConflictBlocking`
+    // notes a blocker only under `may_park_` and a live clock. The tests
+    // below repeat it because they guard a dereference and a deadline
+    // (`NowNs()` answers 0 with no clock, which would make the wait
+    // unbounded), and so the deadline never starts for a caller with
+    // nothing to wait on.
     //
-    // **The first conjunct is the callers' guard repeated, and it stays**
-    // (AO-S6d, a review suggestion declined with its reason). Both callers
-    // test it so the frame is only allocated where there is something to
-    // wait for; what this one additionally guards is the statement's
-    // deadline, which is taken below and would otherwise start running for
-    // a caller that had nothing to wait on.
     // **What the waiter is held by, in words** (AO-S6e-c). A pk of 0 is not
-    // a row: `kFirstRowId` is 1, so zero is a sentinel no key collides
-    // with, and it is what an assertion's admission records - the resource
-    // contended there is a *group*, and on the `INSERT` path the id is not
-    // issued at admission time. Written once and called three times, the
-    // third being the Debug line that printed "row id=0" until the review
-    // counted the sites.
+    // a row (`kFirstRowId` is 1): it is what an assertion's admission
+    // records, whose contended resource is a *group*.
     const auto held_name = [](std::uint64_t pk) {
         return pk != 0 ? "row id=" + std::to_string(pk)
                        : std::string("a bound assertion's group");
     };
     if (out->write_block.has_value() && txn_ != nullptr && clock_ != nullptr) {
-        // **The bound is a fault net, not a ceiling** (AO-R8). Before AO-S3
-        // this was `in_doubt_ceiling_ns_`, 200 ms, and reaching it was an
-        // ordinary outcome: the statement was refused after waiting, which
-        // is a refusal issued *after* the work was done and is worse than
-        // the refusal it replaced (AR2-R10). Now the wait ends when the
-        // holder decides, and this bound fires only when something is
-        // broken - logged as a fault below, never as a busy answer.
+        // **The bound is a fault net, not a ceiling** (AO-R8, AR2-R10): the
+        // wait ends when the holder decides, and this bound fires only when
+        // something is broken - reported as a fault below, never as busy.
         //
-        // **Taken once for the statement, not once per entry into this
-        // function** (AO-S6d, item 16). A foreign-key probe's resume can
-        // open a wait of its own, and a deadline re-taken there would make
-        // "bounded once" a property of an arm rather than of the statement
-        // - a shape whose total is the net times the number of rounds.
+        // **Taken once for the statement, not once per entry** (AO-S6d,
+        // item 16): a foreign-key probe's resume can open a wait of its own,
+        // and a re-taken deadline would multiply the net by the rounds.
         if (*statement_deadline_ns == 0) {
             *statement_deadline_ns =
                 NowNs() + lock_wait_fault_net_ns_;
         }
         const sched::MonoTimeNs deadline_ns = *statement_deadline_ns;
-        // **The waiter's identity for the wait-for graph** (AO-S4a). Only
-        // an explicit transaction can be in a cycle: an autocommit
-        // statement holds nothing when it parks, so nothing can be waiting
-        // for it and its edge would have no incoming half. Zero means "no
-        // edge", not "unknown".
+        // **The waiter's identity for the wait-for graph** (AO-S4a). Zero
+        // means "no edge": a statement holding nothing can be in no cycle.
+        // An explicit transaction holds rows, and so does an autocommit
+        // statement parked mid-walk (AO-S3b), whose open scope can be the
+        // other half of a cycle - a waiter the graph cannot name would be a
+        // deadlock only the fault net ends (AR2-R10).
         Session& waiting_session = session != nullptr ? *session : autocommit_session_;
-        // **AO-S3b: a mid-walk park holds rows even in autocommit**, which
-        // is what makes the sentence above no longer true of every waiter.
-        // Before this stage an autocommit statement's scope was unwound by
-        // `EndWrite` before this loop ran, so the waiter held nothing, no
-        // cycle could contain it and 0 was the honest identity. A statement
-        // parked *inside* its walk keeps its scope open with rows written
-        // into it: it can be the other half of a cycle, and a waiter the
-        // graph cannot name is a link no registration can close - a
-        // deadlock invisible to AO-S4a's detector and ended only by the
-        // fault net, which kills both waiters and is what AR2-R10 forbids.
-        //
-        // **Re-read every turn, because the identity can appear mid-loop.**
-        // An autocommit statement that met the held row before it had
-        // written anything is refused, re-run whole, and only *then* writes
-        // rows and parks mid-walk - so a value taken once, before the first
-        // wait, is 0 for the rest of a loop whose waiter has since become a
-        // holder. That is the invisible link this stage exists to remove,
-        // reintroduced by the caching alone.
+        // **Re-read every turn**: an autocommit statement refused before
+        // writing, re-run, can write rows and park mid-walk, so its identity
+        // appears mid-loop.
         const auto waiter_now = [&waiting_session]() -> std::uint64_t {
             if (const std::optional<Session::ParkedWrite>& parked =
                     waiting_session.parked_write();
@@ -514,38 +461,17 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
                                              std::to_string(block.trx_id)));
         }
         if (out->write_block.has_value()) {
-            // **The fault net fired, and that is not an outcome - it is a
-            // defect report** (AO-R8, AR2-R10 as AR2-A amends it). A wait
-            // that ends by clock reintroduces a refusal *after* the work
-            // was done, which is worse than the refusal it replaced, so
-            // reaching here means something is broken rather than busy:
-            // before AO-S4a, a cycle nobody detected; after it, a detector
-            // that missed one, or a holder that is genuinely stuck.
-            //
-            // The refusal is still `TxnConflict`, because `IsRetryable`
-            // admits exactly that code and a client's retry loop reads the
-            // wire bit it sets - and deliberately **not** `UnknownOutcome`,
-            // which would tell a client to read its data back when this
-            // statement plainly did nothing. What changed at AO-S3 is the
-            // message: it names the net, so an operator meeting it looks
-            // for the fault instead of concluding the row was busy.
+            // **The fault net fired: a defect report, not an outcome** (AO-R8,
+            // AR2-R10 as AR2-A amends it) - a detector that missed a cycle, or
+            // a holder that is stuck. `TxnConflict` because `IsRetryable`
+            // admits exactly that code, and **not** `UnknownOutcome`: this
+            // statement plainly did nothing. The message names the net.
             const DispatchOutcome::WriteBlock block = *out->write_block;
             const std::string held = held_name(block.pk);
-            // **And what reaching it means is not the same sentence for a
-            // group** (the AO-S6e-c review's B3). For a *row* the net is a
-            // defect report, and AO-R8's wording says so. A bound
-            // assertion's group is far coarser - every writer touching one
-            // account serialises on it - so a holder that keeps one for
-            // longer than the net is ordinary contention, and a re-run that
-            // meets a *new* reserver each turn spends the statement's one
-            // deadline on honest churn with nobody stuck at all. Telling
-            // that operator to look for a stuck holder would be the
-            // convenient sentence rather than the true one.
-            //
-            // **What this does not decide**: whether a group wait should
-            // carry a shorter bound of its own. That interacts with AO-R8's
-            // one-net-per-statement rule and is AO-S7's, beside the prices;
-            // AO-0 item 22 records it.
+            // **For a bound assertion's group it means contention, not a
+            // defect** (AO-S6e-c): every writer touching one group serialises
+            // on it, so the message says so. Whether a group wait should have
+            // a shorter bound of its own is undecided (AO-0 item 22).
             const std::string why =
                 block.pk != 0
                     ? std::string(
@@ -571,15 +497,12 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
 sched::Coro CommandDispatcher::AwaitStatementWaits(std::string_view line, Session* session,
                                                    DispatchOutcome* out,
                                                    sched::MonoTimeNs* statement_deadline_ns) {
-    // **One loop over both waits, not two arms** (the AO-S6e-a review's
-    // C3). Each wait's re-run is a whole fresh statement and can meet what
-    // the other waits for: a relation-lock re-run can meet a held row, and
-    // a write-block re-run can meet a relation a DDL took while it waited.
-    // Two sequential arms answer the second of those with a refusal the
-    // first would have waited out - which is item 16's defect, on a new
-    // pair. Both waits are deadline-bounded and both clear their own field
-    // on every exit, so the loop ends when neither is set. One function, so
-    // the first dispatch and a foreign-key probe's resume cannot diverge.
+    // **One loop over both waits** (AO-S6e-a): each re-run is a fresh
+    // statement and can meet what the other waits for, so two sequential
+    // arms would refuse what a wait could get past (item 16). Both waits
+    // are deadline-bounded and clear their own field on every exit. One
+    // function, so the first dispatch and a foreign-key probe's resume
+    // cannot diverge.
     for (;;) {
         if (out->write_block.has_value()) {
             co_await AwaitWriteBlock(line, session, out, statement_deadline_ns);
@@ -618,17 +541,11 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     // deliberately withheld the poison so this wait could happen at all.
     //
     // **What is waited on is the slot, not the holder's decide.** The
-    // holder here may be a read borrow, which is no transaction: no
-    // in-flight table holds its id, so `IsInFlight` is false from the
-    // first poll - a re-run per reactor iteration for the length of the
-    // reader's statement. Where it is a transaction the slot is still the
-    // better wait: it flips at the release, where a poll would re-run in
-    // the gap between the holder's retire and its release. The slot is flipped by the release itself, from whichever
-    // core releases, and the kick that follows it is AU-S2's.
-    // `locks_` and the slot are non-null by construction: this field is
-    // set only where a `TryAcquire` asked for a wake and got one, which
-    // needs both. Not re-tested: a guard on a state that cannot occur reads
-    // as evidence that it can.
+    // holder may be a read borrow, which no in-flight table holds, and for
+    // a transaction the slot flips at the release rather than the retire.
+    // The release flips it from whichever core releases; the kick is
+    // AU-S2's. `locks_` and the slot are non-null by construction: the
+    // field is set only where a `TryAcquire` asked for a wake and got one.
     const DispatchOutcome::LockWait wait = *out->lock_wait;
     out->lock_wait.reset();
 
@@ -698,16 +615,11 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
                                    std::to_string(wait.key.rel_oid) + ", held by " +
                                    HolderName(wait.holder));
         }
-        // **The poison `EndWrite` withheld for the sake of this wait**, and
-        // this is the one exit that has to restore it. The victim arm gets
-        // it from `RefuseParkedWrite`; a re-run's own failure gets it from
-        // `EndWrite`, `lock_wait_` being empty by then. Here the wait ended
-        // in the refusal the ask produced and nothing else runs, so without
-        // this the transaction whose statement failed stays usable and
-        // commits - which is §6's failure atomicity broken by a wait that
-        // was supposed to be invisible when it worked.
-        // Not for a statement that poisons nothing when it fails - a
-        // `CREATE ASSERTION`'s build (the AT-S5e review's C6).
+        // **The poison `EndWrite` withheld for this wait**, restored at the
+        // one exit nothing else restores it on (the victim arm has
+        // `RefuseParkedWrite`, a re-run `EndWrite`); without it the failed
+        // transaction would commit (§6's failure atomicity). Not for a
+        // statement that poisons nothing - a `CREATE ASSERTION`'s build.
         if (waiting_session.in_explicit_txn() && wait.poisons) waiting_session.Poison();
         co_return Status::OK();
     }
@@ -763,15 +675,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // the synchronous half, which takes no suspension point, so it never
     // spans a park and never describes another statement.
     {
-        // **RAII since AO-S6d.** A leaked `may_park_` grants a parking
-        // allowance. The window below provably takes no suspension point -
-        // `DispatchAndStage` is not a coroutine, and nothing in this file
-        // pumps a scheduler - so a hand-placed pair would be correct today
-        // and silently wrong the day an early `co_return` or a `co_await`
-        // appears between them. AO-S6d added a third `may_park_` window,
-        // inside a loop and beside a `co_await`, which is that day
-        // arriving; the guard makes the property structural rather than
-        // reviewed.
+        // **RAII** (AO-S6d): a leaked `may_park_` grants a parking
+        // allowance, and the guard keeps that structural should a
+        // `co_return` or `co_await` ever appear inside a window.
         const MayParkScope parking(*this, /*allowed=*/true, statement);
         *out = DispatchAndStage(line, session);
     }
@@ -803,11 +709,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // never does). A statement that wrote rows first keeps today's refusal
     // (`txn.md` §9: no statement-level rollback) - `EndWrite` clears the
     // note for it. No B-link move-right (BA-Q10).
-    while (out->status.code() == StatusCode::kTxnConflict &&
-           storage::StructuralRefusalNoted() && txn_ != nullptr && clock_ != nullptr) {
-        if (statement_deadline_ns == 0) statement_deadline_ns = NowNs() + lock_wait_fault_net_ns_;
-        if (NowNs() >= statement_deadline_ns) break;
-        Contention::Add(Tally::kStructuralReruns);
+    while (StructuralRerunDue(*out, statement_deadline_ns)) {
         co_await sched::Yield{};
         {
             const MayParkScope parking(*this, /*allowed=*/true, statement);
@@ -903,6 +805,18 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     co_return Status::OK();
 }
 
+bool CommandDispatcher::StructuralRerunDue(const DispatchOutcome& out,
+                                           sched::MonoTimeNs& deadline_ns) {
+    if (out.status.code() != StatusCode::kTxnConflict || !storage::StructuralRefusalNoted() ||
+        txn_ == nullptr || clock_ == nullptr) {
+        return false;
+    }
+    if (deadline_ns == 0) deadline_ns = NowNs() + lock_wait_fault_net_ns_;
+    if (NowNs() >= deadline_ns) return false;
+    Contention::Add(Tally::kStructuralReruns);
+    return true;
+}
+
 CommandDispatcher::StatementEpochScope::StatementEpochScope(CommandDispatcher& dispatcher)
     : d_(dispatcher) {
     const bool outermost = d_.epoch_depth_++ == 0;
@@ -938,19 +852,12 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // revalidation, for as long as the statement runs.
     const StatementEpochScope epoch(*this);
     // **This statement runs as this dispatcher's core** (AM-S2 step 3,
-    // `base/current_core.hpp`). On a reactor thread it is what
-    // `Scheduler::RunOnce` already declared and this costs a redundant
-    // store; off one - a fixture driving several cores' dispatchers from the
-    // test thread - it is the only thing that makes the identity true, and
-    // the identity is written to *disk*: `StampPageLsn` records the core
-    // beside the page_lsn, a diagnostic (`page_header.hpp`). Measured before
-    // it was here: 6,250 stamps in the suite carried
-    // the wrong core, all of them from fixtures, none from `ExpeditorTest`'s
-    // real instance.
-    //
-    // One statement is one core's work by construction - the dispatcher
-    // belongs to a core and a statement never migrates - so this is the
-    // seam, rather than a guard at each of the sites that stamp.
+    // `base/current_core.hpp`). On a reactor thread it repeats what
+    // `Scheduler::RunOnce` declared; off one - a fixture driving several
+    // cores' dispatchers from the test thread - it is what makes the
+    // identity true for its readers (the page store's per-core WAL gate,
+    // the lock table's waiter core, the WAL manager's owner check). One
+    // statement is one core's work, so this is the seam.
     const CurrentCoreGuard as_this_core(core_id_);
 
     // Read only when something might report it; a dispatcher with no
@@ -1013,7 +920,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // where the statement is not re-runnable, so a value here means "this
     // statement wrote nothing and a wait could get it past".
     //
-    // **Never beside a relation wait** (the AT-S5e review's C4): a
+    // **Never beside a relation wait** (AT-S5e): a
     // statement can record a busy parent's writer before it asks its
     // relation `IX`, and a write-block re-run would overwrite the outcome
     // and drop the relation's wake without a `DropWake`. The relation
@@ -1162,7 +1069,22 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
             std::this_thread::yield();
         }
     }
-    DispatchOutcome outcome = DispatchAndStage(line, session);
+    // `DispatchAsync`'s BA-S14 re-run, blocking: a structural refusal of a
+    // statement that wrote nothing is run again after a yield, under the
+    // fault net, and the poison withheld for it is owed by whatever ends the
+    // re-runs. Without it this path answered a refusal no client of the
+    // server sees.
+    DispatchOutcome outcome;
+    {
+        const RerunScope rerunning(*this);
+        outcome = DispatchAndStage(line, session);
+        sched::MonoTimeNs deadline_ns = 0;
+        while (StructuralRerunDue(outcome, deadline_ns)) {
+            std::this_thread::yield();
+            outcome = DispatchAndStage(line, session);
+        }
+    }
+    if (outcome.poison_withheld) (session != nullptr ? *session : autocommit_session_).Poison();
     if (outcome.pending_lsn == wal::kNoLsn) return outcome;
 
     // Inline, on this thread: the batch is whatever happened to be staged
@@ -1359,8 +1281,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // the catalog's pages under the page latch, the DDL's own relation `X`
     // (AO) keeps a statement from being overtaken, and the schema word
     // (AT-S2) carries the change to every other core's memo. §5d's purge
-    // gate rests on AN-S2's instance-wide predicate, the sweep's single core
-    // being a placement so that two do not walk the same chains
+    // runs on core 0's tick (BP-S4), gated on `ResolvedForEveryReader`
     // (`ddl-transactional.md` §5d, `catalog.md` CT6). A write's admission
     // asks `CheckWriteAdmission`'s one assertion question, and what keeps
     // two cores off one page's bytes is the page latch.
@@ -1710,53 +1631,23 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " undo_pages_recycled=" << txn_->undo().PagesRecycled();
     }
 
-    // **The device syncs this core performed** (XD0,
-    // `instructions/v2.7.1/measurement-xd.md`). Read-only surfacing of two
-    // counters that already increment - `WalStats::syncs` at
-    // `src/wal/manager.cpp:110` and `WalWriter::syncs_` at
-    // `src/wal/writer.cpp:98` - so no atomic and no path is added, and
-    // `cores = 1` behaves exactly as before.
+    // **The device syncs, read off counters that already increment** (XD0,
+    // `instructions/v2.7.1/measurement-xd.md`; no atomic and no path added).
     //
-    // **`wal_syncs` is the total, and it is not the writer's number.** The
-    // order that asked for this said "from `Writer::syncs()`"; the source
-    // says otherwise, and the reading would have been ~0 on every cell it
-    // was wanted for. `WalManager::Sync()` performs every sync a caller is
-    // parked on - a commit's, a client `SYNC`, the checkpoint gate - on
-    // the reactor itself, and only D3's loss-window tick is handed to the
-    // writer thread (`manager.cpp`'s `DrainOnce`).
-    // A peer core starts no writer thread of its own (`expeditor.cpp` does,
-    // for core 0 alone), so its `writer_syncs()` is structurally zero.
+    // `wal_syncs` is the total: the manager's own syncs plus the writer
+    // thread's. Under one stream a peer performs none - it flushes through
+    // core 0's stream and waits on core 0's writer - so its `wal_syncs` and
+    // `wal_interval_syncs` are structurally 0 (AR0 M0) and the instance's
+    // sync cost reads on core 0. `wal_sync_failures` is not: a peer's flush
+    // of the shared ring and its wait on the writer can fail, and a failed
+    // wait counts on core 0 too.
     //
-    // **Under one stream a peer's `wal_syncs` and `wal_interval_syncs` are
-    // structurally 0** (AR0 M0). It performs no device sync: it flushes
-    // through core 0's stream and waits on core 0's writer, so every
-    // `fdatasync` this instance pays is counted on core 0. Its interval
-    // count is 0 because the loss window belongs to the log, which has one
-    // drain bounding it (`manager.cpp`'s `DrainOnce`). So the reading rule
-    // below holds on a peer trivially: nothing was performed and nothing
-    // was waited on *here*, and a peer's durability cost is read as core
-    // 0's writer count rising.
-    //
-    // **`wal_sync_failures` is the exception and is not structurally 0.** A
-    // peer's flush of the shared ring can fail, and so can its wait on the
-    // writer; both are counted here. A failed wait is counted on core 0
-    // too, so that one field is the one place a peer and core 0 both
-    // report the same event.
-    //
-    // Hence three fields, and the middle one is the **interval** tick
-    // rather than the writer's count, so one reading rule holds on every
-    // core: `wal_syncs - wal_interval_syncs` is the part somebody was
-    // parked on. `interval_syncs` increments on both of D3's paths -
-    // handed to the writer (`manager.cpp:250`) and taken inline where
-    // there is no writer (`:256`) - where the writer's own count is
-    // structurally 0 on every peer and would read there as *"every sync
-    // was waited on"* when under `relaxed` none was.
-    //
-    // The one drift, stated because a row will divide by these: on core 0
-    // `interval_syncs` counts *requests* and the writer counts
-    // *completions*, so the two differ by the sync in flight and by any
-    // pair the writer coalesced (it reads `requested_` once per wake,
-    // `writer.cpp:66-73`). Bounded and small; a peer has neither term.
+    // `wal_interval_syncs` counts D3's loss-window ticks on both arms
+    // (handed to the writer, or inline where there is none), so one rule
+    // holds on every core: `wal_syncs - wal_interval_syncs` is the part
+    // somebody was parked on. On core 0 the interval count is *requests*
+    // and the writer's *completions*, so they differ by the sync in flight
+    // and any pair the writer coalesced - bounded and small.
     //
     // Absent where the dispatcher has no WAL - the absent-rather-than-
     // zeroed rule - which is an in-process dispatcher, never a served core.
@@ -1782,18 +1673,10 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                << " wal_remove_failures=" << wal_->recycle_failures();
         }
 
-        // **How many commits this core's fsyncs are amortised over**
-        // (AF-T5's §3b finding). D2's whole mechanism is that one sync
-        // resolves a batch, and `kds.conf.sample` states the edge case that
-        // makes it matter: *"a batch of one is a batch"*. A core serving one
-        // committing session has no partner to batch with and pays a sync
-        // per commit, and AF-T5 measured that as **2.35x on a load phase**
-        // against a placement that gave each core two committers.
-        //
-        // **This is the number, and a session count is not.** The obvious
-        // reading of "how many sessions is this core committing for" is a
-        // count of attached sessions, and the topology the fact was found on
-        // inverted it. The batch is the fact; the session count is a proxy.
+        // **How many commits this core's fsyncs are amortised over** (AF-T5):
+        // one sync resolves a batch, and a core with one committing session
+        // pays a sync per commit (`kds.conf.sample`: "a batch of one is a
+        // batch"). The batch is the fact; a session count is only a proxy.
         //
         // Printed as the two counters plus their quotient rather than the
         // quotient alone: an operator reading a live server needs to see
@@ -1965,9 +1848,11 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
             os << " load_c" << k << "_waited_" << kLatchKindNames[i] << "_us=" << ns / 1000;
         }
         // BQ-S1's per-core share of the stream latch: the drain's part of
-        // `_waited_wal_stream_us`, and the waits a segment roll covered.
+        // `_waited_wal_stream_us`, and the waits a segment roll covered;
+        // BM-S1's window lookups (`LookupCommit`, a scan beside a writer's
+        // per-row question among them).
         for (const Tally t : {Tally::kWalDrainLatchWaitNs, Tally::kWalRollBlockedWaits,
-                              Tally::kWalRollBlockedWaitNs}) {
+                              Tally::kWalRollBlockedWaitNs, Tally::kWindowLookups}) {
             const std::uint64_t v = r(c.tallies[static_cast<std::size_t>(t)]);
             if (v == 0) continue;
             os << " load_c" << k << '_' << kTallyNames[static_cast<std::size_t>(t)] << '='
@@ -2016,11 +1901,9 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                << " recovery_undo_us=" << recovery_->timings.undo_ns / 1000
                << " recovery_checkpoint_us=" << recovery_->checkpoint_ns / 1000;
         }
-        // RV3 closed 2026-08-19: catalog mutations log the ordinary record
-        // types, DDL runs under a real transaction, and redo/undo restore
-        // catalog pages like any page - so `catalog_recovered` flips to 1.
-        // `relations_missing_pages` stays as the audit: it counted the gap
-        // while it existed, and a zero from here on is the proof it closed.
+        // Catalog mutations log the ordinary record types and DDL runs under
+        // a real transaction (RV3), so `catalog_recovered` is 1;
+        // `relations_missing_pages` stays as the audit, and reads 0.
         os << " recovery_relations_checked=" << recovery_->relations_checked
            << " recovery_relations_missing_pages=" << recovery_->relations_missing_pages
            << " catalog_recovered=1"
@@ -2030,17 +1913,10 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            // mount ended - cleanly or not - with marks some reader or a
            // crash kept the §5d purge from retiring.
            << " catalog_marks_finalized=" << recovery_->catalog_marks_finalized
-           // DT7 made these transactional; RV3 (2026-08-19) made them
-           // durable - a committed DDL survives a crash by redo, an
-           // uncommitted one is rolled back by the undo records the
-           // catalog's hook appends. The pair finally reads as one true
-           // statement.
-           //
-           // `drop-index` rejoined the list on 2026-08-18 (DT9). It was in
-           // it, came out when the statement was refused inside a
-           // transaction, and is back because the refusal was withdrawn -
-           // which is the whole reason this is a list of statement names
-           // and not a bare `=1`.
+           // Transactional (DT7) and durable (RV3): a committed DDL survives
+           // a crash by redo, an uncommitted one is rolled back by the
+           // catalog hook's undo records. A list of statement names rather
+           // than `=1`, so a statement that leaves it can be seen to.
            << " ddl_transactional=create-table,drop-table,create-index,drop-index"
            << " ddl_durable=1";
         // RC07: what the mount could resume enforcing, and the honest
@@ -2108,12 +1984,8 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
         return {ErrorReply(rows.status()), false, 0, rows.status()};
     }
 
-    // A `name=` column stood here until 2026-08-31, joined in from
-    // `sys.pattern_defs` by pattern_id so a *declared* pattern printed its
-    // name instead of a bare hash. The operator withdrew declared patterns
-    // and the relation is gone, so every pattern prints as hex - which is
-    // exactly what an auto-registered one always did, since a pattern
-    // observed from traffic has no name to print.
+    // Every pattern prints as hex: declared patterns, the only named ones,
+    // were withdrawn on 2026-08-31.
     //
     // Same one-line-per-response contract as DESCRIBE and SHOW PAGE: a
     // count line, then one "\n"-escaped section per pattern, never a raw
@@ -2132,10 +2004,8 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
 
         // Origin and pinning are separate fields and are printed
         // separately, which is how the row stores them (rows.hpp). Both
-        // read the same on every row today - `auto` and `no` - because
-        // withdrawing declared patterns took away the only writer of
-        // kOriginUser and of kPatternPinned; the fields stay on disk and
-        // this prints what they hold rather than what it assumes. `uses`
+        // read `auto` and `no` on every row since declared patterns, their
+        // only writer, were withdrawn; this prints what they hold. `uses`
         // and `last_seen` likewise read 0 since BL-S4's ruling 1 deleted
         // their writer (rows.hpp).
         os << " origin=" << (row.origin == catalog::kOriginUser ? "user" : "auto")
@@ -2443,8 +2313,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
             return {"ERR CREATE TABLE requires a name", false};
         }
         // AF-T3: the same qualifier the SQL form takes, so `CREATE TABLE
-        // orders.t` means one thing on both surfaces. Before this it meant
-        // a relation literally called "orders.t".
+        // orders.t` means one thing on both surfaces.
         const auto [qualifier, name] = SplitQualifiedArg(args);
 
         // Before the collision check, for `HandleCreateTableSql`'s reason:
@@ -2526,12 +2395,10 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
     // summary line, then one "\n"-escaped section per column, never a raw
     // newline byte.
     // PW2-3: the row's desc_page_id is the CREATE-time root; the current
-    // one lives in the anchor. Read directly, not through InitTableAccess
-    // (the 96b0343 review's C5): DESCRIBE resolves its name through the
-    // session's view, and filling the unfiltered shared cache from a
-    // view-filtered read is DT3's rule broken sideways - and an anchor
-    // Corruption should reach the operator on the one surface they
-    // diagnose with, not be swallowed by a fallback.
+    // one lives in the anchor. Read directly, not through InitTableAccess:
+    // DESCRIBE resolves its name through the session's view, and filling
+    // the unfiltered shared cache from a view-filtered read breaks DT3 -
+    // and an anchor Corruption should reach the operator, not a fallback.
     PageId current_root = table_row.value().desc_page_id;
     if (table_row.value().anchor_page_id != kInvalidPageId) {
         auto anchor = page_store_.GetForRead(table_row.value().anchor_page_id);
@@ -2572,10 +2439,9 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
     // describable schema, and refusing the whole command over it would
     // remove the tool at the moment it is needed.
     if (table_row.value().clustered_type == catalog::ClusteredType::kBtree) {
-        // current_root, not the row: post-PW2-3 the row is the CREATE-time
-        // root, and a height computed from a superseded interior page would
-        // contradict the root printed two fields up (the f5686f8 review's
-        // C7).
+        // current_root, not the row: since PW2-3 the row is the CREATE-time
+        // root, and a height from a superseded page would contradict the
+        // root printed two fields up.
         auto height = btree::BtreeHeight(page_store_, current_root);
         auto leaves = btree::BtreeLeafCount(page_store_, current_root);
         os << " height=" << (height.ok() ? std::to_string(height.value()) : std::string("?"))
@@ -2656,8 +2522,7 @@ namespace {
 // The one spelling of a successful CREATE INDEX (docs/spec/client-manual.md).
 // `entries=0` is a literal the manual documents, and the backfill over a
 // populated relation makes it false; it stays until the field is dropped or
-// counted - either is client-visible, so neither is done in passing (the
-// PW1c-6b-3 review's finding).
+// counted - either is client-visible, so neither is done in passing.
 std::string CreatedIndexReply(std::string_view name, std::string_view table,
                               catalog::Oid index_oid, PageId root, std::uint16_t key_width,
                               std::uint16_t entry_width, const std::vector<std::string>& warnings) {
@@ -2734,9 +2599,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             // relation `X` above keeps it from writing until the drop
             // decides, and the decide moving the schema word before it
             // releases (`Transaction::NoteWroteCatalog`) makes it re-resolve
-            // against whichever way the drop went. While the predicate was
-            // core-local a rollback's woken writer without that move kept a
-            // memo that had left the index out (the AT-S5e review's C1).
+            // against whichever way the drop went.
             DdlScope ddl = DdlScopeFor(scope);
             catalog::CatalogRowChange change;
             auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
@@ -2785,12 +2648,9 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
 }
 
 DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
-    // **Reclassified 2026-08-16.** This was grouped with the diagnostic
-    // surfaces, which answer "what does this instance hold". It does not:
-    // it answers "which indexes exist", a schema question, and every
-    // schema route has to give one answer (DT3c's rule). Grouping it with
-    // `SHOW ACCESS` made an uncommitted `DROP INDEX` visible to everyone
-    // while the rest of the catalog hid it.
+    // **A schema question, read under the session's view** (DT3c): "which
+    // indexes exist" must give the answer every schema route gives, so an
+    // uncommitted `DROP INDEX` stays hidden from other sessions.
     const std::optional<txn::ReadView> view = ViewFor(session);
     auto rows = catalog_.ListIndexes(view.has_value() ? &*view : nullptr);
     if (!rows.ok()) {
@@ -2843,9 +2703,9 @@ DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
             write_columns("covering", row.covered_cols.data(), row.ncovered);
         }
 
-        // The anchored root, not the row's: post-PW2-3 the sys.indexes row
-        // is CREATE-fixed and the access entry resolved the current root
-        // through the anchor (the f5686f8 review's C7).
+        // The anchored root, not the row's: since PW2-3 the sys.indexes row
+        // is CREATE-fixed and the access entry resolves the current root
+        // through the anchor.
         PageId shown_root = row.root_page_id;
         if (access.ok()) {
             for (const auto& ref : access.value()->indexes) {
@@ -2879,10 +2739,8 @@ DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
 }
 
 DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
-    // H6 step 2: the parse leg. One of `observability.md` §10's three
-    // request-level spans, and the cheapest to attribute wrongly - a
-    // statement that is slow to *parse* looks identical from outside to
-    // one that is slow to run.
+    // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
+    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
     auto parsed = [&] {
         stats::SpanScope span(trace_, stats::Layer::kParse);
         return parser::Parse(line);
@@ -2944,10 +2802,8 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
 
 DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
                                                Session& session) {
-    // H6 step 2: the parse leg. One of `observability.md` §10's three
-    // request-level spans, and the cheapest to attribute wrongly - a
-    // statement that is slow to *parse* looks identical from outside to
-    // one that is slow to run.
+    // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
+    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
     auto parsed = [&] {
         stats::SpanScope span(trace_, stats::Layer::kParse);
         return parser::Parse(line);
@@ -3033,10 +2889,8 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
 DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                                    Session& session) {
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
-        // H6 step 2: the parse leg. One of `observability.md` §10's three
-    // request-level spans, and the cheapest to attribute wrongly - a
-    // statement that is slow to *parse* looks identical from outside to
-    // one that is slow to run.
+        // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
+    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
     auto parsed = [&] {
         stats::SpanScope span(trace_, stats::Layer::kParse);
         return parser::Parse(line);
@@ -3106,19 +2960,13 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
 
         // ---- AO-S6e-b: the relation `X`, and what waits for what --------
         //
-        // Taken **after** the RESTRICT checks and before the first catalog
-        // write: a drop refused for a foreign key or an assertion is
-        // refused whether or not anybody is reading, and waiting first
-        // would make a client wait to be told something the catalog knew
-        // at once.
-        //
-        // What this buys is stated in `drop-table.md` DT7 rather than
-        // implied here: a reader **already positioned** in the relation
-        // finishes its statement against a live schema instead of meeting
-        // the post-park re-bind's clean error. It does not make the drop
-        // isolated - a read refused its borrow reads on, safe because the
-        // pages are not freed while it runs (DT1's statement epoch), which
-        // is `ddl-transactional.md` §5a unchanged.
+        // Taken **after** the RESTRICT checks, so a refusal the catalog
+        // knows at once is not waited for, and asked again under the `X`
+        // (BF). What it buys is `drop-table.md` DT7's: a reader already
+        // positioned finishes against a live schema. It does not make the
+        // drop isolated (`ddl-transactional.md` §5a): a read refused its
+        // borrow reads on, safe because no page is freed while a statement
+        // that could have bound the relation runs (the statement epoch).
         if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, oid.value());
             held.has_value()) {
             return {ErrorReply(*held), false, 0, *held};
@@ -3170,9 +3018,8 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
 // One handler for both, as the parser has one production: they differ only
 // in which catalog call they reach. Under `InDdlStatement` like every other
 // DDL route, so the one `sys.objects` row this writes is on a real
-// transaction's trail and a crash mid-statement has a loser to roll back -
-// which matters more here than it looks, because AF-T2 makes the namespace
-// the thing that decides where every relation in it will live.
+// transaction's trail and a crash mid-statement has a loser to roll back.
+// The namespace's declared affinity is read by nothing (D18, NS10).
 DispatchOutcome CommandDispatcher::HandleNamespace(std::string_view line, Session& session) {
     parser::Parser parser(line);
     auto parsed = parser.Parse();
@@ -3320,7 +3167,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     } build_lock;
     if (locks_ != nullptr && txn_ != nullptr) {
         // **The session's own transaction is tested first**, by what it holds
-        // rather than by who the table reports (the review's C7): with it and
+        // rather than by who the table reports: with it and
         // another writer both holding the relation, the table may name the
         // other, and waiting for it would end in the same refusal.
         const txn::Transaction* own = session.transaction();
@@ -3372,18 +3219,18 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
         return {ErrorReply(created.status()), false, 0, created.status()};
     }
     const exec::AssertionDdlResult& result = created.value();
-    // After the adoption, deliberately (the review's asymmetry note): a
+    // After the adoption, deliberately: a
     // sync failure then answers ERR with the live registry still enforcing
     // what the log already holds - over-enforcing until the operator
     // retries, where the other order left a durably created constraint
     // unenforced on the running instance.
     if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
 
-    // Truthful now in the other direction: the check runs (AST07), so a
-    // freshly created assertion **is** enforcing - and says so: a create
-    // that returns was adopted inside `CreateAssertion` (AZ-S2). After a
-    // restart the catalog row survives and this registry does not, so SHOW
-    // derives its answer from the registry instead.
+    // A freshly created assertion **is** enforcing (AST07): a create that
+    // returns was adopted inside `CreateAssertion` (AZ-S2). SHOW derives
+    // its answer from the registry, because after a restart the row can
+    // outlive enforcement - a mount that finds no whole snapshot run
+    // brings the assertion up unenforcing (AY-S8, `assertion.md` §8.1).
     std::ostringstream os;
     os << "CREATED ASSERTION name=" << stmt.name
        << " assertion_id=" << result.assertion_id << " on=" << stmt.table_name
@@ -3815,7 +3662,7 @@ namespace {
 
 // The Keystone id an integer value names, or nothing when it names none: an
 // id is in [kFirstRowId, kMaxKeystoneId] (invariant 11), so a negative value,
-// zero (`-0` too), a value past 2^40 - 1, and a literal past int64 (a uint64
+// zero (`-0` too), a value past 2^48 - 1, and a literal past int64 (a uint64
 // above INT64_MAX among them, whose `int_val` has wrapped - `2^64 + 5` must
 // not read as 5) are none. The one answer for a named pk (`OutOfRange`,
 // BD-R5) and a foreign-key value (an absent parent, `FK_VIOLATION`, not
@@ -3894,21 +3741,16 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
                                                 &budget_, &busy_trx);
         if (!verdict.ok()) return verdict.status();
 
-        // **Busy under a granted `S` is a writer the lock table does not
-        // know**, which is a dispatcher built without one: every writer of a
-        // row holds its `X` (AO-S6a), and the `S` above would have been
-        // refused. There `NoteBlockingWriter`'s `IsInFlight` poll is AO-S3's
-        // wait, unchanged. With a table the busy verdict stands and refuses
-        // the statement retryably, which is the defensive answer to a state
-        // the table rules out.
+        // **Busy under a granted `S` means no lock table**: every writer of
+        // a row holds its `X` (AO-S6a), which would have refused the `S`.
+        // Without a table the `IsInFlight` poll is the wait (AO-S3); with
+        // one the busy verdict refuses retryably, defensively.
         if (verdict.value() == exec::FkVerdict::kBusy && busy_trx != 0 && locks_ == nullptr) {
             NoteBlockingWriter(scope.txn, busy_trx, pk, RepeatableReadWait::kCapable);
         }
 
-        // Recorded **per resolution, not per row**, which is the mechanism
-        // made visible in `SHOW ACCESS`: a thousand-row insert against one
-        // parent now reports one lookup where it reported a thousand. The
-        // number moved because the work did.
+        // Recorded **per resolution, not per row**: a thousand-row insert
+        // against one parent reports one lookup in `SHOW ACCESS`.
         RecordFkAccess(exec::AccessKind::kLookup, fk.rel_oid, 1);
         into.Put(fk.rel_oid, pk, verdict.value());
     }
@@ -3942,9 +3784,8 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     //     error - a type mistake reported as a constraint violation sends
     //     the reader looking at the wrong table.
     // An integer is not a type mistake, and one that is no Keystone id -
-    // `-7`, `0`, past 2^40 - 1 - names no parent that can exist: the
-    // violation, with no lock taken and nothing descended. It used to pass
-    // here unchecked when negative, and the codec stored it.
+    // `-7`, `0`, past 2^48 - 1 - names no parent that can exist: the
+    // violation, with no lock taken and nothing descended.
     if (value.type != parser::ValueType::kInt) return Status::OK();
 
     const std::optional<std::uint64_t> id = KeystoneIdOf(value);
@@ -4258,10 +4099,8 @@ DispatchOutcome CommandDispatcher::HandleShowFkeys() {
 DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                                                         Session& session) {
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
-        // H6 step 2: the parse leg. One of `observability.md` §10's three
-    // request-level spans, and the cheapest to attribute wrongly - a
-    // statement that is slow to *parse* looks identical from outside to
-    // one that is slow to run.
+        // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
+    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
     auto parsed = [&] {
         stats::SpanScope span(trace_, stats::Layer::kParse);
         return parser::Parse(line);
@@ -4280,13 +4119,10 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // exist, because implicit creation is what makes a typo
         // indistinguishable from an intent (AF-6, shape (a) over (b)).
         //
-        // **Resolved before the name-collision check below, not after it.**
-        // The other order let `CREATE TABLE ordrs.t` answer `EXISTS oid=n`
-        // whenever some relation `t` existed anywhere - the qualifier
-        // absorbed rather than verified, and AF-6's "a typo must not be
-        // indistinguishable from an intent" broken by the one arm that
-        // never reached the resolver. An unqualified name still reads no
-        // catalog here, so this costs the ordinary path nothing.
+        // **Resolved before the name-collision check below**, so
+        // `CREATE TABLE ordrs.t` is refused for its namespace rather than
+        // answered `EXISTS` for some `t` elsewhere. An unqualified name
+        // reads no catalog here.
         const std::optional<txn::ReadView> ns_view = ViewFor(session);
         auto create_ns = ResolveCreateNamespace(stmt.schema, stmt.table_byte_offset,
                                                 ns_view.has_value() ? &*ns_view : nullptr);
@@ -4353,8 +4189,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             // through the parser, which decides arity by the type name - so
             // this is the catalog's own defense against a statement that
             // arrived by another door, and the two live together because a
-            // third argument-taking type must find one place to extend, not
-            // two (the phase-A review's shape note).
+            // third argument-taking type must find one place to extend.
             const bool takes_precision = row.type_val == catalog::kTypeValDecimal ||
                                           row.type_val == catalog::kTypeValDecimalWide;
             const bool takes_width = row.type_val == catalog::kTypeValChar ||
@@ -4379,16 +4214,11 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             // different schema constant, chosen from the one fact the client
             // declared.
             //
-            // **`decimal128(p, s)` is not a spelling this code ever sees**,
-            // and the sentence that said it "names the wide type directly
-            // and its bounds refuse p <= 18" was wrong (corrected
-            // 2026-08-29, H8). The parser admits a type-argument list for
-            // `DECIMAL`, `CHAR` and `VARCHAR` only, so `decimal128(24, 6)`
-            // is refused as *"type 'decimal128' takes no arguments"* before
-            // a column row is built. Nothing is lost by that: the wide type
-            // is reached by declaring `decimal(p, s)` with p >= 19, which
-            // is the promotion above, so one declaration still selects
-            // exactly one type - by precision, and only by precision.
+            // **`decimal128(p, s)` is not a spelling this code ever sees**:
+            // the parser admits a type-argument list for `DECIMAL`, `CHAR`
+            // and `VARCHAR` only, so it is refused as taking no arguments.
+            // The wide type is reached by `decimal(p, s)` with p >= 19, the
+            // promotion above - one type per declaration, by precision.
             if (row.type_val == catalog::kTypeValDecimal ||
                 row.type_val == catalog::kTypeValDecimalWide) {
                 if (!col.has_precision) {
@@ -4497,9 +4327,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                         false};
             }
             // AF-T3: `REFERENCES orders.customer` asserts where the parent
-            // lives, and a wrong assertion is refused - which matters more
-            // here than anywhere else, because after AF-T2 the parent's
-            // namespace is the parent's *core*.
+            // lives, and a wrong assertion is refused.
             if (Status s = catalog_.CheckRelationQualifier(
                     col.references_schema, col.references_table, parent_oid.value(),
                     col.references_byte_offset,
@@ -4543,14 +4371,10 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
 
         // ---- Storage (docs/spec/heap-and-tuple.md §4.1) --------------------------
         //
-        // One trailing word decides anything now. The key mode was removed
-        // 2026-08-25, and with it the whole resolution that used to live here:
-        // an instance-wide `default_key_mode`, a storage default that moved
-        // with it, and the EXPLICIT-implies-BTREE refusal that made the pair
-        // consistent. A relation's storage is the writer's word or the heap,
-        // and what a heap cannot do with a *supplied* id is refused per id by
-        // `AdmitExplicitRowId` - so no `CREATE TABLE` shape is refused for a
-        // key-mode reason at all.
+        // One trailing word decides storage: the writer's word, or BTREE by
+        // default. `HEAP` is refused `Unsupported` at the parse (SUS-1).
+        // There is no key mode (removed 2026-08-25), so no `CREATE TABLE`
+        // shape is refused for a key-mode reason.
         const catalog::ClusteredType clustered =
             stmt.clustered_given ? stmt.clustered : catalog::ClusteredType::kBtree;  // SUS-1: BTREE is the default
 
@@ -4582,12 +4406,10 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // What can still fail here is catalog I/O. Since D2 the ERR
         // makes FinishDdlStatement abort the statement's transaction, so
         // the relation's own rows are taken back - the message must not
-        // claim otherwise (review B2). What the abort does NOT take back
-        // is any sys.fkeys row already written in this loop:
-        // CreateForeignKey reports no CatalogRowRef, so those rows never
-        // reach the trail - the orphan the review named, pre-existing on
-        // the explicit-transaction path and recorded in
-        // workplan-rv3-catalog-recovery.md's remainder.
+        // claim otherwise. What the abort does NOT take back is any
+        // sys.fkeys row already written in this loop: CreateForeignKey
+        // reports no CatalogRowRef, so those rows never reach the trail
+        // (`git show 925f483:docs/workplan-rv3-catalog-recovery.md`'s remainder).
         // The cross-owner foreign-key notice retired (AT-S5f, AT-S9); its
         // history is at cf889b63.
         for (const PendingForeignKey& fk : pending_fkeys) {
@@ -4676,7 +4498,7 @@ Status CommandDispatcher::LogIndexWrite(const exec::IndexWrite& write, std::uint
     // (`LogTreeSplit`).
     if (!write.restructured.empty()) {
         return LogTreeSplit(write.restructured, txn_id, write.rel_oid, write.index_oid,
-                            write.new_root, write.anchor_page_id);
+                            write.new_root, write.anchor_page_id, write.anchor_pin);
     }
 
     std::vector<std::byte> buf(wal::kIndexInsertFixedSize + write.entry.size());
@@ -4697,9 +4519,15 @@ std::function<Status(const exec::AppendedSpill&)> CommandDispatcher::SpillLogFor
     const std::uint64_t txn_id = scope.txn->id();
     return [this, &scope, rel_oid, pk, txn_id](const exec::AppendedSpill& spill) -> Status {
         // RV3's order: the undo record that can release the value, then the
-        // records that make it durable.
-        if (Status s = NoteSpills(scope, rel_oid, pk, {spill}); !s.ok()) return s;
-        return exec::LogSpill(wal_, page_store_, spill, txn_id, rel_oid);
+        // records that make it durable. **Logged even when the undo record
+        // failed**: the append already wrote the page - a created page, the
+        // link to it, the slot - and left unlogged, the next append into the
+        // chain logs against a page redo never built, which refuses the mount.
+        // Logged, the value is one leaked slot no row names and no undo
+        // record releases.
+        const Status noted = NoteSpills(scope, rel_oid, pk, {spill});
+        const Status logged = exec::LogSpill(wal_, page_store_, spill, txn_id, rel_oid);
+        return noted.ok() ? logged : noted;
     };
 }
 
@@ -4720,6 +4548,7 @@ exec::IndexWriteLog CommandDispatcher::IndexWriteLogFor(const WriteScope& scope,
     return [this, &pending](const exec::IndexWrite& write) -> Status {
         if (write.new_root == kInvalidPageId) {
             pending.push_back(write);
+            pending.back().anchor_pin = nullptr;  // the pin dies with the insert's result
             return Status::OK();
         }
         if (Status s = catalog_.PublishRoot(write.rel_oid, write.index_oid, write.new_root,
@@ -4730,6 +4559,7 @@ exec::IndexWriteLog CommandDispatcher::IndexWriteLogFor(const WriteScope& scope,
         }
         pending.push_back(write);
         pending.back().new_root = kInvalidPageId;
+        pending.back().anchor_pin = nullptr;  // the pin dies with the insert's result
         return Status::OK();
     };
 }
@@ -4742,16 +4572,14 @@ Status CommandDispatcher::LogFullPageImage(PageId page_id, std::uint64_t txn_id)
 
 // The durability a statement with no commit record owes its
 // acknowledgement (workplan-rv3-catalog-recovery.md's remainder round):
-// pattern, assertion, cabin and ALTER DDL run under no transaction, so
+// assertion, cabin and ALTER DDL write no commit record of their own, so
 // nothing ever synced their records - an acknowledged CREATE ASSERTION
 // could die with the WAL buffer, which is the durability promise broken.
 //
 // **D2 syncs here too, and that is not a policy choice.** `wal.md` §1 gives
-// D2 the same durability point as D1 - "D1/D2 differ only in batching,
-// never in the durability point", §14's "D1/D2 never lose an acked commit
-// under any injected crash" - and D2 is the *default* class, so leaving it
-// out would have left the very defect RV3 closed open for every default
-// deployment. D2's batching lives in `pending_commit_lsn_`, which is keyed
+// D2 the same durability point as D1 ("D1/D2 differ only in batching,
+// never in the durability point"), and D2 is the default class. D2's
+// batching lives in `pending_commit_lsn_`, which is keyed
 // to a registered group commit (`DrainOnce` syncs only when
 // `pending_group_commits_ > 0`); a statement with no commit record has
 // nothing to register, so the honest way to keep D2's point is to sync.
@@ -4779,13 +4607,12 @@ Status CommandDispatcher::NoteSpills(const WriteScope& scope, std::uint32_t rel_
     return Status::OK();
 }
 
-Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType leaf_type,
+Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, bool btree,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
                                     std::uint64_t owner_oid, PageId anchor_page_id,
                                     const std::vector<exec::AppendedSpill>& spills,
                                     const std::vector<exec::IndexWrite>& index_writes,
                                     bool own_txn) {
-    const bool btree = leaf_type == PageType::kBtreeLeaf;
     if (wal_ == nullptr) {
         // Nothing to log, and a root the split grew is published all the
         // same.
@@ -4812,26 +4639,10 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
     // placed at. Either comes after the row's spills and index entries, the
     // order the heap's HEAP_INSERT keeps below.
 
-    // Every page a heap insert restructured, in the order the storage layer
-    // says redo has to apply it, and all of it before the tuple's own
-    // record. A brand-new tuple page is a PAGE_INIT that the HEAP_INSERT
-    // below then fills; a link edit is a full page image (insert_placement.hpp).
-    for (const storage::StructuralChange& change :
-         btree ? std::span<const storage::StructuralChange>{} : placed.changes()) {
-        if (change.is_new_page) {
-            if (auto rec = wal::LogPageInit(wal_, txn_id, change.page_id, leaf_type,
-                                            change.min_key, owner_oid);
-                !rec.ok()) {
-                return rec.status();
-            }
-            // Deliberately unstamped: a new tuple page is always the page
-            // the HEAP_INSERT below lands in, and that stamps it. A new
-            // *internal* node is never reported as is_new_page, so it takes
-            // the image arm and is stamped there.
-            continue;
-        }
-
-        if (Status s = LogFullPageImage(change.page_id, txn_id); !s.ok()) return s;
+    // Every page a heap insert restructured, all of it before the tuple's
+    // own record, which fills and stamps the new page.
+    if (!btree) {
+        if (Status s = LogChainGrowth(placed, txn_id, owner_oid); !s.ok()) return s;
     }
 
     // The var-heap values this tuple points at, before the tuple itself.
@@ -4896,26 +4707,51 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed, PageType l
     return Status::OK();
 }
 
-Status CommandDispatcher::LogSplit(const storage::InsertPlacement& placed, std::uint64_t txn_id,
+Status CommandDispatcher::LogChainGrowth(const storage::InsertPlacement& placed,
+                                         std::uint64_t txn_id, std::uint64_t owner_oid) {
+    if (wal_ == nullptr) return Status::OK();
+    for (const storage::StructuralChange& change : placed.changes()) {
+        if (change.is_new_page) {
+            if (auto rec = wal::LogPageInit(wal_, txn_id, change.page_id, PageType::kHeap,
+                                            change.min_key, owner_oid);
+                !rec.ok()) {
+                return rec.status();
+            }
+            // Unstamped (the header says why), and on a take-back left empty
+            // until the next insert's HEAP_INSERT stamps it - its PAGE_INIT
+            // all redo needs until then.
+            continue;
+        }
+        if (Status s = LogFullPageImage(change.page_id, txn_id); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
+Status CommandDispatcher::LogSplit(storage::InsertPlacement& placed, std::uint64_t txn_id,
                                    catalog::Oid oid, PageId anchor_page_id) {
     std::vector<PageId> pages;
     pages.reserve(placed.changes().size());
     for (const storage::StructuralChange& change : placed.changes()) {
         pages.push_back(change.page_id);
     }
-    return LogTreeSplit(pages, txn_id, oid, /*index_oid=*/0, placed.new_root, anchor_page_id);
+    return LogTreeSplit(pages, txn_id, oid, /*index_oid=*/0, placed.new_root, anchor_page_id,
+                        &placed.anchor);
 }
 
 Status CommandDispatcher::LogTreeSplit(std::span<const PageId> pages, std::uint64_t txn_id,
                                        catalog::Oid rel_oid, std::uint64_t index_oid,
-                                       PageId new_root, PageId anchor_page_id) {
+                                       PageId new_root, PageId anchor_page_id,
+                                       storage::UnlatchedPin* anchor_pin) {
     // The anchor is taken after every page the split wrote and dropped
     // first. The pages it then latches beside it are ones the split created,
     // which nothing reaches but through a page already held.
     std::optional<storage::PageRef> anchor;
     Status refused = Status::OK();
     if (new_root != kInvalidPageId) {
+        // A hit on the split's pinned frame; the staging's hold makes the pin
+        // redundant, and dropping it keeps the images below under the ceiling.
         auto staged = catalog_.StageAnchorRoot(anchor_page_id, rel_oid, index_oid, new_root);
+        if (anchor_pin != nullptr) anchor_pin->Release();
         if (staged.ok()) {
             anchor.emplace(std::move(staged.value()));
         } else {
@@ -5366,10 +5202,8 @@ sched::Coro CommandDispatcher::CompleteSelect(std::string_view line, DispatchOut
 }
 
 DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope) {
-    // H6 step 2: the parse leg. One of `observability.md` §10's three
-    // request-level spans, and the cheapest to attribute wrongly - a
-    // statement that is slow to *parse* looks identical from outside to
-    // one that is slow to run.
+    // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
+    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
     auto parsed = [&] {
         stats::SpanScope span(trace_, stats::Layer::kParse);
         return parser::Parse(line);
@@ -5489,8 +5323,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // ---- The relation's intention, before anything is admitted (AT-S5e,
     // AT-0 item 13) ---------------------------------------------------------
     //
-    // **Here and not at the first id borrow**, where an `INSERT` used to
-    // take it. A DDL that claims the relation - a `CREATE INDEX` about to
+    // **Here and not at the first id borrow.** A DDL that claims the relation - a `CREATE INDEX` about to
     // backfill, a `CREATE ASSERTION` about to build a cabin - takes its `X`
     // against this `IX`, and it is a fence only if it stands over everything
     // the statement decides from the relation's secondary structures:
@@ -5523,12 +5356,9 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     //
     // The per-statement half of that gate: the fill carves one contiguous id
     // range up front, so a row that names its own key has no place in it.
-    // Checked over the rows rather than off the relation since 2026-08-25
-    // (heap-and-tuple.md §4.1) - naming a key is a property of the row now.
-    // Ineligibility, not a refusal: a statement that names keys still runs,
-    // through the ordinary per-row path below. `every_row_omits_pk` is
-    // counted at the top of this function, in the one pass R4's routing
-    // also reads.
+    // Checked over the rows, since naming a key is a property of the row
+    // (heap-and-tuple.md §4.1). Ineligibility, not a refusal: a statement
+    // that names keys runs through the ordinary per-row path below.
     if (bulk && every_row_omits_pk && SortedFillEligible(*ta, oid.value())) {
         return SortedFillInner(stmt, oid.value(), *ta, scope);
     }
@@ -5589,15 +5419,11 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
 
 bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
                                            catalog::Oid oid) const {
-    // The key-mode clause is gone with the mode (heap-and-tuple.md §4.1) and
-    // is **replaced by a per-statement one at the call site**, not deleted:
-    // this path's whole shape is one contiguous id range carved up front and
-    // appended in order, which is wrong for any id the caller names. Whether
-    // a caller names one is a fact about the rows now, so the caller checks
-    // the rows; what is left here is the relation-shaped half.
-    // PW1c-5 (revised at the 25059bf review's S-1): the sorted fill is
-    // ineligible rather than refused where it cannot run, and the ordinary
-    // per-row path serves the statement.
+    // The relation-shaped half of the gate: the caller checks the rows,
+    // since one contiguous carved id range is wrong for any id a row names
+    // (heap-and-tuple.md §4.1). Ineligible rather than refused where it
+    // cannot run (PW1c-5): the ordinary per-row path serves the statement.
+    // Heap-only, so SUS-1 leaves it to relations created before it.
     return ta.clustered_type == catalog::ClusteredType::kHeap &&
            ta.varheap_page_id == kInvalidPageId && ta.indexes.empty() && ta.cabin_mask == 0 &&
            !enforcer_->AnyOn(oid);
@@ -5676,21 +5502,12 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         first_id = first.value();
 
         // **The run's borrow, over the block of ids it just carved**
-        // (AO-S6c-a). This path routes past `InsertOneRow` entirely, so without
-        // this it would be the one writer left borrowing nothing - the exact
-        // "header `trx_id`, no table entry" shape this sub-stage exists to
-        // remove, and the one AO-S6c-b would then read as a free row. SUS-1
-        // keeps the path off every relation created since the suspension, but
-        // a pre-suspension heap relation still reaches it and the test binary
-        // lifts the suspension, so it is live rather than theoretical.
+        // (AO-S6c-a): this path bypasses `InsertOneRow`, and a write with no
+        // table entry would read as a free row. Live for pre-SUS-1 heap
+        // relations and the test binary, which lifts the suspension.
         //
-        // **One range rather than one entry per row, and the interval is exact
-        // rather than a superset**: `AllocateRowIdRange` carved
-        // `[first, first + rows)` and every row of this run takes an id from
-        // it, so the declared unit covers precisely what is written. That is
-        // item 14's shape arrived at from the other direction - the ids are
-        // known instead of a predicate - and it is what keeps a bulk fill of
-        // any size inside `max_locks_per_txn`.
+        // **One exact range** (`[first, first + rows)`, item 14's shape),
+        // which keeps a bulk fill of any size inside `max_locks_per_txn`.
         // The run is re-runnable - no row of it is written yet - and the cost
         // of a park is the block already carved, which `AllocateRowIdRange`
         // above has bumped the mark by. That is the same cost the single-id
@@ -5857,22 +5674,15 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // ---- Arity, and where the pk comes from -----------------------------
     //
     // **Two arities, and the row picks** (docs/spec/heap-and-tuple.md section
-    // 4.1). Until 2026-08-25 this was one arity fixed at CREATE TABLE by the
-    // key mode; the mode is gone and both counts are legal on every relation:
+    // 4.1); there is no key mode:
     //
     //   ncols     - the caller names the key. values[0] is the pk, and the
     //               rest are the columns after it.
     //   ncols - 1 - the caller omits it. The engine issues one from the
-    //               relation's cursor, exactly as an ASSIGNED relation's
-    //               INSERT always did, and every value is a body column.
+    //               relation's cursor, and every value is a body column.
     //
-    // The two counts cannot be confused, which is what makes accepting both
-    // honest rather than ambiguous: INSERT is positional with no column list
-    // and no body column may be omitted individually, so a row's length names
-    // one reading and not the other. The old rule's stated reason for one
-    // arity per relation - that a relation taking both counts could not say
-    // which a wrong-length row meant - was about a relation whose two
-    // readings had the same length, and no relation does.
+    // The two cannot be confused: INSERT is positional with no column list
+    // and no body column may be omitted, so a row's length names one reading.
     const std::size_t ncols = ta.schema.columns.size();
     const bool explicit_key = ncols > 0 && values.size() == ncols;
 
@@ -5958,26 +5768,16 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // reach the reservation - a refusal below, a failed placement, a borrow
     // that parks and re-runs this row.
     //
-    // **And a rejection a reservation caused is a wait** (AO-S6e-c, census
-    // row 11). `assertion.md` §6.2 called this a *bounded false rejection*
-    // and accepted it: a statement refused because of a delta belonging to
-    // a transaction that later aborts. The delta's owner is knowable - the
-    // registry names one (`ReserverOnLocked`) - so the statement waits for that decide and
-    // asks again, on exactly the channel every other wait in this family
-    // uses. Its abort releases the delta and the re-run is admitted; its
-    // commit makes the refusal true, and the re-run says so.
+    // **A rejection a reservation caused is a wait** (AO-S6e-c, census row
+    // 11): the registry names the delta's owner (`ReserverOnLocked`), so the
+    // statement waits for its decide and asks again - an abort admits the
+    // re-run, a commit makes the refusal true. Two transactions each holding
+    // a reservation the other needs is a real cycle, refused by the
+    // wait-for graph (AO-S4a).
     //
-    // **The wait-for graph is what makes this safe rather than clever**:
-    // two transactions can each hold a reservation the other's admission
-    // needs, and that cycle is a real one - `NoteBlockingWriter` records
-    // the edge and AO-S4a refuses the waiter that would close it.
-    //
-    // `kCapable` without qualification: an admission reads the **live**
-    // aggregate, never the waiter's read view, so the level does not enter.
-    // The pk is 0 because there is none - this check runs before the id is
-    // issued, deliberately, so a refused row burns nothing - and 0 is not a
-    // key any row can have (`kFirstRowId`), which is what lets the wait's
-    // messages say so rather than name row zero.
+    // `kCapable`: an admission reads the **live** aggregate, never the
+    // waiter's view. The pk is 0 because no id is issued yet, and 0 is no
+    // row's key (`kFirstRowId`).
     std::uint64_t reserver = 0;
     exec::AssertionEnforcer::Hold admitted;
     if (Status s = enforcer_->AdmitInsert(oid, body, WriterId(scope), admitted, &reserver);
@@ -6049,8 +5849,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // the reservation, the undo record, a root's re-publish - and fetches
     // or creates more after each write. A full pool may refuse only here,
     // before the first of them: past this line a refusal would leave a
-    // placed row with no undo record (`docs/inflight/bugs/a-fetch-refused-
-    // after-a-page-write-leaves-the-mutation-half-done.md`). Closed when
+    // placed row with no undo record (`a-fetch-refused-after-a-page-write-
+    // leaves-the-mutation-half-done.md`, closed; at eeb88f47 under
+    // docs/inflight/bugs/). Closed when
     // this function returns, with the row's trail entry written.
     auto window = storage::NoRefuseWindow::Open(page_store_);
     if (!window.ok()) return window.status();
@@ -6122,7 +5923,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 return s;
             }
             attempt.emplace(btree::BtreeInsert(page_store_, ta.desc_page_id, row_id, encoded,
-                                               /*trx_id=*/WriterId(scope), ta.oid));
+                                               /*trx_id=*/WriterId(scope), ta.oid,
+                                               ta.anchor_page_id));
         } else {
             attempt.emplace(FromChain(heap::ChainInsertNamed(
                 page_store_, ta.desc_page_id, row_id, encoded,
@@ -6163,7 +5965,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             if (Status s = encode(); !s.ok()) return s;
             if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
             attempt.emplace(btree::BtreeInsert(page_store_, ta.desc_page_id, row_id, encoded,
-                                               /*trx_id=*/WriterId(scope), ta.oid));
+                                               /*trx_id=*/WriterId(scope), ta.oid,
+                                               ta.anchor_page_id));
             if (attempt->ok()) break;
             // Nothing was placed, so the burned id's borrow is given back
             // whatever refused it: a structural refusal inside `BEGIN` is
@@ -6232,18 +6035,29 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // leaf allocated. A split cannot give back a rebuilt page, so there the
     // row's slot is retired, keyless, the split is logged without a live row
     // (`kNoTxnId`: no transaction owns a structural change), and a root it
-    // grew is published as the success path would. A heap relation is
-    // untouched (BD-Q4).
+    // grew is published as the success path would. **A heap's tail gives it
+    // back the same way**: the row is the last its page allocated, the
+    // tail's hold making that true, and a chain the insert grew keeps its
+    // new, now empty page, logged at `kNoTxnId` as the success path would
+    // log it - left unlogged, the next insert into it is a HEAP_INSERT into
+    // a page redo never built.
     const auto take_back = [&](Status failed) -> Status {
-        if (!is_btree) return failed;
         Status undone = [&]() -> Status {
             auto page = page_store_.Get(placed.value().page_id);
             if (!page.ok()) return page.status();
             heap::PageView leaf(page.value().bytes());
-            if (!placed.value().restructured()) return leaf.UnInsertTuple(placed.value().slot);
-            if (Status s = leaf.RetireSlot(placed.value().slot); !s.ok()) return s;
+            const bool restructured = placed.value().restructured();
+            const std::uint16_t slot = placed.value().slot;
+            if (Status s = is_btree && restructured ? leaf.RetireSlot(slot)
+                                                    : leaf.UnInsertTuple(slot);
+                !s.ok()) {
+                return s;
+            }
+            if (!restructured) return Status::OK();
             page.value().Release();
-            if (Status s = LogSplit(placed.value(), wal::kNoTxnId, oid, ta.anchor_page_id);
+            if (Status s = is_btree
+                               ? LogSplit(placed.value(), wal::kNoTxnId, oid, ta.anchor_page_id)
+                               : LogChainGrowth(placed.value(), wal::kNoTxnId, oid);
                 !s.ok()) {
                 return s;
             }
@@ -6251,8 +6065,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             return Status::OK();
         }();
         if (!undone.ok() && logging(LogLevel::kError)) {
-            log_->Error("btree", "taking back the unlogged placement of id " +
-                                     std::to_string(row_id) + " failed: " + undone.message());
+            log_->Error(is_btree ? "btree" : "heap",
+                        "taking back the unlogged placement of id " +
+                            std::to_string(row_id) + " failed: " + undone.message());
         }
         return failed;
     };
@@ -6320,10 +6135,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // ---- The rollback trail, and the durable record beside it -----------
     //
     // The trail entry is what a *live* rollback reads; the undo record is
-    // what survives a crash. Section 3.6 said an insert writes no record,
-    // and RV10 reversed that - not for visibility, which is unchanged, but
-    // because each record links to the transaction's previous one and an
-    // insert that wrote none would break the chain recovery walks
+    // what survives a crash. An insert writes a record (RV10) not for
+    // visibility but because each record links to the transaction's
+    // previous one, and recovery walks that chain
     // (`docs/workplan-wal-recovery.md` §4b).
     //
     // **The tuple is not stamped with this pointer.** `undo_ptr == 0` still
@@ -6331,13 +6145,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // through the transaction chain, which is what keeps §3.6's visibility
     // rule intact.
     //
-    // **The spills are noted before the row's trail entry** (BD-S2's review,
-    // C2): noting one appends an undo record and can fail, and a failure
-    // after `NoteInsert` would leave the trail naming a row no record
-    // describes - whose live rollback logs a `SLOT_RETIRE` that redo, never
-    // having placed the row, applies to the neighbour the shift moved up.
-    // Before `NoteInsert` the failure is E5's, and the row is taken back. An
-    // insert undo record with no row behind it is work recovery counts done.
+    // **The spills are already noted**, each at its append (`SpillLogFor`),
+    // so the take-back's last exit is the undo append. An insert undo record
+    // with no row behind it is work recovery counts done.
     if (scope.txn != nullptr) {
         txn::UndoRecordFields rec{};
         rec.prior_trx_id = txn::kNoTrxId;
@@ -6348,7 +6158,6 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         auto ptr = txn_->AppendUndo(*scope.txn, rec, row_id, {});
         if (!ptr.ok()) return take_back(ptr.status());
     }
-    if (Status s = NoteSpills(scope, oid, row_id, spills); !s.ok()) return take_back(s);
     if (scope.txn != nullptr) {
         txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
                          row_id);
@@ -6358,8 +6167,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
 
     // Logged under the holds the placement handed out, and before the client
     // is answered - this class's header's ordering note (AT-S21).
-    if (Status s = LogInsert(placed.value(),
-                             is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded,
+    if (Status s = LogInsert(placed.value(), is_btree, encoded,
                              WriterId(scope), oid, ta.anchor_page_id, spills, index_writes,
                              /*own_txn=*/scope.txn == nullptr);
         !s.ok()) {
@@ -6682,7 +6490,7 @@ CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
 
 // Every DDL route runs inside this and only this, which is what makes "no
 // handler may skip FinishDdlStatement" structural rather than a convention
-// a fifth route forgets (review S4): the undo hook the body installs
+// a fifth route forgets: the undo hook the body installs
 // through DdlScopeFor(scope) dies here, on every exit, and the implicit
 // transaction D2 opens resolves here too.
 template <typename Fn>
@@ -6781,8 +6589,8 @@ std::optional<DispatchOutcome> CommandDispatcher::ExistingRelationReply(
         return DispatchOutcome{ErrorReply(existing.status()), false, 0, existing.status()};
     }
     // **`EXISTS` is truthful only about the name, so a qualifier that
-    // disagrees gets a sentence rather than that token** (the AF-T3
-    // review's finding 5). Relation names are instance-global, so
+    // disagrees gets a sentence rather than that token** (AF-T3).
+    // Relation names are instance-global, so
     // `ledger.plain` cannot be created while a `plain` sits in `public` -
     // but replying `EXISTS` to it asserts that `ledger.plain` exists, which
     // is the one thing that is false. The qualifier check answers with the
@@ -6800,11 +6608,9 @@ void CommandDispatcher::SweepSettledDeleteMarks() {
     // (`ResolvedForEveryReader`, AN-S2), and every core writes the catalog
     // and takes DDL (AT-S5): one core sweeps so two do not walk the same
     // chains at once, and core 0 is the one because it is always present.
-    // Sound on any core at any moment, as at the DDL resolution it used to
-    // ride: every view that can read a superseded version is registered,
-    // and a check view needs no lease by proof (`txn.md` §4.1) - the
-    // predicate is instance-wide, so peers' running statements are covered
-    // the same way.
+    // Sound on any core at any moment: every view that can read a
+    // superseded version is registered, a check view needs no lease by
+    // proof (`txn.md` §4.1), and the predicate is instance-wide.
     if (core_id_ != catalog::kSystemCore || txn_ == nullptr) return;
     const std::uint64_t marks = catalog_.MarkCount();
     if (marks == 0) return;
@@ -6830,26 +6636,12 @@ void CommandDispatcher::EndDdlScope(const Session& session, wal::Lsn committed_l
 
 void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed_lsn) {
     const bool held_ddl = std::erase(ddl_txns_, txn_id) > 0;
-    // **Both endings need this, and only the rollback half used to.** A
-    // rollback compensates through the page, retiring rows behind the
-    // catalog's back, so anything cached about them while the transaction
-    // was open now describes rows that are gone.
-    //
-    // The commit half is DT9's (`ddl-transactional.md` §5b). The old
-    // comment here said "a commit leaves the rows in place, so what was
-    // cached about them stays true", which was correct until an unfiltered
-    // read started asking whether a mark's deleter is still in flight:
-    // **commit is now the moment a delete-mark starts counting.** A cache
-    // filled during an open `DROP INDEX` holds the index deliberately -
-    // that is what keeps maintenance writing entries a rollback would
-    // need - and holding it past the commit would keep maintaining an
-    // index that is gone.
-    //
-    // Unconditional on the ending rather than split by it, because the
-    // condition that would split it ("did this transaction delete-mark
-    // anything?") is one more thing to keep true, and a DDL transaction
-    // ending is rare enough that a cache clear it did not strictly need
-    // costs nothing worth measuring.
+    // **Both endings invalidate.** A rollback compensates through the page,
+    // behind the catalog's back. A commit is the moment a delete-mark
+    // starts counting (DT9, `ddl-transactional.md` §5b): a cache filled
+    // during an open `DROP INDEX` holds the index deliberately, and holding
+    // it past the commit would keep maintaining an index that is gone.
+    // Unconditional, since a DDL ending is rare and the clear is cheap.
     if (held_ddl) catalog_.InvalidateAfterCompensation();
     // **A committed drop is queued with the word the commit moved to**
     // (BF-R9): read after the move above, so every statement whose memo
@@ -6878,10 +6670,8 @@ void CommandDispatcher::MarkHoldsDdl(txn::Transaction& txn) {
 void CommandDispatcher::NoteCatalogRowChanges(
     DdlScope& scope, const std::vector<catalog::CatalogRowChange>& changed) {
     // The rollback trail for a DDL route that *changes* rows rather than
-    // inserting them - `DROP TABLE` and `DROP NAMESPACE`. One function
-    // because the two had one copy each and the second was the first minus
-    // the delete-mark branch: `DropNamespace` only ever retypes today, so
-    // the copy was correct and silently assumed the other's invariant.
+    // inserting them - `DROP TABLE` and `DROP NAMESPACE` (which only ever
+    // retypes today).
     //
     // Nothing to do outside an explicit transaction: autocommit's DDL has
     // no rollback to serve, which is why the changes are not even collected
@@ -7081,6 +6871,13 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             return {"ERR a subquery predicate over a catalog view is not supported: the "
                     "view is materialized, so there is no relation for a sub-chain to "
                     "correlate against", false};
+        }
+        // Before anything reads `col`: a boolean conjunct has none (BU-Q4).
+        if (cond.kind == parser::PredicateKind::kBoolTree) {
+            const Status refused = Status::NotImplemented(
+                "a boolean conjunct (OR, NOT, an IN list, LIKE) over a catalog view (byte " +
+                std::to_string(cond.tree->byte_offset) + ")");
+            return {ErrorReply(refused), false, 0, refused};
         }
         // Before anything reads `col`: a function conjunct has none on a
         // call's side, and the view's evaluator compares `col op val` only.
@@ -7443,20 +7240,15 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                         ? StatusOr<txn::LeasedSnapshot>(txn::LeasedSnapshot{*pinned, {}})
                         : SnapshotFor(session);
     // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse, and the
-    // wire's `retryable=1` is what a client's retry loop reads. The
-    // DELETE site has always rendered it this way; these two did not,
-    // so the same refusal carried the bit on one verb and lost it on
-    // the other (the SS2 review's cut 2).
+    // wire's `retryable=1` is what a client's retry loop reads.
     if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
     run->snapshot.emplace(std::move(snapshot.value()));
     const txn::Snapshot& snap = run->snapshot->snap;
 
     // An explicit Parser rather than the free `Parse()`, so the statement's
-    // fingerprint can be taken **from the parse itself** (parser.hpp). It
-    // used to come from `FingerprintOf`, which lexed the text a second time -
-    // measured at ~13% of a point join's latency, three times what the
-    // recording it was for actually cost, and the whole of replay's B+ tree
-    // regression (bench/results-waystone-v2.md).
+    // fingerprint can be taken **from the parse itself** (parser.hpp): a
+    // second lex was ~13% of a point join's latency
+    // (bench/results-waystone-v2.md, at 1769487).
     parser::Parser& parser = run->parser.emplace(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
@@ -7467,15 +7259,6 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     }
     auto& stmt = std::get<parser::SelectStmt>(run->statement.emplace(std::move(parsed.value())));
 
-    // No guards here any more. V05, V06 and V07 each added a refusal
-    // because the single-relation scan below would have answered their
-    // statements *wrongly* rather than failing - a join scanning only its
-    // first relation, a projection emitting every column, a subquery
-    // predicate matching no column and dropping every row. The compiler
-    // and the step VM answer all three now, so the refusals are gone
-    // rather than kept "just in case": a guard that no longer guards
-    // anything is a guard nobody maintains.
-    //
     // A catalog view (`SELECT * FROM sys.tables`) is answered before the
     // compiler is asked for a chain, because it is not a relation: its
     // rows are produced by the catalog's typed readers, not walked out of
@@ -7485,11 +7268,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         const bool from_is_view =
             IEquals(stmt.from.schema, exec::kCatalogSchema) &&
             exec::IsCatalogView(stmt.from.table_name);
-        // The same test the FROM relation gets, and it had to become the
-        // same test at AF-T3: `!schema.empty()` meant "is a view" only
-        // while `sys` was the one qualifier there was, and under a user
-        // namespace it would answer "a catalog view cannot be joined"
-        // about two ordinary relations.
+        // The same test the FROM relation gets: under a user namespace a
+        // non-empty qualifier is not a view (AF-T3).
         bool any_join_is_view = false;
         for (const parser::JoinClause& join : stmt.joins) {
             if (IEquals(join.relation.schema, exec::kCatalogSchema) &&
@@ -7530,14 +7310,11 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                         known + ")",
                     false};
         }
-        // **AF-T3 opened this arm.** It used to answer everything but `sys`
-        // with "unknown schema", because a qualifier could only ever have
-        // named the catalog views. A user namespace is now a qualifier
-        // too, so a name that resolves falls through to the compiler,
-        // which binds the relation and checks the qualifier against it
-        // (`step_compiler.cpp`, one site for FROM, JOIN and every
-        // subquery). Only a namespace that does not exist is refused here,
-        // and it is refused by name.
+        // A user namespace is a qualifier too (AF-T3): a name that resolves
+        // falls through to the compiler, which checks the qualifier
+        // against the relation (`step_compiler.cpp`, one site for FROM,
+        // JOIN and every subquery). Only a missing namespace is refused
+        // here, by name.
         const std::optional<txn::ReadView> schema_view = ViewFor(session);
         auto ns = catalog_.FindNamespaceOidByName(
             stmt.from.schema, schema_view.has_value() ? &*schema_view : nullptr);
@@ -7552,14 +7329,13 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         }
     }
 
-    // V17: parse -> compile -> execute. Everything that used to be
-    // decided here - which relation, which access path, where each
-    // predicate is evaluated - was settled by the compiler and is sitting
-    // in the chain. What is left is formatting.
+    // V17: parse -> compile -> execute. Which relation, which access path
+    // and where each predicate is evaluated are the compiler's, in the chain.
     const std::optional<txn::ReadView> resolve_view = ViewFor(session);
     // Opened before the compile, which declares into it at every bind
-    // (`step_compiler.hpp`'s `declare`; AT-R1). Lives to the end of the
-    // statement, which is the end of this function.
+    // (`step_compiler.hpp`'s `declare`; AT-R1). Lives on the run to the end
+    // of the statement, which a sliced walk carries past this function
+    // (BA-S15).
     ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_);
     auto chain = exec::Compile(catalog_, stmt,
                                resolve_view.has_value() ? &*resolve_view : nullptr, &borrow,
@@ -7581,12 +7357,9 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // `TextResultSink` writes, and what a caller that installed its own
     // sink gets instead.
     //
-    // **The description is not emitted here**, though the header line used
-    // to be. A fold's output columns are typed by its items and a
-    // projection's by its columns, and the fork between them is fifty
-    // lines below - so describing here could only be right about the
-    // names. Nothing writes to `os` between here and either branch, so the
-    // move is invisible to the text form.
+    // **The description is not emitted here**: a fold's output columns are
+    // typed by its items and a projection's by its columns, and the fork
+    // between them is below.
     // Where this statement's rows go (`server/result_sink.hpp`): the
     // session's sink when one is installed, and the newline protocol's
     // rendering otherwise. Built here, above every fork below, because the
@@ -7669,12 +7442,9 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
 
     // The trail this execution leaves, if anything is recording.
     //
-    // **Reused, not constructed per statement.** A collector reserves room
-    // for a whole trail (253 x 32 bytes), so building one per SELECT is an
-    // 8 KB malloc on the read path - which measured as most of an 18%
-    // regression on a point join before this was hoisted onto the
-    // dispatcher; it is pooled scratch since BA-S15. Clear() keeps the
-    // reservation.
+    // **Reused, not constructed per statement**: a collector reserves room
+    // for a whole trail (253 x 32 bytes), an 8 KB malloc per SELECT
+    // otherwise. Pooled scratch since BA-S15; Clear() keeps the reservation.
     exec::TrailCollector* trail = nullptr;
     if (recorder_ != nullptr && trailable && identity.has_value()) {
         run->scratch().trail.Clear();
@@ -7736,12 +7506,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         star_access = access.value();
     }
 
-    // **A star read is a projection, resolved once.** It used to be a
-    // second arm of the row renderer - a loop over the schema's columns,
-    // building the same `{0, 0, i}` reference the projected arm was handed
-    // - which meant the two shapes were formatted by two loops that had to
-    // stay in step. Resolving the projection here instead leaves exactly
-    // one row path below.
+    // **A star read is a projection, resolved once**, so exactly one row
+    // path below formats both shapes.
     StarDescription& star = run->star;
     if (star_access != nullptr) star = DescribeStar(star_access->schema.columns);
     const std::span<const exec::ColumnRef> projection =
@@ -7950,12 +7716,9 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     exec::StatementContext context;  // NOW()'s instant, carried across a park (AP-S4)
     std::vector<exec::SubqueryResult> subquery_answers;  // BJ-S7, carried the same way
 
-    // **AO-S3b: a resume re-enters the scope and the view it already had.**
-    // Not `BeginWrite` and not `SnapshotFor`: the rows this statement has
-    // already written live in that transaction, and a second snapshot would
-    // read the rows it has yet to reach under a different view than the
-    // ones it wrote - the same statement seeing two states of the database,
-    // which is what "under one snapshot" in AO-S3b's cell rules out.
+    // **A resume re-enters the scope and the view it already had** (AO-S3b):
+    // the rows already written live in that transaction, and a second
+    // snapshot would show one statement two states of the database.
     if (session.parked_write().has_value() && !session.parked_write()->is_delete) {
         const Session::ParkedWrite& parked = *session.parked_write();
         scope = WriteScope{parked.txn, parked.owned, &session};
@@ -7994,24 +7757,16 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
         // would read at a snapshot no reader registration covers.
         auto snapshot = SnapshotFor(session);
         // `ErrorReply`, not a bare "ERR ": `SnapshotFor` can refuse, and the
-        // wire's `retryable=1` is what a client's retry loop reads. The
-        // DELETE site has always rendered it this way; these two did not,
-        // so the same refusal carried the bit on one verb and lost it on
-        // the other (the SS2 review's cut 2).
+        // wire's `retryable=1` is what a client's retry loop reads.
         if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false, 0, snapshot.status()};
         snap = snapshot.value().snap;
     }
 
     DispatchOutcome out = UpdateInner(line, scope, snap, resume_from, context, subquery_answers);
 
-    // **AO-S3b: parked in the middle of the walk - the scope stays open.**
-    // Every other pending arm below ends its scope, because the statement
-    // it parks has written nothing and will run whole on the resume. This
-    // one has written rows, and there is no savepoint to unwind them to,
-    // so what parks is the statement *in progress*: the transaction, the
-    // view and the position are handed to the session and picked up by the
-    // branch at the top of this function when `DispatchAsync` runs the
-    // statement again.
+    // **Parked mid-walk, the scope stays open** (AO-S3b): the statement has
+    // written rows and there is no savepoint, so its transaction, view and
+    // position go to the session for the branch at the top to resume.
     if (out.parked_mid_walk) {
         session.set_parked_write(Session::ParkedWrite{scope.txn, scope.owned, snap,
                                                       out.walk_cursor, statement_trail_mark_,
@@ -8187,10 +7942,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // after all (see the stop's arm below).
     bool parked_on_row = false;
     Status blocked_verdict;
-    // H6 step 2: the parse leg. One of `observability.md` §10's three
-    // request-level spans, and the cheapest to attribute wrongly - a
-    // statement that is slow to *parse* looks identical from outside to
-    // one that is slow to run.
+    // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
+    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
     auto parsed = [&] {
         stats::SpanScope span(trace_, stats::Layer::kParse);
         return parser::Parse(line);
@@ -8300,6 +8053,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     std::vector<exec::PendingSpill> frame_spills;
     std::vector<exec::PendingSpill> spills;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
+    bool conjuncts_checked = false;
 
     // Stage 2's decode target and what it decodes (BN-R2): every column
     // where a Cabin or an index reads the row (an assertion is asked per
@@ -8339,18 +8093,12 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     if (!fk_assignments.empty()) {
         // ---- The extraction pass (foreign-keys.md §2a, AH-R1) -----------
         //
-        // A SET assigns a literal, so the parent set is a property of the
-        // *statement* and is resolved here, once, before any row work -
-        // which is the comment the per-row check below used to carry as a
-        // regret ("this repeats one descent per row where one would do").
+        // A foreign-key SET value is constant, so the parent set is a
+        // property of the *statement*, resolved once before any row work.
         //
-        // **Resolving is not failing, and that distinction is what keeps
-        // this byte-identical.** An UPDATE matching zero rows must still
-        // answer `UPDATED 0` even when its SET names a parent that does not
-        // exist, because today's check never runs when no row qualifies.
-        // So the verdict is *held* here and *applied* per matched row: an
-        // unmatched statement resolves a parent, uses nothing, and reports
-        // what it always reported.
+        // **Resolving is not failing**: an UPDATE matching zero rows answers
+        // `UPDATED 0` even when its SET names a missing parent, so the
+        // verdict is *held* here and *applied* per matched row.
         for (const auto& [fk, index] : fk_assignments) {
             // A constant expression is folded at compile (BJ-Q10); one whose
             // fold failed has nothing to resolve, and the row that meets the
@@ -8375,21 +8123,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     std::uint32_t pages_touched = 0;
     PageId last_page = kInvalidPageId;
 
-    // **The unit this write declares** (AO-0 item 14, marked 2026-09-08),
-    // read off the predicate before a row is touched and taken once. A
-    // coarse declaration is what keeps a bulk write inside
-    // `max_locks_per_txn`; the declaration's own definition carries the
-    // argument for why choosing coarsely up front is not the escalation
-    // the mark forbids.
+    // **The unit this write declares** (AO-0 item 14), read off the
+    // predicate and taken once; a coarse declaration keeps a bulk write
+    // inside `max_locks_per_txn` (`DeclaredWriteBorrow` says why it is not
+    // escalation).
     //
-    // **A declaration the table refused is waited for, not demoted**
-    // (AO-S6c-c). Falling back to per-row was right while the borrow was
-    // advisory: it restored a ledger that would otherwise have recorded
-    // nothing at all. With the lock as the wait it is the worse of the two,
-    // and by a clear margin - a demoted statement writes the rows that do
-    // not conflict and then parks on one that does, which AO-S3b's
-    // re-runnability rule turns into a refusal, while waiting on the coarse
-    // unit parks having written nothing and re-runs cleanly.
+    // **A refused declaration is waited for, not demoted** (AO-S6c-c): a
+    // demoted statement would write rows and then park, which the
+    // re-runnability rule turns into a refusal; the coarse wait parks
+    // having written nothing.
     const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
     if (declared.has_value()) {
         // `kFutile`: a declared unit is refused by whoever conflicts with
@@ -8451,10 +8193,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
 
         // ---- Stage 1: only what the WHERE reads (OPT-001) ---------------
         //
-        // A statement that writes one row of two thousand used to decode
-        // all two thousand, twice over, before testing anything - the same
-        // defect AP01 measured at 75% of a SELECT's scan, left standing on
-        // the write path. `filter_mask` is the compiler's, hoisted to the
+        // A row is decoded only as far as the WHERE needs before it is
+        // tested. `filter_mask` is the compiler's, hoisted to the
         // statement because that is what it is a fact about; it is
         // kAllColumns whenever a sub-chain or a >64-column relation makes a
         // partial decode unsound (step_compiler.cpp's CompileWhere).
@@ -8462,6 +8202,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                               frame.SlotsFor(0), filter_mask, frame_spills);
             !s.ok()) {
             return s;
+        }
+        // Checked at the first row, as a SELECT's step is (BT-R5): an
+        // empty relation refuses nothing.
+        if (!conjuncts_checked) {
+            if (Status s = exec::CheckConjuncts(schemas, predicates.value(), frame);
+                !s.ok()) {
+                return s;
+            }
+            conjuncts_checked = true;
         }
         auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas, predicates.value(),
                                                frame, /*stats=*/nullptr, budget_, &snapshot);
@@ -8475,21 +8224,11 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // scanned past. No lock and no wait - the verdict is a pure
         // function of the tuple's current writer and this view.
         if (scope.txn != nullptr) {
-            // **The borrow, before the conflict is decided** (AO-S6a) -
-            // the operator's choice of order over reviving AO-R4's
-            // disjunction.
-            //
-            // **And it is before the header matters, which AO-S6b settled
-            // and this comment used to deny.** It said the grant could only
-            // become the authority at the cost of a re-read after it or the
-            // borrow moved above `ReadTuple`. Neither is owed: the borrow's
-            // key *is* the row's pk and the pk comes only from the tuple,
-            // so moving it above the read is impossible in principle; and a
-            // re-read would be redundant, because this whole walk runs
-            // inside a live write `PageRef` for the page and carries no
-            // `co_await`, so no peer core can write it and no coroutine on
-            // this core can interleave. The captured `trx_id` cannot go
-            // stale between the read and the grant.
+            // **The borrow, before the conflict is decided** (AO-S6a, the
+            // operator's choice of order). No re-read after the grant is
+            // owed (AO-S6b): the walk holds a live write `PageRef` for the
+            // page and carries no `co_await`, so the captured `trx_id`
+            // cannot go stale between the read and the grant.
             //
             // Per row, so no refusal of an earlier row is ever read as this
             // one's - `CheckWriteConflictBlocking` falls it back to `cur`
@@ -8501,37 +8240,17 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
             if (Status s = CheckWriteConflictBlocking(scope, trx_id, id.value(), blocker);
                 !s.ok()) {
-                // **AO-S3b: a conflict a wait can get past stops the walk
-                // rather than failing the statement.** `blocking_writer_`
-                // is the discriminator `CheckWriteConflictBlocking` already
-                // sets, and it is set only under `may_park_` with a live
-                // clock - so one naming *this row's* writer is a wait
-                // something can act on. Every other conflict is the refusal
-                // it always was. Returning OK is what lets the caller turn
-                // this into a `kStop`: the row is not written, and the walk
-                // ends holding no span.
+                // **A conflict a wait can get past stops the walk rather
+                // than failing the statement** (AO-S3b). `blocking_writer_`
+                // is set only under `may_park_` with a live clock; returning
+                // OK lets the caller turn this into a `kStop` holding no span.
                 //
-                // **Compared against `trx_id`, not merely tested non-zero.**
-                // The member is the statement's, not the row's: the forward
-                // foreign-key check records a busy *parent's* holder into it
-                // before the walk starts (`ResolveForeignKeyParents`). A
-                // bare non-zero test would then read that leftover as this
-                // row's verdict and park the statement on a transaction that
-                // holds nothing it wants - waiting for the wrong decide and
-                // resuming into the same refusal. `NoteBlockingWriter` is
-                // called here with this row's own `blocker`, so equality is
-                // exactly "this row's check is the one that recorded it".
-                //
-                // **Against `blocker` rather than `trx_id` since AO-S6c-b**:
-                // the two name the same transaction for a row an in-flight
-                // writer holds, but only the lock can name a holder of a
-                // *range* covering this key - and testing the header there
-                // would compare a leftover against a holder the header does
-                // not know, refusing a wait the table had already offered.
-                // This is not the narrower test it looks like:
-                // `CheckWriteConflictBlocking` writes the holder it
-                // recorded back into `blocker`, which is `trx_id` itself
-                // wherever the table named nobody.
+                // **Compared against this row's `blocker`, not tested
+                // non-zero**: the member is the statement's, and the forward
+                // foreign-key check may have left a parent's holder in it.
+                // `CheckWriteConflictBlocking` writes back the holder it
+                // recorded - the table's (a range holder, AO-S6c-b), or
+                // `trx_id` where the table named nobody.
                 if (blocker != 0 && blocking_writer_ == blocker) {
                     parked_on_row = true;
                     blocked_verdict = s;
@@ -8556,8 +8275,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // than read as a value.
         //
         // **The registry is asked here, after the conflict check, and only
-        // here** - the answer is the assertion site's too (the AT-S5d review:
-        // an assertion adopted on another core between two asks would send
+        // here** - the answer is the assertion site's too (AT-S5d: an
+        // assertion adopted on another core between two asks would send
         // the check an empty `previous`). After, because the check is where
         // the row's writer takes the relation's `IX`, and a build adopts its
         // assertion under `X`: asked before the grant, a build that adopts in
@@ -8610,13 +8329,9 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
 
         // ---- The forward check, for an fk column this SET touches (§2) --
         //
-        // Per matched row, after the row has qualified and the cheap
-        // conflict check has passed - but **the descent is no longer here**
-        // (§2a, AH-T1). The value is statement-constant, so the parent was
-        // resolved once above; what remains is applying the held verdict to
-        // this row, which is what keeps an UPDATE matching zero rows
-        // answering `UPDATED 0` rather than a violation it never used to
-        // report.
+        // Per matched row, after the row has qualified and the conflict
+        // check has passed. No descent here (§2a, AH-T1): the parent was
+        // resolved once above, and this applies the held verdict.
         for (const auto& [fk, index] : fk_assignments) {
             if (Status s = CheckForeignKeyOnWrite(ta, *fk, values[index], fk_held, scope);
                 !s.ok()) {
@@ -8660,15 +8375,10 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                                            ta.oid, previous, row,
                                                            id.value(), page_id, slot, &reserver);
                 !s.ok()) {
-                // AO-S6e-c, and the INSERT site states the argument. The pk
-                // *is* known here, so the wait names the row it is for.
-                // **`pk = 0` here too** (the review's B4). The first draft
-                // passed the row's id because it had one, and the message
-                // then read "row id=N is held by transaction M" about a
-                // holder that may never have touched row N - it holds a
-                // *group* reservation. The `INSERT` arm went to the length
-                // of a sentinel to avoid exactly that sentence, and
-                // `assertion.md` §6.2 states the rule for both arms.
+                // AO-S6e-c, and the INSERT site states the argument.
+                // **`pk = 0` although the pk is known**: the holder holds a
+                // *group* reservation and may never have touched this row
+                // (`assertion.md` §6.2 states the rule for both arms).
                 if (reserver != 0) {
                     NoteBlockingWriter(scope.txn, reserver, /*pk=*/0,
                                        RepeatableReadWait::kCapable);
@@ -8677,18 +8387,11 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
         }
 
-        // The spills this re-encode appended, collected so they can be logged
-        // below. **They were not collected before, and so not logged at all**:
-        // an UPDATE that spilled a value wrote the bytes into a var-heap page
-        // and told the log nothing, leaving a recovered tuple whose cell
-        // points at bytes no record describes (`docs/inflight/known-gaps.md`'s var-heap
-        // entry, hole 3).
-        //
-        // Collected when there is a log to write them to **or a transaction
-        // to roll them back** - the second half added with VC-B3, because a
-        // live Abort needs the trail entry whether or not anything is
-        // logged, and an unlogged dispatcher that dropped the collector
-        // would leak every value a rolled-back UPDATE spilled.
+        // The spills this re-encode appended, collected so they can be noted
+        // and logged below - a spill left unlogged is a recovered cell
+        // pointing at bytes no record describes. Collected when there is a
+        // log **or a transaction to roll them back** (VC-B3): a live Abort
+        // needs the trail entry whether or not anything is logged.
         //
         // `appended_spills`, not `spills`: the enclosing scope already has a
         // `PendingSpill` list, which is the opposite direction - values this
@@ -8717,8 +8420,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // nothing to fall back *from*: under the fixed-length rule the new
         // payload is exactly the same size as the old one, since a row's
         // size is a schema constant and not a function of its values
-        // (invariant 13). This used to be able to fail with OutOfSpace when
-        // a varchar grew past its slot's reservation.
+        // (invariant 13).
         //
         // That is the property the whole fixed-length rule exists for. An
         // UPDATE can never migrate a tuple, so combined with the immutable
@@ -8873,16 +8575,11 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             if (Status s = apply(found.at.page_id, page, found.at.slot); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
             }
-            // **AO-S3b: `apply` now answers OK for a row it declined to
-            // write**, so the count below is no longer proof that it
-            // did. Without this test a point UPDATE against a held row
-            // renders `UPDATED 0` - a success reply for a write that
-            // never happened, and an autocommit commit on top of it.
-            // There is exactly one row in scope here, so nothing was
-            // written and nothing can be resumed from: the conflict is
-            // the answer, and `EndWrite` keeps the blocker that makes
-            // `DispatchAsync` wait for the holder and run the whole
-            // statement again - the pre-AO-S3b behaviour of this arm.
+            // **`apply` answers OK for a row it declined to write**
+            // (AO-S3b), so without this a held row would render
+            // `UPDATED 0`. One row is in scope, so nothing was written:
+            // the conflict is the answer, and `EndWrite` keeps the blocker
+            // that makes `DispatchAsync` wait and re-run the statement.
             if (parked_on_row) {
                 return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
             }
@@ -8922,24 +8619,15 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         return {ErrorReply(scan), false, 0, scan};
     }
 
-    // **AO-S3b: the walk stopped on a held row, so this is not an answer.**
-    // Reported before the count is rendered, because `updated` here is the
-    // number of rows written *so far* and returning it would be a silent
-    // partial UPDATE - the one outcome this stage must never produce.
+    // **The walk stopped on a held row, so this is not an answer** (AO-S3b):
+    // `updated` counts rows written *so far*, and returning it would be a
+    // silent partial UPDATE.
     if (parked_on_row) {
         // **Only a statement that has written rows resumes.** One that has
         // not is answered with its conflict and re-run whole by
-        // `DispatchAsync`, which is AO-S3's shape and is *better* here
-        // rather than merely older: the re-run mints a fresh snapshot, so
-        // a holder that **committed** while it waited is visible to it and
-        // the write goes through against the new version. A resume carries
-        // the statement's original view by construction - it has to, or
-        // the rows it already wrote and the rows it has yet to reach would
-        // be read under two views - and under that view a committed holder
-        // is invisible, so the wait would end in the same refusal it
-        // started with. Resuming buys something only once there are rows
-        // that cannot be re-applied, which is exactly this test.
-        //
+        // `DispatchAsync` (AO-S3) under a fresh snapshot, which sees a holder
+        // that committed meanwhile; a resume keeps the original view, under
+        // which that holder stays invisible.
         if (scope.txn == nullptr || scope.txn->trail().size() == statement_trail_mark_) {
             return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
         }
@@ -8992,9 +8680,7 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
             }
             // **The level name is not one token** - `repeatable read` is two
             // - so it runs to the end of the clause, which is either the end
-            // of the statement or the next clause keyword. Splitting it as a
-            // token was this loop's first shape and it refused every level
-            // this engine actually has.
+            // of the statement or the next clause keyword.
             auto [name, tail] = SplitBeforeClause(after, "DURABILITY");
             auto parsed = txn::ParseIsolationLevel(Trim(name));
             if (!parsed.ok()) return {"ERR " + parsed.status().message(), false, 0, parsed.status()};
@@ -9066,7 +8752,12 @@ DispatchOutcome CommandDispatcher::CommitLocal(Session& session) {
     // The transaction's reservations become committed entries (§6.2 step
     // 4): flags cleared, ASSERT_COMMIT logged, before the commit record. A
     // failure leaves the transaction open - the client may retry COMMIT or
-    // ROLLBACK, and the pending set is untouched until one succeeds.
+    // ROLLBACK - but **not its pending set**: `CommitTxn` took it before the
+    // settle that failed. A retried COMMIT commits with the unsettled
+    // entries' flags left set; a ROLLBACK finds nothing to unapply and
+    // leaves their group totals counting rows it took back - too high, so
+    // the assertion refuses writes it could admit
+    // (`assertion-reservations-stranded-by-a-failed-settle.md`).
     if (Status s = enforcer_->CommitTxn(page_store_, wal_, id); !s.ok()) {
         return {ErrorReply(s), false, 0, s};
     }
@@ -9164,10 +8855,15 @@ DispatchOutcome CommandDispatcher::RollbackLocal(Session& session) {
     // The reservations first (§6.2 step 5): each one removed from its
     // group, ASSERT_ROLLBACK logged, before the undo trail replays - so the
     // directory and the pages unwind in the same statement the rows do.
-    if (Status s = enforcer_->AbortTxn(page_store_, wal_, id); !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
-    }
+    //
+    // **A failed unwind does not skip the rollback**, as `AbortOwnedScope`'s
+    // does not: `AbortTxn` has already taken the pending list and given some
+    // reservations back, so returning here left the transaction open with
+    // its rows, and a `COMMIT` after it kept the rows against totals that no
+    // longer counted them - an assertion admitting a violation.
+    Status unwound = enforcer_->AbortTxn(page_store_, wal_, id);
     Status aborted = txn_->Abort(*txn, RowLocatorForRollback());
+    if (!unwound.ok()) aborted = unwound;
     // Its catalog rows were retired by that abort, so there is nothing
     // left for anyone to be isolated from - and nothing that may still be
     // cached about them (DT3c, DT4). Before `Finish()`, which clears the
@@ -9284,15 +8980,10 @@ StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& s
 
 void CommandDispatcher::RefuseParkedWrite(DispatchOutcome& out, Session& session,
                                           const Status& refused, bool poison) {
-    // **AO-S3b: the wait ended badly and the statement is still holding a
-    // scope open.** A statement parked mid-walk left its transaction, its
-    // view and its position on the session so the resume could pick them
-    // up; a refusal means there is no resume, so the scope has to be ended
-    // here or it is never ended at all - an autocommit transaction never
-    // released, and the *next* statement on this session resuming into it.
-    // Ended through `EndWrite` rather than by hand so that both arms are
-    // the ones every other failed statement takes: an owned scope aborts
-    // and releases, an explicit transaction keeps its rows and poisons.
+    // **The wait ended badly and a mid-walk park still holds a scope open**
+    // (AO-S3b). With no resume coming it is ended here, or never; through
+    // `EndWrite`, so an owned scope aborts and releases and an explicit
+    // transaction keeps its rows and poisons, like any failed statement.
     if (session.parked_write().has_value()) {
         const Session::ParkedWrite parked = *session.parked_write();
         session.clear_parked_write();
@@ -9344,32 +9035,16 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
     // autocommit before its transaction is opened: it holds nothing and
     // will mint a fresh view, so both tests pass vacuously.
     if (waiter != nullptr) {
-        // **No cycle can form while every waiter holds nothing** - AO-S3's
-        // guard, and it is lifted exactly where a detector exists. With a
-        // lock table this core records a `waiter -> holder` edge before it
-        // parks and refuses the wait outright when that edge would close a
-        // cycle (AO-S4a), so a transaction holding rows may wait; without
-        // one the graph has no reader and the narrow rule is what keeps the
-        // stage deadlock-free.
+        // **Without a detector only a waiter holding nothing may wait**
+        // (AO-S3): no cycle can then form. With a lock table the edge is
+        // recorded before the park and a closing one is refused (AO-S4a).
         if (locks_ == nullptr && !waiter->trail().empty()) return;
-        // A repeatable-read waiter's re-run is refused because its view
-        // cannot see a holder that **commits** after it was minted. The
-        // exclusion is conservative rather than exact: a holder that
-        // *aborts* restores the row's prior writer id and the same view
-        // would then admit the write. Waiting only for the abort arm is a
-        // narrower promise than this stage set out to make, so the level
-        // stays excluded here.
-        //
-        // **And here is the whole of it now** (AO-S6d, item 17). Every
-        // sentence above is about a holder that wrote the row; a holder of
-        // a unit that wrote no version of it commits nothing this view
-        // needs to see, so the re-run answers the ordinary MVCC question
-        // and the wait pays off in either arm. The one case that made this
-        // a decision rather than a correction: the holder may write the row
-        // during the wait, and the re-run then meets a header naming it and
-        // is refused first-updater-wins - the correct repeatable-read
-        // outcome, reached after a wait rather than instead of one, which is
-        // PostgreSQL's shape and the operator's ruling of 2026-09-09.
+        // A repeatable-read waiter is not parked where the re-run is futile
+        // (`kFutile`: the holder wrote the row, whose commit its view cannot
+        // see, or the site cannot tell). A holder of a unit that wrote
+        // no version of the row is waited for (AO-S6d, item 17); if it
+        // writes the row meanwhile the re-run is refused first-updater-wins
+        // - the operator's ruling of 2026-09-09.
         if (waiter->isolation() == txn::IsolationLevel::kRepeatableRead &&
             rerun == RepeatableReadWait::kFutile) {
             return;
@@ -9384,12 +9059,9 @@ std::optional<Status> CommandDispatcher::BorrowRelationForDdl(txn::Transaction* 
                                                               txn::LockMode mode) {
     if (locks_ == nullptr || holder == nullptr) return std::nullopt;
 
-    // AR2 §3's DDL row: **the relation, `X`, for the DDL transaction**. Its
-    // one consumer in M2 is the read borrow beneath it (AO-R12): a
-    // positioned reader holds the same entry in `IS`, and the intention
-    // rule is where the two meet - which is also why no unit below this one
-    // is looked at, and why a reader that has not reached this relation
-    // yet, or that reads a different one, costs this nothing.
+    // AR2 §3's DDL row: **the relation, `X`, for the DDL transaction**. It
+    // meets a positioned reader's `IS` (AO-R12) and every writer's `IX`
+    // (AT-S5e) by the intention rule, so no unit below it is looked at.
     const txn::LockKey unit = txn::LockKey::Relation(oid);
     std::uint64_t blocker = 0;
     txn::LockWake wake;
@@ -9437,16 +9109,9 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     txn::LockHoldings& holdings = scope.txn->borrows();
     const std::uint64_t id = scope.txn->id();
 
-    // **The cap refuses the statement** (AO-S6c-c). While the borrow was
-    // advisory it was swallowed - failing a statement for the size of a
-    // ledger that guarded nothing is a cost with no matching benefit, which
-    // is the operator's decision of 2026-09-08 and the condition it
-    // attached. That condition has lapsed: since AO-S6c-b a refused borrow
-    // refuses the write, and since AO-S6c-c a fence stops an insert, so the
-    // ledger is what the engine reads to decide who may write. A truncated
-    // one is rows with no fence over them and no wait behind them, silently.
-    // AO-R10's rule - a cap refuses and never truncates - takes over, which
-    // is what AO-0 item 1's mark said the end state would be.
+    // **The cap refuses the statement** (AO-S6c-c, AO-R10: a cap refuses
+    // and never truncates). The ledger decides who may write, so a
+    // truncated one would leave rows with no fence and no wait, silently.
     //
     // The detail is recorded rather than attached: a `Status` carries none,
     // so `DispatchOutcome::resource_detail` is how `kLockCap` reaches the
@@ -9474,9 +9139,7 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     // refuses this `IX`, and that holder may be on any core. A refusal
     // here parks on the table's own slot, flipped by the release from
     // whichever core releases and followed by a kick -
-    // `BorrowRelationForDdl`'s wait, from the other side. (The row-level
-    // wait's `IsInFlight` read a DDL on a peer as decided until AX-S1, so
-    // that wait would have refused the write rather than held it.)
+    // `BorrowRelationForDdl`'s wait, from the other side.
     //
     // **`IS` over a shared unit** (D9(a), AY-S5): a foreign key's parent row
     // is read and held, not written, so the relation above it is declared
@@ -9499,7 +9162,7 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
         return false;
     }
     // **The first intention is where the statement's memo has to be
-    // current** (the AT-S5e review's C2). The memo was settled at the task
+    // current** (AT-S5e). The memo was settled at the task
     // boundary, and the `IX` is asked later - after the resolution, and for
     // a per-row write after a walk - so a `CREATE INDEX` or a `CREATE
     // ASSERTION` could take the relation `X`, publish and release in
@@ -9634,6 +9297,7 @@ CommandDispatcher::PkWindow CommandDispatcher::FoldPkWindow(
             case parser::CompareOp::kNeq:
             case parser::CompareOp::kIsNull:
             case parser::CompareOp::kIsNotNull:
+            case parser::CompareOp::kLike:  // never flat (BU-S2); refused all the same
                 unread(cond);
                 break;
         }
@@ -9648,17 +9312,10 @@ std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
     // No predicate at all: the statement touches every row of the
     // relation, so **the whole id space** is what it declares.
     //
-    // The relation *unit* is deliberately not what it takes, and the
-    // distinction is the one AO-S6e-b had to draw: the relation unit means
-    // the relation as an **object** - its existence and its schema, which
-    // is what DDL claims and what a positioned reader declares an `IS` on -
-    // while a write's claim is over **keys**. Collapsing a `WHERE`-less
-    // write onto the relation entry was cheaper (one entry, no fence
-    // counter) and made it conflict with a reader's `IS` there, by the
-    // intention rule, for rows MVCC already answers that reader from its
-    // snapshot. A range over the whole space says the same thing about
-    // keys and meets other writers exactly where every other declared
-    // window does.
+    // Not the relation *unit* (AO-S6e-b): that is the relation as an
+    // **object** - what DDL claims and a positioned reader's `IS` covers -
+    // while a write's claim is over **keys**, and on the relation entry it
+    // would conflict with every reader's `IS` for rows MVCC already answers.
     if (where.empty()) return txn::LockKey::Range(access.oid, 0, kIdSpaceEnd);
 
     // Otherwise, the pk window the conjuncts name - if they name one.
@@ -9675,26 +9332,17 @@ std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
     if (!window.bounded) return std::nullopt;
     // An empty window writes nothing, so there is nothing to declare.
     if (lo >= hi) return std::nullopt;
-    // **A window of one key stays per-row**, and this is not a
-    // micro-optimisation: a tuple `X` is the finer expression of the same
-    // hold at the same cost of one entry, and taking a *fence* instead
-    // would raise the relation's fence counter - which sends every other
-    // writer of that relation through the all-partition scan AO-R3 exists
-    // to keep them out of. The commonest OLTP write there is must not pay
-    // that, and it is `WHERE id = k`.
+    // **A window of one key stays per-row**: a fence would raise the
+    // relation's fence counter and send every other writer through the
+    // all-partition scan AO-R3 keeps them out of, for `WHERE id = k`.
     if (hi - lo <= 1) return std::nullopt;
-    // `WHERE id >= 0` is the same statement as no `WHERE` at all and
-    // borrows the same way - which since AO-S6e-b is the whole id space as
-    // a range rather than the relation entry, for the reason the no-`WHERE`
-    // branch above states.
+    // `WHERE id >= 0` borrows as no `WHERE` does: a range, not the relation.
     return txn::LockKey::Range(access.oid, lo, hi);
 }
 
 Status CommandDispatcher::HeldByHolder(std::uint64_t pk, std::uint64_t holder) {
-    // `HolderName`, because a holder is not always a transaction since
-    // AO-S6e-b: a read borrow holds under an id of its own, and an operator
-    // sent after "transaction 9223372036854775809" is being sent after
-    // something that never existed.
+    // `HolderName`, because a holder is not always a transaction: a read
+    // borrow holds under an id of its own (AO-S6e-b).
     return Status::TxnConflict("row id=" + std::to_string(pk) + " is held by " +
                                HolderName(holder));
 }
@@ -9737,13 +9385,9 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
         if (Status final_answer = before_wait(); !final_answer.ok()) return final_answer;
     }
 
-    // **A refused borrow stops the write.** An insert has no conflict check
-    // of its own to convert - the row does not exist, so there is no header
-    // to judge - which is why AO-S6c-b left both insert paths alone and why
-    // a range fence did not stop an insert into its window until AO-S6c-c.
-    // Without this, item 14's declared unit guarded its holder against
-    // writers of rows that *exist* and not against rows that *appear*,
-    // which is the one thing a range fence is for.
+    // **A refused borrow stops the write** (AO-S6c-c). An insert has no
+    // header to judge, so without this a range fence (item 14's declared
+    // unit) would guard against rows that exist and not rows that appear.
     //
     // `NoteBlockingWriter` is the recorder every other wait in this file
     // uses and carries the same conditions - it records nothing outside
@@ -9765,15 +9409,10 @@ Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, st
                                                      std::uint64_t& blocker) {
     Status verdict = txn_->CheckWriteConflict(*scope.txn, cur, pk);
 
-    // **A refused borrow is a conflict in its own right** (AO-S6c-b), and
-    // this is what makes the lock the wait rather than a name attached to
-    // somebody else's refusal. The MVCC check answers about the row's own
-    // *writer*: it is silent about a transaction that holds a **range**
-    // over this key and has not reached this row yet, because the header
-    // still names whoever wrote it last and that writer is long visible.
-    // So a fence-blocked write used to pass this check and go on to write a
-    // row another transaction had already claimed the right to move - the
-    // lost update item 14's coarse units exist to prevent.
+    // **A refused borrow is a conflict in its own right** (AO-S6c-b). The
+    // MVCC check answers about the row's last *writer* and is silent about
+    // a transaction holding a **range** over the key that has not reached
+    // the row yet - the lost update item 14's coarse units prevent.
     //
     // The message follows `CheckWriteConflict`'s, which `txn/manager.cpp`
     // calls part of the wire contract rather than a diagnostic: same shape,
@@ -9781,48 +9420,22 @@ Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, st
     // the client is waiting for.
     if (verdict.ok() && blocker != 0) verdict = HeldByHolder(pk, blocker);
     if (verdict.ok()) return verdict;
-    // **The row is held by a writer that has not decided, so the statement
-    // waits for it instead of refusing** (AO-S3, AO-3 B rows 1 and 2).
+    // **The row is held by an undecided writer, so the statement waits
+    // instead of refusing** (AO-S3; AR2-A §1: a client retry loop is a
+    // wait in the wrong place). Noted, not acted on: this is inside a page
+    // span and a row callback, so `DispatchAsync` waits on the statement
+    // once it is known that nothing was written.
     //
-    // AR2-A §1's first axis: the client's retry loop is a wait written in
-    // the wrong place, spinning a round trip per attempt on a schedule
-    // nobody chose, so every holder that has not decided is waited for alike.
+    // **The blocker is not a diagnostic**: it tells `EndWrite` to withhold
+    // the poison, so recording one nothing will re-run would leave a failed
+    // transaction committable (§6). `NoteBlockingWriter` holds every
+    // condition on recording it.
     //
-    // Noted, not acted on: this function is inside a page span and a row
-    // callback, which is no place to park. `DispatchAsync` is where the
-    // wait happens, on the statement, once it is known that nothing was
-    // written.
-    //
-    // **The blocker is not a diagnostic** - it is the one thing that tells
-    // `EndWrite` to withhold the poison a failed statement owes an explicit
-    // transaction - so recording it where nothing will re-run the statement
-    // would leave a client told `ERR` and a transaction still committable,
-    // which is the failure atomicity §6 states. `NoteBlockingWriter` is
-    // where every condition on recording it lives, including the two that
-    // keep this stage deadlock-free and its waits non-futile.
-    // **The holder is the table's where the table names one, and the
-    // header's where it does not** (AO-S6c-b). The lock names holders the
-    // header never could - a transaction holding a *range* over this key,
-    // which is what item 14's declared units put in the table - and
-    // sourcing the wait from the header alone leaves those refusing
-    // instead of waiting, which is the refusal AR2-A §1 measures this
-    // milestone by removing.
-    //
-    // **The table is not read alone, and one of the two reasons has since
-    // gone.** A truncated ledger was the first: while the cap was swallowed
-    // a transaction past `max_locks_per_txn` kept writing and recorded
-    // nothing more, so its later rows had an in-flight writer in the header
-    // and no entry to find. AO-S6c-c ended that - the cap refuses the
-    // statement now, so no row is ever written without its borrow.
-    //
-    // The second stands and is why this is still a union: **a dispatcher
-    // with no lock table at all**, where `BorrowChain` grants everything
-    // vacuously and `blocker` is zero for every row. That is exactly the
-    // state AO-S3 waited through, so reading the table alone would not
-    // *move* those waits, it would delete them - 7 of the 12 blocked-writer
-    // cells failed at once when this was tried, and
-    // `WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe` is the cell that
-    // says the configuration still behaves.
+    // **The holder is the table's where the table names one, the header's
+    // where it does not** (AO-S6c-b): the table names range holders the
+    // header cannot. Still a union because a dispatcher with no lock table
+    // grants every borrow vacuously, and reading the table alone would
+    // delete its waits (`WithoutATableTheNarrowGuardIsWhatKeepsTheStageSafe`).
     //
     // Written back rather than kept local, because the write sites tell
     // this row's own recording from a leftover on the same member by
@@ -9869,26 +9482,23 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         blocking_writer_ = 0;
         blocked_pk_ = 0;
     }
-    // **And AO-S6e-b's lock wait, on the same test and with one more
-    // thing to undo.** The borrow is asked for before the DDL's first
-    // catalog write, so a statement that reaches here having written
-    // something did not reach the ask - but the test is the shape all three
-    // waits share and stating it once per wait is what keeps them one rule.
-    // The registration goes with the wait: dropped here, it cannot outlive
-    // a statement that will not be re-run.
+    // **And the relation-lock wait (AO-S6e-b), on the same test**, its
+    // registration dropped with it so it cannot outlive a statement that
+    // will not be re-run.
     if (lock_wait_.has_value() &&
         (result.ok() || scope.txn->trail().size() != statement_trail_mark_)) {
         if (locks_ != nullptr) locks_->DropWake(lock_wait_->key, lock_wait_->slot);
         lock_wait_.reset();
     }
     // **A structural refusal from a statement that wrote nothing is re-run**
-    // (BA-S14): `DispatchAsync` waits a turn and runs it again, so it does
-    // not poison - the refusal that ends the re-runs does, there. Any other
-    // end - rows written (BA-R11's "who it reaches"), no park to re-run
-    // from - clears the note, so `DispatchAsync` answers it as before. Not
+    // (BA-S14): `DispatchAsync` and `Dispatch` wait a turn and run it again,
+    // so it does not poison - the refusal that ends the re-runs does, there.
+    // Any other end - rows written (BA-R11's "who it reaches"), or a caller
+    // that re-runs nothing (`ExecuteInsert`, `RefuseParkedWrite`) - clears
+    // the note, so the refusal is answered as before. Not
     // a test on `result`'s code: the write paths hand this an
     // `InvalidArgument` verdict built from the rendered line.
-    const bool structural_rerun = may_park_ && !result.ok() &&
+    const bool structural_rerun = (may_park_ || reruns_structural_) && !result.ok() &&
                                   storage::StructuralRefusalNoted() &&
                                   scope.txn->trail().size() == statement_trail_mark_;
     if (!structural_rerun) storage::ClearStructuralRefusal();
@@ -9903,23 +9513,12 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         // reservations stay pending and ROLLBACK's hook unwinds them with
         // everything else.
         //
-        // **The one failure that does not poison** (R6-5): a write refused
-        // by an undecided holder's row before it wrote anything. The transaction is
-        // exactly as it was - that is what the trail check above
-        // established - and poisoning it would turn a wait into a forced
-        // ROLLBACK, which is the stall D5's ceiling exists to bound rather
-        // than the failure it exists to avoid. The client is told nothing
-        // yet: `DispatchAsync` either re-runs the statement or answers the
-        // named refusal, and *that* refusal poisons like any other, at the
-        // end of the wait.
-        // **A refused borrow is the second such failure** (AO-S6e-b). A
-        // `DROP TABLE` inside a transaction that meets a positioned reader
-        // has written nothing and asked for nothing else; poisoning it
-        // would turn the wait `DispatchAsync` is about to take into a
-        // forced ROLLBACK, and the re-run would answer "transaction is
-        // aborted" - non-retryable - where the client used to get a
-        // relation dropped. The refusal that ends the wait poisons like any
-        // other, because by then `lock_wait_` is empty.
+        // **The failures that do not poison yet**: a write refused by an
+        // undecided holder before it wrote anything (R6-5), a refused
+        // relation borrow (AO-S6e-b), and a structural refusal due a re-run
+        // (BA-S14). The transaction is as it was, and poisoning would turn
+        // the wait `DispatchAsync` is about to take into a forced ROLLBACK;
+        // the refusal that ends the wait poisons like any other.
         if (!result.ok() && blocking_writer_ == 0 && !lock_wait_.has_value()) {
             if (structural_rerun) {
                 structural_poison_withheld_ = true;
@@ -9941,28 +9540,17 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     // flags say, so clearing early is recoverable in both directions.
     //
     // **Both failures below unwind** (AO-S6d, item 15), through
-    // `AbortOwnedScope`, whose declaration carries the argument and what
-    // the old `return` cost. Both are states `Abort` is defined for:
+    // `AbortOwnedScope`. Both are states `Abort` is defined for:
     // `CommitTxn` here only clears assertion entries, and
-    // `TransactionManager::Commit` fails only ahead of its `PublishCommit`,
-    // so neither has published anything a rollback would take back.
+    // `TransactionManager::Commit` fails only ahead of its `PublishCommit`.
     //
-    // **One thing the unwind cannot reach on this first arm**, stated here
-    // rather than implied by the call below it:
+    // **What the unwind cannot reach on the first arm**:
     // `AssertionEnforcer::CommitTxn` takes the reservation list out of
-    // `pending_` before anything that can fail (`assertion_check.cpp`
-    // says why), so a failure part-way through leaves nothing for
-    // `AbortTxn` to find and the reservations it had not yet settled are
-    // neither committed nor unapplied. The Bound Cabin then counts a
-    // contribution whose row this unwind has just compensated. That is
-    // **fail-closed** - an aggregate too high refuses writes it could
-    // admit, it never admits one it should refuse - and it is not a
-    // regression: before AO-S6d the row leaked too, inside a transaction
-    // that stayed in flight for ever and was therefore invisible to every
-    // reader, so the count was already describing rows nobody could see.
-    // Closing it means changing what a failed settle leaves behind, which
-    // is the enforcer's decision and not this arm's:
-    // `docs/inflight/bugs/assertion-reservations-stranded-by-a-failed-settle.md`.
+    // `pending_` before anything can fail, so a part-way failure strands
+    // its unsettled reservations and the Bound Cabin counts a contribution
+    // whose row was compensated. **Fail-closed** - an aggregate too high
+    // refuses writes, never admits one it should refuse. Its bug entry was
+    // closed unreproduced (`git show eeb88f47:docs/inflight/bugs/assertion-reservations-stranded-by-a-failed-settle.md`).
     if (Status s = enforcer_->CommitTxn(page_store_, wal_, scope.txn->id()); !s.ok()) {
         return AbortOwnedScope(scope, s);
     }
@@ -9992,18 +9580,12 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
 Status CommandDispatcher::AbortOwnedScope(WriteScope& scope, const Status& reported) {
     const std::uint64_t id = scope.txn->id();
 
-    // **The enforcer's failure no longer skips the transaction's own
-    // unwind** (AO-S6d): it used to return here. The two are independent in
-    // the direction that matters - assertion entries this core could not
-    // settle say nothing about whether the trail can be compensated.
-    //
-    // **A no-op on one of the three callers**, worth saying at the call
-    // rather than leaving to be discovered: after a failed
-    // `enforcer_->CommitTxn` there is no pending list left to unapply, and
-    // `EndWrite`'s comment at that arm states what that leaves behind.
-    // Called unconditionally anyway, because on the other two it is the
-    // whole of the assertion unwind and a test on which caller it is would
-    // be the branch that goes wrong.
+    // **The enforcer's failure does not skip the transaction's own unwind**
+    // (AO-S6d): unsettled assertion entries say nothing about whether the
+    // trail can be compensated. A no-op after a failed `enforcer_->CommitTxn`
+    // (nothing pending is left; `EndWrite` says what that leaves), called
+    // unconditionally because on the other two callers it is the whole
+    // assertion unwind.
     Status unwound = enforcer_->AbortTxn(page_store_, wal_, id);
     if (Status s = txn_->Abort(*scope.txn, RowLocatorForRollback()); unwound.ok()) {
         unwound = s;
@@ -10115,6 +9697,7 @@ Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Co
         }
     }
     const std::uint32_t at = cond.lhs_fn.has_value() ? cond.lhs_fn->byte_offset
+                             : cond.tree != nullptr   ? cond.tree->byte_offset
                              : !cond.col.name.empty() ? cond.col.byte_offset
                                                       : where_byte;
     return Status::NotImplemented(
@@ -10325,10 +9908,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // AO-S3b, and `UpdateInner`'s site states the argument.
     bool parked_on_row = false;
     Status blocked_verdict;
-    // H6 step 2: the parse leg. One of `observability.md` §10's three
-    // request-level spans, and the cheapest to attribute wrongly - a
-    // statement that is slow to *parse* looks identical from outside to
-    // one that is slow to run.
+    // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
+    // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
     auto parsed = [&] {
         stats::SpanScope span(trace_, stats::Layer::kParse);
         return parser::Parse(line);
@@ -10378,6 +9959,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     std::vector<std::byte> payload_copy;
     std::vector<exec::PendingSpill> frame_spills;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
+    bool conjuncts_checked = false;
 
     // ---- Stage 1 of the walk -------------------------------------------
     //
@@ -10407,6 +9989,14 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                                               frame.SlotsFor(0), filter_mask, frame_spills);
             !s.ok()) {
             return s;
+        }
+        // Checked once at the first row, as UPDATE's (BT-R5).
+        if (!conjuncts_checked) {
+            if (Status s = exec::CheckConjuncts(schemas, predicates.value(), frame);
+                !s.ok()) {
+                return s;
+            }
+            conjuncts_checked = true;
         }
         auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas, predicates.value(),
                                                frame, /*stats=*/nullptr, budget_, &snapshot);

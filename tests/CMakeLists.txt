@@ -113,6 +113,9 @@ add_executable(kds_tests
     trail_recorder_test.cpp
     waystone_replay_test.cpp
     function_conjunct_test.cpp
+    where_bool_test.cpp
+    where_value_list_test.cpp
+    where_bool_subquery_test.cpp
     waystone_contract_test.cpp
     cabin_contract_test.cpp
     foreign_key_test.cpp
@@ -182,6 +185,8 @@ add_executable(kds_tests
     inner_build_contract_test.cpp
     step_correlation_test.cpp
     exec_chain_test.cpp
+    scan_row_walk_test.cpp
+    scan_kernel_test.cpp
     exec_subquery_test.cpp
     exec_budget_test.cpp
     subsystem_logging_test.cpp
@@ -219,6 +224,7 @@ add_executable(kds_tests
     sim_rng_test.cpp
     sim_loop_test.cpp
     bounded_pool_test.cpp
+    half_done_mutation_test.cpp
     wal_golden_log_test.cpp
     wal_shared_stream_test.cpp
     wal_recycle_premise_test.cpp

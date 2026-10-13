@@ -1751,7 +1751,7 @@ private:
     }
 
     // Three-valued AND and OR, left to right, the right operand skipped once
-    // the left decides the answer - so `b <> 0 AND a / b > 1` is safe.
+    // the left decides the answer - so `b != 0 AND a / b > 1` is safe.
     StatusOr<parser::AstValue> Logic(const TypedSetExpr& e) const {
         const bool is_and = e.op == ExprOp::kAnd;
         auto l = Eval(*e.lhs);

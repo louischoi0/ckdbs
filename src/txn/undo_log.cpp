@@ -44,15 +44,10 @@ Status UndoLog::LogUndoWrite(std::uint64_t trx_id, PageId page_id, std::uint16_t
     // repeating it inside the bytes would store one fact twice.
     //
     // That split is txn.md section 3.5's `payload.tail = record bytes
-    // [+16, +28 + image_len)`, and until 2026-08-10 this function logged
-    // the image alone - which left `target_page_id`, `target_slot` and
-    // `type` on the page and nowhere in the log, so redo could rebuild a
-    // chain that named no tuple (docs/workplan-wal-recovery.md RC03). The
-    // spec was right and the code was not.
-    //
-    // Safe to change without a format version precisely because nothing has
-    // ever read the log back: recovery does not exist, so no stream in
-    // existence is ever interpreted under the old reading.
+    // [+16, +44 + image_len)`: the tail carries `target_page_id`,
+    // `target_slot` and `type`, without which redo would rebuild a chain
+    // that named no tuple (docs/workplan-wal-recovery.md RC03; the
+    // image-only form went 2026-08-10).
     std::vector<std::byte> tail(UndoRecordTailSize(image.size()));
     if (Status s = EncodeUndoRecordTail(tail, fields, image); !s.ok()) return s;
 

@@ -97,9 +97,8 @@ Status WriteTrail(storage::PageStore& store, PageId root, int depth, const Insta
     //
     // Rewriting them costs a **dirtied page**, and a dirtied page costs a
     // device write at the next flush. Comparing first costs a read that
-    // does not dirty anything. Measured on tools/join_benchmark.py, the
-    // rewrite was most of an 18% p50 regression on a point join; this
-    // removes it for the case that dominates.
+    // does not dirty anything (the rewrite was most of an 18% p50
+    // regression on a point join, tools/join_benchmark.py).
     //
     // Read through GetForRead(), which is the whole point - a Get() here
     // would dirty the page just to look at it and defeat the exercise.

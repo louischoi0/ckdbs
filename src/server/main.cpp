@@ -114,13 +114,10 @@ std::string PromptPassword(const char* prompt) {
 // file. Runs instead of the server and never opens the data file - a
 // users file is deployment state, not database state.
 //
-// The iteration count is fixed at scram::kDefaultIterations, and the
-// --iterations flag that briefly raised it was removed on review: the
-// unknown-user mock always answers i=4096, so any verifier above it was
-// identifiable in one round trip - the same enumeration oracle the mock
-// exists to close, through a different attribute. Raising the count is
-// future work tied to teaching the mock the deployment's own number
-// (docs/spec/protocol.md §14).
+// The iteration count is fixed at scram::kDefaultIterations: the
+// unknown-user mock always answers i=4096, so a verifier at any other count
+// would be identifiable in one round trip - the enumeration oracle the mock
+// exists to close (docs/spec/protocol.md §14).
 int AddUser(const std::string& users_file, const std::string& username,
             kds::server::Role role) {
     const std::uint32_t iterations = kds::server::scram::kDefaultIterations;

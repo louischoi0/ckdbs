@@ -48,9 +48,10 @@
 // reader-horizon gate exists for. `delete_marked` is therefore an upper
 // bound on what a compact could drop, and the report says `blocked_on`
 // beside the number it would buy. `chain_pages` counts pages holding at
-// least one visitable slot - a page whose every slot was retired would be
-// invisible to the walk, which nothing can produce today (user tuples are
-// delete-marked, never retired).
+// least one visitable slot - a page whose every slot was retired is
+// invisible to the walk. On a heap (the only storage this plans) only a
+// rollback retires a user slot - a page whose every insert was rolled
+// back; `PURGE` is btree-only.
 //
 // Concurrency: core-local, read-only, no state of its own (rules.md #3).
 

@@ -10,8 +10,7 @@
 #include "kds/txn/undo_log.hpp"
 
 // The visibility predicate: which version of a tuple a read view is
-// entitled to (docs/spec/txn.md section 4.3). It is the **first consumer of
-// `Tuple::deleted`**, which the engine has set and never read.
+// entitled to (docs/spec/txn.md section 4.3).
 //
 // ---- Two phases, and the reason is structural ----------------------------
 //
@@ -59,10 +58,9 @@ enum class Visibility : std::uint8_t {
 };
 
 // Phase 1 (txn.md section 4.3 step 2 and 3). No page fetch, safe to call
-// with a page span live. **Not pure since AN-S2**: an invisible-by-floor
-// writer costs the view one latched window lookup (`read_view.hpp`), which
-// is why this is no longer `constexpr` - and still no fetch, which is the
-// property the span rule needs.
+// with a page span live. **Not pure**: a writer at or above the floor costs
+// the view one latched window lookup (`read_view.hpp`) - but still no
+// fetch, which is the property the span rule needs.
 inline Visibility Classify(const ReadView& view, std::uint64_t trx_id, bool deleted,
                            std::uint64_t undo_ptr) {
     if (view.Visible(trx_id)) {
@@ -123,7 +121,7 @@ StatusOr<Visibility> ResolveThroughUndo(const ReadView& view, UndoLog& undo,
 // is a sibling function rather than a flag on the other one.
 //
 // The caller supplies a view minted **at check time**
-// (TransactionManager::MintReadView), not the statement's. Under such a view
+// (TransactionManager::MintCheckView), not the statement's. Under such a view
 // "not visible" means "in flight right now", which is exactly the question
 // F3 asks. A transaction's own uncommitted writes stay visible through
 // `own_trx_id`, so a check inside a transaction judges by that

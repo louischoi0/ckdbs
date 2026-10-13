@@ -89,7 +89,7 @@ filter.
 `CatalogCache` memoizes name→oid and oid→`TableAccess`, per instance and
 snapshot-blind. The rule that keeps it correct: **a view is minted only
 while some transaction holds uncommitted DDL** (`CommandDispatcher::
-ViewFor`, gated by `ddl_txns_`). With none in flight every catalog row is
+ViewFor`, gated by `ddl_txns_` - a set kept per dispatcher, so per core). With none in flight every catalog row is
 either a bootstrap row or a committed one, so an unfiltered, cached read
 is correct for every reader. While one is open, a statement resolves
 names under a view — its own transaction's, or a fresh committed-now view
@@ -111,15 +111,14 @@ Built, and what each gets:
   leaves no relation and no rows. **One name, one row on every core since
   AT-S17**: the duplicate check and the insert are one hold of
   `sys.objects`' root page, and the check refuses a name another core's
-  open drop has freed, answering `TXN_CONFLICT retryable=1` where it was a
-  bare `ERR` asked on one core only (`catalog.md` CT7, which also covers
+  open drop has freed, answering `TXN_CONFLICT retryable=1` (`catalog.md`
+  CT7, which also covers
   `RENAME TO`, `CREATE NAMESPACE`, `RENAME COLUMN`, index and assertion
   names, and a column's cabin).
 - **`DROP TABLE`** — **atomic only**, and deliberately not isolated;
   §5a is the whole argument. Every production drop delete-marks its
   dependent rows, autocommit's implicit transaction included; a drop at
-  the bootstrap id retires them, and only tests reach one (BF-Q12 (a): the
-  code governs, and this sentence said autocommit retires).
+  the bootstrap id retires them, and only tests reach one (BF-Q12 (a)).
 - **`CREATE INDEX`** — atomic and isolated, exactly as `CREATE TABLE`,
   on every core: it takes the relation `X` and builds where its session is
   (§5e).
@@ -140,8 +139,9 @@ Their catalog writes are logged and durable (§7) but not undone by
 A drop inside a transaction **delete-marks** its dependent rows instead of
 retiring them and records the `sys.objects` retype's before-image, both on
 the transaction's trail — so `ROLLBACK` clears the marks and rewrites the
-tombstone back to a live table, restoring the relation and its rows.
-Autocommit retires.
+tombstone back to a live table, restoring the relation and its rows. An
+autocommit drop does the same inside the implicit transaction `BeginWrite`
+opens (`drop-table.md` DT5).
 
 **Other sessions see the drop immediately, before it commits.** The
 `sys.objects` retype is an *in-place overwrite*, and a catalog row has no
@@ -321,9 +321,8 @@ retires every delete-marked row whose deleter is **resolved for every
 reader** — below the instance's floor, or committed at or below every live
 and future snapshot (`TransactionManager::ResolvedForEveryReader()`,
 `txn.md` §4.1). **Core 0's 50 ms `system` tick runs it**
-(`CommandDispatcher::SweepSettledDeleteMarks`, BP-H11), since BP-S4; it
-rode core 0's own DDL resolution before, so a peer's `DROP` left its marks
-until core 0 next ran DDL or the next mount.
+(`CommandDispatcher::SweepSettledDeleteMarks`, BP-H11, since BP-S4), so a
+peer's `DROP` is swept as soon as it settles.
 
 **Why the horizon licenses what §5c's mount-only rule forbade.** After
 mount a mark may belong to a transaction that is still open — or to a
@@ -402,18 +401,15 @@ while the DDL is undecided parks on the slot and re-runs after the decide.
 **Two things make the re-run see what the decide did.** The decide moves
 the schema word before its borrows are released
 (`Transaction::NoteWroteCatalog`), so the re-run's task boundary drops the
-memo it resolved while the DDL was open. That mattered most for a
-rolled-back `DROP INDEX`, whose index another core's memo had left out
-while DT9's predicate was core-local (§5b, until AX-S2); since then that
-memo keeps the index, and no cell now shows the rollback's move to be
-load-bearing (`known-gaps.md`, Testing). And a writer's *first* intention checks that the
+memo it resolved while the DDL was open (since AX-S2 made §5b's predicate
+the instance's, no cell shows this load-bearing for a rolled-back `DROP
+INDEX`; `known-gaps.md`, Testing). And a writer's *first* intention checks that the
 word has not moved since its own boundary (`Catalog::MemoIsCurrent`): the
 intention comes after the resolution, and a DDL could have taken the
 relation, published and released in between; moved, the statement runs
 again before it writes anything. A writer on another core waits the same way: the slot is flipped by
 the release from whichever core releases, and the kick that follows wakes
-the waiter's core, which a poll of `IsInFlight` - the instance's since
-AX-S1 - would not.
+the waiter's core.
 
 **Atomic and isolated, on every core.** A `CREATE INDEX` backfills with no
 concurrent writer, so the finished index holds every row, and nothing names
@@ -447,10 +443,8 @@ exactly as a dropped assertion's pages do.
 **Fenced from every writer, on every core, since AT-S5e** (AT-0 item 13,
 the operator's mark). The build takes the relation `X` as §5e's statements
 do, so it waits for every open writer of the relation and every writer that
-arrives parks until the directory is adopted and then re-runs against it.
-Until then the build took no lock, and a write on another core admitted
-before the adoption could land a row where the scan had passed and be
-counted by neither. **Its holder is a transaction of the statement's own**,
+arrives parks until the directory is adopted and then re-runs against it,
+so no write lands where the scan has passed uncounted. **Its holder is a transaction of the statement's own**,
 not the session's: it writes nothing and is rolled back when the statement
 ends, so the relation is released at the statement's end rather than at the
 session's `COMMIT`, and a failed `CREATE ASSERTION` still poisons nothing.

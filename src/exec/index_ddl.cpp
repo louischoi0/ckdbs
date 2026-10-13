@@ -125,9 +125,8 @@ Status AppendVersion(storage::PageStore& store, const catalog::TableAccess& acce
 // Builds `ix`'s tree over everything the relation already holds, and returns
 // the root it ended at (spec §10a).
 //
-// **Every version, not only the current one.** DDL is not transactional, so
-// the index becomes visible to every reader at once - including one holding
-// an older snapshot, which must find *its* version through it. Every version
+// **Every version, not only the current one.** A reader holding an older
+// snapshot that probes the index must find *its* version through it. Every version
 // of a logical tuple shares one pk, so the walk is bounded by the undo chain
 // and the entries are the ordinary shape. `IndexInsert` deduplicates a
 // byte-identical entry, so a version that did not move the key costs nothing
@@ -302,10 +301,8 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
                                 wal::WalManager* wal) {
     // The layout the definition's widths encode: `PrepareIndexDef` stored
     // `entry_width` as `leaf_entry_width()`, so the covered width is what
-    // is left after the key and the pk. Re-derived rather than carried, so
-    // a definition crosses a ring as the plain `IndexDef` - and guarded,
-    // because one that did is bytes this core did not compute.
-    // `FormatRoot` re-checks the layout as a whole.
+    // is left after the key and the pk. Re-derived rather than carried, and
+    // guarded; `FormatRoot` re-checks the layout as a whole.
     if (def.entry_width < def.key_width + index::kIndexPkWidth) {
         return Status::InvalidArgument("index oid " + std::to_string(def.index_oid) +
                                        ": entry width " + std::to_string(def.entry_width) +
@@ -313,9 +310,9 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
     }
     // The same guard for the column counts, and here it is memory safety
     // rather than a message: `IndexRef`'s arrays are fixed at the caps, and
-    // the assembly below writes one element per declared column. A
-    // definition this core computed came through `CheckIndexDef`, which
-    // refuses over-cap and empty; one that crossed a ring did not.
+    // the assembly below writes one element per declared column.
+    // `CheckIndexDef` refuses over-cap and empty upstream; this guard does
+    // not rely on it.
     if (def.key_cols.empty() || def.key_cols.size() > catalog::kMaxIndexKeyColumns ||
         def.covered_cols.size() > catalog::kMaxIndexCoveredColumns) {
         return Status::InvalidArgument(

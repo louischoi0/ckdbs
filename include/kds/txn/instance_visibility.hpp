@@ -20,29 +20,17 @@ class WakeRegistry;
 // (`instructions/v3.0.0/workorder-an-read-view.md` AN-R1, AN-R8, AN-R9,
 // AN-R12).
 //
-// ---- What this is, and why a per-core view is not enough ------------------
+// ---- What this is ---------------------------------------------------------
 //
-// Until AN-S2, `ReadView::Visible` decided visibility from a bound on
-// transaction ids and `TransactionManager::ReadHorizon()` walked one core's
-// live set. Both were sound only while a reader read its own core's
-// versions; a shared buffer pool ends that, and the failure is a dirty
-// read rather than an error.
-//
-// **A bound on trx ids cannot be repaired into an instance-wide one.** Ids
-// are carved by each core in disjoint blocks of `kTrxIdBlockSize`
-// (`trx_id.hpp`), so issue order across cores is not id order:
-//
-//   - a commit on a core holding a *higher* block is above a lower core's
-//     cursor and reads as "not yet started" - invisible until that core
-//     burns its own block and is carved one above (AN-3 E's H1);
-//   - a transaction *begun after* a mint, out of a lower core's reserved
-//     but unspent range, is below the mint's bound and in no in-flight set,
-//     so it reads as committed before it has started (H2).
-//
-// So commit order is carried by the **commit record's LSN** instead - one
-// stream, one latch, one total order (AR0 M0, AL-R1) - and this class is
-// where that order is published and read. `docs/spec/txn.md` section 4.1
-// owns the contract; this file owns the mechanism.
+// Commit order is the **commit record's LSN** - one stream, one latch, one
+// total order (AR0 M0, AL-R1) - and this class publishes and reads it. A
+// bound on trx ids cannot serve instead: ids are carved per core in disjoint
+// blocks (`trx_id.hpp`), so issue order across cores is not id order (a
+// higher block's commit reads "not yet started" to a lower core's view; a
+// transaction begun after a mint from a lower unspent block reads committed
+// before it started). Background: AN-S2 replaced the per-core trx-id bound
+// once the buffer pool was shared. `docs/spec/txn.md` section 4.1 owns the
+// contract; this file owns the mechanism.
 //
 // ---- The three parts ------------------------------------------------------
 //
@@ -58,7 +46,7 @@ class WakeRegistry;
 // load-bearing assumption).
 //
 // **The floor's second bound is the one that is easy to get wrong**, and it
-// is the same fact H2 rests on. "Every transaction below F is resolved" is
+// is the cross-core issue-order fact above. "Every transaction below F is resolved" is
 // not maintainable on its own: a core holding an unspent range below F can
 // issue into it at any time, and the floor would then answer "committed"
 // for a writer that is live. So the floor is also bounded by the **minimum
@@ -156,12 +144,8 @@ class WakeRegistry;
 // snapshot (`min_snapshot_lsn` over cores), every pending-commit marker
 // (a future snapshot may be capped below a commit the marker's core has
 // not published), and every *unpublished mint* - a view whose ceiling has
-// been read and whose bound is not yet in its core's slot. The third is
-// the one AN-R1's first argument missed: it claimed a pass running while a
-// core's slot still read `kUnboundedBound` could only drop what a snapshot
-// minted afterwards already covers, which is true of a snapshot minted
-// *after* the pass and false of one minted before it and published after.
-// So a mint **lowers its core's slot before it reads the ceiling**
+// been read and whose bound is not yet in its core's slot (a snapshot
+// minted before a pass and published after it). So a mint **lowers its core's slot before it reads the ceiling**
 // (`LowerSnapshotBound`), to a value at or below the snapshot it is about
 // to take; the manager's next publication recomputes the slot exactly.
 //
@@ -349,13 +333,11 @@ public:
     // the question costs one load rather than a walk of every slot.
     //
     // Its one caller is the Cabin's banking rule (`cabin.md` §6a), which
-    // needs "nothing can still commit below my snapshot" and used to get a
-    // weaker fact: `ReadView::in_flight_at_mint`, stamped from the minting
-    // core's own `live_` list. One store for the instance made that answer
-    // the wrong question - a transaction in flight on *another* core writes
-    // rows this view cannot see and will commit them the moment it ends -
-    // so the question is the instance's now, and it is asked where the
-    // answer is used rather than carried on the view.
+    // needs "nothing can still commit below my snapshot" across every core:
+    // a transaction in flight on another core writes rows this view cannot
+    // see (AT-S7). A mint stamps it on the view
+    // (`ReadView::in_flight_at_mint`), and the banking gate asks it again
+    // at its announce, for a transaction begun after the mint.
     bool AnyUnresolved() const noexcept {
         return cores_with_unresolved_.load(std::memory_order_acquire) != 0;
     }
@@ -493,17 +475,11 @@ public:
     // hold `trx_id` - uncommitted, aborted, or reclaimed - and `floor` is
     // what separates the last from the first two.
     //
-    // **Together is the whole point, and a separate `CommitLsnOf` used to
-    // make it impossible.** `Reclaim()` erases entries below `reachable`
-    // and raises the floor to it, both under this latch. A reader that took
-    // the floor *before* a pass and looked the window up *after* it sees
-    // `trx_id >= floor_old` (so the floor does not answer) and no entry (the
-    // pass erased it), and concludes **not committed for a transaction
-    // committed long ago** - a lost row from two reads straddling one pass.
-    // The alternative fix was a rule that a window miss re-reads the floor,
-    // which is sound by an argument about an ordering the code does not
-    // state and survives only while nobody adds a second way to miss. This
-    // removes the straddle instead of explaining that it is harmless.
+    // **Together is the whole point.** `Reclaim()` erases entries below
+    // `reachable` and raises the floor to it, both under this latch. Two
+    // separate reads straddling a pass - floor before, window after - see
+    // `trx_id >= floor_old` and no entry, and answer **not committed for a
+    // transaction committed long ago**: a lost row.
     //
     // The invariant it buys, and the one the cell asserts: **an entry that
     // is absent is an entry below the floor**, for every transaction that

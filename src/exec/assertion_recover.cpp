@@ -75,8 +75,7 @@ StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId
                 // entry the live directory had dropped: the aggregate stays
                 // right (snapshot + folded deltas) but §5.2's
                 // `VerifyAgainstEntries` proof reports Corruption for a
-                // directory that is correct. That is the AS6b decision taken
-                // 2026-08-12 (`docs/spec/assertion.md` §7).
+                // directory that is correct (AS6b, `assertion.md` §7).
                 continue;
             }
             if (entry.value().group_id == 0) {
@@ -288,18 +287,13 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
             // onto and folding would under-count. Counted and skipped; the
             // assertion stays unrecovered and its caller leaves it unenforcing.
             //
-            // **A BUILD record takes this arm too, on purpose** - a genesis
-            // rule ("born empty, so its first BUILD is the base") was built
-            // here on 2026-08-19 and deleted the same day by review: the
-            // publish-time ASSERT_SNAPSHOT (`assertion_catalog.cpp`, AS6a)
-            // already covers a declaration born after the last checkpoint -
-            // even an empty one gets a snapshot record - and a genesis base
-            // would make the `based(id)` skip above *discard* that better,
-            // complete snapshot whenever the range ever began mid-build,
-            // adopting an under-counted directory as enforcing. The one case
-            // genesis covered that this refusal does not is a torn,
-            // unacknowledged CREATE (builds durable, publish snapshot lost),
-            // where the honest answer is exactly this `enforcing=0`.
+            // **A BUILD record takes this arm too, on purpose**: the
+            // publish-time ASSERT_SNAPSHOT (AS6a) already covers a declaration
+            // born after the last checkpoint, and treating a first BUILD as a
+            // base (a "genesis" rule, tried and removed 2026-08-19) could
+            // discard that complete snapshot and adopt an under-counted
+            // directory as enforcing. A torn, unacknowledged CREATE is left
+            // `enforcing=0`, the honest answer.
             ++report.records_without_a_base;
             return Status::OK();
         }

@@ -22,19 +22,11 @@
 //
 // ---- Why this is a type and not two parameters ---------------------------
 //
-// Both halves are `std::uint64_t`, so every signature that took them
-// positionally - `WaystonePageHolds(page, fetch_id, arg_hash)`,
-// `FormatWaystonePage(page, fetch_id, arg_hash, ts)`, the directory walk,
-// and every recorder/replayer entry point still to be written - accepted
-// them in either order and compiled cleanly when swapped. The failure that
-// produces is quiet in exactly the wrong way: a swapped pair still hashes,
-// still resolves to *a* page, and the identity check that exists to catch a
-// wrong page catches this one too - so the bug reads as a permanent trail
-// miss, a pure performance fault with no error anywhere, on the one
-// subsystem whose entire purpose is not costing anything.
-//
-// Making the pair a struct makes that mistake fail to compile. That is the
-// whole point of the type; it has no behaviour and is not meant to grow any.
+// Both halves are `std::uint64_t`, so positional parameters compile when
+// swapped, and a swapped pair still resolves to *a* page whose identity
+// check then misses - a permanent trail miss with no error anywhere. A
+// struct makes that mistake fail to compile; the type has no behaviour and
+// is not meant to grow any.
 //
 // **Identity only, no state.** Nothing about where a trail lives, how hot it
 // is, or whether it has been recorded belongs here - those are properties of

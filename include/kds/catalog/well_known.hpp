@@ -30,20 +30,15 @@ inline constexpr Oid kNamespacePublic = 1;
 // Whether `namespace_oid` names the catalog's own namespace - the test
 // behind every "'x' is a system relation and cannot be ..." refusal.
 //
-// **Spelled `== kNamespaceSys`, not `!= kNamespacePublic`.** The two agree
-// only while `sys` and `public` are the only namespaces, and they disagree
-// about a *third* one in the direction that matters here: a user relation
-// in namespace `orders` is not a system relation, and the older spelling
-// refused to rename, drop or alter it while telling the user it was one -
-// a false refusal, and one with no way around it, since the relation could
-// not be moved back to `public` either.
-// (AF-P3, `instructions/v2.8.0/ratification-af-namespace.md`.)
+// **Spelled `== kNamespaceSys`, not `!= kNamespacePublic`**: a user
+// relation in namespace `orders` is not a system relation, and the other
+// spelling would refuse to rename, drop or alter it while calling it one
+// (AF-P3, `instructions/v2.8.0/ratification-af-namespace.md`).
 //
 // **A gate wants the opposite failure and must not call this**: a
-// permission question keeps `!= kNamespacePublic` at its own site. The two
-// spellings are two different questions that happened to share an answer
-// while there were only two namespaces; this helper exists so the one about
-// identity stops borrowing the one about permission.
+// permission question keeps `!= kNamespacePublic` at its own site - a
+// different question that shared an answer while there were only two
+// namespaces.
 constexpr bool IsSystemNamespace(Oid namespace_oid) noexcept {
     return namespace_oid == kNamespaceSys;
 }
@@ -54,24 +49,18 @@ constexpr bool IsSystemNamespace(Oid namespace_oid) noexcept {
 // Two names for one thing, which this codebase otherwise forbids - so the
 // split is stated rather than left to be discovered:
 //
-// - `sys` is **already** a qualifier in the grammar, and has been since the
-//   catalog views: `exec::kCatalogSchema` is "sys", and `sys.tables` today
-//   resolves to a *view* rather than to the bootstrap relation of that name
-//   (`command_dispatcher.cpp`'s schema-qualified arm). AF-T3 decides what
-//   `sys.` means once real namespaces exist; until it does, admitting a
-//   user namespace called `sys` would create the ambiguity before anyone
-//   had ruled on it.
-// - `public` is the namespace every relation is created in today, and it
-//   has no spelling at all - the qualifier is simply omitted. A user
-//   namespace called `public` would therefore be a *third* thing, distinct
-//   from the default, and `public.customer` would name it rather than the
-//   relation an unqualified `customer` resolves to.
+// - `sys` is a qualifier in the grammar: `exec::kCatalogSchema` is "sys",
+//   and `sys.tables` resolves to a *view* rather than to the bootstrap
+//   relation of that name (`command_dispatcher.cpp`'s schema-qualified
+//   arm), so a user namespace called `sys` would be ambiguous.
+// - `public` is the default namespace and needs no qualifier; a user
+//   namespace called `public` would be a *third* thing, and
+//   `public.customer` would name it rather than the relation an
+//   unqualified `customer` resolves to.
 //
 // So both are refused at `CREATE NAMESPACE` and both resolve in
 // `FindNamespaceOidByName`. The registry names are left alone: they are
-// what a `SELECT ... FROM sys.objects` shows, changing them is a
-// user-visible act with no benefit here, and AF-T3 is where the two
-// spellings either converge or the difference is written into the manual.
+// what a `SELECT ... FROM sys.objects` shows.
 inline constexpr std::string_view kNamespaceSysName = "sys";
 inline constexpr std::string_view kNamespacePublicName = "public";
 
@@ -118,20 +107,9 @@ inline constexpr Oid kTypeDecimalWide = 33;
 // the name immediately. A value, not a format change: type_oid was
 // always data.
 //
-// **Was 22 from DT2 (2026-08-10) until 2026-08-13, which is the oid
-// `kTypeOperator` already had.** DT2 inserted it into the contiguous run
-// (21 table, 22 operator, 23 index) instead of appending, so a dropped
-// relation's row named the registered "type_operator" object. Nothing
-// rendered a wrong word - `sys.objects` prints `type_oid` as a number -
-// but the two concepts shared one identity, and any site that came to
-// compare against `kTypeOperator` would have matched dropped tables too.
-// Moved here, to the end, which is what the TY1 note above already said
-// to do.
-//
-// **No migration, and none is needed.** A file written before this carries
-// dropped-table rows at 22; that value still is not `kTypeTable`, so the
-// name stays freed and the oid stays counted by the floor recovery. The row
-// goes on doing its whole job under the old number.
+// Appended at 34 (2026-08-13) after briefly sharing 22 with
+// `kTypeOperator`; a dropped-table row at 22 in an older file is still not
+// `kTypeTable`, so it keeps freeing the name and counting the oid.
 inline constexpr Oid kTypeDroppedTable = 34;
 
 // A dropped **namespace**'s sys.objects row is retyped to this, for the
@@ -143,9 +121,8 @@ inline constexpr Oid kTypeDroppedTable = 34;
 //
 // **A distinct value rather than reusing `kTypeDroppedTable`**, appended
 // past it per the rule above. Sharing one oid would put two concepts under
-// one identity, which is precisely the defect the note on 22 records - and
-// here it would be worse than cosmetic, because the namespace sweep and
-// the relation sweep would each match the other's tombstones.
+// one identity, and the namespace sweep and the relation sweep would each
+// match the other's tombstones.
 inline constexpr Oid kTypeDroppedNamespace = 35;
 
 inline constexpr Oid kSysTypesTable = 100;
@@ -168,21 +145,10 @@ inline constexpr Oid kSysPatternsTable = 114;
 // withdrawn and kept as the design record). Bootstrap no longer creates the
 // relation and no build reads those rows.
 //
-// **They are never reused.** The static_assert below states the rule the
-// retirement rides on: an oid names exactly one object for the life of a
-// database, so a relation added later goes past the highest value here and
-// never into this gap - a re-initialized directory would otherwise be the
-// only place the difference did not show, and a pre-withdrawal file opened
-// by a later build would resolve a new relation's oid to rows that describe
-// a pattern definition. The run is **five** values, not the four the
-// retired comment claimed: the schema carried `id`, `pattern_id`,
-// `param_count`, `name` and `source_text`.
-//
-// What was learned here and is not retired with it: a catalog relation may
-// be stored in ordinary user tuple format - a Keystone word, tagged cells,
-// var-heap spill - rather than as a fixed-offset typed row codec, when it
-// stores text. `sys.assertions` below is the argument's other user, and
-// carries it now.
+// **They are never reused**: an oid names exactly one object for the life
+// of a database, and a pre-withdrawal file opened by a later build would
+// otherwise resolve a new relation's oid to rows that describe a pattern
+// definition. A relation added later goes past the highest value here.
 
 // sys.assertions (docs/spec/assertion.md §8.2, workplan AST03): one row per
 // declared assertion - a group-level upper-bound constraint over one
@@ -253,14 +219,10 @@ inline constexpr Oid kSysFkeysTable = 132;
 // populated one, resumes past the highest oid `sys.objects` and `sys.columns`
 // already carry - so an oid names one object for the life of the database.
 //
-// This was a KNOWN GAP until 2026-08-08: the counter was in-memory only and
-// restarted here every boot, so two objects created in different runs shared
-// an oid and resolving it returned whichever row the scan reached first
-// (docs/rules/keystoneid-k0-findings.md §6). It is fixed by *recovering* the
-// position rather than persisting it, which is why no format changed and why
-// an existing data file is repaired simply by being opened. sys.patterns
-// rows still take their oid from a persistent per-relation sequence; that
-// predates the fix and is not made wrong by it.
+// The position is *recovered*, not persisted (since 2026-08-08,
+// docs/rules/keystoneid-k0-findings.md §6), so no format carries it.
+// sys.patterns rows take their oid from a persistent per-relation sequence
+// instead.
 //
 // The number itself may not move: it is the boundary below which every oid
 // is a bootstrap oid, and lowering it would collide with them.
@@ -268,20 +230,16 @@ inline constexpr Oid kUserOidStart = 4000;
 
 // ---- Every well-known oid, once, so a duplicate cannot compile ----------
 //
-// `kTypeDroppedTable` and `kTypeOperator` both read 22 from DT2 (2026-08-10)
-// to 2026-08-13, and nothing caught it for three days of commits. Not because
-// anyone was careless: each declaration was correct where it stood, the file
-// is long, and **no site had ever put the two numbers side by side**. A list
-// is what puts them side by side, and a `static_assert` is what makes the
-// compiler read it.
+// A list puts every oid side by side and a `static_assert` makes the
+// compiler read it (two constants once shared 22 for three days,
+// 2026-08-10..13).
 //
 // Namespaces, types and relations share one oid space - `register_namespace`
 // and `register_type` both write into `sys.objects` - so they are checked
 // together rather than per group. `kSysAssertionsColumnOidBase` names the
 // start of a small run (six columns from 140); the base is listed and the
 // run is clear of every other value here. **The retired 115 and 120-124 are
-// deliberately absent**: nothing declares them any more, and this list
-// cannot police a gap - the comment where they stood is what does.
+// absent**: this list cannot police a gap; the comment at 114 does.
 //
 // **`kTypeInt64` is deliberately absent**: it is an alias for `kTypeInt`, not
 // a distinct oid, so listing it would fail this check on a fact that is
@@ -331,17 +289,11 @@ inline constexpr PageId kCatalogPageTables = 7;
 inline constexpr PageId kCatalogPageIndexes = 8;
 inline constexpr PageId kCatalogPagePatterns = 9;
 
-// **Page 10 is reserved and unused.** It was the root heap page of
-// sys.pattern_defs until the operator withdrew user-declared patterns on
-// 2026-08-31; bootstrap no longer creates it, so on a directory
-// initialized by this build page 10 is never written. It keeps its place
-// in the numbering rather than being handed to the next catalog relation,
-// for the reason the retired oids above are never reused: a file
-// initialized by an older build has a live pattern_defs root there, and a
-// new relation rooted at 10 would read that page as its own.
+// **Page 10 is reserved and unused**: sys.pattern_defs' root until
+// 2026-08-31, never written by this build, and never handed to another
+// relation for the reason the retired oids are never reused.
 //
-// The rule this page was the first exercise of survives it, and
-// `kCatalogPageAssertions` now carries it alone: a catalog relation's root
+// The rule `kCatalogPageAssertions` carries: a catalog relation's root
 // page stays in the reserved range because bootstrap must find it without
 // a catalog read, while its *var-heap* root is allocated by CreateNew()
 // and recorded in sys.tables, where it is DDL-immutable and therefore
@@ -410,17 +362,9 @@ inline constexpr PageId kAllCatalogPages[] = {
 // to the first user page - a page count the ledger below moves, so it is
 // not stated here as a number. A page holds ~68 `sys.columns` rows, and
 // the range times that is the whole instance's column ceiling (~7,600
-// with the range starting at 16). It is a ceiling and not "unbounded" - saying so is the
-// point, because the previous ceiling was also unstated until something hit
-// it.
-// Moved 14 -> 15 when sys.assertions claimed page 14 (AST03). The range is
-// "whatever is left of the reserved low pages after the roots", so it walks
-// up by one with every new bootstrap relation, and the ceiling it implies
-// drops by ~68 columns each time. Both facts ride on the same superblock
-// version bump the new relation needed anyway: an existing file could have
-// put a catalog overflow page at id 14, and that file no longer mounts.
-// Moved 15 -> 16 when sys.ranges claimed page 15 (RD1) - the same walk, on
-// the same superblock bump (15 -> 16), for the same reason.
+// with the range starting at 16) - a ceiling, not "unbounded". It walks up
+// by one with every new bootstrap relation, on that relation's superblock
+// bump (14 -> 15 for sys.assertions, 15 -> 16 for the retired sys.ranges).
 inline constexpr PageId kCatalogOverflowFirst = 16;
 
 // One past the last id a catalog chain may take. Must equal
@@ -430,11 +374,8 @@ inline constexpr PageId kCatalogOverflowLimit = 128;
 
 // Distinctness and the overflow bound in one pass over the list that
 // already exists, for `WellKnownOidsAreDistinct()`'s reason: nothing else
-// puts the root ids side by side, and the old form of this assert
-// named the single highest root by hand - a second hand-edited list that
-// every new bootstrap relation had to remember to update (and page 15 was
-// checked against eleven constants by eye when sys.ranges claimed it).
-// Joining `kAllCatalogPages` is now the whole job.
+// puts the root ids side by side, and joining `kAllCatalogPages` is the
+// whole job for a new bootstrap relation.
 constexpr bool CatalogRootsAreDistinctAndBelowOverflow() {
     for (std::size_t i = 0; i < std::size(kAllCatalogPages); ++i) {
         if (kAllCatalogPages[i] >= kCatalogOverflowFirst) return false;

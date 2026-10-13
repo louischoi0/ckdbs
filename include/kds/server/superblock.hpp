@@ -37,9 +37,9 @@
 namespace kds::server {
 
 // Page ids below this are reserved for fixed-position system structures
-// (the superblock's own page, the free map, catalog pages) - ported from
-// It is where DevicePageStore
-// starts handing out ids, not something the superblock itself tracks.
+// (the superblock's own page, the free map, catalog pages). It is where
+// DevicePageStore starts handing out ids, not something the superblock
+// itself tracks.
 inline constexpr PageId kFirstUserPageId = 128;
 
 // Fixed page id the SuperBlock itself lives at. Reserved, same convention
@@ -50,148 +50,44 @@ inline constexpr PageId kSuperBlockPageId = 0;
 
 inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CKDXDBS1", arbitrary but stable
 // Bumped whenever the layout below changes. There is no migration path and
-// no compatibility window while the format is still moving: Decode() refuses
-// anything but this exact number, so a stale data file fails loudly at mount
-// instead of being misparsed. Bump it with every layout change.
-// 4 -> 5: the var-heap added `varheap_page_id` to SysTableRow, which grew
-// that row's on-disk size. Nothing in the *superblock* changed, but a
-// catalog row format change is exactly as breaking, and without a bump a
-// pre-var-heap database mounted happily and then failed on its first
-// catalog read with an opaque size mismatch. A format version is what
-// makes that a refusal at the door instead.
-// 5 -> 6: CREATE PATTERN, twice over. `SysPatternRow` grew `flags` and
-// `origin` (38 -> 41 bytes), and bootstrap gained a seventh system relation,
-// `sys.pattern_defs`, on a fixed page id a pre-existing file does not have.
-// Either alone is the same breakage as the 4 -> 5 case; the second is worse,
-// because the missing relation is not a size mismatch anyone would recognize
-// - the first CREATE PATTERN would simply fail to find a table that every
-// build after this one creates at bootstrap. **Read as history**: declared
-// patterns were withdrawn on 2026-08-31 and bootstrap no longer creates
-// `sys.pattern_defs`, so a v6-era file has a relation this build does not.
-// That is a *removal*, which needed no bump - no pre-release compatibility
-// is owed and an existing directory is re-initialized - and the two row
-// bytes stayed exactly so this line would not have to be undone.
-// 6 -> 7: bootstrap gained `sys.access_stats` on a fixed page id a
-// pre-existing file does not have. Same shape of breakage as 5 -> 6's
-// second half: the file would mount and then fail on the first access
-// the statistics path tried to record, naming a table that every build
-// after this one creates at bootstrap.
-// 7 -> 8: bootstrap gained `sys.cabins` (docs/spec/cabin.md §10) on a fixed
-// page id a pre-existing file does not have - the third repeat of the
-// 5 -> 6 shape. Worth stating once for all three: a *new bootstrap
-// relation* is as breaking as a row layout change and less obvious about
-// it, because the file mounts cleanly and then fails on the first
-// statement that reaches for a table which does not exist. The refusal at
-// the door is the whole point.
-// 8 -> 9: the transaction manager added `next_trx_id` (docs/spec/txn.md section
-// 4.2). Unlike the four bumps above it this one adds a *field*, not a
-// relation - and it is exactly as breaking, because the field sits past the
-// WAL anchor table where a version-8 image holds zeroes. A zero there reads
-// as "the next transaction is id 0", which would hand a real transaction
-// the id that means "no transaction" and then reissue kBootstrapXid, the
-// one id every read view trusts unconditionally. Refusing at the door is
-// the only safe reading of a zero we cannot distinguish from a real value.
-// 9 -> 10: multicore added `core_count` (docs/inflight/in-progress/workplan-crosscore.md M6), and
-// `sys.tables` grew `owner_core` (M1). Either alone is a bump by the rules
-// above - the first is a field past `next_trx_id` where a version-9 image
-// holds zeroes, and a zero core count is not "unset", it is "boot with no
-// cores"; the second is the fifth repeat of the catalog-row-layout break
-// 4 -> 5 first recorded.
-// 10 -> 11: bootstrap gained `sys.fkeys` (docs/spec/foreign-keys.md §1) on a
-// fixed page id a pre-existing file does not have - the fourth repeat of the
-// 5 -> 6 shape, and the one where mounting anyway would be worst. A
-// version-10 file has no page 13, so `CREATE TABLE ... REFERENCES` would
-// fail to find the relation that records the constraint, and - once FK-M2
-// lands - every write path would read an empty foreign-key list and enforce
-// nothing. A constraint that silently does not run is not a degraded mode.
-// 11 -> 12: `SysIndexRow` was rewritten for multi-column and covering
-// indexes (docs/spec/index.md §12, workplan IX03) - a root page, a name, and
-// two column arrays where there had been one `col_pos`.
-//
-// **The reason here is not the reason the four bumps above had, and the
-// difference is worth stating so the next one is argued rather than copied.**
-// Those protected an existing file from a build that would misparse it. This
-// one cannot: nothing ever wrote a sys.indexes row, so no pre-existing file
-// has one to misparse, and a version-11 file would in fact mount and run
-// correctly. What the bump protects is the **other direction** - an older
-// binary opening a *newer* file. It would find rows whose size its `Decode`
-// rejects and fail on every SELECT compile (`HasUnindexedEqualityFilter`
-// asks sys.indexes per statement), which is the opaque failure a version
-// exists to turn into a refusal that names both numbers.
-//
-// The price is the usual one and is not reduced by any of that: every
-// pre-existing data file stops mounting.
-// 12 -> 13: bootstrap gained `sys.assertions` (docs/spec/assertion.md §8.2,
-// workplan AST03) on fixed page 14 - the **fifth repeat of the 5 -> 6
-// shape**, and it carries a second break the four before it did not.
-//
-// The first half is the familiar one: a version-12 file has no page 14, so
-// `CREATE ASSERTION` would fail to find the relation that records the
-// declaration, and it would fail *opaquely* - the file mounts cleanly and
-// then names a table every build after this one creates at bootstrap.
-//
-// The second half is new and is the reason this one could not have been
-// avoided by picking a different page id. Page 14 was the **first id of the
-// catalog overflow range** (`kCatalogOverflowFirst`), which is where a
-// catalog relation's chain grows when its root page fills. A version-12 file
-// that ever outgrew one of its nine catalog roots put a `sys.columns` or
-// `sys.tables` overflow page at id 14 - and this build would create
-// sys.assertions on top of it. That is not a missing relation, it is a
-// silently overwritten one, which is the worst failure any bump on this list
-// has protected against. The range now starts at 15.
-//
-// The price is the usual one and, here, exactly what is wanted: every
-// pre-existing data file stops mounting.
-// 13 -> 14: `sys.tables` grew `key_mode` (docs/spec/heap-and-tuple.md section
-// 4.1, workplan-key-mode.md PK01) - the **sixth repeat of the catalog-row-
-// layout break** 4 -> 5 first recorded, and the second time SysTableRow
-// specifically has been the row that grew (9 -> 10 was `owner_core`).
-//
-// One byte, and the bump is not negotiable for it. A version-13 file has
-// SysTableRow rows one byte short, and `Decode` refuses anything but the
-// exact size (rows.hpp's stated reason: a heap tuple's data_len is
-// caller-supplied at read time, so a length mismatch is a real corruption
-// signal). Without the bump the file mounts cleanly and then fails on the
-// first catalog read, naming a size rather than a version - precisely the
-// opaque failure 4 -> 5 exists to convert into a refusal at the door.
-//
-// Worth recording because it was nearly missed: `docs/spec/page.md` section 16
-// says no shipped format exists, which is true of the *page* layout and not
-// of the catalog rows, and the spec amendment quoted it at the wrong
-// subject before this list was read. The authority on whether a catalog row
-// may grow quietly is this comment block, and it has said no six times.
-// 14 -> 15 (2026-08-24): SysTableRow grew `anchor_page_id` (PW2-1) - four
-// bytes, and Decode refuses any size but the exact one, so without the
-// bump a pre-anchor file would mount and fail on its first catalog read
-// naming a size instead of a version (the key-mode byte's precedent,
-// verbatim).
-//
-// **No bump on 2026-08-25, and the reason is worth recording** because this
-// list is where a missed one would be found. The key mode was removed
-// (docs/spec/heap-and-tuple.md section 4.1), and the byte the 13 -> 14 entry
-// above bought was **repurposed in place** rather than dropped: same offset,
-// same width, and `SysTableRow::key_order` read the two old values as the
-// facts they already implied - kAssigned's 0 as "every id here ascended",
-// kExplicit's 1 as "an id landed out of order". `kOnDiskSize` did not move,
-// so `Decode` accepts a version-15 file and every row in it means what it
-// meant. Dropping the byte instead would have been the seventh break on
-// this list, and it would have bought nothing: the flag had a live reader.
-// **And no bump when the flag went either** (BB-S3b, 2026-10-06): the byte
-// stays, written 0, and a relation still carrying the old 1 is refused by
-// name rather than by version (BB-R11) - until 19 -> 20 refused the
-// volumes that could carry it, below.
-// 15 -> 16 (2026-08-27): bootstrap gained `sys.ranges` on fixed page 15,
-// and `kCatalogOverflowFirst` moved 15 -> 16 on the same bump (the 12 -> 13
-// entry's overflow-range break). The range directory retired at 17 -> 18;
-// its history is at cf889b63.
-// **No bump on 2026-09-02** (AR0 M0's AL-R3): `log_topology` consumed
-// `reserved1`, the u32 at offset 12 that `CreateFresh` has zeroed and
-// `Encode` has written since the initial commit.
-// 16 -> 17 (2026-09-05, AM-S4 / AM-R4, on D14): a version-16 volume's
-// `page_lsn`s are offsets into several per-core streams, which no rewrite
-// could make one stream's, so it is refused with no migration (D14: "no
-// in-place migration; a new major version mounts only volumes created by
-// it"). Per-core streams retired (AM-S4(d)); their history is at cf889b63.
+// no compatibility window: Decode() refuses anything but this exact number,
+// so a stale data file fails loudly at mount instead of being misparsed.
+// **A catalog-row size change and a new bootstrap relation are each as
+// breaking as a superblock field**: without a bump the file mounts cleanly
+// and then fails on its first catalog read naming a size, or on the first
+// statement reaching for a table it does not have - the opaque failure a
+// version exists to turn into a refusal at the door. A new field past the
+// anchor table is a bump too, because an old image holds zeroes there that
+// read as real values. `docs/spec/page.md` section 16's "no shipped format"
+// is about the page layout, not the catalog rows; this list is the
+// authority on whether a catalog row may grow quietly, and it says no.
+// The entries through 17 are history (full text at f3da0413); one line each:
+// 4 -> 5: SysTableRow grew `varheap_page_id`.
+// 5 -> 6: SysPatternRow grew `flags`/`origin`, bootstrap gained
+//   `sys.pattern_defs` (withdrawn 2026-08-31 with no bump; the row bytes stay).
+// 6 -> 7: bootstrap gained `sys.access_stats`.
+// 7 -> 8: bootstrap gained `sys.cabins` (cabin.md §10).
+// 8 -> 9: `next_trx_id` (txn.md section 4.2); a zero would reissue
+//   kBootstrapXid.
+// 9 -> 10: `core_count`, and `sys.tables` grew `owner_core`.
+// 10 -> 11: bootstrap gained `sys.fkeys` (foreign-keys.md §1).
+// 11 -> 12: SysIndexRow rewritten for multi-column and covering indexes
+//   (index.md §12) - a bump that protects the other direction, an older
+//   binary opening a newer file.
+// 12 -> 13: bootstrap gained `sys.assertions` on fixed page 14, which was
+//   the first overflow-range id a version-12 file could already hold; the
+//   overflow range starts at 15 since (16 since 15 -> 16).
+// 13 -> 14: `sys.tables` grew the key-mode byte. Repurposed in place with
+//   no bump when the key mode went (2026-08-25); since BB-S3b (2026-10-06)
+//   it stays, written 0 and read by nothing.
+// 14 -> 15 (2026-08-24): SysTableRow grew `anchor_page_id` (PW2-1).
+// 15 -> 16 (2026-08-27): bootstrap gained `sys.ranges` on page 15;
+//   `kCatalogOverflowFirst` moved to 16. Retired at 17 -> 18.
+// No bump on 2026-09-02 (AL-R3): `log_topology` consumed `reserved1`, the
+//   u32 at offset 12 that every earlier image wrote as zero.
+// 16 -> 17 (2026-09-05, AM-S4, on D14): a version-16 volume's `page_lsn`s
+//   are offsets into per-core streams no rewrite could make one stream's,
+//   so it is refused with no migration. History at cf889b63.
 // 17 -> 18 (2026-09-30): **bootstrap lost `sys.ranges`**, and the split
 // relation with it (`raft-marks-2026-09-30.md` §9). A relation is one
 // structure headed by `desc_page_id`, always, and this build reads nothing
@@ -491,8 +387,8 @@ public:
     // Reads a superblock image out of a raw page buffer (e.g. just loaded
     // off disk). Fails with Corruption if the magic doesn't match
     // kSuperBlockMagic - callers should treat that as "no database here
-    // yet" and call CreateFresh() instead, following the
-    // fresh-init detection (kds_meta_is_fresh_init()).
+    // yet" and call CreateFresh() instead - and with Corruption for any
+    // version but kSuperBlockVersion or a topology but kSingleStream.
     static StatusOr<SuperBlock> Decode(std::span<const std::byte, kPageSize> page);
 
     // Serializes this superblock into `page`. Bytes beyond
@@ -507,10 +403,9 @@ public:
     // relation's row size in this database was computed from it.
     std::uint32_t inline_cell_width() const noexcept { return fields_.inline_cell_width; }
 
-    // **The `cores` this volume was last mounted with**, not pinned (AT-S9,
-    // E9's withdrawal handing it the question): with one stream (AM-S4(d))
-    // and no owners (D17) nothing on the volume names a core, so a mount at
-    // another count sets it
+    // **The `cores` this volume was last mounted with**, not pinned (AT-S9):
+    // with one stream (AM-S4(d)) and no owners (D17) nothing on the volume
+    // names a core, so a mount at another count sets it
     // (`SetCoreCount`) and everything sized by it - the anchor fold's
     // warm-up, the lock table, the page latch - is sized from the running
     // count. Validated by `CheckCoreCount`, as at creation.
@@ -534,10 +429,10 @@ public:
 
     // ---- Per-core WAL anchors (wal.md section 14-3) ---------------------
 
-    // How many anchor slots the last run used - `core_id + 1` of the
-    // highest core that ever published. Under one stream only slot 0 is
-    // ever published, so a mount at another core count (unpinned since
-    // AT-S9) reads the same anchor; this file still never reindexes.
+    // `core_id + 1` of the highest slot ever published: 1 once slot 0 is,
+    // 0 before, since `SetWalAnchor` admits slot 0 alone. Read by no mount
+    // branch (BP-H13), so a mount at another core count reads the same
+    // anchor.
     std::uint32_t wal_anchor_count() const noexcept { return fields_.wal_anchor_count; }
 
     // The anchor for `core_id`, or an all-zero one (no checkpoint yet) for
@@ -562,13 +457,12 @@ public:
     // at or above kMaxCores; refusing beats wrapping, which would let
     // one core's anchor silently overwrite another's.
     //
-    // **Under `kSingleStream` the only legal slot is 0** (AR0 M0, AL-R3):
-    // there is one stream, so there is one place recovery starts, and a
-    // per-core anchor would be a second answer to a question with one. A
-    // peer core's completed checkpoint reaches slot 0 through the fold its
-    // publisher performs - core 0 keeps the per-core numbers in memory and
-    // writes the minimum here - so the refusal is what keeps a caller from
-    // bypassing that fold rather than a limitation.
+    // **Under `kSingleStream` the only legal slot is 0** (AL-R3), and any
+    // other is refused InvalidArgument: there is one stream, so there is one
+    // place recovery starts. Every core's completed checkpoint reaches slot
+    // 0 through `SuperBlockCheckpointAnchor`'s fold, which keeps the
+    // per-core numbers in memory and writes the minimum here - the refusal
+    // keeps a caller from bypassing that fold.
     Status SetWalAnchor(std::uint32_t core_id, const WalAnchorFields& anchor) noexcept;
 
     // The `log_topology()` and `single_stream()` predicates retired
@@ -580,7 +474,7 @@ public:
     // a legal value of most of these fields - a zero `next_trx_id`, a zero
     // `create_time` rendering as the epoch - so a field nobody carried
     // across would answer silently and wrongly; `Open` refuses a config
-    // with no image (the AL-S9 review).
+    // with no image.
 
     // ---- Backup and restore (BR) -----------------------------------------
 

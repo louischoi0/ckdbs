@@ -61,10 +61,8 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
         // mount over it would fail a recovery the WAL is behaving
         // correctly in - which is the same reading kInsert's branch below
         // gives to a slot that reads back nothing. **One rule, two record
-        // types** (H1/CH1, 2026-08-29): this arm was fixed first and the
-        // reviewer who fixed it named `kInsert` as the same shape; it is,
-        // and both now answer a missing page and a missing slot the same
-        // way.
+        // types** (H1/CH1, 2026-08-29): both answer a missing page and a
+        // missing slot the same way.
         if (released.value() == ReleaseOutcome::kNothingToRelease) {
             ++already_done_;
             return Status::OK();

@@ -18,13 +18,10 @@
 //
 // ---- Why this exists at all ----------------------------------------------
 //
-// Every sync used to happen on the reactor thread, which serves statements.
-// `bench/results-latency-matrix.md` prices both consequences: a commit sync
-// pinned throughput at one commit per device sync however many clients asked
-// (fixed by parking the committer, W1), and the D3 loss-window sync produced
-// one ~2.2 ms statement every 12 ms - a system cost billed to whichever
-// client happened to be in flight. Tuning moves that stall; only moving the
-// `fsync` off the thread removes it.
+// A sync on the reactor thread bills its `fsync` to whichever statement is
+// in flight (the D3 loss-window tick measured ~2.2 ms every 12 ms,
+// `bench/results-latency-matrix.md`); only moving it off the thread removes
+// that stall.
 //
 // ---- The rule this bends, and how far ------------------------------------
 //

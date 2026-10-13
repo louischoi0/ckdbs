@@ -131,13 +131,12 @@ static_assert(InlineCapacity(kDefaultInlineCellWidth) == 61);
 // into a page image, an undo record, and a checksum.
 //
 // Fails with Unsupported if value.size() > InlineCapacity(cell.size()):
-// that value belongs in the var-heap, which does not exist yet. The error
-// names both the length and the limit.
+// that value belongs in the var-heap (the row codec spills it before this
+// is reached). The error names both the length and the limit.
 Status EncodeInlineCell(std::span<std::byte> cell, std::string_view value);
 
-// Writes a kNull cell: the tag, then zeros. Nothing calls this yet (the row
-// codec still refuses NULL); it exists so the format's three tags all have
-// exactly one writer when NULLs land.
+// Writes a kNull cell: the tag, then zeros - the one writer of that tag
+// (`exec/row_codec.cpp`).
 Status EncodeNullCell(std::span<std::byte> cell);
 
 // Writes a kSpilled cell: the tag, the value's full length, and the

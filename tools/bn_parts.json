@@ -8,10 +8,14 @@
  ["var-heap append", "varheap::ChainAppend|LogSpills|SpillLogFor"],
  ["undo and WAL records", "UndoLog::|AppendUndo|WalManager::|WalStream::|NoteOverwrite|LogIndexWrites|EncodeHeapWrite"],
  ["transaction begin, commit, locks", "TransactionManager::(Begin|Commit|PublishCoreBounds)|LockTable|BorrowChain|BeginWrite|EndWrite|ReleaseLocks"],
- ["descent and page access", "btree::|BtreeLookup|DescendTo|DevicePageStore|PageStore::|FetchPinned|LocateByPk"],
- ["row decode and encode", "DecodeRow|DecodeColumns|DecodeAndResolve|DecodeOneValue|ResolveSpills|EncodeRow|EncodeAssigned|EncodeOneValue|EncodeColumn"],
- ["visibility and residual", "Classify|ReadView|LookupCommit|EvaluateConjunct|EvaluatePredicate|EvaluateAll|CompareValues|AcceptTupleAt|ReadTuple|BtreeVisitLeafPage"],
  ["result encoding", "WireResultSink|EncodeValue|EncodeProjectedRow|RowBatch"],
+ ["row walk: residual", "EvaluateConjunctChecked|CheckConjunct|EvaluateAll|CompareValues|ScanKernel"],
+ ["row decode and encode", "DecodeRow|DecodeColumns|DecodeAndResolve|DecodeOneValue|ResolveSpills|EncodeRow|EncodeAssigned|EncodeOneValue|EncodeColumn|CheckDecodeInputs"],
+ ["row walk: visibility", "txn::Classify|ReadView|LookupCommit|ResolveThroughUndo"],
+ ["row walk: copy", "chain:^__mem(cpy|move)[^<]*<([^<]*AcceptTupleAt|std::_Function_handler::_M_invoke)(<|$)"],
+ ["row walk: per-row checks and counters", "chain:^[^<]*(AcceptTupleAt|ReadTuple|ExecStats::For|ChargeRow)[^<]*(<|$)|^[^<]*<std::_Function_handler::_M_invoke<[^<]*BtreeVisitLeafPage"],
+ ["row walk: loop and callback", "chain:^(?=[^<]*(_M_invoke|ResolveVisit|lambda|BtreeVisitLeafPage))(?=.*BtreeVisitLeafPage)|^[^<]*RunWalkStep::\\{lambda"],
+ ["descent and page access", "btree::|BtreeLookup|DescendTo|DevicePageStore|PageStore::|FetchPinned|LocateByPk"],
  ["statement scaffolding", "CommandDispatcher::|SelectRun|ChainRunner|StepChain|ExecuteChain"],
  ["scheduler and checkpoint", "Scheduler::|CoroTask|Checkpointer|DrainOnce"]
 ]

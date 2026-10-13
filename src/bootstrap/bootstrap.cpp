@@ -15,7 +15,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
     if (Status s = storage::CheckInlineCellWidth(inline_cell_width); !s.ok()) {
         return s;
     }
-    // Same rule, same reason (workplan-crosscore.md M6).
+    // Same rule: a bad setting is refused as one, before anything is read.
     if (Status s = server::CheckCoreCount(cores); !s.ok()) {
         return s;
     }
@@ -98,7 +98,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
         return existing.status();
     }
 
-    // Fresh database: create and persist a brand-new SuperBlock, then
+    // Fresh database: create and encode a brand-new SuperBlock, then
     // bootstrap the catalog's fixed pages on top of the same store. This is
     // the one moment the cell width is chosen; every mount after this one
     // validates against it.

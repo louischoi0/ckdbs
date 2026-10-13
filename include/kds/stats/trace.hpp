@@ -12,19 +12,8 @@
 // Per-request attribution — the instrument `docs/inflight/in-progress/observability.md`
 // specifies, built to its §10 steps 1-3 and no further (work order H, H6).
 //
-// ---- Why this exists, and why now ----------------------------------------
-//
-// **Three times a missing instrument has blocked an attribution**, and §8a
-// names all three: M3 could not decompose `shipped_statement_us`, RP8 could
-// not separate two candidate explanations for why three sequential syncs do
-// not cost 3x, and RR2's finding is recorded as *likely* because nothing can
-// tell a queued wake from a slow leg from outside the process. §8a's own
-// conclusion is that a span per protocol leg would have settled RP8's
-// question in one run and RR2's in the run that raised it.
-//
-// It is built while the measurement work is blocked on hardware because
-// that is exactly when it is cheapest: it makes the runs that follow read
-// their answers instead of inferring them.
+// Why: a span per request leg settles attributions an outside measurement
+// can only infer (§8a names three that stalled for want of it).
 //
 // ---- What is deliberately not here ---------------------------------------
 //

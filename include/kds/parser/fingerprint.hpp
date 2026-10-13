@@ -8,7 +8,7 @@
 
 // Query-template fingerprinting: the parse-time reduction of a statement
 // to its function form - `patternX(a, b)` - as a pair of integers
-// (docs/spec/waystone-concpets.md sections 1 and 3, docs/parser.md I1). This is
+// (docs/spec/waystone-concpets.md sections 1 and 3, docs/spec/parser-v2.md I1). This is
 // the gate every other Waystone task sits behind: without a stable
 // pattern identity there is nothing to key a waystone on.
 //
@@ -30,18 +30,16 @@
 // design specifically does not want (I1).
 //
 // The two forms differ in arg_hash, and they must. A `?` contributes
-// nothing to the argument stream, because its value does not exist yet -
-// it arrives at BIND. `param_count` is what a future BIND stage uses to
-// know how many bound values to fold in before the arg_hash is final; see
-// "What this is not, yet" below.
+// nothing to the argument stream, because its value arrives at BIND;
+// `param_count` says how many bound values a BIND would fold in on top.
 //
 // ---- What is shape and what is argument ---------------------------------
 //
 // **A function's name is shape too** (AP-S4): it lexes as an identifier
 // and its parentheses as their own tags, so `DATE(ts) = '...'` and
 // `NOW() > '...'` are two patterns and its literal is an argument like any
-// other. A call parsed in no production before AP-S4, so no stored hash
-// held one and admitting it moved none (the refinement below).
+// other. No stored hash held a call before AP-S4, so admitting it moved
+// none (the refinement below).
 //
 // **Identifiers are shape.** `SELECT * FROM accounts WHERE id = 1` and
 // `SELECT * FROM trades WHERE id = 1` are different patterns, because
@@ -49,11 +47,10 @@
 // other. Keywords are hashed as identifiers - same tag, same folded text -
 // which makes SELECT and UPDATE differ for free.
 //
-// That the lexer now has a keyword token type (V04) changes nothing here,
-// and must not: those seven words were identifiers to it before, so
-// tagging them differently would move the pattern_id of every stored
-// statement containing one. Reserving a word is a grammar change, never a
-// fingerprint change.
+// The lexer's keyword token type (V04) changes nothing here, and must not:
+// reserved words were identifiers before, so tagging them differently would
+// move every stored pattern_id containing one. Reserving a word is a
+// grammar change, never a fingerprint change.
 //
 // Identifiers are folded to lower case, so `SELECT`/`select` and
 // `accounts`/`ACCOUNTS` converge - matching the case-insensitive
@@ -113,30 +110,15 @@
 //
 // ---- Where the numbers come from ----------------------------------------
 //
-// **Folded into the parse (2026-08-03).** `FingerprintAccumulator` below is
-// fed by the lexer as it produces tokens, so a parse yields the fingerprint
-// with no second pass over the text. `FingerprintOf()` - which does lex
-// independently - is now for callers holding a string and no parse, and is
-// implemented on the same accumulator so there is one set of rules.
+// `FingerprintAccumulator` below is fed by the lexer as it produces tokens,
+// so a parse yields the fingerprint with no second pass (2026-08-03; the
+// second lex had cost ~13% of a point join, bench/results-waystone-v2.md at
+// `1769487`). `FingerprintOf()` lexes independently for callers holding a
+// string and no parse, on the same accumulator. Hashing allocates nothing:
+// `Token::text` is a view (token.hpp) and the fold hashes case as it goes.
 //
-// This was the cost of being a bolt-on and it was not small: on the
-// statement path the second lex measured ~13% of a point join's latency,
-// three times what the Waystone recording it existed for actually cost, and
-// it was the whole of replay's B+ tree regression
-// (bench/results-waystone-v2.md). What survives the blueprint-parser rewrite
-// is this file's *contract* - a statement in, two integers out - not how the
-// numbers are produced. Nothing downstream should depend on the latter.
-//
-// **Lexing now allocates nothing at all** (2026-08-03): `Token::text` is a
-// view into the statement (token.hpp), and the fold below hashes case as it
-// goes rather than building a folded copy per identifier. Those were the two
-// remaining per-token allocations, and the second one mattered here
-// specifically - a fingerprint that built a `std::string` per token would
-// have undone zero-copy tokens for exactly the tokens that motivated them.
-//
-// arg_hash covers inline literals only. When a BIND stage exists it must
-// fold the bound values in on top, in parameter order, to reach the final
-// instance key; `param_count` is how it knows how many to expect.
+// arg_hash covers inline literals only; a BIND stage folds bound values in
+// on top, in parameter order, `param_count` of them.
 //
 // ---- fetch_id: the shape without the select list --------------------------
 //
@@ -173,11 +155,9 @@ namespace kds::parser {
 //
 // Which revision of the fingerprinting algorithm produced a stored key -
 // the `fetch_id` a `sys.patterns` row is keyed by since AP-S2, and the
-// `pattern_id` it was keyed by before. Persisted on every `sys.patterns` row, and the reason the
-// blueprint parser (docs/parser.md I1) can replace this file without a
-// migration: it will not reproduce these hashes, and it does not have to.
-// It bumps this, and every pattern recorded under the old rules stops
-// resolving.
+// `pattern_id` it was keyed by before. Persisted on every `sys.patterns`
+// row; a bump is how the algorithm changes without a migration - every
+// pattern recorded under the old rules stops resolving.
 //
 // **The rule for bumping, stated once:** bump whenever an *already
 // fingerprintable* statement would hash differently than it does today -
@@ -228,16 +208,12 @@ static_assert(kFingerprintVersion != 0, "0 is reserved for an unset/zeroed row")
 //
 // A mismatch is a **miss, not an error**: the pattern resolves as though
 // it had never been recorded, the statement executes normally, and a new
-// row is recorded under the current version. Nothing fails, nothing is
-// migrated, and the stale rows and their waystones are garbage for
-// retention to reclaim (workplan P15).
+// row is recorded under the current version. Nothing fails and nothing is
+// migrated; the stale rows and their waystones stay, unread.
 //
-// Deliberately an exact comparison rather than `>=` or `<=`. A newer build
-// must not accept an older row - its `pattern_id`s were computed under
-// different rules and name shapes that are not the ones they claim - and
-// an older build must not accept a newer one for the same reason. There is
-// no ordering here, only identity, and an inequality would silently
-// resurrect exactly the trails this constant exists to retire.
+// An exact comparison, not `>=`/`<=`: a row computed under other rules
+// names a shape it does not claim, in either direction, and an inequality
+// would resurrect exactly the trails a bump retires.
 constexpr bool IsCurrentFingerprintVersion(std::uint32_t stored) noexcept {
     return stored == kFingerprintVersion;
 }
@@ -276,7 +252,7 @@ struct Fingerprint {
 //   - DDL and session/admin statements. `CREATE TABLE`, and anything
 //     whose leading keyword is not one of the three below. A pattern is a
 //     thing worth *repeating*; DDL is not, and SET has no result to trail
-//     (docs/parser.md I8 excludes them from fingerprinting explicitly).
+//     (docs/spec/parser-v2.md I8 excludes them from fingerprinting).
 //   - Empty or whitespace-only input.
 //   - Anything the lexer cannot tokenize. A statement that will fail to
 //     parse has no shape worth remembering, and refusing to guess one
@@ -286,13 +262,10 @@ struct Fingerprint {
 // never touches the catalog: this is a pure function of its argument, and
 // the tests depend on it staying that way.
 //
-// **This lexes `sql` from scratch.** On the statement path that is a second
-// lex on top of the parser's own - see `FingerprintAccumulator` below, which
-// is how the parser avoids it. This entry point remains for callers with a
-// string and no parse - today that is the golden corpus alone, which
-// fingerprints statements that deliberately do not parse. `CREATE PATTERN`
-// was the other caller, fingerprinting a *substring* of the statement it had
-// just parsed, until it was withdrawn on 2026-08-31.
+// **This lexes `sql` from scratch** - the parser avoids that through
+// `FingerprintAccumulator` below. Callers with a string and no parse: KWP's
+// PARSE (`server/kwp_session.cpp`, for the informational `pattern_id`) and
+// the tests, including the golden corpus of statements that do not parse.
 std::optional<Fingerprint> FingerprintOf(std::string_view sql);
 
 // ---- The same reduction, driven by someone else's token stream -----------
@@ -304,12 +277,8 @@ std::optional<Fingerprint> FingerprintOf(std::string_view sql);
 // nothing lexes twice.
 //
 // **`FingerprintOf()` above is implemented on top of this**, and that is
-// load-bearing rather than tidy. Two implementations of a hash that is
-// persisted in `sys.patterns` and keys every stored waystone would be two
-// chances to disagree, and a disagreement would not fail - it would quietly
-// give the same statement two different pattern_ids depending on which path
-// computed it, retiring trails at random. There is one set of rules and both
-// entry points run it.
+// load-bearing: two implementations of a persisted hash could disagree
+// silently, giving one statement two pattern_ids by path.
 //
 // The contract on feeding, which the lexer satisfies by construction:
 //

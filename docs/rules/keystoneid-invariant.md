@@ -268,75 +268,52 @@ every path that issues an id, every path that could re-issue one, and the
 exposure a durable log has to a sequence persisted outside it.
 
 **K-M2 — Bump-ahead allocation.**
-The block-size floor is **4096**, measured against the `bench/` tree at
-`1769487` (`git show 1769487:bench/keystone_alloc_bench.cpp`): below it a
-durable bump stops amortizing — one fsync per 64 rows is still one fsync
-every 64 rows, a 3× INSERT regression at N=64 — and per-id durability caps
-INSERT at the device's fsync rate. `txn::kTrxIdBlockSize` reuses the number
-rather than re-deciding it, for the one sequence whose ceiling is synced
-per block (the superblock's, `txn.md` §4.2); it is frozen like
-`kds.inline_cell_width`, not per-relation tunable. **Row ids take no
-block**: every core's `AllocateRowId` bumps the mark per issued id, a
-logged catalog write with no sync of its own - a per-core block would
-break issue order across cores (`heap-and-tuple.md` §4.1a).
+The block-size floor is **4096**: below it a durable bump stops
+amortizing (N=64 was a 3x INSERT regression) and per-id durability caps
+INSERT at the device's fsync rate (measured pre-v3 with
+`bench/keystone_alloc_bench.cpp` at `1769487`).
+`txn::kTrxIdBlockSize` reuses the number for the one sequence whose
+ceiling is synced per block (the superblock's, `txn.md` §4.2); it is
+frozen, not per-relation tunable. **Row ids take no block**: every core's
+`AllocateRowId` bumps the mark per issued id, a logged catalog write with
+no sync of its own - a per-core block would break issue order across
+cores (`heap-and-tuple.md` §4.1a).
 
 **K-M2a — The ceiling is durable.**
-`sys.tables.next_id`'s bump is a logged catalog write with an `UNDO_WRITE`
-ahead of it and replays with every other catalog write
-(`docs/spec/wal.md`); that is what lets K1 be called held across a crash
-(§1.2).
+`sys.tables.next_id`'s bump is a logged `HEAP_OVERWRITE` of its catalog
+row at `kNoTxnId` (`OverwriteLogged`, `src/catalog/catalog.cpp`) - no
+undo, because no transaction owns it and a bump is never rolled back - and
+replays with every other catalog write (`docs/spec/wal.md`); that is what
+lets K1 be called held across a crash (§1.2).
 
 **K-M3 — K2 enforced.**
 `exec::CompileAssignments` (`src/exec/step_compiler.cpp`), called from
-`UpdateInner` before any storage is touched — beside `CompileWhere`,
-because those are the two halves of an UPDATE's compile, and a check the
-dispatcher owns is one a second write path can be written without —
-refuses an UPDATE whose SET list touches the pk. Four rules it carries:
+`UpdateInner` before any storage is touched, refuses an UPDATE whose SET
+list names the pk:
 
-- **The code is `kUnsupported`, and the split from `kInvalidArgument` is
-  the point.** An unknown SET target is simply wrong; the primary key is
-  *understood and declined* — the column exists and the value would
-  encode, and what cannot happen is the write, because the id names the
-  tuple in the clustered tree, in every index and Cabin entry, and in
-  every recorded trail. It is the invariant, not a missing feature.
-- **Both refusals carry a byte.** `parser::Assignment` has a
-  `byte_offset` for the reason `AstValue::byte_offset` has one; nothing
-  compares the field, and the fingerprint folds from the token stream and
-  not from the AST, so no stored `pattern_id` depends on it.
-- **The parser does not refuse it.** Which column is the pk is catalog
-  knowledge; a parser that guessed from the name `id` would refuse a legal
-  statement on a relation whose *second* column is called that. The
-  parser-level test is a **negative** one — the statement parses — and the
-  refusal is the compiler's.
-- **Case sensitivity is a finding, not a fix.** `Schema::FindColumn`
-  matches a SET target exactly, while the step compiler resolves a WHERE
-  column through `IEquals`, so `SET ID = 99` against a pk named `id` is
-  refused as an *unknown column* rather than as the pk. K2 holds either
-  way — no path reaches the write. Making SET targets case-insensitive is
-  a change to the engine's identifier rule (`manual/sql/sql.md`'s
-  "statements are case-insensitive") and belongs to whoever owns it.
+- **`kUnsupported`, not `kInvalidArgument`**: an unknown SET target is
+  simply wrong; the pk is understood and declined, because the id names
+  the tuple in the clustered tree, every index and Cabin entry, and every
+  trail. Both refusals carry the byte (`parser::Assignment::byte_offset`,
+  which nothing compares and the fingerprint does not fold).
+- **The parser does not refuse it**: which column is the pk is catalog
+  knowledge, so the parser-level test is a negative one.
+- **Case sensitivity is a known finding**: `Schema::FindColumn` matches a
+  SET target exactly while WHERE resolves through `IEquals`, so `SET ID =
+  99` against a pk named `id` is refused as an *unknown column*. K2 holds
+  either way; changing it is the identifier rule's owner's call.
 
 **K-M4 — Budget observability.**
-Two surfaces: **`SHOW BUDGET`** lists every relation under a summary line
-carrying `warning=<n>`/`exhausted=<n>`, so consumption is visible without
-reading every row; and **`DESCRIBE`** reports `ids_issued`,
-`ids_remaining` and `budget_used` beside the `next_id` they derive from
-(`docs/spec/client-manual.md`).
-
-The arithmetic is `catalog::BudgetOf()`
-(`include/kds/catalog/keystone_budget.hpp`), a pure function of one
-integer rather than a line of `<<` in the dispatcher, so the *source* can
-change and none of the arithmetic moves. Three things it settles that an
-inline subtraction gets wrong: **issued counts ids spent, not rows
-living** (a burned id is spent, and a renderer saying "rows" would be
-lying); capacity is `kMaxKeystoneId − kFirstRowId + 1`, one short of 2^48
-because id 0 is reserved; and exhaustion is a flag rather than the tail of
-a rounded percentage, since `AllocateRowId` refuses rather than wrapping.
-
-The warning threshold is `kKeystoneBudgetWarnFraction` = 90%
-`[PROPOSED]`: the input for a number is how long a relation takes to cross
-the last 10% at its own insert rate (§3's table), which is
-per-deployment. A named constant, so moving it is one edit.
+**`SHOW BUDGET`** lists every relation under a summary line carrying
+`warning=<n>`/`exhausted=<n>`; **`DESCRIBE`** reports `ids_issued`,
+`ids_remaining` and `budget_used` beside `next_id`
+(`docs/spec/client-manual.md`). The arithmetic is `catalog::BudgetOf()`
+(`include/kds/catalog/keystone_budget.hpp`), a pure function of
+`next_id`: issued counts ids spent, not rows living; capacity is
+`kMaxKeystoneId − kFirstRowId + 1` (id 0 is reserved); exhaustion is a
+flag, since `AllocateRowId` refuses rather than wrapping. The warning
+threshold `kKeystoneBudgetWarnFraction` = 90% is `[PROPOSED]`: the right
+number is per-deployment (how long the last 10% takes at §3's rates).
 
 **K-M5 / K-M6 — Documentation, and re-key.**
 Nothing beyond this file stands under either label: §1's sentence and

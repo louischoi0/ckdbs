@@ -3,8 +3,8 @@
 Decisions NS1–NS10. **A namespace is a name, and it declares the affinity
 of the relations created in it** (NS10) — a statement about which relations
 belong together, which nothing reads: no relation is bound to a core, so a
-qualifier **declares grouping, never identity and never
-placement** — relation names stay instance-global (NS5, NS6).
+qualifier **declares grouping, never identity and never placement** —
+relation names stay instance-global (NS5, NS6).
 
 This spec **ratifies and completes** something the engine already carries
 rather than introducing it: `kNamespaceSys` (0) and `kNamespacePublic` (1)
@@ -151,8 +151,7 @@ name is free for reuse — the same rule DROP TABLE already follows.
 - `CREATE NAMESPACE <name>` — allocates an oid, writes one `sys.objects`
   row with `type_oid = kTypeNamespace`. No pages, no relations. It is the
   affinity declaration (NS10), and nothing reads it. Refused if the name is
-  live, and
-  refused for the two reserved spellings `sys` and `public`
+  live, and for the two reserved spellings `sys` and `public`
   (`well_known.hpp` says why each).
 - `DROP NAMESPACE <name>` — permitted **only when empty**, asked under the hold a
   create's membership is written under (`catalog.md` CT7, AT-S17b); no `CASCADE`,
@@ -174,10 +173,10 @@ name is free for reuse — the same rule DROP TABLE already follows.
   `SELECT` (`FROM` and every `JOIN`, and inside every subquery block),
   `INSERT`, `UPDATE`, `DELETE`, `REFERENCES`, `ALTER TABLE`, `DROP TABLE`,
   `CREATE INDEX`, `CREATE CABIN`, `CREATE ASSERTION`, `DESCRIBE` and
-  `SHOW RELAYOUT`. Verified, never ignored (NS5). Two implementation sites
-  cover all of them — `exec::CompileBlock`'s relation-binding loop for every
-  `SELECT` shape, and one `CommandDispatcher::QualifierRefusal` per other
-  statement.
+  `SHOW RELAYOUT`. Verified, never ignored (NS5). Every site
+  calls `Catalog::CheckRelationQualifier` — `exec::CompileBlock`'s
+  relation-binding loop for every `SELECT` shape, and each other
+  statement's handler (dispatcher, index, Cabin and assertion DDL).
 
 A namespace DDL runs where its session is, as every DDL does: every core
 writes the catalog's pages under the page latch.

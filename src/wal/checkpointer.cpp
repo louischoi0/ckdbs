@@ -376,10 +376,9 @@ void Checkpointer::Published(const CheckpointAnchorRecord& anchor) {
 
 Status Checkpointer::RunToCompletion() {
     // **A checkpoint a failed step or completion left running is resumed, not
-    // refused** (BC-S4's review). `Start` refuses a nested one, so calling it
-    // unconditionally wedged the checkpointer for good after one transient
-    // writeback error: no later run completed, the anchor stopped moving, and
-    // nothing was recycled again. The resumed run keeps its snapshot, whose
+    // refused** (BC-S4): `Start` refuses a nested one, so one transient
+    // writeback error would otherwise wedge the checkpointer - the anchor
+    // stops moving and nothing is recycled again. The resumed run keeps its snapshot, whose
     // redo start was valid when taken and stays so; a `Complete` that failed
     // after appending its `CHECKPOINT_END` appends a second one, which no
     // reader consumes.

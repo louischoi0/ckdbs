@@ -20,30 +20,20 @@
 // records to it until it fills, then chains a new one behind it through
 // `prev_page_id`. **A page is not owned by a transaction.**
 //
-// It was, until 2026-08-05, and the cost of that is what changed it: an
-// autocommitted statement *is* a transaction, so a page per transaction is
-// a fresh 8 KB page per `UPDATE` holding one ~88-byte record - measured at
-// 132 MB of data file for 16,414 updates, and at the instance's whole
-// ~510 MB page-id space exhausted after ~65,000 of them, at which point
-// every further write failed (bench/results-txn-layer-budget.md §3).
-// Sharing puts ~92 records on a page instead of one.
-//
-// Nothing was relying on the exclusivity. A reader follows `undo_ptr`,
-// which names a page and an offset directly; rollback replays the
-// transaction's in-memory trail (manager.hpp) and never walks undo pages;
-// redo names each record's offset explicitly, so interleaved writers replay
-// in LSN order onto the same page correctly. The only thing exclusivity
-// would have bought is a purge that could free a transaction's pages
-// without a side table - and the purge that now exists (below) confirms
-// the analysis: it frees by a per-page bound rather than by an owner,
-// because a page's records outlive their writer.
+// Background: a page per transaction (until 2026-08-05) spent an 8 KB page
+// per autocommit `UPDATE` for one ~88-byte record; sharing puts ~92 on a
+// page. Nothing needs exclusivity: a reader follows `undo_ptr` (page and
+// offset), rollback replays the in-memory trail (manager.hpp), redo names
+// each record's offset so interleaved writers replay in LSN order, and the
+// purge frees by a per-page bound because a page's records outlive their
+// writer.
 //
 // So there are **three** chains here and no two of them are the same chain:
 //
 //   prev_page_id       page -> page, the log's pages in creation order
 //   prior_undo_ptr     record -> record, one tuple's versions, for reading
 //   txn_prev_undo_ptr  record -> record, one *transaction's* records, for
-//                      recovery's undo phase (RV10, added 2026-08-11)
+//                      recovery's undo phase (RV10)
 //
 // A version chain crosses transactions freely, and so does a page. The
 // third exists because neither of the first two answers "what did this
@@ -75,9 +65,7 @@
 //
 // ---- The purge: pages recycle within the log ------------------------------
 //
-// (docs/inflight/in-progress/workplan-undo-purge.md, D1-D3 ratified 2026-08-19; this section
-// replaced "Nothing is ever freed" when the reader-registration
-// prerequisite fell.)
+// (`txn.md` §4.1; ratified 2026-08-19 as the undo-purge workplan's D1-D3.)
 //
 // **The reachability fact**: a record holds the version its writer
 // *replaced*, and a reader walks into undo only while writers are
@@ -103,18 +91,16 @@
 // stale `prev_page_id` links are why LivePages() counts the in-memory
 // chain and no device walk remains.
 //
-// **Disarmed by default**: with no horizon source installed the log
-// behaves exactly as before - nothing is freed. TransactionManager
+// **Disarmed by default**: with no horizon source installed nothing is
+// freed. TransactionManager
 // installs the floor on construction, so every manager-owned log purges; a
 // log built bare (tests, tools) does not. A crash forgets the
 // recycle list and this run's chain alike; the next run starts a fresh
-// chain, so the old pages leak exactly as they always have - the
-// mount-time reclaim of prior-run pages is UP4, not built.
+// chain and a previous run's undo pages leak (no mount-time reclaim).
 //
 // ---- Concurrency ----------------------------------------------------------
 //
-// Core-local, like every other subsystem (rules.md section 3). Holds a
-// reference to a store and a manager and no lock of its own; the caller
+// Core-local: one log per core (rules.md section 3). Holds a reference to a store and a manager and no lock of its own; the caller
 // holds whatever pin the pages need.
 
 namespace kds::txn {
@@ -189,28 +175,14 @@ public:
     // rollback and for tests that assert a whole chain.
     Status Walk(std::uint64_t ptr, const std::function<bool(const UndoVersion&)>& fn);
 
-    // There is no PageCount() either: it walked the on-disk prev chain,
-    // which reuse made partly historical, and its honest replacement is
-    // LivePages() below. (Its own predecessor, `PageCountFor(trx_id)`,
-    // fell to sharing - a page holds records from many transactions and
-    // none of them owns it.)
-
-    // There is no Forget(). It existed to drop a finished transaction's tail
-    // from a per-transaction table, and there is no such table now - one
-    // current page serves everyone, and a transaction ending changes nothing
-    // about it.
-
-    // ---- The purge (header note above; docs/inflight/in-progress/workplan-undo-purge.md) -----
+    // ---- The purge (header note above) ------------------------------------
 
     // Arms purge-on-growth: `horizon` answers a trx id below which every
     // writer's records are unreachable - the instance's floor, from the
-    // manager. Null disarms (the default, and the pre-purge behaviour).
-    // The source is called only from inside Append(), so a caller whose
-    // lambda captures an object need only guarantee that object is alive
-    // while appends run - which TransactionManager, the sole appender,
-    // does trivially for itself. It uninstalls on destruction anyway,
-    // because "the only caller keeps the rule" is the assumption the
-    // reader-registration review saw break once already (its B1).
+    // manager. Null disarms (the default). The source is called only from
+    // inside Append(), so a captured object need only be alive while
+    // appends run; TransactionManager, the sole appender, uninstalls it on
+    // destruction anyway.
     void SetHorizonSource(std::function<std::uint64_t()> horizon) {
         horizon_ = std::move(horizon);
     }
@@ -248,8 +220,7 @@ private:
 
     storage::PageStore& store_;
     wal::WalManager* wal_;
-    // The log's current page - one integer, where a per-transaction table
-    // used to be. kInvalidPageId until the first append, and after a restart:
+    // The log's current page. kInvalidPageId until the first append, and after a restart:
     // a page from a previous run is still readable through a tuple's
     // undo_ptr, but nothing appends to it, because its free space is not
     // recorded anywhere this log reads at startup.

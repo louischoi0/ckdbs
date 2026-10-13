@@ -10,18 +10,9 @@
 // A reactor with nothing to run blocks in its I/O backend. Sockets and
 // timers wake it because both are things the kernel knows about; a write to
 // shared state by another thread is neither, and `epoll_wait` cannot see
-// it. Until this existed, work for an idle core waited for that block to
-// expire on its own.
-//
-// **What that cost, measured** (on the ring transport, retired at AT-S10d):
-// `Scheduler::IdleTimeoutMs` returns whole
-// milliseconds and rounds *up*, so the floor was 1 ms, and statement
-// shipping — which put a ring message on a client's critical path twice —
-// paid it twice per statement. SS-B measured the shipped-minus-seated delta
-// at a flat 1,064 µs, identical with the device sync in the path and with
-// it removed, tracking the idle block over a fivefold range
-// (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md` §4a). The wire
-// itself is ~20 µs against a ~0.9 ms sync; none of that delta was the wire.
+// it. Without a wake, work for an idle core waits for that block to expire
+// - at least 1 ms, since `Scheduler::IdleTimeoutMs` rounds up (v2.2's SS-B
+// measured a flat ~1 ms per cross-core hop on the since-retired ring).
 //
 // ---- What this is, and what it is not -----------------------------------
 //

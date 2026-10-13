@@ -79,7 +79,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "indexes",
             "cabin_max_entries_per_value", "cores",  "reactor_cpus",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
-            "join_build_max_rows",   "lock_wait_fault_net_ms",
+            "join_build_max_rows",   "scan_kernel",  "lock_wait_fault_net_ms",
             "max_locks_per_txn",     "tcp_keepalive_s",
             "txn_lifetime_ceiling_ms",
             "decay_half_life",       "physical_optimizer",
@@ -198,13 +198,9 @@ std::vector<std::pair<std::string, std::string>> Expeditor::Config::RetiredConfi
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
-    // **A retired key is refused by name, before the unknown-key check** -
-    // which is what makes its message reachable at all: a key missing from
-    // `KnownConfigKeys` is refused there as merely unknown, and AT-S6's
-    // successor-naming refusal of `in_doubt_ceiling_ms` sat below that
-    // check, unreachable, until AT-S8. Refused rather than ignored, because
-    // a file that still sets one is a file whose author expects it to do
-    // something.
+    // **A retired key is refused by name, before the unknown-key check**,
+    // which would otherwise refuse it as merely unknown (AT-S8). Refused
+    // rather than ignored: a file that still sets one expects it to act.
     for (const auto& [key, why] : RetiredConfigKeys()) {
         if (file.Has(key)) return Status::InvalidArgument(file.origin() + ": " + why);
     }
@@ -425,6 +421,11 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // row may be held, which refuses every statement that needs a sort
         // while leaving the grammar in place.
         sort_max_rows = static_cast<std::size_t>(v.value());
+    }
+    if (file.Has("scan_kernel")) {
+        auto v = file.GetBool("scan_kernel");
+        if (!v.ok()) return v.status();
+        scan_kernel = v.value();
     }
     if (file.Has("join_build_max_rows")) {
         auto v = file.GetUint("join_build_max_rows");
@@ -738,20 +739,11 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
 
     // Cross-key validation, after every key has been read - a rule that
     // ran mid-overlay would judge keys the file had not yet spoken.
-    // The KWP load endpoint has no auth stage, so opening it beside an
-    // authenticated text port would put an ungated door on a guarded
-    // server - every INSERT the gate protects, reachable without a
-    // password. Refused, not warned (review 2026-08-13); the combination
-    // becomes legal when KWP P07's handshake carries the same SCRAM
-    // exchange.
+    // The KWP v0 load endpoint (`kwp_port`) has no auth stage, so opening
+    // it on an authenticated server would be an ungated door to every
+    // INSERT the gate protects: refused, not warned. The main port's KWP/1
+    // handshake authenticates (`C_AUTH`/`S_AUTH`, P07, 2026-08-31).
     if (auth_scram && kwp_port != 0) {
-        // **Narrowed 2026-08-31, not lifted.** P07 landed, so the *query*
-        // surface authenticates: the main port's KWP handshake runs the
-        // same SCRAM exchange in `C_AUTH`/`S_AUTH` frames. The **load**
-        // endpoint (`kwp_port`) is KWP v0 and still has no auth stage of
-        // its own, so it stays refused - and the message says which
-        // endpoint, because the old one now reads as though the whole
-        // protocol were unauthenticated.
         return Status::InvalidArgument(file.origin() +
                                         ": auth = scram cannot serve kwp_port - the v0 bulk-load "
                                         "endpoint has no auth stage of its own (the main port's "
@@ -889,17 +881,12 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // latch, and every peer appends through it rather than opening one of
     // its own.
     //
-    // **The core count is the whole predicate** (AM-S4(d)): a volume that
-    // is not one stream is refused at `Decode`. What the count decides: at
-    // `cores = 1` arming the latch would put a mutex on every logged page
-    // mutation for a section no second thread can reach. AR0's G2 is that
-    // `cores = 1` pays nothing, and `latch.hpp` calls it a property of the
-    // code rather than of a build flag; this test is where that stays true.
-    // `core_count` is the running count - bootstrap records it at every
-    // mount - so it cannot disagree with the peers
-    // that actually exist, and
-    // `WalManager::Attach` refuses an unshared stream - so getting this
-    // wrong fails the mount loudly rather than racing.
+    // **The core count is the whole predicate** (AM-S4(d); a volume that is
+    // not one stream is refused at `Decode`): at `cores = 1` the latch
+    // stays unarmed, so one core pays nothing (AR0's G2). `core_count` is
+    // the running count, recorded by bootstrap at every mount, and
+    // `WalManager::Attach` refuses an unshared stream, so a wrong arm fails
+    // the mount loudly rather than racing.
     wal_config.shared_stream = expeditor->database_->superblock.core_count() > 1;
     auto wal = wal::WalManager::Open(expeditor->log_device_.get(), expeditor->clock_,
                                      /*core_id=*/0, wal_config);
@@ -907,12 +894,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->wal_ = std::move(wal.value());
     expeditor->wal_->SetLogger(&*expeditor->logger_);
 
-    // The page latch (AM-S1) arms on the same fact, without the topology
-    // conjunct: frames have no stream, so `core_count > 1` is the whole
-    // predicate. Armed **before** recovery below, deliberately - recovery
-    // runs on this thread with no reactor alive, so its every page access
-    // exercises the armed primitive contention-free, a self-test the mount
-    // pays nothing for. At one core the word is never touched.
+    // The page latch (AM-S1) arms on the same fact, `core_count > 1`.
+    // Armed **before** recovery below, so recovery's page accesses exercise
+    // the armed primitive contention-free. At one core the word is never
+    // touched.
     static_assert(kMaxCores - 1 <= storage::kPageLatchMaxCoreId,
                   "the latch word's owner field must name every core the superblock admits");
     // The per-core arrays sized by their own literal, each tied to the one
@@ -932,9 +917,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // by the decision `WalManager::Sync()` states: somebody is parked on the
     // result, and a hand-off adds a wake-up to a latency somebody is
     // measuring. A `group` commit above one core (BA-R4 part 1) and a
-    // cadence checkpoint's gate (BI-S3) are handed to it and parked on. This
-    // comment claimed the opposite until XD0 read the code
-    // (`instructions/v2.7.1/measurement-xd.md`). The server starts one and
+    // cadence checkpoint's gate (BI-S3) are handed to it and parked on. The
+    // server starts one and
     // an in-process caller does not, because a test that drives a
     // WalManager on one thread wants its syncs to have happened by the time
     // the call returns.
@@ -1083,14 +1067,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     if (Status s = DiscardAdvisoryState(expeditor->database_->catalog); !s.ok()) return s;
 
     // H7: collect the spills nothing points at. The assertion catalog -
-    // `exec::LogChainInsert`'s one remaining caller since `sys.pattern_defs`
-    // went with declared patterns on 2026-08-31 - logs its spills under
-    // `kNoTxnId`, so there is no transaction to chain an undo record to and
-    // a rolled-back `CREATE ASSERTION`'s body text has no compensation to
-    // release it.
-    // Every *other* spill is released by the ordinary rollback path since
-    // 2026-08-28, which is what makes this a hole rather than the general
-    // case.
+    // `exec::LogChainInsert`'s one remaining caller - logs its spills under
+    // `kNoTxnId`, so a rolled-back `CREATE ASSERTION`'s body text has no
+    // compensation to release it; every other spill is released by the
+    // ordinary rollback path.
     //
     // **The same window as the sweep above, for the same reasons**: after
     // recovery, so a spill this mount's own log restored is included; and
@@ -1129,8 +1109,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // The rest of the transaction stack, before the dispatcher that reads
     // through it. The persist callback is what makes a reserved id block
     // durable: the superblock is unlogged, so a block is only safe once the
-    // page has been written and synced (txn/trx_id.hpp records the exposure
-    // that leaves). Every peer's sequence is built over the same three
+    // page has been written and synced (txn/trx_id.hpp, "Durable before issued": a crash
+    // burns ids, never reissues one). Every peer's sequence is built over the same three
     // (`CoreRuntime::Config::trx_id_ceiling`, AT-S10b).
     Expeditor* self = expeditor.get();
     expeditor->trx_ids_.emplace(expeditor->database_->superblock,
@@ -1146,7 +1126,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // it. Sized by the instance's core count, so its partitions are latched
     // exactly where a second reactor can reach them and latchless at one
     // core; its wake registry is installed at `Start`, where the registry
-    // is built. The header says what this is the first of.
+    // is built.
     {
         auto locks = txn::LockTable::Create(expeditor->config_.cores,
                                             expeditor->config_.max_locks_per_txn);
@@ -1187,8 +1167,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // a copy, so the block reports the mount's own report and cannot drift from
     // it; `recovery_` is declared above the dispatcher and so outlives it.
     expeditor->dispatcher_->set_recovery(&expeditor->recovery_);
-    // The dispatcher takes the table too (AO-S4b; AO-S5(a) had held this
-    // line) - the member's declaration says what that lands.
+    // The dispatcher takes the table too (AO-S4b): its deadlock detector's
+    // wait-for graph spans every core.
     expeditor->dispatcher_->set_locks(expeditor->locks_.get());
 
     // **Assertion enforcement, resumed** (RC07, AS6a). Here rather than beside
@@ -1196,20 +1176,13 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // dispatcher and the dispatcher did not exist yet - and still before
     // `Serve()`, so no statement is accepted against an unenforcing constraint.
     //
-    // `checkpoint_lsn` from this core's anchor is the scan start: that is the
-    // checkpoint whose snapshot is the base, which is what AS6a's "from the last
-    // checkpoint" means. The anchor read here is the one recovery already used,
-    // so the two cannot disagree about which checkpoint that was.
-    //
-    // **It is `redo_start_lsn`, and core 0 is not exempt from the reason**
-    // (AR0 M0; unconditional since AM-S4(d)). Slot 0 holds the *fold* — the
-    // record of whichever core had the lowest redo start — so its
-    // `checkpoint_lsn` is that core's `CHECKPOINT_BEGIN`, which can sit
-    // past core 0's own snapshot exactly as it can past a peer's. Starting
-    // there finds no base, and no base is not a slow scan: it is
-    // `NoteUnenforceable` for every assertion there is. The field the
-    // fold does bound is `redo_start_lsn` — at or below every core's redo
-    // start, which is at or below every core's own `CHECKPOINT_BEGIN`.
+    // **The scan starts at the anchor's `redo_start_lsn`, not its
+    // `checkpoint_lsn`** (AR0 M0, AM-S4(d)): slot 0 holds the *fold*, whose
+    // `checkpoint_lsn` is whichever core's `CHECKPOINT_BEGIN` had the lowest
+    // redo start and can sit past core 0's own snapshot. Starting there finds
+    // no base, which is `NoteUnenforceable` for every assertion. The fold
+    // bounds `redo_start_lsn` at or below every core's `CHECKPOINT_BEGIN`.
+    // The anchor is the one recovery already used.
     expeditor->recovery_ = ResumeAssertionsAfterRecovery(
         expeditor->database_->catalog, *expeditor->store_, *expeditor->log_device_,
         /*stream_core=*/0, mount_anchor.redo_start_lsn,
@@ -1460,14 +1433,9 @@ void Expeditor::BroadcastShutdown() {
         // is not yet asleep is skipped, and that reactor sees the flag on its
         // next turn without ever blocking.
         //
-        // **The stop is unconditional and only the kick is gated.** This
-        // returned early on `!wakers_.has_value()`, which made the flag - the
-        // half that actually ends the loop - depend on the half that is only
-        // a latency saving. The two are built together today, so the two
-        // shapes agree; they are not the same statement, and the disagreeing
-        // case is `join()` below waiting on a reactor nobody ever stopped.
-        // A missing table costs one idle block per peer, which is what
-        // `waker_table.hpp` prices it at.
+        // **The stop is unconditional and only the kick is gated**: the
+        // flag ends the loop, the kick only saves latency, and a missing
+        // table costs one idle block per peer (`waker_table.hpp`).
         core->scheduler().Stop();
         if (wakers_.has_value()) wakers_->Kick(core->core_id());
     }
@@ -1479,23 +1447,16 @@ void Expeditor::BroadcastShutdown() {
 // bottom of `Start`: there are twenty early returns above it, and a path
 // that missed one would leave the dispatcher pointing at a destroyed
 // reactor, so `SHOW META` through the public `dispatcher()` accessor would
-// read freed memory.
-//
-// It was a local `struct` inside `Serve` until the start/run split
-// (AM-S0(a)); it is out here now because `ServeRuntime` holds one, and it
-// keeps its position *after* the scheduler in that struct for the same
-// reason it had it here - reverse-order destruction clears the view before
-// the reactor it names goes.
+// read freed memory. `ServeRuntime` holds it *after* the scheduler, so
+// reverse-order destruction clears the view before the reactor goes.
 namespace {
 
 struct ClearReactorBorrows {
-    // **A constructor, and the copy deleted beside it.** As an aggregate,
-    // `emplace(ClearReactorBorrows{...})` built a *temporary*, copied it
-    // into the optional and then destroyed the temporary at the semicolon -
-    // running this destructor, which withdrew the `set_scheduler_view` the
-    // line above had just installed. `SHOW META`'s group-accounting block
-    // was then empty for the life of every instance. Deleting the copy is
-    // what makes that spelling stop compiling rather than stop working.
+    // **A constructor, and the copy deleted beside it**: an aggregate
+    // `emplace(ClearReactorBorrows{...})` would build a temporary whose
+    // destructor withdraws the scheduler view just installed, emptying
+    // `SHOW META`'s group-accounting block. Deleting the copy makes that
+    // spelling fail to compile.
     explicit ClearReactorBorrows(CommandDispatcher* d) noexcept : dispatcher(d) {}
     ClearReactorBorrows(const ClearReactorBorrows&) = delete;
     ClearReactorBorrows& operator=(const ClearReactorBorrows&) = delete;
@@ -1508,12 +1469,12 @@ struct ClearReactorBorrows {
 
 }  // namespace
 
-// The stack `Serve()` used to own, in the order it declared it. **Every
-// member is an `optional` because each is built by a step that can fail**,
-// and the field order is the destruction order: reverse, so the peer
-// threads go first (already joined), then the borrow guard, then the
-// reactor, then the listeners, then the credential store and TLS context,
-// then the io backend. That is exactly what the locals did.
+// The running instance's state. **Every member is an `optional` because
+// each is built by a step that can fail**, and the field order is the
+// destruction order: reverse, so the peer threads go first (already
+// joined), then the borrow guard, then the reactor, then the listeners,
+// then the cancel registry, the credential store and TLS context, then the
+// io backend.
 struct Expeditor::ServeRuntime {
     std::optional<sched::EpollIoBackend> io_backend;
 #if KDS_WITH_TLS
@@ -1534,12 +1495,10 @@ struct Expeditor::ServeRuntime {
     // **The listeners are declared *before* `scheduler`, so reverse-order
     // destruction runs `~TcpServer` - which calls `Detach()` - after the
     // reactor it is registered with is gone.** `RunUntilStopped`'s tail
-    // detaches them by hand for exactly that reason, but the tail is not
-    // the only way this struct dies: a failed `Start()` unwinds it through
-    // `DropOnFailure`, and an `Expeditor` started and dropped without ever
-    // being run unwinds it in `~Expeditor`. Both of those left an attached
-    // listener to cancel a timer and unregister an fd on a destroyed
-    // `Scheduler`. Idempotent, so the tail's explicit detach still stands.
+    // detaches them by hand for that reason, but a failed `Start()`
+    // (`DropOnFailure`) and an `Expeditor` started and never run
+    // (`~Expeditor`) unwind this struct without the tail, so it detaches
+    // here too. Idempotent, so the tail's explicit detach still stands.
     ~ServeRuntime() {
         if (listener.has_value()) listener->Detach();
         if (text_listener.has_value()) text_listener->Detach();
@@ -1551,11 +1510,10 @@ struct Expeditor::ServeRuntime {
 Expeditor::~Expeditor() {
     // **An instance that started and was never run still has peer threads
     // turning.** `~ServeRuntime` below would destroy a `std::vector<std::thread>`
-    // whose threads are joinable, which is `std::terminate` - the same hazard
-    // `Start()`'s failure paths hit and `StopStartedCores` was written for.
-    // `Start()`-then-look is the shape the AM-S0(a) fixture uses, so this is
-    // the ordinary path and not an exotic one. Null after `RunUntilStopped`
-    // and after a failed `Start`, both of which have already unwound it.
+    // whose threads are joinable, which is `std::terminate`.
+    // `Start()`-then-look is the AM-S0(a) fixture's ordinary shape. Null
+    // after `RunUntilStopped` and after a failed `Start`, both of which have
+    // already unwound it.
     if (running_ != nullptr) StopStartedCores();
     // **The data-sync thread, before `wal_` goes** (BI-S4): the failure
     // handler `Start` installed dereferences it, and members die in reverse
@@ -1567,16 +1525,11 @@ Expeditor::~Expeditor() {
     }
     // **And the suspend audit `Start` installed on the calling thread.**
     // `InstallSuspendAudit` is thread-local and points at this instance's
-    // store; only `RunUntilStopped`'s tail withdrew it, so an instance
-    // started and dropped - the `Start()`-then-look fixture shape - left the
-    // thread's audit naming a freed store, and the next coroutine that
-    // parked on that thread read it (found 2026-09-07: a same-core deadlock
-    // cell segfaulting after two single-core `Expeditor` cells in one
-    // process). Idempotent after the tail's own withdrawal. The last
-    // install on a thread wins and this withdraws whoever made it, so two
-    // live instances started on one thread would leave the later one
-    // unaudited - a shape no caller has, and a fixture that took it would
-    // reinstall.
+    // store, so an instance started and dropped without the tail would
+    // leave the thread's audit naming a freed store (2026-09-07).
+    // Idempotent after the tail's own withdrawal. The last install on a
+    // thread wins, so two live instances started on one thread would leave
+    // the later one unaudited - a shape no caller has.
     exec::UninstallSuspendAudit();
 }
 
@@ -1591,20 +1544,12 @@ Status Expeditor::Start() {
             "Expeditor::Start: this instance is already started; a second call would bind a "
             "bound port and spawn a second set of core threads");
     }
-    // **Torn down on every failure below, and there are twenty of them.**
-    // Each `return` used to unwind a stack; now it has to unwind a member,
-    // and the guard is what makes that true of paths nobody has taken. It
-    // is dismissed on the one path that succeeds, at the end of this
-    // function, where the caller becomes responsible for the teardown.
-    //
-    // **And it stops the peer threads first, which the stack never did.**
-    // Five of those returns are *after* the workers are spawned - the stop
-    // signal's handler and the three listener attaches - and unwinding a
-    // `std::vector<std::thread>` whose threads are still joinable calls
-    // `std::terminate`. That was reachable before this split and is not a
-    // defect the split introduced; it is one the split had to face, because
-    // `Start()` promises a caller that a failed start leaves nothing
-    // running. `StopStartedCores` is that promise.
+    // **Torn down on every failure below** by `DropOnFailure`, dismissed on
+    // the one path that succeeds, where the caller takes the teardown. It
+    // stops the peer threads first: some returns are *after* the workers
+    // are spawned, and unwinding a joinable `std::thread` calls
+    // `std::terminate`. `Start()` promises a failed start leaves nothing
+    // running; `StopStartedCores` keeps it.
     // **The data file's sync thread** (BI-Q2 (a), `storage/data_syncer.hpp`):
     // one for the instance, before any reactor runs, so a checkpoint step and
     // the anchor publish park on it rather than wait in `fsync`. **A failed
@@ -1632,8 +1577,7 @@ Status Expeditor::Start() {
     } drop_on_failure{this};
     ServeRuntime& live = *running_;
 
-    // Named exactly as the locals they replace, so everything below reads
-    // as it did before the split (AM-S0(a)).
+    // Short names for the `ServeRuntime` members used below.
     auto& io_backend = live.io_backend;
     auto& listener = live.listener;
     auto& text_listener = live.text_listener;
@@ -1810,22 +1754,15 @@ Status Expeditor::Start() {
     live.scheduler.emplace(clock_, io_backend.value());
     sched::Scheduler& scheduler = *live.scheduler;
     scheduler.SetLogger(&*logger_);
-    // `SHOW META`'s group-accounting block on core 0 (sched.md §4). The
-    // reactor is a local of this function and `dispatcher_` is a member that
-    // outlives it, so the view has to be cleared on **every** exit - and
-    // there are twenty early `return`s between here and the tail. A guard,
-    // not a line at the bottom: a path that missed it would leave the
-    // dispatcher pointing at a destroyed reactor, and `SHOW META` through
-    // the public `dispatcher()` accessor would then read freed memory.
-    // Declared after `scheduler`, so reverse order clears the view first.
+    // `SHOW META`'s group-accounting block on core 0 (sched.md §4), cleared
+    // on every exit by `ClearReactorBorrows` (above `ServeRuntime`).
     dispatcher_->set_scheduler_view(&scheduler);
     live.clear_reactor_borrows.emplace(&*dispatcher_);
 
     // Core-local, and installed before any statement runs: from here on a
     // coroutine that suspends while holding a page span - or, since P4d-3,
     // a page pin - is detected rather than merely forbidden in prose
-    // (exec/step_vm.hpp, sched/coro.hpp). Nothing in the executor suspends
-    // yet - this is in place *before* the first thing that can.
+    // (exec/step_vm.hpp, sched/coro.hpp).
     exec::InstallSuspendAudit(store_.get());
 
     // ---- The fan-out (workplan-crosscore.md P2) -------------------------
@@ -1899,7 +1836,7 @@ Status Expeditor::Start() {
         // `wal::CheckpointGate`), set before any reactor can ask it.
         checkpoint_gate_.SetRotation(config_.checkpoint_interval_ns);
         for (std::uint32_t core_id = 1; core_id < config_.cores; ++core_id) {
-            // **No extent for a core that borrows the pool** (AM-S2 step 3).
+            // A peer's config; it borrows the pool (AM-S2 step 3).
             CoreRuntime::Config core_config;
             core_config.core_id = core_id;
             core_config.checkpoint_interval_ns = config_.checkpoint_interval_ns;
@@ -1928,16 +1865,9 @@ Status Expeditor::Start() {
             // replaces, so a page faulted on one core is served from the
             // frame another core loaded.
             core_config.shared_store = store_.get();
-            // The instance's anchor, copied out of the superblock core 0
-            // decoded: a peer's `SuperBlock` member is a default-constructed
-            // one whose anchor slots are all zero.
-            //
-            // **Slot 0, which is the only slot** (AL-R3/AL-R4; AM-S4(d)).
-            // The fold puts every core's checkpoint there and
-            // `SetWalAnchor` refuses any other, so a peer's own slot reads
-            // all zeros - which means "no checkpoint ever", and would send
-            // the assertion resume scanning from the head of the whole log
-            // at every mount. The anchor a peer needs is the instance's.
+            // The instance's anchor: **slot 0, which is the only slot**
+            // (AL-R3/AL-R4; AM-S4(d)). The fold puts every core's checkpoint
+            // there and `SetWalAnchor` refuses any other.
             core_config.anchor = database_->superblock.wal_anchor(0);
             // The whole image, which is what a peer answers `SHOW META`
             // from and what every topology test on that core reads
@@ -2028,9 +1958,7 @@ Status Expeditor::Start() {
     // **The stop signal, as an ordinary readable fd** (`server/stop_signal.hpp`).
     // Registered here rather than polled, so a `systemctl stop` or a Ctrl-C takes
     // the same path a client's `STOP` does: the scheduler stops, the workers
-    // join, and the shutdown tail below runs its final sync and checkpoint. Until
-    // this, those signals killed the process mid-statement and the next mount
-    // recovered as if from a crash.
+    // join, and the shutdown tail below runs its final sync and checkpoint.
     //
     // Absent for every in-process caller, which is what keeps a test from
     // inheriting signal behaviour it did not ask for.
@@ -2264,7 +2192,7 @@ Status Expeditor::RunUntilStopped() {
     }
     // After the join, so nothing is still appending to the stream being
     // synced.
-    // The review's BUG 4: a peer's listener teardown rolls back open
+    // A peer's listener teardown rolls back open
     // sessions and can append CLRs, so it must run *before* this core's
     // final sync - detach-then-sync, the order core 0's own teardown
     // above already has.
@@ -2285,8 +2213,7 @@ Status Expeditor::RunUntilStopped() {
                                             ": final log sync failed: " + s.message());
         }
         // **A peer's shutdown checkpoint** (PW3b, `core_runtime.hpp` carries
-        // the contract): the third checkpoint point this core's tail below
-        // has had since RC08 and a peer had not. Sound here for the reason
+        // the contract). Sound here for the reason
         // `Sync()` above is - after the join this thread owns the peer, and
         // it has owned core 0 all along - and not fatal on the same terms as
         // core 0's own below.
@@ -2319,17 +2246,9 @@ Status Expeditor::RunUntilStopped() {
     if (kwp_listener.has_value()) kwp_listener->Detach();
 
     // **A checkpoint on the way out, so the next mount does not re-read this
-    // run's whole log.** A clean stop used to sync and stop there, which left
-    // the anchor wherever the last cadence tick had put it - so the first mount
-    // after a graceful shutdown rescanned every record written since, and redid
-    // none of them. Measured: a cleanly stopped 2000-row instance re-read all
-    // 10,883 of its own records (`bench/results-wal-recovery.md`).
-    //
-    // RC08 gave a *crash* a bounded next mount by checkpointing at the end of
-    // recovery; this is the same call at the other end, and it is what makes the
-    // bound hold for a stop as well. It also carries the assertion group
-    // snapshots, because the cadence checkpointer already has that source
-    // installed - so enforcement resumes from this record too.
+    // run's whole log** - RC08's mount checkpoint at the other end. It also
+    // carries the assertion group snapshots, so enforcement resumes from
+    // this record too.
     //
     // Not fatal if it fails, and it must not be: the data is already durable
     // through the syncs above, and refusing to exit over a slower *next* start
@@ -2349,23 +2268,18 @@ Status Expeditor::RunUntilStopped() {
     // A checkpoint's redo start is `min(recLSN)` over the dirty table it
     // snapshots at BEGIN (wal.md §11-3) - so checkpointing *before* the final
     // sync publishes an anchor pointing at the oldest page still dirty, which on
-    // a busy run is near the start of the log. Measured: a 300-row instance
-    // stopped that way still had its next mount read 1205 records. Synced first,
-    // the dirty table is empty, the redo start is the CHECKPOINT_BEGIN LSN
-    // itself, and the next mount reads only this checkpoint's own two records.
-    //
-    // This is the same trick RC08's mount checkpoint gets for free: it runs
-    // before any statement has dirtied anything.
+    // a busy run is near the start of the log. Synced first, the dirty table
+    // is empty, the redo start is the CHECKPOINT_BEGIN LSN itself, and the
+    // next mount reads only this checkpoint's own two records.
     if (Status ckpt = Checkpoint(); !ckpt.ok()) {
         logger_->Error("expeditor",
                        "the shutdown checkpoint failed, so the next mount will replay from the "
                        "previous anchor: " +
                            ckpt.message());
     }
-    // **Where the locals used to go out of scope**, and the destruction
-    // order inside `ServeRuntime` is the order they had. Everything above
-    // has finished with them: the workers are joined, the listeners
-    // detached, the last checkpoint written.
+    // **`ServeRuntime` goes here**, in its declared destruction order.
+    // Everything above has finished with it: the workers are joined, the
+    // listeners detached, the last checkpoint written.
     //
     // **The inboxes before the registry** (BL-S2): a connection moved and
     // never taken unregisters its cancel entry as it is destroyed, and the

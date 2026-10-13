@@ -20,30 +20,16 @@
 //
 // ---- Why this is a helper and not a step (the F4 amendment) --------------
 //
-// F4 specifies the forward check as an implicit correlated sub-chain emitted
-// by the step compiler - one `kProbe` on the parent - so that FK checks are
-// ordinary steps with one evaluator, one executor and one statistics
-// surface. **That mechanism does not exist to use.** `exec::Compile()` is
-// SELECT-only: INSERT compiles to no chain at all, and UPDATE/DELETE compile
-// a single `Step` that the dispatcher walks itself rather than running
-// through the step VM. There is nowhere to inject a sub-chain on the paths
-// that need one.
-//
-// So F4's *intent* is what this file keeps, and it keeps all of it: **one**
-// implementation of each check, called from every write path, with no
-// trigger subsystem and no second evaluator. What is given up is named
-// rather than glossed:
-//
-//   - **no probe memo**, which lives in the step VM. Batch-inserting N
-//     children of one parent pays N descents where §2 predicts one. That is
-//     the cost to measure first if the checks are ever too slow.
-//   - **no free ANALYZE integration.** The caller records the access shape
-//     explicitly (FK-M4), where a step would have been counted by being a
-//     step.
-//
-// Converting the write statements to step chains would restore both and is
-// the larger change; when it happens, these functions are what the step
-// implementation must agree with.
+// F4 specifies the forward check as a compiled `kProbe` sub-chain, but the
+// write paths do not run through the step VM (INSERT compiles to no chain;
+// UPDATE/DELETE walk one `Step` in the dispatcher), so there is nowhere to
+// inject one. F4's *intent* is kept whole: **one** implementation of each
+// check, called from every write path, no trigger subsystem, no second
+// evaluator. Given up: the VM's probe memo (the hoisted check's
+// deduplication, `FkParentVerdicts` below, stands in for it on the forward
+// side) and free ANALYZE integration (the caller records the access shape,
+// FK-M4). If the writes ever become step chains, these functions are what
+// the step implementation must agree with.
 //
 // ---- The visibility rule these run under ---------------------------------
 //
@@ -71,13 +57,9 @@ enum class FkVerdict : std::uint8_t {
     // Re-running the statement will violate it again: kFkViolation.
     kViolation,
     // Another transaction is writing the row the check depends on, and the
-    // answer depends on how it ends. F3 as written: refuse now, retryably,
-    // rather than wait, there being nothing to wait on under a cooperative
-    // single-writer core. **AO-S3 made that ground false and the verdict a
-    // wait** - the caller parks on the writer's decide and asks again, which
-    // the paragraph fourteen lines down already says. This enum value is
-    // still the answer this function gives; what the caller does with it
-    // changed. Reported as kTxnConflict.
+    // answer depends on how it ends. **The caller waits** on the writer's
+    // decide and asks again (AO-S3); a path that cannot wait reports it as
+    // kTxnConflict (F3).
     kBusy,
 };
 
@@ -104,12 +86,10 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
 
 // ---- The hoisted forward check's held verdicts (AH-T1) -------------------
 //
-// `docs/spec/foreign-keys.md` §2a. The forward check used to run per row
-// from inside an open `WriteScope`, which is where nothing can wait - so a
-// check that must ask another core cannot ask from where it stands. AH
-// moves the *asking* out to the dispatch fork: every parent pk a statement
-// needs is resolved before any row work, and the per-row check then answers
-// from what was resolved.
+// `docs/spec/foreign-keys.md` §2a. Nothing can wait inside an open
+// `WriteScope`, so the *asking* happens at the dispatch fork: every parent pk
+// a statement needs is resolved before any row work, and the per-row check
+// answers from what was resolved.
 //
 // This is that "what was resolved". One entry per **distinct (parent
 // relation, parent pk)**, which is AH-R2's deduplication and the whole of
@@ -155,12 +135,9 @@ public:
     bool collected() const noexcept { return collected_; }
 
 private:
-    // A map, since AK-S3 (2026-09-02). This was a vector with a linear scan
-    // while the set was one entry per distinct parent pk a single statement
-    // *names* - a handful. The reverse direction now keys it per collected
-    // row, thousands for one DELETE, and a linear `Find` under a `Put` that
-    // re-scanned made the hoist quadratic in the set inside a reactor's
-    // synchronous span (AK-S3's review, C4).
+    // A map (AK-S3): the reverse direction keys it per collected row,
+    // thousands for one DELETE, where a linear scan made the hoist quadratic
+    // inside a reactor's synchronous span.
     using Key = std::pair<catalog::Oid, std::uint64_t>;
     std::map<Key, FkVerdict> entries_;
     bool collected_ = false;
@@ -209,15 +186,11 @@ struct FkReverseOutcome {
 // children", which is the one thing RESTRICT wants and the one thing no
 // advisory structure can witness.
 //
-// **The walk reads a Cabin and never fills one**, which corrects F6 rather
-// than skipping part of it. The value a reverse check would record is the pk
-// being deleted, and a pk is deleted once - so the entry would teach a value
-// no later check can ask about, while `cabin_max_values` is a cap that
-// refuses to observe once it is full. Recording here would spend a bounded
-// budget on values that are dead by construction and could crowd out the
-// live ones a query wanted. The values that make this hit arrive the
-// ordinary way: from queries that filter children by parent id, which is the
-// workload that justifies such a Cabin in the first place.
+// **The walk reads a Cabin and never fills one** (a correction of F6): the
+// value it would record is a pk being deleted, dead by construction, and
+// would spend `cabin_max_values`' bounded budget that live query values need.
+// The values that make this hit arrive from queries that filter children by
+// parent id.
 StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                                                   const catalog::TableAccess& child,
                                                   std::uint16_t child_column_no,

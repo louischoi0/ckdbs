@@ -13,12 +13,8 @@
 // Storage-free on purpose - a PAGE_INIT carries no page bytes, because an
 // empty formatted page is exactly what redo rebuilds.
 //
-// **The record names the core that logged it** (AR0 M0), in the envelope's
-// per-type `flags` byte, for the reason `payload.hpp` gives: under one
-// stream a page redo has to create would otherwise be stamped with the
-// recovering core rather than the core that wrote it. The stamp decides
-// nothing (`page_header.hpp`). The one
-// caller that needs the LSN anyway (the undo log's reclaim arm stamps
+// The envelope's `flags` byte is 0: no record names a core (BP-S3). The
+// one caller that needs the LSN anyway (the undo log's reclaim arm stamps
 // *before* the wipe) takes it from the return.
 //
 // A null `wal` answers kNoLsn: the unlogged path every socket-free test

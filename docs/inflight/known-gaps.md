@@ -1,14 +1,15 @@
 # Known Gaps
 
 What is missing, what does not survive a restart, and what the code does
-differently from what a spec claims. **Opened fresh for v3.0.0 on
-2026-09-03** — the v2 list is at `git show 1769487:docs/inflight/known-gaps.md`
-and none of it is carried across, because every entry described the engine
-AR0 replaces.
+differently from what a spec claims. Opened fresh for v3.0.0 on 2026-09-03;
+the v2 list is at `git show 1769487:docs/inflight/known-gaps.md` and none of
+it carried across.
 
 Every entry names the commit it was verified at and the doc that owns the
 fix. An entry whose verification predates its subsystem's last change is a
 statement about an engine that no longer exists; re-verify or strike it.
+A bug entry `d83bd502` closed unreproduced is cited here as
+`git show eeb88f47:<path>`.
 
 ## Eviction
 
@@ -60,7 +61,8 @@ statement about an engine that no longer exists; re-verify or strike it.
   re-enters the thread's own exclusive hold. No path into
   `TransactionManager::Abort` holding a pin was found, and nothing
   enforces that either. The damage is Census B's #11
-  (`docs/inflight/bugs/a-fetch-refused-after-a-page-write-leaves-the-mutation-half-done.md`).
+  (`bugs/a-fetch-refused-after-a-page-write-leaves-the-mutation-half-done.md`,
+  closed unreproduced at `d83bd502`).
   Owned by `docs/spec/eviction.md` (§3.3) and `docs/spec/txn.md`.
 
 - **Writers outside a statement meet the ordinary refusal.** Verified at
@@ -71,36 +73,31 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Testing
 
+- **`DropTableReclaimServingTest.ATwoCoreMountReclaimsOnceEveryCoreHasCheckpointedWhileServing`
+  failed once under host load.** On `worktree-bm-scan-kernel-open` at
+  `6b771ec1`'s tree, one full Debug `-j8` suite failed its
+  `IsAllocated(id)` expectation (`tests/drop_table_reclaim_test.cpp:684`)
+  at a host loadavg of 30 from other sessions; the stage (BM-S4, the scan
+  kernel's strings) touches no reclaim path. It then passed 6 of 6 alone
+  and 12 of 12 under `ctest --repeat`. **Owner: none**, no cause observed.
+
 - **`IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
-  times out under `-j8`, twice in one day.**
-  - **The failures.** On `worktree-ap-s2-trail-on-fetch-id` at `7fc2c57`'s
-    tree, and again on `worktree-ap-s3-rule-0-prime` at `0fcdfcc` plus
-    comment edits, one full Debug suite each failed the cell's
-    `KickUntil(..., 20000ms)` (`tests/id_allocation_across_cores_test.cpp:74`)
-    after about 21 s. Neither stage touches the insert path the cell drives.
-  - **The reruns.** The cell then passed 10/10 alone, and the next full
-    suite was green both times.
-  - **What a failure cannot say.** The wait's message does not say which
-    writer had not finished, or how far it got. So a slow host cannot be
-    told apart from a writer that stopped.
-  - **Owner: none.** The bound was not widened, since no cause has been
-    observed.
-  - **Reproduced on 2026-10-09** (BA-S3, `worktree-ba-open-marks` at
-    `2f8f7c42`). It failed 2 of 4 plain `-j8` suites that day. Under the
-    `-j8` suite plus eight concurrent copies of the cell, 9 of 80 runs failed
-    there and 10 of 72 at the base `d43845a0`, so BA-S2 did not change the
-    rate.
-  - **A sibling cell answers "slow or stopped" for its own shape: slow.**
-    BA-S2's `ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`
-    drives the same rig, both cores inserting into one relation, and prints
-    each writer's progress when its bound expires. Under the same load, 14
-    of 32 runs expired. Every expired run had both writers part-way, at 52
-    to 400 of 400 rows after 20 s, with core 0 committing `strict` against a
-    real log file. That points at the host's device syncs and oversubscribed
-    CPUs, not at a lost wake. The IdAllocation cell still prints no
-    progress, so this is a reading by analogy for it, not an observation.
-    The sibling now commits `relaxed` and `group` only, with fewer rows and a
-    longer bound.
+  times out under `-j8`.** It failed its `KickUntil(..., 20000ms)`
+  (`tests/id_allocation_across_cores_test.cpp`) in full Debug suites on
+  `worktree-ap-s2-trail-on-fetch-id` at `7fc2c57` and
+  `worktree-ap-s3-rule-0-prime` at `0fcdfcc`, then passed 10/10 alone.
+  Reproduced 2026-10-09 (BA-S3, `worktree-ba-open-marks` at `2f8f7c42`):
+  2 of 4 plain `-j8` suites; under `-j8` plus eight concurrent copies, 9 of
+  80 runs failed there and 10 of 72 at the base `d43845a0`, so BA-S2 did not
+  change the rate. The wait prints no per-writer progress, so a slow host
+  cannot be told from a stopped writer. The sibling
+  `ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`
+  prints it: 14 of 32 runs under the same load expired with both writers
+  part-way (52-400 of 400 rows after 20 s, core 0 committing `strict`
+  against a real log file) - slow, not a lost wake, which for this cell is
+  a reading by analogy. The sibling now commits `relaxed` and `group` only,
+  with fewer rows and a longer bound. **Owner: none**; the bound is not
+  widened.
 
 - **An expeditor's `Start()` failed once under `-j8` and did not
   reproduce.** On `ay-s2-containment-wake` at `33b9433`, one full Debug
@@ -166,92 +163,48 @@ statement about an engine that no longer exists; re-verify or strike it.
   (`instructions/v3.0.0/workorder-ax-inflight-publication.md` §7 item 4).
 
 - **The assertion scan's floor is a fixed defect with no regression test
-  under it.** Verified at AM-S0(a) by reverting the fix: every cell in
-  `tests/expeditor_test.cpp` stays green. The defect
-  (`instructions/v3.0.0/workorder-al-m0-single-wal.md` AL-7c) is the scan
-  starting at the anchor fold's `checkpoint_lsn`, which can sit *past* a
-  core's own `ASSERT_SNAPSHOT` — the fold carries the record of whichever
-  core had the lowest `redo_start_lsn`, and that core's checkpoint can be
-  later than everyone else's. A peer then comes up counting what it owns
-  unenforceable, and refuses that relation's writes for the life of the
-  mount (`docs/spec/assertion.md` §6.1).
+  under it.** Verified at AM-S0(a) by reverting the fix (every cell in
+  `tests/expeditor_test.cpp` stayed green); re-read at `f3da0413`,
+  2026-10-13. The defect (AL-7c, `workorder-al-m0-single-wal.md`) started
+  the assertion resume at the anchor fold's `checkpoint_lsn`, which can sit
+  past a core's own `ASSERT_SNAPSHOT`, so the instance came up counting
+  those assertions unenforceable and refusing their relations' writes for
+  the mount (`assertion.md` §6.1). The fix passes the fold's
+  `redo_start_lsn` (`Expeditor::Open` and `CoreRuntime::Open`'s fixture
+  arm, both calling `ResumeAssertionsAfterRecovery`).
+  - **Why no instance cell reaches it**: each core's `ShutdownCheckpoint`
+    syncs the store first (`core_runtime.cpp`), so its redo start equals its
+    `CHECKPOINT_BEGIN` and the fold's winner is at or before every
+    snapshot. Removing that sync "because the tail already syncs" would make
+    the defect reachable silently.
+  - **What reaches it**: a fold won by a cadence checkpoint (old recLSN,
+    recent `checkpoint_lsn`) beside another core's older last
+    `ASSERT_SNAPSHOT` - a core whose shutdown checkpoint never published.
+  - **The cheap harness** is a unit cell over
+    `SuperBlockCheckpointAnchor::Publish` and the floor choice: two
+    synthetic records `{redo=1000, ckpt=1000}` and `{redo=100, ckpt=5000}`,
+    asserting the floor handed to `ResumeAssertionsAfterRecovery` is `100`.
+    Since BC the fold never decreases (`superblock_checkpoint_anchor.hpp`),
+    which the cell's record order must respect.
 
-  **Why no cell reaches it, stated precisely because the obvious version of
-  the argument cites the wrong call.** It is *not* the shutdown tail's
-  `core->Sync()` that empties a dirty table — that is `wal_->SyncAll()`, the
-  log alone. What does it is each core's `ShutdownCheckpoint`, whose first
-  act is its own `store_->Sync()`; so its `RedoStartFrom` yields exactly its
-  `CHECKPOINT_BEGIN` LSN, which is also its `checkpoint_lsn`, and the
-  `ASSERT_SNAPSHOT` records follow inside the same checkpoint. The fold is a
-  true min over `redo_start_lsn` and the tail walks the cores ascending, so
-  the winner is core 1's — the earliest BEGIN of the run, at or before every
-  core's snapshot, its own included. The property therefore rests on
-  **every** shutdown checkpoint publishing, and on that `store_->Sync()`
-  staying where it is: remove it on the grounds that "the tail already
-  syncs", and this goes silently.
-
-  **How the state is reached**, which is what a harness for it would need:
-  the fold's winner has to be a **cadence** checkpoint record — the cadence
-  path does not sync the store first, so its `redo_start_lsn` is an old
-  recLSN while its `checkpoint_lsn` is recent — with some other core's last
-  `ASSERT_SNAPSHOT` older than that `checkpoint_lsn`. That needs a core
-  whose shutdown checkpoint never published: a crash, or a
-  `ShutdownCheckpoint` that failed and was logged past. At `cores = 2` it is
-  masked besides, because core 0 is the only core that could win the min
-  with a stale record and it syncs its store before its own checkpoint.
-
-  **So the cheap harness is not an instance-level one.** It is a unit cell
-  over `SuperBlockCheckpointAnchor::Publish` and the floor choice in
-  `CoreRuntime::Open`: publish two synthetic anchor records —
-  `{core 1, redo=1000, ckpt=1000}` and `{core 2, redo=100, ckpt=5000}` —
-  assert the fold carries `{redo=100, ckpt=5000}`, and assert the floor
-  handed to `ResumeAssertionsAfterRecovery` is `100` and not `5000`. That
-  pins the field the fold does not bound, in a few dozen lines with no
-  instance, no threads and no crash. Owner: `docs/spec/wal.md` §16.
-
-  The entry this replaces — *no test and no `sim/` cell constructs an
-  `Expeditor`* — closed at AM-S0(a): `Serve()` split into `Start()` +
-  `RunUntilStopped()` (`expeditor.hpp`) and `tests/expeditor_test.cpp` runs
-  a real instance at `cores = 2` over real loopback sockets, asserting the
-  assembly between the halves. Two of AL-7c's three defects have a
-  reproduction there; this is the one that does not.
+  Owner: `docs/spec/wal.md` §16.
 
 - **`wal_ring_full_refusals` is proved zero where it must be and unproved
-  where it fires.** Verified at `f6ed10c`. Reaching it needs an append to
-  lose the drained ring space to another core `kRingDrainAttempts` (4)
-  times running, which cannot be staged from one thread; a multi-threaded
-  cell that sometimes trips is worse than none. `tests/wal_manager_test.cpp`
-  states the gap; `docs/spec/client-manual.md`'s ring-counter row now does
-  too. Owner: `docs/spec/wal.md` §16.
+  where it fires.** Verified at `f6ed10c`; re-read at `f3da0413`,
+  2026-10-13. Reaching it needs an append to lose the drained ring space to
+  another core `kRingDrainAttempts` (4) times running (`src/wal/manager.cpp`),
+  which one thread cannot stage. `tests/wal_manager_test.cpp` and
+  `client-manual.md`'s ring-counter row state the gap. Owner:
+  `docs/spec/wal.md` §16.
 
-- **AL-S8's scenario matrix cannot be re-run on a post-SUS-1 engine, so
-  no measurement stage can produce the delta it was written to
-  produce.** Verified at `13b6b55` on `an-s3-snapshot-adoption`, 2026-09-07,
-  by attempting AN-S5's cells: `tools/scenario0_stockmarket.py` and
-  `tools/scenario2_freight.py` declare part of their schema `HEAP` with no
-  override, and `CREATE TABLE … HEAP` is refused `Unsupported` since SUS-1
-  (2026-09-05). `s0-c1-g` and `s2-c1-g` were refused at schema creation
-  (`bench/v3.0.0/results-an-s5-scenario0-v2.7.0-265-g13b6b55.md`,
-  `…scenario2…`); every other cell of the matrix declares the same tables.
-  AN-S5's scenario half, AM-S6 (AW-S5) and any future delta against
-  `results-scenario0-stockmarket-v2.7.0-157-gf6ed10c.md` /
-  `results-scenario2-freight-…` are unreachable until the drivers stop
-  emitting the word - `workorder-as-sus1-heap-suspended.md` AS-Q6, the
-  operator's, which named these tools on the day. Not a defect in either
-  driver or in SUS-1; a measurement the tree can no longer take. Owner:
-  `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md` AS-Q6.
-  **Closed 2026-09-08** (`raft-marks-2026-09-08-as-q6.md`): the drivers'
-  four heap relations are `BTREE`, and `f6ed10c` was re-measured with the
-  changed drivers the same day — eight cells, AL-S8's own arguments and
-  cell order, all committing their full targets
-  (`results-scenario0-stockmarket-btree-v2.7.0-157-gf6ed10c.md`,
-  `results-scenario2-freight-btree-v2.7.0-157-gf6ed10c.md`). AM-S6 and
-  AN-S5's scenario half have a comparator again, and it is that pair; the
-  AL-S8 heap files stay as history and no delta against them is ever
-  valid. What the entry leaves behind rather than closes: measurement is
-  BTREE only until the operator says otherwise, so no v3 number prices a
-  heap relation, and four tools still emit an explicit `HEAP` and are
-  refused (AS-S3).
+- **No v3 measurement prices a heap relation.** AL-S8's scenario drivers
+  declared `HEAP`, refused since SUS-1; closed 2026-09-08
+  (`raft-marks-2026-09-08-as-q6.md`) by making them `BTREE` and re-measuring
+  `f6ed10c`. Measurement is BTREE-only until the operator says otherwise,
+  and other tools still emit an explicit `HEAP` and are refused
+  (`tools/benchmark.py`, `bulk_insert_benchmark.py`,
+  `aggregate_benchmark.py`, among others; re-read at `f3da0413`). Owner:
+  `instructions/v3.0.0/workorder-as-sus1-heap-suspended.md` AS-S3.
 
 ## WAL
 
@@ -274,33 +227,16 @@ statement about an engine that no longer exists; re-verify or strike it.
   reaches an unlinked page (`page.md` §5, `drop-table.md` DT1). This
   predates AZ-S1: the page used to hold the row. **No owner.**
 
-- **Two cuts AM-S4(d) made possible and did not take.** Named by that
-  stage's `critics-developer` pass, verified by it by trace and exhaustive
-  grep, and deferred because the operator called for the push before they
-  could be made and verified on their own:
-
-  1. **`CoreRuntime`'s unshared-store arm** (`core_runtime.cpp`'s
-     `else { DevicePageStore::Open … SetWalGate }`, the `owned_store_`
-     member, its budget site, and `Config::buffer_pool_frames`). Every
-     caller now sets `shared_store` unconditionally, and AM-S4(d) removed
-     the last syntactic path to null when `share_pool ? store_.get() :
-     nullptr` became `store_.get()`. The one cell touching the budget field
-     asserts it is *ignored*.
-  2. **`SuperBlock::wal_anchors()` and `MountAnchorOf`'s loop.** Only slot
-     0 can be non-zero — `SetWalAnchor` refuses every other unconditionally
-     and `Decode` refuses the volumes that could carry an old one — so
-     `MountAnchorOf` collapses to `wal_anchor(0)` and the vector accessor
-     loses its last caller. The loop is deliberately kept for now as a
-     canary, and `superblock_checkpoint_anchor.hpp` says so at the
-     declaration; cutting it means deciding the canary is not worth a pass
-     over 64 entries once per mount.
-
-  A third, `FrameBudgetShare`, was deleted at BE-S4 with the per-core
-  share it computed. Both remaining are dead code this stage *created*,
-  which is the class AM-R4 warns about: a field nothing writes and nothing reads is worse than no
-  field, because the next reader assumes it means something. Owner:
-  whichever stage next opens `core_runtime.cpp` — AM-S3 touches the same
-  file.
+- **`MountAnchorOf` still loops over 64 anchor slots where only slot 0 can
+  be non-zero.** Named by AM-S4(d)'s review; re-read at `f3da0413`,
+  2026-10-13. `SuperBlock::SetWalAnchor` refuses every slot but 0 and
+  `Decode` refuses volumes that could carry another, so
+  `SuperBlockCheckpointAnchor::MountAnchorOf` could be `wal_anchor(0)` and
+  `SuperBlock::wal_anchors()` would lose its last caller. Kept as a canary,
+  as `superblock_checkpoint_anchor.hpp` says. Owner: whichever stage next
+  opens the anchor. (AM-S4(d)'s other cut, `CoreRuntime`'s unshared-store
+  arm, is no longer dead: it is the documented fixture shape
+  `core_runtime_test.cpp` opens.)
 
 - **Every sync covers every live segment, so its cost grows with the
   checkpoint interval's worth of log.** Restated at BC-S5 on
@@ -384,37 +320,17 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 ## Multi-core state
 
-- **Closed 2026-09-03, recorded because the closure is the interesting
-  part.** A peer's `superblock_` was a default-constructed copy, and zero
-  is a legal value of most of its fields. Three fields had been carried
-  across one at a time after each was caught answering a silent, legal,
-  wrong zero — the WAL anchor, `next_trx_id` (PW1), `log_topology`
-  (AL-7e) — and the AL-S9 review found **the next three already live**:
-  `version`, `create_time` and `last_mount_time`, which a peer's
-  `SHOW META` printed as `0` and as the epoch,
-  against `docs/spec/crosscore.md` CC11's *every core reads with the same
-  authority*.
-
-  Field-by-field was never going to end, because nothing listed which
-  fields a peer was entitled to answer and nothing checked. `Open` now
-  takes the volume's whole image and **refuses a config without one**, so
-  there is no list because there is no choice. Owner:
+- **A peer's superblock is the volume's whole image** (closed 2026-09-03,
+  AL-S9's review): `CoreRuntime::Open` refuses a config without it, so no
+  field is carried across one at a time. Owner:
   `include/kds/server/core_runtime.hpp`.
-
-  **The closure immediately paid for itself**, which is why it is recorded
-  rather than dropped: handing over the real image broke 123 tests that had
-  been running against a volume they contradicted. See the fixture entry
-  under Testing.
 
 - **The transaction lifetime ceiling bounds explicit transactions only, and
   defers to a statement that is running.** Verified on
-  `worktree-txn-lifetime-ceiling` from `1aebdfe8`, 2026-10-12. The entry
-  that stood here - *no transaction has a lifetime ceiling, so an abandoned
-  explicit transaction holds the instance's read horizon and its undo for
-  the life of the process* - closed with the listener's sweep
-  (`txn_lifetime_ceiling_ms`, `docs/spec/txn.md` §1): an explicit
-  transaction, idle or busy, poisoned or not, DDL inside it included, is
-  rolled back between 1x and 1.25x its lifetime. What it leaves:
+  `worktree-txn-lifetime-ceiling` from `1aebdfe8`, 2026-10-12. The sweep
+  (`txn_lifetime_ceiling_ms`, `docs/spec/txn.md` §1) rolls back an explicit
+  transaction, idle or busy, DDL inside it included, between 1x and 1.25x
+  its lifetime. What it leaves:
   - **An autocommit statement is not bounded.** It is its own transaction
     and the sweep reaches only a session's explicit one; a long autocommit
     `SELECT` holds its view for as long as it walks.
@@ -434,27 +350,16 @@ statement about an engine that no longer exists; re-verify or strike it.
 
 - **A core that stops is not an idle core, and it pins the instance's
   commit-order floor for good.** Verified at AN-S2 on
-  `an-s2-read-view-cutover`, recorded here per AN-R14's instruction that
-  it belongs in this file once the window is load-bearing — which AN-S2
-  made it. The floor (`include/kds/txn/instance_visibility.hpp`) is bounded
-  by the minimum issue cursor over attached cores, and AN-S1b unpins an
-  *idle* core by burning its block on that core's own tick. A core that
-  wedges or shuts down takes no tick, and nothing else ever republishes its
-  slot: its cursor stays where it stopped, the floor with it, and the
-  window grows by one entry per commit for the life of the process. Not
-  reachable today — the expeditor stops every core together — and stated
-  so AN-S1b's landing note is not read as closing AN-R13 entirely. Owner:
-  `instructions/v3.0.0/workorder-an-read-view.md` AN-R14, first bullet.
-
-  *(The entry that stood here — "the read view and the read horizon are
-  both per-core, and one spec sentence asserts the opposite" — closed at
-  AN-S2: `ReadView::Visible` decides by the instance's commit-LSN window
-  and floor, `ReadHorizon()` answers the instance-wide oldest snapshot, and
-  `crosscore.md`'s "the trx-id domain is global, so ids compare cleanly" was
-  rewritten at AN-S4. The two cells that fail on the old predicate and
-  pass on the new one are
-  `VisibilityWiringTest.ACommitOnAHigherBlockIsVisibleToALowerCoresNextView`
-  and `…ATransactionBegunAfterTheMintFromALowerBlockStaysInvisible`.)*
+  `an-s2-read-view-cutover`; re-read at `f3da0413`, 2026-10-13. The floor
+  (`include/kds/txn/instance_visibility.hpp`) is bounded by the minimum
+  issue cursor over attached cores, and an *idle* core is unpinned by
+  burning its block on its own tick (`PinsFloor`, `txn/manager.cpp`). A
+  core that wedges or shuts down takes no tick and nothing republishes its
+  slot, so the floor stays and the window grows one entry per commit for
+  the life of the process. Not reachable today: the expeditor stops every
+  core together. Owner: `instructions/v3.0.0/workorder-an-read-view.md`
+  AN-R14. (The per-core read view closed at AN-S2; pinned by
+  `VisibilityWiringTest.ACommitOnAHigherBlockIsVisibleToALowerCoresNextView`.)
 
 - **Two cores recording one pattern can strand a trail in a directory
   slot.** Verified at AT-S7 (2026-09-23) on `at-s7-one-cabin-store`.
@@ -522,7 +427,7 @@ statement about an engine that no longer exists; re-verify or strike it.
   writes already took - so a transaction's asks are quadratic in its
   borrows. Found by the same review. **Measured at AY's close** at
   `v2.7.0-530-g0552d55`, one core only
-  (`bench/v3.0.0/results-ay-s11-overhead-v2.7.0-530-g0552d55.md`, cell 3):
+  (`results-ay-s11-overhead-v2.7.0-530-g0552d55.md`, cell 3, at `fc2d3437^`):
   about 0.2 ns x K a row for K distinct parents in one transaction -
   unresolved up to K = 1,024, marginal at 4,096, +3.43 µs a row (~6 %) at
   16,384 - **and ~2.1 µs of that 3.43 is paid at the decide, not by the
@@ -536,40 +441,24 @@ statement about an engine that no longer exists; re-verify or strike it.
   holdings set would not remove
   it; a keyed partition would. Neither is built.
 
-**The check-to-write window closed at AY-S5** (on
-`ay-s5-d9a-parent-fence`): a child's forward check holds the parent row's
-`S` from before its descent to its decide (D9(a), `foreign-keys.md` §2a,
-§3a), so a parent `DELETE` on any core waits for it. The entry that stood
-here recorded the window from AT-S5f (verified at `f247c52`), and AY-S4
-reproduced it at `64b97e7` (a two-core rig cell, an orphan 5/5). That cell
-went at BB-S3's review - BB-R3 then refused the below-mark key it wrote
-behind the walk, so it passed with nothing tested. BD-S3 withdrew that
-refusal on a btree (BD-R5), so the shape is reachable again through SQL. The
-window stays pinned on one thread by `FkParentHoldTest.AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused`.
-A second orphaning shape AY-S4 found - a parent `DELETE`
-answered "no children" over a child an undecided `UPDATE` had moved off it,
-the rollback then restoring the reference - closed in the same stage, the
-reverse check reading such a row's earlier version (AY-Q8); its bug entry
-went with it.
+**The check-to-write window closed at AY-S5** (D9(a), `foreign-keys.md`
+§2a, §3a), pinned on one thread by
+`FkParentHoldTest.AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused`.
 
 ## Multi-core state, continued
 
-**A volume an engine older than `1b5d252e` wrote at `cores > 1` no longer
-mounts** (closed at BD-S2, `62470f56`, verified at `07e822a6`): superblock
-20 refuses every version-19 volume (BD-R8, no migration), so a btree leaf
-two cores filled out of key order before BB-S3 can no longer reach the
-fallback-free leaf search or the `ORDER BY <pk>` elision. The entry that
-stood here recorded that such a volume mounted under BB-R11's byte check,
-which went with the bump (`heap-and-tuple.md` §4.1).
+**A volume written before `1b5d252e` at `cores > 1` no longer mounts**
+(closed at BD-S2, `62470f56`): superblock 20 and later refuse version 19
+(BD-R8, `heap-and-tuple.md` §4.1).
 
 - **Two concurrent `CREATE ASSERTION`s can place `sys.assertions` rows out
   of issue order.** By reading, on `bb-s0-order` at `bddd450c` (BB §1.8),
   re-read on `worktree-bb-issue-under-the-leaf` at `6dc792c9`; no cell
   reproduces it. `sys.assertions` is the one system relation whose rows carry
   a Keystone word. Its id is issued before the build
-  (`assertion_catalog.cpp:493`, `AllocateRowId(kSysAssertionsTable)`) and
-  placed after it, by `EncodeRow` and `ChainInsert` (`:247-250`) under the
-  root page's hold (`:214`, `catalog.md` CT7) - two latched spans, so two
+  (`src/exec/assertion_catalog.cpp`, `AllocateRowId(kSysAssertionsTable)`) and
+  placed after it, by `EncodeRow` and `ChainInsert` under the
+  root page's hold (`catalog.md` CT7) - two latched spans, so two
   creates on two cores can place out of issue order: defect A's shape, on a
   system relation. Across a tail-page boundary the one issued first and
   placed second is refused `OutOfRange` after its build. **Not read**:
@@ -579,21 +468,10 @@ which went with the bump (`heap-and-tuple.md` §4.1).
   across `ChainInsert` (CT7, since AT-S17), so two cores never grow this
   chain at once. Owner: `assertion.md` §7.
 
-- **The Cabin store's partition latches are taken at `cores = 1`.** By
-  reading, on `at-s12-prose-sweep` at `2b20369` (found by AT-S12's
-  `rules.md` §3 sweep). AT-S7 made the store the instance's with a
-  `std::mutex` per partition (`stats/cabin_store.hpp`'s `Partition`), and
-  unlike every other latch `rules.md` §3 indexes it is not null-armed, so a
-  single-core instance pays an uncontended lock and unlock on every Cabin
-  probe, append and serve. G1's compile-out clause
-  (`ar0-architecture-revision.md` §3) does not admit it; G2 says cores = 1
-  pays nothing. Cost, not correctness, and unmeasured. Owner:
-  `docs/spec/cabin.md`.
-
 - **An unexplained ~0.4 s stall inside foreground time, on the post-AT
   engine only.** Measured by AT-S13 on `at-s13-prices` at
-  `v2.7.0-391-gf6f2073` (2026-09-26, `bench/v3.0.0/results-at-s13-prices-v2.7.0-391-gf6f2073.md`,
-  cell 2): in three of the measured commit's seven runs one
+  `v2.7.0-391-gf6f2073` (2026-09-26, `results-at-s13-prices-v2.7.0-391-gf6f2073.md`
+  cell 2, at `fc2d3437^`): in three of the measured commit's seven runs one
   `update-disjoint` arm took ~0.37-0.41 s longer than its siblings (max
   latency 371-413 ms), inside `sched_foreground_polled_us`, and in one run on
   every core at once; `df8cc5f`'s three runs show none. An instance-wide
@@ -622,38 +500,25 @@ which went with the bump (`heap-and-tuple.md` §4.1).
 
 - **An eight-core append workload reaches the clustered tree's bounded
   re-descent refusal, and the cause is not established.** Measured by the
-  scenario rebaseline on `bench-rerun-scenarios` at
-  `v2.7.0-531-g9a0525d` (2026-09-30,
-  `bench/v3.0.0/results-scenario0-stockmarket-v2.7.0-531-g9a0525d.md` §6,
-  `results-scenario2-freight-v2.7.0-531-g9a0525d.md`, both at `36449d28`). A write descent
-  whose leaf no longer covers its key restarts from the root
-  `storage::kMaxDescentRestarts` (4) times and is then refused
-  `TXN_CONFLICT retryable=1 btree descent for key K from page P gave up
-  after 5 attempts` (`btree.cpp`). Scenario0's `cores = 8`, `strict` cell
-  hit it on one `trades` insert in 3 of 3 runs, the same key 113 from the
-  same root page 138 each time, and in none of its nine other cells.
-  Scenario2's `cores = 8`, `group` cell hit it three times: run 2 on
-  `freights` (key 107, page 145) and `charges` (key 135, page 147), run 3
-  on `charges` at the same key and page. All were on fresh
-  relations under eight appending sessions. The message names two causes
-  and does not choose: split churn outrunning the descent, or a core
-  descending from a memoised root that has since grown a level. The source
-  comment calls the stale root the everyday one. The same key and page in
-  every repeat, and a `catalog changed ... runs again` re-run logged in the
-  same second of one run, fit that reading but do not prove it. A refusal,
-  never a wrong answer, and retryable by design: the client's retry crosses
-  a task boundary, where `Revalidate()` drops the memo. Scenario2's driver
-  retried and lost nothing. Scenario0's driver does not retry, so each such
-  cell tears one transaction and exits 1. The engine could tell the two
-  causes apart and does not: since AT-S16 a root a level grows over carries
-  the grown-over mark, which `SecureParents` reads and `DescendTo` does not,
-  though it reads that root page on every attempt - the comment saying a
-  stale root "does not look different from here" predates the mark (AT-S5c).
-  And §5's "a restart makes progress" holds under split churn only: from a
-  stale root every attempt fails the same way (`insert_placement.hpp` says
-  so). What is open is whether a stale-root miss should re-read the anchor
-  inside the statement rather than cost the client a round trip. No cell
-  isolates which cause fires. Owner: `docs/spec/heap-and-tuple.md` §5.
+  scenario rebaseline on `bench-rerun-scenarios` at `v2.7.0-531-g9a0525d`
+  (2026-09-30, `results-scenario0-stockmarket-…` §6 and
+  `results-scenario2-freight-…`, both at `36449d28`): a write descent
+  restarted `storage::kMaxDescentRestarts` (4) times and was refused
+  `TXN_CONFLICT retryable=1 ... gave up after 5 attempts` (`btree.cpp`) -
+  scenario0 `cores = 8` `strict` on one `trades` insert in 3 of 3 runs
+  (key 113, root page 138 each time), scenario2 `cores = 8` `group` three
+  times; all on fresh relations under eight appending sessions. The message
+  names two causes, split churn or a descent from a memoised root that has
+  since grown a level; the same key and page in every repeat fit the stale
+  root, unproven. **Since BA-S14 (`6aa76ec7`, after the measurement)** a
+  statement that wrote nothing before the refusal is re-run inside the
+  engine after a yield, crossing the task boundary where `Revalidate()`
+  drops the memo, so that case no longer reaches the client; not
+  re-measured. The engine still does not tell the causes apart: since AT-S16
+  a grown-over root carries a mark `SecureParents` reads and `DescendTo`
+  does not, and from a stale root every attempt fails the same way
+  (`insert_placement.hpp`). No cell isolates which cause fires. Owner:
+  `docs/spec/heap-and-tuple.md` §5.
 
 - **No cell drives a stale writeback against a re-faulted frame.** Verified
   at `aaf0f47`. AT-S8 step 1b draws every frame's dirty generation from the
@@ -760,106 +625,43 @@ which went with the bump (`heap-and-tuple.md` §4.1).
 ## Locks
 
 - **A write refused by a lock unit waits on that unit's slot, and a wake
-  is not a grant.** A refusal on the ask's own unit has waited on its slot
-  since AX-S2b, one found in another unit since AY-S2, and a first encounter
-  with a holder between its decide and its release since AY-S3. What still
-  polls is a refusal with no slot behind it - no lock table, a holder only
-  the header names, an assertion's group - and a `PURGE` waiting on a
-  deleter's decide or the read horizon (`heap-and-tuple.md` §4.1c).
-  Found by AT-S13's review, measured on `at-s13-prices` at `896af54`
-  (2026-09-26) as a *refusal*: `CommandDispatcher::NoteBlockingWriter` parks
-  only when `txn_->IsInFlight(trx)`, and until AX-S1 that walked **this
-  core's** `live_`, so a holder on another core read as decided and the
-  writer was refused `TXN_CONFLICT retryable=1` where AO-S3 promised a wait.
-  AT-S13's cell 1 server log
-  (`bench/v3.0.0/archive/at-s13-prices-v2.7.0-391-gf6f2073/s8-kds.log`)
-  carries 7 refusals of that shape, part of cell 1's 4-6% hot-row refusal
-  price. AX-S1 made the predicate the instance's, so the site parks on a
-  peer's holder; **AX-S2b** made `BorrowChain`'s refused tuple ask register
-  a wake, so that wait is on the unit's slot - flipped at the holder's
-  release, after its retire, with a kick to the waiter's core - and its
-  re-run comes after the release (`row_wait_wake_rig_test.cpp`). Verified by
-  reading on `ax-s2b-row-wait-wake` at `043aee7`, the stage's review.
-  **B6 is closed at AY-S3** (on `ay-s3-b6-and-q9-cells` from `e187b2b`,
-  `raft-marks-2026-09-29.md` §13): `NoteBlockingWriter` records the block
-  whenever the refusing unit's wake names the holder, in flight or not, with
-  the repeatable-read guard unchanged beneath it
-  (`row_wait_wake_rig_test.cpp`'s first-encounter cell). What stays open,
-  retryable, never a wrong answer:
-
+  is not a grant.** A refusal on the ask's own unit waits on its slot since
+  AX-S2b, one in another unit since AY-S2 (the containment wake), and a
+  first encounter with a holder between its decide and its release since
+  AY-S3 (B6; `row_wait_wake_rig_test.cpp`). Background: AT-S13's review
+  (`at-s13-prices` at `896af54`, 2026-09-26) found cross-core holders read
+  as decided and writers refused `TXN_CONFLICT retryable=1` where AO-S3
+  promised a wait; AX-S1 made the in-flight test the instance's. What stays
+  open, retryable and never a wrong answer:
   - **A wake is not a grant.** `TryAcquire` does not queue, so a third
-    writer can take the unit between the flip and the re-run; the re-run
-    parks again under the same deadline, and under sustained contention
-    ends at the 1 s fault net naming whichever holder came last.
+    writer can take the unit between the flip and the re-run; under
+    sustained contention the waiter ends at the 1 s fault net naming the
+    last holder (AX's item 3, no action proposed).
+  - **What still polls** has no slot behind it: no lock table, a holder only
+    the header names, an assertion's group, and a `PURGE` waiting on a
+    deleter's decide or the read horizon (`heap-and-tuple.md` §4.1c).
+  - A holder that never decides costs a cross-core writer the 1 s fault net
+    and its defect warning, as a same-core writer pays.
 
-  A holder that never decides costs a cross-core writer the 1 s fault net
-  and its defect warning, as a same-core writer pays. AX closed carrying
-  three (`instructions/v3.0.0/workorder-ax-inflight-publication.md` §7
-  items 1-3): the cross-unit refusal (item 2), which handed back no slot,
-  **is closed by AY-S2** (on `ay-s2-containment-wake` at `7d90ca7`, the
-  containment wake; `txn.md` §5), the first encounter (item 1) **by
-  AY-S3** as a wait (§13), and a wake not being a grant (item 3) proposes
-  no action. Spec: `docs/spec/txn.md` §5.
+  Spec: `docs/spec/txn.md` §5.
 
-- **The relation `IS` covers a statement's outermost walk and nothing else,
-  and AT's quiet-wrong defence is sequenced as though it covered every
-  read.** Verified 2026-09-09 on `ao-m2-close` at `cf3d0d0` by reading the
-  sites: `src/exec/step_vm.cpp:1960` and `:2030` guard the position report on
-  `index == 0`. So a nested step's walk — a join's inner relation —
-  declares no position and holds no relation `IS`.
-
-  **A point, index or Cabin read declares nothing only where its own path
-  serves it**, which is narrower than `txn.md` §5 and AO-S6e-b's list both
-  say and is corrected in the spec with this entry: each falls through to
-  `RunWalkStep` carrying the same `index` (`step_vm.cpp:615` for a heap point
-  read, `:1210`, `:1223` and `:1233` for an index probe with no usable index,
-  `:760`, `:776` and `:812` for a Cabin miss), and a fallback at `index == 0`
-  reports like any other walk.
-
-  **Why this reaches past `DROP TABLE`.**
-  `instructions/v3.0.0/ar0-5-amendment-uniformity.md` §7 sequences M3's
-  schema word on *"the relation `IS`/`X` already in from AO-S6"*, and its §8
-  makes that `IS` the whole defence of the one quiet-wrong surface M3 opens:
-  *"DDL's `X` cannot be granted while it is held, so a stale parse cannot be
-  executed, only rejected at the version check."* Where no `IS` is held the
-  `X` **is** granted, so the defence holds on the shape that declares and on
-  no other. AT's first cell — the schema word deliberately not bumped,
-  asserting that the lock alone still blocks the DDL — is written against
-  the same assumption and would pass only on that shape.
-
-  `docs/spec/drop-table.md` DT7 carries the same conditionality in the
-  narrower form it is visible in, and does not say which readers are
-  positioned.
-
-  **Not a defect in AO-S6e-b**, whose own "what it does not do" list states
-  every one of these omissions; a gap between what M2 built and what AT is
-  sequenced against. Owner:
-  `instructions/v3.0.0/workorder-ao-m2-lock-family.md` AO-0 item 26, closed as
-  mooted at AT's close (`workorder-at-m3-uniformity.md` AT-9, verified at
-  `e6d9098`), and `ar0-5-amendment-uniformity.md` §7 and §8.
-
-  **Closed at AT-S1 on `m3-at`** for every shape above: the compiler
-  declares each relation it binds (`step_compiler.cpp`), and the three write
-  verbs declare at resolve. **What stays open is the
-  direction, and it is a correction to AR0-5 §8 rather than a gap**: the
-  ask is a non-blocking `TryAcquire`, so a reader arriving while a DDL holds
-  `X` is refused and reads on - sound by catalog MVCC, catalog-only DDL and,
-  for a drop, the statement epoch that holds its pages' reclaim until every
-  statement that could have bound the relation has ended (`drop-table.md`
-  DT1), not by the lock (`read_borrow.hpp`; `workorder-at-m3-uniformity.md`
-  AT-7 item 10, AT-0 item 10).
+- **The relation `IS` is declared at the bind for every relation a
+  statement names** (closed at AT-S1, 2026-09-09; `step_compiler.cpp`). What
+  stays is one-directional by design: the ask is a non-queueing
+  `TryAcquire`, so a reader arriving while a DDL holds `X` reads on, sound by
+  catalog MVCC and the statement epoch rather than by the lock
+  (`include/kds/server/read_borrow.hpp`, `txn.md` §5, `drop-table.md` DT1).
 
 - **`CompileWhere` resolves an UPDATE's or DELETE's subquery relations
   under no view.** Verified 2026-09-09 on `m3-at` at `4b06051` by AT-S1's
-  review: `UpdateInner` and `DeleteInner` resolve their own relation under
-  the session's view (DT3c) and then call `exec::CompileWhere` with
-  `view = nullptr`, so `UPDATE t SET v = 1 WHERE id IN (SELECT id FROM u)`
-  resolves a `u` the session cannot see - a relation another transaction
-  created and has not committed. Pre-existing; AT-S1 takes an `IS` on that
-  relation, which changes nothing about the visibility. The fix is one
-  argument at each site and changes a refusal for a shape that works today,
-  so it is recorded rather than applied. Owner: `docs/spec/ddl-transactional.md`
-  DT3c.
+  review; re-read at `f3da0413`, 2026-10-13. `UpdateInner` and
+  `DeleteInner` resolve their own relation under the session's view (DT3c)
+  but call `exec::CompileWhere` with `view = nullptr`
+  (`command_dispatcher.cpp`), so `UPDATE t SET v = 1 WHERE id IN (SELECT id
+  FROM u)` resolves a `u` another transaction created and has not
+  committed. The fix is one argument at each site and turns a shape that
+  works today into a refusal, so it is recorded rather than applied. Owner:
+  `docs/spec/ddl-transactional.md` DT3c.
 
 ## Page reclamation
 
@@ -1106,13 +908,54 @@ stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
   - the var-heap tail hint across a `DROP TABLE` reclaim that reuses the
     dropped chain's root id: the cell (`ARootIsBornWithNoHint`) uses the
     in-memory store's id order, not a reclaim on `DevicePageStore`.
-- **A scan row costs twice PostgreSQL's, and no single part of it
-  dominates**: 67 ns of server CPU a row net of the statement at BN's close
-  against PostgreSQL 18's 34 ns on one host and driver
-  (`bench/v3.0.0/results-bn-close-v2.7.0-787-g8679367e.md`). BN-S1's
-  re-profile on the busy census host split it between visibility, decode,
-  the residual and the leaf visit, none above a quarter
-  (`archive/bn-s1-census-v2.7.0-769-gb70f79d8/profB1r-reports.txt`).
+
+## The scan row (BM)
+
+Written at BM's close on `worktree-bm-scan-kernel-open`, verified at `952c67e5`; the first and
+last entries restated at BT's close, verified at `4274ed81`. Owned by
+`instructions/v3.0.0/workorder-bm-scan-row-kernel.md`,
+`instructions/v3.0.0/workorder-bt-accept-tuple-row.md` and `parser-v2.md` §7.
+
+- **A rejected scan row costs 27.4 ns after BT, and what is left of its
+  fixed cost is what BT-R3 keeps**: `bn`'s net row at `4274ed81` is 27.4 ns
+  of server CPU against 31.0 at `eeb88f47` in the same run
+  (`bench/v3.0.0/results-bt-close-v2.7.0-997-g4274ed81.md`), 0.94 times
+  PostgreSQL 18's 29.1 ns from BM's close (not re-measured). BT-S1's
+  ablations (`bench/v3.0.0/results-bt-s1-premise-v2.7.0-992-geeb88f47.md`)
+  priced what remains: the rejected row's two counters and its row charge
+  about 3 ns together (kept: `ANALYZE`'s counts and the budget's refusal
+  row are BM-R2's), and at most 0.7-1.0 ns for `AcceptTupleAt`'s
+  `Status` return - an upper bound that also holds its `PageSpanGuard` and
+  the call itself (kept: BT-R1 keeps visibility in that one call). No profile was taken after BT;
+  BM's (29.3 ns on the frame-pointer build) put 7.4 ns in the kernel's
+  compare and 6.2 in the slot loop, which BT did not touch.
+- **A recent row's visibility is not memoized** (BM-R7, BM-S5 struck at
+  BM-S1, `bench/v3.0.0/results-bm-s1-scan-row-v2.7.0-942-gf5a7efb2.md`).
+  Beside a point writer, as BM-Q8's cell specifies, `LookupCommit` and the
+  window latch were 3.8 % of the scan core's CPU against the 10 % gate. The
+  share rises with the rows on the window path: 10.7 % beside an every-row
+  writer, 15.6 % with every row on it and no writer, a lookup costing
+  12-15 ns. Neither of those two shapes is the gate's cell, and a
+  statement scanning rows written since the floor pays them.
+- **A step's first visible row of a statement takes the full path**: the
+  kernel is armed only once that step's checks have run (BM-R6), so a
+  statement whose step sees one row gains nothing from it.
+- **The kernel holds a conjunct against a literal only**: a column on the
+  right, a function conjunct, a spilled `varchar`, a `uint64` pk and
+  `UPDATE` / `DELETE`'s own row loops are filtered as before.
+- **The every-row `UPDATE` may still pay a few µs for BM-S2** (verified
+  at `952c67e5`, `bench/v3.0.0/results-bm-s6-remedy-v2.7.0-948-g952c67e5.md`).
+  S2 put a `Status`-building check on every row of `UPDATE`'s path, +4.2 to
+  +4.7 % at the close; the remedy asks each as a predicate first, and the
+  pooled re-measure reads +8.9 µs literal and +3.2 prepared over A of
+  ~740, within the spread - but B2 is slower than A in 12 and 11 of 15
+  runs, and one batch of three reads +16.9 and +14.8. Measured at 1,000
+  rows, `cores = 1`, `relaxed` only. BT-S4 deleted the per-row conjunct
+  check (UPDATE's and DELETE's walks check once, BT-R5), and BT's close
+  reads the every-row `UPDATE` 3.1 / 3.5 % under BT's opening - inside the
+  largest A-against-A' gap, so whether BM-S2's residual is gone is not
+  resolved at 1,000 rows; at 200 and 10,000 rows B is below A in 6 of 6
+  runs literal and 5 of 6 prepared (`bench/v3.0.0/results-bt-close-v2.7.0-997-g4274ed81.md`).
 
 ## Carve and checkpoint stalls
 
@@ -1138,8 +981,9 @@ closed 2026-10-11 at `ec827a19`).
   batch's `pwrite`s (single writes up to about 300 ms in the kernel's
   writeback throttle) and the inline log gate after 16 deferrals at
   `relaxed`. Under `relaxed` a run is 4-8x longer than before at `cores = 1`.
-  `docs/inflight/bugs/a-checkpoint-run-holds-its-cores-reactor-for-its-whole-length.md`
-  carries the numbers and what a fix needs.
+  `bugs/a-checkpoint-run-holds-its-cores-reactor-for-its-whole-length.md`
+  (closed unreproduced at `d83bd502`) carried the numbers and what a fix
+  needs.
 - **A paced publish's map write can carry the bit of a page another core
   created unlogged after the collection** (BI-S4, `[source-read]`). The
   publish collects the dirty pages, writes them, then writes the maps; a
@@ -1165,11 +1009,22 @@ Owned by `instructions/v3.0.0/workorder-bp-per-core-residue.md` §7.
   level grew over** (BP-H6): at most 2.7e-4 drops per statement, 0.08 % of
   statement CPU at worst.
 - **The per-core id window** (AT-R4, BP-H8) is unmeasured: `SHOW META`
-  carries no window-size, burn or `LookupCommit` counter, and no skew cell
-  has run.
+  carries no window-size or burn counter, and no skew cell has run. A
+  `LookupCommit` count exists since BM-S1 (`visibility_window_lookups`).
 - **The per-core in-flight table** (AX, BP-H9): a miss reads one id; its
   1,024-slot cap per core was not approached, and the skew case that would
   settle whether one core can reach it while others have room has not run.
+- **A `cores = 1` every-row `UPDATE` runs 3-6 % slower since BQ joined BP's
+  branch, cause not found** (carried open at BP's and BQ's close,
+  2026-10-13). `ccf9cfc1` is the one fast build; every build from the merge
+  `6139c2de` on is slower, about 1 point of it the harness's position
+  offset. About half the gap sits in `WalManager::Append`'s own frame
+  (1.05 % of samples to 2.97-3.60 %), its callee `WalStream::Append` flat.
+  Three bounded attempts (a bisect, aligned builds, a lazy `RollRecord`)
+  did not find it. Point statements and `cores = 4` are within noise
+  (`bench/v3.0.0/results-bp-bq-close-v2.7.0-924-g3e77e7d1.md`).
+- **BP-H10's fence premium is +5.1 %** after BP-S6 at `cores = 8`; its next
+  cut, BP-Q15 (b), is a protocol change for its own order.
 
 ## Backup and restore (BR)
 
@@ -1215,46 +1070,19 @@ the procedures are `manual/server/backup-restore.md`.
 
 ## Decisions the revision has not taken
 
-- **AR0's D1–D16: four are taken, one of them against AR0's own
-  proposal.** `instructions/v3.0.0/workorder-al-m0-single-wal.md` carries a
-  table of the D-items *"taken as ratified for M0's scope"* — **D3, D4, D14
-  and D15** — of which only D15 was explicitly stamped (as AL-R8, 2026-09-03).
+- **AR0's D1-D16: what is taken.** `workorder-al-m0-single-wal.md` took D3,
+  D4, D14 and D15 for M0's scope; only D15 was stamped (AL-R8, 2026-09-03).
+  D3 was built against AR0's proposal - every core appends under one latch
+  with one writer thread, not (a) a dedicated log core - and was ratified
+  2026-09-28 with AR0-5-R's R10 (`raft-marks-2026-09-28.md` §7). AR0-M and
+  the later marks take D1(b), D2(a), D7, D8, D9(a) and D11; the rest await
+  the operator's word. The three AR0 marks `[quiet-wrong]` - D7, D8, D9 -
+  are all marked by the operator (AR0-M8, AR0-M3, AR0-M4;
+  `raft-marks-2026-09-29.md` §3). Owner: `ar0-architecture-revision.md` §5.
 
-  **D3 is the one to know about.** AR0 proposed *(a) a dedicated log
-  core*. AL-R1 built something else — every core
-  appends under one latch, with a single writer thread — and the work order
-  says so outright: *"every core still appends, which is where AL-R1
-  departs from D3(a)."* That is a D-item settled in practice, against the
-  proposal, and shipped at the cutover. **Ratified 2026-09-28** with
-  AR0-5-R, whose R10 takes R0's core-0 placements, the log stream among them,
-  as D3 answered in practice (`raft-marks-2026-09-28.md` §7; verified at
-  `5dc4081`).
-
-  Of the remaining twelve, AR0-M and the later marks take D1(b), D2(a),
-  D7, D8, D9(a) and D11 (`CLAUDE.md`'s Open Decisions paragraph lists
-  them); the rest are CLA's proposals awaiting the word. **Three are
-  marked `[quiet-wrong]` by AR0 itself — D7, D8, D9 — and all three are
-  marked by the operator**: AR0-M3 marks D8, AR0-M4 marks D9, and AR0-M8
-  marks D7 (2026-09-29, `raft-marks-2026-09-29.md` §3), its last gate
-  lifted in the following letter. *(Swept 2026-09-09 on
-  `ao-m2-close` at `cf3d0d0` at M2's close, which needed the same count; this
-  paragraph read "three are marked … meaning a wrong choice converts a refusal
-  into a wrong answer" and did not reach AR0-M.)* D1 carries no such tag; its
-  proposal argues *about* a quiet-wrong surface (write skew under SI) without
-  AR0 classing the item as one.
-
-- **AR0 §6's prerequisite is answered on paper and not re-measured.** §6
-  requires RW-C1 attribution — what the unattributed reactor wall clock
-  actually is — before D6 and D10 go non-zero and before M0's baselines are
-  interpreted. AR0-V1's own consequence line says the prerequisite **is**
-  answered, by three named v2.x results files at `1769487`, and in the
-  direction that *"a single sync point off the execution cores is supported
-  and D2/D10's 'scheduler latency' premise is not"* — the figure being
-  94–98%, which AR0-V1 corrects from the body's 92–98%, attributed there to
-  the WAL drain's `fdatasync`.
-
-  **The residue is that all of it prices the engine AR0 replaces.** What is
-  missing is the v3 number: AL-S8's `fdatasync`-share-of-reactor-wall-time
-  cell, which the work order's own row records as not run with no number
-  claimed. Owner:
-  `instructions/v3.0.0/ar0-architecture-revision.md` §6 and AR0-V1.
+- **AR0 §6's prerequisite is answered only for the engine AR0 replaces.**
+  AR0-V1 answers RW-C1 attribution from three v2.x results files at
+  `1769487` (94-98 % of unattributed reactor wall time in the WAL drain's
+  `fdatasync`); the v3 number - AL-S8's `fdatasync`-share cell - was not
+  run. Owner: `instructions/v3.0.0/ar0-architecture-revision.md` §6 and
+  AR0-V1.

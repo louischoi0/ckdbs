@@ -65,7 +65,7 @@ teaching the step-kind trust table about a step that reads no relation.
 ## 2. Grammar
 
 ```
-select      ::= SELECT select_list FROM rel join* [WHERE cond (AND cond)*]
+select      ::= SELECT select_list FROM rel join* [WHERE predicate]   -- parser-v2.md
                 [GROUP BY column (, column)*]
 select_list ::= * | select_item (, select_item)*
 select_item ::= column | agg
@@ -237,12 +237,11 @@ word pays nothing for the feature.
 | `aggregate_max_groups` | groups per statement | 65,536 |
 | `aggregate_max_distinct` | DISTINCT entries per statement, summed over all sets | 1,048,576 |
 
-`aggregate_max_groups` was chosen by measurement against the `bench/` tree
-at `1769487`: the fold's cost is proportional to **group count**, not row
-count, so a statement approaching the cap is already slow enough to be
-visible — the cap is a backstop rather than a tuning knob — and the ceiling
-works out at about 27 MB per statement. `aggregate_max_distinct`'s default
-is not measured; the same arithmetic puts it at about 84 MB per statement.
+`aggregate_max_groups` is a backstop, not a tuning knob: the fold's cost is
+proportional to group count, so a statement near the cap is already visibly
+slow; the ceiling is about 27 MB per statement (measured against `bench/` at
+`1769487`). `aggregate_max_distinct` is unmeasured, about 84 MB by the same
+arithmetic.
 
 Exceeding either **fails the statement** with the key's name in the error.
 No spill, no truncation, no silent partial answer — a truncated group set
@@ -306,4 +305,4 @@ leaves nothing behind.
 
 ## 10. Open items — do not assume
 
-The decisions this section listed are unrecorded here.
+None recorded.

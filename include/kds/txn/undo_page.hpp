@@ -67,8 +67,7 @@ struct UndoPageHeaderFields {
     // The transaction whose append created this page; 0 = unknown. It is a
     // **diagnostic, not an owner**: an undo page is shared by every
     // transaction that appends to it while it has room, because a page per
-    // transaction costs 8 KB per autocommitted UPDATE and autocommit is one
-    // transaction per statement (bench/results-txn-layer-budget.md §3).
+    // transaction costs 8 KB per autocommitted UPDATE (`undo_log.hpp`).
     // Nothing reads this field to decide anything, and nothing may - a
     // record's writer is in the UNDO_WRITE envelope, and a record's
     // *reachability* is a property of the tuples pointing at it.
@@ -201,10 +200,10 @@ struct UndoRecordFields {
     // they are not the same chain: `prev_page_id` is page->page in creation
     // order and `prior_undo_ptr` is record->record over *one tuple's
     // versions*. Neither answers "what did this transaction do", which is
-    // the question recovery's undo phase asks and could not previously ask
-    // of anything durable - its only other source is the WAL inside the
-    // replay range, and a page written back before a checkpoint puts a
-    // still-uncommitted write outside it (workplan-wal-recovery.md §4b).
+    // the question recovery's undo phase asks of something durable - the
+    // WAL inside the replay range is not enough, since a page written back
+    // before a checkpoint puts a still-uncommitted write outside it
+    // (workplan-wal-recovery.md §4b).
     //
     // Walked from the head `CHECKPOINT_BEGIN` records per active
     // transaction, so its reach does not depend on the redo start.
@@ -240,10 +239,8 @@ inline constexpr std::size_t kUndoRecPkOffset = 36;
 // **Grew 28 -> 44 at RV10**, and the cost is stated rather than absorbed:
 // 16 bytes per undo record, so a kOverwrite carrying a 64-byte image goes
 // from 92 to 108 bytes and a page holds ~17 % fewer of them. That is the
-// price of a chain that can be walked without the log. It used to compound
-// with the reclamation gap, undo pages being unpurgeable; since
-// `docs/inflight/in-progress/workplan-undo-purge.md` it costs a higher steady-state page count
-// instead, ~17 % more growths per unit of undo written.
+// price of a chain that can be walked without the log; with the undo purge
+// it costs ~17 % more page growths per unit of undo written.
 //
 // The two new fields are appended rather than fitted into `reserved`, which
 // is 2 bytes and holds neither. Appending also keeps every existing offset

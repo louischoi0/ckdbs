@@ -129,11 +129,9 @@ Status WriteHeaderAndSync(int fd, std::span<const std::byte> header) {
 // Zero-fills a freshly allocated segment so its extents are *written*, not
 // merely reserved. posix_fallocate hands back unwritten extents, and the
 // first write into each of those costs an extent-conversion journal
-// transaction inside the very fsync a commit is waiting on - measured as
-// the difference between a ~950us flush and a ~2,100us one on xfs over EBS
-// (bench/results-scenario2-freight.md). Paying the whole conversion here,
-// once per segment and off every commit path, is what PostgreSQL's
-// wal_init_zero does and for the same reason.
+// transaction inside the very fsync a commit is waiting on (roughly
+// doubling a flush on xfs). Paying it here, once per segment and off every
+// commit path, is what PostgreSQL's wal_init_zero does.
 Status Prewrite(int fd, std::uint64_t size) {
     // 1 MiB per write: large enough that a 64 MiB segment is 64 syscalls,
     // small enough not to be a resident buffer anyone notices.

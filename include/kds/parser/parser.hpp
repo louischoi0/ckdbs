@@ -47,10 +47,8 @@ bool HeapStorageAllowedForTest() noexcept;
 // to observe the refusal has to put it back. Restores what it found, so
 // nothing leaks into the next cell.
 //
-// There is deliberately no `AllowHeapStorageForTest` counterpart: one existed
-// briefly, had zero call sites, and was byte-identical to this but for a
-// literal. If both directions are ever wanted, one `HeapStorageForTest(bool)`
-// replaces this rather than sitting beside it.
+// There is deliberately no `AllowHeapStorageForTest` counterpart; if both
+// directions are ever wanted, one `HeapStorageForTest(bool)` replaces this.
 class SuspendHeapStorageForTest {
 public:
     SuspendHeapStorageForTest() noexcept : saved_(HeapStorageAllowedForTest()) {
@@ -225,7 +223,9 @@ private:
 
     StatusOr<AstValue> ParseValue();
     StatusOr<CompareOp> ParseCompareOp();
-    StatusOr<Condition> ParseOneCondition(std::uint32_t depth);
+    // One condition as a leaf - or, for a value list or a negated form
+    // (BU-S2), the subtree it means.
+    StatusOr<BoolExpr> ParseOneCondition(std::uint32_t depth);
 
     // AP-S4's call, its head already read as `head`: `(`, column
     // arguments, `)`. Whether `head` names a function at all is the
@@ -243,6 +243,15 @@ private:
     // makes the condition a kCompareFunction), or a value.
     Status ParseComparisonRhs(Condition& cond);
     StatusOr<std::vector<Condition>> ParseOptionalWhere(std::uint32_t depth);
+
+    // A WHERE's boolean structure (BU-S1): `OR` binds loosest, then `AND`
+    // (one chain production, `is_or` saying which), then `NOT`; a
+    // parenthesized group or one condition is the primary.
+    StatusOr<BoolExpr> ParseBoolChain(std::uint32_t depth, bool is_or);
+    StatusOr<BoolExpr> ParseBoolNot(std::uint32_t depth);
+    // `IN (v, ...)` after its `(` (BU-S2): a disjunction of equalities, or
+    // for `NOT IN` a conjunction of inequalities.
+    StatusOr<BoolExpr> ParseValueList(ColumnName col, bool negated, std::uint32_t at);
 
     StatusOr<std::string> ParseIdent();
 
@@ -282,9 +291,9 @@ private:
     Status ExpectToken(TokenType type, std::string_view desc);
     void ConsumeOptionalSemicolon();
 
-    // The statement text as handed in, kept so a declaration's body can be
-    // sliced out of it verbatim (ast.hpp explains why verbatim matters).
-    // Non-owning: a Parser does not outlive the string it was given.
+    // The statement text as handed in, kept so text can be sliced out of it
+    // verbatim: an assertion's `source_text` and a SET value subquery's
+    // `subquery_sql`. Non-owning: a Parser does not outlive its string.
     std::string_view sql_;
 
     Lexer lexer_;
@@ -292,6 +301,9 @@ private:
     // Nesting of parentheses and unary signs in a SET value, bounded so a
     // hostile statement cannot recurse the stack away.
     std::uint32_t expr_depth_ = 0;
+    // The parentheses and `NOT`s around the WHERE node being parsed, across
+    // the whole statement - every subquery's WHERE included (BU-Q2).
+    std::uint32_t bool_nest_ = 0;
     // Set while a SELECT that is a value inside another statement is parsed:
     // a `;` is that statement's end, not a way to end the subquery early.
     bool inside_value_subquery_ = false;

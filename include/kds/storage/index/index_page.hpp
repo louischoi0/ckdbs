@@ -8,8 +8,7 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
 
-// The two page formats of a secondary index (docs/spec/index.md §4,
-// workplan IX02): the leaf that holds entries and the internal node that
+// The two page formats of a secondary index (docs/spec/index.md §4): the leaf that holds entries and the internal node that
 // routes a descent.
 //
 // ---- What an index page is not ------------------------------------------
@@ -102,8 +101,7 @@ struct IndexLayout {
     // The encoded composite key, from exec::IndexKeyWidth().
     std::uint16_t key_width = 0;
     // The covered columns' inline cells, concatenated. 0 for an index with
-    // no COVERING clause, which is every index until the read path can use
-    // one.
+    // no COVERING clause.
     std::uint16_t covered_width = 0;
 
     // What the tree orders by, and what a separator is.

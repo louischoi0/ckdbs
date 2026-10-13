@@ -151,11 +151,9 @@ Status InternalView::InsertEntry(std::uint64_t sep_key, PageId child) {
                                       " is already present in this internal node");
     }
 
-    // Shift the tail up one stride to open the hole. Insertion is at the
-    // end for a monotonically-issued pk (invariant 10), so this moves zero
-    // bytes on the path that actually runs today - but the ordered form is
-    // what makes the node's sortedness a property of the code rather than
-    // of its one current caller.
+    // Shift the tail up one stride to open the hole. An issued pk inserts at
+    // the end and moves nothing; a named key or a divide below the tail
+    // (BD) inserts mid-node, which this shift keeps sorted.
     const std::uint16_t insert_at = static_cast<std::uint16_t>(at + 1);
     for (std::uint16_t i = h.nr_entries; i > insert_at; --i) {
         WriteEntry(i, ReadEntry(static_cast<std::uint16_t>(i - 1)));

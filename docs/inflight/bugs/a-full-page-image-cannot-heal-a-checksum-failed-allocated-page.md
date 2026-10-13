@@ -1,16 +1,17 @@
 # A full page image cannot heal a checksum-failed page that is allocated
 
 **Found by reading, not reproduced.** Verified at `3b9d5550` on
-`br-backup-restore`, by BR-S0's census (`instructions/v3.0.0/br-s0-census.md`
-H4), while reading whether redo could heal a page a backup copy tore.
+`br-backup-restore` by BR-S0's census (`instructions/v3.0.0/br-s0-census.md`
+H4), while reading whether redo could heal a page a backup copy tore;
+re-read at `f3da0413`, 2026-10-13.
 
 ## What is wrong
 
 `docs/spec/wal.md` §10 says the header CRC32C detects a torn page and a
 `FULL_PAGE_IMAGE` in the replay range heals it. Redo does poison the page on
-a checksum failure and skip its later deltas (`src/wal/redo.cpp:418-423`,
-`:462-464`). But the image's apply recreates the page through
-`store.CreateAt` (`src/wal/redo.cpp:424-433`), and
+a checksum failure and skip its later deltas (`src/wal/redo.cpp`'s
+`PoisonedPages`). But the image's apply recreates the page through
+`store.CreateAt` (the same file), and
 `DevicePageStore::ClaimNamedIdLocked` refuses that for an id whose free-map
 bit is set and whose device bytes are not zeros:
 
@@ -18,7 +19,7 @@ bit is set and whose device bytes are not zeros:
 if (!device_zeros) return Status::AlreadyExists(...);
 ```
 
-(`src/storage/device_page_store.cpp:1312`). A torn page is exactly an
+(`src/storage/device_page_store.cpp`, line 1289 at `f3da0413`). A torn page is exactly an
 allocated id with non-zero bytes, so the heal is refused and the mount fails
 with that refusal rather than with the poison set's "no full page image
 restored it".

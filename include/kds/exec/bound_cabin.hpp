@@ -138,13 +138,11 @@ struct AdmissionResult {
 
 // One assertion's Bound Cabin: the group directory over its entry pages.
 //
-// **Memory-resident in v1**, exactly as the observational Cabin's sets are and
-// on the same licence (`docs/spec/cabin.md` §9). What makes that *not* a
-// contradiction of AS6's "logged, headered authority class" is sequencing:
-// the entries are already on durable, checksummed `kCabinBound` pages, and
-// AST05's WAL records are what let the directory be rebuilt exactly at
-// restart. Until AST05 lands, a restart loses the directory — which is why
-// AST06's publish step, not this class, is what turns enforcement on.
+// **Memory-resident**, on the observational Cabin's licence
+// (`docs/spec/cabin.md` §9), without contradicting AS6's "logged, headered
+// authority class": the entries are on durable, checksummed `kCabinBound`
+// pages, and the `ASSERT_*` records plus the checkpoint snapshot rebuild the
+// directory at mount (`assertion_recover.hpp`, AS6a).
 class BoundCabin {
 public:
     BoundCabin(BoundAggregate aggregate, std::int64_t bound) noexcept

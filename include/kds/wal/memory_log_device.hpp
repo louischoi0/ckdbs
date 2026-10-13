@@ -151,11 +151,9 @@ private:
     // Durable base plus un-synced overlay — MemoryPageDevice's shape, for
     // MemoryPageDevice's reason: Sync() merges the overlay into the base,
     // so its cost is proportional to the bytes written *since the last
-    // sync*, never to the log's whole history. (It used to deep-copy every
-    // segment per sync; under group durability that is one full-history
-    // copy per committed statement, which made any long-running driver
-    // quadratic.) Crash() drops the overlay and the segments created since
-    // the last sync — the same observable semantics as before.
+    // sync*, never to the log's whole history (a deep copy per sync made
+    // long drivers quadratic). Crash() drops the overlay and the segments
+    // created since the last sync.
     std::uint64_t segment_size_;
     // The one lock a test double takes (log_device.hpp): a shared stream
     // writes under its latch while the writer thread syncs, and the maps

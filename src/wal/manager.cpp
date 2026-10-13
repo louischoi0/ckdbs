@@ -161,43 +161,23 @@ void WalManager::RecycleBelow(Lsn durable_redo_start) {
 }
 
 Status WalManager::Sync() {
-    // **On the calling thread on an owning manager, always.** (A `group`
-    // commit's sync no longer comes here at `cores > 1`: the drain hands it
-    // to the writer, BA-R4 part 1, `DrainOnce`.) The writer thread is not
-    // used here and that is the decision, not an omission:
-    // every caller of this has someone waiting on the result - a parked
-    // committer, a client's SYNC, a synchronous checkpoint's gate (mount,
-    // shutdown, a cadence step's inline remainder after its parks) - and
-    // handing such a sync to another thread adds a wake-up to a latency
-    // somebody is measuring. **A cadence checkpoint is the exception since
-    // BI-S3**, and it does not come here: nobody waits on a checkpoint's
-    // latency while every session on its core waits out an inline sync, so
-    // its task asks the writer (`RequestSyncNow`) and parks. Measured on a 2-core host it doubled `group`'s p99 while
-    // barely moving its median, which is what an occasional slow wake-up
-    // looks like (bench/results-latency-matrix.md).
+    // **On the calling thread on an owning manager, always**: every caller
+    // has someone waiting on the result - a parked committer, a client's
+    // SYNC, a synchronous checkpoint's gate (mount, shutdown, a cadence
+    // step's inline remainder) - and a hand-off would add a wake-up to that
+    // latency. A `group` commit's sync at `cores > 1` does not come here (the
+    // drain hands it to the writer, BA-R4 part 1), nor does a cadence
+    // checkpoint's since BI-S3 (`RequestSyncNow`, then park); the writer also
+    // takes D3's loss-window tick (`DrainOnce`).
     //
-    // What the writer *does* take on an owning manager is the sync nobody
-    // waits for - D3's loss-window tick in DrainOnce(). See there.
-    //
-    // **An attached manager is the other case, and it is the point of M0**
-    // (AL-R1). A peer core does not own the device and must not `fdatasync`
-    // on its reactor: it flushes its bytes through the latch and asks the
-    // writer.
-    //
-    // **And then it waits**, because this function's three callers are the
-    // ones whose whole meaning is "wait" (manager.hpp): a D1 commit, whose
-    // contract is that the record is durable on return; `EnsureDurable`,
-    // which is the WAL-before-data gate the page store calls before
-    // writing a dirty page (`storage/device_page_store.cpp`, wal.md §8-1);
-    // and `SyncAll`, which promises everything acknowledged has landed.
-    // Returning on a sync merely *asked for* would break all three, and
-    // the third of those is not a latency bug but a durability one - a
-    // data page reaching the platter ahead of its log record.
-    //
-    // The wait is a condition variable rather than an `fdatasync` on this
-    // thread, so what a peer pays here is one hand-off; the sync itself
-    // left its reactor, which is the 94-98% AL-2 is about. The
-    // non-blocking path is `RequestSyncNow()`, which the drain takes.
+    // **An attached manager** (M0, AL-R1) does not own the device and must
+    // not `fdatasync` on its reactor: it flushes its bytes through the latch,
+    // asks the writer, **and then waits** on a condition variable, because
+    // every caller's meaning is "wait" (manager.hpp): a D1 commit,
+    // `EnsureDurable` (the WAL-before-data gate, wal.md §8-1) and `SyncAll`.
+    // Returning on a sync merely *asked for* would let a data page reach the
+    // platter ahead of its log record. The non-blocking path is
+    // `RequestSyncNow()`, which the drain takes.
     if (attached()) {
         const bool staged = stream_->ring_used() > 0;
         if (Status s = stream_->Flush(); !s.ok()) {
@@ -272,7 +252,7 @@ Status WalManager::RequestSyncNow() {
     if (writer_ == nullptr) {
         // Nobody to ask - an owning manager that never started a writer,
         // which is every in-process test and tool. Its sync is its own, on
-        // this thread, exactly as it was before M0.
+        // this thread.
         return Sync();
     }
     const bool staged = stream_->ring_used() > 0;
@@ -511,33 +491,25 @@ Status WalManager::DrainOnce() {
     // stay open until this core happened to sync for itself.
     ResolveBatches();
 
-    // **The free-tick test skips a peer, whose own work the lines below
-    // cover.** On an attached manager `appended_lsn()` is the *instance's*
-    // append point, which core 0 moves constantly - so the equality was
-    // never true on a peer and every tick fell through to the interval
-    // branch below, issuing a sync request per interval with nothing of its
-    // own staged. What a peer has to do is close its own batches, which the
-    // `ResolveBatches` above just did, and ask for a sync only if somebody
-    // is parked on one.
+    // **The free-tick test skips a peer**: on an attached manager
+    // `appended_lsn()` is the instance's append point, which core 0 moves
+    // constantly, so the equality would almost never hold; a peer only closes its own batches (the
+    // `ResolveBatches` above) and asks for a sync if somebody is parked.
     //
     // **On core 0 this test is deliberately over the *whole log*, and it
-    // must stay that way.** `appended_lsn()` there is the shared stream's,
-    // so it includes every peer's staged bytes - which is the *only* thing
-    // bounding a peer's `relaxed` loss window now that peers do not tick
-    // the interval themselves: core 0 cannot take this early-out while any
-    // peer has bytes unflushed, so it reaches the D3 branch and flushes
-    // them, within one `relaxed_flush_interval_ns` exactly as before the
-    // cutover. Making this symmetric - "core 0 should only mind its own
-    // work" - would leave every peer's relaxed data unbounded, silently and
-    // with no test failing. The asymmetry is the design, not an oversight.
+    // must stay that way.** `appended_lsn()` there includes every peer's
+    // staged bytes, which is the *only* thing bounding a peer's `relaxed`
+    // loss window: core 0 cannot take this early-out while any peer has bytes
+    // unflushed, so it reaches the D3 branch and flushes them within one
+    // `relaxed_flush_interval_ns`. Making it symmetric would leave every
+    // peer's relaxed data unbounded, silently and with no test failing.
     if (!attached() && appended_lsn() == durable_lsn()) {
         return Status::OK();  // nothing to do; a tick must be free
     }
     if (pending_group_commits_ > 0) {
         // Someone is parked on this. On an owning manager it is performed
         // here, on the reactor, for the reason Sync() gives: a waiter pays
-        // for a hand-off. R6-3's prepare disjunct retired with 2PC; its
-        // history is at cf889b63.
+        // for a hand-off.
         //
         // **On an attached manager it is asked for and not waited on.**
         // The waiter is a parked task polling `IsDurable`, not this tick,
@@ -546,12 +518,10 @@ Status WalManager::DrainOnce() {
         // The batch closes on a later tick, at the `ResolveBatches` above.
         //
         // **An owning manager hands it over too once the writer kicks**
-        // (BA-R4 part 1): the census measured core 0's inline `group` sync
-        // at a p50 of 12.9 ms and a p99 of 1.4 s against a peer's 2.4 ms and
-        // 9.5 ms on the writer (`bench/v3.0.0/results-ba-s4-census-v2.7.0-725-gc390a624.md`), the
-        // reverse of the 2-core host Sync()'s comment describes. Without a
-        // kick the parked committer would wait out an idle block, so at one
-        // core - no registry - the sync stays inline.
+        // (BA-R4 part 1; the BA-S4 census measured the inline sync far slower
+        // than the writer's). Without a kick the parked committer would wait
+        // out an idle block, so at one core - no registry - the sync stays
+        // inline.
         return attached() || KicksDurableWaiters() ? RequestSyncNow() : Sync();
     }
 
@@ -559,16 +529,8 @@ Status WalManager::DrainOnce() {
     // drain that bounds it** - core 0's, which runs on the same cadence
     // (`expeditor.cpp`) and cannot skip a peer's bytes, for the reason the
     // early-out above gives. So an attached manager does not take this
-    // branch at all.
-    //
-    // What a peer's tick cost before, stated precisely because the obvious
-    // reading is wrong: on an *idle* instance it woke nobody -
-    // `WalWriter::RequestSync` returns early once the watermark has passed
-    // - so the cost was one acquisition of the **shared** latch and a
-    // no-op flush, per peer, per interval. On a *busy* one it was worse
-    // than redundant: the peer's flush frequently carried **core 0's**
-    // staged bytes, charging them to that peer's `flushes` and forcing
-    // syncs above the coalescing a single drain exists to get.
+    // branch at all: a peer's flush would carry core 0's staged bytes and
+    // force syncs above the coalescing a single drain exists to get.
     if (attached()) {
         return Status::OK();
     }
@@ -576,9 +538,8 @@ Status WalManager::DrainOnce() {
     // No commit is waiting, so the only thing forcing a sync is the D3
     // loss-window bound - and **nobody is waiting for it**. That is what
     // makes it the writer thread's: the fsync leaves this thread entirely,
-    // and the statement that would have been charged for it keeps running.
-    // Measured: `relaxed`'s p99 falls from 2,208 us to 194 us, because that
-    // stall *was* this tick. `RequestSyncNow` is that hand-off, and its
+    // and the statement that would have been charged for it keeps running
+    // (it was `relaxed`'s p99 stall). `RequestSyncNow` is that hand-off, and its
     // no-writer arm is the inline sync a writerless manager still owes.
     if (clock_.Now() - last_sync_ns_ >= config_.relaxed_flush_interval_ns) {
         // No flush counting here: `RequestSyncNow` counts its own on both

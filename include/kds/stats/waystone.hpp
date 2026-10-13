@@ -42,7 +42,7 @@
 // recorded is wrong in a way no per-entry validation can detect, because
 // there is no entry to validate: absence has no witness.
 //
-// ---- Headered, unlike the structure this replaces -----------------------
+// ---- Headered, unlike the directory's interior pages --------------------
 //
 // These are ordinary `PageType::kWaystone` pages carrying the common page
 // header. Nothing here is addressed by shift and mask - a trail is read
@@ -219,8 +219,7 @@ static_assert(kWaystoneBodyOffset + kEntriesPerWaystonePage * kWaystoneEntrySize
 // no entries and no continuation.
 //
 // The instance arrives as one value rather than two `uint64_t`s for the
-// reason instance_key.hpp gives: swapping them used to compile, and the
-// resulting bug is a silent permanent trail miss.
+// reason instance_key.hpp gives.
 void FormatWaystonePage(std::span<std::byte, kPageSize> page, const InstanceKey& key,
                         std::uint64_t recorded_ts);
 

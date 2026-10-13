@@ -27,30 +27,20 @@
 // Concurrency: this is a *reactor participant*, not a loop of its own. The
 // listening socket and every accepted client are non-blocking fds
 // registered with the Scheduler's io backend, and all the work happens in
-// handlers the reactor calls (sched.md phase 1). That is what lets
-// `system`-group work - the checkpointer's cadence above all (wal.md
-// section 11) - actually get a turn: the old blocking accept()/read() loop
-// left the process with nowhere to run anything else.
-//
-// Many clients are served concurrently as a consequence, but still on one
-// thread, cooperatively: no client blocks another, and no request is
-// handled in parallel with any other. The thread-per-core fan-out
-// (rules.md #3) is unchanged and still Phase 2+.
+// handlers the reactor calls (sched.md phase 1), so `system`-group work -
+// the checkpointer's cadence above all (wal.md section 11) - gets a turn.
+// One server per core: its clients are served cooperatively on that core's
+// thread, and no client blocks another.
 
 namespace kds::server {
 
 // **Which protocol a listener speaks** (docs/spec/protocol.md §12,
 // protocol-wp.md P13).
 //
-// §12's instruction, verbatim: "`tcp_server` gains a frame decoder
-// (length-prefixed accumulate) replacing line splitting; `command_dispatcher`
-// splits into a KWP session state machine + the retained loopback text
-// dispatcher (debug flag, default off in production builds)". So this is
-// one socket layer with two framings, not two servers - the accept, the TLS
+// One socket layer with two framings, not two servers: the accept, the TLS
 // channel, the outbox, the write-interest bookkeeping and the async
 // dispatch are the same code either way, and only the framing and the
-// dispatch shape differ. A second listener class was the alternative and it
-// would have been the third copy of this file's syscall handling.
+// dispatch shape differ.
 enum class Protocol : std::uint8_t {
     // KWP/1 (docs/spec/protocol.md). The default since KW-D6's cut-over.
     kKwp,
@@ -124,13 +114,12 @@ public:
 
     // Registers the listening socket with `scheduler` and starts accepting.
     // From here on the reactor drives everything: accepted clients are
-    // registered too, readable events turn into newline-framed command
-    // lines run through `dispatcher`, and replies are written back
-    // newline-terminated.
+    // registered too, and readable events turn into frames (KWP) or command
+    // lines (text) run through `dispatcher`.
     //
-    // A dispatched command setting DispatchOutcome::should_stop calls
-    // Scheduler::Stop(), which ends the caller's Run() - the whole server,
-    // not just that connection, exactly as before.
+    // A dispatched command setting DispatchOutcome::should_stop runs the
+    // stop handler (`set_stop_handler`), or Scheduler::Stop() where none is
+    // set - the whole instance, not just that connection.
     //
     // Both references must outlive this TcpServer. Call Detach() before
     // destroying the scheduler if it might outlive this object.
@@ -175,8 +164,7 @@ public:
     // connection runs through (wire_channel.hpp) - in practice the TLS
     // channel, installed by the Expeditor when `tls = on`. Set it before
     // Attach(): connections accepted earlier keep the identity path.
-    // Unset (the default) means plaintext, byte for byte the pre-seam
-    // behaviour.
+    // Unset (the default) means plaintext.
     using ChannelFactory = std::function<std::unique_ptr<WireChannel>()>;
     void set_channel_factory(ChannelFactory factory) noexcept {
         channel_factory_ = std::move(factory);
@@ -186,7 +174,7 @@ public:
     // connection must pass (auth.hpp) - in practice the SCRAM gate,
     // installed by the Expeditor when `auth = scram`. Set before
     // Attach(). Unset (the default) means every connection starts
-    // authenticated, the pre-auth behaviour.
+    // authenticated.
     using AuthGateFactory = std::function<std::unique_ptr<AuthGate>()>;
     // What STOP does. Unset (core 0, single-core): Scheduler::Stop() on
     // the attached reactor, which ends Serve() and takes the whole
@@ -234,9 +222,8 @@ public:
     // Every core accepts on the port, so core 0's listener and each peer's
     // are configured from one value: a peer listener missing the TLS channel
     // or the SCRAM gate would serve plaintext, unauthenticated sessions on
-    // the port the operator secured, which is why the pairing was refused
-    // while each listener was wired by hand. Unset factories and an unset
-    // identity source keep their setters' defaults. Before Attach().
+    // the port the operator secured. Unset factories and an unset identity
+    // source keep their setters' defaults. Before Attach().
     struct ClientSetup {
         Protocol protocol = Protocol::kKwp;
         wal::DurabilityClass durability = wal::DurabilityClass::kGroup;
@@ -274,14 +261,11 @@ public:
     std::uint64_t reply_writes() const noexcept { return reply_writes_; }
 
 private:
-    // One client's in-flight buffers. Commands are newline-framed and a
-    // read can stop mid-line, so the remainder has to survive until the
-    // next readable event - which is the whole reason a connection needs
-    // state at all. The outbox is the same story on the way out: a
-    // non-blocking socket can accept a partial reply, and the tail has to
-    // survive until the fd is writable again. It is also what makes one
-    // write() serve a whole batch of pipelined commands - see
-    // DrainCommands.
+    // One client's in-flight buffers. A read can stop mid-line or
+    // mid-frame, so the remainder survives in `inbox` until the next
+    // readable event; a non-blocking socket can take a partial reply, so
+    // the tail survives in `outbox` until the fd is writable again - which
+    // is also what lets one write() serve a batch of pipelined commands.
     struct Connection {
         // `inbox` holds *application* bytes (command lines); `outbox`
         // holds *wire* bytes, ready for send(). With no channel the two
@@ -304,19 +288,15 @@ private:
 
         // ---- One statement at a time (the async dispatch seam) ----------
         //
-        // A statement may now suspend, so its reply is not ready when
-        // DrainCommands returns. Three fields carry that.
+        // A statement may suspend, so its reply is not ready when
+        // DrainCommands returns.
         //
-        // **`in_flight` serializes the connection**, and it is not a
-        // simplification - it is required twice over. The session is
-        // stateful (an open transaction, the failed-txn flag), so a second
-        // statement starting before the first finished would interleave
-        // with it; and the newline protocol has no request ids, so replies
-        // must leave in the order the commands arrived. Pipelining still
-        // works exactly as it did - a batch of commands is drained one at a
-        // time and the replies leave in one write - it is only *concurrency
-        // within one connection* that is excluded, which the protocol never
-        // offered.
+        // **`in_flight` serializes the connection**, required twice over:
+        // the session is stateful (an open transaction, the failed-txn
+        // flag), and neither protocol has request ids, so replies leave in
+        // the order the commands arrived. Pipelining still works - a batch
+        // is drained one at a time and the replies leave in one write; only
+        // concurrency within one connection is excluded.
         bool in_flight = false;
 
         // The statement being run, copied out of `inbox` before dispatch.
@@ -354,9 +334,7 @@ private:
 
         // This connection's transaction state (session.hpp). Per
         // connection and not per server: two clients on one dispatcher must
-        // not see each other's open transaction, which is exactly what
-        // docs/spec/txn.md section 10-8 requires and what a shared dispatcher
-        // could not provide before.
+        // not see each other's open transaction (docs/spec/txn.md section 10-8).
         Session session;
 
         // ---- KWP/1 (P13) -------------------------------------------------
@@ -403,11 +381,8 @@ private:
     void OnClientReadable(int client_fd);
     // Starts the next complete command, if the connection has one and is
     // not already running one. Returns false if the connection was closed
-    // and must not be touched again.
-    //
-    // It no longer *runs* commands - it starts one and returns. The reply
-    // is appended by OnStatementComplete when the statement finishes, which
-    // then calls this again for the next line.
+    // and must not be touched again. The reply is appended by
+    // OnStatementComplete, which then calls this again for the next line.
     bool DrainCommands(int client_fd, Connection& conn);
 
     // The KWP half of the same loop: hands complete frames to the session

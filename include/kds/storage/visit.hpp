@@ -7,23 +7,13 @@
 #include "kds/base/status.hpp"
 
 // What a relation walk's visitor tells the walk to do next
-// (docs/spec/parser-v2.md I15 rule 4, workplan V03).
+// (docs/spec/parser-v2.md I15 rule 4).
 //
-// Both walks over a relation's tuples - heap::ChainVisit over a page chain
-// and btree::BtreeVisit over the leaf siblings - used to run to the end of
-// the relation unconditionally. The only way out was a non-ok Status from
-// the visitor, which made "did it fail, or did it finish early on purpose?"
-// unanswerable at the call site: the walk returned kInvalidArgument either
-// way, and the caller had to guess from a message.
-//
-// That is not a style complaint. Three things in the query language need to
-// stop a walk *successfully*: an `Exists` step short-circuits at the first
-// match, `LIMIT n` stops at n rows, and a cost guard stops when a scan has
-// read more pages than it was allowed. All three are ordinary successful
-// outcomes, and encoding them as errors would make every caller upstream
-// re-derive whether an error was really an error.
-//
-// So control and failure travel in different channels: the value says
+// Both walks over a relation's tuples - heap::ChainVisit and
+// btree::BtreeVisit - must be stoppable *successfully*: an `Exists` step
+// short-circuits at the first match, `LIMIT n` stops at n rows, and a cost
+// guard stops when a scan has read its page allowance. So control and
+// failure travel in different channels: the value says
 // whether to keep going, the Status says whether anything went wrong. A
 // visitor returns StatusOr<VisitControl> - kContinue for "next slot",
 // kStop for "I have what I came for", or a non-ok Status for a real

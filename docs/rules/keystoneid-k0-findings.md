@@ -84,36 +84,30 @@ shows why the hazard goes unnoticed without a log: the catalog page (id 4)
 and the heap pages (ids ≥ 128) are lost as one unit, a consequence of
 page-id ordering and not a designed guarantee.
 
-The rule it produced: the mark's bump is a **logged catalog write**, with
-an `UNDO_WRITE` ahead of it, replayed with every other catalog write
-(`docs/spec/wal.md`). The same exposure is the one `docs/spec/txn.md` §4.2
-records for the trx-id block ceiling in the unlogged superblock, and it
-closes the same way, with recovery.
+The rule it produced: the mark's bump is a **logged catalog write** - a
+`HEAP_OVERWRITE` at `kNoTxnId`, no undo - replayed with every other
+catalog write (`docs/spec/wal.md`). The same exposure is the one
+`docs/spec/txn.md` §4.2 records for the trx-id block ceiling in the
+unlogged superblock, and it closes the same way, with recovery.
 
 ## 5. The performance question
 
-**Per-id durability is the disaster, and bump-ahead is the escape.**
-Forcing the sequence to the platter per id is one fsync per insert and
-caps INSERT at the device's fsync rate; bump-ahead at N=4096 costs about a
-quarter more than a non-durable allocator, and N=64 is a 3× INSERT
-regression, because one fsync per 64 rows is still one fsync every 64
-rows. Measured against the `bench/` tree at `1769487`
-(`git show 1769487:bench/keystone_alloc_bench.cpp`). **4096 is a floor,
-not a default**; `keystoneid-invariant.md` §5 K-M2 states it for reuse.
-The allocator itself was under 5% of an unlogged INSERT, so no allocator
-change is a performance change.
+**Per-id durability is the disaster, and bump-ahead is the escape**: one
+fsync per id caps INSERT at the device's fsync rate; bump-ahead at N=4096
+cost about a quarter over a non-durable allocator, and N=64 was a 3x
+INSERT regression. **4096 is a floor, not a default**
+(`keystoneid-invariant.md` §5 K-M2). The allocator was under 5% of an
+unlogged INSERT. Measured pre-v3 with `bench/keystone_alloc_bench.cpp` at
+`1769487`.
 
-**The catalog relations chain** — found while measuring, unrelated to K1.
-Each fixed catalog page id is a chain *root*; a full page links to the
-next, taken from a reserved range of low page ids
-(`kCatalogOverflowFirst`..`kCatalogOverflowLimit`,
-`include/kds/catalog/well_known.hpp`). A page holds 68 `sys.columns` rows,
-so the instance's ceiling is roughly 7,800 column rows. The range is
-reserved rather than unbounded because "every catalog page" has to be
-nameable — the flush that preceded the catalog broadcast needed it, and a
-fixture's flush for a second store over the device still does — and a bounded range can
-be named where an arbitrary set of general-supply ids cannot. §3's scan is genuinely O(relations) across
-pages, and that scaling belongs to whoever owns the catalog's lookup path.
+**The catalog relations chain.** Each fixed catalog page id is a chain
+*root*; a full page links to the next, taken from the reserved range
+`kCatalogOverflowFirst`..`kCatalogOverflowLimit` (16..128,
+`include/kds/catalog/well_known.hpp`). A page holds 68 `sys.columns`
+rows, so the 112-page range caps the instance at roughly 7,600 column rows. The range is
+bounded so "every catalog page" stays nameable (a fixture's flush for a
+second store over the device still needs it). §3's scan is O(relations)
+across pages; that scaling belongs to the catalog's lookup path.
 
 ## 6. The oid half of (oid, pk)
 

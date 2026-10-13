@@ -19,29 +19,20 @@
 //
 // ---- Why this type exists, and what it is not ----------------------------
 //
-// Until KWP the dispatcher had exactly one output form - the newline
-// protocol's comma-joined text - and it built it inline, with a comment at
-// each site warning that a second formatter would drift ("a sorted reply
-// rendering a DATE as an epoch day because one of two copies forgot
-// `projection_types`", `RenderProjectedRow`). KWP is a second output form
-// and would have been that second copy at every emission point: the local
-// walk, the sorted drain and the aggregate fold.
-//
-// So it is not a copy - it is the same call sites, calling a sink. The
-// text form is `TextResultSink` below, is installed by default, and does
-// **exactly** what the inline code did, byte for byte; that is the property
-// the whole existing suite checks, since every one of its expected replies
-// is one of these strings.
+// Two output forms - the text protocol's comma-joined rows and KWP's typed
+// batches - from the same emission points (the walk, the sorted drain, the
+// aggregate fold), each calling a sink rather than carrying a second
+// formatter that would drift. The text form is `TextResultSink` below,
+// installed by default; the suite's expected replies are its strings.
 //
 // ---- The shape, and why encode and emit are two calls --------------------
 //
 // A sorted statement encodes rows during the walk and emits them after
 // (`exec::OutputSort` buffers an opaque payload per row, ordered by keys it
 // normalised separately). So encoding and emitting cannot be one call, and
-// splitting them is not an accommodation - it is what lets a top-N sort
-// *skip* encoding for a row that is already beaten, which is worth 94-104
-// ns a row (`bench/results-order-by.md`) and is the reason `OutputSort`
-// has `Admit` and `Take` rather than one method.
+// splitting them is what lets a top-N sort *skip* encoding for a row that
+// is already beaten - the reason `OutputSort` has `Admit` and `Take`
+// rather than one method.
 //
 // ---- Two encoders, because there are two row shapes ----------------------
 //

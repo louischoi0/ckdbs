@@ -148,8 +148,8 @@ StatusOr<Frame*> BufferPool::AllocNew(PageId page_id) {
 
     // Marked dirty up front: a caller-visible new page must be guaranteed
     // to reach persistence even if the caller never touches it again
-    // before eviction - which holds even though there is no real disk to
-    // flush to yet (see the file-level comment).
+    // before eviction - even over a backing store with no disk (see the
+    // file-level comment).
     Frame& f = RegisterFrame(slot.value(), page_id, created.value().bytes(), /*initial_dirty=*/true);
     Pin(f);
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
@@ -185,8 +185,7 @@ Status BufferPool::AwaitWalDurability(PageId page_id, wal::Lsn page_lsn) {
     if (wal_->IsDurable(page_lsn)) {
         return Status::OK();
     }
-    // The stall page.md section 11 wants attributable. Synchronous today,
-    // a suspension once the reactor can suspend the flushing task.
+    // The stall page.md section 11 wants attributable. Synchronous.
     ++wal_waits_;
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("buffer", "wal wait: page " + std::to_string(page_id) + " needs lsn " +
@@ -246,10 +245,8 @@ Status BufferPool::FlushSlots(std::vector<std::uint32_t> slots) {
         PrepareForWriteOut(frames_[slot]);
     }
     // The write-out barrier. Frame bytes are a view into the backing
-    // store's own memory today (see the file comment), so there is nothing
-    // to copy - Sync() is the whole of "the bytes are now on stable
-    // storage". Once a disk-backed store exists this becomes write-then-
-    // barrier, and only the inside of this call changes.
+    // store's own memory (see the file comment), so there is nothing to
+    // copy - Sync() is the whole of "the bytes are now on stable storage".
     if (Status s = backing_.Sync(); !s.ok()) {
         // Nothing in the batch went clean, so no data was lost - but a
         // barrier that will not complete is how a database stops being

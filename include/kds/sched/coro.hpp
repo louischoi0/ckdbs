@@ -15,21 +15,12 @@
 //
 // ---- The decision, and what it costs ------------------------------------
 //
-// sched.md §3 left task representation open between callback/future chains,
-// stackless coroutines and stackful fibers, and `docs/rules/rules.md` §7 listed
-// coroutines under the undecided language-feature whitelist. **Coroutines.**
+// Chosen over callback/future chains (which would invert the executor) and
+// stackful fibers (a stack per in-flight statement, which an engine sizing
+// itself in pages cannot price), so that a wait is expressible without
+// blocking the reactor or hand-writing a state machine.
 //
-// The thing that forced it: every cross-core operation is a request whose
-// answer arrives later, and the engine had no way to express "wait" that was
-// not either blocking the reactor or rewriting a call chain into a state
-// machine by hand. `docs/inflight/in-progress/workplan-crosscore.md` P4's step pipeline is exactly
-// that shape - send `STEP_OPEN`, then await batches - and it could not be
-// written at all. Callbacks would work and would invert every one of the 22
-// allocation sites and the whole executor; fibers would give the most natural
-// code and cost a stack per in-flight statement, which an engine sizing
-// itself in pages cannot price.
-//
-// What coroutines cost, stated plainly so nobody is surprised later:
+// What coroutines cost:
 //
 //   - **A frame is a heap allocation.** One per coroutine, at first call.
 //     That is real, and it is why this is for *suspendable* work - a
@@ -44,12 +35,9 @@
 //
 // ---- Why this needed no change to Scheduler -----------------------------
 //
-// None. `Task::Poll()` returning `kSuspended`/`kDone`, with the scheduler
-// re-enqueueing on the former, is already precisely a coroutine's resume
-// protocol - task.hpp predicted this in as many words ("a future coroutine-
-// or fiber-backed Task subclass can be added later without any change to
-// Scheduler"). `CoroTask::Poll()` resumes the handle and reports whether it
-// finished.
+// `Task::Poll()` returning `kSuspended`/`kDone`, with the scheduler
+// re-enqueueing on the former, is already a coroutine's resume protocol:
+// `CoroTask::Poll()` resumes the handle and reports whether it finished.
 //
 // ---- Readiness, and the one thing to be careful about -------------------
 //
@@ -60,10 +48,10 @@
 // resuming, so the coroutine body is entered only when its condition holds -
 // the spin costs a predicate call per iteration, not a resume.
 //
-// An event-driven version (the resumer re-submits the task) is strictly
-// better and is deliberately not built yet: it needs the waiter to be
-// reachable from the resumer, which is a lifetime question worth answering
-// against a real pipeline rather than in the abstract.
+// An event-driven version (the resumer re-submits the task) is not built:
+// it needs the waiter to be reachable from the resumer, a lifetime
+// question. A parked task is re-polled; the reactor's idle policy keeps
+// that from spinning (`scheduler.cpp`, sched.md §7).
 
 namespace kds::sched {
 
@@ -198,7 +186,7 @@ public:
     // RunToCompletionAtWalkBoundary) run on this instead of a bare resume:
     // a synchronous caller cannot deliver what a wait waits for, and
     // resuming past an unsatisfied `WaitFor` acts as though the reply had
-    // arrived (the 5ec61da review finding).
+    // arrived.
     bool TryResumeDeepest() {
         if (handle_ == nullptr || handle_.done()) return true;
         auto active = DeepestPending(handle_);

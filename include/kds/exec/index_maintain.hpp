@@ -48,9 +48,7 @@
 //
 // **Key columns come from `values`**, coerced through
 // `exec::CoerceLiteralToColumn` - the one path from a written literal to a
-// value the engine keys on. A second coercion is how the Cabin came to key
-// its writes on one form and its reads on another, silently losing every row
-// inserted after a value was observed (`docs/spec/types.md` §3.1).
+// value the engine keys on (`docs/spec/types.md` §3.1).
 //
 // **Covered columns come from `row`**, the encoded tuple, sliced at the
 // layout's offsets. They are stored as their inline cell bytes verbatim, so
@@ -92,15 +90,17 @@ struct IndexWrite {
     catalog::Oid rel_oid = 0;
     catalog::Oid index_oid = 0;
     PageId anchor_page_id = kInvalidPageId;
+    // The divide's pin on that anchor (`IndexInsertResult::anchor`), alive
+    // for the log call this write is handed to; a copy kept past it is null.
+    storage::UnlatchedPin* anchor_pin = nullptr;
 };
 
 // What maintenance hands each write to, **while the tree still holds the
 // pages it names** (AT-S21): the leaf, and on a divide the parents it
 // wrote. A caller with a log appends and stamps here, from bytes read under
-// that hold; the hold drops when the call returns. Before AT-S21 the writes
-// were collected and logged after the heap write, by which time another
-// core's insert could have shifted the slot - and the entry was re-read at
-// that slot, so the record could carry another row's.
+// that hold; the hold drops when the call returns. Logged after release,
+// another core's insert could shift the slot and the record carry another
+// row's entry (the AT-S21 ground).
 using IndexWriteLog = std::function<Status(const IndexWrite&)>;
 
 // Appends this row's entries to every index on `access` that the write
@@ -140,7 +140,10 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
 // `kInvalidPageId` otherwise - which also covers "the write touched nothing
 // this index cares about", since both mean there is nothing to republish.
 // Reporting rather than republishing is what lets the backfill hold its root
-// in a local while the index is still unpublished.
+// in a local while the index is still unpublished. With `publish` and no
+// `log`, a new root is republished here instead, through the catalog and
+// while the divide still pins the anchor (`UnlatchedPin`), and none is
+// reported; the backfill passes neither, and its growth pins nothing.
 StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   const catalog::TableAccess& access,
                                   const catalog::TableAccess::IndexRef& ix,
@@ -148,6 +151,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::uint16_t first_col_pos, std::span<const std::byte> row,
                                   std::uint64_t pk,
                                   std::span<const parser::AstValue> previous = {},
-                                  const IndexWriteLog* log = nullptr);
+                                  const IndexWriteLog* log = nullptr,
+                                  catalog::Catalog* publish = nullptr);
 
 }  // namespace kds::exec

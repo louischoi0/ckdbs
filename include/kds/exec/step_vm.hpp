@@ -38,9 +38,9 @@
 //      page, and nothing pins the first: the span may be invalidated
 //      underneath. So a step decodes its row into the chain frame and
 //      *releases the span* before the nested loop runs. Enforced by
-//      PageSpanGuard below rather than left to discipline - it is safe
-//      today only because nothing evicts, which is exactly the kind of
-//      accident that stops being safe silently.
+//      PageSpanGuard below rather than left to discipline: the pool
+//      evicts (docs/spec/eviction.md), so a span held across a fetch can
+//      point into a reclaimed frame.
 //
 // R2 - **nested steps are read-only.** Every page a nested step touches is
 //      fetched for read. Structural: the walk is opened with
@@ -74,8 +74,14 @@ using RowSink = std::function<StatusOr<storage::VisitControl>(const ChainFrame&)
 // totals alone cannot, because they cannot say *which* step.
 struct StepStats {
     std::uint64_t relation_opens = 0;
-    std::uint64_t rows_examined = 0;   // tuples decoded and filtered
+    std::uint64_t rows_examined = 0;   // tuples filtered: decoded, or rejected by the scan
+                                       // kernel before any decode (BM-R2)
     std::uint64_t rows_matched = 0;    // of those, the ones passing the residual
+    // Of `rows_examined`, the ones the scan kernel rejected before any
+    // decode (BM-R2: examined, never matched). A witness for the cells that
+    // the kernel ran, and printed nowhere, so `ANALYZE` reads the same with
+    // `scan_kernel` on and off.
+    std::uint64_t rows_kernel_rejected = 0;
     std::uint64_t sub_chain_runs = 0;  // sub-chain evaluations, hoisted or per row
 
     // V19's meters.
@@ -84,11 +90,9 @@ struct StepStats {
     // repeated. `correlated_scans` counts sub-chain evaluations whose
     // driving step **actually walked** its relation - the shape that makes
     // a statement quadratic, and the one worth being able to point at when
-    // a statement is refused for its budget. Execution-level since
-    // 2026-08-19: the compile-time kind test it replaced missed a
-    // kFilterScan driver outright and counted a cabined driver never -
-    // including on the misses that walked - while a served probe, which
-    // walks nothing, now honestly counts as nothing.
+    // a statement is refused for its budget. Counted at execution (since
+    // 2026-08-19, replacing a compile-time kind test), so a served probe,
+    // which walks nothing, counts nothing.
     std::uint64_t probe_memo_hits = 0;
     std::uint64_t correlated_scans = 0;
 
@@ -211,9 +215,7 @@ struct StepStats {
 // so a step_id identifies a step without any parent linkage and this
 // vector needs none either.
 //
-// The statement-wide totals that used to be these fields are still
-// available through Total(), which is what the existing callers want; what
-// they could not answer before is *which* step spent the work.
+// Total() sums them into the statement-wide view.
 struct ExecStats {
     std::vector<StepStats> steps;
 
@@ -277,14 +279,9 @@ struct ExecStats {
 // access kind funnels into: the chain walk, the btree descent, the probe
 // memo, a Waystone replay and a Cabin resolve. That is what makes Waystone
 // §3.1 rule 2 ("MVCC visibility is applied exactly as it would be on the
-// authoritative path") true by construction rather than by discipline, and
-// it is a stronger statement than txn.md §4.4's, which was written when
-// two statement handlers owned the read path and the step VM did not exist.
+// authoritative path") true by construction rather than by discipline.
 //
-// The default snapshot admits every writer and needs no undo log, which is
-// precisely what the engine did before MVCC: every row carried
-// kBootstrapXid and every row was visible. So a caller that passes nothing
-// gets byte-identical results to the pre-transactional executor.
+// The default snapshot (null) admits every writer and needs no undo log.
 // `indexes` is the read-path switch (`indexes`, default on). Off makes an
 // index step take the walk it would have taken had the index not existed -
 // **the compiled chain is unchanged either way**, exactly as `cabins` leaves
@@ -351,10 +348,13 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
                          PositionSink* position, const SlicePolicy& slice);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
-// sub-chains - against a frame already holding that step's row.
+// sub-chains - against a frame already holding that step's row. **The
+// caller has run `CheckConjuncts` on `step` against this frame**,
+// once, at its first row (BT-R5, `workorder-bt-accept-tuple-row.md`): this
+// compares and checks nothing.
 //
 // For statements that walk a relation themselves rather than through
-// `Execute`: UPDATE today, DELETE when it lands. They need it so their
+// `Execute`: UPDATE and DELETE. They need it so their
 // WHERE means exactly what a SELECT's does, down to `NOT IN`'s tri-state
 // collapse. A second evaluator would be a second answer to "does this row
 // qualify", and the two would drift on the first NULL.
@@ -382,11 +382,11 @@ int LivePageSpans() noexcept;
 // is detected rather than merely forbidden in prose.
 //
 // `store`, when given, extends the audit with the pin half of the same
-// rule (workplan-crosscore.md P4d-3): with the PageRef migration landed,
-// "suspending while holding a page" is mechanically
-// `store->live_pins() != 0` at the suspension point, checked against the
-// installing core's own store - pins are per-store and cores share none.
-// Null keeps the span check alone, for callers with no store at hand.
+// rule (workplan-crosscore.md P4d-3): "suspending while holding a page" is
+// `store->live_pins() != 0` at the suspension point. `live_pins()` is the
+// store's total across every thread pinning it, so only a core that owns
+// its store passes it (core_runtime.cpp); a core borrowing core 0's pool
+// passes null and keeps the span check alone.
 //
 // Call once per core, on the core's own thread, before running
 // statements. It is idempotent and core-local, like the guard counters

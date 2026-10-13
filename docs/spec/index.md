@@ -442,13 +442,11 @@ not compile differently as the data changes, or `pattern_id` stops naming a
 plan. It is the same argument `CabinProbeOf` gives for taking the *first*
 cabined equality rather than the most selective one.
 
-There is a crossover this rule cannot see, and below it the index is a loss:
-measured against the `bench/` tree at `1769487`, a range at 200 rows ran 11%
-slower with the index than without it, while a selective equality was 9.7×
-faster at 10,000 rows. KDS cannot decline its own index at that size,
-because declining needs the cardinality estimate IX9 refuses. That is the
-price of a stable plan, and it is small and bounded: the loss is one page's
-worth of rows, and the win grows without limit.
+There is a crossover this rule cannot see (against `bench/` at `1769487`: a
+200-row range 11% slower with the index, a selective equality 9.7× faster at
+10,000 rows). Declining the index there needs the cardinality estimate IX9
+refuses; the loss is bounded at about one page's worth of rows, and is the
+price of a stable plan.
 
 Two rules that keep every existing proof standing:
 
@@ -605,8 +603,9 @@ Also refused, each naming the reason:
 
 ## 12. Catalog, format and WAL
 
-> **IX12 — `SysIndexRow` is 116 bytes.** Its introduction was a superblock
-> format bump (`11 → 12`); a data file older than that does not mount.
+> **IX12 — `SysIndexRow` is 116 bytes.** It arrived with superblock 12; the
+> superblock now refuses every version but 23, so every mountable volume
+> carries it.
 
 The row (`include/kds/catalog/rows.hpp`):
 
@@ -629,9 +628,13 @@ cannot serve one on `b`, so answering yes for `b` would stop the compiler
 calling that step a filter scan while leaving it exactly as slow — a lie to
 the access statistics, which is that function's only consumer.
 
-`Catalog::StageAnchorRoot` and `Catalog::AdoptRoot` are how a root split is recorded - inside the
-split's own `BTREE_SPLIT` (`wal.md` §5.2), as the clustered tree's is - for one reason: the storage layer has no
-catalog, so it reports a new root and something above it writes one down.
+The row's `root_page_id` is the root allocated at `CREATE INDEX` and is
+never rewritten: a root split writes the relation's **anchor slot** for the
+index (`Catalog::StageAnchorRoot`, inside the split's own `BTREE_SPLIT`,
+`wal.md` §5.2, as the clustered tree's is), and `InitTableAccess` reads the
+root from the anchor, falling back to the row's value only for a slot the
+anchor does not hold. The storage layer has no catalog, so it reports a new
+root and something above it writes one down.
 `DropIndex` **retires** the row rather than delete-marking it (a catalog read
 has no snapshot to filter a mark against) and **frees no page at its own
 commit** (BF-Q8 (b) declined): the anchor slot still names the tree, which is
@@ -646,23 +649,18 @@ of the list rather than of how rows happened to land on the catalog page. The
 mask names **leading** key columns only, for the reason `FindIndexOnColumn`
 does.
 
-> **IX12a — `IndexRef::root_page_id` is the one field on `TableAccess` that
-> changes without DDL, so `Catalog::AdoptRoot` updates the cached entry
-> **in place** rather than invalidating it.**
+> **IX12a — a root move changes `TableAccess` without DDL, so
+> `Catalog::AdoptRoot` updates this core's cached entry **in place** rather
+> than invalidating it**, and bumps the instance's schema word
+> (`BumpWord`, not `BumpVersion`) so every other core drops its memo at its
+> next task boundary (`catalog.md` CT2).
 
-A root split republishes the root from inside an ordinary INSERT. Bumping the
-catalog version there would drop every cached relation and dangle the
-`const TableAccess*` the running statement is holding — and a multi-row
-UPDATE would be holding it across every later row. The fact qualifies by the
-same test `catalog_cache.hpp`'s other in-place updates pass: **a root belongs
-to one index and is read by nothing else**, so a global drop would be damage
-for nothing. So the pointer stays valid across the write hook, and every
-holder sees the new root immediately.
-
-`desc_page_id` keeps the older, harsher arrangement — a relation's root move
-*does* bump — and `InsertInner` handles it by relinking last and using only
-plain ids afterwards; changing it would be a change to the clustered tree's
-contract, not this feature's.
+A root split republishes the root from inside an ordinary INSERT. Dropping
+this core's cache there would dangle the `const TableAccess*` the running
+statement holds — a multi-row UPDATE holds it across every later row. A root
+belongs to one index (or, for `desc_page_id`, one relation) and is read by
+nothing else, which is `catalog_cache.hpp`'s license for an in-place update;
+the clustered tree's root move takes the same path (`UpdateDescPage`).
 
 Building the list **fails shut**, on the foreign-key argument rather than the
 Cabin one: an index the *compiler* cannot see costs only speed, but an index
@@ -756,9 +754,12 @@ new right sibling.
   exclusive and asking it whether it still routes the entry's sort key to
   the node below - exact, because that node is held and every change to its
   range is a divide of it. On a miss it re-descends from the root it was
-  given, bounded by `storage::kMaxDescentRestarts`. Only then does it write,
-  so a refusal - `TxnConflict`, retryable, naming a stale path - leaves the
-  tree as it found it. It is the clustered tree's walk (`heap-and-tuple.md`
+  given, bounded by `storage::kMaxDescentRestarts`. It then claims every
+  page the divide will create (`page.md` §14) and, when a level grows, pins
+  the relation's anchor with no latch (`page.md` §3), as the clustered tree
+  does. Only then does it write,
+  so a refusal - `TxnConflict`, retryable, naming a stale path, or a device
+  that cannot grow - leaves the tree as it found it. It is the clustered tree's walk (`heap-and-tuple.md`
   §5), which states why the holds cannot deadlock and why a restart makes
   progress.
 - **A root is marked when a level grows over it** (AT-S16,

@@ -195,7 +195,7 @@ struct TableAccess {
     // Where a heap relation's chain last placed a tuple - heap::ChainInsert
     // reads it as the tail-search start and writes the landing page back,
     // which is what keeps an insert O(1) pages instead of a head-to-tail
-    // walk per row (bench/results-bulk-insert.md's finding). **Advisory
+    // walk per row (the BLK08 finding). **Advisory
     // and self-healing**: the chain grows only at the tail and a page
     // never leaves it, so a stale value is behind, never wrong, and a
     // damaged one costs one retried walk. Mutable on a cached, const-
@@ -311,17 +311,13 @@ struct TableAccess {
     // **This is the one field on this struct that can move without DDL, and
     // the exception is deliberate rather than overlooked.** A root split
     // during an ordinary INSERT republishes `root_page_id` through
-    // `Catalog::AdoptRoot()`. **It used to do that with a version
-    // bump, which dropped this entry and dangled the running statement's
-    // `const TableAccess*`; since PW2-4 it writes the anchor and updates
-    // this field in place instead, so the entry survives** - the same
-    // license and the same one-field/one-owner test the four other in-place
-    // updates pass (catalog_cache.hpp). The hazard the bump created is
-    // therefore gone rather than merely documented; what remains is that
-    // `root_page_id` read before an index insert that grows a level is
-    // behind afterwards, which is why `InsertInner` does its relink last
-    // and uses only plain ids after it, and why the index write hook (IX06)
-    // must do the same. `desc_page_id` has exactly the same property for a
+    // `Catalog::AdoptRoot()`, which writes the anchor and updates this field
+    // **in place** (PW2-4), so the running statement's `const TableAccess*`
+    // survives - the same one-field/one-owner license as the other in-place
+    // updates (catalog_cache.hpp). What remains is that `root_page_id` read
+    // before an index insert that grows a level is behind afterwards, which
+    // is why `InsertInner` does its relink last and uses only plain ids
+    // after it, and why the index write hook must do the same. `desc_page_id` has exactly the same property for a
     // clustered btree and takes the same treatment. The alternative - not
     // caching the root - costs a sys.indexes scan per statement, which is
     // what this whole struct exists to avoid.

@@ -1,37 +1,33 @@
 #pragma once
 
 #include <array>
+#include <cassert>
 #include <atomic>
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <utility>
+#include <vector>
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
 
-// Abstract "give me the bytes for page_id" seam. This exists so that
-// higher layers (catalog/) can be written and tested today against
-// something that behaves like storage, without waiting on the real
-// buffer pool - which needs its own not-yet-decided eviction policy and
-// I/O backend (both open items in CLAUDE.md). Swapping in the real
-// buffer pool later means implementing this interface, not rewriting
-// every caller.
+// Abstract "give me the bytes for page_id" seam: every store - the
+// bounded-pool DevicePageStore, InMemoryPageStore, page_mgr's BufferPool -
+// implements it, and no caller knows which it holds.
 //
-// **The pin model (docs/workplan-pageref.md MG01).** The public accessors
-// return a `PageRef` - a move-only handle whose lifetime IS the validity of
-// the bytes: construction pins the frame, destruction unpins it, and a store
-// that never evicts implements pin/unpin as no-ops, which for it is a true
-// statement rather than a stub. There is deliberately **no implicit
-// conversion from PageRef to a span**: `auto s = store.Get(id).value()`
-// followed by using `s` as bytes would compile and dangle the moment the
-// temporary unpinned - the exact bug eviction introduces. Access is
-// `ref.bytes()`, on a named handle whose lifetime is visible in the code.
+// **The pin model (page.md §3; background: workplan-pageref.md MG01).** The
+// public accessors return a `PageRef` - a move-only handle whose lifetime IS
+// the validity of the bytes: construction pins the frame, destruction unpins
+// it, and a store that never evicts implements pin/unpin as no-ops, which for
+// it is a true statement rather than a stub. There is deliberately **no
+// implicit conversion from PageRef to a span**: `auto s =
+// store.Get(id).value()` would dangle the moment the temporary unpinned.
+// Access is `ref.bytes()`, on a named handle whose lifetime is visible.
 //
-// The `*Unpinned` accessors below are the migration-era escape hatch and
-// the implementation seam: they are what MG02/MG03 convert call sites off
-// of, and MG06 deletes them. New code must not call them.
+// The `*Unpinned` accessors are the implementation seam only: protected
+// since MG06, so engine code cannot name them.
 
 namespace kds::storage {
 
@@ -57,8 +53,8 @@ enum class FetchHeat : std::uint8_t {
     kRing,  // a fault enters at usage 0, a hit never bumps: the scan ring (§5)
 };
 
-// How a bulk sequential reader fetches pages (docs/spec/eviction.md §5,
-// workplan EVT06). A scan that faults every page of a large relation
+// How a bulk sequential reader fetches pages (docs/spec/eviction.md §5).
+// A scan that faults every page of a large relation
 // through the ordinary path floods the pool with frames it will touch
 // exactly once; ring mode reuses a small fixed set of frames cyclically
 // and never bumps usage counters, so a scan's touch does not look like
@@ -68,9 +64,8 @@ enum class FetchHeat : std::uint8_t {
 // callers that need it - the relayout planner's survey and the cabin
 // optimizer's builds (PO4 makes ring routing mandatory there), which are
 // the two the tree has - hold a `PageStore&` and must not know which
-// concrete store is under them. Aggregate full scans stood in this list
-// and in `eviction.md` §5's until 2026-09-06; neither they nor the CREATE
-// ASSERTION builder has ever opened a ring. The base-class ring is
+// concrete store is under them (aggregate scans and the CREATE ASSERTION
+// builder open none). The base-class ring is
 // deliberately plain: a store that never evicts has no pool to protect, so
 // fetching through `GetForRead` *is* its correct ring, and only
 // `DevicePageStore` overrides with the real cyclic one.
@@ -85,14 +80,10 @@ public:
     // than the ordinary accessors give, and the reason a ring consumer
     // finishes each page before fetching the next.
     //
-    // **And does not suspend while it holds one** (AM-R8c). A fetcher holds
-    // a pin, and DevicePageStore's ring holds the page latch with it, from
-    // the Fetch that returned the span until the next one - so a consumer
-    // that parks in between parks holding both, which AR2 R2 forbids and
-    // which no PageRef in the tree does either. heap_chain.hpp states the
-    // same rule for the walk that takes a fetcher; this is it at the seam,
-    // because a ring's span is the one page handle here that is not a
-    // PageRef and so carries no destructor to make the rule automatic.
+    // **And does not suspend while it holds one** (AM-R8c, AR2 R2). A
+    // fetcher holds a pin, and DevicePageStore's ring the page latch with
+    // it, from the Fetch that returned the span until the next one; a
+    // ring's span is not a PageRef, so no destructor enforces this.
     virtual StatusOr<std::span<std::byte, kPageSize>> Fetch(PageId page_id) = 0;
 };
 
@@ -103,7 +94,7 @@ inline constexpr std::size_t kScanRingFrames = 32;
 
 class PageStore;
 
-// The move-only pinned-page handle (page.md S2, workplan-pageref.md).
+// The move-only pinned-page handle (page.md §3).
 // Construction pins, destruction unpins; the bytes are valid exactly as
 // long as the handle is. Copy is deleted rather than refcounted: two
 // handles to one frame is not a thing any caller needs, and making it
@@ -137,6 +128,7 @@ public:
 
 private:
     friend class PageStore;
+    friend class PageClaims;
     PageRef(PageStore* store, PageId page_id, std::span<std::byte, kPageSize> bytes) noexcept
         : store_(store), page_id_(page_id), data_(bytes.data()) {}
 
@@ -156,7 +148,66 @@ private:
 // implements and must not depend on the latch primitive, and the two name
 // different things - the accessor's intent here, the word's state there -
 // that happen to coincide today.
-enum class PinMode : std::uint8_t { kShared, kExclusive };
+//
+// `kUnlatched` is a pin and no latch (`UnlatchedPin`).
+enum class PinMode : std::uint8_t { kShared, kExclusive, kUnlatched };
+
+// **Creations claimed ahead of the writes they serve** (`PageStore::ClaimNew`).
+// A split writes a page and then creates the next one, and a creation can
+// fail for the device - a file that cannot grow, a free-map region that
+// cannot be read - as well as for the pool; failing after the first write
+// leaves the structure torn (`docs/inflight/bugs/a-fetch-refused-after-a-
+// page-write-leaves-the-mutation-half-done.md`). A claim does everything a
+// creation can fail at - the frame slot, the id, the device's room for it -
+// so `CreateNew` here only publishes a claimed page. Claims not used go
+// back when the handle dies. Past its claims - a store that claims nothing,
+// having no device to fail - `CreateNew` is the store's own.
+class PageClaims {
+public:
+    PageClaims() = default;
+    PageClaims(PageClaims&& other) noexcept
+        : store_(std::exchange(other.store_, nullptr)), ids_(std::move(other.ids_)),
+          next_(other.next_) {}
+    PageClaims& operator=(PageClaims&&) = delete;
+    PageClaims(const PageClaims&) = delete;
+    inline ~PageClaims();
+
+    // The next claimed page, created zeroed and pinned exclusive.
+    inline StatusOr<std::pair<PageId, PageRef>> CreateNew();
+
+private:
+    friend class PageStore;
+    PageStore* store_ = nullptr;
+    std::vector<PageId> ids_;
+    std::size_t next_ = 0;
+};
+
+// A pin with no latch (`PageStore::PinUnlatched`): the frame stays in the
+// pool and nothing more, so a later `Get` of it is a hit neither the pool nor
+// the device can refuse, and the holder takes no place in any latch order.
+// A split that grows a root pins the anchor it will re-publish through this
+// way before it writes anything, and takes the anchor's latch only where it
+// always did, after every tree page - holding the anchor exclusive across
+// the split instead would put it ahead of another core's index pages, and a
+// page latch has no timeout (`docs/spec/page.md` §3). Move-only; the pin
+// drops with the handle, and an empty one holds nothing.
+class UnlatchedPin {
+public:
+    UnlatchedPin() noexcept = default;
+    UnlatchedPin(UnlatchedPin&& other) noexcept
+        : store_(std::exchange(other.store_, nullptr)), page_id_(other.page_id_) {}
+    inline UnlatchedPin& operator=(UnlatchedPin&& other) noexcept;
+    UnlatchedPin(const UnlatchedPin&) = delete;
+    UnlatchedPin& operator=(const UnlatchedPin&) = delete;
+    ~UnlatchedPin() { Release(); }
+    inline void Release() noexcept;
+
+private:
+    friend class PageStore;
+    UnlatchedPin(PageStore* store, PageId page_id) noexcept : store_(store), page_id_(page_id) {}
+    PageStore* store_ = nullptr;
+    PageId page_id_ = kInvalidPageId;
+};
 
 class PageStore {
 public:
@@ -164,33 +215,21 @@ public:
 
     // ---- The pinned accessors: the engine's API ------------------------
     //
-    // Non-virtual on purpose: each is the raw fetch plus the pin, and the
-    // seam a store implements is the raw fetch (below) plus the three
-    // frame hooks. Nothing can evict between the fetch and the pin - a
-    // core is single-threaded and nothing here suspends - so the pair is
-    // atomic in the only sense that matters. **That sentence is true of one
-    // core's pool only**; the shared pool latches the frame table across the
-    // pair (AM-S2, below).
+    // Non-virtual on purpose: each is `FetchPinned`/`CreatePinned` plus a
+    // handle; the seam a store implements is the raw fetch (below) plus
+    // the frame hooks.
 
     // ---- The fetch-and-pin pair (AM-S2) -------------------------------
     //
-    // **One overridable operation, because the pair has to be atomic under
-    // a shared pool and cannot be made so from here.** The note above
-    // records the obligation; this is where a store discharges it. The
-    // default is exactly the fetch-then-pin the accessors used to inline,
-    // so a store with no eviction - `InMemoryPageStore`, `page_mgr`'s
-    // `BufferPool` - inherits its previous behaviour and needs no change.
+    // **One overridable operation, because under the shared pool the fetch
+    // and the pin must be atomic and cannot be made so from here**:
+    // DevicePageStore latches its frame table across the pair. The default
+    // is plain fetch-then-pin, true for a store with no eviction
+    // (`InMemoryPageStore`, `page_mgr`'s `BufferPool`). The create accessors
+    // have their own (`CreatePinned`, below).
     //
-    // `for_read` picks which raw fetch runs, rather than the caller passing
-    // a functor: the two differ only in dirty marking, and a store that
-    // overrides this needs to know which one it is servicing.
-    //
-    // **The create accessors have their own** (`CreatePinned`, below).
-    // This block announced the obligation discharged while sitting
-    // directly above three accessors that still did create-then-pin
-    // inline - which is worse than not claiming it, because a reader
-    // checking the seam would have stopped here.
-    // `heat` says how the fetch counts toward the frame's usage
+    // `for_read` picks which raw fetch runs: the two differ only in dirty
+    // marking, and an override needs to know which it is servicing. `heat` says how the fetch counts toward the frame's usage
     // (`FetchHeat`); a store with no reclaim has no counter to bump.
     virtual StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
                                                                  bool for_read,
@@ -229,18 +268,19 @@ public:
     StatusOr<PageRef> GetForRead(PageId page_id) { return Fetch(page_id, PageAccess::kRead); }
 
     // **The create half of the fetch-and-pin pair** (AM-S2). Same obligation
-    // as `FetchPinned` and the same default - create, then pin - so a store
-    // with no eviction inherits its previous behaviour untouched.
+    // as `FetchPinned` and the same default - create, then pin.
     //
     // `which` picks the raw create rather than three virtuals: the three
     // differ only in how the id is chosen and whether a header is stamped,
     // and a store overriding this needs to know which it is servicing.
-    enum class CreateKind : std::uint8_t { kAt, kNew, kNewHeaderless };
+    // `kClaimed` publishes an id `ClaimNew` claimed.
+    enum class CreateKind : std::uint8_t { kAt, kNew, kNewHeaderless, kClaimed };
 
     virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreatePinned(
         CreateKind which, PageId page_id) {
-        if (which == CreateKind::kAt) {
-            auto bytes = CreateAtUnpinned(page_id);
+        if (which == CreateKind::kAt || which == CreateKind::kClaimed) {
+            auto bytes = which == CreateKind::kAt ? CreateAtUnpinned(page_id)
+                                                  : CreateClaimedUnpinned(page_id);
             if (!bytes.ok()) return bytes.status();
             PinFrame(page_id, PinMode::kExclusive);
             return std::pair<PageId, std::span<std::byte, kPageSize>>(page_id, bytes.value());
@@ -268,6 +308,30 @@ public:
             made.value().first, PageRef(this, made.value().first, made.value().second));
     }
 
+    // Faults `page_id` in and pins it with no latch (`UnlatchedPin`);
+    // `kInvalidPageId` pins nothing and answers an empty handle.
+    StatusOr<UnlatchedPin> PinUnlatched(PageId page_id) {
+        if (page_id == kInvalidPageId) return UnlatchedPin();
+        auto bytes = FetchPinned(page_id, PinMode::kUnlatched, /*for_read=*/true,
+                                 FetchHeat::kWarm);
+        if (!bytes.ok()) return bytes.status();
+        return UnlatchedPin(this, page_id);
+    }
+
+    // Claims `n` creations ahead (`PageClaims`): every way a creation can
+    // fail happens here, before the caller writes anything.
+    StatusOr<PageClaims> ClaimNew(std::size_t n) {
+        PageClaims claims;
+        claims.store_ = this;
+        for (std::size_t i = 0; i < n; ++i) {
+            auto id = ClaimNewId();
+            if (!id.ok()) return id.status();  // the claims so far go back
+            if (id.value() == kInvalidPageId) break;  // a store that claims nothing
+            claims.ids_.push_back(id.value());
+        }
+        return claims;
+    }
+
     // CreateNew() for a page with no common header - see
     // CreateNewHeaderlessUnpinned() for who needs that and why.
     StatusOr<std::pair<PageId, PageRef>> CreateNewHeaderless() {
@@ -289,6 +353,8 @@ public:
         (void)mode;
     }
     virtual void UnpinFrame(PageId page_id) noexcept { (void)page_id; }
+    // A `kUnlatched` pin's release: the pin alone, there being no latch.
+    virtual void UnpinUnlatchedFrame(PageId page_id) noexcept { (void)page_id; }
     virtual void MarkFrameDirty(PageId page_id) noexcept { (void)page_id; }
 
     // Outstanding pins across the store, for the suspend audit
@@ -400,6 +466,18 @@ public:
 protected:
     virtual StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) = 0;
 
+    // A claim's two halves and its return (`PageClaims`). The default claims
+    // nothing - `kInvalidPageId` - and is the true implementation for a
+    // store with no device and no pool, whose creation cannot fail after a
+    // write any more than before it.
+    virtual StatusOr<PageId> ClaimNewId() { return kInvalidPageId; }
+    virtual StatusOr<std::span<std::byte, kPageSize>> CreateClaimedUnpinned(PageId page_id) {
+        return Status::InvalidArgument("page " + std::to_string(page_id) +
+                                       " was not claimed from this store");
+    }
+    virtual void ReleaseClaimedId(PageId page_id) noexcept { (void)page_id; }
+    friend class PageClaims;
+
     virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() = 0;
 
 public:
@@ -410,8 +488,7 @@ public:
     // no-op, never a lowering - a floor that could fall would re-open the
     // hazard it exists to close, and every caller so far only ever raises.
     //
-    // Its one production caller is recovery (docs/spec/wal.md §12,
-    // docs/workplan-wal-recovery.md RV4/RC04): the durable record of which
+    // Its one production caller is recovery (docs/spec/wal.md §12): the durable record of which
     // ids exist is unlogged, so a crash can revert it while the log still
     // names pages above it, and an allocation afterwards would hand out a
     // page redo has already written. Raising the floor past every id the
@@ -558,10 +635,8 @@ public:
     // whole of the obligation for a store with no stable storage under it:
     // there is no write-back to order against the log. A store that does
     // write back overrides this to also track the frame's recLSN and to
-    // hold the gate (DevicePageStore) - and, since PW1c-3, to stamp the
-    // owning stream (PL §9 rule 4). The default deliberately does not: a
-    // store with no stable storage never survives into a recovery where
-    // streams could be confused, and it knows no core to stamp.
+    // hold the gate (DevicePageStore). No store stamps a stream: a page
+    // carries none since BP-S3 (one log for the instance).
     virtual Status StampPageLsn(PageId page_id, std::uint64_t lsn) {
         auto page = Get(page_id);
         if (!page.ok()) return page.status();
@@ -578,17 +653,13 @@ public:
     // fail to persist. That keeps callers from having to ask which kind of
     // store they hold.
     //
-    // This is a whole-store durability point, which is all there is until
-    // the WAL lands (docs/spec/wal.md): with one, durability becomes
-    // per-transaction (group commit, and KWP/1's per-transaction
-    // durability class, docs/spec/protocol.md) and calling this per statement
-    // stops being the right shape.
+    // A whole-store durability point; a commit's durability is the WAL's
+    // (docs/spec/wal.md), not this call's.
     virtual Status Sync() { return Status::OK(); }
 
     // A scan fetcher for one bulk sequential read (see ScanFetcher above).
     // The default is the plain pass-through - correct for any store with
-    // no pool to protect - so every existing store and test behaves
-    // exactly as before; DevicePageStore overrides with the real ring.
+    // no pool to protect; DevicePageStore overrides with the real ring.
     virtual std::unique_ptr<ScanFetcher> OpenScanRing(std::size_t frames = kScanRingFrames);
 };
 
@@ -615,6 +686,38 @@ private:
 
 inline std::unique_ptr<ScanFetcher> PageStore::OpenScanRing(std::size_t /*frames*/) {
     return std::make_unique<PlainScanFetcher>(*this);
+}
+
+inline UnlatchedPin& UnlatchedPin::operator=(UnlatchedPin&& other) noexcept {
+    if (this != &other) {
+        Release();
+        store_ = std::exchange(other.store_, nullptr);
+        page_id_ = other.page_id_;
+    }
+    return *this;
+}
+
+inline void UnlatchedPin::Release() noexcept {
+    if (store_ != nullptr) std::exchange(store_, nullptr)->UnpinUnlatchedFrame(page_id_);
+}
+
+inline PageClaims::~PageClaims() {
+    if (store_ == nullptr) return;
+    // Highest first, so a store's cursor steps back over every id it gave.
+    for (std::size_t i = ids_.size(); i-- > next_;) store_->ReleaseClaimedId(ids_[i]);
+}
+
+inline StatusOr<std::pair<PageId, PageRef>> PageClaims::CreateNew() {
+    if (next_ == ids_.size()) {
+        // Only a store that claims nothing gets here: a claiming store run
+        // past its claims is a caller that counted its creations wrong.
+        assert(ids_.empty() && "a claiming store ran past its claims");
+        return store_->CreateNew();
+    }
+    const PageId id = ids_[next_++];
+    auto made = store_->CreatePinned(PageStore::CreateKind::kClaimed, id);
+    if (!made.ok()) return made.status();
+    return std::pair<PageId, PageRef>(id, PageRef(store_, id, made.value().second));
 }
 
 inline PageRef& PageRef::operator=(PageRef&& other) noexcept {

@@ -1,0 +1,14 @@
+=== census start 05:04:50 load 0.93 7.42 14.29
+=== census end 05:27:56 rc=0 load 1.21 1.28 4.13
+=== pgvac start 05:27:56 load 1.21 1.28 4.13
+=== bn1000 start 05:30:11 load 0.76 1.02 3.64
+=== bn1000 end 05:35:00 rc=0 load 1.39 1.26 3.04
+=== pgvac start 05:35:00 load 1.39 1.26 3.04
+=== pgvac end 05:38:15 rc=0 load 0.46 0.86 2.53
+=== prof start 05:38:15 load 0.46 0.86 2.53
+=== prof end 05:38:26 rc=0 load 0.62 0.89 2.52
+=== all phases done 05:38:26
+=== bnpad start 05:38:29 load 0.62 0.89 2.52
+=== bnpad end 05:39:31 rc=1
+=== bnpad2 start 05:39:46 load 0.57 0.84 2.37
+=== bnpad2 end 05:41:58 rc=0

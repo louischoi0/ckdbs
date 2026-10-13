@@ -146,12 +146,10 @@ StatusOr<CatalogView> ColumnsView(catalog::Catalog& catalog) {
         // sys.tables is exactly what a view cannot do.
         const std::string rel_name(catalog::NameView(object.name));
         for (const catalog::SysColumnRow& column : schema.value().columns) {
-            // **The declared type, not `len`.** `len` used to be readable
-            // as "the width", and for a decimal column it is now the packed
-            // (precision, scale) pair (catalog/rows.hpp) - so printing the
-            // integer would show `2562` where the client wrote
-            // `decimal(10,2)`. `ColumnTypeText` is the one place that knows
-            // the field's per-type meaning.
+            // **The declared type, not `len`**: for a decimal column `len`
+            // is the packed (precision, scale) pair (catalog/rows.hpp), so
+            // the integer would print `2562` for `decimal(10,2)`.
+            // `ColumnTypeText` is the one place that knows its meaning.
             auto type_row = catalog.ResolveTypeByVal(column.type_val);
             const std::string base =
                 type_row.ok() ? std::string(catalog::NameView(type_row.value().name))

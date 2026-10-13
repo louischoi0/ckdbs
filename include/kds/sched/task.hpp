@@ -3,15 +3,11 @@
 #include <functional>
 #include <memory>
 
-// Task representation is an explicit open decision (docs/spec/sched.md section
-// 3, docs/rules/rules.md section 7): callback/future chains vs C++20 stackless
-// coroutines vs stackful fibers are all still viable. This header does not
-// choose one - it defines the type-erased "runnable task handle" contract
-// sched.md says the scheduler needs (a queue of runnable task handles),
-// and ships exactly one concrete implementation, FunctionTask, wrapping a
-// plain callable. A future coroutine- or fiber-backed Task subclass can be
-// added later without any change to Scheduler, since Scheduler only ever
-// calls Task::Poll().
+// The type-erased "runnable task handle" contract the scheduler needs
+// (docs/spec/sched.md §3: a queue of runnable task handles). Scheduler only
+// ever calls Task::Poll(). Two implementations: FunctionTask here, wrapping
+// a plain callable, and `CoroTask` (`coro.hpp`) - C++20 stackless
+// coroutines, the engine's chosen task representation (sched.md §3).
 
 namespace kds::sched {
 
@@ -52,10 +48,9 @@ public:
     // that ran and yielded, and a task that was asked whether its condition
     // holds, answered no, and executed nothing. The reactor's idle policy
     // needs them apart — a queue holding only the second kind has no work
-    // in it, and treating it as runnable is what made a reactor with any
-    // parked coroutine spin at ~90% of a core doing nothing but re-asking
-    // a predicate (`bench/v2.2.0/results-shipping-ssb-v2.2.0-11-g982e133.md`
-    // §7, `docs/spec/sched.md` §7).
+    // in it, and treating it as runnable spins a reactor with any parked
+    // coroutine at ~90% of a core re-asking a predicate
+    // (`docs/spec/sched.md` §7).
     //
     // **The default is `true`, and the direction is the point.** A task
     // that does not track this is treated as having advanced, which costs
