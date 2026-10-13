@@ -1,0 +1,111 @@
+# Source-line attribution of ChainRunner::AcceptTupleAt's self time.
+# A -g frame-pointer build (kds_server-fpg-f5a7efb2, sha256 8c00fee223a5...), bn and wide-h,
+# 20000 literal scans each, sampled at 1 kHz of process CPU. Dumps: /home/cdkbs/bench-runs/bm-s1/prof-g/dump.{0,1}
+/home/cdkbs/bench-runs/bm-s1/prof-g/dump.0: 13878 samples; AcceptTupleAt self 2102 = 15.1 % = 10.5 ns/row (server CPU 693.9 us)
+  24.4% of self    512   2.56 ns/row  std::string / std::vector / StatusOr bookkeeping, inlined (AstValue slots, spills_, version_, Status)
+  20.7% of self    436   2.18 ns/row  visibility decision (txn::Classify, ReadView::Visible), inlined
+  14.3% of self    300   1.50 ns/row  building_ test, EvaluateAll call, result check
+  12.3% of self    258   1.29 ns/row  DecodeAndResolve call, ExecStats::For, rows_examined
+  10.6% of self    222   1.11 ns/row  function entry and exit (prologue, epilogue, stack frame)
+   6.0% of self    126   0.63 ns/row  frame slot lookup (ChainFrame::SlotsFor), inlined
+   3.9% of self     83   0.41 ns/row  slot span, recording and partial-decode flags
+   3.9% of self     83   0.41 ns/row  row-touch budget (Budget::ChargeRow), inlined
+   3.1% of self     65   0.32 ns/row  recording_here test
+   0.5% of self     10   0.05 ns/row  ReadTuple call and the Classify switch
+   0.1% of self      3   0.01 ns/row  other AcceptTupleAt lines (step_vm.cpp:2404)
+   0.1% of self      3   0.01 ns/row  other AcceptTupleAt lines (step_vm.cpp:2322)
+   0.0% of self      1   0.00 ns/row  other AcceptTupleAt lines (step_vm.cpp:2535)
+
+/home/cdkbs/bench-runs/bm-s1/prof-g/dump.1: 17845 samples; AcceptTupleAt self 2211 = 12.4 % = 11.0 ns/row (server CPU 884.7 us)
+  22.7% of self    502   2.49 ns/row  std::string / std::vector / StatusOr bookkeeping, inlined (AstValue slots, spills_, version_, Status)
+  19.6% of self    433   2.15 ns/row  visibility decision (txn::Classify, ReadView::Visible), inlined
+  15.8% of self    349   1.73 ns/row  DecodeAndResolve call, ExecStats::For, rows_examined
+  12.7% of self    281   1.39 ns/row  building_ test, EvaluateAll call, result check
+  11.4% of self    252   1.25 ns/row  function entry and exit (prologue, epilogue, stack frame)
+   8.6% of self    191   0.95 ns/row  frame slot lookup (ChainFrame::SlotsFor), inlined
+   4.7% of self    104   0.52 ns/row  row-touch budget (Budget::ChargeRow), inlined
+   1.7% of self     37   0.18 ns/row  recording_here test
+   1.1% of self     25   0.12 ns/row  ReadTuple call and the Classify switch
+   0.9% of self     20   0.10 ns/row  slot span, recording and partial-decode flags
+   0.8% of self     17   0.08 ns/row  other AcceptTupleAt lines (step_vm.cpp:2322)
+
+# bn: self samples by outermost function, then AcceptTupleAt's by inlined helper and source line
+samples 13878 
+-- self by outermost function --
+ 15.15%   2102  kds::exec::::ChainRunner::AcceptTupleAt
+ 13.06%   1813  kds::exec::DecodeColumnsInto
+ 11.08%   1537  kds::btree::BtreeVisitLeafPage
+  9.33%   1295  std::_Function_handler::_M_invoke
+  7.31%   1014  kds::exec::DecodeOneValueInto
+  6.95%    964  kds::heap::PageView::ReadTuple const
+  5.59%    776  kds::exec::EvaluatePredicate
+  4.81%    667  kds::exec::EvaluateAll
+  3.49%    484  kds::exec::EvaluateConjunct
+  3.39%    470  kds::exec::::CheckDecodeInputs [clone .isra.0]
+  3.29%    456  kds::exec::DecodeAndResolve
+  3.11%    431  kds::exec::CompareValues
+  2.46%    342  kds::exec::ExecStats::For
+  1.82%    253  __memcpy_avx512_unaligned_erms
+  1.73%    240  __libc_send
+  1.72%    239  std::__cxx11::basic_string::_M_dispose
+  0.71%     99  kds::storage::GetRelayoutEpoch
+  0.58%     81  kds::catalog::IsIntegerTypeVal
+
+-- within AcceptTupleAt (2102 samples, 15.1 % of all): by innermost inlined function --
+  45.0%   945  kds::exec::::ChainRunner::AcceptTupleAt
+  15.1%   317  kds::txn::Classify
+   7.7%   161  std::vector::size const
+   5.7%   119  kds::txn::ReadView::Visible const
+   4.2%    88  std::__cxx11::basic_string::_M_is_local const
+   2.9%    60  kds::StatusOr::~StatusOr
+   2.8%    59  std::__cxx11::basic_string::_M_local_data
+   2.3%    48  std::__cxx11::basic_string::~basic_string
+   2.0%    43  std::vector::_M_erase_at_end
+   2.0%    41  kds::exec::Budget::ChargeRow
+   1.7%    36  std::__cxx11::basic_string::_M_length
+   1.6%    34  std::span::end const
+   1.3%    27  std::__cxx11::basic_string::_M_data const
+   1.1%    24  kds::Status::ok const
+   1.0%    21  kds::exec::ChainFrame::SlotsFor
+   1.0%    21  void std::vector::_M_assign_aux
+   1.0%    20  std::vector::operator[]
+   0.6%    13  std::byte* std::__copy_move::__copy_m
+   0.4%     8  std::vector::clear
+   0.2%     4  std::char_traits::assign
+   0.2%     4  std::vector::capacity const
+   0.1%     3  std::span::span
+   0.1%     3  std::__cxx11::basic_string::_Alloc_hider::_Alloc_hider
+   0.1%     2  kds::exec::ChainFrame::EndOfSlot const
+   0.0%     1  kds::Status::Status
+
+-- by source line --
+  12.5%   263  kds::txn::Classify @ visibility.hpp:86
+   7.7%   161  std::vector::size const @ stl_vector.h:993
+   5.7%   120  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2558
+   4.9%   102  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2199
+   4.8%   100  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2425 (discriminator 1)
+   4.7%    98  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2328
+   4.2%    88  std::__cxx11::basic_string::_M_is_local const @ basic_string.h:264 (discriminator 2)
+   3.5%    73  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2419
+   3.1%    65  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2350
+   3.1%    65  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2327
+   2.9%    60  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2313
+   2.9%    60  kds::StatusOr::~StatusOr @ status.hpp:284
+   2.9%    60  kds::txn::ReadView::Visible const @ read_view.hpp:127 (discriminator 1)
+   2.8%    59  std::__cxx11::basic_string::_M_local_data @ basic_string.h:230
+   2.7%    56  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2423
+   2.6%    54  kds::txn::Classify @ visibility.hpp:71
+   2.5%    52  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2424 (discriminator 1)
+   2.3%    48  std::__cxx11::basic_string::~basic_string @ basic_string.h:804
+   2.1%    45  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2334
+   2.1%    44  kds::txn::ReadView::Visible const @ read_view.hpp:123
+   2.0%    43  std::vector::_M_erase_at_end @ stl_vector.h:1935
+   2.0%    41  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2332
+   1.7%    36  std::__cxx11::basic_string::_M_length @ basic_string.h:218
+   1.6%    34  std::span::end const @ span:307
+   1.3%    27  std::__cxx11::basic_string::_M_data const @ basic_string.h:223
+   1.1%    24  kds::Status::ok const @ status.hpp:266
+   1.1%    23  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2321
+   1.0%    21  kds::exec::ChainFrame::SlotsFor @ chain_frame.hpp:76 (discriminator 1)
+   1.0%    20  std::vector::operator[] @ stl_vector.h:1129
+   0.9%    19  kds::exec::::ChainRunner::AcceptTupleAt @ step_vm.cpp:2419 (discriminator 4)

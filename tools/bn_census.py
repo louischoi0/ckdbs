@@ -101,10 +101,17 @@ class Server:
             os.remove(self.data)
         shutil.rmtree(self.data + ".wal", ignore_errors=True)
         with open(conf, "w") as f:
-            f.write(f"data_file = {self.data}\nport = {port}\ncores = 1\n"
-                    f"durability = relaxed\nbuffer_pool_frames = 65536\n"
+            # `cores` and `durability` default to BN's cell (1, relaxed); a
+            # caller that varies them sets them on `a` (tools/bm_scan.py's
+            # writer cell: 2, group, `reactor_cpus` pinning a reactor to a CPU each).
+            f.write(f"data_file = {self.data}\nport = {port}\n"
+                    f"cores = {getattr(a, 'cores', 1)}\n"
+                    f"durability = {getattr(a, 'durability', 'relaxed')}\n"
+                    f"buffer_pool_frames = 65536\n"
                     f"log_file = bk-{label}-{tag}.log\nlog_dir = {a.workdir}\n"
                     f"log_level = warn\n")
+            if getattr(a, "reactor_cpus", None):
+                f.write(f"reactor_cpus = {a.reactor_cpus}\n")
         env = dict(os.environ)
         if sampler_out:
             env["LD_PRELOAD"] = a.sampler

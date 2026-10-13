@@ -1,0 +1,66 @@
+# host
+Linux ckdbs-dev 7.0.0-1014-azure #14~24.04.1-Ubuntu SMP PREEMPT Fri Aug 14 17:35:51 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+model name	: AMD EPYC 9V74 80-Core Processor
+8
+               total        used        free      shared  buff/cache   available
+Mem:           15982        3903        3369          95        9151       12079
+# thread siblings (CPU: siblings)
+0: 0-1
+2: 2-3
+4: 4-5
+6: 6-7
+# df -T of the data directory and of the binaries' directory
+Filesystem     Type 1K-blocks      Used Available Use% Mounted on
+/dev/root      ext4 258932720 159573220  99343116  62% /
+/dev/root      ext4 258932720 159573220  99343116  62% /
+# PostgreSQL
+SELECT version() -> PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+SHOW shared_buffers -> 128MB
+SHOW max_parallel_workers_per_gather -> 2
+SHOW min_parallel_table_scan_size -> 8MB
+SHOW autovacuum -> on
+SHOW work_mem -> 4MB
+SHOW effective_cache_size -> 4GB
+SHOW synchronous_commit -> on
+SHOW jit -> on
+SHOW io_method -> worker
+SHOW data_directory -> /home/cdkbs/pg-bench-ba/data
+SHOW port -> 15434
+SHOW default_statistics_target -> 100
+SHOW huge_pages -> try
+# PostgreSQL postgresql.conf additions (defaults otherwise)
+
+# --- tools/pg_setup.sh ---
+port = 15434
+listen_addresses = '127.0.0.1'
+unix_socket_directories = '/home/cdkbs/pg-bench-ba/data'
+logging_collector = off
+log_min_duration_statement = -1
+log_line_prefix = '%m [%p] '
+# a census server config
+data_file = /home/cdkbs/bench-runs/bm-s1/census/bk-bm-r0.db
+port = 32101
+cores = 1
+durability = relaxed
+buffer_pool_frames = 65536
+log_file = bk-bm-r0.log
+log_dir = /home/cdkbs/bench-runs/bm-s1/census
+log_level = warn
+# a writers server config
+data_file = /home/cdkbs/bench-runs/bm-s1/writers/bk-wr-wpoint0.db
+port = 32111
+cores = 2
+durability = group
+buffer_pool_frames = 65536
+log_file = bk-wr-wpoint0.log
+log_dir = /home/cdkbs/bench-runs/bm-s1/writers
+log_level = warn
+reactor_cpus = 2,6
+# drivers as committed with this file (sha256)
+4565afda394980baab110550f8d902c9472150d9d93a24f79738b74278244560  tools/bm_scan.py
+b806d002c1ea3263601a9b5449186495d21dea7d60323cab13d26dcdae914fa8  tools/bm_scan_table.py
+2dfd17a8e6da55b9097fb6c1b75cbd1f229d79223dfa9c42cdde9cecfb118071  tools/bn_pg_scan.py
+9f8822f531d36041a019efebc32860e22e55e1bcfe4f69512f59ba9d1f332cbb  tools/bn_census.py
+6ed4e5906b91a444dfdfcab16e47b0da580ce1534c50ff6808a1b459fe226329  tools/bn_parts.json
+a86c7340497a67f0f4c57ea051b83738a15b59b474f5da438e5a38f2e277dba0  tools/kds_sampler.c
+cf9c82623a86c470c8e507f6f7038d2d2b5e96d5390455d96c5c7b75adcd5b48  tools/kds_sampler_report.py

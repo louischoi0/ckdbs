@@ -1,0 +1,7 @@
+census load=1.99 5.37 6.01 waited=350s competing=0
+pg load=1.43 3.79 5.31 waited=0s competing=0
+pg-novacuum load=1.59 3.52 5.16 waited=0s competing=0
+writers load=1.21 5.82 6.36 waited=265s competing=0
+profile load=1.51 3.09 4.96 waited=0s competing=0
+pg-novacuum load=1.93 2.80 4.64 waited=20s competing=0
+g load=1.93 2.75 4.12 waited=40s

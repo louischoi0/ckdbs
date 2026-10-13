@@ -39,3 +39,12 @@ English**, translated from the Korean it was typed in.
 | **Mark** | BM runs every stage to its close in this session. A decision a stage reaches is adopted on CLA's proposal and recorded as *"adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone)"*, never as the operator's own mark. The first such adoptions are the opening review's revisions: BM-S2 as the VM-owned btree loop, BM-R6's check per step per statement, BM-Q12's spread taken across A and a rebuilt A' (`workorder-bm-scan-row-kernel.md` §6, "BM opened") |
 | **Does not settle** | A push, a merge to `main`, a tag or a version |
 | **Recorded at** | `workorder-bm-scan-row-kernel.md` header, §4 and §6; `index.md`'s BM row |
+
+## 5. BM-S1's second round stopped
+
+| | |
+|---|---|
+| **Word** | *"Finish it with the data you have now."* (after CLA said the measurement's end could not be fixed and offered to close it on the first round) |
+| **Mark** | BM-S1's results file is written from the first round alone. The second round (a 200-row cell, `pool_misses` per arm, a second writers cell and profile) is stopped and stated as not run |
+| **Does not settle** | Anything the second round was to measure |
+| **Recorded at** | `workorder-bm-scan-row-kernel.md` §6, BM-S1; `bench/v3.0.0/results-bm-s1-scan-row-v2.7.0-942-gf5a7efb2.md` |
