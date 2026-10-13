@@ -1,8 +1,10 @@
 # Work order BS — test hardening: the verification methods a production engine is expected to carry, measured against SQLite's
 
 **Written 2026-10-13** on `wo-test-hardening` at `ec0c07ef`, on the
-operator's words W0-W1. **Not opened** (BS-Q0). A draft: every rule below is
-a proposal, and no question in §5 is marked.
+operator's words W0-W1. **Opened 2026-10-13 for S0 and S1 only** (BS-Q0
+(b), §6); S2-S8 wait for BR's close. **Every question in §5 marked by the
+operator on 2026-10-13, each on CLA's proposal** (§6). The rules BS-R1..R4
+remain proposals.
 
 The operator's words, translated:
 
@@ -218,3 +220,18 @@ unexplained anomaly.
 | BS-Q3 | Differential reference engine | (a) the PostgreSQL 18 twin; (b) SQLite; (c) both | **(a)**: its typed comparisons and three-valued logic are closer to KDS's than SQLite's dynamic typing, and it is installed (F13) |
 | BS-Q4 | Does the coverage floor gate? | (a) record only; (b) a drop below the floor fails the nightly; (c) a drop fails the push | **(b)**: visible every day without making a push wait on an instrumented build |
 | BS-Q5 | S4's page half, with no owner for the FPI cadence | (a) build the device primitive now and assert only the refusal; (b) defer the page half until an order owns the cadence | **(a)**: the primitive is test-only, and "a torn page is never served" is worth pinning before any heal exists; whether the cadence gets an owner is a separate question this order does not answer |
+
+## 6. Marks
+
+The operator's marks of 2026-10-13, given in one line as
+`BS-Q0 $!b, Q1 $!b, Q2 $!a, Q3 $!a, Q4 $!b, Q5 $!a` - each the option CLA
+proposed in §5:
+
+| # | Mark | What it obliges |
+|---|---|---|
+| BS-Q0 | **(b)** | BS is open for S0 and S1 only; S2-S8 open after BR closes |
+| BS-Q1 | **(b)** | The nightly runner is a cron job on the benchmark host, scheduled outside measurement windows; a hosted runner is a later question, and sending the tree to one still waits for the word |
+| BS-Q2 | **(a)** | clang: sanitizers, libFuzzer and llvm-cov from one compiler |
+| BS-Q3 | **(a)** | The differential reference is the PostgreSQL 18 twin |
+| BS-Q4 | **(b)** | A coverage drop below the recorded floor fails the nightly; it does not block a push |
+| BS-Q5 | **(a)** | S4's page half is built now as a test-only device primitive and asserts only that a torn page is refused `Corruption` at its read, never served |
