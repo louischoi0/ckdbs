@@ -803,11 +803,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // never does). A statement that wrote rows first keeps today's refusal
     // (`txn.md` §9: no statement-level rollback) - `EndWrite` clears the
     // note for it. No B-link move-right (BA-Q10).
-    while (out->status.code() == StatusCode::kTxnConflict &&
-           storage::StructuralRefusalNoted() && txn_ != nullptr && clock_ != nullptr) {
-        if (statement_deadline_ns == 0) statement_deadline_ns = NowNs() + lock_wait_fault_net_ns_;
-        if (NowNs() >= statement_deadline_ns) break;
-        Contention::Add(Tally::kStructuralReruns);
+    while (StructuralRerunDue(*out, statement_deadline_ns)) {
         co_await sched::Yield{};
         {
             const MayParkScope parking(*this, /*allowed=*/true, statement);
@@ -901,6 +897,18 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         }
     }
     co_return Status::OK();
+}
+
+bool CommandDispatcher::StructuralRerunDue(const DispatchOutcome& out,
+                                           sched::MonoTimeNs& deadline_ns) {
+    if (out.status.code() != StatusCode::kTxnConflict || !storage::StructuralRefusalNoted() ||
+        txn_ == nullptr || clock_ == nullptr) {
+        return false;
+    }
+    if (deadline_ns == 0) deadline_ns = NowNs() + lock_wait_fault_net_ns_;
+    if (NowNs() >= deadline_ns) return false;
+    Contention::Add(Tally::kStructuralReruns);
+    return true;
 }
 
 CommandDispatcher::StatementEpochScope::StatementEpochScope(CommandDispatcher& dispatcher)
@@ -1162,7 +1170,22 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
             std::this_thread::yield();
         }
     }
-    DispatchOutcome outcome = DispatchAndStage(line, session);
+    // `DispatchAsync`'s BA-S14 re-run, blocking: a structural refusal of a
+    // statement that wrote nothing is run again after a yield, under the
+    // fault net, and the poison withheld for it is owed by whatever ends the
+    // re-runs. Without it this path answered a refusal no client of the
+    // server sees.
+    DispatchOutcome outcome;
+    {
+        const RerunScope rerunning(*this);
+        outcome = DispatchAndStage(line, session);
+        sched::MonoTimeNs deadline_ns = 0;
+        while (StructuralRerunDue(outcome, deadline_ns)) {
+            std::this_thread::yield();
+            outcome = DispatchAndStage(line, session);
+        }
+    }
+    if (outcome.poison_withheld) (session != nullptr ? *session : autocommit_session_).Poison();
     if (outcome.pending_lsn == wal::kNoLsn) return outcome;
 
     // Inline, on this thread: the batch is whatever happened to be staged
@@ -9928,13 +9951,14 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         lock_wait_.reset();
     }
     // **A structural refusal from a statement that wrote nothing is re-run**
-    // (BA-S14): `DispatchAsync` waits a turn and runs it again, so it does
-    // not poison - the refusal that ends the re-runs does, there. Any other
-    // end - rows written (BA-R11's "who it reaches"), no park to re-run
-    // from - clears the note, so `DispatchAsync` answers it as before. Not
+    // (BA-S14): `DispatchAsync` and `Dispatch` wait a turn and run it again,
+    // so it does not poison - the refusal that ends the re-runs does, there.
+    // Any other end - rows written (BA-R11's "who it reaches"), or a caller
+    // that re-runs nothing (`ExecuteInsert`, `RefuseParkedWrite`) - clears
+    // the note, so the refusal is answered as before. Not
     // a test on `result`'s code: the write paths hand this an
     // `InvalidArgument` verdict built from the rendered line.
-    const bool structural_rerun = may_park_ && !result.ok() &&
+    const bool structural_rerun = (may_park_ || reruns_structural_) && !result.ok() &&
                                   storage::StructuralRefusalNoted() &&
                                   scope.txn->trail().size() == statement_trail_mark_;
     if (!structural_rerun) storage::ClearStructuralRefusal();

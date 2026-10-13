@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/base/contention.hpp"
 #include "kds/server/session.hpp"
 
 // AT-S10b (AT-S4's allocators, folded into AT-S10): every core issues its
@@ -64,6 +65,12 @@ TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneSequence) {
               "CRE");
     ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
 
+    // The engine's own re-runs (BA-S14) burn an id each as a client's retry
+    // does, and are counted here rather than by the writers, which never
+    // see them. The tally is the process's, so it also counts re-runs that
+    // burn nothing; it only loosens the bound.
+    const Contention::Snapshot before = Contention::Read();
+
     // Nothing is funded: both cores write on their first statement.
     Writer w0;
     Writer w1;
@@ -108,10 +115,13 @@ TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneSequence) {
     const std::uint64_t lo = std::stoull(row.substr(c1 + 1, c2 - c1 - 1));
     const std::uint64_t hi = std::stoull(row.substr(c2 + 1));
     EXPECT_EQ(count, static_cast<std::uint64_t>(2 * kRowsPerCore)) << reply;
-    const std::uint64_t retries = static_cast<std::uint64_t>(w0.retries + w1.retries);
+    const std::uint64_t reruns = Contention::Read().of(Tally::kStructuralReruns) -
+                                 before.of(Tally::kStructuralReruns);
+    const std::uint64_t retries =
+        static_cast<std::uint64_t>(w0.retries + w1.retries) + reruns;
     EXPECT_LE(hi - lo + 1, count + retries)
         << "the ids are not one sequence less at most the " << retries
-        << " retried statements' ids: " << reply;
+        << " retried or re-run statements' ids: " << reply;
 }
 
 }  // namespace
