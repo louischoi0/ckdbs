@@ -47,9 +47,10 @@ Status VerifyDataFilePages(const std::string& data_file, DataFileCheck* out = nu
 // would stay allocated and unreadable for good. Headerless pages are left:
 // their zeros are an empty directory.
 //
-// `DiscardAdvisoryState` - at the restore's mount, after recovery: every
-// pattern's Waystone root is cleared and `sys.access_stats` emptied, so no
-// unlogged structure can reach a page the first half gave back.
+// `DiscardAdvisoryState` - at every mount, after recovery: every pattern's
+// Waystone root is cleared and `sys.access_stats` emptied, so no unlogged
+// structure can reach a page the first half gave back, nor - after a crash -
+// a child whose allocation bit never reached the device.
 Status ForgetUnwrittenPages(storage::PageDevice& device, DataFileCheck* out = nullptr);
 
 

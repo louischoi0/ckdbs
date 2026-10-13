@@ -1198,11 +1198,8 @@ the procedures are `manual/server/backup-restore.md`.
   reserve (4 segments) and the hour that ends an idle backup stay
   `[provisional]`**: BR-S10 measured each at one value only (its results
   file says why each stays).
-- **Two engine defects BR found and did not fix**, each in `bugs/`: a full
-  page image cannot heal an allocated checksum-failed page, and a
-  synchronous anchor publish writes page 0 beside the pages it stands for.
-  An unlogged Waystone page can lose its allocation bit at a crash (the
-  backup's form of it is closed by copying the maps after the stop).
+- **An engine defect BR found and did not fix**, in `bugs/`: a full page
+  image cannot heal an allocated checksum-failed page.
 
 ## Decisions the revision has not taken
 

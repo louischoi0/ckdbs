@@ -58,14 +58,21 @@ public:
         return inner_.GetUnpinned(page_id);
     }
     Status Sync() override {
+        // What page 0's image anchors at each sync: what an `fsync` carries.
+        if (auto page = inner_.GetUnpinned(kSuperBlockPageId); page.ok()) {
+            auto decoded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(page.value()));
+            if (decoded.ok()) anchors_at_sync_.push_back(decoded.value().wal_anchor(0).redo_start_lsn);
+        }
         return fail_ ? Status::IoError("scripted sync failure") : Status::OK();
     }
 
     void FailSync(bool fail) noexcept { fail_ = fail; }
+    const std::vector<std::uint64_t>& anchors_at_sync() const noexcept { return anchors_at_sync_; }
 
 private:
     storage::InMemoryPageStore inner_;
     bool fail_ = false;
+    std::vector<std::uint64_t> anchors_at_sync_;
 };
 
 class SuperBlockAnchorTest : public ::testing::Test {
@@ -333,6 +340,31 @@ TEST_F(SuperBlockFoldTest, AFailedSyncKeepsTheCoresContributionForTheNextPublish
     store.FailSync(false);
     ASSERT_TRUE(anchor.Publish({/*core_id=*/3, 2000, 1900, 2100, 0}).ok());
 
+    auto on_disk = store.GetUnpinned(kSuperBlockPageId);
+    ASSERT_TRUE(on_disk.ok());
+    auto reloaded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(on_disk.value()));
+    ASSERT_TRUE(reloaded.ok());
+    EXPECT_EQ(reloaded.value().wal_anchor(0).redo_start_lsn, 800u);
+}
+
+// A synchronous publish (mount, shutdown, a restore's discharge) syncs the
+// pages its anchor stands for before page 0 holds the anchor: in one `fsync`
+// with them, page 0 could land while a page it names was dropped.
+TEST_F(SuperBlockFoldTest, ASynchronousPublishSyncsItsPagesBeforePageZeroHoldsTheAnchor) {
+    UnsyncablePageStore store;
+    auto page = store.CreateAtUnpinned(kSuperBlockPageId);
+    ASSERT_TRUE(page.ok());
+    superblock_ = SuperBlock::CreateFresh(1000, storage::kDefaultInlineCellWidth, /*cores=*/1);
+    superblock_.Encode(page.value());
+    SuperBlockCheckpointAnchor anchor(superblock_, store);
+
+    ASSERT_TRUE(anchor.Publish({/*core_id=*/0, 900, 800, 1000, 0}).ok());
+    EXPECT_EQ(store.anchors_at_sync(), (std::vector<std::uint64_t>{0, 800}));
+
+    // A failed first sync encodes nothing: page 0 keeps the landed anchor.
+    store.FailSync(true);
+    EXPECT_FALSE(anchor.Publish({/*core_id=*/0, 2000, 1900, 2100, 0}).ok());
+    EXPECT_EQ(store.anchors_at_sync().back(), 800u);
     auto on_disk = store.GetUnpinned(kSuperBlockPageId);
     ASSERT_TRUE(on_disk.ok());
     auto reloaded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(on_disk.value()));
