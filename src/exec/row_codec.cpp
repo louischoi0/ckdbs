@@ -444,6 +444,20 @@ bool ApplyCompare(const T& a, const T& b, parser::CompareOp op) {
     return false;
 }
 
+// A `char(N)` cell's value: its bytes back to the first NUL and no further -
+// a char(N) cell is N bytes whatever the value's length, and the padding is
+// not part of the value (see the char(N) note at the top of this file).
+// memchr finds the terminator in one pass instead of testing and pushing a
+// byte at a time. **The one reading of a char cell**: the decoder and the
+// scan kernel both take it from here, so the value the kernel compares is
+// the value the residual compares (BM-R1).
+std::span<const std::byte> CharCellValue(std::span<const std::byte> cell) {
+    if (cell.empty()) return cell;
+    const void* nul = std::memchr(cell.data(), 0, cell.size());
+    if (nul == nullptr) return cell;
+    return cell.first(static_cast<std::size_t>(static_cast<const std::byte*>(nul) - cell.data()));
+}
+
 // Copies value bytes into a slot the caller already owns, reusing that
 // slot's capacity: one memcpy, no allocation once the frame has settled.
 //
@@ -530,21 +544,8 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             return Status::OK();
         }
         case kTypeValChar: {
-            // Read back to the first NUL and no further - a char(N) cell is
-            // N bytes whatever the value's length, and the padding is not
-            // part of the value (see the char(N) note at the top of this
-            // file). memchr finds the terminator in one pass instead of
-            // testing and pushing a byte at a time.
-            std::size_t len = cell.size();
-            if (!cell.empty()) {
-                const void* nul = std::memchr(cell.data(), 0, cell.size());
-                if (nul != nullptr) {
-                    len = static_cast<std::size_t>(static_cast<const std::byte*>(nul) -
-                                                   cell.data());
-                }
-            }
             out.type = parser::ValueType::kStr;
-            AssignBytes(out.str_val, cell.first(len));
+            AssignBytes(out.str_val, CharCellValue(cell));
             out.raw_int_text.clear();
             return Status::OK();
         }
@@ -1391,6 +1392,13 @@ std::optional<ScanKernelTerm> CompileScanKernelTerm(const catalog::Schema& schem
             term.kind = ScanKernelTerm::Kind::kWide;
             term.lit_hi = literal.dec_hi;
             return term;
+        case kTypeValChar:
+        case kTypeValVarchar:
+            if (literal.type != parser::ValueType::kStr) return {};
+            term.kind = col.type_val == kTypeValChar ? ScanKernelTerm::Kind::kChar
+                                                     : ScanKernelTerm::Kind::kVarchar;
+            term.text = literal.str_val;
+            return term;
         case kTypeValUint64: {
             if (literal.type != parser::ValueType::kInt) return {};
             auto u = ValueAsUint64(literal);
@@ -1434,6 +1442,24 @@ bool ScanKernelRejects(const ScanKernel& kernel, const catalog::RowLayout& layou
                 const auto hi = static_cast<std::int64_t>(GetLE(cell.subspan(8, 8), 8));
                 keep = ApplyCompare(Int128FromHalves(hi, lo),
                                     Int128FromHalves(term.lit_hi, term.lit), term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kChar: {
+                const auto value = CharCellValue(CellOf(layout, payload, term.column));
+                keep = ApplyCompare<std::string_view>(
+                    std::string_view(reinterpret_cast<const char*>(value.data()), value.size()),
+                    term.text, term.op);
+                break;
+            }
+            case ScanKernelTerm::Kind::kVarchar: {
+                // Only an inline value the cell codec vouches for; anything
+                // else - spilled, NULL-tagged, refused - is the residual's.
+                auto cell = storage::DecodeCell(CellOf(layout, payload, term.column));
+                if (!cell.ok() || cell.value().tag != storage::CellTag::kInline) continue;
+                const auto bytes = cell.value().bytes;
+                keep = ApplyCompare<std::string_view>(
+                    std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()),
+                    term.text, term.op);
                 break;
             }
         }

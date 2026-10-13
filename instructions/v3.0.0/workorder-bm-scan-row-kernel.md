@@ -823,3 +823,33 @@ On `worktree-bm-scan-kernel-open` from `c5a724f4`.
   both reads; `ScanKernelTerm::nullable` dropped (`NullBitIsSet` answers
   false for a NOT NULL column); `ScanKernel` an alias; a stray line. The
   flags cell stays at the codec, stated above.
+
+### BM-S4 — the kernel, strings
+
+On `worktree-bm-scan-kernel-open` from `7f1d1f70`.
+- **Code** (`row_codec.cpp`): `kChar` compares a `char(N)` cell after its
+  NUL trim, through `CharCellValue` - now the one reading of a char cell,
+  which the decoder takes too, so the kernel's value and the residual's
+  are one definition (BM-R1). `kVarchar` compares a `varchar` cell only
+  through `DecodeCell` and only when it answers an inline value; a
+  spilled value, a NULL tag and a refusal pass to the residual, which
+  answers or refuses them as today. Byte-wise, as `CompareValues` is.
+- **Cells** (`scan_kernel_test.cpp`): the differential matrix gained
+  `char(16)` (values shorter than N and exactly N, a literal longer than
+  N), `varchar` (the empty string, 61 bytes - the default cell's last
+  inline value - 62, the first spilled, and a 300-byte spilled value also
+  used as a literal, which is returned) and `varchar(16)` (13 and 14
+  bytes, the per-column boundary); the compile witness covers both string
+  types and refuses a number against them; a NULL tag under a present bit
+  and an inline length one past capacity are passed by the kernel and
+  refused `Corruption` by the decode.
+- **Mutations**, each run twice, all killed: the kernel's trim bypassed (a
+  mutant of the shared helper would change both sides and prove nothing);
+  a spilled cell compared by its inline bytes; `DecodeCell` bypassed and
+  the inline length trusted (the harness clamps the read to the cell, so
+  the kill is a wrong answer, not a fault).
+- **Review** (`critics-developer`): no blocker, no input found where the
+  kernel drops a row the residual keeps. Applied: the shared trim; the
+  inline boundary and `varchar(16)` rows; the over-capacity length moved
+  inside the payload; the string columns' non-string literal checked; a
+  `std::move`; a re-wrapped comment.

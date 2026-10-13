@@ -138,7 +138,7 @@ ScanKernel CompileScanKernel(const catalog::Schema& schema, const catalog::RowLa
         if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
         auto term = CompileScanKernelTerm(schema, layout, pred.lhs.col_pos, pred.op,
                                           pred.rhs.literal);
-        if (term.has_value()) kernel.push_back(*term);
+        if (term.has_value()) kernel.push_back(std::move(*term));
     }
     return kernel;
 }

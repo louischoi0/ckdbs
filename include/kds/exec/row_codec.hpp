@@ -437,11 +437,17 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
 //   kUint64    the cell against `ValueAsUint64(literal)`, unsigned;
 //   kWide      the 128-bit pair, high half signed and low half unsigned;
 //   kKeystone  column 0, as the 48-bit id `KeystoneIdOfPayload` reads -
-//              never as its 8-byte cell, whose top two bytes are not the id.
+//              never as its 8-byte cell, whose top two bytes are not the id;
+//   kChar      a `char(N)` cell read back to its first NUL, as the decoder
+//              trims it, then bytes against the literal's;
+//   kVarchar   a `varchar` cell through `DecodeCell` only, and only when it
+//              answers an inline value: a spilled value, a NULL tag and a
+//              refusal all pass to the residual, which answers or refuses
+//              them as it does today (BM-S4).
 // A NULL operand (its bit set) is passed, never rejected: `CompareValues`'
 // NULL arm stays the one place UNKNOWN collapses (BM-Q3 (a)).
 struct ScanKernelTerm {
-    enum class Kind : std::uint8_t { kInt, kUint64, kWide, kKeystone };
+    enum class Kind : std::uint8_t { kInt, kUint64, kWide, kKeystone, kChar, kVarchar };
     Kind kind = Kind::kInt;
     parser::CompareOp op = parser::CompareOp::kEq;
     std::uint16_t column = 0;
@@ -450,6 +456,7 @@ struct ScanKernelTerm {
     std::int64_t lit = 0;          // kInt, kKeystone; kWide's low half
     std::int64_t lit_hi = 0;       // kWide's high half
     std::uint64_t ulit = 0;        // kUint64
+    std::string text;              // kChar, kVarchar
 };
 
 using ScanKernel = std::vector<ScanKernelTerm>;
@@ -457,9 +464,9 @@ using ScanKernel = std::vector<ScanKernelTerm>;
 // The term for `schema.columns[column] <op> literal`, or nothing when the
 // pair is outside the kernel's domain: an operator other than the six, a
 // literal of another value kind or scale than the column compares in, a
-// `uint64` literal `ValueAsUint64` refuses, a string type (BM-S4), or a
-// `uint64` pk. Nothing is refused here; a pair the kernel does not hold is
-// the residual's, as it always was.
+// `uint64` literal `ValueAsUint64` refuses, or a `uint64` pk. Nothing is
+// refused here; a pair the kernel does not hold is the residual's, as it
+// always was.
 std::optional<ScanKernelTerm> CompileScanKernelTerm(const catalog::Schema& schema,
                                                     const catalog::RowLayout& layout,
                                                     std::uint16_t column, parser::CompareOp op,

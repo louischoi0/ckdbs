@@ -11,6 +11,7 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/tagged_cell.hpp"
 
 // BM-S3 (`instructions/v3.0.0/workorder-bm-scan-row-kernel.md`): the scan
 // kernel for the integer-encoded types. The kernel may only reject a row the
@@ -25,6 +26,9 @@
 //     comparison;
 //   - column 0 is the Keystone id, not its 8-byte cell (BM-R4);
 //   - a correlated conjunct is never compiled;
+//   - BM-S4's strings: `char(N)` after its NUL trim, a `varchar` only
+//     through `DecodeCell` and only inline - a spilled, NULL-tagged or
+//     refused cell is the residual's;
 //   - the row-touch budget refuses (the row it refuses on is
 //     `scan_row_walk_test.cpp`'s cell, where the rows before it show).
 // The MVCC cell (a reconstructed version is read from `version_`, never the
@@ -84,6 +88,18 @@ std::vector<TypeCase> Cases() {
     const std::vector<std::string> wide = {
         "'-922337203685477.5808'", "'-922337203685477.5807'", "'-0.0001'", "'0.0000'",
         "'922337203685477.5807'",  "'922337203685477.5808'",  "'922337203685477.5809'"};
+    const std::vector<std::string> chars = {"''", "'a'", "'ab'", "'abd'",
+                                            "'abcdefghijklmnop'"};
+    const std::string spilled = "'" + std::string(300, 'x') + "'";
+    // 61 bytes is the last inline value of the default 64-byte cell, 62 the
+    // first that spills.
+    const std::string last_inline = "'" + std::string(61, 'y') + "'";
+    const std::string first_spilled = "'" + std::string(62, 'y') + "'";
+    const std::vector<std::string> varchars = {"''", "'a'", "'ab'", "'abd'",
+                                               "'abcdefghijklmnop'", last_inline,
+                                               first_spilled, spilled};
+    const std::vector<std::string> narrow = {"''", "'a'", "'" + std::string(13, 'z') + "'",
+                                             "'" + std::string(14, 'z') + "'"};
     auto with = [](std::vector<std::string> v, std::vector<std::string> extra) {
         v.insert(v.end(), extra.begin(), extra.end());
         return v;
@@ -101,6 +117,15 @@ std::vector<TypeCase> Cases() {
         {"timestamp", stamps, stamps},
         {"decimal(12,2)", dec, dec},
         {"decimal(30,4)", wide, wide},
+        // BM-S4. Values shorter than N and exactly N; a literal longer than N.
+        {"char(16)", chars, with(chars, {"'abcdefghijklmnopq'"})},
+        // An inline value, the empty string, and a value longer than the
+        // inline cell, which spills: a spilled value equal to the literal is
+        // returned, because the kernel passes every non-inline cell.
+        {"varchar", varchars, varchars},
+        // A per-column width: 13 bytes is the last inline value of a
+        // varchar(16), 14 the first that spills.
+        {"varchar(16)", narrow, narrow},
     };
 }
 
@@ -276,6 +301,8 @@ TEST(ScanKernelCodecTest, EveryMatrixTypeCompilesToATerm) {
         {catalog::kTypeValDecimal, catalog::PackDecimalLen(12, 2), parser::ValueType::kDecimal, 2},
         {catalog::kTypeValDecimalWide, catalog::PackDecimalLen(30, 4),
          parser::ValueType::kDecimalWide, 4},
+        {catalog::kTypeValChar, 16, parser::ValueType::kStr, 0},
+        {catalog::kTypeValVarchar, 64, parser::ValueType::kStr, 0},
     };
     for (const Case& c : cases) {
         catalog::Schema schema;
@@ -294,12 +321,66 @@ TEST(ScanKernelCodecTest, EveryMatrixTypeCompilesToATerm) {
                 << "type " << c.type_val << " op " << static_cast<int>(op);
         }
         lit.scale = static_cast<std::uint8_t>(c.scale + 1);
-        if (c.kind != parser::ValueType::kInt) {
+        if (c.kind == parser::ValueType::kStr) {
+            parser::AstValue number;
+            number.type = parser::ValueType::kInt;
+            number.int_val = 1;
+            EXPECT_FALSE(CompileScanKernelTerm(schema, layout.value(), 1, parser::CompareOp::kEq,
+                                               number)
+                             .has_value())
+                << "a number against a string column is the residual's (type " << c.type_val
+                << ")";
+        }
+        if (c.kind == parser::ValueType::kDecimal || c.kind == parser::ValueType::kDecimalWide) {
             EXPECT_FALSE(CompileScanKernelTerm(schema, layout.value(), 1, parser::CompareOp::kEq,
                                                lit)
                              .has_value())
                 << "a decimal of another scale is the residual's (type " << c.type_val << ")";
         }
+    }
+}
+
+// BM-S4: a `varchar` cell the cell codec does not vouch for as inline is
+// passed, never rejected, so the residual's decode refuses it as today - a
+// NULL tag under a present bit, and an inline length past the cell's
+// capacity. Both are `Corruption` on the full path, before and after BM.
+TEST(ScanKernelCodecTest, AVarcharCellTheCodecRefusesIsPassedToTheResidual) {
+    catalog::Schema schema;
+    schema.columns.push_back(Column(0, "id", catalog::kTypeValInt64, 8));
+    schema.columns.push_back(Column(1, "s", catalog::kTypeValVarchar, 64));
+    auto layout = catalog::RowLayout::Build(schema, /*inline_cell_width=*/64);
+    ASSERT_TRUE(layout.ok()) << layout.status().message();
+    parser::AstValue v;
+    v.type = parser::ValueType::kStr;
+    v.str_val = "abc";
+    auto row = EncodeRow(schema, layout.value(), /*id=*/1, {v});
+    ASSERT_TRUE(row.ok()) << row.status().message();
+
+    parser::AstValue lit;
+    lit.type = parser::ValueType::kStr;
+    lit.str_val = "zzz";  // no value the kernel could read here equals it
+    auto term = CompileScanKernelTerm(schema, layout.value(), 1, parser::CompareOp::kEq, lit);
+    ASSERT_TRUE(term.has_value());
+    const ScanKernel kernel{*term};
+    ASSERT_TRUE(ScanKernelRejects(kernel, layout.value(), row.value()))
+        << "control: an inline 'abc' is rejected by = 'zzz'";
+
+    const std::size_t cell = layout.value().offsets[1];
+    struct Broken {
+        const char* what;
+        std::size_t offset;
+        std::byte value;
+    };
+    for (const Broken b :
+         {Broken{"a NULL tag", cell + storage::kCellTagOffset, std::byte{0}},
+          Broken{"an inline length one past capacity", cell + storage::kCellInlineLenOffset,
+                 std::byte{62}}}) {
+        std::vector<std::byte> payload = row.value();
+        payload[b.offset] = b.value;
+        EXPECT_FALSE(ScanKernelRejects(kernel, layout.value(), payload)) << b.what;
+        std::vector<parser::AstValue> out(2);
+        Status decoded = DecodeRowInto(schema, layout.value(), payload, out);
+        EXPECT_EQ(decoded.code(), StatusCode::kCorruption) << b.what << ": " << decoded.message();
     }
 }
 
