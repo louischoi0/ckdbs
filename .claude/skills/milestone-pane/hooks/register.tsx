@@ -26,7 +26,8 @@ async function locate($: EngineInterface, root: string, name: string | null): Pr
     if (found.length > 1) throw new Error(`"${name}" matches ${found.length} work orders: ${found.map(f => f.replace(/^.*\//, '')).join(', ')}`)
     return found[0] ?? null
   }
-  const log = await $.process.run(['git', 'log', '-1', '--format=', '--name-only', '--', 'instructions/*/workorder-*.md'], { cwd: root })
+  // A merge lists no files under --name-only, so the last commit to touch a work order must not be one.
+  const log = await $.process.run(['git', 'log', '-1', '--no-merges', '--format=', '--name-only', '--', 'instructions/*/workorder-*.md'], { cwd: root })
   return log.stdout.split('\n').find(Boolean) ?? null
 }
 

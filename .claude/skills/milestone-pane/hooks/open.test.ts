@@ -108,6 +108,17 @@ test('a bare /milestone toggles the pane: closed it opens, open it closes', asyn
   expect(second.text).toBe('Milestone pane closed.')
 })
 
+test('an unpinned /milestone finds the last order a non-merge commit touched', async ($, on) => {
+  on('session.root', () => ({ value: '/repo' }))
+  // A merge commit lists no files: answer empty unless the query skips merges.
+  on('process.run', (_$, e) => ({ value: { stdout: e.argv.includes('--no-merges') ? `${file}\n` : '', stderr: '', exitCode: 0, isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('fs.read', () => ({ value: doc }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] } as never))
+  const r = await $.command.run({ command: 'milestone', args: '', presentation: { isFullscreen: true, columns: 120 } } as Parameters<typeof $.command.run>[0])
+  expect(r.text).toContain('Milestone **ZZ**')
+})
+
 test('/milestone is registered to run at once when typed mid-turn', async ($, on) => {
   const registered: { name: string, immediate?: true }[] = []
   on('command.register', (_$, e) => { registered.push(e); return { value: { command: e.name } } })
