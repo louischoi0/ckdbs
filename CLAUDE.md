@@ -349,6 +349,7 @@ out.
 | `->>` | causes: `A ->> B` means A brings about B - A triggers B, or B is an effect A reaches ("A brings about B"; "A induces B"; "A has a knock-on effect on B") |
 | `{…}` | a set of items: `{A, B, C} :>> D` means A, B and C must all be met before D can proceed |
 | `(…)` | any of a set of items: `(A, B, C) :>> D` means any one of A, B or C being met lets D proceed |
+| `...[…]` | enumerate: `...[X]` asks CLA to list X item by item ("enumerate X"), e.g. `...[1 *I's options]` lists every option for issue 1 |
 | `$!` | a choice: when CLA has proposed options `a`, `b` and `c`, the operator's `$!a` chooses option `a`, and the decision is marked as option `a` |
 
 **A relation symbol mirrored reverses its direction** (operator,
