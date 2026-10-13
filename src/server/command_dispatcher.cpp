@@ -7832,7 +7832,6 @@ public:
                                            std::to_string(fields.size()));
         }
         field_ = std::move(fields[0]);
-        described_ = true;
         return Status::OK();
     }
     // The row's text is the index of its value, so what `Emit` is handed is the
@@ -7861,12 +7860,10 @@ public:
         return Status::OK();
     }
 
-    bool described() const noexcept { return described_; }
     const wire::FieldDescription& field() const noexcept { return field_; }
     parser::AstValue TakeValue() { return std::move(value_); }
 
 private:
-    bool described_ = false;
     wire::FieldDescription field_;
     std::uint64_t rows_ = 0;
     std::vector<parser::AstValue> rendered_;
@@ -7943,10 +7940,6 @@ StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser
     if (!out.status.ok()) return out.status.WithMessage(Positioned(out.status.message()));
     if (out.response.rfind("ERR", 0) == 0) {
         return Status::InvalidArgument(Positioned(out.response.substr(4)));
-    }
-    if (!sink.described()) {
-        return Status::NotImplemented("a subquery over a catalog view is not supported as a SET "
-                                      "value" + at);
     }
 
     const wire::FieldDescription& field = sink.field();

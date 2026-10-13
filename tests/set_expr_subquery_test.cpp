@@ -183,10 +183,16 @@ TEST_F(SetExprSubqueryTest, ASubqueryTheStatementCannotRunIsRefusedWithItsOwnRea
     EXPECT_NE(missing.find("byte " + std::to_string(missing_sql.find("nosuch"))), std::string::npos)
         << "a byte of the UPDATE, not of the subquery's text: " << missing;
     EXPECT_EQ(Run("UPDATE t SET v = (SELECT x FROM nosuch)").substr(0, 3), "ERR");
-    EXPECT_NE(Run("UPDATE t SET v = (SELECT oid FROM sys.tables WHERE oid = 1)")
-                  .find("catalog view"),
-              std::string::npos);
     EXPECT_EQ(Run("UPDATE t SET (v, n) = (SELECT x, y FROM u WHERE id = 2)").substr(0, 3), "ERR");
+}
+
+TEST_F(SetExprSubqueryTest, ASubqueryOverASysViewIsASubqueryOverATable) {
+    // BO-R3 (SV5): a view describes its typed columns as a relation does, so
+    // it serves a SET value - typed with no implicit conversion, as any is.
+    Exec("UPDATE t SET name = (SELECT name FROM sys.tables WHERE name = 'u') WHERE id = 1");
+    EXPECT_NE(Run("SELECT name FROM t WHERE id = 1").find("\\nu"), std::string::npos);
+    const std::string mistyped = Run("UPDATE t SET v = (SELECT oid FROM sys.tables WHERE name = 'u')");
+    EXPECT_EQ(mistyped.substr(0, 3), "ERR") << "a uint64 into an int64 column: " << mistyped;
 }
 
 TEST_F(SetExprSubqueryTest, AnOrderedAndPaginatedSubqueryAnswersTheRowItEmits) {
