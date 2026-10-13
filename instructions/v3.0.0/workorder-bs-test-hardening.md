@@ -3,8 +3,9 @@
 **Written 2026-10-13** on `wo-test-hardening` at `ec0c07ef`, on the
 operator's words W0-W1. **Opened 2026-10-13 for S0 and S1 only** (BS-Q0
 (b), §6); S2-S8 wait for BR's close. **Every question in §5 marked by the
-operator on 2026-10-13, each on CLA's proposal** (§6). The rules BS-R1..R4
-remain proposals.
+operator on 2026-10-13, each on CLA's proposal** (§6). **Every test BS
+adds stays out of the push gate** (the operator's ruling of 2026-10-13,
+§6.1). The rules BS-R1..R4 remain proposals.
 
 The operator's words, translated:
 
@@ -125,7 +126,8 @@ failure point**, since a fail-stop ends the in-process sim. Output:
   each one is a question (BS-R2).
 
 Gate: the suite green under `asan`, which closes F1's two recorded gaps;
-`tsan`'s findings filed.
+`tsan`'s findings filed. Every configuration and every cell this stage adds
+runs from the nightly runner, never from the push hook (§6.1).
 
 ### BS-S2 - Coverage measurement ∥ (after S1)
 
@@ -142,7 +144,8 @@ floor is a ratchet: it may only rise (BS-Q4 sets whether it gates).
 - **Allocation sweep:** fail the Nth allocation inside a statement, in a
   forked child, and assert `sched.md` §3's fail-stop - the statement never
   completes `OK` and the next mount recovers to the oracle.
-- The full sweep runs nightly, a strided sample in the suite.
+- The full sweep runs nightly, and so does any sample of it; none of it
+  runs in the push gate (§6.1).
 
 ### BS-S4 - Realistic power cut: `wal.md` §16-3 and §16-4
 
@@ -235,3 +238,30 @@ proposed in §5:
 | BS-Q3 | **(a)** | The differential reference is the PostgreSQL 18 twin |
 | BS-Q4 | **(b)** | A coverage drop below the recorded floor fails the nightly; it does not block a push |
 | BS-Q5 | **(a)** | S4's page half is built now as a test-only device primitive and asserts only that a torn page is refused `Corruption` at its read, never served |
+
+### 6.1 The operator's ruling of 2026-10-13: BS's tests stay out of the push gate
+
+The operator's words, translated: *"Do not include the tests newly added in
+this milestone in the suites the hook runs on every push."*
+
+What it obliges:
+
+- **Every test BS adds runs outside `scripts/githooks/pre-push`.** A gtest
+  cell BS adds carries a `ctest` label that `scripts/test.sh` excludes with
+  `-LE`, as `heap-suspended` is excluded (AS-R4); a sweep, fuzzer, sanitizer
+  configuration or checker BS adds is a target or script the hook never
+  builds or runs. The label's name is S1's to choose and is stated where it
+  is registered in `tests/CMakeLists.txt`.
+- **S3's "strided sample in the suite" is withdrawn**: the sample runs in
+  the nightly with the full sweep, never in the gate.
+- **The nightly runner (S1) is where these tests run.** Until it reports,
+  a BS test runs only when a stage runs it by hand, and a stage report says
+  so - AS-Q4's warning (excluding a cell from the only thing that runs it
+  deletes its coverage) is the reason the runner lands in the same stage as
+  the first labelled cell.
+- **Not covered by the ruling, and left where it is**: a fix to an existing
+  test file a BS method exposes (S0 found `tests/alloc_counter.cpp` replacing
+  `operator new` but not its `nothrow` form, which ASan reports as an
+  alloc-dealloc mismatch) changes no gate membership; and a regression cell
+  for an engine bug a BS method finds is written on the fix's own branch
+  (BS-R2), where the fix's reviewer decides its gate membership.
