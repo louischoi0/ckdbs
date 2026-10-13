@@ -267,6 +267,11 @@ struct StatementStore {
     // runner of its own per row (`EvaluateConjuncts`), so only a statement
     // run by `Execute` - a read - keeps an answer past one row.
     std::unordered_map<const SubChain*, bool> hoisted;
+    // BM-R6's once, by step id: a step whose decode shape and residual have
+    // been checked in this statement. Here and not in the runner because a
+    // sub-chain's runner is rebuilt per outer row, and a flag rebuilt per
+    // outer row is a check (and an allocation) per outer row.
+    std::vector<bool> shape_checked;
 };
 
 class ChainRunner {
@@ -1906,8 +1911,14 @@ private:
             return storage::VisitControl::kStop;
         };
 
-        auto visitor = [&](PageId page_id, heap::PageView& page,
-                           std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+        // One slot of the walk. **No `Status` and no `StatusOr` per slot**
+        // (BM-R5): a failure is parked in `inner` and answered as a stop,
+        // and the page loop below reads `inner` before anything else, so a
+        // failed row still ends the walk with its own Status. `nr_slots` is
+        // the page's slot count, read once per page by the loop that owns
+        // it.
+        const auto visit_slot = [&](PageId page_id, heap::PageView& page, std::uint16_t slot,
+                                    std::uint16_t nr_slots) -> storage::VisitControl {
             if (walk_ends_on_stop()) return stop_here();
 
             // The walk's page count, exact by construction: the chain hands
@@ -1941,7 +1952,8 @@ private:
                 // The walk is the hottest path there is, and JB5's gate
                 // priced a two-nanosecond per-row guard as visible.
                 if (!prefixed) {
-                    return AcceptTupleAt(steps, index, step, *live_access, page_id, page, at);
+                    return AcceptTupleAt(steps, index, step, *live_access, page_id, page, at,
+                                         nr_slots);
                 }
                 const std::uint32_t ordinal = visited_on_page++;
                 // A btree row's key, for the key mark. A retired slot has
@@ -1949,7 +1961,7 @@ private:
                 // `AcceptTupleAt` declines it.
                 std::uint64_t pk = 0;
                 if (keyed_mark) {
-                    auto payload = page.PayloadAt(at, page.slot_count());
+                    auto payload = page.PayloadAt(at, nr_slots);
                     if (payload.ok()) {
                         auto id = KeystoneIdOfPayload(payload.value());
                         if (!id.ok()) return id.status();
@@ -1963,7 +1975,8 @@ private:
                     keyed_mark ? resume_page != kInvalidPageId && pk != 0 && pk <= resume_pk
                                : page_id == resume_page && ordinal < resume_visited;
                 if (covered) return Status::OK();
-                Status s = AcceptTupleAt(steps, index, step, *live_access, page_id, page, at);
+                Status s =
+                    AcceptTupleAt(steps, index, step, *live_access, page_id, page, at, nr_slots);
                 if (!s.ok() || mark_frozen) return s;
                 if (extending && building_->over_cap) {
                     // The cap stopped the map *at* this row, which was
@@ -1982,23 +1995,45 @@ private:
                 return s;
             };
 
-            auto accepted = accept(slot);
-            if (!accepted.ok()) {
-                inner = accepted;
-                return accepted;
+            if (Status accepted = accept(slot); !accepted.ok()) {
+                inner = std::move(accepted);
+                return storage::VisitControl::kStop;
             }
             return walk_ends_on_stop() ? stop_here() : storage::VisitControl::kContinue;
         };
 
         NoteFetch();
 
-        // Converted to std::function once, outside the page loop: the
-        // primitives take `const std::function&`, and re-wrapping the
-        // by-reference lambda per page would be a heap allocation per page
-        // where the whole-chain walk paid one per walk.
+        // **A btree leaf's slot loop is the walk's own** (BM-R5): one fetch
+        // and one slot-count read per leaf, and the visitor called directly
+        // per slot. `btree::BtreeVisitLeafPage` makes the same walk through
+        // a `std::function`, for its other callers (UPDATE's and DELETE's
+        // row loops); the page's type check is the one it makes.
+        const auto visit_leaf = [&](PageId leaf_id,
+                                    storage::PageAccess access_mode) -> StatusOr<PageId> {
+            auto leaf_ref = btree::BtreeFetchLeaf(store_, leaf_id, access_mode);
+            if (!leaf_ref.ok()) return leaf_ref.status();
+            heap::PageView leaf(leaf_ref.value().bytes());
+            const std::uint16_t n = leaf.slot_count();
+            for (std::uint16_t i = 0; i < n; ++i) {
+                // A stop leaves the leaves to the right unfetched, as the
+                // primitive's early exit does.
+                if (visit_slot(leaf_id, leaf, i, n) == storage::VisitControl::kStop) {
+                    return kInvalidPageId;
+                }
+            }
+            return leaf.next_page_id();
+        };
+
+        // A heap chain's page is still visited through its primitive, which
+        // takes `const std::function&`: relations created before SUS-1. Its
+        // slot count is read per slot there, as before.
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>
-            visit_fn = visitor;
+            visit_fn = [&](PageId page_id, heap::PageView& page,
+                           std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            return visit_slot(page_id, page, slot, page.slot_count());
+        };
 
         // ---- The head seek (kRange on a clustered relation) --------------
         //
@@ -2087,7 +2122,7 @@ private:
             // Per page, not once per walk: the VM makes these fetches
             // itself now, so R1's guard gets to see each one.
             NoteFetch();
-            auto next = is_btree ? btree::BtreeVisitLeafPage(store_, cur, walk_access, visit_fn)
+            auto next = is_btree ? visit_leaf(cur, walk_access)
                                  : heap::ChainVisitOnePage(store_, cur, walk_access, visit_fn);
             if (!inner.ok()) co_return inner;
             if (!next.ok()) co_return next.status();
@@ -2199,6 +2234,14 @@ private:
     Status AcceptTupleAt(const std::vector<Step>& steps, std::size_t index, const Step& step,
                          const catalog::TableAccess& access, PageId page_id,
                          heap::PageView& page, std::uint16_t slot) {
+        return AcceptTupleAt(steps, index, step, access, page_id, page, slot, page.slot_count());
+    }
+
+    // The same, with the page's slot count the caller has already read - a
+    // walk reads it once per page (BM-R5).
+    Status AcceptTupleAt(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                         const catalog::TableAccess& access, PageId page_id,
+                         heap::PageView& page, std::uint16_t slot, std::uint16_t nr_slots) {
         bool decoded = false;
         // Filled by the decode, drained after the span is released. A
         // spilled value lives in the var-heap and fetching it is a page
@@ -2234,7 +2277,7 @@ private:
         {
             PageSpanGuard span;
             observed_epoch = page.RelayoutEpoch();
-            auto tuple = page.ReadTuple(slot);
+            auto tuple = page.ReadTupleIn(slot, nr_slots);
             if (tuple.ok()) {
                 switch (txn::Classify(snapshot_.view, tuple.value())) {
                     case txn::Visibility::kNoVersion:
@@ -2321,11 +2364,25 @@ private:
         const bool recording_here =
             recording_ != nullptr && recording_->step_id == step.step_id;
         const bool partial = step.filter_columns != Step::kAllColumns;
+
+        // **What cannot change within the statement is checked once**
+        // (BM-R6): the decode's schema-and-layout checks and the residual's
+        // malformed-chain checks depend on the step, its relation and the
+        // frame's shape, never on a row. Here, at the first visible row of
+        // the step by any access kind - a walk, a descent, the probe memo,
+        // a replay, a Cabin resolve - and before anything reads a cell, so
+        // a malformed chain is refused at the row it is refused at today
+        // (an empty relation still is not), and every later row pays the
+        // payload's length check alone. A later conjunct's malformation is
+        // refused here even where an earlier conjunct false on every row
+        // used to mask it (BM-Q7).
+        if (Status s = CheckStepShapeOnce(step, access, slots); !s.ok()) return s;
+
         // Decoded and then, once nothing is live, resolved - one call,
         // because the same three lines at four sites is how one of them
         // drifts into handing back the previous row's value (row_codec.hpp).
         if (Status s = DecodeAndResolve(store_, access.schema, access.layout, version_, slots,
-                                        step.filter_columns, spills_);
+                                        step.filter_columns, spills_, DecodeChecks::kPayloadOnly);
             !s.ok()) {
             return s;
         }
@@ -2417,12 +2474,15 @@ private:
         // equality emits nothing today and is precisely what a later
         // outer row's probe will ask for.
         const bool building_here = building_ != nullptr && building_->step_id == step.step_id;
-        auto matched = building_here
-                           ? EvaluateAllExcept(schemas_, step.residual, frame_,
-                                               building_->residual_pos)
-                           : EvaluateAll(schemas_, step.residual, frame_);
-        if (!matched.ok()) return matched.status();
-        if (!matched.value()) return Status::OK();
+        if (building_here) {
+            auto matched = EvaluateAllExcept(schemas_, step.residual, frame_,
+                                             building_->residual_pos);
+            if (!matched.ok()) return matched.status();
+            if (!matched.value()) return Status::OK();
+        } else if (!EvaluateAllChecked(schemas_, step.residual, frame_)) {
+            // Checked once above, so the comparisons alone.
+            return Status::OK();
+        }
         // The function conjuncts (AP-S4), on the row the residual kept.
         // A step carrying one takes no build annotation (step_compiler.cpp),
         // so this never runs while a map is being filled.
@@ -2495,11 +2555,11 @@ private:
         const std::uint64_t rest = step.read_columns & ~step.filter_columns;
         if (partial && rest != 0) {
             if (Status s = DecodeAndResolve(store_, access.schema, access.layout, version_, slots,
-                                            rest, spills_);
+                                            rest, spills_, DecodeChecks::kPayloadOnly);
                 !s.ok()) {
                 return s;
             }
-            stats_.For(step.step_id).spill_fetches += spills_.size();
+            step_stats.spill_fetches += spills_.size();
         }
 
         // Counted after the residual and *before* the sub-chains: this is
@@ -2555,6 +2615,21 @@ private:
         // A deeper local step, driven synchronously: one frame per row on
         // multi-step chains only.
         return RunToCompletionAtWalkBoundary(RunStep(steps, index + 1));
+    }
+
+    // BM-R6's once: a step's decode shape and residual checked at its first
+    // visible row of the statement, by whichever access kind reaches it.
+    Status CheckStepShapeOnce(const Step& step, const catalog::TableAccess& access,
+                              std::span<const parser::AstValue> slots) {
+        std::vector<bool>& checked = statement_->shape_checked;
+        if (step.step_id < checked.size() && checked[step.step_id]) return Status::OK();
+        if (Status s = CheckDecodeShape(access.schema, access.layout, slots); !s.ok()) return s;
+        for (const StepPredicate& pred : step.residual) {
+            if (Status s = CheckConjunct(schemas_, pred, frame_); !s.ok()) return s;
+        }
+        if (step.step_id >= checked.size()) checked.resize(step.step_id + 1);
+        checked[step.step_id] = true;
+        return Status::OK();
     }
 
     catalog::Catalog& catalog_;

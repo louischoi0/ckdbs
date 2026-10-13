@@ -1288,15 +1288,22 @@ Status BtreeVisitFrom(
     }
 }
 
-StatusOr<PageId> BtreeVisitLeafPage(
-    storage::PageStore& store, PageId leaf_id, storage::PageAccess access,
-    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
-        fn) {
+StatusOr<storage::PageRef> BtreeFetchLeaf(storage::PageStore& store, PageId leaf_id,
+                                          storage::PageAccess access) {
     auto bytes = store.Fetch(leaf_id, access);
     if (!bytes.ok()) return bytes.status();
     if (Status s = RequireType(bytes.value().bytes(), leaf_id, PageType::kBtreeLeaf); !s.ok()) {
         return s;
     }
+    return bytes;
+}
+
+StatusOr<PageId> BtreeVisitLeafPage(
+    storage::PageStore& store, PageId leaf_id, storage::PageAccess access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
+        fn) {
+    auto bytes = BtreeFetchLeaf(store, leaf_id, access);
+    if (!bytes.ok()) return bytes.status();
     heap::PageView leaf(bytes.value().bytes());
 
     const std::uint16_t n = leaf.slot_count();

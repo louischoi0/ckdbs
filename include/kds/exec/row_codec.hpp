@@ -197,10 +197,26 @@ inline const parser::AstValue kUndecoded = [] {
 // allocates once rather than per row; the decoders clear it themselves. It
 // is left filled on return, which is what lets a caller count what it
 // fetched (the step VM's `spill_fetches`).
+// **Which of the decode's front checks a call runs** (BM-R6,
+// `workorder-bm-scan-row-kernel.md`). Three of the four depend only on the
+// schema, the layout and the target span, which a walk binds once; the
+// fourth, the payload's length, depends on the row (invariant 13).
+// `kPayloadOnly` is for a caller that has already passed
+// `CheckDecodeShape` for this schema, layout and span - the step VM, once
+// per step per statement - and keeps the per-row check.
+enum class DecodeChecks : std::uint8_t { kAll, kPayloadOnly };
+
+// The schema-and-layout half of the decode's checks, with the messages the
+// decoders give: the Keystone column, the layout against the schema, the
+// target span's size.
+Status CheckDecodeShape(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                        std::span<const parser::AstValue> out);
+
 Status DecodeAndResolve(storage::PageStore& store, const catalog::Schema& schema,
                         const catalog::RowLayout& layout, std::span<const std::byte> payload,
                         std::span<parser::AstValue> out, std::uint64_t columns,
-                        std::vector<PendingSpill>& scratch);
+                        std::vector<PendingSpill>& scratch,
+                        DecodeChecks checks = DecodeChecks::kAll);
 
 // Rewrites a literal into the storage form of `col`'s type, in place
 // (docs/spec/types.md §3.1).
@@ -333,11 +349,13 @@ StatusOr<std::vector<parser::AstValue>> DecodeRow(const catalog::Schema& schema,
 // happen after the caller's span is released.
 Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                          std::span<const std::byte> payload, std::span<parser::AstValue> out,
-                         std::uint64_t columns, std::vector<PendingSpill>* spills);
+                         std::uint64_t columns, std::vector<PendingSpill>* spills,
+                         DecodeChecks checks = DecodeChecks::kAll);
 
 Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                      std::span<const std::byte> payload, std::span<parser::AstValue> out,
-                     std::vector<PendingSpill>* spills = nullptr);
+                     std::vector<PendingSpill>* spills = nullptr,
+                     DecodeChecks checks = DecodeChecks::kAll);
 
 // One column, from a cell the caller located itself.
 //

@@ -230,8 +230,12 @@ Status PageView::UnInsertTuple(std::uint16_t slot_idx) {
 }
 
 StatusOr<PageView::Tuple> PageView::ReadTuple(std::uint16_t slot_idx) const {
-    HeapPageHeaderFields h = ReadHeader();
-    if (slot_idx >= h.nr_slots) {
+    return ReadTupleIn(slot_idx, slot_count());
+}
+
+StatusOr<PageView::Tuple> PageView::ReadTupleIn(std::uint16_t slot_idx,
+                                                std::uint16_t nr_slots) const {
+    if (slot_idx >= nr_slots) {
         return Status::NotFound("slot index out of range");
     }
 

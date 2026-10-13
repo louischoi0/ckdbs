@@ -482,8 +482,12 @@ as the non-match it is.
 - No allocation per row (`parser-v2.md` §7).
 - `pages_fetched`, the range-bound stop and JB6's resume marks keep their
   per-slot meaning.
-- Counters are kept in locals. They are written to `StepStats` once per
-  page and on every way out of it: a stop, an error, a slice boundary.
+- Counters stay in `StepStats`, through `ExecStats::For` - one size
+  compare and an index, inlined. *Revised at BM-S2's review and adopted on
+  the operator's standing go-ahead of 2026-10-13
+  (go-ahead-achieving-milestone):* locals flushed per page were the
+  proposal, and a reference cache built in their place cost more compares
+  than the lookup it replaced; neither is a measured part of the row.
 
 ### BM-R6 — What cannot change within a walk is checked once
 
@@ -534,7 +538,7 @@ Workflow step 3).
 |---|---|---|---|
 | BM-S0 | **The order** | <ul><li>This file</li><li>Its review (§6)</li><li>The index row</li><li>`raft-marks-2026-10-12.md` §1-§3</li></ul> | S |
 | BM-S1 | **The premise, measured** (BM-R8) | <ul><li>**Code: instrumentation only, no behaviour change:**<ul><li>a count of `LookupCommit` calls, a `Tally` in `base/contention.hpp`: `SHOW META` prints it summed as `contention_visibility_window_lookups` and, above one core, per core as `load_c<k>_visibility_window_lookups` (one relaxed add on the asking core's own slot per lookup, which the writer cell carries on both sides of any A/B);</li><li>`tools/bn_parts.json` split so the row walk's parts (loop and callback, visibility, decode, residual, copy) are separate parts rather than one `descent and page access`.</li></ul></li><li>**The drivers:** `tools/bn_census.py` and `tools/bn_pg_scan.py` extended with §5.1's shapes and their PostgreSQL twins.</li><li>**The measurement** (§5.1), into `bench/v3.0.0/results-bm-s1-scan-row-<describe>.md`.</li><li>**The gates** (BM-Q1, BM-Q8).</li><li>**The suite green.**</li></ul> | M |
-| BM-S2 | **The walk owns its slot loop; the walk's invariants checked once** (BM-R5, BM-R6). No result can change | <ul><li>**Code:**<ul><li>the VM owns the leaf's slot loop for a btree relation: it fetches the leaf, checks its type and walks its slots itself, so the shared primitive `btree::BtreeVisitLeafPage` - which `UPDATE` and `DELETE` also reach (`command_dispatcher.cpp:6509`) - and the heap's `heap::ChainVisitOnePage` (`heap_chain.cpp:315`, served for pre-SUS-1 relations) keep their `std::function` form and their callers (not `FunctionRef`, §1.2; chosen at the opening review over a templated primitive, which would have changed both write paths);</li><li>`ReadTuple`'s checks with the header read once per page: BF-R10's bound and the payload check kept, and a refused slot no row, as today (§1.3);</li><li>counters in locals, flushed per page and at every way out a reader sees: a stop, the walk's end, a slice boundary;</li><li>the once-per-walk check of BM-R6.</li></ul></li><li>**Cells:**<ul><li>a three-leaf relation emits in slot order across both boundaries;</li><li>`LIMIT 1` and a true `EXISTS` stopping mid-page leave `pages=` at 1 and `examined=` at the stopping row's ordinal plus one;</li><li>an empty relation and an empty leaf leave `pages=` at 0;</li><li>a slot whose offset leaves the page is no row, as today;</li><li>a hand-built chain with an out-of-range `col_pos` is refused `Corruption` with today's message at the first row, and not on an empty relation - through a walk and through a lookup step;</li><li>an inner-build prefix resuming mid-page (JB6, `step_vm.cpp:1946-1981`) emits each row once;</li><li>a range walk stops on the first slot past `range_high` with `range_pages_pruned` at 1 (`:1927-1929`);</li><li>a payload of the wrong length is refused as today.</li></ul></li><li>**Mutations, each repeated:**<ul><li>the stop deferred to the page's end (killed by the stop cell's `examined=`);</li><li>the counters not flushed on a stop (killed by the stop cell);</li><li>the once-per-statement check skipped (killed by the malformed-chain cell);</li><li>the check's flag set by the walk only (killed by the lookup-step arm of that cell).</li></ul></li><li>**The contract suites byte-identical** (waystone, index, cabin, inner-build) and the suite green.</li></ul> | M |
+| BM-S2 | **The walk owns its slot loop; the walk's invariants checked once** (BM-R5, BM-R6). No result can change | <ul><li>**Code:**<ul><li>the VM owns the leaf's slot loop for a btree relation: it fetches the leaf, checks its type and walks its slots itself, so the shared primitive `btree::BtreeVisitLeafPage` - which `UPDATE` and `DELETE` also reach (`command_dispatcher.cpp:6509`) - and the heap's `heap::ChainVisitOnePage` (`heap_chain.cpp:315`, served for pre-SUS-1 relations) keep their `std::function` form and their callers (not `FunctionRef`, §1.2; chosen at the opening review over a templated primitive, which would have changed both write paths);</li><li>`ReadTuple`'s checks with the header read once per page: BF-R10's bound and the payload check kept, and a refused slot no row, as today (§1.3);</li><li>the once-per-walk check of BM-R6.</li></ul></li><li>**Cells:**<ul><li>a three-leaf relation emits in slot order across both boundaries;</li><li>`LIMIT 1` and a true `EXISTS` stopping mid-page leave `pages=` at 1 and `examined=` at the stopping row's ordinal plus one;</li><li>an empty relation and an empty leaf leave `pages=` at 0;</li><li>a slot whose offset leaves the page is no row, as today;</li><li>a hand-built chain with an out-of-range `col_pos` is refused `Corruption` with today's message at the first row, and not on an empty relation - through a walk and through a lookup step;</li><li>an inner-build prefix resuming mid-page (JB6, `step_vm.cpp:1946-1981`) emits each row once;</li><li>a range walk stops on the first slot past `range_high` with `range_pages_pruned` at 1 (`:1927-1929`);</li><li>a payload of the wrong length is refused as today.</li></ul></li><li>**Mutations, each repeated:**<ul><li>the stop deferred to the page's end (killed by the range cell's `range_pages_pruned` and the wrong-length cell's rows: a stop changes no counter the sink-stop cell reads);</li><li>the once-per-statement check skipped (killed by the malformed-chain cell);</li><li>the check's flag set by the walk only (killed by the lookup-step arm of that cell).</li></ul></li><li>**The contract suites byte-identical** (waystone, index, cabin, inner-build) and the suite green.</li></ul> | M |
 | BM-S3 | **The kernel, integer-encoded types** (BM-R1..R4): the int widths, `uint64`, bool, date, timestamp, decimal, `decimal128` | <ul><li>**Code:**<ul><li>the kernel compiled per step at bind from the residual (BM-R4);</li><li>evaluated in `AcceptTupleAt`, the one place every read access kind reaches (`UPDATE` and `DELETE` filter through `EvaluateConjuncts`, `step_vm.cpp:2874`, `command_dispatcher.cpp:8419-8420`, and are not BM's), before the copy for a visible version and after the undo walk for a reconstructed one (BM-R3);</li><li>a rejected row examined and charged (BM-R2);</li><li>the switch, as BM-Q5 marks.</li></ul></li><li>**Cells:**<ul><li>**the differential matrix**: for every kernel type × the six operators × literals at each boundary (the type's min and max, ±1, 0, `INT64_MAX` and above for `uint64`, negative and positive `decimal128` halves), the kernel's verdict equals `CompareValues`' for every non-NULL operand, and it rejects no row whose operand is NULL (BM-Q3);</li><li>a literal above an `int32` column's range answers as today's int64 comparison under all six operators: every row under `<`, `<=` and `<>`, none under `=`, `>` and `>=`;</li><li>a pk-range conjunct on column 0 over a hand-built leaf whose Keystone flags or reserved byte is nonzero (the engine never writes one, `keystone.hpp:29-35`), and over an `int32` and an `int16` pk;</li><li>`decimal128` values that differ only in the low half, across 2^63;</li><li>a malformed non-kernel conjunct, on a relation whose every row the kernel rejects, is still refused at the first row (BM-R6);</li><li>**MVCC**: a committed row with `w = 5` updated to `w = 6` by a writer the reader cannot see is returned by `WHERE w = 5`;</li><li>**recording**: under a live recording of `sym`, a row with `sym = 'A'` that `qty > 5` rejects enters the set, and a later served `WHERE sym = 'A'` returns it;</li><li>**budget**: with `max_rows_touched` below the relation and every row kernel-rejected, `ResourceExhausted` falls on the same row as with the kernel off;</li><li>`ANALYZE`'s `examined=` and `sel=` equal on and off;</li><li>the inner build's correlated conjunct is never in a kernel.</li></ul></li><li>**Mutations, each repeated:**<ul><li>`uint64` compared signed (killed by the `INT64_MAX` cell);</li><li>`<=` compiled as `<` (killed by the boundary cell);</li><li>column 0 read as its 8-byte cell (killed by the flags cell);</li><li>column 0 sign-extended at its declared width (killed by the narrow-pk arm of the flags cell);</li><li>a literal truncated to an `int32` column's width (killed by the above-range cell);</li><li>sign extension omitted on a narrow int (killed by the matrix's minimum values);</li><li>the `decimal128` low half compared signed (killed by the low-half cell);</li><li>the kernel reading the page for a reconstructed version (killed by the MVCC cell);</li><li>the kernel consulted during recording (killed by the recording cell);</li><li>a kernel-rejected row not charged (killed by the budget cell).</li></ul></li><li>**The contract suites byte-identical with the switch on and off**, and the suite green.</li></ul> | M |
 | BM-S4 | **The kernel, strings**: `char(N)` and an inline `varchar` cell | <ul><li>**Code:**<ul><li>`char(N)` compared after the NUL trim `DecodeOneValueInto` applies;</li><li>a `varchar` cell compared only through `DecodeCell` (`src/storage/tagged_cell.cpp:99-123`), and only when it answers an inline value. Any other answer (spilled, NULL-tagged, or a refusal) goes to the residual, which answers or refuses it as today.</li></ul></li><li>**Cells:**<ul><li>values shorter than N and exactly N;</li><li>a literal longer than N;</li><li>a spilled value equal to the literal is returned;</li><li>a NULL-tagged cell under a present bit is still `Corruption`;</li><li>an inline cell whose length exceeds its capacity is still `Corruption`.</li></ul></li><li>**Mutations, each repeated:**<ul><li>the trim removed (killed by the short-value cell);</li><li>a spilled cell compared by its inline bytes (killed by the spilled cell);</li><li>`DecodeCell` bypassed and the inline length trusted (killed by the over-capacity cell).</li></ul></li><li>**The suite green.**</li></ul> | S |
 | BM-S5 | **A recent row's visibility** (BM-R7), **only if BM-Q8's gate opens it** - **struck at BM-S1** (3.8 % against 10 %, §6) | <ul><li>**Code:**<ul><li>the floor read once per page;</li><li>the per-walk verdict memo.</li></ul></li><li>**Cells** (two-core rig):<ul><li>a writer committing above the reader's snapshot mid-walk stays invisible for every row of it;</li><li>a floor rising mid-walk changes no verdict;</li><li>a second statement after the commit sees it;</li><li>a page holding the rows of two writers, one visible and one not, answers each row by its own writer.</li></ul></li><li>**Mutations, each repeated:**<ul><li>the memo kept across statements (killed by the second-statement cell);</li><li>the memo keyed by page rather than by transaction (killed by a page holding two writers' rows).</li></ul></li><li>**The suite green** and the sim corpus.</li></ul> | S |
@@ -715,3 +719,50 @@ and its drivers are `tools/bm_scan.py`, `tools/bm_scan_table.py`,
   twin for the writers cell, the twin's prepared path, any census at
   `cores > 1`, and `strict` in the writers cell.
 - The drivers' review rides with BM-S2's.
+
+### BM-S2 — the walk owns its btree slot loop; a step's shape checked once
+
+On `worktree-bm-scan-kernel-open` from `23dfdbb8`.
+- **Code:**
+  - the outermost walk fetches each btree leaf through
+    `btree::BtreeFetchLeaf` (the type check `BtreeVisitLeafPage` makes, now
+    shared by both) and calls its slot visitor directly, with no
+    `std::function` and no `StatusOr` per slot; a failed row is parked in
+    `inner` and answered as a stop. `BtreeVisitLeafPage`, which UPDATE and
+    DELETE reach, and the heap's `ChainVisitOnePage` keep their form;
+  - `PageView::ReadTupleIn(slot, nr_slots)`, `ReadTuple`'s checks with the
+    slot count the walk read once per leaf;
+  - `CheckDecodeShape` and `DecodeChecks::kPayloadOnly` in the codec, and
+    `CheckConjunct` / `EvaluateAllChecked` split out of `EvaluateConjunct`,
+    with every message unchanged;
+  - `CheckStepShapeOnce` in `AcceptTupleAt`, flagged per step id in the
+    statement's `StatementStore`, so every access kind runs it and a
+    sub-chain rebuilt per outer row does not re-check or re-allocate.
+- **Cells** (`tests/scan_row_walk_test.cpp`): three leaves in slot order
+  with one `pages_fetched` each; a sink stop mid-leaf (`pages` 1, `examined`
+  7) - the stop `LIMIT` uses; an empty relation (no page, no refusal of a
+  malformed chain); the range stop (`range_pages_pruned` 1, `pages` 2); a
+  column past the frame refused with today's message; a `$param` refused
+  through a walk and through a lookup step; BM-Q7's masked later conjunct
+  refused; a wrong-length payload refused on its own row after five good
+  ones; a slot whose offset leaves the page is no row; a true uncorrelated
+  `EXISTS` stopping its walk mid-leaf. JB6's mid-page resume with the slot
+  count is `exec_chain_test.cpp`'s
+  `AResumedPrefixCoversEveryInnerRowAcrossADivideThatDropsARetiredSlot`.
+  **Not built:** an empty non-root leaf, which no SQL path leaves standing
+  without a hand-built tree.
+- **Mutations**, each run twice, all killed: the stop deferred to the
+  leaf's end (the range and wrong-length cells); the check skipped (five
+  cells); the check's flag set by the walk only (the lookup cell).
+- **Review** (`critics-developer`): no blocker; rows, order, counters and
+  refusals unchanged but for BM-Q7. Applied: the flag moved from the
+  runner to `StatementStore` (a correlated sub-chain allocated it per
+  outer row); the counter cache deleted and BM-R5 revised to keep
+  `ExecStats::For`; the slot-count sentinel replaced by an overload;
+  `ReadTuple` reads `slot_count()` alone; mutation (a)'s kill re-attributed;
+  the lookup cell made to fail without an out-of-bounds read; the slot,
+  `$param` and `EXISTS` cells added. The drivers' findings (lookups per row
+  read from the instance total rather than the scan core's slot, a
+  `SHOW META`'s own lookups not subtracted, unused `Cell.pg_sql` and
+  `rowfn`, a second server class) are taken at the close, where the drivers
+  run again; none moves either gate, since each errs upward.

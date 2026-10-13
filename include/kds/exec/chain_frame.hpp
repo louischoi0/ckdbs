@@ -129,6 +129,20 @@ StatusOr<bool> EvaluatePredicate(const catalog::Schema& lhs_schema, const StepPr
 StatusOr<bool> EvaluateConjunct(const std::vector<const catalog::Schema*>& schemas,
                                 const StepPredicate& pred, const ChainFrame& frame);
 
+// EvaluateConjunct's checks alone - the `$param` refusal and the
+// malformed-chain checks, with their messages - for a caller that checks a
+// step's conjuncts once and then compares per row (BM-R6,
+// `workorder-bm-scan-row-kernel.md`). They depend only on the chain and the
+// frame's shape, never on a row.
+Status CheckConjunct(const std::vector<const catalog::Schema*>& schemas,
+                     const StepPredicate& pred, const ChainFrame& frame);
+
+// EvaluateAll on conjuncts that have each passed `CheckConjunct` against
+// this frame: the comparisons alone, with no check and no Status. The same
+// verdict EvaluateAll gives on a well-formed chain.
+bool EvaluateAllChecked(const std::vector<const catalog::Schema*>& schemas,
+                        const std::vector<StepPredicate>& predicates, const ChainFrame& frame);
+
 // Every conjunct attached to one step. Empty always matches.
 StatusOr<bool> EvaluateAll(const std::vector<const catalog::Schema*>& schemas,
                            const std::vector<StepPredicate>& predicates, const ChainFrame& frame);

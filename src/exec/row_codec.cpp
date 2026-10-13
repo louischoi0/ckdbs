@@ -976,10 +976,31 @@ StatusOr<std::vector<std::byte>> EncodeAssigned(const catalog::Schema& schema,
 namespace {
 
 // The shared front half of both decoders: everything that has to be true
-// before a single cell is read.
+// before a single cell is read. Under `kPayloadOnly` the caller has passed
+// `CheckDecodeShape` for this schema, layout and span already, and only the
+// row's own check runs.
 Status CheckDecodeInputs(const catalog::Schema& schema, const catalog::RowLayout& layout,
                          std::span<const std::byte> payload,
-                         std::span<parser::AstValue> out) {
+                         std::span<const parser::AstValue> out, DecodeChecks checks) {
+    if (checks == DecodeChecks::kAll) {
+        if (Status s = CheckDecodeShape(schema, layout, out); !s.ok()) return s;
+    }
+    // Checked redundancy (invariant 13): the row size is a schema constant,
+    // so a stored payload of any other length is not a row this build can
+    // interpret - the slot's `length` and the header's `data_len` add no
+    // information the schema does not already give.
+    if (payload.size() != layout.row_size) {
+        return Status::Corruption("tuple payload is " + std::to_string(payload.size()) +
+                                   " bytes for a relation whose row size is " +
+                                   std::to_string(layout.row_size));
+    }
+    return Status::OK();
+}
+
+}  // namespace
+
+Status CheckDecodeShape(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                        std::span<const parser::AstValue> out) {
     // **The predicate first, the Status only on failure.** `Status` carries
     // a `std::string` by value, so calling a Status-returning checker
     // constructs and destroys one even when it passes - and this function
@@ -999,17 +1020,10 @@ Status CheckDecodeInputs(const catalog::Schema& schema, const catalog::RowLayout
                                         " slot(s) for a schema of " +
                                         std::to_string(schema.columns.size()) + " column(s)");
     }
-    // Checked redundancy (invariant 13): the row size is a schema constant,
-    // so a stored payload of any other length is not a row this build can
-    // interpret - the slot's `length` and the header's `data_len` add no
-    // information the schema does not already give.
-    if (payload.size() != layout.row_size) {
-        return Status::Corruption("tuple payload is " + std::to_string(payload.size()) +
-                                   " bytes for a relation whose row size is " +
-                                   std::to_string(layout.row_size));
-    }
     return Status::OK();
 }
+
+namespace {
 
 // A decoded NULL slot, whole: type decides, and every value field is
 // cleared - int_val, scale and dec_hi included - so no consumer that
@@ -1039,9 +1053,10 @@ Status DecodeKeystoneInto(std::span<const std::byte> payload, parser::AstValue& 
 
 Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                          std::span<const std::byte> payload, std::span<parser::AstValue> out,
-                         std::uint64_t columns, std::vector<PendingSpill>* spills) {
+                         std::uint64_t columns, std::vector<PendingSpill>* spills,
+                         DecodeChecks checks) {
     if (spills != nullptr) spills->clear();
-    if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
+    if (Status s = CheckDecodeInputs(schema, layout, payload, out, checks); !s.ok()) return s;
 
     // **Iterate the mask's set bits, not the relation's columns.** A fold or
     // a projection reading one column of twelve used to test twelve bits to
@@ -1086,7 +1101,7 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
 
 Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                      std::span<const std::byte> payload, std::span<parser::AstValue> out,
-                     std::vector<PendingSpill>* spills) {
+                     std::vector<PendingSpill>* spills, DecodeChecks checks) {
     if (spills != nullptr) spills->clear();
     // The same four checks DecodeColumnsInto makes, through the same
     // function - which is the point. Calling the two Status-returning
@@ -1095,7 +1110,7 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     // and left standing here; and stating the checks twice invited the two
     // statements of them to drift
     // (CIP/OPT-004-decoderowinto-preconditions/proposal.md).
-    if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
+    if (Status s = CheckDecodeInputs(schema, layout, payload, out, checks); !s.ok()) return s;
 
     auto id = KeystoneIdOfPayload(payload);
     if (!id.ok()) return id.status();
@@ -1172,10 +1187,13 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
 Status DecodeAndResolve(storage::PageStore& store, const catalog::Schema& schema,
                         const catalog::RowLayout& layout, std::span<const std::byte> payload,
                         std::span<parser::AstValue> out, std::uint64_t columns,
-                        std::vector<PendingSpill>& scratch) {
+                        std::vector<PendingSpill>& scratch, DecodeChecks checks) {
     if (columns == kAllColumnsMask) {
-        if (Status s = DecodeRowInto(schema, layout, payload, out, &scratch); !s.ok()) return s;
-    } else if (Status s = DecodeColumnsInto(schema, layout, payload, out, columns, &scratch);
+        if (Status s = DecodeRowInto(schema, layout, payload, out, &scratch, checks); !s.ok()) {
+            return s;
+        }
+    } else if (Status s =
+                   DecodeColumnsInto(schema, layout, payload, out, columns, &scratch, checks);
                !s.ok()) {
         return s;
     }

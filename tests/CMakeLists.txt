@@ -182,6 +182,7 @@ add_executable(kds_tests
     inner_build_contract_test.cpp
     step_correlation_test.cpp
     exec_chain_test.cpp
+    scan_row_walk_test.cpp
     exec_subquery_test.cpp
     exec_budget_test.cpp
     subsystem_logging_test.cpp
