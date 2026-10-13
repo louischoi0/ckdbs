@@ -430,7 +430,8 @@ void RunPlacedSequence(server::TwoCoreRig& rig, int padding_rows) {
     // BEGIN (`wal.md` §11-2), and the fold with it. A fetch whose stamp has
     // not come by the clean moves the generation and stamps nothing, so Q
     // stays dirty at `q` - the state §1.4 needs, reached in production by a
-    // write fetched after the copy and stamped after the clean.
+    // write fetch after the copy that writes nothing (a refused write) or
+    // has not stamped by the clean. This one fetches and does not write.
     //
     // **Every copy of Q the checkpoint makes is raced, not only the first.**
     // The anchor's publish syncs the whole store

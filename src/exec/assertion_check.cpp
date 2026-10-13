@@ -876,6 +876,20 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
         // run before a flag is OR'd into whatever lives at that slot. It and
         // the record are one step under the directory latch, for the snapshot
         // (the header's paragraph); the mark is page work and runs after.
+        //
+        // **The page is held from before the record to after its stamp**
+        // (`wal.md` §8-1), the cabin page's latch ahead of the directory
+        // latch as the header orders them. Taken after the append, the
+        // record existed while the page did not yet carry its mark: another
+        // core's stamp in between was followed by this one, lowering
+        // `page_lsn`, and a writeback copy before the mark whose clean that
+        // stamp skipped moved the recLSN above the record (`WriteBack`) - a
+        // checkpoint could then flush the page unmarked and publish a redo
+        // start past `ASSERT_ROLLBACK`, and a crash lose the mark. A dropped
+        // assertion frees no page, so the fetch ahead of the `live_` check
+        // is sound.
+        auto page = store.Get(it->page);
+        if (!page.ok()) return page.status().WithContext("assert abort: fetching the entry page");
         wal::Lsn stamp = wal::kNoLsn;
         {
             const LatchGuard guard(latch_.get());
@@ -913,8 +927,6 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
         // in `docs/spec/assertion.md` §7). Unconditional, not `wal != nullptr`:
         // the mark is a data change, and skipping it without a log would leave
         // a page the next scan misreads.
-        auto page = store.Get(it->page);
-        if (!page.ok()) return page.status().WithContext("assert abort: fetching the entry page");
         auto view = BoundCabinPage::Open(page.value().bytes());
         if (!view.ok()) return view.status().WithContext("assert abort: opening the entry page");
         if (Status s = view.value().MarkOrphaned(it->index); !s.ok()) {

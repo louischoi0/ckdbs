@@ -80,7 +80,7 @@ Raw spans are unsafe the moment eviction exists; the interface fixes it structur
 - `PageRef` is a move-only RAII guard: construction pins the frame, destruction unpins. It exposes `page_id()`, `bytes()` (fixed-extent span, valid exactly as long as the ref lives), `MarkDirty()`, and `page_class()`.
 - `PageStore` contract: `CreateAt(page_id) → StatusOr<PageRef>`, `CreateNew() → StatusOr<pair<PageId, PageRef>>`, `Get(page_id) → StatusOr<PageRef>`, `GetForRead(page_id) → StatusOr<PageRef>`. Unbalanced unpins are impossible by construction; `Frame` is an implementation detail no caller names.
 - Pin discipline: holding a `PageRef` across a task suspension point is legal but metered (§11) — suspended portals and long scans are the known holders.
-- A stamp records the frame's `recLSN` (the lowest LSN stamped since the last clean) — the hook feeding the checkpoint dirty-page table (§8).
+- A stamp records the frame's `recLSN` (the lowest LSN stamped since the last clean, or since the copy of a clean the dirty generation skipped) — the hook feeding the checkpoint dirty-page table (§8).
 
 ## 4. Single-File Store
 
@@ -144,7 +144,7 @@ Owns "which page_ids exist / are free" inside the disk-backed store, behind the 
 
 The pool enforces the WAL contract in code, not by caller discipline:
 
-- Each frame tracks `dirty`, `recLSN` (the lowest LSN stamped since the last clean), and a `page_lsn` mirror. A mutation path appends its record, then `StampPageLsn()` with the record's LSN, which records the `page_lsn` the gate reads and lowers the frame's `recLSN` to it where it is unset or higher. **The minimum, not the first stamp**: a record appended before its page is taken (`AssertionEnforcer::AbortTxn`) can be stamped after a higher one. A clean resets it; a clean the dirty generation skips moves it up to the lowest LSN stamped since the copy, where one was, and otherwise keeps it (`Frame::stamped_since_copy`, wal.md §11-2).
+- Each frame tracks `dirty`, `recLSN` (the lowest LSN redo must replay into it), and a `page_lsn` mirror. A mutation path appends its record, then `StampPageLsn()` with the record's LSN, which records the `page_lsn` the gate reads and lowers the frame's `recLSN` to it where it is unset or higher. **The minimum, not the first stamp**: a record logged after its page is released can be stamped after a higher one. A clean resets it; a clean the dirty generation skips moves it up to the lowest LSN stamped since the copy, where one was, and otherwise keeps it (`Frame::stamped_since_copy`, wal.md §11-2).
 - `SetWalGate()` installs the default `WalDurability`, and `SetCoreWalGate()` gives one core a gate of its own (BA-S1). Every write path (`Flush`, `Sync`, `FlushPages`) asks the gate of the core it runs as (`CurrentCore()`), or the default where that core has none, and asks that same gate for the whole writeback. It first calls `EnsureDurable()` on the highest `page_lsn` among the pages it is about to write — wal.md §8-1 is unbypassable. One call per flush batch, not per page.
   - Each peer registers its attached manager in `CoreRuntime::Open`, before its first writeback, and takes it back in `~CoreRuntime`, before the manager is destroyed. Core 0 keeps the default, its owning manager. The reason is wal.md §8-1's: a manager's sync writes its own core's state, so a peer must never ask core 0's.
   - A core with neither a gate of its own nor a default writes ungated, which is sound only for a caller that logs nothing (the WAL-free unit tests; the simulator installs a default).

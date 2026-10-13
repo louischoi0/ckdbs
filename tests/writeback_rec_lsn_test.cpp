@@ -51,7 +51,9 @@ protected:
         ASSERT_EQ(RecLsn(), std::nullopt);
     }
 
-    void TearDown() override { store_->SetAfterWritebackCopyForTest({}); }
+    void TearDown() override {
+        if (store_ != nullptr) store_->SetAfterWritebackCopyForTest({});
+    }
 
     // Change `k`: its own body byte, written under the exclusive hold, then
     // stamped at `lsn` - a mutation path's order.
@@ -149,10 +151,10 @@ TEST_F(WritebackRecLsnTest, AWriteWithNoStampSinceTheCopyKeepsTheRecLsn) {
 }
 
 TEST_F(WritebackRecLsnTest, ARecordAppendedBeforeAHigherStampIsCoveredWhenStampedAfterTheCopy) {
-    // `AssertionEnforcer::AbortTxn`'s order (wal.md §11-2): core A appends
-    // at L1 before it takes the page; core B stamps the page at L2 > L1; the
-    // copy carries L2; A then marks and stamps L1. "Just above the copy's
-    // page_lsn" would set the recLSN to L2 + 1 and lose L1 to the recycler.
+    // A stamp below the copy's page_lsn, after the copy (wal.md §11-2): a
+    // record logged after its page is released can land that way. "Just
+    // above the copy's page_lsn" would set the recLSN to L2 + 1 and lose L1
+    // to the recycler.
     constexpr wal::Lsn kL1 = 200;
     constexpr wal::Lsn kL2 = 300;
     Change(0, 100);
@@ -163,8 +165,8 @@ TEST_F(WritebackRecLsnTest, ARecordAppendedBeforeAHigherStampIsCoveredWhenStampe
 }
 
 TEST_F(WritebackRecLsnTest, ALowerStampAfterTheSkippedCleanLowersTheRecLsn) {
-    // The same order with A's stamp after the clean: the recLSN is the
-    // minimum of every stamp since, not the first of them.
+    // A lower stamp after the clean: the recLSN is the minimum of every
+    // stamp since, not the first of them.
     Change(0, 100);
     WriteBackRacedBy([&] { Change(1, 300); });
     ASSERT_EQ(RecLsn(), 300u);
@@ -174,8 +176,8 @@ TEST_F(WritebackRecLsnTest, ALowerStampAfterTheSkippedCleanLowersTheRecLsn) {
 }
 
 TEST_F(WritebackRecLsnTest, ALowerStampAfterACleanLowersTheRecLsn) {
-    // Out of order on a clean frame too: first-wins kept 300 and redo from
-    // it would skip 250.
+    // Out of order from a clean frame too: first-wins kept 300, and redo
+    // from it would skip 250.
     Change(0, 300);
     Change(1, 250);
     EXPECT_EQ(RecLsn(), 250u);

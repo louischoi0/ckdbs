@@ -24,7 +24,6 @@ write to the same page lands out of order, which redo refuses
 | `InsertAssertion` → `heap::ChainInsert` → `exec::LogChainInsert` (`assertion_catalog.cpp`, `wal_row_log.cpp`) | `sys.assertions` tail, new page, link; spills | `PAGE_INIT`, `FULL_PAGE_IMAGE`, `VARHEAP_APPEND`, `HEAP_INSERT` | Two cores' `CREATE ASSERTION` at once: out-of-order dense slots refuse the mount |
 | `BuildIndexTree` / `Backfill` → `LogBuiltTree` (`index_ddl.cpp`) | every page of a new index tree | `FULL_PAGE_IMAGE` | The tree is unpublished, so no other writer; only a flush-before-log of `page_lsn` 0 pages |
 | `CreateTable`'s var-heap root, `varheap::CreateChain` → `LogCatPageInit` (`catalog.cpp`) | the new var-heap root | `PAGE_INIT` | Unpublished; flush-before-log only |
-| `AssertionEnforcer::AbortTxn` (`assertion_check.cpp`) | a Bound Cabin page (`MarkOrphaned`) | `ASSERT_ROLLBACK` | The inverse shape: **appended before the page is taken**, under the directory latch only, stamped after. Another core's `ReserveOne` or `CommitTxn` stamping the page in between is then followed by this stamp, which **lowers** `page_lsn` (`StampPageLsn` does not check it only rises) |
 
 ## The fix
 
@@ -35,3 +34,6 @@ unpublished-tree rows cost only a flush ordering. All are unscheduled.
 (`instructions/v3.0.0/workorder-ay-following-letter.md`): `AllocateCatalogPage`
 returns the new page's `PageRef`, held until the row's `HEAP_INSERT` stamps
 it.
+**`AssertionEnforcer::AbortTxn`'s row left it on `fix-redirtied-page-rec-lsn`**:
+it appended `ASSERT_ROLLBACK` before taking its Bound Cabin page, and now
+holds the page from before the append to after the stamp.

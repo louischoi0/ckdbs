@@ -652,7 +652,8 @@ rotation stretches each core to one run every 25 s. Every sync's breadth
 grows with it. Filed as
 `docs/inflight/bugs/a-page-re-dirtied-after-its-writeback-copy-pins-the-redo-start.md`;
 not BQ's subject, and outside its scope to fix. Fixed since on
-`fix-redirtied-page-rec-lsn` (`wal.md` §11-2), and the entry deleted.
+`fix-redirtied-page-rec-lsn` at `0e88060a` (`wal.md` §11-2), and the entry
+deleted.
 
 **Next (BQ-S2, rung 1, per BQ-Q6 (a)):** the driver's delta fix first
 (`meta_delta` as m1 - m0 with an absent key read as 0, and each slow

@@ -1673,18 +1673,19 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
                                 " is not resident, so its page_lsn cannot be stamped");
     }
 
-    SetPageLsn(std::span<std::byte, kPageSize>(*it->second.bytes), lsn);
-    it->second.MarkDirty(++dirty_gens_);
-    // recLSN is the *oldest* LSN redo must replay to make the page whole,
-    // so it is the minimum, not the first: a record appended before its
-    // page is taken (`AssertionEnforcer::AbortTxn`) can be stamped after a
-    // higher one (wal.md section 11-1). The same minimum is kept since the
-    // last writeback copy, for a clean that copy cannot make (`WriteBack`).
     Frame& frame = it->second;
-    if (frame.rec_lsn == wal::kNoLsn || lsn < frame.rec_lsn) frame.rec_lsn = lsn;
-    if (frame.stamped_since_copy == wal::kNoLsn || lsn < frame.stamped_since_copy) {
-        frame.stamped_since_copy = lsn;
-    }
+    SetPageLsn(std::span<std::byte, kPageSize>(*frame.bytes), lsn);
+    frame.MarkDirty(++dirty_gens_);
+    // recLSN is the *oldest* LSN redo must replay to make the page whole,
+    // so it is the minimum, not the first: a record logged after its page
+    // is released can be stamped after a higher one (wal.md section 11-2).
+    // The same minimum is kept since the last writeback copy, for a clean
+    // that copy cannot make (`WriteBack`).
+    const auto lower = [lsn](wal::Lsn& to) {
+        if (to == wal::kNoLsn || lsn < to) to = lsn;
+    };
+    lower(frame.rec_lsn);
+    lower(frame.stamped_since_copy);
     return Status::OK();
 }
 
@@ -2083,8 +2084,12 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         // that frame stays dirty, and a later writeback carries it. **Its
         // recLSN moves up to the lowest LSN stamped since the copy**, where
         // a stamp came: the image holds every change stamped before it, and
-        // one still unstamped sets `rec_lsn` by the minimum when it stamps.
-        // With no stamp since, the recLSN it had stays.
+        // one still unstamped lowers `rec_lsn` to its LSN when it stamps.
+        // That rests on every path changing a page's bytes before it
+        // appends their record (`AssertionEnforcer::AbortTxn` was the one
+        // exception): a record not yet stamped then describes bytes already
+        // in the frame, which any later copy - a checkpoint's flush among
+        // them - carries. With no stamp since, the recLSN it had stays.
         // The claim goes back here too, clean or not, under the same hold: a
         // waiter that sees it gone sees the clean with it.
         {
