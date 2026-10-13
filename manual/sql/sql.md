@@ -1029,11 +1029,11 @@ may be written qualified (`FROM sys.tables AS t ... WHERE t.oid = 100`),
 and a qualifier naming no relation in the statement is refused in the
 `WHERE` exactly as it is in the projection. A view's integers compare
 **unsigned**, because every one of them is stored as a `uint64` and
-`sys.patterns.fetch_id` really does use the full 64-bit range. Integers
-compare by value, so on a view `WHERE oid > -1` matches every row and
-`WHERE oid = -1` none. A `uint64` column on an ordinary relation refuses a
-negative literal instead - a negative one, or one past 2^64 - 1, is
-`OutOfRange` with its byte.
+`sys.patterns.fetch_id` really does use the full 64-bit range. A view's
+`WHERE` follows the relation's literal rule (types.md §3.1a): every integer
+column is a `uint64` and every other a `varchar`, so `name = 5`, `oid =
+'x'`, a negative literal and one past 2^64 - 1 are each refused with the
+literal's byte, before any row is read.
 
 There is also a legacy non-SQL form: `CREATE TABLE <name>` with **no column
 list** routes to a pre-SQL handler (the dispatcher routes on the presence

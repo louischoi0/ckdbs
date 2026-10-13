@@ -1221,6 +1221,34 @@ TEST_F(CommandDispatcherTest, ACatalogViewRefusesWhatItCannotDoAndSaysWhich) {
     EXPECT_NE(bad_column.response.find("has no column"), std::string::npos) << bad_column.response;
 }
 
+// types.md §3.1a over a catalog view: a literal is judged against the type
+// the view declares for its column, before any row is read, so a mismatch
+// is refused with its byte rather than answered with no rows - on a view
+// with rows and on one without.
+TEST_F(CommandDispatcherTest, ACatalogViewRefusesALiteralOfTheWrongKind) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, owner int64)").response.substr(0, 7),
+              "CREATED");
+
+    for (const std::string sql :
+         {"SELECT oid FROM sys.tables WHERE name = 5",
+          "SELECT oid FROM sys.tables WHERE oid = 'acct'",
+          "SELECT oid FROM sys.tables WHERE oid = -1",
+          "SELECT oid FROM sys.tables WHERE oid = 18446744073709551617",
+          "SELECT oid FROM sys.tables WHERE oid BETWEEN 1 AND 'z'",
+          // sys.patterns holds no row on a fresh instance; it refuses all the same.
+          "SELECT oid FROM sys.patterns WHERE fetch_id = 'x'"}) {
+        const std::string reply = d.Dispatch(sql).response;
+        EXPECT_EQ(reply.rfind("ERR ", 0), 0u) << sql << ": " << reply;
+        EXPECT_NE(reply.find("literal at byte "), std::string::npos) << sql << ": " << reply;
+    }
+    EXPECT_EQ(d.Dispatch("SELECT name FROM sys.tables WHERE name = 'acct'").response,
+              "name\\nacct");
+    EXPECT_EQ(d.Dispatch("SELECT name FROM sys.tables WHERE name = 'acct' AND oid > 0").response,
+              "name\\nacct");
+    EXPECT_EQ(d.Dispatch("SELECT name FROM sys.tables WHERE name IS NULL").response, "name");
+}
+
 // ---- AF-T3: the syntax ---------------------------------------------------
 //
 // `instructions/v2.8.0/ratification-af-namespace.md` AF-6, the operator's

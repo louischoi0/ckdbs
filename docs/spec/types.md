@@ -195,7 +195,13 @@ whether or not a row would have matched.
   with a timestamp. **Integers compare by value** (operator, 2026-10-13,
   option (b)): `CompareValues` reads a `uint64` above `INT64_MAX` through
   its digits whichever side it is on, so an `int32` -1 is less than a
-  `uint64` 5, and a view's `oid > -1` is true.
+  `uint64` 5.
+- **A catalog view takes the same literal rule** (operator, 2026-10-13).
+  Each view declares its columns' types (`exec::CatalogView::column_types`):
+  every integer a `uint64` and every string a `varchar`, the two kinds its
+  builders emit. A literal is judged against the column before any row is
+  read, so `sys.tables WHERE name = 5`, `oid = 'x'` and `oid = -1` are
+  refused on a populated view and on an empty one alike.
 
 ### 3.2 DECIMAL arithmetic
 

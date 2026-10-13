@@ -7118,6 +7118,24 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         auto at = ResolveViewColumn(rows, stmt, cond.col);
         if (!at.ok()) return {ErrorReply(at.status()), false, 0, at.status()};
         where_at.push_back(at.value());
+
+        // The relation's literal rule (types.md §3.1a), against the type the
+        // view declares for the column: `name = 5` and `oid = 'x'` are
+        // refused rather than answered with no rows, and so is a negative
+        // or past-2^64 literal against a view's uint64. Judged on a copy -
+        // these two arms rewrite nothing - so the rows compare `cond.val`.
+        catalog::SysColumnRow column{};
+        column.type_val = rows.column_types[at.value()];
+        const bool between = cond.kind == parser::PredicateKind::kBetween;
+        for (const parser::AstValue* literal : {&cond.val, between ? &cond.val_high : nullptr}) {
+            if (literal == nullptr) continue;
+            parser::AstValue checked = *literal;
+            if (Status s = exec::CoerceLiteralToColumn(column, checked); !s.ok()) {
+                s = s.WithContext("column '" + cond.col.name + "' literal at byte " +
+                                  std::to_string(literal->byte_offset));
+                return {ErrorReply(s), false, 0, s};
+            }
+        }
     }
 
     std::ostringstream os;
