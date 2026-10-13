@@ -1,0 +1,4 @@
+ckdbs on /home/cdkbs/bench-runs/bm-s6/prof/bk-prof-prof.db: 13 pages, superblock version 23
+logging to /home/cdkbs/bench-runs/bm-s6/prof/bk-prof-prof.log at level WARN
+listening on 127.0.0.1:32421
+stopped; 94 pages persisted

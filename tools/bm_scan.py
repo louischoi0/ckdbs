@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """BM-S1's census: a scanned row's server cost, by shape, on KDS.
 
-    bm_scan.py census  --bin BIN --workdir DIR [--port P] [--runs 8]
-                       [--pin-server 2] [--pin-driver 4] [--cells a,b,...]
-                       [--quiet-load 3 --quiet-wait 600] --out OUT.json
+    bm_scan.py census  (--bin BIN | --arm LABEL=BIN[,scan_kernel=off] ...) --workdir DIR
+                       [--port P] [--runs 8] [--pin-server 2] [--pin-driver 4]
+                       [--cells a,b,...] [--quiet-load 3 --quiet-wait 600] --out OUT.json
     bm_scan.py writers --bin BIN --workdir DIR [--port P] [--runs 8]
                        [--pin-driver 4] [--pin-writer 0]
                        [--reactor-cpus 2,6] [--pin-server 2,3,6,7]
@@ -26,8 +26,20 @@ same relation, same path, same run.
 two driver paths - **literal** (an unnamed C_PARSE of the text per statement)
 and **prepared** (one named C_PARSE, then BIND/EXECUTE) - cut into blocks
 taken alternately by the two paths, the first path alternating by block and
-run, so host drift lands on both. `contention_visibility_window_lookups`
-(SHOW META, BM-S1's `Tally::kWindowLookups`) is read around every block.
+run, so host drift lands on both. The scan core's window lookups (SHOW META,
+BM-S1's `Tally::kWindowLookups`: `load_c<k>_visibility_window_lookups` above
+one core, the summed key at one, less one SHOW META's own) are read around every
+block; an engine without the counter records `None`.
+
+With `--arm LABEL=BIN[,scan_kernel=on|off]` (repeatable) one run starts a
+fresh server per arm, all pinned to `--pin-server`, loads the same relations
+into each, and measures every cell on all of them block by block, the order of
+the servers rotating per block and per run (BM-S6's close: A, A', B and B with
+`scan_kernel = off`). Each block runs the same statements on every arm; the
+run records each arm's `ANALYZE` of one statement and a digest of its rows
+(every arm must answer the same rows), and each cell's per-CPU busy % from
+/proc/stat (the siblings of the server's and the driver's CPUs say whether
+another session ran beside it).
 
 The cells (name, relation, SQL):
 
@@ -37,6 +49,8 @@ The cells (name, relation, SQL):
                                              its final 500-row INSERT above the
                                              visibility floor (5 % of rows take
                                              LookupCommit, `flood_commits`)
+  out-200, out-1k         s200 / s1k         SELECT * FROM <rel> WHERE w < ?, every row out
+                                             (sel-100's sizes 200 and 1,000: BM-S6)
   sel-0, sel-1, sel-10,   s                  SELECT * FROM s WHERE w < ?
   sel-100                                    0 / 100 / 1,000 / 10,000 rows out
   wide-h                  wd  (13 columns)   WHERE h = ?   (decimal(30,4))
@@ -63,13 +77,14 @@ dump so `tools/kds_sampler_report.py --parts tools/bn_parts.json` can be
 turned into ns per row. With `--writers` the writers cell is sampled with the
 writer going and again without it.
 """
-import argparse, json, os, signal, subprocess, sys, threading, time
+import argparse, hashlib, json, os, signal, subprocess, sys, threading, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kwp  # noqa: E402
 import bn_census as bc  # noqa: E402
 from bn_census import (Server, sched_ns, self_ns, literal_of, quiet_gate, host_state,  # noqa: E402
-                       pct, must)
+                       pct, must, wait_idle, parse_arms, rotated, clean_cell,
+                       cpu_times, cpu_busy_pct)
 
 TARGET_ID = lambda q, rows: 1 + (q * 7919) % rows
 BASE_DATE = (2026, 1, 1)
@@ -123,10 +138,9 @@ def nul_row_sql(i, pct_null):
 # -- cells ----------------------------------------------------------------------
 
 class Cell:
-    def __init__(self, name, rel, rows, sql, params, expect, ops, group, pg_sql=None):
+    def __init__(self, name, rel, rows, sql, params, expect, ops, group):
         self.name, self.rel, self.rows, self.sql = name, rel, rows, sql
         self.params, self.expect, self.ops, self.group = params, expect, ops, group
-        self.pg_sql = pg_sql  # None: the same text as `sql`
 
 
 def _t(rows):
@@ -153,9 +167,14 @@ def make_cells(a):
         cells.append(Cell(name, "s", 10000, "SELECT * FROM s WHERE w < ?",
                           lambda q, bound=bound: [i64(bound)], lambda q, out=out: out, ops,
                           "selectivity"))
+    # The 100 % output scan at the other two sizes of the sweep (BM-S6's guard
+    # cell, `sel-100`, is the 10,000-row one): every row out, `w < rows + 1`.
+    for name, rel, rows, ops in (("out-200", "s200", 200, k * 4), ("out-1k", "s1k", 1000, k * 2)):
+        cells.append(Cell(name, rel, rows, f"SELECT * FROM {rel} WHERE w < ?",
+                          lambda q, rows=rows: [i64(rows + 1)], lambda q, rows=rows: rows, ops,
+                          "output"))
     cells.append(Cell("wide-h", "wd", W, "SELECT * FROM wd WHERE h = ?",
-                      lambda q: [vc(wv("h")(q))], one, k, "width",
-                      pg_sql="SELECT * FROM wd WHERE h = ?"))
+                      lambda q: [vc(wv("h")(q))], one, k, "width"))
     cells.append(Cell("wide-h-k", "wd", W, "SELECT * FROM wd WHERE h = ? AND k = ?",
                       lambda q: [vc(wv("h")(q)), vc(wv("k")(q))], one, k, "width"))
     for col, kind in (("a", "i"), ("c", "i"), ("d", "d"), ("e", "s"), ("f", "s"), ("g", "s"),
@@ -221,16 +240,41 @@ def meta_vals(conn, keys=()):
     return out
 
 
-def lookups_of(m):
-    """(total, per-core dict) of window lookups from a meta dict."""
-    total = m.get("contention_visibility_window_lookups", 0)
-    per = {k: v for k, v in m.items() if k.startswith("load_c") and
-           k.endswith("_visibility_window_lookups")}
-    return total, per
+def lookups_of(m, core=None):
+    """The window lookups (`LookupCommit` calls) of the scan's core, from a
+    `meta_vals` dict; None where the engine has no counter (an engine before
+    BM-S1's `Tally::kWindowLookups`, whose summed key is absent).
+
+    Above one core SHOW META prints the tally per core
+    (`load_c<k>_visibility_window_lookups`, a zero left out), and `core` is
+    the session's own, so the count is that core's, not the instance's: a
+    writer on another core would otherwise be charged to the scan. At one
+    core the per-core lines are not printed and the summed key is that
+    core's."""
+    if "contention_visibility_window_lookups" not in m:
+        return None
+    if "load_c0_sessions" in m:
+        k = m.get("core", 0) if core is None else core
+        return m.get(f"load_c{k}_visibility_window_lookups", 0)
+    return m["contention_visibility_window_lookups"]
+
+
+def lookups_delta(m0, m1, self_lookups=0):
+    """Scan-core lookups between two `meta_vals` reads, less one SHOW META's
+    own (`self_lookups`, measured back to back: the statement that reads the
+    counter walks the catalog and so asks the window itself). None for an
+    engine without the counter. The core is the one the first read named."""
+    a, b = lookups_of(m0), lookups_of(m1, m0.get("core"))
+    return None if a is None or b is None else max(0, b - a - self_lookups)
+
+
+def lookups_instance(m):
+    """The instance total (every core's), for the record beside the scan core's."""
+    return m.get("contention_visibility_window_lookups")
 
 
 META_KEYS = {"contention_visibility_window_lookups", "contention_window_wait_us",
-             "contention_window_waits", "core", "pool_misses"} | \
+             "contention_window_waits", "core", "pool_misses", "load_c0_sessions"} | \
     {f"load_c{k}_visibility_window_lookups" for k in range(8)}
 
 
@@ -255,21 +299,6 @@ def flood_commits(conn, n, first=1):
     return first + n
 
 
-def wait_idle(srv, limit_s=90.0, ceiling_us_per_s=10000):
-    """Waits for the server's CPU to fall to idle burn (the checkpoint and the
-    pool's background writeback after a load): two consecutive one-second
-    windows at or under the ceiling. Returns (waited s, last us/s)."""
-    t0 = time.time()
-    quiet = 0
-    while True:
-        s0 = sched_ns(srv.proc.pid)
-        time.sleep(1.0)
-        us = (sched_ns(srv.proc.pid) - s0) / 1e3
-        quiet = quiet + 1 if us <= ceiling_us_per_s else 0
-        if quiet >= 2 or time.time() - t0 >= limit_s:
-            return round(time.time() - t0, 1), round(us, 1)
-
-
 def run_stmts(srv, conn, cell_sql, params_fn, path, qs, expect, stmt_name, tag="SELECT"):
     """Runs statements `qs`; returns (lat list, bad count)."""
     lat, bad = [], 0
@@ -292,10 +321,14 @@ def summarize_lat(lat):
             "p95": pct(us, 95), "p99": pct(us, 99), "mean": sum(us) / len(us)}
 
 
-def measure_arm(srv, cell, kind, ops, a, r, q0, cores_meta=False):
-    """One cell (kind 'scan') or its relation's point arm (kind 'point'), both
-    paths, cut into blocks taken alternately. Returns {path: arm dict}."""
-    conn = srv.conn
+def measure_arm(srvs, cell, kind, ops, a, r, q0, self_lookups):
+    """One cell (kind 'scan') or its relation's point arm (kind 'point') on
+    every server of `srvs` at once, both paths, cut into `a.blocks` blocks.
+    Within a block the servers are visited in an order rotated per block and
+    per run (`bn_census.rotated`), each running the same statements on each
+    path, so host drift and a server's position fall on every arm alike.
+    `self_lookups[label]` is that server's SHOW META's own lookups.
+    Returns ({label: {path: arm dict}}, next statement number)."""
     if kind == "point":
         sql = f"SELECT * FROM {cell.rel} WHERE id = ?"
         rows_fn = lambda q: [kwp.Connection.int64(TARGET_ID(q, RELS[cell.rel][1]))]
@@ -303,120 +336,163 @@ def measure_arm(srv, cell, kind, ops, a, r, q0, cores_meta=False):
     else:
         sql, rows_fn, expect = cell.sql, cell.params, cell.expect
     name = f"m_{kind}_{cell.name if kind == 'scan' else cell.rel}"
-    if name not in srv.prepared:
-        conn.prepare(name, sql)
-        srv.prepared.add(name)
-    names = {"literal": name, "prepared": name}
+    for srv in srvs:
+        if name not in srv.prepared:
+            srv.conn.prepare(name, sql)
+            srv.prepared.add(name)
     per = max(1, ops // a.blocks)
-    accs = {p: {"lat": [], "bad": 0, "server_ns": 0, "driver_ns": 0, "lookups": 0,
-                "window_wait_us": 0, "block_server_us": [], "ops": 0, "pool_misses": 0}
-            for p in names}
-    # Untimed warm-up on each path: first-touch of the plan and the pages.
-    for path in ("literal", "prepared"):
-        run_stmts(srv, conn, sql, rows_fn, path, range(q0, q0 + 3), expect, names[path])
+    accs = {srv.label: {p: {"lat": [], "bad": 0, "server_ns": 0, "driver_ns": 0, "lookups": 0,
+                            "lookups_instance": 0, "window_wait_us": 0, "block_server_us": [],
+                            "ops": 0, "pool_misses": 0}
+                        for p in ("literal", "prepared")} for srv in srvs}
+    # Untimed warm-up on each server and path: first-touch of the plan and the pages.
+    for srv in srvs:
+        for path in ("literal", "prepared"):
+            run_stmts(srv, srv.conn, sql, rows_fn, path, range(q0, q0 + 3), expect, name)
     q = q0 + 3
     for b in range(a.blocks):
-        order = ("literal", "prepared") if (b + r) % 2 == 0 else ("prepared", "literal")
-        for path in order:
-            acc = accs[path]
-            qs = range(q, q + per)
-            q += per
-            m0 = meta_vals(conn, META_KEYS)
-            s0, c0 = sched_ns(srv.proc.pid), self_ns()
-            lat, bad = run_stmts(srv, conn, sql, rows_fn, path, qs, expect, names[path])
-            s1, c1 = sched_ns(srv.proc.pid), self_ns()
-            m1 = meta_vals(conn, META_KEYS)
-            acc["lat"].extend(lat)
-            acc["bad"] += bad
-            acc["ops"] += len(qs)
-            acc["server_ns"] += s1 - s0
-            acc["driver_ns"] += c1 - c0
-            acc["lookups"] += lookups_of(m1)[0] - lookups_of(m0)[0]
-            acc["window_wait_us"] += m1.get("contention_window_wait_us", 0) - \
-                m0.get("contention_window_wait_us", 0)
-            acc["pool_misses"] += m1.get("pool_misses", 0) - m0.get("pool_misses", 0)
-            acc["block_server_us"].append(round((s1 - s0) / len(qs) / 1e3, 2))
+        qs_of = {"literal": range(q, q + per), "prepared": range(q + per, q + 2 * per)}
+        q += 2 * per
+        for pos, srv in enumerate(rotated(srvs, b, r)):
+            conn = srv.conn
+            first = ((b + r) // len(srvs) + pos) % 2
+            for path in (("literal", "prepared") if first == 0 else ("prepared", "literal")):
+                acc = accs[srv.label][path]
+                qs = qs_of[path]
+                m0 = meta_vals(conn, META_KEYS)
+                s0, c0 = sched_ns(srv.proc.pid), self_ns()
+                lat, bad = run_stmts(srv, conn, sql, rows_fn, path, qs, expect, name)
+                s1, c1 = sched_ns(srv.proc.pid), self_ns()
+                m1 = meta_vals(conn, META_KEYS)
+                acc["lat"].extend(lat)
+                acc["bad"] += bad
+                acc["ops"] += len(qs)
+                acc["server_ns"] += s1 - s0
+                acc["driver_ns"] += c1 - c0
+                d = lookups_delta(m0, m1, self_lookups[srv.label])
+                acc["lookups"] = None if d is None or acc["lookups"] is None else acc["lookups"] + d
+                t0_, t1_ = lookups_instance(m0), lookups_instance(m1)
+                acc["lookups_instance"] = None if t0_ is None or acc["lookups_instance"] is None \
+                    else acc["lookups_instance"] + t1_ - t0_
+                acc["window_wait_us"] += m1.get("contention_window_wait_us", 0) - \
+                    m0.get("contention_window_wait_us", 0)
+                acc["pool_misses"] += m1.get("pool_misses", 0) - m0.get("pool_misses", 0)
+                acc["block_server_us"].append(round((s1 - s0) / len(qs) / 1e3, 2))
     out = {}
-    for path, acc in accs.items():
-        n = acc["ops"]
-        res = {"cell": cell.name if kind == "scan" else "point:" + cell.rel, "kind": kind,
-               "rel": cell.rel, "path": path, "ops": n,
-               "bad": acc["bad"], "rows": cell.rows if kind == "scan" else 1,
-               "server_cpu_us": acc["server_ns"] / n / 1e3,
-               "driver_cpu_us": acc["driver_ns"] / n / 1e3,
-               "lookups": acc["lookups"], "window_wait_us": acc["window_wait_us"],
-               "pool_misses": acc["pool_misses"], "block_server_us": acc["block_server_us"],
-               "lat_us": [round(x * 1e6, 1) for x in acc["lat"]]}
-        res.update({"p_" + k: v for k, v in summarize_lat(acc["lat"]).items()})
-        out[path] = res
+    for label, paths in accs.items():
+        out[label] = {}
+        for path, acc in paths.items():
+            n = acc["ops"]
+            res = {"arm": label, "cell": cell.name if kind == "scan" else "point:" + cell.rel,
+                   "kind": kind, "rel": cell.rel, "path": path, "ops": n,
+                   "bad": acc["bad"], "rows": cell.rows if kind == "scan" else 1,
+                   "server_cpu_us": acc["server_ns"] / n / 1e3,
+                   "driver_cpu_us": acc["driver_ns"] / n / 1e3,
+                   "lookups": acc["lookups"], "lookups_instance": acc["lookups_instance"],
+                   "window_wait_us": acc["window_wait_us"],
+                   "pool_misses": acc["pool_misses"], "block_server_us": acc["block_server_us"],
+                   "lat_us": [round(x * 1e6, 1) for x in acc["lat"]]}
+            res.update({"p_" + k: v for k, v in summarize_lat(acc["lat"]).items()})
+            out[label][path] = res
     return out, q
 
 
 def one_census_run(a, r, cells, rels):
     waited, load = quiet_gate(a)
+    arms = parse_arms(a)
     out = {"run": r, "host_before": host_state(), "arms": [],
-           "quiet_gate": {"waited_s": waited, "load": load}}
-    srv = Server(a, "bm", a.bin, a.port, f"r{r}")
+           "quiet_gate": {"waited_s": waited, "load": load}, "arm_order": [x[0] for x in arms]}
+    srvs = []
     try:
         t0 = time.time()
-        must(srv.conn, "CREATE TABLE z (id int64, v int64) BTREE", "CREATE")
-        for name in rels:
-            if name == "srec":
-                # The floor passes everything loaded so far (see flood_commits);
-                # `srec`, loaded after it, is the one relation with rows above it.
+        for label, binary, port, sk in arms:
+            srvs.append(Server(a, label, binary, port, f"r{r}", scan_kernel=sk))
+        for srv in srvs:
+            must(srv.conn, "CREATE TABLE z (id int64, v int64) BTREE", "CREATE")
+            for name in rels:
+                if name == "srec":
+                    # The floor passes everything loaded so far (see flood_commits);
+                    # `srec`, loaded after it, is the one relation with rows above it.
+                    flood_commits(srv.conn, FLOOD)
+                load_rel(srv.conn, name)
+            if "srec" not in rels:
                 flood_commits(srv.conn, FLOOD)
-            load_rel(srv.conn, name)
-        if "srec" not in rels:
-            flood_commits(srv.conn, FLOOD)
         out["load_s"] = round(time.time() - t0, 1)
-        out["idle_wait"] = wait_idle(srv)
+        out["idle_wait"] = {s.label: wait_idle(s) for s in srvs}
         # A SHOW META costs lookups itself (its catalog reads): the control
-        # the per-block deltas include once, measured here back to back.
-        m0 = meta_vals(srv.conn, META_KEYS)
-        m1 = meta_vals(srv.conn, META_KEYS)
-        out["meta_self_lookups"] = lookups_of(m1)[0] - lookups_of(m0)[0]
-        s0 = sched_ns(srv.proc.pid)
-        time.sleep(1.0)
-        out["idle_cpu_us_per_s"] = (sched_ns(srv.proc.pid) - s0) / 1e3
+        # each block's delta is corrected by, measured here back to back.
+        self_lookups = {}
+        for srv in srvs:
+            m0 = meta_vals(srv.conn, META_KEYS)
+            m1 = meta_vals(srv.conn, META_KEYS)
+            d = lookups_delta(m0, m1)
+            self_lookups[srv.label] = d or 0
+        out["meta_self_lookups"] = dict(self_lookups)
+        out["idle_cpu_us_per_s"] = {}
+        for srv in srvs:
+            s0 = sched_ns(srv.proc.pid)
+            time.sleep(1.0)
+            out["idle_cpu_us_per_s"][srv.label] = (sched_ns(srv.proc.pid) - s0) / 1e3
         # An untimed prelude: the first few hundred statements of a fresh
         # server fault catalog and system pages (`pool_misses`), which would
         # land in the first arm's point statement.
-        m0 = meta_vals(srv.conn, META_KEYS)
         rel0 = cells[0].rel
-        for q in range(1, 401):
-            srv.conn.execute("SELECT * FROM %s WHERE id = %d" % (rel0, TARGET_ID(q, RELS[rel0][1])))
-        out["prelude_pool_misses"] = meta_vals(srv.conn, META_KEYS).get("pool_misses", 0) - \
-            m0.get("pool_misses", 0)
-        out["analyze"] = {}
+        out["prelude_pool_misses"] = {}
+        for srv in srvs:
+            m0 = meta_vals(srv.conn, META_KEYS)
+            for q in range(1, 401):
+                srv.conn.execute("SELECT * FROM %s WHERE id = %d" % (rel0, TARGET_ID(q, RELS[rel0][1])))
+            out["prelude_pool_misses"][srv.label] = meta_vals(srv.conn, META_KEYS).get(
+                "pool_misses", 0) - m0.get("pool_misses", 0)
+        out["analyze"], out["digest"] = {}, {}
         done_points = set()
+
+        def record(arm_map, host):
+            for label in out["arm_order"]:
+                for path, arm in arm_map[label].items():
+                    arm["host"] = host
+                    out["arms"].append(arm)
+                    print(json.dumps({k: (round(v, 2) if isinstance(v, float) else v)
+                                      for k, v in arm.items()
+                                      if k not in ("host", "block_server_us", "lat_us")}),
+                          flush=True)
+
         for cell in cells:
             if cell.rel not in done_points:
                 done_points.add(cell.rel)
-                host = host_state()
-                arms, _ = measure_arm(srv, cell, "point", a.point_ops, a, r, 1)
-                for arm in arms.values():
-                    arm["host"] = host
-                    out["arms"].append(arm)
-            host = host_state()
-            arms, _ = measure_arm(srv, cell, "scan", cell.ops, a, r, 100)
-            for path, arm in arms.items():
-                arm["host"] = host
-                out["arms"].append(arm)
-                print(json.dumps({k: (round(v, 2) if isinstance(v, float) else v)
-                                  for k, v in arm.items()
-                                  if k not in ("host", "block_server_us", "lat_us")}), flush=True)
+                arm_map, host = clean_cell(
+                    a, lambda: measure_arm(srvs, cell, "point", a.point_ops, a, r, 1,
+                                           self_lookups)[0], True, [s.proc.pid for s in srvs])
+                record(arm_map, host)
+            arm_map, host = clean_cell(
+                a, lambda: measure_arm(srvs, cell, "scan", cell.ops, a, r, 100, self_lookups)[0],
+                True, [s.proc.pid for s in srvs])
+            record(arm_map, host)
             if r == 0:
-                try:
-                    q = 7
-                    _, rows, tag, _ = srv.conn.execute(
-                        "ANALYZE " + literal_of(cell.sql, cell.params(q)))
-                    out["analyze"][cell.name] = tag + " | " + " | ".join(
-                        b" ".join(c or b"" for c in rw).decode(errors="replace") for rw in rows[:6])
-                except Exception as e:  # noqa: BLE001 - recorded, not fatal
-                    out["analyze"][cell.name] = "ERR %s" % str(e)[:200]
-        out["final_meta_lookups"] = lookups_of(meta_vals(srv.conn, META_KEYS))[0]
+                # Each arm's ANALYZE of one statement, and a digest of its
+                # rows: every arm must answer the same rows (BM-R2).
+                out["analyze"][cell.name], out["digest"][cell.name] = {}, {}
+                for srv in srvs:
+                    try:
+                        q = 7
+                        text = literal_of(cell.sql, cell.params(q))
+                        _, rows, tag, _ = srv.conn.execute("ANALYZE " + text)
+                        out["analyze"][cell.name][srv.label] = tag + " | " + " | ".join(
+                            b" ".join(c or b"" for c in rw).decode(errors="replace")
+                            for rw in rows[:6])
+                        _, rows, tag, _ = srv.conn.execute(text)
+                        h = hashlib.sha256()
+                        for rw in rows:
+                            h.update(b"\x1e".join(c if c is not None else b"\xff\xff" for c in rw))
+                            h.update(b"\x1f")
+                        out["digest"][cell.name][srv.label] = "%d:%s" % (len(rows),
+                                                                         h.hexdigest()[:16])
+                    except Exception as e:  # noqa: BLE001 - recorded, not fatal
+                        out["analyze"][cell.name][srv.label] = "ERR %s" % str(e)[:200]
+        out["final_meta_lookups"] = {s.label: lookups_of(meta_vals(s.conn, META_KEYS)) for s in srvs}
     finally:
-        srv.stop()
+        for srv in srvs:
+            srv.stop()
     out["host_after"] = host_state()
     return out
 
@@ -612,7 +688,7 @@ def writers_run(a, r, variant, a2):
         q += 20
         m0 = meta_vals(conn, META_KEYS)
         m1 = meta_vals(conn, META_KEYS)
-        out["meta_self_lookups"] = lookups_of(m1)[0] - lookups_of(m0)[0]
+        out["meta_self_lookups"] = lookups_delta(m0, m1) or 0
         for b in range(a.blocks):
             order = ("writer", "alone") if (b + r) % 2 == 0 else ("alone", "writer")
             for kind in order:
@@ -642,13 +718,17 @@ def writers_run(a, r, variant, a2):
                 n_upd = bad_upd = 0
                 if kind == "writer":
                     n_upd, bad_upd = writer.pause()
-                tot0, per0 = lookups_of(m0)
-                tot1, per1 = lookups_of(m1)
+                per_core = lambda m: {k: v for k, v in m.items() if k.startswith("load_c") and
+                                      k.endswith("_visibility_window_lookups")}
+                per0, per1 = per_core(m0), per_core(m1)
                 blk = {"kind": kind, "ops": per, "bad": bad, "wall_s": round(wall, 4),
                        "lat_us": [round(x * 1e6, 1) for x in lat],
                        "server_total_us_per_stmt": (s1 - s0) / per / 1e3,
                        "reactor_us_per_stmt": {str(k): (p1[k] - p0[k]) / per / 1e3 for k in p0},
-                       "lookups": tot1 - tot0,
+                       # The scan core's (not the instance's: the writer is on another
+                       # core), less one SHOW META's own; the instance total beside it.
+                       "lookups": lookups_delta(m0, m1, out["meta_self_lookups"]),
+                       "lookups_instance": lookups_instance(m1) - lookups_instance(m0),
                        "lookups_per_core": {k: per1[k] - per0.get(k, 0) for k in per1},
                        "window_wait_us": m1.get("contention_window_wait_us", 0) -
                        m0.get("contention_window_wait_us", 0),
@@ -765,6 +845,8 @@ def profile_writers(a, base):
                     time.sleep(0.3)
                 srv.conn = session_back(srv, srv.conn, 1)
                 m0 = meta_vals(srv.conn, META_KEYS)
+                self_lk = lookups_delta(m0, meta_vals(srv.conn, META_KEYS)) or 0
+                m0 = meta_vals(srv.conn, META_KEYS)
                 s0 = sched_ns(srv.proc.pid)
                 p0 = {k: tid_ns(srv.proc.pid, t) for k, t in threads.items()}
                 os.kill(srv.proc.pid, signal.SIGUSR1)
@@ -782,7 +864,8 @@ def profile_writers(a, base):
                        "server_total_us_per_stmt": (s1 - s0) / n / 1e3,
                        "reactor_us_per_stmt": {str(k): (p1[k] - p0[k]) / n / 1e3 for k in p0},
                        "wall_us": wall / n * 1e6,
-                       "lookups": lookups_of(m1)[0] - lookups_of(m0)[0],
+                       "lookups": lookups_delta(m0, m1, self_lk),
+                       "lookups_instance": lookups_instance(m1) - lookups_instance(m0),
                        "window_wait_us": m1.get("contention_window_wait_us", 0) -
                        m0.get("contention_window_wait_us", 0),
                        "dump": f"{base}{variant}.{n_dump}"}
@@ -802,6 +885,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["census", "writers", "profile", "writer-child"])
     ap.add_argument("--bin")
+    ap.add_argument("--arm", action="append",
+                    help="census: LABEL=BINARY[,scan_kernel=on|off], repeatable; every arm is a "
+                    "server run side by side with the others (tools/bn_census.py); replaces --bin")
+    ap.add_argument("--scan-kernel", choices=["on", "off"],
+                    help="write `scan_kernel = <v>` into every server's config (default: not written)")
     ap.add_argument("--workdir", required=True)
     ap.add_argument("--port", type=int, default=32101)
     ap.add_argument("--pin-server", default="2")
@@ -820,6 +908,18 @@ def main():
     ap.add_argument("--settle-s", type=float, default=0.15)
     ap.add_argument("--quiet-load", type=float, default=0.0)
     ap.add_argument("--quiet-wait", type=float, default=600.0)
+    ap.add_argument("--cell-quiet-pct", type=float, default=0.0,
+                    help="census: before each cell wait for a window in which the measurement's CPUs "
+                    "and their SMT siblings are at most this %% busy (0: no wait)")
+    ap.add_argument("--cell-quiet-wait", type=float, default=600.0,
+                    help="census: at most this many seconds per attempt (then the cell runs, flagged)")
+    ap.add_argument("--cell-clean-pct", type=float, default=20.0,
+                    help="census: a cell is clean when its SMT siblings averaged at most this %% busy")
+    ap.add_argument("--cell-foreign-pct", type=float, default=5.0,
+                    help="census: a cell is clean when another session's tasks took at most this %% "
+                    "of the server's and of the driver's pinned CPU")
+    ap.add_argument("--cell-retries", type=int, default=3,
+                    help="census: an unclean cell is run again this many times")
     ap.add_argument("--sampler")
     ap.add_argument("--sampler-dir")
     ap.add_argument("--profile-cells", default="")
@@ -830,6 +930,8 @@ def main():
     ap.add_argument("--avoid-core", type=int, default=1)
     ap.add_argument("--out")
     a = ap.parse_args()
+    if a.mode == "census" and not (a.bin or a.arm):
+        ap.error("census: one of --bin or --arm is required")
     if a.mode == "census":
         census(a)
     elif a.mode == "writers":

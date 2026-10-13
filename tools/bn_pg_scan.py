@@ -44,6 +44,7 @@ import argparse, json, os, re, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pg_wire import PgConnection  # noqa: E402
 from bb_overhead_benchmark import host_state  # noqa: E402
+from bn_census import clean_cell  # noqa: E402
 
 
 def cpu_ns(pid):
@@ -88,7 +89,7 @@ PG_COLS = {
 def pg_load(conn, bm, rel, vacuum=True):
     conn.send_command(f"DROP TABLE IF EXISTS bm_{rel}")
     must_ok(conn, f"CREATE TABLE bm_{rel} ({PG_COLS[rel]})")
-    _, rows, rowfn = bm.RELS[rel][0], bm.RELS[rel][1], bm.RELS[rel][2]
+    rows = bm.RELS[rel][1]
     if rel.startswith("s"):
         must_ok(conn, f"INSERT INTO bm_{rel} SELECT i, i, i FROM generate_series(1, {rows}) i")
     else:
@@ -162,11 +163,10 @@ def bm_main(a):
             if cell.rel not in {x["rel"] for x in run["arms"] if x["kind"] == "point"}:
                 for _ in range(3):
                     conn.query(f"SELECT * FROM bm_{cell.rel} WHERE id = 1")
-                host = host_state()
-                arm = pg_arm(conn, pid,
-                             lambda q, rel=cell.rel: f"SELECT * FROM bm_{rel} WHERE id = "
-                             f"{bm.TARGET_ID(q, bm.RELS[rel][1])}", lambda q: 1, a.point_ops,
-                             a.blocks)
+                arm, host = clean_cell(a, lambda: pg_arm(
+                    conn, pid, lambda q, rel=cell.rel: f"SELECT * FROM bm_{rel} WHERE id = "
+                    f"{bm.TARGET_ID(q, bm.RELS[rel][1])}", lambda q: 1, a.point_ops, a.blocks),
+                    True, [pid])
                 arm.update({"cell": "point:" + cell.rel, "kind": "point", "rel": cell.rel,
                             "path": "literal", "rows": 1, "host": host})
                 run["arms"].append(arm)
@@ -176,8 +176,8 @@ def bm_main(a):
                 run["plans"][cell.name] = plan
             for _ in range(2):  # warm: hint bits and the cache, untimed
                 conn.query(sql_of(1))
-            host = host_state()
-            arm = pg_arm(conn, pid, sql_of, cell.expect, cell.ops, a.blocks)
+            arm, host = clean_cell(a, lambda: pg_arm(conn, pid, sql_of, cell.expect, cell.ops,
+                                                     a.blocks), True, [pid])
             arm.update({"cell": cell.name, "kind": "scan", "rel": cell.rel, "path": "literal",
                         "rows": cell.rows, "host": host})
             run["arms"].append(arm)
@@ -210,6 +210,18 @@ def main():
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--pin-backend", default="2")
     ap.add_argument("--pin-driver", default="4")
+    ap.add_argument("--cell-quiet-pct", type=float, default=0.0,
+                    help="--shapes bm: before each cell wait for a window in which the backend's and "
+                    "the driver's CPUs and their SMT siblings are at most this %% busy (0: no wait)")
+    ap.add_argument("--cell-quiet-wait", type=float, default=600.0,
+                    help="at most this many seconds per attempt (then the cell runs, flagged)")
+    ap.add_argument("--cell-clean-pct", type=float, default=20.0,
+                    help="a cell is clean when its SMT siblings averaged at most this %% busy")
+    ap.add_argument("--cell-foreign-pct", type=float, default=5.0,
+                    help="a cell is clean when another session's tasks took at most this %% of the "
+                    "backend's and of the driver's pinned CPU")
+    ap.add_argument("--cell-retries", type=int, default=3,
+                    help="an unclean cell is run again this many times")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     if a.shapes == "bm":

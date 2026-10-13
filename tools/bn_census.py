@@ -29,6 +29,15 @@ With `--bin-b`, both servers run side by side (one port each, both pinned to
 blocks taken alternately, the first server of a block alternating, so host
 drift lands on both sides alike.
 
+With `--arm LABEL=BINARY[,scan_kernel=on|off]` (repeatable; it replaces
+`--bin`/`--bin-b`), any number of servers run side by side the same way, the
+order of a block rotating by one server per block and per run so that each
+server takes each position equally often. `scan_kernel=` writes that key into
+the arm's config (BM-Q5's switch; absent: the engine's default, and a binary
+that predates the key is never given it). BM-S6's close runs four: A, A' (the
+same commit from a second export), B, and B with the kernel off.
+`--scan-kernel on|off` does the same for every server of a single-`--bin` run.
+
 Per (binary, shape, path) it records the client's wall time per statement
 and, over the arm, **the server's on-CPU time** (the sum of
 /proc/<pid>/task/*/schedstat's first field, every server thread) and **the
@@ -69,6 +78,35 @@ def sched_ns(pid):
     return total
 
 
+def sched_stat(pid):
+    """(on-CPU ns, run-queue wait ns) summed over a process's threads: the second
+    field of /proc/<pid>/task/*/schedstat is the time the thread was runnable
+    and waiting for its CPU, which is what another session's task on the same
+    CPU costs it."""
+    cpu = wait = 0
+    base = f"/proc/{pid}/task"
+    try:
+        tids = os.listdir(base)
+    except OSError:
+        return 0, 0
+    for tid in tids:
+        try:
+            with open(f"{base}/{tid}/schedstat") as f:
+                v = f.read().split()
+            cpu += int(v[0])
+            wait += int(v[1])
+        except (OSError, IndexError):
+            pass
+    return cpu, wait
+
+
+def self_stat():
+    """The calling thread's (on-CPU ns, run-queue wait ns)."""
+    with open("/proc/thread-self/schedstat") as f:
+        v = f.read().split()
+    return int(v[0]), int(v[1])
+
+
 def self_ns():
     with open("/proc/thread-self/schedstat") as f:
         return int(f.read().split()[0])
@@ -89,7 +127,7 @@ def meta(conn, key):
 
 
 class Server:
-    def __init__(self, a, label, binary, port, tag, sampler_out=None):
+    def __init__(self, a, label, binary, port, tag, sampler_out=None, scan_kernel=None):
         self.label = label
         os.makedirs(a.workdir, exist_ok=True)
         self.data = os.path.join(a.workdir, f"bk-{label}-{tag}.db")
@@ -112,6 +150,11 @@ class Server:
                     f"log_level = warn\n")
             if getattr(a, "reactor_cpus", None):
                 f.write(f"reactor_cpus = {a.reactor_cpus}\n")
+            # BM-Q5's switch; None writes nothing (the engine's default, and a
+            # binary that predates the key refuses an unknown one).
+            sk = scan_kernel if scan_kernel is not None else getattr(a, "scan_kernel", None)
+            if sk is not None:
+                f.write(f"scan_kernel = {sk}\n")
         env = dict(os.environ)
         if sampler_out:
             env["LD_PRELOAD"] = a.sampler
@@ -278,6 +321,132 @@ def end_state(conn, a, q_range_last):
             "spill_txt_ok": bool(rows) and rows[0][0].decode() == SPILL}
 
 
+def cpu_times():
+    """Per-CPU (busy, total) jiffies from /proc/stat: busy is everything but
+    idle and iowait. Differenced around a cell, the CPUs the measurement does
+    not use (the server's and the driver's SMT siblings, and the rest) say
+    whether another session ran beside it."""
+    out = {}
+    with open("/proc/stat") as f:
+        for line in f:
+            if line.startswith("cpu") and line[3].isdigit():
+                v = line.split()
+                n = [int(x) for x in v[1:]]
+                out[int(v[0][3:])] = (sum(n[:8]) - n[3] - n[4], sum(n[:8]))
+    return out
+
+
+def cpu_busy_pct(c0, c1):
+    """{cpu: busy % between two cpu_times() reads}."""
+    return {k: round(100.0 * (c1[k][0] - c0[k][0]) / max(1, c1[k][1] - c0[k][1]), 1) for k in c1}
+
+
+def _cpu_list(spec):
+    return [int(x) for x in str(spec).split(",") if x != ""]
+
+
+def siblings_of(cpu):
+    """The SMT siblings of `cpu` (itself excluded), from sysfs."""
+    try:
+        with open(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list") as f:
+            text = f.read().strip()
+    except OSError:
+        return []
+    out = []
+    for part in text.split(","):
+        lo, _, hi = part.partition("-")
+        out.extend(range(int(lo), int(hi or lo) + 1))
+    return [c for c in out if c != cpu]
+
+
+def measurement_cpus(a):
+    """(own, siblings): the CPUs the server (or PostgreSQL backend) and the
+    driver are pinned to, and the SMT siblings of those that nothing of the
+    measurement uses. Another session's work on the siblings, or on the pinned
+    CPUs themselves, is what a quiet cell must not have."""
+    own = set(_cpu_list(getattr(a, "pin_server", None) or getattr(a, "pin_backend", "2")))
+    own |= set(_cpu_list(a.pin_driver))
+    sib = set()
+    for c in own:
+        sib |= set(siblings_of(c))
+    return own, sib - own
+
+
+def wait_quiet(a):
+    """With `--cell-quiet-pct P` > 0: waits for a two-second window in which
+    every CPU of the measurement and every sibling of one is at most P % busy
+    (our own idle servers burn under 1 % each), for at most
+    `--cell-quiet-wait` seconds. Returns the seconds waited."""
+    limit = getattr(a, "cell_quiet_pct", 0)
+    if limit <= 0:
+        return 0.0
+    own, sib = measurement_cpus(a)
+    watch = own | sib
+    t0 = time.time()
+    while True:
+        c0 = cpu_times()
+        time.sleep(2.0)
+        busy = cpu_busy_pct(c0, cpu_times())
+        if all(busy.get(c, 0) <= limit for c in watch):
+            return round(time.time() - t0, 1)
+        if time.time() - t0 >= getattr(a, "cell_quiet_wait", 600):
+            return round(time.time() - t0, 1)
+
+
+def clean_cell(a, fn, retriable=True, pids=()):
+    """Runs `fn()` - one cell on every arm, returning its result - and records
+    the host around it: the 1-minute load, any competing build or test run,
+    and every CPU's busy % over the cell. With `--cell-quiet-pct` > 0 the cell
+    starts in a quiet window (`wait_quiet`) and is *clean* when the SMT
+    siblings of the measurement's CPUs stayed at or under
+    `--cell-clean-pct` % busy while it ran; an unclean cell is run again, up
+    to `--cell-retries` more times, when `retriable` (a cell whose statements
+    can be repeated: reads, and writes that set a value rather than insert or
+    delete a key), and kept with `clean = False` after that. With `pids` (the
+    measured processes, all pinned to `--pin-server`; this driver thread is
+    pinned to `--pin-driver`) it also records the *foreign* busy % of those
+    pinned CPUs - /proc/stat's busy % less what the measured tasks' own
+    schedstat accounts for, i.e. another session's task on the CPU itself -
+    and a cell above `--cell-foreign-pct` is unclean too. `wait_pct`, the
+    measured threads' run-queue wait over their on-CPU time, is recorded and
+    not gated on: the server's own threads share its one CPU, so it is never
+    zero. Returns (result, host record)."""
+    limit = getattr(a, "cell_quiet_pct", 0)
+    waited_total, attempts = 0.0, 0
+    while True:
+        attempts += 1
+        waited_total += wait_quiet(a)
+        host = host_state()
+        c0 = cpu_times()
+        w0 = [sched_stat(p) for p in pids] + [self_stat()]
+        t0 = time.perf_counter()
+        res = fn()
+        wall_ns = (time.perf_counter() - t0) * 1e9
+        w1 = [sched_stat(p) for p in pids] + [self_stat()]
+        busy = cpu_busy_pct(c0, cpu_times())
+        own, sib = measurement_cpus(a)
+        sib_busy = sum(busy.get(c, 0) for c in sib) / max(1, len(sib))
+        cpu_d = sum(y[0] - x[0] for x, y in zip(w0, w1))
+        wait_pct = 100.0 * sum(y[1] - x[1] for x, y in zip(w0, w1)) / max(1, cpu_d)
+        srv_cpus = _cpu_list(getattr(a, "pin_server", None) or getattr(a, "pin_backend", "2"))
+        drv_cpus = _cpu_list(a.pin_driver)
+        srv_own = sum(y[0] - x[0] for x, y in zip(w0[:-1], w1[:-1]))
+        drv_own = w1[-1][0] - w0[-1][0]
+        foreign_srv = (sum(busy.get(c, 0) for c in srv_cpus) / len(srv_cpus)
+                       - 100.0 * srv_own / (wall_ns * len(srv_cpus)))
+        foreign_drv = (sum(busy.get(c, 0) for c in drv_cpus) / len(drv_cpus)
+                       - 100.0 * drv_own / (wall_ns * len(drv_cpus)))
+        host.update({"cpu_busy_pct": busy, "sibling_busy_pct": round(sib_busy, 1),
+                     "wait_pct": round(wait_pct, 2), "foreign_server_cpu_pct": round(foreign_srv, 1),
+                     "foreign_driver_cpu_pct": round(foreign_drv, 1),
+                     "attempts": attempts, "quiet_waited_s": round(waited_total, 1)})
+        fp = getattr(a, "cell_foreign_pct", 5.0)
+        host["clean"] = limit <= 0 or (sib_busy <= getattr(a, "cell_clean_pct", 20) and
+                                       foreign_srv <= fp and foreign_drv <= fp)
+        if host["clean"] or not retriable or attempts > getattr(a, "cell_retries", 3):
+            return res, host
+
+
 def quiet_gate(a):
     """Waits until the 1-minute load average is at or under `--quiet-load`,
     for at most `--quiet-wait` seconds; returns (waited s, load at the end)."""
@@ -290,20 +459,65 @@ def quiet_gate(a):
         time.sleep(5)
 
 
+def wait_idle(srv, limit_s=90.0, ceiling_us_per_s=10000):
+    """Waits for the server's CPU to fall to idle burn (the checkpoint and the
+    pool's background writeback after a load): two consecutive one-second
+    windows at or under the ceiling. Returns (waited s, last us/s)."""
+    t0 = time.time()
+    quiet = 0
+    while True:
+        s0 = sched_ns(srv.proc.pid)
+        time.sleep(1.0)
+        us = (sched_ns(srv.proc.pid) - s0) / 1e3
+        quiet = quiet + 1 if us <= ceiling_us_per_s else 0
+        if quiet >= 2 or time.time() - t0 >= limit_s:
+            return round(time.time() - t0, 1), round(us, 1)
+
+
+def parse_arms(a):
+    """[(label, binary, port, scan_kernel)] from `--arm`, or from `--bin` and
+    `--bin-b` (labels A and B). `--arm LABEL=BINARY[,scan_kernel=on|off]`."""
+    if getattr(a, "arm", None):
+        out = []
+        for i, spec in enumerate(a.arm):
+            label, rest = spec.split("=", 1)
+            binary, *opts = rest.split(",")
+            sk = None
+            for o in opts:
+                k, v = o.split("=", 1)
+                if k != "scan_kernel" or v not in ("on", "off"):
+                    raise SystemExit(f"--arm {spec!r}: only scan_kernel=on|off is an option")
+                sk = v
+            out.append((label, binary, a.port + i, sk))
+        if len({x[0] for x in out}) != len(out):
+            raise SystemExit("--arm labels must be distinct")
+        return out
+    return [("A", a.bin, a.port, None)] + ([("B", a.bin_b, a.port + 1, None)] if a.bin_b else [])
+
+
+def rotated(servers, b, r):
+    """Block `b` of run `r`: the servers rotated one place per block and per
+    run, so each takes each position equally often (two servers: the old
+    alternation)."""
+    k = (b + r) % len(servers)
+    return servers[k:] + servers[:k]
+
+
 def one_run(a, r):
     tag = f"r{r}"
     waited, load = quiet_gate(a)
     before = host_state()
-    bins = [("A", a.bin, a.port)] + ([("B", a.bin_b, a.port + 1)] if a.bin_b else [])
+    bins = parse_arms(a)
     servers = []
     out = {"run": r, "host_before": before, "arms": [], "idle_cpu_us_per_s": {},
            "quiet_gate": {"waited_s": waited, "load": load}}
     try:
-        for label, binary, port in bins:
-            servers.append(Server(a, label, binary, port, tag))
+        for label, binary, port, sk in bins:
+            servers.append(Server(a, label, binary, port, tag, scan_kernel=sk))
         for srv in servers:
             setup(a, srv.conn)
-        time.sleep(0.5)
+        for srv in servers:
+            wait_idle(srv)
         for srv in servers:
             s0 = sched_ns(srv.proc.pid); time.sleep(1.0)
             out["idle_cpu_us_per_s"][srv.label] = (sched_ns(srv.proc.pid) - s0) / 1e3
@@ -321,14 +535,17 @@ def one_run(a, r):
                 if sh[0] == "delete-pk":
                     for srv in servers:
                         preload_deletes(srv.conn, q, a.blocks * per)
-                host = host_state()  # bench/README.md rule 4, per cell
-                accs = {s.label: {"lat": [], "bad": 0, "wall": 0.0, "server_ns": 0,
-                                  "driver_ns": 0} for s in servers}
-                for b in range(a.blocks):
-                    qs = range(q + b * per, q + (b + 1) * per)
-                    order = servers if (b + r) % 2 == 0 else list(reversed(servers))
-                    for srv in order:
-                        run_block(srv, sh, path, qs, accs[srv.label])
+                # bench/README.md rule 4, per cell: the host record is `clean_cell`'s.
+                def do_cell(sh=sh, path=path, per=per, q=q):
+                    accs = {s.label: {"lat": [], "bad": 0, "wall": 0.0, "server_ns": 0,
+                                      "driver_ns": 0} for s in servers}
+                    for b in range(a.blocks):
+                        qs = range(q + b * per, q + (b + 1) * per)
+                        for srv in rotated(servers, b, r):
+                            run_block(srv, sh, path, qs, accs[srv.label])
+                    return accs
+                accs, host = clean_cell(a, do_cell, sh[0] not in ("insert", "delete-pk"),
+                                        [s.proc.pid for s in servers])
                 if sh[0] == "update-range":
                     range_last = q + a.blocks * per - 1
                 q += a.blocks * per
@@ -395,8 +612,12 @@ def profile(a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bin", required=True)
+    ap.add_argument("--bin")
     ap.add_argument("--bin-b")
+    ap.add_argument("--arm", action="append",
+                    help="LABEL=BINARY[,scan_kernel=on|off], repeatable; replaces --bin/--bin-b")
+    ap.add_argument("--scan-kernel", choices=["on", "off"],
+                    help="write `scan_kernel = <v>` into every server's config (default: not written)")
     ap.add_argument("--workdir", required=True)
     ap.add_argument("--port", type=int, default=31931)
     ap.add_argument("--pin-server", default="2")
@@ -411,6 +632,18 @@ def main():
     ap.add_argument("--quiet-load", type=float, default=0.0,
                     help="before each run, wait for the 1-min loadavg to reach this (0: no gate)")
     ap.add_argument("--quiet-wait", type=float, default=600.0)
+    ap.add_argument("--cell-quiet-pct", type=float, default=0.0,
+                    help="before each cell wait for a window in which the measurement's CPUs and "
+                    "their SMT siblings are at most this %% busy (0: no wait)")
+    ap.add_argument("--cell-quiet-wait", type=float, default=600.0,
+                    help="at most this many seconds per attempt (then the cell runs, flagged)")
+    ap.add_argument("--cell-clean-pct", type=float, default=20.0,
+                    help="a cell is clean when its SMT siblings averaged at most this %% busy")
+    ap.add_argument("--cell-foreign-pct", type=float, default=5.0,
+                    help="a cell is clean when another session's tasks took at most this %% of "
+                    "the server's and of the driver's pinned CPU")
+    ap.add_argument("--cell-retries", type=int, default=3,
+                    help="an unclean cell is run again this many times (reads and idempotent writes)")
     ap.add_argument("--sampler")
     ap.add_argument("--sampler-dir")
     ap.add_argument("--profile-ops", type=int, default=100000)
@@ -420,6 +653,8 @@ def main():
     ap.add_argument("--only", help="census: comma-separated shape names (default: every shape)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    if not a.bin and not a.arm:
+        ap.error("one of --bin or --arm is required")
     os.sched_setaffinity(0, {int(a.pin_driver)})
     result = {"args": vars(a), "runs": []}
     if a.sampler:

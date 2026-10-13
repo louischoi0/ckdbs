@@ -14,7 +14,7 @@
  ["row walk: visibility", "txn::Classify|ReadView|LookupCommit|ResolveThroughUndo"],
  ["row walk: copy", "chain:^__mem(cpy|move)[^<]*<([^<]*AcceptTupleAt|std::_Function_handler::_M_invoke)(<|$)"],
  ["row walk: per-row checks and counters", "chain:^[^<]*(AcceptTupleAt|ReadTuple|ExecStats::For|ChargeRow)[^<]*(<|$)|^[^<]*<std::_Function_handler::_M_invoke<[^<]*BtreeVisitLeafPage"],
- ["row walk: loop and callback", "chain:^(?=[^<]*(_M_invoke|ResolveVisit|lambda|BtreeVisitLeafPage))(?=.*BtreeVisitLeafPage)"],
+ ["row walk: loop and callback", "chain:^(?=[^<]*(_M_invoke|ResolveVisit|lambda|BtreeVisitLeafPage))(?=.*BtreeVisitLeafPage)|^[^<]*RunWalkStep::\\{lambda"],
  ["descent and page access", "btree::|BtreeLookup|DescendTo|DevicePageStore|PageStore::|FetchPinned|LocateByPk"],
  ["statement scaffolding", "CommandDispatcher::|SelectRun|ChainRunner|StepChain|ExecuteChain"],
  ["scheduler and checkpoint", "Scheduler::|CoroTask|Checkpointer|DrainOnce"]
