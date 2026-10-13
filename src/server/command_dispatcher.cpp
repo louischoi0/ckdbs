@@ -6789,13 +6789,22 @@ StatusOr<std::size_t> ResolveViewColumn(const exec::CatalogView& view,
                                         const parser::ColumnName& col) {
     if (col.qualified() && !IEquals(col.qualifier, stmt.from.binding())) {
         return Status::InvalidArgument("'" + col.qualifier + "." + col.name +
-                                       "' names no relation in this statement");
+                                       "' names no relation in this statement (byte " +
+                                       std::to_string(col.byte_offset) + ")");
     }
     for (std::size_t i = 0; i < view.column_names.size(); ++i) {
         if (IEquals(view.column_names[i], col.name)) return i;
     }
     return Status::InvalidArgument("view sys." + stmt.from.table_name + " has no column '" +
-                                   col.name + "'");
+                                   col.name + "' (byte " + std::to_string(col.byte_offset) +
+                                   ")");
+}
+
+// Where a statement's rows go: the session's sink when one is installed
+// (KWP), and the newline protocol's text otherwise.
+ResultSink& SinkFor(Session& session, TextResultSink& text) {
+    return session.result_sink() != nullptr ? *session.result_sink()
+                                            : static_cast<ResultSink&>(text);
 }
 
 }  // namespace
@@ -6838,7 +6847,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
 
     // **`ORDER BY` over a view (BO-Q3, W4)**: each key resolved against the
     // view's columns before any row is read, as the WHERE below is, and
-    // ordered by the engine's one ordering (`exec::OrderKeyOf`, D3) under
+    // ordered by the engine's one ordering (`exec::OrderKeyOf`) under
     // the type the view declares - not by a second comparator. No
     // `sort_max_rows` cap: the cap bounds what a walk would buffer, and a
     // view's rows are already whole in memory before the sort sees them.
@@ -6925,8 +6934,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     // header-and-rows text on the newline protocol, never a reply of its
     // own rendering. A view has no Keystone column, so no field is flagged.
     TextResultSink text_sink;
-    ResultSink& sink = session.result_sink() != nullptr ? *session.result_sink()
-                                                        : static_cast<ResultSink&>(text_sink);
+    ResultSink& sink = SinkFor(session, text_sink);
     std::vector<std::string> names;
     std::vector<std::uint32_t> types;
     names.reserve(project.size());
@@ -6974,28 +6982,28 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     if (!sort_by.empty()) {
         // Normalized once per row, as `exec::OutputSort` does; the
         // qualifying order breaks ties, so the sort is stable.
-        std::vector<std::vector<exec::OrderKey>> keys(qualifying.size());
-        for (std::size_t r = 0; r < qualifying.size(); ++r) {
-            keys[r].reserve(sort_by.size());
+        struct Keyed {
+            std::vector<exec::OrderKey> keys;
+            const std::vector<parser::AstValue>* row;
+        };
+        std::vector<Keyed> keyed;
+        keyed.reserve(qualifying.size());
+        for (const std::vector<parser::AstValue>* row : qualifying) {
+            Keyed& k = keyed.emplace_back(Keyed{{}, row});
             for (const auto& [at, descending] : sort_by) {
-                auto key = exec::OrderKeyOf(rows.column_types[at], (*qualifying[r])[at]);
+                auto key = exec::OrderKeyOf(rows.column_types[at], (*row)[at]);
                 if (!key.ok()) return {ErrorReply(key.status()), false, 0, key.status()};
-                keys[r].push_back(std::move(key.value()));
+                k.keys.push_back(std::move(key.value()));
             }
         }
-        std::vector<std::size_t> order(qualifying.size());
-        for (std::size_t r = 0; r < order.size(); ++r) order[r] = r;
-        std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        std::stable_sort(keyed.begin(), keyed.end(), [&](const Keyed& a, const Keyed& b) {
             for (std::size_t k = 0; k < sort_by.size(); ++k) {
-                const int c = keys[a][k].Compare(keys[b][k]);
+                const int c = a.keys[k].Compare(b.keys[k]);
                 if (c != 0) return sort_by[k].second ? c > 0 : c < 0;
             }
             return false;
         });
-        std::vector<const std::vector<parser::AstValue>*> sorted;
-        sorted.reserve(order.size());
-        for (std::size_t r : order) sorted.push_back(qualifying[r]);
-        qualifying = std::move(sorted);
+        for (std::size_t r = 0; r < keyed.size(); ++r) qualifying[r] = keyed[r].row;
     }
 
     // I11's contract, over the one row source that is not a chain: a
@@ -7402,9 +7410,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // fold, the sorted drain and the plain walk all emit through it - and
     // it *is* the reply buffer, so there is no second one.
     TextResultSink& text_sink = run->text_sink;
-    ResultSink& sink = session.result_sink() != nullptr
-                           ? *session.result_sink()
-                           : static_cast<ResultSink&>(text_sink);
+    ResultSink& sink = SinkFor(session, text_sink);
     run->sink = &sink;
 
     // Resolved once, outside the row loop: the projection reads the frame

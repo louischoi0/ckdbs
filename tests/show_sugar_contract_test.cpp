@@ -170,6 +170,12 @@ TEST_F(ShowSugarTest, AViewAnswersKwpWithATypedDescriptionAndTypedRows) {
     ASSERT_TRUE(rows.ok()) << rows.status().message();
     ASSERT_EQ(rows.value().size(), 1u);
     ASSERT_EQ(rows.value()[0][0].bytes.size(), 8u) << "a uint64, in its eight bytes";
+    std::uint64_t oid = 0;
+    for (std::size_t b = 0; b < 8; ++b) {
+        oid |= std::uint64_t{std::to_integer<std::uint8_t>(rows.value()[0][0].bytes[b])} << (8 * b);
+    }
+    EXPECT_EQ("oid\\n" + std::to_string(oid), Text("SELECT oid FROM sys.tables WHERE name = 't'"))
+        << "the value the text protocol prints";
     const auto& name = rows.value()[0][1].bytes;
     EXPECT_EQ(std::string(reinterpret_cast<const char*>(name.data()), name.size()), "t");
 
@@ -194,15 +200,23 @@ TEST_F(ShowSugarTest, TheNewlineProtocolPrintsAViewAsItPrintsARelation) {
 }
 
 TEST_F(ShowSugarTest, AViewIsOrderedByItsDeclaredTypes) {
-    ASSERT_EQ(Text("CREATE TABLE b (id int64)").substr(0, 7), "CREATED");
-    ASSERT_EQ(Text("CREATE TABLE a (id int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Text("CREATE TABLE zb (id int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Text("CREATE TABLE za (id int64)").substr(0, 7), "CREATED");
     // `public` alone (namespace 1): the catalog's own relations are rows too.
     const std::string user = "SELECT name FROM sys.tables WHERE namespace_oid = 1 ";
-    EXPECT_EQ(Text(user + "ORDER BY name"), "name\\na\\nb\\nt");
-    EXPECT_EQ(Text(user + "ORDER BY name DESC LIMIT 2"), "name\\nt\\nb");
-    // By a uint64: the oids ascend in creation order.
-    EXPECT_EQ(Text(user + "ORDER BY oid DESC"), "name\\na\\nb\\nt");
-    EXPECT_EQ(Text("SELECT name FROM sys.tables ORDER BY nope").rfind("ERR", 0), 0u);
+    EXPECT_EQ(Text(user + "ORDER BY name"), "name\\nt\\nza\\nzb");
+    EXPECT_EQ(Text(user + "ORDER BY name DESC LIMIT 2"), "name\\nzb\\nza");
+    // By a uint64: the oids ascend in creation order, which is not the names'.
+    EXPECT_EQ(Text(user + "ORDER BY oid"), "name\\nt\\nzb\\nza");
+    EXPECT_EQ(Text(user + "ORDER BY oid DESC"), "name\\nza\\nzb\\nt");
+    // Two keys, ties on the first broken by the second.
+    EXPECT_EQ(Text("SELECT rel_name, pos FROM sys.columns WHERE rel_name >= 't' "
+                   "ORDER BY rel_name DESC, pos DESC"),
+              "rel_name,pos\\nzb,0\\nza,0\\nt,2\\nt,1\\nt,0");
+    // An unknown key is `InvalidArgument` (no code token) at its byte.
+    const std::string sql = "SELECT name FROM sys.tables ORDER BY nope";
+    EXPECT_EQ(Text(sql), "ERR view sys.tables has no column 'nope' (byte " +
+                             std::to_string(sql.find("nope")) + ")");
 }
 
 TEST_F(ShowSugarTest, ASchemaObjectViewReadsUnderTheSessionsView) {
@@ -217,7 +231,11 @@ TEST_F(ShowSugarTest, ASchemaObjectViewReadsUnderTheSessionsView) {
     }
     EXPECT_NE(Text(other, "SELECT name FROM sys.tables").find("hidden"), std::string::npos)
         << "the creator sees its own relation";
+    EXPECT_NE(Text(other, "SELECT rel_name FROM sys.columns").find("hidden"), std::string::npos);
     ASSERT_EQ(Text(other, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    // DT3c's hole: a read taken while the DDL was open must not leave the
+    // rolled-back relation in the catalog's cache.
+    EXPECT_EQ(Text("SELECT name FROM sys.tables").find("hidden"), std::string::npos);
 }
 
 // ---- SV2: every `SHOW` is its `SELECT` -----------------------------------
@@ -255,8 +273,10 @@ TEST_P(ShowSugarSpellingTest, TheShowAnswersWhatItsSelectAnswers) {
     const std::string selected = Text(s.select);
     ASSERT_EQ(selected.rfind("ERR", 0), std::string::npos) << s.select << ": " << selected;
     EXPECT_EQ(Text(s.show), selected) << s.show;
-    EXPECT_EQ(Answer(s.show), Answer(s.select)) << s.show;
-    EXPECT_NE(Answer(s.show).types.front(), static_cast<std::uint8_t>(ServerFrameType::kComplete))
+    const KwpAnswer shown = Answer(s.show);
+    EXPECT_EQ(shown, Answer(s.select)) << s.show;
+    ASSERT_FALSE(shown.types.empty()) << s.show;
+    EXPECT_EQ(shown.types.front(), static_cast<std::uint8_t>(ServerFrameType::kRowDesc))
         << s.show << " answers a result set";
 }
 
