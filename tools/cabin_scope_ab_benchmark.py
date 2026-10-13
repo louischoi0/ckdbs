@@ -75,6 +75,7 @@ import time
 
 from bench_common import Phase
 from ckdbs_cli import DEFAULT_HOST, ServerConnection, format_reply
+import sys_meta
 
 COLUMNS = "id int64, val varchar, pad varchar"
 MATCHES = 10          # rows per hot value, held (roughly) constant across sizes
@@ -482,7 +483,7 @@ def main():
     fallthroughs = {}
     for side in sides:
         meta = side.must("SHOW META")
-        fallthroughs[side.label] = "cabin_scope_fallthroughs=" in meta
+        fallthroughs[side.label] = "cabin_scope_fallthroughs" in sys_meta.from_text(meta)
 
     print()
     print(f"cabin_scope_ab - sizes {sizes}, {args.ops} ops/arm, suffix {suffix}, "

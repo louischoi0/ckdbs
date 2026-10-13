@@ -97,7 +97,6 @@ because nothing drops a table.
 import argparse
 import os
 import random
-import re
 import socket
 import sys
 import time
@@ -106,6 +105,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bench_common
 
 from ckdbs_cli import ServerConnection
+import sys_meta
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 15432
@@ -230,13 +230,8 @@ def observed_enforcing(conn, assertion_names):
     Returns 'on', 'off' or 'mixed'. The driver does not take its own word
     for which engine it measured - the stamp comes from the server.
     """
-    reply = conn.must("SHOW ASSERTIONS")
-    state = {}
-    for line in reply.split("\\n")[1:]:
-        name = re.search(r"\bname=(\S+)", line)
-        enf = re.search(r"\benforcing=(\d)", line)
-        if name and enf:
-            state[name.group(1)] = enf.group(1)
+    reply = conn.must("SELECT name, enforcing FROM sys.assertions")
+    state = {row["name"]: row["enforcing"] for row in sys_meta.view_rows(reply)}
     missing = [n for n in assertion_names if n not in state]
     if missing:
         raise RuntimeError("SHOW ASSERTIONS did not list: %s" % ", ".join(missing))

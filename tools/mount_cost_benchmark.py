@@ -61,7 +61,6 @@ import atexit
 import json
 import os
 import random
-import re
 import shutil
 import signal
 import subprocess
@@ -73,6 +72,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bench_common import Phase
 from ckdbs_cli import ServerConnection, format_reply
+import sys_meta
 
 REPO = Path(__file__).resolve().parent.parent
 ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -94,18 +94,14 @@ def filesystem_of(path):
     return lines[-1].split()[1] if len(lines) >= 2 else None
 
 
-def parse_meta(line):
-    """Pulls the recovery counters out of a `SHOW META` reply.
+def parse_meta(reply):
+    """Pulls the recovery counters out of a raw `SHOW META` reply.
 
     Absent rather than zero when the server did not report one: a build with
     no recovery has not recovered nothing, it has no answer.
     """
-    found = {}
-    for key in COUNTERS:
-        m = re.search(rf"\b{key}=(\d+)", line)
-        if m:
-            found[key] = int(m.group(1))
-    return found
+    fields = sys_meta.numeric(sys_meta.from_text(reply))
+    return {key: fields[key] for key in COUNTERS if key in fields}
 
 
 # Every server this process started and has not stopped. An abort() below is a
@@ -297,10 +293,10 @@ def main():
         mount = Mount(binary, conf, server_log, args.port)
         wall = mount.start()
         conn = mount.connect(timeout=60.0)
-        meta_line = format_reply(conn.send_command("SHOW META"))
+        meta_reply = conn.send_command("SHOW META")
         conn.close()
         mount.stop()
-        counters = parse_meta(meta_line)
+        counters = parse_meta(meta_reply)
         phase.record(wall, "OK")
         rows.append({"mount": n + 1, "wall_ms": round(wall * 1e3, 2), **counters})
 

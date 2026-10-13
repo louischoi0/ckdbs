@@ -153,6 +153,7 @@ import time
 from bench_common import Phase, report, write_json
 from benchmark import read_durability, reply_rows, server_side_us
 from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
+import sys_meta
 
 # ---- schema --------------------------------------------------------------
 #
@@ -467,28 +468,26 @@ def create_tables(exec_, suffix, cabin=False, fk=False):
 
 
 def read_cabin_state(exec_, suffix):
-    """`SHOW CABINS`, reduced to the one row this run declared.
+    """`sys.cabins`, reduced to the one row this run declared.
 
-    Returns None when the server reports no cabin for it - which is the
-    honest answer for a run that did not ask for one, and also for a server
-    that has the feature switched off (`cabins = off`), where the catalog
-    row exists and the runtime fields read `-`."""
+    Returns None when the server reports no cabin for it - the honest answer
+    for a run that did not ask for one. Where the feature is switched off
+    (`cabins = off`) the catalog row exists and its runtime columns are
+    NULL."""
     reply = exec_("SHOW CABINS")
     if reply.startswith("ERR"):
         return None
 
     want_rel = f"{CABIN_RELATION}_{suffix}"
-    for section in reply.split("\n")[1:]:
-        fields = dict(
-            part.split("=", 1) for part in section.split() if "=" in part)
-        if fields.get("rel") != want_rel or fields.get("column") != CABIN_COLUMN:
+    for fields in sys_meta.view_rows(reply):
+        if fields.get("rel_name") != want_rel or fields.get("column") != CABIN_COLUMN:
             continue
 
         def number(key):
-            # `-` is what the server prints when cabins are switched off:
-            # the counts are *unknown*, which is not the same as zero, so it
-            # is carried through as None rather than flattened.
-            raw = fields.get(key, "-")
+            # NULL when cabins are switched off: the counts are *unknown*,
+            # which is not the same as zero, so it is carried through as
+            # None rather than flattened.
+            raw = fields.get(key, "NULL")
             return int(raw) if raw.isdigit() else None
 
         return {

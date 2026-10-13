@@ -46,6 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_common import Phase  # noqa: E402
 
 from ckdbs_cli import ServerConnection
+import sys_meta  # noqa: E402
 
 PHASES = ("insert", "point-select", "update", "delete", "scan")
 
@@ -78,12 +79,12 @@ class Conn(ServerConnection):
 
 
 def field(reply, key):
-    """`key=<int>` out of a keyed reply (SHOW META, DESCRIBE); absence is an
+    """An integer `sys.meta` field out of a `SHOW META` reply; absence is an
     error, never a silent None - a None would become a core nobody serves."""
-    for tok in reply.split():
-        if tok.startswith(key + "="):
-            return int(tok[len(key) + 1:])
-    raise RuntimeError(f"reply carries no {key}= field: {reply}")
+    value = sys_meta.from_text(reply).get(key)
+    if value is None:
+        raise RuntimeError(f"reply carries no {key} field: {reply}")
+    return int(value)
 
 
 def filesystem_of(path):

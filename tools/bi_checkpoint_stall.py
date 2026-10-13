@@ -56,6 +56,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ckdbs_cli import ServerConnection  # noqa: E402
+import sys_meta  # noqa: E402
 
 ROWS_PER_INSERT = 1024
 PROBE_ROWS = 1000
@@ -103,15 +104,8 @@ def start_server(a, tag):
 
 
 def meta_fields(reply):
-    out = {}
-    for tok in reply.split():
-        if "=" in tok:
-            k, v = tok.split("=", 1)
-            try:
-                out[k] = int(v)
-            except ValueError:
-                pass
-    return out
+    """Every integer field of a `SHOW META` reply."""
+    return sys_meta.numeric(sys_meta.from_text(reply))
 
 
 def check(reply, what):

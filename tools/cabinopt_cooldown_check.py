@@ -73,8 +73,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ckdbs_cli import DEFAULT_HOST, ServerConnection, format_reply
 from scenario4_cabinopt_days import (COLUMNS, CLUSTERED, MATCHES, board_symbol,
-                                     insert_sql, make_board_rows, parse_kv,
-                                     probe_sql)
+                                     insert_sql, make_board_rows, probe_sql)
+import sys_meta
 
 HOT_SYMBOLS = 4     # the warm phase's hot set: one shape, a few values
 
@@ -114,14 +114,9 @@ class Arm:
         return reply
 
     def observe(self, t_rel):
-        """One `SHOW CABIN_OPTIMIZER` capture, appended to the trace."""
-        reply = self("SHOW CABIN_OPTIMIZER")
-        lines = reply.splitlines()
-        header = parse_kv(lines[0])
-        entries = [parse_kv(ln) for ln in lines[1:] if ln.strip()]
-        cap = {"t": round(t_rel, 2), "header": lines[0],
-               "entries": [ln for ln in lines[1:] if ln.strip()]}
-        self.trace.append(cap)
+        """One capture of the controller's state, appended to the trace."""
+        header, entries = sys_meta.cabin_optimizer_state(self)
+        self.trace.append({"t": round(t_rel, 2), "header": header, "entries": entries})
         return header, entries
 
 

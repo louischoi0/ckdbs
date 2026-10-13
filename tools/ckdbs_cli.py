@@ -101,12 +101,16 @@ DEFAULT_PORT = 15432
 # added there without updating this comment.
 KNOWN_COMMANDS = """\
   PING                    -> PONG
-  SHOW META               -> superblock stats
-  SHOW TABLES             -> space-separated table names
+  SHOW <target>           -> a SELECT over one sys view, answered as one:
+                             a header line and a row per line
+  SHOW META               -> sys.meta: section,field,value per engine field
+  SHOW TABLES             -> sys.tables
   SHOW PAGE <page_id> [VALUES]
-                          -> heap page header + slot directory, pretty-printed;
-                             VALUES also hex-encodes each live tuple's payload
-  DESCRIBE <name>         -> table header + one section per column (DESC works too)
+                          -> sys.page_slots: a header row, then a row per slot;
+                             VALUES adds each live tuple's payload in hex
+  DESCRIBE <name>         -> sys.columns for the relation (DESC works too)
+  SELECT ... FROM sys.<view>
+                          -> the same views, with WHERE, ORDER BY, LIMIT
   CREATE TABLE <name>     -> always ERR: a table needs a Keystone pk column;
                              bare form, no columns
   CREATE TABLE <name> (<col> <type> [, ...]) [HEAP|BTREE]

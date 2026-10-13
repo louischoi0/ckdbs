@@ -67,7 +67,7 @@ def setup(conn, preload):
     if r.startswith("ERR"):
         raise SystemExit(f"setup: CREATE ASSERTION -> {r!r}")
     ms = (time.perf_counter() - t0) * 1e3
-    enforcing = conn.send_command("SHOW ASSERTIONS")
+    enforcing = conn.send_command("SELECT name, enforcing FROM sys.assertions")
     return ms, enforcing
 
 

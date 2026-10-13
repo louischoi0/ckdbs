@@ -76,6 +76,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_common import Phase, report
 from ckdbs_cli import DEFAULT_HOST, ServerConnection, format_reply
+import sys_meta
 
 DEFAULT_PORT = 15432
 
@@ -173,30 +174,18 @@ def server_cpu_seconds(pid):
     return (int(after_comm[11]) + int(after_comm[12])) / os.sysconf("SC_CLK_TCK")
 
 
-def parse_kv(line):
-    """`a=1 b=x` -> dict. Values carry no spaces on every surface parsed."""
-    out = {}
-    for tok in line.split():
-        if "=" in tok:
-            k, _, v = tok.partition("=")
-            out[k] = v
-    return out
-
 
 def show_optimizer(client):
-    """SHOW CABIN_OPTIMIZER -> (header dict, [entry dicts])."""
-    reply = client("SHOW CABIN_OPTIMIZER")
-    if reply.startswith("ERR") or reply.startswith("CABIN_OPTIMIZER absent"):
-        abort("SHOW CABIN_OPTIMIZER unavailable - is cabins=on?", reply)
-    lines = reply.splitlines()
-    return parse_kv(lines[0]), [parse_kv(ln) for ln in lines[1:] if ln.strip()]
+    """(header dict, [entry dicts]), `sys_meta.cabin_optimizer_state`'s."""
+    try:
+        return sys_meta.cabin_optimizer_state(client)
+    except RuntimeError as e:
+        abort("SHOW CABIN_OPTIMIZER unavailable - is cabins=on?", str(e))
 
 
 def show_cabins(client):
-    """SHOW CABINS -> [row dicts]."""
-    reply = client("SHOW CABINS")
-    lines = reply.splitlines()
-    return [parse_kv(ln) for ln in lines[1:] if ln.strip()]
+    """`sys.cabins`' rows as dicts."""
+    return sys_meta.view_rows(client("SHOW CABINS"))
 
 
 def select_rows(reply):

@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_common import nearest_rank  # noqa: E402
 from ckdbs_cli import ServerConnection  # noqa: E402
 from bb_overhead_benchmark import host_state, meta_all, must, wait_for_load  # noqa: E402
+import sys_meta  # noqa: E402
 
 
 def client(args):
@@ -79,11 +80,7 @@ def client(args):
 
 
 def session_core(conn):
-    text = conn.send_command("SHOW META").replace("\\n", " ")
-    for tok in text.split():
-        if tok.startswith("core="):
-            return tok[5:]
-    return None
+    return sys_meta.from_text(conn.send_command("SHOW META")).get("core")
 
 
 def run_one(args, run, label, binary, port, tag):

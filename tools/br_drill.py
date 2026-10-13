@@ -33,6 +33,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ckdbs_cli import ServerConnection  # noqa: E402
+import sys_meta  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKUP_TOOL = os.path.join(REPO, "tools", "kds_backup.py")
@@ -148,7 +149,7 @@ def quiesced_point(server, workload):
     conn = server.conn()
     conn.send_command("SYNC")
     digest, rows = table_hash(conn)
-    lsn = int(fields(conn.send_command("SHOW META"))["wal_durable_lsn"])
+    lsn = int(sys_meta.from_text(conn.send_command("SHOW META"))["wal_durable_lsn"])
     workload.resume()
     return digest, rows, lsn
 
@@ -246,7 +247,7 @@ class Drills:
         conn.send_command("SYNC")
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            meta = fields(conn.send_command("SHOW META"))
+            meta = sys_meta.from_text(conn.send_command("SHOW META"))
             if int(meta.get("wal_archive_lag_segments", "1")) == 0:
                 break
             time.sleep(0.5)
@@ -393,7 +394,7 @@ class Drills:
         proc.wait()
         target.start()  # no --restore-from: the volume itself owes the restore
         digest, rows = table_hash(target.conn())
-        meta = fields(target.conn().send_command("SHOW META"))
+        meta = sys_meta.from_text(target.conn().send_command("SHOW META"))
         target.stop()
         self.expect(rows > 0, "case 3", "no rows")
         self.ok("case 3: a restore killed in recovery completes at the next mount",

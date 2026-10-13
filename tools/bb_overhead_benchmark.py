@@ -43,6 +43,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_common import Phase  # noqa: E402
 from ckdbs_cli import ServerConnection  # noqa: E402
+import sys_meta  # noqa: E402
 
 BATCH = 500
 SPILL = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -63,16 +64,8 @@ def host_state():
 
 
 def meta_all(conn):
-    text = conn.send_command("SHOW META").replace("\\n", " ")
-    out = {}
-    for tok in text.split():
-        if "=" in tok:
-            k, v = tok.split("=", 1)
-            try:
-                out[k] = float(v)
-            except ValueError:
-                pass
-    return out
+    """Every numeric `sys.meta` field, as a float."""
+    return sys_meta.numeric(sys_meta.from_text(conn.send_command("SHOW META")), float)
 
 
 def must(conn, sql, prefix):
