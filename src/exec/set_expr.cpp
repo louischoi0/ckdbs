@@ -189,17 +189,7 @@ SetType DecimalQuotient(const SetType& dividend, std::uint32_t divisor_scale) {
 // What CAST converts between (BJ-S5, BJ-Q3). The classes are the reference
 // dialect's families, restricted to the engine's types; a pair not listed is
 // refused at compile, and `bool` converts to nothing but itself.
-enum class Family : std::uint8_t { kInt, kDec, kText, kDate, kTimestamp, kBool, kOther };
-
-Family FamilyOf(std::uint32_t type_val) {
-    if (IsInteger(type_val)) return Family::kInt;
-    if (IsDecimal(type_val)) return Family::kDec;
-    if (IsText(type_val)) return Family::kText;
-    if (type_val == kTypeValDate) return Family::kDate;
-    if (type_val == kTypeValTimestamp) return Family::kTimestamp;
-    if (type_val == kTypeValBool) return Family::kBool;
-    return Family::kOther;
-}
+using Family = TypeFamily;
 
 bool CastAdmitted(Family from, Family to) {
     switch (from) {
@@ -933,7 +923,7 @@ private:
             }
             if (!s.ok()) return s;
         }
-        if (!CastAdmitted(FamilyOf(child->type.type_val), FamilyOf(target.value().type_val))) {
+        if (!CastAdmitted(TypeFamilyOf(child->type.type_val), TypeFamilyOf(target.value().type_val))) {
             return Status::InvalidArgument("CAST from " + SetTypeName(child->type) + " to " +
                                            SetTypeName(target.value()) + " is not supported" +
                                            At(e.op_byte_offset));
@@ -1359,8 +1349,8 @@ private:
         if (IsNull(v)) return v;
         const SetType& from = e.lhs->type;
         const SetType& to = e.type;
-        const Family source = FamilyOf(from.type_val);
-        const Family target = FamilyOf(to.type_val);
+        const Family source = TypeFamilyOf(from.type_val);
+        const Family target = TypeFamilyOf(to.type_val);
 
         // An unscaled value and its scale, for the numeric sources.
         const auto AsDecimal = [&]() -> StatusOr<std::pair<Int128, int>> {

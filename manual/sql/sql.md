@@ -766,6 +766,27 @@ over expressions, no parenthesized nesting. Each conjunct is one of
   is refused with a position.
 - `IN (1, 2, 3)` — a value list — does **not** exist yet (the open half of
   workplan V08). It is reported as "expected a subquery".
+- **No type is converted implicitly** (types.md §3.1a). A literal must be
+  written in the compared column's own spelling, and a statement that
+  breaks the rule is refused at compile with the literal's byte - whether
+  or not a row would have matched, and before an `UPDATE` or `DELETE`
+  touches anything:
+  - an integer column takes an integer literal: `n = 20`, never `n = '20'`
+    or `n = 20.0`;
+  - `char` and `varchar` take a string literal: `s = '5'`, never `s = 5`;
+  - `bool` takes `0` or `1`;
+  - a `date`, `timestamp` or `decimal` is written as a string (`'2026-10-01'`,
+    `'12.34'`); a date or timestamp also takes its epoch integer, and a
+    decimal an integer, which are those types' own forms and not
+    conversions.
+
+  Two columns - in a `WHERE`, an `ON`, or an outer column against the value
+  of `IN (SELECT ...)` or a scalar subquery - compare only inside one
+  family: integers of any width and signedness, compared by value (an
+  `int32` -1 is less than a `uint64` 5); decimals of the same width and
+  scale; `char` and `varchar`, as the text they hold; a date with a date;
+  a timestamp with a timestamp. Any other pair is refused: `date = timestamp`
+  would compare epoch days with epoch microseconds.
 - **Comparisons are three-valued** (null.md §4): a relational operator
   with a NULL operand is unknown, and `WHERE` keeps only true — so
   `col = NULL` matches nothing, ever (the standard's trap, kept on
@@ -1001,11 +1022,11 @@ may be written qualified (`FROM sys.tables AS t ... WHERE t.oid = 100`),
 and a qualifier naming no relation in the statement is refused in the
 `WHERE` exactly as it is in the projection. A view's integers compare
 **unsigned**, because every one of them is stored as a `uint64` and
-`sys.patterns.fetch_id` really does use the full 64-bit range. One
-consequence: a negative literal is not a `uint64`, so on a view `WHERE oid
-> -1` is a non-match for every row rather than a comparison that succeeds.
-A `uint64` column on an ordinary relation refuses such a literal instead -
-a negative one, or one past 2^64 - 1, is `OutOfRange` with its byte.
+`sys.patterns.fetch_id` really does use the full 64-bit range. Integers
+compare by value, so on a view `WHERE oid > -1` matches every row and
+`WHERE oid = -1` none. A `uint64` column on an ordinary relation refuses a
+negative literal instead - a negative one, or one past 2^64 - 1, is
+`OutOfRange` with its byte.
 
 There is also a legacy non-SQL form: `CREATE TABLE <name>` with **no column
 list** routes to a pre-SQL handler (the dispatcher routes on the presence

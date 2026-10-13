@@ -826,18 +826,48 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
         }
 
         case kTypeValUint64:
+            if (val.type != parser::ValueType::kInt) {
+                return Status::InvalidArgument("expects an integer, not a string literal");
+            }
             // The same rule over the unsigned range, which the digits carry
             // (`ValueAsUint64`): a negative literal or one past 2^64 - 1
             // names nothing the column holds. Compared, it answered false
             // under every operator - `!=` and `>` included - and no row.
-            if (val.type == parser::ValueType::kInt && !ValueAsUint64(val).ok()) {
+            if (!ValueAsUint64(val).ok()) {
                 return Status::OutOfRange("integer literal " + val.raw_int_text +
                                           " is outside the range of a uint64");
             }
             return Status::OK();
 
+        // **The kind the encode takes, or a refusal** (types.md §3.1).
+        // These arms compare the value as written, so a literal of another
+        // kind reached CompareValues as a kind mismatch and answered false
+        // per row: `WHERE a = '20'` over an integer column returned no rows
+        // and `DELETE` reported `DELETED 0`. No conversion is made - the
+        // statement is refused for its spelling. An integer outside a narrow
+        // column's width stays legal: compared by value, it is simply true
+        // or false, as it is under the SQL standard.
+        case kTypeValInt8:
+        case kTypeValInt16:
+        case kTypeValInt32:
+        case kTypeValInt64:
+            if (val.type != parser::ValueType::kInt) {
+                return Status::InvalidArgument("expects an integer, not a string literal");
+            }
+            return Status::OK();
+        case kTypeValBool:
+            if (val.type != parser::ValueType::kInt || (val.int_val != 0 && val.int_val != 1)) {
+                return Status::InvalidArgument("expects 0 or 1 (no boolean literal in this grammar)");
+            }
+            return Status::OK();
+        case kTypeValChar:
+        case kTypeValVarchar:
+            if (val.type != parser::ValueType::kStr) {
+                return Status::InvalidArgument("expects a string literal, '...'");
+            }
+            return Status::OK();
+
         default:
-            // Every other type is compared as it was written.
             return Status::OK();
     }
 }
@@ -855,6 +885,24 @@ Status CheckIntegerLiteralFits(const catalog::SysColumnRow& col, const parser::A
         default:
             return Status::InvalidArgument("column type " + std::to_string(col.type_val) +
                                            " is not an integer type");
+    }
+}
+
+TypeFamily TypeFamilyOf(std::uint32_t type_val) {
+    switch (type_val) {
+        case kTypeValInt8:
+        case kTypeValInt16:
+        case kTypeValInt32:
+        case kTypeValInt64:
+        case kTypeValUint64: return TypeFamily::kInt;
+        case kTypeValDecimal:
+        case catalog::kTypeValDecimalWide: return TypeFamily::kDec;
+        case kTypeValChar:
+        case kTypeValVarchar: return TypeFamily::kText;
+        case kTypeValDate: return TypeFamily::kDate;
+        case kTypeValTimestamp: return TypeFamily::kTimestamp;
+        case kTypeValBool: return TypeFamily::kBool;
+        default: return TypeFamily::kOther;
     }
 }
 
@@ -1257,28 +1305,36 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
     if (lhs.type == parser::ValueType::kNull || rhs.type == parser::ValueType::kNull) {
         return false;
     }
-    if (type_val == kTypeValUint64) {
-        // Unsigned, because int_val is signed and cannot represent the
-        // upper half of the range - comparing it would order large ids
-        // below small ones.
-        //
-        // **Through ValueAsUint64, not through raw_int_text.** That field
-        // carries the value only when int_val cannot (a value above
-        // INT64_MAX) and is empty otherwise, which is precisely the rule
-        // ValueAsUint64 exists to be the single owner of. Reading the text
-        // directly here parsed an empty string for every ordinary value and
-        // failed, so *any* comparison with a uint64 operand at or below
-        // INT64_MAX answered false: `WHERE big = 5` returned no rows, and
-        // MIN over a uint64 column could not descend past INT64_MAX. The
-        // header's warning about this caller was already written; this is
-        // that caller.
-        auto a = ValueAsUint64(lhs);
-        auto b = ValueAsUint64(rhs);
-        // A negative operand is not a uint64 and so is a non-match, which
-        // is the answer every other type mismatch here gets.
-        if (!a.ok() || !b.ok()) return false;
-        return ApplyCompare(a.value(), b.value(), op);
+    // ---- Integers, of any width and signedness, by value (types.md §3.1a)
+    //
+    // A uint64 above INT64_MAX is the one integer `int_val` cannot hold: it
+    // is carried by its digits (ValueAsUint64's rule) and `int_val` holds it
+    // wrapped, negative. So such an operand is compared through Int128 and
+    // every other pair stays an int64 comparison. Whichever side is the
+    // uint64 - the left column's type is the only one this function is
+    // told - the answer is the mathematical one: a uint64 column compared
+    // with a signed column's -1 is greater, not a non-match.
+    if (lhs.type == parser::ValueType::kInt && rhs.type == parser::ValueType::kInt) {
+        const auto wrapped = [](const parser::AstValue& v) {
+            return v.int_val < 0 && !v.raw_int_text.empty() && v.raw_int_text[0] != '-';
+        };
+        if (!wrapped(lhs) && !wrapped(rhs)) return ApplyCompare(lhs.int_val, rhs.int_val, op);
+        const auto exact = [&wrapped](const parser::AstValue& v) -> std::optional<Int128> {
+            if (!wrapped(v)) return static_cast<Int128>(v.int_val);
+            auto u = ParseUint64Text(v.raw_int_text);
+            if (!u.ok()) return std::nullopt;
+            return static_cast<Int128>(u.value());
+        };
+        const auto a = exact(lhs);
+        const auto b = exact(rhs);
+        // Digits past 2^64 - 1 name no integer any column holds; the
+        // compiler refuses such a literal, so this is a guard, not an answer.
+        if (!a.has_value() || !b.has_value()) return false;
+        return ApplyCompare(*a, *b, op);
     }
+    // A uint64 operand that is not an integer is a mismatch the compiler
+    // refuses; it must not reach the decimal or string arms below.
+    if (type_val == kTypeValUint64) return false;
     // ---- DECIMAL (docs/spec/types.md §3.1, TY05) -----------------------
     //
     // Unscaled integers, compared directly - which is only valid because
@@ -1305,14 +1361,10 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
         return ApplyCompare(Int128FromHalves(lhs.dec_hi, lhs.int_val),
                             Int128FromHalves(rhs.dec_hi, rhs.int_val), op);
     }
-    // DATE and TIMESTAMP arrive here as the integers they are - epoch days
-    // and epoch microseconds - so they need no arm of their own. That is
-    // the whole reason TY5 reused kInt for them instead of giving each a
-    // ValueType: an ordering on the encoded integer *is* the ordering on
-    // the value, for both.
-    if (lhs.type == parser::ValueType::kInt && rhs.type == parser::ValueType::kInt) {
-        return ApplyCompare(lhs.int_val, rhs.int_val, op);
-    }
+    // DATE and TIMESTAMP arrive as the integers they are - epoch days and
+    // epoch microseconds - and took the integer arm above: that is the whole
+    // reason TY5 reused kInt for them. A date column is never compared with
+    // a timestamp one; the compiler refuses the pair (types.md §3.1a).
     if (lhs.type == parser::ValueType::kStr && rhs.type == parser::ValueType::kStr) {
         return ApplyCompare<std::string_view>(lhs.str_val, rhs.str_val, op);
     }
