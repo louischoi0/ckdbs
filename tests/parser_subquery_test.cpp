@@ -245,14 +245,18 @@ TEST(ParserSubqueryTest, AnUnclosedOrEmptySubqueryIsRejected) {
     }
 }
 
-TEST(ParserSubqueryTest, AnInValueListIsStillRejectedAndSaysWhat) {
-    // V08's, not V07's. The message has to name what it wanted, since
-    // `IN (1, 2)` is the spelling a client reaches for first.
+TEST(ParserSubqueryTest, AnInValueListIsADisjunctionOfEqualities) {
+    // V08's value list, built in BU-S2: `IN (1, 2)` is `id = 1 OR id = 2`,
+    // one boolean conjunct, and one item is the plain equality.
     auto parsed = Parse("SELECT * FROM t WHERE id IN (1, 2)");
-    ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
-    EXPECT_NE(parsed.status().message().find("SELECT"), std::string::npos)
-        << parsed.status().message();
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto& where = std::get<SelectStmt>(parsed.value()).where;
+    ASSERT_EQ(where.size(), 1u);
+    EXPECT_EQ(where[0].kind, PredicateKind::kBoolTree);
+
+    auto one = Parse("SELECT * FROM t WHERE id IN (7)");
+    ASSERT_TRUE(one.ok()) << one.status().message();
+    EXPECT_EQ(std::get<SelectStmt>(one.value()).where[0].kind, PredicateKind::kCompareValue);
 }
 
 TEST(ParserSubqueryTest, NotIsAPredicateOperatorAndNothingElse) {

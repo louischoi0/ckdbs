@@ -190,7 +190,10 @@ inline constexpr std::size_t kMaxSortKeys = 8;
 // than a separate predicate kind so every carrier - step predicates, the
 // evaluator, the fingerprint - takes them through the one op field it
 // already has (docs/spec/null.md, workplan-null.md NU5).
-enum class CompareOp { kEq, kNeq, kLt, kLte, kGt, kGte, kIsNull, kIsNotNull };
+// `kLike` (BU-S2) is a text pattern match and travels only inside a boolean
+// conjunct (`PredicateKind::kBoolTree`): no flat-conjunct reader - a key,
+// a range, the scan kernel - ever sees it.
+enum class CompareOp { kEq, kNeq, kLt, kLte, kGt, kGte, kIsNull, kIsNotNull, kLike };
 
 struct SelectStmt;  // a predicate may carry one - see Condition below
 

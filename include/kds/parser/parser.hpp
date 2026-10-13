@@ -225,7 +225,9 @@ private:
 
     StatusOr<AstValue> ParseValue();
     StatusOr<CompareOp> ParseCompareOp();
-    StatusOr<Condition> ParseOneCondition(std::uint32_t depth);
+    // One condition as a leaf - or, for a value list or a negated form
+    // (BU-S2), the subtree it means.
+    StatusOr<BoolExpr> ParseOneCondition(std::uint32_t depth);
 
     // AP-S4's call, its head already read as `head`: `(`, column
     // arguments, `)`. Whether `head` names a function at all is the
@@ -249,6 +251,9 @@ private:
     // parenthesized group or one condition is the primary.
     StatusOr<BoolExpr> ParseBoolChain(std::uint32_t depth, bool is_or);
     StatusOr<BoolExpr> ParseBoolNot(std::uint32_t depth);
+    // `IN (v, ...)` after its `(` (BU-S2): a disjunction of equalities, or
+    // for `NOT IN` a conjunction of inequalities.
+    StatusOr<BoolExpr> ParseValueList(ColumnName col, bool negated, std::uint32_t at);
 
     StatusOr<std::string> ParseIdent();
 

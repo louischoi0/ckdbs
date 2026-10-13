@@ -7131,8 +7131,8 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         // Before anything reads `col`: a boolean conjunct has none (BU-Q4).
         if (cond.kind == parser::PredicateKind::kBoolTree) {
             const Status refused = Status::NotImplemented(
-                "OR or NOT over a catalog view (byte " + std::to_string(cond.tree->byte_offset) +
-                ")");
+                "a boolean conjunct (OR, NOT, an IN list, LIKE) over a catalog view (byte " +
+                std::to_string(cond.tree->byte_offset) + ")");
             return {ErrorReply(refused), false, 0, refused};
         }
         // Before anything reads `col`: a function conjunct has none on a
@@ -9679,6 +9679,7 @@ CommandDispatcher::PkWindow CommandDispatcher::FoldPkWindow(
             case parser::CompareOp::kNeq:
             case parser::CompareOp::kIsNull:
             case parser::CompareOp::kIsNotNull:
+            case parser::CompareOp::kLike:  // never flat (BU-S2); refused all the same
                 unread(cond);
                 break;
         }

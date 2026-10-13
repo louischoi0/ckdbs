@@ -761,6 +761,11 @@ is one of (verified — the `PredicateKind` enum):
 | `NOT EXISTS (SELECT ...)` | kNotExists | |
 | `col BETWEEN low AND high` | kBetween | inclusive both ends; lowers to `>= low AND <= high`, the range on the step is only a hint |
 | `col IS NULL` / `col IS NOT NULL` | kCompareValue | the one spelling that finds NULLs — answered from the stored bitmap |
+| `col IN (v, ...)` | kBoolTree (one item: kCompareValue) | since BU-S2: `col = v1 OR col = v2 ...`; at most 4,096 items |
+| `col NOT IN (v, ...)` | kCompareValue `!=`, one per item | since BU-S2: `col != v1 AND col != v2 ...`, flattened into the AND-list where it stands at the top; a NULL item is unknown, so `NOT IN (1, NULL)` keeps no row |
+| `col NOT BETWEEN low AND high` | kBoolTree | since BU-S2: `NOT (col BETWEEN low AND high)` |
+| `col [NOT] LIKE 'pattern'` | kBoolTree | since BU-S2: `char`/`varchar` only; `%` any run, `_` one byte, case-sensitive bytes; no `ESCAPE` |
+| `value op col` | kCompareValue | since BU-S2: a literal on the left is the mirrored comparison, `100 < amount` is `amount > 100` |
 
 - **What `OR` and `NOT` cost and what they cannot hold.** A top-level
   `AND` - with or without parentheses - is executed exactly as it always
@@ -779,8 +784,11 @@ is one of (verified — the `PredicateKind` enum):
 - Subqueries are **predicate-position only**, correlated included, nested to
   at most `kMaxSubqueryDepth = 4` below the outermost block. The fifth level
   is refused with a position.
-- `IN (1, 2, 3)` — a value list — does **not** exist yet (the open half of
-  workplan V08). It is reported as "expected a subquery".
+- `IN (1, 2, 3)` — a value list — exists since BU-S2. Each item is coerced
+  to the column's type at compile, with its byte. A list of more than one
+  item, like `LIKE` and `NOT BETWEEN`, is a filter and never a key: `WHERE
+  id IN (1, 2)` walks the relation (`IN` of one item is `=`, keys and all;
+  `NOT IN` is a list of `!=`, which no access path keys on either).
 - **No type is converted implicitly** (types.md §3.1a). A literal must be
   written in the compared column's own spelling, and a statement that
   breaks the rule is refused at compile with the literal's byte - whether

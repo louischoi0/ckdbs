@@ -257,3 +257,54 @@ review's largest cut) - it rewrites AP-S4's plan text and cells, outside a
 stage that adds a form; it is the first candidate for BU-S9's cleanup.
 Shrinking `BoolPredicate` with a variant leaf - its size is per conjunct,
 not per row.
+
+### BU-S1 — the suite, stated
+
+BU-S1's own full-suite run at `ac1c169a` was stopped unfinished: the host
+was shared with two other sessions' suites (load about 20 on 8 cores) and
+it had run 166 of 3,717 tests. The run before the review fixes, at the
+pre-commit tree, had 5 failures - three pinned the old refusals and were
+updated in the stage, two were two-core rigs that pass alone (load). **No
+full suite ran green on `ac1c169a` itself**; BU-S2's run covers it.
+
+### BU-S2 — value lists, `NOT BETWEEN`, `LIKE`, a literal on the left (built 2026-10-13)
+
+On `worktree-bu-basic-query-surface` from `ac1c169a`:
+
+- `ParseOneCondition` returns a `BoolExpr`: a leaf, or the subtree a form
+  means. `IN (v, ...)` is an `OR` of `=` (`ParseValueList`), `NOT IN
+  (v, ...)` an `AND` of `!=` - which at the top of a WHERE flattens into
+  ordinary `!=` conjuncts, none of which keys anything - and one item is the
+  plain comparison. `col NOT BETWEEN` and `col NOT LIKE` are `NOT` over the
+  form. `IN (SELECT ...)` keeps its kind and its depth cap
+  (`CheckSubqueryDepth`, now one function).
+- `col LIKE 'p'` is a new `CompareOp::kLike` (contextual word, nothing
+  reserved) that travels only inside a boolean conjunct: `Flatten` wraps a
+  top-level `LIKE` leaf, so no key, range, scan-kernel, index, Cabin or
+  PURGE reader ever sees it; `CompileScanKernelTerm` and `FoldPkWindow`
+  pass it by all the same. `char`/`varchar` only, the pattern not coerced
+  to the column, bytes, `%` and `_`, case-sensitive, `ESCAPE` refused
+  (BU-Q6); `LikeMatch` is iterative with one backtrack point.
+- A literal on the left is the mirrored comparison (`100 < v` is
+  `v > 100`); its fingerprint is its own text's.
+- Corpus: `IN (1, 2)` and `42 = id` flip to `ok`, hashes unmoved.
+- Docs: the manual's WHERE table and notes, `parser-v2.md` I10,
+  `null.md` §4, the `CLAUDE.md` row.
+- Tests: `tests/where_value_list_test.cpp`, 15 cells.
+
+Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S2 — the `critics-developer` review, applied
+
+One defect, fixed by the reviewer: `LikeMatch` took a `%` in the value as
+a literal match for the pattern's `%` before treating it as a wildcard, so
+`'a_b%c' LIKE 'a_b%'` was false (checked afterwards against a regex
+reference over every value and pattern up to 5 bytes on `{a,b,%,_}`;
+pinned by two cells). Applied: the `NOT IN` docs, which said it was a
+boolean conjunct, now say what the code does; the catalog-view refusal
+names every boolean conjunct, not only `OR`/`NOT`; `ParseOneCondition`
+returns the subtree instead of wrapping it into a conjunct for
+`ParseBoolNot` to deep-copy back out; the subquery depth check written
+once, with an `IN (SELECT ...)` cell for the copy that had none; the
+`LIKE` lowering merged into the general branch. Kept: the scan-kernel
+guard for `kLike`, which costs a line and keeps "every reader decides".

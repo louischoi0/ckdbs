@@ -51,6 +51,7 @@ const char* CompareOpName(CompareOp op) {
         case CompareOp::kGte: return ">=";
         case CompareOp::kIsNull: return "IS NULL";
         case CompareOp::kIsNotNull: return "IS NOT NULL";
+        case CompareOp::kLike: return "LIKE";
     }
     return "?";
 }

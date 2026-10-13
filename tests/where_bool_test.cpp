@@ -215,7 +215,8 @@ TEST_F(WhereBoolTest, WhatIsRefusedAndWhere) {
     EXPECT_EQ(Ids("NOT EXISTS (SELECT id FROM u WHERE u.w = t.k)"), "id\\n5\\n6");
     // OR over a catalog view (BU-Q4).
     EXPECT_EQ(Run("SELECT name FROM sys.tables WHERE oid = 1 OR oid = 2"),
-              "ERR NOT_IMPLEMENTED retryable=0 OR or NOT over a catalog view (byte 34)");
+              "ERR NOT_IMPLEMENTED retryable=0 a boolean conjunct (OR, NOT, an IN list, LIKE) over a "
+              "catalog view (byte 34)");
     // PURGE's window is a conjunction of pk comparisons, OR included.
     EXPECT_EQ(Run("PURGE FROM t WHERE id = 1 OR id = 9"),
               "ERR NOT_IMPLEMENTED retryable=0 PURGE admits only comparisons of the primary key "

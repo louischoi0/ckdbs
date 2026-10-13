@@ -439,9 +439,37 @@ bool ApplyCompare(const T& a, const T& b, parser::CompareOp op) {
         case parser::CompareOp::kGte: return a >= b;
         case parser::CompareOp::kIsNull:
         case parser::CompareOp::kIsNotNull:
+        case parser::CompareOp::kLike:  // text only, answered before this
             return false;
     }
     return false;
+}
+
+// `LIKE` over bytes (BU-Q6): `%` matches any run, `_` any one byte, every
+// other byte itself, case-sensitively. Iterative with one backtrack point -
+// the last `%` - so a pattern of many `%`s costs O(value x pattern) at
+// worst, never the exponential a recursive matcher reaches. A pattern `%` is
+// tested before the literal arm: a `%` byte in the value must not consume a
+// pattern `%` as itself (`'a%b' LIKE 'a%'`).
+bool LikeMatch(std::string_view value, std::string_view pattern) {
+    std::size_t v = 0, p = 0;
+    std::size_t star = std::string_view::npos, star_v = 0;
+    while (v < value.size()) {
+        if (p < pattern.size() && pattern[p] == '%') {
+            star = p++;
+            star_v = v;
+        } else if (p < pattern.size() && (pattern[p] == '_' || pattern[p] == value[v])) {
+            ++v;
+            ++p;
+        } else if (star != std::string_view::npos) {
+            p = star + 1;
+            v = ++star_v;
+        } else {
+            return false;
+        }
+    }
+    while (p < pattern.size() && pattern[p] == '%') ++p;
+    return p == pattern.size();
 }
 
 // A `char(N)` cell's value: its bytes back to the first NUL and no further -
@@ -1383,6 +1411,7 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
     // reason TY5 reused kInt for them. A date column is never compared with
     // a timestamp one; the compiler refuses the pair (types.md §3.1a).
     if (lhs.type == parser::ValueType::kStr && rhs.type == parser::ValueType::kStr) {
+        if (op == parser::CompareOp::kLike) return LikeMatch(lhs.str_val, rhs.str_val);
         return ApplyCompare<std::string_view>(lhs.str_val, rhs.str_val, op);
     }
     return false;  // incompatible value kinds
@@ -1392,7 +1421,10 @@ std::optional<ScanKernelTerm> CompileScanKernelTerm(const catalog::Schema& schem
                                                     const catalog::RowLayout& layout,
                                                     std::uint16_t column, parser::CompareOp op,
                                                     const parser::AstValue& literal) {
-    if (op == parser::CompareOp::kIsNull || op == parser::CompareOp::kIsNotNull) return {};
+    if (op == parser::CompareOp::kIsNull || op == parser::CompareOp::kIsNotNull ||
+        op == parser::CompareOp::kLike) {
+        return {};
+    }
     if (column >= schema.columns.size()) return {};
     const catalog::SysColumnRow& col = schema.columns[column];
     ScanKernelTerm term;

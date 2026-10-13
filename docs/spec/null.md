@@ -177,8 +177,9 @@ belongs to the doc named.
   result containing NULL yields no rows — the standard's tri-state collapse,
   not `!IN`. A NULL probe against a non-empty result is unknown for `IN`
   and `NOT IN` alike, so neither admits the row; against an empty result
-  `NOT IN` is true whatever the probe. `IN (value list)` is refused
-  ("expected a subquery").
+  `NOT IN` is true whatever the probe. A value list (BU-S2) is read the
+  same way: `IN (1, NULL)` is true only where the probe is 1, and
+  `NOT IN (1, NULL)` is never true.
 - **The primary key is never NULL**, and this is not a policy but invariant 11:
   the pk is carried by the Keystone word, which has no NULL encoding. A first
   column declared `NULL` is refused at `CREATE TABLE`.

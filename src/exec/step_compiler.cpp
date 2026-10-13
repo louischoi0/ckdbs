@@ -356,6 +356,15 @@ Status LowerComparison(const Scope& scope, const parser::Condition& cond,
         return Status::OK();
     }
 
+    if (cond.op == parser::CompareOp::kLike) {
+        const std::uint32_t type_val = ColumnAt(scope, lhs.value()).type_val;
+        if (type_val != catalog::kTypeValVarchar && type_val != catalog::kTypeValChar) {
+            return Status::InvalidArgument("LIKE takes a char or varchar column; '" +
+                                           cond.col.name + "' is not one" +
+                                           Position(cond.col.byte_offset));
+        }
+    }
+
     StepPredicate pred;
     pred.lhs = lhs.value();
     pred.op = cond.op;
@@ -370,7 +379,11 @@ Status LowerComparison(const Scope& scope, const parser::Condition& cond,
         pred.rhs.kind = OperandKind::kLiteral;
         pred.rhs.literal = cond.val;
     }
-    if (Status s = CoercePredicate(scope, pred, cond.col.byte_offset); !s.ok()) return s;
+    // A LIKE pattern is not a value of the column - `char(2) LIKE 'a%b'` is a
+    // fair question - so it is not coerced to it; the parser took a string.
+    if (cond.op != parser::CompareOp::kLike) {
+        if (Status s = CoercePredicate(scope, pred, cond.col.byte_offset); !s.ok()) return s;
+    }
     out.push_back(std::move(pred));
     return Status::OK();
 }

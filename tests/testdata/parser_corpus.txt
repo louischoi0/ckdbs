@@ -172,7 +172,9 @@ InvalidArgument	105b2d0f7037251d	cbf29ce484222325	f23375e56ab44482	SELECT * FROM
 InvalidArgument	b5cb30768ad3df28	b5d414774c8002cc	939da3bf364bfc29	SELECT * FROM t WHERE id = 1 AND
 InvalidArgument	39b3246828e08bf7	b5d414774c8002cc	f8801ec478b954b4	SELECT * FROM t WHERE id == 1
 InvalidArgument	0212b03badb413ad	cbf29ce484222325	41b5d4d450506580	SELECT * FROM t WHERE id = ?
-InvalidArgument	2da70c29d3092a81	182b9abf546ab5c4	ecc7fd3d87a19594	SELECT * FROM t WHERE 42 = id
+# [BU-S2] a literal on the left parses since 2026-10-13, as its mirror; the
+# hashes did not move (its shape is its own text, not the mirror's).
+ok	2da70c29d3092a81	182b9abf546ab5c4	ecc7fd3d87a19594	SELECT * FROM t WHERE 42 = id
 # [V15 — done] a column on the right of a comparison. Spec I10 describes
 # the filter surface as `col op {slot}`, but §2's *correlated* subquery is
 # written `WHERE inner.col = outer.col` and cannot be spelled without
@@ -217,7 +219,8 @@ ok	d9e6d16ebc7df09d	cbf29ce484222325	b026099ec02acd20	SELECT * FROM t WHERE id =
 # whole reason this line stayed pinned while its verdict flipped: BETWEEN has
 # lexed as a reserved keyword since V04, and a keyword hashes exactly as the
 # identifier it used to be. Becoming *parseable* changes no shape stream.
-InvalidArgument	b87254b3cae4a5b8	78f79099c419719c	17393c1202798a91	SELECT * FROM t WHERE id IN (1, 2)
+# [BU-S2] the value list parses since 2026-10-13; its hashes did not move.
+ok	b87254b3cae4a5b8	78f79099c419719c	17393c1202798a91	SELECT * FROM t WHERE id IN (1, 2)
 ok	af3f6ac336bb68d8	78f78f99c4196fe9	2f0436283d128f81	SELECT * FROM t WHERE id BETWEEN 1 AND 5
 ok	e55ef6c0ffc6290e	78f78f99c4196fe9	4bb4c5b397d42325	SELECT * FROM t WHERE v BETWEEN 1 AND 5
 ok	ba36feab6d6a3125	2435274fd957b578	febd8d40371cccfe	SELECT * FROM t WHERE id BETWEEN 1 AND 5 AND name = 'x'
@@ -427,7 +430,8 @@ NotImplemented	6a572ac142c50425	cbf29ce484222325	70987933ea91bc56	SELECT * FROM 
 NotImplemented	ea325ba2b616a269	cbf29ce484222325	1aa9b65c676e6550	SELECT * FROM (SELECT * FROM u)
 NotImplemented	-	-	-	WITH x AS (SELECT * FROM u) SELECT * FROM x
 #
-# Malformed. `IN (1, 2)` is [V08]'s value list and stays rejected here.
+# Malformed. (`IN (1, 2)`, [V08]'s value list, parses since BU-S2; an empty
+# list does not.)
 InvalidArgument	d7a6bdcced6fcc02	cbf29ce484222325	2729e7d89121c633	SELECT * FROM t WHERE EXISTS (SELECT * FROM u
 InvalidArgument	b1ee15b5a9bc7449	cbf29ce484222325	f6a61624ac9709a4	SELECT * FROM t WHERE EXISTS ()
 InvalidArgument	9660f26161090c96	cbf29ce484222325	5febed2ffc007497	SELECT * FROM t WHERE EXISTS
