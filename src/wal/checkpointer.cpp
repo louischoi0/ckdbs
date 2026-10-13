@@ -15,6 +15,27 @@ Checkpointer::Checkpointer(WalManager& wal, CheckpointTarget& target, ActiveTran
 
 Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
                               std::span<const CheckpointDirtyPage> dirty_pages) {
+    // **The dirty table is cut to what one record carries** (wal.md §11-1),
+    // keeping the highest page id - the allocation floor analysis takes from
+    // a recLSN-0 page, which no record names; the redo start and the
+    // writeback stay the whole table's (`Start`). The bound is the largest
+    // split's, not the ring: on a shared stream a ring-sized record fits only
+    // an empty ring, and the drains other cores refill end in fail-stop.
+    std::vector<CheckpointDirtyPage> cut;
+    const std::size_t budget =
+        std::min(wal_.usable_payload_bytes(), kLargestSplitRecord - kRecordHeaderSize);
+    const std::size_t fixed = CheckpointBeginSize(active_txns.size(), 0);
+    if (CheckpointBeginSize(active_txns.size(), dirty_pages.size()) > budget &&
+        fixed + kDirtyEntrySize <= budget) {
+        const std::size_t fits = (budget - fixed) / kDirtyEntrySize;
+        cut.assign(dirty_pages.begin(), dirty_pages.begin() + fits);
+        const auto highest = std::ranges::max_element(dirty_pages, {}, &CheckpointDirtyPage::page_id);
+        if (highest - dirty_pages.begin() >= static_cast<std::ptrdiff_t>(fits)) {
+            cut.back() = *highest;
+        }
+        dirty_pages = cut;
+    }
+
     payload_scratch_.assign(CheckpointBeginSize(active_txns.size(), dirty_pages.size()),
                             std::byte{0});
     auto encoded = EncodeCheckpointBegin(payload_scratch_, active_txns, dirty_pages);
