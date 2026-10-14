@@ -677,8 +677,15 @@ Every stage runs the full suite and gets a `critics-developer` review
 
 ## 6. Where to start
 
-**BW reopened for BW-S6** (W7, the `INSERT` column list); S1-S5 stand as
-closed. **BW was closed** - on the operator's word of 2026-10-14 (W6, `raft-marks-2026-10-14.md` §10), at `d6cb3826` (`v3.2.0-28-gd6cb3826`, on `main`). BW-S1..S4 landed (`f2a72474`, `69a31361`, `bc42a011`, `d0134573`); BW-Q1..Q11 adopted on the standing go-ahead (W3). The close measurement ran when the operator directed it (W4, W5): `bench/v3.2.0/results-bw-close-v3.2.0-22-g541ce440.md` found the every-row `UPDATE` +30 us / 1,000 rows outside the spread; the profile attributed none of it to a BW-changed line (`bench/v3.2.0/archive/bw-update-profile/`); `e8727478` hoisted the dropped-column gate out of the codec loops, and `bench/v3.2.0/results-bw-update-fix-v3.2.0-24-ge8727478.md` measured it below `541ce440` in 7 of 7 runs on both paths, while whether it equals the pre-BW tree is unresolved on a loaded host (`known-gaps.md`). Left open: BW-Q11's `[quiet-wrong]` gap for a positional `INSERT` only - BW-S6's column list closes it for a listed one (W7; built, §7); cleaning (D-e). BW-S6's review and the stage's close are what remain of the reopened BW.
+**BW is closed again, with BW-S6** - on the operator's word of 2026-10-14
+(W8, `raft-marks-2026-10-14.md` §12), at the merge `3b5daa80`. BW-S6 (the
+`INSERT` column list, BW-Q12/BW-R13) landed at `e1e17abc`, its review at
+`33519b28`, its guard measurement at `9f5faf50`
+(`bench/v3.2.0/results-bw-s6-insert-v3.2.0-32-g33519b28.md`: the positional
+`INSERT` and point `SELECT` inside the spread). The full suite last ran green
+at `33519b28` (3865/3865); the merge `3b5daa80` and this record landed with
+the suite not run on them (W8's `--no-verify`). BW reopened for BW-S6 (W7);
+S1-S5 stand as closed. **BW was closed** - on the operator's word of 2026-10-14 (W6, `raft-marks-2026-10-14.md` §10), at `d6cb3826` (`v3.2.0-28-gd6cb3826`, on `main`). BW-S1..S4 landed (`f2a72474`, `69a31361`, `bc42a011`, `d0134573`); BW-Q1..Q11 adopted on the standing go-ahead (W3). The close measurement ran when the operator directed it (W4, W5): `bench/v3.2.0/results-bw-close-v3.2.0-22-g541ce440.md` found the every-row `UPDATE` +30 us / 1,000 rows outside the spread; the profile attributed none of it to a BW-changed line (`bench/v3.2.0/archive/bw-update-profile/`); `e8727478` hoisted the dropped-column gate out of the codec loops, and `bench/v3.2.0/results-bw-update-fix-v3.2.0-24-ge8727478.md` measured it below `541ce440` in 7 of 7 runs on both paths, while whether it equals the pre-BW tree is unresolved on a loaded host (`known-gaps.md`). Left open: BW-Q11's `[quiet-wrong]` gap for a positional `INSERT` only - BW-S6's column list closes it for a listed one (W7; built, §7); cleaning (D-e). BW-S6's review and the stage's close are what remain of the reopened BW.
 
 ---
 

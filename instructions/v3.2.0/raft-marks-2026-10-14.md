@@ -100,3 +100,11 @@ _Sections 8-10 recorded by CLA on `worktree-bw-instant-add-drop-column` at `d6cb
 | **Mark** | **BW-Q11 (a)**, now the operator's own mark: a positional `INSERT` written before a `DROP` is not caught by its count, and an `INSERT` column list is what closes it. **The column list is built in BW**, as BW-S6, not left to BU-S8: BW reopens for that stage (its close at §10 stands for S1-S5). BU-S8 keeps the rest of its row (`INSERT ... SELECT`, `VALUES` expressions, `RETURNING`, `UPDATE ... FROM`, `DELETE ... USING`, `ON CONFLICT DO NOTHING`). BW-S6's own design items are adopted as CLA proposes on the standing go-ahead of 2026-10-14 (W3), which covers BW |
 | **Recorded at** | `workorder-bw-instant-add-drop-column.md` header, §4 BW-Q11, §5 BW-S6, §6; `workorder-bu-basic-query-surface.md` BU-S8's row; both index rows |
 
+## 12. BW closed again, with BW-S6
+
+| | |
+|---|---|
+| **Word** | *"push it"*, then, interrupting the merged tree's suite run, *"merge, close it, and /commit-push-no-verify"* (W8) |
+| **Mark** | **BW closed** with BW-S6 at the merge `3b5daa80` of `origin/main` (`72cb79d9`). The merged tree's suite was **not run** on the operator's word; the last green suite is `33519b28`'s 3865/3865. **Does not settle**: the `SELECT` case-folding `[quiet-wrong]` the BW-S6 review found (`docs/inflight/bugs/select-reads-the-first-column-whose-name-matches-ignoring-case.md`, the operator's choice between refusing case-only-different names and exact matching), a positional `INSERT` written before a `DROP` (BW-Q11's remaining gap, `known-gaps.md`), cleaning (D-e); no tag, no version |
+| **Recorded at** | `workorder-bw-instant-add-drop-column.md` §6; `index.md`'s BW row |
+
