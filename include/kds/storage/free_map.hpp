@@ -98,7 +98,7 @@ std::uint32_t FreeMapCountAllocated(std::span<const std::byte, kPageSize> page) 
 //    that region's free map), so creating the first page of a new region
 //    never has to ask another map page where to put it.
 //  - A page's class follows from its id alone. IsMapPageId is what breaks
-//    the apparent recursion in ResidentBytes/StampIfHeadered, which ask
+//    the apparent recursion in FaultIn/StampIfHeadered, which ask
 //    IsHeaderless on the fault and write-back paths: a map page is
 //    headered, always, and must be answered without reading a map.
 //
