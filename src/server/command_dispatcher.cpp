@@ -7853,6 +7853,11 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     std::vector<exec::PendingSpill> spills;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
     bool conjuncts_checked = false;
+    // The collected targets (`WalkCursor::targets`): when set, a row is
+    // written if its key is in them and the WHERE is not evaluated again.
+    // `collecting` is the collection pass's sink, set only during it.
+    std::shared_ptr<const std::unordered_set<std::uint64_t>> targets = resume_from.targets;
+    std::unordered_set<std::uint64_t>* collecting = nullptr;
 
     // Stage 2's decode target and what it decodes (BN-R2): every column
     // where a Cabin or an index reads the row (an assertion is asked per
@@ -8007,6 +8012,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         if (!id.ok()) return id.status();
         const std::uint64_t trx_id = tuple.value().trx_id;
         const std::uint64_t undo_ptr = tuple.value().undo_ptr;
+        // Not a collected target: nothing to decode.
+        if (targets != nullptr && !targets->contains(id.value())) return Status::OK();
 
         // ---- Stage 1: only what the WHERE reads (OPT-001) ---------------
         //
@@ -8029,10 +8036,17 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
             conjuncts_checked = true;
         }
-        auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas, predicates.value(),
-                                               frame, /*stats=*/nullptr, budget_, &snapshot);
-        if (!matched.ok()) return matched.status();
-        if (!matched.value()) return Status::OK();
+        if (targets == nullptr) {
+            auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas,
+                                                   predicates.value(), frame, /*stats=*/nullptr,
+                                                   budget_, &snapshot);
+            if (!matched.ok()) return matched.status();
+            if (!matched.value()) return Status::OK();
+            if (collecting != nullptr) {
+                collecting->insert(id.value());
+                return Status::OK();
+            }
+        }
 
         // ---- First-updater-wins (docs/spec/txn.md section 5) ----------------
         //
@@ -8423,9 +8437,31 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         }
     }
 
+    // **The collection pass**, when the WHERE reads the relation this writes
+    // (`exec::SubChainsRead`): a read walk that evaluates the WHERE over
+    // every row and writes nothing, so the walk below writes exactly the
+    // rows that matched before any was written. A resume carries its
+    // targets and does not collect again.
+    if (targets == nullptr && exec::SubChainsRead(predicates.value(), ta.oid)) {
+        auto collected = std::make_shared<std::unordered_set<std::uint64_t>>();
+        collecting = collected.get();
+        Status pass = VisitRelation(
+            ta, storage::PageAccess::kRead,
+            [&](PageId page_id, heap::PageView& page,
+                std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+                if (Status s = apply(page_id, page, slot); !s.ok()) return s;
+                return storage::VisitControl::kContinue;
+            },
+            /*cursor=*/nullptr);
+        collecting = nullptr;
+        if (!pass.ok()) return {ErrorReply(pass), false, 0, pass};
+        targets = std::move(collected);
+    }
+
     // AO-S3b's resume position. A first walk starts inactive, which is
     // "from the head"; a resumed statement is handed the one its park left.
     WalkCursor walk_cursor = resume_from;
+    walk_cursor.targets = targets;
     Status scan = VisitRelation(
         ta, storage::PageAccess::kWrite,
         [&](PageId page_id, heap::PageView& page,
@@ -9804,6 +9840,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     std::vector<exec::PendingSpill> frame_spills;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
     bool conjuncts_checked = false;
+    // The collected targets, as UPDATE's (`WalkCursor::targets`).
+    std::shared_ptr<const std::unordered_set<std::uint64_t>> targets = resume_from.targets;
 
     // ---- Stage 1 of the walk -------------------------------------------
     //
@@ -9827,6 +9865,10 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         payload_copy.assign(tuple.value().payload.begin(), tuple.value().payload.end());
         auto id = KeystoneIdOfPayload(payload_copy);
         if (!id.ok()) return id.status();
+        // Not a collected target: nothing to decode.
+        if (targets != nullptr && !targets->contains(id.value())) {
+            return std::optional<std::uint64_t>{};
+        }
         if (trx_id_out != nullptr) *trx_id_out = tuple.value().trx_id;
         if (undo_ptr_out != nullptr) *undo_ptr_out = tuple.value().undo_ptr;
         if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload_copy,
@@ -9842,6 +9884,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             }
             conjuncts_checked = true;
         }
+        if (targets != nullptr) return std::optional<std::uint64_t>{id.value()};
         auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas, predicates.value(),
                                                frame, /*stats=*/nullptr, budget_, &snapshot);
         if (!matched.ok()) return matched.status();
@@ -10055,8 +10098,26 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         }
     }
 
+    // The collection pass, and `UpdateInner`'s site states the argument.
+    if (targets == nullptr && exec::SubChainsRead(predicates.value(), ta.oid)) {
+        auto collected = std::make_shared<std::unordered_set<std::uint64_t>>();
+        Status pass = VisitRelation(
+            ta, storage::PageAccess::kRead,
+            [&](PageId, heap::PageView& page,
+                std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+                auto qualified = qualifies(page, slot, nullptr, nullptr);
+                if (!qualified.ok()) return qualified.status();
+                if (qualified.value().has_value()) collected->insert(*qualified.value());
+                return storage::VisitControl::kContinue;
+            },
+            /*cursor=*/nullptr);
+        if (!pass.ok()) return {ErrorReply(pass), false, 0, pass};
+        targets = std::move(collected);
+    }
+
     // AO-S3b, and `UpdateInner`'s site states the argument.
     WalkCursor walk_cursor = resume_from;
+    walk_cursor.targets = targets;
     Status scan = VisitRelation(
         ta, storage::PageAccess::kWrite,
         [&](PageId page_id, heap::PageView& page,
