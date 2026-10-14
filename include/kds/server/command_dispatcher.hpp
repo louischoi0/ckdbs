@@ -1160,9 +1160,10 @@ private:
 
     void NoteDdlRows(DdlScope& scope);
 
-    // Transactions holding catalog rows nobody has committed yet. Empty
-    // is the normal state and the one `ViewFor` optimises for. Entries
-    // are removed when the transaction resolves, by `EndDdlScope`.
+    // This core's transactions that opened a DDL scope and have not been
+    // decided. Each is counted once in the instance's open-DDL count
+    // (`OpenDdl`), which is what `ViewFor` asks. Entries are removed when the
+    // transaction resolves, by `EndDdlScope`.
     std::vector<std::uint64_t> ddl_txns_;
     void EndDdlScope(const Session& session, wal::Lsn committed_lsn = wal::kNoLsn);
 
@@ -1191,9 +1192,14 @@ private:
         bool operator==(const PurgeSeen&) const = default;
     };
     std::optional<PurgeSeen> purge_seen_;
-    // Records that this transaction now holds uncommitted catalog rows,
-    // which is what turns on `ViewFor`'s filtering.
+    // Records that this transaction now holds uncommitted catalog rows, so
+    // the schema word moves at its decide. Its DDL scope opened it already
+    // (`DdlScopeFor`, `OpenDdl`).
     void MarkHoldsDdl(txn::Transaction& txn);
+    // Adds the transaction to `ddl_txns_` and, the first time, to the
+    // instance's open-DDL count, which is what turns on every core's
+    // `ViewFor` filtering. `EndDdlScopeById` closes both.
+    void OpenDdl(std::uint64_t txn_id);
 
     // `CREATE CABIN` / `DROP CABIN` (docs/spec/cabin.md §10). One handler
     // for both: they share a parse and a reply shape, and differ only in

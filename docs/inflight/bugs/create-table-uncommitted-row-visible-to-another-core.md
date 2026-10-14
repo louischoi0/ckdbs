@@ -1,40 +1,69 @@
-# An uncommitted `CREATE TABLE` may be visible to another core
+# An uncommitted `CREATE TABLE` can be bound by another core inside one window
 
-**Found by reading, not reproduced.** Read at `3ee37d3a` on
-`worktree-compress-readme`, 2026-10-13, during the docs-and-comments
-compression pass (a subagent's report on `ddl-transactional.md`).
+**Narrowed, not closed.** Reproduced at `7ad21023` on
+`worktree-fix-create-table-cross-core-visibility`, 2026-10-14, by a probe on the
+two-core rig. The same branch made the open-DDL count instance-wide
+(`InstanceVisibility::AnyDdlOpen`, `ddl-transactional.md` §4). That closed
+the always-on case. The window below was found by that change's
+`critics-developer` review and has not been reproduced.
 
-## What is wrong
+## What was wrong, and is fixed
 
-`CommandDispatcher::ViewFor` (`src/server/command_dispatcher.cpp:6545`)
-returns `std::nullopt` - resolve names with no read view, so every catalog
-row reads as present - whenever `ddl_txns_` is empty:
+`CommandDispatcher::ViewFor` resolved names unfiltered whenever *its own
+core's* `ddl_txns_` was empty. With core 0 in `BEGIN; CREATE TABLE t`, core 1's
+`SELECT * FROM t` answered `id,v`, and an autocommit `INSERT INTO t VALUES (5)`
+answered `INSERTED`. Core 0's `ROLLBACK` then removed the relation together
+with that acknowledged row. `CatalogNameRigTest.AnUncommittedCreateIsInvisibleToAnotherCoreUntilItCommits`
+and `ARolledBackCreateWasNeverVisibleToAnotherCore` now pin the fix.
 
-```
-if (txn_ == nullptr || ddl_txns_.empty()) return std::nullopt;
-```
+## What is still open
 
-`ddl_txns_` (`include/kds/server/command_dispatcher.hpp:1143`) is a member
-of the dispatcher, and every core has its own dispatcher. A `CREATE TABLE`
-inside an explicit transaction on core A registers its id in core A's set
-only. On core B the set is empty, so B resolves names with no view and
-looks as if it would bind the relation A has not committed.
+`ViewFor` reads the count once, and the caller resolves the name afterwards.
+The interleaving that still binds:
 
-`docs/spec/ddl-transactional.md` §4/§5 and `CLAUDE.md`'s Transactional DDL
-row state that `CREATE TABLE` is isolated. If the reading is right, that
-holds on one core only.
+1. Core 1 reads a count of zero.
+2. Core 0's `DdlScopeFor` counts its DDL, and `CREATE TABLE` writes the
+   `sys.objects` row.
+3. Core 1's unfiltered `FindTableOidByName` scans that page and binds the
+   uncommitted oid.
+
+`CREATE TABLE` holds no `X` on the new oid, so core 1's `IX` is granted and the
+`INSERT` succeeds; core 0's rollback then takes the row away. On one core the
+window does not exist: a dispatcher runs one statement at a time and nothing
+yields between `ViewFor` and the lookup.
+
+The count alone cannot be re-checked after the lookup. A rollback followed by
+its decrement returns it to zero, so a reader would bind a dead oid.
+
+Two routes resolve a name without `ViewFor` at all, independent of the count:
+
+- `src/exec/cabin_ddl.cpp`: `CREATE CABIN` resolves unfiltered with no
+  transaction, so it can write a `sys.cabins` row naming another transaction's
+  uncommitted relation. The row survives that relation's rollback.
+- `src/server/kwp_load_server.cpp`: `C_LOAD_BEGIN` binds unfiltered and answers
+  `S_LOAD_READY` for a relation the session cannot see. Each chunk re-resolves
+  and refuses, so nothing is written, but the client is told READY first.
 
 ## Smallest reproduction (not yet run)
 
-Two sessions on two cores (`cores = 2`, force placement with the load
-placer off): session 1 runs `BEGIN; CREATE TABLE t (id int, v int);` and
-does not commit. Session 2, on the other core, runs `SELECT * FROM t`. The
-spec's answer is "no such relation"; the reading predicts that the name
-binds.
+On the two-core rig with reactors running: a loop on core 0 of
+`BEGIN; CREATE TABLE t_n; ROLLBACK`, against a loop on core 1 of
+`INSERT INTO t_n VALUES (1)` for the same `n`. The prediction is an occasional
+`INSERTED` for a relation that never committed.
 
 ## What it costs
 
-An isolation breach on DDL. A reader on another core can bind a relation
-that is later rolled back. Whether it can also write rows into it, or fail
-quietly afterwards, has not been checked. Not yet classified as a quiet
-wrong answer. The first step is to run the reproduction.
+A quiet wrong answer when it hits: an acknowledged autocommit write is lost
+by another transaction's rollback. The window is the time between one
+core's count read and its catalog scan, so it is narrow.
+
+## The fix
+
+Not decided. Two shapes:
+
+- **An open generation** beside the count. A reader records it, resolves,
+  and re-resolves filtered if it moved. This touches every `ViewFor` caller.
+- **`CREATE TABLE` takes `X` on the new oid before it writes the row.** A bound
+  reader's or writer's lock then waits for the decide, and a rolled-back
+  relation is refused as dangling. This needs every bind to re-check after
+  the grant.

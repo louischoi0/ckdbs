@@ -89,7 +89,14 @@ filter.
 `CatalogCache` memoizes name→oid and oid→`TableAccess`, per instance and
 snapshot-blind. The rule that keeps it correct: **a view is minted only
 while some transaction holds uncommitted DDL** (`CommandDispatcher::
-ViewFor`, gated by `ddl_txns_` - a set kept per dispatcher, so per core). With none in flight every catalog row is
+ViewFor`), and "some" is the instance's: `InstanceVisibility::AnyDdlOpen`
+counts every core's open DDL transactions. A transaction is counted
+before its first catalog write - when its DDL scope opens, whether or not
+it goes on to write - and uncounted after it is decided. Each core keeps
+its own transactions in `ddl_txns_`, which the count is the sum of. **One
+window is open**: a reader that read the count as zero just before another
+core counted its DDL resolves unfiltered and can bind the row that DDL
+writes next (`docs/inflight/bugs/create-table-uncommitted-row-visible-to-another-core.md`). With none in flight every catalog row is
 either a bootstrap row or a committed one, so an unfiltered, cached read
 is correct for every reader. While one is open, a statement resolves
 names under a view — its own transaction's, or a fresh committed-now view

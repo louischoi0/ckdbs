@@ -6049,6 +6049,10 @@ CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
     if (write.txn == nullptr) return scope;  // no manager: kBootstrapXid, as ever
     scope.txn = write.txn;
     scope.trx_id = write.txn->id();
+    // **Open before the first catalog write**, not at `MarkHoldsDdl` after
+    // it: a row on the page while no core counts it open is one another
+    // core's unfiltered read binds (`ViewFor`).
+    OpenDdl(scope.trx_id);
 
     // RV3-3: the undo record for each catalog write, appended **inside**
     // the catalog's write points so it precedes the row's own record in
@@ -6141,8 +6145,10 @@ Status CommandDispatcher::EnsureStatementBoundary(Session& session) {
 }
 
 std::optional<txn::ReadView> CommandDispatcher::ViewFor(Session& session) {
-    // The fast path, and the one nearly every statement takes.
-    if (txn_ == nullptr || ddl_txns_.empty()) return std::nullopt;
+    // The fast path, and the one nearly every statement takes. **The
+    // instance's count, not this core's `ddl_txns_`**: a DDL open on
+    // another core writes rows this core's unfiltered read would bind.
+    if (txn_ == nullptr || !txn_->visibility().AnyDdlOpen()) return std::nullopt;
 
     // Take the statement boundary if nothing has yet, so a route that
     // never reaches `SnapshotFor`/`BeginWrite` still resolves under a
@@ -6234,6 +6240,9 @@ void CommandDispatcher::EndDdlScope(const Session& session, wal::Lsn committed_l
 
 void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed_lsn) {
     const bool held_ddl = std::erase(ddl_txns_, txn_id) > 0;
+    // After the decide: committed, its rows are visible to every view;
+    // rolled back, compensated. Either way an unfiltered read is right again.
+    if (held_ddl) txn_->visibility().NoteDdlClosed();
     // **Both endings invalidate.** A rollback compensates through the page,
     // behind the catalog's back. A commit is the moment a delete-mark
     // starts counting (DT9, `ddl-transactional.md` §5b): a cache filled
@@ -6258,11 +6267,12 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
     }
 }
 
-void CommandDispatcher::MarkHoldsDdl(txn::Transaction& txn) {
-    txn.NoteWroteCatalog();
-    if (std::find(ddl_txns_.begin(), ddl_txns_.end(), txn.id()) == ddl_txns_.end()) {
-        ddl_txns_.push_back(txn.id());
-    }
+void CommandDispatcher::MarkHoldsDdl(txn::Transaction& txn) { txn.NoteWroteCatalog(); }
+
+void CommandDispatcher::OpenDdl(std::uint64_t txn_id) {
+    if (std::find(ddl_txns_.begin(), ddl_txns_.end(), txn_id) != ddl_txns_.end()) return;
+    ddl_txns_.push_back(txn_id);
+    txn_->visibility().NoteDdlOpened();
 }
 
 void CommandDispatcher::NoteCatalogRowChanges(
