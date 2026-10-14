@@ -895,13 +895,13 @@ void DevicePageStore::ReleaseFrameLocked(Frame& frame) noexcept {
     ReturnSlotLocked(slot);
 }
 
-StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId page_id,
-                                                                         bool mark_dirty,
-                                                                         FetchHeat heat) {
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Resolve(PageId page_id,
+                                                                  bool mark_dirty,
+                                                                  FetchHeat heat) {
     // Every core faults every page: the miss path always reads and always
     // verifies, and what serialises a shared page is `crosscore.md` CC11's
     // (per-core fault grants retired at AW-S1b, AT-S5).
-
+    if (!IsAllocated(page_id)) return NotAllocated(page_id);
     if (auto it = frames_.find(page_id); it != frames_.end()) {
         // Never clears the flag: a frame already dirty from an earlier
         // mutation stays dirty however many readers touch it afterwards.
@@ -913,7 +913,12 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
         if (heat != FetchHeat::kRing && it->second.usage < kClockUsageCap) ++it->second.usage;
         return std::span<std::byte, kPageSize>(*it->second.bytes);
     }
+    return FaultIn(page_id, mark_dirty, heat);
+}
 
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FaultIn(PageId page_id,
+                                                                   bool mark_dirty,
+                                                                   FetchHeat heat) {
     // The free map says this page exists and the device cannot address it:
     // the strongest form of "allocated but never written" (the all-zero
     // case below says when the map runs ahead of the bytes). NotFound for
@@ -1151,7 +1156,7 @@ StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(Page
                                                                            bool device_zeros) {
     // An allocated id is in use unless the device proves it was never
     // written - the page redo re-creates after a PAGE_INIT outran its first
-    // flush (`ResidentBytes` answers NotFound for the same page, and says
+    // flush (`FaultIn` answers NotFound for the same page, and says
     // why the map can be ahead of the bytes). Decided by a resident frame or
     // the device's bytes, never by the map alone: the map bit is exactly
     // what is true of both a live page and a never-written one.
@@ -1560,13 +1565,6 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetUnpinned(PageId pa
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetForReadUnpinned(PageId page_id) {
     return Resolve(page_id, /*mark_dirty=*/false, FetchHeat::kWarm);
-}
-
-StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Resolve(PageId page_id,
-                                                                  bool mark_dirty,
-                                                                  FetchHeat heat) {
-    if (!IsAllocated(page_id)) return NotAllocated(page_id);
-    return ResidentBytes(page_id, mark_dirty, heat);
 }
 
 Status DevicePageStore::NotAllocated(PageId page_id) const {
@@ -2262,7 +2260,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
     // The hit path runs the raw fetch under the latch, and that does no I/O
     // because no clear bit has a resident frame (BF-R5: `FreePage` erases
     // the frame in the hold that clears the bit), so `IsAllocated` answers
-    // from memory and `ResidentBytes` reads the device only on a miss.
+    // from memory and `Resolve` reads the device only on a miss.
     AssertOrderBeforeFrames("FetchPinned");
     std::unique_lock<Latch> hold(*latch);
     for (;;) {
@@ -2305,7 +2303,13 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
             if (after_fault_published_for_test_) after_fault_published_for_test_(page_id);
             // The reservation (and its sweep, under holds of its own), the
             // device read and the checksum verify, all outside this hold.
-            auto loaded = Resolve(page_id, /*mark_dirty=*/!for_read, heat);
+            // **`FaultIn`, not `Resolve`**: absent under the latch above, and
+            // `loading_` excludes every other loader, so no `find` - which
+            // would run unlatched over a table another core may be
+            // rehashing. A frame inserted meanwhile meets `InsertFrame`'s
+            // lost-race arm.
+            if (!IsAllocated(page_id)) return NotAllocated(page_id);
+            auto loaded = FaultIn(page_id, /*mark_dirty=*/!for_read, heat);
             if (!loaded.ok()) return loaded.status();
         }
 

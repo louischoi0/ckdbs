@@ -322,7 +322,7 @@ public:
     // returns has written and synced every region state copied before it
     // began, on any core. It is also the narrower operation a cell uses to
     // construct "the claim is durable and the page is not" - the state
-    // `ResidentBytes`' all-zero arm answers `NotFound` for.
+    // `FaultIn`'s all-zero arm answers `NotFound` for.
     Status PersistMaps();
 
     // ---- The writeback primitive (docs/spec/eviction.md §4, EVT03) ------
@@ -825,7 +825,10 @@ private:
     // The gate every accessor goes through, so a third one cannot forget
     // it: the allocation check, the adoption below when it misses, then
     // the frame. `mark_dirty` is the only thing Get and GetForRead differ
-    // in.
+    // in: false only for a read-only fetch, whose frame enters the map clean
+    // and is never written back. `heat` is how the fetch counts
+    // (`FetchHeat`): `kScan` and `kRing` fault cold, and `kRing` alone never
+    // bumps a hit.
     StatusOr<std::span<std::byte, kPageSize>> Resolve(PageId page_id, bool mark_dirty,
                                                       FetchHeat heat);
 
@@ -1134,12 +1137,13 @@ private:
     // (SetCoreWalGate), or the default.
     wal::WalDurability* GateForCaller() const noexcept;
 
-    // `mark_dirty` is false only for a read-only fetch: a frame faulted in
-    // by a reader has not been modified, so it enters the map clean and
-    // nothing writes it back. `heat` is how the fetch counts (`FetchHeat`):
-    // `kScan` and `kRing` fault cold, and `kRing` alone never bumps a hit.
-    StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty,
-                                                            FetchHeat heat = FetchHeat::kWarm);
+    // `Resolve`'s miss half: reserve a slot, read, verify, publish. It
+    // reaches the frame table only under holds of its own (`ReserveFrame`'s
+    // sweep, `InsertFrame`), so the armed miss path calls it with the
+    // structure latch released instead of a `find` another core's insert
+    // could be rehashing.
+    StatusOr<std::span<std::byte, kPageSize>> FaultIn(PageId page_id, bool mark_dirty,
+                                                      FetchHeat heat);
 
     // Whether the device holds nothing for `page_id` - not addressable, or
     // every byte zero: a page allocated in the map and never written. What
@@ -1454,9 +1458,11 @@ private:
     // frame's `pins`, `dirty`, `rec_lsn`, `writing` and `dirty_gen`. Under
     // it: the pin accounting, the insert, all three erasers
     // (`ReleaseScanSlot`, `FreePage`, the sweep), the stamp and dirty mark
-    // (AM-S2 step 3e) and the dirty enumerations (step 3f). Still read
-    // without it: the `*Unpinned` accessors' path through `Resolve`,
-    // `IsPinnedClass`'s lookup and the test hooks.
+    // (AM-S2 step 3e) and the dirty enumerations (step 3f). The armed
+    // fault, which runs with it released, reaches the table only under holds
+    // of its own (`FaultIn`). Still read without it, from tests only: the
+    // `*Unpinned` accessors' path through `Resolve`, `IsPinnedClass`'s lookup
+    // and the test hooks.
     //
     // **Null where the store is not shared** (`LatchGuard`'s shape, G2: a
     // null test at `cores = 1`). Armed by the same switch as the page latch.
@@ -1477,8 +1483,8 @@ private:
     // ---- The free map's latch, and the order (AM-S3) ---------------------
     //
     // **A second latch because the two are nested**: `FetchPinned`'s hit
-    // path holds the frame table across `Resolve`, which asks `IsAllocated`,
-    // and `ResidentBytes` asks `IsHeaderless` - free-map reads that would
+    // path holds the frame table across `Resolve`, which asks `IsAllocated`
+    // (and on a miss `FaultIn` asks `IsHeaderless`) - free-map reads that would
     // re-acquire a non-recursive latch (`base/latch.hpp`) if the map shared
     // `frames_latch_`.
     //

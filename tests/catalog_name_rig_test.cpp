@@ -277,6 +277,11 @@ TEST(CatalogNameRigTest, ACreateOnOneCoreIsRefusedIntoAnotherCoresUncommittedNam
     // uncommitted namespace's oid. `CheckNamespaceLive` took any live row as
     // live, so the create landed, and core 0's rollback left `t` in a
     // namespace that never existed. Red before the undecided-create arm.
+    //
+    // Since the open-DDL count is the instance's, core 1 resolves under a
+    // view and the uncommitted namespace is simply not there - the answer
+    // a `SELECT` gives too. The undecided-create arm's `TXN_CONFLICT`
+    // stays behind it as a second defence.
     auto rig = OpenRig();
     ASSERT_NE(rig, nullptr);
     CommandDispatcher& d0 = rig->core(0).dispatcher();
@@ -288,11 +293,111 @@ TEST(CatalogNameRigTest, ACreateOnOneCoreIsRefusedIntoAnotherCoresUncommittedNam
     ASSERT_TRUE(StartsWith(made, "CREATED")) << made;
 
     const std::string t = d1.Dispatch("CREATE TABLE ledger.t (id int64, v int64) BTREE").response;
-    EXPECT_TRUE(StartsWith(t, "ERR TXN_CONFLICT")) << t;
+    EXPECT_TRUE(StartsWith(t, "ERR no namespace named 'ledger'")) << t;
 
     ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
     EXPECT_EQ(NamespacesNamed(*rig, "ledger"), 0);
     EXPECT_EQ(RelationsNamed(*rig, "t"), 0) << "t was left in a rolled-back namespace";
+}
+
+// **An uncommitted `CREATE TABLE` is invisible to another core**
+// (`ddl-transactional.md` property B). Red before the open-DDL count was the
+// instance's: core 1 saw no DDL open in its own set, resolved unfiltered,
+// bound `t`, and an autocommit INSERT into it answered `INSERTED` - a
+// committed row that core 0's rollback then took away with the relation.
+TEST(CatalogNameRigTest, AnUncommittedCreateIsInvisibleToAnotherCoreUntilItCommits) {
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    Session ddl;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)", &ddl).response,
+                           "CREATED"));
+
+    EXPECT_EQ(d1.Dispatch("SELECT * FROM t").response, "ERR no table with this name");
+    const std::string insert = d1.Dispatch("INSERT INTO t VALUES (5)").response;
+    EXPECT_EQ(insert, "ERR no table with this name");
+    Session reader;
+    ASSERT_TRUE(StartsWith(d1.Dispatch("BEGIN", &reader).response, "BEGIN"));
+    EXPECT_EQ(d1.Dispatch("SELECT * FROM t", &reader).response, "ERR no table with this name");
+    ASSERT_TRUE(StartsWith(d1.Dispatch("ROLLBACK", &reader).response, "ROLLBACK"));
+    // The creating core still sees its own relation.
+    EXPECT_EQ(d0.Dispatch("SELECT * FROM t", &ddl).response, "id,v");
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("COMMIT", &ddl).response, "COMMIT"));
+    EXPECT_EQ(d1.Dispatch("SELECT * FROM t").response, "id,v");
+}
+
+TEST(CatalogNameRigTest, ACreateOpenedBetweenAnotherCoresCheckAndLookupIsNotBound) {
+    // **The window the generation closes.** Core 1 reads no DDL open and
+    // takes the unfiltered path; core 0's `CREATE TABLE t` opens and writes
+    // its row before core 1's lookup runs. Without the re-check the lookup
+    // finds `t` and the SELECT reads a relation the rollback below removes.
+    // A SELECT because nothing else stands behind it: a write meets the
+    // schema check at its first write instead.
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    Session ddl;
+    bool fired = false;
+    d1.SetAfterViewForTest([&] {
+        if (fired) return;
+        fired = true;
+        ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+        ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)", &ddl).response,
+                               "CREATED"));
+    });
+    const std::string read = d1.Dispatch("SELECT * FROM t").response;
+    d1.SetAfterViewForTest(nullptr);
+    ASSERT_TRUE(fired);
+    EXPECT_EQ(read, "ERR no table with this name");
+    const std::string insert = d1.Dispatch("INSERT INTO t VALUES (5)").response;
+    EXPECT_EQ(insert, "ERR no table with this name");
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
+    EXPECT_EQ(RelationsNamed(*rig, "t"), 0);
+}
+
+TEST(CatalogNameRigTest, AWritesSubqueryDoesNotBindAnotherCoresUncommittedRelation) {
+    // A write's `WHERE` compiled its subqueries with no view, so `u` bound
+    // while its create was open and the DELETE answered `DELETED 0`.
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+    Session ddl;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE u (id int64, w int64)", &ddl).response,
+                           "CREATED"));
+
+    const std::string deleted =
+        d1.Dispatch("DELETE FROM t WHERE EXISTS (SELECT id FROM u WHERE u.w = t.v)").response;
+    EXPECT_EQ(deleted, "ERR no table with this name") << deleted;
+    const std::string updated =
+        d1.Dispatch("UPDATE t SET v = 1 WHERE EXISTS (SELECT id FROM u WHERE u.w = t.v)").response;
+    EXPECT_EQ(updated, "ERR no table with this name") << updated;
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
+}
+
+TEST(CatalogNameRigTest, ARolledBackCreateWasNeverVisibleToAnotherCore) {
+    auto rig = OpenRig();
+    ASSERT_NE(rig, nullptr);
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    Session ddl;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &ddl).response, "BEGIN"));
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)", &ddl).response,
+                           "CREATED"));
+    const std::string insert = d1.Dispatch("INSERT INTO t VALUES (5)").response;
+    EXPECT_EQ(insert, "ERR no table with this name");
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("ROLLBACK", &ddl).response, "ROLLBACK"));
+    EXPECT_EQ(d1.Dispatch("SELECT * FROM t").response, "ERR no table with this name");
+    EXPECT_EQ(RelationsNamed(*rig, "t"), 0);
 }
 
 }  // namespace

@@ -198,15 +198,16 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
 
     // **BO-Q2**: a schema-object view reads under the session's view, as
     // `SHOW TABLES` always did.
-    const std::optional<txn::ReadView> read_view = ViewFor(session);
-    const txn::ReadView* view = read_view.has_value() ? &*read_view : nullptr;
-    if (n == "tables") return TablesView(view);
-    if (n == "columns") return ColumnsView(view, key);
-    if (n == "objects") return ObjectsView(view);
-    if (n == "namespaces") return NamespacesView(view);
-    if (n == "indexes") return IndexesView(view);
-    if (n == "fkeys") return FkeysView(view);
-    return Status::NotFound("no catalog view named 'sys." + std::string(n) + "'");
+    return ResolveNames(
+        session, [&](const txn::ReadView* view) -> StatusOr<exec::CatalogView> {
+            if (n == "tables") return TablesView(view);
+            if (n == "columns") return ColumnsView(view, key);
+            if (n == "objects") return ObjectsView(view);
+            if (n == "namespaces") return NamespacesView(view);
+            if (n == "indexes") return IndexesView(view);
+            if (n == "fkeys") return FkeysView(view);
+            return Status::NotFound("no catalog view named 'sys." + std::string(n) + "'");
+        });
 }
 
 // ---- The catalog's own relations ------------------------------------------
