@@ -226,7 +226,7 @@ moved since. Tags as in the header; `[source-read]` here means at
 
 ### 9.1 §2's third fact is gone: `PURGE` reopens the restart
 
-`[source-read]` §2 said a named pk equal to a deleted one is refused
+`[source-read]` §2 said a named tuple key equal to a deleted one is refused
 because *"nothing retires a slot today"*. That stopped being true at
 BH-S3 (`26766699`, 2026-10-08). `PURGE FROM t WHERE <pk comparisons>`
 retires, keyless, every committed delete-marked row its window names once
@@ -275,7 +275,7 @@ if the key had never been placed"* (`docs/spec/heap-and-tuple.md:286`,
 | body cites | now |
 |---|---|
 | `heap-and-tuple.md:109` (K1/K2, never rebound) | `:105`, with `PURGE`'s exception |
-| `heap-and-tuple.md:132` (omitted pk never reuses) | `:109`, `:114` (the mark never moves back) |
+| `heap-and-tuple.md:132` (an omitted tuple key never reuses) | `:109`, `:114` (the mark never moves back) |
 | `heap-and-tuple.md:168` (nothing retires a slot) | gone; `:175` (a committed key stays bound until a `PURGE` frees it) and §4.1c (`:284`) |
 | `src/txn/manager.cpp:199` `CheckWriteConflict` | `:188` |
 | `command_dispatcher.cpp:5818` `InsertOneRow` | `:5658` |
