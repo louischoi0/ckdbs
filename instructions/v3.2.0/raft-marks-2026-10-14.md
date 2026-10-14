@@ -65,3 +65,30 @@ _Sections 5-7 recorded by CLA on `worktree-bw-instant-add-drop-column` from `750
 | **Word** | `/go-ahead-achieving-milestone`: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* (W3) |
 | **Mark** | **BW-Q1..Q7 adopted as CLA proposed, on the operator's standing go-ahead of 2026-10-14 (go-ahead-achieving-milestone)** - not marked per item by the operator. BW-Q3 `[quiet-wrong]`: its premise (one payload producer, `EncodeRow`) re-read at `750496b1` before adoption and holds |
 | **Recorded at** | `workorder-bw-instant-add-drop-column.md` header and §4; `index.md`'s BW row |
+
+_Sections 8-10 recorded by CLA on `worktree-bw-instant-add-drop-column` at `d6cb3826`._
+
+## 8. BW pushed, and its close measured
+
+| | |
+|---|---|
+| **Word** | *"push it"* (W4, after BW-S5), then *"do the A/B overhead measurement within 20 minutes now"* (W5, lifting W2's hold for that measurement) |
+| **Mark** | BW landed on `main` at `541ce440`; the close measured A `74b0a3dd` / A' / B `541ce440` in Release (`bench/v3.2.0/results-bw-close-v3.2.0-22-g541ce440.md`): the every-row `UPDATE` +30.2 us / 1,000 rows outside the spread, every other cell inside |
+| **Recorded at** | `workorder-bw-instant-add-drop-column.md` §6, §7 |
+
+## 9. The `UPDATE` regression profiled and fixed
+
+| | |
+|---|---|
+| **Word** | *"profile the UPDATE regression and fix it"*, then *"push it"* |
+| **Mark** | Profiled (no BW-changed line carries the delta; layout/inlining suspected, not shown), the dropped-column gate hoisted (`e8727478`), re-measured (`results-bw-update-fix-v3.2.0-24-ge8727478.md`: below `541ce440` 7/7 on both paths, equality with the pre-BW tree unresolved), pushed at `d6cb3826` |
+| **Recorded at** | `workorder-bw-instant-add-drop-column.md` §6 |
+
+## 10. BW closed
+
+| | |
+|---|---|
+| **Word** | *"close milestone"* (W6) |
+| **Mark** | **BW closed** at `d6cb3826`. **Does not settle**: BW-Q11 (adopted (a) on the go-ahead; the operator's own mark on it is still the one it most needs), cleaning (D-e), and a quiet-host re-measure of `e8727478` against the pre-BW tree; no tag, no version |
+| **Recorded at** | `workorder-bw-instant-add-drop-column.md` §6; `index.md`'s BW row; CLAUDE.md's ALTER TABLE row |
+
