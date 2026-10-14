@@ -989,11 +989,11 @@ private:
     // `frames_.count` is the frame table's, so its caller holds both, frames
     // outer (AM-S3). `device_spare` is the answer to
     // `DeviceHoldsNoPage(page_id, ...)` read *outside* the hold, and
-    // `zeros_known` says whether it was read at all - a caller that found
+    // `device_read` says whether it was read at all - a caller that found
     // the bit clear has no need for it, and gets `AlreadyExists`'s
     // `kNeedsDeviceRead` back if the bit turned out to be set after all.
     enum class ClaimOutcome : std::uint8_t { kClaimed, kNeedsDeviceRead };
-    StatusOr<ClaimOutcome> ClaimNamedIdLocked(PageId page_id, bool zeros_known,
+    StatusOr<ClaimOutcome> ClaimNamedIdLocked(PageId page_id, bool device_read,
                                               bool device_spare);
 
     // `CreateAtUnpinned` and `CreateOverTornUnpinned`, which differ only in
@@ -1157,12 +1157,10 @@ private:
     // every byte zero: a page allocated in the map and never written. What
     // lets CreateAt take an allocated id (redo re-creating a page whose
     // PAGE_INIT outran its first flush) without ever clobbering a live one.
-    // A failed read answers false, the refusing side.
-    bool DeviceHoldsOnlyZeros(PageId page_id) const;
-
-    // `DeviceHoldsOnlyZeros`, or, when `torn_is_none`, a headered page that
-    // fails its checksum: bytes nobody may interpret, which redo's heal
-    // replaces whole. A page that verifies is always a page.
+    // A failed read answers false, the refusing side. With `torn_is_none`,
+    // a headered page that fails its checksum counts as nothing too: bytes
+    // nobody may interpret, which redo's heal replaces whole. A page that
+    // verifies is always a page.
     bool DeviceHoldsNoPage(PageId page_id, bool torn_is_none) const;
 
     // The ring's rotation half: drops `page_id`'s frame unless the

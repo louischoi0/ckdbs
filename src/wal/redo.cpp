@@ -393,9 +393,6 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             }
             created_ref = std::move(created.value());
             page_bytes = created_ref.bytes();
-            if (poisoned.erase(page_id) != 0) {
-                ++stats.pages_healed;
-            }
         } else if (record.type() == RecordType::kPageInit || is_image) {
             auto created = store.CreateAt(page_id);
             if (!created.ok()) {

@@ -386,7 +386,7 @@ Status DevicePageStore::MarkHeaderlessBeforeInsert(PageId headerless_page) {
     // which is child 1 - so a frame inserted ahead of the mark could be
     // written out stamped while this read, write and sync run, and read
     // back after a crash as a directory whose child 1 is a checksum.
-    if (!DeviceHoldsOnlyZeros(headerless_page)) {
+    if (!DeviceHoldsNoPage(headerless_page, /*torn_is_none=*/false)) {
         const Page zeros{};
         if (Status s = device_.WritePage(headerless_page,
                                          std::span<const std::byte, kPageSize>(zeros));
@@ -1098,10 +1098,6 @@ std::unique_ptr<ScanFetcher> DevicePageStore::OpenScanRing(std::size_t frames) {
     return std::make_unique<ScanRing>(*this, frames);
 }
 
-bool DevicePageStore::DeviceHoldsOnlyZeros(PageId page_id) const {
-    return DeviceHoldsNoPage(page_id, /*torn_is_none=*/false);
-}
-
 bool DevicePageStore::DeviceHoldsNoPage(PageId page_id, bool torn_is_none) const {
     // Not addressable is the strongest form of never written. A failed read
     // answers "in use": refusing a CreateAt is the safe error.
@@ -1160,15 +1156,16 @@ StatusOr<PageId> DevicePageStore::ClaimNextFreeIdLocked(std::uint32_t* missing_r
 }
 
 StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(PageId page_id,
-                                                                           bool zeros_known,
+                                                                           bool device_read,
                                                                            bool device_spare) {
     // An allocated id is in use unless the device proves it was never
     // written - the page redo re-creates after a PAGE_INIT outran its first
     // flush (`FaultIn` answers NotFound for the same page, and says
     // why the map can be ahead of the bytes) - or, for redo's heal alone,
-    // that it holds a page failing its checksum (`DeviceHoldsNoPage`). Decided by a resident frame or
-    // the device's bytes, never by the map alone: the map bit is exactly
-    // what is true of both a live page and a never-written one.
+    // that it holds a page failing its checksum (`DeviceHoldsNoPage`).
+    // Decided by a resident frame or the device's bytes, never by the map
+    // alone: the map bit is exactly what is true of both a live page and a
+    // never-written one.
     //
     // The two maps live in this object, not in a frame, and may not have
     // reached the device yet - in use by definition. Any region's bitmaps,
@@ -1196,7 +1193,7 @@ StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(Page
         }
         // The bit is set and the caller did not read the device, because it
         // saw the bit clear before it took the hold. It has to look now.
-        if (!zeros_known) return ClaimOutcome::kNeedsDeviceRead;
+        if (!device_read) return ClaimOutcome::kNeedsDeviceRead;
         if (!device_spare) return Status::AlreadyExists("page id already in use");
     } else {
         ++allocated_pages_;
@@ -1254,12 +1251,12 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateNamedIdUnpinned
     // needed for; a clear bit is a free page and the device says nothing
     // about it. Racy on purpose - a bit that changes under us comes back as
     // `kNeedsDeviceRead` and this loop reads it then.
-    bool zeros_known = false;
+    bool device_read = false;
     bool device_spare = false;
     for (;;) {
-        if (IsAllocated(page_id) && !zeros_known) {
+        if (IsAllocated(page_id) && !device_read) {
             device_spare = DeviceHoldsNoPage(page_id, over_torn);
-            zeros_known = true;
+            device_read = true;
         }
         // **Both latches, frames outer and map inner** - the declared order
         // (`device_page_store.hpp`, AM-S3). `ClaimNamedIdLocked` reads the
@@ -1270,7 +1267,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateNamedIdUnpinned
         // are re-validated under them.
         LatchGuard structure(structure_latch());
         LatchGuard alloc(map_latch());
-        auto claimed = ClaimNamedIdLocked(page_id, zeros_known, device_spare);
+        auto claimed = ClaimNamedIdLocked(page_id, device_read, device_spare);
         if (!claimed.ok()) return claimed.status();
         if (claimed.value() == ClaimOutcome::kClaimed) {
             // Recorded under the same hold that set the bit, so no second
@@ -1280,7 +1277,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateNamedIdUnpinned
         }
         // The bit was set after all and nobody had asked the device yet.
         // The hold ends here, and the next turn asks.
-        zeros_known = false;
+        device_read = false;
     }
 
     // Drops the claim however this function leaves, so a failed

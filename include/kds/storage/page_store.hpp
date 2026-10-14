@@ -488,8 +488,9 @@ protected:
     virtual void ReleaseClaimedId(PageId page_id) noexcept { (void)page_id; }
     friend class PageClaims;
 
-    // `CreateOverTorn`'s raw half. The default is `CreateAtUnpinned`, true
-    // for a store that verifies no checksum and so never holds a torn page.
+    // `CreateOverTorn`'s raw half. The default is `CreateAtUnpinned`: a
+    // store that verifies no checksum holds no torn page, and a wrapper
+    // that does not override this does not heal one.
     virtual StatusOr<std::span<std::byte, kPageSize>> CreateOverTornUnpinned(PageId page_id) {
         return CreateAtUnpinned(page_id);
     }
