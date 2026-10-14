@@ -617,16 +617,33 @@ INSERT INTO trades VALUES (5100, 'MSFT', 3), (6200, 'NVDA', 7);
 
 -- And one statement may do both. Row 2's key is issued above 7000
 INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
+
+-- Or name the columns, in any order: a column left out is NULL, the key
+-- left out (or NULL) is issued
+INSERT INTO trades (qty, symbol) VALUES (4, 'TSLA'), (9, 'ORCL');
+INSERT INTO trades (symbol, id, qty) VALUES ('IBM', 8000, 2);
 ```
 
-- Grammar: `INSERT INTO <table> VALUES (<val> [, ...]) [, (<val> [, ...])]*`
-  — no column list; up to `max_insert_rows` rows per statement (config key,
-  default 1024, a refusal never a truncation).
+- Grammar: `INSERT INTO <table> [(<col> [, ...])] VALUES (<val> [, ...]) [, (<val> [, ...])]*`
+  — up to `max_insert_rows` rows per statement (config key, default 1024, a
+  refusal never a truncation).
+- **With a column list, each value goes to the column it names** (BW-S6),
+  so no `ALTER TABLE` can shift it. Each row has exactly one value per
+  listed name. Names match exactly, case included (`A` is not `a`); an
+  unknown or dropped name, and a name listed twice, are refused at its
+  byte. The tuple key may be listed anywhere or left out: left out, or
+  `NULL`, it is issued. A column declared `NULL` that the list leaves out
+  is written NULL; a `NOT NULL` one left out refuses the statement at the
+  list's `(` - there is no `DEFAULT`. Every column `ADD COLUMN` creates is
+  nullable, so a list written before an `ADD` stays valid after it.
+  Everything below about a named key, the refusals, atomicity and the
+  pipeline holds for a listed row unchanged; the arity rules below are the
+  positional form's.
 - **The arity is per row, and there are two of them.** Supply `n` values on
   an `n`-column relation and the first is the tuple key; supply `n - 1` and
   the engine issues one. Both are legal on every relation and a statement may
-  mix them. The two counts cannot be confused — `INSERT` is positional with
-  no column list and no body column may be omitted individually — so a wrong
+  mix them. The two counts cannot be confused — a positional `INSERT` omits
+  no body column individually — so a wrong
   length is refused naming both:
   `ERR expected 3 value(s) including tuple key column 'id', or 2 to have it issued; got 4 (byte <n>)`.
 - **A `NULL` tuple key asks for an issued one** (as a KWP load row's
@@ -641,7 +658,8 @@ INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
   The count does not catch every stale statement: after a `DROP`, a row
   written for the old columns with its key left out has the new full
   length and is admitted with its first value as the key. Re-read a
-  positional `INSERT` written before an `ALTER`.
+  positional `INSERT` written before an `ALTER` - or write it with a column
+  list, which no column change can shift.
 - **A named tuple key must be an integer literal** in `[1, 2^48 - 1]` — 0 is
   reserved for "unset". A non-integer is `InvalidArgument`; an integer
   outside the range is `OutOfRange` (exhausted). Both carry the offending
@@ -671,7 +689,9 @@ INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
   A pre-id refusal burns no id; an aborted statement burns exactly its
   placed rows' ids (BI9, accepted and documented).
 - Row count is not part of the pattern (BI5): a 500-row insert
-  fingerprints as the 1-row insert on the same relation.
+  fingerprints as the 1-row insert on the same relation. A column list is
+  part of it: two orders of one list are two patterns in
+  `sys.statement_stats`.
 - Values are integers, strings (`'...'`, no quote escaping), bare numerics
   and `NULL` — which stores only into a column declared `NULL` and is
   refused by name (with the byte) for the default `NOT NULL`. A stored
@@ -1313,6 +1333,10 @@ in §7 below now carries and which both used to reach a client as a bare
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
 | A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including tuple key column '<name>', or <n-1> to have it issued; got <k> (byte <b>)` |
 | A row that is not `n` values long, on a relation `ALTER TABLE ... ADD`/`DROP COLUMN` changed | `ERR expected <n> value(s), one per column, with tuple key column '<name>' NULL to have it issued; got <k> (byte <b>). The relation's columns were changed by ALTER TABLE, ...` |
+| An `INSERT` column list naming no live column (unknown or dropped; matched exactly, case included) | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
+| A column named twice in an `INSERT` column list | `InvalidArgument` — `ERR column '<name>' is listed twice in the column list at byte <n>` (the second occurrence's byte) |
+| An `INSERT` column list that leaves out a `NOT NULL` column | `InvalidArgument` — `ERR column '<name>' is NOT NULL and the column list leaves it out; there is no DEFAULT at byte <n>` (the list's `(`; nothing is written) |
+| A row whose length is not the `INSERT` column list's | `InvalidArgument` — `ERR expected <n> value(s), one per listed column; got <k> at byte <b>`, with ` (row <r>)` on a multi-row statement |
 | A non-integer supplied tuple key | `InvalidArgument` — `ERR tuple key column '<name>' needs an integer literal (byte <n>)` |
 | A supplied tuple key outside `[1, 2^48 - 1]` (zero, negative, too large, or past 64 bits) — *exhausted* | `OutOfRange` — `ERR tuple key <k> is outside the Keystone id space [1, 281474976710655] (byte <n>)` |
 | A supplied tuple key already bound on a `BTREE` relation — *duplicate* | `AlreadyExists` — `ERR duplicate tuple key <k> already present at page <p> slot <s> (byte <n>)`, or for a `DELETE`d row's key, until a `PURGE` frees it, `ERR duplicate tuple key <k>: a row with this key was deleted; PURGE frees its key (page <p> slot <s>) (byte <n>)` |

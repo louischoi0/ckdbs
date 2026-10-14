@@ -485,13 +485,30 @@ struct CreateTableStmt {
 // holds before execution begins.
 inline constexpr std::size_t kDefaultMaxInsertRows = 1024;
 
-// `INSERT INTO <t> VALUES (…) [, (…)]*` (docs/spec/bulkinsert.md T1, BI3).
+// One column named in a *declaration's* column list, with where it was
+// written - which is what lets "this relation has no column x" carry a
+// position.
+//
+// Named for the index because that is what first needed it; it serves any
+// parenthesised column list - an assertion's `GROUP BY (...)` and an
+// `INSERT`'s column list (BW-S6) reuse it rather than declaring a second
+// two-field struct. There is one production for all of them
+// (`Parser::ParseDeclaredColumnList`).
+struct IndexColumnRef {
+    std::string name;
+    std::uint32_t byte_offset = 0;
+};
+
+// `INSERT INTO <t> [(<col>, …)] VALUES (…) [, (…)]*` (docs/spec/bulkinsert.md
+// T1, BI3; the column list is BW-S6 of
+// `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
 //
 // One or more rows; the single-row statement is a rows vector of size one,
 // and its parse is byte-identical in behavior to what it always was. The
 // row cap is **not** enforced here: the parser is a pure syntax layer with
 // no config access, so the first config-aware layer (the dispatcher)
 // refuses an over-cap statement naming the cap and the count.
+//
 // The relation and column shape a KWP load described at LOAD BEGIN (BW-Q10
 // of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
 // load's rows are positional against it, so a relation that is not that
@@ -507,6 +524,12 @@ struct InsertStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above
     std::uint32_t table_byte_offset = 0;
+    // The column list (BW-R13), in written order, each name with its byte;
+    // empty for a positional statement, whose values name the live columns
+    // in order. `columns_byte_offset` is the list's `(`, where a NOT NULL
+    // column the list leaves out is refused.
+    std::vector<IndexColumnRef> columns;
+    std::uint32_t columns_byte_offset = 0;
     std::vector<std::vector<AstValue>> rows;
     DescribedShape described;
 };
@@ -954,18 +977,7 @@ struct CabinStmt {
     bool drop = false;
 };
 
-// One column named in a *declaration's* column list, with where it was
-// written - which is what lets "this relation has no column x" carry a
-// position.
-//
-// Named for the index because that is what first needed it; it serves any
-// declaration's parenthesised list, and an assertion's `GROUP BY (...)`
-// reuses it rather than declaring a second two-field struct. There is one
-// production for all of them (`Parser::ParseDeclaredColumnList`).
-struct IndexColumnRef {
-    std::string name;
-    std::uint32_t byte_offset = 0;
-};
+// `IndexColumnRef` is declared above `InsertStmt`, whose column list uses it.
 
 // `CREATE INDEX <name> ON <table>(<col>, ...) [COVERING (<col>, ...)]` and
 // `DROP INDEX <name>` (docs/spec/index.md §10).

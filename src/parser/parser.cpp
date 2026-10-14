@@ -113,8 +113,11 @@ bool AggFuncOf(std::string_view name, AggFunc& out) noexcept {
 Status Parser::ExpectKeyword(std::string_view keyword) {
     Token tok = lexer_.Next();
     if (tok.type != TokenType::kIdent || !IEquals(tok.text, keyword)) {
+        // The byte, as `ExpectToken` gives it (BW-Q12.2 of
+        // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
         return Status::InvalidArgument("expected '" + std::string(keyword) + "', got '" +
-                                        std::string(Describe(tok)) + "'");
+                                        std::string(Describe(tok)) + "' at byte " +
+                                        std::to_string(tok.byte_offset));
     }
     return Status::OK();
 }
@@ -137,7 +140,8 @@ StatusOr<std::string> Parser::ParseIdent() {
     Token tok = lexer_.Next();
     if (tok.type != TokenType::kIdent) {
         return Status::InvalidArgument("expected identifier, got '" +
-                                        std::string(Describe(tok)) + "'");
+                                        std::string(Describe(tok)) + "' at byte " +
+                                        std::to_string(tok.byte_offset));
     }
     // The AST owns its names: docs/parser.md I4's copy-at-the-boundary
     // rule, and what lets a Statement outlive the SQL it came from now that
@@ -2428,6 +2432,19 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
     if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
         !s.ok()) {
         return s;
+    }
+
+    // `( <col> [, <col>]* )` (BW-S6, BW-Q12.1 of
+    // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
+    // columns the rows' values are for, so no column change can shift them.
+    // The paren decides it unambiguously - a positional statement has
+    // `VALUES` here. Names are resolved by the dispatcher, under the
+    // relation's `IX`; an empty list is `ParseIdent`'s refusal at the `)`.
+    if (lexer_.Peek().type == TokenType::kLParen) {
+        stmt.columns_byte_offset = lexer_.Peek().byte_offset;
+        if (Status s = ParseDeclaredColumnList(stmt.columns, "column list", /*cap=*/0); !s.ok()) {
+            return s;
+        }
     }
 
     if (Status s = ExpectKeyword("VALUES"); !s.ok()) return s;

@@ -221,9 +221,18 @@ would put every value one column over. **What the count does not catch**
 (`known-gaps.md`): after a `DROP`, a row written for the old columns with
 its key left out has the full form's length and is admitted, its first
 value read as the key; and after a `DROP` and an `ADD` of one column each,
-an old full row has the new full form's length. SQL text carries no shape
-to check, so a statement written before a change is the writer's to
-re-read. A `NULL` key at full width asks for an issued id on every
+an old full row has the new full form's length. Positional SQL text carries no
+shape to check, so a positional statement written before a change is the
+writer's to re-read. **A column list closes it** (BW-S6, BW-R13 of
+`instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): `INSERT
+INTO t (c1, c2, ...) VALUES (...)` names its columns, so no column change
+can shift its values. Names match exactly, as `UPDATE SET`'s do; an unknown
+or dropped name and a repeated one are refused at their byte; a nullable
+column the list leaves out is NULL - every added column is nullable, so a
+list written before an `ADD` stays valid after it - and a NOT NULL one left
+out refuses the statement at the list's `(`; the tuple key left out or
+`NULL` is issued; each row has one value per listed name. BW-Q9's rule
+never applies to a listed row. A `NULL` key at full width asks for an issued id on every
 relation, which is how a KWP load row has always asked (`bulkinsert.md`
 BI15); the load passes it through, so a load described before a change is
 refused by the same count. **And by its shape** (BW-Q10 (a)) `[quiet-wrong]`:

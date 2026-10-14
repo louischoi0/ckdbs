@@ -552,14 +552,17 @@ public:
     //                            refused. Either order, each at most once.
     //                            See src/exec/row_codec.hpp for the
     //                            supported column type set.
-    //   INSERT INTO <name> VALUES (<val> [, ...]) [, (...)]*
+    //   INSERT INTO <name> [(<col> [, ...])] VALUES (<val> [, ...]) [, (...)]*
     //                         -> "INSERTED oid=<n> id=<n> page=<n> slot=<n>"
     //                            for one row, "INSERTED oid=<n> rows=<n>
     //                            first_id=<n> last_id=<n>" for several, or
-    //                            "ERR ...". Positional, no column list; per
-    //                            row, `n` values name the tuple key first and
-    //                            `n - 1` have it issued (heap-and-tuple.md
-    //                            §4.1, invariant 11).
+    //                            "ERR ...". Without a column list, positional:
+    //                            per row, `n` values name the tuple key first
+    //                            and `n - 1` have it issued (heap-and-tuple.md
+    //                            §4.1, invariant 11). With one (BW-S6), one
+    //                            value per listed column; the tuple key left
+    //                            out or `NULL` is issued, and a nullable
+    //                            column left out is NULL.
     //   SELECT * FROM <name> [WHERE <cond> [AND <cond>]*]
     //                         -> a full ordered scan of the relation,
     //                            WHERE-filtered; a bare `WHERE <tuple key> = <n>`
@@ -1363,7 +1366,8 @@ private:
 
     // The body `ResolveForeignKeyParents` and the FK checks index into: the
     // columns after the tuple key, which is the shape every downstream consumer
-    // takes. Mirrors `InsertOneRow`'s arity split without repeating its
+    // takes - a positional row's and a column-listed row's alike, since
+    // `NormalizeInsertRows` maps a listed row onto it first (BW-S6). Mirrors `InsertOneRow`'s arity split without repeating its
     // refusals - a row of neither legal length yields an empty body here and
     // is refused there, in the order it always was.
     static std::vector<parser::AstValue> InsertBodyOf(

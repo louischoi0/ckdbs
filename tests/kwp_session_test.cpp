@@ -622,6 +622,30 @@ TEST_F(KwpSessionTest, ATextParameterCarryingAQuoteIsRefusedWithTheGrammarsReaso
         << "the refusal names the grammar's limit, which is whose it is";
 }
 
+// BW-S6 (BW-Q12.11 of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`):
+// a prepared column-listed INSERT takes its `?` in VALUES through the same
+// substitution as every other statement, and each value lands in its named
+// column.
+TEST_F(KwpSessionTest, APreparedColumnListedInsertBindsItsValues) {
+    Handshake();
+    Feed(ClientFrameType::kParse, Parse("s", "INSERT INTO t (name, v) VALUES (?, ?)"));
+    const std::string name = "delta";
+    std::vector<std::byte> v(4);
+    v[0] = static_cast<std::byte>(40);
+    wire::BoundParam a;
+    a.type_oid = catalog::kTypeValVarchar;
+    a.bytes = std::span<const std::byte>(reinterpret_cast<const std::byte*>(name.data()),
+                                         name.size());
+    wire::BoundParam b;
+    b.type_oid = catalog::kTypeValInt32;
+    b.bytes = std::span<const std::byte>(v);
+    Feed(ClientFrameType::kBind, Bind("p", "s", {a, b}));
+    auto frames = Feed(ClientFrameType::kExecute, Execute("p", 0));
+    ASSERT_FALSE(frames.empty());
+    EXPECT_NE(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError));
+    EXPECT_EQ(Run("SELECT v, name FROM t WHERE name = 'delta'"), "v,name\\n40,delta");
+}
+
 TEST_F(KwpSessionTest, AParameterCountThatDisagreesWithThePlaceholdersIsRefused) {
     Handshake();
     Feed(ClientFrameType::kParse, Parse("s", "SELECT id FROM t WHERE v = ? AND id = ?"));

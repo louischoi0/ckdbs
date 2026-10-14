@@ -102,6 +102,9 @@ or a `NOT NULL` added column (D-b). Rewriting a relation that has no slot
    values (`command_dispatcher.cpp:4946-4958`, `row_codec.cpp:953-957`),
    and fk, Transition and assertion admission index the body by
    `column_no - 1` (`command_dispatcher.cpp:5007`, `:5021`, `:5052`).
+   **Since BW-S6** `INSERT` also takes a column list
+   (`InsertStmt::columns`), mapped onto that same body by
+   `NormalizeListedInsertRows`; the positional form is unchanged.
 5. **An all-zero varchar cell is `kNull`** (`tagged_cell.hpp:95`), and a
    decode that finds `kNull` where the bitmap says present is `Corruption`
    (`row_codec.cpp:568-576`).
@@ -142,7 +145,7 @@ or a `NOT NULL` added column (D-b). Rewriting a relation that has no slot
 
 ## 2. Rulings
 
-Each of BW-R1..R12 is CLA's proposal; its standing is §4's.
+Each of BW-R1..R13 is CLA's proposal; its standing is §4's.
 
 - **BW-R1 — the grammar.** `CREATE TABLE t (...) [BTREE] SPARE <n>`, where
   `SPARE` is a trailing word in the storage clause's loop
@@ -242,6 +245,26 @@ Each of BW-R1..R12 is CLA's proposal; its standing is §4's.
   (declared `N`) and `spare_free` (slots no column holds; a dropped
   column's slot is not free). `DESCRIBE` and `sys.columns` list live
   columns only.
+- **BW-R13 — `INSERT` with a column list** (W7, BW-Q12).
+  - **Grammar.** `INSERT INTO <t> [ ( <col> [, <col>]* ) ] VALUES ( ... )
+    [, ( ... )]*`. The list is optional, and an `INSERT` without one is
+    positional as before (BW-Q9).
+  - **Names.** Each name resolves exactly, byte for byte, to a live column,
+    as `UPDATE ... SET` resolves. An unknown or dropped name is refused,
+    and so is a name listed twice. An empty list is refused.
+  - **Rows.** Each row has one value per listed column, in list order.
+  - **The tuple key.** Left out of the list, it is issued. Listed, the
+    row's value is the key, and `NULL` there has one issued.
+  - **Omitted columns.** A nullable column left out is NULL. A `NOT NULL`
+    column left out refuses the statement before any row is written, since
+    no `DEFAULT` exists.
+  - **No shift.** A listed row is mapped by name, so no column change can
+    shift it, and BW-Q9's arity rule does not apply to it.
+  - **Fingerprint.** The shape is the column list. `kFingerprintVersion`
+    does not move, and `INSERT` stays unpatterned.
+  - **KWP.** The load path is unchanged.
+  - **Refusals.** All are `InvalidArgument` at the offending token's byte
+    (BW-Q12.12).
 
 ---
 
@@ -338,6 +361,197 @@ before its adoption, and it holds.
   2026-10-14 (W3)**; the operator's mark is the one this item most needs.
   **Marked (a) by the operator (W7)**, with the column list built in BW
   (BW-S6) rather than BU-S8.
+- **BW-Q12** — BW-S6's design: `INSERT` with a column list (W7). Raised by
+  W7's mark of BW-Q11 (a); the tree as read `[source-read]` at `e3450498`.
+  Each sub-item carries its options and CLA's proposal; BW-R13 states the
+  result.
+  - **BW-Q12.1 — the grammar.** `INSERT INTO <t> [ ( <col> [, <col>]* ) ]
+    VALUES ( ... ) [, ( ... )]*`. `Parser::ParseInsert`
+    (`parser.cpp:2423-2467`) peeks for `(` after the qualified name; a
+    positional statement has `VALUES` there, so the peek is unambiguous.
+    The list is read by `ParseDeclaredColumnList` (`parser.cpp:1859-1893`)
+    with no cap, each name keeping its byte. `InsertStmt`
+    (`ast.hpp:506-512`) gains `std::vector<IndexColumnRef> columns` (empty
+    means positional) and `columns_byte_offset`, the byte of the list's
+    `(`. Options: (a) as stated; (b) a new AST type for an insert column.
+    **CLA proposes (a)**: `IndexColumnRef` is already `{name, byte}`, and a
+    second type with the same fields is the duplication the review rules
+    refuse. `INSERT ... SELECT`, `DEFAULT VALUES` and expressions in
+    `VALUES` stay BU-S8's and are not touched. **Adopted as proposed on the
+    standing go-ahead of 2026-10-14 (W3).**
+  - **BW-Q12.2 — the parser's missing bytes.** `ExpectKeyword`
+    (`parser.cpp:113-120`) and `ParseIdent` (`:136-146`) refuse with no
+    byte. Because of that, a missing `VALUES` after the list, and a
+    non-identifier in the list (`(1)`, `()`, `(?)`), would refuse with no
+    position. Options: (a) give both helpers the token's byte, once, as
+    `ExpectToken` already does (`:122-133`); (b) catch the two refusals at
+    `ParseInsert`'s call sites only. **CLA proposes (a)**: the position rule
+    is engine-wide, and fixing it in the helpers covers every production
+    that routes through them. The verdict codes do not move, so the
+    corpus's verdict column does not move. Only message text gains
+    `at byte N`, and a test that matches the old text exactly is updated.
+    **Adopted as proposed on the standing go-ahead of 2026-10-14 (W3).**
+  - **BW-Q12.3 — name matching.** Options: (a) exact bytes, through
+    `Schema::FindColumn` (`schema.cpp:10-17`), as `UPDATE ... SET`
+    (`step_compiler.cpp:1624`, `set_expr.cpp:472`), Transitions and
+    `RENAME COLUMN` resolve; (b) case-insensitive, as SELECT and WHERE
+    resolve (`FindColumnPos`, `step_compiler.cpp:71-81`). **CLA proposes
+    (a)**, departing from SELECT's surface for a reason the survey found.
+    Column-name uniqueness is exact-case (`catalog.cpp:1764-1766`,
+    `:1818`), so `a` and `A` can both exist, and (b) would have to pick one
+    of the two in silence. A read that picks the wrong one shows a wrong
+    column. A write that does would store a value in the wrong column,
+    `[quiet-wrong]`. `INSERT` is a write that names columns, which is
+    exactly the class `UPDATE ... SET` is (BJ-R2), so it takes that rule.
+    SELECT's case-insensitive pick is a separate matter that BW-S6 does
+    not change. **Adopted as proposed on the standing go-ahead of
+    2026-10-14 (W3).**
+  - **BW-Q12.4 — an unknown, dropped or repeated name.** An unknown name
+    is refused `InvalidArgument` "unknown column 'x' at byte N", at the
+    name's byte, the same text `UPDATE ... SET` uses. A dropped column's
+    name is unknown (BW-R6). A name listed twice is refused
+    `InvalidArgument` at the second occurrence's byte
+    (`step_compiler.cpp:1626-1635`'s shape). Options for where these
+    checks run: (a) in `NormalizeInsertRows` (`command_dispatcher.cpp:3161`),
+    which runs after the `IX` (`:4888`); (b) duplicates in the parser,
+    the rest in the dispatcher. **CLA proposes (a)**: the column set must be
+    read behind the `IX`, because a `DROP COLUMN` overwrites its row in
+    place before its decide (`:4899-4902`). Keeping every name check in one
+    loop over the list, in written order, means the first refusal is the
+    leftmost bad name. A list longer than the live column count must hold
+    an unknown or a repeated name, so no separate cap is needed.
+    **Adopted as proposed on the standing go-ahead of 2026-10-14 (W3).**
+  - **BW-Q12.5 — an empty list.** `INSERT INTO t () VALUES ()`. Options:
+    (a) refuse it `InvalidArgument` at the `)` byte, as `ParseIdent`'s
+    refusal of a non-identifier (BW-Q12.2); (b) read it as "every column
+    omitted". **CLA proposes (a)**: the engine has no `DEFAULT`, so the only
+    rows (b) could write are an issued key with every other column NULL,
+    and `VALUES ()` is already refused (corpus line `INSERT INTO t VALUES
+    ()`). Admitting one empty form and refusing the other would be two
+    rules for one statement. **Adopted as proposed on the standing go-ahead
+    of 2026-10-14 (W3).**
+  - **BW-Q12.6 — the tuple key column.** If the list leaves the tuple key
+    out, an id is issued for every row. If the list names it, the row's
+    value at that list position is the key, and a `NULL` there issues one,
+    as a KWP load row's does (BI15) and as BW-Q9's full-width row does. The
+    key may sit anywhere in the list. Every present refusal of a named key
+    is unchanged and names the value's byte: integer type, `[1, 2^48 - 1]`
+    `OutOfRange` and `AlreadyExists` (`command_dispatcher.cpp:5298-5316`,
+    `:5423-5426`). Options: (a) as stated; (b) require the key listed.
+    **CLA proposes (a)**: an omitted key and a `NULL` key both mean "issue
+    one" on every other surface, and both come out of the normalizer's
+    existing arity split without new code downstream. **Adopted as
+    proposed on the standing go-ahead of 2026-10-14 (W3).**
+  - **BW-Q12.7 — a column the list leaves out.** There is no `DEFAULT`. An
+    omitted nullable column is written NULL. Every added column is
+    nullable (BW-R5), so a list written before an `ADD` stays valid after
+    it. An omitted `NOT NULL` column has two options:
+    - (a) refuse the statement once, before any row is touched,
+      `InvalidArgument` naming the column, "is NOT NULL and the column
+      list leaves it out; there is no DEFAULT", at `columns_byte_offset`;
+    - (b) stamp each NULL placeholder with a byte and let `EncodeRow`
+      (`row_codec.cpp:904-909`) refuse per row.
+
+    **CLA proposes (a)**: the refusal is a property of the list, not of a
+    row. It names a real byte, where (b) would name the placeholder's byte
+    0 or a borrowed one. It is the same code `EncodeRow` gives an explicit
+    `NULL` into a `NOT NULL` column. A Transition column is `NOT NULL`
+    (`null.md` D2), so an omitted Transition column falls under (a).
+    **Adopted as proposed on the standing go-ahead of 2026-10-14 (W3).**
+  - **BW-Q12.8 — row width.** Every row carries exactly one value per
+    listed column. A row of any other length is refused `InvalidArgument`
+    "expected N value(s), one per listed column; got M", at the row's
+    first value's byte, with `(row k)` appended on a multi-row statement
+    as the bulk refusals do. Options: (a) as stated; (b) also accept the
+    list's length plus or minus the key, as positional rows do. **CLA
+    proposes (a)**: the list says where every value goes, and a second
+    arity would bring back the ambiguity BW-Q9 and BW-Q11 exist for.
+    **Adopted as proposed on the standing go-ahead of 2026-10-14 (W3).**
+  - **BW-Q12.9 — BW-Q9's rule and the normalized shape.** Options: (a) a
+    column-listed row is never subject to BW-Q9's short-form refusal
+    (`command_dispatcher.cpp:3181-3203`); (b) apply it to both kinds of
+    row. **CLA proposes (a)**: BW-Q9 refuses a row whose length cannot say
+    which columns it means, and a listed row names them.
+    - `NormalizeInsertRows` gains a list branch that maps each value to its
+      column by name and emits the shape every downstream consumer already
+      reads:
+      - the key value first when one is named and not `NULL`;
+      - then one value per physical column;
+      - a NULL placeholder at every dropped position and at every omitted
+        nullable position.
+    - The list branch always normalizes. Its no-copy fast path (`:3170`)
+      stays positional-only, because an identity-list shortcut is an
+      optimization nobody measured (W2).
+    - Downstream code does not change: `InsertBodyOf`, fk extraction and
+      the forward check, Transitions, assertion admission, `EncodeRow`,
+      Cabin, index maintenance, and the heap-only sorted fill all read
+      `column_no - 1` over the physical width, exactly as for a positional
+      row. To each of them, an omitted nullable column is identical to an
+      explicit `NULL`.
+    - Positional `INSERT` and BW-Q9 stay as they are. BW-Q11's
+      `[quiet-wrong]` gap narrows to positional rows, and its
+      `known-gaps.md` entry is restated to cover them only.
+
+    **Adopted as proposed on the standing go-ahead of 2026-10-14 (W3).**
+  - **BW-Q12.10 — fingerprint and Waystone.** Today, BI5's suppression
+    (`fingerprint.cpp:262-303`) closes the shape on the first top-level
+    group of an `INSERT`-headed stream. With a list, that group is the
+    list. So the shape and `fetch_id` cover `INSERT INTO t ( a , b )`, and
+    every `VALUES` row folds into `arg_hash` only. Options:
+    - (a) leave the algorithm as it is. Two lists, or one list in two
+      orders, are two shapes. The row count, the row arity and the literal
+      kinds do not enter the shape.
+    - (b) close the shape on the first group after `VALUES`.
+
+    **CLA proposes (a)**, with no `kFingerprintVersion` move. The bump rule
+    (`fingerprint.hpp:162-197`) moves the version only when an
+    already-storable statement hashes differently, and no column-listed
+    `INSERT` has ever parsed. Under (a), no hash moves at all, the
+    column-listed ones included. The corpus line `INSERT INTO t (a, b)
+    VALUES (1, 2)` (`parser_corpus.txt:135`) flips its verdict to `ok`
+    with every hash unchanged and is marked `[BW-S6]`, which is the
+    corpus header's deliberate verdict move. `INSERT INTO t (1)`
+    (`:121`) stays `InvalidArgument`. (b) would add a second shape per list
+    and would tell nothing the list does not already say.
+    - `INSERT` is fingerprinted but not patterned. It records no trail and
+      registers no `sys.patterns` row (`bulkinsert.md` §2.4), and its
+      `fetch_id` reaches only the memory-resident `sys.statement_stats`.
+      So the shape choice affects statistics only and never a Waystone
+      replay (invariant 8).
+    - One accepted consequence: identifiers fold case in the shape, so `(a)`
+      and `(A)` share a `fetch_id` though BW-Q12.3 resolves them to two
+      columns. It is a statistics key, and the two statements' rows are
+      still written correctly.
+
+    **Adopted as proposed on the standing go-ahead of 2026-10-14 (W3).**
+  - **BW-Q12.11 — KWP.** The load path (`kwp_load_server.cpp:499-520`)
+    builds an `InsertStmt` with no list and its `DescribedShape` (BW-Q10),
+    and stays untouched. A list in SQL text arrives on the wire as text.
+    A prepared statement's `?` is spliced into `VALUES` (`kwp_session.cpp`
+    `Substitute`, `:175`), and a `?` in the list is refused by
+    `ParseIdent` at its byte (BW-Q12.2). Options: (a) as stated; (b) a
+    described shape for SQL text. **CLA proposes (a)**: the list is the
+    statement's own description, so text needs no other. **Adopted as
+    proposed on the standing go-ahead of 2026-10-14 (W3).**
+  - **BW-Q12.12 — refusals, in the order a statement meets them.** Every
+    refusal names a real byte:
+    1. **Parse.** `InvalidArgument` at the offending token: a non-identifier
+       or an empty list, a missing `)`, or a missing `VALUES`.
+    2. **Row cap.** `max_insert_rows`, unchanged.
+    3. **Under the `IX`, the list itself, in written order.**
+       `InvalidArgument` for an unknown or dropped name (at its byte) and
+       for a repeated name (at the second occurrence's byte).
+    4. **Under the `IX`, a `NOT NULL` column left out.** `InvalidArgument`
+       at `columns_byte_offset` (BW-Q12.7).
+    5. **Under the `IX`, each row's width.** `InvalidArgument` at the row's
+       first value, with `(row k)` (BW-Q12.8).
+    6. **Then every present per-value refusal, unchanged**: key type and
+       range, `AlreadyExists`, NULL into `NOT NULL`, type and width, fk,
+       Transition and assertion.
+
+    No refusal here is `NotImplemented` or `Unsupported`. Each one is a
+    statement that is simply wrong against the relation. **Adopted as
+    proposed on the standing go-ahead of 2026-10-14 (W3).**
 
 ---
 
@@ -394,21 +608,88 @@ Every stage runs the full suite and gets a `critics-developer` review
   - CLAUDE.md's ALTER TABLE row.
 - **BW-S5 — the close.** The overhead measurement is held (W2). The close
   report says it was not run.
-- **BW-S6 — `INSERT` with a column list** (W7, BW-Q11 (a)).
+- **BW-S6 — `INSERT` with a column list** (W7, BW-Q11 (a), BW-R13).
   `INSERT INTO t (c1, c2, ...) VALUES (...)` names its columns, so no
-  column change can shift it. Its design items are BW-Q12 below, adopted
+  column change can shift it. Its design items are BW-Q12 above, adopted
   on W3 as CLA proposes.
+  - The parser: `InsertStmt::columns` and `columns_byte_offset`, plus
+    `ParseInsert`'s peek and `ParseDeclaredColumnList` (BW-Q12.1). The
+    bytes `ExpectKeyword` and `ParseIdent` lack (BW-Q12.2).
+  - `NormalizeInsertRows`'s list branch, under the `IX` (BW-Q12.4,
+    BW-Q12.6 to BW-Q12.9). Nothing downstream of it changes.
+  - The corpus: `INSERT INTO t (a, b) VALUES (1, 2)` flips to `ok` with
+    its hashes unchanged, marked `[BW-S6]`. New lines for the listed forms
+    and their parse refusals. No `kFingerprintVersion` move (BW-Q12.10).
+  - The text:
+    - `manual/sql/sql.md`: the `INSERT` grammar, "no column list", and the
+      post-`ALTER` advice, which now points at the list.
+    - `alter.md`: AL11, and BW-Q9's paragraph at `:215-225`.
+    - `heap-and-tuple.md:197` and `bulkinsert.md` §2.4: how a listed shape
+      hashes.
+    - `known-gaps.md`: BW-Q11's entry narrows to positional rows.
+    - The comments at `ast.hpp:487`, `command_dispatcher.hpp:559` and
+      `:1366`, and `command_dispatcher.cpp:3147-3160` and `:4895-4897`.
+    - §1 item 4 and §6 of this order.
+  - Cells:
+    - The list in another order than the relation's lands each value in
+      its column. A single-row and a multi-row statement are both covered,
+      and so is `max_insert_rows`.
+    - The tuple key, in three cases:
+      - left out: issued;
+      - listed with a value: placed there, in any list position;
+      - listed `NULL`: issued.
+      The existing key refusals still name the value's byte.
+    - Omitted columns:
+      - a nullable one is written NULL;
+      - a `NOT NULL` one is refused at the list's `(` byte, naming the
+        column, with nothing written;
+      - an omitted Transition column is refused the same way.
+    - Bad names are refused at the name's byte: an unknown name, a dropped
+      column's name, the second occurrence of a repeated name, and `A`
+      where only `a` exists (exact case).
+    - Parse refusals at their byte: `()`, `(1)`, `(?)`, a missing `)`,
+      and a missing `VALUES`.
+    - A row wider or narrower than the list is refused at its first value,
+      with `(row k)`.
+    - After an `ADD`, a list without the new column writes NULL there, and
+      a list naming it writes the value.
+    - BW-Q11's stale cases cannot shift:
+      - after a `DROP`, a list naming a surviving column lands correctly;
+      - after one `DROP` and one `ADD`, a listed row lands in the right
+        columns.
+    - BW-Q9's positional refusals are unchanged on the same relation.
+    - Downstream consumers with a reordered list:
+      - an fk column listed out of order is checked against its parent,
+        and an omitted nullable fk column is NULL and not checked;
+      - an index on a column listed out of order gets the right key;
+      - an assertion admits the right body.
+    - `ROLLBACK` of a listed insert.
+    - A KWP prepared listed `INSERT` with `?` in `VALUES`, and a KWP load
+      unchanged.
+    - The fingerprint:
+      - one list with two row counts is one `sys.statement_stats` key;
+      - two orders of one list are two keys.
 
 ---
 
 ## 6. Where to start
 
 **BW reopened for BW-S6** (W7, the `INSERT` column list); S1-S5 stand as
-closed. **BW was closed** - on the operator's word of 2026-10-14 (W6, `raft-marks-2026-10-14.md` §10), at `d6cb3826` (`v3.2.0-28-gd6cb3826`, on `main`). BW-S1..S4 landed (`f2a72474`, `69a31361`, `bc42a011`, `d0134573`); BW-Q1..Q11 adopted on the standing go-ahead (W3). The close measurement ran when the operator directed it (W4, W5): `bench/v3.2.0/results-bw-close-v3.2.0-22-g541ce440.md` found the every-row `UPDATE` +30 us / 1,000 rows outside the spread; the profile attributed none of it to a BW-changed line (`bench/v3.2.0/archive/bw-update-profile/`); `e8727478` hoisted the dropped-column gate out of the codec loops, and `bench/v3.2.0/results-bw-update-fix-v3.2.0-24-ge8727478.md` measured it below `541ce440` in 7 of 7 runs on both paths, while whether it equals the pre-BW tree is unresolved on a loaded host (`known-gaps.md`). Left open: BW-Q11's `[quiet-wrong]` gap (BU-S8's column list closes it); cleaning (D-e).
+closed. **BW was closed** - on the operator's word of 2026-10-14 (W6, `raft-marks-2026-10-14.md` §10), at `d6cb3826` (`v3.2.0-28-gd6cb3826`, on `main`). BW-S1..S4 landed (`f2a72474`, `69a31361`, `bc42a011`, `d0134573`); BW-Q1..Q11 adopted on the standing go-ahead (W3). The close measurement ran when the operator directed it (W4, W5): `bench/v3.2.0/results-bw-close-v3.2.0-22-g541ce440.md` found the every-row `UPDATE` +30 us / 1,000 rows outside the spread; the profile attributed none of it to a BW-changed line (`bench/v3.2.0/archive/bw-update-profile/`); `e8727478` hoisted the dropped-column gate out of the codec loops, and `bench/v3.2.0/results-bw-update-fix-v3.2.0-24-ge8727478.md` measured it below `541ce440` in 7 of 7 runs on both paths, while whether it equals the pre-BW tree is unresolved on a loaded host (`known-gaps.md`). Left open: BW-Q11's `[quiet-wrong]` gap for a positional `INSERT` only - BW-S6's column list closes it for a listed one (W7; built, §7); cleaning (D-e). BW-S6's review and the stage's close are what remain of the reopened BW.
 
 ---
 
 ## 7. Stage log
+
+- **BW-S6** built on `worktree-bw-instant-add-drop-column` over
+  `e3450498`: the parser's column list (`ParseInsert`'s peek,
+  `ParseDeclaredColumnList`, `InsertStmt::columns`/`columns_byte_offset`),
+  `ExpectKeyword` and `ParseIdent` with their byte, and
+  `NormalizeListedInsertRows` under the `IX` (BW-Q12.1-Q12.12); the corpus
+  line flipped with its hashes unchanged, eleven new lines; cells in
+  `tests/insert_column_list_test.cpp`, `parser_test.cpp` and
+  `kwp_session_test.cpp`. Review not yet run; overhead not measured here,
+  measured at the stage's close.
 
 - **BW-S1** landed at `f2a72474`. Review (`critics-developer`): a cell was
   sized from its offset to the next column's, so with slots the last

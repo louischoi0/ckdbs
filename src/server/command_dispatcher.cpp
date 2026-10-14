@@ -3145,21 +3145,110 @@ Status InsertArityRefusal(const catalog::TableAccess& ta, std::size_t columns,
         at);
 }
 
+// **A column-listed statement's rows in the physical shape** (BW-S6, BW-Q12
+// of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): each
+// value goes to the column its list position names, so no column change can
+// shift it (BW-Q11's gap does not reach a listed row). The tuple key comes
+// first when the list names it and the row's value is not `NULL`; a `NULL`
+// one, or a list without the key, has an id issued. Every dropped position
+// and every nullable column the list leaves out is a NULL placeholder - to
+// everything downstream the same as an explicit `NULL`.
+//
+// Refused in BW-Q12.12's order, each `InvalidArgument` at a real byte: a
+// name the relation has no live column for (a dropped column's included,
+// BW-R6), matched exactly as `UPDATE SET` matches (BW-Q12.3); a name listed
+// twice, at its second occurrence; a NOT NULL column the list leaves out,
+// once, at the list's `(` - before any row, and never left to the codec,
+// whose placeholder would carry byte 0; and a row whose length is not the
+// list's, at its first value, with its ordinal on a multi-row statement.
+StatusOr<parser::InsertStmt> NormalizeListedInsertRows(const catalog::TableAccess& ta,
+                                                       const parser::InsertStmt& written) {
+    const std::vector<catalog::SysColumnRow>& columns = ta.schema.columns;
+    // The list position each physical column takes its value from, or none.
+    std::vector<std::optional<std::size_t>> source(columns.size());
+    for (std::size_t j = 0; j < written.columns.size(); ++j) {
+        const parser::IndexColumnRef& named = written.columns[j];
+        const catalog::SysColumnRow* col = ta.schema.FindColumn(named.name);
+        if (col == nullptr) {
+            return Status::InvalidArgument("unknown column '" + named.name + "' at byte " +
+                                           std::to_string(named.byte_offset));
+        }
+        const auto i = static_cast<std::size_t>(col - columns.data());
+        if (source[i].has_value()) {
+            return Status::InvalidArgument("column '" + named.name +
+                                           "' is listed twice in the column list at byte " +
+                                           std::to_string(named.byte_offset));
+        }
+        source[i] = j;
+    }
+    // The tuple key (column 0) left out is issued, never refused.
+    for (std::size_t i = 1; i < columns.size(); ++i) {
+        if (!columns[i].dropped() && columns[i].notnull && !source[i].has_value()) {
+            return Status::InvalidArgument(
+                "column '" + std::string(catalog::NameView(columns[i].name)) +
+                "' is NOT NULL and the column list leaves it out; there is no DEFAULT at byte " +
+                std::to_string(written.columns_byte_offset));
+        }
+    }
+
+    parser::InsertStmt out;
+    out.table_name = written.table_name;
+    out.schema = written.schema;
+    out.table_byte_offset = written.table_byte_offset;
+    out.described = written.described;
+    out.rows.reserve(written.rows.size());
+    for (std::size_t k = 0; k < written.rows.size(); ++k) {
+        const std::vector<parser::AstValue>& row = written.rows[k];
+        if (row.size() != written.columns.size()) {
+            const std::string byte = !row.empty() && row.front().byte_offset != 0
+                                         ? " at byte " + std::to_string(row.front().byte_offset)
+                                         : "";
+            const std::string at =
+                written.rows.size() > 1 ? " (row " + std::to_string(k + 1) + ")" : "";
+            return Status::InvalidArgument(
+                "expected " + std::to_string(written.columns.size()) +
+                " value(s), one per listed column; got " + std::to_string(row.size()) + byte +
+                at);
+        }
+        const bool names_key =
+            source[0].has_value() && row[*source[0]].type != parser::ValueType::kNull;
+        std::vector<parser::AstValue>& physical = out.rows.emplace_back();
+        physical.reserve(columns.size());
+        for (std::size_t i = names_key ? 0 : 1; i < columns.size(); ++i) {
+            if (source[i].has_value()) {
+                physical.push_back(row[*source[i]]);
+            } else {
+                physical.emplace_back().type = parser::ValueType::kNull;
+            }
+        }
+    }
+    return out;
+}
+
 // **Each row in the shape everything downstream reads**: the tuple key value first
 // when the row names one, then one value per physical column, a NULL
 // placeholder at every dropped position (BW-R6) - so the body is indexed by
 // `column_no - 1` whatever was dropped. A row whose tuple key is `NULL` asks for an
 // issued id, as a KWP load row's does (bulkinsert.md BI15), and loses it.
+// A column-listed statement always takes `NormalizeListedInsertRows`, to
+// which BW-Q9 below never applies (BW-Q12.9).
 //
 // **BW-Q9 (`[quiet-wrong]`)**: on a relation whose column set has changed
-// (`RowLayout::column_set_changed`), a row carries every live column. The
-// short form - the tuple key left out - is refused there, because after an `ADD`
-// its length is that of a row written for the old columns with its tuple key
-// named, and admitting it would put every value one column over with no
-// error. **What a row's length cannot catch** (BW-Q11, `known-gaps.md`):
-// after a `DROP`, an old row with its tuple key left out has the new full length.
+// (`RowLayout::column_set_changed`), a positional row carries every live
+// column. The short form - the tuple key left out - is refused there,
+// because after an `ADD` its length is that of a row written for the old
+// columns with its tuple key named, and admitting it would put every value
+// one column over with no error. **What a positional row's length cannot
+// catch** (BW-Q11, `known-gaps.md`): after a `DROP`, an old row with its
+// tuple key left out has the new full length. A column list closes it
+// (BW-S6).
 StatusOr<std::optional<parser::InsertStmt>> NormalizeInsertRows(
     const catalog::TableAccess& ta, const parser::InsertStmt& written) {
+    if (!written.columns.empty()) {
+        auto listed = NormalizeListedInsertRows(ta, written);
+        if (!listed.ok()) return listed.status();
+        return std::optional<parser::InsertStmt>(std::move(listed.value()));
+    }
     const std::size_t live = ta.layout.live_columns;
     const bool changed = ta.layout.column_set_changed();
     const auto names_null_key = [&](const std::vector<parser::AstValue>& row) {
@@ -4892,10 +4981,11 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     }
 
     // **Positional `VALUES` name the live columns** (BW-R6, BW-Q9 of
-    // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): a
-    // relation whose column set changed, or a row whose tuple key is `NULL`, takes
-    // its rows normalized here, once (`NormalizeInsertRows`), so everything
-    // downstream keeps indexing the body by `column_no - 1`.
+    // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`), and a
+    // column list names its own (BW-S6): a column-listed statement, a
+    // relation whose column set changed, or a row whose tuple key is `NULL`,
+    // takes its rows normalized here, once (`NormalizeInsertRows`), so
+    // everything downstream keeps indexing the body by `column_no - 1`.
     // **After the `IX`, never before it**: a `DROP COLUMN`'s overwrite is in
     // place and visible before its decide, so a row counted against an open
     // drop's schema would be refused on a column set that may yet roll back;

@@ -75,8 +75,11 @@ for the skipped steps to do (§8).
 ### 2.1 Grammar
 
 ```
-INSERT INTO <relation> VALUES ( <value> [, <value>]* ) [, ( … )]*
+INSERT INTO <relation> [ ( <col> [, <col>]* ) ] VALUES ( <value> [, <value>]* ) [, ( … )]*
 ```
+
+The optional column list is BW-S6's (`alter.md` AL11): each row then has
+one value per listed name, and every rule below holds for it unchanged.
 
 After the closing `)` of a row, a comma begins the next row.
 `InsertStmt.rows` is `std::vector<std::vector<AstValue>>`; the single-row
@@ -127,6 +130,16 @@ workload fact into hundreds of rows of noise; and inserts have no trail
 replay to begin with — the fingerprint's only consumer here is workload
 statistics, which want the aggregate. The existing 1-row fingerprint bytes
 do not change; `tests/bulk_insert_test.cpp` pins it.
+
+**A column-listed statement** (BW-S6, BW-Q12.10 of
+`instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`) hashes by the
+same rule with no change to the algorithm and no `kFingerprintVersion`
+move: the shape ends at the first parenthesised group, which is now the
+list, so the shape is `INSERT INTO t ( a , b )` and every `VALUES` row folds
+into `arg_hash`. One list with any row count is one statistics key; two
+orders of a list are two. The shape ignores case, so `(a)` and `(A)` share a
+key even where they resolve to two columns. No stored hash moves - no
+column-listed statement parsed before.
 
 ---
 
