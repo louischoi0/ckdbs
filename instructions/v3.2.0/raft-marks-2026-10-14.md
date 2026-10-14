@@ -108,3 +108,11 @@ _Sections 8-10 recorded by CLA on `worktree-bw-instant-add-drop-column` at `d6cb
 | **Mark** | **BW closed** with BW-S6 at the merge `3b5daa80` of `origin/main` (`72cb79d9`). The merged tree's suite was **not run** on the operator's word; the last green suite is `33519b28`'s 3865/3865. **Does not settle**: the `SELECT` case-folding `[quiet-wrong]` the BW-S6 review found (`docs/inflight/bugs/select-reads-the-first-column-whose-name-matches-ignoring-case.md`, the operator's choice between refusing case-only-different names and exact matching), a positional `INSERT` written before a `DROP` (BW-Q11's remaining gap, `known-gaps.md`), cleaning (D-e); no tag, no version |
 | **Recorded at** | `workorder-bw-instant-add-drop-column.md` §6; `index.md`'s BW row |
 
+## 13. Column names unique ignoring case
+
+| | |
+|---|---|
+| **Word** | *"Fix the SELECT case bug with $!b"*, then, after CLA's explanation of both options, *"a"* |
+| **Mark** | **Option (a)**: a column name equal to an existing live one ignoring case is refused at `CREATE TABLE`, `ALTER TABLE ADD COLUMN` and `ALTER TABLE RENAME COLUMN` (and `CREATE TABLE` now refuses an exact repeat, which it admitted before). **CLA's addition, adopted on its own judgement and stated to the operator**: a read whose name matches two or more columns ignoring case - which a relation created before the fix can still hold - is refused `InvalidArgument` as ambiguous, naming the columns, at the name's byte, instead of reading the first. The `[quiet-wrong]` bug entry is deleted |
+| **Recorded at** | `src/catalog/schema.cpp` (`ColumnNamesCollide`, `CheckColumnNamesUnique`, `Schema::MatchColumns`); `src/catalog/catalog.cpp` (`CreateTable`, `AddColumn`, `RenameColumn`); `src/exec/step_compiler.cpp` (`FindColumnPos`); `src/server/command_dispatcher.cpp` (`HandleCreateTableSql`, `NamesTupleKey`, the rename's byte); `src/parser/parser.cpp` and `include/kds/parser/ast.hpp` (`ColumnDef::name_byte_offset`); `tests/column_name_case_test.cpp`; `docs/spec/catalog.md` CT7; `docs/spec/alter.md` AL8, AL11; `docs/spec/parser-v2.md`'s resolution rules; `manual/sql/sql.md`; `docs/inflight/known-gaps.md` |
+

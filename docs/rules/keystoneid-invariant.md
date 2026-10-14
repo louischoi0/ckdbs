@@ -301,7 +301,8 @@ list names the tuple key:
 - **Case sensitivity is a known finding**: `Schema::FindColumn` matches a
   SET target exactly while WHERE resolves through `IEquals`, so `SET ID =
   99` against a tuple key named `id` is refused as an *unknown column*. K2 holds
-  either way; changing it is the identifier rule's owner's call.
+  either way. Column names are unique ignoring case (`catalog.md` CT7), so
+  `ID` can name no other column of a relation created since that rule.
 
 **K-M4 — Budget observability.**
 **`SHOW BUDGET`** lists every relation under a summary line carrying

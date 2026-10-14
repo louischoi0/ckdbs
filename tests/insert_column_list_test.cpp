@@ -172,11 +172,9 @@ TEST_F(InsertColumnListTest, BadNamesAreRefusedAtTheirByte) {
     EXPECT_EQ(Run("SELECT COUNT(*) FROM t"), "count(*)\\n0");
 }
 
-TEST_F(InsertColumnListTest, ExactCaseKeepsTwoNamesThatDifferInCaseApart) {
-    Ok("CREATE TABLE t (id int64, a int64, A int64)");
-    Ok("INSERT INTO t (A, a) VALUES (2, 1)");
-    EXPECT_EQ(Run("SELECT * FROM t"), "id,a,A\\n1,1,2");
-}
+// Two names that differ only in case cannot be declared any more (column
+// names are unique ignoring case); a relation created before that rule keeps
+// them apart in a list, which `column_name_case_test.cpp` pins.
 
 // ---- BW-Q12.8: row width ---------------------------------------------------
 

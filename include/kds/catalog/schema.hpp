@@ -30,7 +30,26 @@ struct Schema {
     // The live column named `name`, or nullptr; a dropped column has no name
     // a statement can reach (BW-R6).
     const SysColumnRow* FindColumn(std::string_view name) const noexcept;
+
+    // Every live column whose name equals `name` ignoring case
+    // (`ColumnNamesCollide`), in `pos` order. What a statement's read
+    // resolves a written name against: exactly one is the column, none is
+    // an unknown name, and two or more - which only a relation created
+    // before names were unique ignoring case can hold - is ambiguous and
+    // refused, never a choice of the first.
+    std::vector<std::uint16_t> MatchColumns(std::string_view name) const;
 };
+
+// The one rule deciding whether two column names are the same name:
+// equal ignoring ASCII case. A relation's live column names are unique
+// under it (CREATE TABLE, ADD COLUMN and RENAME COLUMN refuse a twin), and
+// a read resolves a written name under it.
+bool ColumnNamesCollide(std::string_view a, std::string_view b) noexcept;
+
+// Refuses a schema two of whose live columns' names collide - the catalog
+// door's own defense of CREATE TABLE's check (InvalidArgument; the
+// dispatcher's check, which runs first, carries the byte).
+Status CheckColumnNamesUnique(const Schema& schema);
 
 // One reserved column slot's width (BW-R2, D-a): the narrowest tagged cell
 // (`storage::CheckInlineCellWidth`'s floor), so `varchar(16)` fits one and

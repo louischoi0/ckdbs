@@ -103,6 +103,18 @@ bool IEquals(std::string_view a, std::string_view b) {
            });
 }
 
+// True when a written column name resolves to the tuple key column (position
+// 0) and to nothing else, under the compiler's rule
+// (`catalog::Schema::MatchColumns`). A name that also matches another live
+// column ignoring case - possible only on a relation created before names
+// were unique ignoring case - is not the tuple key's: the fast paths decline
+// it and the compiler refuses it as ambiguous, rather than probing the key
+// for a name the statement may have meant as another column.
+bool NamesTupleKey(const catalog::Schema& schema, std::string_view name) {
+    const std::vector<std::uint16_t> matches = schema.MatchColumns(name);
+    return matches.size() == 1 && matches.front() == 0;
+}
+
 // Splits `line` into the first whitespace-delimited token and "the rest"
 // (trimmed), so multi-word commands like "SHOW META"/"FIND TABLE x" can
 // be matched one token at a time without pulling in a real tokenizer.
@@ -2379,7 +2391,16 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
 
     const Status renamed =
         rename_column
-            ? catalog_.RenameColumn(oid.value(), stmt.old_column, stmt.new_name)
+            ? [&] {
+                  // A collision is the new name's fault, so it carries that
+                  // name's byte; a missing old column says its own name.
+                  const Status r =
+                      catalog_.RenameColumn(oid.value(), stmt.old_column, stmt.new_name);
+                  return r.code() == StatusCode::kAlreadyExists
+                             ? r.WithMessage(r.message() + " (byte " +
+                                             std::to_string(stmt.new_name_byte_offset) + ")")
+                             : r;
+              }()
             : catalog_.RenameTable(oid.value(), stmt.new_name,
                                    session.in_explicit_txn() && session.transaction() != nullptr
                                        ? session.transaction()->id()
@@ -3940,6 +3961,19 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         for (const auto& col : stmt.columns) {
             catalog::SysColumnRow row{};
             if (auto refused = ColumnRowOf(col, pos++, row); refused.has_value()) return *refused;
+            // Column names are unique ignoring case
+            // (`catalog::ColumnNamesCollide`); the later name is the one
+            // refused, at its byte. `Catalog::CreateTable` asks again.
+            for (const catalog::SysColumnRow& earlier : schema.columns) {
+                if (catalog::ColumnNamesCollide(catalog::NameView(earlier.name), col.name)) {
+                    const Status s = Status::InvalidArgument(
+                        "column '" + col.name + "' repeats column '" +
+                        std::string(catalog::NameView(earlier.name)) +
+                        "' (names are unique ignoring case) (byte " +
+                        std::to_string(col.name_byte_offset) + ")");
+                    return {ErrorReply(s), false, 0, s};
+                }
+            }
             schema.columns.push_back(row);
         }
 
@@ -6119,9 +6153,7 @@ std::optional<std::uint64_t> CommandDispatcher::TupleKeyLiteral(const catalog::T
     // so a negative literal is a guaranteed miss - and casting it to
     // uint64 would probe an enormous tuple key instead.
     if (cond.val.int_val < 0) return std::nullopt;
-    if (!IEquals(cond.col.name, catalog::NameView(access.schema.columns.front().name))) {
-        return std::nullopt;
-    }
+    if (!NamesTupleKey(access.schema, cond.col.name)) return std::nullopt;
     return static_cast<std::uint64_t>(cond.val.int_val);
 }
 
@@ -9247,8 +9279,7 @@ CommandDispatcher::TupleKeyWindow CommandDispatcher::FoldTupleKeyWindow(
                 cond.val_high.type != parser::ValueType::kInt || cond.val.int_val < 0 ||
                 cond.val_high.int_val < 0 || parser::IntLiteralWrapped(cond.val) ||
                 parser::IntLiteralWrapped(cond.val_high) ||
-                !IEquals(cond.col.name,
-                         catalog::NameView(access.schema.columns.front().name))) {
+                !NamesTupleKey(access.schema, cond.col.name)) {
                 unread(cond);
                 continue;
             }
@@ -9667,8 +9698,7 @@ namespace {
 // with no position of its own (a bare subquery), the `WHERE` token.
 Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Condition& cond,
                             std::uint32_t where_byte) {
-    const bool on_tuple_key = !access.schema.columns.empty() &&
-                       IEquals(cond.col.name, catalog::NameView(access.schema.columns.front().name));
+    const bool on_tuple_key = NamesTupleKey(access.schema, cond.col.name);
     const bool literal = cond.rhs_kind == parser::RhsKind::kLiteral &&
                          (cond.kind == parser::PredicateKind::kCompareValue ||
                           cond.kind == parser::PredicateKind::kBetween);

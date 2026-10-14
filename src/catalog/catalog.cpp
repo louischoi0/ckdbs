@@ -1284,6 +1284,11 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // exhausted key (BD-R5).
     if (Status s = CheckDeclarableColumnTypes(schema); !s.ok()) return s;
 
+    // Column names are unique ignoring case. The dispatcher refuses a twin
+    // first, at its byte; this is the door's own defense for a schema built
+    // by any other caller.
+    if (Status s = CheckColumnNamesUnique(schema); !s.ok()) return s;
+
     // Same argument, extended by the fixed-length rule: the relation's row
     // size is a schema constant, so if it cannot be computed - a column
     // with no decided on-disk width, or a row wider than a page - there is
@@ -1755,21 +1760,38 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
         return txn_ == nullptr || !txn_->IsInFlight(trx);
     };
     bool found_old = false;
+    std::string holder;  // the colliding column's name as declared
     auto collided = ForFirstRow<SysColumnRow>(
         store_, kCatalogPageColumns,
         [&](SysColumnRow& row, heap::PageView&, PageId, std::uint16_t,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.rel_id != table_oid) return false;
             if (tuple.deleted && settled(tuple.trx_id)) return false;  // ScanAll's rule
-            if (row.dropped()) return !settled(tuple.trx_id) && NameView(row.name) == new_name;
-            if (NameView(row.name) == old_name) found_old = true;
-            return NameView(row.name) == new_name;
+            // Names collide ignoring case (`ColumnNamesCollide`); the column
+            // being renamed collides only with itself, so `id` may become
+            // `ID`.
+            if (row.dropped()) {
+                if (!settled(tuple.trx_id) && ColumnNamesCollide(NameView(row.name), new_name)) {
+                    holder = NameView(row.name);
+                    return true;
+                }
+                return false;
+            }
+            if (NameView(row.name) == old_name) {
+                found_old = true;
+                return false;
+            }
+            if (ColumnNamesCollide(NameView(row.name), new_name)) {
+                holder = NameView(row.name);
+                return true;
+            }
+            return false;
         },
         nullptr, storage::PageAccess::kRead);
     if (!collided.ok()) return collided.status();
     if (collided.value()) {
-        return Status::AlreadyExists("the relation already has a column named '" +
-                                      std::string(new_name) + "'");
+        return Status::AlreadyExists("the relation already has a column named '" + holder +
+                                     "' (names are unique ignoring case)");
     }
     if (!found_old) {
         return Status::NotFound("the relation has no column named '" + std::string(old_name) +
@@ -1815,9 +1837,11 @@ Status Catalog::AddColumn(Oid table_oid, const SysColumnRow& column, std::uint64
     std::uint16_t held = 0;
     for (const SysColumnRow& existing : schema.value().columns) {
         if (existing.in_slot()) ++held;
-        if (!existing.dropped() && NameView(existing.name) == NameView(column.name)) {
+        if (!existing.dropped() &&
+            ColumnNamesCollide(NameView(existing.name), NameView(column.name))) {
             return Status::AlreadyExists("the relation already has a column named '" +
-                                         std::string(NameView(column.name)) + "'");
+                                         std::string(NameView(existing.name)) +
+                                         "' (names are unique ignoring case)");
         }
     }
     if (held >= table_row.value().spare_slots) {

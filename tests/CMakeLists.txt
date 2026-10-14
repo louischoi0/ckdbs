@@ -95,6 +95,7 @@ add_executable(kds_tests
     types_contract_test.cpp
     row_layout_test.cpp
     alter_column_test.cpp
+    column_name_case_test.cpp
     insert_column_list_test.cpp
     column_slot_test.cpp
     tagged_cell_test.cpp

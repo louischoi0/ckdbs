@@ -1563,6 +1563,7 @@ StatusOr<BoolExpr> Parser::ParseValueList(ColumnName col, bool negated, std::uin
 StatusOr<ColumnDef> Parser::ParseColumnDef() {
     ColumnDef col;
 
+    col.name_byte_offset = lexer_.Peek().byte_offset;
     auto col_name = ParseIdent();
     if (!col_name.ok()) return col_name.status();
     col.name = std::move(col_name.value());

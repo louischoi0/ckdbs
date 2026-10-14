@@ -65,18 +65,31 @@ std::string Position(std::uint32_t byte_offset) {
     return " at byte " + std::to_string(byte_offset);
 }
 
-// Finds `name` among a relation's columns. Returns the schema position,
+// Finds `name` among a relation's live columns, ignoring case
+// (`catalog::Schema::MatchColumns`). Sets `out` to the schema position,
 // which is exactly what ColumnRef::col_pos is - BuildSchemaFromColumns()
-// returns columns sorted by `pos`, so the vector index is the position.
-bool FindColumnPos(const catalog::Schema& schema, std::string_view name, std::uint16_t& out) {
-    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
-        // A dropped column has no name a statement can reach (BW-R6).
-        if (!schema.columns[i].dropped() && IEquals(catalog::NameView(schema.columns[i].name), name)) {
-            out = static_cast<std::uint16_t>(i);
-            return true;
+// returns columns sorted by `pos`, so the vector index is the position -
+// and answers whether it matched. Two or more matches is refused rather
+// than resolved to the first: column names are unique ignoring case since
+// CREATE TABLE, ADD COLUMN and RENAME COLUMN refuse a twin, but a relation
+// created before that can still hold `id` beside `ID`, and taking the
+// first would answer `SELECT ID` with `id`'s values.
+StatusOr<bool> FindColumnPos(const catalog::Schema& schema, const parser::ColumnName& name,
+                             std::uint16_t& out) {
+    const std::vector<std::uint16_t> matches = schema.MatchColumns(name.name);
+    if (matches.empty()) return false;
+    if (matches.size() > 1) {
+        std::string listed;
+        for (std::size_t i = 0; i < matches.size(); ++i) {
+            if (i > 0) listed += i + 1 == matches.size() ? " and " : ", ";
+            listed += "'" + std::string(catalog::NameView(schema.columns[matches[i]].name)) + "'";
         }
+        return Status::InvalidArgument("column name '" + name.name + "' is ambiguous: it matches " +
+                                       listed + " ignoring case (byte " +
+                                       std::to_string(name.byte_offset) + ")");
     }
-    return false;
+    out = matches.front();
+    return true;
 }
 
 // Resolves one written column name to a compiled reference.
@@ -658,7 +671,9 @@ StatusOr<ColumnRef> ResolveColumn(const Scope& scope, const parser::ColumnName& 
                 if (!IEquals(s->relations[i].binding, name.qualifier)) continue;
 
                 std::uint16_t col_pos = 0;
-                if (!FindColumnPos(s->relations[i].access->schema, name.name, col_pos)) {
+                auto matched = FindColumnPos(s->relations[i].access->schema, name, col_pos);
+                if (!matched.ok()) return matched.status();
+                if (!matched.value()) {
                     return Status::InvalidArgument("relation '" + name.qualifier +
                                                     "' has no column '" + name.name + "'" +
                                                     Position(name.byte_offset));
@@ -672,7 +687,9 @@ StatusOr<ColumnRef> ResolveColumn(const Scope& scope, const parser::ColumnName& 
         std::optional<ColumnRef> found;
         for (std::size_t i = 0; i < s->relations.size(); ++i) {
             std::uint16_t col_pos = 0;
-            if (!FindColumnPos(s->relations[i].access->schema, name.name, col_pos)) continue;
+            auto matched = FindColumnPos(s->relations[i].access->schema, name, col_pos);
+            if (!matched.ok()) return matched.status();
+            if (!matched.value()) continue;
             if (found.has_value()) {
                 return Status::InvalidArgument(
                     "column '" + name.name + "' is ambiguous" + Position(name.byte_offset) +

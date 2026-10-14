@@ -224,6 +224,18 @@ what the check asks, below, not the latch. `RegisterPattern` (page 9) and
   `CREATE TABLE`'s refusal comes after its column types and foreign keys
   are resolved.
 
+**A column name is a relation's own, and unique ignoring case**
+(`catalog::ColumnNamesCollide`, the one rule): `CreateTable` refuses a
+schema two of whose columns' names are equal ignoring ASCII case
+(`CheckColumnNamesUnique`, `InvalidArgument`), and `AddColumn` and
+`RenameColumn` refuse a name equal ignoring case to a live column's
+(`AlreadyExists`, naming that column as declared). A dropped column's name
+is free in any case (BW-R6) - once its drop is decided, for
+`RenameColumn`, whose rewrite is transactionless. `RenameColumn`'s scan
+skips the column being renamed, so `a` may become `A`. A relation created
+before the rule may still hold two such names; a read naming them is
+refused as ambiguous (`parser-v2.md`'s resolution rules).
+
 **Assertion names have no pending drop to ask about**: `DROP ASSERTION`
 retires its row outside any transaction (`ddl-transactional.md` §5).
 

@@ -119,6 +119,11 @@ CREATE TABLE [<namespace>.]<name>
                      [, ...] ) [HEAP | BTREE] [EXPLICIT] [SPARE <n>];
 ```
 
+- **Column names are unique ignoring case.** `(id int64, a int64, A int64)`
+  is refused at the later name's byte: `ERR column 'A' repeats column 'a'
+  (names are unique ignoring case) (byte <n>)`, and so is an exact repeat.
+  A statement may write a column's name in any case (`SELECT A` reads `a`).
+
 - **`SPARE <n>` reserves `n` column slots** (0 to 64, default 0) for
   `ALTER TABLE ... ADD COLUMN` (below). Each slot is 16 bytes plus one null
   bit in every row, used or not, so the row size is fixed for the life of
@@ -330,6 +335,12 @@ Every form is **catalog-only**: it changes catalog rows and no stored row,
 so it costs the same on ten rows and on ten billion. A rename changes a
 label. Identity is the oid, so nothing dangles — foreign keys still
 enforce, indexes and Cabins still serve, all with no re-declaration.
+
+- **A new column name - `ADD COLUMN`'s or `RENAME COLUMN`'s - may not equal
+  another live column's ignoring case**: `ERR the relation already has a
+  column named 'a' (names are unique ignoring case)`, with the new name's
+  byte. A column may be renamed to its own case variant (`RENAME COLUMN a
+  TO A`), and a dropped column's name is free in any case.
 
 - **`ADD COLUMN`** places the column in the relation's lowest free slot
   (`CREATE TABLE ... SPARE n`). Every row that predates it reads `NULL`
@@ -629,9 +640,7 @@ INSERT INTO trades (sym, id, qty) VALUES ('IBM', 8000, 2);
   refusal never a truncation).
 - **With a column list, each value goes to the column it names** (BW-S6),
   so no `ALTER TABLE` can shift it. Each row has exactly one value per
-  listed name. Names match exactly, case included (`A` is not `a`; but a
-  `SELECT` matches ignoring case and reads the first such column - a known
-  bug, so do not declare two names that differ only in case); an
+  listed name. Names match exactly, case included (`A` is not `a`); an
   unknown or dropped name, and a name listed twice, are refused at its
   byte. The tuple key may be listed anywhere or left out: left out, or
   `NULL`, it is issued. A column declared `NULL` that the list leaves out
@@ -1336,6 +1345,9 @@ in §7 below now carries and which both used to reach a client as a bare
 | A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including tuple key column '<name>', or <n-1> to have it issued; got <k> (byte <b>)` |
 | A row that is not `n` values long, on a relation `ALTER TABLE ... ADD`/`DROP COLUMN` changed | `ERR expected <n> value(s), one per column, with tuple key column '<name>' NULL to have it issued; got <k> (byte <b>). The relation's columns were changed by ALTER TABLE, ...` |
 | An `INSERT` column list naming no live column (unknown or dropped; matched exactly, case included) | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
+| A column name in `CREATE TABLE` equal, ignoring case, to an earlier one | `InvalidArgument` — `ERR column '<name>' repeats column '<earlier>' (names are unique ignoring case) (byte <n>)` (the later name's byte; nothing is created) |
+| `ADD COLUMN` or `RENAME COLUMN` to a name equal, ignoring case, to a live column's | `AlreadyExists` — `ERR the relation already has a column named '<existing>' (names are unique ignoring case)`, with the new name's byte |
+| A read naming a column that matches two or more columns ignoring case (only a relation created before names were unique ignoring case can hold them) | `InvalidArgument` — `ERR column name '<name>' is ambiguous: it matches '<a>' and '<b>' ignoring case (byte <n>)` |
 | A column named twice in an `INSERT` column list | `InvalidArgument` — `ERR column '<name>' is listed twice in the column list at byte <n>` (the second occurrence's byte) |
 | An `INSERT` column list that leaves out a `NOT NULL` column | `InvalidArgument` — `ERR column '<name>' is NOT NULL and the column list leaves it out (byte <n>); there is no DEFAULT` (the list's `(`; nothing is written) |
 | A row whose length is not the `INSERT` column list's | `InvalidArgument` — `ERR expected <n> value(s), one per listed column; got <k> at byte <b>`, with ` (row <r>)` on a multi-row statement |

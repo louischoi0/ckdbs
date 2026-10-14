@@ -139,7 +139,11 @@ names are load-bearing for bootstrap and are nobody's to change).
   rewrite are one hold of `sys.objects`' root page, which is what makes
   them one act across cores (`catalog.md` CT7, AT-S17).
 - New column name: same checks against the relation's own columns, under
-  one hold of `sys.columns`' root page (CT7).
+  one hold of `sys.columns`' root page (CT7), **compared ignoring case**:
+  a name equal ignoring case to another live column's - or to one whose
+  drop is undecided - is refused `AlreadyExists` at the new name's byte,
+  naming that column as declared. The column being renamed collides only
+  with itself, so `RENAME COLUMN a TO A` lands.
 - **The tuple key column may be renamed.** Identity is the Keystone word and
   position 0 (invariant 11), not the spelling; `CheckKeystoneColumn` is
   positional and does not re-run.
@@ -193,6 +197,9 @@ position, in the lowest free slot, its `sys.columns` row flagged
 - `REFERENCES` and a cabin clause are `NotImplemented` (CREATE TABLE's).
 - No free slot - none reserved, or all held - is `NotImplemented`. A
   dropped column keeps its slot.
+- A name equal ignoring case to a live column's is `AlreadyExists`, naming
+  that column as declared (`catalog.md` CT7's column rule); a dropped
+  column's name is free in any case.
 
 **`DROP [COLUMN] <name>`** sets `kColumnDropped` on the column's row. The
 column keeps its position, so every stored position (an index's columns, a

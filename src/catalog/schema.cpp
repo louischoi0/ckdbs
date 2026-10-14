@@ -1,5 +1,7 @@
 #include "kds/catalog/schema.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <string>
 
 #include "kds/catalog/well_known.hpp"
@@ -14,6 +16,41 @@ const SysColumnRow* Schema::FindColumn(std::string_view name) const noexcept {
         }
     }
     return nullptr;
+}
+
+std::vector<std::uint16_t> Schema::MatchColumns(std::string_view name) const {
+    std::vector<std::uint16_t> out;
+    for (std::size_t i = 0; i < columns.size(); ++i) {
+        if (!columns[i].dropped() && ColumnNamesCollide(NameView(columns[i].name), name)) {
+            out.push_back(static_cast<std::uint16_t>(i));
+        }
+    }
+    return out;
+}
+
+bool ColumnNamesCollide(std::string_view a, std::string_view b) noexcept {
+    return a.size() == b.size() &&
+           std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+               return std::tolower(static_cast<unsigned char>(x)) ==
+                      std::tolower(static_cast<unsigned char>(y));
+           });
+}
+
+Status CheckColumnNamesUnique(const Schema& schema) {
+    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
+        if (schema.columns[i].dropped()) continue;
+        const std::string_view later = NameView(schema.columns[i].name);
+        for (std::size_t j = 0; j < i; ++j) {
+            if (schema.columns[j].dropped()) continue;
+            const std::string_view earlier = NameView(schema.columns[j].name);
+            if (ColumnNamesCollide(earlier, later)) {
+                return Status::InvalidArgument("column '" + std::string(later) +
+                                               "' repeats column '" + std::string(earlier) +
+                                               "' (names are unique ignoring case)");
+            }
+        }
+    }
+    return Status::OK();
 }
 
 bool IsIntegerTypeVal(std::uint32_t type_val) noexcept {
