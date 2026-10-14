@@ -27,7 +27,15 @@ English:
 - **W2**: "In this milestone skip every per-stage measurement, and hold the
   milestone measurement until directed." BW's stages carry no overhead
   measurement, and BW-S5 closes without one unless the operator directs it
-  (§6).
+  (§5).
+- **W3**: `/go-ahead-achieving-milestone` - *"go ahead until achieving
+  milestone, I will follow CLA proposal if decision needed, keep going in
+  this session."* **BW-Q1..Q7 are adopted as CLA proposed on the
+  operator's standing go-ahead of 2026-10-14
+  (go-ahead-achieving-milestone)**, not marked per item by the operator.
+
+The words are in `raft-marks-2026-10-14.md` §5-§7. W2 is BW's own word and
+outranks the skill's close measurement.
 
 **Claim tags**: `[source-read]` with `path:line` at `750496b1`; `[design]`
 for reasoning about code not yet written; `[quiet-wrong]` where a wrong
