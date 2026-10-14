@@ -3147,7 +3147,9 @@ TEST_F(LockWaitsViewTest, AGrantedRowWaitIsOneRowNamingItsUnitModeAndHolder) {
     EXPECT_EQ(waits.Column("rel_oid"), std::vector<std::string>{std::to_string(oid)});
     EXPECT_EQ(waits.Column("key"), std::vector<std::string>{"7"});
     EXPECT_EQ(waits.Column("holder_trx"), std::vector<std::string>{std::to_string(holder_trx)});
-    EXPECT_NE(waits.Column("waiter_trx"), std::vector<std::string>{std::to_string(holder_trx)});
+    // An autocommit statement refused before it wrote a row holds nothing
+    // the wait-for graph can name, so its waiter is NULL.
+    EXPECT_EQ(waits.Column("waiter_trx"), std::vector<std::string>{"NULL"});
     EXPECT_EQ(waits.Column("waited_us"), std::vector<std::string>{"5000"});
     EXPECT_EQ(waits.Column("outcome"), std::vector<std::string>{"granted"});
     EXPECT_EQ(Local("SELECT seq, core FROM sys.lock_waits WHERE started = '1970-01-02 00:00:00'"),

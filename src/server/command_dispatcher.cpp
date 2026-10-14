@@ -377,7 +377,8 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             if (locks_ != nullptr && waiter_id != 0 &&
                 locks_->NoteWaitFor(waiter_id, block.trx_id)) {
                 deadlocked = true;
-                if (block.slot != nullptr) {
+                // A victim's row by the park's rule: a slot, not yet flipped.
+                if (block.slot != nullptr && !txn::LockWaitReady(block.slot)) {
                     stats::LockWaitRecord row =
                         LockWaitRow(block.key, block.mode, waiter_id, block.trx_id);
                     row.outcome = stats::LockWaitOutcome::kDeadlock;
@@ -598,9 +599,12 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     // (Holder 0 is `BorrowChain`'s stale-memo re-run, which waits on nobody.)
     if (waiter_id != 0 && wait.holder != 0 && !txn::IsReadHolder(wait.holder) &&
         locks_->NoteWaitFor(waiter_id, wait.holder)) {
-        stats::LockWaitRecord row = LockWaitRow(wait.key, wait.mode, waiter_id, wait.holder);
-        row.outcome = stats::LockWaitOutcome::kDeadlock;
-        stats::LockWaitLog::Record(row);
+        // A victim's row by the park's rule: a slot not yet flipped.
+        if (!txn::LockWaitReady(slot)) {
+            stats::LockWaitRecord row = LockWaitRow(wait.key, wait.mode, waiter_id, wait.holder);
+            row.outcome = stats::LockWaitOutcome::kDeadlock;
+            stats::LockWaitLog::Record(row);
+        }
         locks_->DropWake(wait.key, slot);
         locks_->ClearWaitFor(waiter_id);
         RefuseParkedWrite(*out, waiting_session,
@@ -1970,11 +1974,6 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     section("backup");
     if (backup_ != nullptr) backup_->AppendMeta(os);
     if (archiver_ != nullptr) archiver_->AppendMeta(os);
-    // **BA's census block** (BA-R0, BA-S2; `base/contention.hpp`): the
-    // instance's, summed over every core when read - unlike the WAL block
-    // above, which is this core's. Every latch kind is printed, `other`
-    // included, so a latch no row describes still shows its waits; each
-    // count is the contended acquisitions only.
     // **`sys.lock_waits`' store** (BO-S3): the instance's, summed over every
     // core's part, as the contention block below is. `overwritten` is the
     // rows a full ring gave up for newer ones and `dropped` the rows no ring
@@ -1986,6 +1985,11 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
            << " lock_waits_overwritten=" << waits.overwritten
            << " lock_waits_dropped=" << waits.dropped;
     }
+    // **BA's census block** (BA-R0, BA-S2; `base/contention.hpp`): the
+    // instance's, summed over every core when read - unlike the WAL block
+    // above, which is this core's. Every latch kind is printed, `other`
+    // included, so a latch no row describes still shows its waits; each
+    // count is the contended acquisitions only.
     section("contention");
     const Contention::Snapshot contention = Contention::Read();
     for (std::size_t i = 0; i < kLatchKindCount; ++i) {

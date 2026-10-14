@@ -652,3 +652,38 @@ and is left as named.
 
 Suite: 3759/3759 (`ctest -LE heap-suspended`, Debug). Overhead not
 measured; measured at the milestone's close.
+
+### BO-S3 — 2026-10-14
+
+On `bo-show-sugar`, `5c086e29` and its review commit. `sys.lock_waits` as
+§3.3 designs it, memory-resident (BO-Q5 (b)), a ring of 4096 per core
+(BO-Q7 (a)) in `stats::LockWaitLog`, written by `AwaitWriteBlock` and
+`AwaitRelationLock` through an RAII row whose destructor writes
+`cancelled`; `sys.meta`'s `lock_waits` section carries recorded,
+overwritten and dropped. **Decided in the building, stated:** a waiter
+refused at the edge for closing a cycle is a `deadlock` row with
+`waited_us` 0, although it never parked - §3.3 lists the outcome; a slot
+already flipped before the park (a stale memo's re-run, an ask granted
+after its refusal) is no wait; `unit`, `rel_oid` and `key` name the unit
+that refused, where the wait is registered, and `mode` what was asked -
+since AY-S2 they can be two units; `granted` means the slot flipped, not
+a grant, so a re-run that parks again is a second row; a waiter or holder
+that is no transaction reads NULL.
+
+**Review** (`critics-developer`, on `5c086e29`): no engine defect found;
+every exit checked, every site's mode checked against its ask, the
+cancelled path proved by a throwaway cell. Applied: a vacuous
+waiter-differs assertion pinned to the real value (NULL); a comment the
+new `sys.meta` block displaced; the deadlock arms follow the park's
+flipped-slot rule; the destructor's contract stated as the clock's; the
+engine's `LatchGuard` for `std::lock_guard`; the part count tied to
+`kMaxCores`; the record packed to 64 bytes; `unit`/`mode` and `granted`
+documented as above. **Not applied:** `AwaitRelationLock`'s waiter ignores
+`parked_write()` - an identity that predates this stage, inherited by the
+row, left for the lock family; `LockWaitRow` as a free function - it reads
+the core id and is one declaration; a shared per-core ring template, which
+the reviewer itself proposed for when `sys.checkpoints` repeats the shape
+(BO-S7).
+
+Suite: 3767/3767 (`ctest -LE heap-suspended`, Debug). Overhead not
+measured; measured at the milestone's close.

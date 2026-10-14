@@ -1,6 +1,5 @@
 #include "kds/stats/lock_wait_log.hpp"
 
-#include <mutex>
 #include <new>
 
 namespace kds::stats {
@@ -22,7 +21,7 @@ std::array<LockWaitLog::Part, LockWaitLog::kParts>& LockWaitLog::parts() noexcep
 
 void LockWaitLog::Record(LockWaitRecord row) noexcept {
     Part& part = parts()[row.core % kParts];
-    const std::lock_guard<Latch> held(part.latch);
+    const LatchGuard held(&part.latch);
     row.seq = ++part.recorded;
     if (part.ring.size() < kRingCapacity) {
         // The one allocation, on this part's first row; a failure drops the
@@ -44,7 +43,7 @@ void LockWaitLog::Record(LockWaitRecord row) noexcept {
 std::vector<LockWaitRecord> LockWaitLog::Snapshot() {
     std::vector<LockWaitRecord> out;
     for (Part& part : parts()) {
-        const std::lock_guard<Latch> held(part.latch);
+        const LatchGuard held(&part.latch);
         // Oldest first: once the ring has wrapped, `next` is the oldest slot.
         const std::size_t n = part.ring.size();
         const std::size_t first = n == kRingCapacity ? part.next : 0;
@@ -56,7 +55,7 @@ std::vector<LockWaitRecord> LockWaitLog::Snapshot() {
 LockWaitLog::Totals LockWaitLog::Read() noexcept {
     Totals t;
     for (Part& part : parts()) {
-        const std::lock_guard<Latch> held(part.latch);
+        const LatchGuard held(&part.latch);
         t.recorded += part.recorded;
         t.overwritten += part.overwritten;
         t.dropped += part.dropped;
@@ -66,7 +65,7 @@ LockWaitLog::Totals LockWaitLog::Read() noexcept {
 
 void LockWaitLog::ResetForTest() noexcept {
     for (Part& part : parts()) {
-        const std::lock_guard<Latch> held(part.latch);
+        const LatchGuard held(&part.latch);
         part.ring.clear();
         part.next = 0;
         part.recorded = 0;

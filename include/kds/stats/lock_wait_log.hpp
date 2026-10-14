@@ -45,19 +45,27 @@ enum class LockWaitOutcome : std::uint8_t { kGranted, kDeadlock, kFaultNet, kCan
 
 const char* LockWaitOutcomeName(LockWaitOutcome outcome) noexcept;
 
+// **`unit`, `rel_oid` and `key` name the unit that refused** - the one the
+// wait is registered on - and `mode` is what the waiter asked. Since AY-S2
+// the two can differ: a row's `X` refused by a range fence is a `range` row
+// whose `mode` is the row's `X` (`lock_table.hpp`, `AcquireResult::slot_key`).
 struct LockWaitRecord {
     std::uint64_t seq = 0;         // the core's own count of rows, from 1
-    std::uint32_t core = 0;
     std::int64_t started_us = 0;   // UTC epoch microseconds (a TIMESTAMP)
     std::uint64_t waited_us = 0;
-    txn::LockUnit unit = txn::LockUnit::kRelation;
-    txn::LockMode mode = txn::LockMode::kExclusive;
     catalog::Oid rel_oid = 0;
     std::uint64_t key = 0;         // the unit's low bound; 0 for a relation
     std::uint64_t waiter_trx = 0;  // 0: a waiter holding no transaction
     std::uint64_t holder_trx = 0;
+    std::uint32_t core = 0;
+    txn::LockUnit unit = txn::LockUnit::kRelation;
+    txn::LockMode mode = txn::LockMode::kExclusive;
+    // `granted` means the slot flipped, not that the unit was granted: a
+    // wake is not a grant (`lock_table.hpp`), and a re-run that parks again
+    // writes a row of its own.
     LockWaitOutcome outcome = LockWaitOutcome::kGranted;
 };
+static_assert(sizeof(LockWaitRecord) == 64, "a ring of 4096 is 256 KiB per waiting core");
 
 class LockWaitLog {
 public:
@@ -95,9 +103,11 @@ private:
 
 // **One wait's row, written when the wait ends however it ends** - and as
 // `cancelled` by the destructor when it never does, which is a coroutine
-// destroyed at its suspend point (a session dropped mid-wait). The row is
-// the instance's process-wide store's, so a destructor running in teardown
-// reaches nothing its owner freed.
+// destroyed at its suspend point (a session dropped mid-wait). It reaches
+// the process-wide store and `clock`, so its contract is the scheduler's:
+// the clock outlives every scheduler that can hold a waiting frame
+// (`expeditor.hpp`; peers borrow it). A frame destroyed after `main`
+// returns would meet a destroyed store - no scheduler is static, so none is.
 class PendingLockWait {
 public:
     // `clock` times the wait (monotonic); `started_us` is the wall instant.
