@@ -33,6 +33,7 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
+#include "kds/stats/lock_wait_log.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/coro.hpp"
 
@@ -215,6 +216,9 @@ struct DispatchOutcome {
         std::uint64_t pk = 0;      // the row it holds
         txn::LockKey key{};        // the unit `slot` is registered on
         std::shared_ptr<txn::LockWaitSlot> slot;
+        // The mode the refused ask wanted, for `sys.lock_waits`; meaningful
+        // only beside a `slot`.
+        txn::LockMode mode = txn::LockMode::kExclusive;
     };
     std::optional<WriteBlock> write_block = std::nullopt;
 
@@ -243,6 +247,9 @@ struct DispatchOutcome {
         // transaction - false for a statement that is not the transaction's,
         // a `CREATE ASSERTION`'s build (AT-S5e).
         bool poisons = true;
+        // The mode the refused ask wanted (`sys.lock_waits`). Every site
+        // names it; the default is only aggregate initialization's.
+        txn::LockMode mode = txn::LockMode::kExclusive;
     };
     std::optional<LockWait> lock_wait = std::nullopt;
 
@@ -809,6 +816,10 @@ private:
     // first one's deadline instead of starting a fresh one.
     sched::Coro AwaitWriteBlock(std::string_view line, Session* session, DispatchOutcome* out,
                                 sched::MonoTimeNs* statement_deadline_ns);
+    // A `sys.lock_waits` row for a wait on `key` (BO-S3), stamped with this
+    // core and the wall instant; the caller sets its outcome or times it.
+    stats::LockWaitRecord LockWaitRow(const txn::LockKey& key, txn::LockMode mode,
+                                      std::uint64_t waiter, std::uint64_t holder) const;
 
     // **The statement waits for the unit it was refused, then runs again
     // whole** (AO-S6e-b). It polls the table's slot - one atomic load per
@@ -1884,6 +1895,7 @@ private:
     StatusOr<exec::CatalogView> AssertionsView();
     StatusOr<exec::CatalogView> RelayoutView(const parser::AstValue* name, std::uint32_t byte);
     StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
+    StatusOr<exec::CatalogView> LockWaitsView();
     StatusOr<exec::CatalogView> PageSlotsView(const parser::AstValue& page_id);
     StatusOr<exec::CatalogView> MetaView();
     // The clustered root a relation's anchor names, or its descriptor page.

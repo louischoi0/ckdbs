@@ -3099,5 +3099,144 @@ TEST_F(PurgeWaitTest, ARerunThatMeetsADdlWaitsForItAndThenPurges) {
     EXPECT_EQ(locks_->EntryCount(), 0u) << "a wait's registration outlived it";
 }
 
+// ---- BO-S3: `sys.lock_waits`, one row per wait ----------------------------
+//
+// `instructions/v3.0.0/workorder-bo-sys-statistics-show-sugar.md` §3.3. The
+// store is the process's, so each cell empties it first.
+
+class LockWaitsViewTest : public LockDeadlockTest {
+protected:
+    void SetUp() override {
+        LockDeadlockTest::SetUp();
+        stats::LockWaitLog::ResetForTest();
+    }
+
+    testing_view::ViewText Waits() {
+        return testing_view::ReadViewText(
+            Local("SELECT unit, mode, rel_oid, key, waiter_trx, holder_trx, waited_us, outcome "
+                  "FROM sys.lock_waits"));
+    }
+};
+
+TEST_F(LockWaitsViewTest, AGrantedRowWaitIsOneRowNamingItsUnitModeAndHolder) {
+    const std::uint64_t oid = OidIn(Local("INSERT INTO t VALUES (7, 1)"));
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+    const std::uint64_t holder_trx = holder.transaction()->id();
+
+    // The wall instant the row is stamped with, pinned so the TIMESTAMP
+    // column can be filtered as one.
+    const exec::ScopedStatementClockForTest pinned(86'400'000'000);  // 1970-01-02
+    Session waiter;
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 7", waiter);
+    Pump();
+    ASSERT_FALSE(*w.done) << w.out->response;
+    EXPECT_TRUE(Waits().rows.empty()) << "a row before the wait ended";
+
+    clock_.Advance(5'000'000);  // 5 ms parked
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done);
+
+    const testing_view::ViewText waits = Waits();
+    ASSERT_EQ(waits.rows.size(), 1u);
+    EXPECT_EQ(waits.Column("unit"), std::vector<std::string>{"tuple"});
+    EXPECT_EQ(waits.Column("mode"), std::vector<std::string>{"X"});
+    EXPECT_EQ(waits.Column("rel_oid"), std::vector<std::string>{std::to_string(oid)});
+    EXPECT_EQ(waits.Column("key"), std::vector<std::string>{"7"});
+    EXPECT_EQ(waits.Column("holder_trx"), std::vector<std::string>{std::to_string(holder_trx)});
+    EXPECT_NE(waits.Column("waiter_trx"), std::vector<std::string>{std::to_string(holder_trx)});
+    EXPECT_EQ(waits.Column("waited_us"), std::vector<std::string>{"5000"});
+    EXPECT_EQ(waits.Column("outcome"), std::vector<std::string>{"granted"});
+    EXPECT_EQ(Local("SELECT seq, core FROM sys.lock_waits WHERE started = '1970-01-02 00:00:00'"),
+              "seq,core\\n1,0");
+    EXPECT_EQ(testing_view::MetaField(Local("SHOW META"), "lock_waits_recorded"), "1");
+}
+
+TEST_F(LockWaitsViewTest, AWaitTheFaultNetEndsIsAFaultNetRow) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+    Session waiter;
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 7", waiter);
+    Pump();
+    clock_.Advance(txn::kLockWaitFaultNetNs + 1);
+    Pump();
+    ASSERT_TRUE(*w.done);
+
+    const testing_view::ViewText waits = Waits();
+    EXPECT_EQ(waits.Column("outcome"), std::vector<std::string>{"fault_net"});
+    EXPECT_EQ(waits.Column("waited_us"),
+              std::vector<std::string>{std::to_string((txn::kLockWaitFaultNetNs + 1) / 1000)});
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+}
+
+TEST_F(LockWaitsViewTest, TheWaiterThatClosesACycleIsADeadlockRowAndTheSurvivorsIsGranted) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (8, 1)").rfind("INSERTED", 0), 0u);
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &b).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &a).response, "UPDATED 1");
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 8", &b).response, "UPDATED 1");
+    const std::string a_trx = std::to_string(a.transaction()->id());
+    const std::string b_trx = std::to_string(b.transaction()->id());
+
+    Started wa = Start("UPDATE t SET v = 3 WHERE id = 8", a);
+    Pump();
+    Started wb = Start("UPDATE t SET v = 3 WHERE id = 7", b);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "B closed the cycle and is the victim";
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &b).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*wa.done);
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+
+    // B's refusal at the edge it would have parked on, then A's wait.
+    const testing_view::ViewText waits = Waits();
+    ASSERT_EQ(waits.rows.size(), 2u);
+    EXPECT_EQ(waits.Column("outcome"), (std::vector<std::string>{"deadlock", "granted"}));
+    EXPECT_EQ(waits.Column("waiter_trx"), (std::vector<std::string>{b_trx, a_trx}));
+    EXPECT_EQ(waits.Column("holder_trx"), (std::vector<std::string>{a_trx, b_trx}));
+    EXPECT_EQ(waits.Column("key"), (std::vector<std::string>{"7", "8"}));
+    EXPECT_EQ(waits.Column("waited_us").front(), "0") << "a victim never parked";
+}
+
+TEST_F(LockWaitsViewTest, ADropHeldByAPositionedReaderIsARelationRowWithNoTransactionOnEitherSide) {
+    ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
+    const std::uint64_t oid = OidIn(Local("INSERT INTO rb VALUES (1, 1)"));
+    txn::LockHoldings reader;
+    const std::uint64_t reader_id = txn::kReadHolderBit | 7;
+    ASSERT_TRUE(locks_
+                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader)
+                    .value()
+                    .granted);
+    Session s;
+    Started drop = Start("DROP TABLE rb", s);
+    Pump();
+    ASSERT_FALSE(*drop.done);
+    locks_->Release(reader_id, reader);
+    Pump();
+    ASSERT_TRUE(*drop.done);
+
+    // An autocommit DDL holds nothing while it waits, and a read borrow is
+    // no transaction: both parties read NULL rather than an id.
+    const testing_view::ViewText waits = Waits();
+    ASSERT_EQ(waits.rows.size(), 1u);
+    EXPECT_EQ(waits.Column("unit"), std::vector<std::string>{"relation"});
+    EXPECT_EQ(waits.Column("mode"), std::vector<std::string>{"X"});
+    EXPECT_EQ(waits.Column("rel_oid"), std::vector<std::string>{std::to_string(oid)});
+    EXPECT_EQ(waits.Column("key"), std::vector<std::string>{"0"});
+    EXPECT_EQ(waits.Column("waiter_trx"), std::vector<std::string>{"NULL"});
+    EXPECT_EQ(waits.Column("holder_trx"), std::vector<std::string>{"NULL"});
+    EXPECT_EQ(waits.Column("outcome"), std::vector<std::string>{"granted"});
+}
+
 }  // namespace
 }  // namespace kds::server

@@ -101,6 +101,7 @@ add_executable(kds_tests
     waystone_dir_test.cpp
     range_scan_test.cpp
     access_stats_test.cpp
+    lock_wait_log_test.cpp
     decay_test.cpp
     relayout_planner_test.cpp
     show_relayout_test.cpp

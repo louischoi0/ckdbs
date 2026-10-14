@@ -268,6 +268,23 @@ Status StatusFromErrorReply(std::string_view reply) {
 // enforced however true this constant is (`assertion.md` §6.1, §8.1).
 constexpr bool kWritePathEnforcesAssertions = true;
 
+stats::LockWaitRecord CommandDispatcher::LockWaitRow(const txn::LockKey& key,
+                                                    txn::LockMode mode, std::uint64_t waiter,
+                                                    std::uint64_t holder) const {
+    stats::LockWaitRecord row;
+    row.core = core_id_;
+    // The wall instant `NOW()` reads, so a row compares against it.
+    row.started_us = exec::StatementContextNow().now_us;
+    row.unit = key.unit;
+    row.mode = mode;
+    row.rel_oid = key.rel_oid;
+    row.key = key.unit == txn::LockUnit::kRelation ? 0 : key.lo;
+    row.waiter_trx = waiter;
+    // A read borrow's id names no transaction (`IsReadHolder`).
+    row.holder_trx = txn::IsReadHolder(holder) ? 0 : holder;
+    return row;
+}
+
 sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* session,
                                                DispatchOutcome* out,
                                                sched::MonoTimeNs* statement_deadline_ns) {
@@ -360,7 +377,20 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             if (locks_ != nullptr && waiter_id != 0 &&
                 locks_->NoteWaitFor(waiter_id, block.trx_id)) {
                 deadlocked = true;
+                if (block.slot != nullptr) {
+                    stats::LockWaitRecord row =
+                        LockWaitRow(block.key, block.mode, waiter_id, block.trx_id);
+                    row.outcome = stats::LockWaitOutcome::kDeadlock;
+                    stats::LockWaitLog::Record(row);
+                }
                 break;
+            }
+            // **`sys.lock_waits`' row** (BO-S3): a wait on the unit's slot,
+            // from the park to its end; a poll with no slot is not one, and
+            // neither is a slot already flipped - the re-run is immediate.
+            std::optional<stats::PendingLockWait> row;
+            if (block.slot != nullptr && !txn::LockWaitReady(block.slot)) {
+                row.emplace(clock_, LockWaitRow(block.key, block.mode, waiter_id, block.trx_id));
             }
             // **On the unit's slot where the refused ask handed one back**
             // (AX-S2b): the release flips it and kicks this core, whichever
@@ -380,6 +410,10 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             };
             co_await sched::WaitUntil{&released};
             const bool settled = freed();
+            if (row.has_value()) {
+                row->End(settled ? stats::LockWaitOutcome::kGranted
+                                 : stats::LockWaitOutcome::kFaultNet);
+            }
             // Dropped however the wait ended, as `AwaitRelationLock` drops
             // its own - and cleared on the outcome, so an exit below that
             // refuses the statement has nothing left to drop.
@@ -564,6 +598,9 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
     // (Holder 0 is `BorrowChain`'s stale-memo re-run, which waits on nobody.)
     if (waiter_id != 0 && wait.holder != 0 && !txn::IsReadHolder(wait.holder) &&
         locks_->NoteWaitFor(waiter_id, wait.holder)) {
+        stats::LockWaitRecord row = LockWaitRow(wait.key, wait.mode, waiter_id, wait.holder);
+        row.outcome = stats::LockWaitOutcome::kDeadlock;
+        stats::LockWaitLog::Record(row);
         locks_->DropWake(wait.key, slot);
         locks_->ClearWaitFor(waiter_id);
         RefuseParkedWrite(*out, waiting_session,
@@ -574,10 +611,21 @@ sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session*
         co_return Status::OK();
     }
 
+    // `sys.lock_waits`' row (BO-S3), unless the slot was flipped before the
+    // park: a stale memo's re-run or an ask granted after its refusal, which
+    // wait for nothing.
+    std::optional<stats::PendingLockWait> row;
+    if (!txn::LockWaitReady(slot)) {
+        row.emplace(clock_, LockWaitRow(wait.key, wait.mode, waiter_id, wait.holder));
+    }
     const std::function<bool()> freed = [this, slot, deadline_ns] {
         return txn::LockWaitReady(slot) || NowNs() >= deadline_ns;
     };
     co_await sched::WaitUntil{&freed};
+    if (row.has_value()) {
+        row->End(txn::LockWaitReady(slot) ? stats::LockWaitOutcome::kGranted
+                                          : stats::LockWaitOutcome::kFaultNet);
+    }
     if (waiter_id != 0) locks_->ClearWaitFor(waiter_id);
     // Dropped however the wait ended. A registration left behind outlives
     // the statement that made it and would keep its entry alive with a
@@ -886,6 +934,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
         if (blocking_wake_.has_value()) {
             outcome.write_block->key = blocking_wake_->key;
             outcome.write_block->slot = std::move(blocking_wake_->slot);
+            outcome.write_block->mode = blocking_wake_->mode;
         }
     } else if (blocking_wake_.has_value()) {
         // Handed to no wait - `NoteBlockingWriter` declined (a futile
@@ -1926,6 +1975,17 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // above, which is this core's. Every latch kind is printed, `other`
     // included, so a latch no row describes still shows its waits; each
     // count is the contended acquisitions only.
+    // **`sys.lock_waits`' store** (BO-S3): the instance's, summed over every
+    // core's part, as the contention block below is. `overwritten` is the
+    // rows a full ring gave up for newer ones and `dropped` the rows no ring
+    // could take - what the view no longer holds, and why.
+    section("lock_waits");
+    {
+        const stats::LockWaitLog::Totals waits = stats::LockWaitLog::Read();
+        os << " lock_waits_recorded=" << waits.recorded
+           << " lock_waits_overwritten=" << waits.overwritten
+           << " lock_waits_dropped=" << waits.dropped;
+    }
     section("contention");
     const Contention::Snapshot contention = Contention::Read();
     for (std::size_t i = 0; i < kLatchKindCount; ++i) {
@@ -3035,11 +3095,14 @@ void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::
             locks_->ReleaseOne(scope.txn->id(), unit, txn::LockMode::kShared, scope.txn->borrows());
             auto flipped = std::make_shared<txn::LockWaitSlot>();
             flipped->ready.store(true, std::memory_order_release);
-            TakeLockWait(blocking_wake_, DispatchOutcome::LockWait{unit, holder, std::move(flipped)});
+            TakeLockWait(blocking_wake_,
+                         DispatchOutcome::LockWait{unit, holder, std::move(flipped), true,
+                                                   txn::LockMode::kShared});
         } else if (took.ok() && wake.slot != nullptr) {
-            TakeLockWait(blocking_wake_, DispatchOutcome::LockWait{
-                                             wake.key, blocker != 0 ? blocker : holder,
-                                             std::move(wake.slot)});
+            TakeLockWait(blocking_wake_,
+                         DispatchOutcome::LockWait{wake.key, blocker != 0 ? blocker : holder,
+                                                   std::move(wake.slot), true,
+                                                   txn::LockMode::kShared});
         }
     }
     // The reverse check reads latest state and the writer's decide changes
@@ -8246,7 +8309,8 @@ std::optional<Status> CommandDispatcher::BorrowRelationForDdl(txn::Transaction* 
     if (!took.ok()) return took.status();
     if (took.value()) return std::nullopt;
     if (wake.slot != nullptr) {
-        lock_wait_ = DispatchOutcome::LockWait{wake.key, blocker, std::move(wake.slot), poisons};
+        lock_wait_ =
+            DispatchOutcome::LockWait{wake.key, blocker, std::move(wake.slot), poisons, mode};
     }
     // Retryable, and it says who rather than what to do: a client that
     // reached this over the synchronous path has the same recourse it has
@@ -8328,8 +8392,9 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
     if (!rel.ok()) return refused(rel.status());
     if (!rel.value()) {
         if (wake.slot != nullptr) {
-            TakeLockWait(lock_wait_,
-                         DispatchOutcome::LockWait{wake.key, *blocker, std::move(wake.slot)});
+            TakeLockWait(lock_wait_, DispatchOutcome::LockWait{wake.key, *blocker,
+                                                               std::move(wake.slot), true,
+                                                               intention});
         }
         return false;
     }
@@ -8349,7 +8414,9 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
         if (may_park_) {
             auto flipped = std::make_shared<txn::LockWaitSlot>();
             flipped->ready.store(true, std::memory_order_release);
-            TakeLockWait(lock_wait_, DispatchOutcome::LockWait{relation, /*holder=*/0, std::move(flipped)});
+            TakeLockWait(lock_wait_, DispatchOutcome::LockWait{relation, /*holder=*/0,
+                                                               std::move(flipped), true,
+                                                               intention});
         }
         return Status::TxnConflict("relation oid " + std::to_string(unit.rel_oid) +
                                    ": the catalog changed between this statement's resolution "
@@ -8378,8 +8445,9 @@ StatusOr<bool> CommandDispatcher::BorrowChain(const WriteScope& scope,
                                     may_park_ ? &unit_wake : nullptr);
     if (!under.ok()) return refused(under.status());
     if (!under.value() && unit_wake.slot != nullptr) {
-        TakeLockWait(blocking_wake_,
-                     DispatchOutcome::LockWait{unit_wake.key, *blocker, std::move(unit_wake.slot)});
+        TakeLockWait(blocking_wake_, DispatchOutcome::LockWait{unit_wake.key, *blocker,
+                                                               std::move(unit_wake.slot), true,
+                                                               mode});
     }
     return under.value();
 }

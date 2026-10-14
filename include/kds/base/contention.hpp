@@ -53,6 +53,7 @@ enum class LatchKind : std::uint8_t {
     kCabinPartition,      // a CabinStore partition
     kCabinStats,          // CabinStore's stats latch
     kHandoff,             // a connection-handoff inbox (D19's fallback)
+    kStatsRing,           // a `sys` statistics ring's part (`stats/lock_wait_log.hpp`)
     kCount,
 };
 
@@ -63,6 +64,7 @@ inline constexpr std::array<const char*, kLatchKindCount> kLatchKindNames = {
     "other",          "frame_table",   "free_map",      "free_map_flush", "window",
     "lock_partition", "lock_wait_for", "wal_stream",    "wal_sync_gate",  "assertion_dir",
     "optimizer",      "superblock",    "cabin_partition", "cabin_stats",  "handoff",
+    "stats_ring",
 };
 static_assert(kLatchKindNames.back() != nullptr, "a LatchKind without a name");
 

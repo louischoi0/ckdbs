@@ -43,6 +43,9 @@ bool IEquals(std::string_view a, std::string_view b) {
 
 constexpr std::uint32_t kInt = catalog::kTypeValUint64;
 constexpr std::uint32_t kStr = catalog::kTypeValVarchar;
+// UTC epoch microseconds (`docs/spec/types.md` TY4), compared and rendered
+// as a timestamp, so `WHERE started > '...'` reads as written.
+constexpr std::uint32_t kTimestamp = catalog::kTypeValTimestamp;
 
 // The registry, in the order `SysViewNames()` reports them. The first five
 // are the catalog views that predate BO.
@@ -61,6 +64,7 @@ constexpr SysViewSpec kViews[] = {
     {"assertions"},
     {"relayout", ViewKeyMode::kChecked, "name", kStr},
     {"cabin_optimizer"},
+    {"lock_waits"},
     {"page_slots", ViewKeyMode::kRequired, "page_id", kInt},
     {"meta"},
 };
@@ -90,6 +94,17 @@ parser::AstValue Null() {
 }
 
 parser::AstValue Bool(bool v) { return Int(v ? 1 : 0); }
+
+// A UTC epoch-microsecond instant, declared `kTimestamp`.
+parser::AstValue Timestamp(std::int64_t us) {
+    parser::AstValue out;
+    out.type = parser::ValueType::kInt;
+    out.int_val = us;
+    return out;
+}
+
+// A transaction id, NULL where there is none: 0 names no transaction.
+parser::AstValue TrxId(std::uint64_t id) { return id == 0 ? Null() : Int(id); }
 
 // A relation's name from `RelationNameOf`, or NULL where the oid names no
 // relation: its `oid=N` fallback is a label, not a name - no identifier
@@ -168,6 +183,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "assertions") return AssertionsView();
     if (n == "relayout") return RelayoutView(key, byte);
     if (n == "cabin_optimizer") return CabinOptimizerView(byte);
+    if (n == "lock_waits") return LockWaitsView();
     if (n == "page_slots") return PageSlotsView(*key);
     if (n == "meta") return MetaView();
 
@@ -769,6 +785,34 @@ StatusOr<exec::CatalogView> CommandDispatcher::CabinOptimizerView(std::uint32_t 
             row.insert(row.end(), 2, Null());
         }
         view.rows.push_back(std::move(row));
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::LockWaitsView() {
+    exec::CatalogView view;
+    // Every core's recent lock waits, one row each (BO-S3, §3.3), read from
+    // the instance's store whatever core asks - an engine-state view, so it
+    // filters nothing. `key` is the unit's low bound: a tuple's id, a range's
+    // or slice's first id, 0 for a relation. A waiter or holder that is no
+    // transaction (an autocommit statement holding nothing, a read borrow)
+    // is NULL.
+    Define(view, {{"seq", kInt},
+                  {"core", kInt},
+                  {"started", kTimestamp},
+                  {"waited_us", kInt},
+                  {"unit", kStr},
+                  {"mode", kStr},
+                  {"rel_oid", kInt},
+                  {"key", kInt},
+                  {"waiter_trx", kInt},
+                  {"holder_trx", kInt},
+                  {"outcome", kStr}});
+    for (const stats::LockWaitRecord& r : stats::LockWaitLog::Snapshot()) {
+        view.rows.push_back({Int(r.seq), Int(r.core), Timestamp(r.started_us), Int(r.waited_us),
+                             Str(txn::LockUnitName(r.unit)), Str(txn::LockModeName(r.mode)),
+                             Int(r.rel_oid), Int(r.key), TrxId(r.waiter_trx),
+                             TrxId(r.holder_trx), Str(stats::LockWaitOutcomeName(r.outcome))});
     }
     return view;
 }
