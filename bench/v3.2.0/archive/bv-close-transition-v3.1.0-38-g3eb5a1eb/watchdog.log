@@ -1,0 +1,6 @@
+03:07:10 progress age 24s run 1 started 1791947206.048855 pid_alive=yes
+03:08:10 progress age 13s run 3 started 1791947277.381155 pid_alive=yes
+03:09:10 progress age 2s run 5 started 1791947348.3804333 pid_alive=yes
+03:10:10 progress age 27s DONE pid_alive=./wdf.sh: line 7: kill: (1792713) - No such process
+no
+done

@@ -442,3 +442,37 @@ On `worktree-cn4-transition-refresh` at `3a68dd25`.
   its spill and its row. Fixed in `varheap_sweep.cpp`.
 - Overhead not measured; measured at the milestone's close.
 
+### BV-S4 — the close (2026-10-14)
+
+- **Measured** by `ck-tester`, interleaved A/B in `build-release`.
+  - **Arms:** `v3.1.0-31-gb0bc959c` (A, where BV opened) against
+    `v3.1.0-38-g3eb5a1eb` (B), at `cores = 1` and `relaxed` durability,
+    with single-row INSERT and UPDATE at 200, 1K and 10K rows.
+  - **Results file:**
+    `bench/v3.2.0/results-bv-close-transition-v3.1.0-38-g3eb5a1eb.md`.
+  - **Cell 1, no Transition:** inside the A/A noise floor, which is about
+    0.4 µs or 2 % (UPDATE -0.13 µs, INSERT +0.17 µs of 24.6/22.7 µs server
+    CPU).
+  - **Cell 2, a Transition on the `varchar` column:** UPDATE +0.36 µs,
+    positive in all six cells. INSERT +0.28 µs, two of its cells inside the
+    spread. That is about 1.5 % and 1.2 % of the statement.
+  - **Cut** (the results file says why): `strict`/`group` durability,
+    multiple cores, DELETE, multi-row and load-stream INSERT, `CREATE`'s own
+    cost.
+- **The S2+S3 commit's own review, applied:**
+  - **C1.** `DROP TRANSITION` now asks again, under the `X`, which relation
+    its name is on, as `CREATE` re-resolves its table. A name that moved
+    while it waited is refused `TxnConflict` rather than dropped under
+    another relation's `X`. No cell: the window lies between the name's
+    resolution and the grant, and no seam opens it.
+  - A wrapped or out-of-width integer state is `OutOfRange`, the code an
+    INSERT of the same literal gets.
+- **Review finding rejected:** deriving the width from `type_val`.
+  `IntWidthFor` is file-local to `row_codec.cpp`, and `column.len` is the
+  byte width for every integer column (`catalog.cpp`'s type rows).
+- **Docs:** `docs/spec/transition.md`, the manual, `protocol.md` §11,
+  `client-manual.md`, `heap-and-tuple.md` §4.1c, `known-gaps.md`,
+  `CLAUDE.md`'s row, the index row and CN-4's status.
+- **Merge:** `origin/main` brought nothing past BV's base.
+- **Suite:** 3767/3767 on the closing tree.
+

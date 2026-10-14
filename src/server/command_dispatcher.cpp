@@ -3419,6 +3419,18 @@ DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Sessi
     catalog_.Revalidate();
 
     if (stmt.drop) {
+        // The name was resolved before the grant; a drop and a re-create on
+        // another relation in between would leave it naming a Transition
+        // whose relation this statement does not hold. Asked again under the
+        // `X`, as a CREATE re-resolves its table (the S3 review's C1).
+        auto still = exec::FindTransitionByName(catalog_, page_store_, stmt.name);
+        if (!still.ok()) return {ErrorReply(still.status()), false, 0, still.status()};
+        if (still.value().has_value() && still.value()->target_oid != target.value()) {
+            const Status moved = Status::TxnConflict(
+                "transition \"" + stmt.name +
+                "\" moved to another relation while DROP TRANSITION waited for it - retry");
+            return {ErrorReply(moved), false, 0, moved};
+        }
         auto dropped = exec::DropTransition(catalog_, page_store_, stmt, wal_);
         if (!dropped.ok()) return {ErrorReply(dropped.status()), false, 0, dropped.status()};
         if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};

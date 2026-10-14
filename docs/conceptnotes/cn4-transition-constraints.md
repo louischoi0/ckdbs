@@ -1,6 +1,6 @@
 # CN-4 — Concept Note: Transition — a column's allowed state changes as a constraint
 
-Status: **[open]** (operator, 2026-10-14) — taken up by
+Status: **[open]** (operator, 2026-10-14), **built** the same day (`docs/spec/transition.md`) — taken up by
 `instructions/v3.2.0/workorder-bv-transition-constraints.md` (BV, v3.2.0),
 which is now the authority; this note is history, and §8's open items are
 marked there. As written: CONCEPT, not a work order, not a CIP. Nothing here opens a stage.

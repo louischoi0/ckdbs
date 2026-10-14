@@ -127,7 +127,8 @@ StatusOr<catalog::TransitionRef> CompileTransition(const catalog::TableAccess& a
         // or one outside a narrow integer's width.
         if (IsIntegerType(column.type_val) &&
             (parser::IntLiteralWrapped(v) || !FitsSigned(v.int_val, static_cast<int>(column.len)))) {
-            return Status::InvalidArgument("state " + (v.raw_int_text.empty() ? *key : v.raw_int_text) +
+            // `OutOfRange`, the code an INSERT of the same literal gets.
+            return Status::OutOfRange("state " + (v.raw_int_text.empty() ? *key : v.raw_int_text) +
                                            " does not fit column '" + stmt.column + "'" +
                                            ByteSuffix(v));
         }
