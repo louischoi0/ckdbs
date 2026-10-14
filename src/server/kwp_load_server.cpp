@@ -196,7 +196,7 @@ void KwpLoadServer::Detach() noexcept {
     if (scheduler_ == nullptr) return;
     for (auto& [fd, conn] : clients_) {
         if (conn.phase == Phase::kLoading && dispatcher_ != nullptr) {
-            (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
+            (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         }
         (void)scheduler_->UnregisterIoHandler(fd);
         ::close(fd);
@@ -356,7 +356,7 @@ bool KwpLoadServer::HandleFrame(int client_fd, Connection& conn,
                     // KW4's modality: the load is dead and the transaction
                     // with it - v0's collapse of §5's discard-to-sync.
                     SendError(conn, wire::ProtocolDetail::kUnexpectedFrame, "frame not legal inside a load session");
-                    (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
+                    (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
                     conn.phase = Phase::kIdle;
                     conn.load = LoadState{};
                     return true;
@@ -413,7 +413,7 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // from the transaction lifetime ceiling** (docs/spec/txn.md §1,
     // exemption 4): this listener has no sweep, because a bulk load may
     // honestly outlive `txn_lifetime_ceiling_ms`.
-    if (auto out = dispatcher_->Dispatch("BEGIN", &conn.session);
+    if (auto out = dispatcher_->DispatchInternal("BEGIN", &conn.session);
         out.response.rfind("ERR", 0) == 0) {
         SendError(conn, StatusFromErrorReply(out.response));
         return;
@@ -445,7 +445,7 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     const CommandDispatcher::StatementEpochScope epoch(*dispatcher_);  // BF-R9
     const auto fail_load = [&](const Status& status) {
         SendError(conn, status);
-        (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
+        (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         conn.phase = Phase::kIdle;
         conn.load = LoadState{};
     };
@@ -532,10 +532,10 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
 
 void KwpLoadServer::HandleLoadEnd(Connection& conn, bool abort) {
     const std::uint64_t rows = abort ? 0 : conn.load.rows_accepted;
-    auto out = dispatcher_->Dispatch(abort ? "ROLLBACK" : "COMMIT", &conn.session);
+    auto out = dispatcher_->DispatchInternal(abort ? "ROLLBACK" : "COMMIT", &conn.session);
     if (!abort && out.response.rfind("ERR", 0) == 0) {
         SendError(conn, StatusFromErrorReply(out.response));
-        (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
+        (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         conn.phase = Phase::kIdle;
         conn.load = LoadState{};
         return;
@@ -624,7 +624,7 @@ void KwpLoadServer::CloseClient(int client_fd) {
     }
     if (it->second.phase == Phase::kLoading && dispatcher_ != nullptr) {
         // BI11: a connection dying mid-load unwinds its transaction.
-        (void)dispatcher_->Dispatch("ROLLBACK", &it->second.session);
+        (void)dispatcher_->DispatchInternal("ROLLBACK", &it->second.session);
     }
     if (scheduler_ != nullptr) (void)scheduler_->UnregisterIoHandler(client_fd);
     ::close(client_fd);

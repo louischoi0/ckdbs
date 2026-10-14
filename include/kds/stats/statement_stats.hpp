@@ -49,8 +49,9 @@ struct StatementShape {
     std::string shape_text;          // the first statement seen, cut to kShapeTextBytes
 };
 
-// The `kind` of a statement: its first keyword upper-cased when it is a
-// statement verb this engine routes, `OTHER` otherwise. Static storage.
+// The `kind` of a statement: its first whitespace-separated token,
+// upper-cased, when it is a statement verb this engine routes - the token
+// `DispatchInner` routes on - and `OTHER` otherwise. Static storage.
 std::string_view StatementKindOf(std::string_view line) noexcept;
 
 class StatementStats {
@@ -59,11 +60,11 @@ public:
     static constexpr std::size_t kShapeTextBytes = 256;
     static constexpr std::uint32_t kParts = 64;          // `kMaxCores` (superblock.hpp)
 
-    // One statement, at its end. `fetch_id` is 0 where the kind carries no
-    // fingerprint; `elapsed_us` is the statement whole, re-runs included.
-    static void Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view kind,
-                       std::string_view line, bool refused, std::uint64_t elapsed_us,
-                       std::int64_t now_us) noexcept;
+    // One statement, at its end; its kind is `StatementKindOf(line)`.
+    // `fetch_id` is 0 where the kind carries no fingerprint; `elapsed_us` is
+    // the statement whole, re-runs included.
+    static void Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view line,
+                       bool refused, std::uint64_t elapsed_us, std::int64_t now_us) noexcept;
 
     // Every shape, the cores' parts merged by key: calls, refusals and time
     // summed, the longest call the longest, the first statement the

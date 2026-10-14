@@ -1065,7 +1065,7 @@ wal::Lsn CommandDispatcher::UncoveredCommit(Session* session) {
 
 DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
     const sched::MonoTimeNs began_ns = NowNs();
-    DispatchOutcome outcome = DispatchBlocking(line, session);
+    DispatchOutcome outcome = DispatchInternal(line, session);
     RecordStatement(line, outcome, began_ns);
     return outcome;
 }
@@ -1076,12 +1076,12 @@ void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOut
     // and the group commit are inside it (§3.1). A refusal is a call too.
     const sched::MonoTimeNs now_ns = NowNs();
     const bool refused = !out.status.ok() || out.response.rfind("ERR", 0) == 0;
-    stats::StatementStats::Record(core_id_, out.fetch_id, stats::StatementKindOf(line), line,
-                                  refused, now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0,
+    stats::StatementStats::Record(core_id_, out.fetch_id, line, refused,
+                                  now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0,
                                   exec::StatementContextNow().now_us);
 }
 
-DispatchOutcome CommandDispatcher::DispatchBlocking(std::string_view line, Session* session) {
+DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Session* session) {
     // `DispatchAsync`'s BA-R1c wait, blocking, as this path's group commit
     // is below: no other task on this core can hold a marker meanwhile,
     // because a commit holds one only inside its synchronous body. **That
@@ -1123,11 +1123,12 @@ DispatchOutcome CommandDispatcher::DispatchBlocking(std::string_view line, Sessi
 
     // Inline, on this thread: the batch is whatever happened to be staged
     // already, which with no scheduler is this commit alone.
-    if (Status s = wal_->DrainOnce(); !s.ok()) {
-        return {ErrorReply(s), outcome.should_stop};
-    }
-    if (Status s = wal_->EnsureDurable(outcome.pending_lsn); !s.ok()) {
-        return {ErrorReply(s), outcome.should_stop};
+    Status s = wal_->DrainOnce();
+    if (s.ok()) s = wal_->EnsureDurable(outcome.pending_lsn);
+    if (!s.ok()) {
+        DispatchOutcome refused{ErrorReply(s), outcome.should_stop};
+        refused.fetch_id = outcome.fetch_id;  // still this shape's call (BO-S5)
+        return refused;
     }
     outcome.pending_lsn = wal::kNoLsn;
     return outcome;
@@ -4288,7 +4289,10 @@ StatusOr<parser::Statement> CommandDispatcher::ParseKeepingShape(std::string_vie
     // `sys.statement_stats`' key costs the statement no second lex (BO-S5).
     parser::Parser parser(line);
     auto parsed = parser.Parse();
-    if (const auto fingerprint = parser.fingerprint(); fingerprint.has_value()) {
+    // The statement's own parse comes first; a SET value's subquery, run
+    // through `HandleSelect` inside the UPDATE, must not re-key it.
+    if (const auto fingerprint = parser.fingerprint();
+        fingerprint.has_value() && statement_fetch_id_ == 0) {
         statement_fetch_id_ = fingerprint->fetch_id;
     }
     return parsed;
@@ -6548,8 +6552,11 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // (bench/results-waystone-v2.md, at 1769487).
     parser::Parser& parser = run->parser.emplace(line);
     auto parsed = parser.Parse();
-    if (const auto fingerprint = parser.fingerprint(); fingerprint.has_value()) {
-        statement_fetch_id_ = fingerprint->fetch_id;  // `sys.statement_stats` (BO-S5)
+    // `sys.statement_stats` (BO-S5): the first parse of the statement keys
+    // it - an UPDATE's SET subquery runs here after the UPDATE's own parse.
+    if (const auto fingerprint = parser.fingerprint();
+        fingerprint.has_value() && statement_fetch_id_ == 0) {
+        statement_fetch_id_ = fingerprint->fetch_id;
     }
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};

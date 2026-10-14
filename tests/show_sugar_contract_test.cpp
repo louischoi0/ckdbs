@@ -428,6 +428,21 @@ TEST_F(ShowSugarTest, AKindWithNoFingerprintIsOneRowAtFetchIdZero) {
     EXPECT_EQ(testing_view::MetaField(Text("SHOW META"), "statement_stats_dropped"), "0");
 }
 
+TEST_F(ShowSugarTest, AnUpdateWithASubqueryIsKeyedByItsOwnShape) {
+    // The SET value's subquery runs through the SELECT path inside the
+    // UPDATE; its fingerprint must not become the UPDATE's key.
+    stats::StatementStats::ResetForTest();
+    const std::string update = "UPDATE t SET v = (SELECT v FROM t WHERE id = 1) WHERE id = 1";
+    ASSERT_EQ(Text(update).rfind("ERR", 0), std::string::npos) << Text(update);
+
+    const std::string reply =
+        Text("SELECT kind, fetch_id FROM sys.statement_stats WHERE kind = 'UPDATE'");
+    const auto shown = testing_view::ReadViewText(reply);
+    EXPECT_EQ(shown.Column("fetch_id"),
+              std::vector<std::string>{std::to_string(parser::FingerprintOf(update)->fetch_id)})
+        << reply;
+}
+
 TEST_F(ShowSugarTest, TheTraceSurfaceIsRetired) {
     // BO-Q9 (a): nothing ever installed a sink, so these always answered ERR.
     for (const char* sql : {"SHOW TRACES", "SHOW TRACE 1", "TRACE ON"}) {

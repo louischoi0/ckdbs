@@ -687,3 +687,49 @@ the reviewer itself proposed for when `sys.checkpoints` repeats the shape
 
 Suite: 3767/3767 (`ctest -LE heap-suspended`, Debug). Overhead not
 measured; measured at the milestone's close.
+
+### BO-S4 — not run
+
+BO-Q5 is (b): nothing is persisted, so the format change this stage was
+is not made (§4).
+
+### BO-S5 — 2026-10-14
+
+On `bo-show-sugar`, `4a2b16e9` and its review commit. `sys.statement_stats`
+as §3.1 designs it: `stats::StatementStats`, a part per core of up to 4096
+shapes merged by `(fetch_id, kind)` at read; a new shape past the bound is
+dropped and counted (`statement_stats_dropped`). Recorded once per
+statement at its end by `Dispatch` and `DispatchAsync`, timed whole (a
+park, a re-run and the group commit are one call); the `fetch_id` is the
+parse's own - `SELECT`'s parser, `INSERT`'s and `UPDATE`'s through
+`ParseKeepingShape` - so no statement is lexed twice, the first parse of a
+statement keeping the key a nested `SELECT` would otherwise take.
+**Decided in the building, stated:** a refused statement is a call and
+counts in `refused`; a frame destroyed at a park never replied and is no
+call; `kind` is the first whitespace-separated token, as `DispatchInner`
+routes it, and a token that is no routed verb is `OTHER`, so a client mints
+no row per misspelling; **a statement the engine issues itself is not
+counted** - a listener's `ROLLBACK` at the lifetime ceiling or a client's
+disconnect, a KWP load's own `BEGIN`/`COMMIT`/`ROLLBACK` go through
+`DispatchInternal` - and a KWP load's rows, a protocol frame and not a
+statement, are no row either; the cost per statement is **three clock
+reads** (two monotonic, one wall), not §6's two, and one latched map
+update.
+
+**Review** (`critics-developer`, on `4a2b16e9`). Fixed by the review: an
+`UPDATE` whose `SET` holds a subquery was keyed by the subquery's
+`fetch_id`; `Dispatch`'s refused commit dropped the key; `shape_text`
+could end inside a UTF-8 sequence, which a strict client decode refuses -
+each with a cell that failed first. Applied after it: the engine's own
+statements uncounted (above); `Record` derives the kind itself, so a key's
+pointer-hashed kind is always the static one; the kind split as the
+dispatcher splits. **Not applied:** one `IEquals` and one list of routed
+verbs for the engine (eight copies, four lists) - a refactor across the
+parser, exec and server, not this stage's; the per-core part and its
+count repeat `LockWaitLog`'s (BO-S3's deferral stands until BO-S7); a
+reader copying a part delays that core's next write by the copy - both
+stores share it, and the close measures it; an in-process sim restart
+keeps the store, which "emptied by a restart" means of a process.
+
+Suite: 3777/3777 (`ctest -LE heap-suspended`, Debug). Overhead not
+measured; measured at the milestone's close.

@@ -32,8 +32,10 @@ bool IEquals(std::string_view a, std::string_view b) noexcept {
 std::string_view StatementKindOf(std::string_view line) noexcept {
     std::size_t at = 0;
     while (at < line.size() && std::isspace(static_cast<unsigned char>(line[at]))) ++at;
+    // The first whitespace-separated token, as `DispatchInner` splits it:
+    // `COMMIT;` routes nowhere, so it is no `COMMIT`.
     std::size_t end = at;
-    while (end < line.size() && std::isalpha(static_cast<unsigned char>(line[end]))) ++end;
+    while (end < line.size() && !std::isspace(static_cast<unsigned char>(line[end]))) ++end;
     const std::string_view word = line.substr(at, end - at);
     for (std::string_view kind : kKinds) {
         if (IEquals(word, kind)) return kind;
@@ -53,9 +55,11 @@ std::array<StatementStats::Part, StatementStats::kParts>& StatementStats::parts(
     return p;
 }
 
-void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view kind,
-                            std::string_view line, bool refused, std::uint64_t elapsed_us,
-                            std::int64_t now_us) noexcept {
+void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view line,
+                            bool refused, std::uint64_t elapsed_us, std::int64_t now_us) noexcept {
+    // Derived here, so every key's kind is `StatementKindOf`'s static
+    // storage - the pointer `KeyHash` hashes by.
+    const std::string_view kind = StatementKindOf(line);
     Part& part = parts()[core % kParts];
     const LatchGuard held(&part.latch);
     const Key key{fetch_id, kind};
@@ -72,7 +76,15 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
             shape.fetch_id = fetch_id;
             shape.kind = std::string(kind);
             shape.first_seen_us = now_us;
-            shape.shape_text = std::string(line.substr(0, kShapeTextBytes));
+            // Cut at a character boundary: a UTF-8 continuation byte
+            // (`10xxxxxx`) at the cut moves it back, so the text stays
+            // decodable by a client that decodes strictly.
+            std::size_t cut = std::min(line.size(), kShapeTextBytes);
+            while (cut < line.size() && cut > 0 &&
+                   (static_cast<unsigned char>(line[cut]) & 0xC0) == 0x80) {
+                --cut;
+            }
+            shape.shape_text = std::string(line.substr(0, cut));
             found = part.shapes.emplace(key, std::move(shape)).first;
         } catch (const std::bad_alloc&) {
             ++part.dropped;

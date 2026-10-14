@@ -21,15 +21,17 @@ TEST_F(StatementStatsTest, AKindIsAStatementVerbOrOther) {
     EXPECT_EQ(StatementKindOf("Purge from t where id = 1"), "PURGE");
     EXPECT_EQ(StatementKindOf("FLIBBERTIGIBBET EVERYTHING"), "OTHER");
     EXPECT_EQ(StatementKindOf(""), "OTHER");
-    // A verb glued to punctuation is still the verb.
-    EXPECT_EQ(StatementKindOf("SHOW(1)"), "SHOW");
+    // The token `DispatchInner` routes on, split at whitespace: a verb glued
+    // to punctuation routes nowhere, so it is no verb.
+    EXPECT_EQ(StatementKindOf("SHOW(1)"), "OTHER");
+    EXPECT_EQ(StatementKindOf("COMMIT;"), "OTHER");
+    EXPECT_EQ(StatementKindOf("commit"), "COMMIT");
 }
 
 TEST_F(StatementStatsTest, OneShapeOnTwoCoresIsOneRowMerged) {
-    const std::string_view select = StatementKindOf("SELECT");
-    StatementStats::Record(0, 42, select, "SELECT v FROM t WHERE id = 1", false, 10, 1'000);
-    StatementStats::Record(1, 42, select, "SELECT v FROM t WHERE id = 2", true, 30, 500);
-    StatementStats::Record(0, 42, select, "SELECT v FROM t WHERE id = 3", false, 20, 2'000);
+    StatementStats::Record(0, 42, "SELECT v FROM t WHERE id = 1", false, 10, 1'000);
+    StatementStats::Record(1, 42, "SELECT v FROM t WHERE id = 2", true, 30, 500);
+    StatementStats::Record(0, 42, "SELECT v FROM t WHERE id = 3", false, 20, 2'000);
 
     const std::vector<StatementShape> shapes = StatementStats::Snapshot();
     ASSERT_EQ(shapes.size(), 1u);
@@ -47,11 +49,11 @@ TEST_F(StatementStatsTest, OneShapeOnTwoCoresIsOneRowMerged) {
 }
 
 TEST_F(StatementStatsTest, KindsWithNoFingerprintAreOneRowEachAtFetchIdZero) {
-    StatementStats::Record(0, 0, StatementKindOf("DELETE"), "DELETE FROM t WHERE id = 1", false,
+    StatementStats::Record(0, 0, "DELETE FROM t WHERE id = 1", false,
                            1, 1);
-    StatementStats::Record(0, 0, StatementKindOf("DELETE"), "DELETE FROM u WHERE id = 9", false,
+    StatementStats::Record(0, 0, "DELETE FROM u WHERE id = 9", false,
                            1, 2);
-    StatementStats::Record(0, 0, StatementKindOf("CREATE"), "CREATE TABLE x (id int64)", false,
+    StatementStats::Record(0, 0, "CREATE TABLE x (id int64)", false,
                            1, 3);
     const std::vector<StatementShape> shapes = StatementStats::Snapshot();
     ASSERT_EQ(shapes.size(), 2u);
@@ -61,13 +63,12 @@ TEST_F(StatementStatsTest, KindsWithNoFingerprintAreOneRowEachAtFetchIdZero) {
 }
 
 TEST_F(StatementStatsTest, AShapePastTheBoundIsDroppedAndCountedAndKnownShapesStillCount) {
-    const std::string_view select = StatementKindOf("SELECT");
     for (std::uint64_t id = 1; id <= StatementStats::kShapesPerCore; ++id) {
-        StatementStats::Record(2, id, select, "SELECT", false, 1, 1);
+        StatementStats::Record(2, id, "SELECT", false, 1, 1);
     }
-    StatementStats::Record(2, StatementStats::kShapesPerCore + 1, select, "SELECT", false, 1, 1);
+    StatementStats::Record(2, StatementStats::kShapesPerCore + 1, "SELECT", false, 1, 1);
     EXPECT_EQ(StatementStats::Dropped(), 1u);
-    StatementStats::Record(2, 1, select, "SELECT", false, 1, 1);
+    StatementStats::Record(2, 1, "SELECT", false, 1, 1);
     const std::vector<StatementShape> shapes = StatementStats::Snapshot();
     ASSERT_EQ(shapes.size(), StatementStats::kShapesPerCore);
     EXPECT_EQ(shapes.front().calls, 2u) << "a known shape is still counted at the bound";
@@ -75,9 +76,16 @@ TEST_F(StatementStatsTest, AShapePastTheBoundIsDroppedAndCountedAndKnownShapesSt
 
 TEST_F(StatementStatsTest, TheShapeTextIsCutAtItsBound) {
     const std::string longer(StatementStats::kShapeTextBytes + 40, 'x');
-    StatementStats::Record(0, 7, StatementKindOf("SELECT"), longer, false, 1, 1);
+    StatementStats::Record(0, 7, longer, false, 1, 1);
     EXPECT_EQ(StatementStats::Snapshot().front().shape_text.size(),
               StatementStats::kShapeTextBytes);
+}
+
+TEST_F(StatementStatsTest, TheShapeTextIsNeverCutInsideAUtf8Sequence) {
+    // 255 ASCII bytes, then a two-byte sequence straddling the 256-byte cut.
+    const std::string line = "SHOW " + std::string(250, 'x') + "\xC3\xA9";
+    StatementStats::Record(0, 0, line, false, 1, 1);
+    EXPECT_EQ(StatementStats::Snapshot().front().shape_text, line.substr(0, 255));
 }
 
 }  // namespace

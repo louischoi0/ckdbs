@@ -571,6 +571,13 @@ public:
     // boundary, as `DispatchAndStage` below states.
     DispatchOutcome Dispatch(std::string_view line, Session* session = nullptr);
 
+    // `Dispatch` for a statement **the engine issues itself** - a listener's
+    // ROLLBACK at a transaction's lifetime ceiling or a client's disconnect,
+    // a KWP load's own BEGIN, COMMIT and ROLLBACK. It runs exactly as
+    // `Dispatch` does and is no client's statement, so `sys.statement_stats`
+    // does not count it (BO-S5); `Dispatch` is this, timed and counted.
+    DispatchOutcome DispatchInternal(std::string_view line, Session* session);
+
     // The statement path without the durability wait: it runs the statement
     // and reports any commit it staged through `DispatchOutcome::pending_lsn`.
     // Both entry points above go through it; they differ only in how they
@@ -822,8 +829,6 @@ private:
     // first one's deadline instead of starting a fresh one.
     // `parser::Parse`, setting `statement_fetch_id_` from the parse (BO-S5).
     StatusOr<parser::Statement> ParseKeepingShape(std::string_view line);
-    // `Dispatch`'s body; `Dispatch` times it whole for `sys.statement_stats`.
-    DispatchOutcome DispatchBlocking(std::string_view line, Session* session);
     // One statement's `sys.statement_stats` count, at its end (BO-S5):
     // `began_ns` is when it entered, re-runs and waits included.
     void RecordStatement(std::string_view line, const DispatchOutcome& out,
