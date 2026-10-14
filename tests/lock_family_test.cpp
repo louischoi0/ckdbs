@@ -2440,6 +2440,35 @@ TEST_F(MidWalkWaitTest, AClusteredBtreeParksAndResumesByKey) {
         << "the key-ordered skip did not hold - rows below the resume key were written twice";
 }
 
+TEST_F(MidWalkWaitTest, AResumedWriteOverItsOwnRelationWritesTheTargetsItCollected) {
+    // A write whose WHERE reads the relation it writes collects its targets
+    // before its first write (parser-v2.md R2). The park comes after six
+    // rows are written; a resume that collected again would see them -
+    // `x.v = 1` true below every later row - and write nothing more.
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
+    Started walk = Start(
+        "UPDATE tb SET v = 1 WHERE NOT EXISTS (SELECT id FROM tb AS x WHERE x.id < tb.id AND "
+        "x.v = 1)",
+        w);
+    Pump();
+    ASSERT_FALSE(*walk.done) << "the walk did not park: " << walk.out->response;
+    ASSERT_NE(w.transaction(), nullptr);
+    EXPECT_EQ(w.transaction()->trail().size(), 6u);
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*walk.done) << "the wait never ended";
+    EXPECT_EQ(walk.out->response.rfind("UPDATED 10", 0), 0u) << walk.out->response;
+    EXPECT_EQ(w.transaction()->trail().size(), 10u);
+}
+
 TEST_F(MidWalkWaitTest, ThePointLookupArmStillReportsTheConflictItCannotWriteThrough) {
     // **The arm that does not walk at all.** A bare `WHERE id = k` on a
     // btree relation is answered by a descent, not by `VisitRelation` - so

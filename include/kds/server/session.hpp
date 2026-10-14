@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -118,6 +119,12 @@ struct WalkCursor {
     // walk itself; the caller that owns the counter seeds it and writes it
     // back.
     std::uint32_t rows_done = 0;
+    // **The rows a write collected before its first write**, by tuple key:
+    // set when its WHERE reads the relation it writes (`SubChainsRead`), so
+    // the WHERE is evaluated once over the relation as it stood and never
+    // over the statement's own writes. Carried so a resume writes exactly
+    // these rows rather than re-evaluating over what it already wrote.
+    std::shared_ptr<const std::unordered_set<std::uint64_t>> targets;
 };
 
 class Session {
