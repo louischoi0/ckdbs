@@ -332,7 +332,7 @@ NULL for a NULL argument except `CONCAT`, which skips them.
 | `LPAD`, `RPAD(s, n [, fill])` | text, a whole number, text | `varchar` of `n` bytes: a longer `s` is cut on the right, as the reference dialect does; refused past 1 MiB |
 | `CONCAT(a, b, ...)` | text | `varchar` |
 | `NOW()` | none | `timestamp`: **one value per statement**, the statement's clock (`StatementContext`), carried across a park |
-| `CURRENT_DATE` | none, written without parentheses | `date`; a column of that name wins, so the function is unreachable on a relation that has one (BJ-Q4) |
+| `CURRENT_DATE` | none, written without parentheses | `date`; a column of that name, in any case, wins - a `SET` value reads a column as every read does, ignoring case - so the function is unreachable on a relation that has one (BJ-Q4) |
 | `DATE(ts)` | a timestamp | `date`, the day it falls in |
 
 **A scaled decimal.** `ROUND`, `TRUNC`, `CEIL`, `FLOOR` and, for a decimal,

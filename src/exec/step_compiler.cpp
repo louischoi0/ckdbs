@@ -79,14 +79,8 @@ StatusOr<bool> FindColumnPos(const catalog::Schema& schema, const parser::Column
     const std::vector<std::uint16_t> matches = schema.MatchColumns(name.name);
     if (matches.empty()) return false;
     if (matches.size() > 1) {
-        std::string listed;
-        for (std::size_t i = 0; i < matches.size(); ++i) {
-            if (i > 0) listed += i + 1 == matches.size() ? " and " : ", ";
-            listed += "'" + std::string(catalog::NameView(schema.columns[matches[i]].name)) + "'";
-        }
-        return Status::InvalidArgument("column name '" + name.name + "' is ambiguous: it matches " +
-                                       listed + " ignoring case (byte " +
-                                       std::to_string(name.byte_offset) + ")");
+        return schema.AmbiguousColumnName(name.name, matches, /*ignoring_case=*/true,
+                                          name.byte_offset);
     }
     out = matches.front();
     return true;
@@ -1638,7 +1632,9 @@ Status CompileAssignments(const catalog::TableAccess& access,
         compiled->reserve(assignments.size());
     }
     for (const parser::Assignment& a : assignments) {
-        const auto* column = access.schema.FindColumn(a.col_name);
+        auto found = access.schema.FindColumn(a.col_name, a.byte_offset);
+        if (!found.ok()) return found.status();
+        const catalog::SysColumnRow* column = found.value();
         if (column == nullptr) {
             return Status::InvalidArgument("unknown column '" + a.col_name + "' at byte " +
                                            std::to_string(a.byte_offset));

@@ -390,7 +390,9 @@ StatusOr<TransitionDdlResult> CreateTransition(catalog::Catalog& catalog,
     if (!access.ok()) return access.status();
     const catalog::TableAccess& rel = *access.value();
 
-    const catalog::SysColumnRow* column = rel.schema.FindColumn(stmt.column);
+    auto found = rel.schema.FindColumn(stmt.column, stmt.column_byte_offset);
+    if (!found.ok()) return found.status();
+    const catalog::SysColumnRow* column = found.value();
     if (column == nullptr) {
         return Status::NotFound("no column '" + stmt.column + "' in relation '" +
                                 stmt.table_name + "' (byte " +

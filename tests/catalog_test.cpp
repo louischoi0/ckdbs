@@ -285,7 +285,9 @@ TEST_F(CatalogTest, CreateTableInsertsObjectTableAndColumnRows) {
     auto built_schema = catalog_.BuildSchemaFromColumns(oid.value());
     ASSERT_TRUE(built_schema.ok());
     ASSERT_EQ(built_schema.value().columns.size(), 2u);
-    const SysColumnRow* id_found = built_schema.value().FindColumn("id");
+    auto id_lookup = built_schema.value().FindColumn("id", /*byte_offset=*/0);
+    ASSERT_TRUE(id_lookup.ok());
+    const SysColumnRow* id_found = id_lookup.value();
     ASSERT_NE(id_found, nullptr);
     EXPECT_EQ(id_found->type_val, 5u);
     EXPECT_TRUE(id_found->notnull);

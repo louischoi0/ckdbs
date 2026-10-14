@@ -1777,7 +1777,12 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
                 }
                 return false;
             }
-            if (NameView(row.name) == old_name) {
+            // Only the first exact `old_name` is the column renamed - the
+            // rewrite below takes the first - so a second one, which only a
+            // relation created before CREATE TABLE refused a repeated name
+            // can hold, is a sibling like any other: `zz` may become `w`,
+            // the way out of the pair, but not `ZZ`, which keeps it.
+            if (!found_old && NameView(row.name) == old_name) {
                 found_old = true;
                 return false;
             }
@@ -1796,6 +1801,13 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     if (!found_old) {
         return Status::NotFound("the relation has no column named '" + std::string(old_name) +
                                  "'");
+    }
+    // A rename onto the name the column already has is refused, as it was
+    // before a column stopped colliding with itself: it would rewrite,
+    // log and bump the version for nothing.
+    if (old_name == new_name) {
+        return Status::AlreadyExists("the column is already named '" + std::string(new_name) +
+                                     "'");
     }
 
     auto acted = ForFirstRow<SysColumnRow>(
@@ -1894,6 +1906,29 @@ Status Catalog::DropColumn(Oid table_oid, std::string_view name, std::uint64_t t
     // (CT7), as `RenameColumn` takes it.
     auto columns = store_.Get(kCatalogPageColumns);
     if (!columns.ok()) return columns.status();
+
+    // The catalog door's own defense of `Schema::FindColumn`'s refusal: two
+    // live columns named exactly `name` - which only a relation created
+    // before CREATE TABLE refused a repeated name can hold - leave no column
+    // the statement named, and dropping the first would be a choice.
+    std::size_t named = 0;
+    auto counted = ForFirstRow<SysColumnRow>(
+        store_, kCatalogPageColumns,
+        [&](SysColumnRow& row, heap::PageView&, PageId, std::uint16_t,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.rel_id == table_oid && !tuple.deleted && !row.dropped() &&
+                NameView(row.name) == name) {
+                ++named;
+            }
+            return false;
+        },
+        nullptr, storage::PageAccess::kRead);
+    if (!counted.ok()) return counted.status();
+    if (named > 1) {
+        return Status::InvalidArgument("column name '" + std::string(name) +
+                                       "' is ambiguous: " + std::to_string(named) +
+                                       " live columns have it");
+    }
 
     CatalogRowChange change;
     auto acted = ForFirstRow<SysColumnRow>(

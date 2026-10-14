@@ -143,7 +143,10 @@ names are load-bearing for bootstrap and are nobody's to change).
   a name equal ignoring case to another live column's - or to one whose
   drop is undecided - is refused `AlreadyExists` at the new name's byte,
   naming that column as declared. The column being renamed collides only
-  with itself, so `RENAME COLUMN a TO A` lands.
+  with itself, so `RENAME COLUMN a TO A` lands; `RENAME COLUMN a TO a` is
+  `AlreadyExists`. Each refusal carries its token's byte: a missing old
+  column the old name's, a collision or a name longer than 63 bytes the
+  new name's.
 - **The tuple key column may be renamed.** Identity is the Keystone word and
   position 0 (invariant 11), not the spelling; `CheckKeystoneColumn` is
   positional and does not re-run.
@@ -199,7 +202,8 @@ position, in the lowest free slot, its `sys.columns` row flagged
   dropped column keeps its slot.
 - A name equal ignoring case to a live column's is `AlreadyExists`, naming
   that column as declared (`catalog.md` CT7's column rule); a dropped
-  column's name is free in any case.
+  column's name is free in any case. A name longer than 63 bytes is
+  `InvalidArgument` at its byte, never stored truncated.
 
 **`DROP [COLUMN] <name>`** sets `kColumnDropped` on the column's row. The
 column keeps its position, so every stored position (an index's columns, a

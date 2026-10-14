@@ -723,7 +723,9 @@ S1-S5 stand as closed. **BW was closed** - on the operator's word of 2026-10-14 
   `[quiet-wrong]`, reproduced by the review, needs the operator's ruling
   between refusing case-only duplicate names and exact-match reads
   (`docs/inflight/bugs/select-reads-the-first-column-whose-name-matches-ignoring-case.md`,
-  `known-gaps.md`, a caveat in the manual); the codec's type refusal
+  `known-gaps.md`, a caveat in the manual - fixed and deleted at `2cc15aca`
+  on the operator's option (a), `raft-marks-2026-10-14.md` §13; the entry
+  resolves against `f544d161`); the codec's type refusal
   carrying no byte (`known-gaps.md`). **Rejected**: one byte-suffix format
   for every `INSERT` refusal - the listed refusals' "at byte N" is the
   parser's form for the same list (BW-Q12.2), and rewriting the positional

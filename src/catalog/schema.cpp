@@ -1,7 +1,6 @@
 #include "kds/catalog/schema.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <string>
 
 #include "kds/catalog/well_known.hpp"
@@ -9,13 +8,19 @@
 
 namespace kds::catalog {
 
-const SysColumnRow* Schema::FindColumn(std::string_view name) const noexcept {
-    for (const auto& col : columns) {
-        if (!col.dropped() && NameView(col.name) == name) {
-            return &col;
+StatusOr<const SysColumnRow*> Schema::FindColumn(std::string_view name,
+                                                std::uint32_t byte_offset) const {
+    std::vector<std::uint16_t> matches;
+    for (std::size_t i = 0; i < columns.size(); ++i) {
+        if (!columns[i].dropped() && NameView(columns[i].name) == name) {
+            matches.push_back(static_cast<std::uint16_t>(i));
         }
     }
-    return nullptr;
+    if (matches.empty()) return static_cast<const SysColumnRow*>(nullptr);
+    if (matches.size() > 1) {
+        return AmbiguousColumnName(name, matches, /*ignoring_case=*/false, byte_offset);
+    }
+    return &columns[matches.front()];
 }
 
 std::vector<std::uint16_t> Schema::MatchColumns(std::string_view name) const {
@@ -28,11 +33,30 @@ std::vector<std::uint16_t> Schema::MatchColumns(std::string_view name) const {
     return out;
 }
 
+Status Schema::AmbiguousColumnName(std::string_view written,
+                                   const std::vector<std::uint16_t>& matches, bool ignoring_case,
+                                   std::uint32_t byte_offset) const {
+    std::string listed;
+    for (std::size_t i = 0; i < matches.size(); ++i) {
+        if (i > 0) listed += i + 1 == matches.size() ? " and " : ", ";
+        listed += "'" + std::string(NameView(columns[matches[i]].name)) + "' (position " +
+                  std::to_string(matches[i]) + ")";
+    }
+    return Status::InvalidArgument("column name '" + std::string(written) +
+                                   "' is ambiguous: it matches " + listed +
+                                   (ignoring_case ? " ignoring case" : " exactly") + " (byte " +
+                                   std::to_string(byte_offset) + ")");
+}
+
+// ASCII only, and not `std::tolower`, whose answer is the locale's: the
+// lexer admits no other identifier byte, and whether two names are one must
+// not move with the process's locale.
 bool ColumnNamesCollide(std::string_view a, std::string_view b) noexcept {
-    return a.size() == b.size() &&
-           std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-               return std::tolower(static_cast<unsigned char>(x)) ==
-                      std::tolower(static_cast<unsigned char>(y));
+    const auto fold = [](char c) {
+        return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+    };
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [&](char x, char y) {
+               return fold(x) == fold(y);
            });
 }
 

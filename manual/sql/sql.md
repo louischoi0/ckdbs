@@ -122,7 +122,12 @@ CREATE TABLE [<namespace>.]<name>
 - **Column names are unique ignoring case.** `(id int64, a int64, A int64)`
   is refused at the later name's byte: `ERR column 'A' repeats column 'a'
   (names are unique ignoring case) (byte <n>)`, and so is an exact repeat.
-  A statement may write a column's name in any case (`SELECT A` reads `a`).
+  A name is at most 63 bytes; a longer one is refused at its byte.
+  **A read may write a column's name in any case** (`SELECT A` reads `a`,
+  in a `WHERE`, an `ORDER BY` and a `SET` value alike). Everywhere else a
+  column is named - a `SET` target, an `INSERT` column list, `DROP COLUMN`,
+  `RENAME COLUMN`'s old name, `CREATE INDEX`, `CABIN`, `ASSERTION` and
+  `TRANSITION` - the name matches exactly, case included.
 
 - **`SPARE <n>` reserves `n` column slots** (0 to 64, default 0) for
   `ALTER TABLE ... ADD COLUMN` (below). Each slot is 16 bytes plus one null
@@ -340,7 +345,8 @@ enforce, indexes and Cabins still serve, all with no re-declaration.
   another live column's ignoring case**: `ERR the relation already has a
   column named 'a' (names are unique ignoring case)`, with the new name's
   byte. A column may be renamed to its own case variant (`RENAME COLUMN a
-  TO A`), and a dropped column's name is free in any case.
+  TO A`), but not to the name it already has, and a dropped column's name
+  is free in any case.
 
 - **`ADD COLUMN`** places the column in the relation's lowest free slot
   (`CREATE TABLE ... SPARE n`). Every row that predates it reads `NULL`
@@ -1347,7 +1353,9 @@ in §7 below now carries and which both used to reach a client as a bare
 | An `INSERT` column list naming no live column (unknown or dropped; matched exactly, case included) | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
 | A column name in `CREATE TABLE` equal, ignoring case, to an earlier one | `InvalidArgument` — `ERR column '<name>' repeats column '<earlier>' (names are unique ignoring case) (byte <n>)` (the later name's byte; nothing is created) |
 | `ADD COLUMN` or `RENAME COLUMN` to a name equal, ignoring case, to a live column's | `AlreadyExists` — `ERR the relation already has a column named '<existing>' (names are unique ignoring case)`, with the new name's byte |
-| A read naming a column that matches two or more columns ignoring case (only a relation created before names were unique ignoring case can hold them) | `InvalidArgument` — `ERR column name '<name>' is ambiguous: it matches '<a>' and '<b>' ignoring case (byte <n>)` |
+| A read naming a column that matches two or more columns ignoring case (only a relation created before names were unique ignoring case can hold them) | `InvalidArgument` — `ERR column name '<name>' is ambiguous: it matches '<a>' (position <i>) and '<b>' (position <j>) ignoring case (byte <n>)` |
+| A `SET` target, `INSERT` column list, `DROP COLUMN`, `CREATE INDEX`, `CABIN`, `ASSERTION` or `TRANSITION` naming a column two columns carry exactly (only such an older relation can) | `InvalidArgument` — the same message, ending `exactly (byte <n>)`; `RENAME COLUMN` renames the first and is the way out |
+| A column name longer than 63 bytes in `CREATE TABLE`, `ADD COLUMN` or `RENAME COLUMN` | `InvalidArgument` at the name's byte |
 | A column named twice in an `INSERT` column list | `InvalidArgument` — `ERR column '<name>' is listed twice in the column list at byte <n>` (the second occurrence's byte) |
 | An `INSERT` column list that leaves out a `NOT NULL` column | `InvalidArgument` — `ERR column '<name>' is NOT NULL and the column list leaves it out (byte <n>); there is no DEFAULT` (the list's `(`; nothing is written) |
 | A row whose length is not the `INSERT` column list's | `InvalidArgument` — `ERR expected <n> value(s), one per listed column; got <k> at byte <b>`, with ` (row <r>)` on a multi-row statement |

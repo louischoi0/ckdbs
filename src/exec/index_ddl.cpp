@@ -21,29 +21,27 @@
 namespace kds::exec {
 namespace {
 
-// Resolution is exact-match, like `Schema::FindColumn` everywhere else: the
-// catalog stores a column's name as it was declared, and case folding here
-// alone would make `CREATE INDEX` accept a spelling no other statement does.
+// Resolution is exact-match, `Schema::FindColumn`'s, as every resolution
+// that is not a read's: only a read folds case (docs/spec/parser-v2.md).
 StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
                                        const parser::IndexColumnRef& col,
                                        const std::string& table_name) {
-    for (std::size_t i = 0; i < access.schema.columns.size(); ++i) {
-        if (!access.schema.columns[i].dropped() &&
-            catalog::NameView(access.schema.columns[i].name) == col.name) {
-            // D2 (docs/spec/null.md): no nullable column enters an index in
-            // v1, key or covered - an entry has no NULL encoding. Refused
-            // here because this is the layer that still holds the byte;
-            // Catalog::CheckIndexDef re-checks as the catalog's own defense,
-            // the same one-implementation-two-doors split the pre-check
-            // below describes.
-            if (!access.schema.columns[i].notnull) {
-                return Status::NotImplemented(
-                    "column '" + col.name + "' is nullable and cannot be in an index "
-                    "(docs/spec/null.md D2; declare it NOT NULL or leave it unindexed) (byte " +
-                    std::to_string(col.byte_offset) + ")");
-            }
-            return static_cast<std::uint16_t>(i);
+    auto found = access.schema.FindColumn(col.name, col.byte_offset);
+    if (!found.ok()) return found.status();
+    if (const catalog::SysColumnRow* column = found.value(); column != nullptr) {
+        // D2 (docs/spec/null.md): no nullable column enters an index in
+        // v1, key or covered - an entry has no NULL encoding. Refused
+        // here because this is the layer that still holds the byte;
+        // Catalog::CheckIndexDef re-checks as the catalog's own defense,
+        // the same one-implementation-two-doors split the pre-check
+        // below describes.
+        if (!column->notnull) {
+            return Status::NotImplemented(
+                "column '" + col.name + "' is nullable and cannot be in an index "
+                "(docs/spec/null.md D2; declare it NOT NULL or leave it unindexed) (byte " +
+                std::to_string(col.byte_offset) + ")");
         }
+        return static_cast<std::uint16_t>(column - access.schema.columns.data());
     }
     return Status::NotFound("relation '" + table_name + "' has no column '" + col.name +
                             "' (byte " + std::to_string(col.byte_offset) + ")");

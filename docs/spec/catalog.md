@@ -232,9 +232,16 @@ schema two of whose columns' names are equal ignoring ASCII case
 (`AlreadyExists`, naming that column as declared). A dropped column's name
 is free in any case (BW-R6) - once its drop is decided, for
 `RenameColumn`, whose rewrite is transactionless. `RenameColumn`'s scan
-skips the column being renamed, so `a` may become `A`. A relation created
-before the rule may still hold two such names; a read naming them is
-refused as ambiguous (`parser-v2.md`'s resolution rules).
+skips the column being renamed - the first live column named exactly
+`old_name`, the one its rewrite takes - so `a` may become `A`, while a
+rename onto the name the column already has is `AlreadyExists`. A relation
+created before the rule may still hold two such names, or two equal ones
+(CREATE TABLE once admitted `(a, a)`); a statement naming them is refused
+as ambiguous (`parser-v2.md`'s resolution rules), and `DropColumn` refuses
+a name two live columns carry exactly, as its own defense. A column name
+is at most 63 bytes (`kCatalogNameMax - 1`): CREATE TABLE and ADD COLUMN
+refuse a longer one at its byte, as `RenameColumn` does, rather than store
+it truncated.
 
 **Assertion names have no pending drop to ask about**: `DROP ASSERTION`
 retires its row outside any transaction (`ddl-transactional.md` §5).

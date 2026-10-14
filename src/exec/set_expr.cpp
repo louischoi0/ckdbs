@@ -469,10 +469,21 @@ private:
     }
 
     StatusOr<Node> Column(const Expr& e) {
-        const catalog::SysColumnRow* col = access_.schema.FindColumn(e.column);
+        // A column read in a SET value resolves as every read does - ignoring
+        // case (`catalog::Schema::MatchColumns`), two or more matches refused
+        // as ambiguous - so the WHERE and the SET of one statement read one
+        // column for one spelling.
+        const std::vector<std::uint16_t> matches = access_.schema.MatchColumns(e.column);
+        if (matches.size() > 1) {
+            return access_.schema.AmbiguousColumnName(e.column, matches, /*ignoring_case=*/true,
+                                                      e.byte_offset);
+        }
+        const catalog::SysColumnRow* col =
+            matches.empty() ? nullptr : &access_.schema.columns[matches.front()];
         if (col == nullptr && Lower(e.column) == "current_date") {
-            // BJ-Q4: a column of the relation with this name wins, so the
-            // function is reachable only where there is none.
+            // BJ-Q4: a column of the relation with this name wins - in any
+            // case, as a read matches it - so the function is reachable only
+            // where there is none.
             Node n = Make(e);
             n->kind = Expr::Kind::kCall;
             n->op = ExprOp::kFunction;

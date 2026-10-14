@@ -27,9 +27,16 @@ struct Schema {
     // schema alone (RowLayout below).
     std::uint16_t spare_slots = 0;
 
-    // The live column named `name`, or nullptr; a dropped column has no name
-    // a statement can reach (BW-R6).
-    const SysColumnRow* FindColumn(std::string_view name) const noexcept;
+    // The live column named exactly `name`, or nullptr when there is none;
+    // a dropped column has no name a statement can reach (BW-R6). What a
+    // statement resolves a name against where it does not fold case - a SET
+    // target, an INSERT column list, DROP COLUMN, and the column CREATE
+    // INDEX, CABIN, ASSERTION or TRANSITION names. Two or more exact
+    // matches - which only a relation created before CREATE TABLE refused a
+    // repeated name can hold - are refused as ambiguous at `byte_offset`
+    // (`AmbiguousColumnName`), never resolved to the first.
+    StatusOr<const SysColumnRow*> FindColumn(std::string_view name,
+                                             std::uint32_t byte_offset) const;
 
     // Every live column whose name equals `name` ignoring case
     // (`ColumnNamesCollide`), in `pos` order. What a statement's read
@@ -38,6 +45,13 @@ struct Schema {
     // before names were unique ignoring case can hold - is ambiguous and
     // refused, never a choice of the first.
     std::vector<std::uint16_t> MatchColumns(std::string_view name) const;
+
+    // The refusal of a written name that resolves to more than one live
+    // column (`matches`: positions, two or more): InvalidArgument naming
+    // each match with its position, at `byte_offset`. `ignoring_case` says
+    // which rule matched them - `MatchColumns`' or `FindColumn`'s.
+    Status AmbiguousColumnName(std::string_view written, const std::vector<std::uint16_t>& matches,
+                               bool ignoring_case, std::uint32_t byte_offset) const;
 };
 
 // The one rule deciding whether two column names are the same name:

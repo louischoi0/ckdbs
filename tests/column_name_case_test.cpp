@@ -215,7 +215,8 @@ TEST_F(ColumnNameCaseTest, AReadMatchingTwoColumnsIgnoringCaseIsRefusedAsAmbiguo
     //            0         1
     //            0123456789012345
     Refused("SELECT ID FROM t",
-            {"column name 'ID' is ambiguous: it matches 'id', 'ID' and 'Id' ignoring case",
+            {"column name 'ID' is ambiguous: it matches 'id' (position 0), 'ID' (position 1) "
+             "and 'Id' (position 2) ignoring case",
              "byte 7"});
     Refused("SELECT id FROM t", {"is ambiguous", "byte 7"});
     Refused("SELECT t.iD FROM t", {"is ambiguous"});
@@ -235,6 +236,117 @@ TEST_F(ColumnNameCaseTest, AReadMatchingTwoColumnsIgnoringCaseIsRefusedAsAmbiguo
     Ok("UPDATE t SET Id = 5 WHERE v = 7");
     Ok("INSERT INTO t (Id, ID, v) VALUES (2, 1, 9)");
     EXPECT_EQ(Run("SELECT * FROM t"), "id,ID,Id,v\\n1,100,5,7\\n2,101,201,8\\n3,1,2,9");
+}
+
+// PURGE has no compiler behind its fold: a tuple-key name the fold declines
+// as ambiguous is refused as ambiguous, never as a form nobody built.
+TEST_F(ColumnNameCaseTest, PurgeRefusesAnAmbiguousNameAsAmbiguous) {
+    Ok("CREATE TABLE t (id int64, qa int64, v int64)");
+    Ok("INSERT INTO t VALUES (100, 7)");
+    Ok("DELETE FROM t WHERE v = 7");
+    RewriteColumnName("qa", "ID");
+    //            0         1
+    //            01234567890123456789
+    for (const char* sql : {"PURGE FROM t WHERE ID = 1", "PURGE FROM t WHERE id BETWEEN 1 AND 2"}) {
+        const std::string out = Run(sql);
+        EXPECT_NE(out.find("is ambiguous"), std::string::npos) << sql << " -> " << out;
+        EXPECT_NE(out.find("byte 19"), std::string::npos) << sql << " -> " << out;
+        EXPECT_EQ(out.find("PURGE admits only"), std::string::npos) << sql << " -> " << out;
+    }
+}
+
+// A column name the catalog's 63-byte field cannot hold is refused at its
+// byte, never stored truncated - where two names sharing their first 63
+// bytes became one, refused by the catalog door with no byte.
+TEST_F(ColumnNameCaseTest, AColumnNameLongerThanTheCatalogHoldsIsRefusedAtItsByte) {
+    const std::string x63(63, 'x');
+    //   "CREATE TABLE t (id int64, " is 26 bytes.
+    Refused("CREATE TABLE t (id int64, " + x63 + "a int64, " + x63 + "b int64)",
+            {"is longer than 63 bytes", "byte 26"});
+    EXPECT_TRUE(IsErr(Run("SELECT * FROM t")));
+    // 63 bytes is the longest name, and it reads back as written.
+    Ok("CREATE TABLE t (id int64, " + x63 + " int64) SPARE 1");
+    Ok("INSERT INTO t VALUES (5)");
+    EXPECT_EQ(Run("SELECT " + x63 + " FROM t"), x63 + "\\n5");
+    //   "ALTER TABLE t ADD COLUMN " is 25 bytes.
+    Refused("ALTER TABLE t ADD COLUMN " + x63 + "y int64 NULL",
+            {"is longer than 63 bytes", "byte 25"});
+}
+
+// A column read inside a SET value resolves as every read does: ignoring
+// case, a twin refused. Before, it matched exactly, so a column named
+// `CURRENT_DATE` lost to the function for `current_date` - a write of today
+// where WHERE would have read the column ([quiet-wrong]).
+TEST_F(ColumnNameCaseTest, ASetValueReadsAColumnIgnoringCaseAsEveryReadDoes) {
+    Ok("CREATE TABLE c (id int64, CURRENT_DATE date, d date)");
+    Ok("INSERT INTO c VALUES ('2001-02-03', '1999-01-01')");
+    Ok("UPDATE c SET d = current_date");
+    EXPECT_EQ(Run("SELECT d FROM c"), "d\\n2001-02-03");
+
+    Ok("CREATE TABLE w (id int64, Amount int64, b int64)");
+    Ok("INSERT INTO w VALUES (3, 0)");
+    Ok("UPDATE w SET b = amount + 1 WHERE AMOUNT = 3");
+    EXPECT_EQ(Run("SELECT b FROM w"), "b\\n4");
+
+    Ok("CREATE TABLE t (id int64, qa int64, v int64)");
+    Ok("INSERT INTO t VALUES (100, 7)");
+    RewriteColumnName("qa", "ID");
+    //            0         1         2
+    //            012345678901234567890
+    Refused("UPDATE t SET v = ID + 1", {"column name 'ID' is ambiguous", "byte 17"});
+    EXPECT_EQ(Run("SELECT v FROM t WHERE v = 7"), "v\\n7");
+}
+
+// A relation from before CREATE TABLE refused a repeated name can hold two
+// columns named exactly `aa`. Every resolution that matches exactly took the
+// first ([quiet-wrong]); each now refuses the name as ambiguous, and RENAME
+// of one copy to a fresh name is the way out.
+TEST_F(ColumnNameCaseTest, AnExactTwinIsRefusedByEveryExactResolution) {
+    Ok("CREATE TABLE t (id int64, aa int64, qa int64, v int64)");
+    Ok("INSERT INTO t VALUES (10, 20, 7)");
+    RewriteColumnName("qa", "aa");
+
+    Refused("SELECT aa FROM t",
+            {"'aa' (position 1) and 'aa' (position 2) ignoring case", "byte 7"});
+    //            0         1
+    //            0123456789012345
+    Refused("UPDATE t SET aa = 0", {"is ambiguous", "exactly", "byte 13"});
+    Refused("UPDATE t SET v = aa", {"is ambiguous"});
+    Refused("INSERT INTO t (aa, v) VALUES (1, 2)", {"is ambiguous", "exactly", "byte 15"});
+    Refused("CREATE INDEX t_aa ON t (aa)", {"is ambiguous", "exactly"});
+    //            0         1         2
+    //            012345678901234567890123456
+    Refused("ALTER TABLE t DROP COLUMN aa", {"is ambiguous", "exactly", "byte 26"});
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,aa,aa,v\\n1,10,20,7");
+
+    // The catalog's door refuses a drop of the pair on its own.
+    auto oid = boot_->catalog.FindTableOidByName("t");
+    ASSERT_TRUE(oid.ok());
+    const Status dropped =
+        boot_->catalog.DropColumn(oid.value(), "aa", catalog::kBootstrapXid, nullptr);
+    EXPECT_EQ(dropped.code(), StatusCode::kInvalidArgument) << dropped.message();
+
+    // RENAME takes the first copy; onto a case variant the second still
+    // collides, onto a fresh name the pair is undone.
+    Refused("ALTER TABLE t RENAME COLUMN aa TO AA", {"named 'aa'"});
+    EXPECT_EQ(Run("ALTER TABLE t RENAME COLUMN aa TO w"), "RENAMED COLUMN t.aa TO w");
+    EXPECT_EQ(Run("SELECT w, aa FROM t"), "w,aa\\n10,20");
+    Ok("UPDATE t SET aa = 21");
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,w,aa,v\\n1,10,21,7");
+}
+
+// RENAME COLUMN's refusals carry their token's byte, and a rename onto the
+// name the column already has is refused, as before a column stopped
+// colliding with itself.
+TEST_F(ColumnNameCaseTest, RenameColumnRefusalsCarryTheirBytes) {
+    Ok("CREATE TABLE t (id int64, a int64)");
+    //            0         1         2         3
+    //            0123456789012345678901234567890123
+    Refused("ALTER TABLE t RENAME COLUMN a TO a", {"already named 'a'", "byte 33"});
+    Refused("ALTER TABLE t RENAME COLUMN z TO b", {"no column named 'z'", "byte 28"});
+    Refused("ALTER TABLE t RENAME COLUMN a TO " + std::string(64, 'y'),
+            {"longer than 63 bytes", "byte 33"});
+    EXPECT_EQ(Run("ALTER TABLE t RENAME COLUMN a TO A"), "RENAMED COLUMN t.a TO A");
 }
 
 }  // namespace
