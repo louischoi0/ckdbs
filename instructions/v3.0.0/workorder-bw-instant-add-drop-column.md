@@ -240,11 +240,13 @@ Each of BW-R1..R12 is CLA's proposal; its standing is §4's.
 
 ---
 
-## 4. Questions `[open]`
+## 4. Questions — adopted (W3)
 
 Each item carries CLA's proposal as BW-R1..R12 state it. W1's "the rest
-as proposed" covered D-e and D-f; these items arose after W1 and are open
-until marked.
+as proposed" covered D-e and D-f; these items arose after W1. **All seven
+adopted as proposed on the standing go-ahead of 2026-10-14 (W3)**; BW-Q3's
+premise - `EncodeRow` the one payload producer - re-read at `750496b1`
+before its adoption, and it holds.
 
 - **BW-Q1** — `SPARE <n>` as the spelling and `[0, 64]` as the range
   (BW-R1). 64 keeps every slot inside `cabin_mask`/`index_mask`'s 64 bits
@@ -318,4 +320,4 @@ Every stage runs the full suite and gets a `critics-developer` review
 
 ## 6. Where to start
 
-Nothing is built at the writing. BW-Q1..Q7 are open.
+Nothing is built at the writing. BW-Q1..Q7 adopted (W3); BW-S1 is next.
