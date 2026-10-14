@@ -25,7 +25,8 @@ dispatcher's own commands):
 
 `DROP TABLE` and `ALTER TABLE` exist and are **catalog-only** (see their
 sections): a drop tombstones the oid and its pages are reclaimed after it
-commits, and a rename edits a label. The catalog is append-only apart
+commits, a rename edits a label, and `ADD`/`DROP COLUMN` change a column's
+catalog row and no stored row. The catalog is append-only apart
 from those, `DROP CABIN`, `DROP INDEX` and `DROP ASSERTION`.
 
 ---
@@ -115,8 +116,16 @@ Grammar (verified):
 CREATE TABLE [<namespace>.]<name>
                     ( <col> <type> [NULL | NOT NULL] [REFERENCES <parent>]
                      [CABIN | CABIN AUTO | NO CABIN]
-                     [, ...] ) [HEAP | BTREE] [EXPLICIT];
+                     [, ...] ) [HEAP | BTREE] [EXPLICIT] [SPARE <n>];
 ```
+
+- **`SPARE <n>` reserves `n` column slots** (0 to 64, default 0) for
+  `ALTER TABLE ... ADD COLUMN` (below). Each slot is 16 bytes plus one null
+  bit in every row, used or not, so the row size is fixed for the life of
+  the relation and an `ADD` writes no row. A relation created without it
+  has no slot and cannot take an added column. `sys.tables` shows
+  `spare_slots` and `spare_free`. `SPARE` is an identifier, not a reserved
+  word; a count past 64 or a second `SPARE` is refused with its byte.
 
 - **`HEAP` is suspended and the storage clause defaults to `BTREE`.** Writing
   `HEAP` is refused: `ERR HEAP storage is suspended (SUS-1) and no new heap
@@ -308,32 +317,69 @@ structure of the relation reaches - a failed split's, a failed
   change is early. Isolating it needs undo records for catalog rows,
   which is not built (`docs/spec/ddl-transactional.md` §5a).
 
-### ALTER TABLE (built 2026-08-10, AL1-AL9 / ALT01-ALT05)
+### ALTER TABLE (renames built 2026-08-10, AL1-AL9; `ADD`/`DROP COLUMN` BW, v3.2.0)
 
 ```sql
 ALTER TABLE <t> RENAME TO <new>
 ALTER TABLE <t> RENAME COLUMN <old> TO <new>
+ALTER TABLE <t> ADD [COLUMN] <col> <type> NULL
+ALTER TABLE <t> DROP [COLUMN] <col>
 ```
 
-v1 is **catalog-only**: a rename changes a catalog label and no tuple
-bytes. Identity is the oid, so nothing dangles — foreign keys still
+Every form is **catalog-only**: it changes catalog rows and no stored row,
+so it costs the same on ten rows and on ten billion. A rename changes a
+label. Identity is the oid, so nothing dangles — foreign keys still
 enforce, indexes and Cabins still serve, all with no re-declaration.
 
-- `ADD COLUMN` / `DROP COLUMN` / type changes answer `NOT_IMPLEMENTED` with a
-  position: the row size is a schema constant (invariant 13), so a
-  column-set change is a relation rewrite, not a catalog edit. Widening
-  is permanently out by the tagged-cell design.
-- **Assertions RESTRICT both forms**: the stored canon is the
-  declaration's text, so `ALTER` on a relation carrying one refuses,
-  naming it — drop, rename, re-declare.
+- **`ADD COLUMN`** places the column in the relation's lowest free slot
+  (`CREATE TABLE ... SPARE n`). Every row that predates it reads `NULL`
+  there.
+  - **It must say `NULL`.** A column is `NOT NULL` unless declared `NULL`,
+    and the rows that predate it have no value, so `ADD COLUMN c int64` and
+    `... NOT NULL` are refused `NOT_IMPLEMENTED`; there is no `DEFAULT`.
+  - **One slot, at most 16 bytes.** Every integer, `bool`, `date`,
+    `timestamp` and `decimal(p, s)` up to 38 digits fits, as does
+    `char(N)` with N ≤ 16. A string column is `varchar(16)`, which
+    holds a value of any length: up to 13 bytes are stored in the row and a
+    longer value spills to the var-heap. A wider `varchar(N)` or `char(N)`
+    is refused, naming the slot, and so is a bare `varchar` unless the
+    instance's `kds.inline_cell_width` is 16 (it is 64 by default).
+  - `REFERENCES` and a cabin clause are refused (declare a foreign key at
+    `CREATE TABLE`; `CREATE CABIN` after the `ADD`). Because the column is
+    nullable, it cannot be indexed or carry a Transition.
+  - A relation with no free slot - none reserved, or all taken - refuses
+    `ADD` `NOT_IMPLEMENTED`: adding the column would rewrite every row.
+- **`DROP COLUMN`** flags the column. Its name is free for an `ADD` or a
+  `RENAME` once the drop commits (at once for an `ADD` in the dropping
+  transaction), and it leaves `SELECT *`, `DESCRIBE`, `sys.columns`
+  and positional `VALUES`, which count the remaining columns. Its bytes stay
+  in every row and its slot is never reused: nothing is reclaimed (no
+  cleaning is built).
+  - Refused for the primary key, and for a column an index keys or covers,
+    a foreign key names, a Transition governs or a Cabin is on, each named.
+    Any column of a relation that carries an assertion is refused too,
+    naming the assertion.
+- **`ADD` and `DROP COLUMN` are transactional**: each takes the relation
+  exclusively, waiting for open writers and positioned readers (refused
+  `TXN_CONFLICT` after 1 s), and `ROLLBACK` - or a crash before the commit
+  - undoes it. Another session's *read* can see the undecided column set:
+  a column missing from `SELECT *`, or an added one reading `NULL`, before
+  the commit. It never sees a wrong value.
+- Type changes and widening answer `NOT_IMPLEMENTED` with a position: they
+  rewrite every row (invariant 13). Widening is permanently out by the
+  tagged-cell design.
+- **Assertions RESTRICT both renames** (and `DROP COLUMN`, above): the
+  stored canon is the declaration's text, so a rename of a relation
+  carrying one refuses, naming it — drop, rename, re-declare. `ADD COLUMN`
+  is not refused.
 - **Patterns are allowed to die**: statements against the old name stop
   matching stored patterns and trails, which costs replay speed, never a
   row; new-name traffic re-registers on the ordinary path.
 - The pk column renames like any other (identity is the Keystone word,
   not the spelling); a `sys.*` relation refuses; a taken name is
   `AlreadyExists`.
-- Unlogged and non-transactional. (`CREATE TABLE` is the one DDL that is
-  transactional; `ALTER` is not.)
+- A rename is logged and durable but **not transactional**: `ROLLBACK` does
+  not undo it.
 
 ### CREATE INDEX / DROP INDEX (built, IX01-IX16)
 
@@ -583,6 +629,20 @@ INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
   no column list and no body column may be omitted individually — so a wrong
   length is refused naming both:
   `ERR expected 3 value(s) including primary-key column 'id', or 2 to have it issued; got 4`.
+- **A `NULL` primary key asks for an issued one** (as a KWP load row's
+  does): `INSERT INTO trades VALUES (NULL, 'AMD', 1)` is the issued-key row
+  at full width.
+- **After `ALTER TABLE ... ADD` or `DROP COLUMN`, every row is full width.**
+  On a relation whose column set has changed, `n - 1` values are refused,
+  because that length is the length a row written for the old columns has -
+  after an `ADD`, a row that named its key; after a `DROP`, a row that left
+  it out - and admitting it would put every value one column over. Name the
+  key, or write `NULL` for it:
+  `ERR expected 3 value(s), one per column, with primary-key column 'id' NULL to have it issued; got 2 (byte <n>). The relation's columns were changed by ALTER TABLE, ...`.
+  The count does not catch every stale statement: after a `DROP`, a row
+  written for the old columns with its key left out has the new full
+  length and is admitted with its first value as the key. Re-read a
+  positional `INSERT` written before an `ALTER`.
 - **A named pk must be an integer literal** in `[1, 2^48 - 1]` — 0 is
   reserved for "unset". A non-integer is `InvalidArgument`; an integer
   outside the range is `OutOfRange` (exhausted). Both carry the offending
@@ -1071,8 +1131,9 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
     relation. The refusal is deliberate — the alternative is two
     relations claiming one name — and it can be spurious if the first
     transaction rolls back.
-- Other DDL (`ALTER TABLE`, cabins, patterns, assertions) is **not**
-  transactional and is not rolled back.
+- `ALTER TABLE ... ADD COLUMN` and `DROP COLUMN` are transactional too
+  (above). Other DDL (`ALTER TABLE`'s renames, cabins, patterns,
+  assertions) is **not** transactional and is not rolled back.
 
 **Durability class.** Three classes exist — `strict` (D1, fsync per commit),
 `group` (D2, default), `relaxed` (D3) — but the class is set by the
@@ -1143,7 +1204,7 @@ worth anything:
 - **`ERR NOT_IMPLEMENTED retryable=0 …`** — the design admits this form and
   this release has not built it. Feature-detect and try again against a later
   server. Most of this section is this one: CTEs, derived tables, outer
-  joins, `HAVING`, `UNIQUE` indexes, `ALTER TABLE`'s data-moving verbs, a
+  joins, `HAVING`, `UNIQUE` indexes, `ALTER TABLE`'s row-rewriting forms (a type change, an `ADD` with no free slot), a
   value wider than one var-heap page.
 - **`ERR UNSUPPORTED retryable=0 …`** — this engine's architecture cannot
   admit the form, so no later server answers it and the statement must be
@@ -1220,7 +1281,8 @@ they were before the split.
   would turn a read accelerator into a constraint that can fail writes.
 - **No file shrinking, and no data-moving `ALTER`.** A dropped relation's
   pages are reclaimed and reused (DT1), but the file never shrinks and no
-  `VACUUM` moves live rows. `ALTER TABLE` is renames only (AL1). The
+  `VACUUM` moves live rows. `ALTER TABLE` renames and adds or drops a
+  column in place; it never rewrites a row (AL1, BW). The
   RESTRICT predicates (assertions, referencing fkeys) now have their
   callers in both.
 - **No `SELECT *` across a join**, no duplicate FROM bindings, no
@@ -1250,7 +1312,8 @@ in §7 below now carries and which both used to reach a client as a bare
 | Statement in a poisoned transaction | `ERR current transaction is aborted; commands are ignored until ROLLBACK` |
 | `BEGIN` inside a transaction | `ERR a transaction is already open; COMMIT or ROLLBACK first` |
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
-| A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including primary-key column '<name>', or <n-1> to have it issued; got <k>` |
+| A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including primary-key column '<name>', or <n-1> to have it issued; got <k> (byte <b>)` |
+| A row that is not `n` values long, on a relation `ALTER TABLE ... ADD`/`DROP COLUMN` changed | `ERR expected <n> value(s), one per column, with primary-key column '<name>' NULL to have it issued; got <k> (byte <b>). The relation's columns were changed by ALTER TABLE, ...` |
 | A non-integer supplied pk | `InvalidArgument` — `ERR primary-key column '<name>' needs an integer literal (byte <n>)` |
 | A supplied pk outside `[1, 2^48 - 1]` (zero, negative, too large, or past 64 bits) — *exhausted* | `OutOfRange` — `ERR primary key <k> is outside the Keystone id space [1, 281474976710655] (byte <n>)` |
 | A supplied pk already bound on a `BTREE` relation — *duplicate* | `AlreadyExists` — `ERR duplicate primary key <k> already present at page <p> slot <s> (byte <n>)`, or for a `DELETE`d row's key, until a `PURGE` frees it, `ERR duplicate primary key <k>: a row with this key was deleted; PURGE frees its key (page <p> slot <s>) (byte <n>)` |

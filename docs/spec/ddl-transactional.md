@@ -127,10 +127,18 @@ Built, and what each gets:
 - **`CREATE ASSERTION`** — built and published where its session is,
   on any core, since AT-S5d; admitted inside a transaction
   (§5f).
+- **`ALTER TABLE ... ADD COLUMN` / `DROP COLUMN`** (BW, `alter.md` AL11) -
+  atomic and writer-isolated on every core, §5e's shape: the relation `X`
+  before the first catalog write, `ADD` inserting its `sys.columns` row and
+  `DROP` overwriting its row as the transaction's (the prior image to the
+  undo log), so `ROLLBACK` and mount recovery undo either. Readers are not
+  isolated: the row is rewritten in place, so another session's read can
+  see the undecided column set, never a wrong value (BW-Q8 (a)).
 - The autocommit path is unchanged in behaviour: a bare `CREATE TABLE`
   commits immediately.
 
-**Not transactional:** `ALTER TABLE`, cabins, assertions and foreign keys.
+**Not transactional:** `ALTER TABLE`'s renames, cabins, assertions and
+foreign keys.
 Their catalog writes are logged and durable (§7) but not undone by
 `ROLLBACK`.
 

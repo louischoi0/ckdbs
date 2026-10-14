@@ -165,9 +165,10 @@ struct RowLayout {
     // Whether the relation's column set has changed since `CREATE TABLE` - a
     // column added or dropped. **`[quiet-wrong]`** (BW-Q9): on such a
     // relation a positional row carries every live column, the pk `NULL` to
-    // have it issued, because the short form's length is the length a row
-    // written against the column set before the change has, and admitting
-    // it would shift every value one column over.
+    // have it issued, because after an `ADD` the short form's length is that
+    // of a row written for the old columns with its key named, and admitting
+    // it would shift every value one column over. A `DROP` leaves a case no
+    // length catches (BW-Q11, `known-gaps.md`).
     bool column_set_changed() const noexcept { return has_dropped() || slots_held != 0; }
 
     // The instance-pinned kds.inline_cell_width this layout was built for.

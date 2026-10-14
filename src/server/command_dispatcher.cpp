@@ -3153,10 +3153,11 @@ Status InsertArityRefusal(const catalog::TableAccess& ta, std::size_t columns,
 //
 // **BW-Q9 (`[quiet-wrong]`)**: on a relation whose column set has changed
 // (`RowLayout::column_set_changed`), a row carries every live column. The
-// short form - the pk left out - is refused there, because its length is the
-// length of a row that named its pk against the column set before an `ADD`,
-// and the length after a `DROP` of a row that left the pk out; admitting it
-// would put every value one column over, with no error.
+// short form - the pk left out - is refused there, because after an `ADD`
+// its length is that of a row written for the old columns with its pk
+// named, and admitting it would put every value one column over with no
+// error. **What a row's length cannot catch** (BW-Q11, `known-gaps.md`):
+// after a `DROP`, an old row with its pk left out has the new full length.
 StatusOr<std::optional<parser::InsertStmt>> NormalizeInsertRows(
     const catalog::TableAccess& ta, const parser::InsertStmt& written) {
     const std::size_t live = ta.layout.live_columns;
@@ -3196,7 +3197,7 @@ StatusOr<std::optional<parser::InsertStmt>> NormalizeInsertRows(
                 std::string(catalog::NameView(ta.schema.columns.front().name)) +
                 "' NULL to have it issued; got " + std::to_string(row.size()) + byte +
                 ". The relation's columns were changed by ALTER TABLE, so a row that leaves "
-                "the key out is refused: its length is that of a row written for the old "
+                "the key out is refused: it cannot be told from a row written for the old "
                 "columns" + at);
         }
         const bool names_key = full && row.front().type != parser::ValueType::kNull;

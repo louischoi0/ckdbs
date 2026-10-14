@@ -300,7 +300,7 @@ hold on the debug port too (Appendix A gives the text spellings).
   subquery nested deeper than the engine's fixed limit — so **no later server answers
   it** and the statement must be rewritten. `NOT_IMPLEMENTED` is a form the
   design admits and this release has not built — outer joins, CTEs,
-  `UNIQUE`, `ALTER TABLE ADD COLUMN` — so a client may feature-detect and
+  `UNIQUE`, `ALTER TABLE ... MODIFY` — so a client may feature-detect and
   try again against a newer server.
 - **`REPEATABLE READ` is one snapshot on one core.** A transaction pins
   its view at `BEGIN` and every statement of it - read and write - runs

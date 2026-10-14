@@ -315,6 +315,23 @@ before its adoption, and it holds.
   that would land wrong and holds nothing between frames; it also closes
   the older case of a relation dropped and re-created under the name.
   **Adopted (a) on the standing go-ahead of 2026-10-14 (W3).**
+- **BW-Q11** `[quiet-wrong]` — raised by BW-S4's review, against BW-Q9's
+  rationale: BW-Q9 (a) catches every stale row after an `ADD`, but after a
+  `DROP` a row written for the old columns with its key left out has the
+  new full form's length, and after one `DROP` and one `ADD` an old full
+  row has the new full length - admitted, every value one column over. A
+  row's length cannot tell the two apart. Options: (a) state it as a
+  `[quiet-wrong]` known gap, closed by an `INSERT` column list, which
+  BU-S8 owns; (b) on a relation with a dropped column, refuse a named key
+  at full width, so the full form is `NULL`-key only - no stale row is
+  admitted, and a caller-supplied key is unreachable on every relation
+  that has ever dropped a column; (c) refuse positional `INSERT` on such a
+  relation, which leaves it unwritable until BU-S8. **CLA proposes (a)**:
+  (b) and (c) give up a working surface on every altered relation to cover
+  a statement written before a change, which is the class every positional
+  `INSERT` carries across a schema change, and the column list that closes
+  it is another milestone's. **Adopted (a) on the standing go-ahead of
+  2026-10-14 (W3)**; the operator's mark is the one this item most needs.
 
 ---
 
@@ -376,7 +393,7 @@ Every stage runs the full suite and gets a `critics-developer` review
 
 ## 6. Where to start
 
-Nothing is built at the writing. BW-Q1..Q7 adopted (W3); BW-S1 is next.
+BW-S1..S3 landed (`f2a72474`, `69a31361`, `bc42a011`) and BW-S4's text with them; BW-Q1..Q10 adopted on the standing go-ahead (W3). BW-S5, the close, holds its measurement until the operator directs it (W2).
 
 ---
 
@@ -408,7 +425,18 @@ Nothing is built at the writing. BW-Q1..Q7 adopted (W3); BW-S1 is next.
   auto `CreateCabin` racing the restrict check is recorded in
   `known-gaps.md` rather than fenced, since a Cabin on a dropped column is
   never served (no statement names it).
-- **BW-S3** - review (`critics-developer`) found BW-Q9 (`[quiet-wrong]`,
+- **BW-S4** - review (`critics-developer`) checked every claim against
+  `bc42a011` and fixed eight: BW-Q9's protection overstated for a `DROP`
+  (raised BW-Q11, a `[quiet-wrong]` known gap); AL4 and the manual saying
+  assertions refuse every `ALTER` (`ADD` is not refused); a dropped name
+  "free at once" (it is free once the drop commits); `null.md` §5 and
+  `client-manual.md` still naming `ADD COLUMN` refused; a bare `decimal`
+  listed as fitting a slot; the arity refusals' byte; the known-gaps
+  commit. Not changed: the `DROP COLUMN` restrict and rename-assertion
+  refusals go out as bare `ERR` text, as `DROP TABLE`'s restrict does -
+  kept consistent with it; `ALTER COLUMN ... TYPE` answering
+  `InvalidArgument` rather than `NotImplemented` predates BW.
+- **BW-S3** landed at `bc42a011`. Review (`critics-developer`) found BW-Q9 (`[quiet-wrong]`,
   adopted (a), built: `NormalizeInsertRows`, KWP passing its NULL pk
   through) and proposed seven cuts. Applied: one `ResolveAlterTarget` for
   every ALTER form; `ADD`'s statement-level refusals before the `X`;

@@ -1098,8 +1098,19 @@ Verified on `cn4-transition-refresh` (BV's close). Owned by
 
 ## Column slots and `ADD`/`DROP COLUMN` (BW)
 
-Verified on `worktree-bw-instant-add-drop-column` over `f2a72474`
+Verified on `worktree-bw-instant-add-drop-column` over `bc42a011`
 (`instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
+
+- **A positional `INSERT` written before a column change is caught by its
+  count only in part** `[quiet-wrong]` (`alter.md` AL11, BW-Q9). After an
+  `ADD` every stale row is refused. After a `DROP`, a row written for the
+  old columns with its key left out has the new full form's length and is
+  admitted with its first value as the key and every other value one column
+  over; after one `DROP` and one `ADD`, an old full row has the new full
+  length. SQL text carries no described shape, unlike a KWP load (BW-Q10);
+  a column list on `INSERT` (BW-Q9 (b)) is not built - it is BU-S8's
+  (`instructions/v3.0.0/workorder-bu-basic-query-surface.md`), and a
+  column-listed `INSERT` names its columns, so it cannot shift (BW-Q11 (a)).
 
 - **A dropped column's slot and bytes are never reclaimed.** A drop flags the
   column's `sys.columns` row and leaves its bytes in every row, a dropped
