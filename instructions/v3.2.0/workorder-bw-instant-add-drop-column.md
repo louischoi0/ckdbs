@@ -528,8 +528,11 @@ before its adoption, and it holds.
     builds an `InsertStmt` with no list and its `DescribedShape` (BW-Q10),
     and stays untouched. A list in SQL text arrives on the wire as text.
     A prepared statement's `?` is spliced into `VALUES` (`kwp_session.cpp`
-    `Substitute`, `:175`), and a `?` in the list is refused by
-    `ParseIdent` at its byte (BW-Q12.2). Options: (a) as stated; (b) a
+    `Substitute`, `:175`). A `?` in the list is not refused at `C_PARSE`,
+    which only counts placeholders (`kwp_session.cpp:521`): it is refused
+    at `C_EXECUTE`, by `ParseIdent` against the substituted text, at that
+    text's byte (BW-Q12.2) - no bound value lexes as an identifier, so no
+    parameter can become a column name (amended by BW-S6's review). Options: (a) as stated; (b) a
     described shape for SQL text. **CLA proposes (a)**: the list is the
     statement's own description, so text needs no other. **Adopted as
     proposed on the standing go-ahead of 2026-10-14 (W3).**
@@ -688,8 +691,42 @@ closed. **BW was closed** - on the operator's word of 2026-10-14 (W6, `raft-mark
   `NormalizeListedInsertRows` under the `IX` (BW-Q12.1-Q12.12); the corpus
   line flipped with its hashes unchanged, eleven new lines; cells in
   `tests/insert_column_list_test.cpp`, `parser_test.cpp` and
-  `kwp_session_test.cpp`. Review not yet run; overhead not measured here,
-  measured at the stage's close.
+  `kwp_session_test.cpp`. Overhead not measured here, measured at the
+  stage's close.
+- **BW-S6 review** of `e1e17abc` (three lenses: correctness, SQL surface,
+  adversarial - 31 probes over drops and adds open in another session,
+  drop-then-add in one transaction, case-only names, tuple key shapes,
+  parse spellings and every downstream consumer). **No correctness defect
+  and no `[quiet-wrong]` path in BW-S6's code**, so no failing-first cell
+  was owed. Applied: the manual's example named `symbol` on a `trades`
+  declared with `sym` and was refused if run (`symbol` -> `sym`), and its
+  comment said "a column left out is NULL" where only a nullable one is;
+  the NOT NULL refusal read "there is no DEFAULT at byte N", as if the
+  byte were the DEFAULT's - now "leaves it out (byte N); there is no
+  DEFAULT", in the code, its cell and the manual's error table; BW-Q12.11
+  claimed a `?` in the list is refused at its byte, true of text only -
+  over KWP `C_PARSE` counts placeholders and the refusal comes at
+  `C_EXECUTE` against the substituted text, amended in place; one
+  `InsertShellOf` for the header both normalizers copied; `InsertOneRow`'s
+  comment still said INSERT has no column list; `InsertBodyOf`'s
+  over-long comment line re-wrapped; `InsertStmt`'s doc comment moved off
+  `DescribedShape` onto its struct. Recorded, not fixed (predate BW-S6):
+  `SELECT` resolving names ignoring case and taking the first match, while
+  names are unique exact-case and every write matches exactly -
+  `[quiet-wrong]`, reproduced by the review, needs the operator's ruling
+  between refusing case-only duplicate names and exact-match reads
+  (`docs/inflight/bugs/select-reads-the-first-column-whose-name-matches-ignoring-case.md`,
+  `known-gaps.md`, a caveat in the manual); the codec's type refusal
+  carrying no byte (`known-gaps.md`). **Rejected**: one byte-suffix format
+  for every `INSERT` refusal - the listed refusals' "at byte N" is the
+  parser's form for the same list (BW-Q12.2), and rewriting the positional
+  "(byte N)" texts is churn with no position gained; folding the listed
+  branch's `optional` wrap into `InsertParsed` - one entry point for both
+  shapes is worth the three lines; a KWP cell for `?` in the list and a
+  cell for the `(a)`/`(A)` statistics key - the first is pinned by the
+  corrected claim and `ParseIdent`'s text cells, the second is an advisory
+  key BW-Q12.10 accepts. Full suite 3865/3865 (`-LE heap-suspended`, Debug;
+  one run first failed a second cell pinning the old NOT NULL text, updated).
 
 - **BW-S1** landed at `f2a72474`. Review (`critics-developer`): a cell was
   sized from its offset to the next column's, so with slots the last

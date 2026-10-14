@@ -1365,11 +1365,12 @@ private:
 
 
     // The body `ResolveForeignKeyParents` and the FK checks index into: the
-    // columns after the tuple key, which is the shape every downstream consumer
-    // takes - a positional row's and a column-listed row's alike, since
-    // `NormalizeInsertRows` maps a listed row onto it first (BW-S6). Mirrors `InsertOneRow`'s arity split without repeating its
-    // refusals - a row of neither legal length yields an empty body here and
-    // is refused there, in the order it always was.
+    // columns after the tuple key, which is the shape every downstream
+    // consumer takes - a positional row's and a column-listed row's alike,
+    // since `NormalizeInsertRows` maps a listed row onto it first (BW-S6).
+    // Mirrors `InsertOneRow`'s arity split without repeating its refusals -
+    // a row of neither legal length yields an empty body here and is
+    // refused there, in the order it always was.
     static std::vector<parser::AstValue> InsertBodyOf(
         const catalog::TableAccess& ta, const std::vector<parser::AstValue>& values);
 

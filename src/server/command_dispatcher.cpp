@@ -3145,6 +3145,17 @@ Status InsertArityRefusal(const catalog::TableAccess& ta, std::size_t columns,
         at);
 }
 
+// A statement's header - relation, namespace, byte and described shape - with
+// no column list and no rows: what both normalizers fill with physical rows.
+parser::InsertStmt InsertShellOf(const parser::InsertStmt& written) {
+    parser::InsertStmt out;
+    out.table_name = written.table_name;
+    out.schema = written.schema;
+    out.table_byte_offset = written.table_byte_offset;
+    out.described = written.described;
+    return out;
+}
+
 // **A column-listed statement's rows in the physical shape** (BW-S6, BW-Q12
 // of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): each
 // value goes to the column its list position names, so no column change can
@@ -3186,16 +3197,12 @@ StatusOr<parser::InsertStmt> NormalizeListedInsertRows(const catalog::TableAcces
         if (!columns[i].dropped() && columns[i].notnull && !source[i].has_value()) {
             return Status::InvalidArgument(
                 "column '" + std::string(catalog::NameView(columns[i].name)) +
-                "' is NOT NULL and the column list leaves it out; there is no DEFAULT at byte " +
-                std::to_string(written.columns_byte_offset));
+                "' is NOT NULL and the column list leaves it out (byte " +
+                std::to_string(written.columns_byte_offset) + "); there is no DEFAULT");
         }
     }
 
-    parser::InsertStmt out;
-    out.table_name = written.table_name;
-    out.schema = written.schema;
-    out.table_byte_offset = written.table_byte_offset;
-    out.described = written.described;
+    parser::InsertStmt out = InsertShellOf(written);
     out.rows.reserve(written.rows.size());
     for (std::size_t k = 0; k < written.rows.size(); ++k) {
         const std::vector<parser::AstValue>& row = written.rows[k];
@@ -3259,11 +3266,7 @@ StatusOr<std::optional<parser::InsertStmt>> NormalizeInsertRows(
     if (!changed && std::none_of(written.rows.begin(), written.rows.end(), names_null_key)) {
         return std::optional<parser::InsertStmt>();
     }
-    parser::InsertStmt out;
-    out.table_name = written.table_name;
-    out.schema = written.schema;
-    out.table_byte_offset = written.table_byte_offset;
-    out.described = written.described;
+    parser::InsertStmt out = InsertShellOf(written);
     out.rows.reserve(written.rows.size());
     for (std::size_t k = 0; k < written.rows.size(); ++k) {
         const std::vector<parser::AstValue>& row = written.rows[k];
@@ -5364,8 +5367,10 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     //   ncols - 1 - the caller omits it. The engine issues one from the
     //               relation's cursor, and every value is a body column.
     //
-    // The two cannot be confused: INSERT is positional with no column list
-    // and no body column may be omitted, so a row's length names one reading.
+    // The two cannot be confused: no body column may be omitted, so a row's
+    // length names one reading. A column-listed row arrives here already in
+    // this shape - `NormalizeListedInsertRows` reshaped it, a left-out
+    // nullable column as a NULL placeholder (BW-S6).
     const std::size_t ncols = ta.schema.columns.size();
     const bool explicit_key = ncols > 0 && values.size() == ncols;
 

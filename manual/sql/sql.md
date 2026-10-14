@@ -618,10 +618,10 @@ INSERT INTO trades VALUES (5100, 'MSFT', 3), (6200, 'NVDA', 7);
 -- And one statement may do both. Row 2's key is issued above 7000
 INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
 
--- Or name the columns, in any order: a column left out is NULL, the key
--- left out (or NULL) is issued
-INSERT INTO trades (qty, symbol) VALUES (4, 'TSLA'), (9, 'ORCL');
-INSERT INTO trades (symbol, id, qty) VALUES ('IBM', 8000, 2);
+-- Or name the columns, in any order: a nullable column left out is NULL,
+-- the key left out (or NULL) is issued
+INSERT INTO trades (qty, sym) VALUES (4, 'TSLA'), (9, 'ORCL');
+INSERT INTO trades (sym, id, qty) VALUES ('IBM', 8000, 2);
 ```
 
 - Grammar: `INSERT INTO <table> [(<col> [, ...])] VALUES (<val> [, ...]) [, (<val> [, ...])]*`
@@ -629,7 +629,9 @@ INSERT INTO trades (symbol, id, qty) VALUES ('IBM', 8000, 2);
   refusal never a truncation).
 - **With a column list, each value goes to the column it names** (BW-S6),
   so no `ALTER TABLE` can shift it. Each row has exactly one value per
-  listed name. Names match exactly, case included (`A` is not `a`); an
+  listed name. Names match exactly, case included (`A` is not `a`; but a
+  `SELECT` matches ignoring case and reads the first such column - a known
+  bug, so do not declare two names that differ only in case); an
   unknown or dropped name, and a name listed twice, are refused at its
   byte. The tuple key may be listed anywhere or left out: left out, or
   `NULL`, it is issued. A column declared `NULL` that the list leaves out
@@ -1335,7 +1337,7 @@ in §7 below now carries and which both used to reach a client as a bare
 | A row that is not `n` values long, on a relation `ALTER TABLE ... ADD`/`DROP COLUMN` changed | `ERR expected <n> value(s), one per column, with tuple key column '<name>' NULL to have it issued; got <k> (byte <b>). The relation's columns were changed by ALTER TABLE, ...` |
 | An `INSERT` column list naming no live column (unknown or dropped; matched exactly, case included) | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
 | A column named twice in an `INSERT` column list | `InvalidArgument` — `ERR column '<name>' is listed twice in the column list at byte <n>` (the second occurrence's byte) |
-| An `INSERT` column list that leaves out a `NOT NULL` column | `InvalidArgument` — `ERR column '<name>' is NOT NULL and the column list leaves it out; there is no DEFAULT at byte <n>` (the list's `(`; nothing is written) |
+| An `INSERT` column list that leaves out a `NOT NULL` column | `InvalidArgument` — `ERR column '<name>' is NOT NULL and the column list leaves it out (byte <n>); there is no DEFAULT` (the list's `(`; nothing is written) |
 | A row whose length is not the `INSERT` column list's | `InvalidArgument` — `ERR expected <n> value(s), one per listed column; got <k> at byte <b>`, with ` (row <r>)` on a multi-row statement |
 | A non-integer supplied tuple key | `InvalidArgument` — `ERR tuple key column '<name>' needs an integer literal (byte <n>)` |
 | A supplied tuple key outside `[1, 2^48 - 1]` (zero, negative, too large, or past 64 bits) — *exhausted* | `OutOfRange` — `ERR tuple key <k> is outside the Keystone id space [1, 281474976710655] (byte <n>)` |

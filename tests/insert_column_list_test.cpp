@@ -142,14 +142,14 @@ TEST_F(InsertColumnListTest, AnOmittedNullableColumnIsNullAndAnOmittedNotNullOne
     //            0         1         2
     //            0123456789012345678901234
     Refused("INSERT INTO t (n, m) VALUES ('x', 1), ('y', 2)",
-            {"'a' is NOT NULL", "leaves it out", "at byte 14"});
+            {"'a' is NOT NULL", "leaves it out (byte 14); there is no DEFAULT"});
     EXPECT_EQ(Run("SELECT COUNT(*) FROM t"), "count(*)\\n2") << "nothing written";
 }
 
 TEST_F(InsertColumnListTest, AnOmittedTransitionColumnIsRefusedLikeAnyNotNullOne) {
     Ok("CREATE TABLE t (id int64, st varchar, v int64)");
     Ok("CREATE TRANSITION flow ON t(st) ON INSERT ('new') ON UPDATE ('new' => 'done')");
-    Refused("INSERT INTO t (v) VALUES (1)", {"'st' is NOT NULL", "at byte 14"});
+    Refused("INSERT INTO t (v) VALUES (1)", {"'st' is NOT NULL", "(byte 14)"});
     Ok("INSERT INTO t (v, st) VALUES (1, 'new')");
     Refused("INSERT INTO t (v, st) VALUES (2, 'done')", {"transition"});
     EXPECT_EQ(Run("SELECT * FROM t"), "id,st,v\\n1,new,1");

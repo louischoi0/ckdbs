@@ -499,16 +499,6 @@ struct IndexColumnRef {
     std::uint32_t byte_offset = 0;
 };
 
-// `INSERT INTO <t> [(<col>, …)] VALUES (…) [, (…)]*` (docs/spec/bulkinsert.md
-// T1, BI3; the column list is BW-S6 of
-// `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
-//
-// One or more rows; the single-row statement is a rows vector of size one,
-// and its parse is byte-identical in behavior to what it always was. The
-// row cap is **not** enforced here: the parser is a pure syntax layer with
-// no config access, so the first config-aware layer (the dispatcher)
-// refuses an over-cap statement naming the cap and the count.
-//
 // The relation and column shape a KWP load described at LOAD BEGIN (BW-Q10
 // of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
 // load's rows are positional against it, so a relation that is not that
@@ -520,6 +510,15 @@ struct DescribedShape {
     std::uint32_t live_columns = 0;
 };
 
+// `INSERT INTO <t> [(<col>, …)] VALUES (…) [, (…)]*` (docs/spec/bulkinsert.md
+// T1, BI3; the column list is BW-S6 of
+// `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
+//
+// One or more rows; the single-row statement is a rows vector of size one,
+// and its parse is byte-identical in behavior to what it always was. The
+// row cap is **not** enforced here: the parser is a pure syntax layer with
+// no config access, so the first config-aware layer (the dispatcher)
+// refuses an over-cap statement naming the cap and the count.
 struct InsertStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above

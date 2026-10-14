@@ -1113,6 +1113,17 @@ Verified on `worktree-bw-instant-add-drop-column` over `bc42a011`
   BW-S6 (BW-Q11 (a), BW-R13), a column-listed `INSERT` names its columns,
   so no column change can shift it. Verified for BW-S6 on
   `worktree-bw-instant-add-drop-column` over `e3450498`.
+- **A value's type refusal at encode carries no byte** (predates BW): an
+  `INSERT` value of the wrong type - positional or column-listed - is
+  refused by `exec::EncodeRow` (`row_codec.cpp`, "column 'a' expects an
+  integer"), which `InsertOneRow` passes through as it is; a multi-row
+  statement adds only `(row k)`. Every other `INSERT` refusal names the
+  value's byte. Found by BW-S6's review on
+  `worktree-bw-instant-add-drop-column` at `e1e17abc`; not fixed there, as
+  the codec has no `AstValue` and threading the byte is outside BW.
+- **A `SELECT` reads the first column whose name matches ignoring case**
+  `[quiet-wrong]`, while every write matches exactly:
+  `bugs/select-reads-the-first-column-whose-name-matches-ignoring-case.md`.
 
 - **A dropped column's slot and bytes are never reclaimed.** A drop flags the
   column's `sys.columns` row and leaves its bytes in every row, a dropped
