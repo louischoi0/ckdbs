@@ -70,7 +70,8 @@ std::string Position(std::uint32_t byte_offset) {
 // returns columns sorted by `pos`, so the vector index is the position.
 bool FindColumnPos(const catalog::Schema& schema, std::string_view name, std::uint16_t& out) {
     for (std::size_t i = 0; i < schema.columns.size(); ++i) {
-        if (IEquals(catalog::NameView(schema.columns[i].name), name)) {
+        // A dropped column has no name a statement can reach (BW-R6).
+        if (!schema.columns[i].dropped() && IEquals(catalog::NameView(schema.columns[i].name), name)) {
             out = static_cast<std::uint16_t>(i);
             return true;
         }
@@ -2180,6 +2181,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // the projection empty too, and labelling its output with the
         // relation's columns would name a row it never emits.
         for (const auto& column : scope.relations[0].access->schema.columns) {
+            // A dropped column is not in `*` (BW-R6); `DescribeStar` skips
+            // the same columns, so names and values stay aligned.
+            if (column.dropped()) continue;
             chain.column_names.push_back(std::string(catalog::NameView(column.name)));
         }
     }

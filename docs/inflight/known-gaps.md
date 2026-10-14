@@ -1096,6 +1096,27 @@ Verified on `cn4-transition-refresh` (BV's close). Owned by
   statement**, as `CREATE`/`DROP ASSERTION` do. A `ROLLBACK` does not undo
   them.
 
+## Column slots and `ADD`/`DROP COLUMN` (BW)
+
+Verified on `worktree-bw-instant-add-drop-column` over `f2a72474`
+(`instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
+
+- **A dropped column's slot and bytes are never reclaimed.** A drop flags the
+  column's `sys.columns` row and leaves its bytes in every row, a dropped
+  varchar's spills included until purge reclaims the row; a dropped slot is
+  never taken again. Cleaning - resetting the flags and rewriting rows to a
+  smaller size - is D-e (a)'s separate milestone, not built.
+- **Readers see an open `ADD`/`DROP COLUMN`** (BW-Q8 (a)): the catalog row
+  is rewritten in place under the DDL's transaction, so another session's
+  read can see the undecided column set - a column missing from `SELECT *`,
+  a name refused, an added column reading NULL - before the decide. Writers
+  are fenced by the relation `X`; no value a reader shows is wrong.
+- **An automatic `CreateCabin` takes no relation lock**, so the Cabin
+  controller can land a Cabin on a column between `DROP COLUMN`'s restrict
+  check and its write. The Cabin is never served - no statement can name
+  the column - and `DROP CABIN` is refused only by the name it cannot
+  resolve; harmless, and not fenced.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1-D16: what is taken.** `workorder-al-m0-single-wal.md` took D3,

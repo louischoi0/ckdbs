@@ -1207,6 +1207,13 @@ private:
     // reason; the AL4 assertion RESTRICT and the AL7 system-relation
     // refusal live here, before the catalog write.
     DispatchOutcome HandleAlter(std::string_view line, Session& session);
+    // `ALTER TABLE ... DROP COLUMN` (BW-R6..R8): under the relation `X`, in
+    // the statement's DDL transaction.
+    DispatchOutcome HandleDropColumn(const parser::AlterStmt& stmt, Session& session);
+    // BW-R8: the first object that depends on column `pos` of `oid`, named,
+    // or nullopt. Asked under the relation `X`.
+    StatusOr<std::optional<std::string>> DropColumnRestriction(catalog::Oid oid,
+                                                               std::uint16_t pos);
 
     // `DROP TABLE <name>` (docs/spec/drop-table.md, workplan DT03). The
     // DT3 RESTRICT gate lives here - a referencing foreign key and an

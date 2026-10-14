@@ -36,7 +36,8 @@ StatusOr<Resolved> Resolve(catalog::Catalog& catalog, const parser::CabinStmt& s
     if (!access.ok()) return access.status();
 
     for (std::size_t i = 0; i < access.value()->schema.columns.size(); ++i) {
-        if (catalog::NameView(access.value()->schema.columns[i].name) != stmt.column_name) {
+        if (access.value()->schema.columns[i].dropped() ||
+            catalog::NameView(access.value()->schema.columns[i].name) != stmt.column_name) {
             continue;
         }
         Resolved out;

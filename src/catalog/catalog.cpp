@@ -347,6 +347,47 @@ std::uint64_t UndoPkOf(std::span<const std::byte> payload) {
     return id.ok() ? id.value() : 0;
 }
 
+// **A DDL's overwrite of one catalog row** - `DropTable`'s and
+// `DropNamespace`'s retype, `DropColumn`'s flag. The prior image goes to the
+// undo hook first (the hook's contract: it is the only copy a crash leaves of
+// these bytes, since a catalog row has no undo chain), then the row is
+// rewritten and logged, stamped with `trx_id` so the change is that
+// transaction's to undo - or, at `kBootstrapXid`, outside any transaction
+// with the row's own stamp kept. Returns the change a rollback restores.
+StatusOr<CatalogRowChange> OverwriteForDdl(const Catalog::DdlUndoHook& undo_hook,
+                                           wal::WalManager* wal, storage::PageStore& store,
+                                           heap::PageView& page, PageId page_id,
+                                           std::uint16_t slot,
+                                           const heap::PageView::Tuple& tuple, Oid rel_oid,
+                                           Oid oid, std::span<const std::byte> before,
+                                           std::span<const std::byte> after,
+                                           std::uint64_t trx_id) {
+    CatalogRowChange change;
+    change.page_id = page_id;
+    change.slot = slot;
+    change.oid = oid;
+    change.rel_oid = rel_oid;
+    change.prior_trx_id = tuple.trx_id;
+    change.prior_undo_ptr = tuple.undo_ptr;
+    change.prior_image.assign(before.begin(), before.end());
+    if (undo_hook) {
+        if (Status s = undo_hook({Catalog::DdlUndoEvent::Kind::kOverwrite, page_id, slot,
+                                  change.prior_image, tuple.trx_id, tuple.undo_ptr,
+                                  UndoPkOf(change.prior_image)});
+            !s.ok()) {
+            return s;
+        }
+    }
+    const bool transactional = trx_id != kBootstrapXid;
+    if (Status s = OverwriteLogged(wal, store, page, page_id, slot, after,
+                                   transactional ? trx_id : wal::kNoTxnId,
+                                   transactional ? trx_id : tuple.trx_id, tuple.undo_ptr);
+        !s.ok()) {
+        return s;
+    }
+    return change;
+}
+
 // The new page comes back held, exclusive: its caller writes and logs it
 // under that hold (AY-S7, `wal.md` §8-1).
 StatusOr<storage::PageRef> AllocateCatalogPage(storage::PageStore& store) {
@@ -1703,16 +1744,31 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     // of one relation onto one name both pass the read.
     auto columns = store_.Get(kCatalogPageColumns);
     if (!columns.ok()) return columns.status();
-    auto rows = ScanAll<SysColumnRow>(store_, kCatalogPageColumns, nullptr, txn_);
-    if (!rows.ok()) return rows.status();
+    // A dropped column's name is free (BW-R6) **once its drop is decided**
+    // (DT9: an object exists until its removal commits). The rename is
+    // transactionless and the drop's overwrite in place, so a name taken
+    // from an undecided drop would survive the drop's rollback as a second
+    // live column of that name. Hence a walk that reads `trx_id`, which
+    // `ScanAll` drops.
+    const auto settled = [this](std::uint64_t trx) {
+        return txn_ == nullptr || !txn_->IsInFlight(trx);
+    };
     bool found_old = false;
-    for (const SysColumnRow& row : rows.value()) {
-        if (row.rel_id != table_oid) continue;
-        if (NameView(row.name) == new_name) {
-            return Status::AlreadyExists("the relation already has a column named '" +
-                                          std::string(new_name) + "'");
-        }
-        if (NameView(row.name) == old_name) found_old = true;
+    auto collided = ForFirstRow<SysColumnRow>(
+        store_, kCatalogPageColumns,
+        [&](SysColumnRow& row, heap::PageView&, PageId, std::uint16_t,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.rel_id != table_oid) return false;
+            if (tuple.deleted && settled(tuple.trx_id)) return false;  // ScanAll's rule
+            if (row.dropped()) return !settled(tuple.trx_id) && NameView(row.name) == new_name;
+            if (NameView(row.name) == old_name) found_old = true;
+            return NameView(row.name) == new_name;
+        },
+        nullptr, storage::PageAccess::kRead);
+    if (!collided.ok()) return collided.status();
+    if (collided.value()) {
+        return Status::AlreadyExists("the relation already has a column named '" +
+                                      std::string(new_name) + "'");
     }
     if (!found_old) {
         return Status::NotFound("the relation has no column named '" + std::string(old_name) +
@@ -1723,7 +1779,9 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
         store_, kCatalogPageColumns,
         [&](SysColumnRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-            if (row.rel_id != table_oid || NameView(row.name) != old_name) return false;
+            if (row.rel_id != table_oid || row.dropped() || NameView(row.name) != old_name) {
+                return false;
+            }
             SetName(row.name, new_name);
             const auto encoded = row.Encode();
             if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
@@ -1736,6 +1794,45 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     if (!acted.value()) return Status::NotFound("the column vanished between check and write");
 
     BumpVersion("rename column");
+    return Status::OK();
+}
+
+Status Catalog::DropColumn(Oid table_oid, std::string_view name, std::uint64_t trx_id,
+                           std::vector<CatalogRowChange>* changed) {
+    // One hold of `sys.columns`' root page across the lookup and the write
+    // (CT7), as `RenameColumn` takes it.
+    auto columns = store_.Get(kCatalogPageColumns);
+    if (!columns.ok()) return columns.status();
+
+    CatalogRowChange change;
+    auto acted = ForFirstRow<SysColumnRow>(
+        store_, kCatalogPageColumns,
+        [&](SysColumnRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.rel_id != table_oid || row.dropped() || NameView(row.name) != name) {
+                return false;
+            }
+            // Identity is the Keystone word at position 0 (invariant 11).
+            if (row.pos == 0) {
+                return Status::InvalidArgument("column '" + std::string(name) +
+                                                "' is the primary key and cannot be dropped "
+                                                "(invariant 11)");
+            }
+            const auto before = row.Encode();
+            row.flags |= SysColumnRow::kColumnDropped;
+            auto overwritten = OverwriteForDdl(ddl_undo_hook_, wal_, store_, page, page_id, i,
+                                               tuple, kSysColumnsTable, row.oid, before,
+                                               row.Encode(), trx_id);
+            if (!overwritten.ok()) return overwritten.status();
+            change = std::move(overwritten.value());
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) {
+        return Status::NotFound("the relation has no column named '" + std::string(name) + "'");
+    }
+    if (trx_id != kBootstrapXid && changed != nullptr) changed->push_back(std::move(change));
+    BumpVersion("drop column");
     return Status::OK();
 }
 
@@ -1917,54 +2014,25 @@ Status Catalog::DropNamespace(Oid namespace_oid, std::uint64_t trx_id,
     if (!names.ok()) return names.status();
     if (Status s = CheckNamespaceEmpty(namespace_oid, trx_id); !s.ok()) return s;
 
-    const bool transactional = trx_id != kBootstrapXid;
-    PageId retyped_page = kInvalidPageId;
     CatalogRowChange retype_change;
     auto retyped = ForFirstRow<SysObjectRow>(
         store_, kCatalogPageObjects,
         [&](SysObjectRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.type_oid != kTypeNamespace || row.oid != namespace_oid) return false;
-
-            // The before-image, captured before the overwrite: it is what
-            // a rollback writes back and it is the only copy - a catalog
-            // row has no undo chain. `DropTable`'s step 1, one row wide.
-            CatalogRowChange change;
-            change.slot = i;
-            change.oid = row.oid;
-            change.rel_oid = kSysObjectsTable;
-            change.prior_trx_id = tuple.trx_id;
-            change.prior_undo_ptr = tuple.undo_ptr;
+            // `DropTable`'s step 1, one row wide.
             const auto before = row.Encode();
-            change.prior_image.assign(before.begin(), before.end());
-
             row.type_oid = kTypeDroppedNamespace;
-            const auto encoded = row.Encode();
-            if (ddl_undo_hook_) {
-                if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kOverwrite, page_id, i,
-                                               change.prior_image, tuple.trx_id, tuple.undo_ptr,
-                                               UndoPkOf(change.prior_image)});
-                    !s.ok()) {
-                    return s;
-                }
-            }
-            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded,
-                                           transactional ? trx_id : wal::kNoTxnId,
-                                           transactional ? trx_id : tuple.trx_id,
-                                           tuple.undo_ptr);
-                !s.ok()) {
-                return s;
-            }
-            retype_change = std::move(change);
+            auto overwritten = OverwriteForDdl(ddl_undo_hook_, wal_, store_, page, page_id, i,
+                                               tuple, kSysObjectsTable, row.oid, before,
+                                               row.Encode(), trx_id);
+            if (!overwritten.ok()) return overwritten.status();
+            retype_change = std::move(overwritten.value());
             return true;
-        },
-        &retyped_page);
+        });
     if (!retyped.ok()) return retyped.status();
     if (!retyped.value()) return Status::NotFound("no sys.objects row for this namespace");
-    if (transactional && written != nullptr) {
-        retype_change.page_id = retyped_page;  // known only once the walk found it
-        written->push_back(retype_change);
-    }
+    if (trx_id != kBootstrapXid && written != nullptr) written->push_back(retype_change);
 
     BumpVersion("drop namespace");
     return Status::OK();
@@ -1994,7 +2062,6 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
     if (!owed.ok()) return owed.status();
     const std::uint64_t pending_roots = PackPendingRoots(
         PendingRoots{owed.value().anchor_page_id, owed.value().varheap_page_id});
-    PageId retyped_page = kInvalidPageId;
     CatalogRowChange retype_change;
     auto retyped = ForFirstRow<SysObjectRow>(
         store_, kCatalogPageObjects,
@@ -2007,51 +2074,19 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
                                                 std::string(NameView(row.name)) +
                                                 "' is a system relation and cannot be dropped");
             }
-            // The before-image, captured *before* the overwrite: it is
-            // what a rollback writes back, and it is the only copy - a
-            // catalog row has no undo chain to recover it from.
-            CatalogRowChange change;
-            change.slot = i;
-            change.oid = row.oid;
-            change.rel_oid = kSysObjectsTable;
-            change.prior_trx_id = tuple.trx_id;
-            change.prior_undo_ptr = tuple.undo_ptr;
             const auto before = row.Encode();
-            change.prior_image.assign(before.begin(), before.end());
-
             row.type_oid = kTypeDroppedTable;
             row.pending_roots = pending_roots;
-            const auto encoded = row.Encode();
-            // The undo record first (hook contract, catalog.hpp): the
-            // prior image is the only copy a crash leaves of these bytes.
-            if (ddl_undo_hook_) {
-                if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kOverwrite, page_id, i,
-                                               change.prior_image, tuple.trx_id,
-                                               tuple.undo_ptr,
-                                               UndoPkOf(change.prior_image)});
-                    !s.ok()) {
-                    return s;
-                }
-            }
-            // Stamped with the dropping transaction when there is one, so
-            // the retype is this transaction's to undo.
-            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded,
-                                           transactional ? trx_id : wal::kNoTxnId,
-                                           transactional ? trx_id : tuple.trx_id,
-                                           tuple.undo_ptr);
-                !s.ok()) {
-                return s;
-            }
-            retype_change = std::move(change);
+            auto overwritten = OverwriteForDdl(ddl_undo_hook_, wal_, store_, page, page_id, i,
+                                               tuple, kSysObjectsTable, row.oid, before,
+                                               row.Encode(), trx_id);
+            if (!overwritten.ok()) return overwritten.status();
+            retype_change = std::move(overwritten.value());
             return true;
-        },
-        &retyped_page);
+        });
     if (!retyped.ok()) return retyped.status();
     if (!retyped.value()) return Status::NotFound("no sys.objects row for this relation");
-    if (transactional) {
-        retype_change.page_id = retyped_page;  // known only once the walk found it
-        note(retype_change);
-    }
+    if (transactional) note(retype_change);
 
     // 2. Everything the relation owns retires (DT3's "dependents out").
     //    Retired, not delete-marked - DropCabin() states the argument:
@@ -3038,7 +3073,10 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     // rewritten at AT-S7), and every walk that banks one covers the whole
     // relation. The **auto** path came through here
     // too and is admitted on the same terms.
-    if (col_pos >= access.value()->schema.columns.size()) {
+    // A dropped column keeps its position and has no name (BW-R6), so no
+    // door accepts it.
+    if (col_pos >= access.value()->schema.columns.size() ||
+        access.value()->schema.columns[col_pos].dropped()) {
         return Status::InvalidArgument("catalog: relation oid " + std::to_string(rel_oid) +
                                        " has no column at position " + std::to_string(col_pos));
     }
@@ -3152,7 +3190,8 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
     auto parent = InitTableAccess(parent_rel_oid);
     if (!parent.ok()) return parent.status();
 
-    if (child_column_no >= child.value()->schema.columns.size()) {
+    if (child_column_no >= child.value()->schema.columns.size() ||
+        child.value()->schema.columns[child_column_no].dropped()) {
         return Status::InvalidArgument("catalog: relation oid " + std::to_string(child_rel_oid) +
                                        " has no column at position " +
                                        std::to_string(child_column_no));
@@ -3361,6 +3400,10 @@ Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
             return Status::InvalidArgument("catalog: " + std::string(role) + " column position " +
                                             std::to_string(pos) + " is past the relation's " +
                                             std::to_string(schema.columns.size()) + " columns");
+        }
+        if (schema.columns[pos].dropped()) {
+            return Status::InvalidArgument("catalog: " + std::string(role) + " column position " +
+                                            std::to_string(pos) + " is a dropped column");
         }
         return Status::OK();
     };

@@ -72,6 +72,7 @@ StatusOr<RowLayout> RowLayout::Build(const Schema& schema, std::uint32_t inline_
     layout.offsets.push_back(0);
     layout.cell_ends.push_back(kKeystoneWordSize);
     layout.null_bits.push_back(kNoNullBit);
+    layout.live_columns = 1;  // the pk, which no drop reaches
     std::uint32_t offset = kKeystoneWordSize;
     std::uint16_t next_bit = 0;
 
@@ -94,6 +95,7 @@ StatusOr<RowLayout> RowLayout::Build(const Schema& schema, std::uint32_t inline_
         const SysColumnRow& col = schema.columns[i];
         auto width = ColumnWidth(col, inline_cell_width);
         if (!width.ok()) return width.status();
+        if (!col.dropped()) ++layout.live_columns;
 
         if (slots_held == 0 && !col.in_slot()) {
             // A zero-width column would give two columns the same offset,

@@ -569,6 +569,19 @@ public:
                        std::uint64_t own_trx_id = txn::kNoTrxId);
     Status RenameColumn(Oid table_oid, std::string_view old_name, std::string_view new_name);
 
+    // `ALTER TABLE ... DROP COLUMN` (BW-R6, BW-R7 of
+    // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
+    // live column `name` gets `kColumnDropped` on its `sys.columns` row and
+    // nothing else moves - its `pos`, its bytes in every tuple, its bit. The
+    // overwrite is `trx_id`'s, its prior image handed to the DDL undo hook
+    // and to `changed` (when non-null) so a rollback restores it, as
+    // `DropTable`'s retype is. The lookup and the write are one hold of
+    // `sys.columns`' root page (CT7). The pk is refused `InvalidArgument`;
+    // an absent or already-dropped name is `NotFound`. What depends on the
+    // column is the caller's to refuse first, under the relation `X`.
+    Status DropColumn(Oid table_oid, std::string_view name, std::uint64_t trx_id,
+                      std::vector<CatalogRowChange>* changed);
+
     // DROP TABLE's catalog half (docs/spec/drop-table.md DT1-DT3, workplan
     // DT02). The sys.objects row is **retyped to kTypeDroppedTable, never
     // retired** - the rows are GenerateUserOid()'s counter, so the row

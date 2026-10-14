@@ -2337,6 +2337,8 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
         return {"ERR expected an ALTER TABLE statement", false};
     }
     const auto& stmt = std::get<parser::AlterStmt>(parsed.value());
+    if (stmt.action == parser::AlterAction::kDropColumn) return HandleDropColumn(stmt, session);
+    const bool rename_column = stmt.action == parser::AlterAction::kRenameColumn;
 
     // You cannot alter a relation you cannot see (DT3c).
     const std::optional<txn::ReadView> view = ViewFor(session);
@@ -2380,7 +2382,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     }
 
     const Status renamed =
-        stmt.rename_column
+        rename_column
             ? catalog_.RenameColumn(oid.value(), stmt.old_column, stmt.new_name)
             : catalog_.RenameTable(oid.value(), stmt.new_name,
                                    session.in_explicit_txn() && session.transaction() != nullptr
@@ -2394,7 +2396,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
 
     std::ostringstream os;
-    if (stmt.rename_column) {
+    if (rename_column) {
         os << "RENAMED COLUMN " << stmt.table_name << '.' << stmt.old_column << " TO "
            << stmt.new_name;
     } else {
@@ -2402,10 +2404,148 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     }
     if (logging(LogLevel::kInfo)) {
         log_->Info("ddl", "renamed " + stmt.table_name +
-                              (stmt.rename_column ? "." + stmt.old_column : std::string()) +
+                              (rename_column ? "." + stmt.old_column : std::string()) +
                               " to " + stmt.new_name);
     }
     return {os.str(), false};
+}
+
+StatusOr<std::optional<std::string>> CommandDispatcher::DropColumnRestriction(
+    catalog::Oid oid, std::uint16_t pos) {
+    // BW-R8: every object that names the column by its position. A dropped
+    // column keeps its position, so any of these would go on reading bytes
+    // no statement can see or write - an index entry, a reference, a state
+    // check, an observed set - and each is refused rather than dropped with
+    // it (AL4's argument: a constraint is not allowed to die quietly).
+    auto indexes = catalog_.ListIndexes();
+    if (!indexes.ok()) return indexes.status();
+    for (const catalog::SysIndexRow& ix : indexes.value()) {
+        if (ix.table_oid != oid) continue;
+        const auto names = [&](auto first, std::uint8_t n) {
+            return std::find(first, first + n, pos) != first + n;
+        };
+        if (names(ix.key_cols.begin(), ix.nkeys) || names(ix.covered_cols.begin(), ix.ncovered)) {
+            return std::optional<std::string>("index '" +
+                                              std::string(catalog::NameView(ix.name)) +
+                                              "' keys or covers it; DROP INDEX first");
+        }
+    }
+    auto fkeys = catalog_.ListForeignKeys();
+    if (!fkeys.ok()) return fkeys.status();
+    for (const catalog::SysFkeyRow& fk : fkeys.value()) {
+        // The parent end of a reference is always its pk, which no drop
+        // reaches (invariant 11), so only the child end names a column.
+        if (fk.child_rel_oid == oid && fk.child_column_no == pos) {
+            return std::optional<std::string>("it references '" +
+                                              RelationNameOf(fk.parent_rel_oid) +
+                                              "' (a foreign key, declared at CREATE TABLE)");
+        }
+    }
+    auto transitions = exec::TransitionsOnRelation(catalog_, page_store_, oid);
+    if (!transitions.ok()) return transitions.status();
+    for (const exec::TransitionDef& t : transitions.value()) {
+        if (t.column_no == pos) {
+            return std::optional<std::string>("transition '" + t.name +
+                                              "' governs it; DROP TRANSITION first");
+        }
+    }
+    auto cabins = catalog_.ListCabins();
+    if (!cabins.ok()) return cabins.status();
+    for (const catalog::SysCabinRow& cabin : cabins.value()) {
+        if (cabin.rel_oid == oid && cabin.column_no == pos) {
+            return std::optional<std::string>("a Cabin is on it; DROP CABIN first");
+        }
+    }
+    // AL4's predicate, by relation: an assertion's canon is its source
+    // text, and a coarser refusal is never wrong.
+    auto assertions = exec::AssertionsOnRelation(catalog_, page_store_, oid);
+    if (!assertions.ok()) return assertions.status();
+    if (!assertions.value().empty()) {
+        return std::optional<std::string>("assertion '" + assertions.value().front().name +
+                                          "' is declared on this relation; DROP ASSERTION "
+                                          "first");
+    }
+    return std::optional<std::string>();
+}
+
+DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stmt,
+                                                    Session& session) {
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        // You cannot alter a relation you cannot see (DT3c).
+        const std::optional<txn::ReadView> view = ViewFor(session);
+        const txn::ReadView* view_of = view.has_value() ? &*view : nullptr;
+        auto oid = catalog_.FindTableOidByName(stmt.table_name, view_of);
+        if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
+        if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name,
+                                                       oid.value(), stmt.byte_offset, view_of);
+            !s.ok()) {
+            return {ErrorReply(s), false, 0, s};
+        }
+        // AL7: the catalog's own relations are nobody's to change.
+        auto system = InSystemNamespace(oid.value());
+        if (!system.ok()) return {ErrorReply(system.status()), false, 0, system.status()};
+        if (system.value()) {
+            return {"ERR '" + stmt.table_name + "' is a system relation and cannot be altered",
+                    false};
+        }
+
+        // ---- BW-R7: the relation `X`, `CREATE INDEX`'s shape (AT-S5e) -----
+        //
+        // Before the first catalog write. Every writer holds the relation's
+        // `IX` and every positioned reader its `IS` until its transaction
+        // decides, so the grant is a moment none is mid-statement, and one
+        // arriving later parks until this decides and then re-resolves the
+        // schema the decide published (the schema word moves first).
+        if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, oid.value());
+            held.has_value()) {
+            return {ErrorReply(*held), false, 0, *held};
+        }
+
+        // Resolved under the `X`, so no dependant can arrive between the
+        // restrict and the write.
+        auto access = catalog_.InitTableAccess(oid.value());
+        if (!access.ok()) return {ErrorReply(access.status()), false, 0, access.status()};
+        const catalog::SysColumnRow* column =
+            access.value()->schema.FindColumn(stmt.old_column);
+        const auto at = " (byte " + std::to_string(stmt.old_column_byte_offset) + ")";
+        if (column == nullptr) {
+            const Status s = Status::NotFound("relation '" + stmt.table_name +
+                                              "' has no column named '" + stmt.old_column +
+                                              "'" + at);
+            return {ErrorReply(s), false, 0, s};
+        }
+        // Identity is the Keystone word at position 0 (invariant 11).
+        if (column->pos == 0) {
+            const Status s = Status::InvalidArgument("column '" + stmt.old_column +
+                                                      "' is the primary key and cannot be "
+                                                      "dropped (invariant 11)" + at);
+            return {ErrorReply(s), false, 0, s};
+        }
+        auto restricted =
+            DropColumnRestriction(oid.value(), static_cast<std::uint16_t>(column->pos));
+        if (!restricted.ok()) {
+            return {ErrorReply(restricted.status()), false, 0, restricted.status()};
+        }
+        if (restricted.value().has_value()) {
+            return {"ERR column '" + stmt.old_column + "' cannot be dropped" + at + ": " +
+                        *restricted.value(),
+                    false};
+        }
+
+        DdlScope ddl = DdlScopeFor(scope);
+        std::vector<catalog::CatalogRowChange> changed;
+        const Status dropped =
+            catalog_.DropColumn(oid.value(), stmt.old_column, ddl.trx_id, &changed);
+        NoteCatalogRowChanges(ddl, changed);
+        if (!dropped.ok()) {
+            const Status s = dropped.WithContext("byte " + std::to_string(stmt.old_column_byte_offset));
+            return {ErrorReply(s), false, 0, s};
+        }
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "dropped column " + stmt.table_name + "." + stmt.old_column);
+        }
+        return {"DROPPED COLUMN " + stmt.table_name + "." + stmt.old_column, false};
+    });
 }
 
 DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
@@ -2929,6 +3069,52 @@ void CommandDispatcher::RecordFkAccess(exec::AccessKind kind, catalog::Oid rel_o
     // worse trade than no statistic (catalog.hpp says so at the source).
     (void)recorded;
 }
+
+namespace {
+
+// A row of neither arity, refused counting `columns` - the live ones, which
+// is every one on a relation with no dropped column (BW-R6). Both accepted
+// counts are named, because with two of them a single number reads as an
+// off-by-one against the wrong one.
+Status InsertArityRefusal(const catalog::TableAccess& ta, std::size_t columns, std::size_t got) {
+    return Status::InvalidArgument(
+        "expected " + std::to_string(columns) + " value(s) including primary-key column '" +
+        std::string(catalog::NameView(ta.schema.columns.front().name)) + "', or " +
+        std::to_string(columns - 1) + " to have it issued; got " + std::to_string(got));
+}
+
+// BW-R6: a row of the live arity - every live column, or every one but the
+// pk - widened to the physical one with a NULL placeholder at each dropped
+// position; `EncodeRow` writes nothing there. A row of neither live arity is
+// refused here, counting live columns, since the physical count would name
+// columns the writer cannot see.
+StatusOr<parser::InsertStmt> ExpandOverDroppedColumns(const catalog::TableAccess& ta,
+                                                      const parser::InsertStmt& written) {
+    const std::size_t live = ta.layout.live_columns;
+    parser::InsertStmt out;
+    out.table_name = written.table_name;
+    out.schema = written.schema;
+    out.table_byte_offset = written.table_byte_offset;
+    out.rows.reserve(written.rows.size());
+    for (const std::vector<parser::AstValue>& row : written.rows) {
+        if (row.size() != live && row.size() + 1 != live) {
+            return InsertArityRefusal(ta, live, row.size());
+        }
+        std::vector<parser::AstValue>& physical = out.rows.emplace_back();
+        physical.reserve(ta.schema.columns.size());
+        auto next = row.begin();
+        for (std::size_t i = row.size() == live ? 0 : 1; i < ta.schema.columns.size(); ++i) {
+            if (ta.schema.columns[i].dropped()) {
+                physical.emplace_back().type = parser::ValueType::kNull;
+            } else {
+                physical.push_back(*next++);
+            }
+        }
+    }
+    return out;
+}
+
+}  // namespace
 
 std::vector<parser::AstValue> CommandDispatcher::InsertBodyOf(
     const catalog::TableAccess& ta, const std::vector<parser::AstValue>& values) {
@@ -4228,6 +4414,9 @@ StarDescription DescribeStar(std::span<const catalog::SysColumnRow> columns) {
     out.types.reserve(columns.size());
     out.type_mods.reserve(columns.size());
     for (std::size_t i = 0; i < columns.size(); ++i) {
+        // A dropped column is not in `*` (BW-R6), as the compiler's
+        // `column_names` leaves it out.
+        if (columns[i].dropped()) continue;
         out.projection.push_back(exec::ColumnRef{0, 0, static_cast<std::uint16_t>(i)});
         out.types.push_back(columns[i].type_val);
         out.type_mods.push_back(catalog::TypeModOf(columns[i].type_val, columns[i].len));
@@ -4511,13 +4700,13 @@ DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
     return out;
 }
 
-DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
+DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& written,
                                                 WriteScope& scope) {
     // BI3: the row cap, at the first config-aware layer (the parser is a
     // pure syntax layer and deliberately config-blind). A refusal naming
     // the cap and the count, never a truncation.
-    if (stmt.rows.size() > max_insert_rows_) {
-        return {"ERR INSERT of " + std::to_string(stmt.rows.size()) +
+    if (written.rows.size() > max_insert_rows_) {
+        return {"ERR INSERT of " + std::to_string(written.rows.size()) +
                     " rows exceeds max_insert_rows (" + std::to_string(max_insert_rows_) + ")",
                 false};
     }
@@ -4527,7 +4716,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // in-memory trail. A configuration without one (tests; production
     // always builds it) could place rows it cannot take back, which is a
     // wrong answer with a right answer's shape - refused upfront instead.
-    if (stmt.rows.size() > 1 && txn_ == nullptr) {
+    if (written.rows.size() > 1 && txn_ == nullptr) {
         return {"ERR a multi-row INSERT requires the transaction manager; this configuration "
                 "cannot unwind a partially placed statement and is single-row only",
                 false};
@@ -4539,12 +4728,12 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     const std::optional<txn::ReadView> view =
         scope.session != nullptr ? ViewFor(*scope.session) : std::nullopt;
     auto oid =
-        catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
+        catalog_.FindTableOidByName(written.table_name, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) {
         return {ErrorReply(oid.status()), false, 0, oid.status()};
     }
-    if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
-                                                   stmt.table_byte_offset,
+    if (Status s = catalog_.CheckRelationQualifier(written.schema, written.table_name, oid.value(),
+                                                   written.table_byte_offset,
                                                    view.has_value() ? &*view : nullptr);
         !s.ok()) {
         return {ErrorReply(s), false, 0, s};
@@ -4560,15 +4749,6 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // statement, including across AllocateRowId() (catalog.hpp), and
     // refreshed by InsertOneRow when a root repoint invalidates it.
     const catalog::TableAccess* ta = access.value();
-
-    // Whether every row omits its pk, the question T3's sorted fill further
-    // down asks.
-    const std::size_t fill_arity = ta->schema.columns.empty() ? 0 : ta->schema.columns.size() - 1;
-    std::size_t rows_omitting_pk = 0;
-    for (const std::vector<parser::AstValue>& r : stmt.rows) {
-        if (r.size() == fill_arity) ++rows_omitting_pk;
-    }
-    const bool every_row_omits_pk = rows_omitting_pk == stmt.rows.size();
 
     // Insert routing and spreading retired (AT-S9); their history is at
     // cf889b63. A row lands in its relation's one structure on the core the
@@ -4597,6 +4777,32 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
                                                   RepeatableReadWait::kCapable)) {
         return {ErrorReply(*held), false, 0, *held};
     }
+
+    // **Positional `VALUES` name the live columns** (BW-R6 of
+    // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): a
+    // relation with a dropped column takes each row expanded here, once, to
+    // its physical width - a NULL placeholder at every dropped position - so
+    // everything downstream keeps indexing the body by `column_no - 1`.
+    // **After the `IX`, never before it**: a `DROP COLUMN`'s overwrite is in
+    // place and visible before its decide, so a row counted against an open
+    // drop's schema would be refused on a column set that may yet roll back;
+    // behind the `IX` the statement parks on that drop and re-resolves.
+    std::optional<parser::InsertStmt> expanded;
+    if (ta->layout.has_dropped()) {
+        auto physical = ExpandOverDroppedColumns(*ta, written);
+        if (!physical.ok()) return {ErrorReply(physical.status()), false, 0, physical.status()};
+        expanded.emplace(std::move(physical.value()));
+    }
+    const parser::InsertStmt& stmt = expanded.has_value() ? *expanded : written;
+
+    // Whether every row omits its pk, the question T3's sorted fill further
+    // down asks.
+    const std::size_t fill_arity = ta->schema.columns.empty() ? 0 : ta->schema.columns.size() - 1;
+    std::size_t rows_omitting_pk = 0;
+    for (const std::vector<parser::AstValue>& r : stmt.rows) {
+        if (r.size() == fill_arity) ++rows_omitting_pk;
+    }
+    const bool every_row_omits_pk = rows_omitting_pk == stmt.rows.size();
 
     // ---- The bulk loop (docs/spec/bulkinsert.md §2.3, §4) ---------------
     //
@@ -4950,12 +5156,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     if (ncols > 0 && values.size() != ncols && values.size() != ncols - 1) {
         // Before the id: the codec would refuse this row at encode, which
         // sits after the id is settled - and BI9's rule is that a refused row
-        // burns nothing. Both accepted counts are named, because with two of
-        // them a single number reads as an off-by-one against the wrong one.
-        return Status::InvalidArgument(
-            "expected " + std::to_string(ncols) + " value(s) including primary-key column '" +
-               std::string(catalog::NameView(ta.schema.columns.front().name)) + "', or " +
-            std::to_string(ncols - 1) + " to have it issued; got " + std::to_string(values.size()));
+        // burns nothing.
+        return InsertArityRefusal(ta, ncols, values.size());
     }
 
     // When the row names its key, the pk is values[0] and the body is the

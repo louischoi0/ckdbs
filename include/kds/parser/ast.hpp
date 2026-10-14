@@ -869,27 +869,32 @@ struct PurgeStmt {
     std::vector<Condition> where;  // never empty: the parser refuses a bare PURGE
 };
 
-// `ALTER TABLE <t> RENAME TO <new>` and
-// `ALTER TABLE <t> RENAME COLUMN <old> TO <new>` (docs/spec/alter.md AL1).
+// `ALTER TABLE <t> RENAME TO <new>`, `ALTER TABLE <t> RENAME COLUMN <old>
+// TO <new>` (docs/spec/alter.md AL1) and `ALTER TABLE <t> DROP [COLUMN]
+// <name>` (BW-R1 of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
 //
-// v1 is catalog-only: a rename changes a catalog label and no tuple
-// bytes. Everything else spelled under ALTER answers Unsupported at
-// parse with AL1's reason - the row size is a schema constant
-// (invariant 13), so a column-set change is a relation rewrite, not a
-// catalog edit. One struct for both forms, CabinStmt's precedent: they
-// share the resolution and differ in which catalog call they reach.
+// Every form changes catalog rows and no tuple byte: a rename a label, a
+// drop a flag on a column whose bytes stay in every row (BW-R6). One struct
+// for every form, CabinStmt's precedent: they share the resolution and
+// differ in which catalog call they reach.
+enum class AlterAction : std::uint8_t {
+    kRenameTable,
+    kRenameColumn,
+    kDropColumn,
+};
+
 struct AlterStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above
     std::uint32_t byte_offset = 0;  // of the table name
 
-    bool rename_column = false;  // false: RENAME TO, the relation itself
+    AlterAction action = AlterAction::kRenameTable;
 
-    // RENAME COLUMN only: the column as written.
+    // RENAME COLUMN and DROP COLUMN: the column as written.
     std::string old_column;
     std::uint32_t old_column_byte_offset = 0;
 
-    // The new name - of the table or the column, by `rename_column`.
+    // The new name - of the table or the column, by `action`.
     std::string new_name;
     std::uint32_t new_name_byte_offset = 0;
 };

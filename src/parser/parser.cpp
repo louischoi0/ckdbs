@@ -3484,14 +3484,15 @@ StatusOr<Statement> Parser::Parse() {
     return stmt;
 }
 
-// `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new>`
-// (docs/spec/alter.md AL1, AL7), with `ALTER` already consumed.
+// `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new> |
+// DROP [COLUMN] <name>` (docs/spec/alter.md AL1, AL7; BW-R1), with `ALTER`
+// already consumed.
 //
-// `TABLE`, `RENAME`, `COLUMN` and `TO` are ordinary identifiers matched by
-// text, like every clause head this grammar has grown - and the refusal
-// surface is parsed *before* the accepted form, so `ADD`/`DROP`/`MODIFY`/
-// `SET` answer with AL1's reason at their own byte rather than a syntax
-// error pointing past them.
+// `TABLE`, `RENAME`, `DROP`, `COLUMN` and `TO` are ordinary identifiers
+// matched by text, like every clause head this grammar has grown - and the
+// refusal surface is parsed *before* the accepted forms, so `MODIFY`/`SET`
+// answer at their own byte rather than with a syntax error pointing past
+// them.
 StatusOr<AlterStmt> Parser::ParseAlter() {
     if (Status s = ExpectKeyword("TABLE"); !s.ok()) return s;
 
@@ -3508,21 +3509,27 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
         return Status::NotImplemented(
             "ALTER TABLE " + std::string(verb.text) +
             " is not supported (byte " + std::to_string(verb.byte_offset) +
-            "); v1 is catalog-only - RENAME TO and RENAME COLUMN - because a relation's row "
-            "size is a schema constant (invariant 13), so changing the column set is a "
-            "relation rewrite, not a catalog edit");
+            "); ALTER changes catalog rows and no tuple byte, and this form would rewrite "
+            "every row of the relation (invariant 13)");
     }
-    // `DROP` under ALTER is the same class, worded for what was written:
-    // dropping a column is the rewrite, dropping the table is DROP TABLE's
-    // feature, and neither is a rename.
+    // `DROP [COLUMN] <name>` (BW-R1): a flag on the column's catalog row,
+    // its bytes left in every tuple (BW-R6).
     if (verb.type == TokenType::kIdent && IEquals(verb.text, "DROP")) {
-        return Status::NotImplemented(
-            "ALTER TABLE DROP is not supported (byte " + std::to_string(verb.byte_offset) +
-            "); dropping a column changes the row size (invariant 13), and dropping the "
-            "relation is DROP TABLE's feature, which does not exist yet");
+        lexer_.Next();
+        if (const Token what = lexer_.Peek();
+            what.type == TokenType::kIdent && IEquals(what.text, "COLUMN")) {
+            lexer_.Next();
+        }
+        stmt.action = AlterAction::kDropColumn;
+        stmt.old_column_byte_offset = lexer_.Peek().byte_offset;
+        auto column = ParseIdent();
+        if (!column.ok()) return column.status();
+        stmt.old_column = std::move(column.value());
+        ConsumeOptionalSemicolon();
+        return stmt;
     }
     if (verb.type != TokenType::kIdent || !IEquals(verb.text, "RENAME")) {
-        return Status::InvalidArgument("expected RENAME after the table name, got '" +
+        return Status::InvalidArgument("expected RENAME or DROP after the table name, got '" +
                                         std::string(Describe(verb)) + "' at byte " +
                                         std::to_string(verb.byte_offset));
     }
@@ -3531,7 +3538,7 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
     if (const Token what = lexer_.Peek();
         what.type == TokenType::kIdent && IEquals(what.text, "COLUMN")) {
         lexer_.Next();
-        stmt.rename_column = true;
+        stmt.action = AlterAction::kRenameColumn;
         stmt.old_column_byte_offset = lexer_.Peek().byte_offset;
         auto old_col = ParseIdent();
         if (!old_col.ok()) return old_col.status();

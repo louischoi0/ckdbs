@@ -28,7 +28,8 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
                                        const parser::IndexColumnRef& col,
                                        const std::string& table_name) {
     for (std::size_t i = 0; i < access.schema.columns.size(); ++i) {
-        if (catalog::NameView(access.schema.columns[i].name) == col.name) {
+        if (!access.schema.columns[i].dropped() &&
+            catalog::NameView(access.schema.columns[i].name) == col.name) {
             // D2 (docs/spec/null.md): no nullable column enters an index in
             // v1, key or covered - an entry has no NULL encoding. Refused
             // here because this is the layer that still holds the byte;

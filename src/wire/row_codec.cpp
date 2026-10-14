@@ -121,6 +121,9 @@ std::vector<FieldDescription> DescribeSchema(const catalog::Schema& schema) {
     std::vector<FieldDescription> fields;
     fields.reserve(schema.columns.size());
     for (const auto& col : schema.columns) {
+        // A dropped column is not described (BW-R6): a KWP load's rows carry
+        // the live columns, and the insert path expands them.
+        if (col.dropped()) continue;
         FieldDescription f;
         f.name = std::string(catalog::NameView(col.name));
         f.type_oid = col.type_val;

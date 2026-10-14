@@ -148,9 +148,12 @@ std::string ClusteredName(catalog::ClusteredType type) {
     return type == catalog::ClusteredType::kBtree ? "BTREE" : "HEAP";
 }
 
-// A column's name, or its position when the schema cannot say.
+// A column's name, or its position when the schema cannot say - a dropped
+// column's included, whose name left the SQL surface (BW-R6) while a
+// `sys.access_stats` mask or a Cabin controller entry may still carry it.
 std::string ColumnLabel(const StatusOr<const catalog::TableAccess*>& access, std::size_t col) {
-    if (access.ok() && col < access.value()->schema.columns.size()) {
+    if (access.ok() && col < access.value()->schema.columns.size() &&
+        !access.value()->schema.columns[col].dropped()) {
         return std::string(catalog::NameView(access.value()->schema.columns[col].name));
     }
     return std::to_string(col);
@@ -337,6 +340,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
         const std::string rel(catalog::NameView(object.name));
         for (std::size_t i = 0; i < schema.value().columns.size(); ++i) {
             const catalog::SysColumnRow& column = schema.value().columns[i];
+            // `sys.columns` and `DESCRIBE` list live columns (BW-R6, BW-R12).
+            if (column.dropped()) continue;
             // The declared type, not `len`, which for a decimal is the packed
             // (precision, scale); `ColumnTypeText` is its one reader.
             auto type_row = catalog_.ResolveTypeByVal(column.type_val);

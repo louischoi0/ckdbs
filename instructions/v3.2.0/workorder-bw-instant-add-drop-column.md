@@ -267,6 +267,18 @@ before its adoption, and it holds.
 - **BW-Q5** — the `DROP` restrict set (BW-R8), assertions by relation.
 - **BW-Q6** — the format and the superblock bump (BW-R9, BW-R10).
 - **BW-Q7** — `spare_slots`/`spare_free` on the `sys.tables` view (BW-R12).
+- **BW-Q8** — raised by BW-S2's review: a reader on another session sees an
+  open `ADD`/`DROP COLUMN`'s schema before it decides, because the catalog
+  row is rewritten in place and a read's refused `IS` reads on (`DROP
+  TABLE`'s §5a shape). Options: (a) state it - the two forms are atomic and
+  writer-isolated, and a reader can see an undecided column set: `SELECT *`
+  without a column an open drop flags or with one an open add places (NULL
+  in every row), a name refused while the drop is open; never a wrong value
+  in a column it shows; (b) filter the schema by the session's view, which
+  every catalog read of a relation's columns would have to take. **CLA
+  proposes (a)**: (b) is a change to every schema read, outside BW's scope,
+  and (a)'s exposure is a column set, never a value. **Adopted (a) on the
+  standing go-ahead of 2026-10-14 (W3).**
 
 ---
 
@@ -329,3 +341,34 @@ Every stage runs the full suite and gets a `critics-developer` review
 ## 6. Where to start
 
 Nothing is built at the writing. BW-Q1..Q7 adopted (W3); BW-S1 is next.
+
+---
+
+## 7. Stage log
+
+- **BW-S1** landed at `f2a72474`. Review (`critics-developer`): a cell was
+  sized from its offset to the next column's, so with slots the last
+  declared column's cell ran over the slot region - inline capacity, the
+  `char(N)` length check and a covering index's copy all read the wrong
+  span; fixed with `RowLayout::cell_ends` and a cell. Applied: one
+  `sys.tables` read per cache fill, `spare_free` from the layout, one loop
+  in `Build`, `Corruption` for an on-disk slot count past 64. Suite
+  3818/3818. Overhead not measured (W2).
+- **BW-S2** - review (`critics-developer`) found and fixed three defects:
+  an `INSERT` counted its values against an open drop's schema before its
+  `IX` (refused a row the drop's rollback would have admitted); a `RENAME
+  COLUMN` could take the name of a column whose drop was still open (two
+  live columns of one name after the rollback); `ColumnLabel` printed a
+  dropped position's old name in `sys.access_stats`/`sys.cabins`. Applied:
+  one `OverwriteForDdl` for the three transactional catalog overwrites
+  (`DropTable`, `DropNamespace`, `DropColumn`), one arity refusal
+  (`InsertArityRefusal`) over `RowLayout::live_columns`, rows expanded in
+  one copy, the pk refused at the dispatcher with its byte. BW-Q8 raised
+  and adopted (a). **Rejected**: (B) "an `INSERT` refused its `IS` at bind
+  by an open drop that then rolls back writes with the stale schema" - the
+  decide moves the schema word (`Transaction::NoteWroteCatalog`, set by
+  `MarkHoldsDdl`) and the writer's first relation intention refuses a moved
+  word (`MemoIsCurrent`, `BorrowOrWait`), so the statement re-runs; (C) an
+  auto `CreateCabin` racing the restrict check is recorded in
+  `known-gaps.md` rather than fenced, since a Cabin on a dropped column is
+  never served (no statement names it).

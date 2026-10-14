@@ -148,6 +148,17 @@ struct RowLayout {
     std::uint16_t vacant_slot_bit_begin = 0;
     std::uint16_t vacant_slot_bit_end = 0;
 
+    // The columns a statement can see, the pk included: every column but a
+    // dropped one (BW-R6). Positional `VALUES` count these.
+    std::uint32_t live_columns = 0;
+
+    // Whether any column is dropped - the codec's gate, as
+    // `null_bitmap_bytes` is the bitmap's: a relation with no dropped column
+    // asks no column whether it is. A dropped column's cell is written zero
+    // and never interpreted - its bytes may be a NOT NULL varchar's zero
+    // `kNull` tag, which a decode would otherwise refuse.
+    bool has_dropped() const noexcept { return live_columns != offsets.size(); }
+
     // The instance-pinned kds.inline_cell_width this layout was built for.
     // Carried so the codec never has to be told twice.
     std::uint32_t inline_cell_width = 0;

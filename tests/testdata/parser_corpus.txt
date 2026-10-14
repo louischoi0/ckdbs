@@ -292,14 +292,14 @@ ok	fe758a469156cb26	b5d414774c8002cc	35e5c4c06838a2b7	SELECT b, COUNT(*) FROM t 
 ok	61193a3cf78e857f	cbf29ce484222325	bb8d52fd15f1001c	SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b
 
 # ---- ALTER (docs/spec/alter.md AL1, AL7) -----------------------------------
-# ALTER is not a patternable leading word, so every line is "-". The
-# refusal class is the feature: v1 is catalog-only, and ADD/DROP answer a
-# positioned Unsupported carrying invariant 13's reason.
+# ALTER is not a patternable leading word, so every line is "-". Every
+# admitted form changes catalog rows and no tuple byte; `DROP COLUMN` flipped
+# to ok at BW-S2 (`instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
 ok	-	-	-	ALTER TABLE t RENAME TO u
 ok	-	-	-	ALTER TABLE t RENAME COLUMN a TO b
 ok	-	-	-	alter table t rename to u;
 NotImplemented	-	-	-	ALTER TABLE t ADD COLUMN x int
-NotImplemented	-	-	-	ALTER TABLE t DROP COLUMN a
+ok	-	-	-	ALTER TABLE t DROP COLUMN a
 InvalidArgument	-	-	-	ALTER TABLE t
 InvalidArgument	-	-	-	ALTER t RENAME TO u
 
