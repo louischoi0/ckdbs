@@ -1,0 +1,165 @@
+samples 6219
+
+-- self --
+  8.81%    548  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+  5.24%    326  std::_Hashtable::find
+  4.98%    310  __libc_pwrite64
+  3.26%    203  kds::wal::WalManager::AppendThrough
+  2.78%    173  kds::storage::::HardwareExtend
+  2.54%    158  __GI___libc_malloc
+  2.33%    145  _int_free
+  2.30%    143  std::vector::~vector
+  2.06%    128  _int_malloc
+  1.87%    116  __GI___libc_free
+  1.69%    105  __memcpy_avx512_unaligned_erms
+  1.56%     97  kds::exec::DecodeColumnsInto
+  1.48%     92  __libc_send
+  1.37%     85  std::vector::size const
+  1.24%     77  kds::wal::WalStream::Append
+  1.19%     74  std::__cxx11::basic_string::_M_is_local const
+  1.13%     70  kds::txn::EncodeUndoRecordTail
+  1.09%     68  tcache_get_n
+  1.06%     66  kds::wal::WalStream::AppendLocked
+  1.06%     66  __GI_fdatasync
+  1.03%     64  kds::txn::UndoLog::LogUndoWrite
+  1.01%     63  kds::wal::EncodeHeapWrite
+  0.98%     61  kds::Status::ok const
+  0.98%     61  kds::wal::::CheckOutputSize [clone .isra.0]
+  0.96%     60  kds::server::CommandDispatcher::NoteCabinWrite
+  0.85%     53  kds::storage::DevicePageStore::ResidentBytes
+  0.84%     52  kds::server::CommandDispatcher::WalkBtreeLeaves::{lambda#1}::operator const
+  0.84%     52  std::__cxx11::basic_string::_M_local_data
+  0.79%     49  kds::exec::EvaluateConjuncts
+  0.74%     46  std::__cxx11::basic_string::_M_local_data const
+  0.68%     42  unlink_chunk
+  0.68%     42  kds::exec::::EncodeOneValue
+  0.68%     42  kds::exec::DecodeAndResolve
+  0.68%     42  malloc_consolidate
+  0.68%     42  std::_Vector_base::_M_deallocate
+  0.66%     41  std::_Function_handler::_M_invoke
+  0.66%     41  kds::txn::UndoLog::Append
+  0.66%     41  __memset_avx512_unaligned_erms
+  0.64%     40  kds::heap::PageView::OverwriteTuple
+  0.64%     40  kds::storage::PageRef::Release
+  0.64%     40  function
+  0.64%     40  kds::StatusOr::~StatusOr
+  0.63%     39  LoadLe64
+  0.63%     39  kds::exec::::CheckDecodeInputs [clone .isra.0]
+  0.63%     39  kds::wal::EncodeRecord
+  0.61%     38  kds::txn::UndoPageAppend
+  0.59%     37  kds::storage::PageStore::Get
+  0.56%     35  kds::exec::EncodeAssigned
+  0.56%     35  epoll_wait
+  0.55%     34  kds::exec::::EncodeColumn [clone .isra.0]
+  0.55%     34  kds::storage::DevicePageStore::Resolve
+  0.55%     34  kds::Status::Status
+  0.53%     33  kds::storage::DevicePageStore::BeginNoRefuseWindow
+  0.53%     33  std::__cxx11::basic_string::_M_length
+  0.51%     32  kds::wal::EncodeUndoWrite
+  0.50%     31  kds::heap::PageView::TryReadTupleIn const
+  0.50%     31  kds::heap::PageView::ReadTupleIn const
+  0.48%     30  kds::exec::CompareValues
+  0.48%     30  kds::storage::DevicePageStore::FetchAndPin
+  0.48%     30  operator
+  0.47%     29  operator new
+  0.45%     28  std::char_traits::assign
+  0.43%     27  kds::txn::TransactionManager::NoteOverwrite
+  0.42%     26  kds::storage::DevicePageStore::StampPageLsn
+  0.42%     26  std::_Optional_payload_base::_M_reset
+  0.42%     26  kds::storage::NoRefuseWindow::Open
+  0.42%     26  kds::exec::EvaluateAllChecked
+  0.39%     24  kds::exec::LogSpills
+  0.39%     24  __gnu_cxx::__normal_iterator::__normal_iterator
+  0.37%     23  std::_Optional_payload_base::_Optional_payload_base
+  0.37%     23  kds::txn::::CheckRecord [clone .isra.0]
+  0.37%     23  __GI_fsync
+  0.37%     23  DecodeShapeHolds
+  0.35%     22  operator delete
+  0.35%     22  kds::KeystoneIdOfPayload
+  0.35%     22  kds::storage::FreeMapIsAllocated
+  0.34%     21  kds::exec::::CheckLayoutMatches
+  0.34%     21  std::_Function_handler::_M_manager
+  0.32%     20  kds::storage::DevicePageStore::PinFrame
+  0.32%     20  kds::exec::::StartRow [clone .isra.0]
+
+-- inclusive --
+ 95.34%   5929  main
+ 95.34%   5929  __libc_start_call_main
+ 95.34%   5929  kds::server::Expeditor::Serve
+ 95.34%   5929  kds::server::Expeditor::RunUntilStopped
+ 95.34%   5929  kds::sched::Scheduler::Run
+ 95.34%   5929  _start
+ 95.34%   5929  __libc_start_main_impl
+ 94.61%   5884  kds::sched::Scheduler::RunOnce
+ 93.97%   5844  operator
+ 92.31%   5741  std::__n4861::coroutine_handle::resume const
+ 92.17%   5732  kds::server::CommandDispatcher::DispatchAsync [clone .actor]
+ 92.04%   5724  kds::server::CommandDispatcher::DispatchInner
+ 92.04%   5724  kds::server::CommandDispatcher::DispatchAndStage
+ 91.96%   5719  kds::server::CommandDispatcher::HandleUpdate
+ 91.25%   5675  std::function::operator const
+ 89.64%   5575  kds::server::CommandDispatcher::UpdateInner
+ 88.87%   5527  kds::server::CommandDispatcher::VisitRelation
+ 88.86%   5526  kds::server::CommandDispatcher::WalkBtreeLeaves
+ 87.39%   5435  __invoke_impl
+ 75.14%   4673  kds::server::CommandDispatcher::UpdateInner::{lambda#1}::operator const
+ 24.86%   1546  kds::txn::TransactionManager::AppendUndo
+ 22.90%   1424  kds::txn::UndoLog::Append
+ 12.74%    792  kds::wal::WalManager::Append
+ 11.38%    708  kds::txn::UndoLog::LogUndoWrite
+  7.04%    438  kds::wal::WalStream::Append
+  6.90%    429  kds::storage::PageStore::Get
+  6.46%    402  operator new
+  6.40%    398  kds::storage::DevicePageStore::FetchPinned
+  6.16%    383  std::__new_allocator::allocate
+  5.60%    348  kds::storage::DevicePageStore::FetchAndPin
+  5.52%    343  __GI___libc_free
+  5.24%    326  std::_Hashtable::find
+  5.16%    321  kds::wal::WalStream::AppendLocked
+  4.98%    310  __libc_pwrite64
+  4.87%    303  __GI___libc_malloc
+  4.66%    290  std::error_code::default_error_condition const
+  4.66%    290  clone3
+  4.66%    290  start_thread
+  4.60%    286  kds::exec::DecodeAndResolve
+  4.02%    250  kds::txn::UndoLog::TailFor
+  3.76%    234  std::__new_allocator::deallocate
+  3.57%    222  kds::wal::FileLogDevice::RunPreparer
+  3.57%    222  kds::wal::FileLogDevice::BuildAhead
+  3.54%    220  _int_free
+  3.47%    216  kds::exec::EncodeAssigned
+  3.26%    203  kds::wal::WalManager::AppendThrough
+  3.17%    197  kds::storage::DevicePageStore::Resolve
+  3.17%    197  kds::wal::FileLogDevice::BuildBody
+  2.81%    175  kds::exec::DecodeColumnsInto
+  2.78%    173  kds::storage::::HardwareExtend
+  2.62%    163  kds::storage::PageRef::Release
+  2.32%    144  kds::exec::EvaluateConjuncts
+  2.30%    143  std::vector::~vector
+  2.19%    136  _int_malloc
+  2.06%    128  kds::server::CommandDispatcher::EndWrite
+  1.90%    118  std::_Function_handler::_M_invoke
+  1.83%    114  kds::wal::FileLogDevice::WriteAt
+  1.80%    112  kds::wal::WalStream::Flush
+  1.69%    105  __memcpy_avx512_unaligned_erms
+  1.59%     99  kds::server::TcpServer::OnStatementComplete
+  1.56%     97  kds::wal::WalManager::Flush
+  1.51%     94  kds::txn::UndoPageAppend
+  1.50%     93  kds::server::TcpServer::FlushOutbox
+  1.48%     92  __libc_send
+  1.46%     91  kds::exec::::EncodeColumn [clone .isra.0]
+  1.38%     86  kds::wal::EncodeHeapWrite
+  1.37%     85  std::vector::size const
+  1.29%     80  kds::heap::PageView::ReadTuple const
+  1.29%     80  kds::exec::::StartRow [clone .isra.0]
+  1.19%     74  _int_free_maybe_consolidate
+  1.19%     74  kds::wal::EncodeUndoWrite
+  1.19%     74  std::__cxx11::basic_string::_M_is_local const
+  1.16%     72  malloc_consolidate
+  1.14%     71  std::_Function_base::~_Function_base
+  1.13%     70  kds::txn::EncodeUndoRecordTail
+  1.09%     68  tcache_get_n
+  1.08%     67  std::_Function_handler::_M_manager
+  1.06%     66  __GI_fdatasync
+  1.05%     65  kds::wal::FileLogDevice::SyncTimed
+  1.05%     65  kds::wal::WalStream::SyncDevice

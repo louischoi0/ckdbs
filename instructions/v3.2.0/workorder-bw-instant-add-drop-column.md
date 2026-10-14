@@ -393,7 +393,7 @@ Every stage runs the full suite and gets a `critics-developer` review
 
 ## 6. Where to start
 
-BW-S1..S3 landed (`f2a72474`, `69a31361`, `bc42a011`) and BW-S4's text with them; BW-Q1..Q10 adopted on the standing go-ahead (W3). BW-S5, the close, holds its measurement until the operator directs it (W2).
+**BW is closed** - on the operator's word of 2026-10-14 (W6, `raft-marks-2026-10-14.md` §10), at `d6cb3826` (`v3.2.0-28-gd6cb3826`, on `main`). BW-S1..S4 landed (`f2a72474`, `69a31361`, `bc42a011`, `d0134573`); BW-Q1..Q11 adopted on the standing go-ahead (W3). The close measurement ran when the operator directed it (W4, W5): `bench/v3.2.0/results-bw-close-v3.2.0-22-g541ce440.md` found the every-row `UPDATE` +30 us / 1,000 rows outside the spread; the profile attributed none of it to a BW-changed line (`bench/v3.2.0/archive/bw-update-profile/`); `e8727478` hoisted the dropped-column gate out of the codec loops, and `bench/v3.2.0/results-bw-update-fix-v3.2.0-24-ge8727478.md` measured it below `541ce440` in 7 of 7 runs on both paths, while whether it equals the pre-BW tree is unresolved on a loaded host (`known-gaps.md`). Left open: BW-Q11's `[quiet-wrong]` gap (BU-S8's column list closes it); cleaning (D-e).
 
 ---
 

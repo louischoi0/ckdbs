@@ -1,0 +1,6 @@
+911b4b85f0fff3109611142f8c9de0bc775dcc82b91ffdd86bff3b047ba4f1ae  bin/kds_server-A
+911b4b85f0fff3109611142f8c9de0bc775dcc82b91ffdd86bff3b047ba4f1ae  bin/kds_server-A2
+07628c94ed32f035afbbe3063b0db24fad173310640150e35933b7ae28f8bd26  bin/kds_server-B
+6e393d49e46b733f9793dad11265ca3a9c1f8f2248585f8bf00a2731e70b498e  bin/kds_server-C
+build-C/kds_server 2026-10-14 08:51:27.865113815 +0000
+CMAKE_BUILD_TYPE:STRING=Release

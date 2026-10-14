@@ -1,0 +1,24 @@
+08:48:54 start build C
+08:51:27 build C done rc=0
+08:51:46 phase start u1
+08:51:46 watch phase=none driver=no load=10.16 last: 
+08:52:46 watch phase=u1 driver=yes load=7.15 last: 
+08:53:46 watch phase=u1 driver=yes load=7.89 last: {"shape": "select-pk", "path": "literal", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 70.9, "p25_us": 127.83, "p50_us": 
+08:54:46 watch phase=u1 driver=yes load=6.72 last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates': 1000, 'pages_allo
+08:55:46 watch phase=u1 driver=yes load=7.43 last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates': 1000, 'pages_allo
+08:56:46 watch phase=u1 driver=yes load=8.72 last: {"shape": "select-pk", "path": "prepared", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 79.93, "p25_us": 153.99, "p50_us"
+08:57:46 watch phase=u1 driver=yes load=9.32 last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates': 1000, 'pages_allo
+08:58:46 watch phase=u1 driver=yes load=10.86 last: {"shape": "update-range", "path": "literal", "bin": "A", "ops": 120, "bad": 0, "p0_us": 700.58, "p25_us": 730.23, "p50_u
+08:59:46 watch phase=u1 driver=yes load=10.12 last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates': 1000, 'pages_allo
+09:00:47 watch phase=u1 driver=yes load=9.76 last: {"shape": "select-pk", "path": "prepared", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 51.11, "p25_us": 53.7, "p50_us": 
+09:01:47 watch phase=u1 driver=yes load=11.10 last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates': 1000, 'pages_allo
+09:02:31 watch phase=u1 driver=yes load=9.58 last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates
+09:02:49 phase end u1 (json present)
+09:02:49 phase start u2
+09:03:31 watch phase=u2 driver=yes load=3.96 last: 
+09:04:31 watch phase=u2 driver=yes load=2.43 last: C {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates
+09:05:31 watch phase=u2 driver=yes load=5.36 last: {"shape": "select-pk", "path": "literal", "bin": "C", "ops": 1998, "bad": 0, "p0_us": 60.29, "p25_us
+09:06:31 watch phase=u2 driver=yes load=9.20 last: {"shape": "select-pk", "path": "literal", "bin": "C", "ops": 1998, "bad": 0, "p0_us": 60.29, "p25_us
+09:07:31 watch phase=u2 driver=yes load=9.37 last: {"shape": "update-range", "path": "prepared", "bin": "C", "ops": 120, "bad": 0, "p0_us": 1213.67, "p
+09:07:41 phase end u2 rc=0
+09:07:41 ALL DONE

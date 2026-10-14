@@ -949,10 +949,13 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
                                         " value(s) after the tuple key, got " +
                                         std::to_string(values.size()));
     }
+    // BW-R6's gate, read once per call: an unaltered relation's loop asks a
+    // local, never the layout, per column.
+    const bool has_dropped = layout.has_dropped();
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
         // A dropped column's cell stays zero with its bit clear (BW-R6): the
         // caller's placeholder there is not a value.
-        if (layout.has_dropped() && schema.columns[i].dropped()) continue;
+        if (has_dropped && schema.columns[i].dropped()) continue;
         if (Status s = EncodeColumn(schema, layout, i, values[i - 1], out, varheap); !s.ok()) {
             return s;
         }
@@ -1094,6 +1097,7 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
     // decoders already read row_size from, where null_bits is a separate
     // heap allocation.
     const bool has_nulls = layout.null_bitmap_bytes != 0;
+    const bool has_dropped = layout.has_dropped();  // BW-R6 gate, read once per call like has_nulls
 
     std::uint64_t remaining = columns;
     if (schema.columns.size() < 64) {
@@ -1108,7 +1112,7 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
             continue;
         }
         if ((has_nulls && catalog::NullBitIsSet(payload, layout, i)) ||
-            (layout.has_dropped() && schema.columns[i].dropped())) {
+            (has_dropped && schema.columns[i].dropped())) {
             // The bitmap decides here exactly as in DecodeRowInto below.
             SetNullSlot(out[i]);
             continue;
@@ -1143,15 +1147,16 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     out[0].raw_int_text.clear();
     out[0].str_val.clear();
 
-    // The same zero-cost gate as DecodeColumnsInto.
+    // The same zero-cost gates as DecodeColumnsInto.
     const bool has_nulls = layout.null_bitmap_bytes != 0;
+    const bool has_dropped = layout.has_dropped();  // BW-R6 gate, read once per call like has_nulls
 
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
         // A dropped column reads NULL and its cell is never interpreted
         // (BW-R6): no statement can name it, and its bytes need not be a
         // value its type would accept.
         if ((has_nulls && catalog::NullBitIsSet(payload, layout, i)) ||
-            (layout.has_dropped() && schema.columns[i].dropped())) {
+            (has_dropped && schema.columns[i].dropped())) {
             // The bitmap decides (null.md §3); the cell is the defined
             // filler and is not read.
             SetNullSlot(out[i]);

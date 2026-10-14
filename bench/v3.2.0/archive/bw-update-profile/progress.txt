@@ -1,0 +1,17 @@
+08:26:27 start builds
+08:27:43 build A rc=0
+08:28:59 build B rc=0
+08:28:59 builds done
+08:29:06 run A1
+08:29:44 done A1 rc=0
+08:29:44 run B1
+08:30:20 done B1 rc=0
+08:30:20 run A2
+08:30:56 done A2 rc=0
+08:30:56 run B2
+08:31:31 done B2 rc=0
+08:31:31 run A3
+08:32:07 done A3 rc=0
+08:32:07 run B3
+08:32:42 done B3 rc=0
+08:32:42 all done
