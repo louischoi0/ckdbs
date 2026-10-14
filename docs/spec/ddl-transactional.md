@@ -93,10 +93,18 @@ ViewFor`), and "some" is the instance's: `InstanceVisibility::AnyDdlOpen`
 counts every core's open DDL transactions. A transaction is counted
 before its first catalog write - when its DDL scope opens, whether or not
 it goes on to write - and uncounted after it is decided. Each core keeps
-its own transactions in `ddl_txns_`, which the count is the sum of. **One
-window is open**: a reader that read the count as zero just before another
-core counted its DDL resolves unfiltered and can bind the row that DDL
-writes next (`docs/inflight/bugs/create-table-uncommitted-row-visible-to-another-core.md`). With none in flight every catalog row is
+its own transactions in `ddl_txns_`, which the count is the sum of.
+**A relation name resolves through `ResolveNames`**, which closes the
+window between reading the count and reading the catalog: a reader that
+read the count as zero resolves unfiltered, then asks whether the
+instance's DDL generation (`InstanceVisibility::DdlGeneration`, moved by
+every open, after the count) changed while it read, and resolves again
+under a view if it did. A DDL moves the generation before its first
+catalog write, so a reader that found its row sees the move. A write's
+`WHERE` subqueries resolve through it too, and `CREATE INDEX` builds only
+over the relation it resolved and borrowed. The routes that resolve with
+no view at all - `DROP INDEX`'s index name, `CREATE CABIN`, `C_LOAD_BEGIN`
+- are `docs/inflight/bugs/names-resolved-with-no-view.md`'s. With none in flight every catalog row is
 either a bootstrap row or a committed one, so an unfiltered, cached read
 is correct for every reader. While one is open, a statement resolves
 names under a view — its own transaction's, or a fresh committed-now view

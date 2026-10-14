@@ -1138,6 +1138,40 @@ private:
     // decision, taken: pay for isolation only where isolation is at
     // stake.
     std::optional<txn::ReadView> ViewFor(Session& session);
+    // `ViewFor`'s minting half, whatever the count says.
+    txn::ReadView MintResolveView(Session& session);
+    // A relation's name and the qualifier written with it, under `view`.
+    StatusOr<catalog::Oid> ResolveQualifiedRelation(std::string_view qualifier,
+                                                    std::string_view name,
+                                                    std::uint32_t byte_offset,
+                                                    const txn::ReadView* view);
+
+    // **Every name resolution goes through this** (`ddl-transactional.md`
+    // §4): `resolve(view)` runs under `ViewFor`'s answer, and once more under
+    // a minted view when the fast path was taken and a DDL opened anywhere
+    // meanwhile (`InstanceVisibility::DdlGeneration` moved) - the unfiltered
+    // read may then have found the row that DDL wrote. A DDL moves the
+    // generation before its first catalog write, so a lookup that saw the
+    // row sees the move. With no session there is no view to resolve under.
+    template <typename Fn>
+    auto ResolveNames(Session* session, Fn&& resolve) {
+        if (session == nullptr) return resolve(nullptr);
+        const std::uint64_t generation =
+            txn_ != nullptr ? txn_->visibility().DdlGeneration() : 0;
+        std::optional<txn::ReadView> view = ViewFor(*session);
+        if (after_view_for_test_) after_view_for_test_();
+        auto answer = resolve(view.has_value() ? &*view : nullptr);
+        if (!view.has_value() && txn_ != nullptr &&
+            txn_->visibility().DdlGeneration() != generation) {
+            view = MintResolveView(*session);
+            answer = resolve(&*view);
+        }
+        return answer;
+    }
+    template <typename Fn>
+    auto ResolveNames(Session& session, Fn&& resolve) {
+        return ResolveNames(&session, std::forward<Fn>(resolve));
+    }
 
     // **The statement boundary, taken exactly once per statement.**
     // Under READ COMMITTED a transaction re-mints its view at each
@@ -1646,6 +1680,12 @@ public:
     // Empty in production.
     void SetAfterUpdateRowAppliedForTest(std::function<void(std::uint64_t)> hook) {
         after_update_row_applied_for_test_ = std::move(hook);
+    }
+    // **A seam between `ViewFor`'s answer and the resolution it serves**
+    // (`ResolveNames`): where another core's DDL opening lands in the
+    // window the generation re-check closes. Empty in production.
+    void SetAfterViewForTest(std::function<void()> hook) {
+        after_view_for_test_ = std::move(hook);
     }
 
     // The access-batch setters (AT-S7) and R6-5's in-doubt ceiling (AT-S6)
@@ -2363,6 +2403,7 @@ private:
     std::function<void()> epoch_seam_for_test_;
     std::function<void()> before_drop_exclusive_for_test_;
     std::function<void(std::uint64_t)> after_update_row_applied_for_test_;
+    std::function<void()> after_view_for_test_;
     std::function<void()> purge_seam_for_test_;
     // **What an open transaction's drops owe** (BF-R9): recorded when the
     // drop's catalog write succeeds, queued by `EndDdlScopeById` at the
