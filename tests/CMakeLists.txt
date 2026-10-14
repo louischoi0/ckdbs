@@ -94,6 +94,7 @@ add_executable(kds_tests
     types_e2e_test.cpp
     types_contract_test.cpp
     row_layout_test.cpp
+    column_slot_test.cpp
     tagged_cell_test.cpp
     analyze_test.cpp
     varheap_test.cpp

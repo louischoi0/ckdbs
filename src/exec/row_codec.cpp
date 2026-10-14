@@ -396,27 +396,19 @@ Status CheckLayoutMatches(const catalog::Schema& schema, const catalog::RowLayou
     return Status::OK();
 }
 
-// The span of `payload` column `i` occupies: from its offset to the next
-// column's, or - for the last one - to where the null bitmap begins
-// (null.md §2.1: the bitmap is appended after the columns, so the
-// last column's cell must not run to the end of the row; a write there
-// would wipe every null bit. Zero bitmap bytes reduces to the old rule).
+// The span of `payload` column `i` occupies: exactly its column's width
+// (`RowLayout::cell_ends`). Never "to the next offset or the bitmap": the
+// bitmap follows the last column (null.md §2.1) and, with slots, the slot
+// region follows the last declared column (BW-R2); a char or tagged cell
+// sized by a longer span would claim those bytes as its own.
 std::span<const std::byte> CellOf(const catalog::RowLayout& layout,
                                    std::span<const std::byte> payload, std::size_t i) {
-    const std::size_t begin = layout.offsets[i];
-    const std::size_t end = (i + 1 < layout.offsets.size())
-                                ? layout.offsets[i + 1]
-                                : layout.row_size - layout.null_bitmap_bytes;
-    return payload.subspan(begin, end - begin);
+    return payload.subspan(layout.offsets[i], layout.cell_ends[i] - layout.offsets[i]);
 }
 
 std::span<std::byte> MutableCellOf(const catalog::RowLayout& layout, std::span<std::byte> payload,
                                     std::size_t i) {
-    const std::size_t begin = layout.offsets[i];
-    const std::size_t end = (i + 1 < layout.offsets.size())
-                                ? layout.offsets[i + 1]
-                                : layout.row_size - layout.null_bitmap_bytes;
-    return payload.subspan(begin, end - begin);
+    return payload.subspan(layout.offsets[i], layout.cell_ends[i] - layout.offsets[i]);
 }
 
 // The one relational switch, for every operand type CompareValues
@@ -950,6 +942,7 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
     // cell that a short value does not fill (invariant 13).
     std::vector<std::byte> out(layout.row_size, std::byte{0});
     if (Status s = StartRow(schema, layout, id, out); !s.ok()) return s;
+    catalog::SetVacantSlotBits(out, layout);
     const std::size_t expected = schema.columns.size() - 1;
     if (values.size() != expected) {
         return Status::InvalidArgument("expected " + std::to_string(expected) +

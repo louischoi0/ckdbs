@@ -1172,7 +1172,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
                                    PageId desc_page_id, ClusteredType clustered_type,
                                    PageId varheap_page_id,
                                    PageId anchor_page_id, std::uint64_t trx_id,
-                                   CatalogRowRef* where) {
+                                   CatalogRowRef* where, std::uint16_t spare_slots) {
     SysTableRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
@@ -1182,6 +1182,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.next_id = kFirstRowId;
     row.varheap_page_id = varheap_page_id;
     row.anchor_page_id = anchor_page_id;
+    row.spare_slots = spare_slots;
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageTables, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysTablesTable;
     if (s.ok()) BumpVersion("sys.tables insert");
@@ -1315,8 +1316,13 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // page per relation that *could* spill, whether or not it ever does -
     // which is why relations that cannot spill get kInvalidPageId and no
     // page at all.
+    //
+    // A relation with slots gets its chain whether or not a declared column
+    // can spill (BW-R10): a `varchar(16)` a later `ADD COLUMN` places in a
+    // slot spills into it, and allocating then would move a root this rule
+    // keeps fixed at CREATE.
     PageId varheap_root = kInvalidPageId;
-    if (SchemaCanSpill(schema)) {
+    if (SchemaCanSpill(schema) || schema.spare_slots > 0) {
         auto created_varheap = varheap::CreateChain(store_, new_oid);
         if (!created_varheap.ok()) return created_varheap.status();
         varheap_root = created_varheap.value();
@@ -1390,7 +1396,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     note(ref);
     if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
                                       varheap_root, anchor_id, trx_id,
-                                      &ref);
+                                      &ref, schema.spare_slots);
         !s.ok()) {
         return s;
     }
@@ -2189,7 +2195,14 @@ StatusOr<Schema> Catalog::BuildSchemaFromColumns(Oid rel_id) {
     if (const TableAccess* cached = cache_.FindTableAccess(rel_id); cached != nullptr) {
         return cached->schema;
     }
-    return ScanSchemaFromColumns(rel_id);
+    auto schema = ScanSchemaFromColumns(rel_id);
+    if (!schema.ok()) return schema;
+    // After the column scan, so a relation with no columns answers NotFound
+    // as it always has (BW-R2's slot count, as `InitTableAccess` sets it).
+    auto table_row = GetSysTableRow(rel_id);
+    if (!table_row.ok()) return table_row.status();
+    schema.value().spare_slots = table_row.value().spare_slots;
+    return schema;
 }
 
 StatusOr<Schema> Catalog::ScanSchemaFromColumns(Oid rel_id) {
@@ -2269,6 +2282,9 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.namespace_oid = table_row.value().namespace_oid;
     access.oid = oid;
     access.schema = std::move(schema.value());
+    // The slot count rides with the columns because the layout is the
+    // schema's alone (BW-R2).
+    access.schema.spare_slots = table_row.value().spare_slots;
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
     access.varheap_page_id = table_row.value().varheap_page_id;

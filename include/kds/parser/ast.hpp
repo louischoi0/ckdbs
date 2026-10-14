@@ -471,6 +471,11 @@ struct CreateTableStmt {
     // `clustered`'s default - which is one of the two nameable values, so
     // the field alone cannot tell.
     bool clustered_given = false;
+
+    // `SPARE <n>` (BW-R1 of
+    // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
+    // relation's reserved 16-byte column slots, 0 when the word is absent.
+    std::uint16_t spare_slots = 0;
 };
 
 // The per-statement row cap for a multi-row INSERT (docs/spec/bulkinsert.md

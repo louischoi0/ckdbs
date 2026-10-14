@@ -17,10 +17,29 @@
 namespace kds::catalog {
 
 struct Schema {
+    // Every physical column in `pos` order, a dropped one included: the
+    // vector index is the position every index, foreign key, Cabin,
+    // Transition and assertion stores (BW-R6).
     std::vector<SysColumnRow> columns;
 
+    // The relation's reserved 16-byte slots, from its `sys.tables` row
+    // (BW-R2). Part of the schema because the row size is derived from the
+    // schema alone (RowLayout below).
+    std::uint16_t spare_slots = 0;
+
+    // The live column named `name`, or nullptr; a dropped column has no name
+    // a statement can reach (BW-R6).
     const SysColumnRow* FindColumn(std::string_view name) const noexcept;
 };
+
+// One reserved column slot's width (BW-R2, D-a): the narrowest tagged cell
+// (`storage::CheckInlineCellWidth`'s floor), so `varchar(16)` fits one and
+// so does every fixed-width type but a wide `char`.
+inline constexpr std::uint32_t kColumnSlotWidth = 16;
+
+// `CREATE TABLE ... SPARE n`'s ceiling (BW-R1): 64 keeps every slot of a
+// relation of up to 64 declared columns inside `cabin_mask`/`index_mask`.
+inline constexpr std::uint16_t kMaxSpareSlots = 64;
 
 // True for the integer types a Keystone id can be declared as. Float,
 // decimal, bool, char and varchar are not among them: none can represent a
@@ -100,6 +119,13 @@ struct RowLayout {
     // which is appended after the last column (null.md §2.1).
     std::vector<std::uint32_t> offsets;
 
+    // One past each column's last byte: `offsets[i] + ColumnWidth`, aligned
+    // with `offsets`. A cell is exactly its column's width, never "up to the
+    // next offset": with slots (BW-R2) the last declared column is followed
+    // by the slot region and a slot column by vacant slots, and a char or
+    // tagged cell sized by its span would take those bytes as its own.
+    std::vector<std::uint32_t> cell_ends;
+
     // The null-bit index of each column, positionally aligned with
     // Schema::columns; kNoNullBit for a NOT NULL column. Bit i lives in
     // bitmap byte i/8 at bit i%8 from the least significant end - explicit
@@ -112,6 +138,15 @@ struct RowLayout {
     // at `row_size - null_bitmap_bytes`, zero-filled meaning all-present -
     // which is exactly what a row written before this feature means.
     std::uint32_t null_bitmap_bytes = 0;
+
+    // The null bits of the slots no column holds yet, `[begin, end)`
+    // (BW-R3). Slots are taken lowest first and a dropped column keeps its
+    // slot, so the vacant ones are always the suffix. `EncodeRow` sets these
+    // bits in every row it builds, so a column a later `ADD` places in one
+    // reads NULL in every row that predates it. **`[quiet-wrong]`**: without
+    // them a vacant slot's zero bytes would read as a present 0.
+    std::uint16_t vacant_slot_bit_begin = 0;
+    std::uint16_t vacant_slot_bit_end = 0;
 
     // The instance-pinned kds.inline_cell_width this layout was built for.
     // Carried so the codec never has to be told twice.
@@ -133,7 +168,7 @@ struct RowLayout {
 };
 
 // The bitmap is the sole authority on nullness (null.md §3), and these
-// three are its only reader and writers - explicit shift and mask, invariant
+// four are its only reader and writers - explicit shift and mask, invariant
 // 6, with the byte's address computed in exactly one place. `payload` is
 // the whole tuple payload of exactly `layout.row_size` bytes; a column with
 // kNoNullBit is never NULL by construction, and callers of SetNullBit
@@ -164,6 +199,17 @@ inline void ClearNullBit(std::span<std::byte> payload, const RowLayout& layout,
     const std::uint16_t bit = layout.null_bits[col];
     if (bit == kNoNullBit) return;
     payload[NullByteOf(layout, bit)] &= ~std::byte{static_cast<unsigned char>(1u << (bit % 8))};
+}
+
+// Every vacant slot's bit set (BW-R3): a slot no column holds is NULL in
+// every row, so the column a later `ADD COLUMN` places there reads NULL in
+// the rows that predate it. `EncodeRow` calls it on every row it builds;
+// `EncodeAssigned` copies the bits with the before-image.
+inline void SetVacantSlotBits(std::span<std::byte> payload, const RowLayout& layout) noexcept {
+    for (std::uint16_t bit = layout.vacant_slot_bit_begin; bit < layout.vacant_slot_bit_end;
+         ++bit) {
+        payload[NullByteOf(layout, bit)] |= std::byte{static_cast<unsigned char>(1u << (bit % 8))};
+    }
 }
 
 // True if any column of `schema` can produce a spilled value - i.e. any

@@ -143,7 +143,13 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // `kCatalogOverflowFirst` moved to 17. A version-23 volume has no such
 // relation, so a Transition could be neither declared nor read on it;
 // refused with no migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 24;
+//
+// 25 (BW-S1, `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`
+// BW-R9): `sys.columns` rows gained a flags byte (a dropped column, a column
+// in a slot) and `sys.tables` rows the relation's spare-slot count, so a
+// version-24 catalog page's rows are the wrong size; refused with no
+// migration, the standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 25;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

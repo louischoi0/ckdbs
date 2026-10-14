@@ -2,6 +2,7 @@
 #include "kds/parser/parser.hpp"
 
 #include "kds/catalog/rows.hpp"
+#include "kds/catalog/schema.hpp"  // kMaxSpareSlots (BW-R1)
 
 #include <algorithm>
 #include <cctype>
@@ -1706,8 +1707,13 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
     // **refused** `Unsupported` with its byte: it means "supplying an id is
     // refused", which this relation would not enforce (the truthfulness
     // rule).
+    //
+    // `SPARE <n>` (BW-R1) joins the loop: the relation's reserved 16-byte
+    // column slots, a fact about the whole relation like the other two, and
+    // an identifier like them.
     bool storage_given = false;
     bool key_word_given = false;
+    bool spare_given = false;
     for (;;) {
         const Token word = lexer_.Peek();
         if (word.type != TokenType::kIdent) break;
@@ -1716,7 +1722,29 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         const bool is_btree = IEquals(word.text, "BTREE");
         const bool is_assigned = IEquals(word.text, "ASSIGNED");
         const bool is_explicit = IEquals(word.text, "EXPLICIT");
-        if (!is_heap && !is_btree && !is_assigned && !is_explicit) break;
+        const bool is_spare = IEquals(word.text, "SPARE");
+        if (!is_heap && !is_btree && !is_assigned && !is_explicit && !is_spare) break;
+
+        if (is_spare) {
+            if (spare_given) {
+                return Status::InvalidArgument(
+                    "CREATE TABLE takes one SPARE and this is the second (byte " +
+                    std::to_string(word.byte_offset) + ")");
+            }
+            spare_given = true;
+            lexer_.Next();
+            const std::uint32_t count_at = lexer_.Peek().byte_offset;
+            auto count = ParseTypeArgument("SPARE slot count");
+            if (!count.ok()) return count.status();
+            if (count.value() > catalog::kMaxSpareSlots) {
+                return Status::InvalidArgument(
+                    "SPARE " + std::to_string(count.value()) + " exceeds the " +
+                    std::to_string(catalog::kMaxSpareSlots) + " slots a relation may reserve (byte " +
+                    std::to_string(count_at) + ")");
+            }
+            stmt.spare_slots = static_cast<std::uint16_t>(count.value());
+            continue;
+        }
 
         // A category given twice is refused rather than last-one-wins:
         // `HEAP BTREE` names two different relations, so silently keeping

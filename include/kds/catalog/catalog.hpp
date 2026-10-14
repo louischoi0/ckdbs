@@ -1080,7 +1080,8 @@ public:
                               PageId varheap_page_id,
                               PageId anchor_page_id = kInvalidPageId,
                               std::uint64_t trx_id = kBootstrapXid,
-                              CatalogRowRef* where = nullptr);
+                              CatalogRowRef* where = nullptr,
+                              std::uint16_t spare_slots = 0);
 
     // ---- Secondary indexes (docs/spec/index.md §12) --------------------
 

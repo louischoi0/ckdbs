@@ -3395,6 +3395,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // comment) - before touching storage, so a bad type name fails clean
         // with nothing created.
         catalog::Schema schema;
+        schema.spare_slots = stmt.spare_slots;
         std::uint32_t pos = 0;
         for (const auto& col : stmt.columns) {
             auto type_row = catalog_.ResolveTypeByName(col.type_name);

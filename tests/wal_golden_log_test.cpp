@@ -72,7 +72,12 @@ namespace {
 // and six `sys.columns` rows - logged through `InsertRow` - join the stream
 // after `sys.assertions'`, and every later record's LSN moves with them. No
 // record's format changes.
-constexpr std::uint32_t kGoldenLogCrc = 0xb246b885u;
+// **Re-pinned at BW-S1** (on `worktree-bw-instant-add-drop-column`,
+// `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md` BW-R9): a
+// `sys.columns` row carries a flags byte and a `sys.tables` row a spare-slot
+// count, so every catalog row image the stream logs is one or two bytes
+// longer and every later LSN moves. No record kind's framing changes.
+constexpr std::uint32_t kGoldenLogCrc = 0xa98db205u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

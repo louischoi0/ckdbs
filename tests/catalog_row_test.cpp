@@ -390,17 +390,41 @@ TEST(SysTableRowTest, OnDiskLayoutIsPinned) {
     // The row grew by four bytes for `owner_core` (retired at AT-S9, its
     // bytes kept as `kReservedOffset`), one for the key-order byte
     // (`key_mode` when it was added), and four for `anchor_page_id`
-    // (PW2-1), each a format-version event - the superblock bumps to 10, 14
-    // and 15 are the other halves. Pinned so the next person to add a field
-    // cannot do so quietly.
+    // (PW2-1), and two for `spare_slots` (BW-R9), each a format-version
+    // event - the superblock bumps to 10, 14, 15 and 25 are the other halves.
+    // Pinned so the next person to add a field cannot do so quietly.
     EXPECT_EQ(SysTableRow::kReservedOffset,
               SysTableRow::kVarHeapPageIdOffset + sizeof(PageId));
     EXPECT_EQ(SysTableRow::kRetiredKeyOrderOffset,
               SysTableRow::kReservedOffset + sizeof(std::uint32_t));
     EXPECT_EQ(SysTableRow::kAnchorPageIdOffset,
               SysTableRow::kRetiredKeyOrderOffset + sizeof(std::uint8_t));
-    EXPECT_EQ(SysTableRow::kOnDiskSize,
+    EXPECT_EQ(SysTableRow::kSpareSlotsOffset,
               SysTableRow::kAnchorPageIdOffset + sizeof(PageId));
+    EXPECT_EQ(SysTableRow::kOnDiskSize,
+              SysTableRow::kSpareSlotsOffset + sizeof(std::uint16_t));
+}
+
+TEST(SysTableRowTest, TheSpareSlotCountRoundTrips) {
+    SysTableRow in = SampleTableRow();
+    in.spare_slots = 64;
+    auto out = SysTableRow::Decode(in.Encode());
+    ASSERT_TRUE(out.ok());
+    EXPECT_EQ(out.value().spare_slots, 64u);
+}
+
+TEST(SysColumnRowTest, TheFlagsByteRoundTripsAfterTheCabinPolicy) {
+    SysColumnRow in{};
+    in.cabin_policy = 3;
+    in.flags = SysColumnRow::kColumnDropped | SysColumnRow::kColumnInSlot;
+    const auto bytes = in.Encode();
+    EXPECT_EQ(std::to_integer<int>(bytes[SysColumnRow::kFlagsOffset]), 0x03);
+    EXPECT_EQ(SysColumnRow::kFlagsOffset, SysColumnRow::kCabinPolicyOffset + 1);
+    auto out = SysColumnRow::Decode(bytes);
+    ASSERT_TRUE(out.ok());
+    EXPECT_TRUE(out.value().dropped());
+    EXPECT_TRUE(out.value().in_slot());
+    EXPECT_EQ(out.value().cabin_policy, 3);
 }
 
 TEST(SysTableRowTest, DecodeRefusesAnythingButTheExactSize) {

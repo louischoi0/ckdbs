@@ -216,7 +216,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::TablesView(const txn::ReadView* v
                   {"desc_page_id", kInt},
                   {"root_page_id", kInt},
                   {"clustered_type", kStr},
-                  {"next_id", kInt}});
+                  {"next_id", kInt},
+                  {"spare_slots", kInt},
+                  {"spare_free", kInt}});
 
     auto objects = catalog_.ListTables(view_of);
     if (!objects.ok()) return objects.status();
@@ -228,11 +230,21 @@ StatusOr<exec::CatalogView> CommandDispatcher::TablesView(const txn::ReadView* v
         if (!row.ok()) return row.status();
         auto root = CurrentRootOf(row.value());
         if (!root.ok()) return root.status();
+        // A slot is free until a column takes it; a dropped column keeps its
+        // slot (BW-R6, BW-R12). Only a relation with slots is asked.
+        std::uint32_t free_slots = 0;
+        if (row.value().spare_slots > 0) {
+            auto access = catalog_.InitTableAccess(object.oid);
+            if (!access.ok()) return access.status();
+            free_slots = access.value()->layout.vacant_slot_bit_end -
+                         access.value()->layout.vacant_slot_bit_begin;
+        }
         view.rows.push_back({Int(row.value().oid), Int(row.value().namespace_oid),
                              Str(catalog::NameView(row.value().name)),
                              Int(row.value().desc_page_id), Int(root.value()),
                              Str(ClusteredName(row.value().clustered_type)),
-                             Int(row.value().next_id)});
+                             Int(row.value().next_id), Int(row.value().spare_slots),
+                             Int(free_slots)});
     }
     return view;
 }

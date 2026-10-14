@@ -129,6 +129,15 @@ struct SysTableRow {
     // on-disk position.
     PageId anchor_page_id;
 
+    // The relation's reserved 16-byte column slots (BW-R2 of
+    // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`):
+    // `CREATE TABLE ... SPARE n` fixes `n`, and it never changes, so the
+    // row size never does (invariant 13). `ALTER TABLE ADD COLUMN` places a
+    // column in the lowest slot no column holds. 0 for a relation that
+    // declared none, which lays out byte-identical to a relation from
+    // before slots existed. Appended after the anchor (superblock 25).
+    std::uint16_t spare_slots = 0;
+
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kNamespaceOidOffset = 8;
     static constexpr std::size_t kNameOffset = 16;
@@ -141,7 +150,8 @@ struct SysTableRow {
     static constexpr std::size_t kReservedOffset = kVarHeapPageIdOffset + sizeof(PageId);
     static constexpr std::size_t kRetiredKeyOrderOffset = kReservedOffset + sizeof(std::uint32_t);
     static constexpr std::size_t kAnchorPageIdOffset = kRetiredKeyOrderOffset + sizeof(std::uint8_t);
-    static constexpr std::size_t kOnDiskSize = kAnchorPageIdOffset + sizeof(PageId);
+    static constexpr std::size_t kSpareSlotsOffset = kAnchorPageIdOffset + sizeof(PageId);
+    static constexpr std::size_t kOnDiskSize = kSpareSlotsOffset + sizeof(std::uint16_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);
@@ -158,7 +168,8 @@ static_assert(SysTableRow::kVarHeapPageIdOffset == 93);
 static_assert(SysTableRow::kReservedOffset == 97, "the retired owner_core word; its bytes stay");
 static_assert(SysTableRow::kRetiredKeyOrderOffset == 101, "the retired key-order byte; it stays");
 static_assert(SysTableRow::kAnchorPageIdOffset == 102);
-static_assert(SysTableRow::kOnDiskSize == 106);
+static_assert(SysTableRow::kSpareSlotsOffset == 106);
+static_assert(SysTableRow::kOnDiskSize == 108);
 
 static_assert(offsetof(SysTableRow, oid) == SysTableRow::kOidOffset);
 static_assert(offsetof(SysTableRow, namespace_oid) == SysTableRow::kNamespaceOidOffset);
@@ -221,6 +232,23 @@ struct SysColumnRow {
     // not on the `sys.cabins` row.
     std::uint8_t cabin_policy;
 
+    // kColumnDropped / kColumnInSlot below (BW-R6, BW-R9 of
+    // `workorder-bw-instant-add-drop-column.md`). Explicit masks, never a
+    // bitfield (invariant 6). 0 for every column `CREATE TABLE` declared and
+    // nothing dropped.
+    std::uint8_t flags = 0;
+
+    // A dropped column: its row stays at its `pos`, so every stored position
+    // stays valid, and its bytes stay in every tuple. Storage walks it; no
+    // name, `SELECT *`, `DESCRIBE` or positional `VALUES` reaches it.
+    bool dropped() const noexcept { return (flags & kColumnDropped) != 0; }
+    // A column `ALTER TABLE ADD COLUMN` placed in one of the relation's
+    // 16-byte slots, rather than one `CREATE TABLE` packed.
+    bool in_slot() const noexcept { return (flags & kColumnInSlot) != 0; }
+
+    static constexpr std::uint8_t kColumnDropped = 0x01;
+    static constexpr std::uint8_t kColumnInSlot = 0x02;
+
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kRelIdOffset = 8;
     static constexpr std::size_t kPosOffset = 16;
@@ -229,7 +257,8 @@ struct SysColumnRow {
     static constexpr std::size_t kLenOffset = kTypeValOffset + sizeof(std::uint32_t);
     static constexpr std::size_t kNotNullOffset = kLenOffset + sizeof(std::uint32_t);
     static constexpr std::size_t kCabinPolicyOffset = kNotNullOffset + sizeof(std::uint8_t);
-    static constexpr std::size_t kOnDiskSize = kCabinPolicyOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kFlagsOffset = kCabinPolicyOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kOnDiskSize = kFlagsOffset + sizeof(std::uint8_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysColumnRow> Decode(std::span<const std::byte> bytes);
@@ -243,6 +272,8 @@ static_assert(offsetof(SysColumnRow, type_val) == SysColumnRow::kTypeValOffset);
 static_assert(offsetof(SysColumnRow, len) == SysColumnRow::kLenOffset);
 static_assert(offsetof(SysColumnRow, notnull) == SysColumnRow::kNotNullOffset);
 static_assert(offsetof(SysColumnRow, cabin_policy) == SysColumnRow::kCabinPolicyOffset);
+static_assert(offsetof(SysColumnRow, flags) == SysColumnRow::kFlagsOffset);
+static_assert(SysColumnRow::kOnDiskSize == 95, "a change here is a format event (superblock)");
 
 // ---- decimal(p, s) packed into `len` (docs/spec/types.md TY9) ----------
 //
