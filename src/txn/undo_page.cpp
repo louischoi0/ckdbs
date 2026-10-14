@@ -29,7 +29,7 @@ UndoRecordFields ReadRecordHeader(std::span<const std::byte, kPageSize> page,
     std::memcpy(&r.reserved, p + kUndoRecReservedOffset, sizeof(r.reserved));
     std::memcpy(&r.txn_prev_undo_ptr, p + kUndoRecTxnPrevUndoPtrOffset,
                 sizeof(r.txn_prev_undo_ptr));
-    std::memcpy(&r.pk, p + kUndoRecPkOffset, sizeof(r.pk));
+    std::memcpy(&r.tuple_key, p + kUndoRecTupleKeyOffset, sizeof(r.tuple_key));
     return r;
 }
 
@@ -46,7 +46,7 @@ void WriteRecordHeader(std::span<std::byte, kPageSize> page, std::uint16_t offse
     std::memcpy(p + kUndoRecReservedOffset, &r.reserved, sizeof(r.reserved));
     std::memcpy(p + kUndoRecTxnPrevUndoPtrOffset, &r.txn_prev_undo_ptr,
                 sizeof(r.txn_prev_undo_ptr));
-    std::memcpy(p + kUndoRecPkOffset, &r.pk, sizeof(r.pk));
+    std::memcpy(p + kUndoRecTupleKeyOffset, &r.tuple_key, sizeof(r.tuple_key));
 }
 
 // Shared by UndoPageAppend and UndoPageWriteAt: what both refuse before
@@ -229,7 +229,7 @@ Status EncodeUndoRecordTail(std::span<std::byte> out, const UndoRecordFields& fi
     // becoming a second, drifting copy of the record header.
     std::memcpy(p + (kUndoRecTxnPrevUndoPtrOffset - kUndoRecordTailOffset),
                 &fields.txn_prev_undo_ptr, sizeof(fields.txn_prev_undo_ptr));
-    std::memcpy(p + (kUndoRecPkOffset - kUndoRecordTailOffset), &fields.pk, sizeof(fields.pk));
+    std::memcpy(p + (kUndoRecTupleKeyOffset - kUndoRecordTailOffset), &fields.tuple_key, sizeof(fields.tuple_key));
     if (!image.empty()) {
         std::memcpy(p + kUndoRecordTailHeaderSize, image.data(), image.size());
     }
@@ -263,8 +263,8 @@ StatusOr<DecodedUndoRecord> DecodeUndoRecordTail(std::span<const std::byte> tail
     std::memcpy(&out.fields.txn_prev_undo_ptr,
                 p + (kUndoRecTxnPrevUndoPtrOffset - kUndoRecordTailOffset),
                 sizeof(out.fields.txn_prev_undo_ptr));
-    std::memcpy(&out.fields.pk, p + (kUndoRecPkOffset - kUndoRecordTailOffset),
-                sizeof(out.fields.pk));
+    std::memcpy(&out.fields.tuple_key, p + (kUndoRecTupleKeyOffset - kUndoRecordTailOffset),
+                sizeof(out.fields.tuple_key));
 
     if (UndoRecordTailSize(out.fields.image_len) != tail.size()) {
         return Status::Corruption("undo record tail says its image is " +

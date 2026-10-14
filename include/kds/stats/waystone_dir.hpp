@@ -24,7 +24,7 @@
 // ---- A hash directory, not a radix index --------------------------------
 //
 // An `arg_hash` is a 64-bit hash with no order, no density and no ceiling
-// (the pk-keyed radix directory it replaced had all three), so:
+// (the tuple-key-keyed radix directory it replaced had all three), so:
 //
 //   1. **No key is ever out of range.** A depth-d walk consumes the low
 //      11*d bits and ignores the rest, so every hash addresses something.

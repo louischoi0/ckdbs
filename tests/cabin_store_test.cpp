@@ -29,9 +29,9 @@ parser::AstValue Int(std::int64_t v) {
     return value;
 }
 
-CabinEntry EntryFor(std::uint64_t pk, PageId page = 100, std::uint16_t slot = 0) {
+CabinEntry EntryFor(std::uint64_t tuple_key, PageId page = 100, std::uint16_t slot = 0) {
     CabinEntry entry;
-    entry.pk = pk;
+    entry.tuple_key = tuple_key;
     entry.page_id = page;
     entry.slot = slot;
     entry.flags = kCabinHintValid;
@@ -150,7 +150,7 @@ TEST(CabinStoreTest, TheWriteHookAppendsOnlyToObservedValues) {
     EXPECT_EQ(store.stats().appends, 1u);
 }
 
-TEST(CabinStoreTest, AValueRoundTripDuplicatesAPkAndThatIsExpected) {
+TEST(CabinStoreTest, AValueRoundTripDuplicatesATupleKeyAndThatIsExpected) {
     // v -> v' -> v under append-only maintenance. The duplicate is not
     // damage: nothing may remove an entry on the hot path, because an older
     // snapshot may still match through it. The *read* dedupes.
@@ -161,12 +161,12 @@ TEST(CabinStoreTest, AValueRoundTripDuplicatesAPkAndThatIsExpected) {
     store.NoteWrite(v, EntryFor(1));  // updated away and back
     ASSERT_TRUE(store.Find(v).valid());
     EXPECT_EQ(store.Find(v).size(), 2u);
-    EXPECT_EQ(store.Find(v).At(0).pk, store.Find(v).At(1).pk);
+    EXPECT_EQ(store.Find(v).At(0).tuple_key, store.Find(v).At(1).tuple_key);
 }
 
 TEST(CabinStoreTest, APerValueCapRefusesToObserveRatherThanTruncating) {
     // The rule that is correctness and not policy. A truncated set marked
-    // observed is missing qualifying pks, which is the one thing the
+    // observed is missing qualifying tuple keys, which is the one thing the
     // invariant forbids outright.
     CabinLimits limits;
     limits.max_entries_per_value = 3;
@@ -233,7 +233,7 @@ TEST(CabinStoreTest, RecommittingAnObservedValueReplacesItsSet) {
 
     ASSERT_TRUE(store.Find(key).valid());
     ASSERT_EQ(store.Find(key).size(), 1u);
-    EXPECT_EQ(store.Find(key).At(0).pk, 3u);
+    EXPECT_EQ(store.Find(key).At(0).tuple_key, 3u);
     EXPECT_EQ(store.InfoFor(1).values, 1u) << "replacing a set must not double-count it";
 }
 
@@ -398,16 +398,16 @@ TEST(CabinStoreTest, AWriteDuringAnAnnouncedBuildIsInTheCommittedSet) {
     ASSERT_TRUE(store.BeginRecording(key));
     // The write hook, on whichever core: an unobserved value takes no
     // append, and an announced one does - which is the whole point.
-    store.NoteWrite(key, EntryFor(/*pk=*/77, /*page=*/9, /*slot=*/3));
+    store.NoteWrite(key, EntryFor(/*tuple_key=*/77, /*page=*/9, /*slot=*/3));
     // The walk's own matches, merged in rather than replacing.
     ASSERT_TRUE(store.Commit(key, {EntryFor(1), EntryFor(2)}));
 
     const CabinSet set = store.Find(key);
     ASSERT_TRUE(set.valid());
     ASSERT_EQ(set.size(), 3u) << "the concurrent write was dropped, which is the C1 break";
-    std::vector<std::uint64_t> pks;
-    for (std::size_t i = 0; i < set.size(); ++i) pks.push_back(set.At(i).pk);
-    EXPECT_NE(std::find(pks.begin(), pks.end(), 77u), pks.end())
+    std::vector<std::uint64_t> tuple_keys;
+    for (std::size_t i = 0; i < set.size(); ++i) tuple_keys.push_back(set.At(i).tuple_key);
+    EXPECT_NE(std::find(tuple_keys.begin(), tuple_keys.end(), 77u), tuple_keys.end())
         << "the row written during the walk is missing from the banked set";
 }
 
@@ -452,19 +452,19 @@ TEST(CabinStoreTest, AHealKeepsWhatTheWriteHookAppendedWhileItWalked) {
     ASSERT_TRUE(held.valid());
 
     // And what another core does meanwhile, which the handle cannot see.
-    store.NoteWrite(key, EntryFor(/*pk=*/77, /*page=*/9, /*slot=*/3));
+    store.NoteWrite(key, EntryFor(/*tuple_key=*/77, /*page=*/9, /*slot=*/3));
 
-    // The heal drops a dangling pk and repairs a hint. A wholesale replace
-    // here would take pk 77 with it: the set would be authoritative and
+    // The heal drops a dangling tuple key and repairs a hint. A wholesale replace
+    // here would take tuple key 77 with it: the set would be authoritative and
     // missing a live row, which is the C1 break.
-    store.Rebuild(key, held, {EntryFor(/*pk=*/1, /*page=*/42, /*slot=*/7)});
+    store.Rebuild(key, held, {EntryFor(/*tuple_key=*/1, /*page=*/42, /*slot=*/7)});
 
     const CabinSet healed = store.Find(key);
     ASSERT_TRUE(healed.valid());
     ASSERT_EQ(healed.size(), 2u);
-    EXPECT_EQ(healed.At(0).pk, 1u);
+    EXPECT_EQ(healed.At(0).tuple_key, 1u);
     EXPECT_EQ(healed.At(0).page_id, 42u) << "the repaired hint was not written back";
-    EXPECT_EQ(healed.At(1).pk, 77u) << "the row written during the heal was dropped";
+    EXPECT_EQ(healed.At(1).tuple_key, 77u) << "the row written during the heal was dropped";
     EXPECT_EQ(store.InfoFor(1).values, 1u) << "a heal moves no value slot";
     EXPECT_EQ(store.InfoFor(1).entries, 2u);
 }
@@ -483,8 +483,8 @@ TEST(CabinStoreTest, AHealDoesNotTouchAnAnnouncedBuild) {
     const CabinSet set = store.Find(key);
     ASSERT_TRUE(set.valid());
     ASSERT_EQ(set.size(), 2u);
-    EXPECT_EQ(set.At(0).pk, 77u);
-    EXPECT_EQ(set.At(1).pk, 2u);
+    EXPECT_EQ(set.At(0).tuple_key, 77u);
+    EXPECT_EQ(set.At(1).tuple_key, 2u);
 }
 
 }  // namespace

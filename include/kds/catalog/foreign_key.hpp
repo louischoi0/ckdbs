@@ -38,16 +38,16 @@ namespace kds::catalog {
 // Everything decidable from the parent and the child column alone.
 //
 // Fails with:
-//   InvalidArgument  `child_column_pos == 0` - the Keystone pk is the
+//   InvalidArgument  `child_column_pos == 0` - the Keystone tuple key is the
 //                    child's identity, not a field of it (invariant 11), so
 //                    a reference stored *in* it would make one row's
 //                    identity a statement about another row; or a column
 //                    whose declared type cannot hold a Keystone id,
 //                    which is a reference that can never be written.
 //   Unsupported      a **heap** parent. F1 puts the reference on the
-//                    parent's pk, and a heap relation has no pk index: a
+//                    parent's tuple key, and a heap relation has no tuple key index: a
 //                    point lookup on one is a chain scan
-//                    (CommandDispatcher::LocateByPk returns kScan), so
+//                    (CommandDispatcher::LocateByTupleKey returns kScan), so
 //                    every child INSERT would scan the parent - the whole
 //                    relation when the parent is missing, which is the case
 //                    the check exists to catch. Refusing keeps the

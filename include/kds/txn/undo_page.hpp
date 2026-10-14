@@ -144,9 +144,9 @@ enum class UndoRecordType : std::uint8_t {
     //
     // **The target is a value, not a row**, which is the one thing that
     // makes this type unlike its three siblings: `target_page_id` names a
-    // kVarHeap page, so the pk identity check every other type is
+    // kVarHeap page, so the tuple key identity check every other type is
     // compensated under does not apply and must be skipped rather than
-    // failed. `pk` is still carried - it says which row's spill this was,
+    // failed. `tuple_key` is still carried - it says which row's spill this was,
     // which is what a diagnostic needs and costs nothing.
     //
     // It exists for the same reason kInsert does, and the argument is
@@ -216,12 +216,12 @@ struct UndoRecordFields {
     // to before it writes: a btree leaf division moves tuples and renumbers
     // slots, so `(target_page_id, target_slot)` is where the row *was*
     // (`TransactionManager::Compensate`, and workplan-wal-recovery.md §4a).
-    // The live path reads the pk from its in-memory trail; recovery has
+    // The live path reads the tuple key from its in-memory trail; recovery has
     // only this record, and **two of the three types carry no image to
-    // recover a pk from** - kDeleteMark's is empty by design and kInsert's
+    // recover a tuple key from** - kDeleteMark's is empty by design and kInsert's
     // is empty too. Storing it once, for every type, is what makes the
     // check uniform rather than available for kOverwrite alone.
-    std::uint64_t pk;
+    std::uint64_t tuple_key;
 };
 
 inline constexpr std::size_t kUndoRecPriorTrxIdOffset = 0;
@@ -233,7 +233,7 @@ inline constexpr std::size_t kUndoRecTypeOffset = 24;
 inline constexpr std::size_t kUndoRecFlagsOffset = 25;
 inline constexpr std::size_t kUndoRecReservedOffset = 26;
 inline constexpr std::size_t kUndoRecTxnPrevUndoPtrOffset = 28;
-inline constexpr std::size_t kUndoRecPkOffset = 36;
+inline constexpr std::size_t kUndoRecTupleKeyOffset = 36;
 // 8+8+4+2+2+1+1+2+8+8 = 44; image bytes begin here.
 //
 // **Grew 28 -> 44 at RV10**, and the cost is stated rather than absorbed:
@@ -262,7 +262,7 @@ static_assert(offsetof(UndoRecordFields, flags) == kUndoRecFlagsOffset);
 static_assert(offsetof(UndoRecordFields, reserved) == kUndoRecReservedOffset);
 // **RV10's two fields get no offsetof assert, and cannot have one.** The
 // record is deliberately unpadded (see kUndoRecordHeaderSize below), so
-// `txn_prev_undo_ptr` sits at on-disk offset 28 and `pk` at 36 - neither
+// `txn_prev_undo_ptr` sits at on-disk offset 28 and `tuple_key` at 36 - neither
 // 8-byte aligned. The compiler cannot place a `uint64_t` member there, so
 // it pads the *struct* to 32 and 40, and asserting the two against each
 // other compares an in-memory offset with an on-disk one.

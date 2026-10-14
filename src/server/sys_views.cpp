@@ -296,7 +296,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
                   {"type_val", kInt},
                   {"type", kStr},
                   {"notnull", kInt},
-                  {"pk", kInt},
+                  {"tuple_key", kInt},
                   {"cabin", kStr},
                   {"references", kStr}});
 
@@ -348,10 +348,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
             const std::string base =
                 type_row.ok() ? std::string(catalog::NameView(type_row.value().name))
                               : "?type_val=" + std::to_string(column.type_val);
-            const bool pk = i == 0;
+            const bool tuple_key = i == 0;
             parser::AstValue cabin = Null();
             parser::AstValue references = Null();
-            if (!pk) {
+            if (!tuple_key) {
                 const std::uint8_t policy = catalog::EffectiveCabinPolicy(column.cabin_policy);
                 cabin = Str(policy == catalog::kCabinPolicyDisabled  ? "no"
                             : policy == catalog::kCabinPolicyEnabled ? "yes"
@@ -367,7 +367,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
             view.rows.push_back({Int(column.rel_id), Str(rel), Int(column.pos),
                                  Str(catalog::NameView(column.name)), Int(column.type_val),
                                  Str(catalog::ColumnTypeText(column, base)),
-                                 Bool(column.notnull), Bool(pk), std::move(cabin),
+                                 Bool(column.notnull), Bool(tuple_key), std::move(cabin),
                                  std::move(references)});
         }
     }
@@ -473,7 +473,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
         }
         const index::IndexLayout layout{
             row.key_width,
-            static_cast<std::uint16_t>(row.entry_width - row.key_width - index::kIndexPkWidth)};
+            static_cast<std::uint16_t>(row.entry_width - row.key_width - index::kIndexTupleKeyWidth)};
         auto height = index::IndexHeight(page_store_, root, layout);
         auto entries = index::IndexEntryCount(page_store_, root, layout);
         view.rows.push_back(

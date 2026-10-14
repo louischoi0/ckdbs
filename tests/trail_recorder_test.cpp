@@ -114,14 +114,14 @@ TEST_F(TrailRecorderTest, WouldRecordIsTheOnePlaceThePolicyLives) {
 // ---- What is in a trail --------------------------------------------------
 
 TEST_F(TrailRecorderTest, OnlyTrailReplayableStepsAreRecorded) {
-    // A pk equality on a btree relation is a Lookup, and Lookup is
+    // A tuple key equality on a btree relation is a Lookup, and Lookup is
     // replayable - so its row is recorded.
     const std::string point = "SELECT * FROM t WHERE id = 3";
     Run(point);
     Run(point);
     ASSERT_EQ(TrailFor(point).size(), 1u);
 
-    // A non-pk predicate is a Scan, and invariant 9 forbids a trail from
+    // A non-tuple-key predicate is a Scan, and invariant 9 forbids a trail from
     // replacing a search. Its rows could only ever be prefetched, and
     // nothing prefetches - so recording them would be paying a write per
     // scanned row for a read nobody makes.
@@ -139,7 +139,7 @@ TEST_F(TrailRecorderTest, ARecordedEntryNamesWhereTheRowActuallyWas) {
 
     auto trail = TrailFor(sql);
     ASSERT_EQ(trail.size(), 1u);
-    EXPECT_EQ(trail[0].pk, 3u);
+    EXPECT_EQ(trail[0].tuple_key, 3u);
     EXPECT_NE(trail[0].page_id, kInvalidPageId);
     EXPECT_NE(trail[0].flags & kWaystoneEntryValid, 0);
 
@@ -155,7 +155,7 @@ TEST_F(TrailRecorderTest, AJoinRecordsOneEntryPerReplayableStepInOrder) {
                   "INSERTED");
     }
 
-    // Lookup on `t`, then a pk probe into `u`. Both steps lookup-class, so
+    // Lookup on `t`, then a tuple key probe into `u`. Both steps lookup-class, so
     // both contribute - and the step_id is what tells a future replay which
     // entry is the driving relation and which is the probe result.
     //
@@ -220,7 +220,7 @@ TEST_F(TrailRecorderTest, ClearingTheSightingTableOnlyRestartsCounting) {
     exec::TrailCollector trail(kMaxTrailEntries);
     exec::TouchedTuple t;
     t.rel_oid = 1;
-    t.pk = 1;
+    t.tuple_key = 1;
     t.page_id = 200;
     trail.Add(t);
 
@@ -240,7 +240,7 @@ TEST_F(TrailRecorderTest, AnOverflowedCollectorRecordsNothingRatherThanAPartialT
     exec::TrailCollector tiny(1);
     exec::TouchedTuple t;
     t.rel_oid = 1;
-    t.pk = 1;
+    t.tuple_key = 1;
     t.page_id = 200;
     tiny.Add(t);
     tiny.Add(t);

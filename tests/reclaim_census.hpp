@@ -22,7 +22,7 @@
 
 namespace kds::reclaim_census {
 
-// `rows` rows into `t (id int64, v varchar)`, the pk issued, 100 a statement.
+// `rows` rows into `t (id int64, v varchar)`, the tuple key issued, 100 a statement.
 inline void Fill(server::CommandDispatcher& d, const std::string& table, int rows) {
     for (int done = 0; done < rows;) {
         std::string sql = "INSERT INTO " + table + " VALUES ";

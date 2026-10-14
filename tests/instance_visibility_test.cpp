@@ -612,7 +612,7 @@ TEST_F(VisibilityWiringTest, CoreZerosUndoPurgeDoesNotPassAReaderOnAnotherCore) 
     ASSERT_TRUE(writer.ok()) << writer.status().message();
     const std::uint64_t writer_id = writer.value()->id();
     for (int i = 0; i < 5; ++i) {
-        ASSERT_TRUE(core0->AppendUndo(*writer.value(), fields, /*pk=*/1, image).ok());
+        ASSERT_TRUE(core0->AppendUndo(*writer.value(), fields, /*tuple_key=*/1, image).ok());
     }
     ASSERT_TRUE(core0->Commit(*writer.value(), wal::DurabilityClass::kRelaxed).ok());
     core0->Release(*writer.value());
@@ -623,7 +623,7 @@ TEST_F(VisibilityWiringTest, CoreZerosUndoPurgeDoesNotPassAReaderOnAnotherCore) 
     auto next = core0->Begin(IsolationLevel::kReadCommitted);
     ASSERT_TRUE(next.ok()) << next.status().message();
     for (int i = 0; i < 8; ++i) {
-        ASSERT_TRUE(core0->AppendUndo(*next.value(), fields, /*pk=*/1, image).ok());
+        ASSERT_TRUE(core0->AppendUndo(*next.value(), fields, /*tuple_key=*/1, image).ok());
     }
     EXPECT_EQ(undo_->PagesRecycled(), 0u)
         << "core 0 recycled undo a reader on core 1 can still reach";
@@ -636,7 +636,7 @@ TEST_F(VisibilityWiringTest, CoreZerosUndoPurgeDoesNotPassAReaderOnAnotherCore) 
     auto after = core0->Begin(IsolationLevel::kReadCommitted);
     ASSERT_TRUE(after.ok()) << after.status().message();
     for (int i = 0; i < 8; ++i) {
-        ASSERT_TRUE(core0->AppendUndo(*after.value(), fields, /*pk=*/1, image).ok());
+        ASSERT_TRUE(core0->AppendUndo(*after.value(), fields, /*tuple_key=*/1, image).ok());
     }
     EXPECT_GE(undo_->PagesRecycled(), 1u) << "with no reader left, nothing held the pages";
     ASSERT_TRUE(core0->Commit(*after.value(), wal::DurabilityClass::kRelaxed).ok());

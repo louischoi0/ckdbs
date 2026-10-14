@@ -140,7 +140,7 @@ names are load-bearing for bootstrap and are nobody's to change).
   them one act across cores (`catalog.md` CT7, AT-S17).
 - New column name: same checks against the relation's own columns, under
   one hold of `sys.columns`' root page (CT7).
-- **The pk column may be renamed.** Identity is the Keystone word and
+- **The tuple key column may be renamed.** Identity is the Keystone word and
   position 0 (invariant 11), not the spelling; `CheckKeystoneColumn` is
   positional and does not re-run.
 - No content validation re-runs: a rename changes no value, so FK, index,
@@ -208,7 +208,7 @@ in every tuple.
 - Its name is free for an `ADD` or a `RENAME` once the drop's transaction
   is no longer in flight - and at once for an `ADD` inside that
   transaction, which alone can pass the `X`; its slot is never reused.
-- Refused: the pk, and a column an index keys or covers, a foreign key
+- Refused: the tuple key, and a column an index keys or covers, a foreign key
   names, a Transition governs or a Cabin is on - each named - and every
   column of a relation an assertion is declared on (AL4's predicate).
 

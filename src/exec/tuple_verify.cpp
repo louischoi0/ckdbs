@@ -8,7 +8,7 @@
 namespace kds::exec {
 
 VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint16_t slot,
-                            std::uint64_t expected_pk, std::uint32_t recorded_epoch,
+                            std::uint64_t expected_tuple_key, std::uint32_t recorded_epoch,
                             std::uint64_t expected_owner) {
     VerifiedTuple out;
 
@@ -51,9 +51,9 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
     // about to read this row through the authoritative path anyway, and if
     // the bytes really are damaged that path reports it - with the relation
     // and the schema in hand, which this function does not have.
-    auto found_pk = KeystoneIdOfPayload(tuple.value().payload);
-    if (!found_pk.ok() || found_pk.value() != expected_pk) {
-        out.outcome = VerifyOutcome::kPkMismatch;
+    auto found_tuple_key = KeystoneIdOfPayload(tuple.value().payload);
+    if (!found_tuple_key.ok() || found_tuple_key.value() != expected_tuple_key) {
+        out.outcome = VerifyOutcome::kTupleKeyMismatch;
         return out;
     }
 

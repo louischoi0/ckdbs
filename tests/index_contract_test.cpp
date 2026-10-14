@@ -163,7 +163,7 @@ const std::vector<std::string>& Queries() {
         "SELECT id FROM b WHERE sym = 'nope'",
         // The deleted row must be absent whichever way it is reached.
         "SELECT id FROM b WHERE owner = 1 AND qty = 1",
-        // A pk predicate, which no index may take over.
+        // A tuple key predicate, which no index may take over.
         "SELECT id FROM b WHERE id = 3",
         // Folds, because a fold collapses rows to a number and so catches a
         // duplicate or a dropped row that a projection would print plainly.
@@ -176,11 +176,11 @@ const std::vector<std::string>& Queries() {
         // ---- Paginated statements (docs/spec/parser-v2.md I11, V09) ---------
         //
         // A limited index step must slice, never reorder: the walk
-        // collects in index-key order and emission is pk order (§8a), so
-        // the quota keeps the first rows *by pk* - the same rows every
+        // collects in index-key order and emission is tuple key order (§8a), so
+        // the quota keeps the first rows *by tuple key* - the same rows every
         // other configuration keeps. The multi-match probe under LIMIT 1
         // is the case where stopping the collect phase early would drop a
-        // pk-earlier row; these lines pin that it never does, in all four
+        // tuple-key-earlier row; these lines pin that it never does, in all four
         // configurations at once.
         "SELECT id FROM b WHERE owner = 1 LIMIT 1",
         "SELECT id FROM b WHERE owner = 1 LIMIT 2 OFFSET 1",
@@ -268,7 +268,7 @@ std::uint64_t MeterOf(const std::string& reply, const std::string& key) {
 TEST(IndexContractTest, AFilledQuotaStopsResolvingIndexEntries) {
     // V09's quota against the two-phase step, and the asymmetry is the
     // point. The *collect* phase may never stop early - index-key order is
-    // not pk order, so a shortened collect could drop a pk-earlier row -
+    // not tuple key order, so a shortened collect could drop a tuple-key-earlier row -
     // but each *resolve* is a base descent, and a sink that stopped ends
     // that loop on the row that filled the quota. `index_resolved=` is the
     // witness the saving is real; the paginated query-set lines above are
@@ -283,7 +283,7 @@ TEST(IndexContractTest, AFilledQuotaStopsResolvingIndexEntries) {
         << "the fixture must multi-match to prove anything";
     EXPECT_EQ(MeterOf(limited, "index_resolved"), 1u) << limited;
     EXPECT_EQ(MeterOf(limited, "index_scanned"), MeterOf(full, "index_scanned"))
-        << "the collect phase must not shorten - it is what keeps the slice a pk-order slice";
+        << "the collect phase must not shorten - it is what keeps the slice a tuple-key order slice";
 }
 
 // ---- MVCC: an old snapshot reads through a superseded entry --------------
@@ -421,15 +421,15 @@ TEST(IndexContractTest, ASpilledCoveredValueKeepsItsRowRatherThanDecidingIt) {
 //
 // Maintenance is append-only, so one row can own several entries, and a
 // stale one can be the first the walk meets. The covering filter judges an
-// entry by its own covered bytes; the pk dedup stops a row resolving twice.
-// If the dedup claims the pk before the filter has passed the entry, a
+// entry by its own covered bytes; the tuple key dedup stops a row resolving twice.
+// If the dedup claims the tuple key before the filter has passed the entry, a
 // stale entry that fails the filter takes the row down with it, and the
 // current entry - which would pass - is skipped as a duplicate: a quiet
 // wrong answer, the one kind index.md §1 forbids outright.
 
 TEST(IndexContractTest, ARowWhoseKeyAndCoveredColumnMovedTogetherSurvivesItsStaleEntry) {
-    // The entry's reproduction: (2, pk 1, c = 10) is walked before
-    // (5, pk 1, c = 20), and only the second passes `c = 20`.
+    // The entry's reproduction: (2, tuple key 1, c = 10) is walked before
+    // (5, tuple key 1, c = 20), and only the second passes `c = 20`.
     Instance db(/*indexes=*/true);
     Instance plain(/*indexes=*/true);
     for (Instance* i : {&db, &plain}) {
@@ -458,7 +458,7 @@ TEST(IndexContractTest, ARowWhoseKeyAndCoveredColumnMovedTogetherSurvivesItsStal
 
 TEST(IndexContractTest, AnOldSnapshotKeepsItsRowWhenOnlyTheCoveredColumnMoved) {
     // The entry's second case: an update of `c` alone appends an entry with
-    // the same (key, pk), which sorts to the front of its run - so an older
+    // the same (key, tuple key), which sorts to the front of its run - so an older
     // snapshot, whose version carries the old `c`, meets the new entry
     // first, and the new `c` fails its predicate.
     Instance db(/*indexes=*/true);
@@ -538,8 +538,8 @@ TEST(IndexContractTest, TwoIndexStepsInOneChainDoNotShareOnePhaseTwoBuffer) {
     // statement in it opens one relation. A join whose *both* sides are
     // served by an index puts two index steps in one chain, and the inner
     // one runs inside the outer one's phase-2 loop - so the runner-held
-    // scratch that carries phase 1's pks to phase 2 is live on two frames at
-    // once. Sharing it made the outer step resolve the inner step's pks and
+    // scratch that carries phase 1's tuple keys to phase 2 is live on two frames at
+    // once. Sharing it made the outer step resolve the inner step's tuple keys and
     // drop eleven of thirteen rows: the index changed the reply, which is
     // the one thing §1 does not allow it to do.
     Instance on(/*indexes=*/true);

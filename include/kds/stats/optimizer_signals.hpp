@@ -69,7 +69,7 @@ inline constexpr std::size_t kMaxTrackedCabins = 4096;
 // by the dispatcher from the compiled chain (a kCabinProbe step, or the
 // first kFilterScan's filtered column); `cabin_id` is non-zero when an
 // existing Cabin already serves the shape. Zero rel_oid means the shape
-// has no cabin candidacy (a pk lookup, a bare scan) - still counted, so
+// has no cabin candidacy (a tuple key lookup, a bare scan) - still counted, so
 // S1 stays the workload's whole heat map, but no CREATE prices it.
 struct CandidateRef {
     std::uint64_t rel_oid = 0;

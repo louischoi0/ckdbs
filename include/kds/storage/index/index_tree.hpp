@@ -31,12 +31,12 @@
 //
 // ---- What an entry is, and what it is not -------------------------------
 //
-//     entry := key || pk || covered
+//     entry := key || tuple key || covered
 //
-// The pk resolves through the relation's clustered tree; there is no
+// The tuple key resolves through the relation's clustered tree; there is no
 // `(page_id, slot)` location hint, because a secondary index is refused on a
 // heap-clustered relation (spec IX3). So nothing here can dangle, nothing
-// needs healing, and relayout - which moves tuples but never changes a pk -
+// needs healing, and relayout - which moves tuples but never changes a tuple key -
 // cannot invalidate an index.
 //
 // An entry is **not** authority over a row. It says a row *once had* this
@@ -45,17 +45,17 @@
 //
 // ---- Duplicates ---------------------------------------------------------
 //
-// Two entries may share a key, and even a (key, pk) pair - an UPDATE that
-// changes a covered column appends an entry with the same key and pk and
+// Two entries may share a key, and even a (key, tuple key) pair - an UPDATE that
+// changes a covered column appends an entry with the same key and tuple key and
 // different covered bytes, which is information, not noise.
 //
 // A **byte-identical** entry is not information, and `IndexInsert` reports
 // it rather than storing it twice (`already_present`). Nothing reclaims an
 // index entry, so a duplicate is permanent; and a probe that resolved one
-// pk twice would emit its row twice. The check is complete for a duplicate
+// tuple key twice would emit its row twice. The check is complete for a duplicate
 // in the leaf the descent lands on, which misses one only when a run of
 // equal sort keys straddles a leaf boundary (index_tree.cpp's
-// `FindExactDuplicate`). Deduplicating *by pk* is the read path's job, not
+// `FindExactDuplicate`). Deduplicating *by tuple key* is the read path's job, not
 // this file's.
 //
 // ---- Concurrency ---------------------------------------------------------
@@ -159,7 +159,7 @@ struct IndexInsertResult {
 Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layout,
                   std::uint64_t owner_oid);
 
-// Inserts `key || pk || covered` into the tree rooted at `root`.
+// Inserts `key || tuple key || covered` into the tree rooted at `root`.
 //
 // `key` must be exactly `layout.key_width` bytes and `covered` exactly
 // `layout.covered_width`; both are already-encoded bytes this layer never
@@ -183,7 +183,7 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layou
 // `anchor_page` is the anchor a growth pins (`UnlatchedPin`); none pins nothing.
 StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                                         const IndexLayout& layout,
-                                        std::span<const std::byte> key, std::uint64_t pk,
+                                        std::span<const std::byte> key, std::uint64_t tuple_key,
                                         std::span<const std::byte> covered,
                                         std::uint64_t owner_oid,
                                         PageId anchor_page = kInvalidPageId);

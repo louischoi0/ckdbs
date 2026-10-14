@@ -236,7 +236,7 @@ The design is specification-first: every subsystem has a spec carrying its decis
 
 ## Terminology
 
-**`pk` is a retired word** (operator, 2026-10-14). The 48-bit id a tuple's Keystone word carries is called the **tuple key** or the **tuple identity key** - two names for one thing - and never the *pk* or *primary key*: it is a row's identity - unique for the life of the relation, never updated, rebound only by `PURGE` - not a business key. New text in this repository - specs, work orders, the manual, code comments and messages - uses those names. A SQL or code token that already spells `pk` is an identifier and is not renamed by this rule; an older document that says *pk* means the tuple key.
+**`pk` is a retired word** (operator, 2026-10-14). The 48-bit id a tuple's Keystone word carries is called the **tuple key** or the **tuple identity key** - two names for one thing - and never the *pk* or *primary key*: it is a row's identity - unique for the life of the relation, never updated, rebound only by `PURGE` - not a business key. New text in this repository - specs, work orders, the manual, code comments and messages - uses those names. Code identifiers, messages and the manual were renamed on 2026-10-14 (`tuple_key`, `TupleKey`, `kTupleKey`; a short local scope may use `tkey`). The history under `bench/`, `instructions/` and `CIP/` is left as written, and a *pk* there means the tuple key.
 
 ## Glossary
 

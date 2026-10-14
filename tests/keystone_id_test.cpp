@@ -96,7 +96,7 @@ protected:
 };
 
 TEST_F(KeystoneIdTest, RetiringATupleDoesNotReturnItsIdToTheAllocator) {
-    // The §1.1 hazard stated directly: a pk freed and re-issued while an
+    // The §1.1 hazard stated directly: a tuple key freed and re-issued while an
     // old snapshot can still see the prior tuple resolves to the wrong
     // incarnation. There is no SQL DELETE yet, so the slot is retired at
     // the page - which is the *strongest* form of the question, because a
@@ -445,8 +445,8 @@ TEST_F(KeystoneIdWalCrashTest, ASyncedShutdownLeavesTheSequenceAboveEveryLoggedI
 
 // ---- 4. The oid space, which K1 also depends on --------------------------
 
-// §1.2 claims "(oid, pk) becomes a forever-unique key ... a stored (oid, pk)
-// can dangle, but it can never mis-attribute". The pk half is sound. The
+// §1.2 claims "(oid, tuple key) becomes a forever-unique key ... a stored (oid, tuple key)
+// can dangle, but it can never mis-attribute". The tuple key half is sound. The
 // oid half is not: `Catalog::GenerateUserOid()` is `next_user_oid_++` over
 // an in-memory counter seeded at `kUserOidStart` and never read back from
 // the catalog, so every boot re-issues the same oids.
@@ -508,7 +508,7 @@ TEST_F(KeystoneIdCrashTest, ObjectOidsAreUniqueAcrossABoot) {
 
         // The property §1.2 of docs/rules/keystoneid-invariant.md claims and could
         // not previously deliver: an oid names one object for the life of the
-        // database. Everything keyed on (oid, pk) - the access statistics,
+        // database. Everything keyed on (oid, tuple key) - the access statistics,
         // trail entries, any future change feed - depends on it.
         EXPECT_NE(c_oid.value(), a_oid);
 

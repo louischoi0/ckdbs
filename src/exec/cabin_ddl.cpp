@@ -82,7 +82,7 @@ StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, const parser::Ca
     auto resolved = Resolve(catalog, stmt);
     if (!resolved.ok()) return resolved.status();
 
-    // The pk refusal and the duplicate refusal both live in the catalog, and
+    // The tuple key refusal and the duplicate refusal both live in the catalog, and
     // are deliberately not restated here: two answers to "why not" is how one
     // of them ends up wrong.
     auto cabin_id = catalog.CreateCabin(resolved.value().rel_oid, resolved.value().col_pos,

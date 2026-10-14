@@ -37,7 +37,7 @@
 // ---- The contract --------------------------------------------------------
 //
 // Emission order is a client contract (I12: written order across steps,
-// pk order within one), so the reply to `LIMIT n OFFSET m` is exactly
+// tuple key order within one), so the reply to `LIMIT n OFFSET m` is exactly
 // rows [m, m+n) of the reply the unlimited statement gives - a prefix of
 // an order the statement has, not one it hopes for. OFFSET skips
 // *qualifying* rows: they are examined, filtered and then discarded, so

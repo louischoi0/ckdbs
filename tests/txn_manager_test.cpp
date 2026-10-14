@@ -27,14 +27,14 @@ namespace {
 
 constexpr PageId kFirstUserPageId = 128;
 
-// A well-formed tuple payload: the Keystone word carrying `pk`, then the
+// A well-formed tuple payload: the Keystone word carrying `tuple_key`, then the
 // test's text. Rollback identifies a row by the id in that word before it
 // compensates (txn/manager.hpp's RowLocator), so a payload without one is
 // not a row this manager could ever be asked to unwind - these used to be
 // bare text, and the check had nothing to read.
-std::vector<std::byte> BytesOf(std::string_view s, std::uint64_t pk = 1) {
+std::vector<std::byte> BytesOf(std::string_view s, std::uint64_t tuple_key = 1) {
     std::vector<std::byte> out(kKeystoneWordSize + s.size());
-    const std::uint64_t word = Keystone::Encode(pk, 0, 0).value();
+    const std::uint64_t word = Keystone::Encode(tuple_key, 0, 0).value();
     std::memcpy(out.data(), &word, kKeystoneWordSize);
     std::memcpy(out.data() + kKeystoneWordSize, s.data(), s.size());
     return out;
@@ -70,12 +70,12 @@ protected:
         std::uint16_t slot = 0;
     };
 
-    Row PlaceRow(std::string_view payload, std::uint64_t writer, std::uint64_t pk = 1) {
+    Row PlaceRow(std::string_view payload, std::uint64_t writer, std::uint64_t tuple_key = 1) {
         auto created = store_.CreateNew();
         EXPECT_TRUE(created.ok());
         auto page = heap::PageView::CreateEmpty(created.value().second.bytes(), /*min_key=*/0);
         EXPECT_TRUE(page.ok());
-        auto slot = page.value().InsertTuple(BytesOf(payload, pk), writer, kNoUndoPtr);
+        auto slot = page.value().InsertTuple(BytesOf(payload, tuple_key), writer, kNoUndoPtr);
         EXPECT_TRUE(slot.ok());
         return Row{created.value().first, slot.value()};
     }
@@ -250,7 +250,7 @@ TEST_F(TxnManagerTest, RollbackRestoresTheBytesAnOverwriteReplaced) {
     Transaction* txn = Begin();
     ASSERT_NE(txn, nullptr);
     const heap::PageView::Tuple before = TupleAt(row);
-    mgr_->NoteOverwrite(*txn, /*rel_oid=*/9, row.page_id, row.slot, /*pk=*/1, before.trx_id,
+    mgr_->NoteOverwrite(*txn, /*rel_oid=*/9, row.page_id, row.slot, /*tuple_key=*/1, before.trx_id,
                         before.undo_ptr, BytesOf("original"));
 
     auto bytes = store_.Get(row.page_id);
@@ -271,7 +271,7 @@ TEST_F(TxnManagerTest, RollbackClearsTheMarkADeleteSet) {
     Transaction* txn = Begin();
     ASSERT_NE(txn, nullptr);
     const heap::PageView::Tuple before = TupleAt(row);
-    mgr_->NoteDeleteMark(*txn, /*rel_oid=*/9, row.page_id, row.slot, /*pk=*/1, before.trx_id,
+    mgr_->NoteDeleteMark(*txn, /*rel_oid=*/9, row.page_id, row.slot, /*tuple_key=*/1, before.trx_id,
                         before.undo_ptr);
 
     auto bytes = store_.Get(row.page_id);
@@ -291,7 +291,7 @@ TEST_F(TxnManagerTest, RollbackRetiresTheSlotAnInsertTook) {
 
     Transaction* txn = Begin();
     ASSERT_NE(txn, nullptr);
-    mgr_->NoteInsert(*txn, /*rel_oid=*/9, row.page_id, row.slot, /*pk=*/1);
+    mgr_->NoteInsert(*txn, /*rel_oid=*/9, row.page_id, row.slot, /*tuple_key=*/1);
     ASSERT_TRUE(mgr_->Abort(*txn).ok());
 
     auto bytes = store_.Get(row.page_id);
@@ -540,7 +540,7 @@ TEST_F(TxnManagerTest, UndoPagesRecycleOnceTheirWritersClearTheHorizon) {
     // Two pages and one growth while `a` runs: its own id bounds the
     // horizon, so nothing may recycle - a rollback could still need it.
     for (int i = 0; i < 5; ++i) {
-        ASSERT_TRUE(mgr_->AppendUndo(*a, fields, /*pk=*/1, image).ok());
+        ASSERT_TRUE(mgr_->AppendUndo(*a, fields, /*tuple_key=*/1, image).ok());
     }
     EXPECT_EQ(undo_->PagesRecycled(), 0u)
         << "a running transaction's undo was recycled under it";
@@ -552,7 +552,7 @@ TEST_F(TxnManagerTest, UndoPagesRecycleOnceTheirWritersClearTheHorizon) {
     Transaction* b = Begin();
     ASSERT_NE(b, nullptr);
     for (int i = 0; i < 8; ++i) {
-        ASSERT_TRUE(mgr_->AppendUndo(*b, fields, /*pk=*/1, image).ok());
+        ASSERT_TRUE(mgr_->AppendUndo(*b, fields, /*tuple_key=*/1, image).ok());
     }
     EXPECT_GE(undo_->PagesRecycled(), 1u);
     EXPECT_LE(undo_->LivePages(), 3u) << "undo grew where it should have recycled";
@@ -586,7 +586,7 @@ TEST_F(TxnManagerTest, ALiveTransactionsUndoSurvivesAPurgePassTakenWhileItRuns) 
 
     Transaction* a = Begin();
     ASSERT_NE(a, nullptr);
-    auto first = mgr_->AppendUndo(*a, fields, /*pk=*/1, mine);
+    auto first = mgr_->AppendUndo(*a, fields, /*tuple_key=*/1, mine);
     ASSERT_TRUE(first.ok()) << first.status().message();
     for (int i = 0; i < 4; ++i) ASSERT_TRUE(mgr_->AppendUndo(*a, fields, 1, mine).ok());
 

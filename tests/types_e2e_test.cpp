@@ -343,7 +343,7 @@ TEST(TypesEndToEnd, ACabinOnADateColumnRecordsServesAndDrops) {
 
 TEST(TypesEndToEnd, ATrailOverADecimalResidualReplaysIdentically) {
     // Invariant 8, over a chain whose residual is a decimal comparison:
-    // turning replay on must not change a reply. The pk equality is what
+    // turning replay on must not change a reply. The tuple key equality is what
     // makes the step lookup-class and therefore replayable; the decimal
     // residual rides along on the same step, which is exactly the shape the
     // done-when asks for.

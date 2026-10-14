@@ -9,9 +9,9 @@ Status Budget::Exhausted() const {
     // from "budget exceeded".
     return Status::ResourceExhausted(
         "statement exceeded its row-touch budget of " + std::to_string(limit_) +
-        " tuples; it was still reading. A correlated subquery or a join on a non-pk "
+        " tuples; it was still reading. A correlated subquery or a join on a non-tuple-key "
         "column reads the inner relation once per outer row, which is quadratic - "
-        "rewrite it to bind a primary key, or raise `max_rows_touched` in the config "
+        "rewrite it to bind a tuple key, or raise `max_rows_touched` in the config "
         "if this statement is meant to cost that much");
 }
 

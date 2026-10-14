@@ -12,8 +12,8 @@
 // Everything else that looks like nesting - a derived table, a CTE - is
 // out, and the reason is structural rather than a matter of effort: a
 // derived table's result must become a relation with a schema,
-// materialized and probed by something other than a pk, which breaks
-// pk-direct probing into the next step and puts a temporary relation in
+// materialized and probed by something other than a tuple key, which breaks
+// tuple-key-direct probing into the next step and puts a temporary relation in
 // the storage layer.
 //
 // The rule that enforces it, from spec section 2: **the relation-reference

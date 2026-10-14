@@ -2,7 +2,7 @@
 
 // sim/oracle.hpp — the reference model (bench/workplan-teststrategy SIM03,
 // grown by SIM06). The dumbest thing that can be right: per relation a
-// std::map<pk, Row>, updated on every **acknowledged** write, queried on
+// std::map<tuple key, Row>, updated on every **acknowledged** write, queried on
 // every read. It never sees the engine's internals and it does not know the
 // feature toggles exist — divergence from it is the definition of a wrong
 // answer.
@@ -63,15 +63,15 @@ class Oracle {
 public:
     using TableRows = std::map<std::uint64_t, OracleRow>;
 
-    // `id = key` when by_pk, else `v = v`. The two shapes UPDATE and
+    // `id = key` when by_tuple_key, else `v = v`. The two shapes UPDATE and
     // DELETE are generated with (sim/workload.hpp).
     struct Predicate {
-        bool by_pk = true;
+        bool by_tuple_key = true;
         std::uint64_t key = 0;
         std::int64_t v = 0;
     };
 
-    // What an UPDATE's SET assigns. The pk is never assignable
+    // What an UPDATE's SET assigns. The tuple key is never assignable
     // (invariant 11), so there are exactly two columns to choose between.
     struct Assignment {
         bool set_name = false;
@@ -215,7 +215,7 @@ public:
     // Whether a mutation's reported row count can be compared at all.
     // Once a relation holds an unknown, most counts cannot: a predicate on
     // a *value* may match a row whose fate the oracle does not know. A
-    // predicate on the **pk** names one row, so it stays checkable as long
+    // predicate on the **tuple key** names one row, so it stays checkable as long
     // as that one id is not itself unknown — which is 70% of the mutations
     // the generator emits, and the difference between the sharpest
     // assertion in the harness running on 6% of them and on most.
@@ -254,7 +254,7 @@ public:
         return std::to_string(id) + "," + std::to_string(row.v) + "," + row.name;
     }
 
-    std::vector<std::string> ExpectPk(const std::string& table, std::uint64_t key) const;
+    std::vector<std::string> ExpectTupleKey(const std::string& table, std::uint64_t key) const;
     std::vector<std::string> ExpectRange(const std::string& table, std::uint64_t lo,
                                          std::uint64_t hi) const;
     std::vector<std::string> ExpectFilter(const std::string& table, std::int64_t v) const;

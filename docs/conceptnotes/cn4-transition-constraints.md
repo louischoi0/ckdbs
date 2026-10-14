@@ -64,9 +64,9 @@ committed versions and none of them is checked.
 The induction has one way to be broken: a row that restarts its history
 under the same identity — delete it, then insert the same id back in
 state `'NEW'`. This engine refuses that today, on three facts
-`[source-read]`: the pk is *"never rebound and never updated"*
-(`docs/spec/heap-and-tuple.md:109`, K1/K2); an omitted pk is issued from a
-sequence that never reuses (`:132`); and a **named** pk equal to a deleted
+`[source-read]`: the tuple key is *"never rebound and never updated"*
+(`docs/spec/heap-and-tuple.md:109`, K1/K2); an omitted tuple key is issued from a
+sequence that never reuses (`:132`); and a **named** tuple key equal to a deleted
 one is refused because *"a `DELETED` slot is still a live slot until
 retirement; nothing retires a slot today"* (`:168`). The third is a
 statement about today, not an invariant — a future slot purge reopens the
@@ -93,7 +93,7 @@ way around the same guarantee (§6, T9).
   is first-updater-wins `[source-read]`: `TransactionManager::CheckWriteConflict`
   (`src/txn/manager.cpp:199`) refuses a write over a head whose writer the
   view cannot see, and the write's borrow — the tuple's `X`, or a declared
-  range for a pk-window or unfiltered statement (`docs/spec/txn.md` §5) —
+  range for a tuple-key-window or unfiltered statement (`docs/spec/txn.md` §5) —
   keeps a second writer out until decide. A writer that waited re-runs and
   reads the other's result under RC, and is refused `TxnConflict` under RR.
   Either way the check never sees a value that is not the head.
@@ -138,7 +138,7 @@ SHOW TRANSITIONS;
   nothing to switch on. The message names the Transition, the row id and
   both values.
 - **Create-time refusals**, before any scan, in the shape of
-  `assertion.md` §3.1: unknown relation or column; the pk column; a type
+  `assertion.md` §3.1: unknown relation or column; the tuple key column; a type
   outside T5; a nullable column (T3); a missing required clause (T10); a
   duplicate name; a second Transition on the column (T6); a state no walk
   from an initial state reaches.
@@ -215,7 +215,7 @@ Each carries CLA's proposal, none ratified.
 | T8 | Which write paths | Every one that writes the column: textual and multi-row `INSERT`, the KWP load path, `UPDATE`, `DELETE` — and sorted fill, which since SUS-1 is reachable only for a heap relation created before the suspension. A path that cannot check refuses the write, never skips the check |
 | T9 | A CN-3 successor's state | Undecided by CLA; the shapes are in §6. **Answer before either note is built**, because one answer voids §2 under an alias |
 | T10 | Which clauses are required | **`ON INSERT` and `ON UPDATE` required**, `ON DELETE` optional and permissive when omitted. Omitting either of the first two gives up the path property of §2 with nothing to tell the user so |
-| T11 | §2 leans on "nothing retires a slot today" (`heap-and-tuple.md:168`) | Record it as a dependency: any slot purge that lets a named pk re-take a deleted id must answer for Transitions in the same work order. See §9.1 (re-read of 2026-10-14) |
+| T11 | §2 leans on "nothing retires a slot today" (`heap-and-tuple.md:168`) | Record it as a dependency: any slot purge that lets a named tuple key re-take a deleted id must answer for Transitions in the same work order. See §9.1 (re-read of 2026-10-14) |
 
 ## 9. Re-read against `b0bc959c` (2026-10-14)
 
@@ -228,7 +228,7 @@ moved since. Tags as in the header; `[source-read]` here means at
 
 `[source-read]` §2 said a named tuple key equal to a deleted one is refused
 because *"nothing retires a slot today"*. That stopped being true at
-BH-S3 (`26766699`, 2026-10-08). `PURGE FROM t WHERE <pk comparisons>`
+BH-S3 (`26766699`, 2026-10-08). `PURGE FROM t WHERE <tuple key comparisons>`
 retires, keyless, every committed delete-marked row its window names once
 no reader can see the delete, *"and an `INSERT` that names it is judged as
 if the key had never been placed"* (`docs/spec/heap-and-tuple.md:286`,

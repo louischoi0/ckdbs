@@ -536,10 +536,10 @@ TEST_F(VarHeapWriteAtTest, ASlotPastTheEndIsCorruption) {
 // it, and refuses a record whose key does not sort there; a split's one
 // record replays every page it names.
 
-// A row whose Keystone word carries `pk`.
-std::vector<std::byte> Row(std::uint64_t pk) {
+// A row whose Keystone word carries `tuple_key`.
+std::vector<std::byte> Row(std::uint64_t tuple_key) {
     std::vector<std::byte> out(24, std::byte{0x5A});
-    auto word = Keystone::Encode(pk, 0, 0);
+    auto word = Keystone::Encode(tuple_key, 0, 0);
     EXPECT_TRUE(word.ok());
     const std::uint64_t w = word.ok() ? word.value() : 0;
     std::memcpy(out.data(), &w, sizeof(w));
@@ -554,8 +554,8 @@ void AppendLeafInit(WalStream& w) {
     ASSERT_TRUE(w.Append({RecordType::kPageInit, 1, kPage}, init).ok());
 }
 
-void AppendBtreeInsert(WalStream& w, std::uint16_t slot, std::uint64_t pk) {
-    const std::vector<std::byte> row = Row(pk);
+void AppendBtreeInsert(WalStream& w, std::uint16_t slot, std::uint64_t tuple_key) {
+    const std::vector<std::byte> row = Row(tuple_key);
     std::vector<std::byte> buf(kHeapWriteFixedSize + row.size());
     const HeapWritePayload hw{/*trx_id=*/7, /*undo_ptr=*/0, slot,
                               static_cast<std::uint16_t>(row.size())};

@@ -44,7 +44,7 @@
 -- ---------------------------------------------------------------------------
 -- 0. Setup
 --
--- The first column is the Keystone primary key and the engine issues it, so
+-- The first column is the Keystone tuple key and the engine issues it, so
 -- INSERT never supplies one (invariant 11).
 -- ---------------------------------------------------------------------------
 

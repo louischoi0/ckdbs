@@ -72,11 +72,11 @@ std::uint16_t Load16(std::span<const std::byte> at) noexcept {
 }  // namespace
 
 Status EncodeEntry(const BoundCabinEntry& entry, std::span<std::byte, kEntryBytes> out) {
-    // The Keystone word's own codec (BK-R2): one layout, one encoder. A pk
-    // above the id space is refused there, never truncated - a truncated pk
+    // The Keystone word's own codec (BK-R2): one layout, one encoder. A tuple key
+    // above the id space is refused there, never truncated - a truncated tuple key
     // is a name that means a *different* row, which is exactly the
     // mis-attribution K1 exists to make impossible.
-    auto keystone = Keystone::Encode(entry.pk, entry.flags, /*reserved=*/0);
+    auto keystone = Keystone::Encode(entry.tuple_key, entry.flags, /*reserved=*/0);
     if (!keystone.ok()) {
         return Status::InvalidArgument("bound cabin entry: " + keystone.status().message());
     }
@@ -95,7 +95,7 @@ Status EncodeEntry(const BoundCabinEntry& entry, std::span<std::byte, kEntryByte
 BoundCabinEntry DecodeEntry(std::span<const std::byte, kEntryBytes> in) {
     BoundCabinEntry entry;
     const Keystone keystone = Keystone::Decode(Load64(in.subspan(kOffKeystone, 8)));
-    entry.pk = keystone.id;
+    entry.tuple_key = keystone.id;
     entry.flags = keystone.flags;
 
     entry.page_id = Load32(in.subspan(kOffHint, 4));

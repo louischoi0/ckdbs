@@ -82,9 +82,9 @@ TEST_F(AlterTableTest, RenameColumnEndToEnd) {
 }
 
 // Identity is the Keystone word and position 0, not the spelling
-// (invariant 11, AL8) - so the pk column renames like any other, and a
-// pk lookup through the new name is still a lookup.
-TEST_F(AlterTableTest, ThePkColumnMayBeRenamed) {
+// (invariant 11, AL8) - so the tuple key column renames like any other, and a
+// tuple key lookup through the new name is still a lookup.
+TEST_F(AlterTableTest, TheTupleKeyColumnMayBeRenamed) {
     Ok("CREATE TABLE t (id int64, v varchar) BTREE");
     Ok("INSERT INTO t VALUES ('one')");
 

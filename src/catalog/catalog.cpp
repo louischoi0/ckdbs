@@ -342,7 +342,7 @@ Status LogCatPageImage(wal::WalManager* wal, storage::PageStore& store, std::uin
 // The identity a compensation re-reads (DT5's rule): the Keystone word of
 // the payload, or 0 for a payload too short to carry one - which no
 // catalog row is, so the fallback is a never-taken safety.
-std::uint64_t UndoPkOf(std::span<const std::byte> payload) {
+std::uint64_t UndoTupleKeyOf(std::span<const std::byte> payload) {
     auto id = KeystoneIdOfPayload(payload);
     return id.ok() ? id.value() : 0;
 }
@@ -373,7 +373,7 @@ StatusOr<CatalogRowChange> OverwriteForDdl(const Catalog::DdlUndoHook& undo_hook
     if (undo_hook) {
         if (Status s = undo_hook({Catalog::DdlUndoEvent::Kind::kOverwrite, page_id, slot,
                                   change.prior_image, tuple.trx_id, tuple.undo_ptr,
-                                  UndoPkOf(change.prior_image)});
+                                  UndoTupleKeyOf(change.prior_image)});
             !s.ok()) {
             return s;
         }
@@ -432,7 +432,7 @@ Status ReportPlacedRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
                        std::uint64_t trx_id) {
     if (hook) {
         if (Status s = hook({Catalog::DdlUndoEvent::Kind::kInsert, page_id, slot, encoded, 0, 0,
-                             UndoPkOf(encoded)});
+                             UndoTupleKeyOf(encoded)});
             !s.ok()) {
             if (Status back = page.UnInsertTuple(slot); !back.ok()) {
                 return back.WithContext("taking back a catalog row after: " + s.message());
@@ -453,7 +453,7 @@ Status ReportPlacedRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
 // the tail is full.
 //
 // This is `heap::ChainInsert` minus the one thing a catalog row does not
-// have: a **Keystone id**. A user tuple's first word is its primary key, and
+// have: a **Keystone id**. A user tuple's first word is its tuple key, and
 // the heap chain uses it to keep pages key-ordered and to enforce `min_key`
 // (invariant 3). A catalog row is a fixed-offset struct with no such word,
 // so there is no key to order by and every page carries `min_key = 0` - the
@@ -1278,7 +1278,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // No key-mode refusal here any more. Until 2026-08-25 an EXPLICIT
     // relation was required to be btree-clustered and this is where the
     // pairing was refused; the mode is gone, both storage types take a
-    // caller-supplied pk, and what a relation cannot take is refused per
+    // caller-supplied tuple key, and what a relation cannot take is refused per
     // *id* by the insert path rather than per relation - on a heap a key
     // below its mark (BB-R3, kept by BD-Q4), on a btree a duplicate or an
     // exhausted key (BD-R5).
@@ -1882,7 +1882,7 @@ Status Catalog::DropColumn(Oid table_oid, std::string_view name, std::uint64_t t
             // Identity is the Keystone word at position 0 (invariant 11).
             if (row.pos == 0) {
                 return Status::InvalidArgument("column '" + std::string(name) +
-                                                "' is the primary key and cannot be dropped "
+                                                "' is the tuple key and cannot be dropped "
                                                 "(invariant 11)");
             }
             const auto before = row.Encode();
@@ -2047,7 +2047,7 @@ StatusOr<Oid> Catalog::CreateNamespace(std::string_view name, std::uint64_t trx_
     }
     // **`InsertObjectRow` does not fill `oid`, and a trail entry without it
     // cannot be rolled back.** `CreateTable` sets it by hand at each of its
-    // three inserts; this one did not, so the entry recorded pk 0, the
+    // three inserts; this one did not, so the entry recorded tuple key 0, the
     // abort found the row's real oid at that slot, decided it had moved,
     // and asked `RowLocatorForRollback` to relocate a *catalog* row - which
     // answers "no columns for this rel_id", because a bootstrap relation
@@ -2193,7 +2193,7 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
                     if (ddl_undo_hook_) {
                         if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kDeleteMark, page_id,
                                                        i, {}, tuple.trx_id, tuple.undo_ptr,
-                                                       UndoPkOf(tuple.payload)});
+                                                       UndoTupleKeyOf(tuple.payload)});
                             !s.ok()) {
                             return s;
                         }
@@ -2586,7 +2586,7 @@ StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.oid != table_oid) return false;
             // No key-mode refusal: a carve is legal on every relation now,
-            // because every relation's omitted-pk inserts draw from this same
+            // because every relation's omitted-tuple key inserts draw from this same
             // mark. What a carve costs is stated at the call site and in
             // section 4.1 - the ids inside it are spent from the mark's point
             // of view before they are placed. The carve is the heap's
@@ -2626,7 +2626,7 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
         if (row.oid != table_oid) return false;
 
-        // No key-mode refusal: this is what every INSERT that omits the pk
+        // No key-mode refusal: this is what every INSERT that omits the tuple key
         // calls, whatever the relation. The id it hands out is safe from a
         // caller-supplied one for the same reason it always was - the mark
         // only ever moves forward, and AdmitExplicitRowId moves it past every
@@ -2673,13 +2673,13 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
 
 Status CheckNamedRowIdSpellable(std::uint64_t id) {
     if (id < kFirstRowId) {
-        return Status::OutOfRange("primary key " + std::to_string(id) +
+        return Status::OutOfRange("tuple key " + std::to_string(id) +
                                   " is below the first issuable id (" +
                                        std::to_string(kFirstRowId) +
                                        "); 0 is reserved for \"unset\"");
     }
     if (id > kMaxKeystoneId) {
-        return Status::OutOfRange("primary key " + std::to_string(id) +
+        return Status::OutOfRange("tuple key " + std::to_string(id) +
                                   " does not fit the Keystone id space (max " +
                                        std::to_string(kMaxKeystoneId) + ")");
     }
@@ -2688,7 +2688,7 @@ Status CheckNamedRowIdSpellable(std::uint64_t id) {
 
 Status RefuseRowIdBelowMark(Oid table_oid, std::uint64_t id, std::uint64_t mark) {
     return Status::OutOfRange(
-        "primary key " + std::to_string(id) + " is below relation " + std::to_string(table_oid) +
+        "tuple key " + std::to_string(id) + " is below relation " + std::to_string(table_oid) +
         "'s high-water mark " + std::to_string(mark) +
         "; a named key must sort above every key the relation has placed or issued, which is "
         "what keeps every page's slot order its key order");
@@ -3121,11 +3121,11 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
         return Status::InvalidArgument("catalog: unknown cabin origin");
     }
     if (col_pos == 0) {
-        // Not a policy choice and not a limitation: the pk column's Cabin
+        // Not a policy choice and not a limitation: the tuple key column's Cabin
         // is the clustered tree, which is already authoritative for every
         // value rather than for the observed ones (spec section 2).
         return Status::InvalidArgument(
-            "catalog: the primary-key column needs no cabin - the clustered tree is its cabin");
+            "catalog: the tuple key column needs no cabin - the clustered tree is its cabin");
     }
 
     // Through InitTableAccess() rather than the sys.columns scan, because
@@ -3451,14 +3451,14 @@ Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
     auto access = InitTableAccess(def.table_oid);
     if (!access.ok()) return access.status();
     const Schema& schema = access.value()->schema;
-    // A heap relation has no pk index, so resolving an entry's pk would be a
+    // A heap relation has no tuple key index, so resolving an entry's tuple key would be a
     // chain scan and an index over it would turn one full scan into N
     // partial ones. The same rule and the same argument as
     // foreign-keys.md F1's refusal of a heap parent.
     if (access.value()->clustered_type != ClusteredType::kBtree) {
         return Status::InvalidArgument(
             "catalog: relation oid " + std::to_string(def.table_oid) +
-            " is heap-clustered; a secondary index resolves an entry through the primary key, "
+            " is heap-clustered; a secondary index resolves an entry through the tuple key, "
             "which a heap relation has no index for (docs/spec/index.md IX3)");
     }
 
@@ -3476,12 +3476,12 @@ Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
     };
     for (std::size_t i = 0; i < def.key_cols.size(); ++i) {
         if (Status s = check_column(def.key_cols[i], "key"); !s.ok()) return s;
-        // The pk is carried only by the Keystone word and the clustered tree
+        // The tuple key is carried only by the Keystone word and the clustered tree
         // already indexes it; a second copy would be maintained forever to
         // answer questions the descent answers faster.
         if (def.key_cols[i] == 0) {
             return Status::InvalidArgument(
-                "catalog: the primary key already has an index - the clustered tree is it");
+                "catalog: the tuple key already has an index - the clustered tree is it");
         }
         // D2 (`docs/workplan-null.md`): a nullable key column is refused in
         // v1, so the entry format, maintenance and backfill keep the
@@ -3659,7 +3659,7 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
                 if (ddl_undo_hook_) {
                     if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kDeleteMark, page_id, i,
                                                    {}, tuple.trx_id, tuple.undo_ptr,
-                                                   UndoPkOf(tuple.payload)});
+                                                   UndoTupleKeyOf(tuple.payload)});
                         !s.ok()) {
                         return s;
                     }

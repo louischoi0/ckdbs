@@ -14,9 +14,9 @@
 namespace kds::exec {
 namespace {
 
-stats::CabinEntry Entry(std::uint64_t pk) {
+stats::CabinEntry Entry(std::uint64_t tuple_key) {
     stats::CabinEntry entry;
-    entry.pk = pk;
+    entry.tuple_key = tuple_key;
     return entry;
 }
 
@@ -35,9 +35,9 @@ void Add(InnerBuild& build, const stats::CabinKey& key, const stats::CabinEntry&
     ASSERT_TRUE(build.Add(key, entry));
 }
 
-std::vector<std::uint64_t> Pks(const InnerBuild::Bucket& bucket) {
+std::vector<std::uint64_t> TupleKeys(const InnerBuild::Bucket& bucket) {
     std::vector<std::uint64_t> out;
-    for (const stats::CabinEntry& entry : bucket) out.push_back(entry.pk);
+    for (const stats::CabinEntry& entry : bucket) out.push_back(entry.tuple_key);
     return out;
 }
 
@@ -51,18 +51,18 @@ TEST(InnerBuildTest, PerKeyReplayIsWalkOrder) {
     Add(build, Key(20), Entry(4));
     Add(build, Key(10), Entry(5));
 
-    EXPECT_EQ(Pks(build.Find(Key(10))), (std::vector<std::uint64_t>{1, 3, 5}));
-    EXPECT_EQ(Pks(build.Find(Key(20))), (std::vector<std::uint64_t>{2, 4}));
+    EXPECT_EQ(TupleKeys(build.Find(Key(10))), (std::vector<std::uint64_t>{1, 3, 5}));
+    EXPECT_EQ(TupleKeys(build.Find(Key(20))), (std::vector<std::uint64_t>{2, 4}));
 }
 
-TEST(InnerBuildTest, AWalkReplaysWalkOrderNotPkOrder) {
+TEST(InnerBuildTest, AWalkReplaysWalkOrderNotTupleKeyOrder) {
     // Both key modes, one discriminating pin. Bucket one is an ASSIGNED
     // walk: ids ascend, so the walk encounters them ascending and replay
     // is ascending as a *consequence*. Bucket two is an EXPLICIT walk: a
     // caller-supplied id can be appended below existing ids
-    // (docs/spec/heap-and-tuple.md §4.1), so page-slot order diverges from pk
+    // (docs/spec/heap-and-tuple.md §4.1), so page-slot order diverges from tuple key
     // order — and walk order is the emission contract. A map that sorted
-    // by pk (the Cabin recording's move, WalkAndRecord) would pass the
+    // by tuple key (the Cabin recording's move, WalkAndRecord) would pass the
     // first bucket and every other test here while changing replies on an
     // EXPLICIT relation.
     InnerBuild build;
@@ -73,8 +73,8 @@ TEST(InnerBuildTest, AWalkReplaysWalkOrderNotPkOrder) {
     Add(build, Key(8), Entry(2));
     Add(build, Key(8), Entry(9));
 
-    EXPECT_EQ(Pks(build.Find(Key(7))), (std::vector<std::uint64_t>{2, 5, 9}));
-    EXPECT_EQ(Pks(build.Find(Key(8))), (std::vector<std::uint64_t>{5, 2, 9}));
+    EXPECT_EQ(TupleKeys(build.Find(Key(7))), (std::vector<std::uint64_t>{2, 5, 9}));
+    EXPECT_EQ(TupleKeys(build.Find(Key(8))), (std::vector<std::uint64_t>{5, 2, 9}));
 }
 
 TEST(InnerBuildTest, AnUnknownKeyIsAnEmptyBucket) {
@@ -101,18 +101,18 @@ TEST(InnerBuildTest, ABucketSurvivesTheAddsThatExtendTheMap) {
     Add(build, Key(1), Entry(1));
     InnerBuild::Bucket bucket = build.Find(Key(1));
     auto it = bucket.begin();
-    EXPECT_EQ(it->pk, 1u);
+    EXPECT_EQ(it->tuple_key, 1u);
 
-    for (std::uint64_t pk = 2; pk <= 500; ++pk) Add(build, Key(pk % 7), Entry(pk));
+    for (std::uint64_t tuple_key = 2; tuple_key <= 500; ++tuple_key) Add(build, Key(tuple_key % 7), Entry(tuple_key));
     Add(build, Key(1), Entry(999));
 
     // The iterator taken before all of that still reads its own entry, and
     // walking on reaches the rows appended since.
-    EXPECT_EQ(it->pk, 1u);
-    std::vector<std::uint64_t> pks = Pks(bucket);
-    ASSERT_FALSE(pks.empty());
-    EXPECT_EQ(pks.front(), 1u);
-    EXPECT_EQ(pks.back(), 999u);
+    EXPECT_EQ(it->tuple_key, 1u);
+    std::vector<std::uint64_t> tuple_keys = TupleKeys(bucket);
+    ASSERT_FALSE(tuple_keys.empty());
+    EXPECT_EQ(tuple_keys.front(), 1u);
+    EXPECT_EQ(tuple_keys.back(), 999u);
 }
 
 TEST(InnerBuildTest, RowsCountsEveryEntryAcrossBuckets) {

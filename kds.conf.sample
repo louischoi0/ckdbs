@@ -114,7 +114,7 @@ buffer_pool_frames = 131072
 # AO-S6c-c, when the lock became what a writer waits on and a truncated
 # ledger became rows with no protection and no wait behind them.
 #
-# The shape that reaches it is a write whose predicate names no primary-key
+# The shape that reaches it is a write whose predicate names no tuple key
 # window, such as `WHERE name = 'x'`: one whose predicate does name one
 # borrows that window once instead of a row at a time, so a bulk write by
 # key range costs a single entry however many rows it touches.
@@ -266,7 +266,7 @@ relaxed_flush_interval_us = 10000
 # that reads an unbounded number of rows therefore does not run slowly, it
 # takes a core out of service.
 #
-# The easy way to write one is a correlated subquery or a join on a non-pk
+# The easy way to write one is a correlated subquery or a join on a non-tuple-key
 # column: both read the inner relation once per outer row, so two relations
 # of n rows is n² decodes from a statement that fits on one line and looks
 # entirely reasonable. Failing after a bounded amount of work is the kinder
@@ -463,11 +463,11 @@ cabin_optimizer = off
 
 # Whether Cabins may be built and served (docs/spec/cabin.md).
 #
-# A Cabin is a per-(relation, non-pk column) store that is **authoritative
+# A Cabin is a per-(relation, non-tuple-key column) store that is **authoritative
 # for the values queries have actually observed** - the third trust class,
-# between the clustered pk tree (always authoritative) and a Waystone trail
+# between the clustered tuple key tree (always authoritative) and a Waystone trail
 # (never authoritative). For an observed value it holds a superset of the
-# matching rows' primary keys, so `WHERE sym = 'AAPL'` reads those rows
+# matching rows' tuple keys, so `WHERE sym = 'AAPL'` reads those rows
 # instead of the relation, and an observed value with *no* matching rows
 # answers zero rows without opening the relation at all - which no advisory
 # structure can do.
@@ -573,7 +573,7 @@ aggregate_max_distinct = 1048576
 # error - the cap fires only if that many rows actually arrive.
 #
 # `sort_max_rows = 0` holds no row, which refuses every statement needing a
-# sort while leaving the grammar in place. Statements ordered by the primary
+# sort while leaving the grammar in place. Statements ordered by the tuple
 # key ascending are unaffected either way: they are elided, not sorted.
 sort_max_rows = 1048576
 
@@ -677,7 +677,7 @@ log_level = info
 # REMOVED 2026-08-25: default_key_mode
 #
 # There is no key mode to default (docs/spec/heap-and-tuple.md section 4.1).
-# Every relation takes a caller-named primary key or issues one when INSERT
+# Every relation takes a caller-named tuple key or issues one when INSERT
 # omits it, per row, so an instance whose keys come from outside - a
 # migration, an upstream system, natural keys - now simply supplies them and
 # has nothing to configure.

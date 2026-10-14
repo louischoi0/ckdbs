@@ -43,13 +43,13 @@ inline constexpr std::uint16_t kMaxSpareSlots = 64;
 
 // True for the integer types a Keystone id can be declared as. Float,
 // decimal, bool, char and varchar are not among them: none can represent a
-// Keystone id, and a pk that cannot hold its own value is a table no row can
+// Keystone id, and a tuple key that cannot hold its own value is a table no row can
 // be written to.
 bool IsIntegerTypeVal(std::uint32_t type_val) noexcept;
 
 // Rejects a schema that cannot carry a Keystone word: no columns at all,
 // or a first column whose declared type is not an integer one. Every
-// relation's first column is its system-generated primary key
+// relation's first column is its system-generated tuple key
 // (heap-and-tuple.md section 4), so this is a property of the schema
 // itself, checked at CREATE TABLE rather than at the first INSERT.
 Status CheckKeystoneColumn(const Schema& schema);
@@ -148,7 +148,7 @@ struct RowLayout {
     std::uint16_t vacant_slot_bit_begin = 0;
     std::uint16_t vacant_slot_bit_end = 0;
 
-    // The columns a statement can see, the pk included: every column but a
+    // The columns a statement can see, the tuple key included: every column but a
     // dropped one (BW-R6). Positional `VALUES` count these.
     std::uint32_t live_columns = 0;
 
@@ -164,7 +164,7 @@ struct RowLayout {
 
     // Whether the relation's column set has changed since `CREATE TABLE` - a
     // column added or dropped. **`[quiet-wrong]`** (BW-Q9): on such a
-    // relation a positional row carries every live column, the pk `NULL` to
+    // relation a positional row carries every live column, the tuple key `NULL` to
     // have it issued, because after an `ADD` the short form's length is that
     // of a row written for the old columns with its key named, and admitting
     // it would shift every value one column over. A `DROP` leaves a case no
@@ -329,7 +329,7 @@ struct TableAccess {
     // have one and says nothing about the rest.
     //
     // `cabin_mask` holds a bit per `col_pos`. Bit 0 is always clear: the
-    // pk's Cabin is the clustered tree itself (spec section 2), so
+    // tuple key's Cabin is the clustered tree itself (spec section 2), so
     // CreateCabin() refuses column 0. A relation wider than 64 columns
     // folds its high columns into no bit - which loses the *acceleration*
     // for those columns and can never lose a row, since an unnoticed
@@ -468,7 +468,7 @@ struct TableAccess {
     // FindIndexOnColumn` makes for the same reason: an index on `(a, b)`
     // cannot serve an equality on `b`, so a bit for `b` would stop the
     // compiler calling that step a filter scan while leaving it exactly as
-    // slow. Bit 0 is always clear - `CreateIndex` refuses the primary key,
+    // slow. Bit 0 is always clear - `CreateIndex` refuses the tuple key,
     // whose index is the clustered tree. A relation wider than 64 columns
     // folds its high columns into no bit, which loses the acceleration and
     // never a row.

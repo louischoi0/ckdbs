@@ -213,7 +213,7 @@ Each of BW-R1..R12 is CLA's proposal; its standing is §4's.
     transactionless.
 - **BW-R8 — `DROP COLUMN` restricts.** It is refused, naming the
   dependant, when the column is:
-  - the pk (position 0, invariant 11);
+  - the tuple key (position 0, invariant 11);
   - a key or covered column of an index;
   - either end of a foreign key;
   - under a Transition;
@@ -300,7 +300,7 @@ before its adoption, and it holds.
   count, keeps id issue reachable, and (b) is a grammar BW does not own.
   Premise re-read against the tree before adoption: the short form is the
   only arity the change makes ambiguous, a full-width row is ambiguous with
-  nothing, and the KWP load builds full rows once its NULL pk is passed
+  nothing, and the KWP load builds full rows once its NULL tuple key is passed
   through. **Adopted (a) on the standing go-ahead of 2026-10-14 (W3).**
 - **BW-Q10** `[quiet-wrong]` — raised by BW-Q9's review: a KWP load
   describes the relation at LOAD BEGIN and each chunk re-resolves it by
@@ -416,7 +416,7 @@ BW-S1..S3 landed (`f2a72474`, `69a31361`, `bc42a011`) and BW-S4's text with them
   one `OverwriteForDdl` for the three transactional catalog overwrites
   (`DropTable`, `DropNamespace`, `DropColumn`), one arity refusal
   (`InsertArityRefusal`) over `RowLayout::live_columns`, rows expanded in
-  one copy, the pk refused at the dispatcher with its byte. BW-Q8 raised
+  one copy, the tuple key refused at the dispatcher with its byte. BW-Q8 raised
   and adopted (a). **Rejected**: (B) "an `INSERT` refused its `IS` at bind
   by an open drop that then rolls back writes with the stale schema" - the
   decide moves the schema word (`Transaction::NoteWroteCatalog`, set by
@@ -437,7 +437,7 @@ BW-S1..S3 landed (`f2a72474`, `69a31361`, `bc42a011`) and BW-S4's text with them
   kept consistent with it; `ALTER COLUMN ... TYPE` answering
   `InvalidArgument` rather than `NotImplemented` predates BW.
 - **BW-S3** landed at `bc42a011`. Review (`critics-developer`) found BW-Q9 (`[quiet-wrong]`,
-  adopted (a), built: `NormalizeInsertRows`, KWP passing its NULL pk
+  adopted (a), built: `NormalizeInsertRows`, KWP passing its NULL tuple key
   through) and proposed seven cuts. Applied: one `ResolveAlterTarget` for
   every ALTER form; `ADD`'s statement-level refusals before the `X`;
   `AddColumn` propagating `ColumnWidth`'s error, running

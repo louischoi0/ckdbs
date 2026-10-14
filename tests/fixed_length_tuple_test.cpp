@@ -74,7 +74,7 @@ protected:
         return heap::ChainVisit(store_, access.desc_page_id, storage::PageAccess::kRead, fn);
     }
 
-    // Where every live row of `table` physically sits, keyed by pk. Read
+    // Where every live row of `table` physically sits, keyed by tuple key. Read
     // straight off the pages rather than inferred from a reply, because
     // "did the row move?" is a question only the pages can answer.
     std::map<std::uint64_t, std::pair<PageId, std::uint16_t>> Locations(const std::string& table) {

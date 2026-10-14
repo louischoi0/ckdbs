@@ -206,7 +206,7 @@ TEST_F(LockCapTest, AWritePastTheBorrowCapIsRefusedAndNamesTheCap) {
     // fence over them and no wait behind them, which is AO-R10's reason for
     // refusing instead.
     //
-    // The predicate names no pk window, which is the shape item 14's
+    // The predicate names no tuple key window, which is the shape item 14's
     // declared units deliberately do not reach, so it still accumulates one
     // entry per row - and is the one shape that can meet the cap at all.
     Session session;
@@ -342,7 +342,7 @@ TEST_F(LockCapOfOneTest, AnInsertTakesTheBorrowOfTheRowItWrites) {
 TEST_F(LockCapOfOneTest, ASortedFillBorrowsTheIdBlockItCarved) {
     // The INSERT path that routes **past** `InsertOneRow`: `t` is HEAP with
     // no var-heap, no index, no cabin and no assertion, so a multi-row
-    // VALUES whose every row omits its pk goes to `SortedFillInner`. Until
+    // VALUES whose every row omits its tuple key goes to `SortedFillInner`. Until
     // AO-S6c-a it wrote rows and borrowed nothing at all - the one writer
     // left in the "header `trx_id`, no table entry" shape the sub-stage
     // exists to remove, and the review is what found it.
@@ -369,7 +369,7 @@ TEST_F(LockCapTest, ARangePredicateDeclaresItsWindowRatherThanAccumulatingRows) 
     ASSERT_EQ(Local("INSERT INTO t VALUES (3, 0)").rfind("INSERTED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO t VALUES (4, 0)").rfind("INSERTED", 0), 0u);
 
-    // `id > 1` is a pk window of three rows. Declared, it is the relation
+    // `id > 1` is a tuple key window of three rows. Declared, it is the relation
     // `IX` plus one range - two entries under a cap of three. Per-row it
     // would be the `IX` plus three tuples, which reaches the cap on the
     // last of them.
@@ -817,7 +817,7 @@ TEST_F(LockDeadlockTest, ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid) {
 // ---- AY-S2: the containment wake ------------------------------------------
 
 TEST_F(LockDeadlockTest, AChildWhoseParentIsUnderARangeFenceWaitsForTheFence) {
-    // A parent `DELETE` with a pk window declares a range `X` and takes no
+    // A parent `DELETE` with a tuple key window declares a range `X` and takes no
     // tuple `X` per row, so the child's forward check - its tuple `S` on the
     // parent row, held from before the descent since AY-S5 - meets the fence
     // only in the lock table's verify arm. Until AY-S2 that refusal had no
@@ -1193,7 +1193,7 @@ TEST_F(LockDeadlockTest, ADuplicateIsRefusedAtOnceAndAnAbsentKeyWaitsOnAFenceOnA
     Pump();
     ASSERT_TRUE(*wd.done) << "a duplicate waited on a fence";
     EXPECT_EQ(wd.out->status.code(), StatusCode::kAlreadyExists) << wd.out->response;
-    EXPECT_NE(wd.out->response.find("duplicate primary key"), std::string::npos)
+    EXPECT_NE(wd.out->response.find("duplicate tuple key"), std::string::npos)
         << wd.out->response;
     EXPECT_EQ(locks_->EntryCount(), held) << "the refused ask left an entry";
     EXPECT_EQ(locks_->WaitEdgeCount(), 0u) << "the refused ask left an edge";
@@ -1248,7 +1248,7 @@ TEST_F(LockDeadlockTest, ASortedFillWaitsOnAFenceOverTheBlockItCarves) {
 // `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md` §1.4. A recorded
 // wait survives only while the statement's trail is unchanged, and a spill is
 // a trail entry - so a row whose borrow came after its encode would turn this
-// wait into a refusal. BB moves an omitted pk's issue, borrow and encode under
+// wait into a refusal. BB moves an omitted tuple key's issue, borrow and encode under
 // its leaf's hold (BB-R2) and a named key's admission after its descent
 // (BB-R3); both orders keep the borrow ahead of the encode, and these cells
 // are what says so. `varchar(16)` and a longer value make the encode spill.
@@ -1294,7 +1294,7 @@ TEST_F(LockDeadlockTest, ANamedRowWithASpilledValueWaitsOnAFence) {
 TEST_F(LockDeadlockTest, ANamedKeyRefusedAtItsEncodeGivesBackItsBorrow) {
     // The borrow goes back with the refusal. Nothing was written under it, so
     // it protected no row; and it stood where the next issued id lands - the
-    // mark had not moved - so an omitted-pk insert drew that very id and,
+    // mark had not moved - so an omitted-tuple key insert drew that very id and,
     // until this give-back, waited on a holder that could no longer place it:
     // until the holder's `ROLLBACK`, or until the 1 s fault net refused it. A
     // borrow the transaction held before the statement is kept (it can stand
@@ -1329,7 +1329,7 @@ TEST_F(LockDeadlockTest, ANamedKeyRefusedAtItsEncodeGivesBackItsBorrow) {
 TEST_F(LockDeadlockTest, ANamedKeyRefusedAfterItsValueSpilledLeavesTheRelationWhole) {
     // The duplicate check refuses after the encode's spills are logged at
     // their append and noted on the trail (`SpillLogFor`) - on a btree the
-    // only pk refusal that comes that late, since BD-R5's other reason is
+    // only tuple key refusal that comes that late, since BD-R5's other reason is
     // judged on the literal and the mark refuses nothing (BD-R6); every
     // other refusal cell names values that fit inline. What a refused
     // statement wrote to the var-heap is unwound with it - autocommit (BI4),
@@ -1347,7 +1347,7 @@ TEST_F(LockDeadlockTest, ANamedKeyRefusedAfterItsValueSpilledLeavesTheRelationWh
         std::uint64_t key;
         StatusCode code;
         const char* text;
-    } refusals[] = {{5, StatusCode::kAlreadyExists, "duplicate primary key"}};
+    } refusals[] = {{5, StatusCode::kAlreadyExists, "duplicate tuple key"}};
     std::uint64_t next = 6;  // the mark: a refused key moves nothing
     for (const bool in_txn : {false, true}) {
         for (const auto& r : refusals) {
@@ -1542,7 +1542,7 @@ TEST_F(LockDeadlockTest, AStatementThatHasWrittenRowsNowWaitsInsteadOfBeingRefus
 
     // A multi-row UPDATE that writes row 1 and then meets row 2.
     //
-    // **The predicate names no pk window, and since AO-S6c-c that is what
+    // **The predicate names no tuple key window, and since AO-S6c-c that is what
     // keeps this cell about a mid-walk park.** `WHERE id <= 2` would now
     // declare `Range(t, 0, 3)` (item 14), which overlaps the holder's tuple
     // and is refused *before* the walk starts - so the statement would wait
@@ -1740,7 +1740,7 @@ TEST_F(LockDeadlockTest, ARepeatableReadInsertThatWaitsOnAFenceStillCannotDuplic
     ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
     Pump();
     ASSERT_TRUE(*w.done) << "the wait never ended";
-    EXPECT_NE(w.out->response.find("duplicate primary key"), std::string::npos)
+    EXPECT_NE(w.out->response.find("duplicate tuple key"), std::string::npos)
         << "a repeatable-read insert wrote a key its own view could not see: "
         << w.out->response;
 }
@@ -2122,14 +2122,14 @@ protected:
     }
 
     // **Why every cell here writes `WHERE v >= 0` rather than no predicate
-    // or a pk one.** A `WHERE`-less write declares the relation (AO-0 item
-    // 14) and a pk-shaped one declares its range, and a declared unit is
+    // or a tuple key one.** A `WHERE`-less write declares the relation (AO-0 item
+    // 14) and a tuple-key-shaped one declares its range, and a declared unit is
     // borrowed **before the walk starts** - so such a statement waits
     // having written nothing and re-runs cleanly, which is the better
     // behaviour and has its own cell
     // (`ACoarseDeclarationWaitsBeforeItWritesAnythingAndThenSucceeds`).
     // The mid-walk park these cells exist to measure is what a predicate
-    // naming no pk window still takes. Every row is inserted with `v = 0`
+    // naming no tuple key window still takes. Every row is inserted with `v = 0`
     // and a holder's row carries `9`, so `v >= 0` matches all ten whichever
     // value the page holds - `apply` evaluates the WHERE against the page's
     // current bytes, not against the version the view would resolve.
@@ -2681,9 +2681,9 @@ TEST_F(MidWalkWaitTest, ADeadlockBetweenTwoMidWalkParksUnwindsTheVictimsOpenScop
 
     // **The anchors carry distinguishing values, and since AO-S6c-c that is
     // what makes the shape reachable at all.** The cell used to give the two
-    // walkers disjoint pk windows (`id >= 5`, `id >= 2`); a pk-shaped
+    // walkers disjoint tuple key windows (`id >= 5`, `id >= 2`); a tuple-key-shaped
     // predicate now declares a range and is borrowed before the walk, so
-    // neither would write anything before conflicting. A non-pk predicate
+    // neither would write anything before conflicting. A non-tuple-key predicate
     // keeps the per-row path - but both walkers then start at row 1, and
     // the second meets the first's rows immediately and writes nothing,
     // which is the coverage this cell exists to add. So the anchors' values
@@ -3031,7 +3031,7 @@ TEST_F(PurgeWaitTest, AnUndecidedDeleterAtTheBoundIsRefusedRetryably) {
     ASSERT_TRUE(*purge.done) << "the wait outlived kPurgeHorizonWait";
     EXPECT_EQ(purge.out->status.code(), StatusCode::kTxnConflict) << purge.out->response;
     EXPECT_TRUE(purge.out->status.retryable()) << purge.out->response;
-    EXPECT_NE(purge.out->response.find("primary key 5"), std::string::npos)
+    EXPECT_NE(purge.out->response.find("tuple key 5"), std::string::npos)
         << "the refusal does not name the key: " << purge.out->response;
     ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &c).response.rfind("ROLLBACK", 0), 0u);
 }

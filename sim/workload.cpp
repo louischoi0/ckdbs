@@ -24,7 +24,7 @@ const char* OpKindName(Op::Kind kind) {
     switch (kind) {
         case Op::Kind::kCreateTable: return "create-table";
         case Op::Kind::kInsert: return "insert";
-        case Op::Kind::kSelectPk: return "select-pk";
+        case Op::Kind::kSelectTupleKey: return "select-tuple-key";
         case Op::Kind::kSelectRange: return "select-range";
         case Op::Kind::kFilterScan: return "filter-scan";
         case Op::Kind::kSync: return "sync";
@@ -43,7 +43,7 @@ const char* OpKindName(Op::Kind kind) {
 
 std::optional<Op::Kind> ParseOpKind(std::string_view name) {
     for (const Op::Kind kind :
-         {Op::Kind::kCreateTable, Op::Kind::kInsert, Op::Kind::kSelectPk,
+         {Op::Kind::kCreateTable, Op::Kind::kInsert, Op::Kind::kSelectTupleKey,
           Op::Kind::kSelectRange, Op::Kind::kFilterScan, Op::Kind::kSync, Op::Kind::kUpdate,
           Op::Kind::kDelete, Op::Kind::kBegin, Op::Kind::kCommit, Op::Kind::kRollback,
           Op::Kind::kCreateCabin, Op::Kind::kInsertNamed, Op::Kind::kDropTable,
@@ -216,7 +216,7 @@ Op Workload::Update(const Table& table) {
     Op op;
     op.kind = Op::Kind::kUpdate;
     op.table = table.name;
-    op.by_pk = rng_.Chance(70);
+    op.by_tuple_key = rng_.Chance(70);
     op.set_name = rng_.Chance(40);
     op.sql = "UPDATE " + table.name + " SET ";
     if (op.set_name) {
@@ -226,7 +226,7 @@ Op Workload::Update(const Table& table) {
         op.v = NextValue();
         op.sql += "v = " + std::to_string(op.v);
     }
-    if (op.by_pk) {
+    if (op.by_tuple_key) {
         op.key = GuessKey(table);
         op.sql += " WHERE id = " + std::to_string(op.key);
     } else {
@@ -240,9 +240,9 @@ Op Workload::Delete(Table& table) {
     Op op;
     op.kind = Op::Kind::kDelete;
     op.table = table.name;
-    op.by_pk = rng_.Chance(70);
+    op.by_tuple_key = rng_.Chance(70);
     op.sql = "DELETE FROM " + table.name;
-    if (op.by_pk) {
+    if (op.by_tuple_key) {
         op.key = GuessKey(table);
         op.sql += " WHERE id = " + std::to_string(op.key);
         // A key a named INSERT names again later: a duplicate for good if
@@ -299,7 +299,7 @@ Op Workload::DataOp() {
         Op del = Delete(table);
         if (in_txn_ || !table.btree || !purge_rng_.Chance(60)) return del;
         // The DELETE never runs, so its key is no deleted key to name again.
-        if (del.by_pk && !table.deleted.empty() && table.deleted.back() == del.key) {
+        if (del.by_tuple_key && !table.deleted.empty() && table.deleted.back() == del.key) {
             table.deleted.pop_back();
         }
         return Purge(table);
@@ -307,7 +307,7 @@ Op Workload::DataOp() {
     if (roll < 79) {
         const Table& table = PickTable();
         Op op;
-        op.kind = Op::Kind::kSelectPk;
+        op.kind = Op::Kind::kSelectTupleKey;
         op.table = table.name;
         op.key = GuessKey(table);
         op.sql = "SELECT * FROM " + table.name + " WHERE id = " + std::to_string(op.key);
@@ -400,7 +400,7 @@ Op Workload::Next() {
         return op;
     }
     if (roll < 92) {
-        // A Cabin on the only column that can carry one here: the pk is
+        // A Cabin on the only column that can carry one here: the tuple key is
         // refused by name, and `name` is the spill-prone varchar the
         // harness deliberately keeps in the var-heap's hands.
         const Table& table = PickTable();

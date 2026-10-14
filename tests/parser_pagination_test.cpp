@@ -33,8 +33,8 @@
 //      aggregate admitted as a key.
 //
 // What the parser deliberately does not decide: whether `order_by` names
-// the driving relation's pk. Pk-ness is catalog knowledge, so that check -
-// and the acceptance of `ORDER BY <pk> [ASC]` as the validated no-op it is
+// the driving relation's tuple key. TupleKey-ness is catalog knowledge, so that check -
+// and the acceptance of `ORDER BY <tuple key> [ASC]` as the validated no-op it is
 // - lives in the compiler (V09's execution half), pointed at the byte the
 // AST stored here.
 

@@ -12,16 +12,16 @@
 //
 // Two subsystems ask this question, and they are deliberately made to ask it
 // through the same code. A Waystone trail entry names `(page_id, slot)` for
-// a pk it recorded (`docs/spec/waystone-concpets.md` §2 rules 1-2); a Cabin entry
+// a tuple key it recorded (`docs/spec/waystone-concpets.md` §2 rules 1-2); a Cabin entry
 // carries the same triple as an advisory *hint* on top of an authoritative
-// pk (`docs/spec/cabin.md` C6, which requires the check to run "under the
+// tuple key (`docs/spec/cabin.md` C6, which requires the check to run "under the
 // same rules as waystone entries - shared validation code, not a parallel
 // implementation, two verifiers would be where the bugs live").
 //
 // ---- What a failure means, and what it does not --------------------------
 //
 // Every outcome below other than kOk is a **miss**, never an error. The
-// caller falls back to the authoritative path - a descent, a walk, or a pk
+// caller falls back to the authoritative path - a descent, a walk, or a tuple key
 // resolution - and the statement's answer is unchanged. That is what makes
 // both structures deletable: a trail wholesale (invariant 8), a Cabin value
 // at a time (§1's corollary).
@@ -58,7 +58,7 @@
 // design, and the epoch is 0 on most pages - so without this a location
 // remembered for a dropped relation, read on a page another relation now
 // owns, validates whenever that relation's row there carries the expected
-// pk. **It is defence, not the authority**: no reader reaches a freed page
+// tuple key. **It is defence, not the authority**: no reader reaches a freed page
 // (BF-R8's mount-time argument), and this turns a defect in that gate into
 // a miss rather than another relation's row. The header bytes are already
 // in hand, so it costs a branch.
@@ -88,7 +88,7 @@ enum class VerifyOutcome : std::uint8_t {
     // makes a stale remembered location a miss rather than somebody else's
     // row, and it is the one the corrupted-trail contract test exists to
     // prove load-bearing.
-    kPkMismatch,
+    kTupleKeyMismatch,
     // The page is not a row page of the expected relation (BF-R10): freed
     // and reused, or never one. Checked before the epoch.
     kNotThisRelation,
@@ -110,13 +110,13 @@ struct VerifiedTuple {
 
 // Fetches `page_id` for read, checks it is a row page of `expected_owner`,
 // compares its relayout epoch against `recorded_epoch`, then reads `slot`
-// and compares the tuple's Keystone id against `expected_pk`.
+// and compares the tuple's Keystone id against `expected_tuple_key`.
 //
 // Never returns a Status: there is no failure here that is not a miss, and
 // giving one a Status would put a "the trail was corrupt" error in front of
 // a user whose query is perfectly answerable.
 VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint16_t slot,
-                            std::uint64_t expected_pk, std::uint32_t recorded_epoch,
+                            std::uint64_t expected_tuple_key, std::uint32_t recorded_epoch,
                             std::uint64_t expected_owner);
 
 // The epoch to stamp on a location being *written*: `page_id`'s current

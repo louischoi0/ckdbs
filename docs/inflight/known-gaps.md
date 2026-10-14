@@ -587,7 +587,7 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `PurgeKeyTest.CensusDADeleteOfASystemRelationIsRefusedOnlyByAccident`
   pins the accident. Owner: `heap-and-tuple.md` §4.
 
-- **An omitted pk on a btree can be refused `AlreadyExists`.** Verified at
+- **An omitted tuple key on a btree can be refused `AlreadyExists`.** Verified at
   `91c998a3` (BD-S5), by reading `CommandDispatcher::InsertOneRow`. The id
   is issued before the descent, under no leaf's hold (BD-R6), so a named key
   equal to it can be borrowed, placed and committed first; the placement's
@@ -733,7 +733,7 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
   `exec::SlicePolicy::pages_per_slice` (64) pages. Nothing else running
   gives its core back:
   - a write;
-  - a pk descent, run inline by design;
+  - a tuple key descent, run inline by design;
   - an index walk (`RunIndexStep`);
   - a join's inner walk under one outer page;
   - a heap relation's lookup that falls back to a chain walk.
@@ -889,7 +889,7 @@ stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
   client that prepares is the only one a cached parse would help; no driver
   in the tree prepares. A text parameter containing a single quote stays
   unbindable at `C_BIND` for the same reason.
-- **Waystone records a trail for a point `SELECT` by pk**: recording and the
+- **Waystone records a trail for a point `SELECT` by tuple key**: recording and the
   replay attempt are 7-9 % of its server CPU (BN-S1's census), for a lookup
   the descent already answers directly. No BN proposal named it.
 - **The request path's floor is the kernel's**: a `C_PING` round trip costs
@@ -941,7 +941,7 @@ last entries restated at BT's close, verified at `4274ed81`. Owned by
   kernel is armed only once that step's checks have run (BM-R6), so a
   statement whose step sees one row gains nothing from it.
 - **The kernel holds a conjunct against a literal only**: a column on the
-  right, a function conjunct, a spilled `varchar`, a `uint64` pk and
+  right, a function conjunct, a spilled `varchar`, a `uint64` tuple key and
   `UPDATE` / `DELETE`'s own row loops are filtered as before.
 - **The every-row `UPDATE` may still pay a few µs for BM-S2** (verified
   at `952c67e5`, `bench/v3.0.0/results-bm-s6-remedy-v2.7.0-948-g952c67e5.md`).

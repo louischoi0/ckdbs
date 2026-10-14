@@ -29,7 +29,7 @@ protected:
 
 WaystoneEntry SampleEntry() {
     WaystoneEntry e{};
-    e.pk = 0x0000A5FFEEDDCCBBull;  // bits 40-47 set: inside the 48-bit id space
+    e.tuple_key = 0x0000A5FFEEDDCCBBull;  // bits 40-47 set: inside the 48-bit id space
     e.rel_oid = 0x1122334455667788ull;
     e.page_id = 0xAABBCCDDu;
     e.page_epoch = 0x01020304u;
@@ -80,12 +80,12 @@ TEST_F(WaystonePageTest, FormatWritesAHeaderedWaystonePage) {
 TEST_F(WaystonePageTest, AFreshPageHasNoValidEntries) {
     FormatWaystonePage(page(), {1, 2}, 0);
 
-    // A never-written entry decodes to pk 0 and page_id 0, both of which
+    // A never-written entry decodes to tuple key 0 and page_id 0, both of which
     // look like real values. Only the flag says whether it means anything.
     auto e = ReadWaystoneEntry(const_page(), 0);
     ASSERT_TRUE(e.ok());
     EXPECT_EQ(e.value().flags & kWaystoneEntryValid, 0u);
-    EXPECT_EQ(e.value().pk, 0u);
+    EXPECT_EQ(e.value().tuple_key, 0u);
 }
 
 // ---- Header codec ---------------------------------------------------------
@@ -149,7 +149,7 @@ TEST_F(WaystonePageTest, EntryRoundTripsEveryField) {
 
     auto out = ReadWaystoneEntry(const_page(), 5);
     ASSERT_TRUE(out.ok());
-    EXPECT_EQ(out.value().pk, in.pk);
+    EXPECT_EQ(out.value().tuple_key, in.tuple_key);
     EXPECT_EQ(out.value().rel_oid, in.rel_oid);
     EXPECT_EQ(out.value().page_id, in.page_id);
     EXPECT_EQ(out.value().page_epoch, in.page_epoch);
@@ -179,7 +179,7 @@ TEST_F(WaystonePageTest, AdjacentEntriesDoNotOverlap) {
 
     for (std::size_t i = 0; i < kEntriesPerWaystonePage; ++i) {
         WaystoneEntry e{};
-        e.pk = i + 1;
+        e.tuple_key = i + 1;
         e.rel_oid = 1000 + i;
         e.step_id = static_cast<std::uint16_t>(i);
         e.flags = kWaystoneEntryValid;
@@ -188,7 +188,7 @@ TEST_F(WaystonePageTest, AdjacentEntriesDoNotOverlap) {
     for (std::size_t i = 0; i < kEntriesPerWaystonePage; ++i) {
         auto e = ReadWaystoneEntry(const_page(), i);
         ASSERT_TRUE(e.ok()) << i;
-        EXPECT_EQ(e.value().pk, i + 1) << i;
+        EXPECT_EQ(e.value().tuple_key, i + 1) << i;
         EXPECT_EQ(e.value().rel_oid, 1000u + i) << i;
         EXPECT_EQ(e.value().step_id, i) << i;
     }

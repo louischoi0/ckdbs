@@ -62,7 +62,7 @@ using crash_rig::TempDir;
 // Long enough to spill out of a 16-byte inline cell.
 const std::string kLong(100, 'x');
 
-// The trx id stamped on `pk`'s slot - the deleter, once it is delete-marked -
+// The trx id stamped on `tuple_key`'s slot - the deleter, once it is delete-marked -
 // and the var-heap slots its version points at.
 struct SlotFacts {
     std::uint64_t trx_id = 0;
@@ -70,10 +70,10 @@ struct SlotFacts {
     std::vector<exec::SpillRef> spills;
 };
 SlotFacts FactsOf(storage::PageStore& store, const catalog::TableAccess& access,
-                  std::uint64_t pk) {
+                  std::uint64_t tuple_key) {
     SlotFacts facts;
-    auto at = btree::BtreeLookup(store, access.desc_page_id, pk);
-    EXPECT_TRUE(at.ok()) << pk << ": " << at.status().message();
+    auto at = btree::BtreeLookup(store, access.desc_page_id, tuple_key);
+    EXPECT_TRUE(at.ok()) << tuple_key << ": " << at.status().message();
     if (!at.ok()) return facts;
     heap::PageView leaf(at.value().leaf.bytes());
     auto tuple = leaf.ReadTuple(at.value().slot);
@@ -99,9 +99,9 @@ struct Loaded {
     const catalog::TableAccess* access = nullptr;
     SlotFacts tomb;
 
-    StatusOr<exec::PurgeOutcome> Purge(TwoCoreRig& rig, std::uint64_t pk,
+    StatusOr<exec::PurgeOutcome> Purge(TwoCoreRig& rig, std::uint64_t tuple_key,
                                        std::uint64_t deleter) const {
-        return exec::PurgeKey(rig.store(), &rig.wal(), *access, pk, deleter);
+        return exec::PurgeKey(rig.store(), &rig.wal(), *access, tuple_key, deleter);
     }
     StatusOr<exec::PurgeOutcome> PurgeFive(TwoCoreRig& rig) const {
         return Purge(rig, 5, tomb.trx_id);
@@ -124,12 +124,12 @@ Loaded Load(TwoCoreRig& rig) {
     return l;
 }
 
-// Whether `pk` is free on a mounted image: an `INSERT` naming it is placed.
-bool KeyIsFree(Expeditor& db, std::uint64_t pk) {
-    const std::string insert = "INSERT INTO t VALUES (" + std::to_string(pk) + ", 'new')";
+// Whether `tuple_key` is free on a mounted image: an `INSERT` naming it is placed.
+bool KeyIsFree(Expeditor& db, std::uint64_t tuple_key) {
+    const std::string insert = "INSERT INTO t VALUES (" + std::to_string(tuple_key) + ", 'new')";
     const std::string reply = db.dispatcher().Dispatch(insert).response;
     if (StartsWith(reply, "INSERTED")) return true;
-    EXPECT_NE(reply.find("duplicate primary key"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("duplicate tuple key"), std::string::npos) << reply;
     return false;
 }
 
@@ -166,7 +166,7 @@ TEST(PurgeKeyStorageTest, ASlotThatIsNotTheJudgedTombstoneIsSkipped) {
 
     struct Case {
         const char* what;
-        std::uint64_t pk;
+        std::uint64_t tuple_key;
         std::uint64_t deleter;
     };
     const Case skips[] = {
@@ -175,7 +175,7 @@ TEST(PurgeKeyStorageTest, ASlotThatIsNotTheJudgedTombstoneIsSkipped) {
         {"a key never placed", 7, l.tomb.trx_id},
     };
     for (const Case& c : skips) {
-        auto out = l.Purge(*rig, c.pk, c.deleter);
+        auto out = l.Purge(*rig, c.tuple_key, c.deleter);
         ASSERT_TRUE(out.ok()) << c.what << ": " << out.status().message();
         EXPECT_EQ(out.value(), exec::PurgeOutcome::kSkipped) << c.what;
     }

@@ -136,8 +136,8 @@ TEST(IndexRaceTest, TwoCoresDividingOneIndexLeaveEveryEntryWhereAProbeFindsIt) {
                         const std::uint32_t key = region * kStride + 1 +
                                                   2 * static_cast<std::uint32_t>(round) +
                                                   static_cast<std::uint32_t>(t);
-                        const std::uint64_t pk = 1'000'000 + key;
-                        auto r = IndexInsert(*store, root, layout, Key(key), pk, covered, 0);
+                        const std::uint64_t tuple_key = 1'000'000 + key;
+                        auto r = IndexInsert(*store, root, layout, Key(key), tuple_key, covered, 0);
                         if (!r.ok()) {
                             const std::lock_guard<std::mutex> held(errors_latch);
                             errors.push_back(std::to_string(key) + ": " + r.status().message());
@@ -147,7 +147,7 @@ TEST(IndexRaceTest, TwoCoresDividingOneIndexLeaveEveryEntryWhereAProbeFindsIt) {
                             root_moved.store(true, std::memory_order_release);
                         }
                         if (r.value().restructured()) divides.fetch_add(1);
-                        mine[static_cast<std::size_t>(t)].emplace_back(key, pk);
+                        mine[static_cast<std::size_t>(t)].emplace_back(key, tuple_key);
                     }
                 }
             });
@@ -182,7 +182,7 @@ TEST(IndexRaceTest, TwoCoresDividingOneIndexLeaveEveryEntryWhereAProbeFindsIt) {
         ASSERT_TRUE(walked.ok()) << walked.message();
 
         // Every entry is found by a probe from the root.
-        for (const auto& [key, pk] : placed) {
+        for (const auto& [key, tuple_key] : placed) {
             if (!failure.empty()) break;
             std::vector<std::byte> sort_key(layout.sort_key_width(), std::byte{0});
             const auto k = Key(key);
@@ -199,12 +199,12 @@ TEST(IndexRaceTest, TwoCoresDividingOneIndexLeaveEveryEntryWhereAProbeFindsIt) {
                     const std::uint32_t at = KeyOf(entry.value().subspan(0, kKeyWidth));
                     if (at < key) return storage::VisitControl::kContinue;
                     if (at > key) return storage::VisitControl::kStop;
-                    if (GetIndexPk(entry.value().subspan(kKeyWidth)) == pk) found = true;
+                    if (GetIndexTupleKey(entry.value().subspan(kKeyWidth)) == tuple_key) found = true;
                     return storage::VisitControl::kContinue;
                 });
             ASSERT_TRUE(probed.ok()) << probed.message();
-            if (!found) failure = "a probe for key " + std::to_string(key) + " missed pk " +
-                                  std::to_string(pk);
+            if (!found) failure = "a probe for key " + std::to_string(key) + " missed tuple key " +
+                                  std::to_string(tuple_key);
         }
 
         if (!failure.empty()) {
@@ -253,9 +253,9 @@ std::vector<std::byte> WideKey(std::uint32_t v) {
 }
 
 std::vector<std::byte> WideSortKey(const IndexLayout& layout, std::uint32_t key,
-                                   std::uint64_t pk) {
+                                   std::uint64_t tuple_key) {
     std::vector<std::byte> out(layout.sort_key_width());
-    EXPECT_TRUE(EncodeIndexSortKey(layout, WideKey(key), pk, out).ok());
+    EXPECT_TRUE(EncodeIndexSortKey(layout, WideKey(key), tuple_key, out).ok());
     return out;
 }
 
@@ -272,16 +272,16 @@ TEST(IndexRaceTest, TwoCoresDividingOneParentLeaveEverySeparatorOverItsSubtree) 
         created.value().second.Release();
 
         std::vector<std::pair<std::uint32_t, std::uint64_t>> placed;
-        auto insert = [&](std::uint32_t key, std::uint64_t pk) {
-            auto r = IndexInsert(*store, first_root, layout, WideKey(key), pk, {}, 0);
-            ASSERT_TRUE(r.ok()) << "setup " << key << "/" << pk << ": " << r.status().message();
+        auto insert = [&](std::uint32_t key, std::uint64_t tuple_key) {
+            auto r = IndexInsert(*store, first_root, layout, WideKey(key), tuple_key, {}, 0);
+            ASSERT_TRUE(r.ok()) << "setup " << key << "/" << tuple_key << ": " << r.status().message();
             if (r.value().new_root != kInvalidPageId) first_root = r.value().new_root;
-            placed.emplace_back(key, pk);
+            placed.emplace_back(key, tuple_key);
         };
         for (std::uint32_t k = 1; k <= 600; ++k) insert(k * 10, 1);
         const PageId parent = testing_race::IndexLeftmostAtLevel(*store, first_root, 1);
-        std::uint64_t pk = 2;
-        while (!testing_race::IndexPageIsFull(*store, parent, layout)) insert(0, pk++);
+        std::uint64_t tuple_key = 2;
+        while (!testing_race::IndexPageIsFull(*store, parent, layout)) insert(0, tuple_key++);
 
         const PageId leaf_a = testing_race::IndexChildren(*store, parent).back();
         std::uint32_t key_a = 0;
@@ -294,13 +294,13 @@ TEST(IndexRaceTest, TwoCoresDividingOneParentLeaveEverySeparatorOverItsSubtree) 
             key_a = KeyOf(last.value().subspan(0, kWideKey));
         }
         ASSERT_GT(key_a, 0u);
-        while (!testing_race::IndexPageIsFull(*store, leaf_a, layout)) insert(key_a, pk++);
+        while (!testing_race::IndexPageIsFull(*store, leaf_a, layout)) insert(key_a, tuple_key++);
         for (;;) {  // LB: the leaf the next key-0 entry lands in, filled without dividing
-            auto leaf_b = IndexSeekLeaf(*store, first_root, layout, WideSortKey(layout, 0, pk));
+            auto leaf_b = IndexSeekLeaf(*store, first_root, layout, WideSortKey(layout, 0, tuple_key));
             ASSERT_TRUE(leaf_b.ok()) << leaf_b.status().message();
             ASSERT_NE(leaf_a, leaf_b.value());
             if (testing_race::IndexPageIsFull(*store, leaf_b.value(), layout)) break;
-            insert(0, pk++);
+            insert(0, tuple_key++);
         }
         ASSERT_TRUE(testing_race::IndexPageIsFull(*store, parent, layout));
 
@@ -308,18 +308,18 @@ TEST(IndexRaceTest, TwoCoresDividingOneParentLeaveEverySeparatorOverItsSubtree) 
         Rendezvous gate(kThreads);
         std::vector<std::string> errors;
         std::mutex errors_latch;
-        const std::pair<std::uint32_t, std::uint64_t> mine[kThreads] = {{0, pk}, {key_a, pk + 1}};
+        const std::pair<std::uint32_t, std::uint64_t> mine[kThreads] = {{0, tuple_key}, {key_a, tuple_key + 1}};
 
         std::vector<std::thread> threads;
         for (int t = 0; t < kThreads; ++t) {
             threads.emplace_back([&, t] {
                 SetCurrentCore(static_cast<std::uint32_t>(t));
-                const auto [key, entry_pk] = mine[t];
+                const auto [key, entry_tuple_key] = mine[t];
                 gate.Wait();
                 Status last = Status::OK();
                 for (int attempt = 0; attempt < kRetries; ++attempt) {
                     auto r = IndexInsert(*store, root.load(std::memory_order_acquire), layout,
-                                         WideKey(key), entry_pk, {}, 0);
+                                         WideKey(key), entry_tuple_key, {}, 0);
                     if (r.ok()) {
                         if (r.value().new_root != kInvalidPageId) {
                             root.store(r.value().new_root, std::memory_order_release);
@@ -341,7 +341,7 @@ TEST(IndexRaceTest, TwoCoresDividingOneParentLeaveEverySeparatorOverItsSubtree) 
 
         const PageId final_root = root.load();
         testing_race::ExpectIndexSeparatorsBoundTheirSubtrees(*store, final_root, layout);
-        for (const auto& [key, entry_pk] : placed) {
+        for (const auto& [key, entry_tuple_key] : placed) {
             const std::vector<std::byte> k = WideKey(key);
             auto leaf = IndexSeekLeaf(*store, final_root, layout, WideSortKey(layout, key, 0));
             ASSERT_TRUE(leaf.ok()) << leaf.status().message();
@@ -355,12 +355,12 @@ TEST(IndexRaceTest, TwoCoresDividingOneParentLeaveEverySeparatorOverItsSubtree) 
                     const int cmp = std::memcmp(entry.value().data(), k.data(), k.size());
                     if (cmp < 0) return storage::VisitControl::kContinue;
                     if (cmp > 0) return storage::VisitControl::kStop;
-                    if (GetIndexPk(entry.value().subspan(kWideKey)) == entry_pk) found = true;
+                    if (GetIndexTupleKey(entry.value().subspan(kWideKey)) == entry_tuple_key) found = true;
                     return storage::VisitControl::kContinue;
                 });
             ASSERT_TRUE(probed.ok()) << probed.message();
             EXPECT_TRUE(found) << "round " << round << ": a probe for key " << key
-                               << " missed pk " << entry_pk;
+                               << " missed tuple key " << entry_tuple_key;
         }
         if (::testing::Test::HasFailure()) break;  // one round's damage is the report
     }

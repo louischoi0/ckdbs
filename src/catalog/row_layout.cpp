@@ -58,7 +58,7 @@ StatusOr<RowLayout> RowLayout::Build(const Schema& schema, std::uint32_t inline_
     layout.cell_ends.reserve(schema.columns.size());
     layout.null_bits.reserve(schema.columns.size());
 
-    // The Keystone word leads every tuple and the pk is carried *only*
+    // The Keystone word leads every tuple and the tuple key is carried *only*
     // there, never also as a body column (invariant 11), so column 0
     // occupies the word and the body starts after it - and it can never
     // be nullable, because the word has no NULL encoding. CREATE TABLE
@@ -66,13 +66,13 @@ StatusOr<RowLayout> RowLayout::Build(const Schema& schema, std::uint32_t inline_
     // own defense for a schema that arrives by another door.
     if (!schema.columns.empty() && !schema.columns[0].notnull) {
         return Status::InvalidArgument(
-            "the first column is the primary key and cannot be nullable (invariant 11: the "
+            "the first column is the tuple key and cannot be nullable (invariant 11: the "
             "Keystone word has no NULL encoding)");
     }
     layout.offsets.push_back(0);
     layout.cell_ends.push_back(kKeystoneWordSize);
     layout.null_bits.push_back(kNoNullBit);
-    layout.live_columns = 1;  // the pk, which no drop reaches
+    layout.live_columns = 1;  // the tuple key, which no drop reaches
     std::uint32_t offset = kKeystoneWordSize;
     std::uint16_t next_bit = 0;
 

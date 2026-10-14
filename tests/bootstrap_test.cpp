@@ -32,7 +32,7 @@ TEST(BootstrapTest, SecondBootstrapLoadsExistingSuperBlockWithoutReRunningCatalo
     // bootstrap call did NOT wipe the catalog (Catalog::Bootstrap() would
     // fail outright trying to re-CreateAt the fixed pages anyway, but this
     // also proves data survives across the boundary).
-    // A relation's first column is its mandatory Keystone primary key
+    // A relation's first column is its mandatory Keystone tuple key
     // (heap-and-tuple.md section 4), so the table needs one to exist.
     catalog::Schema schema;
     catalog::SysColumnRow col{};

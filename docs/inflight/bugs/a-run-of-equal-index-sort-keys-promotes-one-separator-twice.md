@@ -6,8 +6,8 @@ nothing concurrent about it.
 
 ## What is wrong
 
-An index's sort key is `(key, pk)`, and it is **not unique**: an `UPDATE`
-that moves a covered column appends an entry with the same key and pk and
+An index's sort key is `(key, tuple key)`, and it is **not unique**: an `UPDATE`
+that moves a covered column appends an entry with the same key and tuple key and
 different covered bytes (`index_tree.hpp`, "Duplicates"). One hot row
 therefore builds a run of equal sort keys, and `InsertEntry` puts each new
 one at the front of the run.
@@ -23,7 +23,7 @@ is divided and its new sibling linked, with no separator in the parent.
 ## Smallest reproduction
 
 A tree-level cell on a 4-byte key with 8 covered bytes: insert
-`(key 42, pk 1, covered i)` for `i = 0, 1, ...`. The insert at `i = 610`
+`(key 42, tuple key 1, covered i)` for `i = 0, 1, ...`. The insert at `i = 610`
 fails `AlreadyExists`. **Since AT-S15** every later insert of sort key
 `(42, 1)` is refused `TxnConflict` after five attempts: it routes to the
 leaf whose new sibling now starts at that key, the coverage check sends it
@@ -40,7 +40,7 @@ reproduced. A rollback retires the row's slot and leaves the insert's index
 entries, because the rollback list has no index entry type
 (`txn/manager.hpp`). Since BD-S3 a rolled-back key is free (BD-R4, W12,
 `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md` §1.7), so an
-`INSERT` naming it again appends a new entry with the same `(key, pk)`. A
+`INSERT` naming it again appends a new entry with the same `(key, tuple key)`. A
 byte-identical entry is not stored twice (`FindExactDuplicate`), but one
 with different covered bytes - or one landing in a run that straddles a
 leaf - grows the run of equal sort keys exactly as an `UPDATE` does. A key
@@ -51,24 +51,24 @@ times reaches the refusal.
 `worktree-bh-purge-key` at `26766699`; not reproduced. `PURGE` retires a
 deleted row's slot keyless and leaves its index entries (BH-Q8 (a),
 `heap-and-tuple.md` §4.1c), so an `INSERT` naming the purged key again with
-a different covered value appends an equal `(key, pk)` entry, as the
+a different covered value appends an equal `(key, tuple key)` entry, as the
 rolled-back path does. About 600 rounds of delete, purge and re-insert
 reach the refusal.
 
 **While this stands, its `AlreadyExists` is the one exception to BD-R5**:
-a named key is refused because of its pk only as a duplicate or as
+a named key is refused because of its tuple key only as a duplicate or as
 exhausted, and this refusal is neither - the key is not bound, and the
 `AlreadyExists` comes from the index's separator, not from the leaf.
 
 ## What it costs
 
 A **refusal that does not clear**: every write that would append an entry
-for that `(key, pk)` fails - the row's `UPDATE`s that move a covered column
+for that `(key, tuple key)` fails - the row's `UPDATE`s that move a covered column
 - first `AlreadyExists`, then `TxnConflict`, which calls itself retryable.
 Reads are unaffected: separators remain lower bounds and a probe walks
 forward. A second effect of the same runs: `FindExactDuplicate` looks only
 in the leaf the descent lands on, so a byte-identical entry in the left
-half of a straddling run is stored twice (reads absorb it through the pk
+half of a straddling run is stored twice (reads absorb it through the tuple key
 dedup).
 
 **A third shape, found by reading at AT-S16's review** (on

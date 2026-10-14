@@ -56,7 +56,7 @@ StatusOr<PageId> LookupWaystonePage(storage::PageStore& store, PageId root, int 
                                     const InstanceKey& key) {
     if (Status s = CheckDepth(depth); !s.ok()) return s;
 
-    // No range check on the key, unlike the pk directory this replaces: a
+    // No range check on the key, unlike the tuple key directory this replaces: a
     // hash has no coverage to exceed, and the digits above 11*depth fold
     // (waystone_dir.hpp).
     PageId current = root;

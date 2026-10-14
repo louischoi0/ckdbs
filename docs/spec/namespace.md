@@ -58,7 +58,7 @@ enforces.
 
 Consequences, all of them load-bearing:
 
-- `(oid, pk)` stays unique without a namespace qualification - unique at
+- `(oid, tuple key)` stays unique without a namespace qualification - unique at
   any instant, and for life up to a `PURGE` that frees a key, which every
   advisory structure re-checks against the row now there
   (`heap-and-tuple.md` §4.1c) - so every advisory structure keyed by oid -

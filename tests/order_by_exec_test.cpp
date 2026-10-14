@@ -313,7 +313,7 @@ TEST_F(OrderByExecTest, TopNHoldsOffsetPlusLimitRowsNotTheRelation) {
 
 // ---- 6. The elision: the free order stays free ----------------------------
 
-TEST_F(OrderByExecTest, OrderByThePkBuildsNoSortAndPrintsNoSortLine) {
+TEST_F(OrderByExecTest, OrderByTheTupleKeyBuildsNoSortAndPrintsNoSortLine) {
     Run("CREATE TABLE t (id int64, v varchar)");
     for (const char* v : {"a", "b", "c"}) {
         Run(std::string("INSERT INTO t VALUES ('") + v + "')");

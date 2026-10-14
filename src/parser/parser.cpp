@@ -1632,7 +1632,7 @@ StatusOr<ColumnDef> Parser::ParseColumnDef() {
         // reference the engine cannot store.
         if (lexer_.Peek().type == TokenType::kLParen) {
             return Status::Unsupported(
-                "a foreign key references the parent's primary key and no other column, so "
+                "a foreign key references the parent's tuple key and no other column, so "
                 "REFERENCES takes no column list (byte " +
                 std::to_string(lexer_.Peek().byte_offset) + ")");
         }
@@ -1787,7 +1787,7 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
             return Status::Unsupported(
                 "the ASSIGNED key mode no longer exists (byte " +
                 std::to_string(word.byte_offset) +
-                ") - every relation takes a caller-supplied primary key or issues one when "
+                ") - every relation takes a caller-supplied tuple key or issues one when "
                 "INSERT omits it, so there is nothing for this word to select");
         } else {
             if (key_word_given) {
@@ -2477,8 +2477,8 @@ StatusOr<RelationRef> Parser::ParseRelationRef() {
     //
     // Why it stays out, since the error should not have to explain it: a
     // derived table's result must become a relation with a schema,
-    // materialized somewhere and probed by something other than a pk.
-    // That breaks pk-direct probing into the next step, which is the
+    // materialized somewhere and probed by something other than a tuple key.
+    // That breaks tuple-key-direct probing into the next step, which is the
     // shape of the whole execution model, and puts a temporary relation
     // in the storage layer.
     if (lexer_.Peek().type == TokenType::kLParen) {
@@ -3197,7 +3197,7 @@ StatusOr<PurgeStmt> Parser::ParsePurge() {
     // `PURGE FROM t` would be a sweep of the relation, which nobody asked
     // for and a later word could add - so it is declined, not wrong. Which
     // conjuncts the statement admits is the dispatcher's question, asked of
-    // the relation's pk column; the grammar is `DELETE`'s, so the parse
+    // the relation's tuple key column; the grammar is `DELETE`'s, so the parse
     // gives every byte a refusal there needs.
     PurgeStmt stmt;
     if (Status s = ExpectKeyword("FROM"); !s.ok()) return s;
@@ -3208,7 +3208,7 @@ StatusOr<PurgeStmt> Parser::ParsePurge() {
     const Token& peek = lexer_.Peek();
     stmt.where_byte_offset = peek.byte_offset;
     if (peek.type != TokenType::kIdent || !IEquals(peek.text, "WHERE")) {
-        return Status::NotImplemented("PURGE needs a WHERE naming the primary key; purging every "
+        return Status::NotImplemented("PURGE needs a WHERE naming the tuple key; purging every "
                                       "deleted key of a relation is not implemented (byte " +
                                       std::to_string(peek.byte_offset) + ")");
     }

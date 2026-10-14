@@ -137,7 +137,7 @@ def load_worker(port, session, stop_at, out_q):
                 retries += 1  # documented as writing nothing; the same rows go again
                 retried = True
                 continue
-            if retried and reply.startswith("ERR duplicate primary key"):
+            if retried and reply.startswith("ERR duplicate tuple key"):
                 dup_after_retry.append(reply)
                 retried = False
                 k += ROWS_PER_INSERT

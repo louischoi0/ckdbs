@@ -185,7 +185,7 @@ public:
         // The identity the compensation will re-read - the Keystone word
         // of the row's payload, never a `.oid` member (DT5's rule, which
         // not every catalog row has).
-        std::uint64_t pk = 0;
+        std::uint64_t tuple_key = 0;
     };
     using DdlUndoHook = std::function<Status(const DdlUndoEvent&)>;
 
@@ -410,7 +410,7 @@ public:
     // the requested clustered type, and inserts the corresponding
     // sys.objects/sys.tables/sys.columns rows.
     //
-    // No key-mode parameter: every relation takes a supplied pk or issues
+    // No key-mode parameter: every relation takes a supplied tuple key or issues
     // one per row (heap-and-tuple.md §4.1; the mode went 2026-08-25).
     // `trx_id` stamps the `sys.objects` / `sys.tables` / `sys.columns`
     // rows this writes (DT2). `kBootstrapXid` is the default and the
@@ -576,7 +576,7 @@ public:
     // overwrite is `trx_id`'s, its prior image handed to the DDL undo hook
     // and to `changed` (when non-null) so a rollback restores it, as
     // `DropTable`'s retype is. The lookup and the write are one hold of
-    // `sys.columns`' root page (CT7). The pk is refused `InvalidArgument`;
+    // `sys.columns`' root page (CT7). The tuple key is refused `InvalidArgument`;
     // an absent or already-dropped name is `NotFound`. What depends on the
     // column is the caller's to refuse first, under the relation `X`.
     Status DropColumn(Oid table_oid, std::string_view name, std::uint64_t trx_id,
@@ -688,7 +688,7 @@ public:
     StatusOr<const TableAccess*> InitTableAccess(Oid oid);
 
     // Issues the next Keystone id for `table_oid` and persists the bumped
-    // sequence. This is what an `INSERT` that **omits** the pk calls, on
+    // sequence. This is what an `INSERT` that **omits** the tuple key calls, on
     // every relation - there is no longer a key mode that makes it illegal
     // (section 4.1). Ids are unique by construction and rise above every id
     // the relation has ever placed, since `AdmitExplicitRowId` moves the same
@@ -707,7 +707,7 @@ public:
     // spreading off.
     StatusOr<std::uint64_t> AllocateRowId(Oid table_oid);
 
-    // What an `INSERT` that **supplies** the pk calls (docs/spec/heap-and-tuple.md
+    // What an `INSERT` that **supplies** the tuple key calls (docs/spec/heap-and-tuple.md
     // section 4.1): admits a caller-named id and moves the relation's
     // high-water mark past it. Every relation may be inserted into either
     // way; which of the two functions runs is a property of the row, not of
@@ -966,14 +966,14 @@ public:
 
     // ---- sys.cabins (docs/spec/cabin.md §10) -----------------------------
 
-    // Declares a Cabin on one non-pk column and returns its `cabin_id`.
+    // Declares a Cabin on one non-tuple-key column and returns its `cabin_id`.
     //
     // What this writes is that the Cabin **exists**. Nothing is observed by
     // creating one: the read path's miss branch is what fills it (spec §4),
     // so a fresh Cabin costs a catalog row and changes no answer until
     // traffic teaches it something.
     //
-    // Fails with InvalidArgument for column 0 - the pk's Cabin is the
+    // Fails with InvalidArgument for column 0 - the tuple key's Cabin is the
     // clustered tree itself (§2), which is not a refusal a caller can talk
     // its way out of - and for a `col_pos` past the relation's schema;
     // NotFound for an unknown relation; AlreadyExists for a second Cabin on
@@ -1136,9 +1136,9 @@ public:
     //
     // Refuses, each naming the reason: a name already in use, an empty or
     // over-cap column list (a cap **refuses**, never truncates - spec §11),
-    // a duplicate or out-of-range column position, an index on the primary
+    // a duplicate or out-of-range column position, an index on the tuple
     // key (the clustered tree already is one), a heap-clustered relation
-    // (spec IX3 - there is no pk descent to resolve an entry through), and
+    // (spec IX3 - there is no tuple key descent to resolve an entry through), and
     // `kIndexFlagUnique` (spec IX11).
     //
     // It does **not** build the tree or check the key columns' types: the

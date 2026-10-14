@@ -86,7 +86,7 @@ catalog::Oid Relation(TwoCoreRig& rig, const std::string& name) {
     return oid.ok() ? oid.value() : 0;
 }
 
-// An `INSERT`'s values after the pk: the one column, `v`.
+// An `INSERT`'s values after the tuple key: the one column, `v`.
 std::vector<parser::AstValue> Row(std::int64_t v) {
     std::vector<parser::AstValue> row(1);
     row[0].type = parser::ValueType::kInt;

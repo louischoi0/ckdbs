@@ -244,7 +244,7 @@ TEST_F(CommandDispatcherTest, TheTablesViewReportsTheHeaderTheOldFindTableDid) {
     EXPECT_EQ(shown.Find("name", "tables", "clustered_type"), "HEAP");
 }
 
-TEST_F(CommandDispatcherTest, DescribeListsColumnsAndMarksThePrimaryKey) {
+TEST_F(CommandDispatcherTest, DescribeListsColumnsAndMarksTheTupleKey) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar)").response.substr(0, 7),
               "CREATED");
@@ -255,15 +255,15 @@ TEST_F(CommandDispatcherTest, DescribeListsColumnsAndMarksThePrimaryKey) {
     // The declared type name round-trips back out of sys.types.
     EXPECT_EQ(shown.Find("name", "id", "type"), "int32") << reply;
     EXPECT_EQ(shown.Find("name", "name", "type"), "varchar") << reply;
-    // Column 0 is the Keystone pk; nothing else is.
+    // Column 0 is the Keystone tuple key; nothing else is.
     EXPECT_EQ(shown.Find("name", "id", "notnull"), "1") << reply;
-    EXPECT_EQ(shown.Find("name", "id", "pk"), "1") << reply;
-    EXPECT_EQ(shown.Find("name", "name", "pk"), "0") << reply;
+    EXPECT_EQ(shown.Find("name", "id", "tuple_key"), "1") << reply;
+    EXPECT_EQ(shown.Find("name", "name", "tuple_key"), "0") << reply;
     // One "\n"-escaped line per column, and never a raw newline byte.
     EXPECT_EQ(reply.find('\n'), std::string::npos);
 }
 
-// ---- The pk in DESCRIBE (heap-and-tuple.md §4.1) --------------------------
+// ---- The tuple key in DESCRIBE (heap-and-tuple.md §4.1) --------------------------
 //
 // `key_mode=` was a declaration and is gone with the mode, and `key_order=`
 // with `kUnordered` (BB-Q11 (a)); neither is a column of `sys.columns` or
@@ -277,7 +277,7 @@ TEST_F(CommandDispatcherTest, DescribeCarriesNoKeyOrderField) {
     const std::string reply = d.Dispatch("DESCRIBE acct").response;
     const auto shown = testing_view::ReadViewText(reply);
     EXPECT_EQ(reply.find("key_order"), std::string::npos) << reply;
-    EXPECT_EQ(shown.Find("name", "id", "pk"), "1") << reply;
+    EXPECT_EQ(shown.Find("name", "id", "tuple_key"), "1") << reply;
     // The storage, the DDL-only fact, is the relation's row.
     const std::string tables =
         d.Dispatch("SELECT name, clustered_type FROM sys.tables WHERE name = 'acct'").response;
@@ -464,20 +464,20 @@ TEST_F(CommandDispatcherTest, CreateTableCreatesNewTable) {
     EXPECT_NE(out.response.find("oid="), std::string::npos);
 
     const auto found = testing_view::ReadViewText(d.Dispatch("DESCRIBE accounts").response);
-    EXPECT_EQ(found.Find("name", "id", "pk"), "1");
+    EXPECT_EQ(found.Find("name", "id", "tuple_key"), "1");
 }
 
 // The bare, pre-parser form asks for a zero-column table, and every
-// relation's first column is its mandatory Keystone pk - so there is no
+// relation's first column is its mandatory Keystone tuple key - so there is no
 // such table to create.
-TEST_F(CommandDispatcherTest, BareCreateTableIsRefusedForHavingNoPrimaryKey) {
+TEST_F(CommandDispatcherTest, BareCreateTableIsRefusedForHavingNoTupleKey) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto out = d.Dispatch("CREATE TABLE accounts");
     EXPECT_EQ(out.response.substr(0, 4), "ERR ");
     EXPECT_NE(out.response.find("no columns"), std::string::npos) << out.response;
 }
 
-TEST_F(CommandDispatcherTest, CreateTableRejectsANonIntegerPrimaryKey) {
+TEST_F(CommandDispatcherTest, CreateTableRejectsANonIntegerTupleKey) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto out = d.Dispatch("CREATE TABLE bad (name varchar, id int64)");
     EXPECT_EQ(out.response.substr(0, 4), "ERR ");
@@ -640,9 +640,9 @@ TEST_F(CommandDispatcherTest, CreateTableIsIdempotentWhenAlreadyExists) {
     EXPECT_EQ(count, 1u);
 }
 
-// ---- Keystone primary key: system-generated, unique, autoincrement ------
+// ---- Keystone tuple key: system-generated, unique, autoincrement ------
 //
-// The pk is not a constraint checked after the fact - it is the id the
+// The tuple key is not a constraint checked after the fact - it is the id the
 // engine issues (heap-and-tuple.md section 4, CLAUDE.md invariant 10), so
 // these assert that the caller cannot supply it, cannot collide with it,
 // and cannot change it.
@@ -657,13 +657,13 @@ TEST_F(CommandDispatcherTest, InsertAssignsAscendingIdsWithoutTheCallerSupplying
     EXPECT_NE(first.response.find("id=1"), std::string::npos) << first.response;
     EXPECT_NE(second.response.find("id=2"), std::string::npos) << second.response;
 
-    // And the issued ids are what SELECT reads back for the pk column.
+    // And the issued ids are what SELECT reads back for the tuple key column.
     auto rows = d.Dispatch("SELECT * FROM acct");
     EXPECT_NE(rows.response.find("1,alice"), std::string::npos) << rows.response;
     EXPECT_NE(rows.response.find("2,bob"), std::string::npos) << rows.response;
 }
 
-TEST_F(CommandDispatcherTest, SupplyingThePrimaryKeyOnInsertIsAdmittedAndMovesTheMark) {
+TEST_F(CommandDispatcherTest, SupplyingTheTupleKeyOnInsertIsAdmittedAndMovesTheMark) {
     // The inverse of what this test asserted until 2026-08-25 (§4.1). The
     // mark is the part worth keeping: a named key moves it, so the next
     // issued id clears the named one instead of colliding with it.
@@ -711,7 +711,7 @@ TEST_F(CommandDispatcherTest, TheIdSequenceDoesNotRestartAfterReopeningTheCatalo
     EXPECT_NE(out.response.find("id=2"), std::string::npos) << out.response;
 }
 
-TEST_F(CommandDispatcherTest, UpdatingThePrimaryKeyIsRefused) {
+TEST_F(CommandDispatcherTest, UpdatingTheTupleKeyIsRefused) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar)").response.substr(0, 7),
               "CREATED");
@@ -723,7 +723,7 @@ TEST_F(CommandDispatcherTest, UpdatingThePrimaryKeyIsRefused) {
     // K-M3: the refusal is `Unsupported`, so it carries a byte position -
     // and since 2026-08-31 it reaches the wire under its own token rather
     // than bare. `UNSUPPORTED`, not `NOT_IMPLEMENTED`, is the assertion
-    // that matters here: a pk UPDATE is refused by invariant 11, so no
+    // that matters here: a tuple key UPDATE is refused by invariant 11, so no
     // later release lifts it and a client must be told that rather than
     // left to feature-detect forever. The bit stays one wide - retryable=0,
     // spelled rather than implied by omission.
@@ -751,7 +751,7 @@ TEST_F(CommandDispatcherTest, TheTwoRefusalTokensAreDistinctAndRoundTrip) {
         << not_built.response;
     EXPECT_NE(not_built.response.find("at byte "), std::string::npos) << not_built.response;
 
-    // A pk UPDATE is invariant 11, so it is the "never" half. Same
+    // A tuple key UPDATE is invariant 11, so it is the "never" half. Same
     // statement class, same `ERR ` prefix, different answer to the only
     // question a client library asks about a refused form.
     const auto forbidden = d.Dispatch("UPDATE t SET id = 99");
@@ -1048,9 +1048,9 @@ TEST_F(CommandDispatcherTest, ACatalogViewsBetweenTakesBothBounds) {
     EXPECT_EQ(empty, "name") << empty;
 }
 
-TEST_F(CommandDispatcherTest, AWriteWhosePkPredicateIsBetweenTouchesEveryRowInTheRange) {
+TEST_F(CommandDispatcherTest, AWriteWhoseTupleKeyPredicateIsBetweenTouchesEveryRowInTheRange) {
     // **The same `op`-default hazard as the test above, in a second
-    // consumer.** `PkEqualityTarget` answers "is this a bare pk point
+    // consumer.** `TupleKeyEqualityTarget` answers "is this a bare tuple key point
     // lookup" from the raw `Condition`, and it read `op` alone - which a
     // `kBetween` leaves at `kEq` while `val` holds the *low bound*. So
     // `WHERE id BETWEEN 2 AND 5` reported itself as `WHERE id = 2`, and
@@ -1080,7 +1080,7 @@ TEST_F(CommandDispatcherTest, AWriteWhosePkPredicateIsBetweenTouchesEveryRowInTh
     EXPECT_EQ(d.Dispatch("DELETE FROM b WHERE id BETWEEN 2 AND 5").response, "DELETED 4");
     EXPECT_EQ(d.Dispatch("SELECT id FROM b").response, "id\\n1\\n6");
 
-    // The control the fix must not cost: a real pk equality still takes
+    // The control the fix must not cost: a real tuple key equality still takes
     // the point path and still answers one row.
     EXPECT_EQ(d.Dispatch("UPDATE b SET v = 7 WHERE id = 1").response, "UPDATED 1");
     EXPECT_EQ(d.Dispatch("SELECT v FROM b WHERE id = 1").response, "v\\n7");

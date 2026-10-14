@@ -63,7 +63,7 @@ enum class FkVerdict : std::uint8_t {
     kBusy,
 };
 
-// **The forward check** (§2): is there a row with Keystone id `parent_pk` in
+// **The forward check** (§2): is there a row with Keystone id `parent_tuple_key` in
 // `parent`, at latest state?
 //
 // Descends on a btree parent, which `catalog::CheckForeignKeyDeclaration`
@@ -80,19 +80,19 @@ enum class FkVerdict : std::uint8_t {
 // paths that cannot wait keep F3's retryable refusal.
 StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
                                        const catalog::TableAccess& parent,
-                                       std::uint64_t parent_pk,
+                                       std::uint64_t parent_tuple_key,
                                        const txn::ReadView& check_view, Budget* budget,
                                        std::uint64_t* busy_trx = nullptr);
 
 // ---- The hoisted forward check's held verdicts (AH-T1) -------------------
 //
 // `docs/spec/foreign-keys.md` §2a. Nothing can wait inside an open
-// `WriteScope`, so the *asking* happens at the dispatch fork: every parent pk
+// `WriteScope`, so the *asking* happens at the dispatch fork: every parent tuple key
 // a statement needs is resolved before any row work, and the per-row check
 // answers from what was resolved.
 //
 // This is that "what was resolved". One entry per **distinct (parent
-// relation, parent pk)**, which is AH-R2's deduplication and the whole of
+// relation, parent tuple key)**, which is AH-R2's deduplication and the whole of
 // why a thousand-row insert against one parent costs one descent rather
 // than a thousand.
 //
@@ -101,17 +101,17 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
 // parent-side intent retired (AT-S5f); their history is at cf889b63.
 class FkParentVerdicts {
 public:
-    // The verdict for a parent pk this statement needs, or nullptr when it
+    // The verdict for a parent tuple key this statement needs, or nullptr when it
     // was never resolved.
     //
     // **A miss is a caller bug, not a fall-back.** AH-R3: a statement whose
     // parent set could not be enumerated is refused at the fork rather than
-    // run against a partial set, so by the time a row is written every pk
+    // run against a partial set, so by the time a row is written every tuple key
     // it names has an entry. Callers report a miss; they must never quietly
     // check it themselves, which would put a descent back inside the write
     // scope and make the crossing unreachable again.
-    const FkVerdict* Find(catalog::Oid parent_rel, std::uint64_t parent_pk) const noexcept {
-        auto at = entries_.find(Key{parent_rel, parent_pk});
+    const FkVerdict* Find(catalog::Oid parent_rel, std::uint64_t parent_tuple_key) const noexcept {
+        auto at = entries_.find(Key{parent_rel, parent_tuple_key});
         return at == entries_.end() ? nullptr : &at->second;
     }
 
@@ -119,16 +119,16 @@ public:
     // extraction pass deduplicates, and this is the second half of that: a
     // statement naming one parent from twenty rows resolves it once.
     // Returns whether the key was new, so a caller can count descents.
-    bool Put(catalog::Oid parent_rel, std::uint64_t parent_pk, FkVerdict verdict) {
-        return entries_.emplace(Key{parent_rel, parent_pk}, verdict).second;
+    bool Put(catalog::Oid parent_rel, std::uint64_t parent_tuple_key, FkVerdict verdict) {
+        return entries_.emplace(Key{parent_rel, parent_tuple_key}, verdict).second;
     }
 
     std::size_t size() const noexcept { return entries_.size(); }
     bool empty() const noexcept { return entries_.empty(); }
 
-    // AK-S3: whether the pks this holds were **collected** by a read-only
+    // AK-S3: whether the tuple keys this holds were **collected** by a read-only
     // pass over the relation rather than named by the statement. It changes
-    // what a miss in the per-row check means: for a named pk a miss is the
+    // what a miss in the per-row check means: for a named tuple key a miss is the
     // caller bug above; for a collected set it is a row that became visible
     // after the pass, which is retryable and never a fall-through.
     void set_collected() noexcept { collected_ = true; }
@@ -172,10 +172,10 @@ struct FkReverseOutcome {
     // transaction writing it (AY-Q8): what a parent `DELETE` waits for,
     // since that writer holds no `S` on the parent to be refused by.
     std::uint64_t busy_trx = 0;
-    std::uint64_t busy_pk = 0;
+    std::uint64_t busy_tuple_key = 0;
 };
 
-// **The reverse check** (§3): does any row of `child` reference `parent_pk`
+// **The reverse check** (§3): does any row of `child` reference `parent_tuple_key`
 // through column `child_column_no`, at latest state?
 //
 // Walks the child relation and **stops at the first match** (V03's stoppable
@@ -187,14 +187,14 @@ struct FkReverseOutcome {
 // advisory structure can witness.
 //
 // **The walk reads a Cabin and never fills one** (a correction of F6): the
-// value it would record is a pk being deleted, dead by construction, and
+// value it would record is a tuple key being deleted, dead by construction, and
 // would spend `cabin_max_values`' bounded budget that live query values need.
 // The values that make this hit arrive from queries that filter children by
 // parent id.
 StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                                                   const catalog::TableAccess& child,
                                                   std::uint16_t child_column_no,
-                                                  std::uint64_t parent_pk,
+                                                  std::uint64_t parent_tuple_key,
                                                   const txn::ReadView& check_view,
                                                   const FkReverseOptions& options,
                                                   Budget* budget);

@@ -107,7 +107,7 @@ TEST(WaystoneDirIndexTest, DigitsAreBase2048MostSignificantFirst) {
 }
 
 TEST(WaystoneDirIndexTest, BitsAboveTheDepthFoldRatherThanFail) {
-    // The pk directory refused a key past its coverage; a hash has no
+    // The tuple key directory refused a key past its coverage; a hash has no
     // coverage to exceed, so the high bits are simply not consumed and two
     // keys agreeing on the low ones share an address. That is the
     // collision the waystone header exists to catch.

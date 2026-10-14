@@ -94,9 +94,9 @@ protected:
     // the CREATE-time builder and the enforcer do: id first, then the page, then
     // the directory.
     std::uint16_t Write(BoundCabin& live, const std::string& key, std::int64_t value,
-                        std::uint64_t pk) {
+                        std::uint64_t tuple_key) {
         BoundCabinEntry entry;
-        entry.pk = pk;
+        entry.tuple_key = tuple_key;
         entry.flags = kEntryHintValid;
         entry.value = value;
         entry.group_id = live.EnsureGroupId(key);
@@ -312,14 +312,14 @@ TEST_F(AssertionRecoverTest, AGroupWhoseEntriesSpanTheCheckpointReSumsCorrectly)
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
 
     // Before the checkpoint: two entries whose contribution the snapshot carries.
-    Write(live, Key("x"), 5, /*pk=*/1);
-    Write(live, Key("x"), 7, /*pk=*/2);
+    Write(live, Key("x"), 5, /*tuple_key=*/1);
+    Write(live, Key("x"), 7, /*tuple_key=*/2);
     const wal::Lsn checkpoint_lsn = Checkpoint(live);
 
     // After it: a third entry in the same group, whose contribution has to come
     // from the fold instead.
     const std::uint32_t gx = live.Find(Key("x"))->group_id;
-    const std::uint16_t after = Write(live, Key("x"), 11, /*pk=*/3);
+    const std::uint16_t after = Write(live, Key("x"), 11, /*tuple_key=*/3);
     LogEntry(after, Key("x"), gx);
 
     BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1000);
@@ -781,13 +781,13 @@ TEST_F(AssertionRecoverTest, ASecondCheckpointsSnapshotInRangeDoesNotFailThePass
     // duplicate-id refusal, and the whole pass then fails - which leaves every
     // assertion unenforcing after an ordinary crash.
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
-    Write(live, Key("x"), 5, /*pk=*/1);
+    Write(live, Key("x"), 5, /*tuple_key=*/1);
     const wal::Lsn first = Checkpoint(live);
 
     // An entry between the two checkpoints, so the fold has work whose result
     // proves the *first* snapshot is still the base.
     const std::uint32_t gx = live.Find(Key("x"))->group_id;
-    const std::uint16_t after = Write(live, Key("x"), 7, /*pk=*/2);
+    const std::uint16_t after = Write(live, Key("x"), 7, /*tuple_key=*/2);
     LogEntry(after, Key("x"), gx);
     Checkpoint(live);  // the second one, whose anchor the crash never published
 
@@ -809,7 +809,7 @@ TEST_F(AssertionRecoverTest, AChunkedSnapshotRelinksEachEntryExactlyOnce) {
     // already restored, so running it per chunk attaches their entries again -
     // and a duplicated pair is exactly what §7's VerifyAgainstEntries catches.
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
-    Write(live, Key("x"), 5, /*pk=*/1);  // group id 1, so it lands in chunk one
+    Write(live, Key("x"), 5, /*tuple_key=*/1);  // group id 1, so it lands in chunk one
     FillToChunk(live);
     const wal::Lsn checkpoint_lsn = Checkpoint(live);
     ASSERT_GT(SnapshotRecords(checkpoint_lsn), 1u) << "one chunk cannot double-attach anything";
@@ -1062,11 +1062,11 @@ TEST_F(AssertionRecoverTest, LinkageTheWalkAndTheFoldBothAttachedIsReconciled) {
     // VerifyAgainstEntries double-counts that entry and answers Corruption on a
     // directory whose aggregate is correct.
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
-    Write(live, Key("x"), 5, /*pk=*/1);
+    Write(live, Key("x"), 5, /*tuple_key=*/1);
     const wal::Lsn checkpoint_lsn = Checkpoint(live);
 
     const std::uint32_t gx = live.Find(Key("x"))->group_id;
-    const std::uint16_t after = Write(live, Key("x"), 7, /*pk=*/2);
+    const std::uint16_t after = Write(live, Key("x"), 7, /*tuple_key=*/2);
     LogEntry(after, Key("x"), gx);
 
     BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1000);
@@ -1105,12 +1105,12 @@ TEST_F(AssertionRecoverTest, LinkageTheWalkAndTheFoldBothAttachedIsReconciled) {
 // Corruption on a directory that was correct.
 TEST_F(AssertionRecoverTest, AnAbortBeforeTheCheckpointLeavesNoEntryForTheWalkToRelink) {
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
-    Write(live, Key("x"), 5, /*pk=*/1);
+    Write(live, Key("x"), 5, /*tuple_key=*/1);
 
     // The reservation that aborts. The live abort path: the directory drops the
     // linkage, the page keeps the bytes and takes the mark
     // (`AssertionEnforcer::AbortTxn`).
-    const std::uint16_t rolled_back = Write(live, Key("x"), 7, /*pk=*/2);
+    const std::uint16_t rolled_back = Write(live, Key("x"), 7, /*tuple_key=*/2);
     ASSERT_TRUE(live.Unapply(Key("x"), 7, kCabinPage, rolled_back).ok());
     MarkOrphaned(rolled_back);
 
@@ -1159,8 +1159,8 @@ TEST_F(AssertionRecoverTest, AnAbortBeforeTheCheckpointLeavesNoEntryForTheWalkTo
 // after an ordinary crash is the failure RC07 exists to prevent.
 TEST_F(AssertionRecoverTest, AnAbortAfterTheCheckpointStillCompensatesWithTheMarkOnDisk) {
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
-    Write(live, Key("x"), 5, /*pk=*/1);
-    const std::uint16_t rolled_back = Write(live, Key("x"), 7, /*pk=*/2);
+    Write(live, Key("x"), 5, /*tuple_key=*/1);
+    const std::uint16_t rolled_back = Write(live, Key("x"), 7, /*tuple_key=*/2);
 
     // The checkpoint sees the reservation live: its snapshot carries 12 over 2.
     const wal::Lsn checkpoint_lsn = Checkpoint(live);

@@ -100,7 +100,7 @@ protected:
         exec::TouchedTuple t;
         if (!read.value().empty()) {
             t.rel_oid = read.value()[0].rel_oid;
-            t.pk = read.value()[0].pk;
+            t.tuple_key = read.value()[0].tuple_key;
             t.page_id = read.value()[0].page_id;
             t.slot = read.value()[0].slot;
             t.step_id = read.value()[0].step_id;
@@ -137,7 +137,7 @@ TEST_F(WaystoneReplayTest, AReplayedStepReturnsExactlyWhatTheDescentReturned) {
 }
 
 TEST_F(WaystoneReplayTest, ReplayTurnsAHeapChainScanIntoOneRead) {
-    // The case spec section 7 calls large: a heap relation has no pk index,
+    // The case spec section 7 calls large: a heap relation has no tuple key index,
     // so the authoritative path for `WHERE id = n` is a full chain scan.
     const std::string sql = "SELECT * FROM h WHERE id = 4";
     const std::string replayed = RunUntilRecorded(sql);
@@ -217,7 +217,7 @@ TEST_F(WaystoneReplayTest, AnEntryRecordedAgainstAnotherRelationIsDroppedAtBuild
 // ---- Rule 0, the one storage cannot supply --------------------------------
 
 TEST_F(WaystoneReplayTest, AnEntryForADifferentKeyIsNeverConsulted) {
-    // Rule 0 is the lookup key here: the index is keyed on (step_id, pk) and
+    // Rule 0 is the lookup key here: the index is keyed on (step_id, tuple key) and
     // the caller looks up by the key its step just derived. An entry
     // recorded for another key is not "checked and rejected", it is not
     // found - which is the point, since a check can be forgotten and a key
@@ -226,7 +226,7 @@ TEST_F(WaystoneReplayTest, AnEntryForADifferentKeyIsNeverConsulted) {
     const std::string correct = RunUntilRecorded(sql);
 
     exec::TouchedTuple entry = EntryOf(sql);
-    entry.pk = 5;  // a real row, but not this statement's
+    entry.tuple_key = 5;  // a real row, but not this statement's
     PoisonTrail(sql, entry);
 
     EXPECT_EQ(Run(sql), correct);
@@ -249,7 +249,7 @@ TEST_F(WaystoneReplayTest, ADrivingEntryForAnotherKeyIsNeverFoundEvenWhereItIsVa
     RunUntilRecorded(other);
 
     const exec::TouchedTuple entry = EntryOf(other);  // row 5, where row 5 is
-    ASSERT_EQ(entry.pk, 5u);
+    ASSERT_EQ(entry.tuple_key, 5u);
     ASSERT_EQ(entry.step_id, EntryOf(sql).step_id) << "both are the driving step";
     PoisonTrail(sql, entry);
 
@@ -275,7 +275,7 @@ TEST_F(WaystoneReplayTest, AJoinReplaysEveryKeyedStepAndReturnsTheSameRows) {
                   "INSERTED");
     }
 
-    // Lookup on t, then a pk probe into u: both steps keyed, so both are
+    // Lookup on t, then a tuple key probe into u: both steps keyed, so both are
     // replayable and the trail spans two relations.
     const std::string sql =
         "SELECT a.v, b.w FROM t AS a JOIN u AS b ON a.id = b.id WHERE a.id = 3";
@@ -395,7 +395,7 @@ TEST_F(WaystoneReplayTest, AVersionOneRowIsNeverFoundAndTheStatementRecordsAgain
 // ---- What must never be replayed -----------------------------------------
 
 TEST_F(WaystoneReplayTest, AScanStepIsNeverServedFromATrail) {
-    // Invariant 9: a trail may replace a lookup, never a search. A non-pk
+    // Invariant 9: a trail may replace a lookup, never a search. A non-tuple-key
     // predicate is a search however often it repeats, and this is the
     // instrumented half of spec section 11-4 - the *work not done* is the
     // only evidence, since a wrongly skipped search returns plausible rows.
@@ -416,7 +416,7 @@ TEST_F(WaystoneReplayTest, AScanStepIsNeverServedFromATrail) {
     // must not use one: TrailReplay::Build drops entries for steps that are
     // not trail-replayable.
     stats::WaystoneEntry fake{};
-    fake.pk = 3;
+    fake.tuple_key = 3;
     fake.rel_oid = chain.value().steps[0].rel_oid;
     fake.page_id = 129;
     fake.slot = 0;
@@ -427,9 +427,9 @@ TEST_F(WaystoneReplayTest, AScanStepIsNeverServedFromATrail) {
     EXPECT_TRUE(replay.empty()) << "a Scan step's entry must never be indexed";
 }
 
-// ---- BK-S1: the packed key keeps the pk's upper eight bits ---------------
+// ---- BK-S1: the packed key keeps the tuple key's upper eight bits ---------------
 //
-// `TrailReplay` packs `(step_id, pk)` into one uint64 (BK-R3,
+// `TrailReplay` packs `(step_id, tuple key)` into one uint64 (BK-R3,
 // `instructions/v3.0.0/workorder-bk-keystone-48.md`). Under a 48-bit id the
 // pair fits exactly, and the two ways of getting the packing wrong are each
 // silent - a miss, bounded by the verifier, never a wrong row - which is why
@@ -442,11 +442,11 @@ StatusOr<StepChain> ChainOf(catalog::Catalog& catalog, const std::string& sql) {
     return Compile(catalog, std::get<parser::SelectStmt>(parsed.value()));
 }
 
-// A valid entry for `pk` at `step`, recorded at `(page, slot)`.
-stats::WaystoneEntry ValidEntry(std::uint64_t rel_oid, std::uint16_t step, std::uint64_t pk,
+// A valid entry for `tuple_key` at `step`, recorded at `(page, slot)`.
+stats::WaystoneEntry ValidEntry(std::uint64_t rel_oid, std::uint16_t step, std::uint64_t tuple_key,
                                 PageId page, std::uint16_t slot) {
     stats::WaystoneEntry e{};
-    e.pk = pk;
+    e.tuple_key = tuple_key;
     e.rel_oid = rel_oid;
     e.page_id = page;
     e.slot = slot;
@@ -455,23 +455,23 @@ stats::WaystoneEntry ValidEntry(std::uint64_t rel_oid, std::uint16_t step, std::
     return e;
 }
 
-TEST_F(WaystoneReplayTest, ATrailEntryKeepsTheUpperEightBitsOfItsPk) {
-    // Two pks that differ only in bits 40-47 are two rows, each found at its
+TEST_F(WaystoneReplayTest, ATrailEntryKeepsTheUpperEightBitsOfItsTupleKey) {
+    // Two tuple keys that differ only in bits 40-47 are two rows, each found at its
     // own location. A mask left at 40 bits folds them into one key, and the
     // second entry built overwrites the first.
     auto chain = ChainOf(boot_->catalog, "SELECT * FROM t WHERE id = 10");
     ASSERT_TRUE(chain.ok()) << chain.status().message();
     const std::uint64_t rel = chain.value().steps[0].rel_oid;
-    const std::uint64_t low_pk = 10;
-    const std::uint64_t high_pk = low_pk + (std::uint64_t{1} << 40);
-    const stats::WaystoneEntry entries[] = {ValidEntry(rel, 0, low_pk, 129, 1),
-                                            ValidEntry(rel, 0, high_pk, 130, 2)};
+    const std::uint64_t low_tuple_key = 10;
+    const std::uint64_t high_tuple_key = low_tuple_key + (std::uint64_t{1} << 40);
+    const stats::WaystoneEntry entries[] = {ValidEntry(rel, 0, low_tuple_key, 129, 1),
+                                            ValidEntry(rel, 0, high_tuple_key, 130, 2)};
 
     TrailReplay replay;
     replay.Build(chain.value(), entries);
-    ASSERT_EQ(replay.size(), 2u) << "two pks are two keys";
-    const TrailLocation* at_low = replay.Find(0, low_pk);
-    const TrailLocation* at_high = replay.Find(0, high_pk);
+    ASSERT_EQ(replay.size(), 2u) << "two tuple keys are two keys";
+    const TrailLocation* at_low = replay.Find(0, low_tuple_key);
+    const TrailLocation* at_high = replay.Find(0, high_tuple_key);
     ASSERT_NE(at_low, nullptr);
     ASSERT_NE(at_high, nullptr);
     EXPECT_EQ(at_low->page_id, 129u);
@@ -482,10 +482,10 @@ TEST_F(WaystoneReplayTest, ATrailEntryKeepsTheUpperEightBitsOfItsPk) {
     // BK-R3's guard: a step id above the entry format's 16 bits is a miss,
     // today and after. A `Find` that narrowed its parameter instead would
     // read step 65,536 as step 0 and answer with step 0's entry.
-    EXPECT_EQ(replay.Find(0x10000, low_pk), nullptr);
+    EXPECT_EQ(replay.Find(0x10000, low_tuple_key), nullptr);
 }
 
-TEST_F(WaystoneReplayTest, AStepIdAndAPksUpperBitsNeverShareAKey) {
+TEST_F(WaystoneReplayTest, AStepIdAndATupleKeysUpperBitsNeverShareAKey) {
     // The half move - the mask widened to 48 bits with the shift left at 40
     // - packs `(1, k)` and `(0, k + 2^40)` to one key. Green at 5979b5e7
     // (both at 40, so the keys differ) and after BK-S2 (both at 48); it is
@@ -504,7 +504,7 @@ TEST_F(WaystoneReplayTest, AStepIdAndAPksUpperBitsNeverShareAKey) {
 
     TrailReplay replay;
     replay.Build(chain.value(), entries);
-    ASSERT_EQ(replay.size(), 2u) << "a step id and a pk's upper bits are two keys";
+    ASSERT_EQ(replay.size(), 2u) << "a step id and a tuple key's upper bits are two keys";
     const TrailLocation* one = replay.Find(1, k);
     const TrailLocation* zero = replay.Find(0, k_high);
     ASSERT_NE(one, nullptr);

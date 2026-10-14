@@ -261,7 +261,7 @@ constexpr bool Covers(LockMode held, LockMode want) noexcept {
 // part of the hash, so two slices sharing a lower bound land in one
 // partition and the chain tells them apart.
 //
-// `hi` is exclusive. A tuple is the unit-length interval `[pk, pk + 1)`,
+// `hi` is exclusive. A tuple is the unit-length interval `[tuple key, tuple key + 1)`,
 // so one containment test serves tuples and slices alike.
 struct LockKey {
     catalog::Oid rel_oid = 0;
@@ -278,8 +278,8 @@ struct LockKey {
     static constexpr LockKey Slice(catalog::Oid rel, std::uint64_t lo, std::uint64_t hi) noexcept {
         return LockKey{rel, LockUnit::kSlice, lo, hi};
     }
-    static constexpr LockKey Tuple(catalog::Oid rel, std::uint64_t pk) noexcept {
-        return LockKey{rel, LockUnit::kTuple, pk, pk + 1};
+    static constexpr LockKey Tuple(catalog::Oid rel, std::uint64_t tuple_key) noexcept {
+        return LockKey{rel, LockUnit::kTuple, tuple_key, tuple_key + 1};
     }
 
     friend constexpr bool operator==(const LockKey& a, const LockKey& b) noexcept {
@@ -295,7 +295,7 @@ struct LockKey {
         return unit == LockUnit::kRange || unit == LockUnit::kSlice;
     }
 
-    constexpr bool ContainsKey(std::uint64_t pk) const noexcept { return pk >= lo && pk < hi; }
+    constexpr bool ContainsKey(std::uint64_t tuple_key) const noexcept { return tuple_key >= lo && tuple_key < hi; }
 
     // Do two units' key intervals meet? A relation unit carries the empty
     // interval `[0, 0)` and therefore overlaps nothing - which is right,
@@ -609,7 +609,7 @@ public:
     void SetWakeRegistry(const sched::WakeRegistry* registry) noexcept { wake_ = registry; }
     const sched::WakeRegistry* wake_registry() const noexcept { return wake_; }
 
-    // Is a range- or slice-unit fence held over `pk` by anyone but `txn`,
+    // Is a range- or slice-unit fence held over `tuple_key` by anyone but `txn`,
     // in `S` or `X`? The probe AO-R3 puts in place of a persisted lock bit.
     // Tuple-unit conflicts are **not** its business - those are found by
     // looking the tuple's own key up - and neither are relation-unit
@@ -625,7 +625,7 @@ public:
     // `wake`, when given, is registered on the covering fence's entry under
     // the latch that observed its holder, and filled in (AY-S2); the caller
     // owns it as it owns `TryAcquire`'s.
-    bool FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t txn,
+    bool FenceCoversKey(catalog::Oid rel, std::uint64_t tuple_key, std::uint64_t txn,
                         LockMode want = LockMode::kExclusive,
                         std::uint64_t* holder = nullptr, LockWake* wake = nullptr);
 
@@ -637,7 +637,7 @@ public:
     // transaction's id.
     //
     // **Every interval-carrying unit, not only tuples.** A tuple is the
-    // unit-length interval `[pk, pk + 1)`, so one overlap test serves both
+    // unit-length interval `[tuple key, tuple key + 1)`, so one overlap test serves both
     // - and it has to, because two *fences* over one relation are the
     // ordinary case the moment a write declares its unit from a predicate
     // (AO-0 item 14): `WHERE id > 1` and `WHERE id BETWEEN 2 AND 3` derive

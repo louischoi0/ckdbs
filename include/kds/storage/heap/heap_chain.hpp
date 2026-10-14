@@ -157,7 +157,7 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
 // exclusive hold of the tail it lands on and the chain's ids ascend across
 // pages and within each at every core count.
 //
-// `ChainInsertIssued` - an omitted pk: holds the tail, then asks `issue` for
+// `ChainInsertIssued` - an omitted tuple key: holds the tail, then asks `issue` for
 // the row. Fails as `ChainInsert` does, and with whatever `issue` refused,
 // in which case nothing is placed and the tail is released.
 StatusOr<ChainInsertResult> ChainInsertIssued(storage::PageStore& store, PageId head,

@@ -327,7 +327,7 @@ StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root, const Inde
 // are contiguous, but a run of them longer than half a leaf can straddle a
 // divide, and the descent lands on the run's *right* part - so a
 // byte-identical entry in the left part is missed and stored twice, which
-// the probe's pk dedup absorbs
+// the probe's tuple key dedup absorbs
 // (`docs/inflight/bugs/a-run-of-equal-index-sort-keys-promotes-one-separator-twice.md`).
 StatusOr<bool> FindExactDuplicate(IndexLeafView& leaf, std::span<const std::byte> entry,
                                    std::size_t sort_key_len, std::uint16_t* at) {
@@ -355,7 +355,7 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layou
 
 StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                                         const IndexLayout& layout,
-                                        std::span<const std::byte> key, std::uint64_t pk,
+                                        std::span<const std::byte> key, std::uint64_t tuple_key,
                                         std::span<const std::byte> covered,
                                         std::uint64_t owner_oid, PageId anchor_page) {
     if (Status s = CheckIndexLayout(layout); !s.ok()) return s;
@@ -372,7 +372,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     const std::size_t sort_key_len = layout.sort_key_width();
     const std::size_t entry_len = layout.leaf_entry_width();
     std::span<std::byte> entry(entry_buf.data(), entry_len);
-    if (Status s = EncodeIndexSortKey(layout, key, pk, entry.subspan(0, sort_key_len)); !s.ok()) {
+    if (Status s = EncodeIndexSortKey(layout, key, tuple_key, entry.subspan(0, sort_key_len)); !s.ok()) {
         return s;
     }
     if (!covered.empty()) {

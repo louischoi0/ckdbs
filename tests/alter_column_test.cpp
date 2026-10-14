@@ -186,7 +186,7 @@ TEST_F(AlterColumnTest, ADroppedNameIsFreeAndUnreachable) {
 
 TEST_F(AlterColumnTest, ThePkAnAbsentColumnAndASystemRelationAreRefused) {
     Ok("CREATE TABLE t (id int64, a int32)");
-    Refused("ALTER TABLE t DROP COLUMN id", "primary key");
+    Refused("ALTER TABLE t DROP COLUMN id", "tuple key");
     Refused("ALTER TABLE t DROP COLUMN zz", "byte 26");
     Refused("ALTER TABLE tables DROP COLUMN name", "system relation");
 }

@@ -38,7 +38,7 @@ deferred to when the user asks.
 
 `[source-read]` `docs/spec/foreign-keys.md:17-21` (F1): the child fk
 column holds the parent's Keystone id, and `docs/rules/keystoneid-invariant.md`
-K1/K2 make that id issue-once — a deleted pk is never reissued.
+K1/K2 make that id issue-once — a deleted tuple key is never reissued.
 
 `[design]` That is what makes a *dangling* reference safe to keep. On an
 engine that reuses keys, a child row whose parent was deleted may, after
@@ -132,7 +132,7 @@ translation. **Proposed, not decided.**
   an opt-in wait is wanted.
 - **F11 — The surface is a command.** `CHECK COMPLETENESS <table>
   [WHERE <pred>]`, emitting one row per tuple examined as
-  `(pk, verdict, dangling columns)` with `verdict ∈ {complete,
+  `(tuple key, verdict, dangling columns)` with `verdict ∈ {complete,
   incomplete, busy}`, and by default emitting only the incomplete and
   busy rows. A pseudo-column (`SELECT ..., __complete`) was refused: it
   would put a parent probe inside the step VM, which F4 keeps the

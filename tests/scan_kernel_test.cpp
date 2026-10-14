@@ -236,21 +236,21 @@ catalog::SysColumnRow Column(std::uint32_t pos, const char* name, std::uint32_t 
 // Column 0 is the Keystone id, never its cell: the word's byte 6 is a flags
 // byte and byte 7 reserved (keystone.hpp), and the engine writes both 0, so
 // only a hand-set byte tells the id from the cell. With byte 6 set, every
-// pk comparison still answers on the id - for an int64, int32 and int16 pk.
-// The id has bit 31 set: the codec stores the 48-bit id whatever the pk's
+// tuple key comparison still answers on the id - for an int64, int32 and int16 tuple key.
+// The id has bit 31 set: the codec stores the 48-bit id whatever the tuple key's
 // declared width, so a read at that width (2 bytes: 1; 4 bytes: negative)
 // is a wrong answer this cell sees. Driven at the codec, not through a
 // hand-built leaf: the walk hands the kernel the payload `ReadTupleIn`
 // returns, the bytes this cell builds.
 TEST(ScanKernelCodecTest, ColumnZeroIsTheKeystoneIdNotItsCell) {
-    struct Pk {
+    struct TupleKey {
         std::uint32_t type_val;
         std::uint32_t len;
     };
-    for (const Pk pk : {Pk{catalog::kTypeValInt64, 8}, Pk{catalog::kTypeValInt32, 4},
-                        Pk{catalog::kTypeValInt16, 2}}) {
+    for (const TupleKey tuple_key : {TupleKey{catalog::kTypeValInt64, 8}, TupleKey{catalog::kTypeValInt32, 4},
+                        TupleKey{catalog::kTypeValInt16, 2}}) {
         catalog::Schema schema;
-        schema.columns.push_back(Column(0, "id", pk.type_val, pk.len));
+        schema.columns.push_back(Column(0, "id", tuple_key.type_val, tuple_key.len));
         schema.columns.push_back(Column(1, "v", catalog::kTypeValInt64, 8));
         auto layout = catalog::RowLayout::Build(schema, /*inline_cell_width=*/64);
         ASSERT_TRUE(layout.ok()) << layout.status().message();
@@ -274,7 +274,7 @@ TEST(ScanKernelCodecTest, ColumnZeroIsTheKeystoneIdNotItsCell) {
             ScanKernel kernel{*term};
             const bool keeps = op != parser::CompareOp::kNeq;
             EXPECT_EQ(ScanKernelRejects(kernel, layout.value(), payload), !keeps)
-                << "pk type " << pk.type_val << ", op " << static_cast<int>(op);
+                << "tuple key type " << tuple_key.type_val << ", op " << static_cast<int>(op);
         }
     }
 }

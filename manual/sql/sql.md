@@ -134,16 +134,16 @@ CREATE TABLE [<namespace>.]<name>
   *creation* only — a database that already holds heap relations opens,
   reads, writes and recovers them exactly as before, and nothing about them
   is deprecated.
-- `BTREE` gives the relation a clustered B+ tree on the primary key; only a
+- `BTREE` gives the relation a clustered B+ tree on the tuple key; only a
   btree relation can carry a secondary index or be an FK parent. With `HEAP`
   suspended those are no longer distinctions between two choices you can
   make: they describe the one storage form a new relation takes.
-- **There is no key mode.** Every relation takes a caller-named primary key
+- **There is no key mode.** Every relation takes a caller-named tuple key
   or issues one when `INSERT` omits it, so nothing about keys is declared
   here. `EXPLICIT` is still accepted and **does nothing** — it states what is
   true of every relation, so old scripts keep working. `ASSIGNED` is refused:
   `ERR the ASSIGNED key mode no longer exists (byte <n>) - every relation
-  takes a caller-supplied primary key or issues one when INSERT omits it, so
+  takes a caller-supplied tuple key or issues one when INSERT omits it, so
   there is nothing for this word to select`.
 - **The words are order-free**: `BTREE EXPLICIT` and `EXPLICIT BTREE` are the
   same statement. Each *category* may appear at most once, and a repeat is
@@ -165,18 +165,18 @@ CREATE TABLE [<namespace>.]<name>
   standard-minded schemas. This is deliberate (null.md D1): a
   nullable-by-default rule would have silently reinterpreted every
   `CREATE TABLE` written before the feature existed. Consequences: the
-  first column (the primary key) may not be `NULL`; neither may any index
+  first column (the tuple key) may not be `NULL`; neither may any index
   key or covered column (D2 — `IS NULL` answers by scan); a nullable
   column costs its relation a tail bitmap byte per 8 nullable columns,
   and a relation with none costs nothing.
 
-**The Keystone contract (primary key).** The first column *is* the primary
+**The Keystone contract (tuple key).** The first column *is* the tuple
 key:
 
 - It must be declared with an integer type (`catalog::CheckKeystoneColumn`,
   checked at CREATE TABLE).
 - **Where its values come from is decided per `INSERT`, not per relation.**
-  Supply a value in the pk's position and that value *is* the key; omit it
+  Supply a value in the tuple key's position and that value *is* the key; omit it
   and the engine issues one. Both work on every relation, and one statement
   may mix the two across its rows.
 - **An issued key clears every key you named before it.** The relation
@@ -187,8 +187,8 @@ key:
   `AlreadyExists` (see the error table). Issued keys ascend in the order
   they are issued.
 - **A named key may be any key not already bound, in any order, on a
-  `BTREE` relation.** There a row is placed where its key sorts, so after `pk = 100`,
-  `pk = 99` is placed, and a multi-row `VALUES` may name its keys in any
+  `BTREE` relation.** There a row is placed where its key sorts, so after `tuple_key = 100`,
+  `tuple_key = 99` is placed, and a multi-row `VALUES` may name its keys in any
   order. A named key is refused because of its value for **exactly two
   reasons**, each naming the key's byte in the statement, and nothing is
   written (one known defect adds a third: inserting, rolling back and
@@ -196,13 +196,13 @@ key:
   covered value can be refused `AlreadyExists` by a covering index, and
   `TxnConflict` after that):
   - **duplicate**, `AlreadyExists`: a row with this key exists, live
-    (`ERR duplicate primary key <k> already present at page <p> slot <s>
-    (byte <n>)`) or deleted (`ERR duplicate primary key <k>: a row with
+    (`ERR duplicate tuple key <k> already present at page <p> slot <s>
+    (byte <n>)`) or deleted (`ERR duplicate tuple key <k>: a row with
     this key was deleted; PURGE frees its key (page <p> slot <s>)
     (byte <n>)`). A key named twice in one statement is a duplicate at its
     second row;
   - **exhausted**, `OutOfRange`: the key is outside `[1, 2^48 - 1]`
-    (`ERR primary key <k> is outside the Keystone id space [1,
+    (`ERR tuple key <k> is outside the Keystone id space [1,
     281474976710655] (byte <n>)`) — zero, negative, too large, or a literal
     too long for 64 bits.
 
@@ -214,13 +214,13 @@ key:
   committed row that another session is updating or deleting is
   `AlreadyExists` at once. A named key can also wait on another session's
   open write over a range that covers it. Every `BTREE` page's rows stay in
-  key order however keys arrive, so `ORDER BY <pk>` costs nothing (see
+  key order however keys arrive, so `ORDER BY <tuple key>` costs nothing (see
   ORDER BY). A `HEAP` relation (none can be created since SUS-1) still
   refuses a named key below its high-water mark, `OutOfRange`.
 - It cannot be `UPDATE`d: it is the tuple's identity, not a field of it.
   Naming a key at insert and changing one afterwards are unrelated
   permissions; only the first is granted.
-- It cannot carry a Cabin — a cabin on the primary key is refused with the
+- It cannot carry a Cabin — a cabin on the tuple key is refused with the
   position of the `CABIN` keyword.
 - Ids are unique, never gapless. A supplied id that is already in use — 
   including one belonging to a row that has been `DELETE`d, whose slot is
@@ -250,7 +250,7 @@ CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts, amount int6
 - No parent column is written **and none may be**: the parent side is always
   the referenced relation's Keystone id. `REFERENCES accounts(id)` is refused
   (`Unsupported`) — it would spell out the only thing it could mean.
-- A heap-clustered parent is refused at declaration: a parent needs a pk
+- A heap-clustered parent is refused at declaration: a parent needs a tuple key
   index for the check not to be a scan.
 - v1 is RESTRICT-only and fail-fast. INSERT/UPDATE of an fk column checks the
   parent exists; DELETE of a parent checks for live children and stops at the
@@ -355,7 +355,7 @@ enforce, indexes and Cabins still serve, all with no re-declaration.
   and positional `VALUES`, which count the remaining columns. Its bytes stay
   in every row and its slot is never reused: nothing is reclaimed (no
   cleaning is built).
-  - Refused for the primary key, and for a column an index keys or covers,
+  - Refused for the tuple key, and for a column an index keys or covers,
     a foreign key names, a Transition governs or a Cabin is on, each named.
     Any column of a relation that carries an assertion is refused too,
     naming the assertion.
@@ -375,7 +375,7 @@ enforce, indexes and Cabins still serve, all with no re-declaration.
 - **Patterns are allowed to die**: statements against the old name stop
   matching stored patterns and trails, which costs replay speed, never a
   row; new-name traffic re-registers on the ordinary path.
-- The pk column renames like any other (identity is the Keystone word,
+- The tuple key column renames like any other (identity is the Keystone word,
   not the spelling); a `sys.*` relation refuses; a taken name is
   `AlreadyExists`.
 - A rename is logged and durable but **not transactional**: `ROLLBACK` does
@@ -391,7 +391,7 @@ DROP INDEX ix_owner;
 - Multi-column keys: up to `kMaxIndexKeyColumns` (4) key columns and
   `kMaxIndexCoveredColumns` (8) covered columns. The caps refuse, never
   truncate, and the parser names the byte of the offending column.
-- Only a `BTREE` relation may carry an index (an entry's payload is the pk).
+- Only a `BTREE` relation may carry an index (an entry's payload is the tuple key).
 - `CREATE UNIQUE INDEX` is refused (`NOT_IMPLEMENTED`): enforcing uniqueness
   would make the index a constraint that can fail a write, and v1 is a read
   accelerator that cannot fail a write for a reason of its own (IX11).
@@ -519,7 +519,7 @@ DROP CABIN ON accounts(owner);
 - A Cabin is named by what it is on — `(table, column)` — never by a name of
   its own. One column only in v1; a comma in the column list is refused with
   a message naming decision C3.
-- Refused on the primary key and on a `NO CABIN` column, whoever asks.
+- Refused on the tuple key and on a `NO CABIN` column, whoever asks.
 - `SHOW CABINS` lists them. Entry sets are memory-resident and do not survive
   a restart; only the catalog row persists.
 - `SHOW CABINS` no longer prints `scope_declines`: every walk covers the
@@ -607,11 +607,11 @@ Registered in `sys.types` (verified in `src/catalog/catalog.cpp`):
 ### INSERT (verified; multi-row built 2026-08-10, bulkinsert.md T1)
 
 ```sql
--- Omit the pk and the engine issues one
+-- Omit the tuple key and the engine issues one
 INSERT INTO accounts VALUES ('alice', 120.50);
 INSERT INTO accounts VALUES ('bob', 10), ('carol', 20), ('dave', 30);
 
--- Or name it: the pk comes first, any key not already bound, in any order
+-- Or name it: the tuple key comes first, any key not already bound, in any order
 INSERT INTO trades VALUES (5000, 'AAPL', 10);
 INSERT INTO trades VALUES (5100, 'MSFT', 3), (6200, 'NVDA', 7);
 
@@ -623,36 +623,35 @@ INSERT INTO trades VALUES (7000, 'AMD', 1), ('INTC', 2);
   — no column list; up to `max_insert_rows` rows per statement (config key,
   default 1024, a refusal never a truncation).
 - **The arity is per row, and there are two of them.** Supply `n` values on
-  an `n`-column relation and the first is the primary key; supply `n - 1` and
+  an `n`-column relation and the first is the tuple key; supply `n - 1` and
   the engine issues one. Both are legal on every relation and a statement may
   mix them. The two counts cannot be confused — `INSERT` is positional with
   no column list and no body column may be omitted individually — so a wrong
   length is refused naming both:
-  `ERR expected 3 value(s) including primary-key column 'id', or 2 to have it issued; got 4`.
-- **A `NULL` primary key asks for an issued one** (as a KWP load row's
+  `ERR expected 3 value(s) including tuple key column 'id', or 2 to have it issued; got 4 (byte <n>)`.
+- **A `NULL` tuple key asks for an issued one** (as a KWP load row's
   does): `INSERT INTO trades VALUES (NULL, 'AMD', 1)` is the issued-key row
   at full width.
 - **After `ALTER TABLE ... ADD` or `DROP COLUMN`, every row is full width.**
   On a relation whose column set has changed, `n - 1` values are refused,
-  because that length is the length a row written for the old columns has -
-  after an `ADD`, a row that named its key; after a `DROP`, a row that left
-  it out - and admitting it would put every value one column over. Name the
-  key, or write `NULL` for it:
-  `ERR expected 3 value(s), one per column, with primary-key column 'id' NULL to have it issued; got 2 (byte <n>). The relation's columns were changed by ALTER TABLE, ...`.
+  because after an `ADD` that is the length of a row written for the old
+  columns with its key named, and admitting it would put every value one
+  column over. Name the key, or write `NULL` for it:
+  `ERR expected 3 value(s), one per column, with tuple key column 'id' NULL to have it issued; got 2 (byte <n>). The relation's columns were changed by ALTER TABLE, ...`.
   The count does not catch every stale statement: after a `DROP`, a row
   written for the old columns with its key left out has the new full
   length and is admitted with its first value as the key. Re-read a
   positional `INSERT` written before an `ALTER`.
-- **A named pk must be an integer literal** in `[1, 2^48 - 1]` — 0 is
+- **A named tuple key must be an integer literal** in `[1, 2^48 - 1]` — 0 is
   reserved for "unset". A non-integer is `InvalidArgument`; an integer
   outside the range is `OutOfRange` (exhausted). Both carry the offending
   token's byte and are checked before anything is placed, so a refused row
   burns no id (BI9).
-- **A named pk is refused as a duplicate when its key is bound** (see the
+- **A named tuple key is refused as a duplicate when its key is bound** (see the
   Keystone contract): on a `BTREE` relation the clustered descent lands on
   the only leaf that could hold the key and names a used one `AlreadyExists`.
   A `DELETE`d row still holds its key until a `PURGE` frees it, so a
-  deleted pk cannot be re-supplied before one; a key whose insert rolled
+  deleted tuple key cannot be re-supplied before one; a key whose insert rolled
   back, or a purged one, can.
 - Replies: `INSERTED oid=<o> id=<n> page=<p> slot=<s>` for one row, where
   `slot` is the slot at placement — a later insert into the same page can
@@ -731,7 +730,7 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
     boolean literals, a correlated or catalog-view subquery, an expression
     in `INSERT ... VALUES` or a select list, and an expression that reads a
     column assigned to a foreign-key column (a constant one is checked).
-- **The primary key cannot be assigned**, and the
+- **The tuple key cannot be assigned**, and the
   refusal is `Unsupported` with the column's byte — understood and
   declined, not a feature awaiting work (K2). This holds whether the key was
   named or issued: naming a key at insert and changing one afterwards are
@@ -780,12 +779,12 @@ INSERT INTO accounts VALUES (5, 0);        -- placed: the key is free again
 PURGE FROM accounts WHERE id BETWEEN 100 AND 199;
 ```
 
-`PURGE FROM <table> WHERE <pk comparisons>` removes the deleted rows of a
-primary-key window and **frees their keys**, so an `INSERT` that names one
+`PURGE FROM <table> WHERE <tuple key comparisons>` removes the deleted rows of a
+tuple key window and **frees their keys**, so an `INSERT` that names one
 is placed as if the key had never been used. It is the one exception to
 "a committed key stays bound" (the Keystone contract).
 
-- **The window.** Every conjunct compares the primary key with a
+- **The window.** Every conjunct compares the tuple key with a
   non-negative integer literal — `=`, `<`, `<=`, `>`, `>=`, `BETWEEN a AND
   b` — and they are ANDed into one key range. Any other conjunct is refused,
   not ignored, because ignoring one would free more than was asked
@@ -849,7 +848,7 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
   and nothing reorders it. The statement is the plan.
 - Every relation's binding must be distinct; `FROM t JOIN t` is refused, and
   `FROM t AS a JOIN t AS b` is how a self-join is spelled.
-- A join keyed on a relation's **primary key** executes as a pk probe
+- A join keyed on a relation's **tuple key** executes as a tuple key probe
   (lookup class). Any other equi-join is *not refused* — it compiles to a
   scan (or index/Cabin/filter scan) of that relation with the ON equality
   evaluated as a residual filter per row (verified in the step compiler's
@@ -895,7 +894,7 @@ is one of (verified — the `PredicateKind` enum):
   answers `NOT_IMPLEMENTED` with its byte; a tree nested deeper than 64 levels or holding more than
   4,096 conditions answers `UNSUPPORTED`. `NOT EXISTS (...)` and
   `col NOT IN (SELECT ...)` are the forms above and keep their meaning.
-  `PURGE`'s window still refuses every conjunct that is not a pk
+  `PURGE`'s window still refuses every conjunct that is not a tuple key
   comparison, `OR` included.
 - Subqueries are **predicate-position only**, correlated included, nested to
   at most `kMaxSubqueryDepth = 4` below the outermost block. The fifth level
@@ -930,8 +929,8 @@ is one of (verified — the `PredicateKind` enum):
   with a NULL operand is unknown, and `WHERE` keeps only true — so
   `col = NULL` matches nothing, ever (the standard's trap, kept on
   purpose); `IS NULL` is the spelling that finds them.
-- A pk equality (`WHERE id = 42`) executes as a keyed descent; a pk
-  `BETWEEN` as a range walk with tail pruning; a non-pk equality is served
+- A tuple key equality (`WHERE id = 42`) executes as a keyed descent; a tuple key
+  `BETWEEN` as a range walk with tail pruning; a non-tuple-key equality is served
   by a secondary index, then a Cabin, then a filter scan, in that fixed
   preference order — selection is a function of shape and catalog, never of
   data statistics.
@@ -973,7 +972,7 @@ Each clause is independently optional, in that order (`OFFSET 5 LIMIT 10`
 is trailing garbage — dialect compatibility is a non-goal). `LIMIT`
 without `ORDER BY` is well-defined here in a way general SQL cannot
 promise: emission order is already a client contract — written order
-across steps, pk order within one — so `LIMIT n OFFSET m` means rows
+across steps, tuple key order within one — so `LIMIT n OFFSET m` means rows
 `[m, m+n)` of the reply the unlimited statement gives.
 
 - The counts are non-negative integer literals; a value past uint64
@@ -991,10 +990,10 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
   had without it** — ordering refines the emission contract rather than
   replacing it, so a tie is never resolved arbitrarily and never varies
   between runs.
-- **Ordering by the primary key ascending is free**, and only that form:
+- **Ordering by the tuple key ascending is free**, and only that form:
   it names the order the engine already emits, so the compiler drops the
   clause and the statement pays nothing. `ANALYZE` shows this as the
-  absence of a `sort` line. Every other order — including `ORDER BY <pk>
+  absence of a `sort` line. Every other order — including `ORDER BY <tuple key>
   DESC` — is an output sort, which is not free; see the two notes below.
 - **That order holds on every `BTREE` page, at any number of cores.** A
   row is placed at the position its key sorts to, whatever order keys
@@ -1003,7 +1002,7 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
   whose pages need not, does not mount (format version 20 refuses 19).
 - **A sorted statement's `LIMIT` bounds what you receive, not what the
   engine reads.** The sort must see every qualifying row before it knows
-  which comes first, so unlike an unsorted or pk-ordered `LIMIT`, it
+  which comes first, so unlike an unsorted or tuple-key-ordered `LIMIT`, it
   cannot stop the scan early; `ANALYZE`'s `examined=` shows the full
   count. What the `LIMIT` does bound is memory — only `offset + limit`
   rows are held. For deep pagination over an ordered column, prefer keyset
@@ -1163,7 +1162,7 @@ Dispatcher commands, not parser statements:
 | `SHOW ASSERTIONS` | assertions with `enforcing=` and live counters (checks/violations/reserved/aborted) |
 | `SHOW TRANSITIONS` | Transitions: id, name, relation, governed column's position, and the declaration verbatim |
 | `SHOW RELAYOUT [<table>]` | the physical optimizer's shadow report (candidate moves, each blocked by a named gate) |
-| `DESCRIBE <table>` (`DESC`) | columns, types, `clustered_type=`, `next_id`, `ids_issued`/`ids_remaining`/`budget_used`. A pk column reports `autoincrement=if-omitted`, every other column `no` |
+| `DESCRIBE <table>` (`DESC`) | columns, types, `clustered_type=`, `next_id`, `ids_issued`/`ids_remaining`/`budget_used`. A tuple key column reports `autoincrement=if-omitted`, every other column `no` |
 | `PING` | `PONG` |
 | `SYNC` | forces log + store durability: `OK synced` |
 | `STOP` | closes the connection: `OK bye` |
@@ -1188,7 +1187,7 @@ There is also a legacy non-SQL form: `CREATE TABLE <name>` with **no column
 list** routes to a pre-SQL handler (the dispatcher routes on the presence
 of `(`). It answers `EXISTS oid=<n>` if the name is taken; otherwise the
 catalog refuses the empty schema — `ERR relation has no columns; the first
-column is the mandatory Keystone primary key` — so the form can no longer
+column is the mandatory Keystone tuple key` — so the form can no longer
 create anything.
 
 ---
@@ -1208,7 +1207,7 @@ worth anything:
   value wider than one var-heap page.
 - **`ERR UNSUPPORTED retryable=0 …`** — this engine's architecture cannot
   admit the form, so no later server answers it and the statement must be
-  rewritten: updating a primary key, `float`, comparing decimals of different
+  rewritten: updating a tuple key, `float`, comparing decimals of different
   width or scale, one relation named twice in a `FROM` list without distinct
   aliases, a `$name` parameter on this protocol.
 
@@ -1220,7 +1219,7 @@ they were before the split.
   relation with a schema. *"common table expressions (WITH) are not
   supported; subqueries are allowed in predicate position only."*
 - **No derived tables.** `FROM (SELECT ...)` is refused by the relation
-  reference itself: materializing an inner result breaks pk-direct probing
+  reference itself: materializing an inner result breaks tuple-key-direct probing
   into the next step and puts a temp relation in the storage layer.
 - **No window functions, no expressions.** The grammar has no expression
   tree outside a `SET` value — no arithmetic in a predicate (`OR`, `NOT`
@@ -1240,7 +1239,7 @@ they were before the split.
   that answer `NOT_IMPLEMENTED` with their own position, so the grammar will
   not shift if they ever land.
 - **The join rule.** KDS supports inner equi-join chains, executed in
-  written order, probing by primary key where the ON allows it. There is no
+  written order, probing by tuple key where the ON allows it. There is no
   merge join and no plan search **— the query is the plan.** Written order
   is a client contract; decorrelation rewrites are forbidden, not merely
   unimplemented. A stable plan is what lets `pattern_id` name a plan and
@@ -1268,7 +1267,7 @@ they were before the split.
   half of it would settle the rest by accident. Ordinary statements do
   have a full `ORDER BY` — any columns, `ASC`/`DESC` — since 2026-08-11;
   see Ordering and pagination.
-- **No cross-dialect shims.** No `SERIAL`, no `AUTO_INCREMENT` (every pk is
+- **No cross-dialect shims.** No `SERIAL`, no `AUTO_INCREMENT` (every tuple key is
   already both when the `INSERT` omits it, and deliberately neither when the
   `INSERT` names it), no `IF NOT EXISTS`, no `public.` schema
   qualifier, no
@@ -1312,23 +1311,23 @@ in §7 below now carries and which both used to reach a client as a bare
 | Statement in a poisoned transaction | `ERR current transaction is aborted; commands are ignored until ROLLBACK` |
 | `BEGIN` inside a transaction | `ERR a transaction is already open; COMMIT or ROLLBACK first` |
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
-| A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including primary-key column '<name>', or <n-1> to have it issued; got <k> (byte <b>)` |
-| A row that is not `n` values long, on a relation `ALTER TABLE ... ADD`/`DROP COLUMN` changed | `ERR expected <n> value(s), one per column, with primary-key column '<name>' NULL to have it issued; got <k> (byte <b>). The relation's columns were changed by ALTER TABLE, ...` |
-| A non-integer supplied pk | `InvalidArgument` — `ERR primary-key column '<name>' needs an integer literal (byte <n>)` |
-| A supplied pk outside `[1, 2^48 - 1]` (zero, negative, too large, or past 64 bits) — *exhausted* | `OutOfRange` — `ERR primary key <k> is outside the Keystone id space [1, 281474976710655] (byte <n>)` |
-| A supplied pk already bound on a `BTREE` relation — *duplicate* | `AlreadyExists` — `ERR duplicate primary key <k> already present at page <p> slot <s> (byte <n>)`, or for a `DELETE`d row's key, until a `PURGE` frees it, `ERR duplicate primary key <k>: a row with this key was deleted; PURGE frees its key (page <p> slot <s>) (byte <n>)` |
-| A supplied pk below the high-water mark of a `HEAP` relation (none can be created since SUS-1) | `OutOfRange` — `ERR primary key <k> is below relation <oid>'s high-water mark <m>; a named key must sort above every key the relation has placed or issued, which is what keeps every page's slot order its key order`, or when the key sorts below the chain's tail `ERR primary key <k> is below the relation's high-water mark: the chain's tail, page <p>, opens at <m>, an id already placed; a named key must sort above every key the relation has placed or issued` (neither form carries a byte) |
-| An omitted pk on a `BTREE` relation whose issued id met a concurrently named key 8 times in a row | `AlreadyExists` — `ERR duplicate primary key <k> already present at page <p> slot <s>` (no byte: the key was issued, not written) |
+| A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including tuple key column '<name>', or <n-1> to have it issued; got <k> (byte <b>)` |
+| A row that is not `n` values long, on a relation `ALTER TABLE ... ADD`/`DROP COLUMN` changed | `ERR expected <n> value(s), one per column, with tuple key column '<name>' NULL to have it issued; got <k> (byte <b>). The relation's columns were changed by ALTER TABLE, ...` |
+| A non-integer supplied tuple key | `InvalidArgument` — `ERR tuple key column '<name>' needs an integer literal (byte <n>)` |
+| A supplied tuple key outside `[1, 2^48 - 1]` (zero, negative, too large, or past 64 bits) — *exhausted* | `OutOfRange` — `ERR tuple key <k> is outside the Keystone id space [1, 281474976710655] (byte <n>)` |
+| A supplied tuple key already bound on a `BTREE` relation — *duplicate* | `AlreadyExists` — `ERR duplicate tuple key <k> already present at page <p> slot <s> (byte <n>)`, or for a `DELETE`d row's key, until a `PURGE` frees it, `ERR duplicate tuple key <k>: a row with this key was deleted; PURGE frees its key (page <p> slot <s>) (byte <n>)` |
+| A supplied tuple key below the high-water mark of a `HEAP` relation (none can be created since SUS-1) | `OutOfRange` — `ERR tuple key <k> is below relation <oid>'s high-water mark <m>; a named key must sort above every key the relation has placed or issued, which is what keeps every page's slot order its key order`, or when the key sorts below the chain's tail `ERR tuple key <k> is below the relation's high-water mark: the chain's tail, page <p>, opens at <m>, an id already placed; a named key must sort above every key the relation has placed or issued` (neither form carries a byte) |
+| An omitted tuple key on a `BTREE` relation whose issued id met a concurrently named key 8 times in a row | `AlreadyExists` — `ERR duplicate tuple key <k> already present at page <p> slot <s>` (no byte: the key was issued, not written) |
 | `ASSIGNED` in CREATE TABLE | `Unsupported` — `ERR UNSUPPORTED retryable=0 the ASSIGNED key mode no longer exists (byte <n>) - ...` (removed 2026-08-25 and not coming back, which is why it is the permanent half; `EXPLICIT` is accepted and does nothing) |
-| Assigning the pk in UPDATE | `Unsupported` — `ERR UNSUPPORTED retryable=0 primary-key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
+| Assigning the tuple key in UPDATE | `Unsupported` — `ERR UNSUPPORTED retryable=0 tuple key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
 | Unknown SET target in UPDATE | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
 | A column assigned twice in one UPDATE's SET list | `InvalidArgument` — `ERR column '<name>' is assigned more than once at byte <n>` (the second name's byte; refused at compile, so nothing is written) |
 | Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE)` |
 | `PURGE` inside a transaction | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE inside a transaction is not implemented; run it in autocommit (byte 0)`; the transaction is not poisoned |
 | `PURGE` of a system or heap relation | `Unsupported` — `ERR UNSUPPORTED retryable=0 '<t>' is a system relation; PURGE frees keys of user relations only (byte <n>)`, or `… is a heap relation, whose chain grows only at its tail; PURGE frees keys of btree relations only (byte <n>)` |
-| `PURGE` with no `WHERE`, or a conjunct other than a pk comparison with an integer literal | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE needs a WHERE naming the primary key; … (byte <n>)`, or `… PURGE admits only comparisons of the primary key with an integer literal (=, <, <=, >, >=, BETWEEN); this conjunct is not one (byte <n>)` |
-| `PURGE` naming one live key, or a negative pk literal | `InvalidArgument` — `ERR primary key <k> is live; PURGE frees only a key whose row was deleted (byte <n>)`, or `ERR primary key literal <k> is negative, and no key is below 1 (byte <n>)` |
-| `PURGE` meeting an older snapshot, or an undecided writer, for 1 s | `TxnConflict`, retryable — `ERR TXN_CONFLICT retryable=1 PURGE cannot free primary key <k> yet: …; nothing was purged, and running it again once that ends will` |
+| `PURGE` with no `WHERE`, or a conjunct other than a tuple key comparison with an integer literal | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE needs a WHERE naming the tuple key; … (byte <n>)`, or `… PURGE admits only comparisons of the tuple key with an integer literal (=, <, <=, >, >=, BETWEEN); this conjunct is not one (byte <n>)` |
+| `PURGE` naming one live key, or a negative tuple key literal | `InvalidArgument` — `ERR tuple key <k> is live; PURGE frees only a key whose row was deleted (byte <n>)`, or `ERR tuple key literal <k> is negative, and no key is below 1 (byte <n>)` |
+| `PURGE` meeting an older snapshot, or an undecided writer, for 1 s | `TxnConflict`, retryable — `ERR TXN_CONFLICT retryable=1 PURGE cannot free tuple key <k> yet: …; nothing was purged, and running it again once that ends will` |
 | Anything after a complete statement (e.g. `OFFSET 5 LIMIT 10`'s reversed tail) | `ERR unexpected token '<t>' after end of statement` |
 | Bare `decimal` | `ERR column '<c>' needs a precision and a scale - decimal(p, s) - at byte <n>; there is no default scale, ...` |
 | `float` column | `Unsupported` from the row-layout build: no decided on-disk encoding, and the type is refused rather than deferred |

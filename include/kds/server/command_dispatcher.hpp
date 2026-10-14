@@ -60,7 +60,7 @@
 //
 // CREATE TABLE keeps a bare-name form with no parens, which asks for a
 // zero-column table and therefore always errors (every relation needs a
-// Keystone pk column); a '(' after the name selects the full form.
+// Keystone tuple key column); a '(' after the name selects the full form.
 //
 // Newline protocol: one command per line, case-insensitive keyword; a
 // response is exactly one line with no embedded newline - the listener
@@ -84,7 +84,7 @@
 // heap_chain.hpp) or a clustered B+ tree (`kBtree`, btree.hpp), and every
 // statement handler below branches on `TableAccess::clustered_type` in
 // exactly one place each - `InsertOneRow`'s placement, `VisitRelation`,
-// `LocateByPk`, and `LogInsert`'s record (a leaf's row is a `BTREE_INSERT`
+// `LocateByTupleKey`, and `LogInsert`'s record (a leaf's row is a `BTREE_INSERT`
 // or rides a `BTREE_SPLIT`, BD-R12).
 // Everything else in this file is storage-agnostic, which is possible
 // because a btree **leaf is a heap page**: the row codec, `PageView`
@@ -96,7 +96,7 @@
 //   - `SELECT`/`UPDATE ... WHERE id = <n>` on a btree relation descends
 //     the tree, which is **authoritative** - a miss means the row does not
 //     exist, and no scan follows. The same statement on a heap relation
-//     scans the chain, because a heap relation has no pk index at all.
+//     scans the chain, because a heap relation has no tuple key index at all.
 //   - `INSERT` may split a leaf and grow the tree a level, in which case
 //     the relation's `desc_page_id` is repointed at the new root before
 //     the client is answered.
@@ -214,7 +214,7 @@ struct DispatchOutcome {
     // names - and there the wait polls `IsInFlight`.
     struct WriteBlock {
         std::uint64_t trx_id = 0;  // the holder being waited for
-        std::uint64_t pk = 0;      // the row it holds
+        std::uint64_t tuple_key = 0;      // the row it holds
         txn::LockKey key{};        // the unit `slot` is registered on
         std::shared_ptr<txn::LockWaitSlot> slot;
         // The mode the refused ask wanted, for `sys.lock_waits`; meaningful
@@ -262,7 +262,7 @@ struct DispatchOutcome {
     // answers with that refusal at once, which is `response`. A poll,
     // because no release or horizon advance kicks it (`known-gaps.md`).
     struct PurgeWait {
-        std::uint64_t pk = 0;
+        std::uint64_t tuple_key = 0;
         std::uint64_t trx_id = 0;  // the writer waited for, or the deleter
         bool horizon = false;      // waiting for every reader, not a decide
     };
@@ -528,13 +528,13 @@ public:
     //                             for a BTREE relation), then one "\n"-escaped
     //                            (see SHOW PAGE above) section per column:
     //                            "pos=<n> name=<s> type=<s> len=<n>
-    //                             notnull=<yes|no> pk=<yes|no>
+    //                             notnull=<yes|no> tuple_key=<yes|no>
     //                             autoincrement=<if-omitted|no>". DESC is
     //                            accepted as a synonym.
     //   CREATE TABLE <name>   -> the bare, pre-parser form: a zero-column
     //                            table. Now always "ERR ...", because
     //                            every relation's first column is its
-    //                            mandatory Keystone primary key
+    //                            mandatory Keystone tuple key
     //                            (heap-and-tuple.md section 4) and a
     //                            zero-column relation cannot have one.
     //                            Kept only so the failure names the
@@ -546,7 +546,7 @@ public:
     //                            src/parser, types resolved through
     //                            Catalog::ResolveTypeByName(). The storage
     //                            word: BTREE (default) is a clustered B+
-    //                            tree on the Keystone pk; HEAP is refused
+    //                            tree on the Keystone tuple key; HEAP is refused
     //                            `Unsupported` since SUS-1. EXPLICIT is
     //                            accepted and does nothing; ASSIGNED is
     //                            refused. Either order, each at most once.
@@ -557,12 +557,12 @@ public:
     //                            for one row, "INSERTED oid=<n> rows=<n>
     //                            first_id=<n> last_id=<n>" for several, or
     //                            "ERR ...". Positional, no column list; per
-    //                            row, `n` values name the pk first and
+    //                            row, `n` values name the tuple key first and
     //                            `n - 1` have it issued (heap-and-tuple.md
     //                            §4.1, invariant 11).
     //   SELECT * FROM <name> [WHERE <cond> [AND <cond>]*]
     //                         -> a full ordered scan of the relation,
-    //                            WHERE-filtered; a bare `WHERE <pk> = <n>`
+    //                            WHERE-filtered; a bare `WHERE <tuple key> = <n>`
     //                            instead takes the point path (a tree
     //                            descent, on a btree relation).
     //                            One wire line: "col1,col2,..." then one
@@ -644,7 +644,7 @@ public:
     }
 
     // **A test seam at the instant a row's id is fixed** (BB-S2): runs once
-    // per id `InsertOneRow` fixes for a row - on a btree's omitted pk once
+    // per id `InsertOneRow` fixes for a row - on a btree's omitted tuple key once
     // per draw, so a draw that collides with a named key and is burned
     // (BD-S3's re-draw) fires it again with the next id - once its id is
     // borrowed and its row encoded. On a heap it sits under the exclusive
@@ -657,7 +657,7 @@ public:
         after_row_id_fixed_for_test_ = std::move(hook);
     }
 
-    // **A test seam between an omitted pk's issue and its borrow** (BD-S3's
+    // **A test seam between an omitted tuple key's issue and its borrow** (BD-S3's
     // review): runs once per issue on a btree, with the id drawn. A cell that
     // stops here lets a named key place the same id first - the one
     // collision BD-R6 leaves, which the insert answers by drawing again.
@@ -811,7 +811,7 @@ private:
         // waiter's view.
         kCapable,
     };
-    void NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx, std::uint64_t pk,
+    void NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx, std::uint64_t tuple_key,
                             RepeatableReadWait rerun);
 
     // Ends a parked write with `refused`, on every channel a client reads.
@@ -895,7 +895,7 @@ private:
     // (a dispatcher with no lock table). Zero out means nothing to wait for
     // and the refusal is the plain conflict, which the write sites test.
     Status CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
-                                      std::uint64_t pk, std::uint64_t& blocker);
+                                      std::uint64_t tuple_key, std::uint64_t& blocker);
 
     // The refusal a borrow the table declined produces, in
     // `CheckWriteConflict`'s own shape - `txn/manager.cpp` calls that
@@ -904,7 +904,7 @@ private:
     // the **holder** rather than the row's writer, because that is who the
     // client is waiting for and, for a range fence, the two are not the
     // same transaction.
-    static Status HeldByHolder(std::uint64_t pk, std::uint64_t holder);
+    static Status HeldByHolder(std::uint64_t tuple_key, std::uint64_t holder);
 
     // **The borrow, and the refusal a unit somebody else holds produces.**
     // `nullopt` means the unit is this statement's to write. A `Status`
@@ -944,8 +944,8 @@ private:
                                        FunctionRef<Status()> before_wait = {});
 
     // Is `cond` a non-negative integer literal compared against `access`'s
-    // primary key, and if so which id? The shared half of the test
-    // `PkEqualityTarget` and `DeclaredWriteBorrow` both need.
+    // tuple key, and if so which id? The shared half of the test
+    // `TupleKeyEqualityTarget` and `DeclaredWriteBorrow` both need.
     //
     // **`kind` before `op` and before `val`, which is why this is one
     // function.** `ast.hpp` records that both default to a value reading as
@@ -953,7 +953,7 @@ private:
     // one row and answer `UPDATED 1`. Answers `nullopt` for every kind that
     // is not a `kCompareValue` against a literal, leaving `kBetween` to the
     // caller that knows it carries two bounds.
-    std::optional<std::uint64_t> PkLiteral(const catalog::TableAccess& access,
+    std::optional<std::uint64_t> TupleKeyLiteral(const catalog::TableAccess& access,
                                            const parser::Condition& cond) const;
 
     // **The unit a write declares before it walks** (AO-0 item 14, marked
@@ -977,27 +977,27 @@ private:
     // than per-row, a wrong answer rather than a cost;
     // `LockTable::ConflictingOverlap` makes them meet.
     //
-    // **What it does not reach**: a predicate naming no pk window - `WHERE
+    // **What it does not reach**: a predicate naming no tuple key window - `WHERE
     // name = 'x'` - stays per-row and is the one shape the cap can refuse.
     std::optional<txn::LockKey> DeclaredWriteBorrow(
         const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const;
 
-    // **The pk window an AND-list bounds** - the one recognizer of it (BH-R2),
+    // **The tuple key window an AND-list bounds** - the one recognizer of it (BH-R2),
     // shared by `DeclaredWriteBorrow` and `PURGE`. `[lo, hi)` is folded from
-    // every conjunct that compares the pk with a non-negative integer literal
+    // every conjunct that compares the tuple key with a non-negative integer literal
     // in one of PU1's six forms; `bounded` says at least one did. `unfolded`
     // is the first conjunct that did not, which the two callers answer in
     // opposite ways and both soundly: a borrow skips it, because an AND-list
     // only removes rows and the window is a superset of what is written; a
     // `PURGE` refuses it, because skipping one would *widen* what it frees
     // (`id > 0 AND id <> 5` would free 5).
-    struct PkWindow {
+    struct TupleKeyWindow {
         std::uint64_t lo = 0;
         std::uint64_t hi = 0;
         bool bounded = false;
         const parser::Condition* unfolded = nullptr;
     };
-    PkWindow FoldPkWindow(const catalog::TableAccess& access,
+    TupleKeyWindow FoldTupleKeyWindow(const catalog::TableAccess& access,
                           const std::vector<parser::Condition>& where) const;
 
     // Whether an already-resolved relation lives in the `sys` namespace
@@ -1254,14 +1254,14 @@ private:
     exec::IndexWriteLog IndexWriteLogFor(const WriteScope& scope,
                                          std::vector<exec::IndexWrite>& pending);
 
-    // `VarHeapSink::on_append` for a row `pk` of `rel_oid` (AT-S21's
+    // `VarHeapSink::on_append` for a row `tuple_key` of `rel_oid` (AT-S21's
     // review): with a manager owning the transaction, the spill's undo record
     // (`NoteSpills`) and then its records (`exec::LogSpill`), under the
     // var-heap page's hold. Null without a manager, whose spills are
     // collected and logged by `LogInsert`.
     std::function<Status(const exec::AppendedSpill&)> SpillLogFor(const WriteScope& scope,
                                                                   std::uint32_t rel_oid,
-                                                                  std::uint64_t pk);
+                                                                  std::uint64_t tuple_key);
 
     // `CREATE INDEX` / `DROP INDEX` (docs/spec/index.md §10). One handler
     // for both, for HandleCabin's reason. Both take the relation `X` before
@@ -1327,7 +1327,7 @@ private:
     // (a conflict names the child and parent relations; any other code
     // stands).
     Status ParentRowHeld(const catalog::TableAccess& child, catalog::Oid parent_rel,
-                         std::uint64_t pk, const Status& held);
+                         std::uint64_t tuple_key, const Status& held);
 
     // The forward check for one foreign key and one written value (§2),
     // **answered from what the extraction pass already resolved** (§2a,
@@ -1344,8 +1344,8 @@ private:
                                   const catalog::ForeignKeyRef& fk, const parser::AstValue& value,
                                   const exec::FkParentVerdicts& held, const WriteScope& scope);
 
-    // The extraction pass (§2a, AH-R1): resolves every parent pk one row's
-    // body names, into `into`, deduplicated by (parent relation, pk) so a
+    // The extraction pass (§2a, AH-R1): resolves every parent tuple key one row's
+    // body names, into `into`, deduplicated by (parent relation, tuple key) so a
     // statement naming one parent from a thousand rows descends once.
     //
     // Called **before any row work** - at the dispatch fork for a statement
@@ -1362,7 +1362,7 @@ private:
 
 
     // The body `ResolveForeignKeyParents` and the FK checks index into: the
-    // columns after the pk, which is the shape every downstream consumer
+    // columns after the tuple key, which is the shape every downstream consumer
     // takes. Mirrors `InsertOneRow`'s arity split without repeating its
     // refusals - a row of neither legal length yields an empty body here and
     // is refused there, in the order it always was.
@@ -1379,14 +1379,14 @@ private:
     //
     // A busy answer naming a child writer records a wait on it (AY-Q8,
     // `WaitForChildRowWriter`), which the caller parks its walk on.
-    Status CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent, std::uint64_t parent_pk,
+    Status CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent, std::uint64_t parent_tuple_key,
                                        const WriteScope& scope);
 
-    // **The reverse check's wait** (AY-Q8): the child row `pk` of
+    // **The reverse check's wait** (AY-Q8): the child row `tuple_key` of
     // `child_rel` is being written by `holder`, which holds no `S` on the
     // parent. Registers a wake on that row where a table and a reactor exist,
     // and records the block.
-    void WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel, std::uint64_t pk,
+    void WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel, std::uint64_t tuple_key,
                                std::uint64_t holder);
 
     // One access shape, recorded by hand because a check is not a step
@@ -1632,7 +1632,7 @@ public:
         before_drop_exclusive_for_test_ = std::move(hook);
     }
 
-    // **A seam after an `UPDATE` wrote a row** (BJ-R9), handed the row's pk:
+    // **A seam after an `UPDATE` wrote a row** (BJ-R9), handed the row's tuple key:
     // the application count a non-idempotent `SET` makes load-bearing. A
     // literal `SET` is idempotent, so a path that applied it twice to one
     // row was invisible; the cell counts the calls instead of reading a
@@ -1849,8 +1849,8 @@ private:
     // unnecessary. The surplus is subtracted at read time by verification.
     //
     // `values[i]` is the value of column `first_col_pos + i`: INSERT passes
-    // the row's body (`first_col_pos` 1, after the pk) and UPDATE the whole
-    // decoded row (0). `pk`, `page_id` and `slot` are the tuple's identity
+    // the row's body (`first_col_pos` 1, after the tuple key) and UPDATE the whole
+    // decoded row (0). `tuple_key`, `page_id` and `slot` are the tuple's identity
     // and location, already in hand at both sites, so C6's hints cost
     // nothing to produce.
     //
@@ -1867,7 +1867,7 @@ private:
     // corollary) and is always legal.
     void NoteCabinWrite(const catalog::TableAccess& access,
                         std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
-                        std::uint64_t pk, PageId page_id, std::uint16_t slot,
+                        std::uint64_t tuple_key, PageId page_id, std::uint16_t slot,
                         std::span<const parser::AstValue> previous = {});
     DispatchOutcome HandleUpdate(std::string_view line, Session& session);
 
@@ -1886,7 +1886,7 @@ private:
     // dropping its entry would break the superset invariant. The surplus is
     // subtracted at read time, which now includes the visibility predicate.
     DispatchOutcome HandleDelete(std::string_view line, Session& session);
-    // `PURGE FROM t WHERE <pk window>` (BH): one whole attempt - judge the
+    // `PURGE FROM t WHERE <tuple key window>` (BH): one whole attempt - judge the
     // window, then write it key by key - under an owned transaction of its
     // own, so each re-drive after a wait begins with a fresh view (BH-R5)
     // and holds no unit while it waits. A key still pending - an undecided
@@ -2031,7 +2031,7 @@ private:
     // A scope with no transaction records nothing (a dispatcher built
     // without a manager, and the `kNoTxnId` writes `LogChainInsert` makes
     // for the assertion catalog); those spills leak on rollback.
-    Status NoteSpills(const WriteScope& scope, std::uint32_t rel_oid, std::uint64_t pk,
+    Status NoteSpills(const WriteScope& scope, std::uint32_t rel_oid, std::uint64_t tuple_key,
                       const std::vector<exec::AppendedSpill>& spills);
 
     // Logs an insert **under the holds its placement handed out** (AT-S21,
@@ -2095,33 +2095,33 @@ private:
     //
     //   kScan    no shortcut. Scan; the scan is the authoritative path and
     //            produces the same answer. Every heap relation lands here,
-    //            having no pk index to descend.
+    //            having no tuple key index to descend.
     //   kAt      look at this (page, slot) - a btree descent, which is
     //            authoritative - through `at.leaf`, held **exclusive**:
     //            every caller writes the slot (btree.hpp `Location`).
     //   kAbsent  **no such row**, on authority. Only a btree descent can
     //            say this, so a heap relation never produces it.
-    struct PkLookup {
+    struct TupleKeyLookup {
         enum class Kind { kScan, kAt, kAbsent };
         Kind kind = Kind::kScan;
         btree::Location at;
     };
-    PkLookup LocateByPk(const catalog::TableAccess& access, std::uint64_t pk);
+    TupleKeyLookup LocateByTupleKey(const catalog::TableAccess& access, std::uint64_t tuple_key);
 
     // The row-relocation callback a rollback needs when a leaf division has
     // moved rows this transaction wrote (txn/manager.hpp's RowLocator).
     // Built per abort, never stored on the manager - see the definition.
     txn::TransactionManager::RowLocator RowLocatorForRollback();
 
-    // The pk value a WHERE clause is a *bare* equality against, or nullopt
-    // if it is anything else - no WHERE, more than one condition, a non-pk
+    // The tuple key value a WHERE clause is a *bare* equality against, or nullopt
+    // if it is anything else - no WHERE, more than one condition, a non-tuple-key
     // column, a non-equality operator, or a non-integer or negative
     // literal.
     //
     // Shared by SELECT and UPDATE so the two cannot disagree about which
     // predicates take the point path. Duplicating this check is how one
     // path ends up descending for a query the other correctly scans.
-    std::optional<std::uint64_t> PkEqualityTarget(
+    std::optional<std::uint64_t> TupleKeyEqualityTarget(
         const catalog::TableAccess& access,
         const std::vector<parser::Condition>& where) const;
 
@@ -2278,7 +2278,7 @@ private:
     exec::AggregateLimits aggregate_limits_;
 
     // The fold, **reused rather than constructed per statement** (AP03):
-    // building one per statement cost about 4 us of server CPU on a pk
+    // building one per statement cost about 4 us of server CPU on a tuple key
     // lookup, nearly all of it buffer allocation.
     //
     // `Reset` points it at each statement's spec and labels, which live on
@@ -2390,13 +2390,13 @@ private:
     // Per-statement members, on `pending_commit_lsn_`'s terms (one statement
     // at a time on a core), zeroed at the top of `DispatchAndStage` and read
     // out at its end. `blocking_writer_` is the undecided transaction that
-    // refused this statement, `blocked_pk_` the row it holds, and
+    // refused this statement, `blocked_tuple_key_` the row it holds, and
     // `statement_trail_mark_` the transaction's trail length when this
     // statement's write scope opened - which says whether the statement
     // wrote anything before it was refused, so whether a re-run is a repeat
     // or a second application.
     std::uint64_t blocking_writer_ = 0;
-    std::uint64_t blocked_pk_ = 0;
+    std::uint64_t blocked_tuple_key_ = 0;
 
     // On `blocking_writer_`'s terms, the relation lock wait (AO-S6e-b): set
     // where the borrow is refused, read back out by `DispatchAndStage` into

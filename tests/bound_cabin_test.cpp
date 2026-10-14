@@ -17,7 +17,7 @@
 // One test per acceptance criterion, and each is written against the property
 // rather than the implementation:
 //
-//   entry codec round-trip          §5.1's 32 bytes, pk authoritative
+//   entry codec round-trip          §5.1's 32 bytes, tuple key authoritative
 //   group header updates            §5.2's running aggregate
 //   hash collisions isolate groups  the key confirms, the hash only finds
 //   eviction never touches a pinned Bound Cabin frame   EV3, by page kind
@@ -61,9 +61,9 @@ std::string Key(std::vector<parser::AstValue> values) { return EncodeGroupKey(va
 TEST(BoundCabinEntryTest, ThirtyTwoBytesRoundTripEveryField) {
     BoundCabinEntry in;
     // Every id bit set beside flags 0x3: with the flags shift left at 40
-    // (BK-R2's half move) the flags land inside the pk's bits and decode as
+    // (BK-R2's half move) the flags land inside the tuple key's bits and decode as
     // something other than 0x3, which the flags compare catches.
-    in.pk = kMaxKeystoneId;
+    in.tuple_key = kMaxKeystoneId;
     in.flags = kEntryReserved | kEntryHintValid;
     in.page_id = 4242;
     in.page_epoch = 7;
@@ -74,7 +74,7 @@ TEST(BoundCabinEntryTest, ThirtyTwoBytesRoundTripEveryField) {
     ASSERT_TRUE(storage::cabin::EncodeEntry(in, buf).ok());
     const BoundCabinEntry out = storage::cabin::DecodeEntry(buf);
 
-    EXPECT_EQ(out.pk, in.pk);
+    EXPECT_EQ(out.tuple_key, in.tuple_key);
     EXPECT_EQ(out.flags, in.flags);
     EXPECT_EQ(out.page_id, in.page_id);
     EXPECT_EQ(out.page_epoch, in.page_epoch);
@@ -84,12 +84,12 @@ TEST(BoundCabinEntryTest, ThirtyTwoBytesRoundTripEveryField) {
     EXPECT_TRUE(out.hint_valid());
 }
 
-TEST(BoundCabinEntryTest, APkPastTheIdSpaceIsRefusedRatherThanTruncated) {
-    // A truncated pk is a name that means a *different* row, which is exactly
+TEST(BoundCabinEntryTest, ATupleKeyPastTheIdSpaceIsRefusedRatherThanTruncated) {
+    // A truncated tuple key is a name that means a *different* row, which is exactly
     // the mis-attribution K1 exists to make impossible. Refusing is the only
     // safe answer; narrowing would be silent corruption of an identity.
     BoundCabinEntry in;
-    in.pk = kIdSpaceEnd;  // one past the range
+    in.tuple_key = kIdSpaceEnd;  // one past the range
 
     std::array<std::byte, kEntryBytes> buf{};
     Status s = storage::cabin::EncodeEntry(in, buf);
@@ -100,18 +100,18 @@ TEST(BoundCabinEntryTest, APkPastTheIdSpaceIsRefusedRatherThanTruncated) {
 }
 
 TEST(BoundCabinEntryTest, AnEntryWithNoHintIsStillAValidEntry) {
-    // C2 carried over: the pk is the authority and the location is advice, so
+    // C2 carried over: the tuple key is the authority and the location is advice, so
     // an entry whose hint was proven wrong is complete and correct - it just
     // costs a descent.
     BoundCabinEntry in;
-    in.pk = 77;
+    in.tuple_key = 77;
     in.value = 5;
     in.page_id = kInvalidPageId;
 
     std::array<std::byte, kEntryBytes> buf{};
     ASSERT_TRUE(storage::cabin::EncodeEntry(in, buf).ok());
     const BoundCabinEntry out = storage::cabin::DecodeEntry(buf);
-    EXPECT_EQ(out.pk, 77u);
+    EXPECT_EQ(out.tuple_key, 77u);
     EXPECT_FALSE(out.hint_valid());
 }
 
@@ -155,7 +155,7 @@ TEST_F(BoundCabinPageTest, AppendsReadBackInOrderAndFillTheStatedCapacity) {
 
     for (std::uint16_t i = 0; i < kMaxEntriesPerPage; ++i) {
         BoundCabinEntry e;
-        e.pk = 1000 + i;
+        e.tuple_key = 1000 + i;
         e.value = i;
         auto at = view.value().Append(e);
         ASSERT_TRUE(at.ok()) << at.status().message();
@@ -167,7 +167,7 @@ TEST_F(BoundCabinPageTest, AppendsReadBackInOrderAndFillTheStatedCapacity) {
     EXPECT_EQ(kMaxEntriesPerPage, 254);
 
     BoundCabinEntry overflow;
-    overflow.pk = 1;
+    overflow.tuple_key = 1;
     auto refused = view.value().Append(overflow);
     EXPECT_FALSE(refused.ok());
     EXPECT_EQ(refused.status().code(), StatusCode::kOutOfSpace);
@@ -175,7 +175,7 @@ TEST_F(BoundCabinPageTest, AppendsReadBackInOrderAndFillTheStatedCapacity) {
     for (std::uint16_t i = 0; i < kMaxEntriesPerPage; ++i) {
         auto e = view.value().Read(i);
         ASSERT_TRUE(e.ok());
-        EXPECT_EQ(e.value().pk, 1000u + i);
+        EXPECT_EQ(e.value().tuple_key, 1000u + i);
         EXPECT_EQ(e.value().value, i);
     }
 }
@@ -183,13 +183,13 @@ TEST_F(BoundCabinPageTest, AppendsReadBackInOrderAndFillTheStatedCapacity) {
 TEST_F(BoundCabinPageTest, CommitClearsTheReservedFlagInPlace) {
     // The one mutation the format needs: §6.2 step 4 clears RESERVED, and the
     // aggregate is already correct because the reservation counted from
-    // admission. Nothing else about an entry ever changes - its pk least of
+    // admission. Nothing else about an entry ever changes - its tuple key least of
     // all.
     auto view = BoundCabinPage::Open(page());
     ASSERT_TRUE(view.ok());
 
     BoundCabinEntry e;
-    e.pk = 5;
+    e.tuple_key = 5;
     e.value = 3;
     e.flags = kEntryReserved;
     auto at = view.value().Append(e);
@@ -201,7 +201,7 @@ TEST_F(BoundCabinPageTest, CommitClearsTheReservedFlagInPlace) {
     auto after = view.value().Read(at.value());
     ASSERT_TRUE(after.ok());
     EXPECT_FALSE(after.value().reserved());
-    EXPECT_EQ(after.value().pk, 5u) << "the identity is untouched by a commit";
+    EXPECT_EQ(after.value().tuple_key, 5u) << "the identity is untouched by a commit";
     EXPECT_EQ(view.value().entry_count(), 1u) << "nothing was appended";
 }
 
@@ -401,7 +401,7 @@ TEST(BoundCabinTest, ReSummingTheEntriesAgreesWithTheHeaderAndCatchesADivergence
     std::vector<BoundCabinEntry> entries;
     for (std::int64_t v : {10, 20, 30}) {
         BoundCabinEntry e;
-        e.pk = 100 + static_cast<std::uint64_t>(v);
+        e.tuple_key = 100 + static_cast<std::uint64_t>(v);
         e.value = v;
         entries.push_back(e);
         ASSERT_TRUE(cabin.Apply(k, v, 9, static_cast<std::uint16_t>(entries.size() - 1)).ok());

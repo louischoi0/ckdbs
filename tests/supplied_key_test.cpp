@@ -14,14 +14,14 @@
 #include "kds/txn/manager.hpp"
 #include "view_text.hpp"
 
-// End-to-end cover for caller-supplied primary keys (docs/spec/heap-and-tuple.md
+// End-to-end cover for caller-supplied tuple keys (docs/spec/heap-and-tuple.md
 // §4.1). The unit-level pieces are tested where they live - the admission
 // gate in catalog_test.cpp, the leaf division in btree_test.cpp (which SQL no
 // longer reaches), the grammar in parser_test.cpp - and this file is the one
 // place all of them run together, through SQL, the way a caller meets them.
 //
 // **The claim moved on 2026-08-25** and the file was renamed with it. It was
-// *a caller may name a relation's primary keys, those keys need not ascend,
+// *a caller may name a relation's tuple keys, those keys need not ascend,
 // and nothing else about the engine changes* - a per-relation mode, chosen at
 // CREATE TABLE, btree-only. It moved on 2026-10-06 (BB-R3) to *a named key
 // must sort above every key the relation has placed*, refused below the mark.
@@ -29,9 +29,9 @@
 // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`): a btree
 // leaf places a row where its key sorts, so it is now:
 //
-//   **Every relation takes a caller-supplied primary key or issues one when
+//   **Every relation takes a caller-supplied tuple key or issues one when
 //   the INSERT omits it, per row. A btree takes a named key in any order,
-//   and refuses it for its pk for two reasons only: a duplicate
+//   and refuses it for its tuple key for two reasons only: a duplicate
 //   (AlreadyExists) or a key outside the id space (OutOfRange). A heap
 //   still takes only a key at or above its mark (BB-R7, BD-Q4).**
 //
@@ -105,7 +105,7 @@ TEST_F(SuppliedKeySqlTest, AWrongArityNamesBothAcceptedCounts) {
     // off-by-one against whichever the writer did not mean.
     auto out = d.Dispatch("INSERT INTO t VALUES (1, 2, 3)");
     EXPECT_EQ(out.response.substr(0, 3), "ERR") << out.response;
-    EXPECT_NE(out.response.find("2 value(s) including primary-key column 'id'"),
+    EXPECT_NE(out.response.find("2 value(s) including tuple key column 'id'"),
               std::string::npos)
         << out.response;
     EXPECT_NE(out.response.find("or 1 to have it issued"), std::string::npos) << out.response;
@@ -195,7 +195,7 @@ TEST_F(SuppliedKeySqlTest, AHeapRelationRefusesAKeyBelowItsMarkPresentOrAbsent) 
     auto again = d.Dispatch("INSERT INTO h VALUES (600, 3)");
     EXPECT_EQ(again.response.substr(0, 3), "ERR") << again.response;
     EXPECT_NE(again.response.find("high-water mark"), std::string::npos) << again.response;
-    EXPECT_EQ(again.response.find("duplicate primary key"), std::string::npos)
+    EXPECT_EQ(again.response.find("duplicate tuple key"), std::string::npos)
         << "a heap answers OutOfRange for a present key too (BB-R12): " << again.response;
 
     // The relation is unharmed and the mark did not move: 600 keeps its
@@ -394,7 +394,7 @@ TEST_F(SuppliedKeySqlTest, OrderByWithLimitTakesTheLowestKeysNotTheFirstSlots) {
         << page2.response;
 }
 
-TEST_F(SuppliedKeySqlTest, OrderByThePkCostsNothing) {
+TEST_F(SuppliedKeySqlTest, OrderByTheTupleKeyCostsNothing) {
     auto d = Dispatcher();
     CreateHeap(d);
 
@@ -466,7 +466,7 @@ protected:
 // Compensating an entry recorded before either reaches whatever now occupies
 // that slot - so the failure is not a rollback that misses rows, it is a
 // rollback that writes over rows it never touched. The live rollback re-finds
-// the row by pk (`RowLocatorForRollback`), and these cells pin it, restored
+// the row by tuple key (`RowLocatorForRollback`), and these cells pin it, restored
 // at BD-S3 from the shape BB-S3 withdrew.
 
 TEST_F(SuppliedKeyBulkTest, AFailedStatementThatDividedALeafRollsBackWhole) {
@@ -603,7 +603,7 @@ TEST_F(SuppliedKeySqlTest, ADuplicateKeyIsRefused) {
     // key. This is the test that the proof actually runs.
     auto dup = d.Dispatch("INSERT INTO t VALUES (42, 2)");
     EXPECT_EQ(dup.response.substr(0, 3), "ERR") << dup.response;
-    EXPECT_NE(dup.response.find("duplicate primary key"), std::string::npos) << dup.response;
+    EXPECT_NE(dup.response.find("duplicate tuple key"), std::string::npos) << dup.response;
 
     // And the loser changed nothing.
     EXPECT_NE(d.Dispatch("SELECT * FROM t WHERE id = 42").response.find("1"), std::string::npos);
@@ -620,7 +620,7 @@ TEST_F(SuppliedKeySqlTest, ADuplicateOfADescendingKeyIsAlsoRefused) {
     // the mark, so only a real lookup can know it is taken.
     auto dup = d.Dispatch("INSERT INTO t VALUES (100, 3)");
     EXPECT_EQ(dup.response.substr(0, 3), "ERR") << dup.response;
-    EXPECT_NE(dup.response.find("duplicate primary key"), std::string::npos) << dup.response;
+    EXPECT_NE(dup.response.find("duplicate tuple key"), std::string::npos) << dup.response;
 }
 
 // ---- A key below the mark, placed (BD-R5) ---------------------------------
@@ -653,7 +653,7 @@ TEST_F(SuppliedKeySqlTest, APresentKeyBelowTheMarkIsRefusedAsADuplicate) {
     ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (1)").response.substr(0, 8), "INSERTED");
     auto dup = d.Dispatch("INSERT INTO t VALUES (1, 9)");
     EXPECT_EQ(dup.response.substr(0, 3), "ERR") << dup.response;
-    EXPECT_NE(dup.response.find("duplicate primary key"), std::string::npos)
+    EXPECT_NE(dup.response.find("duplicate tuple key"), std::string::npos)
         << "a present key is refused AlreadyExists (BB-R12): " << dup.response;
     EXPECT_EQ(dup.status.code(), StatusCode::kAlreadyExists) << dup.status.message();
 }
@@ -681,7 +681,7 @@ TEST_F(SuppliedKeySqlTest, AKeyOutsideTheIdSpaceIsRefused) {
     for (const char* key : {"-3", "-0", "18446744073709551621"}) {
         auto out = d.Dispatch(std::string("INSERT INTO t VALUES (") + key + ", 1)");
         EXPECT_EQ(out.status.code(), StatusCode::kOutOfRange) << key << ": " << out.response;
-        EXPECT_NE(out.response.find(std::string("primary key ") + key + " "), std::string::npos)
+        EXPECT_NE(out.response.find(std::string("tuple key ") + key + " "), std::string::npos)
             << out.response;
         EXPECT_NE(out.response.find("(byte 22)"), std::string::npos) << out.response;
     }
@@ -748,7 +748,7 @@ TEST_F(SuppliedKeySqlTest, HeapExplicitIsCreatedRatherThanRefused) {
 TEST_F(SuppliedKeySqlTest, AssignedIsRefusedAtCreateWithItsByte) {
     auto d = Dispatcher();
 
-    // The word that outlived nothing: it named a mode where supplying a pk
+    // The word that outlived nothing: it named a mode where supplying a tuple key
     // was refused, and on the relation this statement would create,
     // supplying one is admitted. Refused rather than ignored.
     auto out = d.Dispatch("CREATE TABLE a (id int64, qty int64) HEAP ASSIGNED");
