@@ -92,3 +92,11 @@ _Sections 8-10 recorded by CLA on `worktree-bw-instant-add-drop-column` at `d6cb
 | **Mark** | **BW closed** at `d6cb3826`. **Does not settle**: BW-Q11 (adopted (a) on the go-ahead; the operator's own mark on it is still the one it most needs), cleaning (D-e), and a quiet-host re-measure of `e8727478` against the pre-BW tree; no tag, no version |
 | **Recorded at** | `workorder-bw-instant-add-drop-column.md` §6; `index.md`'s BW row; CLAUDE.md's ALTER TABLE row |
 
+## 11. BW-Q11 marked (a); its fix taken into BW
+
+| | |
+|---|---|
+| **Word** | *"BW-Q11 $!a include this fix in BW M"* (W7) |
+| **Mark** | **BW-Q11 (a)**, now the operator's own mark: a positional `INSERT` written before a `DROP` is not caught by its count, and an `INSERT` column list is what closes it. **The column list is built in BW**, as BW-S6, not left to BU-S8: BW reopens for that stage (its close at §10 stands for S1-S5). BU-S8 keeps the rest of its row (`INSERT ... SELECT`, `VALUES` expressions, `RETURNING`, `UPDATE ... FROM`, `DELETE ... USING`, `ON CONFLICT DO NOTHING`). BW-S6's own design items are adopted as CLA proposes on the standing go-ahead of 2026-10-14 (W3), which covers BW |
+| **Recorded at** | `workorder-bw-instant-add-drop-column.md` header, §4 BW-Q11, §5 BW-S6, §6; `workorder-bu-basic-query-surface.md` BU-S8's row; both index rows |
+

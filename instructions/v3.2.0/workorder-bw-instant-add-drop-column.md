@@ -34,7 +34,11 @@ English:
   operator's standing go-ahead of 2026-10-14
   (go-ahead-achieving-milestone)**, not marked per item by the operator.
 
-The words are in `raft-marks-2026-10-14.md` §5-§7. W2 is BW's own word and
+- **W7**: *"BW-Q11 $!a include this fix in BW M"* - BW-Q11 (a) is the
+  operator's mark, and the `INSERT` column list that closes it is built in
+  BW as BW-S6 (`raft-marks-2026-10-14.md` §11).
+
+The words are in `raft-marks-2026-10-14.md` §5-§7 and §11. W2 is BW's own word and
 outranks the skill's close measurement.
 
 **Claim tags**: `[source-read]` with `path:line` at `750496b1`; `[design]`
@@ -332,6 +336,8 @@ before its adoption, and it holds.
   `INSERT` carries across a schema change, and the column list that closes
   it is another milestone's. **Adopted (a) on the standing go-ahead of
   2026-10-14 (W3)**; the operator's mark is the one this item most needs.
+  **Marked (a) by the operator (W7)**, with the column list built in BW
+  (BW-S6) rather than BU-S8.
 
 ---
 
@@ -388,12 +394,17 @@ Every stage runs the full suite and gets a `critics-developer` review
   - CLAUDE.md's ALTER TABLE row.
 - **BW-S5 — the close.** The overhead measurement is held (W2). The close
   report says it was not run.
+- **BW-S6 — `INSERT` with a column list** (W7, BW-Q11 (a)).
+  `INSERT INTO t (c1, c2, ...) VALUES (...)` names its columns, so no
+  column change can shift it. Its design items are BW-Q12 below, adopted
+  on W3 as CLA proposes.
 
 ---
 
 ## 6. Where to start
 
-**BW is closed** - on the operator's word of 2026-10-14 (W6, `raft-marks-2026-10-14.md` §10), at `d6cb3826` (`v3.2.0-28-gd6cb3826`, on `main`). BW-S1..S4 landed (`f2a72474`, `69a31361`, `bc42a011`, `d0134573`); BW-Q1..Q11 adopted on the standing go-ahead (W3). The close measurement ran when the operator directed it (W4, W5): `bench/v3.2.0/results-bw-close-v3.2.0-22-g541ce440.md` found the every-row `UPDATE` +30 us / 1,000 rows outside the spread; the profile attributed none of it to a BW-changed line (`bench/v3.2.0/archive/bw-update-profile/`); `e8727478` hoisted the dropped-column gate out of the codec loops, and `bench/v3.2.0/results-bw-update-fix-v3.2.0-24-ge8727478.md` measured it below `541ce440` in 7 of 7 runs on both paths, while whether it equals the pre-BW tree is unresolved on a loaded host (`known-gaps.md`). Left open: BW-Q11's `[quiet-wrong]` gap (BU-S8's column list closes it); cleaning (D-e).
+**BW reopened for BW-S6** (W7, the `INSERT` column list); S1-S5 stand as
+closed. **BW was closed** - on the operator's word of 2026-10-14 (W6, `raft-marks-2026-10-14.md` §10), at `d6cb3826` (`v3.2.0-28-gd6cb3826`, on `main`). BW-S1..S4 landed (`f2a72474`, `69a31361`, `bc42a011`, `d0134573`); BW-Q1..Q11 adopted on the standing go-ahead (W3). The close measurement ran when the operator directed it (W4, W5): `bench/v3.2.0/results-bw-close-v3.2.0-22-g541ce440.md` found the every-row `UPDATE` +30 us / 1,000 rows outside the spread; the profile attributed none of it to a BW-changed line (`bench/v3.2.0/archive/bw-update-profile/`); `e8727478` hoisted the dropped-column gate out of the codec loops, and `bench/v3.2.0/results-bw-update-fix-v3.2.0-24-ge8727478.md` measured it below `541ce440` in 7 of 7 runs on both paths, while whether it equals the pre-BW tree is unresolved on a loaded host (`known-gaps.md`). Left open: BW-Q11's `[quiet-wrong]` gap (BU-S8's column list closes it); cleaning (D-e).
 
 ---
 
