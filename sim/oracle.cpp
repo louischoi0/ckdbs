@@ -33,7 +33,7 @@ std::size_t Oracle::ApplyUpdate(const std::string& table, const Predicate& where
         ++updated;
     };
 
-    if (where.by_pk) {
+    if (where.by_tuple_key) {
         auto row = t->second.find(where.key);
         if (row != t->second.end()) assign(row->first, row->second);
         return updated;
@@ -48,7 +48,7 @@ std::size_t Oracle::ApplyDelete(const std::string& table, const Predicate& where
     auto t = Live().find(table);
     if (t == Live().end()) return 0;
 
-    if (where.by_pk) {
+    if (where.by_tuple_key) {
         auto row = t->second.find(where.key);
         if (row == t->second.end()) return 0;
         Touch(table, where.key);
@@ -74,7 +74,7 @@ std::vector<std::uint64_t> Oracle::Matching(const std::string& table,
     std::vector<std::uint64_t> out;
     auto t = Live().find(table);
     if (t == Live().end()) return out;
-    if (where.by_pk) {
+    if (where.by_tuple_key) {
         if (t->second.count(where.key) != 0) out.push_back(where.key);
         return out;
     }
@@ -151,8 +151,8 @@ bool Oracle::IsUnchecked(const std::string& table, std::uint64_t id) const {
 
 bool Oracle::CountCheckable(const std::string& table, const Predicate& where) const {
     if (!has_unknowns(table)) return true;
-    if (!where.by_pk) return false;
-    // A pk predicate names exactly one row, so the only unknown that can
+    if (!where.by_tuple_key) return false;
+    // A tuple key predicate names exactly one row, so the only unknown that can
     // change its count is that row's own. An outstanding errored INSERT
     // matters only if *this* id is one the engine never named — an id it
     // did name is the oracle's to assert on whatever else is unknown here.
@@ -174,7 +174,7 @@ bool Oracle::Ignorable(const std::string& table, std::string_view rendered) cons
     return it == issued_.end() || it->second.count(id) == 0;
 }
 
-std::vector<std::string> Oracle::ExpectPk(const std::string& table, std::uint64_t key) const {
+std::vector<std::string> Oracle::ExpectTupleKey(const std::string& table, std::uint64_t key) const {
     std::vector<std::string> out;
     auto t = Live().find(table);
     if (t == Live().end()) return out;

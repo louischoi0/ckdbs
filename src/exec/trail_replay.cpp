@@ -23,7 +23,7 @@ void TrailReplay::Build(const StepChain& chain,
     by_key_.reserve(entries.size());
     for (const stats::WaystoneEntry& entry : entries) {
         // A never-written entry reads back all-zero, which decodes to a
-        // plausible-looking pk 0 at page 0 (waystone.hpp). The flag is the
+        // plausible-looking tuple key 0 at page 0 (waystone.hpp). The flag is the
         // only safe test.
         if ((entry.flags & stats::kWaystoneEntryValid) == 0) continue;
 
@@ -45,19 +45,19 @@ void TrailReplay::Build(const StepChain& chain,
 
         // **Last entry wins for a repeated key**, and it does not matter
         // which: the entries were recorded in one execution, and one
-        // execution locates one tuple per (step, pk) - a probe for the same
+        // execution locates one tuple per (step, tuple key) - a probe for the same
         // key twice found the same row both times. Stated because
         // `insert_or_assign` looks like a choice and is not.
-        by_key_.insert_or_assign(PackKey(entry.step_id, entry.pk),
+        by_key_.insert_or_assign(PackKey(entry.step_id, entry.tuple_key),
                                  TrailLocation{entry.page_id, entry.page_epoch, entry.slot});
     }
 }
 
-const TrailLocation* TrailReplay::Find(std::uint32_t step_id, std::uint64_t pk) const noexcept {
+const TrailLocation* TrailReplay::Find(std::uint32_t step_id, std::uint64_t tuple_key) const noexcept {
     // BK-R3: the entry format holds 16-bit step ids, so no wider one was
     // ever recorded - a miss, never a narrowing onto another step's key.
     if (step_id > 0xFFFF) return nullptr;
-    auto found = by_key_.find(PackKey(static_cast<std::uint16_t>(step_id), pk));
+    auto found = by_key_.find(PackKey(static_cast<std::uint16_t>(step_id), tuple_key));
     return found == by_key_.end() ? nullptr : &found->second;
 }
 

@@ -128,7 +128,7 @@ names are load-bearing for bootstrap and are nobody's to change).
   them one act across cores (`catalog.md` CT7, AT-S17).
 - New column name: same checks against the relation's own columns, under
   one hold of `sys.columns`' root page (CT7).
-- **The pk column may be renamed.** Identity is the Keystone word and
+- **The tuple key column may be renamed.** Identity is the Keystone word and
   position 0 (invariant 11), not the spelling; `CheckKeystoneColumn` is
   positional and does not re-run.
 - No content validation re-runs: a rename changes no value, so FK, index,

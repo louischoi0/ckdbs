@@ -32,12 +32,12 @@ FkVerdict VerdictOf(txn::CheckVerdict verdict) noexcept {
 }
 
 // The value a Cabin on the child's fk column is keyed by, for this parent.
-// A pk is an integer by invariant 11, so this never has to consider the
+// A tuple key is an integer by invariant 11, so this never has to consider the
 // other value kinds.
-parser::AstValue PkValue(std::uint64_t pk) {
+parser::AstValue TupleKeyValue(std::uint64_t tuple_key) {
     parser::AstValue value;
     value.type = parser::ValueType::kInt;
-    value.int_val = static_cast<std::int64_t>(pk);
+    value.int_val = static_cast<std::int64_t>(tuple_key);
     return value;
 }
 
@@ -86,7 +86,7 @@ StatusOr<std::optional<std::uint64_t>> ForeignKeyValue(const catalog::TableAcces
 
 StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
                                        const catalog::TableAccess& parent,
-                                       std::uint64_t parent_pk,
+                                       std::uint64_t parent_tuple_key,
                                        const txn::ReadView& check_view, Budget* budget,
                                        std::uint64_t* busy_trx) {
     if (busy_trx != nullptr) *busy_trx = 0;
@@ -99,7 +99,7 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
         // relation: a hit is where the row lives, and a miss means there is
         // no such row - the same property that lets a point SELECT skip the
         // scan, and the reason the declaration refuses a heap parent.
-        auto found = btree::BtreeLookup(store, parent.desc_page_id, parent_pk);
+        auto found = btree::BtreeLookup(store, parent.desc_page_id, parent_tuple_key);
         if (!found.ok()) {
             if (found.status().code() == StatusCode::kNotFound) return FkVerdict::kViolation;
             return found.status();
@@ -144,7 +144,7 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
             inner = id.status();
             return id.status();
         }
-        if (id.value() != parent_pk) return storage::VisitControl::kContinue;
+        if (id.value() != parent_tuple_key) return storage::VisitControl::kContinue;
         verdict = VerdictOf(txn::CheckVisibility(check_view, tuple.value()));
         return storage::VisitControl::kStop;
     };
@@ -159,7 +159,7 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
 StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                                                   const catalog::TableAccess& child,
                                                   std::uint16_t child_column_no,
-                                                  std::uint64_t parent_pk,
+                                                  std::uint64_t parent_tuple_key,
                                                   const txn::ReadView& check_view,
                                                   const FkReverseOptions& options,
                                                   Budget* budget) {
@@ -176,14 +176,14 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     // ---- The Cabin, if this value has been observed (F6) ----------------
     std::optional<stats::CabinKey> key;
     if (options.cabins != nullptr && options.cabin_id != 0) {
-        key = stats::MakeCabinKey(options.cabin_id, PkValue(parent_pk));
+        key = stats::MakeCabinKey(options.cabin_id, TupleKeyValue(parent_tuple_key));
     }
 
     if (key.has_value()) {
         if (const stats::CabinSet set = options.cabins->Find(*key); set.valid()) {
             options.cabins->NoteHit(options.cabin_id);
 
-            // An observed value's set is a **superset** of the pks that
+            // An observed value's set is a **superset** of the tuple keys that
             // carry it, so every entry has to be checked and none may be
             // trusted on sight. A live match found here is authoritative and
             // returns without walking; so is an exhausted loop that checked
@@ -198,7 +198,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 // the instance's, and another core may be healing this
                 // entry while this loop reads it.
                 const stats::CabinEntry entry = set.At(i);
-                if (!seen.insert(entry.pk).second) continue;  // v→v′→v round trip
+                if (!seen.insert(entry.tuple_key).second) continue;  // v→v′→v round trip
 
                 // Held from the moment the slot is vouched for - by the
                 // verifier or by the descent - to the read (btree.hpp
@@ -208,7 +208,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 storage::PageRef held;
                 if (entry.hint_valid()) {
                     VerifiedTuple verified = VerifyTupleAt(store, entry.page_id, entry.slot,
-                                                           entry.pk, entry.page_epoch, child.oid);
+                                                           entry.tuple_key, entry.page_epoch, child.oid);
                     options.cabins->NoteHint(options.cabin_id, verified.ok());
                     if (verified.ok()) {
                         at_page = entry.page_id;
@@ -226,9 +226,9 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                         usable = false;
                         break;
                     }
-                    auto found = btree::BtreeLookup(store, child.desc_page_id, entry.pk);
+                    auto found = btree::BtreeLookup(store, child.desc_page_id, entry.tuple_key);
                     if (!found.ok()) {
-                        // Dangling: the pk names no row now - a skip, not an
+                        // Dangling: the tuple key names no row now - a skip, not an
                         // error. A committed key names another row only
                         // after a `PURGE` freed it (K1); a rolled-back or
                         // purged one may be named again (W12, BD-R4, BH),
@@ -266,9 +266,9 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 auto value =
                     ForeignKeyValue(child, child_column_no, tuple.value().payload, scratch);
                 if (!value.ok()) return value.status();
-                if (!value.value().has_value() || *value.value() != parent_pk) {
+                if (!value.value().has_value() || *value.value() != parent_tuple_key) {
                     // **A row an undecided writer moved off the parent**
-                    // keeps its pk in this set and holds the writer's value
+                    // keeps its tuple key in this set and holds the writer's value
                     // in its page (AY-Q8): skipping it would clear a parent
                     // the writer's rollback references again. The set is
                     // given up for this check and the walk, which reads such
@@ -290,7 +290,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                     outcome.verdict = FkVerdict::kBusy;
                     outcome.served_from_cabin = true;
                     outcome.busy_trx = tuple.value().trx_id;
-                    outcome.busy_pk = entry.pk;
+                    outcome.busy_tuple_key = entry.tuple_key;
                     return outcome;
                 }
             }
@@ -313,7 +313,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     // ---- The walk (§3) --------------------------------------------------
     //
     // **The walk records nothing into the Cabin** - a correction to F6 the
-    // header states: a deleted pk is dead by construction and would spend
+    // header states: a deleted tuple key is dead by construction and would spend
     // `cabin_max_values`' bounded budget.
     FkVerdict verdict = FkVerdict::kPass;
     Status inner = Status::OK();
@@ -361,7 +361,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
             inner = value.status();
             return value.status();
         }
-        if (!value.value().has_value() || *value.value() != parent_pk) {
+        if (!value.value().has_value() || *value.value() != parent_tuple_key) {
             if (UndecidedWithEarlierVersion(check_view, tuple.value())) {
                 const auto bytes = tuple.value().payload;
                 moved.push_back(Moved{tuple.value().trx_id, tuple.value().deleted,
@@ -375,13 +375,13 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
 
         verdict = seen_as == txn::CheckVerdict::kBusy ? FkVerdict::kBusy : FkVerdict::kViolation;
         if (verdict == FkVerdict::kBusy) {
-            auto pk = KeystoneIdOfPayload(tuple.value().payload);
-            if (!pk.ok()) {
-                inner = pk.status();
-                return pk.status();
+            auto tuple_key = KeystoneIdOfPayload(tuple.value().payload);
+            if (!tuple_key.ok()) {
+                inner = tuple_key.status();
+                return tuple_key.status();
             }
             outcome.busy_trx = tuple.value().trx_id;
-            outcome.busy_pk = pk.value();
+            outcome.busy_tuple_key = tuple_key.value();
         }
         return storage::VisitControl::kStop;
     };
@@ -399,8 +399,8 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
     // answers, and a moved row can only turn "no children" into busy.
     for (Moved& row : moved) {
         if (verdict != FkVerdict::kPass) break;
-        auto pk = KeystoneIdOfPayload(row.payload);
-        if (!pk.ok()) return pk.status();
+        auto tuple_key = KeystoneIdOfPayload(row.payload);
+        if (!tuple_key.ok()) return tuple_key.status();
         bool references = true;  // with no log to read, the row may reference it
         if (options.undo != nullptr) {
             auto seen = txn::ResolveThroughUndo(check_view, *options.undo, row.trx_id, row.deleted,
@@ -410,13 +410,13 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
             if (seen.value() == txn::Visibility::kVisible) {
                 auto value = ForeignKeyValue(child, child_column_no, row.payload, scratch);
                 if (!value.ok()) return value.status();
-                references = value.value().has_value() && *value.value() == parent_pk;
+                references = value.value().has_value() && *value.value() == parent_tuple_key;
             }
         }
         if (references) {
             verdict = FkVerdict::kBusy;
             outcome.busy_trx = row.trx_id;
-            outcome.busy_pk = pk.value();
+            outcome.busy_tuple_key = tuple_key.value();
         }
     }
 

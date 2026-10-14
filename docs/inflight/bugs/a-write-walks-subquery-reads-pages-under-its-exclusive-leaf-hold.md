@@ -105,7 +105,7 @@ Smallest first, from the census's verification:
   the one written - over its own relation, hoisting hides the statement's
   earlier rows from it.
 - **(a) Evaluate sub-chains with no page latch held**: stop the walk through
-  AO-S3b's resume-by-pk, evaluate, re-descend and re-check before writing.
+  AO-S3b's resume-by-tuple key, evaluate, re-descend and re-check before writing.
 
 Owner: `page.md` §6's owed page-against-page order (AM-S2's), and
 `rules.md` §3's page latch row.

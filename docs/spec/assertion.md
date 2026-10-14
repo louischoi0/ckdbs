@@ -217,15 +217,15 @@ shared lookup machinery but different lifecycle contracts:
 
 | Field | Width | Notes |
 |---|---|---|
-| pk | 48 bit | Keystone id, authoritative (K1 invariants: never reused except after a `PURGE` freed it, never changed - `DELETE` writes the departure and `PURGE` writes none) |
+| tuple key | 48 bit | Keystone id, authoritative (K1 invariants: never reused except after a `PURGE` freed it, never changed - `DELETE` writes the departure and `PURGE` writes none) |
 | flags | 8 bit | includes `RESERVED` for in-flight entries (§6) and `ORPHANED` (bit 3, `kEntryOrphaned`) for an entry whose reservation aborted (AS6b, §7) |
 | reserved | 8 bit | alignment; the word is the Keystone word's layout (BK-R2) |
-| location hint: page id / epoch / slot | 64 bit | advisory; shares Waystone validation rules; on hint failure fall back to pk descent and heal in place |
+| location hint: page id / epoch / slot | 64 bit | advisory; shares Waystone validation rules; on hint failure fall back to tuple key descent and heal in place |
 | aggregate value | 64 bit | the row's `SUM` column value, inline (int64). For COUNT-only assertions this field is written as 1. |
 | `group_id` | 32 bit | **AS6a.** Which group of this cabin the entry belongs to. Authoritative, not advisory: it is what lets recovery rebuild the header→entry linkage by scanning the cabin's own pages. |
 | padding | — | to 32 B |
 
-The normative facts are: fixed 32 B, pk authoritative, hint advisory, value
+The normative facts are: fixed 32 B, tuple key authoritative, hint advisory, value
 inline, `group_id` authoritative. `group_id` is carried by the entry, by
 `AssertEntryPayload`, and by the in-memory group header, and all three
 writing sites stamp it. The replay fold **adopts** the id a record carries
@@ -706,12 +706,12 @@ what `ListAssertions` returns.
 
 ### 8.1a Cutover: the membership-check protocol
 
-**A row counts as incorporated if and only if its pk is present in the Bound
-Cabin.** Not inferred from pk ordering, not from scan position, not from a
+**A row counts as incorporated if and only if its tuple key is present in the Bound
+Cabin.** Not inferred from tuple key ordering, not from scan position, not from a
 watermark. The Cabin is the sole source of truth about its own contents.
 
-A pk watermark ("already scanned" ⇔ `pk <= watermark`) is not used: it would
-rest on every row written behind the scan carrying a pk above it, which
+A tuple key watermark ("already scanned" ⇔ `tuple_key <= watermark`) is not used: it would
+rest on every row written behind the scan carrying a tuple key above it, which
 `docs/rules/keystoneid-invariant.md` K3 withholds: issued keys ascend in issue
 order, not in placement order (at `cores > 1` an id issued before a higher
 one that was placed first lands below it, BD-R2), and a named key carries

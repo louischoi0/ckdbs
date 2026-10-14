@@ -600,7 +600,7 @@ std::uint64_t LockTable::RelationFenceCount(catalog::Oid rel) const {
     return FenceCounterFor(rel).load(std::memory_order_acquire);
 }
 
-bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t txn,
+bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t tuple_key, std::uint64_t txn,
                                LockMode want, std::uint64_t* holder, LockWake* wake) {
     // Every partition, because a fence's partition is decided by its own
     // `lo` and the key being probed is not it. Reached only when the
@@ -612,7 +612,7 @@ bool LockTable::FenceCoversKey(catalog::Oid rel, std::uint64_t pk, std::uint64_t
         LatchGuard guard(part.latch);
         for (Entry& e : part.entries) {
             if (e.key.rel_oid != rel || !e.key.IsFenceUnit()) continue;
-            if (!e.key.ContainsKey(pk)) continue;
+            if (!e.key.ContainsKey(tuple_key)) continue;
             for (const Tenant& h : e.holders) {
                 if (h.txn == txn) continue;
                 // A fence is held in `S` or `X`; an intention mode on a

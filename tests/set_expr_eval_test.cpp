@@ -307,7 +307,7 @@ TEST_F(SetExprEvalTest, ARowThatDoesNotMatchIsNeverEvaluated) {
 
 TEST_F(SetExprEvalTest, AFailureInALaterRowNamesThatRowAndWritesNothingOfIt) {
     // Row 1 evaluates, row 2 overflows int8 (BJ-R10): the statement is
-    // refused at row 2, naming its pk. (This dispatcher has no transaction
+    // refused at row 2, naming its tuple key. (This dispatcher has no transaction
     // manager, so rolling row 1 back is the transactional cells' to pin.)
     Exec("UPDATE t SET i8 = -100 WHERE id = 2");
     const std::string out = Run("UPDATE t SET i8 = i8 * 2 WHERE id >= 1");

@@ -85,7 +85,7 @@ struct SysTableRow {
     Name name;
     PageId desc_page_id;
     ClusteredType clustered_type;
-    // Next Keystone id this relation will issue. The relation's pk is
+    // Next Keystone id this relation will issue. The relation's tuple key is
     // system-generated and autoincrement (heap-and-tuple.md section 4,
     // CLAUDE.md invariant 10), and the sequence has to be *persistent*
     // rather than derived: deriving it as max(id)+1 would reissue an id
@@ -666,7 +666,7 @@ struct SysAccessStatRow {
     Oid rel_id;
 
     // Bit per `col_pos` the access was keyed or filtered on: bit 0 (the
-    // pk) for a lookup, probe or range; the filtered columns for a filter
+    // tuple key) for a lookup, probe or range; the filtered columns for a filter
     // scan; 0 for a bare scan.
     //
     // A relation wider than 64 columns folds its high columns into no bit,
@@ -730,7 +730,7 @@ inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 
 // ---- sys.cabins -------------------------------------------------------
 //
-// One row per Cabin: a per-`(relation, non-pk column)` store that is
+// One row per Cabin: a per-`(relation, non-tuple-key column)` store that is
 // **authoritative for the values queries have observed** and for nothing
 // else (`docs/spec/cabin.md` §10, C1).
 //
@@ -763,7 +763,7 @@ struct SysCabinRow {
     // Live values, best-effort. See the note above.
     std::uint64_t observed_ct;
 
-    // The key column's schema position. **Never 0**: the pk's Cabin is the
+    // The key column's schema position. **Never 0**: the tuple key's Cabin is the
     // clustered tree itself (§2), so a 0 here is a row no writer produces.
     std::uint16_t column_no;
 
@@ -866,7 +866,7 @@ struct SysFkeyRow {
     Oid parent_rel_oid;
 
     // The referencing column's schema position. **Never 0**: column 0 is
-    // the Keystone pk, which is the child's own identity and not a field of
+    // the Keystone tuple key, which is the child's own identity and not a field of
     // it, so a 0 here is a row no writer produces.
     std::uint16_t child_column_no;
 
@@ -899,7 +899,7 @@ static_assert(SysFkeyRow::kOnDiskSize == 28);
 // Written by `Catalog::CreateForeignKey` from the child column's declared
 // nullability - the one writer, at the one moment the fact is known.
 // Enforcement never consults it: a NULL value skips the forward probe by
-// being a NULL, a NULL child cell matches no parent pk on the reverse walk,
+// being a NULL, a NULL child cell matches no parent tuple key on the reverse walk,
 // and a NOT NULL column refuses the NULL in the row codec before any row
 // lands. The bit records the declaration so `SHOW` prints it without a
 // second catalog read, and a stored 0 keeps its one reading: the check runs.

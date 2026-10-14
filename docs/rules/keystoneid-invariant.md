@@ -27,7 +27,7 @@ Decisions fixed here:
   `PURGE` retires it. An id issued and burned without placement, or placed
   and rolled back, was never bound, and a named key may take it.
   - **`PURGE` is the operator's statement** (BH-R1). It frees the deleted
-    keys of a pk window, each whole and in key order, visibly and logged,
+    keys of a tuple key window, each whole and in key order, visibly and logged,
     and only once no reader can see the row each deleted (`heap-and-tuple.md` §4.1c, PU5). After it,
     an `INSERT` naming the key is judged as if the key had never been
     placed. The issue cursor never hands a purged key out (K3): only an
@@ -70,9 +70,9 @@ Decisions fixed here:
 
 What this buys, engine-wide:
 
-1. **Snapshot-safe pk resolution.** Without issue-once, a pk freed and
+1. **Snapshot-safe tuple key resolution.** Without issue-once, a tuple key freed and
    re-issued while an old snapshot can still see the prior tuple makes
-   plain pk lookups resolve to the wrong incarnation — the reader
+   plain tuple key lookups resolve to the wrong incarnation — the reader
    walks the *new* tuple's undo chain and silently misses a row its
    snapshot is entitled to. Issue-once deletes the hazard structurally
    instead of gating it behind a purge-horizon rule that every future
@@ -83,18 +83,18 @@ What this buys, engine-wide:
    Census A) - an obligation every later view kind inherits. A rolled-back
    key named again does not reopen it: the rolled-back tuple was never visible to another
    snapshot, the new row starts no undo chain, and every structure that
-   keeps `(oid, pk)` past a write verifies against the row now there
+   keeps `(oid, tuple key)` past a write verifies against the row now there
    (`workorder-bd-sorted-leaf-named-keys.md` §1.7).
-2. **(oid, pk) is unique at any instant, and unique for life up to a
+2. **(oid, tuple key) is unique at any instant, and unique for life up to a
    `PURGE`.** Every structure keyed on it — the statistics primitives,
    waystone trail entries, in-memory canonical caches, any replication or
-   change feed — gets identity for free: a stored (oid, pk) can dangle;
-   a committed pk names another row only after a `PURGE` freed it, and one
+   change feed — gets identity for free: a stored (oid, tuple key) can dangle;
+   a committed tuple key names another row only after a `PURGE` freed it, and one
    a rolled-back insert left can be named again - both of which the
    read-time verification against the row now there catches (BH-S1's
    Census B checked every consumer) - so "dangling ⇒ skip" is sound. The oid half holds because
    `Catalog::GenerateUserOid()` recovers its position from the catalog on
-   first use (`keystoneid-k0-findings.md` §6). The pk half — K1 across a
+   first use (`keystoneid-k0-findings.md` §6). The tuple key half — K1 across a
    crash — holds exactly as far as the mark's durability does:
    `sys.tables.next_id` advances through a logged catalog write that
    precedes the row it covers and replays with every other catalog write
@@ -125,8 +125,8 @@ Four things rest on *ordering* rather than on uniqueness:
   `heap::ChainInsertNamed`); for an omitted key the id is issued there.
 - the clustered btree's leaves hold their keyed slots in key order at
   every core count, because a row takes the slot its key sorts to
-  (BD-R1, BD-R2) — the premise the `ORDER BY <pk>` elision, the Cabin
-  serve's pk sort and the index step's (`index.md` IX8a) read. It rests
+  (BD-R1, BD-R2) — the premise the `ORDER BY <tuple key>` elision, the Cabin
+  serve's tuple key sort and the index step's (`index.md` IX8a) read. It rests
   on placement, not on issue order, so a named key below the relation's
   highest is placed, and reaches the leaf divide and the internal-node
   divide from SQL.
@@ -248,7 +248,7 @@ boundary conditions so nothing else accidentally forecloses it:
 - It deliberately violates K1 **once, atomically, and visibly**:
   every tuple receives a fresh id from a reset HWM; the operation is
   logged as a single recoverable unit.
-- Everything keyed on the old (oid, pk) space is invalidated
+- Everything keyed on the old (oid, tuple key) space is invalidated
   wholesale: statistics, waystone trees, canonical caches. All are
   droppable classes by design, so invalidation is a purge, not a
   migration.
@@ -289,18 +289,18 @@ lets K1 be called held across a crash (§1.2).
 **K-M3 — K2 enforced.**
 `exec::CompileAssignments` (`src/exec/step_compiler.cpp`), called from
 `UpdateInner` before any storage is touched, refuses an UPDATE whose SET
-list names the pk:
+list names the tuple key:
 
 - **`kUnsupported`, not `kInvalidArgument`**: an unknown SET target is
-  simply wrong; the pk is understood and declined, because the id names
+  simply wrong; the tuple key is understood and declined, because the id names
   the tuple in the clustered tree, every index and Cabin entry, and every
   trail. Both refusals carry the byte (`parser::Assignment::byte_offset`,
   which nothing compares and the fingerprint does not fold).
-- **The parser does not refuse it**: which column is the pk is catalog
+- **The parser does not refuse it**: which column is the tuple key is catalog
   knowledge, so the parser-level test is a negative one.
 - **Case sensitivity is a known finding**: `Schema::FindColumn` matches a
   SET target exactly while WHERE resolves through `IEquals`, so `SET ID =
-  99` against a pk named `id` is refused as an *unknown column*. K2 holds
+  99` against a tuple key named `id` is refused as an *unknown column*. K2 holds
   either way; changing it is the identifier rule's owner's call.
 
 **K-M4 — Budget observability.**

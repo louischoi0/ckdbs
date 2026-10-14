@@ -211,16 +211,16 @@ the last hold is granted.**
 - **Keys the call wrote** are already held — each `X` is held to the
   decide. In the sketch, `no_overdraft` reads `accounts[$src]`, which the
   first `UPDATE` wrote: sound with no new mechanism.
-- **A pk point the call did not write** takes `IS` on the relation and
+- **A tuple key point the call did not write** takes `IS` on the relation and
   `S` on the key before the check view is minted, held to the decide —
   the forward check's pair. **The `S` holds the key's absence too**: the
-  tuple unit is keyed by pk, not by a physical row
+  tuple unit is keyed by tuple key, not by a physical row
   (`[source-read]` `include/kds/txn/lock_table.hpp:361-363`), and both
   insert paths borrow the key's `X` before placing the row — a named key
   inside `AdmitExplicitRowId`, an issued one right after `AllocateRowId`
   (`src/server/command_dispatcher.cpp:5030-5058`). So a check that a row
   does *not* exist stays true too.
-- **A pk window the call did not write** (`id BETWEEN $a AND $b`) can be
+- **A tuple key window the call did not write** (`id BETWEEN $a AND $b`) can be
   held by an `S` **range** unit: the lock family has `kRange`, AR2 defines
   a fence as `S` or `X`, and an insert's `X` meets a fence on its key
   (`[source-read]` `lock_table.hpp:275-280`, `:369-376`; `txn.md:621-623`).
@@ -231,7 +231,7 @@ the last hold is granted.**
   foreign key's enumerability rule (`foreign-keys.md:251-254`). A key read
   out of another row cannot be held before the read that finds it.
 - **Anything else is refused at `CREATE TEMPLATE`, `Unsupported` with the
-  byte**: a read through a secondary index, a non-pk predicate, a join.
+  byte**: a read through a secondary index, a non-tuple-key predicate, a join.
   No lock unit covers them, and adding one changes AR2's units. An
   aggregate over rows is already refused by the grammar — a subquery
   holding an aggregate is AG8 (`[source-read]` `parser-v2.md:79`) — and
@@ -316,7 +316,7 @@ by literals and parameters.
   each check a row the other then writes deadlock and one is refused.
   §4's soundness is bought with exactly this, and the manual must say so.
 - **Some checks cannot be written.** "No open order of this customer is
-  past due" reads a non-pk predicate and is refused at `CREATE`. That is
+  past due" reads a non-tuple-key predicate and is refused at `CREATE`. That is
   §4 working, not a gap.
 - **`NULL` is a decision, not a detail.** SQL's table `CHECK` passes on
   unknown; `WHERE` rejects it. A template `CHECK` that passes on unknown
@@ -341,4 +341,4 @@ Each carries CLA's proposal, none ratified.
 | O7 | The reply | **Row counts per statement, plus the rows of the body's last `SELECT` if it is one** |
 | O8 | Server-side retry on `TxnConflict` | **No**; the client retries the call, with CN-5's token where it has one |
 | O9 | Catalog and dependencies | **`sys.templates` with the source text; `DROP`/`RENAME` of a relation a template names refused RESTRICT**, as fkeys and assertions are |
-| O10 | §4's soundness rule | **Ratify as written**: keys enumerable; own writes already held; pk points `IS` + `S`; the check view minted after the last grant; pk windows by an `S` range unit, **refused `NotImplemented` in v1** until a consumer names a window check; everything else refused at `CREATE`. This is the decision the note cannot proceed without |
+| O10 | §4's soundness rule | **Ratify as written**: keys enumerable; own writes already held; tuple key points `IS` + `S`; the check view minted after the last grant; tuple key windows by an `S` range unit, **refused `NotImplemented` in v1** until a consumer names a window check; everything else refused at `CREATE`. This is the decision the note cannot proceed without |

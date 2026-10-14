@@ -213,7 +213,7 @@ Status ApplyIndexInsert(std::span<std::byte, kPageSize> page, const DecodedRecor
     index::IndexLeafView leaf(page);
 
     // An index entry's position is a function of its bytes (entries sort by
-    // (key, pk), IX4b), so re-inserting reproduces the same slot rather
+    // (key, tuple key), IX4b), so re-inserting reproduces the same slot rather
     // than appending a duplicate. The re-application check is therefore a
     // comparison against what is already there.
     const std::uint16_t slot = decoded.value().fields.slot;

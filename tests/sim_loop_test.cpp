@@ -753,7 +753,7 @@ TEST(SimWorkload, TheGeneratedStreamCoversEveryV2Shape) {
     for (int i = 0; i < 4000; ++i) ++seen[workload.Next().kind];
 
     for (const Op::Kind kind :
-         {Op::Kind::kInsert, Op::Kind::kUpdate, Op::Kind::kDelete, Op::Kind::kSelectPk,
+         {Op::Kind::kInsert, Op::Kind::kUpdate, Op::Kind::kDelete, Op::Kind::kSelectTupleKey,
           Op::Kind::kSelectRange, Op::Kind::kFilterScan, Op::Kind::kSync, Op::Kind::kBegin,
           Op::Kind::kCommit, Op::Kind::kRollback, Op::Kind::kCreateCabin, Op::Kind::kPurge}) {
         EXPECT_GT(seen[kind], 0) << "the stream never generates " << OpKindName(kind);
@@ -763,16 +763,16 @@ TEST(SimWorkload, TheGeneratedStreamCoversEveryV2Shape) {
     // (sim/workload.hpp): a SET on the column a Cabin and an index are
     // keyed on, and one on the varchar that may spill.
     Workload again(Rng(11).Fork("workload"), Profile::kUniform);
-    bool set_v = false, set_name = false, by_pk = false, by_value = false;
+    bool set_v = false, set_name = false, by_tuple_key = false, by_value = false;
     for (int i = 0; i < 4000; ++i) {
         const Op op = again.Next();
         if (op.kind != Op::Kind::kUpdate) continue;
         (op.set_name ? set_name : set_v) = true;
-        (op.by_pk ? by_pk : by_value) = true;
+        (op.by_tuple_key ? by_tuple_key : by_value) = true;
     }
     EXPECT_TRUE(set_v);
     EXPECT_TRUE(set_name);
-    EXPECT_TRUE(by_pk);
+    EXPECT_TRUE(by_tuple_key);
     EXPECT_TRUE(by_value);
 }
 
@@ -811,7 +811,7 @@ TEST(SimLoop, TheAdvisoryFeaturesChangeNoAnswerOnEveryCommittedSeed) {
 // happen to pass.
 TEST(SimLoop, ThePairingComparatorDiscriminates) {
     Op read;
-    read.kind = Op::Kind::kSelectPk;
+    read.kind = Op::Kind::kSelectTupleKey;
     EXPECT_TRUE(SameOutcome(read, "id,v,name\\n1,2,a", "id,v,name\\n1,2,a"));
     EXPECT_FALSE(SameOutcome(read, "id,v,name\\n1,2,a", "id,v,name\\n1,3,a"))
         << "a differing row passed as the same answer";
@@ -909,7 +909,7 @@ TEST(SimCase, ACaseFileRoundTripsAndReplays) {
         EXPECT_EQ(got.op.key, want.op.key);
         EXPECT_EQ(got.op.v, want.op.v);
         EXPECT_EQ(got.op.pred_v, want.op.pred_v);
-        EXPECT_EQ(got.op.by_pk, want.op.by_pk);
+        EXPECT_EQ(got.op.by_tuple_key, want.op.by_tuple_key);
         EXPECT_EQ(got.op.set_name, want.op.set_name);
         EXPECT_EQ(got.faults, want.faults);
     }
@@ -1021,28 +1021,28 @@ TEST(SimCase, EveryNamedEnumRoundTrips) {
 
 // The count assertion is the sharpest one the harness makes, and an
 // unknown must cost it as little as it truthfully has to: a predicate on
-// the pk names one row, so it stays checkable while *that* row is known.
+// the tuple key names one row, so it stays checkable while *that* row is known.
 TEST(SimOracleTest, AnUnknownRowCostsOnlyTheCountsItCouldChange) {
     Oracle oracle;
     oracle.CreateTable("t");
     oracle.ApplyInsert("t", 1, OracleRow{10, "a"});
     oracle.ApplyInsert("t", 2, OracleRow{10, "b"});
 
-    const Oracle::Predicate by_pk_known{true, 1, 0};
-    const Oracle::Predicate by_pk_unknown{true, 2, 0};
+    const Oracle::Predicate by_tuple_key_known{true, 1, 0};
+    const Oracle::Predicate by_tuple_key_unknown{true, 2, 0};
     const Oracle::Predicate by_value{false, 0, 10};
-    EXPECT_TRUE(oracle.CountCheckable("t", by_pk_known));
+    EXPECT_TRUE(oracle.CountCheckable("t", by_tuple_key_known));
     EXPECT_TRUE(oracle.CountCheckable("t", by_value));
 
     // An errored UPDATE on id 2: its own count is gone, id 1's is not, and
     // a value predicate that might match id 2 is.
     oracle.NoteUnchecked("t", 2);
-    EXPECT_TRUE(oracle.CountCheckable("t", by_pk_known));
-    EXPECT_FALSE(oracle.CountCheckable("t", by_pk_unknown));
+    EXPECT_TRUE(oracle.CountCheckable("t", by_tuple_key_known));
+    EXPECT_FALSE(oracle.CountCheckable("t", by_tuple_key_unknown));
     EXPECT_FALSE(oracle.CountCheckable("t", by_value));
 
     // An errored INSERT: the relation may hold rows it never named, so a
-    // value predicate is gone — but a pk the engine *did* name is still
+    // value predicate is gone — but a tuple key the engine *did* name is still
     // the oracle's to assert on.
     Oracle second;
     second.CreateTable("t");
@@ -1062,7 +1062,7 @@ TEST(SimOracleTest, AnUnknownRowCostsOnlyTheCountsItCouldChange) {
 // these six statements by SIM07's minimizer, 1200 ops -> 9 in 933 replays.
 //
 // `cabin_store.hpp` states the authority rule: "Observed => complete,
-// superset form, per snapshot ... Missing a qualifying pk violates
+// superset form, per snapshot ... Missing a qualifying tuple key violates
 // authority." The header then argues the build-by-observation hazard is
 // structurally dead because statements run to completion on the owning
 // core - which answers a *concurrent* writer and not this:

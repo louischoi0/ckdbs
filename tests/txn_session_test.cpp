@@ -1347,7 +1347,7 @@ TEST_F(TxnSessionTest, ARolledBackDropLeavesNothingForThePurge) {
 
 // ---- NULL storage's surface refusals (docs/workplan-null.md NU3) --------
 
-TEST_F(TxnSessionTest, ANullablePrimaryKeyIsRefusedWithItsByte) {
+TEST_F(TxnSessionTest, ANullableTupleKeyIsRefusedWithItsByte) {
     Session s;
     const std::string out = Run(s, "CREATE TABLE t (id int64 NULL, v int64)");
     ASSERT_EQ(out.rfind("ERR", 0), 0u);

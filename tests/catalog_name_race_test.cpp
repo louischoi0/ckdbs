@@ -48,15 +48,15 @@ using testing_race::Rendezvous;
 inline constexpr int kThreads = 2;
 inline constexpr int kRounds = 40;
 
-Schema PkAnd(std::initializer_list<const char*> names) {
+Schema TupleKeyAnd(std::initializer_list<const char*> names) {
     Schema schema;
-    SysColumnRow pk{};
-    pk.pos = 0;
-    SetName(pk.name, "id");
-    pk.type_val = kTypeValInt64;
-    pk.len = 8;
-    pk.notnull = true;
-    schema.columns.push_back(pk);
+    SysColumnRow tuple_key{};
+    tuple_key.pos = 0;
+    SetName(tuple_key.name, "id");
+    tuple_key.type_val = kTypeValInt64;
+    tuple_key.len = 8;
+    tuple_key.notnull = true;
+    schema.columns.push_back(tuple_key);
     for (const char* name : names) {
         SysColumnRow col{};
         col.pos = static_cast<std::uint32_t>(schema.columns.size());
@@ -147,7 +147,7 @@ TEST(CatalogNameRaceTest, TwoCoresCreatingOneTableNameLeaveOneRow) {
     // 20 in 20 (and 10 in 10 against the stage's first, wider hold).
     TwoCatalogs cats;
     Rendezvous gate(kThreads);
-    const Schema schema = PkAnd({"v"});
+    const Schema schema = TupleKeyAnd({"v"});
     auto out = OnTwoCores([&](int core, int round) {
         const std::string name = Name("t", round);
         gate.Wait();
@@ -200,7 +200,7 @@ TEST(CatalogNameRaceTest, TwoCoresRenamingTwoTablesOntoOneNameLeaveOneRow) {
     //
     // **Mutation**: drop the hold in `RenameTable` - killed 10 in 10.
     TwoCatalogs cats;
-    const Schema schema = PkAnd({"v"});
+    const Schema schema = TupleKeyAnd({"v"});
     std::array<std::vector<Oid>, kThreads> rels;
     for (int core = 0; core < kThreads; ++core) {
         for (int round = 0; round < kRounds; ++round) {
@@ -240,7 +240,7 @@ TEST(CatalogNameRaceTest, TwoCoresRenamingTwoColumnsOntoOneNameLeaveOneColumn) {
     TwoCatalogs cats;
     std::vector<Oid> rels;
     for (int round = 0; round < kRounds; ++round) {
-        auto oid = cats[0].CreateTable(kNamespacePublic, Name("c", round), PkAnd({"a", "b"}),
+        auto oid = cats[0].CreateTable(kNamespacePublic, Name("c", round), TupleKeyAnd({"a", "b"}),
                                        ClusteredType::kBtree);
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         rels.push_back(oid.value());
@@ -283,7 +283,7 @@ TEST(CatalogNameRaceTest, TwoCoresCreatingOneIndexNameOnTwoRelationsLeaveOneRow)
         for (int round = 0; round < kRounds; ++round) {
             auto oid = cats[0].CreateTable(kNamespacePublic,
                                            Name(core == 0 ? "p" : "q", round),
-                                           PkAnd({"v"}), ClusteredType::kBtree);
+                                           TupleKeyAnd({"v"}), ClusteredType::kBtree);
             ASSERT_TRUE(oid.ok()) << oid.status().message();
             rels[static_cast<std::size_t>(core)].push_back(oid.value());
         }
@@ -329,7 +329,7 @@ TEST(CatalogNameRaceTest, TwoCoresPublishingOneAssertionNameOnTwoRelationsLeaveO
         for (int round = 0; round < kRounds; ++round) {
             auto oid = cats[0].CreateTable(kNamespacePublic,
                                            Name(core == 0 ? "r" : "s", round),
-                                           PkAnd({"v"}), ClusteredType::kBtree);
+                                           TupleKeyAnd({"v"}), ClusteredType::kBtree);
             ASSERT_TRUE(oid.ok()) << oid.status().message();
             rels[static_cast<std::size_t>(core)].push_back(oid.value());
         }
@@ -367,7 +367,7 @@ TEST(CatalogNameRaceTest, TwoCoresCreatingACabinOnOneColumnLeaveOneRow) {
     TwoCatalogs cats;
     std::vector<Oid> rels;
     for (int round = 0; round < kRounds; ++round) {
-        auto oid = cats[0].CreateTable(kNamespacePublic, Name("k", round), PkAnd({"v"}),
+        auto oid = cats[0].CreateTable(kNamespacePublic, Name("k", round), TupleKeyAnd({"v"}),
                                        ClusteredType::kBtree);
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         rels.push_back(oid.value());
@@ -430,7 +430,7 @@ TEST(CatalogNameRaceTest, ACreateThatResolvedANamespaceAnotherCoreDroppedIsRefus
         spaces.push_back(ns.value());
     }
     Rendezvous gate(kThreads);
-    const Schema schema = PkAnd({"v"});
+    const Schema schema = TupleKeyAnd({"v"});
     auto out = OnTwoCores([&](int core, int round) -> Status {
         const Oid ns = spaces[static_cast<std::size_t>(round)];
         if (core == 0) {
@@ -488,7 +488,7 @@ TEST(CatalogNameRaceTest, ADropBetweenACreatesTwoRowsIsRefused) {
         dropped = cats[0]->DropNamespace(ns.value());
     });
     const auto created =
-        cats[1]->CreateTable(ns.value(), "t", PkAnd({"v"}), ClusteredType::kBtree);
+        cats[1]->CreateTable(ns.value(), "t", TupleKeyAnd({"v"}), ClusteredType::kBtree);
     ASSERT_TRUE(store.fired()) << "the drop never ran; the cell tested nothing";
     ASSERT_TRUE(objects_row_written)
         << "the drop ran before the create's sys.objects row; this is the other cell's order";
@@ -528,7 +528,7 @@ TEST(CatalogNameRaceTest, ACreateAndADropOfItsNamespaceAtOneInstantLeaveNoOrphan
         spaces.push_back(ns.value());
     }
     Rendezvous gate(kThreads);
-    const Schema schema = PkAnd({"v"});
+    const Schema schema = TupleKeyAnd({"v"});
     auto out = OnTwoCores([&](int core, int round) -> Status {
         const Oid ns = spaces[static_cast<std::size_t>(round)];
         gate.Wait();

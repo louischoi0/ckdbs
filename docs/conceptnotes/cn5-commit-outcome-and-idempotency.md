@@ -76,9 +76,9 @@ way to tell "expired" from "never seen" (§3's retention).
   `docs/spec/protocol.md` §10), and *"Session state … All dropped on
   disconnect"* (`protocol.md:130`). After a drop the work may still be in
   flight, and the session that could have been asked is gone.
-- **The engine issues primary keys** (CLAUDE.md invariant 11), so a blind
-  retry of an `INSERT` that omitted its pk inserts a second row. A named
-  pk already in use — a deleted row's included — *"is refused as a
+- **The engine issues tuple keys** (CLAUDE.md invariant 11), so a blind
+  retry of an `INSERT` that omitted its tuple key inserts a second row. A named
+  tuple key already in use — a deleted row's included — *"is refused as a
   duplicate"* (`manual/sql/sql.md:198-200`): TigerBeetle's shape, with two
   gaps — the retry gets an error rather than the first result, and the key
   must be a 48-bit id.
@@ -113,7 +113,7 @@ way to tell "expired" from "never seen" (§3's retention).
   correctly unclaimed.
 - **The commit record.** `TXN_COMMIT` carries the token and a **result
   summary** — rows affected per statement and, for an `INSERT` that
-  omitted its pk, the issued ids as ranges (O4) — plus a request
+  omitted its tuple key, the issued ids as ranges (O4) — plus a request
   fingerprint: the statement's `pattern_id`, its `arg_hash` and its bound
   values, since a `pattern_id` alone replaces every inline literal with a
   marker (`include/kds/parser/fingerprint.hpp:18-19`, `[source-read]`).
@@ -165,7 +165,7 @@ way to tell "expired" from "never seen" (§3's retention).
   (`lock_table.hpp:438`, `[source-read]`).
 - **The read view** is untouched. The token map is a second, narrower
   memory of commits, kept for clients, and it feeds no visibility.
-- **Named pks** keep their duplicate refusal; a client using a pk as its
+- **Named tuple keys** keep their duplicate refusal; a client using a tuple key as its
   key keeps working, and the token is the general form.
 - **CN-4** (Transition) is orthogonal; a saga step using both gets
   at-most-once from this note and legal states from that one.
@@ -216,7 +216,7 @@ Each carries CLA's proposal, none ratified.
 | O1 | Token form | **16 bytes, client-chosen, UUIDv7 layout** — the leading timestamp is what makes retention sound (§3) |
 | O2 | Token scope | **Per authenticated user.** Per instance lets tenants collide and probe each other's tokens |
 | O3 | Retention | **A time horizon plus a count cap that refuses new claims**, both settings. Ten minutes (DynamoDB) is short for a batch retry; a day (Stripe) is the familiar number |
-| O4 | The summary | Rows affected per statement and issued pk ids **as ranges, capped**, falling back to a count past the cap; **not** returned rows — a retried `SELECT` is re-run, not replayed |
+| O4 | The summary | Rows affected per statement and issued tuple key ids **as ranges, capped**, falling back to a count past the cap; **not** returned rows — a retried `SELECT` is re-run, not replayed |
 | O5 | `relaxed` durability | **Refuse a token on a `relaxed` transaction**, since §5's withdrawn answer is exactly what a token exists to prevent. Forcing `strict` silently would accept one spelling and enforce another |
 | O6 | Lookup by trx id as well | **No.** It needs an abort index §2 shows does not exist, names an attempt rather than an operation, and is unknown to an autocommit client whose reply was lost |
 | O7 | Surface | Two frame fields (`C_TXN_BEGIN`, `C_EXECUTE`), one lookup frame, and a read-only `sys.commit_tokens` for audit. No SQL spelling in v1. The lookup's logged burn is its cost, and it is rate-bound by the same per-user scope |

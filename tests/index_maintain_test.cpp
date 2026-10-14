@@ -108,7 +108,7 @@ TEST_F(IndexMaintainTest, AnUpdateThatMovesTheKeyAppendsAndLeavesTheOldEntry) {
     EXPECT_EQ(Entries("by_owner"), 2);
 
     // Back to the original value: a third entry, because it is a third
-    // version. The (key, pk) pair repeats but this is not the byte-identical
+    // version. The (key, tuple key) pair repeats but this is not the byte-identical
     // duplicate IndexInsert deduplicates - it is, and the count says so.
     Ok("UPDATE t SET owner = 7 WHERE id = 1");
     EXPECT_EQ(Entries("by_owner"), 2) << "an identical entry must not be stored twice";
@@ -245,7 +245,7 @@ TEST_F(IndexMaintainTest, TheBackfillIndexesEveryVersionAndNotJustTheCurrentOne)
     Ok("UPDATE t SET owner = 10 WHERE id = 1");
 
     Ok("CREATE INDEX by_owner ON t (owner)");
-    // Two rows, four distinct (key, pk) pairs: (7,1) (9,1) (10,1) (8,2).
+    // Two rows, four distinct (key, tuple key) pairs: (7,1) (9,1) (10,1) (8,2).
     EXPECT_EQ(Entries("by_owner"), 4);
 }
 

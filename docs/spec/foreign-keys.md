@@ -13,7 +13,7 @@ unique-constraint semantics (fail-fast, same family).
 Decisions:
 
 - **F1 — FKs reference the parent's Keystone id.** The child fk column
-  holds the parent's engine pk (48-bit id in a u64/int cell), never a
+  holds the parent's engine tuple key (48-bit id in a u64/int cell), never a
   business key. Consequences bought outright by K1/K2: *ON UPDATE
   CASCADE does not exist* (the referenced key is immutable), and a
   stored reference can dangle but names a different committed parent
@@ -53,7 +53,7 @@ Decisions:
   on the child fk column first: its verified empty set is the
   authoritative "no children" RESTRICT wants (§3). Nothing auto-creates
   that Cabin from a `REFERENCES` clause — `CREATE CABIN ON child(fk_col)`
-  is the surface — and the reverse check records nothing into it: a pk
+  is the surface — and the reverse check records nothing into it: a tuple key
   is deleted once, so recording it would spend `cabin_max_values` on
   values no later check can ask about.
 
@@ -103,7 +103,7 @@ about `NO CABIN`.
 **A heap parent is refused, `NotImplemented`** (`include/kds/base/status.hpp`:
 a thing a later release could build, not one the architecture cannot
 admit). F1 puts the reference on the parent's Keystone id, and a heap
-relation has no pk index: `LocateByPk` answers `kScan` for one, so every
+relation has no tuple key index: `LocateByTupleKey` answers `kScan` for one, so every
 child INSERT would scan the parent — the whole parent when the row is
 missing, which is the case the check exists to catch. Refusing keeps a
 constraint's cost a descent.
@@ -145,13 +145,13 @@ probe parent_rel  key = <fk value being written>
   `kFkNullable`: the forward check's non-integer bail passes a NULL
   through, and the row codec then stores it (column declared `NULL`) or
   refuses it by name (`NOT NULL`) — so the NOT NULL refusal is the gate.
-  On the reverse side a NULL child cell matches no parent pk, so a NULL
+  On the reverse side a NULL child cell matches no parent tuple key, so a NULL
   child never blocks its parent's delete.
 - An integer fk value that is no Keystone id - below 1 (negative or 0),
   above `2^48 - 1`, or a literal past int64 (a `uint64` above `INT64_MAX`)
   - names no parent that can exist: `kFkViolation`, with no `S` taken and
   no probe. A non-integer value stays the codec's refusal. The test is
-  `KeystoneIdOf`, the one a named pk is refused `OutOfRange` by (BD-R5).
+  `KeystoneIdOf`, the one a named tuple key is refused `OutOfRange` by (BD-R5).
 - Probe finds a version → apply **check visibility** (§4): visible
   committed parent → pass; written or delete-marked by an in-flight
   foreign trx → busy (`TxnConflict`, F3); deleted-committed or not found →
@@ -165,7 +165,7 @@ touches — no separate accounting.
 
 **Statistics.** The checks are not steps, so `CommandDispatcher::
 RecordFkAccess` records the shape by hand: a `kLookup` on the parent's
-pk for the forward check, a `kFilterScan` (or `kCabinProbe` when the
+tuple key for the forward check, a `kFilterScan` (or `kCabinProbe` when the
 Cabin answered) on the child's fk column for the reverse one. Both show
 up in `SHOW ACCESS` beside ordinary query shapes, which is what lets an
 operator compare constraint cost against query cost. An INSERT has no
@@ -177,13 +177,13 @@ plan, so ANALYZE carries no tag for the check.
 `CheckParentPresent` descends `parent.desc_page_id`, a page every core
 faults through the instance's one frame table.
 
-**Why it is hoisted.** Every parent pk a
+**Why it is hoisted.** Every parent tuple key a
 statement needs is extracted **before any row work** — an INSERT's
 from its `VALUES`, an UPDATE's from its `SET` body — and resolved at the
 dispatch fork. Two things pay for it:
 
-- **Deduplication** (AH-R2). The extracted pks are one entry per distinct
-  (parent relation, pk), so a thousand-row insert against one parent costs
+- **Deduplication** (AH-R2). The extracted tuple keys are one entry per distinct
+  (parent relation, tuple key), so a thousand-row insert against one parent costs
   one descent and `SHOW ACCESS` reports one `kLookup`.
 - **The wait has somewhere to happen.** The per-row check runs inside an
   open `WriteScope`, which is no place to park; the fork is before any row
@@ -218,7 +218,7 @@ writer of that row on whichever core either runs (§3a).
   With the `S` first, a parent row held by a writer is not read at all
   until the writer decides (`FkParentHoldTest`).
 - **A refused `S` is the wait.** A writer of the parent row holds its `X`
-  (AO-S6a), and a parent `DELETE` with a pk window holds a range over it,
+  (AO-S6a), and a parent `DELETE` with a tuple key window holds a range over it,
   met in the lock table's verify (AY-S2); the refused ask registers a wake
   on the entry that refused it, and the statement - which has written
   nothing - parks and runs again at the release, from whichever core
@@ -349,7 +349,7 @@ statement's passing check and its row write - is pinned on one thread,
 
 **A child writer that holds no `S` on the parent is met by the walk
 instead** (AY-Q8): a child `DELETE`, an `UPDATE` of other columns, or
-one moving the fk column off it. The walk answers busy and carries that writer's id and the row's pk
+one moving the fk column off it. The walk answers busy and carries that writer's id and the row's tuple key
 out; the `DELETE` parks mid-walk on the row, nothing of the parent row
 written yet, and runs the check again at the writer's decide - a commit
 leaves the parent unreferenced, a rollback puts the reference back and the
@@ -387,7 +387,7 @@ on three things:
 
 **A loop that gives the set up is not exhausted**, and the walk answers:
 a heap child whose hint fails (no descent heals it, and the value is
-un-observed), and a row an undecided writer moved off the parent, whose pk
+un-observed), and a row an undecided writer moved off the parent, whose tuple key
 stays in the set while its page holds the new value (AY-Q8).
 
 ## 3. Reverse check — parent DELETE
@@ -398,7 +398,7 @@ child relation:
 
 ```
 walk child_rel
-      residual: child.fk_col == <parent pk being deleted>
+      residual: child.fk_col == <parent tuple key being deleted>
       stop:     VisitControl::kStop on first visible match
 ```
 
@@ -419,7 +419,7 @@ walk child_rel
   drains answers "no children" without walking (§3a). A heap child with a failed hint, or a row an
   undecided writer moved off the parent, gives the set up and walks.
 
-There is no reverse check for parent UPDATE: K2 makes pk update
+There is no reverse check for parent UPDATE: K2 makes tuple key update
 Unsupported, so the case is closed by contract, not by code.
 
 ## 4. Check visibility — one MVCC mode, not a second implementation

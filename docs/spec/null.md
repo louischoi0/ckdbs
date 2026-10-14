@@ -157,8 +157,8 @@ belongs to the doc named.
   `NOT IN` is true whatever the probe. A value list (BU-S2) is read the
   same way: `IN (1, NULL)` is true only where the probe is 1, and
   `NOT IN (1, NULL)` is never true.
-- **The primary key is never NULL**, and this is not a policy but invariant 11:
-  the pk is carried by the Keystone word, which has no NULL encoding. A first
+- **The tuple key is never NULL**, and this is not a policy but invariant 11:
+  the tuple key is carried by the Keystone word, which has no NULL encoding. A first
   column declared `NULL` is refused at `CREATE TABLE`.
 - **Secondary indexes** (D2, `docs/spec/index.md`). **No nullable column
   enters an index**, as a key or as a covered column; `CREATE INDEX` refuses

@@ -91,7 +91,7 @@ LiveAssertion CountCap(storage::PageStore& store, std::uint64_t id, std::int64_t
     return a;
 }
 
-// An `INSERT`'s VALUES list after the pk: the one column, `v`.
+// An `INSERT`'s VALUES list after the tuple key: the one column, `v`.
 std::vector<parser::AstValue> Row(std::int64_t v) {
     std::vector<parser::AstValue> row(1);
     row[0].type = parser::ValueType::kInt;
@@ -157,8 +157,8 @@ TEST(AssertionRaceTest, TwoCoresAdmittingIntoOneGroupAdmitExactlyOneAndRefuseThe
                     }
                     continue;
                 }
-                const std::uint64_t pk = static_cast<std::uint64_t>(round) * 2 + t + 1;
-                if (enforcer.ReserveInsert(*store, /*wal=*/nullptr, txn, hold, kOid, values, pk,
+                const std::uint64_t tuple_key = static_cast<std::uint64_t>(round) * 2 + t + 1;
+                if (enforcer.ReserveInsert(*store, /*wal=*/nullptr, txn, hold, kOid, values, tuple_key,
                                            kInvalidPageId, 0)
                         .ok()) {
                     admitted[round].fetch_add(1);
@@ -201,7 +201,7 @@ TEST(AssertionRaceTest, AnAssertionAdoptedBetweenAnAdmissionAndItsReservationIsC
     enforcer.Adopt(CountCap(*store, /*id=*/1, /*bound=*/0));
 
     const Status reserved =
-        enforcer.ReserveInsert(*store, /*wal=*/nullptr, 1, hold, kOid, values, /*pk=*/1,
+        enforcer.ReserveInsert(*store, /*wal=*/nullptr, 1, hold, kOid, values, /*tuple_key=*/1,
                                kInvalidPageId, 0);
     EXPECT_EQ(reserved.code(), StatusCode::kAssertionViolation) << reserved.message();
     EXPECT_EQ(SnapshotCount(enforcer, 7), 0);
@@ -239,7 +239,7 @@ TEST(AssertionRaceTest, AHoldCountsInEveryAdmissionAndInNoSnapshotAndIsRoomAgain
     ASSERT_TRUE(enforcer.AdmitInsert(kOid, values, /*writer_txn=*/3, third).ok())
         << "a hold given back left the group full";
     ASSERT_TRUE(enforcer
-                    .ReserveInsert(*store, /*wal=*/nullptr, 3, third, kOid, values, /*pk=*/3,
+                    .ReserveInsert(*store, /*wal=*/nullptr, 3, third, kOid, values, /*tuple_key=*/3,
                                    kInvalidPageId, 0)
                     .ok());
     EXPECT_EQ(SnapshotCount(enforcer, 7), 1);
@@ -277,7 +277,7 @@ TEST(AssertionRaceTest, ASnapshotHoldsTheDirectoryAgainstAReservationOnAnotherCo
         while (!visiting.load(std::memory_order_acquire)) std::this_thread::yield();
         reserving.store(true, std::memory_order_release);
         EXPECT_TRUE(enforcer
-                        .ReserveInsert(*store, /*wal=*/nullptr, 1, hold, kOid, values, /*pk=*/1,
+                        .ReserveInsert(*store, /*wal=*/nullptr, 1, hold, kOid, values, /*tuple_key=*/1,
                                        kInvalidPageId, 0)
                         .ok());
         reserved.store(true, std::memory_order_release);
@@ -352,10 +352,10 @@ TEST(AssertionRaceTest, EightCoresReservingIntoOneCabinLoseNoEntryAndCountEveryO
             for (int n = 0; n < kPerThread; ++n) {
                 AssertionEnforcer::Hold hold;
                 gate.Wait();
-                const std::uint64_t pk = static_cast<std::uint64_t>(n) * kWriters + t + 1;
+                const std::uint64_t tuple_key = static_cast<std::uint64_t>(n) * kWriters + t + 1;
                 if (!enforcer.AdmitInsert(kOid, values, txn, hold).ok() ||
                     !enforcer
-                         .ReserveInsert(*store, /*wal=*/nullptr, txn, hold, kOid, values, pk,
+                         .ReserveInsert(*store, /*wal=*/nullptr, txn, hold, kOid, values, tuple_key,
                                         kInvalidPageId, 0)
                          .ok()) {
                     failures.fetch_add(1);
@@ -422,7 +422,7 @@ TEST(AssertionRaceTest, ANegativeContributionIsHeldAsZeroSoItLendsNoRoom) {
         ASSERT_TRUE(enforcer.AdmitInsert(kOid, Row2(1, 10), /*writer_txn=*/1, full).ok());
         ASSERT_TRUE(enforcer
                         .ReserveInsert(*store, /*wal=*/nullptr, 1, full, kOid, Row2(1, 10),
-                                       /*pk=*/1, kInvalidPageId, 0)
+                                       /*tuple_key=*/1, kInvalidPageId, 0)
                         .ok());
     }
 
@@ -436,7 +436,7 @@ TEST(AssertionRaceTest, ANegativeContributionIsHeldAsZeroSoItLendsNoRoom) {
     }
     ASSERT_TRUE(enforcer
                     .ReserveInsert(*store, /*wal=*/nullptr, 2, negative, kOid, Row2(1, -5),
-                                   /*pk=*/2, kInvalidPageId, 0)
+                                   /*tuple_key=*/2, kInvalidPageId, 0)
                     .ok());
     AssertionEnforcer::Hold three;
     EXPECT_TRUE(enforcer.AdmitInsert(kOid, Row2(1, 3), /*writer_txn=*/3, three).ok())
@@ -494,10 +494,10 @@ TEST(AssertionRaceTest, EverySnapshotEqualsTheFoldOfTheRecordsBeforeIt) {
             const auto values = Row(t);
             for (int n = 0; n < kPerThread; ++n) {
                 AssertionEnforcer::Hold hold;
-                const std::uint64_t pk = static_cast<std::uint64_t>(n) * kThreads + t + 1;
+                const std::uint64_t tuple_key = static_cast<std::uint64_t>(n) * kThreads + t + 1;
                 if (!enforcer.AdmitInsert(kOid, values, txn, hold).ok() ||
                     !enforcer
-                         .ReserveInsert(*store, wal.value().get(), txn, hold, kOid, values, pk,
+                         .ReserveInsert(*store, wal.value().get(), txn, hold, kOid, values, tuple_key,
                                         kInvalidPageId, 0)
                          .ok()) {
                     failures.fetch_add(1);

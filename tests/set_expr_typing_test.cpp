@@ -191,13 +191,13 @@ TEST_F(SetExprTypingTest, NullTypesAsWhatItsContextIs) {
     EXPECT_NE(Refusal("s = NULL + 1").find("byte"), std::string::npos);
 }
 
-TEST_F(SetExprTypingTest, ThePkIsReadNeverWritten) {
+TEST_F(SetExprTypingTest, TheTupleKeyIsReadNeverWritten) {
     // BJ-R5: `id` may be read inside an expression and still cannot be a
     // target, refused before the expression is looked at.
     EXPECT_TRUE(Types("i64 = id * 10"));
     const std::string out = Run("UPDATE t SET id = id + 1 WHERE id = 1");
     EXPECT_NE(out.find("UNSUPPORTED"), std::string::npos) << out;
-    EXPECT_NE(out.find("primary-key column"), std::string::npos) << out;
+    EXPECT_NE(out.find("tuple key column"), std::string::npos) << out;
 }
 
 TEST_F(SetExprTypingTest, AnUnknownColumnInAnExpressionIsPositioned) {

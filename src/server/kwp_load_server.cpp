@@ -399,7 +399,7 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // `schema` refers into - so what the load needs is copied out first and
     // the borrow is not touched again.
     //
-    // **Every column, the pk first** (bulkinsert.md BI15): field 0 is the
+    // **Every column, the tuple key first** (bulkinsert.md BI15): field 0 is the
     // Keystone id, and a row names it or leaves it NULL for the engine to
     // issue - per row, so one chunk may mix the two as one T1 statement may.
     // Every storable type loads (BI16); no column is refused here.
@@ -485,9 +485,9 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     // path, and it is a *transliteration*, not a coercion: the column's
     // type decides at the same gates a T1 statement goes through.
     //
-    // **The pk field decides the row's arity** (BI15): NULL leaves it out,
-    // which is a T1 row that omits its pk and takes an issued id; a value
-    // keeps it, which is a T1 row that names one. The pk is never NULL in
+    // **The tuple key field decides the row's arity** (BI15): NULL leaves it out,
+    // which is a T1 row that omits its tuple key and takes an issued id; a value
+    // keeps it, which is a T1 row that names one. The tuple key is never NULL in
     // a relation, so the NULL has no other reading to collide with.
     const std::string chunk = "chunk " + std::to_string(header.value().chunk_seq);
     parser::InsertStmt stmt;

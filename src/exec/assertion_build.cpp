@@ -31,7 +31,7 @@ using storage::cabin::kEntryHintValid;
 // parser-v2.md I15's R1 forbids a fetch while a span into another page is
 // live. Two phases per leaf bounds the memory at one page.
 struct StagedRow {
-    std::uint64_t pk = 0;
+    std::uint64_t tuple_key = 0;
     std::uint16_t slot = 0;
     std::vector<std::byte> payload;
 };
@@ -229,11 +229,11 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
                         break;
                 }
 
-                auto pk = kds::KeystoneIdOfPayload(tuple.value().payload);
-                if (!pk.ok()) return pk.status();
+                auto tuple_key = kds::KeystoneIdOfPayload(tuple.value().payload);
+                if (!tuple_key.ok()) return tuple_key.status();
 
                 StagedRow row;
-                row.pk = pk.value();
+                row.tuple_key = tuple_key.value();
                 row.slot = i;
                 row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
                 staged.push_back(std::move(row));
@@ -263,7 +263,7 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
                                            : std::int64_t{1};
 
             BoundCabinEntry entry;
-            entry.pk = row.pk;
+            entry.tuple_key = row.tuple_key;
             entry.flags = kEntryHintValid;  // committed: no kEntryReserved
             entry.page_id = leaf;
             entry.page_epoch = 0;  // no page epoch exists; written 0 like every hint

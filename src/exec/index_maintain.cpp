@@ -59,7 +59,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   const catalog::TableAccess::IndexRef& ix,
                                   std::span<const parser::AstValue> values,
                                   std::uint16_t first_col_pos, std::span<const std::byte> row,
-                                  std::uint64_t pk,
+                                  std::uint64_t tuple_key,
                                   std::span<const parser::AstValue> previous,
                                   const IndexWriteLog* log, catalog::Catalog* publish) {
     const bool is_update = !previous.empty();
@@ -67,7 +67,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
     index::IndexLayout layout;
     layout.key_width = ix.key_width;
     layout.covered_width =
-        static_cast<std::uint16_t>(ix.entry_width - ix.key_width - index::kIndexPkWidth);
+        static_cast<std::uint16_t>(ix.entry_width - ix.key_width - index::kIndexTupleKeyWidth);
 
     // Uninitialized on purpose: every byte of the key is written by the
     // encoder, which errors if the widths disagree, and zeroing 4 KB per
@@ -144,7 +144,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
     // unbounded the other way - one entry per write, forever.
     if (!touched) return kInvalidPageId;
 
-    auto placed = index::IndexInsert(store, ix.root_page_id, layout, key, pk, covered,
+    auto placed = index::IndexInsert(store, ix.root_page_id, layout, key, tuple_key, covered,
                                      ix.index_oid,
                                      log != nullptr || publish != nullptr
                                          ? access.anchor_page_id
@@ -163,7 +163,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
         IndexWrite write;
         write.page_id = placed.value().page_id;
         write.slot = placed.value().slot;
-        // The entry as the tree composed it - pk and covered bytes included -
+        // The entry as the tree composed it - tuple key and covered bytes included -
         // read at its slot **under the hold the tree handed out** (AT-S21),
         // so the slot is still this entry's and the record and the page
         // cannot disagree about what was written.
@@ -206,7 +206,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
 Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
                        const catalog::TableAccess& access,
                        std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
-                       std::span<const std::byte> row, std::uint64_t pk,
+                       std::span<const std::byte> row, std::uint64_t tuple_key,
                        std::span<const parser::AstValue> previous,
                        const IndexWriteLog* log) {
     // The one test a relation with no index pays.
@@ -215,7 +215,7 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
     for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
         // With a log the root rides in the split's record
         // (`IndexWrite::new_root`); without one it is published inside.
-        auto moved = AppendIndexEntry(store, access, ix, values, first_col_pos, row, pk,
+        auto moved = AppendIndexEntry(store, access, ix, values, first_col_pos, row, tuple_key,
                                       previous, log, &catalog);
         if (!moved.ok()) return moved.status();
     }

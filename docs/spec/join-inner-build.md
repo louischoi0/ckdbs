@@ -26,7 +26,7 @@ When a join's inner step would be a **walked join** — a `kScan` whose
 residual binds an own column by equality to an earlier step's or an
 enclosing chain's column, with no index and no Cabin to serve it — the
 executor builds, **once per statement**, an in-memory map from the join
-column's values to the matching rows' pks (and location hints), by
+column's values to the matching rows' tuple keys (and location hints), by
 letting the **first outer row's inner walk double as the build**. Every
 later outer row probes the map instead of walking. The map is discarded
 when the statement ends. Nothing is declared, persisted, recorded,
@@ -37,8 +37,8 @@ replayed, or shared.
 statement writes nothing between its build and its probes, but another
 core may, and a leaf places a row where its key sorts, shifting the rows
 after it. So a probe reads a btree entry through `VerifyTupleAt` - the
-Keystone id at the slot against the bucketed pk - and resolves a miss by a
-pk lookup. A heap page never shifts, so a heap entry goes through the same
+Keystone id at the slot against the bucketed tuple key - and resolves a miss by a
+tuple key lookup. A heap page never shifts, so a heap entry goes through the same
 verifier and a miss there is a page that changed class or owner under the
 statement, refused `Corruption` (BF-R10; `step_vm.cpp`'s build probe).
 
@@ -64,7 +64,7 @@ by name. Three facts keep the build inside that contract:
    order the walk would have emitted them — for a named key and an
    issued one alike, since build order *is* the walk's order, whatever
    that order is. (This is stronger
-   than the pk-sort argument IX8a and the Cabin serve need, because the
+   than the tuple-key-sort argument IX8a and the Cabin serve need, because the
    build captures order rather than reconstructing it.)
 
 What the build must **not** do, stated as hard rules: never build the
@@ -92,7 +92,7 @@ is the honest rendering of "it got N rows in and threw them away".
 ## 5. The selection rule stays `f(shape, catalog)`
 
 The build is the **last arm of the structure ladder**, tried only when
-the pk arms, both index arms, and both Cabin arms declined — i.e. for
+the tuple key arms, both index arms, and both Cabin arms declined — i.e. for
 exactly the walked-join shape. No statistics, no cardinality estimate:
 the lazy form is what removes the need for one. At k = 1 the statement
 pays one walk plus the build's per-row constant, and a stopping
@@ -122,7 +122,7 @@ The design does not complete it — it makes partiality safe:
 - **The map is a walk-order prefix.** Rows are bucketed up to a
   high-water mark, and every walk traverses the engine's one walk
   order, so what the map covers is a position, not a guess. **On a btree
-  the mark is a key** - the last pk the walk covered, a resume skipping
+  the mark is a key** - the last tuple key the walk covered, a resume skipping
   every row at or below it - because another core's placement can shift a
   marked leaf's rows between two walks, and keys only move right (BD-R3
   E4). On a heap it is a page and how many of its rows the walk covered,
@@ -170,7 +170,7 @@ the publication gate and the budget carve-out.
 ## 7. Memory, and the cap
 
 The map holds one entry per inner row: the join-column value (bucketed),
-the pk, and a location hint — the Cabin's 24-byte entry is the natural
+the tuple key, and a location hint — the Cabin's 24-byte entry is the natural
 unit, reused rather than redesigned. Bounded by a config knob:
 
 - `join_build_max_rows` (default `65536`, `kDefaultJoinBuildMaxRows`) —

@@ -31,7 +31,7 @@ protected:
     static exec::TouchedTuple Touched(std::uint64_t n) {
         exec::TouchedTuple t;
         t.rel_oid = 4000 + n;
-        t.pk = 100 + n;
+        t.tuple_key = 100 + n;
         t.page_id = static_cast<PageId>(500 + n);
         t.slot = static_cast<std::uint16_t>(n);
         t.step_id = static_cast<std::uint16_t>(n % 4);
@@ -59,7 +59,7 @@ TEST_F(TrailStoreTest, ATrailRoundTripsEveryFieldInExecutionOrder) {
     ASSERT_EQ(read.value().size(), 3u);
 
     for (std::size_t i = 0; i < touched.size(); ++i) {
-        EXPECT_EQ(read.value()[i].pk, touched[i].pk);
+        EXPECT_EQ(read.value()[i].tuple_key, touched[i].tuple_key);
         EXPECT_EQ(read.value()[i].rel_oid, touched[i].rel_oid) << "an entry must say which "
                                                                   "relation it came from";
         EXPECT_EQ(read.value()[i].page_id, touched[i].page_id);

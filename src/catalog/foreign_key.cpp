@@ -10,7 +10,7 @@ Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow&
 
     if (child_column_pos == 0) {
         return Status::InvalidArgument("column '" + column +
-                                       "' is the primary key and cannot be a foreign key - the "
+                                       "' is the tuple key and cannot be a foreign key - the "
                                        "Keystone id is the row's identity, not a field of it");
     }
     if (!IsIntegerTypeVal(child_column.type_val)) {
@@ -21,7 +21,7 @@ Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow&
         // Named as the parent's property rather than as "unsupported", so
         // the operator reads the one thing that would fix it.
         return Status::NotImplemented(
-            "the parent relation is a heap relation and has no primary-key index, so every check "
+            "the parent relation is a heap relation and has no tuple key index, so every check "
             "of this foreign key would scan it - declare the parent CLUSTERED BTREE");
     }
     return Status::OK();

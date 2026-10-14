@@ -119,7 +119,7 @@ struct TrailEntry {
     std::uint32_t rel_oid = 0;
     PageId page_id = kInvalidPageId;
     std::uint16_t slot = 0;
-    std::uint64_t pk = 0;
+    std::uint64_t tuple_key = 0;
 
     // The header to restore. For an insert, and for a var-heap append,
     // these are meaningless - the slot is retired or released instead.
@@ -416,9 +416,9 @@ public:
     //
     // So compensation checks identity before it acts, and asks for the row's
     // current address when the check fails. The lookup lives outside this
-    // class because finding a row by `(rel_oid, pk)` needs the catalog and
+    // class because finding a row by `(rel_oid, tuple key)` needs the catalog and
     // the relation's storage form, and `txn` deliberately knows neither -
-    // `CommandDispatcher::LocateByPk` is the implementation, installed here.
+    // `CommandDispatcher::LocateByTupleKey` is the implementation, installed here.
     //
     // Unset is a valid configuration: without it a moved row is reported
     // rather than compensated wrongly, which is the safe half of the same
@@ -435,7 +435,7 @@ public:
     // belongs to the dispatcher, which is shorter-lived than the manager it
     // borrows, so a stored callback capturing it would outlive its captures.
     using RowLocator = std::function<StatusOr<RowLocation>(std::uint32_t rel_oid,
-                                                            std::uint64_t pk)>;
+                                                            std::uint64_t tuple_key)>;
 
     // Walks the trail **in reverse** emitting each compensation as an
     // ordinary logged page mutation (section 6), then TXN_ABORT with no
@@ -458,15 +458,15 @@ public:
     //   otherwise            **conflict** - still in flight, or committed
     //                        after my read view
     //
-    // `pk` only shapes the message, which is part of the wire contract
+    // `tuple_key` only shapes the message, which is part of the wire contract
     // (section 5): "ERR TXN_CONFLICT retryable=1 row id=42 was written by
     // transaction 118".
     Status CheckWriteConflict(const Transaction& txn, std::uint64_t cur,
-                              std::uint64_t pk) const;
+                              std::uint64_t tuple_key) const;
 
     // ---- The one place an undo record is appended (RV10) ----------------
     //
-    // Sets `fields.txn_prev_undo_ptr` from `txn`, sets `fields.pk`, appends
+    // Sets `fields.txn_prev_undo_ptr` from `txn`, sets `fields.tuple key`, appends
     // through the log, and on success advances the transaction's head.
     //
     // It exists so no call site can forget the chain link. There are three
@@ -476,7 +476,7 @@ public:
     // wrote before it. That failure is invisible until a crash, which is
     // exactly the kind this engine centralizes rather than documents.
     //
-    // `pk` is passed separately rather than pre-set on `fields` for the
+    // `tuple_key` is passed separately rather than pre-set on `fields` for the
     // same reason: it is required for every type (`undo_page.hpp` - two of
     // the three carry no image to recover it from) and a parameter cannot
     // be left at its default by accident.
@@ -487,7 +487,7 @@ public:
     // means "inserted", so an insert's record is reachable through the
     // transaction chain alone.
     StatusOr<std::uint64_t> AppendUndo(Transaction& txn, UndoRecordFields fields,
-                                       std::uint64_t pk, std::span<const std::byte> image);
+                                       std::uint64_t tuple_key, std::span<const std::byte> image);
 
     // Runs ahead of every `AppendUndo`; a non-OK return fails that append
     // with nothing written, as a device error on the undo tail would.
@@ -499,16 +499,16 @@ public:
     // and a write that could not be recorded is a write that cannot be
     // undone - which is why the caller records *before* it mutates.
     void NoteInsert(Transaction& txn, std::uint32_t rel_oid, PageId page_id, std::uint16_t slot,
-                    std::uint64_t pk);
+                    std::uint64_t tuple_key);
     void NoteOverwrite(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
-                       std::uint16_t slot, std::uint64_t pk, std::uint64_t prior_trx_id,
+                       std::uint16_t slot, std::uint64_t tuple_key, std::uint64_t prior_trx_id,
                        std::uint64_t prior_undo_ptr, std::span<const std::byte> image);
     // Records a var-heap append so a rollback can release the slot it
     // wrote: **the undo record and the trail entry both**, which is why
     // this one returns a Status where its three siblings return void.
     //
     // `page_id`/`slot` are the **var-heap** address the tuple's cell now
-    // points at, and `pk` the row that pointed there - carried for the
+    // points at, and `tuple_key` the row that pointed there - carried for the
     // diagnostic, never for an identity check, since a var-heap slot has no
     // Keystone word to check against.
     //
@@ -519,10 +519,10 @@ public:
     // notices until a crash. The three heap actions predate that argument
     // and still split the two calls; this one does not have to.
     Status NoteVarHeapAppend(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
-                             std::uint16_t slot, std::uint64_t pk);
+                             std::uint16_t slot, std::uint64_t tuple_key);
 
     void NoteDeleteMark(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
-                        std::uint16_t slot, std::uint64_t pk, std::uint64_t prior_trx_id,
+                        std::uint16_t slot, std::uint64_t tuple_key, std::uint64_t prior_trx_id,
                         std::uint64_t prior_undo_ptr);
 
     // The snapshot a reader hands the step VM.

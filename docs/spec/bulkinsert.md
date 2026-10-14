@@ -32,7 +32,7 @@ sorted fill under Tier 1). Consistent with `docs/spec/protocol.md`, `docs/spec/w
 | BI11 | T2 transactions | A load is one implicit transaction: `C_LOAD_BEGIN` runs the session's `BEGIN`, `C_LOAD_END` commits, `C_LOAD_ABORT` (or connection loss mid-load) rolls back. Cross-core: the load runs on the core its session is on, whole, as every transaction does (`crosscore.md` CC3) |
 | BI13 | Observability | `S_COMPLETE` tag `LOAD` (or `ABORT`) with `rows_affected` |
 | BI14 | Resume / dedup | **None.** A load has no resume token, `chunk_seq` must arrive strictly increasing from 0, and the engine deduplicates nothing — replaying chunks after a crash duplicates rows. Restart-safety is the client's (truncate-and-reload) |
-| BI15 | T2 keys | **Every column is announced and encoded, the pk first** (field 0, `kFieldFlagKeystone`). Per row, a **NULL pk field** asks the engine to issue the id and a value names it — T1's per-row arity, spelled on a fixed-width row. One chunk may mix the two. The pk is never NULL in a relation, so the NULL has no second reading. A named key is admitted or refused exactly as on T1, and the refusal reaches the client with its code (`AlreadyExists`, `OutOfRange`) |
+| BI15 | T2 keys | **Every column is announced and encoded, the tuple key first** (field 0, `kFieldFlagKeystone`). Per row, a **NULL tuple key field** asks the engine to issue the id and a value names it — T1's per-row arity, spelled on a fixed-width row. One chunk may mix the two. The tuple key is never NULL in a relation, so the NULL has no second reading. A named key is admitted or refused exactly as on T1, and the refusal reaches the client with its code (`AlreadyExists`, `OutOfRange`) |
 | BI16 | T2 types | **Every storable type loads**, and a NULL in a nullable column. Each field is transliterated into the value shape the storage gate already validates (`exec::EncodeRow`) — never a second gate: a decimal goes over as its literal text so its precision is checked, a date and a timestamp as their decoded integers so their range is, a bool as the byte sent so anything but 0 or 1 is refused. A fixed-width field of another length is refused, never interpreted |
 
 ---
@@ -153,8 +153,8 @@ absent the bit, the frames are unknown types under `protocol.md` §4's rule.
 | Frame | Payload | Notes |
 |---|---|---|
 | `C_LOAD_BEGIN` | `{relation str, flags u16, declared_rows u64}` | `declared_rows` 0 = unknown; informational, never enforced. `flags` reserved 0 |
-| `S_LOAD_READY` | `{load_id u64, window u16, max_chunk_bytes u32, field_count u16, fields: …}` | field descriptors are `S_ROW_DESC` fields for **every column, the pk first** — the schema the client must encode, stated by the server so drift is impossible (BI15) |
-| `C_LOAD_CHUNK` | `{load_id u64, chunk_seq u32, row_count u16, rows…}` | rows in D5 encoding per the announced fields; a NULL pk field takes an issued id, a value names it (BI15); `chunk_seq` starts at 0, strictly increasing |
+| `S_LOAD_READY` | `{load_id u64, window u16, max_chunk_bytes u32, field_count u16, fields: …}` | field descriptors are `S_ROW_DESC` fields for **every column, the tuple key first** — the schema the client must encode, stated by the server so drift is impossible (BI15) |
+| `C_LOAD_CHUNK` | `{load_id u64, chunk_seq u32, row_count u16, rows…}` | rows in D5 encoding per the announced fields; a NULL tuple key field takes an issued id, a value names it (BI15); `chunk_seq` starts at 0, strictly increasing |
 | `S_LOAD_ACK` | `{load_id u64, chunk_seq u32, rows_accepted u64}` | cumulative count; the window advances |
 | `C_LOAD_END` | `{load_id u64}` | → `S_COMPLETE {tag "LOAD", rows_affected}` after the transaction's commit |
 | `C_LOAD_ABORT` | `{load_id u64}` | rolls back → `S_COMPLETE {tag "ABORT", rows_affected}` |
@@ -289,7 +289,7 @@ and for a million.
 Built for heap relations only, and reached only from a multi-row T1
 statement (T2 enters through T1's path, `kwp_load_server.cpp`). **The gate**
 (`CommandDispatcher::SortedFillEligible`, plus the caller's per-statement
-half): more than one row, every row omits its pk, a heap relation, no
+half): more than one row, every row omits its tuple key, a heap relation, no
 var-heap root, no secondary index, no Cabin, and no assertion on the
 relation. Ineligibility is not a refusal: the statement takes §4's per-row
 path.

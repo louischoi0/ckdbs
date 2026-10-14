@@ -111,7 +111,7 @@ protected:
 };
 
 // The prefix-slice contract, spelled out against known data. Ids are
-// engine-assigned 1..5 in insert order, and a scan emits in pk order, so
+// engine-assigned 1..5 in insert order, and a scan emits in tuple key order, so
 // the unlimited reply is fixed and every tail is a slice of it.
 TEST_F(PaginationExecTest, TheReplyIsASliceOfTheUnlimitedReply) {
     FillFiveRows("CREATE TABLE t (id int64, v varchar)");

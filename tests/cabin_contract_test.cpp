@@ -26,7 +26,7 @@
 // checkable by looking at one execution:
 //
 //   - **Serving must not lose a row.** An observed value's entry set is a
-//     superset of the qualifying pks; if the write hook ever misses an
+//     superset of the qualifying tuple keys; if the write hook ever misses an
 //     append, a query returns *fewer* rows and looks perfectly plausible.
 //   - **Serving must not gain one.** The set is a superset, so surplus
 //     entries are expected - a row updated away from the value, a duplicate
@@ -42,10 +42,10 @@
 //   4. writes after observation      the witness (§5)
 //   5. corrupted location hints      entries naming valid pages and slots
 //                                    holding *different* tuples
-//   6. dangling pks planted in a set entries naming rows that do not exist
+//   6. dangling tuple keys planted in a set entries naming rows that do not exist
 //
 // Cases 5 and 6 are the ones that prove C2 load-bearing rather than
-// decorative: authority lives in the pk, the location is advice, and a
+// decorative: authority lives in the tuple key, the location is advice, and a
 // wrong hint must cost a descent and not a row.
 
 namespace kds::server {
@@ -82,7 +82,7 @@ private:
 };
 
 // Two relations, one btree and one heap. Both are covered because the two
-// fail differently on a bad hint: a btree resolves the pk and heals, a heap
+// fail differently on a bad hint: a btree resolves the tuple key and heals, a heap
 // has no descent at all and must abandon the Cabin for the walk.
 //
 // `sym` repeats across rows on purpose - a Cabin on a column where every
@@ -113,7 +113,7 @@ void DeclareCabins(Instance& db) {
 // value matching exactly one, a value matching **nothing** (the case where
 // an observed Cabin answers authoritatively without reading the relation),
 // a cabined equality with an extra conjunct (which must not narrow what the
-// Cabin records), a bare scan, and a pk lookup that no Cabin touches.
+// Cabin records), a bare scan, and a tuple key lookup that no Cabin touches.
 const std::vector<std::string>& Queries() {
     static const std::vector<std::string> kQueries = {
         "SELECT * FROM b WHERE sym = 'aaa'",
@@ -294,7 +294,7 @@ TEST(CabinContractTest, WritesAfterObservationChangeNoReply) {
 TEST(CabinContractTest, CorruptedLocationHintsChangeNoReply) {
     // **C6, proven load-bearing.** Every hint in every entry set is pointed
     // at a page and slot holding a *different* tuple. On a btree relation the
-    // reader must notice, resolve the pk, and heal; on a heap relation it
+    // reader must notice, resolve the tuple key, and heal; on a heap relation it
     // must abandon the Cabin and walk. Either way the rows must not move.
     //
     // Without the id check in `VerifyTupleAt`, this test returns real rows
@@ -351,7 +351,7 @@ TEST(CabinContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
     // **The epoch check made real for the Cabin's hints**
     // (docs/spec/physical-optimizer.md R4, workplan PX04). Every hint was
     // recorded at epoch 0; the page side moves here, as a relayout mover
-    // will move it. A btree relation must notice per entry, resolve the pk,
+    // will move it. A btree relation must notice per entry, resolve the tuple key,
     // and stamp the healed hint with the *bumped* epoch - a heal that wrote
     // 0 back would miss and re-heal forever. A heap relation must abandon
     // the Cabin and re-record from the walk. Either way no reply moves.
@@ -399,8 +399,8 @@ TEST(CabinContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
     ASSERT_GT(checked, 0u) << "no hint was checked; the test proves nothing";
 }
 
-TEST(CabinContractTest, DanglingPksChangeNoReply) {
-    // **C2's third consequence.** A pk absent from the clustered tree can
+TEST(CabinContractTest, DanglingTupleKeysChangeNoReply) {
+    // **C2's third consequence.** A tuple key absent from the clustered tree can
     // never resurface under a new tuple (K1), so a dangling entry is dead
     // forever and must be skipped - never an error, and never a row.
     Instance db(/*cabins=*/true);
@@ -425,9 +425,9 @@ TEST(CabinContractTest, DanglingPksChangeNoReply) {
         if (!entries.valid()) continue;
 
         stats::CabinEntry dangling;
-        dangling.pk = 999999;  // issued to nothing, and by K1 never will be
+        dangling.tuple_key = 999999;  // issued to nothing, and by K1 never will be
         dangling.page_id = kInvalidPageId;
-        dangling.flags = 0;  // no usable hint: the pk is all there is
+        dangling.flags = 0;  // no usable hint: the tuple key is all there is
         // Appended through the store's own write hook, which is what a
         // write to the relation would do - the handle names entries and
         // does not grow a set (AT-S7).
@@ -438,7 +438,7 @@ TEST(CabinContractTest, DanglingPksChangeNoReply) {
 
     const std::vector<std::string> after = RunAll(db, 2);
     replies.insert(replies.end(), after.begin(), after.end());
-    ExpectSame(replies, Reference(5), "dangling pks");
+    ExpectSame(replies, Reference(5), "dangling tuple keys");
 }
 
 // ---- The claim no advisory structure can make ----------------------------
@@ -580,7 +580,7 @@ TEST(CabinContractTest, AQuotaStoppedWalkCommitsNoObservation) {
 
     // The btree twin, same sequence: the stopped walk commits nothing,
     // the completed one observes, and a *served* probe under a quota
-    // resolves through the pk and slices identically.
+    // resolves through the tuple key and slices identically.
     ASSERT_EQ(db.Run("SELECT id FROM b WHERE sym = 'aaa' LIMIT 1"), "id\\n1");
     EXPECT_EQ(db.Run("SELECT id FROM b WHERE sym = 'aaa'"), "id\\n1\\n3\\n6");
     EXPECT_EQ(db.Run("SELECT id FROM b WHERE sym = 'aaa' LIMIT 2"), "id\\n1\\n3");
@@ -649,7 +649,7 @@ TEST(CabinContractTest, DdlRefusesWhatCanNeverWork) {
     Instance db(/*cabins=*/true);
     Load(db);
 
-    EXPECT_EQ(db.Run("CREATE CABIN ON b(id)").substr(0, 3), "ERR");   // the pk
+    EXPECT_EQ(db.Run("CREATE CABIN ON b(id)").substr(0, 3), "ERR");   // the tuple key
     EXPECT_EQ(db.Run("CREATE CABIN ON b(nope)").substr(0, 3), "ERR");  // no column
     EXPECT_EQ(db.Run("CREATE CABIN ON nope(sym)").substr(0, 3), "ERR");  // no relation
     EXPECT_EQ(db.Run("CREATE CABIN ON b(sym, qty)").substr(0, 3), "ERR");  // C3
@@ -681,7 +681,7 @@ TEST(CabinContractTest, ColumnPolicyDecidesWhoMayCreateACabin) {
     EXPECT_EQ(db.Run("CREATE CABIN ON p(c)").substr(0, 7), "CREATED");  // auto permits asking
     EXPECT_EQ(db.Run("CREATE CABIN ON p(d)").substr(0, 7), "CREATED");  // unset reads as auto
 
-    // A policy on the pk is refused, not ignored.
+    // A policy on the tuple key is refused, not ignored.
     EXPECT_EQ(db.Run("CREATE TABLE q (id int64 CABIN, x varchar)").substr(0, 3), "ERR");
     EXPECT_EQ(db.Run("CREATE TABLE r (id int64 NO CABIN, x varchar)").substr(0, 3), "ERR");
 
@@ -723,7 +723,7 @@ TEST(CabinContractTest, TwoCabinStepsInOneChainNeitherShareBuffersNorCancelEachO
     //
     //   - `recording_`, cleared to null on the inner walk's way out, which
     //     cancelled the outer recording from its second row - committing a
-    //     set as observed while missing qualifying pks, exactly the C1
+    //     set as observed while missing qualifying tuple keys, exactly the C1
     //     break the completed-walk check exists to prevent;
     //   - the phase-2 location buffer, cleared and refilled by the inner
     //     serve while the outer serve was walking it.
@@ -736,7 +736,7 @@ TEST(CabinContractTest, TwoCabinStepsInOneChainNeitherShareBuffersNorCancelEachO
     for (Instance* db : {&on, &off}) {
         ASSERT_EQ(db->Run(std::string("CREATE TABLE p") + kDecl).substr(0, 7), "CREATED");
         ASSERT_EQ(db->Run(std::string("CREATE TABLE q") + kDecl).substr(0, 7), "CREATED");
-        // Deliberately different set sizes and different pks: two relations
+        // Deliberately different set sizes and different tuple keys: two relations
         // whose sets happen to agree would hide a buffer served from the
         // wrong step.
         for (int i = 1; i <= 4; ++i) {
@@ -764,11 +764,11 @@ TEST(CabinContractTest, TwoCabinStepsInOneChainNeitherShareBuffersNorCancelEachO
     EXPECT_EQ(on.Run(sql), off.Run(sql));
 }
 
-TEST(CabinContractTest, AWriteHookAppendServesInPkOrder) {
+TEST(CabinContractTest, AWriteHookAppendServesInTupleKeyOrder) {
     // **The ordering rule, minimised to one relation and one write.** A
-    // walk emits a step's rows in pk order (I12), and a committed set
+    // walk emits a step's rows in tuple key order (I12), and a committed set
     // starts that way - but the write hook appends at the set's *end*, so
-    // an UPDATE moving an earlier pk into an observed value leaves the set
+    // an UPDATE moving an earlier tuple key into an observed value leaves the set
     // out of order. Serving it in entry order then reorders a reply, which
     // is an accelerator changing a query result (§1).
     //
@@ -782,14 +782,14 @@ TEST(CabinContractTest, AWriteHookAppendServesInPkOrder) {
     Load(ref);
     DeclareCabins(db);
 
-    // 'ccc' is one row, pk 4. Declared, so this execution observes it.
+    // 'ccc' is one row, tuple key 4. Declared, so this execution observes it.
     const std::string sql = "SELECT id FROM b WHERE sym = 'ccc'";
     ASSERT_EQ(db.Run(sql), ref.Run(sql));
 
-    // pk 1 moves in, and lands after pk 4 in the entry set.
+    // tuple key 1 moves in, and lands after tuple key 4 in the entry set.
     const std::string write = "UPDATE b SET sym = 'ccc' WHERE id = 1";
     ASSERT_EQ(db.Run(write), ref.Run(write));
-    EXPECT_EQ(db.Run(sql), ref.Run(sql)) << "btree: a served set emitted out of pk order";
+    EXPECT_EQ(db.Run(sql), ref.Run(sql)) << "btree: a served set emitted out of tuple key order";
 
     // The heap twin. Same append; the serve path differs (no descent to
     // heal a hint with), the ordering rule does not.
@@ -798,7 +798,7 @@ TEST(CabinContractTest, AWriteHookAppendServesInPkOrder) {
     const std::string heap_write = "UPDATE h SET sym = 'ccc' WHERE id = 1";
     ASSERT_EQ(db.Run(heap_write), ref.Run(heap_write));
     EXPECT_EQ(db.Run(heap_sql), ref.Run(heap_sql))
-        << "heap: a served set emitted out of pk order";
+        << "heap: a served set emitted out of tuple key order";
 }
 
 TEST(CabinContractTest, ANamedKeyBelowTheMarkIsWitnessedAndADuplicateIsNot) {
@@ -806,7 +806,7 @@ TEST(CabinContractTest, ANamedKeyBelowTheMarkIsWitnessedAndADuplicateIsNot) {
     // named-keys.md`) from the shape BB-S3 withdrew: caller-supplied ids
     // named out of order. Before BB they left a page's slots in insertion
     // order and a serve had to emit them as the walk did; since BD a leaf
-    // places each where it sorts, so the walk's order and pk order are one
+    // places each where it sorts, so the walk's order and tuple key order are one
     // order and the served reply must equal the cabin-free one.
     //
     // And the witness (§5) runs once a row is placed: a key below the mark is
@@ -848,7 +848,7 @@ TEST(CabinContractTest, ANamedKeyBelowTheMarkIsWitnessedAndADuplicateIsNot) {
     const std::string present = "INSERT INTO e VALUES (30, 'aaa', 99)";
     const std::string refused_present = base.Run(present);
     EXPECT_EQ(refused_present.rfind("ERR", 0), 0u) << refused_present;
-    EXPECT_NE(refused_present.find("duplicate primary key"), std::string::npos)
+    EXPECT_NE(refused_present.find("duplicate tuple key"), std::string::npos)
         << refused_present;
     EXPECT_EQ(db.Run(present), refused_present);
     EXPECT_EQ(db.cabins().Find(*key).size(), before) << "a refused key reached the entry set";
@@ -862,7 +862,7 @@ TEST(CabinContractTest, ANamedKeyBelowTheMarkIsWitnessedAndADuplicateIsNot) {
     const std::string ordered = sql + " ORDER BY id";
     EXPECT_EQ(db.Run(ordered), base.Run(ordered));
 
-    // The mark did not move for a key below it: the next omitted pk is 51.
+    // The mark did not move for a key below it: the next omitted tuple key is 51.
     const std::string next = "INSERT INTO e VALUES ('aaa', 60)";
     const std::string issued = base.Run(next);
     EXPECT_NE(issued.find(" id=51 "), std::string::npos) << issued;

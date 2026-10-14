@@ -206,7 +206,7 @@ Status WriteCase(const std::string& path, const SimConfig& config, const SimPlan
         const Op& op = entry.op;
         out << "op\t" << OpKindName(op.kind) << '\t' << op.table << '\t' << op.key << '\t'
             << op.lo << '\t' << op.hi << '\t' << op.v << '\t' << op.pred_v << '\t'
-            << (op.btree ? 1 : 0) << '\t' << (op.by_pk ? 1 : 0) << '\t'
+            << (op.btree ? 1 : 0) << '\t' << (op.by_tuple_key ? 1 : 0) << '\t'
             << (op.set_name ? 1 : 0) << '\t' << op.name << '\t' << op.sql << "\n";
     }
     if (!out) return Status::IoError("the case file " + path + " was not written whole");
@@ -320,7 +320,7 @@ StatusOr<LoadedCase> ReadCase(const std::string& path) {
                                            ": a numeric field is not a number");
         }
         op.btree = f[8] == "1";
-        op.by_pk = f[9] == "1";
+        op.by_tuple_key = f[9] == "1";
         op.set_name = f[10] == "1";
         op.name = f[11];
         op.sql = f[12];

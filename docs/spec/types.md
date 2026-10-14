@@ -147,7 +147,7 @@ timestamp, narrow-decimal, signed-integer and `bool` coercion refuse a
 wrapped literal outright rather than coercing the value it wrapped to. A
 `uint64` column reads the digits and refuses a literal outside
 `[0, 2^64 - 1]` `OutOfRange` - compared, one answered false under every
-operator, `!=` and `>` included - and a pk bounds a range or keys a lookup
+operator, `!=` and `>` included - and a tuple key bounds a range or keys a lookup
 only from a literal that did not wrap. Purely additive: no format
 change, no version bump, one `sys.types` row (`decimal128`, oid 33,
 type_val 13). `p > 38` has no representation and is refused.
@@ -257,7 +257,7 @@ evaluator refuses `Corruption` a column the decode left out (`exec::kUndecoded`)
 rather than read a default. The new image is the row's own bytes with only the
 assigned cells re-encoded (`exec::EncodeAssigned`, BN-R3, `heap-and-tuple.md`
 §3.4). A failure names the failing operator's byte, the
-expression's first byte and the row's pk. `exec::TypeSetExpression` (`include/kds/exec/set_expr.hpp`) is the
+expression's first byte and the row's tuple key. `exec::TypeSetExpression` (`include/kds/exec/set_expr.hpp`) is the
 one place the rules below live. §3.2's "there is none" stands for every other
 position: the grammar admits an expression in a SET value only.
 
@@ -389,7 +389,7 @@ Its errors name bytes of the UPDATE.
 Whether a NULL result fits a `NOT NULL` target is the row's verdict. The
 whole expression must be the target column's type, or the statement is
 refused naming both types: "the expression is `int32` but column `v` is
-`int64`". The pk is read, never written (BJ-R5).
+`int64`". The tuple key is read, never written (BJ-R5).
 
 ### 3.3 Rendering happens at the boundary
 
@@ -408,7 +408,7 @@ chose kInt reuse over a rendered representation.
 ### 3.4 NULLs, keys, and the rest
 
 A NULL date is a NULL like any other (`docs/spec/null.md`), skipped by
-aggregates, one group under GROUP BY. The Keystone pk remains uint64 —
+aggregates, one group under GROUP BY. The Keystone tuple key remains uint64 —
 none of these types can be column 0. Cabin keys, probe keys, and Waystone
 trails treat the types as the integers they are; no trust-model text
 changes.

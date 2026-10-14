@@ -107,7 +107,7 @@ using IndexWriteLog = std::function<Status(const IndexWrite&)>;
 // touched.
 //
 // `values` is positionally aligned with the schema from `first_col_pos` - 1
-// for an INSERT, whose VALUES list supplies the columns after the pk, and 0
+// for an INSERT, whose VALUES list supplies the columns after the tuple key, and 0
 // for an UPDATE, which carries the whole decoded row. The same convention the
 // Cabin hook uses, so the two call sites read alike.
 //
@@ -125,7 +125,7 @@ using IndexWriteLog = std::function<Status(const IndexWrite&)>;
 Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
                        const catalog::TableAccess& access,
                        std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
-                       std::span<const std::byte> row, std::uint64_t pk,
+                       std::span<const std::byte> row, std::uint64_t tuple_key,
                        std::span<const parser::AstValue> previous = {},
                        const IndexWriteLog* log = nullptr);
 
@@ -149,7 +149,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   const catalog::TableAccess::IndexRef& ix,
                                   std::span<const parser::AstValue> values,
                                   std::uint16_t first_col_pos, std::span<const std::byte> row,
-                                  std::uint64_t pk,
+                                  std::uint64_t tuple_key,
                                   std::span<const parser::AstValue> previous = {},
                                   const IndexWriteLog* log = nullptr,
                                   catalog::Catalog* publish = nullptr);

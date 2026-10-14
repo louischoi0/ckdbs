@@ -178,7 +178,7 @@ struct Token {
     // client used.
     //
     // `int_val` is a signed decode that silently wraps past 64 bits, so a
-    // range check (the pk's id space, V30) needs the digits themselves.
+    // range check (the tuple key's id space, V30) needs the digits themselves.
     //
     // A view into this token's own `text`, and so into the source behind
     // it - valid exactly as long as that is.

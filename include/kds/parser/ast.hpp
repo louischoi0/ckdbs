@@ -210,7 +210,7 @@ enum class PredicateKind : std::uint8_t {
     // `rhs_col` are unset. `op` is the comparison, `IS [NOT] NULL` included.
     //
     // **A kind of its own, so every reader that acts on a `kCompareValue`
-    // passes it by** - the point lookup's pk test, the write's lock window -
+    // passes it by** - the point lookup's tuple key test, the write's lock window -
     // rather than reading `col op val` off a conjunct that is about `f(col)`.
     // It lowers to a function conjunct (step_chain.hpp) and never to a
     // `StepPredicate`, which is what keeps it from ever being a key.
@@ -364,7 +364,7 @@ struct ColumnDef {
     std::uint8_t cabin_policy = 0;  // catalog::kCabinPolicyUnset
 
     // Where the policy keyword was written, for an error that can point at
-    // it - a cabin on the primary key is refused, and the refusal has to
+    // it - a cabin on the tuple key is refused, and the refusal has to
     // say where.
     std::uint32_t cabin_byte_offset = 0;
 
@@ -668,14 +668,14 @@ struct SelectStmt {
     //
     // `LIMIT` without `ORDER BY` is well-defined here in a way general SQL
     // cannot promise: emission order is already a client contract (I12 -
-    // written order across steps, pk order within one), so the clause
+    // written order across steps, tuple key order within one), so the clause
     // takes a prefix of an order the statement has, not one it hopes for.
     //
     // `order_by` carries the written sort keys in written order, empty when
     // no `ORDER BY` was written. The parser judges *shape* only - a column
     // reference or (over a fold) an aggregate call, never an ordinal and
     // never an expression - because which relation a name belongs to,
-    // whether it is the pk, and whether it is a grouping key are catalog
+    // whether it is the tuple key, and whether it is a grouping key are catalog
     // knowledge, and the compiler is where catalog knowledge lives.
     //
     // `DESC` reaches the AST: an output sort does not walk, so descending
@@ -815,7 +815,7 @@ struct Assignment {
     // Where `col_name` was written. Carried for the same reason
     // `AstValue::byte_offset` is (types.md TY05): the SET list is
     // resolved against the catalog at compile, and both refusals it can
-    // produce - an unknown column, and the primary key, which is the
+    // produce - an unknown column, and the tuple key, which is the
     // tuple's identity and not a field of it (keystoneid-invariant.md K2)
     // - owe the client an exact position. Nothing compares this field, so
     // adding it moved no fingerprint: the hash folds from the token
@@ -849,7 +849,7 @@ struct DeleteStmt {
     std::vector<Condition> where;  // empty = every row
 };
 
-// `PURGE FROM <t> WHERE <pk comparisons>` (BH,
+// `PURGE FROM <t> WHERE <tuple key comparisons>` (BH,
 // `instructions/v3.0.0/workorder-bh-purge-key.md` PU1): retires, keyless,
 // the slot of every committed delete-marked row the window names once no
 // reader can see it, so the key may be named again. `DELETE`'s fields, and

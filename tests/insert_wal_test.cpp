@@ -868,7 +868,7 @@ TEST_F(InsertWalTest, AnIndexSplitTakesOneBtreeSplitAndNoIndexInsert) {
               std::string::npos);
 
     // A varchar key spends kIndexStringKeyBytes + 1 on the key and 8 on the
-    // pk, so a leaf holds 8144 / 41 = 198 entries - enough inserts here to
+    // tuple key, so a leaf holds 8144 / 41 = 198 entries - enough inserts here to
     // divide one without paying for thousands of rows.
     constexpr int kRows = 400;
     for (int i = 0; i < kRows; ++i) {

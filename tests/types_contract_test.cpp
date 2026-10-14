@@ -153,7 +153,7 @@ TEST(TypesContract, Item2_TwelvePointThreeEqualsTwelvePointThirtyAtScaleTwo) {
 }
 
 TEST(TypesContract, Item2_ABtreeRelationOrdersTheSameAsAHeapOne) {
-    // Clustering is on the Keystone pk, not on a typed column, so what is
+    // Clustering is on the Keystone tuple key, not on a typed column, so what is
     // actually being pinned is that the storage form does not change the
     // answer - the same equivalence the heap/btree suite pins for
     // everything else.
@@ -510,7 +510,7 @@ TEST(TypesContract, AWrappedIntegerLiteralInAWhereIsRefusedNotCompared) {
     ASSERT_EQ(db.Run("CREATE TABLE t (id int64, qty int64) BTREE").substr(0, 7), "CREATED");
     ASSERT_EQ(db.Run("INSERT INTO t VALUES (5, 1)").substr(0, 8), "INSERTED");
 
-    // 2^64 + 5 wraps to 5, the pk; 2^64 + 1 wraps to 1, the qty.
+    // 2^64 + 5 wraps to 5, the tuple key; 2^64 + 1 wraps to 1, the qty.
     for (const char* sql : {"SELECT * FROM t WHERE id = 18446744073709551621",
                             "SELECT * FROM t WHERE qty = 18446744073709551617",
                             "SELECT * FROM t WHERE id >= 18446744073709551621 AND "
@@ -529,7 +529,7 @@ TEST(TypesContract, AWrappedIntegerLiteralInAWhereIsRefusedNotCompared) {
     // The widest value int64 holds is still an ordinary literal.
     EXPECT_EQ(db.Run("SELECT * FROM t WHERE id = 9223372036854775807"), "id,qty");
 
-    // An index probe and a pk range are keyed from the coerced literal too.
+    // An index probe and a tuple key range are keyed from the coerced literal too.
     ASSERT_EQ(db.Run("CREATE INDEX t_qty ON t (qty)").substr(0, 7), "CREATED");
     for (const char* sql : {"SELECT * FROM t WHERE qty = 18446744073709551617",
                             "SELECT * FROM t WHERE id BETWEEN 18446744073709551621 AND "
@@ -589,7 +589,7 @@ TEST(TypesContract, AUint64ColumnStillTakesItsFullUnsignedRange) {
     EXPECT_EQ(db.Run("SELECT * FROM u WHERE big = 0"), "id,big\\n2,0");
 }
 
-TEST(TypesContract, AUint64PkIsNotLookedUpAtTheNumberAWrappedLiteralWrapsTo) {
+TEST(TypesContract, AUint64TupleKeyIsNotLookedUpAtTheNumberAWrappedLiteralWrapsTo) {
     Instance db;
     ASSERT_EQ(db.Run("CREATE TABLE p (id uint64, v int64) BTREE").substr(0, 7), "CREATED");
     ASSERT_EQ(db.Run("INSERT INTO p VALUES (5, 7)").substr(0, 8), "INSERTED");

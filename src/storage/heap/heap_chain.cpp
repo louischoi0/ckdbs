@@ -92,7 +92,7 @@ StatusOr<ChainInsertResult> PlaceOnTail(storage::PageStore& store, HeldTail tail
         auto existing = KeystoneIdOfPayload(tuple.value().payload);
         if (!existing.ok()) return existing.status();
         if (existing.value() == id) {
-            return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
+            return Status::AlreadyExists("duplicate tuple key " + std::to_string(id) +
                                           " already present at page " +
                                           std::to_string(tail.id) + " slot " +
                                           std::to_string(i));
@@ -191,7 +191,7 @@ StatusOr<ChainInsertResult> ChainInsertNamed(storage::PageStore& store, PageId h
     PageView page(tail.value().page.bytes());
     if (id < page.min_key()) {
         return Status::OutOfRange(
-            "primary key " + std::to_string(id) +
+            "tuple key " + std::to_string(id) +
             " is below the relation's high-water mark: the chain's tail, page " +
             std::to_string(tail.value().id) + ", opens at " + std::to_string(page.min_key()) +
             ", an id already placed; a named key must sort above every key the relation has "

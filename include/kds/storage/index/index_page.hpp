@@ -26,7 +26,7 @@
 // `leftmost_child`, `level`, binary search - because the shape was right;
 // the key type is what differs, and it differs all the way down.
 //
-// ---- The sort key is (key, pk), not the key --------------------------
+// ---- The sort key is (key, tuple key), not the key --------------------------
 //
 // A secondary key is not unique, so two entries can share one key. If the
 // tree routed on the key alone, a separator equal to a duplicated key would
@@ -34,7 +34,7 @@
 // straddle a boundary and half of them would be unreachable.
 //
 // So the ordering key of every entry, and every separator, is the full
-// `key || pk` pair: `kIndexPkWidth` bytes of primary key, **big-endian**,
+// `key || tuple key` pair: `kIndexTupleKeyWidth` bytes of tuple key, **big-endian**,
 // appended to the encoded key. Big-endian for the same reason the key
 // itself is (exec/index_key.hpp): it is compared with `memcmp` and by
 // nothing else. A seek for key K then uses `(K, 0)`, which sorts at or
@@ -47,24 +47,24 @@
 // ---- A probe is padded, never shortened ---------------------------------
 //
 // Every comparison in this file is over a **full** `key_width +
-// kIndexPkWidth` bytes, and a caller that knows less than a whole sort key
+// kIndexTupleKeyWidth` bytes, and a caller that knows less than a whole sort key
 // zero-pads the rest. That is not a convenience: a short comparison would be
 // wrong. A separator whose key equals a probe's would compare *equal* under
 // a truncated memcmp and route the descent right, past entries in the left
-// subtree carrying that same key with a lower pk - which is exactly the
-// duplicate-straddling failure the (key, pk) sort key exists to prevent.
+// subtree carrying that same key with a lower tuple key - which is exactly the
+// duplicate-straddling failure the (key, tuple key) sort key exists to prevent.
 //
 // Zero-padding gives the true lower bound instead, and it does so for free:
 // a key column's leading discriminator byte is `kIndexKeyPresent` (1) for
 // every value that exists, so a zero byte in that position sorts below all
 // of them. `WHERE a = 3` on an index over `(a, b)` therefore encodes column
-// `a`, leaves `b` and the pk zero, and lands on the first entry that can
+// `a`, leaves `b` and the tuple key zero, and lands on the first entry that can
 // match.
 //
 // ---- Key bytes are opaque here ------------------------------------------
 //
 // Nothing in this file or in index_tree.hpp interprets a key byte. Ordering
-// is `memcmp` over `key_width + kIndexPkWidth` bytes, and what those bytes
+// is `memcmp` over `key_width + kIndexTupleKeyWidth` bytes, and what those bytes
 // mean is `exec::EncodeIndexKey`'s business. That is what keeps the tree
 // free of the schema, of a per-type dispatch, and of any chance of
 // disagreeing with `CompareValues`.
@@ -90,10 +90,10 @@
 
 namespace kds::index {
 
-// The primary key an entry carries, in bytes. Not derived from
+// The tuple key an entry carries, in bytes. Not derived from
 // `sizeof(std::uint64_t)`: it is a stored width, and a stored width that
 // tracks a C++ type is a format that changes when a type does.
-inline constexpr std::uint32_t kIndexPkWidth = 8;
+inline constexpr std::uint32_t kIndexTupleKeyWidth = 8;
 
 // The shape of one index's entries - its schema constant, in the sense
 // `catalog::RowLayout::row_size` is a relation's.
@@ -106,7 +106,7 @@ struct IndexLayout {
 
     // What the tree orders by, and what a separator is.
     constexpr std::uint32_t sort_key_width() const {
-        return static_cast<std::uint32_t>(key_width) + kIndexPkWidth;
+        return static_cast<std::uint32_t>(key_width) + kIndexTupleKeyWidth;
     }
     constexpr std::uint32_t leaf_entry_width() const {
         return sort_key_width() + covered_width;
@@ -225,16 +225,16 @@ constexpr std::uint16_t MaxInternalEntries(const IndexLayout& layout) {
 
 // ---- Sort keys ----------------------------------------------------------
 
-// Writes the `kIndexPkWidth`-byte big-endian primary key at the front of
-// `out`. The one spelling of the pk's byte order, so no reader and writer
+// Writes the `kIndexTupleKeyWidth`-byte big-endian tuple key at the front of
+// `out`. The one spelling of the tuple key's byte order, so no reader and writer
 // can disagree about it.
-void PutIndexPk(std::span<std::byte> out, std::uint64_t pk);
-std::uint64_t GetIndexPk(std::span<const std::byte> in);
+void PutIndexTupleKey(std::span<std::byte> out, std::uint64_t tuple_key);
+std::uint64_t GetIndexTupleKey(std::span<const std::byte> in);
 
-// Composes an entry's sort key - `key || pk` - into `out`, which must be
+// Composes an entry's sort key - `key || tuple key` - into `out`, which must be
 // exactly `layout.sort_key_width()` bytes.
 Status EncodeIndexSortKey(const IndexLayout& layout, std::span<const std::byte> key,
-                          std::uint64_t pk, std::span<std::byte> out);
+                          std::uint64_t tuple_key, std::span<std::byte> out);
 
 // ---- Views --------------------------------------------------------------
 
@@ -257,7 +257,7 @@ public:
     PageId right_sibling() const;
     void set_right_sibling(PageId page_id);
 
-    // The whole entry, and its `key || pk` prefix. Both fail with OutOfRange
+    // The whole entry, and its `key || tuple key` prefix. Both fail with OutOfRange
     // past `entry_count()`.
     StatusOr<std::span<const std::byte>> Entry(std::uint16_t idx) const;
     StatusOr<std::span<const std::byte>> SortKey(std::uint16_t idx) const;
@@ -271,7 +271,7 @@ public:
 
     // Index of the first entry whose sort key is >= `sort_key`, or
     // `entry_count()` if there is none. `sort_key` is a full
-    // `key_width + kIndexPkWidth` bytes; a caller holding less pads with
+    // `key_width + kIndexTupleKeyWidth` bytes; a caller holding less pads with
     // zeros, which is the lower bound - see the header.
     std::uint16_t LowerBound(std::span<const std::byte> sort_key) const;
 

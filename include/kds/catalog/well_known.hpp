@@ -184,7 +184,7 @@ inline constexpr Oid kSysAssertionsColumnOidBase = 140;
 inline constexpr Oid kSysAccessStatsTable = 130;
 
 // sys.cabins (docs/spec/cabin.md §10): one row per Cabin - a
-// `(relation, non-pk column)` store authoritative for observed values.
+// `(relation, non-tuple-key column)` store authoritative for observed values.
 // Fixed-offset typed rows like every catalog relation except
 // sys.assertions, since nothing in the row is variable-width.
 //
@@ -200,9 +200,9 @@ inline constexpr Oid kSysCabinsTable = 131;
 // sys.assertions, since nothing in the row is variable-width.
 //
 // **There is no parent-column field, and that is F1, not an omission.** A
-// foreign key references the parent's engine pk and never a business key,
+// foreign key references the parent's engine tuple key and never a business key,
 // so the parent side is fixed by the invariant that issues it: ids are
-// issue-once (docs/rules/keystoneid-invariant.md K1) and a pk cannot be updated
+// issue-once (docs/rules/keystoneid-invariant.md K1) and a tuple key cannot be updated
 // (invariant 11), which is what buys ON UPDATE CASCADE never having to
 // exist and a stored reference being able to dangle, naming a different
 // committed row only after a `PURGE` freed the parent's key - which needs

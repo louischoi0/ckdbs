@@ -21,8 +21,8 @@
 // client on that core waits. Even a sliced walk is bounded here, because
 // one that never ends holds its view, its borrow and its memo for good.
 //
-// A correlated subquery over a non-pk column is the easy way to write one.
-// `WHERE EXISTS (SELECT ... WHERE inner.col = outer.col)` with a non-pk
+// A correlated subquery over a non-tuple-key column is the easy way to write one.
+// `WHERE EXISTS (SELECT ... WHERE inner.col = outer.col)` with a non-tuple-key
 // `col` walks the whole inner relation once per outer row: two relations of
 // n rows is n² tuple decodes from a statement that fits on one line and
 // looks entirely reasonable. At a million rows each that is 10¹² decodes,

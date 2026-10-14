@@ -72,7 +72,7 @@ TEST_F(AssertionCatalogTest, BootstrapCreatesTheRelationWithItsSixColumns) {
     ASSERT_TRUE(access.ok()) << access.status().message();
     ASSERT_EQ(access.value()->schema.columns.size(), 6u);
 
-    // The shape is §8.2's table with the Keystone pk added, and the order is
+    // The shape is §8.2's table with the Keystone tuple key added, and the order is
     // what `src/exec/assertion_catalog.cpp`'s kCol* constants index by - so
     // this is the test that fails if the two ever disagree.
     EXPECT_EQ(catalog::NameView(access.value()->schema.columns[0].name), "id");

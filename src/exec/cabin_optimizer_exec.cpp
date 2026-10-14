@@ -28,7 +28,7 @@ txn::ReadView CabinOptimizerExecutor::MintCheckView() {
     // is committed, which is what the all-visible view says. With one, the
     // mint cannot fail (AN-S2). The all-visible view is never a fallback
     // here: under it `CheckVisibility` never answers kBusy and a banked set
-    // can miss a live pk (cabin.md §6a).
+    // can miss a live tuple key (cabin.md §6a).
     if (txn_ == nullptr) return txn::ReadView::Everything();
     return txn_->MintCheckView(txn::kNoTrxId);
 }
@@ -148,7 +148,7 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
     const PageId walk_origin = leaf;
 
     struct StagedRow {
-        std::uint64_t pk = 0;
+        std::uint64_t tuple_key = 0;
         std::uint16_t slot = 0;
         std::vector<std::byte> payload;
     };
@@ -199,10 +199,10 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
                         break;
                 }
 
-                auto pk = kds::KeystoneIdOfPayload(tuple.value().payload);
-                if (!pk.ok()) return pk.status();
+                auto tuple_key = kds::KeystoneIdOfPayload(tuple.value().payload);
+                if (!tuple_key.ok()) return tuple_key.status();
                 StagedRow row;
-                row.pk = pk.value();
+                row.tuple_key = tuple_key.value();
                 row.slot = i;
                 row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
                 staged.push_back(std::move(row));
@@ -234,7 +234,7 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
             if (bucket == collected.end()) continue;  // not a seeded value
 
             stats::CabinEntry entry;
-            entry.pk = row.pk;
+            entry.tuple_key = row.tuple_key;
             entry.page_id = leaf;
             entry.page_epoch = page_epoch;
             entry.slot = row.slot;
@@ -362,7 +362,7 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
         // be, and hand it back through `Rebuild` - which replaces exactly
         // the entries this handle names and **keeps whatever the write
         // hook appended while the walk above ran**. A wholesale `Commit`
-        // would drop those appends, and a set missing a live pk is the C1
+        // would drop those appends, and a set missing a live tuple key is the C1
         // break; `Rebuild`'s own comment carries the argument.
         //
         // A reader holding the old set walks on over it, which is safe for
@@ -378,7 +378,7 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
                 continue;
             }
             VerifiedTuple verified =
-                VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk, entry.page_epoch,
+                VerifyTupleAt(store_, entry.page_id, entry.slot, entry.tuple_key, entry.page_epoch,
                               access.value()->oid);
             if (verified.ok()) {
                 rebuilt.push_back(entry);
@@ -390,7 +390,7 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
                 unobserve = true;
                 break;
             }
-            auto found = btree::BtreeLookup(store_, access.value()->desc_page_id, entry.pk);
+            auto found = btree::BtreeLookup(store_, access.value()->desc_page_id, entry.tuple_key);
             if (!found.ok()) {
                 // Dangling: no row now, so left out of the set being
                 // rebuilt; a later insert under the key witnesses itself.
@@ -417,7 +417,7 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
         bool same = rebuilt.size() == set.size();
         for (std::size_t i = 0; same && i < rebuilt.size(); ++i) {
             const stats::CabinEntry held = set.At(i);
-            same = held.pk == rebuilt[i].pk && held.page_id == rebuilt[i].page_id &&
+            same = held.tuple_key == rebuilt[i].tuple_key && held.page_id == rebuilt[i].page_id &&
                    held.slot == rebuilt[i].slot && held.page_epoch == rebuilt[i].page_epoch &&
                    held.flags == rebuilt[i].flags;
         }

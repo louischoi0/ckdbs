@@ -236,7 +236,7 @@ TEST(CabinOptimizerExecTest, ABusyRowDefersTheBuildUntilItSettles) {
     EXPECT_EQ(set.size(), 3u) << "the settled build must see the committed third row";
 }
 
-TEST(CabinOptimizerExecTest, HealRepairsBrokenHintsAndErasesDanglingPks) {
+TEST(CabinOptimizerExecTest, HealRepairsBrokenHintsAndErasesDanglingTupleKeys) {
     Instance db;
     LoadBtree(db);
     const std::uint64_t cabin_id = MakeAutoCabin(db, "b");
@@ -256,7 +256,7 @@ TEST(CabinOptimizerExecTest, HealRepairsBrokenHintsAndErasesDanglingPks) {
         ASSERT_TRUE(set.valid());
         ASSERT_EQ(set.size(), 2u);
 
-        // Break every hint, and plant a dangling pk with a plausible one.
+        // Break every hint, and plant a dangling tuple key with a plausible one.
         // Both go through the store since AT-S7 - `Heal` writes a hint and
         // `NoteWrite` grows a set, and the handle does neither itself.
         for (std::size_t i = 0; i < set.size(); ++i) {
@@ -265,7 +265,7 @@ TEST(CabinOptimizerExecTest, HealRepairsBrokenHintsAndErasesDanglingPks) {
                      entry.page_epoch);
         }
         stats::CabinEntry dangling = set.At(0);
-        dangling.pk = 999'999;
+        dangling.tuple_key = 999'999;
         db.cabins().NoteWrite(*key, dangling);
     }
 
@@ -276,11 +276,11 @@ TEST(CabinOptimizerExecTest, HealRepairsBrokenHintsAndErasesDanglingPks) {
 
     const stats::CabinSet healed = db.cabins().Find(*key);
     ASSERT_TRUE(healed.valid());
-    EXPECT_EQ(healed.size(), 2u) << "the dangling pk was not erased";
+    EXPECT_EQ(healed.size(), 2u) << "the dangling tuple key was not erased";
     for (std::size_t i = 0; i < healed.size(); ++i) {
         const stats::CabinEntry entry = healed.At(i);
         exec::VerifiedTuple verified =
-            exec::VerifyTupleAt(db.store(), entry.page_id, entry.slot, entry.pk,
+            exec::VerifyTupleAt(db.store(), entry.page_id, entry.slot, entry.tuple_key,
                                 entry.page_epoch, heal.rel_oid);
         EXPECT_TRUE(verified.ok()) << "a healed hint still fails verification";
     }

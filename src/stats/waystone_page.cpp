@@ -91,7 +91,7 @@ StatusOr<WaystoneEntry> ReadWaystoneEntry(std::span<const std::byte, kPageSize> 
 
     const std::size_t base = EntryOffset(index);
     WaystoneEntry e{};
-    e.pk = Load<std::uint64_t>(page, base + kWaystoneEntryPkOffset);
+    e.tuple_key = Load<std::uint64_t>(page, base + kWaystoneEntryTupleKeyOffset);
     e.rel_oid = Load<std::uint64_t>(page, base + kWaystoneEntryRelOidOffset);
     e.page_id = Load<PageId>(page, base + kWaystoneEntryPageIdOffset);
     e.page_epoch = Load<std::uint32_t>(page, base + kWaystoneEntryPageEpochOffset);
@@ -109,7 +109,7 @@ Status WriteWaystoneEntry(std::span<std::byte, kPageSize> page, std::size_t inde
     }
 
     const std::size_t base = EntryOffset(index);
-    Store<std::uint64_t>(page, base + kWaystoneEntryPkOffset, entry.pk);
+    Store<std::uint64_t>(page, base + kWaystoneEntryTupleKeyOffset, entry.tuple_key);
     Store<std::uint64_t>(page, base + kWaystoneEntryRelOidOffset, entry.rel_oid);
     Store<PageId>(page, base + kWaystoneEntryPageIdOffset, entry.page_id);
     Store<std::uint32_t>(page, base + kWaystoneEntryPageEpochOffset, entry.page_epoch);

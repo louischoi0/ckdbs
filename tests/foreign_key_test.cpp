@@ -267,16 +267,16 @@ TEST_F(ForeignKeyTest, AColumnThatCannotHoldAKeystoneIdIsRefused) {
     EXPECT_FALSE(boot_->catalog.FindTableOidByName("trades").ok());
 }
 
-// The pk is the row's identity, not a field of it: a reference stored there
+// The tuple key is the row's identity, not a field of it: a reference stored there
 // would make one row's identity a statement about another row.
-TEST_F(ForeignKeyTest, AForeignKeyOnThePrimaryKeyIsRefused) {
+TEST_F(ForeignKeyTest, AForeignKeyOnTheTupleKeyIsRefused) {
     ASSERT_EQ(Run("CREATE TABLE accounts (id int64, owner varchar) BTREE").substr(0, 7),
               "CREATED");
 
     const std::string out =
         Run("CREATE TABLE trades (id int64 REFERENCES accounts, qty int64) BTREE");
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
-    EXPECT_NE(out.find("primary key"), std::string::npos) << out;
+    EXPECT_NE(out.find("tuple key"), std::string::npos) << out;
     EXPECT_FALSE(boot_->catalog.FindTableOidByName("trades").ok());
 }
 
@@ -327,7 +327,7 @@ TEST_F(ForeignKeyTest, TheCatalogRefusesADeclarationTheDdlSurfaceWouldHaveCaught
     ASSERT_TRUE(trades.ok());
     ASSERT_TRUE(accounts.ok());
 
-    // Column 0 - the pk - and a column past the schema, refused at the door
+    // Column 0 - the tuple key - and a column past the schema, refused at the door
     // rather than only at the CREATE TABLE clause.
     EXPECT_EQ(boot_->catalog.CreateForeignKey(trades.value(), 0, accounts.value()).status().code(),
               StatusCode::kInvalidArgument);
@@ -418,7 +418,7 @@ TEST_F(ForeignKeyCheckTest, AChildReferencingNoParentIsRefused) {
     EXPECT_EQ(RowCount("SELECT * FROM trades"), 0u);
 }
 
-// A parent's pk is a Keystone id in [1, 2^40 - 1], so an integer outside it
+// A parent's tuple key is a Keystone id in [1, 2^40 - 1], so an integer outside it
 // names no parent that can exist: an absent parent, refused like any other.
 // A negative one used to pass unchecked and be stored.
 TEST_F(ForeignKeyCheckTest, AnIntegerThatIsNoKeystoneIdReferencesNoParent) {
@@ -693,7 +693,7 @@ TEST_F(ForeignKeyCheckTest, ChecksAreVisibleInShowAccess) {
     ASSERT_EQ(Run("DELETE FROM accounts WHERE id = 2"), "DELETED 1");
 
     const std::string out = Run("SELECT rel_name FROM sys.access_stats");
-    // The forward check is a pk lookup on the parent; the reverse check is a
+    // The forward check is a tuple key lookup on the parent; the reverse check is a
     // filtered walk of the child. Both relations appear, which is the point:
     // an operator can see what the constraints cost.
     const std::vector<std::string> names = testing_view::ReadViewText(out).Column("rel_name");
@@ -725,13 +725,13 @@ TEST_F(ForeignKeyCheckTest, AnObservedCabinAnswersTheReverseCheckWithoutWalking)
 
 // The surplus an append-only set carries has to be subtracted by the reverse
 // check too: a child moved off the value is not a reference to it, even
-// though its pk is still in that value's entry set (§1's superset rule).
+// though its tuple key is still in that value's entry set (§1's superset rule).
 TEST_F(ForeignKeyCheckTest, ACabinSurplusEntryDoesNotBlockADelete) {
     ASSERT_EQ(Run("CREATE CABIN ON trades(account_id)").substr(0, 7), "CREATED");
     ASSERT_EQ(Run("INSERT INTO trades VALUES (1, 100)").substr(0, 8), "INSERTED");
     ASSERT_EQ(RowCount("SELECT * FROM trades WHERE account_id = 1"), 1u);
 
-    // The row moves to account 2. Append-only maintenance leaves its pk in
+    // The row moves to account 2. Append-only maintenance leaves its tuple key in
     // account 1's set, where it no longer belongs.
     ASSERT_EQ(Run("UPDATE trades SET account_id = 2 WHERE id = 1"), "UPDATED 1");
 

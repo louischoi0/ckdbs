@@ -76,7 +76,7 @@ TEST(ParserTest, CreateTableStillTakesEXPLICITInEitherOrderAndItDoesNothing) {
 
 TEST(ParserTest, CreateTableRefusesASSIGNEDWithItsByte) {
     // Not ignored, which would be accepting a spelling and enforcing
-    // something else: the word means "supplying a pk is refused", and on the
+    // something else: the word means "supplying a tuple key is refused", and on the
     // relation this statement makes, supplying one is admitted.
     auto stmt = Parse("CREATE TABLE t (id int64) HEAP ASSIGNED");
     ASSERT_FALSE(stmt.ok());
@@ -274,11 +274,11 @@ TEST(ParserTest, UpdateMultipleAssignmentsWithWhere) {
 }
 
 // K-M3's parser half, and it is a *negative* obligation: assigning the
-// primary key must reach the compiler, because which column is the pk is
+// tuple key must reach the compiler, because which column is the tuple key is
 // catalog knowledge and the parser has no catalog. A parser that guessed
 // - by the name `id`, say - would refuse a legal statement on a relation
 // whose second column happens to be called that.
-TEST(ParserTest, AssigningThePrimaryKeyParses) {
+TEST(ParserTest, AssigningTheTupleKeyParses) {
     auto stmt = Parse("UPDATE accounts SET id = 99");
     ASSERT_TRUE(stmt.ok()) << stmt.status().message();
 

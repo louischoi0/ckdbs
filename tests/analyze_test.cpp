@@ -85,7 +85,7 @@ protected:
 
 // ---- The plan ------------------------------------------------------------
 
-TEST_F(AnalyzeTest, APkJoinReportsScanThenProbe) {
+TEST_F(AnalyzeTest, ATupleKeyJoinReportsScanThenProbe) {
     const std::string plan = Unescaped(
         Run("ANALYZE SELECT acct.name FROM trade JOIN acct ON trade.acct_id = acct.id"));
 
@@ -101,8 +101,8 @@ TEST_F(AnalyzeTest, APkJoinReportsScanThenProbe) {
 // ---- The statement-local inner build (workplan JB7) ----------------------
 //
 // `acct JOIN trade ON trade.acct_id = acct.id` is the walked-join shape,
-// the pk join above read the other way round: the inner step is `trade`,
-// keyed on `trade.acct_id`, which is not `trade`'s pk and carries no index
+// the tuple key join above read the other way round: the inner step is `trade`,
+// keyed on `trade.acct_id`, which is not `trade`'s tuple key and carries no index
 // and no Cabin - so every arm of the structure ladder declines and the
 // step takes the build annotation.
 
@@ -118,12 +118,12 @@ TEST_F(AnalyzeTest, AWalkedJoinsPlanMarksTheStepThatMayBuild) {
     EXPECT_NE(plan.find("step 1 Scan trade"), std::string::npos) << plan;
     EXPECT_NE(plan.find("build on=col1"), std::string::npos) << plan;
 
-    // The pk join of the test above takes no annotation: its inner step is
+    // The tuple key join of the test above takes no annotation: its inner step is
     // served by the probe arm, which declines the build arm by ladder
     // order. Same two relations, so this isolates the shape.
-    const std::string pk_plan = Unescaped(
+    const std::string tuple_key_plan = Unescaped(
         Run("ANALYZE SELECT acct.name FROM trade JOIN acct ON trade.acct_id = acct.id"));
-    EXPECT_EQ(pk_plan.find("build"), std::string::npos) << pk_plan;
+    EXPECT_EQ(tuple_key_plan.find("build"), std::string::npos) << tuple_key_plan;
 }
 
 TEST_F(AnalyzeTest, ABuiltStatementReportsItsMapAndItsProbes) {
@@ -165,7 +165,7 @@ TEST_F(AnalyzeTest, AFallenBackStatementSaysSoRatherThanGoingQuiet) {
     EXPECT_EQ(plan.find("build_probes="), std::string::npos) << plan;
 }
 
-TEST_F(AnalyzeTest, ALiteralPkEqualityReportsALookup) {
+TEST_F(AnalyzeTest, ALiteralTupleKeyEqualityReportsALookup) {
     const std::string plan = Unescaped(Run("ANALYZE SELECT acct.name FROM acct WHERE acct.id = 2"));
     EXPECT_NE(plan.find("step 0 Lookup acct key=2"), std::string::npos) << plan;
     EXPECT_NE(plan.find("class=PointSelect"), std::string::npos) << plan;

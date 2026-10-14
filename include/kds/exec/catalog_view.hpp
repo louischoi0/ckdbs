@@ -16,7 +16,7 @@
 // A catalog row is not a row-codec tuple. `SysTableRow::Encode()` memcpy's
 // its fields at fixed offsets (catalog/rows.hpp): no Keystone word, `oid`
 // is a plain 8-byte value at offset 0, `name` a fixed 64-byte array. A user
-// tuple is `[Keystone word][packed body]` with the pk carried *only* in the
+// tuple is `[Keystone word][packed body]` with the tuple key carried *only* in the
 // word (invariant 11) and varchar length-prefixed. The two formats have
 // nothing in common, so attaching a `sys.columns` schema to a catalog table
 // would not make `DecodeRow` read it - it would misread every field.

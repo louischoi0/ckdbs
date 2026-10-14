@@ -277,7 +277,7 @@ public:
     // page appends, which is `at == slot_count()` and moves nothing. **The
     // rows after `at` change slot**, so a caller holding a `(page, slot)` on
     // this page past the hold that placed the row reads another row - every
-    // such holder verifies its pk (btree.hpp `Location`). InvalidArgument
+    // such holder verifies its tuple key (btree.hpp `Location`). InvalidArgument
     // for `at` past the directory's end, otherwise InsertTuple()'s failures.
     StatusOr<std::uint16_t> InsertTupleAt(std::uint16_t at, std::span<const std::byte> payload,
                                            std::uint64_t trx_id, std::uint64_t undo_ptr = 0);
@@ -354,7 +354,7 @@ public:
     // of a payload *mean* is the row encoding's business, and this layer
     // reads one Keystone constant - the id ceiling a min_key is checked
     // against (BK-R2) - and nothing of the word's layout. Callers searching
-    // by primary key pair this with KeystoneIdOfPayload() from
+    // by tuple key pair this with KeystoneIdOfPayload() from
     // storage/keystone.hpp.
     //
     // Fails with NotFound on exactly the slots ReadTuple() does (out of

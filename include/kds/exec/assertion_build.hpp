@@ -29,7 +29,7 @@
 //
 // ---- The cutover, and why the membership protocol is trivially met --------
 //
-// §8.1a's decided protocol: a row counts as incorporated iff its pk is in
+// §8.1a's decided protocol: a row counts as incorporated iff its tuple key is in
 // the Bound Cabin, never inferred from scan position. This build runs
 // **synchronously inside the CREATE statement on one cooperative core** -
 // the same fact `index_ddl.cpp` states as "nothing can observe the

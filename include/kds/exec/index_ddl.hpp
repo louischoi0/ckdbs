@@ -30,7 +30,7 @@
 //
 // The same line `cabin_ddl.hpp` draws. An **error** is a
 // declaration that could never do what it says - an index on a heap relation,
-// on the primary key, on a column the relation has not got, on a type with no
+// on the tuple key, on a column the relation has not got, on a type with no
 // order. A **warning** is one that works and will disappoint.
 
 namespace kds::exec {

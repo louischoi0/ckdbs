@@ -33,7 +33,7 @@
 //      and loses rows silently.
 //   2. **Duplicate keys stay reachable.** A secondary key is not unique, so
 //      duplicates straddle leaf boundaries - the reason the sort key is
-//      (key, pk) and the reason a probe is zero-padded rather than
+//      (key, tuple key) and the reason a probe is zero-padded rather than
 //      shortened.
 //   3. **A walk is in key order and complete.** Everything inserted comes
 //      back, once, sorted.
@@ -81,15 +81,15 @@ struct Fixture {
         EXPECT_TRUE(s.ok()) << s.message();
     }
 
-    Status Insert(std::uint32_t key, std::uint64_t pk,
+    Status Insert(std::uint32_t key, std::uint64_t tuple_key,
                   std::span<const std::byte> covered = {}) {
-        auto out = IndexInsert(store, root, layout, Key(key, layout.key_width), pk, covered, /*owner_oid=*/0);
+        auto out = IndexInsert(store, root, layout, Key(key, layout.key_width), tuple_key, covered, /*owner_oid=*/0);
         if (!out.ok()) return out.status();
         if (out.value().new_root != kInvalidPageId) root = out.value().new_root;
         return Status::OK();
     }
 
-    // Every (key, pk) in the tree, in walk order.
+    // Every (key, tuple key) in the tree, in walk order.
     std::vector<std::pair<std::uint32_t, std::uint64_t>> Walk() {
         std::vector<std::pair<std::uint32_t, std::uint64_t>> out;
         Status s = IndexVisit(
@@ -99,19 +99,19 @@ struct Fixture {
                 auto entry = leaf.Entry(idx);
                 if (!entry.ok()) return entry.status();
                 out.emplace_back(KeyOf(entry.value().subspan(0, layout.key_width)),
-                                 GetIndexPk(entry.value().subspan(layout.key_width)));
+                                 GetIndexTupleKey(entry.value().subspan(layout.key_width)));
                 return storage::VisitControl::kContinue;
             });
         EXPECT_TRUE(s.ok()) << s.message();
         return out;
     }
 
-    // The pks carrying `key`, found the way a probe will: seek to the leaf
+    // The tuple keys carrying `key`, found the way a probe will: seek to the leaf
     // that could hold it, then walk right while the key still matches.
     std::vector<std::uint64_t> Probe(std::uint32_t key) {
         std::vector<std::byte> sort_key(layout.sort_key_width(), std::byte{0});
         auto k = Key(key, layout.key_width);
-        std::memcpy(sort_key.data(), k.data(), k.size());  // pk left zero: the lower bound
+        std::memcpy(sort_key.data(), k.data(), k.size());  // tuple key left zero: the lower bound
 
         auto leaf = IndexSeekLeaf(store, root, layout, sort_key);
         EXPECT_TRUE(leaf.ok()) << leaf.status().message();
@@ -126,7 +126,7 @@ struct Fixture {
                 const std::uint32_t found = KeyOf(entry.value().subspan(0, layout.key_width));
                 if (found < key) return storage::VisitControl::kContinue;
                 if (found > key) return storage::VisitControl::kStop;
-                out.push_back(GetIndexPk(entry.value().subspan(layout.key_width)));
+                out.push_back(GetIndexTupleKey(entry.value().subspan(layout.key_width)));
                 return storage::VisitControl::kContinue;
             });
         EXPECT_TRUE(s.ok()) << s.message();
@@ -181,16 +181,16 @@ void ExpectCompleteAfterRandomInserts(Fixture& f, std::uint32_t count) {
     const auto walked = f.Walk();
     ASSERT_EQ(count, walked.size());
     for (std::uint32_t i = 0; i < count; ++i) {
-        // Every pk still attached to its own key, which is what a division
+        // Every tuple key still attached to its own key, which is what a division
         // that moved an entry to the wrong half would break.
         EXPECT_EQ(i, walked[i].first);
         EXPECT_EQ(i + 1, walked[i].second);
     }
 
     for (std::uint32_t i = 0; i < count; i += 97) {
-        const auto pks = f.Probe(i);
-        ASSERT_EQ(1u, pks.size()) << "key " << i;
-        EXPECT_EQ(i + 1, pks[0]);
+        const auto tuple_keys = f.Probe(i);
+        ASSERT_EQ(1u, tuple_keys.size()) << "key " << i;
+        EXPECT_EQ(i + 1, tuple_keys[0]);
     }
 }
 
@@ -250,23 +250,23 @@ TEST(IndexTreeTest, EveryLeafsKeysSitBelowItsRightSiblings) {
 // ---- Duplicates ---------------------------------------------------------
 
 TEST(IndexTreeTest, ADuplicatedKeyStaysReachableAcrossLeafBoundaries) {
-    // The case the (key, pk) sort key exists for. 2,000 entries share one
+    // The case the (key, tuple key) sort key exists for. 2,000 entries share one
     // key, which is three leaves' worth, so the duplicates certainly
     // straddle boundaries and a separator lands inside the run.
     Fixture f;
     constexpr std::uint64_t kDuplicates = 2000;
-    for (std::uint64_t pk = 1; pk <= kDuplicates; ++pk) ASSERT_TRUE(f.Insert(42, pk).ok());
+    for (std::uint64_t tuple_key = 1; tuple_key <= kDuplicates; ++tuple_key) ASSERT_TRUE(f.Insert(42, tuple_key).ok());
     // Neighbours on both sides, so a probe that over- or under-shoots shows.
-    for (std::uint64_t pk = 1; pk <= 500; ++pk) ASSERT_TRUE(f.Insert(41, 100000 + pk).ok());
-    for (std::uint64_t pk = 1; pk <= 500; ++pk) ASSERT_TRUE(f.Insert(43, 200000 + pk).ok());
+    for (std::uint64_t tuple_key = 1; tuple_key <= 500; ++tuple_key) ASSERT_TRUE(f.Insert(41, 100000 + tuple_key).ok());
+    for (std::uint64_t tuple_key = 1; tuple_key <= 500; ++tuple_key) ASSERT_TRUE(f.Insert(43, 200000 + tuple_key).ok());
 
-    const auto pks = f.Probe(42);
-    ASSERT_EQ(kDuplicates, pks.size());
-    for (std::uint64_t i = 0; i < kDuplicates; ++i) EXPECT_EQ(i + 1, pks[i]);
+    const auto tuple_keys = f.Probe(42);
+    ASSERT_EQ(kDuplicates, tuple_keys.size());
+    for (std::uint64_t i = 0; i < kDuplicates; ++i) EXPECT_EQ(i + 1, tuple_keys[i]);
 }
 
 TEST(IndexTreeTest, AByteIdenticalEntryIsReportedRatherThanStoredTwice) {
-    // Nothing reclaims an index entry, and a probe that resolved one pk
+    // Nothing reclaims an index entry, and a probe that resolved one tuple key
     // twice would emit its row twice.
     Fixture f;
     ASSERT_TRUE(f.Insert(7, 3).ok());
@@ -566,7 +566,7 @@ using DivideOnFetchStore = testing_race::ActOnFetchStore;
 // A two-leaf index whose **left** leaf is full, so the next entry routed
 // there divides it. Keys 0..per_leaf ascending divide the root leaf at its
 // midpoint (keys 0..338 stay, 339.. move); then keys 0..338 again under
-// pk 2 refill the left half. Returns the left leaf.
+// tuple key 2 refill the left half. Returns the left leaf.
 PageId BuildFullLeftLeaf(Fixture& f) {
     const std::uint16_t per_leaf = MaxLeafEntries(f.layout);
     for (std::uint32_t k = 0; k <= per_leaf; ++k) EXPECT_TRUE(f.Insert(k, 1).ok()) << k;
@@ -611,10 +611,10 @@ void ExpectSortKeysAscend(Fixture& f) {
 // moves its place to the new right sibling. B's sorts low and stays left.
 constexpr std::uint32_t kKeyA = 300;
 constexpr std::uint32_t kKeyB = 10;
-constexpr std::uint64_t kPkNew = 3;  // neither 1 nor 2: the pks the fill used
+constexpr std::uint64_t kTupleKeyNew = 3;  // neither 1 nor 2: the tuple keys the fill used
 
 void ExpectAsEntryReachable(Fixture& f) {
-    EXPECT_EQ((std::vector<std::uint64_t>{1, 2, kPkNew}), f.Probe(kKeyA))
+    EXPECT_EQ((std::vector<std::uint64_t>{1, 2, kTupleKeyNew}), f.Probe(kKeyA))
         << "a probe for A's key must find A's entry beside the two the fill placed";
     ExpectSortKeysAscend(f);
 }
@@ -626,9 +626,9 @@ TEST(IndexTreeTest, ALeafDividedBetweenTheSharedReadAndTheExclusiveRefetchIsNotW
     Fixture f;
     const PageId left = BuildFullLeftLeaf(f);
     DivideOnFetchStore store(f.store);
-    store.OnFetch(left, /*nth=*/2, [&] { ASSERT_TRUE(f.Insert(kKeyB, kPkNew).ok()); });
+    store.OnFetch(left, /*nth=*/2, [&] { ASSERT_TRUE(f.Insert(kKeyB, kTupleKeyNew).ok()); });
 
-    auto placed = IndexInsert(store, f.root, f.layout, Key(kKeyA), kPkNew, {}, /*owner_oid=*/0);
+    auto placed = IndexInsert(store, f.root, f.layout, Key(kKeyA), kTupleKeyNew, {}, /*owner_oid=*/0);
     ASSERT_TRUE(placed.ok()) << placed.status().message();
     ASSERT_TRUE(store.fired()) << "the divide never ran; the cell tested nothing";
     EXPECT_NE(left, placed.value().page_id)
@@ -644,9 +644,9 @@ TEST(IndexTreeTest, ALeafDividedBeforeTheDescentReadsItIsNotWrittenPast) {
     Fixture f;
     const PageId left = BuildFullLeftLeaf(f);
     DivideOnFetchStore store(f.store);
-    store.OnFetch(left, /*nth=*/1, [&] { ASSERT_TRUE(f.Insert(kKeyB, kPkNew).ok()); });
+    store.OnFetch(left, /*nth=*/1, [&] { ASSERT_TRUE(f.Insert(kKeyB, kTupleKeyNew).ok()); });
 
-    auto placed = IndexInsert(store, f.root, f.layout, Key(kKeyA), kPkNew, {}, /*owner_oid=*/0);
+    auto placed = IndexInsert(store, f.root, f.layout, Key(kKeyA), kTupleKeyNew, {}, /*owner_oid=*/0);
     ASSERT_TRUE(placed.ok()) << placed.status().message();
     ASSERT_TRUE(store.fired()) << "the divide never ran; the cell tested nothing";
     EXPECT_NE(left, placed.value().page_id)
@@ -669,7 +669,7 @@ TEST(IndexTreeTest, AnInsertFromARootThatHasSinceGrownIsRefusedOutsideItsSubtree
     auto before = IndexEntryCount(f.store, f.root, f.layout);
     ASSERT_TRUE(before.ok()) << before.status().message();
 
-    auto refused = IndexInsert(f.store, stale, f.layout, Key(600), kPkNew, {}, /*owner_oid=*/0);
+    auto refused = IndexInsert(f.store, stale, f.layout, Key(600), kTupleKeyNew, {}, /*owner_oid=*/0);
     ASSERT_FALSE(refused.ok()) << "an entry for key 600 was placed through a stale root, in page "
                                << refused.value().page_id;
     EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
@@ -682,10 +682,10 @@ TEST(IndexTreeTest, AnInsertFromARootThatHasSinceGrownIsRefusedOutsideItsSubtree
     // to is the leaf the current root routes to. What a stale root still
     // gets wrong is the walk back up past it, when such an insert divides
     // - window 2, AT-S16's - and this insert does not divide.
-    auto inside = IndexInsert(f.store, stale, f.layout, Key(5), kPkNew, {}, /*owner_oid=*/0);
+    auto inside = IndexInsert(f.store, stale, f.layout, Key(5), kTupleKeyNew, {}, /*owner_oid=*/0);
     ASSERT_TRUE(inside.ok()) << inside.status().message();
     EXPECT_EQ(kInvalidPageId, inside.value().new_root);
-    EXPECT_EQ((std::vector<std::uint64_t>{1, kPkNew}), f.Probe(5));
+    EXPECT_EQ((std::vector<std::uint64_t>{1, kTupleKeyNew}), f.Probe(5));
     ExpectSortKeysAscend(f);
 }
 
@@ -729,10 +729,10 @@ TEST(IndexTreeTest, APromotionIntoAParentAnotherCoreDividedLandsInTheHalfHolding
     const PageId grandparent = LeftmostAtLevel(f, 2);
     ASSERT_NE(kInvalidPageId, grandparent) << "the tree must be at least three levels";
 
-    // Key 0 under rising pks sorts below everything, so it lands in P's
+    // Key 0 under rising tuple keys sorts below everything, so it lands in P's
     // first leaf; each of its divides adds one separator to P.
-    std::uint64_t pk = 2;
-    while (!NodeIsFull(f, parent)) ASSERT_TRUE(f.Insert(0, pk++).ok());
+    std::uint64_t tuple_key = 2;
+    while (!NodeIsFull(f, parent)) ASSERT_TRUE(f.Insert(0, tuple_key++).ok());
     ASSERT_FALSE(NodeIsFull(f, grandparent))
         << "P's parent must have room, or B's divide of P grows the tree past A's root";
 
@@ -747,15 +747,15 @@ TEST(IndexTreeTest, APromotionIntoAParentAnotherCoreDividedLandsInTheHalfHolding
         key_a = KeyOf(last.value().subspan(0, f.layout.key_width));
     }
     ASSERT_GT(key_a, 0u) << "LA must hold keys above the run B inserts";
-    while (!NodeIsFull(f, leaf)) ASSERT_TRUE(f.Insert(key_a, pk++).ok());
+    while (!NodeIsFull(f, leaf)) ASSERT_TRUE(f.Insert(key_a, tuple_key++).ok());
 
-    const std::uint64_t pk_a = pk++;
+    const std::uint64_t tuple_key_a = tuple_key++;
     DivideOnFetchStore store(f.store);
     store.OnFetch(parent, /*nth=*/2, [&] {
-        while (ChildrenOf(f, parent).back() == leaf) ASSERT_TRUE(f.Insert(0, pk++).ok());
+        while (ChildrenOf(f, parent).back() == leaf) ASSERT_TRUE(f.Insert(0, tuple_key++).ok());
     });
     const PageId root_before = f.root;
-    auto placed = IndexInsert(store, f.root, f.layout, Key(key_a, f.layout.key_width), pk_a, {},
+    auto placed = IndexInsert(store, f.root, f.layout, Key(key_a, f.layout.key_width), tuple_key_a, {},
                               /*owner_oid=*/0);
     ASSERT_TRUE(placed.ok()) << placed.status().message();
     ASSERT_TRUE(store.fired()) << "B's divide never ran; the cell tested nothing";
@@ -766,20 +766,20 @@ TEST(IndexTreeTest, APromotionIntoAParentAnotherCoreDividedLandsInTheHalfHolding
     // An insert over A's new leaf's range routes there. Before the fix its
     // descent reached LA, whose right sibling bounds it below the key, and
     // was refused on every attempt.
-    ASSERT_TRUE(f.Insert(key_a, pk++).ok());
-    const auto pks = f.Probe(key_a);
-    EXPECT_NE(pks.end(), std::find(pks.begin(), pks.end(), pk_a)) << "a probe misses A's entry";
+    ASSERT_TRUE(f.Insert(key_a, tuple_key++).ok());
+    const auto tuple_keys = f.Probe(key_a);
+    EXPECT_NE(tuple_keys.end(), std::find(tuple_keys.begin(), tuple_keys.end(), tuple_key_a)) << "a probe misses A's entry";
     ExpectEverySeparatorBoundsItsSubtree(f);
 }
 
-// A stale-root cell's second core: inserts key 0 under rising pks through
+// A stale-root cell's second core: inserts key 0 under rising tuple keys through
 // `root`, which it keeps naming, until one insert has to divide a leaf -
 // returning that insert's outcome. The ones before it land inside the stale
 // root's subtree, which is still the right place for them.
-StatusOr<IndexInsertResult> InsertUntilADivide(Fixture& f, PageId root, std::uint64_t& pk) {
+StatusOr<IndexInsertResult> InsertUntilADivide(Fixture& f, PageId root, std::uint64_t& tuple_key) {
     for (int i = 0; i < 64; ++i) {
         const std::size_t before = f.Walk().size();
-        auto out = IndexInsert(f.store, root, f.layout, Key(0, f.layout.key_width), pk++, {},
+        auto out = IndexInsert(f.store, root, f.layout, Key(0, f.layout.key_width), tuple_key++, {},
                                /*owner_oid=*/0);
         if (!out.ok()) {
             EXPECT_EQ(before, f.Walk().size()) << "a refused insert wrote an entry";
@@ -806,16 +806,16 @@ TEST(IndexTreeTest, ARootAnotherCoreGrewOverIsNotGrownOverASecondTime) {
         ++k;
     }
     const PageId stale = f.root;
-    std::uint64_t pk = 2;
+    std::uint64_t tuple_key = 2;
     while (f.root == stale) ASSERT_TRUE(f.Insert(k++ * 10, 1).ok());  // B grows over R
-    while (!NodeIsFull(f, stale)) ASSERT_TRUE(f.Insert(0, pk++).ok());  // and refills it
+    while (!NodeIsFull(f, stale)) ASSERT_TRUE(f.Insert(0, tuple_key++).ok());  // and refills it
 
-    auto refused = InsertUntilADivide(f, stale, pk);
+    auto refused = InsertUntilADivide(f, stale, tuple_key);
     ASSERT_FALSE(refused.ok()) << "A grew root " << refused.value().new_root
                                << " over a page B had already grown one over";
     EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
     ExpectEverySeparatorBoundsItsSubtree(f);
-    ASSERT_TRUE(f.Insert(0, pk++).ok()) << "the retry, from the current root";
+    ASSERT_TRUE(f.Insert(0, tuple_key++).ok()) << "the retry, from the current root";
     ExpectEverySeparatorBoundsItsSubtree(f);
 }
 
@@ -827,14 +827,14 @@ TEST(IndexTreeTest, ALeafRootAnotherCoreGrewOverIsNotGrownOverASecondTime) {
     const PageId stale = f.root;
     std::uint32_t k = 1;
     while (f.root == stale) ASSERT_TRUE(f.Insert(k++ * 10, 1).ok());
-    std::uint64_t pk = 2;
+    std::uint64_t tuple_key = 2;
 
-    auto refused = InsertUntilADivide(f, stale, pk);
+    auto refused = InsertUntilADivide(f, stale, tuple_key);
     ASSERT_FALSE(refused.ok()) << "A grew root " << refused.value().new_root
                                << " over a leaf B had already grown one over";
     EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
     ExpectEverySeparatorBoundsItsSubtree(f);
-    ASSERT_TRUE(f.Insert(0, pk++).ok()) << "the retry, from the current root";
+    ASSERT_TRUE(f.Insert(0, tuple_key++).ok()) << "the retry, from the current root";
     ExpectEverySeparatorBoundsItsSubtree(f);
 }
 

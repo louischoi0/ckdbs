@@ -170,7 +170,7 @@ TEST_F(BulkInsertTest, AFailingRowUnwindsTheWholeStatement) {
 
 TEST_F(BulkInsertTest, RowsMayNameTheirOwnKeysOrNotWithinOneStatement) {
     // The inverse of what this asserted until 2026-08-25 (§4.1): naming the
-    // pk is an arity, not a violation, and BI2's per-row pipeline means one
+    // tuple key is an arity, not a violation, and BI2's per-row pipeline means one
     // statement may mix the two. Row 1 takes an issued id, row 2 names 2 -
     // which is exactly what the mark had reached, so a heap relation admits
     // it - and row 3 takes the next issued one, above the named one.
@@ -336,7 +336,7 @@ TEST_F(BulkInsertTest, TheSortedFillSpansPagesWithExactMinKeys) {
     EXPECT_EQ(Run("SELECT n FROM t WHERE id = 1"), "n\\n0");
     EXPECT_EQ(Run("SELECT n FROM t WHERE id = 500"), "n\\n499");
     EXPECT_EQ(Run("SELECT COUNT(*) FROM t"), "count(*)\\n500");
-    // The pk range crosses at least one page boundary and stays exact.
+    // The tuple key range crosses at least one page boundary and stays exact.
     EXPECT_EQ(Run("SELECT COUNT(*) FROM t WHERE id BETWEEN 190 AND 210"), "count(*)\\n21");
 }
 

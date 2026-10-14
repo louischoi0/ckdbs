@@ -196,7 +196,7 @@ std::vector<std::string> WithoutUnknowns(const std::vector<std::string>& actual,
 }
 
 // A read must agree with the oracle. Scans are compared order-insensitively
-// (sorted), a pk point read exactly — the SIM03 contract. Under fault
+// (sorted), a tuple key point read exactly — the SIM03 contract. Under fault
 // injection a row whose write's outcome is unknown is permitted but never
 // required (sim/oracle.hpp).
 bool ReadAgrees(const std::string& reply, std::vector<std::string> expected, bool ordered,
@@ -249,14 +249,14 @@ bool CheckRead(Iteration& it, const Op& op, const std::string& reply,
 }
 
 Oracle::Predicate PredicateOf(const Op& op) {
-    return Oracle::Predicate{op.by_pk, op.key, op.pred_v};
+    return Oracle::Predicate{op.by_tuple_key, op.key, op.pred_v};
 }
 
 
 // A mutation's row count is the sharpest single assertion the harness
 // makes: the engine's own count of what it touched, against a map that has
 // been tracking the same rows all along. What can stop it is an unknown
-// the predicate might match — which for a pk predicate is one id and for a
+// the predicate might match — which for a tuple key predicate is one id and for a
 // value predicate is any of them (Oracle::CountCheckable).
 bool CheckCount(Iteration& it, const Op& op, const std::string& reply, std::string_view verb,
                 std::size_t expected, std::size_t op_index) {
@@ -351,9 +351,9 @@ void AbsorbError(Iteration& it, const Op& op, std::size_t op_index) {
     }
 }
 
-// BD-R5's two reasons a named key is refused for its pk, read off a reply.
+// BD-R5's two reasons a named key is refused for its tuple key, read off a reply.
 bool IsDuplicateRefusal(const std::string& reply) {
-    return IsErr(reply) && reply.find("duplicate primary key") != std::string::npos;
+    return IsErr(reply) && reply.find("duplicate tuple key") != std::string::npos;
 }
 bool IsExhaustedRefusal(const std::string& reply) {
     return IsErr(reply) && reply.find("outside the Keystone id space") != std::string::npos;
@@ -437,7 +437,7 @@ bool CheckNamedInsert(Iteration& it, const Op& op, const std::string& reply,
             break;
     }
     if (!legal) {
-        // An injected I/O error is absorbed; a refusal for the pk is never
+        // An injected I/O error is absorbed; a refusal for the tuple key is never
         // an I/O outcome, so a wrong one fails with faults on too.
         if (IsErr(reply) && it.faults_on() && !duplicate && !exhausted) {
             AbsorbError(it, op, op_index);
@@ -614,8 +614,8 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             it.txn_drop_oids.clear();
             ++it.verdict.transactions;
             break;
-        case Op::Kind::kSelectPk:
-            if (!CheckRead(it, op, reply, it.oracle.ExpectPk(op.table, op.key),
+        case Op::Kind::kSelectTupleKey:
+            if (!CheckRead(it, op, reply, it.oracle.ExpectTupleKey(op.table, op.key),
                            /*ordered=*/true, op_index)) {
                 return false;
             }

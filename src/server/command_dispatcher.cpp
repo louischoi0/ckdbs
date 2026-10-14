@@ -220,7 +220,7 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     // happened": the statement may have committed. A client must be able to
     // tell it from the bare `ERR` it would otherwise wear, because the
     // correct response is to read the data back - not to retry, which
-    // against engine-issued primary keys would insert twice.
+    // against engine-issued tuple keys would insert twice.
     {StatusCode::kUnknownOutcome, "UNKNOWN_OUTCOME retryable=0 "},
     // The refusal pair (status.hpp carries the test that separates them),
     // spelled because the distinction pays only at the client: "can I
@@ -322,11 +322,11 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
     // unbounded), and so the deadline never starts for a caller with
     // nothing to wait on.
     //
-    // **What the waiter is held by, in words** (AO-S6e-c). A pk of 0 is not
+    // **What the waiter is held by, in words** (AO-S6e-c). A tuple key of 0 is not
     // a row (`kFirstRowId` is 1): it is what an assertion's admission
     // records, whose contended resource is a *group*.
-    const auto held_name = [](std::uint64_t pk) {
-        return pk != 0 ? "row id=" + std::to_string(pk)
+    const auto held_name = [](std::uint64_t tuple_key) {
+        return tuple_key != 0 ? "row id=" + std::to_string(tuple_key)
                        : std::string("a bound assertion's group");
     };
     if (out->write_block.has_value() && txn_ != nullptr && clock_ != nullptr) {
@@ -429,7 +429,7 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             if (!settled) break;  // the net, not the decision
             if (logging(LogLevel::kDebug)) {
                 log_->Debug("lock", "core " + std::to_string(core_id_) + " held a write of " +
-                                        held_name(block.pk) + " until transaction " +
+                                        held_name(block.tuple_key) + " until transaction " +
                                         std::to_string(block.trx_id) +
                                         " decided, and is running it again");
             }
@@ -469,7 +469,7 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             // what makes the outcome deterministic rather than a race
             // between two transactions to notice.
             const DispatchOutcome::WriteBlock block = *out->write_block;
-            const std::string held = held_name(block.pk);
+            const std::string held = held_name(block.tuple_key);
             // **What is aborted is the statement; the transaction is
             // poisoned and still holds its rows.** Saying "the other
             // proceeds" without saying when would be the convenient
@@ -488,13 +488,13 @@ sched::Coro CommandDispatcher::AwaitWriteBlock(std::string_view line, Session* s
             // admits exactly that code, and **not** `UnknownOutcome`: this
             // statement plainly did nothing. The message names the net.
             const DispatchOutcome::WriteBlock block = *out->write_block;
-            const std::string held = held_name(block.pk);
+            const std::string held = held_name(block.tuple_key);
             // **For a bound assertion's group it means contention, not a
             // defect** (AO-S6e-c): every writer touching one group serialises
             // on it, so the message says so. Whether a group wait should have
             // a shorter bound of its own is undecided (AO-0 item 22).
             const std::string why =
-                block.pk != 0
+                block.tuple_key != 0
                     ? std::string(
                           "A wait ends when the holder decides, so reaching the net means a "
                           "deadlock went undetected or a holder is stuck - not that the row "
@@ -918,7 +918,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
 
     pending_commit_lsn_ = wal::kNoLsn;
     blocking_writer_ = 0;
-    blocked_pk_ = 0;
+    blocked_tuple_key_ = 0;
     lock_wait_.reset();
     last_refusal_ = Status::OK();
     last_refusal_detail_ = wire::kNoDetail;
@@ -944,7 +944,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     // and drop the relation's wake without a `DropWake`. The relation
     // re-run re-resolves the parent anyway.
     if (blocking_writer_ != 0 && !lock_wait_.has_value()) {
-        outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_pk_};
+        outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_tuple_key_};
         // The unit's wake travels with the block (AX-S2b). Its holder is
         // the blocker recorded: every `NoteBlockingWriter` that can follow
         // a refused `BorrowChain` is handed that ask's own blocker, and
@@ -979,7 +979,7 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     if (lock_wait_.has_value()) outcome.lock_wait = std::move(lock_wait_);
     lock_wait_.reset();
     blocking_writer_ = 0;
-    blocked_pk_ = 0;
+    blocked_tuple_key_ = 0;
     outcome.poison_withheld = structural_poison_withheld_;
     outcome.statement = parking_statement_;
 
@@ -2949,7 +2949,7 @@ namespace {
 // id is in [kFirstRowId, kMaxKeystoneId] (invariant 11), so a negative value,
 // zero (`-0` too), a value past 2^48 - 1, and a literal past int64 (a uint64
 // above INT64_MAX among them, whose `int_val` has wrapped - `2^64 + 5` must
-// not read as 5) are none. The one answer for a named pk (`OutOfRange`,
+// not read as 5) are none. The one answer for a named tuple key (`OutOfRange`,
 // BD-R5) and a foreign-key value (an absent parent, `FK_VIOLATION`, not
 // looked up); each caller words its own refusal.
 std::optional<std::uint64_t> KeystoneIdOf(const parser::AstValue& value) {
@@ -2972,7 +2972,7 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         const parser::AstValue& value = body[fk.column_no - 1];
         // The same bail `CheckForeignKeyOnWrite` takes, and it must be the
         // same one: a value that is not an id cannot reference one, and
-        // resolving it would put a nonsense pk in the held set. An integer
+        // resolving it would put a nonsense tuple key in the held set. An integer
         // that is no id is that check's violation, with nothing to look up.
         if (value.type != parser::ValueType::kInt) continue;
         const std::optional<std::uint64_t> id = KeystoneIdOf(value);
@@ -2991,8 +2991,8 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // ordering above alone.
         if (fk.rel_oid == child.oid) continue;
 
-        const std::uint64_t pk = *id;
-        if (into.Find(fk.rel_oid, pk) != nullptr) continue;  // AH-R2's dedup
+        const std::uint64_t tuple_key = *id;
+        if (into.Find(fk.rel_oid, tuple_key) != nullptr) continue;  // AH-R2's dedup
 
         auto parent = catalog_.InitTableAccess(fk.rel_oid);
         if (!parent.ok()) return parent.status();
@@ -3012,9 +3012,9 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // runs again at the release - and the cap refuses it past
         // `max_locks_per_txn` (AO-R10).
         if (std::optional<Status> held =
-                BorrowOrWait(scope, txn::LockKey::Tuple(fk.rel_oid, pk),
+                BorrowOrWait(scope, txn::LockKey::Tuple(fk.rel_oid, tuple_key),
                              RepeatableReadWait::kCapable, txn::LockMode::kShared)) {
-            return ParentRowHeld(child, fk.rel_oid, pk, *held);
+            return ParentRowHeld(child, fk.rel_oid, tuple_key, *held);
         }
 
         // The view is minted **after** the grant, so a writer that decided
@@ -3022,7 +3022,7 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // rather than read as busy.
         const txn::ReadView check_view = CheckView(scope);
         std::uint64_t busy_trx = 0;
-        auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), pk, check_view,
+        auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), tuple_key, check_view,
                                                 &budget_, &busy_trx);
         if (!verdict.ok()) return verdict.status();
 
@@ -3031,26 +3031,26 @@ Status CommandDispatcher::ResolveForeignKeyParents(const catalog::TableAccess& c
         // Without a table the `IsInFlight` poll is the wait (AO-S3); with
         // one the busy verdict refuses retryably, defensively.
         if (verdict.value() == exec::FkVerdict::kBusy && busy_trx != 0 && locks_ == nullptr) {
-            NoteBlockingWriter(scope.txn, busy_trx, pk, RepeatableReadWait::kCapable);
+            NoteBlockingWriter(scope.txn, busy_trx, tuple_key, RepeatableReadWait::kCapable);
         }
 
         // Recorded **per resolution, not per row**: a thousand-row insert
         // against one parent reports one lookup in `SHOW ACCESS`.
         RecordFkAccess(exec::AccessKind::kLookup, fk.rel_oid, 1);
-        into.Put(fk.rel_oid, pk, verdict.value());
+        into.Put(fk.rel_oid, tuple_key, verdict.value());
     }
     return Status::OK();
 }
 
 Status CommandDispatcher::ParentRowHeld(const catalog::TableAccess& child,
-                                        catalog::Oid parent_rel, std::uint64_t pk,
+                                        catalog::Oid parent_rel, std::uint64_t tuple_key,
                                         const Status& held) {
     // The hold's own refusal names a row and its holder; the client asked
     // about a foreign key, so a conflict says which one. The cap's
     // `ResourceExhausted` is about the transaction, and stands as it is.
     if (held.code() != StatusCode::kTxnConflict) return held;
     return Status::TxnConflict("the foreign key on '" + RelationNameOf(child.oid) +
-                               "' cannot check row id=" + std::to_string(pk) + " of '" +
+                               "' cannot check row id=" + std::to_string(tuple_key) + " of '" +
                                RelationNameOf(parent_rel) + "' yet: " + std::string(held.message()));
 }
 
@@ -3074,9 +3074,9 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     if (value.type != parser::ValueType::kInt) return Status::OK();
 
     const std::optional<std::uint64_t> id = KeystoneIdOf(value);
-    // 0 for no id: no `S` is ever held on pk 0, so the release below meets
+    // 0 for no id: no `S` is ever held on tuple key 0, so the release below meets
     // nothing of it.
-    const std::uint64_t parent_pk = id.value_or(0);
+    const std::uint64_t parent_tuple_key = id.value_or(0);
 
     // The held verdict, resolved by `ResolveForeignKeyParents` before any
     // row work (§2a). No descent happens here and none may be added: this
@@ -3085,7 +3085,7 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     exec::FkVerdict resolved{};
     if (!id.has_value()) {
         resolved = exec::FkVerdict::kViolation;
-    } else if (const exec::FkVerdict* found = held.Find(fk.rel_oid, parent_pk);
+    } else if (const exec::FkVerdict* found = held.Find(fk.rel_oid, parent_tuple_key);
                found != nullptr) {
         resolved = *found;
     } else if (fk.rel_oid == child.oid) {
@@ -3101,13 +3101,13 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         // the statement ends there to park. A parent this statement wrote
         // itself is its own `X`, which never conflicts with its own `S`.
         if (std::optional<Status> row_held =
-                BorrowOrWait(scope, txn::LockKey::Tuple(fk.rel_oid, parent_pk),
+                BorrowOrWait(scope, txn::LockKey::Tuple(fk.rel_oid, parent_tuple_key),
                              RepeatableReadWait::kCapable, txn::LockMode::kShared)) {
-            return ParentRowHeld(child, fk.rel_oid, parent_pk, *row_held);
+            return ParentRowHeld(child, fk.rel_oid, parent_tuple_key, *row_held);
         }
         auto parent = catalog_.InitTableAccess(fk.rel_oid);
         if (!parent.ok()) return parent.status();
-        auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), parent_pk,
+        auto verdict = exec::CheckParentPresent(page_store_, *parent.value(), parent_tuple_key,
                                                 CheckView(scope), &budget_);
         if (!verdict.ok()) return verdict.status();
         RecordFkAccess(exec::AccessKind::kLookup, fk.rel_oid, 1);
@@ -3128,7 +3128,7 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
         // "can't happen" is not a thing to encode as silence.
         return Status::NotImplemented(
             "the foreign key on '" + RelationNameOf(child.oid) + "' names parent row id=" +
-            std::to_string(parent_pk) + " of '" + RelationNameOf(fk.rel_oid) +
+            std::to_string(parent_tuple_key) + " of '" + RelationNameOf(fk.rel_oid) +
             "', which this statement's shape did not resolve before writing "
             "(docs/spec/foreign-keys.md §2a)");
     }
@@ -3171,7 +3171,7 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
     // The failing key is named on its own for the self-referencing arm,
     // whose verdict is not in `held`; any other is in `held` already.
     if (locks_ != nullptr && scope.txn != nullptr) {
-        const txn::LockKey failing = txn::LockKey::Tuple(fk.rel_oid, parent_pk);
+        const txn::LockKey failing = txn::LockKey::Tuple(fk.rel_oid, parent_tuple_key);
         locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
                           [&](const txn::LockHoldings::Held& h) {
                               if (h.mode != txn::LockMode::kShared ||
@@ -3194,7 +3194,7 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
 }
 
 Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent,
-                                                      std::uint64_t parent_pk,
+                                                      std::uint64_t parent_tuple_key,
                                                       const WriteScope& scope) {
     // **Minted here, after the caller holds the parent row's `X`** - the
     // forward hoist's rule from the other side, and load-bearing for the
@@ -3229,7 +3229,7 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
         }
 
         auto outcome = exec::CheckNoChildReferences(page_store_, *child.value(), fk.column_no,
-                                                    parent_pk, check_view, options, &budget_);
+                                                    parent_tuple_key, check_view, options, &budget_);
         if (!outcome.ok()) return outcome.status();
 
         // A cabin-served check probed one value's set; a walk read the
@@ -3258,15 +3258,15 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
                 // columns or one moving the column off - and its decide is
                 // what the answer depends on. The caller parks on it.
                 if (outcome.value().busy_trx != 0) {
-                    WaitForChildRowWriter(scope, fk.rel_oid, outcome.value().busy_pk,
+                    WaitForChildRowWriter(scope, fk.rel_oid, outcome.value().busy_tuple_key,
                                           outcome.value().busy_trx);
                 }
                 return Status::TxnConflict("a row of '" + RelationNameOf(fk.rel_oid) +
-                                           "' referencing id=" + std::to_string(parent_pk) +
+                                           "' referencing id=" + std::to_string(parent_tuple_key) +
                                            " is being written by another transaction");
             }
             case exec::FkVerdict::kViolation:
-                return Status::FkViolation("row id=" + std::to_string(parent_pk) +
+                return Status::FkViolation("row id=" + std::to_string(parent_tuple_key) +
                                            " is still referenced by '" +
                                            RelationNameOf(fk.rel_oid) + "." + column + "'");
         }
@@ -3275,7 +3275,7 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
 }
 
 void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel,
-                                              std::uint64_t pk, std::uint64_t holder) {
+                                              std::uint64_t tuple_key, std::uint64_t holder) {
     // **The wake is the child row's own**, asked for the way the forward
     // check asked for its parent's until AY-S5 folded that into its `S`: the
     // writer holds the row's `X` (AO-S6a), the table is the instance's, and
@@ -3290,7 +3290,7 @@ void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::
     // **Not over a hold this transaction already has**: the child row is a
     // parent of its own children, and an `S` taken on it for a grandchild's
     // reference would be the one the grant arm's release drops.
-    const txn::LockKey unit = txn::LockKey::Tuple(child_rel, pk);
+    const txn::LockKey unit = txn::LockKey::Tuple(child_rel, tuple_key);
     if (locks_ != nullptr && scope.txn != nullptr && may_park_ &&
         !scope.txn->borrows().Holds(unit)) {
         std::uint64_t blocker = 0;
@@ -3313,7 +3313,7 @@ void CommandDispatcher::WaitForChildRowWriter(const WriteScope& scope, catalog::
     }
     // The reverse check reads latest state and the writer's decide changes
     // it either way, so the re-run is not futile at any level.
-    NoteBlockingWriter(scope.txn, holder, pk, RepeatableReadWait::kCapable);
+    NoteBlockingWriter(scope.txn, holder, tuple_key, RepeatableReadWait::kCapable);
 }
 
 StatusOr<catalog::Oid> CommandDispatcher::ResolveCreateNamespace(std::string_view qualifier,
@@ -3402,23 +3402,23 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 return {ErrorReply(type_row.status()), false, 0, type_row.status()};
             }
 
-            // A cabin policy on the primary key is refused rather than ignored.
-            // The pk's cabin is the clustered tree (spec §2), so any of the
+            // A cabin policy on the tuple key is refused rather than ignored.
+            // The tuple key's cabin is the clustered tree (spec §2), so any of the
             // three answers would be a statement about something that cannot
             // exist - and silently dropping the clause would leave an operator
             // believing they had said something.
             if (pos == 0 && col.cabin_policy != catalog::kCabinPolicyUnset) {
-                return {"ERR the primary-key column '" + col.name +
+                return {"ERR the tuple key column '" + col.name +
                             "' takes no cabin policy - the clustered tree is its cabin (byte " +
                             std::to_string(col.cabin_byte_offset) + ")",
                         false};
             }
             // Invariant 11 at the surface, with the byte the layout's own
-            // defense cannot know: the first column is the pk, carried by
+            // defense cannot know: the first column is the tuple key, carried by
             // the Keystone word, which has no NULL encoding.
             if (pos == 0 && !col.notnull) {
-                return {"ERR the primary-key column '" + col.name +
-                            "' cannot be declared NULL - the pk is carried by the Keystone "
+                return {"ERR the tuple key column '" + col.name +
+                            "' cannot be declared NULL - the tuple key is carried by the Keystone "
                             "word, which has no NULL encoding (byte " +
                             std::to_string(col.null_byte_offset) + ")",
                         false};
@@ -3765,10 +3765,10 @@ Status CommandDispatcher::LogIndexWrite(const exec::IndexWrite& write, std::uint
 }
 
 std::function<Status(const exec::AppendedSpill&)> CommandDispatcher::SpillLogFor(
-    const WriteScope& scope, std::uint32_t rel_oid, std::uint64_t pk) {
+    const WriteScope& scope, std::uint32_t rel_oid, std::uint64_t tuple_key) {
     if (scope.txn == nullptr) return nullptr;
     const std::uint64_t txn_id = scope.txn->id();
-    return [this, &scope, rel_oid, pk, txn_id](const exec::AppendedSpill& spill) -> Status {
+    return [this, &scope, rel_oid, tuple_key, txn_id](const exec::AppendedSpill& spill) -> Status {
         // RV3's order: the undo record that can release the value, then the
         // records that make it durable. **Logged even when the undo record
         // failed**: the append already wrote the page - a created page, the
@@ -3776,7 +3776,7 @@ std::function<Status(const exec::AppendedSpill&)> CommandDispatcher::SpillLogFor
         // chain logs against a page redo never built, which refuses the mount.
         // Logged, the value is one leaked slot no row names and no undo
         // record releases.
-        const Status noted = NoteSpills(scope, rel_oid, pk, {spill});
+        const Status noted = NoteSpills(scope, rel_oid, tuple_key, {spill});
         const Status logged = exec::LogSpill(wal_, page_store_, spill, txn_id, rel_oid);
         return noted.ok() ? logged : noted;
     };
@@ -3845,12 +3845,12 @@ Status CommandDispatcher::AwaitDdlDurability() {
 
 
 Status CommandDispatcher::NoteSpills(const WriteScope& scope, std::uint32_t rel_oid,
-                                     std::uint64_t pk,
+                                     std::uint64_t tuple_key,
                                      const std::vector<exec::AppendedSpill>& spills) {
     if (scope.txn == nullptr) return Status::OK();
     for (const exec::AppendedSpill& spill : spills) {
         if (Status s = txn_->NoteVarHeapAppend(*scope.txn, rel_oid, spill.ptr.page_id,
-                                                spill.ptr.slot, pk);
+                                                spill.ptr.slot, tuple_key);
             !s.ok()) {
             return s;
         }
@@ -4195,7 +4195,7 @@ std::vector<wire::FieldDescription> DescribeFields(
         // "field 0 of every user relation is the Keystone id"). So it is
         // set from the *reference*, which is the only thing that knows -
         // `SELECT v, id FROM t` flags its second field, and a fold flags
-        // none, because a `COUNT(*)` is not anybody's primary key.
+        // none, because a `COUNT(*)` is not anybody's tuple key.
         //
         // A **star** read passes a projection built from the schema, whose
         // element 0 is exactly `{0, 0, 0}`, so the two routes to one
@@ -4560,14 +4560,14 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // refreshed by InsertOneRow when a root repoint invalidates it.
     const catalog::TableAccess* ta = access.value();
 
-    // Whether every row omits its pk, the question T3's sorted fill further
+    // Whether every row omits its tuple key, the question T3's sorted fill further
     // down asks.
     const std::size_t fill_arity = ta->schema.columns.empty() ? 0 : ta->schema.columns.size() - 1;
-    std::size_t rows_omitting_pk = 0;
+    std::size_t rows_omitting_tuple_key = 0;
     for (const std::vector<parser::AstValue>& r : stmt.rows) {
-        if (r.size() == fill_arity) ++rows_omitting_pk;
+        if (r.size() == fill_arity) ++rows_omitting_tuple_key;
     }
-    const bool every_row_omits_pk = rows_omitting_pk == stmt.rows.size();
+    const bool every_row_omits_tuple_key = rows_omitting_tuple_key == stmt.rows.size();
 
     // Insert routing and spreading retired (AT-S9); their history is at
     // cf889b63. A row lands in its relation's one structure on the core the
@@ -4619,7 +4619,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
     // Checked over the rows, since naming a key is a property of the row
     // (heap-and-tuple.md §4.1). Ineligibility, not a refusal: a statement
     // that names keys runs through the ordinary per-row path below.
-    if (bulk && every_row_omits_pk && SortedFillEligible(*ta, oid.value())) {
+    if (bulk && every_row_omits_tuple_key && SortedFillEligible(*ta, oid.value())) {
         return SortedFillInner(stmt, oid.value(), *ta, scope);
     }
 
@@ -4702,7 +4702,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // from what this resolved, so a refused statement still names the same
     // row ordinal it always did.
     //
-    // Every row of a sorted fill omits its pk (the caller's gate), so the
+    // Every row of a sorted fill omits its tuple key (the caller's gate), so the
     // body is the row.
     exec::FkParentVerdicts fk_held;
     if (!ta.fkeys_out.empty()) {
@@ -4714,19 +4714,19 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     }
 
     // Admission-class checks for every row, before anything burns (BI9) -
-    // arity, the pk rule, FK - in the row loop's order, so a refused
+    // arity, the tuple key rule, FK - in the row loop's order, so a refused
     // statement answers identically down to the ordinal.
     for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
         const auto& values = stmt.rows[k];
         std::string err;
         // Arity is the caller's gate, not this one's: the fill is entered
-        // only when every row omits its pk, because the id range it carves
+        // only when every row omits its tuple key, because the id range it carves
         // leaves no room for a key a caller named (heap-and-tuple.md §4.1).
         // Restated here as checked redundancy - a row of the wrong length
         // would otherwise be encoded against the wrong column positions.
         if (ncols > 0 && values.size() != ncols - 1) {
             err = "ERR expected " + std::to_string(ncols - 1) +
-                  " value(s) after the primary key, got " + std::to_string(values.size());
+                  " value(s) after the tuple key, got " + std::to_string(values.size());
         } else if (!ta.fkeys_out.empty()) {
             for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
                 if (fk.column_no == 0 || fk.column_no > values.size()) continue;
@@ -4906,7 +4906,7 @@ bool UndecidedInsert(txn::TransactionManager& txn, std::uint64_t undo_ptr) {
     return false;
 }
 
-// How many times an omitted pk is issued again when the id it drew was
+// How many times an omitted tuple key is issued again when the id it drew was
 // placed meanwhile by a named key (BD-R6's one collision: a named key at
 // the mark borrows before an issue draws the same id, then places it).
 // Each round burns one id; two rounds at once is already a race against a
@@ -4931,12 +4931,12 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // `AlreadyExists` and `OutOfRange` among them). A lock wait's fault net
     // is what refuses that way.
 
-    // ---- Arity, and where the pk comes from -----------------------------
+    // ---- Arity, and where the tuple key comes from -----------------------------
     //
     // **Two arities, and the row picks** (docs/spec/heap-and-tuple.md section
     // 4.1); there is no key mode:
     //
-    //   ncols     - the caller names the key. values[0] is the pk, and the
+    //   ncols     - the caller names the key. values[0] is the tuple key, and the
     //               rest are the columns after it.
     //   ncols - 1 - the caller omits it. The engine issues one from the
     //               relation's cursor, and every value is a body column.
@@ -4952,12 +4952,12 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // burns nothing. Both accepted counts are named, because with two of
         // them a single number reads as an off-by-one against the wrong one.
         return Status::InvalidArgument(
-            "expected " + std::to_string(ncols) + " value(s) including primary-key column '" +
+            "expected " + std::to_string(ncols) + " value(s) including tuple key column '" +
                std::string(catalog::NameView(ta.schema.columns.front().name)) + "', or " +
             std::to_string(ncols - 1) + " to have it issued; got " + std::to_string(values.size()));
     }
 
-    // When the row names its key, the pk is values[0] and the body is the
+    // When the row names its key, the tuple key is values[0] and the body is the
     // rest. Split here, once, so everything downstream - the FK check,
     // assertion admission, EncodeRow, the Cabin witness, index maintenance -
     // keeps receiving exactly the shape it already expects: the columns after
@@ -4968,7 +4968,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         const parser::AstValue& key = values.front();
         if (key.type != parser::ValueType::kInt) {
             return Status::InvalidArgument(
-                "primary-key column '" + std::string(catalog::NameView(ta.schema.columns.front().name)) +
+                "tuple key column '" + std::string(catalog::NameView(ta.schema.columns.front().name)) +
                 "' needs an integer literal (byte " + std::to_string(key.byte_offset) + ")");
         }
         // **Exhausted** (BD-R5 2., `instructions/v3.0.0/workorder-bd-sorted-
@@ -4981,7 +4981,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         const std::optional<std::uint64_t> id = KeystoneIdOf(key);
         if (!id.has_value()) {
             return Status::OutOfRange(
-                "primary key " + exec::FormatValue(0, key) + " is outside the Keystone id space [" +
+                "tuple key " + exec::FormatValue(0, key) + " is outside the Keystone id space [" +
                 std::to_string(catalog::kFirstRowId) + ", " + std::to_string(kMaxKeystoneId) +
                 "] (byte " + std::to_string(key.byte_offset) + ")");
         }
@@ -4994,7 +4994,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     //
     // **Before the id is allocated**, which is a stronger form of §2's
     // "before the heap write": a refused row costs no undo work *and* no
-    // Keystone id (BI9). VALUES supplies the columns after the pk, so a
+    // Keystone id (BI9). VALUES supplies the columns after the tuple key, so a
     // column at schema position c is at index c-1.
     //
     // **The resolution is the caller's** (§2a, AH-R1): `HandleInsert` runs
@@ -5025,7 +5025,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     //
     // Before the id for FK's reason: a refused row burns nothing. The
     // reservation (step 3) happens after placement, when the entry has a
-    // pk and a location to carry - and in a bulk statement this row's
+    // tuple key and a location to carry - and in a bulk statement this row's
     // admission sees every earlier row's reservation, which is the
     // intra-statement accumulation BI2 exists to keep.
     //
@@ -5045,14 +5045,14 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // wait-for graph (AO-S4a).
     //
     // `kCapable`: an admission reads the **live** aggregate, never the
-    // waiter's view. The pk is 0 because no id is issued yet, and 0 is no
+    // waiter's view. The tuple key is 0 because no id is issued yet, and 0 is no
     // row's key (`kFirstRowId`).
     std::uint64_t reserver = 0;
     exec::AssertionEnforcer::Hold admitted;
     if (Status s = enforcer_->AdmitInsert(oid, body, WriterId(scope), admitted, &reserver);
         !s.ok()) {
         if (reserver != 0) {
-            NoteBlockingWriter(scope.txn, reserver, /*pk=*/0, RepeatableReadWait::kCapable);
+            NoteBlockingWriter(scope.txn, reserver, /*tuple_key=*/0, RepeatableReadWait::kCapable);
         }
         return s;
     }
@@ -5065,7 +5065,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // the admission: BB-R1, which fixed the id under the hold of the page it
     // lands on so that placement order was issue order, is withdrawn there
     // (W10) - its one reason was a leaf's key order, which placement keeps.
-    // An omitted pk: issue, borrow, encode, descend, place. A named key:
+    // An omitted tuple key: issue, borrow, encode, descend, place. A named key:
     // borrow, encode, admit (advance-or-nothing), descend, the duplicate
     // check, place. **A heap keeps BB-R1** (BD-Q4 (a)): its tail cannot take
     // a key below its highest, so the id is fixed under the tail's hold.
@@ -5089,9 +5089,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         encoded = std::move(row.value());
         return Status::OK();
     };
-    // **A duplicate carries the pk token's byte** (BD-R5), as the exhausted
+    // **A duplicate carries the tuple key token's byte** (BD-R5), as the exhausted
     // refusal above does.
-    const auto duplicate_at_pk = [&](const Status& duplicate) {
+    const auto duplicate_at_tuple_key = [&](const Status& duplicate) {
         return Status::AlreadyExists(duplicate.message() + " (byte " +
                                      std::to_string(values.front().byte_offset) + ")");
     };
@@ -5161,7 +5161,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             if (!version.ok()) return Status::OK();
             const bool undecided =
                 txn_ != nullptr && txn_->IsInFlight(version.value().trx_id);
-            const Status duplicate = duplicate_at_pk(btree::DuplicateKey(
+            const Status duplicate = duplicate_at_tuple_key(btree::DuplicateKey(
                 supplied_id, present.value().page_id, present.value().slot,
                 version.value().deleted));
             const std::uint64_t undo_ptr = version.value().undo_ptr;
@@ -5216,7 +5216,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // key at the mark borrows it, an issue draws the same id before the
         // named key's admission moves the mark, and the named key places it
         // first. Its row unit serialises the two, and this placement then
-        // finds the key present - which is not a reason an omitted pk is
+        // finds the key present - which is not a reason an omitted tuple key is
         // refused for. The id is burned, its borrow given back, and another
         // drawn; a spill the abandoned round wrote is left as any failed
         // placement leaves one.
@@ -5272,9 +5272,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     StatusOr<storage::InsertPlacement> placed = std::move(*attempt);
     if (!placed.ok()) {
         const StatusCode code = placed.status().code();
-        // A duplicate, BD-R5's first reason, carries the pk token's byte.
+        // A duplicate, BD-R5's first reason, carries the tuple key token's byte.
         if (explicit_key && code == StatusCode::kAlreadyExists) {
-            return duplicate_at_pk(placed.status());
+            return duplicate_at_tuple_key(placed.status());
         }
         // A heap's key below its tail (BB-R12, kept by BD-Q4) is the client's
         // error too, answered as the admission's is, and not logged. A
@@ -5557,7 +5557,7 @@ Status CommandDispatcher::WalkBtreeLeaves(
         fn,
     WalkCursor* cursor) {
     const bool resuming = cursor != nullptr && cursor->active;
-    const std::uint64_t resume_pk = resuming ? cursor->pk : 0;
+    const std::uint64_t resume_tuple_key = resuming ? cursor->tuple_key : 0;
 
     // **A fresh descent, not a remembered leaf**, and that is the whole of
     // the btree arm's safety argument. While the statement was parked
@@ -5566,14 +5566,14 @@ Status CommandDispatcher::WalkBtreeLeaves(
     // already written - into a new right sibling. Returning to the
     // remembered page would visit those rows a second time. Descending by
     // key cannot: the tree is ordered by Keystone id, so a row this walk
-    // finished sorts below `resume_pk` wherever a split has since put it,
+    // finished sorts below `resume_tuple_key` wherever a split has since put it,
     // and the skip below is exact rather than positional.
-    auto start = resuming ? btree::BtreeSeekLeaf(page_store_, root, resume_pk)
+    auto start = resuming ? btree::BtreeSeekLeaf(page_store_, root, resume_tuple_key)
                           : btree::BtreeLeftmostLeaf(page_store_, root);
     if (!start.ok()) return start.status();
 
     bool cut = false;
-    std::uint64_t cut_pk = 0;
+    std::uint64_t cut_tuple_key = 0;
     PageId leaf = start.value();
     const PageId walk_origin = leaf;
     for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
@@ -5601,7 +5601,7 @@ Status CommandDispatcher::WalkBtreeLeaves(
                 // A slot with no readable key is left to `fn`, which is the
                 // one place that decides what a dead slot means. Skipping
                 // it here would hide a corrupt page behind a resume.
-                if (key.has_value() && *key < resume_pk) return storage::VisitControl::kContinue;
+                if (key.has_value() && *key < resume_tuple_key) return storage::VisitControl::kContinue;
             }
             auto outcome = fn(page_id, page, slot);
             if (!outcome.ok() || !outcome.has_value()) return outcome;
@@ -5611,7 +5611,7 @@ Status CommandDispatcher::WalkBtreeLeaves(
                 // resume from zero.** `fn` has just read this slot live, so
                 // failing to read it back is a corrupt page rather than an
                 // ordinary dead slot - and the tempting fallback is the
-                // worst outcome the stage can produce. Leaving `cut_pk` at
+                // worst outcome the stage can produce. Leaving `cut_tuple_key` at
                 // 0 while the cursor goes active makes the resume descend
                 // to the *leftmost* leaf and skip nothing, so every row
                 // already written is written a second time: the trail
@@ -5627,7 +5627,7 @@ Status CommandDispatcher::WalkBtreeLeaves(
                         "from; refusing rather than resuming from the start of the relation");
                 }
                 cut = true;
-                cut_pk = *key;
+                cut_tuple_key = *key;
             }
             return outcome;
         };
@@ -5639,7 +5639,7 @@ Status CommandDispatcher::WalkBtreeLeaves(
 
     if (cursor != nullptr) {
         if (cut) {
-            cursor->pk = cut_pk;
+            cursor->tuple_key = cut_tuple_key;
             cursor->active = true;
         } else {
             const std::uint32_t done = cursor->rows_done;
@@ -5665,7 +5665,7 @@ Status CommandDispatcher::VisitRelation(
                               " has an unknown clustered_type");
 }
 
-std::optional<std::uint64_t> CommandDispatcher::PkLiteral(const catalog::TableAccess& access,
+std::optional<std::uint64_t> CommandDispatcher::TupleKeyLiteral(const catalog::TableAccess& access,
                                                           const parser::Condition& cond) const {
     if (access.schema.columns.empty()) return std::nullopt;
     // **`op` only means anything for a `kCompareValue`** (`ast.hpp:226`
@@ -5688,7 +5688,7 @@ std::optional<std::uint64_t> CommandDispatcher::PkLiteral(const catalog::TableAc
     if (parser::IntLiteralWrapped(cond.val)) return std::nullopt;
     // Negative ids do not exist (invariant 7 zero-extends the id),
     // so a negative literal is a guaranteed miss - and casting it to
-    // uint64 would probe an enormous pk instead.
+    // uint64 would probe an enormous tuple key instead.
     if (cond.val.int_val < 0) return std::nullopt;
     if (!IEquals(cond.col.name, catalog::NameView(access.schema.columns.front().name))) {
         return std::nullopt;
@@ -5696,12 +5696,12 @@ std::optional<std::uint64_t> CommandDispatcher::PkLiteral(const catalog::TableAc
     return static_cast<std::uint64_t>(cond.val.int_val);
 }
 
-std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
+std::optional<std::uint64_t> CommandDispatcher::TupleKeyEqualityTarget(
     const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const {
     // Deliberately storage-agnostic: this answers "is this statement a bare
-    // pk point lookup", which is a property of the WHERE clause alone.
+    // tuple key point lookup", which is a property of the WHERE clause alone.
     // Whether anything can shortcut it - a tree descent, or nothing at
-    // all - is LocateByPk's question.
+    // all - is LocateByTupleKey's question.
     //
     // Exactly one condition: an extra AND could exclude the row the probe
     // would find, and the probe cannot evaluate the second predicate.
@@ -5712,7 +5712,7 @@ std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
     if (where.size() != 1) return std::nullopt;
     const parser::Condition& cond = where.front();
     if (cond.op != parser::CompareOp::kEq) return std::nullopt;
-    return PkLiteral(access, cond);
+    return TupleKeyLiteral(access, cond);
 }
 
 CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
@@ -5751,7 +5751,7 @@ CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
                 rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kDeleteMark);
                 break;
         }
-        auto ptr = txn_->AppendUndo(*t, rec, e.pk, image);
+        auto ptr = txn_->AppendUndo(*t, rec, e.tuple_key, image);
         return ptr.ok() ? Status::OK() : ptr.status();
     });
     return scope;
@@ -5985,16 +5985,16 @@ txn::TransactionManager::RowLocator CommandDispatcher::RowLocatorForRollback() {
     // outlive its captures. An abort runs entirely inside one dispatch, so a
     // borrowed one cannot dangle.
     return [this](std::uint32_t rel_oid,
-                  std::uint64_t pk) -> StatusOr<txn::TransactionManager::RowLocation> {
+                  std::uint64_t tuple_key) -> StatusOr<txn::TransactionManager::RowLocation> {
         auto access = catalog_.InitTableAccess(static_cast<catalog::Oid>(rel_oid));
         if (!access.ok()) return access.status();
-        PkLookup found = LocateByPk(*access.value(), pk);
-        if (found.kind != PkLookup::Kind::kAt) {
+        TupleKeyLookup found = LocateByTupleKey(*access.value(), tuple_key);
+        if (found.kind != TupleKeyLookup::Kind::kAt) {
             // kAbsent means the row is gone, kScan means the relation has no
             // descent to ask. Neither is a location, and rollback may not
             // guess one - the caller reports rather than compensating a slot
             // it cannot vouch for.
-            return Status::NotFound("row id " + std::to_string(pk) + " of relation oid " +
+            return Status::NotFound("row id " + std::to_string(tuple_key) + " of relation oid " +
                                     std::to_string(rel_oid) +
                                     " could not be relocated for rollback");
         }
@@ -6003,8 +6003,8 @@ txn::TransactionManager::RowLocator CommandDispatcher::RowLocatorForRollback() {
     };
 }
 
-CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAccess& access,
-                                                          std::uint64_t pk) {
+CommandDispatcher::TupleKeyLookup CommandDispatcher::LocateByTupleKey(const catalog::TableAccess& access,
+                                                          std::uint64_t tuple_key) {
     if (access.clustered_type == catalog::ClusteredType::kBtree) {
         // The tree *is* the relation's storage, so its answer is
         // authoritative in both directions: a hit is where the row lives,
@@ -6013,31 +6013,31 @@ CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAc
         // place a point lookup may skip the scan on a miss, and it is
         // allowed precisely because it is not a hint.
         // Exclusive, because every caller writes the slot it is handed.
-        auto found = btree::BtreeLookup(page_store_, access.desc_page_id, pk,
+        auto found = btree::BtreeLookup(page_store_, access.desc_page_id, tuple_key,
                                         storage::PageAccess::kWrite);
         if (found.ok()) {
-            return PkLookup{PkLookup::Kind::kAt, std::move(found.value())};
+            return TupleKeyLookup{TupleKeyLookup::Kind::kAt, std::move(found.value())};
         }
         if (found.status().code() == StatusCode::kNotFound) {
-            return PkLookup{PkLookup::Kind::kAbsent, {}};
+            return TupleKeyLookup{TupleKeyLookup::Kind::kAbsent, {}};
         }
         // A corrupt descent or an unreadable page: fall back to the scan
         // rather than fail the query. The scan reaches the leaves through
         // the sibling links, so it can still answer when the index above
         // them cannot.
         if (logging(LogLevel::kWarn)) {
-            log_->Warn("btree", "descent for pk " + std::to_string(pk) + " in table oid " +
+            log_->Warn("btree", "descent for tuple key " + std::to_string(tuple_key) + " in table oid " +
                                     std::to_string(access.oid) +
                                     " failed, falling back to a scan: " +
                                     found.status().message());
         }
         storage::ClearStructuralRefusal();  // the scan answers it (BA-S14)
-        return PkLookup{PkLookup::Kind::kScan, {}};
+        return TupleKeyLookup{TupleKeyLookup::Kind::kScan, {}};
     }
 
-    // A heap relation has no pk index: the chain scan is the only path,
+    // A heap relation has no tuple key index: the chain scan is the only path,
     // and it is authoritative.
-    return PkLookup{PkLookup::Kind::kScan, {}};
+    return TupleKeyLookup{TupleKeyLookup::Kind::kScan, {}};
 }
 
 
@@ -7019,7 +7019,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // nowhere to park. The hold and the pin are taken here, while this head
     // still publishes the word it revalidated against.
     //
-    // **A pk descent is never handed on**: it reads one leaf and cannot fill
+    // **A tuple key descent is never handed on**: it reads one leaf and cannot fill
     // a slice, so it would pay the hand-off - a frame, a hold, a pin - for
     // a yield it never reaches. A heap relation's lookup, which falls back
     // to a chain walk, loses its yields with it (SUS-1: no new heap).
@@ -7056,7 +7056,7 @@ void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
 
 void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
                                         std::span<const parser::AstValue> values,
-                                        std::uint16_t first_col_pos, std::uint64_t pk,
+                                        std::uint16_t first_col_pos, std::uint64_t tuple_key,
                                         PageId page_id, std::uint16_t slot,
                                         std::span<const parser::AstValue> previous) {
     // The two tests a relation with no Cabin pays, and nothing else.
@@ -7125,7 +7125,7 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
         if (!key.has_value()) continue;
 
         stats::CabinEntry entry;
-        entry.pk = pk;
+        entry.tuple_key = tuple_key;
         entry.page_id = page_id;
         // The page's current epoch, fetched lazily - once per statement
         // that actually appends, and only then - so a relation whose write
@@ -7177,13 +7177,13 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIden
             break;
         }
         if (step.kind == exec::AccessKind::kFilterScan && !candidate.valid()) {
-            // The lowest filtered non-pk column: a single-column equality's
+            // The lowest filtered non-tuple-key column: a single-column equality's
             // mask has one bit, and a multi-column residual's lowest is a
             // deterministic pick rather than a claim of primacy.
-            const std::uint64_t non_pk = step.filter_columns & ~std::uint64_t{1};
-            if (non_pk != 0 && step.filter_columns != exec::Step::kAllColumns) {
+            const std::uint64_t non_tuple_key = step.filter_columns & ~std::uint64_t{1};
+            if (non_tuple_key != 0 && step.filter_columns != exec::Step::kAllColumns) {
                 candidate.rel_oid = step.rel_oid;
-                candidate.col_pos = static_cast<std::uint16_t>(std::countr_zero(non_pk));
+                candidate.col_pos = static_cast<std::uint16_t>(std::countr_zero(non_tuple_key));
             }
         }
     }
@@ -7462,7 +7462,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
 
     // Resolve the SET list before touching storage, so a bad target fails
     // clean with no partial update. All three refusals - an unknown column,
-    // a column named twice (BJ-R2), and the primary key (K2, `Unsupported`) -
+    // a column named twice (BJ-R2), and the tuple key (K2, `Unsupported`) -
     // live in the compiler beside
     // CompileWhere rather than here: the two halves of an UPDATE's compile
     // belong at one layer, and a check the dispatcher owns is one a second
@@ -7796,7 +7796,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // evaluation can fail, BJ-R10). The values are collected first and
         // written second, so a later assignment never reads an earlier one's
         // result. A failure names the expression's first byte and the row's
-        // pk and fails the statement like every mid-statement write failure
+        // tuple key and fails the statement like every mid-statement write failure
         // (the AS9 resolution). A value that evaluates but does not fit its
         // target - a NULL into a NOT NULL column, a `char(N)` too long - is
         // the encode's verdict, further down.
@@ -7878,11 +7878,11 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                                            id.value(), page_id, slot, &reserver);
                 !s.ok()) {
                 // AO-S6e-c, and the INSERT site states the argument.
-                // **`pk = 0` although the pk is known**: the holder holds a
+                // **`tuple key = 0` although the tuple key is known**: the holder holds a
                 // *group* reservation and may never have touched this row
                 // (`assertion.md` §6.2 states the rule for both arms).
                 if (reserver != 0) {
-                    NoteBlockingWriter(scope.txn, reserver, /*pk=*/0,
+                    NoteBlockingWriter(scope.txn, reserver, /*tuple_key=*/0,
                                        RepeatableReadWait::kCapable);
                 }
                 return s;
@@ -7908,7 +7908,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // is carried from `payload_copy`, the version this walk read, so a
         // spilled value the SET list does not name is shared with the new
         // version rather than appended again - and no longer leaked by every
-        // UPDATE of its row. The pk is the tuple's own Keystone word, never
+        // UPDATE of its row. The tuple key is the tuple's own Keystone word, never
         // assignable (rejected above).
         auto encoded = exec::EncodeAssigned(
             ta.schema, ta.layout, id.value(), payload_copy, assigned,
@@ -7981,7 +7981,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
 
         // ---- The Cabin witness, UPDATE half (docs/spec/cabin.md §5) -----
         //
-        // `row` now holds the **new** values, so this appends the pk
+        // `row` now holds the **new** values, so this appends the tuple key
         // to v′'s set for every cabined column. The old value's set is
         // deliberately left alone: a pre-update snapshot is still entitled
         // to match through it, and for newer readers the stale entry is a
@@ -8059,17 +8059,17 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         return Status::OK();
     };
 
-    // Same fast path as SELECT, and the same contract: a point UPDATE by pk
+    // Same fast path as SELECT, and the same contract: a point UPDATE by tuple key
     // is the other statement shape whose cost is otherwise linear in the
     // relation. Any reason to decline falls through to the scan, which
     // produces the identical result - the locator picks the slot to look
     // at, never which rows match.
-    if (std::optional<std::uint64_t> pk = PkEqualityTarget(ta, stmt.where); pk.has_value()) {
-        PkLookup found = LocateByPk(ta, *pk);
-        if (found.kind == PkLookup::Kind::kAbsent) {
+    if (std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where); tuple_key.has_value()) {
+        TupleKeyLookup found = LocateByTupleKey(ta, *tuple_key);
+        if (found.kind == TupleKeyLookup::Kind::kAbsent) {
             return {"UPDATED 0", false, 0};  // no such row, on the tree's authority
         }
-        if (found.kind == PkLookup::Kind::kAt) {
+        if (found.kind == TupleKeyLookup::Kind::kAt) {
             // Through the leaf the descent holds exclusive and dirty (btree.hpp
             // `Location`): a shared lookup then `Get()` let a divide renumber
             // the slot, and `apply` declined another row on the WHERE.
@@ -8086,7 +8086,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                 return {ErrorReply(blocked_verdict), false, 0, blocked_verdict};
             }
             if (logging(LogLevel::kTrace)) {
-                log_->Trace("query", "pk " + std::to_string(*pk) + " updated at " +
+                log_->Trace("query", "tuple key " + std::to_string(*tuple_key) + " updated at " +
                                          std::to_string(found.at.page_id) + ":" +
                                          std::to_string(found.at.slot));
             }
@@ -8515,7 +8515,7 @@ void CommandDispatcher::RefuseParkedWrite(DispatchOutcome& out, Session& session
 }
 
 void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx,
-                                           std::uint64_t pk, RepeatableReadWait rerun) {
+                                           std::uint64_t tuple_key, RepeatableReadWait rerun) {
     if (!may_park_ || clock_ == nullptr || txn_ == nullptr) return;
     // A relation-level refusal already parked this statement on the table's
     // slot (`BorrowChain`); a second wait on the same statement would be
@@ -8553,7 +8553,7 @@ void CommandDispatcher::NoteBlockingWriter(const txn::Transaction* waiter, std::
         }
     }
     blocking_writer_ = trx;
-    blocked_pk_ = pk;
+    blocked_tuple_key_ = tuple_key;
 }
 
 std::optional<Status> CommandDispatcher::BorrowRelationForDdl(txn::Transaction* holder,
@@ -8734,11 +8734,11 @@ StatusOr<bool> CommandDispatcher::InSystemNamespace(catalog::Oid oid) {
     return named != tables.value().end() && catalog::IsSystemNamespace(named->namespace_oid);
 }
 
-CommandDispatcher::PkWindow CommandDispatcher::FoldPkWindow(
+CommandDispatcher::TupleKeyWindow CommandDispatcher::FoldTupleKeyWindow(
     const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const {
-    PkWindow w;
+    TupleKeyWindow w;
     w.hi = kIdSpaceEnd;
-    // No pk to compare against: nothing folds, and a caller refusing what
+    // No tuple key to compare against: nothing folds, and a caller refusing what
     // did not fold must see that (BH-S3's review, C4).
     if (access.schema.columns.empty()) {
         if (!where.empty()) w.unfolded = &where.front();
@@ -8751,7 +8751,7 @@ CommandDispatcher::PkWindow CommandDispatcher::FoldPkWindow(
 
     for (const parser::Condition& cond : where) {
         if (cond.kind == parser::PredicateKind::kBetween) {
-            // The one kind `PkLiteral` deliberately declines, because it
+            // The one kind `TupleKeyLiteral` deliberately declines, because it
             // carries two bounds rather than one. Its own guards, in the
             // same order and for the same reasons.
             if (cond.rhs_kind != parser::RhsKind::kLiteral ||
@@ -8770,7 +8770,7 @@ CommandDispatcher::PkWindow CommandDispatcher::FoldPkWindow(
             w.bounded = true;
             continue;
         }
-        const std::optional<std::uint64_t> v = PkLiteral(access, cond);
+        const std::optional<std::uint64_t> v = TupleKeyLiteral(access, cond);
         if (!v.has_value()) {
             unread(cond);
             continue;
@@ -8799,7 +8799,7 @@ CommandDispatcher::PkWindow CommandDispatcher::FoldPkWindow(
                 break;
             // `kNeq` names no window, and the two null tests name no id at
             // all. Left per-row rather than widened to the relation: a
-            // predicate that does not bound the pk is exactly the shape the
+            // predicate that does not bound the tuple key is exactly the shape the
             // mark leaves alone.
             case parser::CompareOp::kNeq:
             case parser::CompareOp::kIsNull:
@@ -8825,15 +8825,15 @@ std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
     // would conflict with every reader's `IS` for rows MVCC already answers.
     if (where.empty()) return txn::LockKey::Range(access.oid, 0, kIdSpaceEnd);
 
-    // Otherwise, the pk window the conjuncts name - if they name one.
+    // Otherwise, the tuple key window the conjuncts name - if they name one.
     //
     // **The vector is an AND-list**, so a conjunct the fold cannot read can
     // only remove rows from the set, never add one: the window derived from
-    // the pk conjuncts alone is a *superset* of what the statement writes,
+    // the tuple key conjuncts alone is a *superset* of what the statement writes,
     // and a borrow over a superset covers every row written. That is what
     // makes it sound to ignore `WHERE name = 'x'` sitting beside
     // `WHERE id < 50` - `unfolded` is `PURGE`'s question, not this one's.
-    const PkWindow window = FoldPkWindow(access, where);
+    const TupleKeyWindow window = FoldTupleKeyWindow(access, where);
     const std::uint64_t lo = window.lo;
     const std::uint64_t hi = window.hi;
     if (!window.bounded) return std::nullopt;
@@ -8847,10 +8847,10 @@ std::optional<txn::LockKey> CommandDispatcher::DeclaredWriteBorrow(
     return txn::LockKey::Range(access.oid, lo, hi);
 }
 
-Status CommandDispatcher::HeldByHolder(std::uint64_t pk, std::uint64_t holder) {
+Status CommandDispatcher::HeldByHolder(std::uint64_t tuple_key, std::uint64_t holder) {
     // `HolderName`, because a holder is not always a transaction: a read
     // borrow holds under an id of its own (AO-S6e-b).
-    return Status::TxnConflict("row id=" + std::to_string(pk) + " is held by " +
+    return Status::TxnConflict("row id=" + std::to_string(tuple_key) + " is held by " +
                                HolderName(holder));
 }
 
@@ -8912,9 +8912,9 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
 }
 
 Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
-                                                     std::uint64_t pk,
+                                                     std::uint64_t tuple_key,
                                                      std::uint64_t& blocker) {
-    Status verdict = txn_->CheckWriteConflict(*scope.txn, cur, pk);
+    Status verdict = txn_->CheckWriteConflict(*scope.txn, cur, tuple_key);
 
     // **A refused borrow is a conflict in its own right** (AO-S6c-b). The
     // MVCC check answers about the row's last *writer* and is silent about
@@ -8925,7 +8925,7 @@ Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, st
     // calls part of the wire contract rather than a diagnostic: same shape,
     // and it names the holder rather than the writer because that is who
     // the client is waiting for.
-    if (verdict.ok() && blocker != 0) verdict = HeldByHolder(pk, blocker);
+    if (verdict.ok() && blocker != 0) verdict = HeldByHolder(tuple_key, blocker);
     if (verdict.ok()) return verdict;
     // **The row is held by an undecided writer, so the statement waits
     // instead of refusing** (AO-S3; AR2-A §1: a client retry loop is a
@@ -8959,7 +8959,7 @@ Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, st
                                          ? RepeatableReadWait::kCapable
                                          : RepeatableReadWait::kFutile;
     if (blocker == 0) blocker = cur;
-    NoteBlockingWriter(scope.txn, blocker, pk, rerun);
+    NoteBlockingWriter(scope.txn, blocker, tuple_key, rerun);
     return verdict;
 }
 
@@ -8987,7 +8987,7 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     if (blocking_writer_ != 0 &&
         (result.ok() || scope.txn->trail().size() != statement_trail_mark_)) {
         blocking_writer_ = 0;
-        blocked_pk_ = 0;
+        blocked_tuple_key_ = 0;
     }
     // **And the relation-lock wait (AO-S6e-b), on the same test**, its
     // registration dropped with it so it cannot outlive a statement that
@@ -9173,22 +9173,22 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
 
 namespace {
 
-// PU10's conjunct rows: a negative literal on the pk is simply wrong, and
+// PU10's conjunct rows: a negative literal on the tuple key is simply wrong, and
 // every other conjunct the fold could not read is a form nobody built. The
 // byte is the conjunct's function, column or literal - or, for a conjunct
 // with no position of its own (a bare subquery), the `WHERE` token.
 Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Condition& cond,
                             std::uint32_t where_byte) {
-    const bool on_pk = !access.schema.columns.empty() &&
+    const bool on_tuple_key = !access.schema.columns.empty() &&
                        IEquals(cond.col.name, catalog::NameView(access.schema.columns.front().name));
     const bool literal = cond.rhs_kind == parser::RhsKind::kLiteral &&
                          (cond.kind == parser::PredicateKind::kCompareValue ||
                           cond.kind == parser::PredicateKind::kBetween);
-    if (on_pk && literal) {
+    if (on_tuple_key && literal) {
         for (const parser::AstValue* v : {&cond.val, &cond.val_high}) {
             if (parser::IntLiteralWrapped(*v)) {
                 return Status::InvalidArgument(
-                    "primary key literal " + v->raw_int_text +
+                    "tuple key literal " + v->raw_int_text +
                     " is outside the Keystone id space [" +
                     std::to_string(catalog::kFirstRowId) + ", " + std::to_string(kMaxKeystoneId) +
                     "] (byte " +
@@ -9196,7 +9196,7 @@ Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Co
             }
             if (v->type == parser::ValueType::kInt && v->int_val < 0) {
                 return Status::InvalidArgument(
-                    "primary key literal " + std::to_string(v->int_val) +
+                    "tuple key literal " + std::to_string(v->int_val) +
                     " is negative, and no key is below 1 (byte " + std::to_string(v->byte_offset) +
                     ")");
             }
@@ -9208,7 +9208,7 @@ Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Co
                              : !cond.col.name.empty() ? cond.col.byte_offset
                                                       : where_byte;
     return Status::NotImplemented(
-        "PURGE admits only comparisons of the primary key with an integer literal (=, <, <=, >, "
+        "PURGE admits only comparisons of the tuple key with an integer literal (=, <, <=, >, "
         ">=, BETWEEN); this conjunct is not one (byte " +
         std::to_string(at) + ")");
 }
@@ -9281,7 +9281,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
 
     // PU1: the one recognizer of the window, refusing what it cannot read
     // rather than skipping it (BH-R2), clamped to the key space.
-    const PkWindow window = FoldPkWindow(ta, stmt.where);
+    const TupleKeyWindow window = FoldTupleKeyWindow(ta, stmt.where);
     if (window.unfolded != nullptr) {
         return refuse(PurgeConjunctRefusal(ta, *window.unfolded, stmt.where_byte_offset));
     }
@@ -9331,7 +9331,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     // or whose deleter some reader cannot see yet, is a wait (PU4, PU5) -
     // the first one found ends the walk, since the attempt re-runs whole.
     struct Target {
-        std::uint64_t pk;
+        std::uint64_t tuple_key;
         std::uint64_t deleter;
     };
     std::vector<Target> targets;
@@ -9350,22 +9350,22 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
                 }
                 return tuple.status();
             }
-            auto pk = KeystoneIdOfPayload(tuple.value().payload);
-            if (!pk.ok()) return pk.status();
-            if (pk.value() < lo) return storage::VisitControl::kContinue;
-            if (pk.value() >= hi) return storage::VisitControl::kStop;
+            auto tuple_key = KeystoneIdOfPayload(tuple.value().payload);
+            if (!tuple_key.ok()) return tuple_key.status();
+            if (tuple_key.value() < lo) return storage::VisitControl::kContinue;
+            if (tuple_key.value() >= hi) return storage::VisitControl::kStop;
             const std::uint64_t trx = tuple.value().trx_id;
             const bool in_flight = txn_ != nullptr && txn_->IsInFlight(trx);
             if (tuple.value().deleted) {
                 if (in_flight) {
-                    pending = DispatchOutcome::PurgeWait{pk.value(), trx, /*horizon=*/false};
+                    pending = DispatchOutcome::PurgeWait{tuple_key.value(), trx, /*horizon=*/false};
                     return storage::VisitControl::kStop;
                 }
                 if (txn_ != nullptr && !txn_->ResolvedForEveryReader(trx)) {
-                    pending = DispatchOutcome::PurgeWait{pk.value(), trx, /*horizon=*/true};
+                    pending = DispatchOutcome::PurgeWait{tuple_key.value(), trx, /*horizon=*/true};
                     return storage::VisitControl::kStop;
                 }
-                targets.push_back({pk.value(), trx});
+                targets.push_back({tuple_key.value(), trx});
                 return storage::VisitControl::kContinue;
             }
             // PU3, BH-Q2: a live key refuses a window of one key - once its
@@ -9373,7 +9373,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
             // back - and a wider window passes over it.
             if (one_key) {
                 if (in_flight) {
-                    pending = DispatchOutcome::PurgeWait{pk.value(), trx, /*horizon=*/false};
+                    pending = DispatchOutcome::PurgeWait{tuple_key.value(), trx, /*horizon=*/false};
                 } else {
                     one_key_live = true;
                 }
@@ -9385,7 +9385,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     if (one_key_live) {
         const std::uint32_t at = stmt.where.front().val.byte_offset;
         return ended(refuse(Status::InvalidArgument(
-            "primary key " + std::to_string(lo) +
+            "tuple key " + std::to_string(lo) +
             " is live; PURGE frees only a key whose row was deleted (byte " + std::to_string(at) +
             ")")));
     }
@@ -9396,7 +9396,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
                 : "its latest writer, transaction " + std::to_string(pending->trx_id) +
                       ", has not decided";
         DispatchOutcome out = ended(refuse(Status::TxnConflict(
-            "PURGE cannot free primary key " + std::to_string(pending->pk) + " yet: " + why +
+            "PURGE cannot free tuple key " + std::to_string(pending->tuple_key) + " yet: " + why +
             "; nothing was purged, and running it again once that ends will")));
         out.purge_wait = pending;
         return out;
@@ -9413,7 +9413,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     {
         const storage::DrainOnPressure drain(page_store_);  // the keys, not the decide
         for (const Target& t : targets) {
-            auto one = exec::PurgeKey(page_store_, wal_, ta, t.pk, t.deleter);
+            auto one = exec::PurgeKey(page_store_, wal_, ta, t.tuple_key, t.deleter);
             if (!one.ok()) return ended(refuse(partly(one.status(), purged)));
             if (one.value() == exec::PurgeOutcome::kPurged) ++purged;
         }
@@ -9478,7 +9478,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
     // ---- Stage 1 of the walk -------------------------------------------
     //
-    // Only what the WHERE reads (OPT-001): the row's pk if a version is
+    // Only what the WHERE reads (OPT-001): the row's tuple key if a version is
     // visible under the snapshot and qualifies, else nothing. DELETE walks
     // the whole relation exactly as UPDATE does, so it decoded every row of
     // it to mark one; the mask is the compiler's, and is kAllColumns
@@ -9704,12 +9704,12 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // The same point-lookup fast path SELECT and UPDATE take, and the same
     // contract: the locator picks the slot to look at, never which rows
     // match, so falling through to the scan produces the identical answer.
-    if (std::optional<std::uint64_t> pk = PkEqualityTarget(ta, stmt.where); pk.has_value()) {
-        PkLookup found = LocateByPk(ta, *pk);
-        if (found.kind == PkLookup::Kind::kAbsent) {
+    if (std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where); tuple_key.has_value()) {
+        TupleKeyLookup found = LocateByTupleKey(ta, *tuple_key);
+        if (found.kind == TupleKeyLookup::Kind::kAbsent) {
             return {"DELETED 0", false, 0};
         }
-        if (found.kind == PkLookup::Kind::kAt) {
+        if (found.kind == TupleKeyLookup::Kind::kAt) {
             // Through the held leaf, as UPDATE's point arm (btree.hpp `Location`).
             heap::PageView page(found.at.leaf.bytes());
             if (Status s = mark(found.at.page_id, page, found.at.slot); !s.ok()) {

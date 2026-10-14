@@ -24,13 +24,13 @@ struct Schema {
 
 // True for the integer types a Keystone id can be declared as. Float,
 // decimal, bool, char and varchar are not among them: none can represent a
-// Keystone id, and a pk that cannot hold its own value is a table no row can
+// Keystone id, and a tuple key that cannot hold its own value is a table no row can
 // be written to.
 bool IsIntegerTypeVal(std::uint32_t type_val) noexcept;
 
 // Rejects a schema that cannot carry a Keystone word: no columns at all,
 // or a first column whose declared type is not an integer one. Every
-// relation's first column is its system-generated primary key
+// relation's first column is its system-generated tuple key
 // (heap-and-tuple.md section 4), so this is a property of the schema
 // itself, checked at CREATE TABLE rather than at the first INSERT.
 Status CheckKeystoneColumn(const Schema& schema);
@@ -260,7 +260,7 @@ struct TableAccess {
     // have one and says nothing about the rest.
     //
     // `cabin_mask` holds a bit per `col_pos`. Bit 0 is always clear: the
-    // pk's Cabin is the clustered tree itself (spec section 2), so
+    // tuple key's Cabin is the clustered tree itself (spec section 2), so
     // CreateCabin() refuses column 0. A relation wider than 64 columns
     // folds its high columns into no bit - which loses the *acceleration*
     // for those columns and can never lose a row, since an unnoticed
@@ -399,7 +399,7 @@ struct TableAccess {
     // FindIndexOnColumn` makes for the same reason: an index on `(a, b)`
     // cannot serve an equality on `b`, so a bit for `b` would stop the
     // compiler calling that step a filter scan while leaving it exactly as
-    // slow. Bit 0 is always clear - `CreateIndex` refuses the primary key,
+    // slow. Bit 0 is always clear - `CreateIndex` refuses the tuple key,
     // whose index is the clustered tree. A relation wider than 64 columns
     // folds its high columns into no bit, which loses the acceleration and
     // never a row.

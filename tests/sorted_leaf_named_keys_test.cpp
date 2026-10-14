@@ -18,9 +18,9 @@
 // on one core.
 //
 // BD-R5's claim, the one this file pins: a named key's `INSERT` is refused
-// because of its pk for exactly two reasons - a duplicate (`AlreadyExists`)
+// because of its tuple key for exactly two reasons - a duplicate (`AlreadyExists`)
 // or a key outside `[1, 2^48 - 1]` (`OutOfRange`) - and each refusal names
-// the pk token's byte. Everything else about the key is placed: below the
+// the tuple key token's byte. Everything else about the key is placed: below the
 // relation's mark, in any order, and a key a rollback freed (W8, W12).
 //
 // The two-session cells (a named key meeting an undecided writer) are in
@@ -98,8 +98,8 @@ protected:
 // ---- Red at BD-S0: a key below the mark is placed (W8) --------------------
 
 TEST_F(SortedLeafSqlTest, AKeyBelowAnEarlierOneIsPlacedAndOrderByStaysElided) {
-    // W8: "there must be no case where writing pk=100 first makes inserting
-    // pk=99 fail".
+    // W8: "there must be no case where writing tuple_key=100 first makes inserting
+    // tuple_key=99 fail".
     ASSERT_TRUE(Placed(Run("INSERT INTO t VALUES (100, 1)")));
     const DispatchOutcome below = Run("INSERT INTO t VALUES (99, 2)");
     ASSERT_TRUE(Placed(below)) << below.response;
@@ -171,13 +171,13 @@ TEST_F(SortedLeafSqlTest, ADeletedKeyNamedAgainIsAlreadyExists) {
     EXPECT_EQ(Walk(), (std::vector<std::uint64_t>{9}));
 }
 
-// ---- The census cell: every pk-caused refusal is one of two codes ---------
+// ---- The census cell: every tuple-key-caused refusal is one of two codes ---------
 
-TEST_F(SortedLeafSqlTest, EveryRefusalANamedKeyGetsForItsPkIsDuplicateOrExhausted) {
+TEST_F(SortedLeafSqlTest, EveryRefusalANamedKeyGetsForItsTupleKeyIsDuplicateOrExhausted) {
     // BD §1.4's table, every row a statement can reach on one core without a
-    // concurrent writer: a key is placed, or refused for its pk with exactly
+    // concurrent writer: a key is placed, or refused for its tuple key with exactly
     // the code BD-R5 gives its reason - never `InvalidArgument`, never the
-    // other of the two - and the pk token's byte, which starts at 22 in
+    // other of the two - and the tuple key token's byte, which starts at 22 in
     // `INSERT INTO t VALUES (k, 1)`.
     //
     // 251 even ids, so the first leaf has a right sibling: an odd key
@@ -237,7 +237,7 @@ TEST_F(SortedLeafSqlTest, EveryRefusalANamedKeyGetsForItsPkIsDuplicateOrExhauste
 TEST_F(SortedLeafSqlTest, AKeyInTheUpperEightBitsIsPlacedAndTheFortyEightBitCeilingIsExhausted) {
     // BK (`instructions/v3.0.0/workorder-bk-keystone-48.md`): the id space is
     // `[1, 2^48 - 1]`. 2^40, refused `OutOfRange` at 5979b5e7, is a key and
-    // is read back by pk; 2^48 is exhausted, and the refusal names the
+    // is read back by tuple key; 2^48 is exhausted, and the refusal names the
     // ceiling's value, not its width (BK-R5).
     ASSERT_TRUE(Placed(Run("INSERT INTO t VALUES (1099511627776, 1)")));
     EXPECT_EQ(EmittedIds(Run("SELECT * FROM t WHERE id = 1099511627776").response),

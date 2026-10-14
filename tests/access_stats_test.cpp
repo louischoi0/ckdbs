@@ -70,7 +70,7 @@ protected:
         return std::nullopt;
     }
 
-    static constexpr std::uint64_t kPk = 1ull << 0;
+    static constexpr std::uint64_t kTupleKey = 1ull << 0;
     static constexpr std::uint64_t kFlag = 1ull << 1;
     static constexpr std::uint64_t kName = 1ull << 2;
 
@@ -131,8 +131,8 @@ TEST_F(AccessStatsTest, EveryAccessKindIsRecordedTheSameWay) {
     Run("SELECT * FROM b WHERE flag = 1");               // FilterScan
     Run("SELECT * FROM b");                              // Scan
 
-    EXPECT_TRUE(Shape(exec::AccessKind::kLookup, "b", kPk).has_value());
-    EXPECT_TRUE(Shape(exec::AccessKind::kRange, "b", kPk).has_value());
+    EXPECT_TRUE(Shape(exec::AccessKind::kLookup, "b", kTupleKey).has_value());
+    EXPECT_TRUE(Shape(exec::AccessKind::kRange, "b", kTupleKey).has_value());
     EXPECT_TRUE(Shape(exec::AccessKind::kFilterScan, "b", kFlag).has_value());
     // A bare scan is steered by nothing, so its shape has no columns.
     EXPECT_TRUE(Shape(exec::AccessKind::kScan, "b", 0).has_value());
@@ -229,7 +229,7 @@ TEST_F(AccessStatsTest, AJoinRecordsBothOfItsSteps) {
     Run("SELECT a.id FROM b AS a JOIN h AS c ON a.id = c.id WHERE a.flag = 1");
     // The driving relation is filter-scanned; the inner one is probed.
     EXPECT_TRUE(Shape(exec::AccessKind::kFilterScan, "b", kFlag).has_value());
-    EXPECT_TRUE(Shape(exec::AccessKind::kProbe, "h", kPk).has_value());
+    EXPECT_TRUE(Shape(exec::AccessKind::kProbe, "h", kTupleKey).has_value());
 }
 
 // ---- Heat --------------------------------------------------------------

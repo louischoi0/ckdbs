@@ -22,17 +22,17 @@
 //
 // | offset | width | field                                                  |
 // |--------|-------|--------------------------------------------------------|
-// |    0   |   8   | pk (48) | flags (8) | reserved (8) - the Keystone word  |
+// |    0   |   8   | tuple key (48) | flags (8) | reserved (8): Keystone   |
 // |    8   |   8   | location hint: page_id (32) | epoch (16) | slot (16)    |
 // |   16   |   8   | aggregate value, int64                                  |
 // |   24   |   4   | group_id (AS6a)                                         |
 // |   28   |   4   | padding to 32                                           |
 //
-// **The pk is authoritative and the hint is advisory**, which is C2 carried
+// **The tuple key is authoritative and the hint is advisory**, which is C2 carried
 // over from the observational class unchanged. Under K1 a stored Keystone id
 // is a name: it can dangle - the row may be gone - and it comes to mean a
 // different row only after a `PURGE` freed it (`heap-and-tuple.md` §4.1c).
-// An entry is a contribution, summed and settled, and its pk is never
+// An entry is a contribution, summed and settled, and its tuple key is never
 // resolved to read a row, so a re-placed key's old entries stay the old
 // row's and cost nothing. A wrong hint costs a descent and never a wrong
 // answer. The hint is verified through the one verifier
@@ -75,7 +75,7 @@ inline constexpr std::uint8_t kEntryReserved = 0x1;
 // `flags` bit 1: the location hint is worth trying. Cleared - never the entry
 // dropped - when a hint has been proven wrong and there was nothing better to
 // heal it with, exactly as `stats::kCabinHintValid` is for the observational
-// class. The pk is the authority, so an entry with no usable hint is still a
+// class. The tuple key is the authority, so an entry with no usable hint is still a
 // complete, correct entry that costs a descent.
 inline constexpr std::uint8_t kEntryHintValid = 0x2;
 
@@ -114,11 +114,11 @@ inline constexpr std::uint8_t kEntryOrphaned = 0x8;
 //
 // A plain struct with explicit encode/decode rather than a memcpy'd overlay:
 // `docs/rules/rules.md` forbids compiler bitfields in a persisted format, and the
-// pk/flags/reserved word is packed by shift and mask for the same reason the
+// tuple key/flags/reserved word is packed by shift and mask for the same reason the
 // Keystone word is (invariant 6 - bitfield layout is implementation-defined
 // and this format must be architecture-portable).
 struct BoundCabinEntry {
-    std::uint64_t pk = 0;  // kKeystoneIdBits used; the bits above are always 0
+    std::uint64_t tuple_key = 0;  // kKeystoneIdBits used; the bits above are always 0
     std::uint8_t flags = 0;
 
     // The advisory location. Every Bound Cabin writer stores `page_epoch` 0
@@ -126,7 +126,7 @@ struct BoundCabinEntry {
     // do carry a `relayout_epoch` (page_header.hpp) that a btree leaf division
     // bumps; `exec/tuple_verify.hpp` compares the two, so a hint into a page
     // whose epoch moved fails verification and costs a descent - never a
-    // wrong answer, the pk being the authority.
+    // wrong answer, the tuple key being the authority.
     PageId page_id = kInvalidPageId;
     std::uint16_t page_epoch = 0;
     std::uint16_t slot = 0;
@@ -160,8 +160,8 @@ inline constexpr std::size_t kEntryBytes = 32;
 
 // Field-wise codec. The entry's first word is packed exactly as the Keystone
 // word is (BK-R2: one layout, keystone.hpp's constants), and `EncodeEntry`
-// fails with InvalidArgument on a pk above `kMaxKeystoneId` - refused rather
-// than truncated, because a truncated pk is a name that means a different
+// fails with InvalidArgument on a tuple key above `kMaxKeystoneId` - refused rather
+// than truncated, because a truncated tuple key is a name that means a different
 // row, which is precisely what K1 exists to prevent.
 Status EncodeEntry(const BoundCabinEntry& entry, std::span<std::byte, kEntryBytes> out);
 BoundCabinEntry DecodeEntry(std::span<const std::byte, kEntryBytes> in);
@@ -208,7 +208,7 @@ public:
 
     // Rewrites an entry in place. The only mutations the format needs are flag
     // moves - commit clears `kEntryReserved`, abort sets `kEntryOrphaned` - so
-    // nothing here ever shrinks and an entry's pk never changes. Abort still
+    // nothing here ever shrinks and an entry's tuple key never changes. Abort still
     // removes the entry from the *directory*; the flag is what lets a rebuild
     // that reads only these pages agree with it.
     Status Write(std::uint16_t index, const BoundCabinEntry& entry);

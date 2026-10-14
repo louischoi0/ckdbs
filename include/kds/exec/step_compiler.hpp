@@ -116,7 +116,7 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 //
 // Two refusals, and the distinction between their codes is the policy
 // rules.md states: `kInvalidArgument` for a column the relation has not
-// got - simply wrong - and **`kUnsupported` for the primary key**, which
+// got - simply wrong - and **`kUnsupported` for the tuple key**, which
 // is understood and declined. K2 makes a Keystone id immutable for the
 // life of the tuple: the clustered tree, every secondary index entry,
 // every Cabin entry and every recorded trail address the row by that id,

@@ -79,10 +79,10 @@ Status CheckDeclarableColumnTypes(const Schema& schema) {
 Status CheckKeystoneColumn(const Schema& schema) {
     if (schema.columns.empty()) {
         return Status::InvalidArgument(
-            "relation has no columns; the first column is the mandatory Keystone primary key");
+            "relation has no columns; the first column is the mandatory Keystone tuple key");
     }
     if (!IsIntegerTypeVal(schema.columns.front().type_val)) {
-        return Status::InvalidArgument("primary-key column '" +
+        return Status::InvalidArgument("tuple key column '" +
                                         std::string(NameView(schema.columns.front().name)) +
                                         "' must be an integer type - it carries the Keystone id");
     }

@@ -365,7 +365,7 @@ void CabinStore::Rebuild(const CabinKey& key, const CabinSet& viewed,
     // **The same storage the heal walked, or nothing.** An `Unobserve` and
     // a re-record between the walk and this call leave a different set
     // under this key, and replacing its first entries with a rebuild of
-    // the old one would drop live pks it holds there. Identity, not size:
+    // the old one would drop live tuple keys it holds there. Identity, not size:
     // two sets of one length are not one set.
     //
     // **An announced build is covered by the same test and needs no second

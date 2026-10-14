@@ -931,7 +931,7 @@ Status StartRow(const catalog::Schema& schema, const catalog::RowLayout& layout,
     if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
     if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
     // The Keystone word leads every tuple (heap-and-tuple.md section 4).
-    // The pk column is therefore *not* encoded into the body: storing it
+    // The tuple key column is therefore *not* encoded into the body: storing it
     // twice is how the two copies come to disagree.
     auto word = Keystone::Encode(id, /*flags=*/0, /*reserved=*/0);
     if (!word.ok()) return word.status();
@@ -953,7 +953,7 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
     const std::size_t expected = schema.columns.size() - 1;
     if (values.size() != expected) {
         return Status::InvalidArgument("expected " + std::to_string(expected) +
-                                        " value(s) after the primary key, got " +
+                                        " value(s) after the tuple key, got " +
                                         std::to_string(values.size()));
     }
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
@@ -1137,7 +1137,7 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     auto id = KeystoneIdOfPayload(payload);
     if (!id.ok()) return id.status();
 
-    // The pk is not in the body: it lives in the Keystone word, which is
+    // The tuple key is not in the body: it lives in the Keystone word, which is
     // why the loop below starts at column 1.
     out[0].type = parser::ValueType::kInt;
     out[0].int_val = static_cast<std::int64_t>(id.value());
@@ -1385,7 +1385,7 @@ std::optional<ScanKernelTerm> CompileScanKernelTerm(const catalog::Schema& schem
 
     if (column == 0) {
         // The Keystone id, compared as the int64 the decoder makes of it. A
-        // `uint64` pk compares through `ValueAsUint64` and is left to the
+        // `uint64` tuple key compares through `ValueAsUint64` and is left to the
         // residual; the id fits 48 bits, so taking it in later is a matter
         // of the literal's range alone.
         if (col.type_val == kTypeValUint64 || literal.type != parser::ValueType::kInt) return {};

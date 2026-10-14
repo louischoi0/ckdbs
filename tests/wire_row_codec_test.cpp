@@ -477,7 +477,7 @@ TEST(WireRowBatchTest, TheByteLayoutIsWhatTheSpecSays) {
     }
 }
 
-// ---- A pk declared narrower than 64 bits travels as u64 ------------------
+// ---- A tuple key declared narrower than 64 bits travels as u64 ------------------
 //
 // protocol.md §6: field 0 of every user relation is the Keystone id as u64,
 // whatever integer width the column declares - the width is display
@@ -485,7 +485,7 @@ TEST(WireRowBatchTest, TheByteLayoutIsWhatTheSpecSays) {
 // used to write it at the declared width, so an id past it reached the
 // client as another number.
 
-TEST(WireRowBatchTest, AnInt32PkAboveItsDeclaredWidthReachesTheClientWhole) {
+TEST(WireRowBatchTest, AnInt32TupleKeyAboveItsDeclaredWidthReachesTheClientWhole) {
     const auto schema = SchemaOf({Column(0, "id", catalog::kTypeValInt32),
                                   Column(1, "v", catalog::kTypeValInt64)});
     // A Keystone id inside the id space and past int32.
@@ -500,7 +500,7 @@ TEST(WireRowBatchTest, AnInt32PkAboveItsDeclaredWidthReachesTheClientWhole) {
     EXPECT_EQ(DecodeInt(rows.value()[0][0].bytes).value(), id);
 }
 
-TEST(WireRowBatchTest, ANarrowPkIsDescribedEightBytesUnderItsDeclaredType) {
+TEST(WireRowBatchTest, ANarrowTupleKeyIsDescribedEightBytesUnderItsDeclaredType) {
     const auto fields = DescribeSchema(SchemaOf({Column(0, "id", catalog::kTypeValInt8),
                                                  Column(1, "v", catalog::kTypeValInt8)}));
     EXPECT_EQ(fields[0].type_oid, catalog::kTypeValInt8) << "the declared type stays named";

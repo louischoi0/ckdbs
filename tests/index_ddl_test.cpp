@@ -188,13 +188,13 @@ TEST_F(IndexDdlTest, AHeapRelationIsRefusedAndSaysWhy) {
     EXPECT_NE(out.find("heap-clustered"), std::string::npos) << out;
 }
 
-TEST_F(IndexDdlTest, ThePrimaryKeyAndAnUnknownColumnAreBothRefused) {
+TEST_F(IndexDdlTest, TheTupleKeyAndAnUnknownColumnAreBothRefused) {
     ASSERT_EQ(Run("CREATE TABLE t (id int64, owner int64) BTREE").response.substr(0, 3),
               "CRE");
 
-    const std::string on_pk = Run("CREATE INDEX ix ON t (id)").response;
-    EXPECT_EQ(on_pk.substr(0, 3), "ERR") << on_pk;
-    EXPECT_NE(on_pk.find("clustered tree"), std::string::npos) << on_pk;
+    const std::string on_tuple_key = Run("CREATE INDEX ix ON t (id)").response;
+    EXPECT_EQ(on_tuple_key.substr(0, 3), "ERR") << on_tuple_key;
+    EXPECT_NE(on_tuple_key.find("clustered tree"), std::string::npos) << on_tuple_key;
 
     const std::string absent = Run("CREATE INDEX ix ON t (nope)").response;
     EXPECT_EQ(absent.substr(0, 3), "ERR") << absent;

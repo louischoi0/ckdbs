@@ -23,7 +23,7 @@
 // funnels through it.
 //
 // The equivalence that matters is txn.md section 10-9's: **the probe path
-// and the scan path return identical bytes for the same pk under the same
+// and the scan path return identical bytes for the same tuple key under the same
 // read view**. That is what makes invariant 9's fall-through safe. A miss
 // falls back to a walk, and if the two could disagree about visibility, a
 // Waystone miss would change the answer rather than only the cost.

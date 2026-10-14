@@ -3,7 +3,7 @@
 Status: **DECIDED** — C1–C7 fixed; items marked `[PROPOSED]` / `[OPEN]`
 are not.
 Depends on: **`docs/rules/keystoneid-invariant.md` (K1–K5, adopted)**,
-Keystone pk contract (super column), B+tree pk facade (B1–B3), patterns +
+Keystone tuple key contract (super column), B+tree tuple key facade (B1–B3), patterns +
 fingerprint (P-series), waystone trail model, thread-per-core
 cooperative scheduling, MVCC undo-chain model.
 Related docs: `waystone-concpets.md`, `pattern-tracking-levels.md`,
@@ -13,7 +13,7 @@ Related docs: `waystone-concpets.md`, `pattern-tracking-levels.md`,
 Decisions fixed by this spec:
 
 - **C1** — Cabin is authoritative **only for observed values**.
-- **C2** — entries store **Keystone ids (pks), never tuple locations**.
+- **C2** — entries store **Keystone ids (tuple keys), never tuple locations**.
 - **C3** — expression (filtered-index style) cabins are **out of v1**.
 - **C4** — Cabin, Waystone, and patterns are distinct structures that
   **interlock cooperatively**; none absorbs another.
@@ -21,8 +21,8 @@ Decisions fixed by this spec:
   full coverage is permitted, at which point a Cabin converges to a
   lazily built secondary index.
 - **C6** — entries carry a **location hint** (page, epoch, slot)
-  alongside the pk: advisory, reader-verified under the same rules as
-  waystone entries, falling back to pk descent and healed in place on
+  alongside the tuple key: advisory, reader-verified under the same rules as
+  waystone entries, falling back to tuple key descent and healed in place on
   failure. Entry size 24 B.
 - **C7** — a column declares at `CREATE TABLE` **who may decide** it
   carries a Cabin: `NO CABIN` (never, by any route), `CABIN AUTO` (the
@@ -45,7 +45,7 @@ Three structures share the access path, one per trust class:
 
 | structure | authority | write cost | droppable |
 |---|---|---|---|
-| clustered pk tree | always authoritative | per-write maintenance | never |
+| clustered tuple key tree | always authoritative | per-write maintenance | never |
 | **Cabin** | **authoritative for observed values** | probe + append, observed values only | per value |
 | Waystone trail | never authoritative (advisory) | zero | wholesale |
 
@@ -53,8 +53,8 @@ Cabin's defining invariant (the whole spec hangs on it), stated
 precisely — per snapshot, and one-sided:
 
 > **Observed ⇒ complete (superset form).** For every observed value `v`
-> and every active snapshot `S`: v's entry set ⊇ { pk : tuple visible
-> in S whose key column equals v }. Missing a qualifying pk violates
+> and every active snapshot `S`: v's entry set ⊇ { tuple key : tuple visible
+> in S whose key column equals v }. Missing a qualifying tuple key violates
 > authority; a surplus entry never does — surplus is removed at read
 > time by verification (§4). The empty set (after verification) is an
 > authoritative "no rows".
@@ -73,7 +73,7 @@ Two corollaries fall out:
 
 ## 2. Scope (v1)
 
-- Key: a **single non-pk column** with an equality predicate. The pk
+- Key: a **single non-tuple-key column** with an equality predicate. The tuple key
   column needs no Cabin (the clustered tree is its Cabin).
 - **C3**: no predicate-scoped cabins (`WHERE state='closed'` subsets),
   no multi-column keys, no range observation. The v1 shape is
@@ -90,7 +90,7 @@ observed set     := { value → entry-set ref }        — the directory
 entry set (v)    := list of CabinEntry               — C2 + C6
 
 CabinEntry (24 B):
-  pk           u64   — Keystone id            (authoritative tier)
+  tuple_key    u64   — Keystone id            (authoritative tier)
   page_id      u32   — last-seen heap page    (advisory tier)
   page_epoch   u32   — heap epoch at write
   slot         u16
@@ -98,7 +98,7 @@ CabinEntry (24 B):
   reserved     u32
 ```
 
-**C2 — authority lives in the pk, never the location.** The pk is
+**C2 — authority lives in the tuple key, never the location.** The tuple key is
 resolved through the clustered tree when the hint fails; under the
 adopted issue-once invariant (K1/K2) a stored id is an
 **immutable name**: it can dangle, and a committed id names another row
@@ -108,15 +108,15 @@ read-time key re-check filters. This buys four things:
 
 1. **Relocation invariance** — the physical optimizer moves pages
    without ever touching a Cabin, exactly as decided for secondary
-   indexes in B2 (value = pk indirection). An authoritative structure
+   indexes in B2 (value = tuple key indirection). An authoritative structure
    that required maintenance on relocation would couple two subsystems
    that are deliberately independent.
-2. **No incarnation checks** — a pk needs no epoch or identity
+2. **No incarnation checks** — a tuple key needs no epoch or identity
    protocol; by K1 there is at most one committed tuple it can mean at any
    instant, and a rolled-back or purged key named again is caught by the
    read-time key re-check. MVCC
    visibility is evaluated on the tuple as always.
-3. **Dangling ⇒ skip** — a pk absent from the clustered tree names no
+3. **Dangling ⇒ skip** — a tuple key absent from the clustered tree names no
    row now. A committed key names another row only after a `PURGE` freed
    it, and an engine-internal purge would leave a keyed tombstone (K1's
    purge obligation). A rolled-back insert's key, and a purged one, is
@@ -131,9 +131,9 @@ read-time key re-check filters. This buys four things:
 advice riding on cabin-class truth: verified by the reader under the
 **same rules as waystone entries** (shared validation code, not a
 parallel implementation — two verifiers would be where the bugs live):
-fetch hinted page → epoch match → Keystone id at slot equals entry pk →
+fetch hinted page → epoch match → Keystone id at slot equals entry tuple key →
 then the mandatory MVCC + key re-check of §4. Any failure falls back
-to pk descent — results never change — and the hint is **healed in
+to tuple key descent — results never change — and the hint is **healed in
 place** after a successful fallback (under the set's partition latch, and
 WAL-free in the unlogged class of §9). Hints cost
 nothing to produce: the recording scan and the insert hook both hold
@@ -144,7 +144,7 @@ same-page tuples into one fetch under the no-pin R1 regime.
 ## 4. Read path
 
 Compilation stays deterministic: whether `(rel, col)` has a Cabin is
-catalog state, so the plan remains `f(shape, catalog)` — a non-pk
+catalog state, so the plan remains `f(shape, catalog)` — a non-tuple-key
 equality step on a cabined column compiles to a **cabin probe with scan
 fallback**; nothing about the *data* influences the plan.
 
@@ -154,14 +154,14 @@ At execution, for key value `v`:
    partition latch).
 2. **Hit** → serve the entry set authoritatively. Per entry: try the
    location hint first (C6 verification — epoch, then id-at-slot);
-   on hint failure resolve the pk via the clustered tree and heal the
+   on hint failure resolve the tuple key via the clustered tree and heal the
    hint. Either way, then **verify** — MVCC visibility for this
    snapshot, plus re-check of the key-column equality — and apply
    remaining residuals. Verification is not an optimization choice: it
    is what licenses the append-only maintenance model of §5 (entry
-   sets are supersets; the read does the subtraction). A pk absent
+   sets are supersets; the read does the subtraction). A tuple key absent
    from the clustered tree is a **skip**, never an error, and
-   duplicate pks within a set are served once (seen-set dedup —
+   duplicate tuple keys within a set are served once (seen-set dedup —
    duplicates are expected under append-only maintenance, §5). An
    empty post-verification result returns zero rows with authority.
 3. **Miss** → run the authoritative scan as today, and (policy
@@ -171,7 +171,7 @@ At execution, for key value `v`:
 
 The miss path is why the first query for a value costs nothing extra in
 big-O: it was going to scan anyway; recording is a side effect. In the
-constant, the recording walk decodes the filter's columns, and the pk
+constant, the recording walk decodes the filter's columns, and the tuple key
 only for a row whose key matches — everything the recording reads and
 nothing else — so what recording adds to the walk it shadows is one key
 comparison per walked row.
@@ -252,11 +252,11 @@ bounded-work property a completed walk would break, and the mode is never
 set on a top-level runner.
 
 **The serve emits in the walk's order, not entry order.** An UPDATE that
-moves an earlier pk into an observed value appends that pk at the set's
+moves an earlier tuple key into an observed value appends that tuple key at the set's
 end, and serving entry-order would reorder a reply against I12's
 within-step contract — reachable by a plain single-relation probe, not
 only by a join. The serve sorts to the walk's order before emission, which is
-pk order — a page's slot order is its key order (`heap-and-tuple.md`
+tuple key order — a page's slot order is its key order (`heap-and-tuple.md`
 §4.1: a btree leaf's by placement, BD-R1) — IX8a's rule.
 
 ### 4b. What a set speaks for, and what a step may answer from it
@@ -286,18 +286,18 @@ entitled to match the entry through the undo chain. Per Cabin:
 
 | operation | action | why it preserves authority |
 |---|---|---|
-| INSERT | probe observed(new.v); on hit, **append** pk — O(1), no scan | a missed append is the only way completeness can break |
+| INSERT | probe observed(new.v); on hit, **append** tuple key — O(1), no scan | a missed append is the only way completeness can break |
 | DELETE | **nothing** — removal forbidden | older snapshots still see the row via undo; read-time visibility excludes it for newer ones |
 | UPDATE, key column unchanged | nothing | — |
-| UPDATE, key v→v′ | **append** pk to v′'s set if v′ observed; leave v's set untouched | v′ readers need the entry; v's entry is *required* by pre-update snapshots and is a read-filtered surplus for newer ones |
+| UPDATE, key v→v′ | **append** tuple key to v′'s set if v′ observed; leave v's set untouched | v′ readers need the entry; v's entry is *required* by pre-update snapshots and is a read-filtered surplus for newer ones |
 
-(UPDATE of the pk itself does not exist: K2 makes it Unsupported.)
+(UPDATE of the tuple key itself does not exist: K2 makes it Unsupported.)
 
 Nothing prunes: a surplus entry stays until its value is un-observed.
 Any physical removal of surplus entries is bound by two rules, one per
 class:
 
-- **Dangling entries** — pk not present in the clustered tree. A
+- **Dangling entries** — tuple key not present in the clustered tree. A
   committed key names another row only after a `PURGE`, and a rolled-back
   or purged key named again is re-checked against the key column and
   witnessed by its own insert (W12, BD-R4, `heap-and-tuple.md` §4.1c):
@@ -358,7 +358,7 @@ the announce and resolving afterwards:
   rollback, so no append repairs it.
 
 Both are the C1 break the store's header forbids in as many words
-("missing a qualifying pk violates authority"). The second, in nine
+("missing a qualifying tuple key violates authority"). The second, in nine
 operations:
 
 ```sql
@@ -485,10 +485,10 @@ Distinct trust classes, cooperative operation; none replaces another:
 - **Cabin serves; Waystone still accelerates.** In a chain like
   `…FROM account JOIN trade ON trade.account_id = account.id WHERE
   trade.sym = $sym`, the sym step is served by the Cabin
-  (authoritative), the pk join step by probe/trail replay (advisory),
+  (authoritative), the tuple key join step by probe/trail replay (advisory),
   and location hints on cabin entries (C6) are waystone-class advice
   riding on cabin-class truth. Each layer degrades independently:
-  hints go stale → pk descent; value evicted → scan; trail evicted →
+  hints go stale → tuple key descent; value evicted → scan; trail evicted →
   descent. Correctness never depends on any of them.
 - **ANALYZE narrates all three.** Per step: cabin hit/miss, trail
   replay/fallback, and the recording events themselves.
@@ -559,7 +559,7 @@ dispatcher, each handed the one collector through `OptimizerSurface`
 (AT-S8 step 3). So a relation read only from cores other than core 0
 feeds CREATE as well as EXTEND.
 
-A policy on the **primary-key column is refused**, not ignored: the pk's
+A policy on the **tuple key column is refused**, not ignored: the tuple key's
 Cabin is the clustered tree (§2), so any of the three would be a statement
 about something that cannot exist, and silently dropping the clause would
 leave an operator believing they had said something.
@@ -600,7 +600,7 @@ sys.cabins
   cabin_id     u64     (AllocateRowId(kSysCabinsTable))
   rel_oid      u64
   observed_ct  u64     (values currently observed; best-effort)
-  column_no    u16     (schema position; never 0 — the pk has no Cabin)
+  column_no    u16     (schema position; never 0 — the tuple key has no Cabin)
   origin       u8      (unset / auto / user)
   status       u8
 ```
@@ -645,7 +645,7 @@ not**.
 | Durability | Unlogged authoritative (§9); memory-resident; rebuilt by traffic after a restart | **Logged, headered authority class**: WAL-before-data, checksummed, crash-consistent, enforceable at restart with no rebuild scan |
 | Role | Advisory acceleration — chooses where to look | Authoritative constraint substrate — decides whether a write is admitted |
 | Entry size | 24 B (`stats::CabinEntry`, C6) | **32 B** — the same fields plus the row's aggregate value inline |
-| Key | One non-pk column's value, held by value | The `GROUP BY` column list, hashed into a group directory |
+| Key | One non-tuple-key column's value, held by value | The `GROUP BY` column list, hashed into a group directory |
 | Instances | One per `(relation, column)` | One per **assertion** (§5.3); never shared |
 
 **The scope of the two classes differs and §4b is where the
@@ -669,7 +669,7 @@ implementation choice.
 ### 12.2 Entry layouts
 
 Observational, 24 B — `include/kds/stats/cabin_store.hpp`, pinned by its
-own `static_assert`: `pk` (u64) | `page_id` (u32) | `page_epoch` (u32)
+own `static_assert`: `tuple_key` (u64) | `page_id` (u32) | `page_epoch` (u32)
 | `slot` (u16) | `flags` (u16) | `reserved` (u32).
 
 Bound, 32 B (`BoundCabinEntry`, `include/kds/storage/cabin_bound_page.hpp`,
@@ -677,13 +677,13 @@ Bound, 32 B (`BoundCabinEntry`, `include/kds/storage/cabin_bound_page.hpp`,
 
 | Field | Width | Notes |
 |---|---|---|
-| pk | 48 bit of a u64 | Keystone id. **Authoritative**, under K1: it may dangle, and names another row only after a `PURGE` freed it - harmless, because no bound entry's pk is resolved to read a row, and `DELETE` wrote the old row's departure first - and an aborted reservation's entry is removed and marked `kEntryOrphaned` before the undo frees its key (AS6b) |
+| tuple key | 48 bit of a u64 | Keystone id. **Authoritative**, under K1: it may dangle, and names another row only after a `PURGE` freed it - harmless, because no bound entry's tuple key is resolved to read a row, and `DELETE` wrote the old row's departure first - and an aborted reservation's entry is removed and marked `kEntryOrphaned` before the undo frees its key (AS6b) |
 | flags | 8 bit | includes the `RESERVED` bit for an in-flight entry (assertion §6) |
 | reserved | 8 bit | written 0, ignored; the word is the Keystone word's layout (BK-R2) |
-| location hint (page id / epoch / slot) | 64 bit | **advisory**, verified through the one verifier `exec/tuple_verify.hpp`; on failure fall back to a pk descent and heal in place |
+| location hint (page id / epoch / slot) | 64 bit | **advisory**, verified through the one verifier `exec/tuple_verify.hpp`; on failure fall back to a tuple key descent and heal in place |
 | aggregate value | 64 bit | the row's `SUM` column value, inline (int64). For a `COUNT(*)` assertion it is written **1** |
 
-The normative facts are: **fixed 32 B, pk authoritative, hint advisory, value
+The normative facts are: **fixed 32 B, tuple key authoritative, hint advisory, value
 inline.** The packing is bound by the engine's on-disk rules —
 `static_assert` on size and offsets, fixed-width integers, explicit
 shift/mask serialization, no compiler bitfields. The class has its own page

@@ -278,7 +278,7 @@ TEST_F(KwpSessionTest, ASelectStarDescribesTheWholeSchema) {
         << "field 0 of every user relation is the Keystone id";
 }
 
-TEST_F(KwpSessionTest, ANarrowPkPastItsDeclaredWidthReachesTheClientWhole) {
+TEST_F(KwpSessionTest, ANarrowTupleKeyPastItsDeclaredWidthReachesTheClientWhole) {
     // protocol.md §6: a relation's column 0 is its Keystone id, u64 on the
     // wire whatever integer width it declares - in any projected position
     // and on a joined relation as much as the first one.

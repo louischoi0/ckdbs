@@ -45,7 +45,7 @@ StatusOr<PurgeOutcome> PurgeKey(storage::PageStore& store, wal::WalManager* wal,
         // leaves (BH-R7).
         if (!released.ok()) {
             return released.status().WithMessage(
-                released.status().message() + "; primary key " + std::to_string(id) +
+                released.status().message() + "; tuple key " + std::to_string(id) +
                 " is purged, and its spill at page " + std::to_string(page_id) + " slot " +
                 std::to_string(slot) + " and any after it are not released");
         }
@@ -53,7 +53,7 @@ StatusOr<PurgeOutcome> PurgeKey(storage::PageStore& store, wal::WalManager* wal,
         // update, so its absence is a defect, not a crash (the outcome's
         // own rule in `varheap_release.hpp`).
         if (released.value() == txn::ReleaseOutcome::kNothingToRelease) {
-            return Status::Corruption("purge of primary key " + std::to_string(id) +
+            return Status::Corruption("purge of tuple key " + std::to_string(id) +
                                       ": its spill at page " + std::to_string(page_id) +
                                       " slot " + std::to_string(slot) + " does not exist");
         }

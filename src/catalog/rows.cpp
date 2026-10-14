@@ -309,7 +309,7 @@ StatusOr<SysCabinRow> SysCabinRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&row.status, base + kStatusOffset, sizeof(row.status));
     // Pure, like its neighbours: whether `origin` and `status` name real
     // values is the acting layer's question, and `column_no == 0` - a row
-    // claiming a Cabin on the pk - is CreateCabin()'s to refuse, not this
+    // claiming a Cabin on the tuple key - is CreateCabin()'s to refuse, not this
     // function's to reinterpret.
     return row;
 }
@@ -336,7 +336,7 @@ StatusOr<SysFkeyRow> SysFkeyRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&row.child_column_no, base + kChildColumnNoOffset, sizeof(row.child_column_no));
     std::memcpy(&row.flags, base + kFlagsOffset, sizeof(row.flags));
     // Pure, like its neighbours: a `child_column_no == 0` - a foreign key
-    // claiming the child's own pk - is CreateForeignKey()'s to refuse, and
+    // claiming the child's own tuple key - is CreateForeignKey()'s to refuse, and
     // whether the two oids name live relations is a question this function
     // has no catalog to ask.
     return row;

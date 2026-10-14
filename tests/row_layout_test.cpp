@@ -62,7 +62,7 @@ TEST(RowLayoutTest, OffsetsStartAtTheKeystoneWordAndRunInColumnOrder) {
     ASSERT_TRUE(layout.ok());
     ASSERT_EQ(layout.value().offsets.size(), 4u);
 
-    // The pk lives *only* in the Keystone word, so column 0 is that word
+    // The tuple key lives *only* in the Keystone word, so column 0 is that word
     // and the body starts after it (invariant 11).
     EXPECT_EQ(layout.value().offsets[0], 0u);
     EXPECT_EQ(layout.value().offsets[1], kKeystoneWordSize);

@@ -19,13 +19,13 @@
 //
 // ---- What this is, next to heap_chain.hpp -------------------------------
 //
-// A heap-clustered relation is a linked list of pages: point lookup by pk
+// A heap-clustered relation is a linked list of pages: point lookup by tuple key
 // is O(pages), and a range scan has to start at the head. This is the
 // same tuple storage with an index above it - the
 // leaves *are* heap pages (heap_page.hpp's CreateEmptyAs under a
 // kBtreeLeaf header), linked by the same `next_page_id`, holding the same
 // slotted tuples with the same MVCC header. What is added is the internal
-// levels (btree_page.hpp), which turn a pk lookup into O(log n) page
+// levels (btree_page.hpp), which turn a tuple key lookup into O(log n) page
 // fetches and let a range scan start at the first qualifying leaf.
 //
 // Reusing the leaf body rather than defining a second tuple format is
@@ -42,7 +42,7 @@
 // directory entries after it move up one, no tuple byte moves, and every
 // keyed slot of a leaf - live and delete-marked - ascends by Keystone id,
 // whatever order keys arrive in and at every core count. That is the
-// premise the `ORDER BY <pk>` elision reads, and `SearchLeaf` below is the
+// premise the `ORDER BY <tuple key>` elision reads, and `SearchLeaf` below is the
 // one binary search every caller asks. An insert logs `BTREE_INSERT`, whose
 // redo shifts as the placement did.
 //
@@ -152,7 +152,7 @@ struct LeafPosition {
 };
 StatusOr<LeafPosition> SearchLeaf(heap::PageView& leaf, std::uint64_t id);
 
-// The duplicate a named key meets (BD-R5's first reason): *"duplicate primary
+// The duplicate a named key meets (BD-R5's first reason): *"duplicate tuple
 // key k"*, or *"... k: a row with this key was deleted; PURGE frees its
 // key"* for a delete-marked row (BD-R4's tombstone, which a `PURGE` retires;
 // BH-Q13).
@@ -242,7 +242,7 @@ StatusOr<std::optional<Location>> BtreeHoldTombstone(storage::PageStore& store, 
                                                      std::uint64_t id,
                                                      std::uint64_t deleter_trx_id);
 
-// Calls `fn` once per slot of every leaf, left to right - which is pk
+// Calls `fn` once per slot of every leaf, left to right - which is tuple key
 // order page by page, and within a leaf slot order, which is key order on
 // every leaf (BD-R1). Signature matches heap::ChainVisit deliberately, so a
 // caller can hand the same lambda to either - `access` and the

@@ -420,8 +420,8 @@ Unsupported	a6d47bc00b1c1048	cbf29ce484222325	e0142405ae5d7287	SELECT * FROM t W
 # head. These read NotImplemented since 2026-08-31, and the older argument
 # for calling them architectural is what changed: it was that a derived
 # table's result would have to become a relation probed by something other
-# than a pk, and `exec::InnerBuild` (join-inner-build.md) now buckets a
-# statement-scoped row set and probes it by a non-pk key. The shape is
+# than a tuple key, and `exec::InnerBuild` (join-inner-build.md) now buckets a
+# statement-scoped row set and probes it by a key other than the tuple key. The shape is
 # unbuilt, not excluded.
 # [BU-S1] a bare `NOT` over a predicate parses since 2026-10-13; the
 # hashes did not move.

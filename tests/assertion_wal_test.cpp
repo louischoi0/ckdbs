@@ -57,9 +57,9 @@ std::span<const std::byte> Bytes(const std::string& s) {
     return std::as_bytes(std::span<const char>(s.data(), s.size()));
 }
 
-BoundCabinEntry Entry(std::uint64_t pk, std::int64_t value, std::uint8_t flags) {
+BoundCabinEntry Entry(std::uint64_t tuple_key, std::int64_t value, std::uint8_t flags) {
     BoundCabinEntry entry;
-    entry.pk = pk;
+    entry.tuple_key = tuple_key;
     entry.value = value;
     entry.flags = flags;
     return entry;
@@ -199,7 +199,7 @@ TEST(AssertPayloadTest, EntryPayloadRoundTripsAndLengthsComeFromTheSpans) {
 
     const BoundCabinEntry back = storage::cabin::DecodeEntry(
         std::span<const std::byte, kEntryBytes>(d.entry.data(), kEntryBytes));
-    EXPECT_EQ(back.pk, 77u);
+    EXPECT_EQ(back.tuple_key, 77u);
     EXPECT_EQ(back.value, -5);
     EXPECT_TRUE(back.reserved());
 }
@@ -314,11 +314,11 @@ protected:
 
     // One entry through the live side - build or reservation - returning the
     // index it took, with the record appended to the log.
-    std::uint16_t LiveEntry(wal::RecordType type, std::uint64_t txn_id, std::uint64_t pk,
+    std::uint16_t LiveEntry(wal::RecordType type, std::uint64_t txn_id, std::uint64_t tuple_key,
                             std::int64_t value, std::int64_t group) {
         const std::uint8_t flags =
             type == wal::RecordType::kAssertReserve ? kEntryReserved : std::uint8_t{0};
-        BoundCabinEntry entry = Entry(pk, value, flags);
+        BoundCabinEntry entry = Entry(tuple_key, value, flags);
         // The live writer's order (AS6a): the group's id is assigned and
         // stamped onto the entry *before* the page append, because the append
         // precedes the Apply that would otherwise create the group.

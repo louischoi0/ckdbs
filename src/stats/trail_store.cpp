@@ -16,14 +16,14 @@ namespace {
 // location to the Keystone-id check (R4's pairing rule).
 WaystoneEntry EntryOf(const exec::TouchedTuple& touched) noexcept {
     WaystoneEntry entry{};
-    entry.pk = touched.pk;
+    entry.tuple_key = touched.tuple_key;
     entry.rel_oid = touched.rel_oid;
     entry.page_id = touched.page_id;
     entry.page_epoch = static_cast<std::uint32_t>(touched.page_epoch);
     entry.slot = touched.slot;
     entry.step_id = touched.step_id;
-    // Never inferred from `pk != 0`: a never-written entry reads back
-    // all-zero, and pk 0 with page_id 0 are both plausible-looking values
+    // Never inferred from `tuple key != 0`: a never-written entry reads back
+    // all-zero, and tuple key 0 with page_id 0 are both plausible-looking values
     // (waystone.hpp).
     entry.flags = kWaystoneEntryValid;
     entry.reserved = 0;
@@ -56,7 +56,7 @@ bool TrailIsUnchanged(std::span<const std::byte, kPageSize> page, const Instance
         if (!stored.ok()) return false;
         const WaystoneEntry want = EntryOf(touched[i]);
         const WaystoneEntry& got = stored.value();
-        if (got.pk != want.pk || got.rel_oid != want.rel_oid || got.page_id != want.page_id ||
+        if (got.tuple_key != want.tuple_key || got.rel_oid != want.rel_oid || got.page_id != want.page_id ||
             got.slot != want.slot || got.step_id != want.step_id ||
             got.page_epoch != want.page_epoch || got.flags != want.flags) {
             return false;

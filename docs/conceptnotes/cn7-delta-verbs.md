@@ -109,9 +109,9 @@ The hot-row shape AT-S13 measured is unchanged by this note (§7).
 `[source-read]` unless marked.
 
 - **`UPDATE` is a `SET` list of values and a `WHERE`** (`sql.md:536`,
-  `ast.hpp:709-713`). The pk cannot be assigned, refused `Unsupported`
+  `ast.hpp:709-713`). The tuple key cannot be assigned, refused `Unsupported`
   with the column's byte at compile (`sql.md:538-546`, K2). The same
-  refusal covers `INC` on the pk (§3).
+  refusal covers `INC` on the tuple key (§3).
 - **No `RETURNING` exists**; the write reply is `UPDATED <n>`
   (`sql.md:548`). A write that returns rows needs the row-description and
   row-batch frames a `SELECT` sends, on a write's reply (O6).
@@ -158,7 +158,7 @@ The hot-row shape AT-S13 measured is unchanged by this note (§7).
   `INC col BY -v` at the executor and keeps its own spelling for the
   reader's sake.
 - **Admissible columns (R2).** Any column of `int64`, `DECIMAL(p,s)` or
-  `DECIMAL128(p,s)`. The pk is refused as it is for `SET` (K2, same
+  `DECIMAL128(p,s)`. The tuple key is refused as it is for `SET` (K2, same
   message, same byte). Any other type is `Unsupported` naming the type
   and the byte. Nothing in the catalog marks a column; the check is the
   compile-time type check every assignment already gets.
@@ -274,12 +274,12 @@ are not repeated here.
 
 | # | question | CLA's proposal |
 |---|---|---|
-| O1 | Verb spelling | **`INC col BY v` / `DEC col BY v`** inside `UPDATE`, so the statement class, the `WHERE` production and the pk refusal are `UPDATE`'s. Not a new top-level statement |
+| O1 | Verb spelling | **`INC col BY v` / `DEC col BY v`** inside `UPDATE`, so the statement class, the `WHERE` production and the tuple key refusal are `UPDATE`'s. Not a new top-level statement |
 | O2 | Admissible types | **`int64`, `DECIMAL`, `DECIMAL128`**; everything else `Unsupported` with the type and the byte. No implicit widening: the delta takes the column's type. **(BJ)** BJ-Q2 (a), if marked, admits widening within a family for an expression `SET`; O2 would then diverge from it, and the two are reconciled when the second is marked |
 | O3 | Mixing `SET` and `INC` in one statement | **Refused in v1**, `Unsupported` at the second verb's byte. Two statements in one transaction cost nothing this cannot |
 | O4 | `INC` on a `NULL` value | **Leave `NULL`, do not count the row as updated**, and say so in the manual. The alternative — treat `NULL` as zero — is a silent coercion the type system elsewhere refuses |
 | O5 | Log record | **A `kHeapDelta` type** (§4). The overwrite record is correct and would do; the delta record is the one that says what the statement said, and is smaller on wide rows |
 | O6 | `RETURNING` on a write's reply | **Row description + row batches + `UPDATED <n>`**, the `SELECT` frames on a write, no new frame. `protocol.md` owns the sequence and says whether a client that did not ask for rows can receive them |
 | O7 | Measurement gate | **None before the stage.** The path is `UPDATE`'s with one addition. The stage's row states "not measured"; the first AS-E cell that includes it confirms `INC` ≈ `SET` and reports the `RETURNING` reply's cost |
-| O8 | Target rows | **Point and set alike**, as `UPDATE` is. Restricting to the pk point would be a limit the lock model does not require |
+| O8 | Target rows | **Point and set alike**, as `UPDATE` is. Restricting to the tuple key point would be a limit the lock model does not require |
 | O9 | The ledger tier's home | **Out of CN-7** (§6): a physical-optimizer note, opened only after AX lands and AT-S13's C3 driver is re-run to price hot-row contention without the wait gap. **(BJ)** BJ's `SET v = v + 1` is a second shape for that driver to price: the same borrow and the same wait as `INC`, so the ledger's note prices both |

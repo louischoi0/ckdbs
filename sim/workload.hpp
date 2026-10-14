@@ -7,8 +7,8 @@
 //
 //     CREATE TABLE (heap and btree clustered_type; int columns plus one
 //     varchar, sized to land on both sides of inline_cell_width)
-//     INSERT, pk point SELECT, pk BETWEEN range, non-pk FilterScan, SYNC
-//     UPDATE and DELETE, each by pk and by a non-key predicate   (v2)
+//     INSERT, tuple key point SELECT, tuple key BETWEEN range, non-tuple-key FilterScan, SYNC
+//     UPDATE and DELETE, each by tuple key and by a non-key predicate   (v2)
 //     BEGIN / COMMIT / ROLLBACK, isolation level drawn per transaction (v2)
 //     CREATE CABIN                                                (v2)
 //
@@ -24,7 +24,7 @@
 // rewrites a tagged cell that may spill to the var-heap. The engine's
 // rules differ across that line (the Cabin's append-only rule, var-heap
 // immutability per version, invariant 13's fixed row size) and a generator
-// that only ever wrote one of them would exercise half of it. The primary
+// that only ever wrote one of them would exercise half of it. The tuple
 // key is never assigned: invariant 11 makes that a compile-time refusal,
 // not a case to generate — SIM12's job, not this one's.
 //
@@ -61,7 +61,7 @@ struct Op {
     enum class Kind : std::uint8_t {
         kCreateTable,
         kInsert,
-        kSelectPk,
+        kSelectTupleKey,
         kSelectRange,
         kFilterScan,
         kSync,
@@ -72,7 +72,7 @@ struct Op {
         kRollback,
         kCreateCabin,
         // A named key (BD, `instructions/v3.0.0/workorder-bd-sorted-leaf-
-        // named-keys.md`): `key` is the pk the INSERT names. Placed where it
+        // named-keys.md`): `key` is the tuple key the INSERT names. Placed where it
         // sorts, or refused as a duplicate or as exhausted (BD-R5) - the
         // oracle says which.
         kInsertNamed,
@@ -92,16 +92,16 @@ struct Op {
     std::string table;
     std::string sql;
     // Semantic fields the oracle needs to build its expectation.
-    std::uint64_t key = 0;       // kSelectPk, kInsertNamed; kUpdate/kDelete when by_pk
+    std::uint64_t key = 0;       // kSelectTupleKey, kInsertNamed; kUpdate/kDelete when by_tuple_key
     std::uint64_t lo = 0;        // kSelectRange, kPurge
     std::uint64_t hi = 0;        // kSelectRange, kPurge
     std::int64_t v = 0;          // kInsert(Named), kFilterScan; kUpdate's new v
     std::string name;            // kInsert(Named); kUpdate's new name
     bool btree = false;          // kCreateTable
 
-    // kUpdate / kDelete: the predicate is `id = key` when by_pk, else
+    // kUpdate / kDelete: the predicate is `id = key` when by_tuple_key, else
     // `v = pred_v`. kUpdate assigns `name` when set_name, else `v`.
-    bool by_pk = false;
+    bool by_tuple_key = false;
     std::int64_t pred_v = 0;
     bool set_name = false;
 };
@@ -124,7 +124,7 @@ private:
         std::string name;
         bool btree;
         std::uint64_t inserted = 0;  // the id-guessing counter, not truth
-        // Keys a named INSERT reuses (BD-R9): ones a DELETE by pk named,
+        // Keys a named INSERT reuses (BD-R9): ones a DELETE by tuple key named,
         // and ones a rolled-back transaction named - a deleted key is a
         // duplicate for good, a rolled-back one is free (W12).
         std::vector<std::uint64_t> deleted;
@@ -139,8 +139,8 @@ private:
         std::uint64_t fresh = std::uint64_t{1} << 39;
         // The first fresh key moves the mark to just above it, so every id
         // issued after it lands in a high band: `high_base` is its first id,
-        // and `high_inserted` counts the omitted-pk inserts into it, so the
-        // pk-targeted ops can still aim at the rows issued there.
+        // and `high_inserted` counts the omitted-tuple key inserts into it, so the
+        // tuple-key-targeted ops can still aim at the rows issued there.
         std::uint64_t high_base = 0;
         std::uint64_t high_inserted = 0;
         // Dropped, or dropped by the open transaction: no op names it again.

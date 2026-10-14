@@ -43,7 +43,7 @@ enum class StatusCode {
     // **The test is whether a later release could lift it without changing
     // the architecture.** If it could, the refusal is kNotImplemented. This
     // code is for the refusals where it could not: one falls out of a hard
-    // invariant (a pk UPDATE, invariant 11 - the id is the tuple's identity
+    // invariant (a tuple key UPDATE, invariant 11 - the id is the tuple's identity
     // and not a field of it), out of a fixed structure's ceiling (the
     // subquery nesting depth), out of a format
     // (comparing decimals of different width or scale, which are different
@@ -108,7 +108,7 @@ enum class StatusCode {
     //
     // **Its whole reason for existing is that it is not retryable.** Every
     // other refusal in this enum means "nothing happened" - a retry is at
-    // worst wasted work. This one does not, and the engine issues primary
+    // worst wasted work. This one does not, and the engine issues tuple
     // keys, so a client that retried on it would insert the row twice with
     // two different ids and no way to notice. Folding it into
     // kTxnConflict, which is where a timeout would naturally land, is

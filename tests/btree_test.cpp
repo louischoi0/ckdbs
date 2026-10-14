@@ -725,7 +725,7 @@ TEST(BtreeTest, ADuplicateIsRefusedEvenAfterTheTreeHasBranched) {
 
     // The one that matters: an id whose leaf is no longer the root. If the
     // descent routed to the wrong leaf, this would be accepted and the
-    // relation would hold two rows with one primary key.
+    // relation would hold two rows with one tuple key.
     auto dup = tree.Insert(17, kOnePerLeafFiller);
     EXPECT_FALSE(dup.ok());
     EXPECT_EQ(dup.status().code(), StatusCode::kAlreadyExists);
@@ -1890,7 +1890,7 @@ TEST(BtreeTest, ADuplicateKeyIsRefusedAndADeletedOneSaysItIsBoundOnce) {
     auto live = tree.Insert(2, kSmallFiller);
     ASSERT_FALSE(live.ok());
     EXPECT_EQ(live.status().code(), StatusCode::kAlreadyExists) << live.status().message();
-    EXPECT_NE(live.status().message().find("duplicate primary key 2"), std::string::npos)
+    EXPECT_NE(live.status().message().find("duplicate tuple key 2"), std::string::npos)
         << live.status().message();
 
     {
