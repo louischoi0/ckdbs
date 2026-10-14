@@ -9,6 +9,9 @@ recorded in English:
   form the operator chose over a rewrite (`docs/conceptnotes/README.md`).
 - **W1:** *"Now mark that concept note [open] and write a work order that
   carries the work plan against the current code. Mark it v3.2.0."*
+- **W2:** *"Q1: (a)."* This marks BV-Q1 (a) as written: oid 146,
+  column oids from 147, root page 16, overflow at 17, superblock 24
+  refusing 23.
 
 **Written 2026-10-14; not opened for building.** W1 asks for a plan. It
 does not give the word to build, and it does not mark §4. CN-4 §8 is
@@ -302,7 +305,7 @@ close".
 | # | Question | CLA's proposal | Mark |
 |---|---|---|---|
 | BV-Q0 | Open BV whole, or stage by stage | Stage by stage, each on its gate's mark. W1 asked for the plan, not the build | — |
-| BV-Q1 | Where a Transition is stored | (a) A new row-codec catalog relation `sys.transitions` (oid 146, past the highest well-known oid as `well_known.hpp:151` requires, with a fixed run of column oids from 147 like `kSysAssertionsColumnOidBase`, because its `sys.columns` rows are written during bootstrap; root page 16, overflow moving to 17), storing the declaration's text and re-parsed into `TableAccess`; the superblock goes to 24 and refuses 23, under the standing order. (b) Rows of a new kind in `sys.assertions`: one relation for two concepts, a second meaning for one name. **(a)** | — |
+| BV-Q1 | Where a Transition is stored | (a) A new row-codec catalog relation `sys.transitions` (oid 146, past the highest well-known oid as `well_known.hpp:151` requires, with a fixed run of column oids from 147 like `kSysAssertionsColumnOidBase`, because its `sys.columns` rows are written during bootstrap; root page 16, overflow moving to 17), storing the declaration's text and re-parsed into `TableAccess`; the superblock goes to 24 and refuses 23, under the standing order. (b) Rows of a new kind in `sys.assertions`: one relation for two concepts, a second meaning for one name. **(a)** || **(a), marked by the operator 2026-10-14** (W2) |
 | BV-Q2 | The grammar | §0.1's shape. `ON DELETE FROM` lists states; `=>` is one new token. A `DROP TRANSITION` inside an explicit transaction follows `DROP ASSERTION`'s rule | — |
 | BV-Q3 | The violation code | A new `StatusCode::kTransitionViolation`, wire category 18, token `TRANSITION_VIOLATION`, non-retryable; the message names the Transition, the row id and both values (CN-4 §4) | — |
 | CN-4 T1–T8, T10 | The semantics | CN-4 §8's proposals, unchanged. Not restated here so the two cannot drift. Each is marked here, beside its id, when the operator marks it | — |
