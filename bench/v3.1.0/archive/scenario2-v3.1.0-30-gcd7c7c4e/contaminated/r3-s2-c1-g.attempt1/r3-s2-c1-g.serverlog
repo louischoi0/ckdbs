@@ -1,0 +1,4 @@
+1791935969 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 14881391 WHERE id = 492" -> ERR TXN_CONFLICT retryable=1 row id=492 was written by transaction 10833 in 17us
+1791935970 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 979000, revenue = 9114418 WHERE id = 450" -> ERR TXN_CONFLICT retryable=1 row id=450 was written by transaction 11093 in 7us
+1791935970 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 729000, revenue = 5899187 WHERE id = 425" -> ERR TXN_CONFLICT retryable=1 row id=425 was written by transaction 11577 in 16us
+1791935972 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 1473000, revenue = 11678124 WHERE id = 411" -> ERR TXN_CONFLICT retryable=1 row id=411 was written by transaction 12674 in 11us

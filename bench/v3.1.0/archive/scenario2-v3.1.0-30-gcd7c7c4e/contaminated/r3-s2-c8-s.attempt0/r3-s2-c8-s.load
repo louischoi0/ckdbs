@@ -1,0 +1,33 @@
+created 8 relations with suffix _s2c8s:
+  organizations_s2c8s
+  ships_s2c8s
+  operations_s2c8s
+  cargos_s2c8s
+  fees_s2c8s
+  recipes_s2c8s
+  freights_s2c8s
+  charges_s2c8s
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/bench-v3.1.0-scenarios/tools/scenario2_freight.py --suffix s2c8s
+
+ckdbs benchmark - 68 columns, 4735 rows resident, 1 connection
+server 127.0.0.1:15607  table scenario2_s2c8s
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0    1161.2   1085.7   1101.7   1141.9   1388.7   1388.7    1388.7     0
+load-organizations         300         0    1427.8    929.5   1045.7   1093.1   2874.1   8726.6   17919.7     0
+load-ships                  30         0    1658.9   1008.2   1028.2   1096.4   3472.1  11924.0   11924.0     0
+load-operations            300         0    1349.3    934.4   1028.0   1066.8   2363.4   9039.4   14141.2     0
+load-fees                   12         0    1113.1   1012.6   1028.6   1099.5   1240.5   1240.5    1240.5     0
+load-recipes                93         0    1124.1    924.7   1002.3   1036.2   1304.4   4583.0    4583.0     0
+load-cargos               4000         0    1243.0    895.6   1004.1   1045.5   2268.0   5053.5   13475.6     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.
