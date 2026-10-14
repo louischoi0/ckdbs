@@ -595,6 +595,9 @@ public:
     // row wait.
     bool IsInFlight(std::uint64_t trx_id) const noexcept;
 
+    // The instance's open-DDL count (`InstanceVisibility::AnyDdlOpen`).
+    InstanceVisibility& visibility() const noexcept { return *visibility_; }
+
     // **`IsInFlight`'s partner** (AX-S2): no id below this is running on
     // any core and none will begin, for as long as the caller holds it -
     // the instance's floor candidate, whose comment carries the argument.
