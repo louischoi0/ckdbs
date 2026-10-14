@@ -582,6 +582,16 @@ public:
     Status DropColumn(Oid table_oid, std::string_view name, std::uint64_t trx_id,
                       std::vector<CatalogRowChange>* changed);
 
+    // `ALTER TABLE ... ADD COLUMN` (BW-R4, BW-R5): `column` - its name, type,
+    // `len` and nothing else read - becomes a nullable column at the next
+    // position, in the relation's lowest free slot, its `sys.columns` row
+    // inserted under `trx_id` and reported through `where`. The name check,
+    // the slot count and the insert are one hold of `sys.columns`' root page
+    // (CT7). A taken live name is `AlreadyExists`; a relation with no free
+    // slot, and a cell wider than a slot, are `NotImplemented` (D-c, BW-R4).
+    Status AddColumn(Oid table_oid, const SysColumnRow& column, std::uint64_t trx_id,
+                     CatalogRowRef* where);
+
     // DROP TABLE's catalog half (docs/spec/drop-table.md DT1-DT3, workplan
     // DT02). The sys.objects row is **retyped to kTypeDroppedTable, never
     // retired** - the rows are GenerateUserOid()'s counter, so the row
@@ -1270,7 +1280,7 @@ private:
                             std::uint32_t type_val, std::uint32_t len, bool notnull,
                             std::uint8_t cabin_policy = kCabinPolicyUnset,
                             std::uint64_t trx_id = kBootstrapXid,
-                            CatalogRowRef* where = nullptr);
+                            CatalogRowRef* where = nullptr, std::uint8_t flags = 0);
     Status InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type_val,
                           std::uint32_t len);
 

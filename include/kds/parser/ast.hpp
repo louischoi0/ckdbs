@@ -492,11 +492,23 @@ inline constexpr std::size_t kDefaultMaxInsertRows = 1024;
 // row cap is **not** enforced here: the parser is a pure syntax layer with
 // no config access, so the first config-aware layer (the dispatcher)
 // refuses an over-cap statement naming the cap and the count.
+// The relation and column shape a KWP load described at LOAD BEGIN (BW-Q10
+// of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
+// load's rows are positional against it, so a relation that is not that
+// relation in that shape when a chunk takes its `IX` refuses the chunk.
+// `oid == 0` - every SQL statement - asks nothing.
+struct DescribedShape {
+    std::uint64_t oid = 0;
+    std::uint32_t physical_columns = 0;
+    std::uint32_t live_columns = 0;
+};
+
 struct InsertStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above
     std::uint32_t table_byte_offset = 0;
     std::vector<std::vector<AstValue>> rows;
+    DescribedShape described;
 };
 
 
@@ -870,17 +882,20 @@ struct PurgeStmt {
 };
 
 // `ALTER TABLE <t> RENAME TO <new>`, `ALTER TABLE <t> RENAME COLUMN <old>
-// TO <new>` (docs/spec/alter.md AL1) and `ALTER TABLE <t> DROP [COLUMN]
-// <name>` (BW-R1 of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
+// TO <new>` (docs/spec/alter.md AL1), `ALTER TABLE <t> DROP [COLUMN] <name>`
+// and `ALTER TABLE <t> ADD [COLUMN] <column definition>` (BW-R1 of
+// `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
 //
 // Every form changes catalog rows and no tuple byte: a rename a label, a
-// drop a flag on a column whose bytes stay in every row (BW-R6). One struct
+// drop a flag on a column whose bytes stay in every row (BW-R6), an add a
+// column in a slot every row already has (BW-R2). One struct
 // for every form, CabinStmt's precedent: they share the resolution and
 // differ in which catalog call they reach.
 enum class AlterAction : std::uint8_t {
     kRenameTable,
     kRenameColumn,
     kDropColumn,
+    kAddColumn,
 };
 
 struct AlterStmt {
@@ -897,6 +912,11 @@ struct AlterStmt {
     // The new name - of the table or the column, by `action`.
     std::string new_name;
     std::uint32_t new_name_byte_offset = 0;
+
+    // ADD COLUMN only: the definition, in `CREATE TABLE`'s grammar, with
+    // the byte its name was written at.
+    ColumnDef column;
+    std::uint32_t column_byte_offset = 0;
 };
 
 // `CREATE PATTERN` / `DROP PATTERN` were withdrawn on 2026-08-31

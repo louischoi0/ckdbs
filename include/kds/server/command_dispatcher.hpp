@@ -1210,6 +1210,21 @@ private:
     // `ALTER TABLE ... DROP COLUMN` (BW-R6..R8): under the relation `X`, in
     // the statement's DDL transaction.
     DispatchOutcome HandleDropColumn(const parser::AlterStmt& stmt, Session& session);
+    // `ALTER TABLE ... ADD COLUMN` (BW-R4, BW-R5, BW-R7): a nullable column
+    // in the lowest free slot, under the relation `X`, in the statement's
+    // DDL transaction.
+    DispatchOutcome HandleAddColumn(const parser::AlterStmt& stmt, Session& session);
+    // Every ALTER form's head: the relation resolved under the session's
+    // view and its qualifier, a system relation refused (AL7).
+    StatusOr<catalog::Oid> ResolveAlterTarget(const parser::AlterStmt& stmt, Session& session);
+    // The two column forms' head: `ResolveAlterTarget`, then the relation `X`
+    // taken for `scope`'s transaction (BW-R7).
+    StatusOr<catalog::Oid> AlterColumnRelation(const parser::AlterStmt& stmt, Session& session,
+                                               WriteScope& scope);
+    // A parsed column definition as its `sys.columns` row at `pos`, or the
+    // refusal (CREATE TABLE's and ADD COLUMN's one resolver).
+    std::optional<DispatchOutcome> ColumnRowOf(const parser::ColumnDef& col, std::uint32_t pos,
+                                               catalog::SysColumnRow& row);
     // BW-R8: the first object that depends on column `pos` of `oid`, named,
     // or nullopt. Asked under the relation `X`.
     StatusOr<std::optional<std::string>> DropColumnRestriction(catalog::Oid oid,

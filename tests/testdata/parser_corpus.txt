@@ -294,11 +294,13 @@ ok	61193a3cf78e857f	cbf29ce484222325	bb8d52fd15f1001c	SELECT b, COUNT(*) FROM t 
 # ---- ALTER (docs/spec/alter.md AL1, AL7) -----------------------------------
 # ALTER is not a patternable leading word, so every line is "-". Every
 # admitted form changes catalog rows and no tuple byte; `DROP COLUMN` flipped
-# to ok at BW-S2 (`instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
+# to ok at BW-S2 and `ADD COLUMN` at BW-S3
+# (`instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`); the parse
+# admits `x int`, and the dispatcher refuses it for not saying NULL (BW-R5).
 ok	-	-	-	ALTER TABLE t RENAME TO u
 ok	-	-	-	ALTER TABLE t RENAME COLUMN a TO b
 ok	-	-	-	alter table t rename to u;
-NotImplemented	-	-	-	ALTER TABLE t ADD COLUMN x int
+ok	-	-	-	ALTER TABLE t ADD COLUMN x int
 ok	-	-	-	ALTER TABLE t DROP COLUMN a
 InvalidArgument	-	-	-	ALTER TABLE t
 InvalidArgument	-	-	-	ALTER t RENAME TO u

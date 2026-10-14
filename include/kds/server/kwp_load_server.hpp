@@ -70,6 +70,8 @@ private:
         std::uint64_t rows_accepted = 0; // cumulative, echoed in every ACK
         // What S_LOAD_READY announced: every column, the pk as field 0.
         std::vector<wire::FieldDescription> fields;
+        // The relation and column shape `fields` describes (BW-Q10).
+        parser::DescribedShape shape;
     };
 
     struct Connection {

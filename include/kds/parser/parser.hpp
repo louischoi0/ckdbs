@@ -95,6 +95,7 @@ public:
 
 private:
     StatusOr<CreateTableStmt> ParseCreateTable();
+    StatusOr<ColumnDef> ParseColumnDef();
     StatusOr<InsertStmt> ParseInsert();
     StatusOr<UpdateStmt> ParseUpdate();
     StatusOr<DeleteStmt> ParseDelete();

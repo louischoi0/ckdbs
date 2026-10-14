@@ -159,6 +159,17 @@ struct RowLayout {
     // `kNull` tag, which a decode would otherwise refuse.
     bool has_dropped() const noexcept { return live_columns != offsets.size(); }
 
+    // The slots a column holds, a dropped one's included (BW-R2).
+    std::uint16_t slots_held = 0;
+
+    // Whether the relation's column set has changed since `CREATE TABLE` - a
+    // column added or dropped. **`[quiet-wrong]`** (BW-Q9): on such a
+    // relation a positional row carries every live column, the pk `NULL` to
+    // have it issued, because the short form's length is the length a row
+    // written against the column set before the change has, and admitting
+    // it would shift every value one column over.
+    bool column_set_changed() const noexcept { return has_dropped() || slots_held != 0; }
+
     // The instance-pinned kds.inline_cell_width this layout was built for.
     // Carried so the codec never has to be told twice.
     std::uint32_t inline_cell_width = 0;

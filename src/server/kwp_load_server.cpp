@@ -405,6 +405,14 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // Every storable type loads (BI16); no column is refused here.
     LoadState load;
     load.relation = begin.value().relation;
+    // Every chunk's rows are positional against this shape, and each chunk
+    // re-resolves the relation by name: a drop and an add of equal net width
+    // between here and a chunk's `IX` would land values in other columns,
+    // so the chunk is refused unless the relation is still this one in this
+    // shape (BW-Q10).
+    load.shape = parser::DescribedShape{oid.value(),
+                                        static_cast<std::uint32_t>(schema.columns.size()),
+                                        access.value()->layout.live_columns};
     load.fields = wire::DescribeSchema(schema);
 
     // The implicit transaction (KW5, BI11): the same BEGIN the text
@@ -492,12 +500,17 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     const std::string chunk = "chunk " + std::to_string(header.value().chunk_seq);
     parser::InsertStmt stmt;
     stmt.table_name = conn.load.relation;
+    stmt.described = conn.load.shape;
     stmt.rows.reserve(rows.value().size());
     for (std::size_t r = 0; r < rows.value().size(); ++r) {
         const std::vector<wire::DecodedField>& row = rows.value()[r];
         std::vector<parser::AstValue> values;
         values.reserve(row.size());
-        for (std::size_t f = row[0].is_null ? 1 : 0; f < row.size(); ++f) {
+        // Every field, a NULL pk included: the insert path reads a full row
+        // with a NULL pk as one asking for an issued id, and refuses a
+        // row of another width on a relation whose columns were changed by
+        // ALTER TABLE since this load described them (BW-Q9).
+        for (std::size_t f = 0; f < row.size(); ++f) {
             auto v = ValueOf(row[f], conn.load.fields[f]);
             if (!v.ok()) {
                 fail_load(v.status().WithContext(chunk + ", row " + std::to_string(r + 1)));

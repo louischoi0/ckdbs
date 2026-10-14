@@ -2338,31 +2338,11 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     }
     const auto& stmt = std::get<parser::AlterStmt>(parsed.value());
     if (stmt.action == parser::AlterAction::kDropColumn) return HandleDropColumn(stmt, session);
+    if (stmt.action == parser::AlterAction::kAddColumn) return HandleAddColumn(stmt, session);
     const bool rename_column = stmt.action == parser::AlterAction::kRenameColumn;
 
-    // You cannot alter a relation you cannot see (DT3c).
-    const std::optional<txn::ReadView> view = ViewFor(session);
-    auto oid =
-        catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
-    if (!oid.ok()) {
-        return {ErrorReply(oid.status()), false, 0, oid.status()};
-    }
-    if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
-                                                   stmt.byte_offset,
-                                                   view.has_value() ? &*view : nullptr);
-        !s.ok()) {
-        return {ErrorReply(s), false, 0, s};
-    }
-
-    // AL7: the catalog's own names are load-bearing for bootstrap and are
-    // nobody's to change - refused here so both forms share the answer,
-    // and RenameTable's own guard is defense rather than the door.
-    //
-    auto system = InSystemNamespace(oid.value());
-    if (!system.ok()) return {ErrorReply(system.status()), false, 0, system.status()};
-    if (system.value()) {
-        return {"ERR '" + stmt.table_name + "' is a system relation and cannot be altered", false};
-    }
+    auto oid = ResolveAlterTarget(stmt, session);
+    if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
 
     // AL4: assertions RESTRICT both forms. The stored canon is the
     // declaration's verbatim text (AS10), and the recovery-side registry
@@ -2468,38 +2448,113 @@ StatusOr<std::optional<std::string>> CommandDispatcher::DropColumnRestriction(
     return std::optional<std::string>();
 }
 
+StatusOr<catalog::Oid> CommandDispatcher::ResolveAlterTarget(const parser::AlterStmt& stmt,
+                                                            Session& session) {
+    // You cannot alter a relation you cannot see (DT3c).
+    const std::optional<txn::ReadView> view = ViewFor(session);
+    const txn::ReadView* view_of = view.has_value() ? &*view : nullptr;
+    auto oid = catalog_.FindTableOidByName(stmt.table_name, view_of);
+    if (!oid.ok()) return oid.status();
+    if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name, oid.value(),
+                                                   stmt.byte_offset, view_of);
+        !s.ok()) {
+        return s;
+    }
+    // AL7: the catalog's own names are load-bearing for bootstrap and are
+    // nobody's to change - refused here so every form shares the answer, and
+    // `RenameTable`'s own guard is defense rather than the door.
+    auto system = InSystemNamespace(oid.value());
+    if (!system.ok()) return system.status();
+    if (system.value()) {
+        return Status::InvalidArgument("'" + stmt.table_name +
+                                        "' is a system relation and cannot be altered");
+    }
+    return oid.value();
+}
+
+StatusOr<catalog::Oid> CommandDispatcher::AlterColumnRelation(const parser::AlterStmt& stmt,
+                                                             Session& session,
+                                                             WriteScope& scope) {
+    auto oid = ResolveAlterTarget(stmt, session);
+    if (!oid.ok()) return oid.status();
+    // ---- BW-R7: the relation `X`, `CREATE INDEX`'s shape (AT-S5e) ---------
+    //
+    // Before the first catalog write. Every writer holds the relation's `IX`
+    // and every positioned reader its `IS` until its transaction decides, so
+    // the grant is a moment none is mid-statement, and one arriving later
+    // parks until this decides and then re-resolves the schema the decide
+    // published (the schema word moves first).
+    if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, oid.value());
+        held.has_value()) {
+        return *held;
+    }
+    return oid.value();
+}
+
+DispatchOutcome CommandDispatcher::HandleAddColumn(const parser::AlterStmt& stmt,
+                                                   Session& session) {
+    const parser::ColumnDef& col = stmt.column;
+    const auto refuse = [](const std::string& what, std::uint32_t byte) {
+        const Status s =
+            Status::NotImplemented(what + " (byte " + std::to_string(byte) + ")");
+        return DispatchOutcome{ErrorReply(s), false, 0, s};
+    };
+    // BW-R5: the rows that predate the column have no value for it, so
+    // it is nullable and says so - this engine's columns are NOT NULL
+    // unless declared NULL (null.md §2.3), and reading an unmarked
+    // declaration as nullable would enforce something other than what
+    // was written.
+    if (col.notnull) {
+        return refuse("an added column must be declared NULL: the rows that predate it "
+                      "have no value for it, and there is no DEFAULT",
+                      stmt.column_byte_offset);
+    }
+    if (!col.references_table.empty()) {
+        return refuse("a foreign key is declared at CREATE TABLE only",
+                      col.references_byte_offset);
+    }
+    if (col.cabin_policy != catalog::kCabinPolicyUnset) {
+        return refuse("a column's cabin policy is declared at CREATE TABLE only; CREATE "
+                      "CABIN after the ADD",
+                      col.cabin_byte_offset);
+    }
+    // Before the `X`: a declaration that cannot be admitted waits for
+    // nobody. `pos` 1 because an added column is never the pk; the catalog
+    // places it.
+    catalog::SysColumnRow row{};
+    if (auto refused = ColumnRowOf(col, /*pos=*/1, row); refused.has_value()) return *refused;
+
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        auto oid = AlterColumnRelation(stmt, session, scope);
+        if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
+
+
+        DdlScope ddl = DdlScopeFor(scope);
+        catalog::CatalogRowRef created;
+        const Status added = catalog_.AddColumn(oid.value(), row, ddl.trx_id,
+                                                ddl.txn != nullptr ? &created : nullptr);
+        // Before the status, CREATE INDEX's reason: a failed add that wrote
+        // its row still left it there.
+        if (ddl.txn != nullptr && created.page_id != kInvalidPageId) {
+            ddl.written.push_back(created);
+            NoteDdlRows(ddl);
+        }
+        if (!added.ok()) {
+            const Status s = added.WithContext("byte " + std::to_string(stmt.column_byte_offset));
+            return {ErrorReply(s), false, 0, s};
+        }
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "added column " + stmt.table_name + "." + col.name);
+        }
+        return {"ADDED COLUMN " + stmt.table_name + "." + col.name, false};
+    });
+}
+
 DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stmt,
                                                     Session& session) {
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
-        // You cannot alter a relation you cannot see (DT3c).
-        const std::optional<txn::ReadView> view = ViewFor(session);
-        const txn::ReadView* view_of = view.has_value() ? &*view : nullptr;
-        auto oid = catalog_.FindTableOidByName(stmt.table_name, view_of);
+        auto oid = AlterColumnRelation(stmt, session, scope);
         if (!oid.ok()) return {ErrorReply(oid.status()), false, 0, oid.status()};
-        if (Status s = catalog_.CheckRelationQualifier(stmt.schema, stmt.table_name,
-                                                       oid.value(), stmt.byte_offset, view_of);
-            !s.ok()) {
-            return {ErrorReply(s), false, 0, s};
-        }
-        // AL7: the catalog's own relations are nobody's to change.
-        auto system = InSystemNamespace(oid.value());
-        if (!system.ok()) return {ErrorReply(system.status()), false, 0, system.status()};
-        if (system.value()) {
-            return {"ERR '" + stmt.table_name + "' is a system relation and cannot be altered",
-                    false};
-        }
-
-        // ---- BW-R7: the relation `X`, `CREATE INDEX`'s shape (AT-S5e) -----
-        //
-        // Before the first catalog write. Every writer holds the relation's
-        // `IX` and every positioned reader its `IS` until its transaction
-        // decides, so the grant is a moment none is mid-statement, and one
-        // arriving later parks until this decides and then re-resolves the
-        // schema the decide published (the schema word moves first).
-        if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, oid.value());
-            held.has_value()) {
-            return {ErrorReply(*held), false, 0, *held};
-        }
 
         // Resolved under the `X`, so no dependant can arrive between the
         // restrict and the write.
@@ -3076,34 +3131,79 @@ namespace {
 // is every one on a relation with no dropped column (BW-R6). Both accepted
 // counts are named, because with two of them a single number reads as an
 // off-by-one against the wrong one.
-Status InsertArityRefusal(const catalog::TableAccess& ta, std::size_t columns, std::size_t got) {
+Status InsertArityRefusal(const catalog::TableAccess& ta, std::size_t columns,
+                          const std::vector<parser::AstValue>& row) {
+    // The row's first value is where it was written; a KWP load row has no
+    // text, so no byte.
+    const std::string at = !row.empty() && row.front().byte_offset != 0
+                               ? " (byte " + std::to_string(row.front().byte_offset) + ")"
+                               : "";
     return Status::InvalidArgument(
         "expected " + std::to_string(columns) + " value(s) including primary-key column '" +
         std::string(catalog::NameView(ta.schema.columns.front().name)) + "', or " +
-        std::to_string(columns - 1) + " to have it issued; got " + std::to_string(got));
+        std::to_string(columns - 1) + " to have it issued; got " + std::to_string(row.size()) +
+        at);
 }
 
-// BW-R6: a row of the live arity - every live column, or every one but the
-// pk - widened to the physical one with a NULL placeholder at each dropped
-// position; `EncodeRow` writes nothing there. A row of neither live arity is
-// refused here, counting live columns, since the physical count would name
-// columns the writer cannot see.
-StatusOr<parser::InsertStmt> ExpandOverDroppedColumns(const catalog::TableAccess& ta,
-                                                      const parser::InsertStmt& written) {
+// **Each row in the shape everything downstream reads**: the pk value first
+// when the row names one, then one value per physical column, a NULL
+// placeholder at every dropped position (BW-R6) - so the body is indexed by
+// `column_no - 1` whatever was dropped. A row whose pk is `NULL` asks for an
+// issued id, as a KWP load row's does (bulkinsert.md BI15), and loses it.
+//
+// **BW-Q9 (`[quiet-wrong]`)**: on a relation whose column set has changed
+// (`RowLayout::column_set_changed`), a row carries every live column. The
+// short form - the pk left out - is refused there, because its length is the
+// length of a row that named its pk against the column set before an `ADD`,
+// and the length after a `DROP` of a row that left the pk out; admitting it
+// would put every value one column over, with no error.
+StatusOr<std::optional<parser::InsertStmt>> NormalizeInsertRows(
+    const catalog::TableAccess& ta, const parser::InsertStmt& written) {
     const std::size_t live = ta.layout.live_columns;
+    const bool changed = ta.layout.column_set_changed();
+    const auto names_null_key = [&](const std::vector<parser::AstValue>& row) {
+        return row.size() == live && row.front().type == parser::ValueType::kNull;
+    };
+    // The common case copies nothing: an unchanged relation's rows, none of
+    // them asking for an issued key with a NULL, are already the shape.
+    if (!changed && std::none_of(written.rows.begin(), written.rows.end(), names_null_key)) {
+        return std::optional<parser::InsertStmt>();
+    }
     parser::InsertStmt out;
     out.table_name = written.table_name;
     out.schema = written.schema;
     out.table_byte_offset = written.table_byte_offset;
+    out.described = written.described;
     out.rows.reserve(written.rows.size());
-    for (const std::vector<parser::AstValue>& row : written.rows) {
-        if (row.size() != live && row.size() + 1 != live) {
-            return InsertArityRefusal(ta, live, row.size());
+    for (std::size_t k = 0; k < written.rows.size(); ++k) {
+        const std::vector<parser::AstValue>& row = written.rows[k];
+        const bool full = row.size() == live;
+        if (!full && (changed || row.size() + 1 != live)) {
+            // The row's ordinal, as the bulk loop appends to its refusals
+            // (BB-S3's review): a KWP client reads the `Status`, not the line.
+            const std::string at =
+                written.rows.size() > 1 ? " (row " + std::to_string(k + 1) + ")" : "";
+            if (!changed) {
+                return Status::InvalidArgument(InsertArityRefusal(ta, live, row).message() + at);
+            }
+            const std::string byte = !row.empty() && row.front().byte_offset != 0
+                                         ? " (byte " + std::to_string(row.front().byte_offset) +
+                                               ")"
+                                         : "";
+            return Status::InvalidArgument(
+                "expected " + std::to_string(live) + " value(s), one per column, with "
+                "primary-key column '" +
+                std::string(catalog::NameView(ta.schema.columns.front().name)) +
+                "' NULL to have it issued; got " + std::to_string(row.size()) + byte +
+                ". The relation's columns were changed by ALTER TABLE, so a row that leaves "
+                "the key out is refused: its length is that of a row written for the old "
+                "columns" + at);
         }
+        const bool names_key = full && row.front().type != parser::ValueType::kNull;
         std::vector<parser::AstValue>& physical = out.rows.emplace_back();
         physical.reserve(ta.schema.columns.size());
-        auto next = row.begin();
-        for (std::size_t i = row.size() == live ? 0 : 1; i < ta.schema.columns.size(); ++i) {
+        auto next = row.begin() + (full && !names_key ? 1 : 0);
+        for (std::size_t i = names_key ? 0 : 1; i < ta.schema.columns.size(); ++i) {
             if (ta.schema.columns[i].dropped()) {
                 physical.emplace_back().type = parser::ValueType::kNull;
             } else {
@@ -3111,7 +3211,7 @@ StatusOr<parser::InsertStmt> ExpandOverDroppedColumns(const catalog::TableAccess
             }
         }
     }
-    return out;
+    return std::optional<parser::InsertStmt>(std::move(out));
 }
 
 }  // namespace
@@ -3538,6 +3638,162 @@ std::string CommandDispatcher::RelationNameOf(catalog::Oid oid) {
     return "oid=" + std::to_string(oid);
 }
 
+// One parsed column definition as the `sys.columns` row it declares:
+// its type resolved and every argument checked, each refusal with its byte.
+// `CREATE TABLE`'s and `ALTER TABLE ... ADD COLUMN`'s (BW-R1), so the two
+// cannot accept different spellings of one type.
+std::optional<DispatchOutcome> CommandDispatcher::ColumnRowOf(const parser::ColumnDef& col,
+                                                            std::uint32_t pos,
+                                                            catalog::SysColumnRow& row) {
+    auto type_row = catalog_.ResolveTypeByName(col.type_name);
+    if (!type_row.ok()) {
+        return DispatchOutcome{ErrorReply(type_row.status()), false, 0, type_row.status()};
+    }
+
+    // A cabin policy on the primary key is refused rather than ignored.
+    // The pk's cabin is the clustered tree (spec §2), so any of the
+    // three answers would be a statement about something that cannot
+    // exist - and silently dropping the clause would leave an operator
+    // believing they had said something.
+    if (pos == 0 && col.cabin_policy != catalog::kCabinPolicyUnset) {
+        return DispatchOutcome{"ERR the primary-key column '" + col.name +
+                    "' takes no cabin policy - the clustered tree is its cabin (byte " +
+                    std::to_string(col.cabin_byte_offset) + ")",
+                false};
+    }
+    // Invariant 11 at the surface, with the byte the layout's own
+    // defense cannot know: the first column is the pk, carried by
+    // the Keystone word, which has no NULL encoding.
+    if (pos == 0 && !col.notnull) {
+        return DispatchOutcome{"ERR the primary-key column '" + col.name +
+                    "' cannot be declared NULL - the pk is carried by the Keystone "
+                    "word, which has no NULL encoding (byte " +
+                    std::to_string(col.null_byte_offset) + ")",
+                false};
+    }
+
+    row = catalog::SysColumnRow{};
+    row.pos = pos;
+    catalog::SetName(row.name, col.name);
+    row.type_val = type_row.value().type_val;
+    row.len = type_row.value().len;
+    row.notnull = col.notnull;  // D1: NOT NULL unless declared NULL
+    row.cabin_policy = col.cabin_policy;
+
+    // ---- The arity refusals, both above the type arms ---------------
+    //
+    // A type that takes no arguments refuses the ones it was given,
+    // rather than dropping them: silently ignoring an argument leaves
+    // an operator believing they said something. Both are unreachable
+    // through the parser, which decides arity by the type name - so
+    // this is the catalog's own defense against a statement that
+    // arrived by another door, and the two live together because a
+    // third argument-taking type must find one place to extend.
+    const bool takes_precision = row.type_val == catalog::kTypeValDecimal ||
+                                  row.type_val == catalog::kTypeValDecimalWide;
+    const bool takes_width = row.type_val == catalog::kTypeValChar ||
+                              row.type_val == catalog::kTypeValVarchar;
+    if ((col.has_precision && !takes_precision) || (col.has_width && !takes_width)) {
+        return DispatchOutcome{"ERR type '" + col.type_name + "' takes no arguments (byte " +
+                    std::to_string(col.type_arg_byte_offset) + ")",
+                false};
+    }
+
+    // ---- decimal(p, s) (docs/spec/types.md TY2, TY9) ----------------
+    //
+    // The pair replaces the type's default `len`, which for a decimal
+    // was never read as a width - `RowLayout::ColumnWidth` gives every
+    // decimal its bytes from its `type_val` alone (catalog/rows.hpp
+    // says why the field was free).
+    //
+    // **The declared precision selects the width, here and only here.**
+    // `decimal(p, s)` with p <= 18 is the 8-byte type and with p >= 19
+    // the 16-byte one (`kTypeValDecimalWide`) - TY2's separate type,
+    // not a widening, so the promotion is a different type_val and a
+    // different schema constant, chosen from the one fact the client
+    // declared.
+    //
+    // **`decimal128(p, s)` is not a spelling this code ever sees**:
+    // the parser admits a type-argument list for `DECIMAL`, `CHAR`
+    // and `VARCHAR` only, so it is refused as taking no arguments.
+    // The wide type is reached by `decimal(p, s)` with p >= 19, the
+    // promotion above - one type per declaration, by precision.
+    if (row.type_val == catalog::kTypeValDecimal ||
+        row.type_val == catalog::kTypeValDecimalWide) {
+        if (!col.has_precision) {
+            // Unreachable through the parser, which refuses a bare
+            // `decimal`. Checked anyway: a schema can be built without
+            // one, and a decimal with no scale stored is a column whose
+            // values have no defined meaning.
+            return DispatchOutcome{"ERR column '" + col.name + "' is decimal with no precision or scale",
+                    false};
+        }
+        if (row.type_val == catalog::kTypeValDecimal &&
+            col.precision >= exec::kMinDecimalPrecisionWide) {
+            row.type_val = catalog::kTypeValDecimalWide;
+        }
+        Status bounds = row.type_val == catalog::kTypeValDecimalWide
+                            ? exec::CheckDecimalWidePrecisionScale(col.precision, col.scale)
+                            : exec::CheckDecimalPrecisionScale(col.precision, col.scale);
+        if (!bounds.ok()) {
+            return DispatchOutcome{ErrorReply(bounds) + " (byte " +
+                        std::to_string(col.type_byte_offset) + ")",
+                    false};
+        }
+        row.len = catalog::PackDecimalLen(static_cast<std::uint8_t>(col.precision),
+                                          static_cast<std::uint8_t>(col.scale));
+    } else if (row.type_val == catalog::kTypeValChar) {
+        // ---- char(N) / varchar(N) --------------------------------
+        //
+        // **The two say different things with one number**, and the
+        // difference is the whole design:
+        //
+        //   char(N)     N is the cell. The value lives in exactly
+        //               those bytes or is refused.
+        //   varchar(N)  N is *this column's* kds.inline_cell_width -
+        //               a width, not a cap. It is therefore
+        //               validated by the instance setting's own
+        //               validator and never by a second one, which
+        //               is the operator's rule and the reason no
+        //               `max_inline_char_size` exists.
+        if (col.has_width) {
+            if (col.width == 0) {
+                return DispatchOutcome{"ERR column '" + col.name +
+                            "' cannot be char(0) - every column must occupy bytes (byte " +
+                            std::to_string(col.type_arg_byte_offset) + ")",
+                        false};
+            }
+            row.len = col.width;
+        }
+        // Nothing said: `char` is `char(1)`, which is the sys.types
+        // default already in `row.len` and what the standard means
+        // by a bare `char`. Not refused the way a bare `decimal` is
+        // - that refusal guards a silent decision about what a
+        // stored value *means*, and char(1) decides nothing.
+    } else if (row.type_val == catalog::kTypeValVarchar) {
+        if (col.has_width) {
+            if (Status s = storage::CheckInlineCellWidth(col.width); !s.ok()) {
+                // Through `ErrorReply` like every other refusal in
+                // this file: the width validator answers
+                // InvalidArgument today, which renders bare, so the
+                // line is unchanged - but a coded refusal reaching
+                // this one path bare is exactly the hole the rest of
+                // the file just closed.
+                return DispatchOutcome{ErrorReply(s.WithContext("column '" + col.name + "'")) + " (byte " +
+                            std::to_string(col.type_arg_byte_offset) + ")",
+                        false};
+            }
+            row.len = col.width;
+        }
+        // Nothing said: `len` stays 0, which is what every varchar
+        // column written before this version carries and what it has
+        // always meant - the instance's pinned width. That is the
+        // whole compatibility story; no file changes, no bump.
+    }
+
+    return std::nullopt;
+}
+
 DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                                                         Session& session) {
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
@@ -3584,152 +3840,8 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         schema.spare_slots = stmt.spare_slots;
         std::uint32_t pos = 0;
         for (const auto& col : stmt.columns) {
-            auto type_row = catalog_.ResolveTypeByName(col.type_name);
-            if (!type_row.ok()) {
-                return {ErrorReply(type_row.status()), false, 0, type_row.status()};
-            }
-
-            // A cabin policy on the primary key is refused rather than ignored.
-            // The pk's cabin is the clustered tree (spec §2), so any of the
-            // three answers would be a statement about something that cannot
-            // exist - and silently dropping the clause would leave an operator
-            // believing they had said something.
-            if (pos == 0 && col.cabin_policy != catalog::kCabinPolicyUnset) {
-                return {"ERR the primary-key column '" + col.name +
-                            "' takes no cabin policy - the clustered tree is its cabin (byte " +
-                            std::to_string(col.cabin_byte_offset) + ")",
-                        false};
-            }
-            // Invariant 11 at the surface, with the byte the layout's own
-            // defense cannot know: the first column is the pk, carried by
-            // the Keystone word, which has no NULL encoding.
-            if (pos == 0 && !col.notnull) {
-                return {"ERR the primary-key column '" + col.name +
-                            "' cannot be declared NULL - the pk is carried by the Keystone "
-                            "word, which has no NULL encoding (byte " +
-                            std::to_string(col.null_byte_offset) + ")",
-                        false};
-            }
-
             catalog::SysColumnRow row{};
-            row.pos = pos++;
-            catalog::SetName(row.name, col.name);
-            row.type_val = type_row.value().type_val;
-            row.len = type_row.value().len;
-            row.notnull = col.notnull;  // D1: NOT NULL unless declared NULL
-            row.cabin_policy = col.cabin_policy;
-
-            // ---- The arity refusals, both above the type arms ---------------
-            //
-            // A type that takes no arguments refuses the ones it was given,
-            // rather than dropping them: silently ignoring an argument leaves
-            // an operator believing they said something. Both are unreachable
-            // through the parser, which decides arity by the type name - so
-            // this is the catalog's own defense against a statement that
-            // arrived by another door, and the two live together because a
-            // third argument-taking type must find one place to extend.
-            const bool takes_precision = row.type_val == catalog::kTypeValDecimal ||
-                                          row.type_val == catalog::kTypeValDecimalWide;
-            const bool takes_width = row.type_val == catalog::kTypeValChar ||
-                                      row.type_val == catalog::kTypeValVarchar;
-            if ((col.has_precision && !takes_precision) || (col.has_width && !takes_width)) {
-                return {"ERR type '" + col.type_name + "' takes no arguments (byte " +
-                            std::to_string(col.type_arg_byte_offset) + ")",
-                        false};
-            }
-
-            // ---- decimal(p, s) (docs/spec/types.md TY2, TY9) ----------------
-            //
-            // The pair replaces the type's default `len`, which for a decimal
-            // was never read as a width - `RowLayout::ColumnWidth` gives every
-            // decimal its bytes from its `type_val` alone (catalog/rows.hpp
-            // says why the field was free).
-            //
-            // **The declared precision selects the width, here and only here.**
-            // `decimal(p, s)` with p <= 18 is the 8-byte type and with p >= 19
-            // the 16-byte one (`kTypeValDecimalWide`) - TY2's separate type,
-            // not a widening, so the promotion is a different type_val and a
-            // different schema constant, chosen from the one fact the client
-            // declared.
-            //
-            // **`decimal128(p, s)` is not a spelling this code ever sees**:
-            // the parser admits a type-argument list for `DECIMAL`, `CHAR`
-            // and `VARCHAR` only, so it is refused as taking no arguments.
-            // The wide type is reached by `decimal(p, s)` with p >= 19, the
-            // promotion above - one type per declaration, by precision.
-            if (row.type_val == catalog::kTypeValDecimal ||
-                row.type_val == catalog::kTypeValDecimalWide) {
-                if (!col.has_precision) {
-                    // Unreachable through the parser, which refuses a bare
-                    // `decimal`. Checked anyway: a schema can be built without
-                    // one, and a decimal with no scale stored is a column whose
-                    // values have no defined meaning.
-                    return {"ERR column '" + col.name + "' is decimal with no precision or scale",
-                            false};
-                }
-                if (row.type_val == catalog::kTypeValDecimal &&
-                    col.precision >= exec::kMinDecimalPrecisionWide) {
-                    row.type_val = catalog::kTypeValDecimalWide;
-                }
-                Status bounds = row.type_val == catalog::kTypeValDecimalWide
-                                    ? exec::CheckDecimalWidePrecisionScale(col.precision, col.scale)
-                                    : exec::CheckDecimalPrecisionScale(col.precision, col.scale);
-                if (!bounds.ok()) {
-                    return {ErrorReply(bounds) + " (byte " +
-                                std::to_string(col.type_byte_offset) + ")",
-                            false};
-                }
-                row.len = catalog::PackDecimalLen(static_cast<std::uint8_t>(col.precision),
-                                                  static_cast<std::uint8_t>(col.scale));
-            } else if (row.type_val == catalog::kTypeValChar) {
-                // ---- char(N) / varchar(N) --------------------------------
-                //
-                // **The two say different things with one number**, and the
-                // difference is the whole design:
-                //
-                //   char(N)     N is the cell. The value lives in exactly
-                //               those bytes or is refused.
-                //   varchar(N)  N is *this column's* kds.inline_cell_width -
-                //               a width, not a cap. It is therefore
-                //               validated by the instance setting's own
-                //               validator and never by a second one, which
-                //               is the operator's rule and the reason no
-                //               `max_inline_char_size` exists.
-                if (col.has_width) {
-                    if (col.width == 0) {
-                        return {"ERR column '" + col.name +
-                                    "' cannot be char(0) - every column must occupy bytes (byte " +
-                                    std::to_string(col.type_arg_byte_offset) + ")",
-                                false};
-                    }
-                    row.len = col.width;
-                }
-                // Nothing said: `char` is `char(1)`, which is the sys.types
-                // default already in `row.len` and what the standard means
-                // by a bare `char`. Not refused the way a bare `decimal` is
-                // - that refusal guards a silent decision about what a
-                // stored value *means*, and char(1) decides nothing.
-            } else if (row.type_val == catalog::kTypeValVarchar) {
-                if (col.has_width) {
-                    if (Status s = storage::CheckInlineCellWidth(col.width); !s.ok()) {
-                        // Through `ErrorReply` like every other refusal in
-                        // this file: the width validator answers
-                        // InvalidArgument today, which renders bare, so the
-                        // line is unchanged - but a coded refusal reaching
-                        // this one path bare is exactly the hole the rest of
-                        // the file just closed.
-                        return {ErrorReply(s.WithContext("column '" + col.name + "'")) + " (byte " +
-                                    std::to_string(col.type_arg_byte_offset) + ")",
-                                false};
-                    }
-                    row.len = col.width;
-                }
-                // Nothing said: `len` stays 0, which is what every varchar
-                // column written before this version carries and what it has
-                // always meant - the instance's pinned width. That is the
-                // whole compatibility story; no file changes, no bump.
-            }
-
+            if (auto refused = ColumnRowOf(col, pos++, row); refused.has_value()) return *refused;
             schema.columns.push_back(row);
         }
 
@@ -4778,22 +4890,35 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         return {ErrorReply(*held), false, 0, *held};
     }
 
-    // **Positional `VALUES` name the live columns** (BW-R6 of
+    // **Positional `VALUES` name the live columns** (BW-R6, BW-Q9 of
     // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): a
-    // relation with a dropped column takes each row expanded here, once, to
-    // its physical width - a NULL placeholder at every dropped position - so
-    // everything downstream keeps indexing the body by `column_no - 1`.
+    // relation whose column set changed, or a row whose pk is `NULL`, takes
+    // its rows normalized here, once (`NormalizeInsertRows`), so everything
+    // downstream keeps indexing the body by `column_no - 1`.
     // **After the `IX`, never before it**: a `DROP COLUMN`'s overwrite is in
     // place and visible before its decide, so a row counted against an open
     // drop's schema would be refused on a column set that may yet roll back;
     // behind the `IX` the statement parks on that drop and re-resolves.
-    std::optional<parser::InsertStmt> expanded;
-    if (ta->layout.has_dropped()) {
-        auto physical = ExpandOverDroppedColumns(*ta, written);
-        if (!physical.ok()) return {ErrorReply(physical.status()), false, 0, physical.status()};
-        expanded.emplace(std::move(physical.value()));
+    //
+    // **A KWP load's rows are positional against the shape it described**
+    // (BW-Q10): a chunk re-resolves the relation by name, so it is refused
+    // unless that is still the same relation with the same column set - a
+    // drop and an add of equal net width would otherwise land its values in
+    // other columns. Asked behind the `IX`, where no column DDL can move it.
+    if (written.described.oid != 0 &&
+        (written.described.oid != ta->oid ||
+         written.described.physical_columns != ta->schema.columns.size() ||
+         written.described.live_columns != ta->layout.live_columns)) {
+        const Status s = Status::InvalidArgument(
+            "relation '" + written.table_name +
+            "' is not the relation this load described at its BEGIN: it was dropped or its "
+            "columns were changed by ALTER TABLE since; begin a new load");
+        return {ErrorReply(s), false, 0, s};
     }
-    const parser::InsertStmt& stmt = expanded.has_value() ? *expanded : written;
+    auto normalized = NormalizeInsertRows(*ta, written);
+    if (!normalized.ok()) return {ErrorReply(normalized.status()), false, 0, normalized.status()};
+    const parser::InsertStmt& stmt =
+        normalized.value().has_value() ? *normalized.value() : written;
 
     // Whether every row omits its pk, the question T3's sorted fill further
     // down asks.
@@ -5157,7 +5282,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // Before the id: the codec would refuse this row at encode, which
         // sits after the id is settled - and BI9's rule is that a refused row
         // burns nothing.
-        return InsertArityRefusal(ta, ncols, values.size());
+        return InsertArityRefusal(ta, ncols, values);
     }
 
     // When the row names its key, the pk is values[0] and the body is the

@@ -174,11 +174,17 @@ Each of BW-R1..R12 is CLA's proposal; its standing is §4's.
   wider `char(N)` are refused `NotImplemented` naming the 16-byte slot. It
   is never narrowed silently, which the truthfulness rule forbids. The
   column takes the lowest free slot.
-- **BW-R5 — an added column is nullable** (D-b (a)). `ADD COLUMN c int`
-  declares a nullable column. `NOT NULL` written on it is refused
-  `NotImplemented`, because no row that predates it holds a value.
-  `REFERENCES` on it is refused `NotImplemented` (a foreign key is declared
-  at `CREATE TABLE` only, `foreign-keys.md`).
+- **BW-R5 — an added column is nullable** (D-b (a)), **and says so**
+  (revised at BW-S3, adopted on the standing go-ahead of 2026-10-14, W3).
+  As written, `ADD COLUMN c int` declared a nullable column; but this
+  engine reads an unmarked column as `NOT NULL` (`null.md` §2.3), so
+  admitting it as nullable would enforce something other than what was
+  written. The definition must carry `NULL`; `c int` and `c int NOT NULL`
+  are refused `NotImplemented` (the rows that predate it hold no value, and
+  there is no `DEFAULT`). `REFERENCES` and a cabin clause on it are refused
+  `NotImplemented` (both are `CREATE TABLE`'s). A consequence, not a rule:
+  an added column cannot be indexed (`null.md` D2) or governed by a
+  Transition, since neither takes a nullable column.
 - **BW-R6 — a dropped column stays a physical column.** Its `sys.columns`
   row stays at its `pos` with a dropped flag, so every stored position
   stays valid, and its bytes stay in every row. Storage loops still walk
@@ -279,6 +285,36 @@ before its adoption, and it holds.
   proposes (a)**: (b) is a change to every schema read, outside BW's scope,
   and (a)'s exposure is a column set, never a value. **Adopted (a) on the
   standing go-ahead of 2026-10-14 (W3).**
+- **BW-Q9** `[quiet-wrong]` — raised by BW-S3's review: `INSERT`'s two
+  positional arities (§1 item 4) collide across a column-set change. After
+  an `ADD`, a row written for the old columns with its key named has the
+  length of the short, key-issued form; after a `DROP`, a key-issued row
+  has the full form's; either would be admitted with every value one column
+  over and no error, and a KWP load described before the change sends such
+  rows too. Options: (a) on a relation whose column set has changed
+  (`RowLayout::column_set_changed`: a column added or dropped), refuse the
+  short form and take a `NULL` key at full width as the issued-key row -
+  which KWP already sends (BI15) and SQL then admits on every relation; (b)
+  a column list on `INSERT`; (c) state it in `known-gaps.md`. **CLA
+  proposes (a)**: it turns every shifted row into a refusal naming the
+  count, keeps id issue reachable, and (b) is a grammar BW does not own.
+  Premise re-read against the tree before adoption: the short form is the
+  only arity the change makes ambiguous, a full-width row is ambiguous with
+  nothing, and the KWP load builds full rows once its NULL pk is passed
+  through. **Adopted (a) on the standing go-ahead of 2026-10-14 (W3).**
+- **BW-Q10** `[quiet-wrong]` — raised by BW-Q9's review: a KWP load
+  describes the relation at LOAD BEGIN and each chunk re-resolves it by
+  name, taking its `IX` only then, so a `DROP` and an `ADD` of equal net
+  width between the two leave the chunk's width valid and land a dropped
+  column's value in the added one. Options: (a) the load records the
+  relation's oid and column shape (physical and live counts, which every
+  `ADD` or `DROP` moves) and a chunk is refused, behind its `IX`, unless the
+  relation is still that one in that shape; (b) take the relation's `IS` at
+  LOAD BEGIN and hold it to LOAD END, which keeps a load's window open
+  against every DDL. **CLA proposes (a)**: it refuses exactly the chunks
+  that would land wrong and holds nothing between frames; it also closes
+  the older case of a relation dropped and re-created under the name.
+  **Adopted (a) on the standing go-ahead of 2026-10-14 (W3).**
 
 ---
 
@@ -354,7 +390,7 @@ Nothing is built at the writing. BW-Q1..Q7 adopted (W3); BW-S1 is next.
   `sys.tables` read per cache fill, `spare_free` from the layout, one loop
   in `Build`, `Corruption` for an on-disk slot count past 64. Suite
   3818/3818. Overhead not measured (W2).
-- **BW-S2** - review (`critics-developer`) found and fixed three defects:
+- **BW-S2** landed at `69a31361`. Review (`critics-developer`) found and fixed three defects:
   an `INSERT` counted its values against an open drop's schema before its
   `IX` (refused a row the drop's rollback would have admitted); a `RENAME
   COLUMN` could take the name of a column whose drop was still open (two
@@ -372,3 +408,18 @@ Nothing is built at the writing. BW-Q1..Q7 adopted (W3); BW-S1 is next.
   auto `CreateCabin` racing the restrict check is recorded in
   `known-gaps.md` rather than fenced, since a Cabin on a dropped column is
   never served (no statement names it).
+- **BW-S3** - review (`critics-developer`) found BW-Q9 (`[quiet-wrong]`,
+  adopted (a), built: `NormalizeInsertRows`, KWP passing its NULL pk
+  through) and proposed seven cuts. Applied: one `ResolveAlterTarget` for
+  every ALTER form; `ADD`'s statement-level refusals before the `X`;
+  `AddColumn` propagating `ColumnWidth`'s error, running
+  `CheckDeclarableColumnTypes`, and reading `sys.tables` before its hold;
+  the parser comment. BW-Q9's own review fixed a multi-row refusal losing
+  its `(row k)`, raised BW-Q10 (adopted (a), built: `DescribedShape`,
+  checked behind the chunk's `IX`), and folded the normalization's
+  trigger into `NormalizeInsertRows`; the arity refusals carry the row's
+  byte. **Rejected**: `ColumnRowOf` as `StatusOr` - the
+  refusals render as `DispatchOutcome` text that CREATE TABLE's tests pin,
+  and converting them is churn with no behaviour gained. The review's
+  finding that BW-R5 as written admitted an unmarked column as nullable was
+  CLA's own, applied before it (BW-R5's revision).

@@ -1553,6 +1553,121 @@ StatusOr<BoolExpr> Parser::ParseValueList(ColumnName col, bool negated, std::uin
     return node;
 }
 
+// One column definition, `CREATE TABLE`'s and `ALTER TABLE ... ADD
+// COLUMN`'s (BW-R1): a name, a type with its arguments, then the suffixes
+// in their fixed order - nullability, `REFERENCES`, the cabin policy.
+StatusOr<ColumnDef> Parser::ParseColumnDef() {
+    ColumnDef col;
+
+    auto col_name = ParseIdent();
+    if (!col_name.ok()) return col_name.status();
+    col.name = std::move(col_name.value());
+
+    // The type, with its arguments: `DECIMAL(p, s)` takes two
+    // (docs/spec/types.md §2), `CHAR(n)` and `VARCHAR(n)` one
+    // (`instructions/v2.5.0/varchar-char-architecture.md` §3).
+    TypeSpec spec;
+    if (Status s = ParseTypeSpec(spec); !s.ok()) return s;
+    col.type_name = std::move(spec.name);
+    col.type_byte_offset = spec.byte_offset;
+    col.type_arg_byte_offset = spec.arg_byte_offset;
+    col.has_precision = spec.has_precision;
+    col.precision = spec.precision;
+    col.scale = spec.scale;
+    col.has_width = spec.has_width;
+    col.width = spec.width;
+    if (IEquals(col.type_name, "DECIMAL") && !col.has_precision) {
+        // **A bare `decimal` is refused, never defaulted.** A default
+        // scale is a silent decision about someone's money, and the
+        // parser is the only layer that can still tell the difference
+        // between "said nothing" and "said zero".
+        return Status::InvalidArgument(
+            "column '" + col.name + "' needs a precision and a scale - `decimal(p, s)` - "
+            "at byte " + std::to_string(col.type_byte_offset) +
+            "; there is no default scale, because one would be a silent decision about "
+            "what a stored value means");
+    }
+
+    // Optional nullability, directly after the type and before every
+    // other suffix (docs/spec/null.md §2.3, D1): `NULL` opts a column
+    // into nullability; `NOT NULL` spells the default for
+    // standard-minded schemas and changes nothing. First in the suffix
+    // chain because it modifies the type, not the column's relations.
+    if (lexer_.Peek().type == TokenType::kNullLit) {
+        col.null_byte_offset = lexer_.Peek().byte_offset;
+        lexer_.Next();
+        col.notnull = false;
+    } else if (lexer_.Peek().type == TokenType::kKeyword &&
+               lexer_.Peek().kw == Keyword::kNot) {
+        lexer_.Next();
+        if (lexer_.Peek().type != TokenType::kNullLit) {
+            return Status::InvalidArgument(
+                "expected NULL after NOT in a column declaration (byte " +
+                std::to_string(lexer_.Peek().byte_offset) + ")");
+        }
+        lexer_.Next();
+        col.notnull = true;  // the default, said out loud
+    }
+
+    // Optional `REFERENCES <table>` (docs/spec/foreign-keys.md §1).
+    // Peeked like the cabin clause below it, and written *before* it
+    // when both appear - a fixed order, because two optional suffixes
+    // accepted in either order is a grammar with a shape nobody can
+    // state, and the fingerprint would have to hash both spellings of
+    // one declaration.
+    if (const Token& refs = lexer_.Peek();
+        refs.type == TokenType::kIdent && IEquals(refs.text, "REFERENCES")) {
+        col.references_byte_offset = refs.byte_offset;
+        lexer_.Next();
+
+        if (Status s = ParseQualifiedName(col.references_schema, col.references_table);
+            !s.ok()) {
+            return s.WithContext("REFERENCES names the parent relation");
+        }
+
+        // `REFERENCES parent(col)` is refused rather than parsed and
+        // checked: the parent side is always the Keystone id (F1), so
+        // the only column that could be named is the one the engine
+        // would have used anyway, and naming any other is asking for a
+        // reference the engine cannot store.
+        if (lexer_.Peek().type == TokenType::kLParen) {
+            return Status::Unsupported(
+                "a foreign key references the parent's primary key and no other column, so "
+                "REFERENCES takes no column list (byte " +
+                std::to_string(lexer_.Peek().byte_offset) + ")");
+        }
+    }
+
+    // Optional cabin policy: `CABIN`, `CABIN AUTO`, or `NO CABIN`
+    // (docs/spec/cabin.md). Peeked rather than required, so every
+    // pre-existing CREATE TABLE parses unchanged and lands on
+    // kCabinPolicyUnset.
+    const Token& policy = lexer_.Peek();
+    if (policy.type == TokenType::kIdent && IEquals(policy.text, "CABIN")) {
+        col.cabin_byte_offset = policy.byte_offset;
+        lexer_.Next();
+        const Token& mode = lexer_.Peek();
+        if (mode.type == TokenType::kIdent && IEquals(mode.text, "AUTO")) {
+            lexer_.Next();
+            col.cabin_policy = catalog::kCabinPolicyAuto;
+        } else {
+            col.cabin_policy = catalog::kCabinPolicyEnabled;
+        }
+    } else if (policy.type == TokenType::kIdent && IEquals(policy.text, "NO")) {
+        col.cabin_byte_offset = policy.byte_offset;
+        lexer_.Next();
+        // `NO` is only ever the start of `NO CABIN` here. Saying so
+        // beats letting `no` fall through to the trailing-garbage check,
+        // which would point at the wrong token.
+        if (Status s = ExpectKeyword("CABIN"); !s.ok()) {
+            return s.WithContext("the only NO clause on a column is `NO CABIN`");
+        }
+        col.cabin_policy = catalog::kCabinPolicyDisabled;
+    }
+
+    return col;
+}
+
 StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
     if (Status s = ExpectKeyword("TABLE"); !s.ok()) return s;
 
@@ -1569,115 +1684,9 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
     if (Status s = ExpectToken(TokenType::kLParen, "'('"); !s.ok()) return s;
 
     for (;;) {
-        ColumnDef col;
-
-        auto col_name = ParseIdent();
-        if (!col_name.ok()) return col_name.status();
-        col.name = std::move(col_name.value());
-
-        // The type, with its arguments: `DECIMAL(p, s)` takes two
-        // (docs/spec/types.md §2), `CHAR(n)` and `VARCHAR(n)` one
-        // (`instructions/v2.5.0/varchar-char-architecture.md` §3).
-        TypeSpec spec;
-        if (Status s = ParseTypeSpec(spec); !s.ok()) return s;
-        col.type_name = std::move(spec.name);
-        col.type_byte_offset = spec.byte_offset;
-        col.type_arg_byte_offset = spec.arg_byte_offset;
-        col.has_precision = spec.has_precision;
-        col.precision = spec.precision;
-        col.scale = spec.scale;
-        col.has_width = spec.has_width;
-        col.width = spec.width;
-        if (IEquals(col.type_name, "DECIMAL") && !col.has_precision) {
-            // **A bare `decimal` is refused, never defaulted.** A default
-            // scale is a silent decision about someone's money, and the
-            // parser is the only layer that can still tell the difference
-            // between "said nothing" and "said zero".
-            return Status::InvalidArgument(
-                "column '" + col.name + "' needs a precision and a scale - `decimal(p, s)` - "
-                "at byte " + std::to_string(col.type_byte_offset) +
-                "; there is no default scale, because one would be a silent decision about "
-                "what a stored value means");
-        }
-
-        // Optional nullability, directly after the type and before every
-        // other suffix (docs/spec/null.md §2.3, D1): `NULL` opts a column
-        // into nullability; `NOT NULL` spells the default for
-        // standard-minded schemas and changes nothing. First in the suffix
-        // chain because it modifies the type, not the column's relations.
-        if (lexer_.Peek().type == TokenType::kNullLit) {
-            col.null_byte_offset = lexer_.Peek().byte_offset;
-            lexer_.Next();
-            col.notnull = false;
-        } else if (lexer_.Peek().type == TokenType::kKeyword &&
-                   lexer_.Peek().kw == Keyword::kNot) {
-            lexer_.Next();
-            if (lexer_.Peek().type != TokenType::kNullLit) {
-                return Status::InvalidArgument(
-                    "expected NULL after NOT in a column declaration (byte " +
-                    std::to_string(lexer_.Peek().byte_offset) + ")");
-            }
-            lexer_.Next();
-            col.notnull = true;  // the default, said out loud
-        }
-
-        // Optional `REFERENCES <table>` (docs/spec/foreign-keys.md §1).
-        // Peeked like the cabin clause below it, and written *before* it
-        // when both appear - a fixed order, because two optional suffixes
-        // accepted in either order is a grammar with a shape nobody can
-        // state, and the fingerprint would have to hash both spellings of
-        // one declaration.
-        if (const Token& refs = lexer_.Peek();
-            refs.type == TokenType::kIdent && IEquals(refs.text, "REFERENCES")) {
-            col.references_byte_offset = refs.byte_offset;
-            lexer_.Next();
-
-            if (Status s = ParseQualifiedName(col.references_schema, col.references_table);
-                !s.ok()) {
-                return s.WithContext("REFERENCES names the parent relation");
-            }
-
-            // `REFERENCES parent(col)` is refused rather than parsed and
-            // checked: the parent side is always the Keystone id (F1), so
-            // the only column that could be named is the one the engine
-            // would have used anyway, and naming any other is asking for a
-            // reference the engine cannot store.
-            if (lexer_.Peek().type == TokenType::kLParen) {
-                return Status::Unsupported(
-                    "a foreign key references the parent's primary key and no other column, so "
-                    "REFERENCES takes no column list (byte " +
-                    std::to_string(lexer_.Peek().byte_offset) + ")");
-            }
-        }
-
-        // Optional cabin policy: `CABIN`, `CABIN AUTO`, or `NO CABIN`
-        // (docs/spec/cabin.md). Peeked rather than required, so every
-        // pre-existing CREATE TABLE parses unchanged and lands on
-        // kCabinPolicyUnset.
-        const Token& policy = lexer_.Peek();
-        if (policy.type == TokenType::kIdent && IEquals(policy.text, "CABIN")) {
-            col.cabin_byte_offset = policy.byte_offset;
-            lexer_.Next();
-            const Token& mode = lexer_.Peek();
-            if (mode.type == TokenType::kIdent && IEquals(mode.text, "AUTO")) {
-                lexer_.Next();
-                col.cabin_policy = catalog::kCabinPolicyAuto;
-            } else {
-                col.cabin_policy = catalog::kCabinPolicyEnabled;
-            }
-        } else if (policy.type == TokenType::kIdent && IEquals(policy.text, "NO")) {
-            col.cabin_byte_offset = policy.byte_offset;
-            lexer_.Next();
-            // `NO` is only ever the start of `NO CABIN` here. Saying so
-            // beats letting `no` fall through to the trailing-garbage check,
-            // which would point at the wrong token.
-            if (Status s = ExpectKeyword("CABIN"); !s.ok()) {
-                return s.WithContext("the only NO clause on a column is `NO CABIN`");
-            }
-            col.cabin_policy = catalog::kCabinPolicyDisabled;
-        }
-
-        stmt.columns.push_back(std::move(col));
+        auto col = ParseColumnDef();
+        if (!col.ok()) return col.status();
+        stmt.columns.push_back(std::move(col.value()));
 
         if (lexer_.Peek().type == TokenType::kComma) {
             lexer_.Next();
@@ -3485,10 +3494,10 @@ StatusOr<Statement> Parser::Parse() {
 }
 
 // `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new> |
-// DROP [COLUMN] <name>` (docs/spec/alter.md AL1, AL7; BW-R1), with `ALTER`
-// already consumed.
+// ADD [COLUMN] <column definition> | DROP [COLUMN] <name>`
+// (docs/spec/alter.md AL1, AL7, AL11), with `ALTER` already consumed.
 //
-// `TABLE`, `RENAME`, `DROP`, `COLUMN` and `TO` are ordinary identifiers
+// `TABLE`, `RENAME`, `ADD`, `DROP`, `COLUMN` and `TO` are ordinary identifiers
 // matched by text, like every clause head this grammar has grown - and the
 // refusal surface is parsed *before* the accepted forms, so `MODIFY`/`SET`
 // answer at their own byte rather than with a syntax error pointing past
@@ -3503,9 +3512,24 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
     }
 
     const Token verb = lexer_.Peek();
+    // `ADD [COLUMN] <column definition>` (BW-R1): a column in one of the
+    // relation's reserved slots, every row of which already has the bytes.
+    if (verb.type == TokenType::kIdent && IEquals(verb.text, "ADD")) {
+        lexer_.Next();
+        if (const Token what = lexer_.Peek();
+            what.type == TokenType::kIdent && IEquals(what.text, "COLUMN")) {
+            lexer_.Next();
+        }
+        stmt.action = AlterAction::kAddColumn;
+        stmt.column_byte_offset = lexer_.Peek().byte_offset;
+        auto column = ParseColumnDef();
+        if (!column.ok()) return column.status();
+        stmt.column = std::move(column.value());
+        ConsumeOptionalSemicolon();
+        return stmt;
+    }
     if (verb.type == TokenType::kIdent &&
-        (IEquals(verb.text, "ADD") || IEquals(verb.text, "MODIFY") ||
-         IEquals(verb.text, "SET"))) {
+        (IEquals(verb.text, "MODIFY") || IEquals(verb.text, "SET"))) {
         return Status::NotImplemented(
             "ALTER TABLE " + std::string(verb.text) +
             " is not supported (byte " + std::to_string(verb.byte_offset) +
@@ -3529,7 +3553,7 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
         return stmt;
     }
     if (verb.type != TokenType::kIdent || !IEquals(verb.text, "RENAME")) {
-        return Status::InvalidArgument("expected RENAME or DROP after the table name, got '" +
+        return Status::InvalidArgument("expected RENAME, ADD or DROP after the table name, got '" +
                                         std::string(Describe(verb)) + "' at byte " +
                                         std::to_string(verb.byte_offset));
     }

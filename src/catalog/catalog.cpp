@@ -1233,7 +1233,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
 Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::string_view name,
                                  std::uint32_t type_val, std::uint32_t len, bool notnull,
                                  std::uint8_t cabin_policy, std::uint64_t trx_id,
-                                 CatalogRowRef* where) {
+                                 CatalogRowRef* where, std::uint8_t flags) {
     SysColumnRow row{};
     row.oid = oid;
     row.rel_id = rel_id;
@@ -1243,6 +1243,7 @@ Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::str
     row.len = len;
     row.notnull = notnull;
     row.cabin_policy = cabin_policy;
+    row.flags = flags;
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageColumns, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysColumnsTable;
     // A new column row changes the schema half of a cached TableAccess.
@@ -1794,6 +1795,72 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     if (!acted.value()) return Status::NotFound("the column vanished between check and write");
 
     BumpVersion("rename column");
+    return Status::OK();
+}
+
+Status Catalog::AddColumn(Oid table_oid, const SysColumnRow& column, std::uint64_t trx_id,
+                          CatalogRowRef* where) {
+    // The slot count is fixed at CREATE, so it is read before the hold.
+    auto table_row = GetSysTableRow(table_oid);
+    if (!table_row.ok()) return table_row.status();
+    // One hold of `sys.columns`' root page across the name check, the slot
+    // count and the insert (CT7), so two adds cannot take one name or one
+    // slot.
+    auto columns_page = store_.Get(kCatalogPageColumns);
+    if (!columns_page.ok()) return columns_page.status();
+
+    auto schema = ScanSchemaFromColumns(table_oid);
+    if (!schema.ok()) return schema.status();
+    schema.value().spare_slots = table_row.value().spare_slots;
+    std::uint16_t held = 0;
+    for (const SysColumnRow& existing : schema.value().columns) {
+        if (existing.in_slot()) ++held;
+        if (!existing.dropped() && NameView(existing.name) == NameView(column.name)) {
+            return Status::AlreadyExists("the relation already has a column named '" +
+                                         std::string(NameView(column.name)) + "'");
+        }
+    }
+    if (held >= table_row.value().spare_slots) {
+        return Status::NotImplemented(
+            table_row.value().spare_slots == 0
+                ? std::string("the relation reserved no column slots (CREATE TABLE ... SPARE n); "
+                              "adding a column to it would rewrite every row (invariant 13)")
+                : "all " + std::to_string(table_row.value().spare_slots) +
+                      " of the relation's column slots are taken - a dropped column keeps its "
+                      "slot - and adding a column would rewrite every row (invariant 13)");
+    }
+
+    SysColumnRow row = column;
+    row.rel_id = table_oid;
+    row.pos = static_cast<std::uint32_t>(schema.value().columns.size());
+    row.notnull = false;
+    row.flags = SysColumnRow::kColumnInSlot;
+    auto width = RowLayout::ColumnWidth(row, inline_cell_width_);
+    if (!width.ok()) return width.status();
+    if (width.value() > kColumnSlotWidth) {
+        return Status::NotImplemented(
+            "a column slot is " + std::to_string(kColumnSlotWidth) + " bytes and this column's " +
+            "cell is " + std::to_string(width.value()) +
+            "; a string column added to a relation is varchar(16), which holds a value of any "
+            "length and spills one past 13 bytes");
+    }
+    // The layout the relation will have, built before anything is written:
+    // the row size it computes is the one every row already has.
+    schema.value().columns.push_back(row);
+    if (Status s = CheckDeclarableColumnTypes(schema.value()); !s.ok()) return s;
+    if (auto layout = RowLayout::Build(schema.value(), inline_cell_width_); !layout.ok()) {
+        return layout.status();
+    }
+
+    auto col_oid = GenerateUserOid();
+    if (!col_oid.ok()) return col_oid.status();
+    if (Status s = InsertColumnRow(col_oid.value(), table_oid, row.pos, NameView(row.name),
+                                   row.type_val, row.len, row.notnull, row.cabin_policy, trx_id,
+                                   where, row.flags);
+        !s.ok()) {
+        return s;
+    }
+    if (where != nullptr) where->oid = col_oid.value();
     return Status::OK();
 }
 

@@ -140,6 +140,7 @@ StatusOr<RowLayout> RowLayout::Build(const Schema& schema, std::uint32_t inline_
     }
     offset = slot_region + static_cast<std::uint32_t>(schema.spare_slots) * kColumnSlotWidth;
     next_bit = static_cast<std::uint16_t>(first_slot_bit + schema.spare_slots);
+    layout.slots_held = slots_held;
     layout.vacant_slot_bit_begin = static_cast<std::uint16_t>(first_slot_bit + slots_held);
     layout.vacant_slot_bit_end = next_bit;
 

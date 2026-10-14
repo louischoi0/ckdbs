@@ -97,11 +97,69 @@ TEST_F(AlterColumnTest, ADroppedColumnLeavesEverySurfaceAndTheOthersReadAsBefore
     EXPECT_EQ(Run("SELECT name FROM sys.columns WHERE rel_name = 't'"), "name\\nid\\nb");
 
     // Positional VALUES count live columns: the body, or the key and the body.
-    Ok("INSERT INTO t VALUES ('three')");
+    Ok("INSERT INTO t VALUES (NULL, 'three')");
     Ok("INSERT INTO t VALUES (9, 'nine')");
     Refused("INSERT INTO t VALUES (1, 'x', 'y')", "expected 2 value(s)");
     Ok("UPDATE t SET b = 'TWO' WHERE id = 2");
     EXPECT_EQ(Run("SELECT * FROM t"), "id,b\\n1,one\\n2,TWO\\n3,three\\n9,nine");
+}
+
+// BW-Q9 [quiet-wrong]: after an ADD, a row written for the old columns -
+// key named - has the length the short, key-issued form had; after a DROP,
+// a key-issued row has the full form's. Either would put every value one
+// column over with no error, so a changed relation takes every live column,
+// the key NULL to have it issued.
+TEST_F(AlterColumnTest, AChangedColumnSetRefusesTheShortFormThatWouldShiftValues) {
+    Ok("CREATE TABLE t (id int64, v int64) SPARE 2");
+    Ok("INSERT INTO t VALUES (8)");      // short form, key issued: allowed before the change
+    Ok("INSERT INTO t VALUES (NULL, 9)");  // a NULL key asks for one too
+    Ok("ALTER TABLE t ADD COLUMN a int64 NULL");
+    Refused("INSERT INTO t VALUES (9, 8)", "changed by ALTER TABLE");
+    Ok("INSERT INTO t VALUES (NULL, 7, 6)");
+    Ok("INSERT INTO t VALUES (20, 5, 4)");
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,v,a\\n1,8,NULL\\n2,9,NULL\\n3,7,6\\n20,5,4");
+
+    Ok("CREATE TABLE u (id int64, a int64, b int64)");
+    Ok("ALTER TABLE u DROP COLUMN a");
+    Refused("INSERT INTO u VALUES (5)", "changed by ALTER TABLE");
+    Ok("INSERT INTO u VALUES (NULL, 5)");
+    EXPECT_EQ(Run("SELECT * FROM u"), "id,b\\n1,5");
+}
+
+// BW-Q10 [quiet-wrong]: a KWP load's rows are positional against the shape
+// it described at LOAD BEGIN. A drop and an add of equal net width before a
+// chunk would put a dropped column's value in the added one, so the chunk -
+// which re-resolves by name - is refused unless the relation is the one, in
+// the shape, it described. Driven through the load's own seam.
+TEST_F(AlterColumnTest, ALoadChunkAgainstAChangedShapeIsRefused) {
+    Ok("CREATE TABLE t (id int64, a int64, b int64) SPARE 1");
+    const auto oid = boot_->catalog.FindTableOidByName("t");
+    ASSERT_TRUE(oid.ok());
+    auto access = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    const parser::DescribedShape described{oid.value(), 3, access.value()->layout.live_columns};
+
+    const auto chunk = [&](std::int64_t a, std::int64_t b) {
+        parser::InsertStmt stmt;
+        stmt.table_name = "t";
+        stmt.described = described;
+        std::vector<parser::AstValue> row(3);  // a NULL key: issue one
+        row[1].type = parser::ValueType::kInt;
+        row[1].int_val = a;
+        row[2].type = parser::ValueType::kInt;
+        row[2].int_val = b;
+        stmt.rows.push_back(std::move(row));
+        Session session;
+        return dispatcher_->ExecuteInsert(stmt, session).response;
+    };
+    EXPECT_FALSE(IsErr(chunk(1, 2)));
+
+    Ok("ALTER TABLE t DROP COLUMN a");
+    Ok("ALTER TABLE t ADD COLUMN c int64 NULL");  // three live columns again
+    const std::string refused = chunk(3, 4);
+    EXPECT_TRUE(IsErr(refused)) << refused;
+    EXPECT_NE(refused.find("begin a new load"), std::string::npos) << refused;
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,b,c\\n1,2,NULL");
 }
 
 // A dropped NOT NULL varchar's cell is zero - the `kNull` tag - in every row
@@ -110,7 +168,7 @@ TEST_F(AlterColumnTest, ADroppedNotNullVarcharIsNeverDecoded) {
     Ok("CREATE TABLE t (id int64, s varchar, n int32)");
     Ok("INSERT INTO t VALUES ('before', 1)");
     Ok("ALTER TABLE t DROP s");
-    Ok("INSERT INTO t VALUES (2)");
+    Ok("INSERT INTO t VALUES (NULL, 2)");
     EXPECT_EQ(Run("SELECT * FROM t"), "id,n\\n1,1\\n2,2");
     EXPECT_EQ(Run("SELECT COUNT(*) FROM t WHERE n > 0"), "count(*)\\n2");
 }
@@ -122,7 +180,7 @@ TEST_F(AlterColumnTest, ADroppedNameIsFreeAndUnreachable) {
     Refused("CREATE INDEX ix ON t (a)", "no column 'a'");
     Refused("CREATE CABIN ON t(a)", "'a'");
     EXPECT_EQ(Run("ALTER TABLE t RENAME COLUMN b TO a"), "RENAMED COLUMN t.b TO a");
-    Ok("INSERT INTO t VALUES (5)");
+    Ok("INSERT INTO t VALUES (NULL, 5)");
     EXPECT_EQ(Run("SELECT a FROM t"), "a\\n5");
 }
 
@@ -165,7 +223,7 @@ TEST_F(AlterColumnTest, ARolledBackDropRestoresTheColumnWithItsValues) {
     ASSERT_FALSE(IsErr(Run(session, "BEGIN")));
     EXPECT_EQ(Run(session, "ALTER TABLE t DROP COLUMN a"), "DROPPED COLUMN t.a");
     EXPECT_EQ(Run(session, "SELECT * FROM t"), "id,b\\n1,one");
-    ASSERT_FALSE(IsErr(Run(session, "INSERT INTO t VALUES ('two')")));
+    ASSERT_FALSE(IsErr(Run(session, "INSERT INTO t VALUES (NULL, 'two')")));
     ASSERT_FALSE(IsErr(Run(session, "ROLLBACK")));
 
     EXPECT_EQ(Run("SELECT * FROM t"), "id,a,b\\n1,10,one");
@@ -279,6 +337,132 @@ TEST(AlterColumnRecoveryTest, ACommittedDropSurvivesACrashAndAnOpenOneIsUndone) 
     ASSERT_TRUE(rebooted.ok()) << rebooted.message();
 
     EXPECT_EQ(db.Execute("SELECT * FROM t"), "id,b,c\\n1,2,3");
+}
+
+
+// ---- ADD COLUMN (BW-S3) ------------------------------------------------------
+
+TEST_F(AlterColumnTest, RowsThatPredateAnAddedColumnReadNullInEveryType) {
+    Ok("CREATE TABLE t (id int64, v int32) SPARE 8");
+    Ok("INSERT INTO t VALUES (1)");
+    Ok("UPDATE t SET v = 2 WHERE id = 1");  // an updated row carries the vacant bits
+    for (const char* add : {"ALTER TABLE t ADD COLUMN a int64 NULL",
+                            "ALTER TABLE t ADD b bool NULL",
+                            "ALTER TABLE t ADD COLUMN c date NULL",
+                            "ALTER TABLE t ADD COLUMN d decimal(30, 2) NULL",
+                            "ALTER TABLE t ADD COLUMN e char(4) NULL",
+                            "ALTER TABLE t ADD COLUMN f varchar(16) NULL"}) {
+        const std::string out = Run(add);
+        EXPECT_EQ(out.rfind("ADDED COLUMN t.", 0), 0u) << add << " -> " << out;
+    }
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,v,a,b,c,d,e,f\\n1,2,NULL,NULL,NULL,NULL,NULL,NULL");
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM t WHERE a IS NULL AND f IS NULL"), "count(*)\\n1");
+    EXPECT_EQ(Run("SELECT name, spare_slots, spare_free FROM sys.tables WHERE name = 't'"),
+              "name,spare_slots,spare_free\\nt,8,2");
+}
+
+TEST_F(AlterColumnTest, AnAddedColumnTakesValuesInlineAndSpilledAndIsUpdated) {
+    Ok("CREATE TABLE t (id int64, v int32) SPARE 2");
+    Ok("INSERT INTO t VALUES (1)");
+    Ok("ALTER TABLE t ADD COLUMN s varchar(16) NULL");
+    Ok("ALTER TABLE t ADD COLUMN n int64 NULL");
+    const std::string longer(100, 'z');
+    Ok("INSERT INTO t VALUES (NULL, 2, 'short', 7)");
+    Ok("INSERT INTO t VALUES (NULL, 3, '" + longer + "', NULL)");
+    EXPECT_EQ(Run("SELECT s, n FROM t WHERE id = 2"), "s,n\\nshort,7");
+    EXPECT_EQ(Run("SELECT s FROM t WHERE id = 3"), "s\\n" + longer);
+    Ok("UPDATE t SET n = 9, s = 'fill' WHERE id = 1");
+    EXPECT_EQ(Run("SELECT * FROM t"),
+              "id,v,s,n\\n1,1,fill,9\\n2,2,short,7\\n3,3," + longer + ",NULL");
+    EXPECT_EQ(Run("SELECT id FROM t WHERE n = 9"), "id\\n1");
+}
+
+TEST_F(AlterColumnTest, AnAddAfterADropTakesTheNextSlotNeverTheDroppedOne) {
+    Ok("CREATE TABLE t (id int64, v int32) SPARE 2");
+    Ok("ALTER TABLE t ADD COLUMN a int64 NULL");
+    Ok("INSERT INTO t VALUES (NULL, 1, 11)");
+    Ok("ALTER TABLE t DROP COLUMN a");
+    Ok("ALTER TABLE t ADD COLUMN a int64 NULL");  // the name is free; the slot is not
+    // Slot 0's bytes still hold 11; the new `a` lives in slot 1 and reads NULL.
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,v,a\\n1,1,NULL");
+    Refused("ALTER TABLE t ADD COLUMN b int64 NULL", "column slots are taken");
+}
+
+TEST_F(AlterColumnTest, WhatAnAddCannotHoldIsRefusedWithItsByte) {
+    Ok("CREATE TABLE plain (id int64, v int32)");
+    Refused("ALTER TABLE plain ADD COLUMN a int64 NULL", "reserved no column slots");
+
+    Ok("CREATE TABLE t (id int64, v int32) SPARE 2");
+    Refused("ALTER TABLE t ADD COLUMN a int64", "must be declared NULL");
+    Refused("ALTER TABLE t ADD COLUMN a int64 NOT NULL", "must be declared NULL");
+    Refused("ALTER TABLE t ADD COLUMN s varchar NULL", "varchar(16)");
+    Refused("ALTER TABLE t ADD COLUMN s varchar(32) NULL", "varchar(16)");
+    Refused("ALTER TABLE t ADD COLUMN c char(17) NULL", "16 bytes");
+    Refused("ALTER TABLE t ADD COLUMN v int64 NULL", "already has a column named 'v'");
+    Refused("ALTER TABLE t ADD COLUMN p int64 NULL REFERENCES t", "CREATE TABLE only");
+    Refused("ALTER TABLE t ADD COLUMN q int64 NULL CABIN", "CREATE CABIN");
+    Refused("ALTER TABLE t ADD COLUMN f float NULL", "float");
+    Refused("ALTER TABLE tables ADD COLUMN x int64 NULL", "system relation");
+    // Nothing was taken by a refusal.
+    EXPECT_EQ(Run("SELECT name, spare_free FROM sys.tables WHERE name = 't'"),
+              "name,spare_free\\nt,2");
+}
+
+TEST_F(AlterColumnTest, ARolledBackAddFreesItsSlotAndTakesItsRowsWithIt) {
+    Ok("CREATE TABLE t (id int64, v int32) SPARE 1");
+    Ok("INSERT INTO t VALUES (1)");
+
+    Session session;
+    ASSERT_FALSE(IsErr(Run(session, "BEGIN")));
+    EXPECT_EQ(Run(session, "ALTER TABLE t ADD COLUMN a int64 NULL"), "ADDED COLUMN t.a");
+    ASSERT_FALSE(IsErr(Run(session, "INSERT INTO t VALUES (NULL, 2, 22)")));
+    EXPECT_EQ(Run(session, "SELECT * FROM t"), "id,v,a\\n1,1,NULL\\n2,2,22");
+    ASSERT_FALSE(IsErr(Run(session, "ROLLBACK")));
+
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,v\\n1,1");
+    EXPECT_EQ(Run("ALTER TABLE t ADD COLUMN b int64 NULL"), "ADDED COLUMN t.b");
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,v,b\\n1,1,NULL");
+}
+
+TEST_F(AlterColumnTest, ACabinServesAnAddedColumnAndANullableOnlyObjectIsRefused) {
+    Ok("CREATE TABLE t (id int64, v int32) BTREE SPARE 3");
+    Ok("INSERT INTO t VALUES (1)");
+    Ok("ALTER TABLE t ADD COLUMN st varchar(16) NULL");
+    Ok("ALTER TABLE t ADD COLUMN c int64 NULL");
+    Ok("CREATE CABIN ON t(c)");
+    Ok("INSERT INTO t VALUES (NULL, 2, NULL, 5)");
+    EXPECT_EQ(Run("SELECT id FROM t WHERE c = 5"), "id\\n2");
+    Ok("INSERT INTO t VALUES (NULL, 3, 'new', 6)");
+    Ok("UPDATE t SET st = 'done' WHERE id = 3");
+    EXPECT_EQ(Run("SELECT st FROM t WHERE id = 3"), "st\\ndone");
+    // An added column is nullable (BW-R5), and neither an index (null.md D2)
+    // nor a Transition (CN-4) takes a nullable column.
+    Refused("CREATE INDEX ix ON t (c)", "nullable");
+    Refused("CREATE TRANSITION flow ON t(st) ON INSERT ('new') ON UPDATE ('new' => 'done')",
+            "nullable");
+}
+
+// ---- Durable, and undone at mount (ADD) -----------------------------------
+
+TEST(AlterColumnRecoveryTest, ACommittedAddSurvivesACrashAndAnOpenOneIsUndone) {
+    auto created = sim::SimInstance::Create();
+    ASSERT_TRUE(created.ok()) << created.status().message();
+    sim::SimInstance& db = *created.value();
+    ASSERT_FALSE(IsErr(db.Execute("CREATE TABLE t (id int64, v int32) SPARE 2")));
+    ASSERT_FALSE(IsErr(db.Execute("INSERT INTO t VALUES (1)")));
+    ASSERT_EQ(db.Execute("ALTER TABLE t ADD COLUMN a int64 NULL"), "ADDED COLUMN t.a");
+    ASSERT_FALSE(IsErr(db.Execute("INSERT INTO t VALUES (NULL, 2, 20)")));
+
+    ASSERT_FALSE(IsErr(db.Execute("BEGIN")));
+    ASSERT_EQ(db.Execute("ALTER TABLE t ADD COLUMN b int64 NULL"), "ADDED COLUMN t.b");
+    ASSERT_FALSE(IsErr(db.Execute("INSERT INTO t VALUES (NULL, 3, 30, 300)")));
+    ASSERT_FALSE(IsErr(db.Execute("SYNC")));
+    db.Crash();
+    const Status rebooted = db.Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+
+    EXPECT_EQ(db.Execute("SELECT * FROM t"), "id,v,a\\n1,1,NULL\\n2,2,20");
+    EXPECT_EQ(db.Execute("ALTER TABLE t ADD COLUMN b int64 NULL"), "ADDED COLUMN t.b");
 }
 
 }  // namespace

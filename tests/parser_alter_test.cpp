@@ -72,12 +72,22 @@ TEST(ParserAlterTest, TheGrammarsOwnWordsAreOrdinaryNames) {
 
 // ---- The AL1 refusal surface ----------------------------------------------
 
-TEST(ParserAlterTest, AddColumnIsNotImplementedWithItsPosition) {
-    const std::string_view sql = "ALTER TABLE t ADD COLUMN x int";
-    const auto parsed = Parse(sql);
-    ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kNotImplemented);
-    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "ADD")));
+TEST(ParserAlterTest, AddColumnTakesCreateTablesColumnDefinition) {
+    for (const std::string_view sql : {std::string_view("ALTER TABLE t ADD COLUMN x int64 NULL"),
+                                       std::string_view("alter table t add x varchar(16) null;")}) {
+        const AlterStmt stmt = MustAlter(Parse(sql));
+        EXPECT_EQ(stmt.action, AlterAction::kAddColumn) << sql;
+        EXPECT_EQ(stmt.column.name, "x") << sql;
+        EXPECT_FALSE(stmt.column.notnull) << sql;
+        EXPECT_EQ(stmt.column_byte_offset, ByteOf(sql, "x")) << sql;
+    }
+    const AlterStmt wide = MustAlter(Parse("ALTER TABLE t ADD c decimal(20, 2) NULL"));
+    EXPECT_TRUE(wide.column.has_precision);
+    EXPECT_EQ(wide.column.precision, 20u);
+    // A bare decimal is refused here as at CREATE TABLE: one definition grammar.
+    EXPECT_EQ(Parse("ALTER TABLE t ADD c decimal NULL").status().code(),
+              StatusCode::kInvalidArgument);
+    EXPECT_EQ(Parse("ALTER TABLE t ADD COLUMN").status().code(), StatusCode::kInvalidArgument);
 }
 
 TEST(ParserAlterTest, DropColumnParsesWithOrWithoutTheWordColumn) {
