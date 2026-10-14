@@ -1207,7 +1207,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         return HandleShow(line, sub, sub_rest, session);
     }
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
-        return HandleShow(line, "DESCRIBE", rest, session);
+        return HandleShow(line, cmd, rest, session);
     }
     // **A DDL runs where the session is** (AT-S5, AT-R5): every core writes
     // the catalog's pages under the page latch, the DDL's own relation `X`
@@ -5792,18 +5792,16 @@ ResultSink& SinkFor(Session& session, TextResultSink& text) {
 // `SELECT` path calls. `DESCRIBE <t>` is one more spelling of the same kind.
 DispatchOutcome CommandDispatcher::HandleShow(std::string_view line, std::string_view target,
                                               std::string_view arg, Session& session) {
+    // A token is a view into `line`; an absent one (`SplitFirstToken`'s
+    // empty rest has no address) is the statement's end.
     const auto byte_of = [&](std::string_view token) {
-        return static_cast<std::uint32_t>(token.data() - line.data());
+        const std::string_view whole = Trim(line);
+        return static_cast<std::uint32_t>(
+            (token.data() == nullptr ? whole.data() + whole.size() : token.data()) - line.data());
     };
     const auto refuse = [&](std::string what) {
         const Status s = Status::InvalidArgument(std::move(what));
         return DispatchOutcome{ErrorReply(s), false, 0, s};
-    };
-    struct Spelling {
-        std::string_view target;
-        std::string_view view;
-        // The projection, empty for `*`.
-        std::initializer_list<std::string_view> columns;
     };
     static constexpr std::string_view kBudget[] = {
         "oid", "name", "next_id", "ids_issued", "ids_remaining", "budget_used_ppm",
@@ -5818,11 +5816,17 @@ DispatchOutcome CommandDispatcher::HandleShow(std::string_view line, std::string
         {"CABINS", "cabins"},       {"INDEXES", "indexes"},
         {"FKEYS", "fkeys"},         {"ASSERTIONS", "assertions"},
         {"CABIN_OPTIMIZER", "cabin_optimizer"}, {"RELAYOUT", "relayout"},
-        {"PAGE", "page_slots"},     {"DESCRIBE", "columns"}};
+        {"PAGE", "page_slots"}};
 
     std::string_view view;
-    for (const auto& [name, v] : kPlain) {
-        if (IEquals(target, name)) view = v;
+    // `DESCRIBE <t>` / `DESC <t>`: the target is the statement's own verb,
+    // so `SHOW DESCRIBE` is no spelling of it.
+    if (target.data() == Trim(line).data()) {
+        view = "columns";
+    } else {
+        for (const auto& [name, v] : kPlain) {
+            if (IEquals(target, name)) view = v;
+        }
     }
     if (view.empty()) {
         return refuse("unknown SHOW target '" + std::string(target) + "' (byte " +
@@ -5928,8 +5932,13 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     // `key = <literal>`, coerced to the key's type, is handed to the builder
     // as a bound on what it reads; a required key not written is refused.
     std::optional<parser::AstValue> key;
+    // The conjunct the builder took as its key: it bounded what the builder
+    // read, and the builder resolved it - `ns.t` names the rows whose
+    // `rel_name` is `t` - so it is not compared against those rows again.
+    std::optional<std::size_t> key_at;
     if (spec->key_mode != ViewKeyMode::kNone) {
-        for (const parser::Condition& cond : stmt.where) {
+        for (std::size_t i = 0; i < stmt.where.size(); ++i) {
+            const parser::Condition& cond = stmt.where[i];
             if (cond.kind != parser::PredicateKind::kCompareValue ||
                 cond.op != parser::CompareOp::kEq || cond.rhs_kind != parser::RhsKind::kLiteral ||
                 !IEquals(cond.col.name, spec->key_column)) {
@@ -5945,6 +5954,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                 return {ErrorReply(s), false, 0, s};
             }
             key = std::move(literal);
+            key_at = i;
             break;
         }
         if (!key.has_value() && spec->key_mode == ViewKeyMode::kRequired) {
@@ -5955,7 +5965,8 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             return {ErrorReply(s), false, 0, s};
         }
     }
-    auto view = ReadSysView(*spec, session, key.has_value() ? &*key : nullptr);
+    auto view =
+        ReadSysView(*spec, session, key.has_value() ? &*key : nullptr, stmt.from.byte_offset);
     if (!view.ok()) {
         return {ErrorReply(view.status()), false, 0, view.status()};
     }
@@ -6081,6 +6092,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     for (const std::vector<parser::AstValue>& row : rows.rows) {
         bool matched = true;
         for (std::size_t i = 0; i < stmt.where.size(); ++i) {
+            if (i == key_at) continue;
             const parser::Condition& cond = stmt.where[i];
             const parser::AstValue& value = row[where_at[i]];
             // The declared type, as the check above used; integers compare

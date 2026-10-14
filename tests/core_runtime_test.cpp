@@ -414,12 +414,15 @@ TEST_F(CoreRuntimeTest, APeerStatementSeesADdlThroughItsOwnBoundary) {
     Session s;
     const std::string first = peer.value()->dispatcher().Dispatch("DESCRIBE early", &s).response;
     ASSERT_NE(first.rfind("ERR", 0), 0u) << first;
-    ASSERT_NE(first.find("v"), std::string::npos) << first;
+    ASSERT_EQ(testing_view::ReadViewText(first).Column("name"),
+              (std::vector<std::string>{"id", "v"}))
+        << first;
 
     ASSERT_TRUE(core0_->catalog.RenameColumn(oid.value(), "v", "renamed").ok());
     const std::string second = peer.value()->dispatcher().Dispatch("DESCRIBE early", &s).response;
     ASSERT_NE(second.rfind("ERR", 0), 0u) << second;
-    EXPECT_NE(second.find("renamed"), std::string::npos)
+    EXPECT_EQ(testing_view::ReadViewText(second).Column("name"),
+              (std::vector<std::string>{"id", "renamed"}))
         << "the peer's statement described a column name a DDL had renamed: " << second;
 }
 

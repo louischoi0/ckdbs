@@ -587,3 +587,68 @@ stays refused (AG12).
 
 **Not cut, stated:** the migration's size. `SHOW META` is parsed in 15
 test files and 24 tools.
+
+### BO-S1 — 2026-10-13
+
+On `bo-show-sugar`, `92c9bc47` to `ac3ec07c`: a `sys` view answers as an
+ordinary table (SV5) - a typed `S_ROW_DESC` and typed row batches on KWP -
+takes `ORDER BY` under its declared types, and the schema-object views read
+under the session's view (BO-Q2 (a)); the `show_sugar` contract suite was
+written red first, its SV2 cells red until BO-S2; a `SET` value's subquery
+over a view runs as one over a table, and the refusal SV5 made dead is
+deleted. Its `critics-developer` review was applied at `ac3ec07c` (a
+view-column refusal names its byte; one keyed sort vector and one sink
+selection). **Not recorded by that session**: the review's rejected
+findings and the suite's pass count; the next session found BO-S2's work
+uncommitted on top of it and no handoff.
+
+### BO-S2 — 2026-10-14
+
+On `bo-show-sugar`, `a8d1425e` (engine and tests), `3ac864f3` (tools) and
+the review commit after them. Every `SHOW` target and `DESCRIBE` is one
+`SELECT` over one view, built as its AST and answered by
+`HandleCatalogView` (SV1, SV4); the fifteen handlers and the trace sink
+(BO-Q9) are deleted; the views are `src/server/sys_views.cpp`. `sys.meta`
+is `(section, field, value)` (BO-Q4), written per section. SV3 carried two
+headers no view had: `SHOW CABIN_OPTIMIZER`'s controller and executor
+numbers (`cabin_optimizer_*`) and `SHOW CABINS`' store counters
+(`cabins_unbankable_views`, `cabins_cap_refusals`), both `sys.meta` fields.
+Every test and tool that parsed a `key=value` reply reads the view
+(`tests/view_text.hpp`, `tools/sys_meta.py`; the tool reader also reads a
+pre-BO engine's line, which an A/B baseline still answers).
+
+**Deleted, by SV3's second clause:** `SHOW BUDGET`'s summary line (BO-Q3:
+a filter on `budget_warning` answers it); `SHOW RELAYOUT`'s per-shape lines
+(summed into `shapes` and `walk_weight_q8`, the shapes being
+`sys.access_stats`' rows); `DESCRIBE`'s `autoincrement=` (always
+`if-omitted` on the pk, derivable from `pk`) and `columns=` (the row
+count); `SHOW PAGE`'s internal-node `max_entries` (a constant);
+`SHOW PATTERNS`' `stale=v<n>` (derivable from `fingerprint_version`).
+**Behaviour changed, stated:** `SHOW RELAYOUT` with the optimizer off and
+`SHOW CABIN_OPTIMIZER` with no controller are refusals naming the view's
+byte, where the first answered a notice; `SHOW PAGE` refuses a page with an
+unreadable slot rather than skipping it; `SHOW BUDGET` refuses where a
+relation has no `sys.tables` row rather than printing an error row.
+
+**Review** (`critics-developer`, on `a8d1425e`). Applied: a view's key
+conjunct re-filtered the rows its builder had already resolved, so a
+qualified `DESCRIBE ns.t` and `SHOW RELAYOUT ns.t` answered zero rows
+(`[quiet-wrong]`; fixed, two new cells); `DESCRIBE` and a bare `SHOW` named
+garbage bytes (fixed); `sys.patterns` decided a directory by its root, not
+`HasWaystoneDirectory` (fixed); `DESCRIBE <unknown>` named no byte (fixed);
+the two configuration refusals named no byte (fixed); a rate over no
+lookups, an empty covering list and an unresolvable relation name read 0,
+`''` and `oid=N` (now NULL); every view took the session's read view, which
+ends a statement boundary under an open DDL (now only the schema-object
+views); a dead `Spelling` struct; two tests reading by position or by a
+substring the header also holds. **Rejected:** `Unsupported` for the two
+configuration refusals - the architecture admits both surfaces, this
+instance is configured without them, so `InvalidArgument` stays;
+`MetaSections` pushing triples instead of a `key=value` line its view
+parses back - the largest cut on offer, but the backup and archive blocks
+write the same line through `AppendMeta(std::ostream&)` and share it with
+`BACKUP STATUS`, so it is a change to those interfaces, not to this stage,
+and is left as named.
+
+Suite: 3759/3759 (`ctest -LE heap-suspended`, Debug). Overhead not
+measured; measured at the milestone's close.

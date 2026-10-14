@@ -91,6 +91,19 @@ parser::AstValue Null() {
 
 parser::AstValue Bool(bool v) { return Int(v ? 1 : 0); }
 
+// A relation's name from `RelationNameOf`, or NULL where the oid names no
+// relation: its `oid=N` fallback is a label, not a name - no identifier
+// holds `=` - and the view's `*_oid` column already carries the number.
+parser::AstValue RelName(std::string name) {
+    return name.find('=') == std::string::npos ? Str(name) : Null();
+}
+
+// A percentage of `of`, NULL where nothing was counted: a rate over no
+// lookups is unknown, not 0.
+parser::AstValue PercentOf(std::uint64_t part, std::uint64_t of) {
+    return of == 0 ? Null() : Int(part * 100 / of);
+}
+
 // A slot's payload in hex: any byte value, ASCII out.
 std::string HexEncode(std::span<const std::byte> bytes) {
     static constexpr char kHexDigits[] = "0123456789abcdef";
@@ -141,28 +154,33 @@ std::vector<std::string> SysViewNames() {
 
 StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& spec,
                                                            Session& session,
-                                                           const parser::AstValue* key) {
-    // **BO-Q2**: a schema-object view reads under the session's view, as
-    // `SHOW TABLES` always did; an engine-state view does not.
-    const std::optional<txn::ReadView> read_view = ViewFor(session);
-    const txn::ReadView* view = read_view.has_value() ? &*read_view : nullptr;
+                                                           const parser::AstValue* key,
+                                                           std::uint32_t byte) {
+    // Engine state first: these read no session view, so none is taken -
+    // `ViewFor` ends a statement boundary under an open DDL, a side effect
+    // the old `SHOW` handlers never had.
     const std::string_view n = spec.name;
-    if (n == "tables") return TablesView(view);
-    if (n == "columns") return ColumnsView(view, key);
-    if (n == "objects") return ObjectsView(view);
     if (n == "types") return TypesView();
     if (n == "patterns") return PatternsView();
-    if (n == "namespaces") return NamespacesView(view);
-    if (n == "indexes") return IndexesView(view);
-    if (n == "fkeys") return FkeysView(view);
     if (n == "access_stats") return AccessStatsView();
     if (n == "relation_stats") return RelationStatsView();
     if (n == "cabins") return CabinsView();
     if (n == "assertions") return AssertionsView();
-    if (n == "relayout") return RelayoutView(key);
-    if (n == "cabin_optimizer") return CabinOptimizerView();
+    if (n == "relayout") return RelayoutView(key, byte);
+    if (n == "cabin_optimizer") return CabinOptimizerView(byte);
     if (n == "page_slots") return PageSlotsView(*key);
     if (n == "meta") return MetaView();
+
+    // **BO-Q2**: a schema-object view reads under the session's view, as
+    // `SHOW TABLES` always did.
+    const std::optional<txn::ReadView> read_view = ViewFor(session);
+    const txn::ReadView* view = read_view.has_value() ? &*read_view : nullptr;
+    if (n == "tables") return TablesView(view);
+    if (n == "columns") return ColumnsView(view, key);
+    if (n == "objects") return ObjectsView(view);
+    if (n == "namespaces") return NamespacesView(view);
+    if (n == "indexes") return IndexesView(view);
+    if (n == "fkeys") return FkeysView(view);
     return Status::NotFound("no catalog view named 'sys." + std::string(n) + "'");
 }
 
@@ -252,7 +270,11 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
         // qualifier checked, never answered with no rows.
         const auto [qualifier, bare] = SplitQualifiedArg(rel_name->str_val);
         auto oid = catalog_.FindTableOidByName(bare, view_of);
-        if (!oid.ok()) return oid.status();
+        if (!oid.ok()) {
+            return oid.status().WithMessage(oid.status().message() + " '" + rel_name->str_val +
+                                            "' (byte " + std::to_string(rel_name->byte_offset) +
+                                            ")");
+        }
         if (Status s = catalog_.CheckRelationQualifier(qualifier, bare, oid.value(),
                                                        rel_name->byte_offset, view_of);
             !s.ok()) {
@@ -299,7 +321,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
                     if (const catalog::ForeignKeyRef* fk =
                             access.value()->ForeignKeyOn(static_cast<std::uint16_t>(i));
                         fk != nullptr) {
-                        references = Str(RelationNameOf(fk->rel_oid));
+                        references = RelName(RelationNameOf(fk->rel_oid));
                     }
                 }
             }
@@ -346,7 +368,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::PatternsView() {
     auto patterns = catalog_.ListPatterns();
     if (!patterns.ok()) return patterns.status();
     for (const catalog::SysPatternRow& p : patterns.value()) {
-        const bool directory = p.waystone_root != kInvalidPageId;
+        // `dir_depth` is the one authority on a directory (rows.hpp): a
+        // zeroed row's root reads as page 0, not as the invalid id.
+        const bool directory = catalog::HasWaystoneDirectory(p);
         view.rows.push_back({Int(p.oid), Int(p.fetch_id), Int(p.fingerprint_version),
                              Int(p.stmt_class),
                              Str(p.origin == catalog::kOriginUser ? "user" : "auto"),
@@ -415,8 +439,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
         auto entries = index::IndexEntryCount(page_store_, root, layout);
         view.rows.push_back(
             {Int(row.index_oid), Str(catalog::NameView(row.name)), Int(row.table_oid),
-             Str(RelationNameOf(row.table_oid)), Str(columns(row.key_cols.data(), row.nkeys)),
-             Str(columns(row.covered_cols.data(), row.ncovered)), Int(root), Int(row.key_width),
+             RelName(RelationNameOf(row.table_oid)), Str(columns(row.key_cols.data(), row.nkeys)),
+             row.ncovered == 0 ? Null() : Str(columns(row.covered_cols.data(), row.ncovered)),
+             Int(root), Int(row.key_width),
              Int(row.entry_width), height.ok() ? Int(height.value()) : Null(),
              entries.ok() ? Int(entries.value()) : Null()});
     }
@@ -443,9 +468,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::FkeysView(const txn::ReadView* vi
             [&](const catalog::SysObjectRow& obj) { return obj.oid == row.child_rel_oid; });
         if (!seen) continue;
         auto child = catalog_.InitTableAccess(row.child_rel_oid);
-        view.rows.push_back({Int(row.fk_id), Str(RelationNameOf(row.child_rel_oid)),
+        view.rows.push_back({Int(row.fk_id), RelName(RelationNameOf(row.child_rel_oid)),
                              Str(ColumnLabel(child, row.child_column_no)),
-                             Str(RelationNameOf(row.parent_rel_oid)), Str("RESTRICT"),
+                             RelName(RelationNameOf(row.parent_rel_oid)), Str("RESTRICT"),
                              Bool((row.flags & catalog::kFkNullable) != 0)});
     }
     return view;
@@ -473,7 +498,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::AccessStatsView() {
             if (!columns.empty()) columns += ',';
             columns += ColumnLabel(access, col);
         }
-        view.rows.push_back({Int(row.rel_id), Str(RelationNameOf(row.rel_id)),
+        view.rows.push_back({Int(row.rel_id), RelName(RelationNameOf(row.rel_id)),
                              Str(kind.has_value() ? exec::AccessKindName(*kind) : "?"),
                              Str(std::move(columns)), Int(row.column_mask), Int(row.use_count),
                              Int(row.last_seen)});
@@ -546,7 +571,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::CabinsView() {
         std::vector<parser::AstValue> out{
             Int(row.cabin_id),
             Int(row.rel_oid),
-            Str(RelationNameOf(row.rel_oid)),
+            RelName(RelationNameOf(row.rel_oid)),
             Str(ColumnLabel(access, row.column_no)),
             Str(row.origin == catalog::kCabinOriginUser ? "user" : "auto"),
             Str(row.status == catalog::kCabinStatusActive     ? "active"
@@ -582,7 +607,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::AssertionsView() {
     if (!rows.ok()) return rows.status();
     for (const exec::AssertionDef& def : rows.value()) {
         std::vector<parser::AstValue> out{
-            Int(def.id), Str(def.name), Int(def.target_oid), Str(RelationNameOf(def.target_oid)),
+            Int(def.id), Str(def.name), Int(def.target_oid), RelName(RelationNameOf(def.target_oid)),
             // Enforced when it has a directory and the registry holds it
             // (`assertion.md` §6.1, §8.1).
             Bool(def.cabin_root != kInvalidPageId && enforcer_->Holds(def.id))};
@@ -600,11 +625,12 @@ StatusOr<exec::CatalogView> CommandDispatcher::AssertionsView() {
     return view;
 }
 
-StatusOr<exec::CatalogView> CommandDispatcher::RelayoutView(const parser::AstValue* name) {
+StatusOr<exec::CatalogView> CommandDispatcher::RelayoutView(const parser::AstValue* name,
+                                                            std::uint32_t byte) {
     if (relayout_mode_ == PhysicalOptimizerMode::kOff) {
         return Status::InvalidArgument(
             "sys.relayout has no plans to report: the physical optimizer is off "
-            "(physical_optimizer=off)");
+            "(physical_optimizer=off) (byte " + std::to_string(byte) + ")");
     }
     exec::CatalogView view;
     // One row per plan, the relation's columns repeated on each; a relation
@@ -688,11 +714,12 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelayoutView(const parser::AstVal
     return view;
 }
 
-StatusOr<exec::CatalogView> CommandDispatcher::CabinOptimizerView() {
+StatusOr<exec::CatalogView> CommandDispatcher::CabinOptimizerView(std::uint32_t byte) {
     const LatchGuard latched(cabin_optimizer_view_latch_);
     if (cabin_controller_ == nullptr) {
         return Status::InvalidArgument(
-            "sys.cabin_optimizer has nothing to report: this instance runs no cabin optimizer");
+            "sys.cabin_optimizer has nothing to report: this instance runs no cabin optimizer "
+            "(byte " + std::to_string(byte) + ")");
     }
     exec::CatalogView view;
     // One row per managed entry. The controller's and executor's own
@@ -715,18 +742,15 @@ StatusOr<exec::CatalogView> CommandDispatcher::CabinOptimizerView() {
     for (const stats::ManagedEntryView& entry : cabin_controller_->ManagedEntries()) {
         auto access = catalog_.InitTableAccess(entry.rel_oid);
         std::vector<parser::AstValue> row{
-            Int(entry.rel_oid),      Str(RelationNameOf(entry.rel_oid)),
+            Int(entry.rel_oid),      RelName(RelationNameOf(entry.rel_oid)),
             Str(ColumnLabel(access, entry.col_pos)), Str(entry.state),
             Int(entry.cabin_id),     Int(entry.pages),
             Int(entry.confirm_streak), Int(entry.benefit),
             Int(entry.cost)};
         if (entry.cabin_id != 0 && optimizer_signals_ != nullptr) {
             const stats::SnapshotCabin q = optimizer_signals_->QualityOf(entry.cabin_id);
-            const std::uint64_t lookups = q.lookups_q8;
-            row.push_back(
-                Int(lookups == 0 ? 0 : (std::uint64_t{q.hint_failures_q8} * 100) / lookups));
-            row.push_back(
-                Int(lookups == 0 ? 0 : (std::uint64_t{q.coverage_misses_q8} * 100) / lookups));
+            row.push_back(PercentOf(q.hint_failures_q8, q.lookups_q8));
+            row.push_back(PercentOf(q.coverage_misses_q8, q.lookups_q8));
         } else {
             row.insert(row.end(), 2, Null());
         }

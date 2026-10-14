@@ -536,7 +536,7 @@ TEST_F(ForeignKeyCheckTest, ManyChildrenOfOneParentResolveItOnce) {
     // shape's counter (`sys.access_stats`), and before the hoist this read
     // 20.
     const std::string access =
-        Run("SELECT kind, columns, uses FROM sys.access_stats WHERE rel_name = 'accounts'");
+        Run("SELECT kind, uses, columns FROM sys.access_stats WHERE rel_name = 'accounts'");
     const auto shown = testing_view::ReadViewText(access);
     EXPECT_EQ(shown.Find("kind", "Lookup", "columns"), "id") << access;
     EXPECT_EQ(shown.Find("kind", "Lookup", "uses"), "1")

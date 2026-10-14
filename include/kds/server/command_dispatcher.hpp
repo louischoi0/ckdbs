@@ -1865,9 +1865,10 @@ private:
     // One builder per view; `ReadSysView` dispatches on the registry entry.
     // `key` is the view's key literal where the statement wrote one
     // (`sys_views.hpp`), null otherwise; a schema-object view reads under
-    // `view` (BO-Q2), null for unfiltered.
+    // `view` (BO-Q2), null for unfiltered; `byte` is the view name's, which a
+    // refusal that is not about a literal names.
     StatusOr<exec::CatalogView> ReadSysView(const SysViewSpec& spec, Session& session,
-                                            const parser::AstValue* key);
+                                            const parser::AstValue* key, std::uint32_t byte);
     StatusOr<exec::CatalogView> TablesView(const txn::ReadView* view);
     StatusOr<exec::CatalogView> ObjectsView(const txn::ReadView* view);
     StatusOr<exec::CatalogView> ColumnsView(const txn::ReadView* view,
@@ -1881,13 +1882,13 @@ private:
     StatusOr<exec::CatalogView> RelationStatsView();
     StatusOr<exec::CatalogView> CabinsView();
     StatusOr<exec::CatalogView> AssertionsView();
-    StatusOr<exec::CatalogView> RelayoutView(const parser::AstValue* name);
-    StatusOr<exec::CatalogView> CabinOptimizerView();
+    StatusOr<exec::CatalogView> RelayoutView(const parser::AstValue* name, std::uint32_t byte);
+    StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
     StatusOr<exec::CatalogView> PageSlotsView(const parser::AstValue& page_id);
     StatusOr<exec::CatalogView> MetaView();
     // The clustered root a relation's anchor names, or its descriptor page.
     StatusOr<PageId> CurrentRootOf(const catalog::SysTableRow& row);
-    // `sys.meta`'s fields as one `key=value` line.
+    // `sys.meta`'s fields: each section's `key=value` tokens.
     std::vector<std::pair<std::string_view, std::string>> MetaSections();
 
     // A full ordered scan of the relation, whichever storage it uses. Both

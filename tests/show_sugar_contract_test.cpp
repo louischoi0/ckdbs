@@ -336,10 +336,44 @@ TEST_F(ShowSugarTest, ASurfaceTheInstanceDoesNotRunIsRefusedTheSameByBothSpellin
     // SV2's refusal half: with no controller the view reports the surface
     // absent rather than an empty table, and the `SHOW` says it in the same
     // words.
+    // Each names the byte of the view in the statement it was sent: the
+    // `SHOW`'s target word, the `SELECT`'s relation.
     dispatcher_->set_cabin_optimizer_view(nullptr, nullptr);
-    const std::string selected = Text("SELECT * FROM sys.cabin_optimizer");
-    EXPECT_EQ(selected.rfind("ERR", 0), 0u) << selected;
-    EXPECT_EQ(Text("SHOW CABIN_OPTIMIZER"), selected);
+    const std::string refusal =
+        "ERR sys.cabin_optimizer has nothing to report: this instance runs no cabin optimizer";
+    EXPECT_EQ(Text("SELECT * FROM sys.cabin_optimizer"), refusal + " (byte 14)");
+    EXPECT_EQ(Text("SHOW CABIN_OPTIMIZER"), refusal + " (byte 5)");
+}
+
+TEST_F(ShowSugarTest, AQualifiedNameDescribesTheRelationItNames) {
+    // The key's literal is `ns.t` and the rows' `rel_name` is `t`: the
+    // builder resolves the qualified name, and the conjunct must not then
+    // filter every row it read away - a relation answered with no columns.
+    ASSERT_EQ(Text("CREATE NAMESPACE ns").substr(0, 7), "CREATED");
+    ASSERT_EQ(Text("CREATE TABLE ns.q (id int64, w int32)").substr(0, 7), "CREATED");
+    const std::string described = Text("DESCRIBE ns.q");
+    EXPECT_EQ(described, Text("DESCRIBE q"));
+    EXPECT_EQ(described, Text("SELECT * FROM sys.columns WHERE rel_name = 'ns.q'"));
+    EXPECT_NE(described.find("\\n"), std::string::npos) << "no rows: " << described;
+    const std::string relayout = Text("SHOW RELAYOUT ns.q");
+    EXPECT_EQ(relayout, Text("SHOW RELAYOUT q"));
+    EXPECT_NE(relayout.find("\\n"), std::string::npos) << "no rows: " << relayout;
+    // A wrong qualifier is still refused, not answered with no rows.
+    EXPECT_EQ(Text("DESCRIBE public.q").rfind("ERR", 0), 0u);
+    EXPECT_EQ(Text("SHOW RELAYOUT public.q").rfind("ERR", 0), 0u);
+}
+
+TEST_F(ShowSugarTest, ARefusalWithNoArgumentNamesTheStatementsEnd) {
+    // `DESCRIBE` and a bare `SHOW` have no token to point at; the byte is
+    // the end of the statement, never an address outside it.
+    EXPECT_NE(Text("DESCRIBE").find("(byte 8)"), std::string::npos) << Text("DESCRIBE");
+    EXPECT_NE(Text("DESC").find("(byte 4)"), std::string::npos) << Text("DESC");
+    EXPECT_NE(Text("SHOW").find("(byte 4)"), std::string::npos) << Text("SHOW");
+    EXPECT_NE(Text("DESC a b").find("(byte 7)"), std::string::npos) << Text("DESC a b");
+    // An unknown name is refused at the name's byte.
+    EXPECT_NE(Text("DESCRIBE nope").find("(byte 9)"), std::string::npos) << Text("DESCRIBE nope");
+    // `DESCRIBE` is a statement of its own, not a `SHOW` target.
+    EXPECT_EQ(Text("SHOW DESCRIBE t").rfind("ERR", 0), 0u) << Text("SHOW DESCRIBE t");
 }
 
 TEST_F(ShowSugarTest, TheTraceSurfaceIsRetired) {

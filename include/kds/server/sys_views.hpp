@@ -28,8 +28,10 @@
 //   kChecked   the conjunct is optional; when written, the builder is told
 //              and refuses a key that names nothing.
 //
-// The conjunct still filters the rows as any other does: the builder's use
-// of it is a bound on what it reads, never a second meaning.
+// The builder takes the first such conjunct as a bound on what it reads and
+// returns only the rows it names, so that conjunct is not compared against
+// them again: `rel_name = 'ns.t'` names the rows whose `rel_name` is `t`.
+// Every other conjunct, a second one on the key included, filters as usual.
 
 namespace kds::server {
 
