@@ -1,0 +1,6 @@
+2026-10-14T00:44:40Z master=none alive=n status_age=26s status=2026-10-14T00:44:14Z ALL DONE
+2026-10-14T00:44:40Z ORPHAN: master gone, restarting
+2026-10-14T00:45:40Z master=1677627 alive=y status_age=2s status=2026-10-14T00:45:38Z b1-s2-c1-s end
+2026-10-14T00:46:40Z master=1677627 alive=y status_age=26s status=2026-10-14T00:46:14Z r2-b1-s2-c1-s start
+2026-10-14T00:47:40Z master=1677627 alive=y status_age=24s status=2026-10-14T00:47:16Z r3-b1-s2-c1-s start
+2026-10-14T00:48:40Z all.done seen, watchdog exits

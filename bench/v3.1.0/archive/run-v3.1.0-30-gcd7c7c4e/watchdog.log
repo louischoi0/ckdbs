@@ -1,0 +1,11 @@
+2026-10-14T01:30:14Z master=none alive=n status_age=22s status=2026-10-14T01:29:52Z ALL DONE
+2026-10-14T01:30:14Z ORPHAN: master gone, restarting
+2026-10-14T01:31:14Z master=1718967 alive=y status_age=10s status=2026-10-14T01:31:04Z r2-s1s-n252-c1-g start
+2026-10-14T01:32:14Z master=1718967 alive=y status_age=10s status=2026-10-14T01:32:04Z r2-s1s-n252-c1-g waiting for a quiet host: busy=100% procs=28
+2026-10-14T01:33:14Z master=1718967 alive=y status_age=9s status=2026-10-14T01:33:05Z r2-s1s-n252-c1-g waiting for a quiet host: busy=99% procs=28
+2026-10-14T01:34:14Z master=1718967 alive=y status_age=9s status=2026-10-14T01:34:05Z r2-s1s-n10080-c1-g waiting for a quiet host: busy=24% procs=10
+2026-10-14T01:35:14Z master=1718967 alive=y status_age=1s status=2026-10-14T01:35:13Z r2-s1s-n10080-c1-g end
+2026-10-14T01:36:14Z master=1718967 alive=y status_age=3s status=2026-10-14T01:36:11Z r2-s1s-n10080-c1-g waiting for a quiet host: busy=31% procs=10
+2026-10-14T01:37:14Z master=1718967 alive=y status_age=3s status=2026-10-14T01:37:11Z r2-s1s-n10080-c1-g waiting for a quiet host: busy=92% procs=10
+2026-10-14T01:38:14Z master=1718967 alive=y status_age=2s status=2026-10-14T01:38:12Z r2-s1s-n10080-c1-g waiting for a quiet host: busy=21% procs=10
+2026-10-14T01:39:14Z master=1718967 alive=y status_age=1s status=2026-10-14T01:39:13Z r2-s1s-n10080-c1-g waiting for a quiet host: busy=3% procs=10

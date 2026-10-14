@@ -1,0 +1,33 @@
+created 8 relations with suffix _s2rrc8g:
+  organizations_s2rrc8g
+  ships_s2rrc8g
+  operations_s2rrc8g
+  cargos_s2rrc8g
+  fees_s2rrc8g
+  recipes_s2rrc8g
+  freights_s2rrc8g
+  charges_s2rrc8g
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/bench-v3.1.0-scenarios/tools/scenario2_freight.py --suffix s2rrc8g
+
+ckdbs benchmark - 68 columns, 4735 rows resident, 1 connection
+server 127.0.0.1:15605  table scenario2_s2rrc8g
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0    1235.0   1022.8   1061.5   1086.0   1823.7   1823.7    1823.7     0
+load-organizations         300         0    1353.1    948.2   1022.8   1062.4   2706.8   6453.6   14102.2     0
+load-ships                  30         0    1131.7    949.6   1036.0   1065.2   1783.0   2268.1    2268.1     0
+load-operations            300         0    1144.1    932.6   1011.4   1043.8   1521.6   4077.7    6366.3     0
+load-fees                   12         0    1049.3    980.7   1023.5   1041.8   1124.7   1124.7    1124.7     0
+load-recipes                93         0    1221.9    940.5   1010.0   1049.1   2403.2   4747.6    4747.6     0
+load-cargos               4000         0    1346.1    899.3   1044.3   1094.1   2488.4   5941.4   24072.8     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.
