@@ -22,6 +22,7 @@
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/stats/relayout_planner.hpp"
 #include "kds/stats/trail_store.hpp"
+#include "kds/stats/statement_stats.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -683,6 +684,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // statement of this core stages its own inside this one's parks and
     // walk (BA-S15), and this statement must not wait out that one's sync.
     const std::uint64_t statement = ++last_statement_;
+    // `sys.statement_stats` times the statement from here to its reply
+    // (BO-S5); a frame destroyed at a park never replies and is no call.
+    const sched::MonoTimeNs began_ns = NowNs();
     out->statement = statement;
     // Every statement runs on the core its session is on (AT-S9). What
     // suspends here is a statement's own wait - a lock, a blocking writer,
@@ -715,6 +719,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         const MayParkScope parking(*this, /*allowed=*/true, statement);
         *out = DispatchAndStage(line, session);
     }
+    // Kept from the first run: every re-run is the same text, and a reply
+    // rebuilt below (a refused commit, a walk's end) need not carry it.
+    const std::uint64_t fetch_id = out->fetch_id;
 
     // ---- R6-5: D5's bounded wait on an undecided row --------------------
     //
@@ -836,6 +843,8 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
                 .set_acknowledged_commit_lsn(wal::kNoLsn);
         }
     }
+    out->fetch_id = fetch_id;
+    RecordStatement(line, *out, began_ns);
     co_return Status::OK();
 }
 
@@ -911,8 +920,10 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
     last_refusal_ = Status::OK();
     last_refusal_detail_ = wire::kNoDetail;
     statement_trail_mark_ = 0;
+    statement_fetch_id_ = 0;
 
     DispatchOutcome outcome = DispatchInner(line, active);
+    outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
     // Read back out of the member the write paths set: threading it through
     // InsertInner/UpdateInner/EndWrite and every handler between would be a
     // parameter on a dozen signatures for one number, and one statement runs
@@ -1053,6 +1064,24 @@ wal::Lsn CommandDispatcher::UncoveredCommit(Session* session) {
 }
 
 DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
+    const sched::MonoTimeNs began_ns = NowNs();
+    DispatchOutcome outcome = DispatchBlocking(line, session);
+    RecordStatement(line, outcome, began_ns);
+    return outcome;
+}
+
+void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOutcome& out,
+                                        sched::MonoTimeNs began_ns) const {
+    // Once per statement, at its end, the statement whole: a re-run, a wait
+    // and the group commit are inside it (§3.1). A refusal is a call too.
+    const sched::MonoTimeNs now_ns = NowNs();
+    const bool refused = !out.status.ok() || out.response.rfind("ERR", 0) == 0;
+    stats::StatementStats::Record(core_id_, out.fetch_id, stats::StatementKindOf(line), line,
+                                  refused, now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0,
+                                  exec::StatementContextNow().now_us);
+}
+
+DispatchOutcome CommandDispatcher::DispatchBlocking(std::string_view line, Session* session) {
     // `DispatchAsync`'s BA-R1c wait, blocking, as this path's group commit
     // is below: no other task on this core can hold a marker meanwhile,
     // because a commit holds one only inside its synchronous body. **That
@@ -1985,6 +2014,10 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
            << " lock_waits_overwritten=" << waits.overwritten
            << " lock_waits_dropped=" << waits.dropped;
     }
+    // **`sys.statement_stats`' store** (BO-S5), the instance's: new shapes
+    // a full part could not take, which the view therefore never shows.
+    section("statement_stats");
+    os << " statement_stats_dropped=" << stats::StatementStats::Dropped();
     // **BA's census block** (BA-R0, BA-S2; `base/contention.hpp`): the
     // instance's, summed over every core when read - unlike the WAL block
     // above, which is this core's. Every latch kind is printed, `other`
@@ -4250,8 +4283,19 @@ sched::Coro CommandDispatcher::CompleteSelect(std::string_view line, DispatchOut
     co_return Status::OK();
 }
 
+StatusOr<parser::Statement> CommandDispatcher::ParseKeepingShape(std::string_view line) {
+    // `parser::Parse`, keeping the fingerprint the lexer took on the way:
+    // `sys.statement_stats`' key costs the statement no second lex (BO-S5).
+    parser::Parser parser(line);
+    auto parsed = parser.Parse();
+    if (const auto fingerprint = parser.fingerprint(); fingerprint.has_value()) {
+        statement_fetch_id_ = fingerprint->fetch_id;
+    }
+    return parsed;
+}
+
 DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope) {
-    auto parsed = parser::Parse(line);
+    auto parsed = ParseKeepingShape(line);
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
     }
@@ -6504,6 +6548,9 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // (bench/results-waystone-v2.md, at 1769487).
     parser::Parser& parser = run->parser.emplace(line);
     auto parsed = parser.Parse();
+    if (const auto fingerprint = parser.fingerprint(); fingerprint.has_value()) {
+        statement_fetch_id_ = fingerprint->fetch_id;  // `sys.statement_stats` (BO-S5)
+    }
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
     }
@@ -7186,7 +7233,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // after all (see the stop's arm below).
     bool parked_on_row = false;
     Status blocked_verdict;
-    auto parsed = parser::Parse(line);
+    auto parsed = ParseKeepingShape(line);
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
     }

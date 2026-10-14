@@ -18,6 +18,7 @@
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/stats/relayout_planner.hpp"
+#include "kds/stats/statement_stats.hpp"
 
 // The builders of every `sys` view (`include/kds/server/sys_views.hpp`).
 //
@@ -65,6 +66,7 @@ constexpr SysViewSpec kViews[] = {
     {"relayout", ViewKeyMode::kChecked, "name", kStr},
     {"cabin_optimizer"},
     {"lock_waits"},
+    {"statement_stats"},
     {"page_slots", ViewKeyMode::kRequired, "page_id", kInt},
     {"meta"},
 };
@@ -184,6 +186,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "relayout") return RelayoutView(key, byte);
     if (n == "cabin_optimizer") return CabinOptimizerView(byte);
     if (n == "lock_waits") return LockWaitsView();
+    if (n == "statement_stats") return StatementStatsView();
     if (n == "page_slots") return PageSlotsView(*key);
     if (n == "meta") return MetaView();
 
@@ -817,6 +820,30 @@ StatusOr<exec::CatalogView> CommandDispatcher::LockWaitsView() {
                              Str(txn::LockUnitName(r.unit)), Str(txn::LockModeName(r.mode)),
                              Int(r.rel_oid), Int(r.key), TrxId(r.waiter_trx),
                              TrxId(r.holder_trx), Str(stats::LockWaitOutcomeName(r.outcome))});
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::StatementStatsView() {
+    exec::CatalogView view;
+    // What each statement shape costs (BO-S5, §3.1): one row per
+    // `(fetch_id, kind)` for the instance, the cores' parts merged at read
+    // - an engine-state view, so it filters nothing. `fetch_id` is 0 for a
+    // kind with no fingerprint. `shape_text` is the first statement of the
+    // shape seen, cut to 256 bytes - last, as a value that can hold commas.
+    Define(view, {{"fetch_id", kInt},
+                  {"kind", kStr},
+                  {"calls", kInt},
+                  {"refused", kInt},
+                  {"total_us", kInt},
+                  {"max_us", kInt},
+                  {"first_seen", kTimestamp},
+                  {"last_seen", kTimestamp},
+                  {"shape_text", kStr}});
+    for (const stats::StatementShape& s : stats::StatementStats::Snapshot()) {
+        view.rows.push_back({Int(s.fetch_id), Str(s.kind), Int(s.calls), Int(s.refused),
+                             Int(s.total_us), Int(s.max_us), Timestamp(s.first_seen_us),
+                             Timestamp(s.last_seen_us), Str(s.shape_text)});
     }
     return view;
 }

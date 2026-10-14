@@ -23,6 +23,7 @@
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wire/error_registry.hpp"
+#include "kds/stats/statement_stats.hpp"
 #include "view_text.hpp"
 
 // The lock family on one core, driven through the dispatcher's served path
@@ -3207,6 +3208,40 @@ TEST_F(LockWaitsViewTest, TheWaiterThatClosesACycleIsADeadlockRowAndTheSurvivors
     EXPECT_EQ(waits.Column("holder_trx"), (std::vector<std::string>{a_trx, b_trx}));
     EXPECT_EQ(waits.Column("key"), (std::vector<std::string>{"7", "8"}));
     EXPECT_EQ(waits.Column("waited_us").front(), "0") << "a victim never parked";
+}
+
+// BO-S5 (§3.1): a statement is timed whole - its park, its re-run and its
+// commit inside one call - and counted once, however many times it ran.
+TEST_F(LockWaitsViewTest, AStatementThatWaitedIsOneCallTimedWhole) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+    stats::StatementStats::ResetForTest();
+
+    const exec::ScopedStatementClockForTest pinned(86'400'000'000);  // 1970-01-02
+    Session waiter;
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 8", waiter);  // another shape's literal
+    Started parked = Start("UPDATE t SET v = 3 WHERE id = 7", waiter);
+    Pump();
+    ASSERT_FALSE(*parked.done);
+    clock_.Advance(5'000'000);
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done && *parked.done);
+
+    const testing_view::ViewText shapes = testing_view::ReadViewText(
+        Local("SELECT kind, calls, total_us, max_us, first_seen FROM sys.statement_stats "
+              "WHERE kind = 'UPDATE'"));
+    // One shape: the two UPDATEs differ in a literal only. The holder's
+    // UPDATE ran before the reset, and its COMMIT is another kind.
+    ASSERT_EQ(shapes.rows.size(), 1u);
+    EXPECT_EQ(shapes.Column("calls"), std::vector<std::string>{"2"});
+    EXPECT_EQ(shapes.Column("max_us"), std::vector<std::string>{"5000"})
+        << "the parked statement's 5 ms, re-run included, in one call";
+    EXPECT_EQ(shapes.Column("total_us"), std::vector<std::string>{"5000"});
+    EXPECT_EQ(shapes.Column("first_seen"), std::vector<std::string>{"1970-01-02 00:00:00"});
 }
 
 TEST_F(LockWaitsViewTest, ADropHeldByAPositionedReaderIsARelationRowWithNoTransactionOnEitherSide) {

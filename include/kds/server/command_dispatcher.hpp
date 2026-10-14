@@ -313,6 +313,12 @@ struct DispatchOutcome {
     // statement's head and the end of `DispatchAsync`, and would overwrite
     // a member.
     bool poison_withheld = false;
+
+    // **The statement's shape for `sys.statement_stats`** (BO-S5): its
+    // fingerprint's `fetch_id`, 0 for a kind that carries none (only
+    // `SELECT`, `INSERT` and `UPDATE` do). Carried for `poison_withheld`'s
+    // reason: another statement of this core can run before this one ends.
+    std::uint64_t fetch_id = 0;
 };
 
 // The one spelling of an error reply on the newline protocol (docs/spec/txn.md
@@ -814,6 +820,15 @@ private:
     // `statement_deadline_ns` is in-out and zero means "not taken yet":
     // the fault net bounds the *statement*, so a second entry inherits the
     // first one's deadline instead of starting a fresh one.
+    // `parser::Parse`, setting `statement_fetch_id_` from the parse (BO-S5).
+    StatusOr<parser::Statement> ParseKeepingShape(std::string_view line);
+    // `Dispatch`'s body; `Dispatch` times it whole for `sys.statement_stats`.
+    DispatchOutcome DispatchBlocking(std::string_view line, Session* session);
+    // One statement's `sys.statement_stats` count, at its end (BO-S5):
+    // `began_ns` is when it entered, re-runs and waits included.
+    void RecordStatement(std::string_view line, const DispatchOutcome& out,
+                         sched::MonoTimeNs began_ns) const;
+
     sched::Coro AwaitWriteBlock(std::string_view line, Session* session, DispatchOutcome* out,
                                 sched::MonoTimeNs* statement_deadline_ns);
     // A `sys.lock_waits` row for a wait on `key` (BO-S3), stamped with this
@@ -1896,6 +1911,7 @@ private:
     StatusOr<exec::CatalogView> RelayoutView(const parser::AstValue* name, std::uint32_t byte);
     StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
     StatusOr<exec::CatalogView> LockWaitsView();
+    StatusOr<exec::CatalogView> StatementStatsView();
     StatusOr<exec::CatalogView> PageSlotsView(const parser::AstValue& page_id);
     StatusOr<exec::CatalogView> MetaView();
     // The clustered root a relation's anchor names, or its descriptor page.
@@ -2325,6 +2341,9 @@ private:
     // **The wake a refused unit ask registered** (AX-S2b), on the same
     std::optional<DispatchOutcome::LockWait> blocking_wake_ = std::nullopt;
     std::size_t statement_trail_mark_ = 0;
+    // The running statement's `fetch_id`, set by the parse that has one and
+    // copied onto its outcome by `DispatchAndStage` (BO-S5).
+    std::uint64_t statement_fetch_id_ = 0;
 
     // **The fault net every wait in this file is bounded by**, and the
     // one thing `lock_wait_fault_net_ms` sets; defaults to the constant.

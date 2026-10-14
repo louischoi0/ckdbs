@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <optional>
@@ -10,6 +11,8 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/kwp_session.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
+#include "kds/stats/statement_stats.hpp"
+#include "kds/parser/fingerprint.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
@@ -18,6 +21,7 @@
 #include "kds/wire/kwp.hpp"
 #include "kds/wire/kwp_types.hpp"
 #include "kds/wire/row_codec.hpp"
+#include "view_text.hpp"
 
 // **The `show_sugar` contract suite** (`instructions/v3.0.0/workorder-bo-sys-statistics-show-sugar.md`
 // BO-R2 SV1-SV4, BO-R3 SV5).
@@ -374,6 +378,54 @@ TEST_F(ShowSugarTest, ARefusalWithNoArgumentNamesTheStatementsEnd) {
     EXPECT_NE(Text("DESCRIBE nope").find("(byte 9)"), std::string::npos) << Text("DESCRIBE nope");
     // `DESCRIBE` is a statement of its own, not a `SHOW` target.
     EXPECT_EQ(Text("SHOW DESCRIBE t").rfind("ERR", 0), 0u) << Text("SHOW DESCRIBE t");
+}
+
+// ---- BO-S5: `sys.statement_stats` ----------------------------------------
+
+TEST_F(ShowSugarTest, OneShapeIsOneRowWhateverItsLiterals) {
+    stats::StatementStats::ResetForTest();
+    ASSERT_EQ(Text("SELECT v FROM t WHERE id = 1").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Text("SELECT v FROM t WHERE id = 2").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Text("SELECT v FROM t WHERE id = 3").rfind("ERR", 0), std::string::npos);
+    // A refusal is a call too: the shape parses, the relation does not exist.
+    ASSERT_EQ(Text("SELECT v FROM nope WHERE id = 1").rfind("ERR", 0), 0u);
+
+    const auto fetch = parser::FingerprintOf("SELECT v FROM t WHERE id = 1");
+    ASSERT_TRUE(fetch.has_value());
+    const std::string reply = Text(
+        "SELECT fetch_id, calls, refused, shape_text FROM sys.statement_stats WHERE kind = "
+        "'SELECT'");
+    const auto shown = testing_view::ReadViewText(reply);
+    const std::string id = std::to_string(fetch->fetch_id);
+    EXPECT_EQ(shown.Find("fetch_id", id, "calls"), "3") << reply;
+    EXPECT_EQ(shown.Find("fetch_id", id, "refused"), "0") << reply;
+    EXPECT_EQ(shown.Find("fetch_id", id, "shape_text"), "SELECT v FROM t WHERE id = 1")
+        << "the first statement of the shape: " << reply;
+    // The refused one is a shape of its own (another relation), refused once.
+    const std::vector<std::string> refused = shown.Column("refused");
+    EXPECT_NE(std::find(refused.begin(), refused.end(), "1"), refused.end()) << reply;
+}
+
+TEST_F(ShowSugarTest, AKindWithNoFingerprintIsOneRowAtFetchIdZero) {
+    stats::StatementStats::ResetForTest();
+    ASSERT_EQ(Text("DELETE FROM t WHERE id = 1").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Text("DELETE FROM t WHERE id = 99").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Text("FLIBBERTIGIBBET EVERYTHING").rfind("ERR", 0), 0u);
+    ASSERT_EQ(Text("INSERT INTO t VALUES (20, 'beta')").rfind("INSERTED", 0), 0u);
+
+    const std::string reply =
+        Text("SELECT kind, fetch_id, calls, refused FROM sys.statement_stats ORDER BY kind");
+    const auto shown = testing_view::ReadViewText(reply);
+    EXPECT_EQ(shown.Column("kind"), (std::vector<std::string>{"DELETE", "INSERT", "OTHER"}))
+        << reply;
+    EXPECT_EQ(shown.Find("kind", "DELETE", "fetch_id"), "0") << reply;
+    EXPECT_EQ(shown.Find("kind", "DELETE", "calls"), "2") << reply;
+    EXPECT_EQ(shown.Find("kind", "OTHER", "refused"), "1") << reply;
+    // An INSERT carries its fingerprint, taken from the parse it ran.
+    EXPECT_EQ(shown.Find("kind", "INSERT", "fetch_id"),
+              std::to_string(parser::FingerprintOf("INSERT INTO t VALUES (20, 'beta')")->fetch_id))
+        << reply;
+    EXPECT_EQ(testing_view::MetaField(Text("SHOW META"), "statement_stats_dropped"), "0");
 }
 
 TEST_F(ShowSugarTest, TheTraceSurfaceIsRetired) {
