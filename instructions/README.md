@@ -5,6 +5,9 @@ governing draft with its verification record, and one work order per
 milestone, starting with AL (`v3.0.0/index.md`). Nothing else returns
 here: a `v2.x` citation still resolves at `1769487`.
 
+**`v3.2.0/` opened 2026-10-14** on the operator's naming of that version,
+with BV (`v3.2.0/index.md`).
+
 The operator's work orders, ratifications and blueprints for `v2.3.0`
 through `v2.8.0` left ahead of the big-bang change to the architecture,
 rules and constraints. Every one of them was an instruction against the
