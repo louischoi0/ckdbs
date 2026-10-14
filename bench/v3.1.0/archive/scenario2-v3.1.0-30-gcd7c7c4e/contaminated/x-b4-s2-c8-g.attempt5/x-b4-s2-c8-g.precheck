@@ -1,0 +1,9 @@
+time: 2026-10-14T01:14:02Z
+loadavg: 1.28 2.91 3.36 2/392 1699492
+gate wait s: 80
+pgrep cc1plus|cmake --build|ctest|kds_tests:
+  1699465 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791933132475-6o7izd.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'timeout 590 ./build-review/tests/kds_tests > /tmp/claude-1000/-home-cdkbs-ckdbs/8d74d8f3-3a9c-4d32-ba34-da31a7259774/scratchpad/full2.log 2>&1; grep -E "^\[ RUN" /tmp/claude-1000/-home-cdkbs-ckdbs/8d74d8f3-3a9c-4d32-ba34-da31a7259774/scratchpad/full2.log | tail -2; grep -c "^\[       OK" /tmp/claude-1000/-home-cdkbs-ckdbs/8d74d8f3-3a9c-4d32-ba34-da31a7259774/scratchpad/full2.log' < /dev/null && pwd -P >| /tmp/claude-c134-cwd
+  1699466 timeout 590 ./build-review/tests/kds_tests
+  1699467 ./build-review/tests/kds_tests
+  1699484 ./build-review/tests/kds_tests --gtest_filter=BadAllocDeathTest.AWriteStoppedAtAFailedAllocationIsRestoredByTheMount --gtest_internal_run_death_test=/home/cdkbs/ckdbs/.claude/worktrees/bo-show-sugar/tests/bad_alloc_death_test.cpp|162|1|4
+  1699486 /usr/bin/python3 /usr/share/apport/apport -p1699484 -s6 -c0 -d1 -P1699484 -u1000 -g1000 -F3 -- !home!cdkbs!ckdbs!.claude!worktrees!bo-show-sugar!build-review!tests!kds_tests

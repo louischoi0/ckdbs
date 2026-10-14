@@ -2247,6 +2247,142 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
     return stmt;
 }
 
+StatusOr<TransitionStmt> Parser::ParseTransition(bool drop) {
+    TransitionStmt stmt;
+    stmt.drop = drop;
+
+    stmt.byte_offset = lexer_.Peek().byte_offset;
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    stmt.name = std::move(name.value());
+
+    // A Transition's name is unique instance-wide, so DROP names nothing else.
+    if (drop) {
+        ConsumeOptionalSemicolon();
+        return stmt;
+    }
+
+    // `ON` is a reserved keyword (it joins); ParseAssertion has the same
+    // wrinkle. Every other word of this grammar - TRANSITION, INSERT,
+    // UPDATE, DELETE, FROM - is matched by text and reserves nothing (BV-R5).
+    const auto is_on = [](const Token& t) {
+        return t.type == TokenType::kKeyword && t.kw == Keyword::kOn;
+    };
+    if (const Token& on = lexer_.Peek(); !is_on(on)) {
+        return Status::InvalidArgument(
+            "CREATE TRANSITION names the column it governs: `CREATE TRANSITION <name> ON "
+            "<table>(<column>) ON INSERT (...) ON UPDATE (... => ...)` (byte " +
+            std::to_string(on.byte_offset) + ")");
+    }
+    lexer_.Next();
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = ExpectToken(TokenType::kLParen, "'(' and the governed column"); !s.ok()) {
+        return s;
+    }
+    stmt.column_byte_offset = lexer_.Peek().byte_offset;
+    auto column = ParseIdent();
+    if (!column.ok()) return column.status();
+    stmt.column = std::move(column.value());
+    if (Status s = ExpectToken(TokenType::kRParen, "')' after the governed column"); !s.ok()) {
+        return s;
+    }
+
+    // `ON <event>`, in the fixed order INSERT, UPDATE, DELETE. INSERT and
+    // UPDATE are required (CN-4 T10): without both, §2's path property
+    // does not follow from the graph, and a declaration that gave it up
+    // silently would promise what it does not enforce.
+    const auto clause = [&](std::string_view event) -> bool {
+        const Token& on = lexer_.Peek();
+        if (!is_on(on)) return false;
+        Lexer probe = lexer_;
+        probe.Next();
+        if (!IsWord(probe.Peek(), event)) return false;
+        lexer_.Next();
+        lexer_.Next();
+        return true;
+    };
+    const auto required = [&](std::string_view event) -> Status {
+        if (clause(event)) return Status::OK();
+        return Status::InvalidArgument("CREATE TRANSITION requires ON " + std::string(event) +
+                                       ", in the order ON INSERT, ON UPDATE, ON DELETE FROM "
+                                       "(byte " +
+                                       std::to_string(lexer_.Peek().byte_offset) + ")");
+    };
+
+    if (Status s = required("INSERT"); !s.ok()) return s;
+    if (Status s = ParseTransitionStates(stmt.initial, "ON INSERT"); !s.ok()) return s;
+
+    if (Status s = required("UPDATE"); !s.ok()) return s;
+    if (Status s = ExpectToken(TokenType::kLParen, "'(' and the ON UPDATE edges"); !s.ok()) {
+        return s;
+    }
+    for (;;) {
+        TransitionStmt::Edge edge;
+        auto from = ParseValue();
+        if (!from.ok()) return from.status();
+        edge.from = std::move(from.value());
+        // `=>` is `=` immediately followed by `>`: two tokens, adjacent,
+        // so the arrow costs the lexer nothing and the fingerprint nothing.
+        const Token eq = lexer_.Next();
+        const Token gt = lexer_.Next();
+        if (eq.type != TokenType::kEq || gt.type != TokenType::kGt ||
+            gt.byte_offset != eq.byte_offset + 1) {
+            return Status::InvalidArgument("an ON UPDATE edge is `<state> => <state>` (byte " +
+                                           std::to_string(eq.byte_offset) + ")");
+        }
+        auto to = ParseValue();
+        if (!to.ok()) return to.status();
+        edge.to = std::move(to.value());
+        stmt.edges.push_back(std::move(edge));
+        const Token next = lexer_.Next();
+        if (next.type == TokenType::kRParen) break;
+        if (next.type != TokenType::kComma) {
+            return Status::InvalidArgument("expected ',' or ')' in ON UPDATE (byte " +
+                                           std::to_string(next.byte_offset) + ")");
+        }
+    }
+
+    if (clause("DELETE")) {
+        if (const Token& from = lexer_.Next(); !IsWord(from, "FROM")) {
+            return Status::InvalidArgument("ON DELETE is `ON DELETE FROM (<state>, ...)` (byte " +
+                                           std::to_string(from.byte_offset) + ")");
+        }
+        stmt.delete_declared = true;
+        if (Status s = ParseTransitionStates(stmt.deletable, "ON DELETE FROM"); !s.ok()) return s;
+    }
+
+    ConsumeOptionalSemicolon();
+
+    // Sliced from the input, never rebuilt from the AST, for ParseAssertion's
+    // reason: a rebuild is a second spelling that can drift. `Parse()`
+    // refuses trailing garbage, so the statement is exactly the input.
+    std::string_view text = sql_;
+    while (!text.empty() && (text.back() == ';' ||
+                             std::isspace(static_cast<unsigned char>(text.back())) != 0)) {
+        text.remove_suffix(1);
+    }
+    stmt.source_text = std::string(text);
+    return stmt;
+}
+
+Status Parser::ParseTransitionStates(std::vector<AstValue>& out, std::string_view what) {
+    if (Status s = ExpectToken(TokenType::kLParen, "'(' and a list of states"); !s.ok()) return s;
+    for (;;) {
+        auto value = ParseValue();
+        if (!value.ok()) return value.status();
+        out.push_back(std::move(value.value()));
+        const Token next = lexer_.Next();
+        if (next.type == TokenType::kRParen) return Status::OK();
+        if (next.type != TokenType::kComma) {
+            return Status::InvalidArgument("expected ',' or ')' in " + std::string(what) +
+                                           " (byte " + std::to_string(next.byte_offset) + ")");
+        }
+    }
+}
+
 StatusOr<InsertStmt> Parser::ParseInsert() {
     if (Status s = ExpectKeyword("INTO"); !s.ok()) return s;
 
@@ -3206,6 +3342,11 @@ StatusOr<Statement> Parser::Parse() {
             auto s = ParseAssertion(/*drop=*/false);
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "TRANSITION")) {
+            lexer_.Next();
+            auto s = ParseTransition(/*drop=*/false);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
         } else if (what.type == TokenType::kIdent && IEquals(what.text, "NAMESPACE")) {
             lexer_.Next();
             auto s = ParseNamespace(/*drop=*/false);
@@ -3237,6 +3378,11 @@ StatusOr<Statement> Parser::Parse() {
             auto s = ParseAssertion(/*drop=*/true);
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "TRANSITION")) {
+            lexer_.Next();
+            auto s = ParseTransition(/*drop=*/true);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
         } else if (what.type == TokenType::kIdent && IEquals(what.text, "NAMESPACE")) {
             lexer_.Next();
             auto s = ParseNamespace(/*drop=*/true);
@@ -3256,8 +3402,8 @@ StatusOr<Statement> Parser::Parse() {
             stmt = std::move(drop);
         } else {
             return Status::NotImplemented(
-                "only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX and DROP ASSERTION "
-                "are supported (byte " +
+                "only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX, DROP ASSERTION and "
+                "DROP TRANSITION are supported (byte " +
                 std::to_string(what.byte_offset) + ")");
         }
     } else if (IEquals(tok.text, "INSERT")) {

@@ -90,6 +90,8 @@ std::string_view StatusCodeName(StatusCode code) {
         case StatusCode::kNotImplemented: return "NotImplemented";
         // A walk's, never a parse's (BA-S15).
         case StatusCode::kCancelled: return "Cancelled";
+        // A write's (BV-Q3), never a parse's.
+        case StatusCode::kTransitionViolation: return "TransitionViolation";
     }
     return "<unknown>";
 }

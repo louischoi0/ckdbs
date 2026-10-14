@@ -41,6 +41,10 @@ to its close in this session, BO-Q2 and Q4..Q13 adopted as CLA proposed -
 several revised against `cd7c7c4e` first - and recorded in §5's mark
 column as adopted, never as the operator's marks.
 
+**State, 2026-10-14: in progress.** Built and reviewed: BO-S0, S1, S2, S3, S5; not run:
+S4 (BO-Q5 (b)); open: S6, S7, S8. On `main` from the merge of `bo-show-sugar` that day,
+after `v3.2.0` (BV's close), with no tag of its own. The stages' rows are §7.
+
 **Claim tags:**
 - `[source-read]` with `path:line` at `ab2c46d0` in §1.1-§1.6 and at
   `cd7c7c4e` in §1.7 and below, read and not run;

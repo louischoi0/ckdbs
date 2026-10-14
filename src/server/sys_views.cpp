@@ -11,6 +11,7 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/catalog_view.hpp"
+#include "kds/exec/transition_catalog.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/anchor_page.hpp"
@@ -63,6 +64,7 @@ constexpr SysViewSpec kViews[] = {
     {"relation_stats"},
     {"cabins"},
     {"assertions"},
+    {"transitions"},
     {"relayout", ViewKeyMode::kChecked, "name", kStr},
     {"cabin_optimizer"},
     {"lock_waits"},
@@ -183,6 +185,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "relation_stats") return RelationStatsView();
     if (n == "cabins") return CabinsView();
     if (n == "assertions") return AssertionsView();
+    if (n == "transitions") return TransitionsView();
     if (n == "relayout") return RelayoutView(key, byte);
     if (n == "cabin_optimizer") return CabinOptimizerView(byte);
     if (n == "lock_waits") return LockWaitsView();
@@ -640,6 +643,32 @@ StatusOr<exec::CatalogView> CommandDispatcher::AssertionsView() {
         }
         out.push_back(Str(def.source_text));
         view.rows.push_back(std::move(out));
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::TransitionsView() {
+    exec::CatalogView view;
+    // Every declared Transition (BV, `exec/transition_catalog.hpp`), what
+    // `SHOW TRANSITIONS` printed - an engine-state view as `sys.assertions`
+    // is. The relation and column are resolved at read: a relation gone (a
+    // drop whose cleanup a crash cut short) reads NULL beside its oid, and a
+    // column the schema cannot name reads its position. `def` is the
+    // statement verbatim - last, as a value that can hold commas.
+    Define(view, {{"transition_id", kInt},
+                  {"name", kStr},
+                  {"rel_oid", kInt},
+                  {"rel_name", kStr},
+                  {"column_no", kInt},
+                  {"column", kStr},
+                  {"def", kStr}});
+    auto rows = exec::ListTransitions(catalog_, page_store_);
+    if (!rows.ok()) return rows.status();
+    for (const exec::TransitionDef& def : rows.value()) {
+        auto access = catalog_.InitTableAccess(def.target_oid);
+        view.rows.push_back({Int(def.id), Str(def.name), Int(def.target_oid),
+                             RelName(RelationNameOf(def.target_oid)), Int(def.column_no),
+                             Str(ColumnLabel(access, def.column_no)), Str(def.source_text)});
     }
     return view;
 }

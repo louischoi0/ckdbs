@@ -218,8 +218,10 @@ TEST_F(ShowSugarTest, AViewIsOrderedByItsDeclaredTypes) {
     // By a uint64: the oids ascend in creation order, which is not the names'.
     EXPECT_EQ(Text(user + "ORDER BY oid"), "name\\nt\\nzb\\nza");
     EXPECT_EQ(Text(user + "ORDER BY oid DESC"), "name\\nza\\nzb\\nt");
-    // Two keys, ties on the first broken by the second.
-    EXPECT_EQ(Text("SELECT rel_name, pos FROM sys.columns WHERE rel_name >= 't' "
+    // Two keys, ties on the first broken by the second. User relations
+    // only (oids from 4000): a catalog relation with column rows -
+    // `sys.transitions` - would sort among them.
+    EXPECT_EQ(Text("SELECT rel_name, pos FROM sys.columns WHERE rel_id >= 4000 "
                    "ORDER BY rel_name DESC, pos DESC"),
               "rel_name,pos\\nzb,0\\nza,0\\nt,2\\nt,1\\nt,0");
     // An unknown key is `InvalidArgument` (no code token) at its byte.
@@ -267,6 +269,7 @@ constexpr Spelling kSpellings[] = {
     {"SHOW INDEXES", "SELECT * FROM sys.indexes"},
     {"SHOW FKEYS", "SELECT * FROM sys.fkeys"},
     {"SHOW ASSERTIONS", "SELECT * FROM sys.assertions"},
+    {"SHOW TRANSITIONS", "SELECT * FROM sys.transitions"},
     {"SHOW RELAYOUT", "SELECT * FROM sys.relayout"},
     {"SHOW RELAYOUT t", "SELECT * FROM sys.relayout WHERE name = 't'"},
     {"SHOW CABIN_OPTIMIZER", "SELECT * FROM sys.cabin_optimizer"},

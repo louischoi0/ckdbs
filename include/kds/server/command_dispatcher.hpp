@@ -20,6 +20,7 @@
 #include "kds/exec/aggregate.hpp"
 #include "kds/exec/sort.hpp"
 #include "kds/exec/assertion_check.hpp"
+#include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/fk_check.hpp"
 #include "kds/exec/set_expr.hpp"
@@ -457,6 +458,14 @@ public:
         // leave the later manager installed, the same relation the single
         // `catalog_` reference already has.
         if (txn != nullptr) catalog.SetTransactionManager(txn);
+        // The transition loader (BV-S2), here for the manager's reason: a
+        // construction site cannot forget it, so every serving catalog fills
+        // `TableAccess::transitions`. It captures the catalog and the store,
+        // never the dispatcher, which a test may destroy before them.
+        catalog.SetTransitionLoader(
+            [&catalog, &page_store](catalog::TableAccess& access) {
+                return exec::LoadTransitions(catalog, page_store, access);
+            });
         ArmAssertionRecordBudget();
     }
 
@@ -1251,6 +1260,32 @@ private:
     // writer's when the build's relation `X` is refused (AT-S5e).
     DispatchOutcome HandleAssertion(std::string_view line, Session& session);
 
+    // `CREATE TRANSITION` / `DROP TRANSITION` (BV-S2,
+    // `instructions/v3.2.0/workorder-bv-transition-constraints.md`): under
+    // the relation `X` of a transaction of the statement's own, as
+    // `CREATE ASSERTION`'s build is (BV-R4), and committed at the statement
+    // like it - never with the session's transaction. `SHOW TRANSITIONS` is
+    // `SELECT * FROM sys.transitions` (BO's SV1).
+    DispatchOutcome HandleTransition(std::string_view line, Session& session);
+
+    // **The relation `X` a declaration's build holds** (AT-S5e, AT-0 item
+    // 13), shared by `HandleAssertion` and `HandleTransition`: a
+    // transaction of the statement's own that writes nothing and is rolled
+    // back when the lock goes out of scope, so a failed build poisons
+    // nothing - a transaction rather than a minted id because a waiter names
+    // its holder. No manager or lock table: no lock, which is the pre-MVCC
+    // engine every socket-free test runs on. Returns the refusal, if any.
+    struct DdlBuildLock {
+        txn::TransactionManager* manager = nullptr;
+        txn::Transaction* txn = nullptr;
+        DdlBuildLock() = default;
+        DdlBuildLock(const DdlBuildLock&) = delete;
+        DdlBuildLock& operator=(const DdlBuildLock&) = delete;
+        ~DdlBuildLock();
+    };
+    std::optional<Status> TakeDdlBuildLock(Session& session, catalog::Oid relation,
+                                           std::string_view relation_name, std::string_view verb,
+                                           DdlBuildLock& out);
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
 
 
@@ -1913,6 +1948,7 @@ private:
     StatusOr<exec::CatalogView> RelationStatsView();
     StatusOr<exec::CatalogView> CabinsView();
     StatusOr<exec::CatalogView> AssertionsView();
+    StatusOr<exec::CatalogView> TransitionsView();
     StatusOr<exec::CatalogView> RelayoutView(const parser::AstValue* name, std::uint32_t byte);
     StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
     StatusOr<exec::CatalogView> LockWaitsView();

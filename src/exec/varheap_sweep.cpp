@@ -27,10 +27,19 @@ Status SweepChain(const catalog::TableAccess& access, storage::PageStore& store,
             !s.ok()) {
             return s;
         }
-        auto bytes = store.GetForRead(page_id);
-        if (!bytes.ok()) return bytes.status();
-        const std::uint16_t slots = varheap::PageSlotCount(bytes.value().bytes());
-        const PageId next = varheap::PageNextPageId(bytes.value().bytes());
+        // The page's facts are read under a shared hold that is let go
+        // before any release: a release takes the page exclusive, and a page
+        // latch is never upgraded (`page.md` §6). Found by BV-S3's crash
+        // cell, the first to cut a declaration between its spill and its
+        // row on a device store.
+        std::uint16_t slots = 0;
+        PageId next = kInvalidPageId;
+        {
+            auto bytes = store.GetForRead(page_id);
+            if (!bytes.ok()) return bytes.status();
+            slots = varheap::PageSlotCount(bytes.value().bytes());
+            next = varheap::PageNextPageId(bytes.value().bytes());
+        }
         ++report.pages;
 
         for (std::uint16_t slot = 0; slot < slots; ++slot) {

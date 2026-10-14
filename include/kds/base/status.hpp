@@ -145,6 +145,15 @@ enum class StatusCode {
     // returned was returned", never "nothing happened": a cancel is observed
     // only where a read yields, so nothing it ends has written.
     kCancelled,
+    // **A Transition the write broke** (BV-Q3,
+    // `instructions/v3.2.0/workorder-bv-transition-constraints.md`): an
+    // INSERT in a state outside the initial set, an UPDATE along no declared
+    // edge, a DELETE from a state outside the deletable set. The fourth
+    // constraint code, beside kFkViolation and kAssertionViolation and for
+    // their reason: a violation against the row as it stands answers the
+    // same way forever, so it is not retryable, and folding it into
+    // kInvalidArgument would give a client nothing to switch on.
+    kTransitionViolation,
 };
 
 // True for a Status a caller may sensibly re-issue the same statement for.
@@ -209,6 +218,9 @@ public:
     static Status Cancelled(std::string msg) {
         return Status(StatusCode::kCancelled, std::move(msg));
     }
+    static Status TransitionViolation(std::string msg) {
+        return Status(StatusCode::kTransitionViolation, std::move(msg));
+    }
 
     // A status decoded off a wire: the code as the integer it travelled as,
     // and a message the receiver chose. **A code outside the enum degrades
@@ -237,6 +249,7 @@ public:
             case StatusCode::kUnknownOutcome: return UnknownOutcome(std::move(msg));
             case StatusCode::kNotImplemented: return NotImplemented(std::move(msg));
             case StatusCode::kCancelled: return Cancelled(std::move(msg));
+            case StatusCode::kTransitionViolation: return TransitionViolation(std::move(msg));
         }
         return IoError(std::move(msg));
     }

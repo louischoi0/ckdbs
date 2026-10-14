@@ -1035,9 +1035,46 @@ struct AssertionStmt {
     }
 };
 
+// `CREATE TRANSITION <name> ON <table>(<column>) ON INSERT (<state>, ...)
+// ON UPDATE (<state> => <state>, ...) [ON DELETE FROM (<state>, ...)]` and
+// `DROP TRANSITION <name>` (`instructions/v3.2.0/workorder-bv-transition-
+// constraints.md`). A state is an integer or a string literal; which one a
+// column admits is the catalog's question, not the grammar's. One struct for
+// both statements, for AssertionStmt's reason: DROP fills `name` alone.
+struct TransitionStmt {
+    std::string name;
+    std::uint32_t byte_offset = 0;  // of the transition name
+
+    bool drop = false;
+
+    // CREATE only.
+    std::string table_name;
+    std::string schema;  // see the namespace-qualifier rule above
+    std::uint32_t table_byte_offset = 0;
+    std::string column;
+    std::uint32_t column_byte_offset = 0;
+
+    // `ON INSERT`: the states a row may be inserted in.
+    std::vector<AstValue> initial;
+    // `ON UPDATE`: the allowed `from => to` moves, as written.
+    struct Edge {
+        AstValue from;
+        AstValue to;
+    };
+    std::vector<Edge> edges;
+    // `ON DELETE FROM`: the states a row may be deleted from. Absent, every
+    // delete is allowed (CN-4 T10, adopted under BV's go-ahead).
+    bool delete_declared = false;
+    std::vector<AstValue> deletable;
+
+    // The whole declaration verbatim, for `sys.transitions.source_text`:
+    // the canon the reader re-parses (BV-Q1 (a)).
+    std::string source_text;
+};
+
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
                                DeleteStmt, PurgeStmt, CabinStmt, IndexStmt, AssertionStmt,
-                               AlterStmt, DropTableStmt, NamespaceStmt>;
+                               TransitionStmt, AlterStmt, DropTableStmt, NamespaceStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

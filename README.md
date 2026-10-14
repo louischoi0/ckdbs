@@ -2,7 +2,7 @@
 
 **An OLTP database engine that keeps the invariants so the application does not have to.**
 
-KDS narrows its surface to what online transaction processing needs — keyed reads and writes, short transactions, pk-chain joins, tight tail latency, durability the caller chooses — and spends the room that buys on two things most engines leave to the application: the rules the data must obey, and the physical shape the data should have. The first is the subject of the next section. The second is the physical optimizer.
+KDS narrows its surface to what online transaction processing needs — keyed reads and writes, short transactions, tuple-key-chain joins, tight tail latency, durability the caller chooses — and spends the room that buys on two things most engines leave to the application: the rules the data must obey, and the physical shape the data should have. The first is the subject of the next section. The second is the physical optimizer.
 
 ---
 
@@ -16,7 +16,7 @@ What the engine guarantees today, and what the application may forget:
 
 | Guaranteed | The application no longer | Status |
 |---|---|---|
-| **Issue-once identity.** A pk is a 48-bit id bound to at most one committed row for the life of the relation (only `PURGE` frees one); a stored id can dangle but never names another committed row | derives keys, checks for reuse, or guards against a stale reference pointing at the wrong row | built |
+| **Issue-once identity.** A tuple key is a 48-bit id bound to at most one committed row for the life of the relation (only `PURGE` frees one); a stored id can dangle but never names another committed row | derives keys, checks for reuse, or guards against a stale reference pointing at the wrong row | built |
 | **Group bounds.** SQL-92 `CREATE ASSERTION` over per-group `COUNT(*)` / `SUM(col)` upper bounds, checked in O(1) at admission; a violating write is refused before it happens | counts, sums and compares before every write, and reconciles when two writers race | built |
 | **Referential integrity.** Foreign keys, checked on write | joins to confirm a parent exists before inserting a child | built ([gap](docs/inflight/known-gaps.md#foreign-keys)) |
 | **Advisory learning that cannot change an answer.** Every structure the engine learns — trails, hints, engine-created Cabins — may cost performance if wrong, never a result | verifies the database's own optimizations | built, with its own test family |
@@ -34,7 +34,7 @@ Rows marked *concept* are recorded in [`docs/conceptnotes/`](docs/conceptnotes/)
 
 ## Design philosophy
 
-- **OLTP-first, not general-purpose.** Primary-key point reads and writes, inner equi-join chains, predicate-position subqueries, pagination, short transactions. Every statement compiles to a **step chain** executed in written order — *the query is the plan*: execution shape is classified at parse time and dispatched without plan search. No CTEs, no window functions, no dialect-compatibility shims.
+- **OLTP-first, not general-purpose.** Tuple-key point reads and writes, inner equi-join chains, predicate-position subqueries, pagination, short transactions. Every statement compiles to a **step chain** executed in written order — *the query is the plan*: execution shape is classified at parse time and dispatched without plan search. No CTEs, no window functions, no dialect-compatibility shims.
 - **The engine observes, then reorganizes.** Executions feed a statistics layer. Time-decayed scores classify data and query shapes hot/warm/cold; the physical optimizer creates and retires lookup structures. Statistics change *what exists*, not just how a query runs.
 - **Advisory by construction.** Everything learned — trails, scores, placement hints, engine-created Cabins — is structurally advisory or value-granularly revocable: delete all of it and every query still returns the same rows, just slower. The B+ tree stays the sole unconditional authority. This is a hard invariant with its own test family, not a design preference.
 - **Reliability is a product feature.** One write-ahead log per instance with per-transaction durability classes, page checksums, full-page-image torn-write recovery, recovery at mount, and fault paths exercised by deterministic injection rather than assumed. What is *not* built is stated as plainly as what is — see [Status](#status).
@@ -52,7 +52,7 @@ Four structures share the access path, separated by **how much they are allowed 
 
 | Structure | Authority | Write cost | Droppable | Failure of an entry means |
 |---|---|---|---|---|
-| Clustered pk B+ tree | Always authoritative | Per-write maintenance | Never | Corruption |
+| Clustered tuple-key B+ tree | Always authoritative | Per-write maintenance | Never | Corruption |
 | Secondary index | Authoritative, full coverage | Per-write append | Wholesale (`DROP INDEX`) | Statement failure |
 | **Cabin** | **Authoritative for observed values** | Probe + append, observed values only | Per value | Un-observe → scan |
 | **Waystone trail** | **Never authoritative (advisory)** | Zero on the write path | Wholesale | A miss → authoritative path |
@@ -61,19 +61,19 @@ Correctness never depends on the bottom three, so a wrong guess costs performanc
 
 ### Keystone — the identity of a row
 
-Every tuple's first column is a 64-bit **Keystone word**, `id:48 | flags:8 | reserved:8`: the 48-bit id is the primary key, the flags byte the status byte. It exists so that any structure outside the tuple can name a row by value instead of by address.
+Every tuple's first column is a 64-bit **Keystone word**, `id:48 | flags:8 | reserved:8`: the 48-bit id is the **tuple identity key** (the *tuple key*), the flags byte the status byte. It exists so that any structure outside the tuple can name a row by value instead of by address.
 
-- **The pk is unique for the life of the relation, and where it comes from is the `INSERT`'s choice.** Name a value in the pk's position and that value *is* the key; omit it and the engine issues one from `sys.tables.next_id`, a **high-water mark on what has been placed** — persistent, never derived as `max(id) + 1`, because deriving it would reissue the identity of a deleted row.
-- **On a btree a named key may be any key not already bound, in any order.** A btree places it where it sorts — after `pk = 100`, `pk = 99` is placed — and refuses it because of its value for exactly two reasons: a duplicate (`AlreadyExists`, proved by the descent that lands on the one leaf that may hold it) or a key outside `[1, 2^48 - 1]` (`OutOfRange`). A key whose insert rolled back is free again; a key whose row was committed stays bound, even after `DELETE`, until a `PURGE` retires it. An issued id that meets a concurrently named key is burned and drawn again. (A heap relation, which can no longer be created, still refuses a named key below its mark, `OutOfRange`.)
-- **The pk cannot be updated** (refused at compile, `Unsupported`), is stored only in the Keystone word, and is unique but not gapless. The word is an atomic `uint64_t` encoded with shift/mask helpers; compiler bitfields are forbidden in persisted formats.
+- **The tuple key is unique for the life of the relation, and where it comes from is the `INSERT`'s choice.** Name a value in the tuple key's position and that value *is* the key; omit it and the engine issues one from `sys.tables.next_id`, a **high-water mark on what has been placed** — persistent, never derived as `max(id) + 1`, because deriving it would reissue the identity of a deleted row.
+- **On a btree a named key may be any key not already bound, in any order.** A btree places it where it sorts — after `id = 100`, `id = 99` is placed — and refuses it because of its value for exactly two reasons: a duplicate (`AlreadyExists`, proved by the descent that lands on the one leaf that may hold it) or a key outside `[1, 2^48 - 1]` (`OutOfRange`). A key whose insert rolled back is free again; a key whose row was committed stays bound, even after `DELETE`, until a `PURGE` retires it. An issued id that meets a concurrently named key is burned and drawn again. (A heap relation, which can no longer be created, still refuses a named key below its mark, `OutOfRange`.)
+- **The tuple key cannot be updated** (refused at compile, `Unsupported`), is stored only in the Keystone word, and is unique but not gapless. The word is an atomic `uint64_t` encoded with shift/mask helpers; compiler bitfields are forbidden in persisted formats.
 
-This is the **issue-once contract**: a stored id may *dangle*, but a committed id never names another row, so Cabins and indexes can store pks instead of addresses, and every reader re-checks the row it finds.
+This is the **issue-once contract**: a stored id may *dangle*, but a committed id never names another row, so Cabins and indexes can store tuple keys instead of addresses, and every reader re-checks the row it finds.
 
 ### Pages and relations — btree first
 
 Pages are 8192 bytes. Every page header carries an **immutable `min_key`** fixed at creation, and no tuple with `id < min_key` may ever be placed in a page — including transiently during any relayout. Tuples inside a heap page are unordered (append at O(1)); a btree leaf is sorted by placement, each row taking the slot its key sorts to; pages are ordered by `min_key`.
 
-A relation is stored as a **clustered B+ tree** on the pk. A btree leaf *is* a heap page — same slots, same tuple format, same MVCC header — so the tree is a directory over pages, not a second storage engine. The tree is what admits a caller-named key that sorts *below* keys already placed, because only a descent can place and prove one: the row takes the slot its key sorts to, so every leaf stays in key order whatever order keys arrive in. An id sorting inside a full leaf moves the upper part out to a new leaf, both invariants above survive the move, and the split is logged as one record that replays whole or not at all.
+A relation is stored as a **clustered B+ tree** on the tuple key. A btree leaf *is* a heap page — same slots, same tuple format, same MVCC header — so the tree is a directory over pages, not a second storage engine. The tree is what admits a caller-named key that sorts *below* keys already placed, because only a descent can place and prove one: the row takes the slot its key sorts to, so every leaf stays in key order whatever order keys arrive in. An id sorting inside a full leaf moves the upper part out to a new leaf, both invariants above survive the move, and the split is logged as one record that replays whole or not at all.
 
 The **semi-sorted heap chain** (the same pages without a directory) is suspended since 2026-09-05 (SUS-1): existing heap relations mount and serve, creating one is refused, and the storage default is `BTREE`, so the btree track matures first ([`workorder-as-sus1-heap-suspended.md`](instructions/v3.0.0/workorder-as-sus1-heap-suspended.md)).
 
@@ -91,15 +91,15 @@ A *pattern* is a statement's shape, fingerprinted at parse time and kept in `sys
 
 > **A trail may replace a lookup. It may never replace a search.**
 
-A stale entry is caught by the Keystone-id check, but a missing row has no witness, so only keyed steps — whose completeness follows from pk uniqueness — are served from a trail; negation is always search-class. Each entry is verified (key, Keystone id, relation, page epoch, MVCC visibility) and any miss falls through for that step alone. A trail is one page (253 entries) and never truncated: one that would not fit is not recorded. Contract: `docs/spec/waystone-concpets.md`.
+A stale entry is caught by the Keystone-id check, but a missing row has no witness, so only keyed steps — whose completeness follows from tuple-key uniqueness — are served from a trail; negation is always search-class. Each entry is verified (key, Keystone id, relation, page epoch, MVCC visibility) and any miss falls through for that step alone. A trail is one page (253 entries) and never truncated: one that would not fit is not recorded. Contract: `docs/spec/waystone-concpets.md`.
 
 ### Cabin — authority for the values that were asked for
 
-A per-`(relation, column)` store covering only the values queries have *observed*, built so non-pk equality is fast without an index's unconditional write cost:
+A per-`(relation, column)` store covering only the values queries have *observed*, built so equality on a column other than the tuple key is fast without an index's unconditional write cost:
 
-> **Observed ⇒ complete (superset form).** For every observed value and active snapshot, its entry set contains every visible matching pk; surplus is subtracted at read time.
+> **Observed ⇒ complete (superset form).** For every observed value and active snapshot, its entry set contains every visible matching tuple key; surplus is subtracted at read time.
 
-An observed value's empty set is therefore an authoritative "no rows", and un-observing is always legal — it costs performance, never correctness. Entries hold pks plus an advisory location hint, maintenance is append-only, the read subtracts (visibility, key re-check, dedup), policy is declared per column (`NO CABIN` / `CABIN AUTO` / `CABIN`), and a Cabin is unlogged: a restart unobserves everything and traffic rebuilds it. **A traditional index is the limit case of a Cabin**, fully observed. Contract: `docs/spec/cabin.md`.
+An observed value's empty set is therefore an authoritative "no rows", and un-observing is always legal — it costs performance, never correctness. Entries hold tuple keys plus an advisory location hint, maintenance is append-only, the read subtracts (visibility, key re-check, dedup), policy is declared per column (`NO CABIN` / `CABIN AUTO` / `CABIN`), and a Cabin is unlogged: a restart unobserves everything and traffic rebuilds it. **A traditional index is the limit case of a Cabin**, fully observed. Contract: `docs/spec/cabin.md`.
 
 ### Assertions and the Bound Cabin
 
@@ -150,7 +150,7 @@ Beside the query optimizer, runtime access statistics decide *what structures ex
                            │        │   Cabin    │  authoritative for observed values
                            │        └─────┬──────┘              │
                         ┌──▼──────────────▼──────┐              │
-                        │ B+ tree (pk) + indexes │◀─ validates ─┘
+                        │ B+ tree (key) + indexes│◀─ validates ─┘
                         └──────────┬─────────────┘
                                    │              ┌──────────────────────────┐
                                    │              │  Physical optimizer      │
@@ -177,8 +177,8 @@ Beside the query optimizer, runtime access statistics decide *what structures ex
 |---|---|
 | **KWP wire protocol** | Length-prefixed binary protocol: version/capability handshake with an authentication stage, extended PARSE/BIND/EXECUTE over server-side statement and portal handles, chunked result streaming with explicit flow control, per-transaction durability selection, a structured error registry with retryable classes |
 | **Parser** | Small OLTP grammar — joins and predicate-position subqueries included. Parameterizes literals during the parse (pattern fingerprints come out for free), tags each statement with an execution class, binds catalog names to oids at parse time |
-| **B+ tree** | The authoritative pk → location index, the storage form of every new relation. Append-optimized for monotonic engine-issued ids (rightmost fast path, asymmetric splits); a named key is placed where it sorts, and a full leaf takes an append split when the key is above all its keys, otherwise divides - the rightmost at the insertion point, any other at its median |
-| **Secondary indexes** | Multi-column and covering, for the searches a trail may never replace. Formally "a Cabin that observed everything". An entry is `key || pk`, never a location, and is logged under the index tree's hold |
+| **B+ tree** | The authoritative tuple key → location index, the storage form of every new relation. Append-optimized for monotonic engine-issued ids (rightmost fast path, asymmetric splits); a named key is placed where it sorts, and a full leaf takes an append split when the key is above all its keys, otherwise divides - the rightmost at the insertion point, any other at its median |
+| **Secondary indexes** | Multi-column and covering, for the searches a trail may never replace. Formally "a Cabin that observed everything". An entry is `key || tuple key`, never a location, and is logged under the index tree's hold |
 | **Foreign keys** | Declared at `CREATE TABLE`, checked on write; see `docs/spec/foreign-keys.md` and the open entry in `known-gaps.md` |
 | **Buffer pool** | One pool for the instance, bounded: `buffer_pool_frames` is required and a hard ceiling. Frames are slots reclaimed by a CLOCK hand in bounded batches, inline and on a background tick; a scan faults cold so it does not displace the working set; a full pool refuses a statement rather than grow. RAII pinned-page handles, WAL-ordering gate enforced in code |
 | **Storage** | One growable data file, arithmetic page addressing (`offset = page_id × 8 KiB`), extent-based crash-safe growth, bitmap free-space management, CRC32C page checksums. mmap deliberately rejected — explicit I/O through the device seam only |
@@ -193,14 +193,14 @@ Never violated, never "temporarily" bypassed. Each is a capability given up for 
 | 1 | 8192-byte pages; `uint32_t` page ids; `0xFFFFFFFF` invalid | Arithmetic addressing, no indirection |
 | 2 | A page's `min_key` is immutable after creation, until the page is freed | Lock-free range pruning |
 | 3 | No tuple with `id < min_key(page)` in that page, ever — including by relayout, including transiently | The pruning decision is always sound |
-| 4 | Tuples within a heap page are unordered; a btree leaf is sorted by placement | O(1) append; `ORDER BY <pk>` for free |
+| 4 | Tuples within a heap page are unordered; a btree leaf is sorted by placement | O(1) append; `ORDER BY <tuple key>` for free |
 | 5 | The Keystone column is exactly `id:48 \| flags:8 \| reserved:8` | One word names a row |
 | 6 | The Keystone word is atomic `uint64_t`; persisted formats use shift/mask, **never** compiler bitfields | No torn fields; portable on-disk layout |
 | 7 | Ids outside the tuple header are zero-extended `uint64_t` | One id representation everywhere |
 | 8 | Waystone is advisory: deleting it wholesale may cost performance, never a result | Learning is risk-free |
 | 9 | Waystone is never authoritative — it chooses *where to look*, never *what is visible* | Absence needs no witness |
 | 10 | No canonical in-memory tuple; consistency is page pin + latch discipline | No coherence cache to keep |
-| 11 | Every pk is a unique 48-bit id carried only by the Keystone word, **never updatable**, never rebound except by `PURGE` (see Keystone) | Issue-once identity |
+| 11 | Every tuple key is a unique 48-bit id carried only by the Keystone word, **never updatable**, never rebound except by `PURGE` (see Keystone) | Issue-once identity |
 | 12 | The MVCC header is exactly 20 bytes and there is **no `xmax`** | One fact stored once |
 | 13 | Every tuple is fixed-length; a disagreeing length is `Corruption`, never interpreted | Tuples never migrate |
 | 14 | Var-heap values are immutable per version; `kVarHeap` pages are never relocated | MVCC correctness for free |
@@ -234,6 +234,10 @@ The design is specification-first: every subsystem has a spec carrying its decis
 | Active work orders and ratifications | `instructions/v3.0.0/` |
 | **What is missing, and what a restart loses** | **`docs/inflight/known-gaps.md`** |
 
+## Terminology
+
+**`pk` is a retired word** (operator, 2026-10-14). The 48-bit id a tuple's Keystone word carries is called the **tuple key** or the **tuple identity key** - two names for one thing - and never the *pk* or *primary key*: it is a row's identity - unique for the life of the relation, never updated, rebound only by `PURGE` - not a business key. New text in this repository - specs, work orders, the manual, code comments and messages - uses those names. A SQL or code token that already spells `pk` is an identifier and is not renamed by this rule; an older document that says *pk* means the tuple key.
+
 ## Glossary
 
 The stone metaphor is deliberate — a *keystone* holds the structure up, a *waystone* guides the traveler without being the road, and a *cabin* is a place someone has actually been.
@@ -241,9 +245,10 @@ The stone metaphor is deliberate — a *keystone* holds the structure up, a *way
 | Term | Meaning |
 |---|---|
 | **Keystone** | The 64-bit identity word every tuple carries: 48-bit id · 8-bit flags · 8 reserved bits. Everything that names a tuple names it by its Keystone id |
+| **Tuple key / tuple identity key** | The 48-bit id in the Keystone word: a relation's unique, never-updated row identity. The two names mean the same thing; KDS does not call it a *pk* (see *Terminology*) |
 | **Waystone** | The advisory store of trails, reached per pattern instance through `sys.patterns`. Droppable wholesale without changing any result |
 | **Trail** | The recorded path of one pattern instance — the Keystones a previous execution touched, in execution order, with step tags and last-seen locations. A trail may replace a lookup, never a search |
-| **Cabin** | A per-`(relation, column)` store, authoritative for the values queries have actually observed; entries hold pks, not addresses. A **Bound Cabin** is the pinned, fully covering, logged variant that backs an assertion |
+| **Cabin** | A per-`(relation, column)` store, authoritative for the values queries have actually observed; entries hold tuple keys, not addresses. A **Bound Cabin** is the pinned, fully covering, logged variant that backs an assertion |
 | **Pattern / pattern instance** | A pattern is a statement's *shape*, fingerprinted at parse time as `pattern_id`. An instance is that shape with arguments bound: `(pattern_id, arg_hash)` |
 | **Step chain** | The compiled form of every statement: an ordered list of steps executed in written order. "The query is the plan" |
 | **`min_key`** | The immutable per-page key lower bound: pages are unordered inside, ordered between |

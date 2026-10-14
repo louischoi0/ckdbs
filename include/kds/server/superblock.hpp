@@ -136,7 +136,14 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // read them as zero - no lineage, no restore owed - which is true of it, but
 // the standing order refuses it all the same rather than mount an image
 // this build did not write.
-inline constexpr std::uint32_t kSuperBlockVersion = 23;
+//
+// 24 (BV-S1, `instructions/v3.2.0/workorder-bv-transition-constraints.md`
+// BV-Q1 (a)): bootstrap gained `sys.transitions` on fixed page 16, the
+// first overflow-range id a version-23 file could already hold;
+// `kCatalogOverflowFirst` moved to 17. A version-23 volume has no such
+// relation, so a Transition could be neither declared nor read on it;
+// refused with no migration, the standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 24;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

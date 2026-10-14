@@ -154,8 +154,8 @@ inline constexpr Oid kSysPatternsTable = 114;
 // declared assertion - a group-level upper-bound constraint over one
 // relation.
 //
-// **The only catalog relation stored in ordinary user tuple format**, and
-// the second one built that way: it stores the declaration's `source_text`
+// **One of the two catalog relations stored in ordinary user tuple format**
+// (sys.transitions, below, is the other), and the second built that way: it stores the declaration's `source_text`
 // verbatim (AS10), and the fixed-length rule already answers where an
 // arbitrary-length value goes. `sys.pattern_defs` was the first and is
 // retired above, which leaves this relation carrying the argument alone.
@@ -213,6 +213,21 @@ inline constexpr Oid kSysFkeysTable = 132;
 // (2026-09-30). Unused and not reissued: nothing below kUserOidStart is
 // generated.
 
+// sys.transitions (docs/spec/transition.md): one row per Transition - the
+// allowed state changes of one column. The second row-codec catalog
+// relation, for sys.assertions' reason: a declaration's state values and
+// edge list are neither fixed-width nor bounded, so the row stores the
+// declaration's text and the reader re-parses it (BV-Q1 (a),
+// `instructions/v3.2.0/workorder-bv-transition-constraints.md`). Past the
+// highest well-known oid, as the note at 114 requires - 134..139 were never
+// issued, but a gap is not where a relation goes.
+inline constexpr Oid kSysTransitionsTable = 146;
+
+// Fixed oids for sys.transitions' six sys.columns rows, 147..152, for
+// kSysAssertionsColumnOidBase's reason: written during bootstrap, when the
+// oid sequence cannot answer yet.
+inline constexpr Oid kSysTransitionsColumnOidBase = 147;
+
 // The **floor** for user-created object oids, not a counter.
 //
 // `Catalog::GenerateUserOid()` starts here on an empty database and, on a
@@ -257,7 +272,7 @@ inline constexpr Oid kAllWellKnownOids[] = {
     kSysColumnsTable,     kSysTablesTable,       kSysIndexesTable,
     kSysPatternsTable,    kSysAssertionsTable,   kSysAccessStatsTable,
     kSysCabinsTable,      kSysFkeysTable,        kSysAssertionsColumnOidBase,
-    kUserOidStart,
+    kSysTransitionsTable, kSysTransitionsColumnOidBase, kUserOidStart,
 };
 
 // O(n^2) over ~39 values is ~750 compile-time comparisons - a sort would be
@@ -310,7 +325,7 @@ inline constexpr PageId kCatalogPageCabins = 12;
 inline constexpr PageId kCatalogPageFkeys = 13;
 
 // Root heap page of sys.assertions. Fixed like the ones above, and - as
-// the one row-codec catalog relation left - its *var-heap* root is not:
+// a row-codec catalog relation (with sys.transitions) - its *var-heap* root is not:
 // that one is allocated by CreateNew() and recorded in sys.tables, where it
 // is DDL-immutable and therefore cacheable. Intended
 // rather than incidental, and binding on any catalog relation that gains a
@@ -325,6 +340,11 @@ inline constexpr PageId kCatalogPageAssertions = 14;
 // Page 15 was `sys.ranges`' root until the split relation was retired
 // (2026-09-30). Nothing creates it; `kCatalogOverflowFirst` stays at 16,
 // because moving it back would buy one page for a format event.
+
+// Root heap page of sys.transitions (superblock 24), the first id past the
+// old overflow start, which moved to 17 with it. Its var-heap root is
+// allocated, as sys.assertions' is.
+inline constexpr PageId kCatalogPageTransitions = 16;
 
 // Every catalog relation's **root** page, in id order.
 //
@@ -344,7 +364,7 @@ inline constexpr PageId kAllCatalogPages[] = {
     kCatalogPageTypes,       kCatalogPageColumns,    kCatalogPageObjects,
     kCatalogPageTables,      kCatalogPageIndexes,    kCatalogPagePatterns,
     kCatalogPageAccessStats, kCatalogPageCabins,     kCatalogPageFkeys,
-    kCatalogPageAssertions,
+    kCatalogPageAssertions,  kCatalogPageTransitions,
 };
 
 // ---- Where a catalog chain grows into ------------------------------------
@@ -361,11 +381,12 @@ inline constexpr PageId kAllCatalogPages[] = {
 // The range is what is left of the reserved low pages after the roots, up
 // to the first user page - a page count the ledger below moves, so it is
 // not stated here as a number. A page holds ~68 `sys.columns` rows, and
-// the range times that is the whole instance's column ceiling (~7,600
-// with the range starting at 16) - a ceiling, not "unbounded". It walks up
+// the range times that is the whole instance's column ceiling (~7,500
+// with the range starting at 17) - a ceiling, not "unbounded". It walks up
 // by one with every new bootstrap relation, on that relation's superblock
-// bump (14 -> 15 for sys.assertions, 15 -> 16 for the retired sys.ranges).
-inline constexpr PageId kCatalogOverflowFirst = 16;
+// bump (14 -> 15 for sys.assertions, 15 -> 16 for the retired sys.ranges,
+// 16 -> 17 for sys.transitions).
+inline constexpr PageId kCatalogOverflowFirst = 17;
 
 // One past the last id a catalog chain may take. Must equal
 // kds::server::kFirstUserPageId; the static_assert lives in catalog.cpp,

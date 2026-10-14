@@ -411,6 +411,58 @@ CREATE ASSERTION <name> ON <table> GROUP BY (<col> [, ...])
   and a write arriving while it builds waits for it to finish - on any
   core - so the new constraint counts every row.
 
+### CREATE TRANSITION / DROP TRANSITION (built and **enforcing**, BV, v3.2.0)
+
+```sql
+CREATE TRANSITION order_status ON orders(status)
+  ON INSERT ('NEW')
+  ON UPDATE ('NEW' => 'CHECKED', 'CHECKED' => 'FINALIZED',
+             'NEW' => 'CANCELLED', 'CHECKED' => 'CANCELLED')
+  ON DELETE FROM ('NEW', 'CANCELLED');
+DROP TRANSITION order_status;
+```
+
+A Transition is a column's allowed state changes. It is checked per row,
+from the row alone (`docs/spec/transition.md`).
+
+What each clause allows:
+
+- **`ON INSERT`**: the states a row may be inserted in.
+- **`ON UPDATE`**: the `old => new` moves an UPDATE may make. Assigning the
+  current value again is allowed. An UPDATE that does not assign the column
+  is not checked.
+- **`ON DELETE FROM`**: the states a row may be deleted from. Leave it out
+  and every DELETE is allowed.
+
+`ON INSERT` and `ON UPDATE` are required, in that order. Together they make
+a path property hold without any history being stored: with the
+declaration above, a row reaches `FINALIZED` only through `CHECKED`.
+
+Rules:
+
+- **The state column.** It is `NOT NULL`, of an integer type, `char(N)` or
+  `varchar(N)`, and not the tuple key. A column carries at most one
+  Transition. A state is an integer or a string literal matching the
+  column, and every state must be reachable from an `ON INSERT` state.
+  `=>` is written without a space.
+- **Existing rows.** `CREATE` scans the relation and refuses if a row's
+  state is not named in the declaration. It does not check how a row got to
+  its state.
+- **Violations.** A violating write answers
+  `ERR TRANSITION_VIOLATION retryable=0 transition '<name>' on column '<c>': ...`
+  and, like every failed write, fails its transaction.
+- **When `CREATE`/`DROP` take effect.** They wait for open writes to the
+  relation and commit at the statement, never with the session's
+  transaction. `SHOW TRANSITIONS` lists them.
+- **`PURGE`** is refused on a relation that carries a Transition. A freed
+  tuple key could restart a row's history in an initial state, so a
+  governed relation's deleted keys stay bound until `DROP TRANSITION`.
+- **`DROP TABLE`** removes the relation's Transitions in autocommit. Inside
+  an explicit transaction it is refused while one stands: `DROP TRANSITION`
+  first.
+- **`ALTER TABLE RENAME COLUMN`** keeps the Transition. It names the column
+  by position.
+
 ### CREATE CABIN / DROP CABIN (built, CB01-CB11)
 
 ```sql
@@ -1048,6 +1100,7 @@ Dispatcher commands, not parser statements:
 | `SHOW INDEXES` | secondary indexes, key and covered columns |
 | `SHOW FKEYS` | declared foreign keys |
 | `SHOW ASSERTIONS` | assertions with `enforcing=` and live counters (checks/violations/reserved/aborted) |
+| `SHOW TRANSITIONS` | Transitions: id, name, relation, governed column's position, and the declaration verbatim |
 | `SHOW RELAYOUT [<table>]` | the physical optimizer's shadow report (candidate moves, each blocked by a named gate) |
 | `DESCRIBE <table>` (`DESC`) | columns, types, `clustered_type=`, `next_id`, `ids_issued`/`ids_remaining`/`budget_used`. A pk column reports `autoincrement=if-omitted`, every other column `no` |
 | `PING` | `PONG` |
@@ -1179,10 +1232,11 @@ they were before the split.
 ## 8. Error surfaces
 
 Reply shape (verified, `server::ErrorReply` — a compatibility surface, not a
-diagnostic): `ERR <TOKEN> retryable=<b> <message>` for the six codes a client
-library switches on, `ERR <message>` for everything else. The six are
-`TXN_CONFLICT`, `FK_VIOLATION`, `ASSERTION_VIOLATION`, `UNKNOWN_OUTCOME`, and
-— since 2026-08-31 — `UNSUPPORTED` and `NOT_IMPLEMENTED`, which every refusal
+diagnostic): `ERR <TOKEN> retryable=<b> <message>` for the seven codes a client
+library switches on, `ERR <message>` for everything else. The seven are
+`TXN_CONFLICT`, `FK_VIOLATION`, `ASSERTION_VIOLATION`, `UNKNOWN_OUTCOME`,
+`TRANSITION_VIOLATION` (since BV, 2026-10-14), and — since 2026-08-31 —
+`UNSUPPORTED` and `NOT_IMPLEMENTED`, which every refusal
 in §7 below now carries and which both used to reach a client as a bare
 `ERR <message>`.
 
@@ -1191,6 +1245,8 @@ in §7 below now carries and which both used to reach a client as a bare
 | Write conflict (first-updater-wins), write to another core's relation, FK check meets in-flight writer, CREATE ASSERTION on unsettled relation, a name (table, namespace, index) held by another transaction's uncommitted DROP | `ERR TXN_CONFLICT retryable=1 row id=<n> was written by transaction <n>` (message varies; the token and `retryable=1` do not) |
 | FK violation (missing parent on INSERT/UPDATE; live child on parent DELETE) | `ERR FK_VIOLATION retryable=0 <message>` |
 | Assertion ceiling exceeded | `ERR ASSERTION_VIOLATION retryable=0 <message naming the group and the enforced ceiling>` (`CHECK COUNT(*) < 5` refuses at 5 saying "would exceed bound 4") |
+| A Transition broken: an INSERT outside `ON INSERT`, an UPDATE along no declared edge, a DELETE outside `ON DELETE FROM` | `ERR TRANSITION_VIOLATION retryable=0 transition '<name>' on column '<c>': <what>, row id <n> (byte <b>)` |
+| `PURGE` of a relation carrying a Transition | `Unsupported` — `ERR UNSUPPORTED retryable=0 '<t>' carries transition '<name>', whose state history a freed key would restart; PURGE frees no key of a relation that carries a Transition (byte <n>)` |
 | Statement in a poisoned transaction | `ERR current transaction is aborted; commands are ignored until ROLLBACK` |
 | `BEGIN` inside a transaction | `ERR a transaction is already open; COMMIT or ROLLBACK first` |
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |

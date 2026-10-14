@@ -1,0 +1,72 @@
+created 8 relations with suffix _xb4c8g:
+  organizations_xb4c8g
+  ships_xb4c8g
+  operations_xb4c8g
+  cargos_xb4c8g
+  fees_xb4c8g
+  recipes_xb4c8g
+  freights_xb4c8g
+  charges_xb4c8g
+
+read probe - which of the reads S2-02..S2-04 need does this server take?
+
+  pk lookup           ok
+  capacity aggregate  ok
+  recipe filterscan   ok
+  voyage manifest     ok
+  voyage rollup       ok
+  customer statement  ok
+
+
+ckdbs benchmark - 68 columns, 24656 rows resident, 1 connection
+server 127.0.0.1:15605  table scenario2_xb4c8g
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0    1251.1   1042.0   1091.8   1203.5   1662.3   1662.3    1662.3     0
+load-organizations         300         0    1291.3    934.8   1024.5   1074.2   2358.1   5391.3   11533.2     0
+load-ships                  30         0    1182.2    919.8   1001.1   1024.0   2316.7   2867.3    2867.3     0
+load-operations            300         0    1325.4    956.5   1037.8   1083.5   2477.6   4288.8   15701.5     0
+load-fees                   12         0    1591.6   1068.7   1070.7   1149.9   4603.6   4603.6    4603.6     0
+load-recipes                93         0    1303.9    997.2   1079.3   1118.0   3254.5   3678.3    3678.3     0
+load-cargos               4000         0    1371.3    949.2   1087.9   1140.6   2565.3   5896.2   21178.9     0
+booking                   3382     1,091    3592.1    475.1   2603.4   3268.4   6630.4  12825.3   87581.0     0
+cargo-lookup              3382     1,091     122.8     70.9    109.6    119.5    159.4    203.8     659.5     0
+credit-lookup             3382     1,091     107.4     63.4     91.8    105.3    145.5    194.2     417.8     0
+capacity-read             3382     1,091     102.6     62.4     86.2     99.6    141.8    185.5     442.9     0
+recipe-read               3382     1,091     235.1    159.7    202.4    224.3    310.1    365.8     819.0     0
+freight-insert            3000       968      88.7     50.2     73.3     84.0    123.9    195.9    1586.9     0
+charge-insert            16921     5,457      69.3     39.3     56.1     66.3    103.0    143.2     387.5     0
+operation-update          3000       968      83.0     51.6     68.7     79.0    118.7    167.1    3459.8     0
+org-update                3000       968      81.1     46.8     65.3     75.9    121.8    178.0    3110.6     0
+commit                    3000       968    2615.7    972.6   1580.5   1996.5   5504.4  12055.0   86110.3     0
+manifest-scan               80        26     275.5     89.2    164.2    239.1    483.6   1170.1    1170.1     0
+voyage-rollup               80        26     274.0     87.2    136.5    201.9    383.2   3077.3    3077.3     0
+customer-statement          40        13    1361.5     79.4    119.0   1240.8   2883.3   3630.8    3630.8     0
+
+  ddl: 8 relations
+  booking: BEGIN/COMMIT, capacity=cached, 4 bookers, contended
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.
+bookings
+  committed                 3000       967.5 TPS
+  rejected-capacity          323        9.6% of attempts
+  rejected-credit             59        1.7% of attempts
+  conflicted                   0          0 retries
+
+  mode                 BEGIN/COMMIT, capacity=cached, max_fees=uncapped
+  bookers              4, contended (shared voyages and customers)
+  per booker           #0:750  #1:750  #2:750  #3:750
+  cargo pool left      941
+
+  manifest reporter    4 passes, 200 reads, 394 freight rows scanned
+                       latency is in the table above, beside the bookings it contended with
+
+verify (§4)          400 checks, 5 failure(s)
+  first: I1 operation 440: booked_cbm=1509000, SUM(freights.cbm)=1596000
+
+  wrote /home/cdkbs/bench-runs/v3.1.0-30-gcd7c7c4e/json/x-b4-s2-c8-g.json

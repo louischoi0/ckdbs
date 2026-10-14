@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "kds/base/common.hpp"
@@ -182,6 +184,22 @@ struct ForeignKeyRef {
     std::uint16_t flags = 0;
 };
 
+// One Transition on a relation, parsed from its `sys.transitions` row
+// (`exec/transition.hpp` builds it, BV-S2). Every state is held as its
+// **state key**: a string column's value as its bytes, an integer column's
+// as its decimal spelling - one canonical spelling per value, so a check is
+// a comparison of two strings whatever the column's type.
+struct TransitionRef {
+    std::uint64_t id = 0;
+    std::string name;
+    std::uint16_t column_no = 0;
+    std::vector<std::string> initial;
+    std::vector<std::pair<std::string, std::string>> edges;
+    // Absent `ON DELETE FROM`: every delete is allowed (CN-4 T10).
+    bool delete_declared = false;
+    std::vector<std::string> deletable;
+};
+
 struct TableAccess {
     // Filled from the `sys.tables` row. Its one reader is
     // `Catalog::CheckRelationQualifier`, which asks whether a qualified
@@ -292,6 +310,26 @@ struct TableAccess {
     // then works from what it compiled, exactly as §1 requires.
     std::vector<ForeignKeyRef> fkeys_out;
     std::vector<ForeignKeyRef> fkeys_in;
+
+    // ---- Transitions on this relation (BV-S2) ---------------------------
+    //
+    // At most one per column (CN-4 T6). A DDL fact by the foreign key's
+    // test, cached here and dropped by the schema word. **The fence is the
+    // memo** (BV-R4): `CREATE TRANSITION` writes its row under the relation
+    // `X` and moves the word before release, so a writer's first relation
+    // intention (`MemoIsCurrent`) re-runs a statement compiled against an
+    // entry without it. Filled by the catalog's transition loader; a fill
+    // that cannot read sys.transitions fails, as one that cannot read
+    // sys.fkeys does - a constraint the write path cannot see does not run.
+    std::vector<TransitionRef> transitions;
+
+    // The Transition on `col_pos`, or nullptr.
+    const TransitionRef* TransitionOn(std::uint16_t col_pos) const noexcept {
+        for (const TransitionRef& t : transitions) {
+            if (t.column_no == col_pos) return &t;
+        }
+        return nullptr;
+    }
 
     // The foreign key on `col_pos`, or nullptr. Linear over a list whose
     // length is the number of references a relation declares - single
