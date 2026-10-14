@@ -765,8 +765,8 @@ Status Catalog::Bootstrap() {
         }
     }
 
-    // Phase 5: the two declaration relations, sys.assertions and
-    // sys.transitions - the catalog relations stored in ordinary user tuple
+    // Phase 5: the three declaration relations, sys.assertions,
+    // sys.transitions and sys.cabin_exprs - the catalog relations stored in ordinary user tuple
     // format (well_known.hpp explains why). Built here by hand rather than
     // through CreateTable() for two reasons: CreateTable() takes its oids
     // from GenerateUserOid(), which is in-memory at bootstrap time and could
@@ -776,7 +776,8 @@ Status Catalog::Bootstrap() {
     //
     // After phase 4: their schemas name column types by the type_val tags
     // phase 4 just registered. Each has one fixed column of its own:
-    // sys.assertions' Bound Cabin root, sys.transitions' governed column.
+    // sys.assertions' Bound Cabin root, sys.transitions' governed column,
+    // sys.cabin_exprs' Cabin.
     struct Declarations {
         Oid oid;
         std::string_view name;
@@ -791,6 +792,9 @@ Status Catalog::Bootstrap() {
          kSysAssertionsColumnOidBase, "cabin_root", kTypeValInt64, 8},
         {kSysTransitionsTable, "transitions", kCatalogPageTransitions,
          kSysTransitionsColumnOidBase, "column_no", kTypeValInt32, 4},
+        // AQ-S1: an expression or predicate Cabin's `F`, by `cabin_id`.
+        {kSysCabinExprsTable, "cabin_exprs", kCatalogPageCabinExprs,
+         kSysCabinExprsColumnOidBase, "cabin_id", kTypeValInt64, 8},
     };
     for (const Declarations& d : kDeclarations) {
         if (Status s = BootstrapDeclarations(
@@ -2478,6 +2482,14 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     for (const SysCabinRow& cabin : cabins.value()) {
         if (cabin.rel_oid != oid) continue;
         if (!IsCabinServing(cabin)) continue;
+        // An expression or predicate Cabin joins the list; its `F` is the
+        // declaration loader's to fill (below), from sys.cabin_exprs.
+        if (cabin.shape == kCabinShapeExpression || cabin.shape == kCabinShapePredicate) {
+            access.expr_cabins.push_back(
+                TableAccess::ExprCabinRef{cabin.cabin_id, cabin.origin, cabin.shape, cabin.expr_id, {}});
+            continue;
+        }
+        if (cabin.shape != kCabinShapeColumn) continue;
         if (cabin.column_no == 0 || cabin.column_no >= access.cabin_ids.size()) continue;
         access.cabin_ids[cabin.column_no] = TableAccess::CabinRef{cabin.cabin_id, cabin.origin};
         if (cabin.column_no < 64) {
@@ -2555,13 +2567,15 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
                   return a.index_oid < b.index_oid;
               });
 
-    // The relation's Transitions (BV-S2), failing shut for the fkeys'
-    // reason. After the anchor is let go: the loader reads sys.transitions
-    // and its var-heap, and holds nothing of this relation. A catalog
-    // relation carries none, and asking would recurse into its own fill.
+    // The relation's Transitions (BV-S2) and its expression Cabins' `F`
+    // (AQ-S1), failing shut for the fkeys' reason - a Cabin one core
+    // witnesses and another cannot would lose a row. After the anchor is let
+    // go: the loader reads sys.transitions, sys.cabin_exprs and their
+    // var-heaps, and holds nothing of this relation. A catalog relation
+    // carries neither, and asking would recurse into its own fill.
     anchor_held.reset();
-    if (transition_loader_ && oid >= kUserOidStart) {
-        if (Status s = transition_loader_(access); !s.ok()) return s;
+    if (declaration_loader_ && oid >= kUserOidStart) {
+        if (Status s = declaration_loader_(access); !s.ok()) return s;
     }
 
     return cache_.PutTableAccess(std::move(access));
@@ -3185,26 +3199,36 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     // runtime state made by DDL.
     row.observed_ct = 0;
     row.column_no = col_pos;
+    row.shape = kCabinShapeColumn;
     row.origin = origin;
     // Active immediately. kCabinStatusBuilding exists for a phase-2
     // background build and has no writer while the only way to fill a Cabin
     // is a statement that was going to scan anyway.
     row.status = kCabinStatusActive;
 
-    if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageCabins, row, kBootstrapXid); !s.ok()) {
+    if (Status s = InsertCabinRow(row); !s.ok()) return s;
+    return row.cabin_id;
+}
+
+Status Catalog::InsertCabinRow(const SysCabinRow& row) {
+    if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageCabins, row, kBootstrapXid);
+        !s.ok()) {
         return s;
     }
-
     // **Bumped, unlike RegisterPattern().** A pattern appearing stales
-    // nothing cached; a Cabin appearing stales `TableAccess::cabin_mask` on
-    // every held entry for this relation, which is a fact the compiler
-    // reads. That is what makes this DDL and not a statement-path write.
+    // nothing cached; a Cabin appearing stales `TableAccess::cabin_mask` and
+    // `expr_cabins` on every held entry for this relation, which are facts
+    // the compiler reads. That is what makes this DDL and not a
+    // statement-path write.
     BumpVersion("sys.cabins create", Tally::kWordMovesCabin);
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
-        log_->Info("catalog", "created cabin " + std::to_string(row.cabin_id) + " on relation oid " +
-                                  std::to_string(rel_oid) + " column " + std::to_string(col_pos));
+        log_->Info("catalog", "created cabin " + std::to_string(row.cabin_id) +
+                                  " on relation oid " + std::to_string(row.rel_oid) + " shape " +
+                                  std::to_string(row.shape) + " column " +
+                                  std::to_string(row.column_no) + " expr_id " +
+                                  std::to_string(row.expr_id));
     }
-    return row.cabin_id;
+    return Status::OK();
 }
 
 Status Catalog::DropCabin(std::uint64_t cabin_id) {
@@ -3245,9 +3269,61 @@ StatusOr<SysCabinRow> Catalog::FindCabinOnColumn(Oid rel_oid, std::uint16_t col_
     auto rows = ListCabins();
     if (!rows.ok()) return rows.status();
     for (const SysCabinRow& row : rows.value()) {
-        if (row.rel_oid == rel_oid && row.column_no == col_pos) return row;
+        if (row.shape == kCabinShapeColumn && row.rel_oid == rel_oid && row.column_no == col_pos) {
+            return row;
+        }
     }
     return Status::NotFound("no cabin on this column");
+}
+
+StatusOr<std::uint64_t> Catalog::CreateExprCabin(Oid rel_oid, std::uint8_t shape,
+                                                  std::uint64_t expr_id, std::uint8_t origin,
+                                                  const SameKeyFunction& same_f,
+                                                  const RecordKeyFunction& record_f) {
+    if (shape != kCabinShapeExpression && shape != kCabinShapePredicate) {
+        return Status::InvalidArgument("catalog: not an expression or predicate cabin shape");
+    }
+    if (origin != kCabinOriginAuto && origin != kCabinOriginUser) {
+        return Status::InvalidArgument("catalog: unknown cabin origin");
+    }
+    // Issued before the hold, for CreateCabin()'s reason. The text's own row
+    // id is the caller's, issued before this call for the same one.
+    auto cabin_id = AllocateRowId(kSysCabinsTable);
+    if (!cabin_id.ok()) return cabin_id.status();
+
+    // **One Cabin per `F`** (AQ-R2), under the hold CreateCabin() takes for
+    // one per column: candidates by `expr_id`, each confirmed against the
+    // compiled `F` - two `F`s sharing an `expr_id` are two Cabins. **The
+    // order under it**: sys.cabins' root, then sys.cabin_exprs' root, then
+    // its var-heap - `same_f` reads and `record_f` writes the last two, and
+    // nothing takes them in the other order (their readers latch nothing).
+    auto held = store_.Get(kCatalogPageCabins);
+    if (!held.ok()) return held.status();
+    auto rows = ListCabins();
+    if (!rows.ok()) return rows.status();
+    for (const SysCabinRow& row : rows.value()) {
+        if (row.rel_oid != rel_oid || row.shape != shape || row.expr_id != expr_id) continue;
+        auto same = same_f(row);
+        if (!same.ok()) return same.status();
+        if (same.value()) {
+            return Status::AlreadyExists("catalog: this relation already has a cabin on this key");
+        }
+    }
+
+    // The text first: a sys.cabins row is what makes a Cabin exist, and one
+    // whose text is missing would fail its relation's every fill. A text
+    // whose row never lands is inert - nothing reads a text no row names.
+    if (Status s = record_f(cabin_id.value()); !s.ok()) return s;
+
+    SysCabinRow row{};
+    row.cabin_id = cabin_id.value();
+    row.rel_oid = rel_oid;
+    row.expr_id = expr_id;
+    row.shape = shape;
+    row.origin = origin;
+    row.status = kCabinStatusActive;
+    if (Status s = InsertCabinRow(row); !s.ok()) return s;
+    return row.cabin_id;
 }
 
 StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16_t child_column_no,

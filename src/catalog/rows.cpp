@@ -294,9 +294,11 @@ std::array<std::byte, SysCabinRow::kOnDiskSize> SysCabinRow::Encode() const {
     std::memcpy(base + kCabinIdOffset, &cabin_id, sizeof(cabin_id));
     std::memcpy(base + kRelOidOffset, &rel_oid, sizeof(rel_oid));
     std::memcpy(base + kObservedCtOffset, &observed_ct, sizeof(observed_ct));
+    std::memcpy(base + kExprIdOffset, &expr_id, sizeof(expr_id));
     std::memcpy(base + kColumnNoOffset, &column_no, sizeof(column_no));
     std::memcpy(base + kOriginOffset, &origin, sizeof(origin));
     std::memcpy(base + kStatusOffset, &status, sizeof(status));
+    std::memcpy(base + kShapeOffset, &shape, sizeof(shape));
     return buf;
 }
 
@@ -308,9 +310,11 @@ StatusOr<SysCabinRow> SysCabinRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&row.cabin_id, base + kCabinIdOffset, sizeof(row.cabin_id));
     std::memcpy(&row.rel_oid, base + kRelOidOffset, sizeof(row.rel_oid));
     std::memcpy(&row.observed_ct, base + kObservedCtOffset, sizeof(row.observed_ct));
+    std::memcpy(&row.expr_id, base + kExprIdOffset, sizeof(row.expr_id));
     std::memcpy(&row.column_no, base + kColumnNoOffset, sizeof(row.column_no));
     std::memcpy(&row.origin, base + kOriginOffset, sizeof(row.origin));
     std::memcpy(&row.status, base + kStatusOffset, sizeof(row.status));
+    std::memcpy(&row.shape, base + kShapeOffset, sizeof(row.shape));
     // Pure, like its neighbours: whether `origin` and `status` name real
     // values is the acting layer's question, and `column_no == 0` - a row
     // claiming a Cabin on the tuple key - is CreateCabin()'s to refuse, not this

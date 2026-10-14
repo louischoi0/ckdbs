@@ -1308,7 +1308,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "CABIN")) {
-            return HandleCabin(Trim(line));
+            return HandleCabin(Trim(line), session);
         }
         if (IEquals(sub, "ASSERTION")) {
             return HandleAssertion(Trim(line), session);
@@ -1350,7 +1350,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         // error pointing at its name. `PATTERN` was one of these until
         // 2026-08-31, when the operator withdrew declared patterns.
         if (IEquals(sub, "CABIN")) {
-            return HandleCabin(Trim(line));
+            return HandleCabin(Trim(line), session);
         }
         if (IEquals(sub, "INDEX")) {
             return HandleIndex(Trim(line), session);
@@ -2286,7 +2286,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     });
 }
 
-DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
+DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line, Session& session) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
@@ -2295,12 +2295,39 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
         return {"ERR expected a CREATE CABIN or DROP CABIN statement", false};
     }
     const auto& stmt = std::get<parser::CabinStmt>(parsed.value());
+    if (stmt.shape == catalog::kCabinShapeColumn) return RunCabinDdl(stmt);
 
+    // ---- AQ-S1: an expression or predicate Cabin takes the relation `X` --
+    //
+    // `CREATE INDEX`'s hold (AT-S5e), for two reasons of its own. `DROP
+    // COLUMN` decides under the `X` whether a Cabin's key reads the column,
+    // and a create compiled against the column on another core must not land
+    // its text after that answer - the text would name a dropped column and
+    // fail every fill of the relation. And a writer holds its `IX` from before
+    // it reads the relation's Cabins until it decides, so a Cabin appears
+    // only between writers, never under one that compiled without it.
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        const std::optional<catalog::Oid> relation =
+            ResolveNames(session, [&](const txn::ReadView* v) {
+                auto oid = catalog_.FindTableOidByName(stmt.table_name, v);
+                return oid.ok() ? std::optional<catalog::Oid>(oid.value()) : std::nullopt;
+            });
+        if (relation.has_value()) {
+            if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, *relation);
+                held.has_value()) {
+                return {ErrorReply(*held), false, 0, *held};
+            }
+        }
+        return RunCabinDdl(stmt);
+    });
+}
+
+DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt) {
     // One handler for both, because the two statements share a parse and a
     // reply shape and differ only in which catalog call they reach - the same
     // reason CabinStmt is one struct (ast.hpp).
     if (stmt.drop) {
-        auto cabin_id = exec::DropCabin(catalog_, stmt);
+        auto cabin_id = exec::DropCabin(catalog_, page_store_, wal_, stmt);
         if (!cabin_id.ok()) {
             return {ErrorReply(cabin_id.status()), false, 0, cabin_id.status()};
         }
@@ -2313,15 +2340,17 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
         // sys.cabins row is logged but no commit record follows it.
         if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
         std::ostringstream os;
-        os << "DROPPED CABIN on=" << stmt.table_name << '.' << stmt.column_name
-           << " cabin_id=" << cabin_id.value();
+        os << "DROPPED CABIN on=" << stmt.table_name;
+        if (stmt.shape == catalog::kCabinShapeColumn) os << '.' << stmt.column_name;
+        os << " cabin_id=" << cabin_id.value();
         if (logging(LogLevel::kInfo)) {
-            log_->Info("ddl", "dropped cabin on " + stmt.table_name + "." + stmt.column_name);
+            log_->Info("ddl", "dropped cabin " + std::to_string(cabin_id.value()) + " on " +
+                                  stmt.table_name);
         }
         return {os.str(), false};
     }
 
-    auto result = exec::CreateCabin(catalog_, stmt);
+    auto result = exec::CreateCabin(catalog_, page_store_, wal_, stmt);
     if (!result.ok()) {
         return {ErrorReply(result.status()), false, 0, result.status()};
     }
@@ -2331,14 +2360,21 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
     // `observed=0` is printed rather than left out, because it is the thing
     // most likely to be misunderstood: creating a Cabin observes nothing and
     // accelerates nothing until traffic fills it (spec §4's miss path).
-    os << "CREATED CABIN on=" << stmt.table_name << '.' << stmt.column_name
-       << " cabin_id=" << result.value().cabin_id << " column=" << result.value().col_pos
-       << " observed=0";
+    if (stmt.shape == catalog::kCabinShapeColumn) {
+        os << "CREATED CABIN on=" << stmt.table_name << '.' << stmt.column_name
+           << " cabin_id=" << result.value().cabin_id << " column=" << result.value().col_pos
+           << " observed=0";
+    } else {
+        // The key as the engine canonicalised it, so an operator sees what
+        // a statement must spell to be served (AQ-R5, R6).
+        os << "CREATED CABIN on=" << stmt.table_name << " (" << result.value().key << ")"
+           << " cabin_id=" << result.value().cabin_id << " observed=0";
+    }
     for (const std::string& warning : result.value().warnings) {
         os << "\\n" << "WARN " << warning;
     }
     if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "created cabin on " + stmt.table_name + "." + stmt.column_name);
+        log_->Info("ddl", "created cabin on " + stmt.table_name + " (" + result.value().key + ")");
     }
     return {os.str(), false};
 }
@@ -2448,9 +2484,18 @@ StatusOr<std::optional<std::string>> CommandDispatcher::DropColumnRestriction(
     auto cabins = catalog_.ListCabins();
     if (!cabins.ok()) return cabins.status();
     for (const catalog::SysCabinRow& cabin : cabins.value()) {
-        if (cabin.rel_oid == oid && cabin.column_no == pos) {
+        if (cabin.rel_oid == oid && cabin.shape == catalog::kCabinShapeColumn &&
+            cabin.column_no == pos) {
             return std::optional<std::string>("a Cabin is on it; DROP CABIN first");
         }
+    }
+    // An expression or predicate Cabin reads it by position too (AQ-S1).
+    auto access = catalog_.InitTableAccess(oid);
+    if (!access.ok()) return access.status();
+    auto read = exec::AnyCabinKeyReads(catalog_, page_store_, *access.value(), pos);
+    if (!read.ok()) return read.status();
+    if (read.value()) {
+        return std::optional<std::string>("a Cabin's key reads it; DROP CABIN first");
     }
     // AL4's predicate, by relation: an assertion's canon is its source
     // text, and a coarser refusal is never wrong.
@@ -2772,6 +2817,15 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         if (!cleared.ok() && logging(LogLevel::kWarn)) {
             log_->Warn("ddl", "a dropped relation's transitions were not all removed: " +
                                   cleared.message());
+        }
+        // Its expression Cabins' texts, on the same terms (AQ-S1): inside an
+        // explicit transaction the drop can still roll back its Cabins'
+        // rows, so their texts stay - inert once the drop commits, since
+        // nothing reads a text no sys.cabins row names.
+        if (Status s = exec::ForgetCabinTexts(catalog_, page_store_, wal_, *dropped_oid);
+            !s.ok() && logging(LogLevel::kWarn)) {
+            log_->Warn("ddl", "a dropped relation's cabin key functions were not all removed: " +
+                                  s.message());
         }
     }
     return out;

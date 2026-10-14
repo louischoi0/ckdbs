@@ -27,6 +27,7 @@
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/cabin_ddl.hpp"
+#include "kds/exec/cabin_expr.hpp"
 #include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/parser/ast.hpp"
@@ -458,13 +459,17 @@ public:
         // leave the later manager installed, the same relation the single
         // `catalog_` reference already has.
         if (txn != nullptr) catalog.SetTransactionManager(txn);
-        // The transition loader (BV-S2), here for the manager's reason: a
-        // construction site cannot forget it, so every serving catalog fills
-        // `TableAccess::transitions`. It captures the catalog and the store,
-        // never the dispatcher, which a test may destroy before them.
-        catalog.SetTransitionLoader(
+        // The declaration loader (BV-S2, AQ-S1), here for the manager's
+        // reason: a construction site cannot forget it, so every serving
+        // catalog fills `TableAccess::transitions` and every expression
+        // Cabin's `F`. It captures the catalog and the store, never the
+        // dispatcher, which a test may destroy before them.
+        catalog.SetDeclarationLoader(
             [&catalog, &page_store](catalog::TableAccess& access) {
-                return exec::LoadTransitions(catalog, page_store, access);
+                if (Status s = exec::LoadTransitions(catalog, page_store, access); !s.ok()) {
+                    return s;
+                }
+                return exec::LoadExprCabins(catalog, page_store, access);
             });
         ArmAssertionRecordBudget();
     }
@@ -1243,7 +1248,10 @@ private:
     // which catalog call they reach. Takes the whole statement line rather
     // than a suffix, because the parser is what resolves the two
     // identifiers.
-    DispatchOutcome HandleCabin(std::string_view line);
+    DispatchOutcome HandleCabin(std::string_view line, Session& session);
+    // Both statements' catalog half and reply, under whatever hold
+    // `HandleCabin` took.
+    DispatchOutcome RunCabinDdl(const parser::CabinStmt& stmt);
 
     // `ALTER TABLE ... RENAME TO | RENAME COLUMN` (docs/spec/alter.md,
     // workplan ALT03). One handler for both forms, for HandleCabin's

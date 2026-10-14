@@ -967,12 +967,23 @@ struct DropTableStmt {
 // One struct for both statements: they take the same two identifiers and
 // differ only in which catalog call they reach, so a second struct would be
 // two copies of one grammar.
+//
+// **The key function `F` has three shapes since AQ-S1**
+// (workorder-aq-expression-cabins.md AQ-R1, AR1-4): a column
+// (`column_name`), an immutable call (`expr`, `CREATE CABIN ON t (DATE(ts))`)
+// or a conjunction of comparisons with a literal (`predicate`,
+// `CREATE CABIN ON t (state = 'closed' AND amount > 1000)`). `shape` is one
+// of `catalog::kCabinShape*`, and only its own field is set.
 struct CabinStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above
+    std::uint8_t shape = catalog::kCabinShapeColumn;
     std::string column_name;
+    std::optional<FunctionCall> expr;
+    std::vector<Condition> predicate;
     std::uint32_t byte_offset = 0;         // of the table name
     std::uint32_t column_byte_offset = 0;  // of the column name
+    std::uint32_t expr_byte_offset = 0;    // of `F`'s first token
     bool drop = false;
 };
 

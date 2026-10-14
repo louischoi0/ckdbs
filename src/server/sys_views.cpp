@@ -603,16 +603,32 @@ StatusOr<exec::CatalogView> CommandDispatcher::CabinsView() {
                   {"observed", kInt},
                   {"entries", kInt},
                   {"hits", kInt},
-                  {"misses", kInt}});
+                  {"misses", kInt},
+                  {"shape", kStr},
+                  {"key", kStr}});
     auto rows = catalog_.ListCabins();
     if (!rows.ok()) return rows.status();
     for (const catalog::SysCabinRow& row : rows.value()) {
         auto access = catalog_.InitTableAccess(row.rel_oid);
+        const bool column = row.shape == catalog::kCabinShapeColumn;
+        // An expression or predicate Cabin's key, spelled from its compiled
+        // `F` with the columns' current names (AQ-S1); NULL where its
+        // relation's entry has none to read.
+        const parser::AstValue column_label =
+            column ? Str(ColumnLabel(access, row.column_no)) : Null();
+        parser::AstValue key = column_label;
+        if (!column && access.ok()) {
+            for (const catalog::TableAccess::ExprCabinRef& ref : access.value()->expr_cabins) {
+                if (ref.id == row.cabin_id && ref.f != nullptr) {
+                    key = Str(exec::RenderCabinExpr(*ref.f, access.value()->schema));
+                }
+            }
+        }
         std::vector<parser::AstValue> out{
             Int(row.cabin_id),
             Int(row.rel_oid),
             RelName(RelationNameOf(row.rel_oid)),
-            Str(ColumnLabel(access, row.column_no)),
+            column_label,
             Str(row.origin == catalog::kCabinOriginUser ? "user" : "auto"),
             Str(row.status == catalog::kCabinStatusActive     ? "active"
                 : row.status == catalog::kCabinStatusBuilding ? "building"
@@ -626,6 +642,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::CabinsView() {
         } else {
             out.insert(out.end(), 4, Null());
         }
+        out.push_back(Str(row.shape == catalog::kCabinShapeExpression  ? "expression"
+                          : row.shape == catalog::kCabinShapePredicate ? "predicate"
+                                                                       : "column"));
+        out.push_back(std::move(key));
         view.rows.push_back(std::move(out));
     }
     return view;

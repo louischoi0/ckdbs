@@ -10,6 +10,15 @@ its own letter.
 **Opened as AQ on 2026-10-06, with every §4 item marked as proposed**
 (`raft-marks-2026-10-06.md` §2). Every stage waits for its own word. It cuts no tag; the v3.0.0 tag waits on M4.
 
+**Taken up on 2026-10-14 on the operator's standing go-ahead
+(go-ahead-achieving-milestone)**, on `worktree-aq-expression-cabins` from
+`7c234766` (`v3.2.0-44-g7c234766`), `instructions/v3.2.0/raft-marks-2026-10-14.md`
+§13: that word is every stage's own. **AQ-R1's read-by-length mechanism is
+superseded** by the operator's standing order of 2026-10-07 (no superblock
+backward compatibility), which postdates AQ-Q1's mark: superblock 26 refuses
+every older volume, and no 28-byte row is read. AQ-Q7..Q13 (§4) are CLA's
+proposals adopted on the standing go-ahead, not the operator's marks.
+
 ## 0. What AQ is
 
 AR1 §14 gives AQ this content and these dependencies:
@@ -305,6 +314,18 @@ Each stage waits for the operator's word.
 | AQ-Q5 | **Automatic creation of expression and predicate Cabins** by the cabin optimizer (AR1 §8: "when a D0 pattern's predicate-position `expr_id` crosses the sighting threshold") | scope | not in AQ. Declared Cabins first; the controller's pricing of an expression is its own work. `CABIN AUTO` stays a column policy until then |
 | AQ-Q6 | **D1's fold, carried from AP-Q5** | cost | stays deferred: AQ gives it no consumer (§1.6). It moves with whichever letter first observes a `kStable` value |
 
+### Items surfaced in the stages - adopted on the operator's standing go-ahead of 2026-10-14 (go-ahead-achieving-milestone)
+
+| # | item | class | CLA proposal, adopted |
+|---|---|---|---|
+| AQ-Q7 | **AQ-Q1's mechanism against the standing order of 2026-10-07** | format | the order governs: `sys.cabins` rows are 37 B (`expr_id`, `shape` added), superblock 25 -> 26, a version-25 volume refused with no migration. Not a re-opening of AQ-Q1: its text-in-a-relation half stands, its read-by-length half is the case the later order decides. Costs: every existing volume stops mounting |
+| AQ-Q8 | **D7's "`column_no` dropped"** | format | **kept for the column shape**, 0 for the other two. AQ-R1's own v2 layout leaves a column Cabin no other carrier for its column (it has no `sys.cabin_exprs` row), and AQ-R3 keeps the column path byte for byte. `key_width` is **not** added: its reader is D3's sortable directory, which AQ-Q4 defers, and a field with no reader is a promise nothing checks |
+| AQ-Q9 | **Where `sys.cabin_exprs` lives** | format | a third declaration relation (`exec/declaration_relation.hpp`'s shape: `aux` = `cabin_id`, `name` = `cabin_<id>`) on **fixed page 15**, the retired `sys.ranges` root nothing creates, so `kCatalogOverflowFirst` does not move; oid 153, column oids 154..159 |
+| AQ-Q10 | **AQ-R2's "compiled `F` equals"**, made concrete | spec, **quiet-wrong** | the **canonical text** of the lowered `F` is the identity: column positions, the function's catalog name, the operator, and every field of the literal after coercion (a uint64's digits without leading zeros); a predicate's conjuncts sorted by their text and de-duplicated, so `a AND b` is `b AND a`. The stored text is that string, and a load recompiles and re-canonicalises it, refusing `Corruption` when the two differ or the `expr_id` does not match. `expr_id` is FNV-1a over the text with every literal folded to its kind (AR1 §6), so `state = 'open'` and `state = 'closed'` share one and are kept apart by text |
+| AQ-Q11 | **A dropped relation's texts** | gap | removed after the drop commits in autocommit, as its Transitions are (CN-4 T7); inside an explicit transaction they stay - the drop can still roll back its Cabins' rows - and are inert once it commits, since nothing reads a text no `sys.cabins` row names. Stated in `known-gaps.md` |
+| AQ-Q12 | **The tuple key as an input** | spec | admitted beside another column (`id > 5 AND state = 'open'`); refused when `F` reads it alone (the S1 exit's refusal), and the write hook reads it from the tuple key in hand at INSERT. A key reading no column at all is refused too |
+| AQ-Q13 | **A lock for an expression Cabin's DDL** (AQ-S1's review, B2) | spec, **quiet-wrong** | the relation `X`, as `CREATE INDEX` takes it (AT-S5e), for the expression and predicate shapes only. Without it a create compiled on one core could land its text after another core's `DROP COLUMN` found no Cabin reading the column, leaving a text that names a dropped column and fails every fill of the relation; and a writer's `IX`, held from before it reads the relation's Cabins until it decides, keeps a Cabin from appearing under a writer that compiled without it - the witness's premise in AQ-S2. The column shape keeps its unlocked path (known-gaps.md) |
+
 Three surfaces in this order are `[quiet-wrong]`: AQ-R2's identity, AQ-R4's
 witness and AQ-R6's match. AQ-R2 and AQ-R4 are rulings here, and their
 cells are the stages' exits. AQ-R6's form is AQ-Q3's.
@@ -341,3 +362,50 @@ proposed (`raft-marks-2026-10-06.md` §2), and the order landed on `main`.
   the operator.
 
 No stage has started.
+
+### AQ-S1 - the catalog and the grammar, landed 2026-10-14
+
+On `worktree-aq-expression-cabins` from `7c234766`, on the standing
+go-ahead (`instructions/v3.2.0/raft-marks-2026-10-14.md` §13).
+
+- **Built.** `SysCabinRow` is 37 B with `expr_id` and `shape`
+  (superblock 26, AQ-Q7, AQ-Q8); `sys.cabin_exprs` is the third declaration
+  relation, on page 15 (AQ-Q9); `CREATE CABIN ON t (F)` parses a column, an
+  immutable call or a conjunction (`ParseCabin` reads ahead and rewinds the
+  lexer); `exec/cabin_expr` compiles `F` to its canonical text - the
+  identity (AQ-Q10) - and recompiles it at load; `TableAccess::expr_cabins`
+  is filled by the catalog's declaration loader (renamed from the transition
+  loader) and fails shut; `SHOW CABINS` gains `shape` and `key`; `DROP
+  COLUMN` restricts a column any Cabin's key reads, of any status; `DROP
+  TABLE` removes the texts in autocommit (AQ-Q11); the expression shapes'
+  DDL takes the relation `X` (AQ-Q13). The golden WAL log is re-pinned
+  (bootstrap's three new catalog rows).
+- **The exit, cell by cell** (`tests/cabin_expr_test.cpp`): a `DATE(ts)`
+  Cabin creates a v2 row and a text row and lists its key; a predicate is
+  canonical and its commuted, repeated spelling is the same key; a column
+  Cabin is unchanged - its reply, its row, its mask; **a row of the old
+  width is refused** rather than read (AQ-Q7 replaces the planted-v1-row
+  cell); refusals at their byte for a non-immutable function, a key reading
+  only the tuple key or no column, a duplicate `F`, a `NO CABIN` input and
+  every form AQ-R6 does not admit; **two keys sharing an `expr_id` are kept
+  apart** (`state = 'open'` and `state = 'closed'`, the natural collision:
+  literals fold out of the hash) and `DROP CABIN` takes the one it names; a
+  stored text that is not canonical is `Corruption`; a reopened catalog
+  recompiles every key, every literal kind round-trips its text, and a
+  renamed input keeps its Cabin.
+- **Review** (`critics-developer`): B1 - a negative integer literal's signed
+  digit text was stored and refused by the reader, disabling the relation;
+  fixed (the text is kept only for a wrapped uint64 literal) with the
+  every-literal-kind cell. B2 - a create racing `DROP COLUMN` across cores;
+  fixed by AQ-Q13. B3 - `DROP COLUMN` checked serving Cabins only; fixed
+  (every status, from the texts). B4 - `DROP CABIN` failed after its row was
+  gone; fixed. B5 - a zero-argument key wrote an unreadable text; refused.
+  B6 - a `sys.tables` page nested under the `sys.cabins` hold; the text's id
+  is issued before it and the order is stated. S2-S6 applied (one row
+  insert for both doors, one text lookup, texts removed by relation, the
+  shape constants in `well_known.hpp`, one label). **Rejected: S1** (delete
+  the evaluator `CabinKeyOf` until it has a caller) - AQ-S2 is its caller
+  and lands next with its cells; `result_type_val`, the duplicate it named,
+  is deleted.
+- **Suite**: 3890/3890 at the stage's commit. Overhead not measured;
+  measured at the milestone's close.

@@ -108,3 +108,12 @@ _Sections 8-10 recorded by CLA on `worktree-bw-instant-add-drop-column` at `d6cb
 | **Mark** | **BW closed** with BW-S6 at the merge `3b5daa80` of `origin/main` (`72cb79d9`). The merged tree's suite was **not run** on the operator's word; the last green suite is `33519b28`'s 3865/3865. **Does not settle**: the `SELECT` case-folding `[quiet-wrong]` the BW-S6 review found (`docs/inflight/bugs/select-reads-the-first-column-whose-name-matches-ignoring-case.md`, the operator's choice between refusing case-only-different names and exact matching), a positional `INSERT` written before a `DROP` (BW-Q11's remaining gap, `known-gaps.md`), cleaning (D-e); no tag, no version |
 | **Recorded at** | `workorder-bw-instant-add-drop-column.md` §6; `index.md`'s BW row |
 
+
+## 13. AQ taken up on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone`, the operator's standing word: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"*. Recorded on `worktree-aq-expression-cabins` from `7c234766` |
+| **Mark** | **AQ** (`instructions/v3.0.0/workorder-aq-expression-cabins.md`), the first open milestone in `instructions/v3.0.0/index.md`'s order, is taken to its close. The word is each of AQ-S1..S5's "own word" (§3). **AQ-Q1's mechanism is superseded, not re-opened**: the operator's standing order of 2026-10-07 (no superblock backward compatibility; bump and refuse, never migrate) postdates AQ-Q1's mark of 2026-10-06 and governs every such case, so a 28-byte `sys.cabins` row is refused with its volume (superblock 26) rather than read by its length. AQ-Q7..Q13 are CLA's proposals **adopted on the operator's standing go-ahead of 2026-10-14 (go-ahead-achieving-milestone)**, not the operator's own marks |
+| **Does not settle** | AQ-Q4's deferrals (monotone serving, D3's sortable directory), AQ-Q5 (automatic creation), AQ-Q6 (D1's fold); a tag or a version |
+| **Recorded at** | `workorder-aq-expression-cabins.md` header, §4 and §6; `instructions/v3.0.0/index.md`'s AQ row |

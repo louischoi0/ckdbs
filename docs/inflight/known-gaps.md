@@ -1139,6 +1139,24 @@ Verified on `worktree-bw-instant-add-drop-column` over `bc42a011`
   the column - and `DROP CABIN` is refused only by the name it cannot
   resolve; harmless, and not fenced.
 
+## Expression and predicate Cabins (AQ)
+
+Verified on `worktree-aq-expression-cabins` at AQ-S1
+(`instructions/v3.0.0/workorder-aq-expression-cabins.md`).
+
+- **A `DROP TABLE` inside an explicit transaction leaves its expression
+  Cabins' texts in `sys.cabin_exprs`** (AQ-Q11). The drop can still roll
+  back its Cabins' rows, so the texts are removed only by an autocommit
+  drop, after its commit; once the transactional drop commits they are inert
+  - nothing reads a text no `sys.cabins` row names - and take a little
+  catalog space for good. The same holds for a crash between an autocommit
+  drop's commit and the removal, and for a `DROP CABIN` whose text delete
+  failed after its row was gone.
+- **A column Cabin's `CREATE` and `DROP` take no relation lock**, as before
+  AQ; only the expression and predicate shapes take the relation `X`
+  (AQ-Q13), because their text names columns by position and a create
+  racing `DROP COLUMN` would leave one naming a dropped column.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1-D16: what is taken.** `workorder-al-m0-single-wal.md` took D3,

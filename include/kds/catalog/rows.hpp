@@ -761,9 +761,10 @@ inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 
 // ---- sys.cabins -------------------------------------------------------
 //
-// One row per Cabin: a per-`(relation, non-tuple-key column)` store that is
-// **authoritative for the values queries have observed** and for nothing
-// else (`docs/spec/cabin.md` §10, C1).
+// One row per Cabin: a per-`(relation, F)` store that is **authoritative for
+// the values queries have observed** and for nothing else
+// (`docs/spec/cabin.md` §10, C1). `F` is a non-tuple-key column, an
+// expression over one, or a predicate (AQ, superblock 26).
 //
 // What is *in* this row is the whole of what survives a restart, and that
 // is deliberate. §9 makes Cabin pages unlogged-authoritative: the
@@ -794,8 +795,20 @@ struct SysCabinRow {
     // Live values, best-effort. See the note above.
     std::uint64_t observed_ct;
 
-    // The key column's schema position. **Never 0**: the tuple key's Cabin is the
-    // clustered tree itself (§2), so a 0 here is a row no writer produces.
+    // The lookup key of the Cabin's key function `F` (AQ-R2): the
+    // fingerprint of `F`'s canonical form with every literal folded to its
+    // type, so two `F`s that differ only in a literal share one. **A key,
+    // never an identity**: a probe or a write finds candidates by
+    // `(rel_oid, expr_id)` and confirms each against the compiled `F`
+    // (`exec/cabin_expr.hpp`), because a 64-bit hash can collide and a
+    // Cabin answers authoritatively. 0 for a column Cabin, whose identity
+    // is `column_no`.
+    std::uint64_t expr_id;
+
+    // The key column's schema position, for the **column** shape. **Never
+    // 0** there: the tuple key's Cabin is the clustered tree itself (§2), so
+    // a 0 is a row no writer produces. 0 for an expression or predicate
+    // Cabin, whose inputs are named by its `sys.cabin_exprs` text.
     std::uint16_t column_no;
 
     // kCabinOriginAuto / kCabinOriginUser. Mirrors sys.patterns' origin
@@ -806,13 +819,19 @@ struct SysCabinRow {
     // kCabinStatusActive / kCabinStatusBuilding / kCabinStatusDemoted.
     std::uint8_t status;
 
+    // kCabinShapeColumn / kCabinShapeExpression / kCabinShapePredicate
+    // (AR1-4: column, expression and predicate are shapes of one `F`).
+    std::uint8_t shape;
+
     static constexpr std::size_t kCabinIdOffset = 0;
     static constexpr std::size_t kRelOidOffset = 8;
     static constexpr std::size_t kObservedCtOffset = 16;
-    static constexpr std::size_t kColumnNoOffset = 24;
-    static constexpr std::size_t kOriginOffset = 26;
-    static constexpr std::size_t kStatusOffset = 27;
-    static constexpr std::size_t kOnDiskSize = kStatusOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kExprIdOffset = 24;
+    static constexpr std::size_t kColumnNoOffset = 32;
+    static constexpr std::size_t kOriginOffset = 34;
+    static constexpr std::size_t kStatusOffset = 35;
+    static constexpr std::size_t kShapeOffset = 36;
+    static constexpr std::size_t kOnDiskSize = kShapeOffset + sizeof(std::uint8_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysCabinRow> Decode(std::span<const std::byte> bytes);
@@ -821,10 +840,15 @@ struct SysCabinRow {
 static_assert(offsetof(SysCabinRow, cabin_id) == SysCabinRow::kCabinIdOffset);
 static_assert(offsetof(SysCabinRow, rel_oid) == SysCabinRow::kRelOidOffset);
 static_assert(offsetof(SysCabinRow, observed_ct) == SysCabinRow::kObservedCtOffset);
+static_assert(offsetof(SysCabinRow, expr_id) == SysCabinRow::kExprIdOffset);
 static_assert(offsetof(SysCabinRow, column_no) == SysCabinRow::kColumnNoOffset);
 static_assert(offsetof(SysCabinRow, origin) == SysCabinRow::kOriginOffset);
 static_assert(offsetof(SysCabinRow, status) == SysCabinRow::kStatusOffset);
-static_assert(SysCabinRow::kOnDiskSize == 28);
+static_assert(offsetof(SysCabinRow, shape) == SysCabinRow::kShapeOffset);
+static_assert(SysCabinRow::kOnDiskSize == 37);
+
+// `shape`'s values are `kCabinShape*` (well_known.hpp, where the parser
+// reads them too).
 
 // `origin` and `status`, with **0 reserved for "unset"** in both.
 //
