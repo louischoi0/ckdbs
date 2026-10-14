@@ -1,0 +1,2555 @@
+{
+ "args": {
+  "bin": null,
+  "bin_b": null,
+  "arm": [
+   "A=/home/cdkbs/bench-runs/bw-s6/bin/kds_server-A",
+   "A2=/home/cdkbs/bench-runs/bw-s6/bin/kds_server-A2",
+   "B=/home/cdkbs/bench-runs/bw-s6/bin/kds_server-B"
+  ],
+  "scan_kernel": null,
+  "workdir": "/home/cdkbs/bench-runs/bw-s6/wd-u2",
+  "port": 32931,
+  "pin_server": "2",
+  "pin_driver": "4",
+  "rows": 1000,
+  "scan_rows": 1000,
+  "ops": 2000,
+  "scan_ops": 200,
+  "range_ops": 60,
+  "blocks": 6,
+  "runs": 4,
+  "quiet_load": 2.0,
+  "quiet_wait": 20.0,
+  "cell_quiet_pct": 10.0,
+  "cell_quiet_wait": 30.0,
+  "cell_clean_pct": 20.0,
+  "cell_foreign_pct": 15.0,
+  "cell_retries": 1,
+  "sampler": null,
+  "sampler_dir": null,
+  "profile_ops": 100000,
+  "profile_range_ops": 0,
+  "profile_scan_ops": 0,
+  "profile_only": null,
+  "only": "select-pk,insert",
+  "out": "/home/cdkbs/bench-runs/bw-s6/out/u2.json"
+ },
+ "runs": [
+  {
+   "run": 0,
+   "host_before": {
+    "loadavg": "5.36 7.26 9.69 9/446 2091050",
+    "competing": [
+     "2090583 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-a3.log 2>&1; echo exit=$?; grep -m5 \"error\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-a3.log' < /dev/null && pwd -P >| /tmp/claude-b8eb-cwd",
+     "2090584 cmake --build build -j8 --target kds_tests",
+     "2090996 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/contention_counters_test.cpp.d -MF CMakeFiles/kds_tests.dir/contention_counters_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/contention_counters_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/contention_counters_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase contention_counters_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccrdD5x8.s",
+     "2091005 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/durable_kick_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/durable_kick_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/durable_kick_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/durable_kick_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase durable_kick_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccxLGIQ0.s",
+     "2091010 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/strict_park_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/strict_park_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/strict_park_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/strict_park_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase strict_park_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccBYU7dr.s",
+     "2091035 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/trx_id_carve_crash_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/trx_id_carve_crash_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/trx_id_carve_crash_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/trx_id_carve_crash_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase trx_id_carve_crash_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cch1dG2a.s",
+     "2091042 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/structural_rerun_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/structural_rerun_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/structural_rerun_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/structural_rerun_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase structural_rerun_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cclyS5jf.s",
+     "2091048 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/walk_slice_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/walk_slice_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/walk_slice_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/walk_slice_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase walk_slice_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccvHSFOi.s"
+    ]
+   },
+   "arms": [
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 83.76594632863998,
+     "p25_us": 108.24296623468399,
+     "p50_us": 122.20419012010098,
+     "p90_us": 145.4490702599287,
+     "p99_us": 176.34592950344086,
+     "mean_us": 126.69567980368187,
+     "server_cpu_us": 61.820892392392395,
+     "driver_cpu_us": 63.615934934934934,
+     "block_server_us": [
+      59.44,
+      58.68,
+      58.11,
+      66.28,
+      63.62,
+      64.78
+     ],
+     "host": {
+      "loadavg": "8.50 7.82 9.69 6/439 2091700",
+      "competing": [
+       "2090583 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-a3.log 2>&1; echo exit=$?; grep -m5 \"error\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-a3.log' < /dev/null && pwd -P >| /tmp/claude-b8eb-cwd",
+       "2090584 cmake --build build -j8 --target kds_tests",
+       "2091663 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/sim_loop_test.cpp.d -MF CMakeFiles/kds_tests.dir/sim_loop_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/sim_loop_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/sim_loop_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase sim_loop_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccunr9hl.s",
+       "2091669 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/bounded_pool_test.cpp.d -MF CMakeFiles/kds_tests.dir/bounded_pool_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/bounded_pool_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/bounded_pool_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase bounded_pool_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccNTfFwj.s",
+       "2091679 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/half_done_mutation_test.cpp.d -MF CMakeFiles/kds_tests.dir/half_done_mutation_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/half_done_mutation_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/half_done_mutation_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase half_done_mutation_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc1RxKQw.s",
+       "2091684 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/wal_golden_log_test.cpp.d -MF CMakeFiles/kds_tests.dir/wal_golden_log_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/wal_golden_log_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/wal_golden_log_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase wal_golden_log_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc5WQNEd.s",
+       "2091690 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/wal_recycle_premise_test.cpp.d -MF CMakeFiles/kds_tests.dir/wal_recycle_premise_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/wal_recycle_premise_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/wal_recycle_premise_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase wal_recycle_premise_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccPlg2Cl.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 5.3,
+       "2": 54.2,
+       "3": 100.0,
+       "4": 52.1,
+       "5": 98.7,
+       "6": 100.0,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 99.3,
+      "wait_pct": 7.27,
+      "foreign_server_cpu_pct": 4.3,
+      "foreign_driver_cpu_pct": 3.0,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 73.39101284742355,
+     "p25_us": 106.32001794874668,
+     "p50_us": 122.10407294332981,
+     "p90_us": 147.31311239302158,
+     "p99_us": 173.28094691038132,
+     "mean_us": 124.89823177941629,
+     "server_cpu_us": 63.93913113113113,
+     "driver_cpu_us": 61.0153948948949,
+     "block_server_us": [
+      56.35,
+      62.87,
+      66.23,
+      66.06,
+      68.26,
+      63.87
+     ],
+     "host": {
+      "loadavg": "8.50 7.82 9.69 6/439 2091700",
+      "competing": [
+       "2090583 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-a3.log 2>&1; echo exit=$?; grep -m5 \"error\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-a3.log' < /dev/null && pwd -P >| /tmp/claude-b8eb-cwd",
+       "2090584 cmake --build build -j8 --target kds_tests",
+       "2091663 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/sim_loop_test.cpp.d -MF CMakeFiles/kds_tests.dir/sim_loop_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/sim_loop_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/sim_loop_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase sim_loop_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccunr9hl.s",
+       "2091669 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/bounded_pool_test.cpp.d -MF CMakeFiles/kds_tests.dir/bounded_pool_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/bounded_pool_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/bounded_pool_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase bounded_pool_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccNTfFwj.s",
+       "2091679 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/half_done_mutation_test.cpp.d -MF CMakeFiles/kds_tests.dir/half_done_mutation_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/half_done_mutation_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/half_done_mutation_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase half_done_mutation_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc1RxKQw.s",
+       "2091684 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/wal_golden_log_test.cpp.d -MF CMakeFiles/kds_tests.dir/wal_golden_log_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/wal_golden_log_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/wal_golden_log_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase wal_golden_log_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc5WQNEd.s",
+       "2091690 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/wal_recycle_premise_test.cpp.d -MF CMakeFiles/kds_tests.dir/wal_recycle_premise_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/wal_recycle_premise_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/wal_recycle_premise_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase wal_recycle_premise_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccPlg2Cl.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 5.3,
+       "2": 54.2,
+       "3": 100.0,
+       "4": 52.1,
+       "5": 98.7,
+       "6": 100.0,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 99.3,
+      "wait_pct": 7.27,
+      "foreign_server_cpu_pct": 4.3,
+      "foreign_driver_cpu_pct": 3.0,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 77.05600000917912,
+     "p25_us": 111.47907935082912,
+     "p50_us": 126.45102106034756,
+     "p90_us": 151.11803077161312,
+     "p99_us": 317.90020875632763,
+     "mean_us": 135.33004142858604,
+     "server_cpu_us": 62.29050850850851,
+     "driver_cpu_us": 65.93748298298298,
+     "block_server_us": [
+      51.65,
+      67.08,
+      53.38,
+      68.12,
+      67.64,
+      65.86
+     ],
+     "host": {
+      "loadavg": "8.50 7.82 9.69 6/439 2091700",
+      "competing": [
+       "2090583 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-a3.log 2>&1; echo exit=$?; grep -m5 \"error\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-a3.log' < /dev/null && pwd -P >| /tmp/claude-b8eb-cwd",
+       "2090584 cmake --build build -j8 --target kds_tests",
+       "2091663 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/sim_loop_test.cpp.d -MF CMakeFiles/kds_tests.dir/sim_loop_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/sim_loop_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/sim_loop_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase sim_loop_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccunr9hl.s",
+       "2091669 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/bounded_pool_test.cpp.d -MF CMakeFiles/kds_tests.dir/bounded_pool_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/bounded_pool_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/bounded_pool_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase bounded_pool_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccNTfFwj.s",
+       "2091679 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/half_done_mutation_test.cpp.d -MF CMakeFiles/kds_tests.dir/half_done_mutation_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/half_done_mutation_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/half_done_mutation_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase half_done_mutation_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc1RxKQw.s",
+       "2091684 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/wal_golden_log_test.cpp.d -MF CMakeFiles/kds_tests.dir/wal_golden_log_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/wal_golden_log_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/wal_golden_log_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase wal_golden_log_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc5WQNEd.s",
+       "2091690 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/include -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/wal_recycle_premise_test.cpp.d -MF CMakeFiles/kds_tests.dir/wal_recycle_premise_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/wal_recycle_premise_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/fix-create-table-cross-core-visibility/tests/wal_recycle_premise_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase wal_recycle_premise_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccPlg2Cl.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 5.3,
+       "2": 54.2,
+       "3": 100.0,
+       "4": 52.1,
+       "5": 98.7,
+       "6": 100.0,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 99.3,
+      "wait_pct": 7.27,
+      "foreign_server_cpu_pct": 4.3,
+      "foreign_driver_cpu_pct": 3.0,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 49.81504753232002,
+     "p25_us": 52.60016769170761,
+     "p50_us": 53.47095429897308,
+     "p90_us": 61.742961406707764,
+     "p99_us": 78.43808270990849,
+     "mean_us": 56.25022269479624,
+     "server_cpu_us": 27.51325925925926,
+     "driver_cpu_us": 29.122072072072072,
+     "block_server_us": [
+      27.86,
+      27.8,
+      27.12,
+      26.95,
+      28.02,
+      27.32
+     ],
+     "host": {
+      "loadavg": "7.56 7.64 9.61 1/415 2091755",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 2.9,
+       "2": 53.1,
+       "3": 2.9,
+       "4": 53.1,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.4,
+      "wait_pct": 2.17,
+      "foreign_server_cpu_pct": 2.6,
+      "foreign_driver_cpu_pct": 2.2,
+      "attempts": 1,
+      "quiet_waited_s": 12.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.77687092125416,
+     "p25_us": 52.980147302150726,
+     "p50_us": 53.90099249780178,
+     "p90_us": 62.94483318924904,
+     "p99_us": 77.73702964186668,
+     "mean_us": 56.71957023423147,
+     "server_cpu_us": 28.06862562562563,
+     "driver_cpu_us": 29.006276276276274,
+     "block_server_us": [
+      28.83,
+      28.61,
+      27.47,
+      27.19,
+      27.72,
+      28.59
+     ],
+     "host": {
+      "loadavg": "7.56 7.64 9.61 1/415 2091755",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 2.9,
+       "2": 53.1,
+       "3": 2.9,
+       "4": 53.1,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.4,
+      "wait_pct": 2.17,
+      "foreign_server_cpu_pct": 2.6,
+      "foreign_driver_cpu_pct": 2.2,
+      "attempts": 1,
+      "quiet_waited_s": 12.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.856033340096474,
+     "p25_us": 53.61996591091156,
+     "p50_us": 54.612988606095314,
+     "p90_us": 63.406070694327354,
+     "p99_us": 78.82807403802872,
+     "mean_us": 57.45816077604457,
+     "server_cpu_us": 29.19691791791792,
+     "driver_cpu_us": 28.906181181181182,
+     "block_server_us": [
+      29.75,
+      29.39,
+      28.85,
+      29.15,
+      29.02,
+      29.03
+     ],
+     "host": {
+      "loadavg": "7.56 7.64 9.61 1/415 2091755",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 2.9,
+       "2": 53.1,
+       "3": 2.9,
+       "4": 53.1,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.4,
+      "wait_pct": 2.17,
+      "foreign_server_cpu_pct": 2.6,
+      "foreign_driver_cpu_pct": 2.2,
+      "attempts": 1,
+      "quiet_waited_s": 12.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 35.915058106184006,
+     "p25_us": 42.61382855474949,
+     "p50_us": 43.12489181756973,
+     "p90_us": 50.17593502998352,
+     "p99_us": 74.40219633281231,
+     "mean_us": 46.05711409794139,
+     "server_cpu_us": 21.958181681681683,
+     "driver_cpu_us": 24.22983183183183,
+     "block_server_us": [
+      22.69,
+      21.63,
+      22.14,
+      21.77,
+      21.7,
+      21.81
+     ],
+     "host": {
+      "loadavg": "7.12 7.55 9.57 1/422 2091769",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 47.8,
+       "3": 0.0,
+       "4": 55.6,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.65,
+      "foreign_server_cpu_pct": -1.2,
+      "foreign_driver_cpu_pct": 3.5,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 38.007041439414024,
+     "p25_us": 42.78402775526047,
+     "p50_us": 43.25597546994686,
+     "p90_us": 49.735186621546745,
+     "p99_us": 66.40120409429073,
+     "mean_us": 45.520703292435954,
+     "server_cpu_us": 21.947294794794793,
+     "driver_cpu_us": 24.185107107107104,
+     "block_server_us": [
+      22.23,
+      21.34,
+      21.96,
+      22.1,
+      21.73,
+      22.32
+     ],
+     "host": {
+      "loadavg": "7.12 7.55 9.57 1/422 2091769",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 47.8,
+       "3": 0.0,
+       "4": 55.6,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.65,
+      "foreign_server_cpu_pct": -1.2,
+      "foreign_driver_cpu_pct": 3.5,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 35.51412373781204,
+     "p25_us": 43.26505586504936,
+     "p50_us": 43.696025386452675,
+     "p90_us": 50.75591616332531,
+     "p99_us": 68.70296783745289,
+     "mean_us": 46.207480509210754,
+     "server_cpu_us": 22.63376976976977,
+     "driver_cpu_us": 24.158924924924925,
+     "block_server_us": [
+      22.66,
+      23.08,
+      22.2,
+      22.48,
+      22.96,
+      22.41
+     ],
+     "host": {
+      "loadavg": "7.12 7.55 9.57 1/422 2091769",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 47.8,
+       "3": 0.0,
+       "4": 55.6,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.65,
+      "foreign_server_cpu_pct": -1.2,
+      "foreign_driver_cpu_pct": 3.5,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 32.640062272548676,
+     "p25_us": 39.93092104792595,
+     "p50_us": 40.37003964185715,
+     "p90_us": 46.74098454415798,
+     "p99_us": 68.70296783745289,
+     "mean_us": 42.86818123339592,
+     "server_cpu_us": 21.33270670670671,
+     "driver_cpu_us": 22.059860360360357,
+     "block_server_us": [
+      21.43,
+      21.47,
+      21.17,
+      21.06,
+      21.34,
+      21.52
+     ],
+     "host": {
+      "loadavg": "7.12 7.55 9.57 1/419 2091777",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 52.0,
+       "3": 0.0,
+       "4": 47.8,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 3.85,
+      "foreign_server_cpu_pct": 1.7,
+      "foreign_driver_cpu_pct": -1.8,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 38.06711174547672,
+     "p25_us": 40.421029552817345,
+     "p50_us": 40.88087007403374,
+     "p90_us": 47.7619469165802,
+     "p99_us": 71.1679458618164,
+     "mean_us": 44.89248449745419,
+     "server_cpu_us": 21.83274774774775,
+     "driver_cpu_us": 22.05608158158158,
+     "block_server_us": [
+      21.97,
+      21.62,
+      21.66,
+      22.0,
+      21.84,
+      21.91
+     ],
+     "host": {
+      "loadavg": "7.12 7.55 9.57 1/419 2091777",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 52.0,
+       "3": 0.0,
+       "4": 47.8,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 3.85,
+      "foreign_server_cpu_pct": 1.7,
+      "foreign_driver_cpu_pct": -1.8,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 34.17115658521652,
+     "p25_us": 40.74093885719776,
+     "p50_us": 41.182152926921844,
+     "p90_us": 47.53191024065018,
+     "p99_us": 71.73814810812473,
+     "mean_us": 44.77226266262678,
+     "server_cpu_us": 22.26868818818819,
+     "driver_cpu_us": 22.033472972972973,
+     "block_server_us": [
+      22.52,
+      22.28,
+      21.97,
+      22.28,
+      22.36,
+      22.2
+     ],
+     "host": {
+      "loadavg": "7.12 7.55 9.57 1/419 2091777",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 52.0,
+       "3": 0.0,
+       "4": 47.8,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 3.85,
+      "foreign_server_cpu_pct": 1.7,
+      "foreign_driver_cpu_pct": -1.8,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    }
+   ],
+   "idle_cpu_us_per_s": {
+    "A": 6943.483,
+    "A2": 6441.59,
+    "B": 6026.356
+   },
+   "quiet_gate": {
+    "waited_s": 20.0,
+    "load": 5.36
+   },
+   "end_state": {
+    "A": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    },
+    "A2": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    },
+    "B": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    }
+   },
+   "pages-unspilled": {
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "pages-spilled": {
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "host_after": {
+    "loadavg": "7.12 7.55 9.57 1/410 2091778",
+    "competing": []
+   }
+  },
+  {
+   "run": 1,
+   "host_before": {
+    "loadavg": "5.38 7.12 9.39 2/422 2091919",
+    "competing": [
+     "2091820 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 --target kds_tests > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-m3.log 2>&1; echo exit=$?' < /dev/null && pwd -P >| /tmp/claude-06a2-cwd",
+     "2091821 cmake --build build -j8 --target kds_tests"
+    ]
+   },
+   "arms": [
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.9568490087986,
+     "p25_us": 53.17991599440575,
+     "p50_us": 58.18787030875683,
+     "p90_us": 66.67012348771095,
+     "p99_us": 86.26002818346024,
+     "mean_us": 59.56811611787663,
+     "server_cpu_us": 30.588038038038036,
+     "driver_cpu_us": 29.325142142142145,
+     "block_server_us": [
+      26.95,
+      26.44,
+      26.57,
+      36.16,
+      33.92,
+      33.47
+     ],
+     "host": {
+      "loadavg": "4.40 6.82 9.25 1/427 2091983",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 2.8,
+       "1": 0.0,
+       "2": 53.1,
+       "3": 0.0,
+       "4": 51.4,
+       "5": 2.7,
+       "6": 11.1,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.4,
+      "wait_pct": 2.38,
+      "foreign_server_cpu_pct": 1.1,
+      "foreign_driver_cpu_pct": 2.6,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.44601857662201,
+     "p25_us": 53.080031648278236,
+     "p50_us": 58.47797729074955,
+     "p90_us": 67.20190867781639,
+     "p99_us": 87.67214603722095,
+     "mean_us": 59.727414346135056,
+     "server_cpu_us": 30.654686186186186,
+     "driver_cpu_us": 29.28957257257257,
+     "block_server_us": [
+      26.96,
+      26.69,
+      26.59,
+      35.67,
+      34.78,
+      33.24
+     ],
+     "host": {
+      "loadavg": "4.40 6.82 9.25 1/427 2091983",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 2.8,
+       "1": 0.0,
+       "2": 53.1,
+       "3": 0.0,
+       "4": 51.4,
+       "5": 2.7,
+       "6": 11.1,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.4,
+      "wait_pct": 2.38,
+      "foreign_server_cpu_pct": 1.1,
+      "foreign_driver_cpu_pct": 2.6,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.83600990474224,
+     "p25_us": 53.10005508363247,
+     "p50_us": 58.909179642796516,
+     "p90_us": 67.0610461384058,
+     "p99_us": 85.87003685534,
+     "mean_us": 59.690847466173054,
+     "server_cpu_us": 30.664644644644646,
+     "driver_cpu_us": 29.182973973973976,
+     "block_server_us": [
+      27.02,
+      26.52,
+      26.97,
+      35.33,
+      33.86,
+      34.29
+     ],
+     "host": {
+      "loadavg": "4.40 6.82 9.25 1/427 2091983",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 2.8,
+       "1": 0.0,
+       "2": 53.1,
+       "3": 0.0,
+       "4": 51.4,
+       "5": 2.7,
+       "6": 11.1,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.4,
+      "wait_pct": 2.38,
+      "foreign_server_cpu_pct": 1.1,
+      "foreign_driver_cpu_pct": 2.6,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 53.70122380554676,
+     "p25_us": 55.473996326327324,
+     "p50_us": 56.274933740496635,
+     "p90_us": 64.04612213373184,
+     "p99_us": 74.1009134799242,
+     "mean_us": 58.979790255024625,
+     "server_cpu_us": 27.587396896896898,
+     "driver_cpu_us": 31.687985485485484,
+     "block_server_us": [
+      28.1,
+      27.22,
+      27.64,
+      27.75,
+      27.31,
+      27.51
+     ],
+     "host": {
+      "loadavg": "4.40 6.82 9.25 3/420 2091986",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 50.0,
+       "3": 0.0,
+       "4": 53.1,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.41,
+      "foreign_server_cpu_pct": 2.3,
+      "foreign_driver_cpu_pct": -0.1,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 54.342206567525864,
+     "p25_us": 56.02487362921238,
+     "p50_us": 56.84606730937958,
+     "p90_us": 64.52808156609535,
+     "p99_us": 80.81202395260334,
+     "mean_us": 59.3901947010178,
+     "server_cpu_us": 28.045754254254255,
+     "driver_cpu_us": 31.668864364364364,
+     "block_server_us": [
+      28.65,
+      28.53,
+      27.67,
+      27.57,
+      28.06,
+      27.8
+     ],
+     "host": {
+      "loadavg": "4.40 6.82 9.25 3/420 2091986",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 50.0,
+       "3": 0.0,
+       "4": 53.1,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.41,
+      "foreign_server_cpu_pct": 2.3,
+      "foreign_driver_cpu_pct": -0.1,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 53.78108471632004,
+     "p25_us": 55.524054914712906,
+     "p50_us": 56.44490011036396,
+     "p90_us": 63.616083934903145,
+     "p99_us": 76.42502896487713,
+     "mean_us": 58.86457486169504,
+     "server_cpu_us": 27.650206206206207,
+     "driver_cpu_us": 31.661869869869868,
+     "block_server_us": [
+      27.85,
+      27.47,
+      27.78,
+      27.39,
+      27.43,
+      27.97
+     ],
+     "host": {
+      "loadavg": "4.40 6.82 9.25 3/420 2091986",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 50.0,
+       "3": 0.0,
+       "4": 53.1,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.41,
+      "foreign_server_cpu_pct": 2.3,
+      "foreign_driver_cpu_pct": -0.1,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 38.61798904836178,
+     "p25_us": 40.30088894069195,
+     "p50_us": 40.771905332803726,
+     "p90_us": 49.43506792187691,
+     "p99_us": 73.90184327960014,
+     "mean_us": 44.06897125073948,
+     "server_cpu_us": 21.956777277277276,
+     "driver_cpu_us": 22.272932432432434,
+     "block_server_us": [
+      22.17,
+      21.76,
+      21.78,
+      22.2,
+      21.95,
+      21.88
+     ],
+     "host": {
+      "loadavg": "4.20 6.74 9.22 1/420 2091987",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 6.9,
+       "2": 52.0,
+       "3": 0.0,
+       "4": 52.0,
+       "5": 3.6,
+       "6": 3.6,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.8,
+      "wait_pct": 6.19,
+      "foreign_server_cpu_pct": 1.3,
+      "foreign_driver_cpu_pct": 2.4,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 34.34205427765846,
+     "p25_us": 40.490878745913506,
+     "p50_us": 41.022198274731636,
+     "p90_us": 48.96405152976513,
+     "p99_us": 71.71905599534512,
+     "mean_us": 44.31827262312442,
+     "server_cpu_us": 22.155095595595593,
+     "driver_cpu_us": 22.123432932932936,
+     "block_server_us": [
+      22.44,
+      22.27,
+      21.84,
+      22.08,
+      22.08,
+      22.21
+     ],
+     "host": {
+      "loadavg": "4.20 6.74 9.22 1/420 2091987",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 6.9,
+       "2": 52.0,
+       "3": 0.0,
+       "4": 52.0,
+       "5": 3.6,
+       "6": 3.6,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.8,
+      "wait_pct": 6.19,
+      "foreign_server_cpu_pct": 1.3,
+      "foreign_driver_cpu_pct": 2.4,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 38.087135180830956,
+     "p25_us": 40.22102802991867,
+     "p50_us": 40.70182330906391,
+     "p90_us": 48.78407344222069,
+     "p99_us": 83.6770050227642,
+     "mean_us": 44.2480271051939,
+     "server_cpu_us": 21.864402402402405,
+     "driver_cpu_us": 21.988797297297296,
+     "block_server_us": [
+      22.04,
+      21.61,
+      21.75,
+      21.96,
+      21.78,
+      22.05
+     ],
+     "host": {
+      "loadavg": "4.20 6.74 9.22 1/420 2091987",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 6.9,
+       "2": 52.0,
+       "3": 0.0,
+       "4": 52.0,
+       "5": 3.6,
+       "6": 3.6,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.8,
+      "wait_pct": 6.19,
+      "foreign_server_cpu_pct": 1.3,
+      "foreign_driver_cpu_pct": 2.4,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 41.173072531819344,
+     "p25_us": 42.96516999602318,
+     "p50_us": 43.44596527516842,
+     "p90_us": 51.598064601421356,
+     "p99_us": 73.570990934968,
+     "mean_us": 47.85702688744417,
+     "server_cpu_us": 22.465504504504505,
+     "driver_cpu_us": 24.22407107107107,
+     "block_server_us": [
+      22.59,
+      21.97,
+      22.62,
+      22.84,
+      22.4,
+      22.37
+     ],
+     "host": {
+      "loadavg": "4.20 6.74 9.22 1/427 2091997",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 3.4,
+       "1": 0.0,
+       "2": 45.8,
+       "3": 0.0,
+       "4": 56.7,
+       "5": 0.0,
+       "6": 3.4,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 3.35,
+      "foreign_server_cpu_pct": -3.3,
+      "foreign_driver_cpu_pct": 5.5,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 40.92208109796047,
+     "p25_us": 43.204985558986664,
+     "p50_us": 43.68601366877556,
+     "p90_us": 52.38899029791355,
+     "p99_us": 77.60687731206417,
+     "mean_us": 46.60659861211125,
+     "server_cpu_us": 22.767412412412412,
+     "driver_cpu_us": 24.319747747747748,
+     "block_server_us": [
+      23.03,
+      22.66,
+      22.94,
+      22.64,
+      22.86,
+      22.48
+     ],
+     "host": {
+      "loadavg": "4.20 6.74 9.22 1/427 2091997",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 3.4,
+       "1": 0.0,
+       "2": 45.8,
+       "3": 0.0,
+       "4": 56.7,
+       "5": 0.0,
+       "6": 3.4,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 3.35,
+      "foreign_server_cpu_pct": -3.3,
+      "foreign_driver_cpu_pct": 5.5,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 37.836842238903046,
+     "p25_us": 42.974017560482025,
+     "p50_us": 43.47506910562515,
+     "p90_us": 50.88699981570244,
+     "p99_us": 73.53094406425953,
+     "mean_us": 46.124450048549214,
+     "server_cpu_us": 22.467848348348348,
+     "driver_cpu_us": 24.113503003003004,
+     "block_server_us": [
+      22.71,
+      22.07,
+      22.73,
+      22.27,
+      22.55,
+      22.48
+     ],
+     "host": {
+      "loadavg": "4.20 6.74 9.22 1/427 2091997",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 3.4,
+       "1": 0.0,
+       "2": 45.8,
+       "3": 0.0,
+       "4": 56.7,
+       "5": 0.0,
+       "6": 3.4,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 3.35,
+      "foreign_server_cpu_pct": -3.3,
+      "foreign_driver_cpu_pct": 5.5,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    }
+   ],
+   "idle_cpu_us_per_s": {
+    "A": 4055.468,
+    "A2": 4522.25,
+    "B": 4093.849
+   },
+   "quiet_gate": {
+    "waited_s": 20.0,
+    "load": 5.38
+   },
+   "end_state": {
+    "A": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    },
+    "A2": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    },
+    "B": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    }
+   },
+   "pages-unspilled": {
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "pages-spilled": {
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "host_after": {
+    "loadavg": "4.20 6.74 9.22 1/418 2091998",
+    "competing": []
+   }
+  },
+  {
+   "run": 2,
+   "host_before": {
+    "loadavg": "3.16 6.34 9.03 2/419 2092114",
+    "competing": [
+     "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+     "2092040 cmake --build build -j8"
+    ]
+   },
+   "arms": [
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 73.62104952335358,
+     "p25_us": 83.25604721903801,
+     "p50_us": 86.48005314171314,
+     "p90_us": 105.71000166237354,
+     "p99_us": 277.27894484996796,
+     "mean_us": 97.86916113140676,
+     "server_cpu_us": 35.29831781781782,
+     "driver_cpu_us": 57.874413413413414,
+     "block_server_us": [
+      34.83,
+      35.34,
+      35.36,
+      35.25,
+      34.48,
+      36.52
+     ],
+     "host": {
+      "loadavg": "8.14 7.07 9.07 6/436 2092659",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 62.2,
+       "2": 48.6,
+       "3": 100.0,
+       "4": 62.9,
+       "5": 95.9,
+       "6": 97.3,
+       "7": 82.4
+      },
+      "sibling_busy_pct": 98.0,
+      "wait_pct": 40.9,
+      "foreign_server_cpu_pct": 16.6,
+      "foreign_driver_cpu_pct": 16.0,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 67.08083674311638,
+     "p25_us": 84.59808304905891,
+     "p50_us": 88.41394446790218,
+     "p90_us": 112.16895654797554,
+     "p99_us": 997.8569578379393,
+     "mean_us": 126.95683514581874,
+     "server_cpu_us": 39.4740960960961,
+     "driver_cpu_us": 57.53536436436437,
+     "block_server_us": [
+      36.75,
+      37.09,
+      48.5,
+      38.91,
+      38.08,
+      37.51
+     ],
+     "host": {
+      "loadavg": "8.14 7.07 9.07 6/436 2092659",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 62.2,
+       "2": 48.6,
+       "3": 100.0,
+       "4": 62.9,
+       "5": 95.9,
+       "6": 97.3,
+       "7": 82.4
+      },
+      "sibling_busy_pct": 98.0,
+      "wait_pct": 40.9,
+      "foreign_server_cpu_pct": 16.6,
+      "foreign_driver_cpu_pct": 16.0,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 68.95395927131176,
+     "p25_us": 84.8080962896347,
+     "p50_us": 88.9741349965334,
+     "p90_us": 187.53297626972198,
+     "p99_us": 1005.8688931167126,
+     "mean_us": 145.05719787462635,
+     "server_cpu_us": 38.11753003003003,
+     "driver_cpu_us": 58.827023023023024,
+     "block_server_us": [
+      35.39,
+      38.48,
+      43.14,
+      36.26,
+      38.08,
+      37.36
+     ],
+     "host": {
+      "loadavg": "8.14 7.07 9.07 6/436 2092659",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 62.2,
+       "2": 48.6,
+       "3": 100.0,
+       "4": 62.9,
+       "5": 95.9,
+       "6": 97.3,
+       "7": 82.4
+      },
+      "sibling_busy_pct": 98.0,
+      "wait_pct": 40.9,
+      "foreign_server_cpu_pct": 16.6,
+      "foreign_driver_cpu_pct": 16.0,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 65.66895171999931,
+     "p25_us": 139.84087854623795,
+     "p50_us": 206.11099898815155,
+     "p90_us": 441.7670425027609,
+     "p99_us": 1373.701961711049,
+     "mean_us": 282.9372416482539,
+     "server_cpu_us": 34.50952952952953,
+     "driver_cpu_us": 44.47436436436437,
+     "block_server_us": [
+      31.1,
+      31.21,
+      34.26,
+      37.66,
+      36.64,
+      36.19
+     ],
+     "host": {
+      "loadavg": "9.60 7.70 9.16 12/438 2093030",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 100.0,
+       "2": 71.4,
+       "3": 99.6,
+       "4": 64.2,
+       "5": 97.8,
+       "6": 97.8,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 98.7,
+      "wait_pct": 439.87,
+      "foreign_server_cpu_pct": 60.4,
+      "foreign_driver_cpu_pct": 52.2,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 63.24495188891888,
+     "p25_us": 137.96892017126083,
+     "p50_us": 215.63516929745674,
+     "p90_us": 603.3210083842278,
+     "p99_us": 3499.1600550711155,
+     "mean_us": 407.37285129110643,
+     "server_cpu_us": 37.558879379379384,
+     "driver_cpu_us": 45.68549099099099,
+     "block_server_us": [
+      32.29,
+      42.85,
+      42.27,
+      35.6,
+      36.49,
+      35.85
+     ],
+     "host": {
+      "loadavg": "9.60 7.70 9.16 12/438 2093030",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 100.0,
+       "2": 71.4,
+       "3": 99.6,
+       "4": 64.2,
+       "5": 97.8,
+       "6": 97.8,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 98.7,
+      "wait_pct": 439.87,
+      "foreign_server_cpu_pct": 60.4,
+      "foreign_driver_cpu_pct": 52.2,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 61.85285747051239,
+     "p25_us": 145.21880075335503,
+     "p50_us": 222.25501015782356,
+     "p90_us": 801.4291524887085,
+     "p99_us": 3774.615004658699,
+     "mean_us": 442.1103544331886,
+     "server_cpu_us": 39.28133883883884,
+     "driver_cpu_us": 46.01173123123123,
+     "block_server_us": [
+      36.73,
+      52.26,
+      35.81,
+      34.67,
+      41.33,
+      34.88
+     ],
+     "host": {
+      "loadavg": "9.60 7.70 9.16 12/438 2093030",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 100.0,
+       "2": 71.4,
+       "3": 99.6,
+       "4": 64.2,
+       "5": 97.8,
+       "6": 97.8,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 98.7,
+      "wait_pct": 439.87,
+      "foreign_server_cpu_pct": 60.4,
+      "foreign_driver_cpu_pct": 52.2,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 44.51698623597622,
+     "p25_us": 49.24391396343708,
+     "p50_us": 50.65719597041607,
+     "p90_us": 63.62609565258026,
+     "p99_us": 136.58590614795685,
+     "mean_us": 143.7666786795443,
+     "server_cpu_us": 30.33061961961962,
+     "driver_cpu_us": 24.649005505505507,
+     "block_server_us": [
+      30.33,
+      30.72,
+      32.35,
+      29.56,
+      29.36,
+      29.67
+     ],
+     "host": {
+      "loadavg": "9.58 7.88 9.17 3/436 2093194",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 3.6,
+       "1": 7.1,
+       "2": 32.7,
+       "3": 100.0,
+       "4": 28.3,
+       "5": 0.0,
+       "6": 100.0,
+       "7": 1.8
+      },
+      "sibling_busy_pct": 50.0,
+      "wait_pct": 4.21,
+      "foreign_server_cpu_pct": -0.7,
+      "foreign_driver_cpu_pct": 2.0,
+      "attempts": 1,
+      "quiet_waited_s": 30.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 44.36704330146313,
+     "p25_us": 49.073947593569756,
+     "p50_us": 50.02599209547043,
+     "p90_us": 63.265906646847725,
+     "p99_us": 96.78583592176437,
+     "mean_us": 54.78949113110373,
+     "server_cpu_us": 29.24678178178178,
+     "driver_cpu_us": 24.565123123123122,
+     "block_server_us": [
+      30.4,
+      29.21,
+      28.76,
+      28.9,
+      28.57,
+      29.64
+     ],
+     "host": {
+      "loadavg": "9.58 7.88 9.17 3/436 2093194",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 3.6,
+       "1": 7.1,
+       "2": 32.7,
+       "3": 100.0,
+       "4": 28.3,
+       "5": 0.0,
+       "6": 100.0,
+       "7": 1.8
+      },
+      "sibling_busy_pct": 50.0,
+      "wait_pct": 4.21,
+      "foreign_server_cpu_pct": -0.7,
+      "foreign_driver_cpu_pct": 2.0,
+      "attempts": 1,
+      "quiet_waited_s": 30.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 41.80287942290306,
+     "p25_us": 48.87394607067108,
+     "p50_us": 49.8348381370306,
+     "p90_us": 64.03704173862934,
+     "p99_us": 135.89509762823582,
+     "mean_us": 80.06716667729485,
+     "server_cpu_us": 29.87751801801802,
+     "driver_cpu_us": 24.5193993993994,
+     "block_server_us": [
+      29.78,
+      29.6,
+      31.46,
+      29.23,
+      29.9,
+      29.29
+     ],
+     "host": {
+      "loadavg": "9.58 7.88 9.17 3/436 2093194",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 3.6,
+       "1": 7.1,
+       "2": 32.7,
+       "3": 100.0,
+       "4": 28.3,
+       "5": 0.0,
+       "6": 100.0,
+       "7": 1.8
+      },
+      "sibling_busy_pct": 50.0,
+      "wait_pct": 4.21,
+      "foreign_server_cpu_pct": -0.7,
+      "foreign_driver_cpu_pct": 2.0,
+      "attempts": 1,
+      "quiet_waited_s": 30.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 37.43590787053108,
+     "p25_us": 40.68110138177872,
+     "p50_us": 41.54210910201073,
+     "p90_us": 56.22510798275471,
+     "p99_us": 113.89213614165783,
+     "mean_us": 396.806967898726,
+     "server_cpu_us": 23.759586086086085,
+     "driver_cpu_us": 23.173847847847846,
+     "block_server_us": [
+      22.64,
+      22.25,
+      24.85,
+      27.73,
+      22.28,
+      22.8
+     ],
+     "host": {
+      "loadavg": "9.93 8.13 9.21 1/443 2093480",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 3.8,
+       "1": 14.5,
+       "2": 13.3,
+       "3": 5.3,
+       "4": 12.3,
+       "5": 4.6,
+       "6": 14.6,
+       "7": 31.3
+      },
+      "sibling_busy_pct": 4.9,
+      "wait_pct": 18.25,
+      "foreign_server_cpu_pct": 1.5,
+      "foreign_driver_cpu_pct": 1.5,
+      "attempts": 1,
+      "quiet_waited_s": 30.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 35.0030604749918,
+     "p25_us": 40.75188189744949,
+     "p50_us": 41.7931005358696,
+     "p90_us": 60.10010838508606,
+     "p99_us": 142.0639455318451,
+     "mean_us": 210.9315368702059,
+     "server_cpu_us": 23.454543543543544,
+     "driver_cpu_us": 24.578003503503503,
+     "block_server_us": [
+      22.22,
+      22.89,
+      21.91,
+      22.09,
+      28.94,
+      22.68
+     ],
+     "host": {
+      "loadavg": "9.93 8.13 9.21 1/443 2093480",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 3.8,
+       "1": 14.5,
+       "2": 13.3,
+       "3": 5.3,
+       "4": 12.3,
+       "5": 4.6,
+       "6": 14.6,
+       "7": 31.3
+      },
+      "sibling_busy_pct": 4.9,
+      "wait_pct": 18.25,
+      "foreign_server_cpu_pct": 1.5,
+      "foreign_driver_cpu_pct": 1.5,
+      "attempts": 1,
+      "quiet_waited_s": 30.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 38.78818824887276,
+     "p25_us": 40.6110193580389,
+     "p50_us": 41.773077100515366,
+     "p90_us": 60.030026361346245,
+     "p99_us": 308.2850016653538,
+     "mean_us": 53.35801990014744,
+     "server_cpu_us": 24.206477477477478,
+     "driver_cpu_us": 23.527141141141144,
+     "block_server_us": [
+      22.92,
+      21.55,
+      22.07,
+      34.22,
+      22.21,
+      22.26
+     ],
+     "host": {
+      "loadavg": "9.93 8.13 9.21 1/443 2093480",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 3.8,
+       "1": 14.5,
+       "2": 13.3,
+       "3": 5.3,
+       "4": 12.3,
+       "5": 4.6,
+       "6": 14.6,
+       "7": 31.3
+      },
+      "sibling_busy_pct": 4.9,
+      "wait_pct": 18.25,
+      "foreign_server_cpu_pct": 1.5,
+      "foreign_driver_cpu_pct": 1.5,
+      "attempts": 1,
+      "quiet_waited_s": 30.0,
+      "clean": true
+     }
+    }
+   ],
+   "idle_cpu_us_per_s": {
+    "A": 4352.159,
+    "A2": 4017.689,
+    "B": 4480.06
+   },
+   "quiet_gate": {
+    "waited_s": 20.0,
+    "load": 3.16
+   },
+   "end_state": {
+    "A": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    },
+    "A2": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    },
+    "B": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    }
+   },
+   "pages-unspilled": {
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "pages-spilled": {
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "host_after": {
+    "loadavg": "10.42 8.26 9.25 2/429 2093528",
+    "competing": [
+     "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+     "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+     "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+    ]
+   }
+  },
+  {
+   "run": 3,
+   "host_before": {
+    "loadavg": "10.20 8.36 9.26 2/426 2093766",
+    "competing": [
+     "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+     "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+     "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+    ]
+   },
+   "arms": [
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.9568490087986,
+     "p25_us": 53.14103327691555,
+     "p50_us": 54.551986977458,
+     "p90_us": 70.76608017086983,
+     "p99_us": 142.6150556653738,
+     "mean_us": 61.03811814012499,
+     "server_cpu_us": 28.98873723723724,
+     "driver_cpu_us": 31.059145645645646,
+     "block_server_us": [
+      27.87,
+      28.07,
+      32.58,
+      28.87,
+      28.12,
+      28.43
+     ],
+     "host": {
+      "loadavg": "9.69 8.39 9.25 2/441 2094064",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 11.1,
+       "1": 8.1,
+       "2": 51.4,
+       "3": 0.0,
+       "4": 50.0,
+       "5": 8.1,
+       "6": 5.4,
+       "7": 2.8
+      },
+      "sibling_busy_pct": 4.0,
+      "wait_pct": 5.76,
+      "foreign_server_cpu_pct": 3.4,
+      "foreign_driver_cpu_pct": -0.7,
+      "attempts": 2,
+      "quiet_waited_s": 8.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 49.934955313801765,
+     "p25_us": 51.898881793022156,
+     "p50_us": 53.16990427672863,
+     "p90_us": 66.86104461550713,
+     "p99_us": 116.03510938584805,
+     "mean_us": 59.111326750185164,
+     "server_cpu_us": 27.532869869869867,
+     "driver_cpu_us": 30.389357857857856,
+     "block_server_us": [
+      26.87,
+      26.48,
+      28.63,
+      26.46,
+      27.16,
+      29.6
+     ],
+     "host": {
+      "loadavg": "9.69 8.39 9.25 2/441 2094064",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 11.1,
+       "1": 8.1,
+       "2": 51.4,
+       "3": 0.0,
+       "4": 50.0,
+       "5": 8.1,
+       "6": 5.4,
+       "7": 2.8
+      },
+      "sibling_busy_pct": 4.0,
+      "wait_pct": 5.76,
+      "foreign_server_cpu_pct": 3.4,
+      "foreign_driver_cpu_pct": -0.7,
+      "attempts": 2,
+      "quiet_waited_s": 8.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 51.14707164466381,
+     "p25_us": 53.029973059892654,
+     "p50_us": 54.13219332695007,
+     "p90_us": 66.73997268080711,
+     "p99_us": 90.69684892892838,
+     "mean_us": 58.76677678534397,
+     "server_cpu_us": 28.095706706706707,
+     "driver_cpu_us": 30.058523523523522,
+     "block_server_us": [
+      28.71,
+      27.15,
+      26.95,
+      28.74,
+      28.49,
+      28.52
+     ],
+     "host": {
+      "loadavg": "9.69 8.39 9.25 2/441 2094064",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 11.1,
+       "1": 8.1,
+       "2": 51.4,
+       "3": 0.0,
+       "4": 50.0,
+       "5": 8.1,
+       "6": 5.4,
+       "7": 2.8
+      },
+      "sibling_busy_pct": 4.0,
+      "wait_pct": 5.76,
+      "foreign_server_cpu_pct": 3.4,
+      "foreign_driver_cpu_pct": -0.7,
+      "attempts": 2,
+      "quiet_waited_s": 8.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 54.6120572835207,
+     "p25_us": 56.263990700244904,
+     "p50_us": 57.23605863749981,
+     "p90_us": 66.6910782456398,
+     "p99_us": 91.50803089141846,
+     "mean_us": 60.64663170832205,
+     "server_cpu_us": 29.452363863863862,
+     "driver_cpu_us": 32.162793793793796,
+     "block_server_us": [
+      30.18,
+      29.18,
+      28.74,
+      29.77,
+      29.12,
+      29.72
+     ],
+     "host": {
+      "loadavg": "9.63 8.40 9.24 1/444 2094138",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.3,
+       "1": 2.7,
+       "2": 46.9,
+       "3": 0.0,
+       "4": 52.9,
+       "5": 0.0,
+       "6": 2.8,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 3.39,
+      "foreign_server_cpu_pct": -2.0,
+      "foreign_driver_cpu_pct": 0.5,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 53.01996134221554,
+     "p25_us": 54.83184941112995,
+     "p50_us": 56.04419857263565,
+     "p90_us": 69.68504749238491,
+     "p99_us": 100.94186291098595,
+     "mean_us": 60.93701999820955,
+     "server_cpu_us": 28.32961261261261,
+     "driver_cpu_us": 31.965803303303304,
+     "block_server_us": [
+      28.1,
+      29.49,
+      28.52,
+      28.15,
+      28.09,
+      27.64
+     ],
+     "host": {
+      "loadavg": "9.63 8.40 9.24 1/444 2094138",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.3,
+       "1": 2.7,
+       "2": 46.9,
+       "3": 0.0,
+       "4": 52.9,
+       "5": 0.0,
+       "6": 2.8,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 3.39,
+      "foreign_server_cpu_pct": -2.0,
+      "foreign_driver_cpu_pct": 0.5,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 54.09098230302334,
+     "p25_us": 56.08494393527508,
+     "p50_us": 57.18600004911423,
+     "p90_us": 67.05080159008503,
+     "p99_us": 83.09492841362953,
+     "mean_us": 60.09516370547068,
+     "server_cpu_us": 29.102412412412413,
+     "driver_cpu_us": 31.766068568568567,
+     "block_server_us": [
+      30.17,
+      28.8,
+      28.8,
+      29.02,
+      28.98,
+      28.84
+     ],
+     "host": {
+      "loadavg": "9.63 8.40 9.24 1/444 2094138",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.3,
+       "1": 2.7,
+       "2": 46.9,
+       "3": 0.0,
+       "4": 52.9,
+       "5": 0.0,
+       "6": 2.8,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 3.39,
+      "foreign_server_cpu_pct": -2.0,
+      "foreign_driver_cpu_pct": 0.5,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 34.742988646030426,
+     "p25_us": 40.421029552817345,
+     "p50_us": 40.96096381545067,
+     "p90_us": 47.801993787288666,
+     "p99_us": 69.1940076649189,
+     "mean_us": 43.57229559323391,
+     "server_cpu_us": 21.734157657657658,
+     "driver_cpu_us": 22.360026526526525,
+     "block_server_us": [
+      22.04,
+      21.73,
+      21.35,
+      21.5,
+      21.82,
+      21.95
+     ],
+     "host": {
+      "loadavg": "9.63 8.40 9.24 1/437 2094159",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 7.1,
+       "1": 0.0,
+       "2": 52.0,
+       "3": 0.0,
+       "4": 50.0,
+       "5": 7.4,
+       "6": 0.0,
+       "7": 11.1
+      },
+      "sibling_busy_pct": 3.7,
+      "wait_pct": 2.5,
+      "foreign_server_cpu_pct": 2.1,
+      "foreign_driver_cpu_pct": -1.3,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 33.05892460048199,
+     "p25_us": 40.20100459456444,
+     "p50_us": 40.88110290467739,
+     "p90_us": 52.76896990835667,
+     "p99_us": 77.16682739555836,
+     "mean_us": 44.68388723543247,
+     "server_cpu_us": 21.50478328328328,
+     "driver_cpu_us": 23.422847847847848,
+     "block_server_us": [
+      21.64,
+      21.77,
+      21.8,
+      21.21,
+      20.98,
+      21.63
+     ],
+     "host": {
+      "loadavg": "9.63 8.40 9.24 1/437 2094159",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 7.1,
+       "1": 0.0,
+       "2": 52.0,
+       "3": 0.0,
+       "4": 50.0,
+       "5": 7.4,
+       "6": 0.0,
+       "7": 11.1
+      },
+      "sibling_busy_pct": 3.7,
+      "wait_pct": 2.5,
+      "foreign_server_cpu_pct": 2.1,
+      "foreign_driver_cpu_pct": -1.3,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 35.3129580616951,
+     "p25_us": 40.732091292738914,
+     "p50_us": 41.29181616008282,
+     "p90_us": 51.50795914232731,
+     "p99_us": 71.48785516619682,
+     "mean_us": 44.33189426456486,
+     "server_cpu_us": 22.05491041041041,
+     "driver_cpu_us": 22.88262412412412,
+     "block_server_us": [
+      23.51,
+      21.61,
+      21.8,
+      21.91,
+      21.58,
+      21.92
+     ],
+     "host": {
+      "loadavg": "9.63 8.40 9.24 1/437 2094159",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 7.1,
+       "1": 0.0,
+       "2": 52.0,
+       "3": 0.0,
+       "4": 50.0,
+       "5": 7.4,
+       "6": 0.0,
+       "7": 11.1
+      },
+      "sibling_busy_pct": 3.7,
+      "wait_pct": 2.5,
+      "foreign_server_cpu_pct": 2.1,
+      "foreign_driver_cpu_pct": -1.3,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 35.7641838490963,
+     "p25_us": 43.23502071201801,
+     "p50_us": 43.99707540869713,
+     "p90_us": 56.22510798275471,
+     "p99_us": 80.56219667196274,
+     "mean_us": 48.53874930200186,
+     "server_cpu_us": 23.809227727727727,
+     "driver_cpu_us": 25.990028528528526,
+     "block_server_us": [
+      23.1,
+      24.45,
+      24.15,
+      23.62,
+      24.0,
+      23.54
+     ],
+     "host": {
+      "loadavg": "9.57 8.45 9.25 2/438 2094287",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 2.9,
+       "1": 0.0,
+       "2": 42.4,
+       "3": 2.8,
+       "4": 46.9,
+       "5": 17.6,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 10.2,
+      "wait_pct": 2.97,
+      "foreign_server_cpu_pct": 1.0,
+      "foreign_driver_cpu_pct": 1.9,
+      "attempts": 1,
+      "quiet_waited_s": 12.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 40.87202250957489,
+     "p25_us": 42.70486533641815,
+     "p50_us": 43.83712075650692,
+     "p90_us": 57.65678361058235,
+     "p99_us": 82.25394412875175,
+     "mean_us": 48.89216407801624,
+     "server_cpu_us": 22.721651151151153,
+     "driver_cpu_us": 26.80197847847848,
+     "block_server_us": [
+      23.03,
+      22.82,
+      22.29,
+      21.85,
+      23.41,
+      22.93
+     ],
+     "host": {
+      "loadavg": "9.57 8.45 9.25 2/438 2094287",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 2.9,
+       "1": 0.0,
+       "2": 42.4,
+       "3": 2.8,
+       "4": 46.9,
+       "5": 17.6,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 10.2,
+      "wait_pct": 2.97,
+      "foreign_server_cpu_pct": 1.0,
+      "foreign_driver_cpu_pct": 1.9,
+      "attempts": 1,
+      "quiet_waited_s": 12.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "insert",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 37.256162613630295,
+     "p25_us": 43.25481131672859,
+     "p50_us": 44.01593469083309,
+     "p90_us": 57.34688602387905,
+     "p99_us": 85.43906733393669,
+     "mean_us": 76.26823710372767,
+     "server_cpu_us": 23.698858858858856,
+     "driver_cpu_us": 26.058166166166167,
+     "block_server_us": [
+      23.95,
+      22.65,
+      22.98,
+      24.12,
+      23.55,
+      24.94
+     ],
+     "host": {
+      "loadavg": "9.57 8.45 9.25 2/438 2094287",
+      "competing": [
+       "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+       "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+       "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 2.9,
+       "1": 0.0,
+       "2": 42.4,
+       "3": 2.8,
+       "4": 46.9,
+       "5": 17.6,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 10.2,
+      "wait_pct": 2.97,
+      "foreign_server_cpu_pct": 1.0,
+      "foreign_driver_cpu_pct": 1.9,
+      "attempts": 1,
+      "quiet_waited_s": 12.0,
+      "clean": true
+     }
+    }
+   ],
+   "idle_cpu_us_per_s": {
+    "A": 4471.149,
+    "A2": 4973.829,
+    "B": 4117.773
+   },
+   "quiet_gate": {
+    "waited_s": 20.0,
+    "load": 10.2
+   },
+   "end_state": {
+    "A": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    },
+    "A2": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    },
+    "B": {
+     "range_v_ok": false,
+     "spill_txt_ok": true
+    }
+   },
+   "pages-unspilled": {
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "pages-spilled": {
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "host_after": {
+    "loadavg": "9.57 8.45 9.25 2/430 2094307",
+    "competing": [
+     "2092039 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-full3.log 2>&1; echo build=$?; ctest --test-dir build -j8 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log 2>&1; echo ctest=$?' < /dev/null && pwd -P >| /tmp/claude-2336-cwd",
+     "2092285 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1791965549643-w0z52j.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'until grep -q \"ctest=\\|build=[1-9]\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output 2>/dev/null; do sleep 5; done; cat /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/tasks/bel16izcu.output; grep -E \"tests passed|\\(Failed\\)|Timeout\" /tmp/claude-1000/-home-cdkbs-ckdbs/a9eebf37-5a06-4064-bf5b-cc5a13cc5c81/scratchpad/b3-ctest3.log' < /dev/null && pwd -P >| /tmp/claude-8d19-cwd",
+     "2092296 ctest --test-dir build -j8 -LE heap-suspended"
+    ]
+   }
+  }
+ ]
+}

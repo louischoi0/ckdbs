@@ -220,6 +220,8 @@ def shapes(a):
          lambda q: [txt(q), i64(key(q))], "UPDATED 1", "point"),
         ("insert", "INSERT INTO i VALUES (?, ?, ?)",
          lambda q: [i64(10_000_000 + q)] * 3, "INSERT", "point"),
+        ("insert-listed", "INSERT INTO i (w, id, v) VALUES (?, ?, ?)",
+         lambda q: [i64(20_000_000 + q)] * 3, "INSERT", "point"),
         ("delete-pk", "DELETE FROM d WHERE id = ?", lambda q: [i64(q)], "DELETED 1", "point"),
         ("update-range", "UPDATE r SET v = ? WHERE id >= 1",
          lambda q: [i64(q)], f"UPDATED {n}", "range"),

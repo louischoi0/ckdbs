@@ -1,0 +1,7 @@
+a53e9b147c4deb57a86806f4b37889a03d5b282af9c3d776db5fd2f4cf053a55  bin/kds_server-A
+a53e9b147c4deb57a86806f4b37889a03d5b282af9c3d776db5fd2f4cf053a55  bin/kds_server-A2
+2b6e0e0ffbb3564f3f3b31507e4ea740ed1be98b1ba28352784ba5b04821bb62  bin/kds_server-B
+build-A/kds_server 2026-10-14 11:44:29.679801338 +0000
+build-B/kds_server 2026-10-14 11:44:28.982782244 +0000
+build-B/CMakeCache.txt:CMAKE_BUILD_TYPE:STRING=Release
+build-A/CMakeCache.txt:CMAKE_BUILD_TYPE:STRING=Release
