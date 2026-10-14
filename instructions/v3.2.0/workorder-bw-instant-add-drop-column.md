@@ -425,7 +425,7 @@ BW-S1..S3 landed (`f2a72474`, `69a31361`, `bc42a011`) and BW-S4's text with them
   auto `CreateCabin` racing the restrict check is recorded in
   `known-gaps.md` rather than fenced, since a Cabin on a dropped column is
   never served (no statement names it).
-- **BW-S4** - review (`critics-developer`) checked every claim against
+- **BW-S4** landed at `d0134573`. Review (`critics-developer`) checked every claim against
   `bc42a011` and fixed eight: BW-Q9's protection overstated for a `DROP`
   (raised BW-Q11, a `[quiet-wrong]` known gap); AL4 and the manual saying
   assertions refuse every `ALTER` (`ADD` is not refused); a dropped name
@@ -451,3 +451,8 @@ BW-S1..S3 landed (`f2a72474`, `69a31361`, `bc42a011`) and BW-S4's text with them
   and converting them is churn with no behaviour gained. The review's
   finding that BW-R5 as written admitted an unmarked column as nullable was
   CLA's own, applied before it (BW-R5's revision).
+- **BW-S5** - `origin/main` merged at `93ebc2ff` (`v3.2.0-21-g93ebc2ff`;
+  74b0a3dd's retirement of "pk" for "tuple key" taken into every line BW
+  added), suite 3839/3839 on the merged tree. **The overhead measurement
+  was not run**: held by W2 until the operator directs it. BW is not
+  pushed, merged to `main` or tagged.
