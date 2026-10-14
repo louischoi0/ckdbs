@@ -12,8 +12,15 @@ recorded in English:
 - **W2:** *"Q1: (a)."* This marks BV-Q1 (a) as written: oid 146,
   column oids from 147, root page 16, overflow at 17, superblock 24
   refusing 23.
+- **W3:** the `go-ahead-achieving-milestone` skill, invoked on BV:
+  *"go ahead until achieving milestone, I will follow CLA proposal if
+  decision needed, keep going in this session."* Every item W2 left
+  unmarked is adopted as CLA proposed under it, and recorded as adopted
+  on the operator's standing go-ahead of 2026-10-14
+  (go-ahead-achieving-milestone), never as the operator's own per-item
+  mark (`raft-marks-2026-10-14.md` §4).
 
-**Written 2026-10-14; not opened for building.** W1 asks for a plan. It
+**Written 2026-10-14; opened for building on W3.** Before W3 it read: written, not opened for building. W1 asks for a plan. It
 does not give the word to build, and it does not mark §4. CN-4 §8 is
 unanswered, so every proposal in §4 is CLA's and unmarked. **No stage
 past BV-S0 starts until its gate in §3 is marked.** BV takes up
@@ -79,7 +86,7 @@ These are CN-4 §7, unchanged:
 `[source-read]`
 
 - **`INSERT`.** `InsertOneRow` (`src/server/command_dispatcher.cpp:5658`)
-  takes the row as `body`, the columns after the pk (`:5729`). It runs the
+  takes the row as `body`, the columns after the tuple key (`:5729`). It runs the
   foreign-key forward check (`:5746`) and the assertion admission
   (`:5755`) **before the id is allocated**, so a refused row burns
   nothing. Every `INSERT` reaches it:
@@ -304,13 +311,13 @@ close".
 
 | # | Question | CLA's proposal | Mark |
 |---|---|---|---|
-| BV-Q0 | Open BV whole, or stage by stage | Stage by stage, each on its gate's mark. W1 asked for the plan, not the build | — |
+| BV-Q0 | Open BV whole, or stage by stage | Stage by stage, each on its gate's mark. W1 asked for the plan, not the build || adopted on the operator's standing go-ahead of 2026-10-14 (go-ahead-achieving-milestone) |
 | BV-Q1 | Where a Transition is stored | (a) A new row-codec catalog relation `sys.transitions` (oid 146, past the highest well-known oid as `well_known.hpp:151` requires, with a fixed run of column oids from 147 like `kSysAssertionsColumnOidBase`, because its `sys.columns` rows are written during bootstrap; root page 16, overflow moving to 17), storing the declaration's text and re-parsed into `TableAccess`; the superblock goes to 24 and refuses 23, under the standing order. (b) Rows of a new kind in `sys.assertions`: one relation for two concepts, a second meaning for one name. **(a)** || **(a), marked by the operator 2026-10-14** (W2) |
-| BV-Q2 | The grammar | §0.1's shape. `ON DELETE FROM` lists states; `=>` is one new token. A `DROP TRANSITION` inside an explicit transaction follows `DROP ASSERTION`'s rule | — |
-| BV-Q3 | The violation code | A new `StatusCode::kTransitionViolation`, wire category 18, token `TRANSITION_VIOLATION`, non-retryable; the message names the Transition, the row id and both values (CN-4 §4) | — |
-| CN-4 T1–T8, T10 | The semantics | CN-4 §8's proposals, unchanged. Not restated here so the two cannot drift. Each is marked here, beside its id, when the operator marks it | — |
-| BV-Q4 (CN-4 T11) | `PURGE` restarts a row's history (§1.6) | (a) **`PURGE` is refused `Unsupported`, at the relation's byte, on a relation carrying a Transition.** A key on it stays bound for life, and the refusal names the Transition. (b) Accept the restart: the graph speaks for one tenure of a key, and the spec says so. (c) Refuse the re-insert: needs a durable record of purged keys, against BV-R1. **(a)**, because (b) makes the guarantee false for exactly the rows an administrator touched, and says so only in a document | — |
-| BV-Q5 (CN-4 T9) | A CN-3 successor's state | CN-3 is unbuilt (`CHAIN` appears nowhere in `src/parser/`). Answer now in the strict form: **a successor is an `INSERT` and meets the initial set.** CN-3's order may ask to relax it, against this order's tests | — |
+| BV-Q2 | The grammar | §0.1's shape. `ON DELETE FROM` lists states; `=>` is one new token. A `DROP TRANSITION` inside an explicit transaction follows `DROP ASSERTION`'s rule || adopted on the operator's standing go-ahead of 2026-10-14 (go-ahead-achieving-milestone) |
+| BV-Q3 | The violation code | A new `StatusCode::kTransitionViolation`, wire category 18, token `TRANSITION_VIOLATION`, non-retryable; the message names the Transition, the row id and both values (CN-4 §4) || adopted on the operator's standing go-ahead of 2026-10-14 (go-ahead-achieving-milestone) |
+| CN-4 T1–T8, T10 | The semantics | CN-4 §8's proposals, unchanged. Not restated here so the two cannot drift. Each is marked here, beside its id, when the operator marks it || adopted on the operator's standing go-ahead of 2026-10-14 (go-ahead-achieving-milestone) |
+| BV-Q4 (CN-4 T11) | `PURGE` restarts a row's history (§1.6) | (a) **`PURGE` is refused `Unsupported`, at the relation's byte, on a relation carrying a Transition.** A key on it stays bound for life, and the refusal names the Transition. (b) Accept the restart: the graph speaks for one tenure of a key, and the spec says so. (c) Refuse the re-insert: needs a durable record of purged keys, against BV-R1. **(a)**, because (b) makes the guarantee false for exactly the rows an administrator touched, and says so only in a document || adopted on the operator's standing go-ahead of 2026-10-14 (go-ahead-achieving-milestone) |
+| BV-Q5 (CN-4 T9) | A CN-3 successor's state | CN-3 is unbuilt (`CHAIN` appears nowhere in `src/parser/`). Answer now in the strict form: **a successor is an `INSERT` and meets the initial set.** CN-3's order may ask to relax it, against this order's tests || adopted on the operator's standing go-ahead of 2026-10-14 (go-ahead-achieving-milestone) |
 
 ## 5. Measurement
 

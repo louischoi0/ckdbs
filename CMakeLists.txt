@@ -132,6 +132,8 @@ add_library(kds
     src/exec/index_ddl.cpp
     src/exec/assertion_build.cpp
     src/exec/assertion_catalog.cpp
+    src/exec/declaration_relation.cpp
+    src/exec/transition_catalog.cpp
     src/exec/assertion_check.cpp
     src/exec/assertion_replay.cpp
     src/exec/assertion_violation.cpp

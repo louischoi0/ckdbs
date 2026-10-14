@@ -8,4 +8,5 @@ reads `v3.1.0-*`.
 
 | document | what it is |
 |---|---|
-| `workorder-bv-transition-constraints.md` | **BV — Transition**: a column's allowed state changes (initial states, `old => new` edges, deletable states) as a row-local, stateless constraint. Takes up CN-4. **Written 2026-10-14, not opened for building**: every gate in its §3 waits on a mark in its §4, `PURGE`'s interaction (BV-Q4) included |
+| `workorder-bv-transition-constraints.md` | **BV — Transition**: a column's allowed state changes (initial states, `old => new` edges, deletable states) as a row-local, stateless constraint. Takes up CN-4. **Opened 2026-10-14** on the operator's standing go-ahead (`raft-marks-2026-10-14.md` §4); BV-Q1 the operator's mark, every other item adopted as CLA proposed |
+| `raft-marks-2026-10-14.md` | The operator's words of 2026-10-14: CN-4's re-read and opening, BV written, BV-Q1 marked (a), BV to its close on the standing go-ahead |

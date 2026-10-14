@@ -1215,13 +1215,16 @@ private:
         const std::function<bool(std::uint64_t deleter)>& settled,
         std::uint64_t* remaining_out = nullptr);
 
-    // Phase 5 of Bootstrap(): creates sys.assertions as an ordinary
-    // row-codec relation - fixed root page, var-heap chain, six sys.columns
-    // rows at fixed oids (docs/spec/assertion.md §8.2, workplan AST03).
-    // Split out because it is the one bootstrap relation that is not just a
-    // page and two rows, and folding it into Bootstrap() would bury the
-    // reason it differs.
-    Status BootstrapAssertions();
+    // Phases 5 and 6 of Bootstrap(): the two row-codec declaration
+    // relations, sys.assertions and sys.transitions - one shape (fixed root
+    // page, var-heap chain, six sys.columns rows at fixed oids), built by
+    // hand rather than through CreateTable() for the reasons Bootstrap()
+    // states. Split out because they are the bootstrap relations that are
+    // not just a page and two rows.
+    static Schema DeclarationSchema(Oid rel_oid, Oid column_oid_base, std::string_view aux_name,
+                                    std::uint32_t aux_type_val, std::uint32_t aux_len);
+    Status BootstrapDeclarations(Oid rel_oid, std::string_view name, PageId root_page,
+                                 const Schema& schema);
 
     // `cabin_policy` is one of the `kCabinPolicy*` values (rows.hpp) and
     // defaults to unset, which every reader treats as `auto`. It is a
