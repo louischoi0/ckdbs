@@ -43,9 +43,8 @@ copier reads the data file through the device's write fence: armed, a write
 and the copier's read of an overlapping page range never run at once, so no
 copied page is torn by the engine's own write - headered, headerless, free
 map or superblock. Disarmed, a data-file write pays three atomic operations
-(BR-R6). No full-page images are logged (`br-s0-census.md` H4/H5: there is no
-single decision site, and redo's heal is refused for an allocated page -
-`docs/inflight/bugs/a-full-page-image-cannot-heal-a-checksum-failed-allocated-page.md`).
+(BR-R6). No full-page images are logged (`br-s0-census.md` H5: there is no
+single decision site).
 
 **B6 - The copy is bounded by the stop on both sides.** The copier copies to
 the capacity read at START; STOP copies the tail the file grew, **then**

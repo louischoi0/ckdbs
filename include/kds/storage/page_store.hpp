@@ -273,14 +273,15 @@ public:
     // `which` picks the raw create rather than three virtuals: the three
     // differ only in how the id is chosen and whether a header is stamped,
     // and a store overriding this needs to know which it is servicing.
-    // `kClaimed` publishes an id `ClaimNew` claimed.
-    enum class CreateKind : std::uint8_t { kAt, kNew, kNewHeaderless, kClaimed };
+    // `kClaimed` publishes an id `ClaimNew` claimed; `kOverTorn` is `kAt`
+    // that may also take an id whose stored page fails its checksum.
+    enum class CreateKind : std::uint8_t { kAt, kNew, kNewHeaderless, kClaimed, kOverTorn };
 
     virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreatePinned(
         CreateKind which, PageId page_id) {
-        if (which == CreateKind::kAt || which == CreateKind::kClaimed) {
-            auto bytes = which == CreateKind::kAt ? CreateAtUnpinned(page_id)
-                                                  : CreateClaimedUnpinned(page_id);
+        if (which == CreateKind::kAt || which == CreateKind::kClaimed ||
+            which == CreateKind::kOverTorn) {
+            auto bytes = CreateNamedUnpinned(which, page_id);
             if (!bytes.ok()) return bytes.status();
             PinFrame(page_id, PinMode::kExclusive);
             return std::pair<PageId, std::span<std::byte, kPageSize>>(page_id, bytes.value());
@@ -295,6 +296,15 @@ public:
     // pinned. Fails with AlreadyExists if that id is already in use.
     StatusOr<PageRef> CreateAt(PageId page_id) {
         auto made = CreatePinned(CreateKind::kAt, page_id);
+        if (!made.ok()) return made.status();
+        return PageRef(this, made.value().first, made.value().second);
+    }
+
+    // CreateAt() for redo's heal (wal.md §10): it also takes an id whose
+    // stored page fails its checksum, which CreateAt() refuses as in use.
+    // Only a whole-page record may ask, since it replaces every byte.
+    StatusOr<PageRef> CreateOverTorn(PageId page_id) {
+        auto made = CreatePinned(CreateKind::kOverTorn, page_id);
         if (!made.ok()) return made.status();
         return PageRef(this, made.value().first, made.value().second);
     }
@@ -477,6 +487,22 @@ protected:
     }
     virtual void ReleaseClaimedId(PageId page_id) noexcept { (void)page_id; }
     friend class PageClaims;
+
+    // `CreateOverTorn`'s raw half. The default is `CreateAtUnpinned`, true
+    // for a store that verifies no checksum and so never holds a torn page.
+    virtual StatusOr<std::span<std::byte, kPageSize>> CreateOverTornUnpinned(PageId page_id) {
+        return CreateAtUnpinned(page_id);
+    }
+
+    // The raw create for the three kinds that name their id.
+    StatusOr<std::span<std::byte, kPageSize>> CreateNamedUnpinned(CreateKind which,
+                                                                  PageId page_id) {
+        switch (which) {
+            case CreateKind::kClaimed: return CreateClaimedUnpinned(page_id);
+            case CreateKind::kOverTorn: return CreateOverTornUnpinned(page_id);
+            default: return CreateAtUnpinned(page_id);
+        }
+    }
 
     virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() = 0;
 
