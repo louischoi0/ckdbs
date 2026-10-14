@@ -61,7 +61,7 @@ struct DeclarationRow {
     // The relation's own fixed column: sys.assertions' `cabin_root`,
     // sys.transitions' `column_no`.
     std::int64_t aux = 0;
-    // Reserved; written 0.
+    // Reserved; every writer passes 0.
     std::uint32_t flags = 0;
     std::string name;
     std::string source_text;
@@ -81,6 +81,12 @@ StatusOr<std::optional<DeclarationRow>> FindDeclarationByName(catalog::Catalog& 
                                                               storage::PageStore& store,
                                                               catalog::Oid rel_oid,
                                                               std::string_view name);
+
+// The rows constraining `target_oid`, in chain order.
+StatusOr<std::vector<DeclarationRow>> DeclarationsOnRelation(catalog::Catalog& catalog,
+                                                             storage::PageStore& store,
+                                                             catalog::Oid rel_oid,
+                                                             catalog::Oid target_oid);
 
 // Records `row` (its `id` from the caller's `Catalog::AllocateRowId`).
 // `kind` names the declaration in refusals ("assertion", "transition").

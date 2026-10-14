@@ -44,12 +44,10 @@ StatusOr<std::optional<TransitionDef>> FindTransitionByName(catalog::Catalog& ca
 StatusOr<std::vector<TransitionDef>> TransitionsOnRelation(catalog::Catalog& catalog,
                                                            storage::PageStore& store,
                                                            catalog::Oid target_oid) {
-    auto defs = ListTransitions(catalog, store);
-    if (!defs.ok()) return defs.status();
+    auto rows = DeclarationsOnRelation(catalog, store, catalog::kSysTransitionsTable, target_oid);
+    if (!rows.ok()) return rows.status();
     std::vector<TransitionDef> out;
-    for (TransitionDef& def : defs.value()) {
-        if (def.target_oid == target_oid) out.push_back(std::move(def));
-    }
+    for (DeclarationRow& row : rows.value()) out.push_back(ToTransitionDef(std::move(row)));
     return out;
 }
 

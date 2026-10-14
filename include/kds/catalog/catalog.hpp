@@ -197,6 +197,28 @@ public:
     // design (an abort burns ids, K3).
     void SetDdlUndoHook(DdlUndoHook hook) { ddl_undo_hook_ = std::move(hook); }
 
+    // **The transition loader** (BV-S2): fills a user relation's
+    // `TableAccess::transitions` from sys.transitions. A seam rather than a
+    // call because the rows are row-codec and their declarations re-parsed,
+    // which is `exec/`'s, and `exec/` depends on this layer. Armed by the
+    // `CommandDispatcher` constructor - every serving catalog has one, and
+    // every write runs through a dispatcher. Unarmed (bootstrap, recovery, a
+    // bare-store test) a fill leaves the list empty.
+    using TransitionLoader = std::function<Status(TableAccess&)>;
+    // Drops the memo: an entry filled before the loader was armed would
+    // serve its relation without its Transitions.
+    void SetTransitionLoader(TransitionLoader loader) {
+        transition_loader_ = std::move(loader);
+        cache_.Invalidate();
+    }
+
+    // The schema word moved for a declaration row whose readers cache it -
+    // `CREATE`/`DROP TRANSITION`, which write through `exec/`. After the
+    // row's write, before the DDL's relation `X` is released (D21's order).
+    // A named door onto `BumpVersion`, which stays private: every other
+    // caller is a catalog write of this class's own.
+    void NoteDeclarationsChanged(std::string_view what) { BumpVersion(what); }
+
     // **The schema version word** (AT-S2, `docs/spec/catalog.md`; AR0-5
     // §2.1, D21). One `std::atomic` for the instance, owned by `Expeditor`
     // and handed to every core's catalog; `BumpVersion()` - the single DDL
@@ -1221,8 +1243,6 @@ private:
     // hand rather than through CreateTable() for the reasons Bootstrap()
     // states. Split out because they are the bootstrap relations that are
     // not just a page and two rows.
-    static Schema DeclarationSchema(Oid rel_oid, Oid column_oid_base, std::string_view aux_name,
-                                    std::uint32_t aux_type_val, std::uint32_t aux_len);
     Status BootstrapDeclarations(Oid rel_oid, std::string_view name, PageId root_page,
                                  const Schema& schema);
 
@@ -1343,6 +1363,7 @@ private:
     wal::WalManager* wal_ = nullptr;
     // RV3-3: per-DDL-statement, dispatcher-installed; empty = no undo.
     DdlUndoHook ddl_undo_hook_;
+    TransitionLoader transition_loader_;
     // Delete-marks written this run and possibly still on a page - the
     // gate that keeps PurgeSettledDeleteMarks() from Get()-dirtying every
     // catalog page after a DDL that marked nothing (found when D2 made

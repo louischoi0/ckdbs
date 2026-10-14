@@ -1068,6 +1068,34 @@ the procedures are `manual/server/backup-restore.md`.
 - **An engine defect BR found and did not fix**, in `bugs/`: a full page
   image cannot heal an allocated checksum-failed page.
 
+## Transitions (BV)
+
+Verified on `cn4-transition-refresh` (BV's close). Owned by
+`docs/spec/transition.md`.
+
+- **Not built** (BV §0.2, CN-4 §7):
+  - a trigger or any action on a transition;
+  - a stored history or audit log;
+  - a state machine spanning columns or relations;
+  - guarded edges;
+  - freezing a row in a terminal state.
+- **A crash between a `DROP TABLE`'s commit and the retirement of its
+  Transitions leaves an inert row.** The row names a relation that is gone
+  and can never return, because an oid is never reissued. It keeps its name
+  taken until `DROP TRANSITION`, and `SHOW TRANSITIONS` prints it with
+  `rel=oid=<n>`. Nothing at mount sweeps it.
+- **The sim harness has no Transition op.** BV-S3 replaced it with
+  exhaustive cut-everywhere crash cells (`tests/transition_crash_test.cpp`)
+  for `CREATE`, an `UPDATE` along an edge, and `DROP`. A seeded workload
+  interleaving state moves with transactions, rollbacks and faults is not
+  generated.
+- **The sorted heap fill's skip has no cell.** The fill is ineligible for a
+  governed relation (`SortedFillEligible`), but no heap relation can be
+  created since SUS-1 to exercise it.
+- **`CREATE`/`DROP TRANSITION` inside an explicit transaction commit at the
+  statement**, as `CREATE`/`DROP ASSERTION` do. A `ROLLBACK` does not undo
+  them.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1-D16: what is taken.** `workorder-al-m0-single-wal.md` took D3,

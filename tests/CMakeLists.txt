@@ -57,6 +57,8 @@ add_executable(kds_tests
     assertion_ddl_test.cpp
     assertion_catalog_test.cpp
     transition_catalog_test.cpp
+    transition_test.cpp
+    transition_crash_test.cpp
     assertion_violation_test.cpp
     assertion_wal_test.cpp
     assertion_build_test.cpp

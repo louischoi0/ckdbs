@@ -50,6 +50,7 @@ constexpr GoldenCategory kGolden[] = {
     {ErrorCategory::kNotImplemented, 15, "NOT_IMPLEMENTED"},
     {ErrorCategory::kFkViolation, 16, "FK_VIOLATION"},
     {ErrorCategory::kAssertionViolation, 17, "ASSERTION_VIOLATION"},
+    {ErrorCategory::kTransitionViolation, 18, "TRANSITION_VIOLATION"},
 };
 
 TEST(KwpErrorRegistryTest, TheCategoryNumberingIsFrozen) {
@@ -117,6 +118,7 @@ TEST(KwpErrorRegistryTest, EveryStatusCodeMapsToACategory) {
         {StatusCode::kResourceExhausted, ErrorCategory::kResourceExhausted},
         {StatusCode::kFkViolation, ErrorCategory::kFkViolation},
         {StatusCode::kAssertionViolation, ErrorCategory::kAssertionViolation},
+        {StatusCode::kTransitionViolation, ErrorCategory::kTransitionViolation},
         {StatusCode::kUnknownOutcome, ErrorCategory::kUnknownOutcome},
         {StatusCode::kNotImplemented, ErrorCategory::kNotImplemented},
     };

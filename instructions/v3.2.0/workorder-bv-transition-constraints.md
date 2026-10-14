@@ -293,7 +293,7 @@ and the golden corpus is the proof, not the assumption.
 | Stage | Builds | Gate |
 |---|---|---|
 | **BV-S0** | This order; CN-4 marked `[open]` | written |
-| **BV-S1** | Catalog and format: `sys.transitions` (BV-Q1); the superblock bump, refusing the previous version; the bootstrap row and oids; the `exec/` reader; `TableAccess` carrying the relation's Transition. No SQL reaches it | BV-Q1 marked |
+| **BV-S1** | Catalog and format: `sys.transitions` (BV-Q1); the superblock bump, refusing the previous version; the bootstrap row and oids; the `exec/` reader. No SQL reaches it. (`TableAccess` carrying the relation's Transition moved to BV-S2, where its loader parses: the S1 review's finding) | BV-Q1 marked |
 | **BV-S2** | Surface and enforcement, together, so no Transition can be declared before every write path checks it: `CREATE`/`DROP`/`SHOW TRANSITIONS`; CN-4 §4's create-time refusals; the build scan under `X`; the three check sites (BV-R3), including the `UPDATE` read mask (§1.1); `TRANSITION_VIOLATION` (BV-Q3); the `DROP TABLE` arm (T7); BV-R2's per-path tests; BV-R4's cell | BV-Q2, BV-Q3, CN-4 T1–T8 and T10 marked |
 | **BV-S3** | The `PURGE` answer (BV-Q4) and the CN-3 answer (BV-Q5); the sim harness gains a Transition op and an oracle that walks the edge graph over committed versions, crashed and reconciled | BV-Q4, BV-Q5 marked |
 | **BV-S4** | The close: `docs/spec/transition.md` as the owning spec, the manual, the `CLAUDE.md` milestone row, CN-4's status, overhead measured once (§5) | — |
@@ -337,3 +337,108 @@ building included.
 This document, on `worktree-cn4-transition-refresh` from `b0bc959c`. CN-4
 is marked `[open]` and cites this order. No code, no spec edit, no test.
 The suite was not executed and no pass is claimed. Overhead not measured.
+
+### BV-S1 — `sys.transitions` (built 2026-10-14)
+
+On `worktree-cn4-transition-refresh` at `3a68dd25`.
+
+- **What landed:**
+  - a new relation: oid 146, column oids 147..152, root page 16, overflow
+    from 17, superblock 24 refusing 23;
+  - one storage for the two declaration relations
+    (`Catalog::BootstrapDeclarations`, `exec/declaration_relation`), with
+    `assertion_catalog.cpp` delegating to it;
+  - `exec/transition_catalog`, the typed face;
+  - the golden WAL log re-pinned, because bootstrap's rows joined the
+    stream.
+- **Suite:** 2 failures before the re-pin. The golden log was re-pinned,
+  then green. `SetExprTwoCoreRigTest`'s 60 s two-core cell timed out under
+  `-j8` load and passed 8/8 alone.
+- **The `critics-developer` review, applied in BV-S2's commit:**
+  - `sys.transitions` was missing from the var-heap sweep's list, so a
+    dropped Transition's text would leak for good. Added, with a cell.
+  - The stale "the one row-codec relation" comments were corrected.
+  - `DeleteDeclaration` reads the key with `KeystoneIdOfPayload` instead of
+    decoding the row.
+  - The bootstrap is a two-row table.
+  - `DeclarationsOnRelation` is shared by both declaration relations.
+  - `flags` is written as given.
+  - The `TableAccess` item moved to BV-S2, where its loader parses.
+- **Review finding rejected:** the duplicated `FoldAscii`/`IEquals` copies
+  predate BV, so their cleanup is out of the milestone.
+- Overhead not measured; measured at the milestone's close.
+
+### BV-S2 — surface and enforcement (built 2026-10-14)
+
+- **What landed:**
+  - the grammar, `TransitionStmt` and `ParseTransition`;
+  - `exec/transition` (state keys, compile, loader, the three checks, the
+    DDL);
+  - the catalog's transition loader and `TableAccess::transitions`;
+  - the three check sites (BV-R3), with the `UPDATE` read mask carrying the
+    governed column;
+  - the sorted fill made ineligible for a governed relation;
+  - `TRANSITION_VIOLATION` (status, wire category 18, newline token,
+    `tools/kwp.py`);
+  - `SHOW TRANSITIONS`;
+  - `DROP TABLE`'s arm.
+- **CN-4 T7 revised against the tree, under the go-ahead.** A Transition's
+  row commits at its own statement, and a `DROP TABLE` inside an explicit
+  transaction can roll back. So:
+  - in autocommit the drop retires the relation's Transitions once it has
+    committed;
+  - inside an explicit transaction it is refused `NotImplemented` while one
+    stands.
+
+  A crash between the commit and the retirement leaves an inert row
+  (`known-gaps.md`).
+- **BV-R4's cell:** `TransitionMemoFenceTest`, two catalogs on one schema
+  word. The mutant that removes the `MemoIsCurrent` refusal fails it 3/3.
+  The epoch seam's `kAfterPublish` is the C2 window, so no new seam was
+  added.
+- **The `critics-developer` review, applied:**
+  - **B1.** A failed DDL commit now carries its `Status`
+    (`FinishDdlStatement`), so a `DROP TABLE` whose commit failed keeps its
+    Transitions.
+  - **B2.** The build makes its memo current under the `X`
+    (`Revalidate`), so a Transition or rename another core published
+    between the boundary and the grant is seen. It has a cell, and the
+    mutant fails it.
+  - **B3.** A wrapped or out-of-width integer state is refused.
+  - **B4.** A string state for an integer column is refused rather than
+    coerced, because the encode never coerces it.
+  - **B5.** Arming the loader drops the memo.
+  - **Simplifications.** The relation-`X` scaffold is shared with
+    `HandleAssertion` (`TakeDdlBuildLock`). The unreachable guards are
+    gone. The forward declaration is gone.
+- **Review findings rejected:**
+  - **A shared settled-row walk with the assertion build.** The assertion
+    build's loop carries the slot and key its chain writer appends with;
+    the shared shape would need a callback carrying both, for about 40
+    lines.
+  - **A shared target resolver.** `TransitionTargetOid` adds the
+    system-relation refusal `AssertionTargetOid` does not make. Both are
+    about 15 lines.
+- Overhead not measured; measured at the milestone's close.
+
+### BV-S3 — `PURGE`, CN-3, crash cells (built 2026-10-14)
+
+- **What landed:**
+  - **BV-Q4 (a):** `PURGE` is refused `Unsupported` on a governed relation,
+    with a cell.
+  - **BV-Q5:** nothing to build, because CN-3 is unbuilt. Its answer is
+    `docs/spec/transition.md` T9.
+- **The sim op is replaced, under the go-ahead.** The stage asked for a
+  Transition op in the sim harness. Its oracle would be a second model
+  beside the generator's, which never reads a reply. In its place are three
+  exhaustive cut-everywhere crash cells (`tests/transition_crash_test.cpp`),
+  for a `CREATE`, an `UPDATE` along an edge, and a `DROP`. At every log
+  boundary each cell mounts the cut the way a restart does and asks that the
+  declaration and the write path agree. The sim op stays open in
+  `known-gaps.md`.
+- **The cells found a defect older than BV.** The mount's var-heap sweep
+  held a page shared while releasing a slot on it exclusive: a latch upgrade
+  that a device store aborts on, reachable from any declaration cut between
+  its spill and its row. Fixed in `varheap_sweep.cpp`.
+- Overhead not measured; measured at the milestone's close.
+

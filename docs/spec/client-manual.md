@@ -524,7 +524,8 @@ rendered.
 - **The special cases of §2 carry their category as a token** a retry
   loop reads rather than prose: `ERR TXN_CONFLICT retryable=1 ...`,
   `ERR UNKNOWN_OUTCOME retryable=0 ...`, `ERR UNSUPPORTED retryable=0 ...`,
-  `ERR NOT_IMPLEMENTED retryable=0 ...`, `ERR FK_VIOLATION retryable=0 ...`.
+  `ERR NOT_IMPLEMENTED retryable=0 ...`, `ERR FK_VIOLATION retryable=0 ...`,
+  `ERR ASSERTION_VIOLATION retryable=0 ...`, `ERR TRANSITION_VIOLATION retryable=0 ...`.
   The `retryable=` token will not change spelling. The semantics are §2's;
   every other `ERR` is not retryable. After a conflict the connection is
   in a failed transaction and answers only `ROLLBACK`/`ABORT`/`SYNC`/

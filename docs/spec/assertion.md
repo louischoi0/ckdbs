@@ -745,7 +745,7 @@ and the protocol is not built.
 
 ### 8.2 Catalog
 
-`sys.assertions` (bootstrapped on its fixed page, `Catalog::BootstrapAssertions`), in schema order:
+`sys.assertions` (bootstrapped on its fixed page, `Catalog::BootstrapDeclarations`), in schema order:
 
 | Column | Type | Notes |
 |---|---|---|
@@ -756,7 +756,7 @@ and the protocol is not built.
 | name | varchar | unique |
 | source_text | varchar | full declaration verbatim; the `GROUP BY` list is recovered by re-parsing it, so there is no column cap and no sibling relation |
 
-**The only catalog relation in user tuple format** (`catalog/well_known.hpp`
+**One of the two catalog relations in user tuple format**, with `sys.transitions` (`catalog/well_known.hpp`
 `kSysAssertionsTable`): its text is var-heap spilled like any user cell, so
 its readers live above `catalog/` (`exec/assertion_catalog.hpp`).
 

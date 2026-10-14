@@ -102,9 +102,9 @@ unlogged INSERT. Measured pre-v3 with `bench/keystone_alloc_bench.cpp` at
 
 **The catalog relations chain.** Each fixed catalog page id is a chain
 *root*; a full page links to the next, taken from the reserved range
-`kCatalogOverflowFirst`..`kCatalogOverflowLimit` (16..128,
+`kCatalogOverflowFirst`..`kCatalogOverflowLimit` (17..128,
 `include/kds/catalog/well_known.hpp`). A page holds 68 `sys.columns`
-rows, so the 112-page range caps the instance at roughly 7,600 column rows. The range is
+rows, so the 111-page range caps the instance at roughly 7,500 column rows. The range is
 bounded so "every catalog page" stays nameable (a fixture's flush for a
 second store over the device still needs it). §3's scan is O(relations)
 across pages; that scaling belongs to the catalog's lookup path.

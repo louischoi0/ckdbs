@@ -134,6 +134,7 @@ add_library(kds
     src/exec/assertion_catalog.cpp
     src/exec/declaration_relation.cpp
     src/exec/transition_catalog.cpp
+    src/exec/transition.cpp
     src/exec/assertion_check.cpp
     src/exec/assertion_replay.cpp
     src/exec/assertion_violation.cpp

@@ -6,6 +6,7 @@
 #include "kds/exec/wal_row_log.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/storage/varheap.hpp"
 #include "kds/wal/manager.hpp"
 
@@ -139,6 +140,19 @@ StatusOr<std::optional<DeclarationRow>> FindDeclarationByName(catalog::Catalog& 
     return std::optional<DeclarationRow>();
 }
 
+StatusOr<std::vector<DeclarationRow>> DeclarationsOnRelation(catalog::Catalog& catalog,
+                                                             storage::PageStore& store,
+                                                             catalog::Oid rel_oid,
+                                                             catalog::Oid target_oid) {
+    auto rows = ScanDeclarations(catalog, store, rel_oid);
+    if (!rows.ok()) return rows.status();
+    std::vector<DeclarationRow> out;
+    for (DeclarationRow& row : rows.value()) {
+        if (row.target_oid == target_oid) out.push_back(std::move(row));
+    }
+    return out;
+}
+
 Status InsertDeclaration(catalog::Catalog& catalog, storage::PageStore& store,
                          wal::WalManager* wal, catalog::Oid rel_oid, std::string_view kind,
                          const DeclarationRow& row) {
@@ -186,7 +200,7 @@ Status InsertDeclaration(catalog::Catalog& catalog, storage::PageStore& store,
     };
     set_int(kColTargetOid, static_cast<std::int64_t>(row.target_oid));
     set_int(kColAux, row.aux);
-    set_int(kColFlags, 0);
+    set_int(kColFlags, static_cast<std::int64_t>(row.flags));
     set_str(kColName, row.name);
     set_str(kColSourceText, row.source_text);
 
@@ -228,10 +242,6 @@ StatusOr<DeclarationRow> DeleteDeclaration(catalog::Catalog& catalog, storage::P
     }
     const std::uint64_t target_id = found.value()->id;
 
-    // The spills list is passed only so a spilled `name`/`source_text` cell
-    // does not turn the decode into an error; nothing here reads them.
-    std::vector<parser::AstValue> values(kColumnCount);
-    std::vector<PendingSpill> spills;
     bool retired = false;
     Status walked = heap::ChainVisit(
         store, rel.desc_page_id, storage::PageAccess::kWrite,
@@ -246,15 +256,9 @@ StatusOr<DeclarationRow> DeleteDeclaration(catalog::Catalog& catalog, storage::P
             }
             if (tuple.value().deleted) return storage::VisitControl::kContinue;
 
-            spills.clear();
-            if (Status s = DecodeRowInto(rel.schema, rel.layout, tuple.value().payload, values,
-                                          &spills);
-                !s.ok()) {
-                return s;
-            }
-            if (static_cast<std::uint64_t>(values[kColId].int_val) != target_id) {
-                return storage::VisitControl::kContinue;
-            }
+            auto id = KeystoneIdOfPayload(tuple.value().payload);
+            if (!id.ok()) return id.status();
+            if (id.value() != target_id) return storage::VisitControl::kContinue;
             if (Status s = page.RetireSlot(slot); !s.ok()) return s;
             if (Status s = LogSlotRetire(wal, store, wal::kNoTxnId, page_id, slot); !s.ok()) {
                 return s;

@@ -154,8 +154,8 @@ inline constexpr Oid kSysPatternsTable = 114;
 // declared assertion - a group-level upper-bound constraint over one
 // relation.
 //
-// **The only catalog relation stored in ordinary user tuple format**, and
-// the second one built that way: it stores the declaration's `source_text`
+// **One of the two catalog relations stored in ordinary user tuple format**
+// (sys.transitions, below, is the other), and the second built that way: it stores the declaration's `source_text`
 // verbatim (AS10), and the fixed-length rule already answers where an
 // arbitrary-length value goes. `sys.pattern_defs` was the first and is
 // retired above, which leaves this relation carrying the argument alone.
@@ -325,7 +325,7 @@ inline constexpr PageId kCatalogPageCabins = 12;
 inline constexpr PageId kCatalogPageFkeys = 13;
 
 // Root heap page of sys.assertions. Fixed like the ones above, and - as
-// the one row-codec catalog relation left - its *var-heap* root is not:
+// a row-codec catalog relation (with sys.transitions) - its *var-heap* root is not:
 // that one is allocated by CreateNew() and recorded in sys.tables, where it
 // is DDL-immutable and therefore cacheable. Intended
 // rather than incidental, and binding on any catalog relation that gains a

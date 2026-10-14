@@ -69,13 +69,10 @@ StatusOr<std::optional<AssertionDef>> FindAssertionByName(catalog::Catalog& cata
 StatusOr<std::vector<AssertionDef>> AssertionsOnRelation(catalog::Catalog& catalog,
                                                          storage::PageStore& store,
                                                          catalog::Oid target_oid) {
-    auto defs = ScanAssertions(catalog, store);
-    if (!defs.ok()) return defs.status();
-
+    auto rows = DeclarationsOnRelation(catalog, store, catalog::kSysAssertionsTable, target_oid);
+    if (!rows.ok()) return rows.status();
     std::vector<AssertionDef> out;
-    for (AssertionDef& def : defs.value()) {
-        if (def.target_oid == target_oid) out.push_back(std::move(def));
-    }
+    for (DeclarationRow& row : rows.value()) out.push_back(ToAssertionDef(std::move(row)));
     return out;
 }
 

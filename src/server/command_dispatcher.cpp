@@ -44,6 +44,7 @@
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/fk_check.hpp"
 #include "kds/exec/assertion_catalog.hpp"
+#include "kds/exec/transition.hpp"
 #include "kds/exec/index_ddl.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/exec/pagination.hpp"
@@ -228,6 +229,8 @@ inline constexpr ErrorSpelling kErrorSpellings[] = {
     // The third constraint spelling (docs/spec/assertion.md §4.4, AS9),
     // shaped exactly like FK_VIOLATION and for its reason.
     {StatusCode::kAssertionViolation, "ASSERTION_VIOLATION retryable=0 "},
+    // The fourth (BV-Q3), shaped exactly like the two above.
+    {StatusCode::kTransitionViolation, "TRANSITION_VIOLATION retryable=0 "},
     // Statement shipping, this spelling's producer, retired (AT-S6); its
     // history is at cf889b63. The spelling stays because the wire pins it. Its own spelling
     // because it is the one refusal here that does **not** mean "nothing
@@ -1263,6 +1266,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "INDEXES")) return HandleShowIndexes(session);
         if (IEquals(sub, "FKEYS")) return HandleShowFkeys();
         if (IEquals(sub, "ASSERTIONS")) return HandleShowAssertions();
+        if (IEquals(sub, "TRANSITIONS")) return HandleShowTransitions();
         if (IEquals(sub, "RELAYOUT")) return HandleShowRelayout(sub_rest);
         if (IEquals(sub, "CABIN_OPTIMIZER")) return HandleShowCabinOptimizer();
         // H6 step 3: `TRACES` is the ring, `TRACE <id>` one span tree.
@@ -1294,6 +1298,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         }
         if (IEquals(sub, "ASSERTION")) {
             return HandleAssertion(Trim(line), session);
+        }
+        if (IEquals(sub, "TRANSITION")) {
+            return HandleTransition(Trim(line), session);
         }
         // `UNIQUE` routes here too, so its refusal comes from the parser
         // with the byte offset of the word itself rather than from this
@@ -1337,14 +1344,17 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "ASSERTION")) {
             return HandleAssertion(Trim(line), session);
         }
+        if (IEquals(sub, "TRANSITION")) {
+            return HandleTransition(Trim(line), session);
+        }
         if (IEquals(sub, "NAMESPACE")) {
             return HandleNamespace(Trim(line), session);
         }
         if (IEquals(sub, "TABLE")) {
             return HandleDropTable(Trim(line), session);
         }
-        return {"ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX and DROP "
-                "ASSERTION are supported",
+        return {"ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX, DROP "
+                "ASSERTION and DROP TRANSITION are supported",
                 false};
     }
     if (IEquals(cmd, "INSERT")) {
@@ -2888,7 +2898,13 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
 
 DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                                    Session& session) {
-    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+    // Set by a drop that succeeded, so its Transitions go once it commits -
+    // which in autocommit is the end of `InDdlStatement`, read here before
+    // it, and asked of the status the commit leaves (a failed commit
+    // carries its own, `FinishDdlStatement`).
+    std::optional<catalog::Oid> dropped_oid;
+    const bool autocommit = !session.in_explicit_txn();
+    DispatchOutcome out = InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         // The parse leg's span (H6 step 2; `observability.md` §10, at 1769487
     // under docs/inflight/in-progress/): slow parsing is otherwise invisible.
     auto parsed = [&] {
@@ -2953,6 +2969,26 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                            "' is declared on this relation; DROP ASSERTION first",
                                        false};
             }
+            // CN-4 T7 as revised in BV-S2: a Transition goes with its
+            // relation - but its row commits at its own statement and a drop
+            // inside an explicit transaction can still roll back, so there
+            // the drop is refused rather than taking a constraint the
+            // rollback could not give back.
+            if (session.in_explicit_txn()) {
+                auto governing = exec::TransitionsOnRelation(catalog_, page_store_, oid.value());
+                if (!governing.ok()) {
+                    return DispatchOutcome{ErrorReply(governing.status()), false, 0,
+                                           governing.status()};
+                }
+                if (!governing.value().empty()) {
+                    const Status s = Status::NotImplemented(
+                        "transition '" + governing.value().front().name +
+                        "' is declared on this relation; inside an explicit transaction DROP "
+                        "TRANSITION first, or drop the relation in autocommit (byte " +
+                        std::to_string(stmt.byte_offset) + ")");
+                    return DispatchOutcome{ErrorReply(s), false, 0, s};
+                }
+            }
             return std::nullopt;
         };
         if (auto refused = restricted(); refused.has_value()) return *refused;
@@ -3008,8 +3044,30 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                   "); its pages are reclaimed once no reader or replay "
                                   "can reach them");
         }
+        dropped_oid = oid.value();
         return {"DROPPED TABLE " + stmt.table_name + " oid=" + std::to_string(oid.value()), false};
     });
+    // CN-4 T7: the relation's Transitions go with it, once the drop has
+    // committed - in autocommit, at the end of `InDdlStatement`; inside an
+    // explicit transaction the drop was refused while one stood. A crash
+    // between the commit and this leaves an inert row naming a relation
+    // that is gone - an oid is never reissued - which `DROP TRANSITION`
+    // removes (`docs/inflight/known-gaps.md`).
+    if (dropped_oid.has_value() && out.status.ok() && autocommit) {
+        auto governing = exec::TransitionsOnRelation(catalog_, page_store_, *dropped_oid);
+        Status cleared = governing.status();
+        if (governing.ok()) {
+            for (const exec::TransitionDef& def : governing.value()) {
+                auto gone = exec::DeleteTransition(catalog_, page_store_, wal_, def.name);
+                if (!gone.ok()) cleared = gone.status();
+            }
+        }
+        if (!cleared.ok() && logging(LogLevel::kWarn)) {
+            log_->Warn("ddl", "a dropped relation's transitions were not all removed: " +
+                                  cleared.message());
+        }
+    }
+    return out;
 }
 
 // `CREATE NAMESPACE <name>` / `DROP NAMESPACE <name>` (AF-T3, AF-6's
@@ -3103,6 +3161,35 @@ DispatchOutcome CommandDispatcher::HandleShowNamespaces(Session& session) {
     return {os.str(), false};
 }
 
+CommandDispatcher::DdlBuildLock::~DdlBuildLock() {
+    if (txn == nullptr) return;
+    (void)manager->Abort(*txn);
+    manager->Release(*txn);  // `Abort` keeps it in `live_` by design
+}
+
+std::optional<Status> CommandDispatcher::TakeDdlBuildLock(Session& session, catalog::Oid relation,
+                                                         std::string_view relation_name,
+                                                         std::string_view verb,
+                                                         DdlBuildLock& out) {
+    if (locks_ == nullptr || txn_ == nullptr) return std::nullopt;
+    // **The session's own transaction is tested first**, by what it holds
+    // rather than by who the table reports: with it and another writer both
+    // holding the relation, the table may name the other, and waiting for it
+    // would end in the same refusal.
+    const txn::Transaction* own = session.transaction();
+    if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(relation))) {
+        return Status::TxnConflict("relation '" + std::string(relation_name) +
+                                   "' is held by this session's own transaction; " +
+                                   std::string(verb) +
+                                   " reads settled state - retry when it has ended");
+    }
+    auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
+    if (!begun.ok()) return begun.status();
+    out.manager = txn_;
+    out.txn = begun.value();
+    return BorrowRelationForDdl(out.txn, relation, /*poisons=*/false);
+}
+
 DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Session& session) {
     parser::Parser parser(line);
     auto parsed = parser.Parse();
@@ -3156,37 +3243,12 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line, Sessio
     auto target = exec::AssertionTargetOid(catalog_, stmt, &view);
     if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
 
-    struct BuildLock {
-        txn::TransactionManager* manager = nullptr;
-        txn::Transaction* txn = nullptr;
-        ~BuildLock() {
-            if (txn == nullptr) return;
-            (void)manager->Abort(*txn);
-            manager->Release(*txn);  // `Abort` keeps it in `live_` by design
-        }
-    } build_lock;
-    if (locks_ != nullptr && txn_ != nullptr) {
-        // **The session's own transaction is tested first**, by what it holds
-        // rather than by who the table reports: with it and
-        // another writer both holding the relation, the table may name the
-        // other, and waiting for it would end in the same refusal.
-        const txn::Transaction* own = session.transaction();
-        if (own != nullptr && own->borrows().Holds(txn::LockKey::Relation(target.value()))) {
-            const Status mine = Status::TxnConflict(
-                "relation '" + stmt.table_name +
-                "' is held by this session's own transaction; CREATE ASSERTION reads "
-                "settled state - retry when it has ended");
-            return {ErrorReply(mine), false, 0, mine};
-        }
-        auto begun = txn_->Begin(txn::IsolationLevel::kReadCommitted);
-        if (!begun.ok()) return {ErrorReply(begun.status()), false, 0, begun.status()};
-        build_lock.manager = txn_;
-        build_lock.txn = begun.value();
-        if (std::optional<Status> held =
-                BorrowRelationForDdl(build_lock.txn, target.value(), /*poisons=*/false);
-            held.has_value()) {
-            return {ErrorReply(*held), false, 0, *held};
-        }
+    DdlBuildLock build_lock;
+    if (std::optional<Status> refused =
+            TakeDdlBuildLock(session, target.value(), stmt.table_name, "CREATE ASSERTION",
+                             build_lock);
+        refused.has_value()) {
+        return {ErrorReply(*refused), false, 0, *refused};
     }
 
     // The visibility the build's scan reads under: settled state, minted
@@ -3294,6 +3356,117 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
                << " reserved=" << counters->reserved << " aborted=" << counters->aborted;
         }
         os << " def=" << def.source_text;
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleTransition(std::string_view line, Session& session) {
+    parser::Parser parser(line);
+    auto parsed = parser.Parse();
+    if (!parsed.ok()) return {ErrorReply(parsed.status()), false, 0, parsed.status()};
+    if (!std::holds_alternative<parser::TransitionStmt>(parsed.value())) {
+        return {"ERR expected a CREATE TRANSITION or DROP TRANSITION statement", false};
+    }
+    const auto& stmt = std::get<parser::TransitionStmt>(parsed.value());
+    const char* verb = stmt.drop ? "DROP TRANSITION" : "CREATE TRANSITION";
+
+    // ---- The relation `X` (BV-R4), `HandleAssertion`'s shape -------------
+    //
+    // Held by a transaction of the statement's own, which writes nothing
+    // and is rolled back when the statement ends: the grant is the moment
+    // no writer of the relation is mid-statement, and a writer arriving
+    // during the build waits for the publish. The row and the schema word
+    // move before the release, so a writer that resolved the relation
+    // before re-runs at its first intention (`MemoIsCurrent`) and meets the
+    // change. Resolved under a settled view: a DROP names the relation its
+    // row names; a CREATE resolves its table name.
+    const auto settled_view = [this] {
+        return txn_ != nullptr ? txn_->MintCheckView(txn::kNoTrxId) : txn::ReadView::Everything();
+    };
+    const txn::ReadView view = settled_view();
+    StatusOr<catalog::Oid> target = Status::NotFound("");
+    if (stmt.drop) {
+        auto def = exec::FindTransitionByName(catalog_, page_store_, stmt.name);
+        if (!def.ok()) return {ErrorReply(def.status()), false, 0, def.status()};
+        if (!def.value().has_value()) {
+            const Status s = Status::NotFound("no transition named \"" + stmt.name +
+                                              "\" (byte " + std::to_string(stmt.byte_offset) +
+                                              ")");
+            return {ErrorReply(s), false, 0, s};
+        }
+        target = def.value()->target_oid;
+    } else {
+        target = exec::TransitionTargetOid(catalog_, stmt, &view);
+    }
+    if (!target.ok()) return {ErrorReply(target.status()), false, 0, target.status()};
+
+    DdlBuildLock build_lock;
+    if (std::optional<Status> refused =
+            TakeDdlBuildLock(session, target.value(), RelationNameOf(target.value()), verb,
+                             build_lock);
+        refused.has_value()) {
+        return {ErrorReply(*refused), false, 0, *refused};
+    }
+    const txn::ReadView check_view = settled_view();
+    // **The memo is made current under the `X`** (the S2 review's B2): the
+    // statement's boundary settled it before the grant, and another core's
+    // `CREATE TRANSITION` or `RENAME COLUMN` on this relation may have
+    // published and released in between - the one-per-column check (CN-4
+    // T6) and the column's resolution would then read an entry without it.
+    // Nothing of this statement holds a `TableAccess` yet, so dropping the
+    // memo here strands nothing; from the grant on, no DDL can change the
+    // relation until this statement ends.
+    catalog_.Revalidate();
+
+    if (stmt.drop) {
+        auto dropped = exec::DropTransition(catalog_, page_store_, stmt, wal_);
+        if (!dropped.ok()) return {ErrorReply(dropped.status()), false, 0, dropped.status()};
+        if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
+        if (logging(LogLevel::kInfo)) log_->Info("ddl", "dropped transition '" + stmt.name + "'");
+        return {"DROPPED TRANSITION name=" + stmt.name +
+                    " transition_id=" + std::to_string(dropped.value().id),
+                false};
+    }
+
+    // A drop-and-recreate that committed while this waited leaves the name
+    // on another relation; the grant is on the old one, so what is built
+    // must be too, or nothing.
+    if (build_lock.txn != nullptr) {
+        auto settled = exec::TransitionTargetOid(catalog_, stmt, &check_view);
+        if (!settled.ok()) return {ErrorReply(settled.status()), false, 0, settled.status()};
+        if (settled.value() != target.value()) {
+            const Status moved = Status::TxnConflict(
+                "relation '" + stmt.table_name +
+                "' changed while CREATE TRANSITION waited for it - retry");
+            return {ErrorReply(moved), false, 0, moved};
+        }
+    }
+    auto created =
+        exec::CreateTransition(catalog_, page_store_, stmt, target.value(), check_view, wal_);
+    if (!created.ok()) return {ErrorReply(created.status()), false, 0, created.status()};
+    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "created transition '" + stmt.name + "' on '" + stmt.table_name + "'");
+    }
+    return {"CREATED TRANSITION name=" + stmt.name +
+                " transition_id=" + std::to_string(created.value().transition_id) +
+                " on=" + stmt.table_name + " column=" + stmt.column +
+                " rows=" + std::to_string(created.value().rows_checked),
+            false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowTransitions() {
+    auto rows = exec::ListTransitions(catalog_, page_store_);
+    if (!rows.ok()) return {ErrorReply(rows.status()), false, 0, rows.status()};
+    std::ostringstream os;
+    os << "transitions=" << rows.value().size();
+    for (const exec::TransitionDef& def : rows.value()) {
+        os << "\\n" << "transition_id=" << def.id << " name=" << def.name << " rel=";
+        // Resolved here rather than stored, as SHOW ASSERTIONS does. A
+        // relation gone - a drop whose cleanup a crash cut short - prints
+        // its oid (`HandleDropTable`).
+        os << RelationNameOf(def.target_oid);
+        os << " column_no=" << def.column_no << " def=" << def.source_text;
     }
     return {os.str(), false};
 }
@@ -5426,7 +5599,7 @@ bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
     // Heap-only, so SUS-1 leaves it to relations created before it.
     return ta.clustered_type == catalog::ClusteredType::kHeap &&
            ta.varheap_page_id == kInvalidPageId && ta.indexes.empty() && ta.cabin_mask == 0 &&
-           !enforcer_->AnyOn(oid);
+           ta.transitions.empty() && !enforcer_->AnyOn(oid);
 }
 
 DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stmt,
@@ -5750,6 +5923,15 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 return s;
             }
         }
+    }
+
+    // ---- The Transition check (BV-R3) ----------------------------------
+    //
+    // Before the id, for the forward check's reason: a refused row costs
+    // no undo work and no Keystone id. Every governed column's value must
+    // be an initial state.
+    if (!ta.transitions.empty()) {
+        if (Status s = exec::CheckTransitionInsert(ta, body, supplied_id); !s.ok()) return s;
     }
 
     // ---- The admission check (docs/spec/assertion.md §6.2 step 2) -------
@@ -6519,7 +6701,7 @@ void CommandDispatcher::FinishDdlStatement(Session& session, WriteScope& scope,
     if (!ended.ok() && !failed) {
         // The DDL succeeded and its commit did not - the commit failure is
         // the client's answer, exactly as the DML handlers report it.
-        out = {ErrorReply(ended), false};
+        out = {ErrorReply(ended), false, 0, ended};
     }
     // The implicit transaction resolved inside EndWrite, so the seam that
     // explicit COMMIT/ROLLBACK reaches through EndDdlScope runs here: the
@@ -8074,6 +8256,24 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         if (c.expr != nullptr) set_read_mask |= exec::SetExpressionColumns(*c.expr);
     }
 
+    // ---- Which Transitions this SET list touches (BV-R3) ----------------
+    //
+    // Resolved once, for the foreign key's reason below. A governed column
+    // is decoded on every row, since its old value is half the check: in
+    // the read mask, or - past the mask's 64 bits - by decoding whole.
+    std::vector<std::pair<const catalog::TransitionRef*, std::size_t>> transition_assignments;
+    bool transition_needs_whole_row = false;
+    for (std::size_t i = 0; i < compiled.size(); ++i) {
+        const catalog::TransitionRef* t = ta.TransitionOn(compiled[i].column_no);
+        if (t == nullptr) continue;
+        transition_assignments.emplace_back(t, i);
+        if (t->column_no < 64) {
+            set_read_mask |= std::uint64_t{1} << t->column_no;
+        } else {
+            transition_needs_whole_row = true;
+        }
+    }
+
     // ---- Which foreign keys this SET list touches (§2) -------------------
     //
     // Resolved once, here: an UPDATE that changes no fk column must cost
@@ -8287,7 +8487,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // assertion under `X`: asked before the grant, a build that adopts in
         // between would leave this row written unchecked.
         const bool asserted = enforcer_->AnyOn(ta.oid);
-        const bool whole_row = hooked || asserted;
+        const bool whole_row = hooked || asserted || transition_needs_whole_row;
         if (whole_row) {
             row_poisoned = false;
         } else if (!row_poisoned) {
@@ -8339,6 +8539,20 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // resolved once above, and this applies the held verdict.
         for (const auto& [fk, index] : fk_assignments) {
             if (Status s = CheckForeignKeyOnWrite(ta, *fk, values[index], fk_held, scope);
+                !s.ok()) {
+                return s;
+            }
+        }
+
+        // ---- The Transition check, for a governed column this SET touches
+        //
+        // `row` is still the version being replaced (the SET values land in
+        // it below), and the head the conflict check above proved this
+        // writer holds. Before the assertion reservation, the undo record
+        // and the no-refuse window (BV-R3).
+        for (const auto& [t, index] : transition_assignments) {
+            if (Status s = exec::CheckTransitionUpdate(ta, *t, row[t->column_no], values[index],
+                                                       id.value());
                 !s.ok()) {
                 return s;
             }
@@ -9763,6 +9977,19 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
                                           "tail; PURGE frees keys of btree relations only" +
                                           at_name));
     }
+    // BV-Q4 (a): a freed key could be inserted again in an initial state,
+    // restarting a row's history under its old identity - the one way past
+    // the induction a Transition's path property rests on (CN-4 §2, §9.1).
+    // Refused, so a key on a governed relation stays bound for life. A
+    // Transition created after this read takes the relation `X`, which the
+    // purge's `IX` waits for, and the memo check re-runs this statement.
+    if (!ta.transitions.empty()) {
+        return refuse(Status::Unsupported(
+            "'" + stmt.table_name + "' carries transition '" + ta.transitions.front().name +
+            "', whose state history a freed key would restart; PURGE frees no key of a "
+            "relation that carries a Transition" +
+            at_name));
+    }
 
     // PU1: the one recognizer of the window, refusing what it cannot read
     // rather than skipping it (BH-R2), clamped to the key space.
@@ -10073,6 +10300,18 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                     blocked_verdict = s;
                     return Status::OK();
                 }
+                return s;
+            }
+        }
+
+        // ---- The Transition check (BV-R3) ------------------------------
+        //
+        // The departing row's state must be a deletable one. After the
+        // conflict check - the frame is the head this writer holds - and
+        // before the reverse check, which may wait: a refusal the row alone
+        // decides waits for nobody.
+        if (!ta.transitions.empty()) {
+            if (Status s = exec::CheckTransitionDelete(ta, frame.SlotsFor(0), id); !s.ok()) {
                 return s;
             }
         }

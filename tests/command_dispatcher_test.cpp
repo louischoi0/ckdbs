@@ -336,15 +336,17 @@ TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithANamedTargetList) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     // `DROP NAMESPACE` joined the list at AF-T3 - the first edit in the
     // *growing* direction, and the one the comment above did not schedule.
+    // `DROP TRANSITION` joined it at BV-S2 (`docs/spec/transition.md`).
     EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response,
-              "ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX and DROP ASSERTION "
-              "are supported");
+              "ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX, DROP ASSERTION and "
+              "DROP TRANSITION are supported");
     EXPECT_EQ(d.Dispatch("DROP TABLE t").response, "ERR no table with this name");
 
     const auto parsed = parser::Parse("DROP EVERYTHING");
     ASSERT_FALSE(parsed.ok());
     EXPECT_NE(parsed.status().message().find("only DROP TABLE, DROP NAMESPACE, DROP CABIN, "
-                                             "DROP INDEX and DROP ASSERTION are supported"),
+                                             "DROP INDEX, DROP ASSERTION and DROP TRANSITION are "
+                                             "supported"),
               std::string::npos)
         << parsed.status().message();
 }

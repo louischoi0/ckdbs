@@ -1,5 +1,6 @@
 #include "kds/exec/transition_catalog.hpp"
 #include "kds/exec/declaration_relation.hpp"
+#include "kds/exec/varheap_sweep.hpp"
 
 #include <optional>
 #include <string>
@@ -104,6 +105,27 @@ TEST_F(TransitionCatalogTest, DeleteRetiresTheRowAndFreesTheName) {
     EXPECT_EQ(DeleteTransition(catalog(), store_, nullptr, "a").status().code(),
               StatusCode::kNotFound);
     EXPECT_TRUE(InsertTransition(catalog(), store_, nullptr, Def("a", 5000, 1, "x")).ok());
+}
+
+TEST_F(TransitionCatalogTest, TheMountSweepCollectsADroppedTransitionsSpilledText) {
+    // The delete retires the row and leaves its spilled text on the
+    // var-heap; the sweep is what collects it (`catalog_spills.hpp`'s list).
+    // A Transition missing from that list leaks for good - the S1 review's
+    // finding, pinned.
+    const std::string text(400, 'x');
+    ASSERT_TRUE(InsertTransition(catalog(), store_, nullptr, Def("keep", 5000, 1, text)).ok());
+    ASSERT_TRUE(InsertTransition(catalog(), store_, nullptr, Def("gone", 5000, 2, text)).ok());
+    ASSERT_TRUE(DeleteTransition(catalog(), store_, nullptr, "gone").ok());
+
+    auto swept = SweepUnownedSpills(catalog(), store_, nullptr);
+    ASSERT_TRUE(swept.ok()) << swept.status().message();
+    EXPECT_GE(swept.value().released, 1u);
+    EXPECT_GE(swept.value().retained, 1u);
+
+    auto kept = FindTransitionByName(catalog(), store_, "keep");
+    ASSERT_TRUE(kept.ok());
+    ASSERT_TRUE(kept.value().has_value());
+    EXPECT_EQ(kept.value()->source_text, text);
 }
 
 TEST_F(TransitionCatalogTest, ADeclarationSurvivesAReopenOfTheSameStore) {
