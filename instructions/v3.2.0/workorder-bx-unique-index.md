@@ -5,12 +5,12 @@ Written 2026-10-15 on `worktree-bx-unique-index` from `87d2893c`
 
 - **W0**: "Compose the milestone for the UNIQUE constraint and index."
 - **W2** (2026-10-15): *"Q6 $!b, go ahead"* - BX-Q6 marked (b), BX-S6
-  opened (`raft-marks-2026-10-15.md` §6).
+  opened (`raft-marks-2026-10-15.md` §7).
 - **W1** (2026-10-15): *"BX-Q1..Q5 $!a, go ahead"* - every question
   marked (a) by the operator, and BX opened. **BX-Q1 (a) is the operator's
   choice against CLA's proposal (b)**: `CREATE UNIQUE INDEX` is the one
   surface, `UNIQUE` in `CREATE TABLE` stays refused, and BX-S4 is cut.
-  Q2..Q5 (a) are CLA's proposals (`raft-marks-2026-10-15.md` §5).
+  Q2..Q5 (a) are CLA's proposals (`raft-marks-2026-10-15.md` §6).
 
 **Claim tags**: `[source-read]` with `path:line` at `87d2893c`; `[design]`
 for reasoning about code not yet written; `[quiet-wrong]` where a wrong
