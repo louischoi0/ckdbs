@@ -440,6 +440,13 @@ public:
 
                 switch (sub.kind) {
                     case parser::PredicateKind::kExists:
+                        // `UPDATE ... FROM`'s reads a second row, which is
+                        // its refusal (BU-Q16).
+                        if (sub.at_most_one) {
+                            ++scalar_rows;
+                            return scalar_rows >= 2 ? storage::VisitControl::kStop
+                                                    : storage::VisitControl::kContinue;
+                        }
                         // Short-circuit: one qualifying row is the whole
                         // answer, and V03 made stopping expressible.
                         return storage::VisitControl::kStop;
@@ -549,6 +556,11 @@ public:
 
         switch (sub.kind) {
             case parser::PredicateKind::kExists:
+                if (sub.at_most_one && scalar_rows > 1) {
+                    return Status::CardinalityViolation(
+                        "UPDATE ... FROM matched a row with more than one FROM row; which one "
+                        "sets it would be a guess (BU-Q16)");
+                }
                 return saw_row ? TriState::kTrue : TriState::kFalse;
 
             case parser::PredicateKind::kNotExists:

@@ -467,10 +467,29 @@ constexpr std::size_t kMaxExprArgs = 128;
 
 // A token after which a SET value is complete: the next assignment, the
 // statement's end, a row value's `)`, or the WHERE.
+std::string At(std::uint32_t byte) { return " (byte " + std::to_string(byte) + ")"; }
+
 bool EndsSetValue(const Token& t) {
     return t.type == TokenType::kComma || t.type == TokenType::kEof ||
            t.type == TokenType::kSemicolon || t.type == TokenType::kRParen ||
            (t.type == TokenType::kIdent && IEquals(t.text, "WHERE"));
+}
+
+// A token after which a query-grammar value is complete (BU-S4): a clause
+// word, a join word, a sort direction. Only what decides whether `case` is
+// a column reads it.
+bool EndsQueryValue(const Token& t) {
+    if (t.type == TokenType::kKeyword) {
+        return t.kw == Keyword::kJoin || t.kw == Keyword::kOn || t.kw == Keyword::kLeft ||
+               t.kw == Keyword::kRight || t.kw == Keyword::kFull || t.kw == Keyword::kOuter;
+    }
+    if (t.type != TokenType::kIdent) return false;
+    for (std::string_view w : {"FROM", "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET",
+                               "UNION", "INTERSECT", "EXCEPT", "INNER", "CROSS", "USING", "ASC",
+                               "DESC"}) {
+        if (IEquals(t.text, w)) return true;
+    }
+    return false;
 }
 
 // `IN`, `BETWEEN`, `LIKE`: comparison forms BJ does not build (BJ-R1 family
@@ -611,7 +630,8 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprIs() {
             // `IS [NOT] TRUE`, `IS DISTINCT FROM`: the standard's other
             // tests, outside BJ's list (BJ-R1 family 2).
             return Status::NotImplemented(
-                "only IS [NOT] NULL is supported in a SET value (byte " +
+                std::string("only IS [NOT] NULL is supported in ") +
+                (query_mode_ ? "an expression" : "a SET value") + " (byte " +
                 std::to_string(lexer_.Peek().byte_offset) + ")");
         }
         lexer_.Next();
@@ -628,6 +648,7 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprComparison() {
     if (!lhs.ok()) return lhs;
     const Token& t = lexer_.Peek();
     const std::optional<ExprOp> compare = ComparisonOf(t.type);
+    if (!compare.has_value() && query_mode_) return ParseExprQueryComparison(std::move(lhs.value()));
     if (!compare.has_value()) {
         // The comparison forms BJ does not build, named at their byte rather
         // than left to a generic complaint about what follows.
@@ -943,6 +964,67 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprCase(const Token& kw) {
     return call;
 }
 
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprAfterIdent(const Token& tok) {
+    const Token& after = lexer_.Peek();
+    if (after.type == TokenType::kLParen) {
+        // `CASE (b) WHEN ...`: no function is named `case` and no
+        // column is followed by `(`, so this is a simple CASE whose
+        // operand opens with a parenthesis - the one way to write a
+        // negative operand, since `case -1` is a column's subtraction.
+        if (IEquals(tok.text, "CASE")) return ParseExprCase(tok);
+        if (AggFunc func; query_mode_ && AggFuncOf(tok.text, func)) {
+            lexer_.Next();  // the '('
+            return ParseExprAggregate(tok, func);
+        }
+        if (IEquals(tok.text, "CAST") || NaryOf(tok.text).has_value()) {
+            lexer_.Next();  // the '('
+            return ParseExprCall(tok);
+        }
+        // Every other call is a scalar function, BJ-S6's.
+        lexer_.Next();  // the '('
+        return ParseExprFunction(tok);
+    }
+    if (after.type == TokenType::kDot) {
+        if (!query_mode_) {
+            return Status::NotImplemented(
+                "a qualified column in a SET value is not supported (byte " +
+                std::to_string(tok.byte_offset) + ")");
+        }
+        lexer_.Next();  // the '.'
+        auto name = ParseIdent();
+        if (!name.ok()) return name.status();
+        auto e = std::make_shared<Expr>();
+        e->kind = Expr::Kind::kColumn;
+        e->byte_offset = tok.byte_offset;
+        e->qualifier = std::string(tok.text);
+        e->column = std::move(name.value());
+        return std::shared_ptr<const Expr>(std::move(e));
+    }
+    // `CASE` is not reserved, so a column may be named `case`; it
+    // opens an expression only when what follows is not something
+    // that ends or continues a value.
+    const bool case_is_a_column =
+        EndsSetValue(after) || IsSignedLiteral(after) ||
+        after.type == TokenType::kPlus || after.type == TokenType::kMinus ||
+        after.type == TokenType::kStar || after.type == TokenType::kSlash ||
+        after.type == TokenType::kPercent || after.type == TokenType::kConcat ||
+        ComparisonOf(after.type).has_value() || after.type == TokenType::kDoubleColon ||
+        IsUnbuiltComparison(after) ||
+        (after.type == TokenType::kKeyword && after.kw == Keyword::kAs) ||
+        (query_mode_ && EndsQueryValue(after)) ||
+        (after.type == TokenType::kIdent &&
+         (IEquals(after.text, "AND") ||
+          IEquals(after.text, "OR") || IEquals(after.text, "IS") ||
+          IEquals(after.text, "THEN") || IEquals(after.text, "ELSE") ||
+          IEquals(after.text, "END")));
+    if (IEquals(tok.text, "CASE") && !case_is_a_column) return ParseExprCase(tok);
+    auto e = std::make_shared<Expr>();
+    e->kind = Expr::Kind::kColumn;
+    e->byte_offset = tok.byte_offset;
+    e->column = std::string(tok.text);
+    return std::shared_ptr<const Expr>(std::move(e));
+}
+
 StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
     if (pending_primary_ != nullptr) {
         std::shared_ptr<const Expr> literal = std::move(pending_primary_);
@@ -961,55 +1043,16 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
             if (!v.ok()) return v.status();
             return MakeLiteral(std::move(v.value()), tok.type == TokenType::kNumLit);
         }
-        case TokenType::kIdent: {
+        case TokenType::kIdent:
             lexer_.Next();
-            const Token& after = lexer_.Peek();
-            if (after.type == TokenType::kLParen) {
-                // `CASE (b) WHEN ...`: no function is named `case` and no
-                // column is followed by `(`, so this is a simple CASE whose
-                // operand opens with a parenthesis - the one way to write a
-                // negative operand, since `case -1` is a column's subtraction.
-                if (IEquals(tok.text, "CASE")) return ParseExprCase(tok);
-                if (IEquals(tok.text, "CAST") || NaryOf(tok.text).has_value()) {
-                    lexer_.Next();  // the '('
-                    return ParseExprCall(tok);
-                }
-                // Every other call is a scalar function, BJ-S6's.
-                lexer_.Next();  // the '('
-                return ParseExprFunction(tok);
-            }
-            if (after.type == TokenType::kDot) {
-                return Status::NotImplemented(
-                    "a qualified column in a SET value is not supported (byte " +
-                    std::to_string(tok.byte_offset) + ")");
-            }
-            // `CASE` is not reserved, so a column may be named `case`; it
-            // opens an expression only when what follows is not something
-            // that ends or continues a value.
-            const bool case_is_a_column =
-                EndsSetValue(after) || IsSignedLiteral(after) ||
-                after.type == TokenType::kPlus || after.type == TokenType::kMinus ||
-                after.type == TokenType::kStar || after.type == TokenType::kSlash ||
-                after.type == TokenType::kPercent || after.type == TokenType::kConcat ||
-                ComparisonOf(after.type).has_value() || after.type == TokenType::kDoubleColon ||
-                IsUnbuiltComparison(after) ||
-                (after.type == TokenType::kKeyword && after.kw == Keyword::kAs) ||
-                (after.type == TokenType::kIdent &&
-                 (IEquals(after.text, "AND") ||
-                  IEquals(after.text, "OR") || IEquals(after.text, "IS") ||
-                  IEquals(after.text, "THEN") || IEquals(after.text, "ELSE") ||
-                  IEquals(after.text, "END")));
-            if (IEquals(tok.text, "CASE") && !case_is_a_column) return ParseExprCase(tok);
-            auto e = std::make_shared<Expr>();
-            e->kind = Expr::Kind::kColumn;
-            e->byte_offset = tok.byte_offset;
-            e->column = std::string(tok.text);
-            return std::shared_ptr<const Expr>(std::move(e));
-        }
+            return ParseExprAfterIdent(tok);
         case TokenType::kLParen: {
             if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(tok.byte_offset);
             lexer_.Next();
             const Token& inner = lexer_.Peek();
+            if (query_mode_ && inner.type == TokenType::kIdent && IEquals(inner.text, "SELECT")) {
+                return ParseExprQuerySubquery(tok, ExprOp::kScalarSubquery, nullptr);
+            }
             if (inner.type == TokenType::kIdent && IEquals(inner.text, "SELECT")) {
                 // A scalar subquery (BJ-S7). It runs as a SELECT of its own, so
                 // it is parsed as an outermost block (an aggregate is allowed);
@@ -1041,6 +1084,23 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprPrimary() {
             return std::shared_ptr<const Expr>(std::move(copy));
         }
         case TokenType::kKeyword:
+            if (tok.kw == Keyword::kExists && query_mode_) {
+                lexer_.Next();
+                if (lexer_.Peek().type != TokenType::kLParen) {
+                    return Status::InvalidArgument("expected '(' after EXISTS (byte " +
+                                                   std::to_string(lexer_.Peek().byte_offset) + ")");
+                }
+                const Token open = lexer_.Next();
+                if (!IsWord(lexer_.Peek(), "SELECT")) {
+                    return Status::InvalidArgument("expected SELECT after EXISTS ( (byte " +
+                                                   std::to_string(lexer_.Peek().byte_offset) + ")");
+                }
+                auto node = ParseExprQuerySubquery(open, ExprOp::kExists, nullptr);
+                if (!node.ok()) return node;
+                auto e = std::make_shared<Expr>(*node.value());
+                e->byte_offset = tok.byte_offset;
+                return std::shared_ptr<const Expr>(std::move(e));
+            }
             if (tok.kw == Keyword::kExists) {
                 return Status::NotImplemented(
                     "'EXISTS' in a SET value is not supported (byte " +
@@ -1464,6 +1524,19 @@ StatusOr<std::vector<Condition>> Parser::ParseOptionalWhere(std::uint32_t depth)
     auto tree = ParseBoolChain(depth, /*is_or=*/true);
     if (!tree.ok()) return tree.status();
     if (Status s = Flatten(std::move(tree.value()), conds); !s.ok()) return s;
+    return conds;
+}
+
+StatusOr<std::vector<Condition>> Parser::ParseConditions() {
+    std::vector<Condition> conds;
+    auto tree = ParseBoolChain(0, /*is_or=*/true);
+    if (!tree.ok()) return tree.status();
+    if (Status s = Flatten(std::move(tree.value()), conds); !s.ok()) return s;
+    if (const Token& tail = lexer_.Peek(); tail.type != TokenType::kEof) {
+        return Status::InvalidArgument("unexpected token '" + std::string(Describe(tail)) +
+                                       "' after a condition (byte " +
+                                       std::to_string(tail.byte_offset) + ")");
+    }
     return conds;
 }
 
@@ -2480,6 +2553,22 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
         }
     }
 
+    // `INSERT ... SELECT` (BU-S8): the source is a query of the query
+    // grammar, run by the query layer.
+    if (IsWord(lexer_.Peek(), "SELECT")) {
+        stmt.select_byte_offset = lexer_.Peek().byte_offset;
+        const bool was = query_mode_;
+        query_mode_ = true;
+        auto source = ParseQueryExpr();
+        query_mode_ = was;
+        if (!source.ok()) return source.status();
+        stmt.select = std::move(source.value());
+        stmt.select_text = std::string(sql_);
+        if (Status s = ParseInsertTail(stmt); !s.ok()) return s;
+        ConsumeOptionalSemicolon();
+        return stmt;
+    }
+
     if (Status s = ExpectKeyword("VALUES"); !s.ok()) return s;
 
     // One or more parenthesised rows, comma-separated (bulkinsert.md
@@ -2491,9 +2580,19 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
 
         std::vector<AstValue> row;
         for (;;) {
-            auto val = ParseValue();
-            if (!val.ok()) return val.status();
-            row.push_back(std::move(val.value()));
+            // A value is a SET value's grammar (BU-S8): a bare literal reads
+            // as it always did, anything longer as an expression.
+            Assignment value;
+            if (Status s = ParseSetValue(value); !s.ok()) return s;
+            if (value.expr != nullptr) {
+                AstValue placeholder;
+                placeholder.type = ValueType::kNull;
+                placeholder.byte_offset = value.expr->byte_offset;
+                stmt.value_exprs.push_back({stmt.rows.size(), row.size(), std::move(value.expr)});
+                row.push_back(std::move(placeholder));
+            } else {
+                row.push_back(std::move(value.val));
+            }
 
             if (lexer_.Peek().type == TokenType::kComma) {
                 lexer_.Next();
@@ -2512,8 +2611,56 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
         break;
     }
 
+    if (Status s = ParseInsertTail(stmt); !s.ok()) return s;
     ConsumeOptionalSemicolon();
     return stmt;
+}
+
+// What follows an INSERT's rows (BU-S8): `ON CONFLICT [(col)] DO NOTHING`
+// (BU-Q18), then `RETURNING` (BU-Q17). `DO UPDATE` is understood and not
+// built.
+Status Parser::ParseInsertTail(InsertStmt& stmt) {
+    const Token& on = lexer_.Peek();
+    if (on.type != TokenType::kKeyword || on.kw != Keyword::kOn) return ParseReturning(stmt.returning);
+    lexer_.Next();
+    if (!IsWord(lexer_.Peek(), "CONFLICT")) {
+        return Status::InvalidArgument("expected CONFLICT after ON, got '" +
+                                       std::string(Describe(lexer_.Peek())) + "'" +
+                                       At(lexer_.Peek().byte_offset));
+    }
+    lexer_.Next();
+    if (lexer_.Peek().type == TokenType::kLParen) {
+        lexer_.Next();
+        IndexColumnRef target;
+        target.byte_offset = lexer_.Peek().byte_offset;
+        auto name = ParseIdent();
+        if (!name.ok()) return name.status();
+        target.name = std::move(name.value());
+        if (lexer_.Peek().type != TokenType::kRParen) {
+            return Status::NotImplemented("a conflict target of more than one column is not "
+                                          "supported" + At(lexer_.Peek().byte_offset) +
+                                          "; the tuple key is the one conflict there is");
+        }
+        lexer_.Next();
+        stmt.conflict_target = std::move(target);
+    }
+    if (!IsWord(lexer_.Peek(), "DO")) {
+        return Status::InvalidArgument("expected DO, got '" + std::string(Describe(lexer_.Peek())) +
+                                       "'" + At(lexer_.Peek().byte_offset));
+    }
+    lexer_.Next();
+    if (IsWord(lexer_.Peek(), "UPDATE")) {
+        return Status::NotImplemented("ON CONFLICT DO UPDATE is not supported" +
+                                      At(lexer_.Peek().byte_offset) + "; DO NOTHING is");
+    }
+    if (!IsWord(lexer_.Peek(), "NOTHING")) {
+        return Status::InvalidArgument("expected NOTHING, got '" +
+                                       std::string(Describe(lexer_.Peek())) + "'" +
+                                       At(lexer_.Peek().byte_offset));
+    }
+    lexer_.Next();
+    stmt.on_conflict_do_nothing = true;
+    return ParseReturning(stmt.returning);
 }
 
 StatusOr<RelationRef> Parser::ParseRelationRef() {
@@ -3221,6 +3368,8 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
     return stmt;
 }
 
+std::vector<Condition> ExistsOver(RelationRef rel, std::vector<Condition> where, bool at_most_one);
+
 StatusOr<DeleteStmt> Parser::ParseDelete() {
     DeleteStmt stmt;
 
@@ -3231,15 +3380,67 @@ StatusOr<DeleteStmt> Parser::ParseDelete() {
         return s;
     }
 
+    // `DELETE FROM t USING u WHERE ...` (BU-S8): one more relation the
+    // WHERE reads, made an EXISTS below.
+    std::optional<RelationRef> using_rel;
+    if (IsWord(lexer_.Peek(), "USING")) {
+        lexer_.Next();
+        auto rel = ParseOtherRelation(stmt.table_name);
+        if (!rel.ok()) return rel.status();
+        using_rel = std::move(rel.value());
+    }
+
     // Depth 0 and the same production UPDATE uses: a DELETE's WHERE is an
     // outermost query block, and a predicate-position subquery in it nests
     // exactly as a SELECT's does.
     auto where = ParseOptionalWhere(/*depth=*/0);
     if (!where.ok()) return where.status();
     stmt.where = std::move(where.value());
+    if (using_rel.has_value()) {
+        stmt.where = ExistsOver(std::move(*using_rel), std::move(stmt.where), /*at_most_one=*/false);
+    }
+    if (Status s = ParseReturning(stmt.returning); !s.ok()) return s;
 
     ConsumeOptionalSemicolon();
     return stmt;
+}
+
+// The relation `UPDATE ... FROM` or `DELETE ... USING` names (BU-S8): one,
+// bound apart from the statement's own `target`.
+StatusOr<RelationRef> Parser::ParseOtherRelation(const std::string& target) {
+    auto rel = ParseRelationRef();
+    if (!rel.ok()) return rel.status();
+    const Token& next = lexer_.Peek();
+    if (next.type == TokenType::kComma ||
+        (next.type == TokenType::kKeyword && next.kw == Keyword::kJoin)) {
+        return Status::NotImplemented("more than one relation after FROM or USING is not "
+                                      "supported" + At(next.byte_offset) +
+                                      "; name one, and put the rest in an EXISTS");
+    }
+    if (IEquals(rel.value().binding(), target)) {
+        return Status::InvalidArgument("the name '" + rel.value().binding() +
+                                       "' is bound twice" + At(rel.value().byte_offset) +
+                                       "; give the second one an alias with AS");
+    }
+    return rel;
+}
+
+// The statement's WHERE as one EXISTS over `rel` (BU-S8): the subquery
+// reads `rel` under `where`, in one name space with the statement, so a row
+// is written when some `rel` row meets the conditions - and for `UPDATE`
+// (`at_most_one`) when exactly one does.
+std::vector<Condition> ExistsOver(RelationRef rel, std::vector<Condition> where, bool at_most_one) {
+    auto sub = std::make_shared<SelectStmt>();
+    sub->from = std::move(rel);
+    sub->where = std::move(where);
+    sub->shares_parent_names = true;
+    Condition exists;
+    exists.kind = PredicateKind::kExists;
+    exists.at_most_one = at_most_one;
+    exists.subquery = std::move(sub);
+    std::vector<Condition> out;
+    out.push_back(std::move(exists));
+    return out;
 }
 
 StatusOr<PurgeStmt> Parser::ParsePurge() {
@@ -3374,6 +3575,17 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
         break;
     }
 
+    // `UPDATE t SET ... FROM u WHERE ...` (BU-S8): one more relation the
+    // WHERE reads, made an EXISTS that refuses a second match (BU-Q16). A
+    // SET value reads the target's columns only.
+    std::optional<RelationRef> from_rel;
+    if (IsWord(lexer_.Peek(), "FROM")) {
+        lexer_.Next();
+        auto rel = ParseOtherRelation(stmt.table_name);
+        if (!rel.ok()) return rel.status();
+        from_rel = std::move(rel.value());
+    }
+
     // Depth 0: an UPDATE's WHERE is an outermost query block, and a
     // subquery in it is `[OPEN: revisit]` in spec section 2 only for the
     // *value* position (`SET a = (SELECT ...)`), which BJ-S7 built as an
@@ -3382,6 +3594,10 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
     auto where = ParseOptionalWhere(/*depth=*/0);
     if (!where.ok()) return where.status();
     stmt.where = std::move(where.value());
+    if (from_rel.has_value()) {
+        stmt.where = ExistsOver(std::move(*from_rel), std::move(stmt.where), /*at_most_one=*/true);
+    }
+    if (Status s = ParseReturning(stmt.returning); !s.ok()) return s;
 
     ConsumeOptionalSemicolon();
     return stmt;
@@ -3629,6 +3845,574 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
 
     ConsumeOptionalSemicolon();
     return stmt;
+}
+
+// ---- The query grammar (BU-S4, workorder-bu-basic-query-surface.md BU-Q8) ----
+//
+// Reached only through `ParseQuery`, which the dispatcher calls after the
+// native grammar or compiler refused a SELECT (BU-Q9). It shares the
+// expression levels above with the SET value grammar, `query_mode_` turning
+// on what only a query reads: qualified columns, aggregates, `[NOT] IN`,
+// `[NOT] BETWEEN`, `[NOT] LIKE`, `EXISTS` and a subquery as a value.
+
+StatusOr<Query> Parser::ParseQuery() {
+    query_mode_ = true;
+    const Token& first = lexer_.Peek();
+    if (!IsWord(first, "SELECT") && first.type != TokenType::kLParen) {
+        return Status::InvalidArgument("expected SELECT, got '" + std::string(Describe(first)) +
+                                       "'" + At(first.byte_offset));
+    }
+    auto q = ParseQueryExpr();
+    if (!q.ok()) return q.status();
+    ConsumeOptionalSemicolon();
+    if (const Token& tail = lexer_.Peek(); tail.type != TokenType::kEof) {
+        return Status::InvalidArgument("unexpected token '" + std::string(Describe(tail)) +
+                                       "' after end of statement" + At(tail.byte_offset));
+    }
+    return *q.value();
+}
+
+StatusOr<std::shared_ptr<const Query>> Parser::ParseQueryExpr() {
+    auto lhs = ParseQueryTerm();
+    if (!lhs.ok()) return lhs;
+    std::shared_ptr<const Query> acc = std::move(lhs.value());
+    while (IsWord(lexer_.Peek(), "UNION") || IsWord(lexer_.Peek(), "EXCEPT")) {
+        const Token op = lexer_.Next();
+        auto node = std::make_shared<Query>();
+        node->op = IEquals(op.text, "UNION") ? Query::Op::kUnion : Query::Op::kExcept;
+        if (IsWord(lexer_.Peek(), "ALL")) {
+            lexer_.Next();
+            node->all = true;
+        } else if (IsWord(lexer_.Peek(), "DISTINCT")) {
+            lexer_.Next();
+        }
+        auto rhs = ParseQueryTerm();
+        if (!rhs.ok()) return rhs;
+        node->byte_offset = acc->byte_offset;
+        node->lhs = std::move(acc);
+        node->rhs = std::move(rhs.value());
+        acc = std::move(node);
+    }
+    // The tail orders and counts the whole expression. A parenthesized
+    // operand keeps its own; one tail over another is refused rather than
+    // read as either.
+    const Token& next = lexer_.Peek();
+    if (IsWord(next, "ORDER") || IsWord(next, "LIMIT") || IsWord(next, "OFFSET")) {
+        if (!acc->order_by.empty() || acc->limit.has_value() || acc->offset != 0) {
+            return Status::NotImplemented(
+                "a second ORDER BY, LIMIT or OFFSET over a parenthesized query is not "
+                "supported" + At(next.byte_offset));
+        }
+        auto whole = std::make_shared<Query>(*acc);
+        if (Status s = ParseQueryTail(*whole); !s.ok()) return s;
+        acc = std::move(whole);
+    }
+    return acc;
+}
+
+StatusOr<std::shared_ptr<const Query>> Parser::ParseQueryTerm() {
+    auto lhs = ParseQueryPrimary();
+    if (!lhs.ok()) return lhs;
+    std::shared_ptr<const Query> acc = std::move(lhs.value());
+    while (IsWord(lexer_.Peek(), "INTERSECT")) {
+        lexer_.Next();
+        auto node = std::make_shared<Query>();
+        node->op = Query::Op::kIntersect;
+        if (IsWord(lexer_.Peek(), "ALL")) {
+            lexer_.Next();
+            node->all = true;
+        } else if (IsWord(lexer_.Peek(), "DISTINCT")) {
+            lexer_.Next();
+        }
+        auto rhs = ParseQueryPrimary();
+        if (!rhs.ok()) return rhs;
+        node->byte_offset = acc->byte_offset;
+        node->lhs = std::move(acc);
+        node->rhs = std::move(rhs.value());
+        acc = std::move(node);
+    }
+    return acc;
+}
+
+StatusOr<std::shared_ptr<const Query>> Parser::ParseQueryPrimary() {
+    const Token& t = lexer_.Peek();
+    if (t.type == TokenType::kLParen) {
+        const Token open = lexer_.Next();
+        return ParseNestedQuery(open);
+    }
+    const std::uint32_t at = t.byte_offset;
+    auto block = ParseQueryBlock();
+    if (!block.ok()) return block.status();
+    auto q = std::make_shared<Query>();
+    q->op = Query::Op::kBlock;
+    q->block = std::move(block.value());
+    q->byte_offset = at;
+    return std::shared_ptr<const Query>(std::move(q));
+}
+
+StatusOr<std::shared_ptr<const Query>> Parser::ParseNestedQuery(const Token& open) {
+    if (Status s = CheckSubqueryDepth(query_depth_, open.byte_offset); !s.ok()) return s;
+    ++query_depth_;
+    auto q = ParseQueryExpr();
+    --query_depth_;
+    if (!q.ok()) return q;
+    if (Status s = ExpectToken(TokenType::kRParen, "')' closing a subquery"); !s.ok()) return s;
+    return q;
+}
+
+// A select list of the query grammar: `*`, `rel.*`, or an expression with
+// an optional `AS alias`, comma-separated - a block's, and RETURNING's.
+Status Parser::ParseOutputItems(std::vector<OutputItem>& items) {
+    for (;;) {
+        OutputItem item;
+        const Token first = lexer_.Peek();
+        item.byte_offset = first.byte_offset;
+        if (first.type == TokenType::kStar) {
+            lexer_.Next();
+            item.star = true;
+        } else {
+            if (first.type == TokenType::kIdent) {
+                // `rel.*` needs the token after the dot: the identifier is
+                // read, and if no star follows it is handed to the
+                // expression as its first primary.
+                lexer_.Next();
+                if (lexer_.Peek().type == TokenType::kDot) {
+                    lexer_.Next();
+                    if (lexer_.Peek().type == TokenType::kStar) {
+                        lexer_.Next();
+                        item.star = true;
+                        item.star_qualifier = std::string(first.text);
+                    } else {
+                        auto name = ParseIdent();
+                        if (!name.ok()) return name.status();
+                        auto e = std::make_shared<Expr>();
+                        e->kind = Expr::Kind::kColumn;
+                        e->byte_offset = first.byte_offset;
+                        e->qualifier = std::string(first.text);
+                        e->column = std::move(name.value());
+                        pending_primary_ = std::move(e);
+                    }
+                } else {
+                    auto primary = ParseExprAfterIdent(first);
+                    if (!primary.ok()) return primary.status();
+                    pending_primary_ = std::move(primary.value());
+                }
+            }
+            if (!item.star) {
+                auto expr = ParseExprOr();
+                if (!expr.ok()) return expr.status();
+                item.expr = std::move(expr.value());
+                const std::uint32_t end = lexer_.Peek().byte_offset;
+                std::string_view text = sql_.substr(first.byte_offset, end - first.byte_offset);
+                while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
+                    text.remove_suffix(1);
+                }
+                item.text = std::string(text);
+                if (lexer_.Peek().type == TokenType::kKeyword && lexer_.Peek().kw == Keyword::kAs) {
+                    lexer_.Next();
+                    auto alias = ParseIdent();
+                    if (!alias.ok()) return alias.status();
+                    item.alias = std::move(alias.value());
+                }
+            }
+        }
+        items.push_back(std::move(item));
+        if (lexer_.Peek().type != TokenType::kComma) break;
+        lexer_.Next();
+    }
+    return Status::OK();
+}
+
+// `RETURNING <items>` (BU-S8, BU-Q17), after a DML statement's own clauses.
+Status Parser::ParseReturning(Returning& out) {
+    if (!IsWord(lexer_.Peek(), "RETURNING")) return Status::OK();
+    out.byte_offset = lexer_.Next().byte_offset;
+    const bool was = query_mode_;
+    query_mode_ = true;
+    Status parsed = ParseOutputItems(out.items);
+    query_mode_ = was;
+    return parsed;
+}
+
+StatusOr<std::shared_ptr<const QueryBlock>> Parser::ParseQueryBlock() {
+    auto block = std::make_shared<QueryBlock>();
+    block->byte_offset = lexer_.Peek().byte_offset;
+    if (Status s = ExpectKeyword("SELECT"); !s.ok()) return s;
+    if (IsWord(lexer_.Peek(), "DISTINCT")) {
+        lexer_.Next();
+        if (lexer_.Peek().type == TokenType::kKeyword && lexer_.Peek().kw == Keyword::kOn) {
+            return Status::NotImplemented("DISTINCT ON is not supported" +
+                                          At(lexer_.Peek().byte_offset));
+        }
+        block->distinct = true;
+    } else if (IsWord(lexer_.Peek(), "ALL")) {
+        lexer_.Next();
+    }
+
+    // ---- The select list ----------------------------------------------------
+    if (Status st = ParseOutputItems(block->items); !st.ok()) return st;
+
+    // ---- FROM ---------------------------------------------------------------
+    if (IsWord(lexer_.Peek(), "FROM")) {
+        lexer_.Next();
+        auto from = ParseFromItem();
+        if (!from.ok()) return from.status();
+        block->has_from = true;
+        block->from = std::move(from.value());
+        if (Status s = ParseQueryJoins(*block); !s.ok()) return s;
+    }
+
+    // ---- WHERE: each top-level AND term with its text span ------------------
+    if (IsWord(lexer_.Peek(), "WHERE")) {
+        lexer_.Next();
+        std::shared_ptr<const Expr> acc;
+        for (;;) {
+            const std::uint32_t begin = lexer_.Peek().byte_offset;
+            auto term = ParseExprNot();
+            if (!term.ok()) return term.status();
+            block->where_spans.emplace_back(begin, lexer_.Peek().byte_offset);
+            acc = acc == nullptr ? std::move(term.value())
+                                 : MakeBinary(ExprOp::kAnd, begin, std::move(acc),
+                                              std::move(term.value()));
+            if (TooBig(*acc)) return ExprTooDeep(begin);
+            if (!IsWord(lexer_.Peek(), "AND")) break;
+            lexer_.Next();
+        }
+        // An `OR` at the top makes the whole WHERE one term.
+        while (IsWord(lexer_.Peek(), "OR")) {
+            const Token op = lexer_.Next();
+            auto rhs = ParseExprAnd();
+            if (!rhs.ok()) return rhs.status();
+            acc = MakeBinary(ExprOp::kOr, op.byte_offset, std::move(acc), std::move(rhs.value()));
+            if (TooBig(*acc)) return ExprTooDeep(op.byte_offset);
+            block->where_spans.clear();
+        }
+        block->where = std::move(acc);
+    }
+
+    // ---- GROUP BY, HAVING ---------------------------------------------------
+    if (IsWord(lexer_.Peek(), "GROUP")) {
+        lexer_.Next();
+        if (Status s = ExpectKeyword("BY"); !s.ok()) return s;
+        for (;;) {
+            auto e = ParseExprOr();
+            if (!e.ok()) return e.status();
+            block->group_by.push_back(std::move(e.value()));
+            if (lexer_.Peek().type != TokenType::kComma) break;
+            lexer_.Next();
+        }
+    }
+    if (IsWord(lexer_.Peek(), "HAVING")) {
+        lexer_.Next();
+        auto e = ParseExprOr();
+        if (!e.ok()) return e.status();
+        block->having = std::move(e.value());
+    }
+    if (const Token& w = lexer_.Peek(); IsWord(w, "WINDOW") || IsWord(w, "QUALIFY")) {
+        return Status::NotImplemented("'" + std::string(w.text) + "' is not supported" +
+                                      At(w.byte_offset));
+    }
+    return std::shared_ptr<const QueryBlock>(std::move(block));
+}
+
+StatusOr<FromItem> Parser::ParseFromItem() {
+    FromItem item;
+    const Token& t = lexer_.Peek();
+    item.byte_offset = t.byte_offset;
+    if (t.type == TokenType::kLParen) {
+        const Token open = lexer_.Next();
+        if (!IsWord(lexer_.Peek(), "SELECT") && lexer_.Peek().type != TokenType::kLParen) {
+            return Status::NotImplemented("a parenthesized join in FROM is not supported" +
+                                          At(open.byte_offset));
+        }
+        auto q = ParseNestedQuery(open);
+        if (!q.ok()) return q.status();
+        item.derived = std::move(q.value());
+        if (lexer_.Peek().type != TokenType::kKeyword || lexer_.Peek().kw != Keyword::kAs) {
+            return Status::InvalidArgument("a derived table needs a name: `(SELECT ...) AS name`" +
+                                           At(lexer_.Peek().byte_offset));
+        }
+        lexer_.Next();
+        auto alias = ParseIdent();
+        if (!alias.ok()) return alias.status();
+        item.rel.alias = std::move(alias.value());
+        item.rel.byte_offset = open.byte_offset;
+        return item;
+    }
+    auto rel = ParseRelationRef();
+    if (!rel.ok()) return rel.status();
+    item.rel = std::move(rel.value());
+    return item;
+}
+
+Status Parser::ParseQueryJoins(QueryBlock& block) {
+    for (;;) {
+        const Token t = lexer_.Peek();
+        FromJoin join;
+        join.byte_offset = t.byte_offset;
+        if (t.type == TokenType::kComma) {
+            lexer_.Next();
+            join.kind = JoinKind::kCross;
+            join.comma = true;
+        } else if (t.type == TokenType::kKeyword && t.kw == Keyword::kJoin) {
+            lexer_.Next();
+            join.kind = JoinKind::kInner;
+        } else if (IsWord(t, "INNER") || IsWord(t, "CROSS") ||
+                   (t.type == TokenType::kKeyword &&
+                    (t.kw == Keyword::kLeft || t.kw == Keyword::kRight || t.kw == Keyword::kFull))) {
+            lexer_.Next();
+            if (IsWord(t, "INNER")) {
+                join.kind = JoinKind::kInner;
+            } else if (IsWord(t, "CROSS")) {
+                join.kind = JoinKind::kCross;
+            } else {
+                join.kind = t.kw == Keyword::kLeft    ? JoinKind::kLeft
+                            : t.kw == Keyword::kRight ? JoinKind::kRight
+                                                      : JoinKind::kFull;
+                if (lexer_.Peek().type == TokenType::kKeyword &&
+                    lexer_.Peek().kw == Keyword::kOuter) {
+                    lexer_.Next();
+                }
+            }
+            if (lexer_.Peek().type != TokenType::kKeyword || lexer_.Peek().kw != Keyword::kJoin) {
+                return Status::InvalidArgument("expected JOIN, got '" +
+                                               std::string(Describe(lexer_.Peek())) + "'" +
+                                               At(lexer_.Peek().byte_offset));
+            }
+            lexer_.Next();
+        } else if (IsWord(t, "NATURAL")) {
+            return Status::NotImplemented("NATURAL JOIN is not supported" + At(t.byte_offset));
+        } else {
+            return Status::OK();
+        }
+
+        auto item = ParseFromItem();
+        if (!item.ok()) return item.status();
+        join.item = std::move(item.value());
+
+        if (!join.comma) {
+            const Token& cond = lexer_.Peek();
+            if (cond.type == TokenType::kKeyword && cond.kw == Keyword::kOn) {
+                if (join.kind == JoinKind::kCross) {
+                    return Status::InvalidArgument("a CROSS JOIN takes no ON" +
+                                                   At(cond.byte_offset));
+                }
+                lexer_.Next();
+                auto on = ParseExprOr();
+                if (!on.ok()) return on.status();
+                join.on = std::move(on.value());
+            } else if (IsWord(cond, "USING")) {
+                if (join.kind == JoinKind::kCross) {
+                    return Status::InvalidArgument("a CROSS JOIN takes no USING" +
+                                                   At(cond.byte_offset));
+                }
+                lexer_.Next();
+                if (Status s = ExpectToken(TokenType::kLParen, "'(' after USING"); !s.ok()) {
+                    return s;
+                }
+                for (;;) {
+                    auto col = ParseColumnName();
+                    if (!col.ok()) return col.status();
+                    if (col.value().qualified()) {
+                        return Status::InvalidArgument("a USING column is not qualified" +
+                                                       At(col.value().byte_offset));
+                    }
+                    join.using_columns.push_back(std::move(col.value()));
+                    if (lexer_.Peek().type != TokenType::kComma) break;
+                    lexer_.Next();
+                }
+                if (Status s = ExpectToken(TokenType::kRParen, "')' closing USING"); !s.ok()) {
+                    return s;
+                }
+            } else if (join.kind != JoinKind::kCross) {
+                return Status::InvalidArgument("expected ON or USING after JOIN, got '" +
+                                               std::string(Describe(cond)) + "'" +
+                                               At(cond.byte_offset));
+            }
+        }
+        block.joins.push_back(std::move(join));
+    }
+}
+
+Status Parser::ParseQueryTail(Query& q) {
+    if (IsWord(lexer_.Peek(), "ORDER")) {
+        lexer_.Next();
+        if (Status s = ExpectKeyword("BY"); !s.ok()) return s;
+        for (;;) {
+            const std::uint32_t key_at = lexer_.Peek().byte_offset;
+            if (q.order_by.size() >= kMaxSortKeys) {
+                return Status::NotImplemented(
+                    "ORDER BY takes at most " + std::to_string(kMaxSortKeys) + " keys" +
+                    At(key_at) +
+                    "; every key costs a comparison on every row pair, and sorting by a "
+                    "prefix of what was written would answer a question nobody asked");
+            }
+            auto e = ParseExprOr();
+            if (!e.ok()) return e.status();
+            OrderItem item;
+            item.expr = std::move(e.value());
+            if (IsWord(lexer_.Peek(), "ASC")) {
+                lexer_.Next();
+            } else if (IsWord(lexer_.Peek(), "DESC")) {
+                lexer_.Next();
+                item.descending = true;
+            }
+            if (IsWord(lexer_.Peek(), "NULLS")) {
+                return Status::NotImplemented(
+                    "NULLS FIRST/LAST is not supported" + At(lexer_.Peek().byte_offset) +
+                    "; NULLs sort largest");
+            }
+            q.order_by.push_back(std::move(item));
+            if (lexer_.Peek().type != TokenType::kComma) break;
+            lexer_.Next();
+        }
+    }
+    if (IsWord(lexer_.Peek(), "LIMIT")) {
+        lexer_.Next();
+        auto n = ParsePaginationCount("LIMIT");
+        if (!n.ok()) return n.status();
+        q.limit = n.value();
+    }
+    if (IsWord(lexer_.Peek(), "OFFSET")) {
+        lexer_.Next();
+        auto n = ParsePaginationCount("OFFSET");
+        if (!n.ok()) return n.status();
+        q.offset = n.value();
+    }
+    return Status::OK();
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprQuerySubquery(
+    const Token& open, ExprOp op, std::shared_ptr<const Expr> lhs) {
+    auto q = ParseNestedQuery(open);
+    if (!q.ok()) return q.status();
+    auto node = std::make_shared<Expr>();
+    node->kind = Expr::Kind::kSubquery;
+    node->op = op;
+    node->byte_offset = lhs != nullptr ? lhs->byte_offset : open.byte_offset;
+    node->op_byte_offset = open.byte_offset;
+    node->query = std::move(q.value());
+    if (lhs != nullptr) {
+        node->height = lhs->height + 1;
+        node->size = AddSize(lhs->size, 1);
+        node->lhs = std::move(lhs);
+    }
+    return std::shared_ptr<const Expr>(std::move(node));
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprAggregate(const Token& name, AggFunc func) {
+    if (expr_depth_ >= kMaxExprDepth) return ExprTooDeep(name.byte_offset);
+    DepthScope scope(expr_depth_);
+    auto node = std::make_shared<Expr>();
+    node->kind = Expr::Kind::kAggregate;
+    node->agg_func = func;
+    node->byte_offset = name.byte_offset;
+    node->op_byte_offset = name.byte_offset;
+    if (lexer_.Peek().type == TokenType::kStar) {
+        const Token star = lexer_.Next();
+        if (func != AggFunc::kCount) {
+            return Status::InvalidArgument(std::string(AggFuncText(func)) +
+                                           " takes a value, not '*'" + At(star.byte_offset) +
+                                           "; '*' is only an argument of COUNT");
+        }
+    } else {
+        if (IsWord(lexer_.Peek(), "DISTINCT")) {
+            lexer_.Next();
+            node->agg_distinct = true;
+        }
+        auto arg = ParseExprOr();
+        if (!arg.ok()) return arg;
+        node->height = arg.value()->height + 1;
+        node->size = AddSize(arg.value()->size, 1);
+        node->lhs = std::move(arg.value());
+    }
+    if (Status s = ExpectToken(TokenType::kRParen, "')' closing an aggregate's argument"); !s.ok()) {
+        return s;
+    }
+    if (const Token& w = lexer_.Peek(); IsWord(w, "OVER") || IsWord(w, "FILTER")) {
+        return Status::NotImplemented("'" + std::string(w.text) + "' after an aggregate is not "
+                                      "supported" + At(w.byte_offset));
+    }
+    return std::shared_ptr<const Expr>(std::move(node));
+}
+
+StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprQueryComparison(
+    std::shared_ptr<const Expr> lhs) {
+    const Token first = lexer_.Peek();
+    bool negated = false;
+    if (first.type == TokenType::kKeyword && first.kw == Keyword::kNot) {
+        lexer_.Next();
+        negated = true;
+    }
+    const Token form = lexer_.Peek();
+    std::shared_ptr<const Expr> node;
+    if (form.type == TokenType::kKeyword && form.kw == Keyword::kIn) {
+        lexer_.Next();
+        if (lexer_.Peek().type != TokenType::kLParen) {
+            return Status::InvalidArgument("expected '(' after IN" +
+                                           At(lexer_.Peek().byte_offset));
+        }
+        const Token open = lexer_.Next();
+        if (IsWord(lexer_.Peek(), "SELECT")) {
+            auto sub = ParseExprQuerySubquery(open, ExprOp::kInSubquery, std::move(lhs));
+            if (!sub.ok()) return sub;
+            node = std::move(sub.value());
+        } else {
+            std::vector<std::shared_ptr<const Expr>> args{lhs};
+            for (;;) {
+                auto v = ParseExprOr();
+                if (!v.ok()) return v;
+                args.push_back(std::move(v.value()));
+                if (args.size() > kMaxExprArgs) {
+                    return Status::Unsupported("an IN list of more than " +
+                                               std::to_string(kMaxExprArgs - 1) + " values" +
+                                               At(form.byte_offset));
+                }
+                if (lexer_.Peek().type != TokenType::kComma) break;
+                lexer_.Next();
+            }
+            if (Status s = ExpectToken(TokenType::kRParen, "')' closing an IN list"); !s.ok()) {
+                return s;
+            }
+            node = MakeCall(ExprOp::kInList, lhs->byte_offset, form.byte_offset, std::move(args));
+        }
+    } else if (form.type == TokenType::kKeyword && form.kw == Keyword::kBetween) {
+        lexer_.Next();
+        auto lo = ParseExprConcat();
+        if (!lo.ok()) return lo;
+        if (!IsWord(lexer_.Peek(), "AND")) {
+            return Status::InvalidArgument("expected AND in BETWEEN" +
+                                           At(lexer_.Peek().byte_offset));
+        }
+        lexer_.Next();
+        auto hi = ParseExprConcat();
+        if (!hi.ok()) return hi;
+        node = MakeBinary(ExprOp::kAnd, form.byte_offset,
+                          MakeBinary(ExprOp::kGe, form.byte_offset, lhs, std::move(lo.value())),
+                          MakeBinary(ExprOp::kLe, form.byte_offset, lhs, std::move(hi.value())));
+    } else if (IsWord(form, "LIKE")) {
+        lexer_.Next();
+        auto pattern = ParseExprConcat();
+        if (!pattern.ok()) return pattern;
+        if (IsWord(lexer_.Peek(), "ESCAPE")) {
+            return Status::NotImplemented("LIKE ... ESCAPE is not supported" +
+                                          At(lexer_.Peek().byte_offset));
+        }
+        node = MakeBinary(ExprOp::kLike, form.byte_offset, std::move(lhs),
+                          std::move(pattern.value()));
+    } else if (negated) {
+        return Status::InvalidArgument("expected IN, BETWEEN or LIKE after NOT" +
+                                       At(form.byte_offset));
+    } else {
+        return lhs;
+    }
+    if (TooBig(*node)) return ExprTooDeep(form.byte_offset);
+    if (negated) {
+        const std::uint32_t at = node->byte_offset;  // read before node is moved from
+        node = MakeUnary(ExprOp::kNot, at, first.byte_offset, std::move(node));
+        if (TooBig(*node)) return ExprTooDeep(first.byte_offset);
+    }
+    return node;
 }
 
 StatusOr<Statement> Parse(std::string_view sql) { return Parser(sql).Parse(); }

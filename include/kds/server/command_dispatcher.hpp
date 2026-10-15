@@ -18,6 +18,7 @@
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/aggregate.hpp"
+#include "kds/exec/query_layer.hpp"
 #include "kds/exec/sort.hpp"
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/transition.hpp"
@@ -322,6 +323,11 @@ struct DispatchOutcome {
     // `SELECT`, `INSERT` and `UPDATE` do). Carried for `poison_withheld`'s
     // reason: another statement of this core can run before this one ends.
     std::uint64_t fetch_id = 0;
+
+    // **The reply carries rows besides its tag** (RETURNING, BU-Q17): the
+    // rows went out through the session's sink, and `response` is still the
+    // DML's tag, which a KWP `S_COMPLETE` carries in place of `SELECT`.
+    bool returning = false;
 };
 
 // The one spelling of an error reply on the newline protocol (docs/spec/txn.md
@@ -1521,6 +1527,19 @@ private:
         std::uint16_t slot = 0;
     };
 
+    // Whether a btree slot keyed `id` makes a named key a duplicate now
+    // (BD-R5): `AlreadyExists` at `byte` when one is there, except one an
+    // undecided insert of a transaction other than `own` wrote, whose
+    // rollback frees it (BD-Q9, a wait); OK when absent. `own`'s own version
+    // is a duplicate whatever it is: no decide of another frees it.
+    Status NamedKeyVerdict(const catalog::TableAccess& ta, std::uint64_t id, std::uint32_t byte,
+                           const txn::Transaction* own);
+    // ON CONFLICT DO NOTHING's question (BU-Q18): is `id` placed? Takes the
+    // key's row unit as a named-key insert does, waiting as it waits, and
+    // keeps it only when the answer is no.
+    StatusOr<bool> TupleKeyPlaced(const catalog::TableAccess& ta, std::uint64_t id,
+                                  std::uint32_t byte, WriteScope& scope);
+
     // The per-row write pipeline, verbatim and in order (bulkinsert.md
     // §4, BI2): arity, FK forward check, assertion admission, id, encode +
     // spill, placement, Cabin witness, index maintenance, reservation,
@@ -1604,6 +1623,50 @@ private:
     DispatchOutcome HandleSelect(std::string_view line, Session& session, bool analyze = false,
                                  const txn::Snapshot* pinned = nullptr,
                                  const exec::StatementContext* context = nullptr);
+
+    // Everything `HandleSelect` does once `run` holds its snapshot and its
+    // parsed statement: the compile, the trail, the walk or its hand-off.
+    // `line` is the statement's text, empty for a query layer walk, which
+    // has no text of its own - and so no parser, no fingerprint and no trail
+    // (BU-Q12) - and is never handed back to the layer.
+    DispatchOutcome SelectBody(const std::shared_ptr<SelectRun>& run, Session& session,
+                               bool analyze, const exec::StatementContext* context,
+                               std::string_view line);
+
+    // The query layer's host (`exec::LayerHost`): a relation's description
+    // and its walks, at the statement's snapshot.
+    class LayerHostImpl;
+
+    // **The query layer's door** (BU-S4, BU-Q9): `line` as the query
+    // grammar reads it, run by `exec::RunQuery` at `snap`, its reply emitted
+    // through the session's sink. nullopt when the query grammar refuses
+    // the text too, and the caller's native refusal is then the answer.
+    std::optional<DispatchOutcome> TryQueryLayer(std::string_view line, Session& session,
+                                                 const txn::Snapshot& snap,
+                                                 const exec::StatementContext* context);
+    // RETURNING (BU-Q17): when `line` - an INSERT, UPDATE or DELETE that
+    // answered `out` - has a RETURNING list, the rows this statement wrote,
+    // found on its transaction's trail since the statement's mark and read
+    // back by tuple key, emitted through the session's sink. Read before
+    // the write scope ends, so a failure here fails the statement.
+    DispatchOutcome WithReturning(std::string_view line, Session& session, WriteScope& scope,
+                                  DispatchOutcome out);
+    StatusOr<parser::InsertStmt> InsertSelectRows(const catalog::TableAccess& ta,
+                                                  const parser::InsertStmt& written,
+                                                  WriteScope& scope);
+    // Runs a query-layer query whose text is `text` at `snap`, under this
+    // dispatcher's row and group caps (BU-Q10): TryQueryLayer's and
+    // INSERT ... SELECT's one way in.
+    StatusOr<exec::RowSet> RunLayerQuery(const parser::Query& query, std::string_view text,
+                                         Session& session, const txn::Snapshot& snap,
+                                         const exec::StatementContext& context);
+
+    // One relation's walk for the query layer: `stmt` - a single-relation
+    // `SELECT *` with native conjuncts - run through `SelectBody` at `snap`,
+    // its rows captured as values.
+    StatusOr<std::vector<std::vector<parser::AstValue>>> WalkForLayer(
+        parser::SelectStmt stmt, Session& session, const txn::Snapshot& snap,
+        const exec::StatementContext& context);
 
     // Runs the walk a `DispatchAndStage` reply left in `out->select_run`
     // and writes the reply over `out` (BA-S15). `DispatchAsync` only.

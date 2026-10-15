@@ -1,5 +1,12 @@
 # Work order BU — the basic query surface: `OR`, `NOT`, value lists, select-list expressions, `HAVING`, outer joins, set operations
 
+**Built to its close on 2026-10-15** (BU-S9, §6) on
+`worktree-bu-basic-query-surface-s4`: every stage landed with its review and
+a green suite, and anti-kdbs F004 answers every case as PostgreSQL does but
+P07, which BU-Q13 refuses. **The overhead is not measured**: the close's
+A/B was stopped by the operator before it ran (`instructions/v3.2.0/raft-marks-2026-10-15.md`
+§4). Not merged to `main`, not tagged.
+
 Written 2026-10-13 on `worktree-bu-basic-query-surface` from `eeb88f47`
 (`v2.7.0-992-geeb88f47`). It follows the operator's words of 2026-10-13,
 recorded in English:
@@ -11,6 +18,8 @@ recorded in English:
   query forms, excluding CTEs."*
 - **W3:** *"Move the working directory to ckdbs, add the work order, and
   implement it the way kdbs development is already done."*
+
+**BU-S4 onward runs on the operator's standing go-ahead of 2026-10-13** (`go-ahead-achieving-milestone`, `raft-marks-2026-10-13.md` §13): BU-Q8..Q12 and any later decision are CLA's proposals adopted under it, recorded as such and never as the operator's own marks.
 
 **Written and opened 2026-10-13 on W3.** W0-W2 stand here as BU-R1..R3.
 The questions in §4 were unmarked when the order was written; W3 is the
@@ -185,6 +194,17 @@ not measured; measured at the milestone's close".
 | BU-Q5 | `<>`, bare alias, quote escaping, `NULLS FIRST/LAST` | stay refused (I13) | adopted on W3 |
 | BU-Q6 | `LIKE` | bytes, case-sensitive, `%` and `_`, no `ESCAPE` clause (refused `NotImplemented`) | adopted on W3 |
 | BU-Q7 | Outer-join placement of a `WHERE` conjunct on the nullable side | never moved into the `ON`; equality propagation never crosses the nullable side `[quiet-wrong]` | adopted on W3 |
+| BU-Q8 | Execution shape of the forms a step chain cannot carry - select-list expressions, `DISTINCT`, `ORDER BY` an expression, `HAVING`, outer and non-equi joins, set operations, derived tables, a select-list subquery: (a) a **query layer** over native walks - each relation, with every `WHERE` conjunct the native grammar reads that names it alone, is walked as a step chain under the statement's snapshot, and everything else is evaluated over the rows in hand; (b) extend the step compiler and VM form by form | (a): one evaluator for every remaining form, and every statement the native path answers today keeps its parse, chain and plan byte for byte, which is what BU-R5's measurement predicts. (b) is the deeper change a later order may make per form, against the answers BU pins | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
+| BU-Q9 | Which statements reach the layer | the native parse and compile run first; the layer is tried only when one of them refuses, and the native refusal is the answer when the query grammar refuses too, so no statement answered or refused today changes its reply unless the layer answers it | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
+| BU-Q10 | A bound on the rows the layer holds | no new setting (`CLAUDE.md`: no second name for a quantity): `sort_max_rows` re-scoped to every row set the layer holds - a relation's walk, a join's output, a sort, a set operation - and `aggregate_max_groups` to its group table, each refused `ResourceExhausted` naming the setting | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
+| BU-Q11 | The type of a select-list expression `[quiet-wrong]` | BJ's typer, no implicit conversion (BJ-R3); an untyped literal takes its context's type, and with none its natural one - an integer literal `int64`, a quoted string `varchar`, a bare decimal the `decimal(p,s)` of its own digits, a lone `NULL` `varchar`; a comparison or boolean is `bool` | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
+| BU-Q13 | `CAST(x AS varchar(N))`, F004 P07's spelling | stays refused, as BJ refuses it in a SET value: `varchar(N)`'s `N` is a column's cell width, not a length (`types.md` §3.2b), so PostgreSQL's truncation to `N` characters cannot be what KDS means; `CAST(x AS varchar)` is the spelling. P07 closes refused by this ruling (§0.1) | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
+| BU-Q14 | `GROUP BY` an expression, which §3's stages do not list | taken into BU-S5: the grouped path types `GROUP BY` items as expressions already, and a gate arm kept for it alone would refuse a form the stage's code answers and tests; AG9 then holds for the step chain only | adopted on the operator's request of 2026-10-15 to continue BU, as CLA proposed |
+| BU-Q15 | A `RIGHT` or `FULL` join after a comma, which binds looser than `JOIN` (`x, o RIGHT JOIN c` is `x CROSS (o RIGHT JOIN c)`) while the layer reads every join left-deep `[quiet-wrong]` | refused `NotImplemented`, naming the comma-joined relation to move after the outer join: a left-deep reading null-extends `x` instead of crossing it, and nothing else in the layer nests a join; a `LEFT` or inner join after a comma reads the same either way and is answered | adopted on the operator's request of 2026-10-15 to continue BU, as CLA proposed at BU-S6's review |
+| BU-Q16 | An `UPDATE ... FROM` target row matching two or more `FROM` rows `[quiet-wrong]` | (a) refused `CardinalityViolation`, nothing written; `DELETE ... USING` deletes a row once | **the operator's mark, 2026-10-15** (`instructions/v3.2.0/raft-marks-2026-10-15.md` §3) |
+| BU-Q17 | `RETURNING` | (a) built on `INSERT`, `UPDATE`, `DELETE`: rows described and emitted as a `SELECT`'s, then the command tag; after-images, the before-image for `DELETE` | **the operator's mark, 2026-10-15** (§3) |
+| BU-Q18 | What `ON CONFLICT DO NOTHING` treats as a conflict | (a) the tuple key only: a key placed live or delete-marked (BD-R5) skips the row; an undecided insert of it is waited for (BD-Q9); another target and `DO UPDATE` refused `NotImplemented` | **the operator's mark, 2026-10-15** (§3) |
+| BU-Q12 | Waystone for a layer statement | none: a layer statement records no trail and registers no `sys.patterns` row, its relation walks carrying no fingerprint of their own; invariant 8 makes that a cost, never an answer | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
 
 ## 5. Measurement
 
@@ -361,3 +381,363 @@ through `OR`: a write's subquery over its own relation sees the statement's
 own writes. It is recorded in
 `docs/inflight/bugs/a-write-walks-subquery-sees-its-own-statements-writes.md`
 with a `DISABLED_` cell, and its fix waits for the operator's ruling.
+
+### BU-S4 - the query layer: select-list expressions, `DISTINCT`, `ORDER BY` an expression, expressions in WHERE (built 2026-10-15)
+
+Begun 2026-10-13 on `worktree-bu-basic-query-surface-s4` from `4aaf526f` by
+a session that ended with the stage uncommitted and no handoff; resumed
+2026-10-15, committed as found (`86765796`) and merged with `origin/main`
+at `256b86e9` (BO, BV, BW and the 2026-10-15 case ruling). BU-Q8..Q13 are
+the stage's rulings (§4).
+
+- **Shape (BU-Q8 (a)).** `Parser::ParseQuery` reads the query grammar
+  (`parser::Query`); `exec::RunQuery` (`src/exec/query_layer.cpp`) types
+  every expression with BJ's typer (`TypeQueryExpression`, an `ExprScope`
+  over the layer's columns), walks each relation as a native single-relation
+  chain through `LayerHost` carrying the top-level WHERE terms the native
+  grammar reads for it alone (`Walkable`: no subquery, no function the
+  native catalog lacks, never a nullable side), and evaluates the rest over
+  the rows in hand. The dispatcher tries it only after a native parse
+  failure or a native compile `NotImplemented`, never under `ANALYZE`
+  (BU-Q9), and only when `exec::FormsLanded` holds: the grammar already
+  reads the forms of S5-S7, and each of those stages deletes its arm when it
+  lands with its spec, cells and review.
+- **Merged onto `main`'s changes.** Column names, output names and `USING`
+  columns match ignoring case (`catalog::ColumnNamesCollide`, the
+  operator's ruling of 2026-10-15), qualifiers and `rel.*` too, as the native
+  path matches them; a dropped column (BW) is no column of the layer's.
+- **Docs.** `parser-v2.md` §7a (I19), I10 and I11; the manual's select
+  list, WHERE notes, `ORDER BY` and "The query layer"; the `CLAUDE.md` row.
+- **Tests.** `tests/query_layer_test.cpp`, 20 cells and one disabled for
+  S5; `FunctionConjunctTest.WhatTheQueryLayerAnswers` takes the calls the
+  native path declines, and `WhatIsRefusedAndWhere` keeps the refusals that
+  stand.
+- **F004** against a release build at `256b86e9`, before the review: built
+  5/5, 1a 7/7, 1b 6/6, 1c 6/6 (W24 and W25 answer), phase 2 14 ok and P07
+  unbuilt by BU-Q13, wrong=0 in every phase. Phases 3-5 answered too at
+  that commit; the gate added since withholds them.
+
+Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S4 - the `critics-developer` review, applied
+
+Fixed by the reviewer: `x IN (empty subquery)` was unknown for a NULL `x`
+where it is false, so `NOT IN` dropped NULL rows `[quiet-wrong]`; a layer
+walk was bounded only after it had read the whole relation (BU-Q10), now
+refused at the first row past `sort_max_rows`; a layer statement held no
+borrow across its walks (AT-S1), so a concurrent `DROP`/`CREATE` could
+hand back rows of another width - one `ReadBorrow` now spans the
+statement, the description resolves through `ResolveNames`, and a row of
+the wrong width is refused `TxnConflict`; `aggregate_max_groups = 0`
+meant unlimited in the layer where the native fold refuses (an S5 path,
+its cell disabled until S5); `ORDER BY` a name two items read as one
+column was refused as ambiguous; `ResolveCall`'s refusal no longer says
+the layer answers where no layer runs; `TryQueryLayer` calls `SinkFor`.
+Applied by CLA on the review's questions: the later stages' forms gated
+(`FormsLanded`), which the three aggregate and ORDER BY cells the suite
+failed on asked for; qualifiers matched ignoring case; the wire's tuple-key
+flag set on the driving relation's column 0 only, as `DescribeFields`
+sets it (every relation's column 0 still travels as a u64).
+**Deferred, with reasons:** cuts (1)-(4) - the parallel type vectors, the
+two subquery-typing lambdas, the twice-written `ORDER BY` lookup, the
+`SUM`/`AVG` result type - live in the grouped, set-operation and join
+paths that S5-S7 open and test; each is taken at the stage that owns its
+path. Re-walking without a pushed term the native compile refuses: no
+case reaches it now that `Walkable` excludes the one found; recorded here
+rather than built. The per-row `Concat` copy, the by-value cache returns
+and the linear `IN (subquery)` probe are costs, measured at BU-S9.
+
+### BU-S4 - the suite and F004, stated
+
+Full suite (Debug, `-LE heap-suspended`) at `b45f60ff`: 3,910/3,910
+passed, 4 disabled (the S5 cell among them). The run before the review at
+`256b86e9` had 9 failures: six pinned refusals the layer answered (three
+S4 forms, re-pinned in `FunctionConjunctTest`; three S5/S6 forms, which
+the gate restores) and three were the host's disk filling (`/tmp` at
+99 %, stale test directories removed; each passed alone). F004 against a
+release build at `b45f60ff`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2
+14 ok and P07 refused by BU-Q13, phases 3-6 unbuilt behind the gate,
+wrong=0 in every phase - S4's gate (phase 2, W24, W25) is met.
+
+### BU-S5 - grouped statements (built 2026-10-15)
+
+Resumed 2026-10-15 from the handoff `20261015-0427-bu-basic-query-surface-s4.md`
+on `worktree-bu-basic-query-surface-s4`, after merging `origin/main` at
+`ffade396` (AQ closed; the suite there 3,957/3,957). The stage is `58c15228`
+and its review.
+
+- **Gate.** `FormsLanded` loses its S5 arms: a grouped block is the
+  layer's. `HAVING` is checked as a condition (a subquery under it allowed),
+  `GROUP BY` items as value positions (a subquery there is still S7's).
+- **Fold.** The layer's `GroupRows` answers as `aggregate.md` does: SUM and
+  AVG check every addition in the native accumulator (int64, int128 for
+  `DECIMAL128`), so a sum crossing `INT64_MAX` fails as natively, said "SUM
+  overflow"; NULLs per §3.1; AVG half-even per §3.4.
+- **Forms.** `HAVING` (three-valued, kept only true), `ORDER BY`, `LIMIT`
+  and `OFFSET` over groups, an aggregate under an alias, over an expression
+  and inside one, `GROUP BY` an expression (BU-Q14), an aggregate in a
+  subquery.
+- **Cuts taken from S4's review** on this path: `has_group_by` and
+  `key_types` read off the keys, one `SubqueryTyper`, one `DecimalResult`.
+- **Docs.** `aggregate.md` §2's table and §8, `parser-v2.md` I11 and I19,
+  the manual's aggregate, ordering and "not supported" sections, the
+  `CLAUDE.md` row.
+- **Tests.** `tests/query_layer_test.cpp` gains the S5 cells and enables
+  S4's disabled one; `AggregateDispatchTest.WhatTheQueryLayerAnswersSinceBuS5`
+  takes §2's three rows that became answers;
+  `OrderByExecTest.OrderByOverAnAggregatedStatementIsTheQueryLayers`
+  replaces the refusal it pinned.
+
+Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S5 - the `critics-developer` review, applied
+
+Fixed by the reviewer, each with a cell: the global group was counted
+against `aggregate_max_groups`, refusing at 0 what the native fold answers
+(`Aggregator::Reset` founds it unchecked); a decimal SUM was bounded by its
+declared precision where the native fold bounds it only by its
+accumulator (`ValueOf` replaced by `AggregateValue`, `PowerOfTen`
+deleted); an aggregate over a subquery in `HAVING` was refused because
+`SameExpr` matched no subquery, not even itself; the overflow message now
+reads as §3.3 writes it. Applied by CLA on the review's flags: the layer
+counts DISTINCT entries against `aggregate_max_distinct`, summed over the
+statement as the native fold counts them (AG11; no new setting); a `GROUP
+BY` key named twice is refused as the native compile refuses it; the
+`ExprLanded` switch and the `key_nodes` copy cut. **Recorded, not
+changed:** an aggregate over only an outer column inside a subquery is
+refused - rightly, the standard binds it to the outer query - with the
+message "an aggregate is not allowed in HAVING", which names the clause and
+not the reason; `HAVING NULL` is refused as not a bool, BU-Q11's lone
+`NULL` being `varchar`, as `WHERE NULL` already was before S5. **Declined:**
+folding the grouped `resolve` lambda into `ResolveIn` (the review's cut 1),
+which would merge two refusal messages a client reads apart; splitting the
+overflow check by width, which reads no simpler.
+
+### BU-S5 - the suite and F004, stated
+
+Full suite (Debug, `-LE heap-suspended`) at `58c15228`: 3,964/3,964; at
+`17500b6b`, with the review applied: 3,969/3,969. F004 against a release
+build at `17500b6b`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
+P07 refused by BU-Q13, **phase 3 8/8**, phases 4-6 unbuilt behind the gate
+(D01 answers natively), wrong=0 in every phase - S5's gate is met.
+
+### BU-S6 - joins (built 2026-10-15)
+
+On `worktree-bu-basic-query-surface-s4` from `59e5be6f`; the stage is
+`9d2fcc40` and its review.
+
+- **Gate.** `FormsLanded` loses its join arm: `LEFT`, `RIGHT`, `FULL
+  [OUTER]`, `CROSS` and comma joins, `USING`, and an `ON` of any typed
+  condition are the layer's; an `ON` is checked as a condition, and a
+  derived table in a join stays S7's.
+- **Semantics** (built at S4, exercised first here): written order; a hash
+  on the top-level `AND`'s same-typed column equalities, the whole `ON`
+  tested per candidate pair in three values; null extension of the side
+  with no match, a `FULL` join's unmatched right rows once; output bounded
+  by `sort_max_rows`; no `WHERE` term carried by a walk on a nullable side
+  (BU-Q7).
+- **Cells.** Each join kind against its answer; `ON` filtering the match,
+  never the preserved side; BU-Q7 on both sides; `USING`; a non-equality
+  `ON`; a `LEFT JOIN` under `GROUP BY`; the join's bound. The dispatcher's
+  and KWP's `NotImplemented` example moves from a `LEFT JOIN` to a CTE.
+- **Docs.** `parser-v2.md` I19's joins, J2 and the join surface; the
+  manual's join rule, the layer's join bullet and the not-built list; I19's
+  "refused by name" corrected to what a client gets under BU-Q9 (`OVER`
+  answers the native parse's "expected 'FROM'"); the `CLAUDE.md` row.
+
+Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S6 - the `critics-developer` review, applied
+
+Fixed by the reviewer, each with a cell shown failing on `9d2fcc40`'s
+source and passing with the fix: a `RIGHT` or `FULL` join after a comma
+answered wrong - the layer reads joins left-deep, so the comma's relation
+was null-extended instead of crossed (54 rows by PostgreSQL, 44 here) -
+now refused (BU-Q15, `FromJoin::comma`); a bare `USING` name resolved
+through a name map, picking `a.cust_id` where PostgreSQL calls it
+ambiguous and refusing a second `USING` PostgreSQL answers - replaced by
+`CompiledBlock::hidden`, the partner a bare name does not read (the right
+side's column, the left's under `RIGHT`); the wire flagged a tuple key
+that a `RIGHT` or `FULL` join can null-extend, which the flag promises is
+never NULL. Taken: `Join::eq_types` folded into the typed nodes, one key
+function in `JoinRows`. Applied by CLA: `USING (k, k)` refused, as
+PostgreSQL refuses it. **Recorded, not changed:** a comma then a `LEFT` or
+inner join whose `ON` reads a relation before the comma is answered where
+PostgreSQL refuses it - never a wrong answer to valid SQL; the review's
+note that `SourceRows` caps a walk only after it returned is answered by
+S4's review, whose `LayerWalkSink` refuses at the first row past the cap.
+**Declined:** the `prefix` copy and a `MakeBinary` helper for the `USING`
+condition - each saves lines in code that runs once per statement and
+reads plainly as written.
+
+### BU-S6 - the suite and F004, stated
+
+Full suite (Debug, `-LE heap-suspended`) at `9d2fcc40`: 3,973/3,973; at
+`eccb9d31`, with the review applied: 3,978/3,978. F004 against a release
+build at `eccb9d31`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
+P07 refused by BU-Q13, phase 3 8/8, **phase 4 12/12**, phases 5-6 unbuilt
+behind the gate, wrong=0 in every phase - S6's gate is met.
+
+### BU-S7 - set operations, derived tables, subqueries as values (built 2026-10-15)
+
+On `worktree-bu-basic-query-surface-s4` from `9964a705`; the stage is
+`14f4579b` and its review.
+
+- **The gate deleted.** S7 is its last stage, so `exec::FormsLanded` goes
+  whole: every form the query grammar reads is the layer's (BU-Q9 unchanged).
+- **Set operations.** `UNION`, `INTERSECT`, `EXCEPT`, each `[ALL]`;
+  `INTERSECT` binds tighter, each left-associative; NULLs one value; `ALL`
+  by multiplicity; sides paired by position, one type each (two text types
+  meeting as `varchar`, one family keeping the wider length); the tail over
+  the whole.
+- **Derived tables** - filtered, grouped, joined, over a set operation -
+  never correlated: one that reads an enclosing query's column is refused
+  `NotImplemented`.
+- **Subqueries as values** in the select list, `ORDER BY` and any
+  expression: one column, at most one row (`CardinalityViolation` past it),
+  correlated or not.
+- **Cuts from S4's review**: one `OutputColumn` lookup for blocks and set
+  operations; `item_types` and `sort_types` read off the typed nodes.
+- **Docs.** `parser-v2.md` I19 and J2, the manual, the `CLAUDE.md` row.
+
+Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S7 - the `critics-developer` review, applied
+
+No wrong row found. Fixed by the reviewer, with a cell shown failing
+without it: a derived table's column 0 was flagged the tuple key on the
+wire whatever its own output decided, so a null-extended or later
+relation's key gained the flag. Applied by CLA on the review's flags: a
+column has a SQL name apart from its heading (`LayerColumn::heading`), so
+`(SELECT o.id ...) AS x` is read as `x.id` and `SUM(...)` as `sum`, and a
+set operation's `ORDER BY id` finds a left side written `o.id`, as in
+PostgreSQL; a derived table reading an enclosing query's column is refused
+`NotImplemented` instead of "unknown column"; `char(3) UNION char(5)` is
+`char(5)`; I19's code for a second row corrected to `CardinalityViolation`;
+the `INTERSECT`/`EXCEPT ALL` branch shortened and a stale comment removed.
+**Recorded, not changed:** an aggregate reading an enclosing query's
+column inside a subquery is refused "an aggregate is not allowed here"
+where PostgreSQL answers the mixed form - a refusal, never a wrong answer;
+a statement opening with `(` is routed by the dispatcher as an unknown
+command and never reaches either grammar; the query grammar's refusals by
+name reach no client under BU-Q9 (S6's row); `SELECT NULL UNION SELECT 1`
+is refused, BU-Q11's lone `NULL` being `varchar`. **Measured at BU-S9, not
+cut:** `Execute` returns a cached result by value, copied per outer row for
+an uncorrelated subquery. **Declined:** one key helper for the set
+operation and `DISTINCT` - the two loops differ in where their types live.
+
+### BU-S7 - the suite and F004, stated
+
+Full suite (Debug, `-LE heap-suspended`) at `14f4579b`: 3,980/3,980; at
+`84af2912`, with the review applied: 3,983/3,983. F004 against a release
+build at `84af2912`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
+P07 refused by BU-Q13, phase 3 8/8, phase 4 12/12, **phase 5 9/9**, phase 6
+(S8's DML) 1 ok and 6 unbuilt, wrong=0 in every phase - S7's gate is met.
+
+### BU-S8 - the DML forms (built 2026-10-15)
+
+On `worktree-bu-basic-query-surface-s4` from `ecd6f071`, after the
+operator marked BU-Q16..Q18 (`instructions/v3.2.0/raft-marks-2026-10-15.md`
+§3, `50d74101`), in four commits: `2982d3b6` (expressions in `VALUES`,
+`INSERT ... SELECT`), `efeb1604` (`ON CONFLICT DO NOTHING`), `f1467c38`
+(`UPDATE ... FROM`, `DELETE ... USING`), `0f7fa2fa` (`RETURNING`). The
+`INSERT` column list is BW-S6's, landed before.
+
+- **`VALUES` expressions** take the SET value's grammar and typer and are
+  folded once before any row is placed; one reading a column is refused.
+- **`INSERT ... SELECT`** runs its source through the query layer
+  (`RunLayerQuery`, now `TryQueryLayer`'s way in too) at a snapshot taken
+  after `BeginWrite`, read whole before the first row - a statement reading
+  the relation it writes reads only what was there - each column assignable
+  to its target as a SET value is.
+- **`ON CONFLICT DO NOTHING`** (BU-Q18) decides every row before any is
+  admitted (`TupleKeyPlaced`, the key's row unit taken as a placement takes
+  it), so a skipped row takes no foreign-key hold, no assertion reservation
+  and no id; `NamedKeyVerdict` is the one btree duplicate verdict for it and
+  `InsertOneRow`.
+- **`UPDATE ... FROM` / `DELETE ... USING`** (BU-Q16) are the WHERE made one
+  `EXISTS` over the named relation in the statement's name space; `UPDATE`'s
+  reads a second row and refuses `CardinalityViolation`, never hoisted.
+- **`RETURNING`** (BU-Q17) reads the rows off the transaction's trail since
+  the statement's mark, back by tuple key, before the write scope ends; KWP
+  completes under the write's own tag.
+- **Docs.** `parser-v2.md` I20 (new) and I10, `protocol.md` §7, the
+  manual's DML section, the `CLAUDE.md` row.
+- **Tests.** `tests/dml_forms_test.cpp` (14 cells), a KWP cell for
+  `RETURNING`'s completion; the parser cell and the golden corpus move two
+  `INSERT` verdicts to `ok` (an expression in `VALUES` now parses), hashes
+  unmoved.
+
+Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S8 - the `critics-developer` review, applied
+
+Fixed by the reviewer, each with a cell: `INSERT ... SELECT` compared every
+type's `len`, so an integer literal (`len` 0) was refused for an `int64`
+column - now only a decimal's scale is compared; it stored a decimal wider
+than the column's precision, the encoder checking scale alone
+`[quiet-wrong]` - every decimal value is now range-checked per row
+(`exec::ValueInRange`, the typer's own check); a `VALUES` expression calling
+`NOW()` or `CURRENT_DATE` was refused as reading a column - the test is now
+`SetExpressionColumns`, folded at the statement's one instant; with no lock
+table, `ON CONFLICT` skipped a key an undecided insert held, which a
+rollback then lost - `NamedKeyVerdict` takes the writing transaction, its own
+version always a duplicate, another's undecided insert never. Applied by CLA:
+a RETURNING item naming the `FROM` relation is refused `NotImplemented` with
+what it is, not "names no relation"; a multi-row `INSERT ... SELECT` needs
+the transaction manager as a multi-row `VALUES` does; misplaced comments
+moved to their declarations. **Recorded, not changed:** the source of
+`INSERT ... SELECT` is typed before its target is known, so a bare `5` into
+an `int32` and a bare `NULL` into a non-text column are refused - `CAST` is
+the spelling (the manual says so); a SET value cannot read the `FROM` row,
+refused `NotImplemented`; the `EXISTS` rewrite moves conjuncts on the target
+alone into the sub-chain, so a point `UPDATE ... FROM` walks the target - a
+cost, measured at BU-S9; without a transaction manager a RETURNING is
+refused after the rows are written (a test configuration only - production
+always builds one); `ON CONFLICT`'s pre-check keeps the units it took across
+a wait-and-re-run inside an explicit transaction, and takes the key before
+the foreign-key parent, the reverse of the row path (the deadlock detector
+covers the cycle); `DmlFormsTest` has no lock table, so the pre-check's wait
+has no cell; `INSERT INTO t (SELECT ...)` is a parse error. **Declined:**
+carrying the parsed RETURNING out of the three `*Inner` paths instead of
+re-parsing - the re-parse is gated on the word and costs one parse per
+RETURNING statement, while the carry would thread state through the park
+and resume of `UPDATE` and `DELETE`; one shared assignability rule with
+`set_expr.cpp` - the two answer different questions (an expression for a
+column, a typed column for a column); one shared give-back with
+`InsertOneRow` - two three-line lambdas over different locals.
+
+### BU-S8 - the suite and F004, stated
+
+Full suite (Debug, `-LE heap-suspended`) at `0176135a`: 3,998/3,998; at
+`a13ceb49`, with the review applied: 4,002/4,002. F004 against a release
+build at `a13ceb49`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
+P07 refused by BU-Q13, phase 3 8/8, phase 4 12/12, phase 5 9/9, **phase 6
+7/7**, wrong=0 in every phase - S8's gate is met, and every F004 case but
+the one BU-Q13 refuses answers as PostgreSQL does.
+
+### BU-S9 - the close (2026-10-15)
+
+On `worktree-bu-basic-query-surface-s4`, `origin/main` merged at `bba74a4a`
+(the write-subquery and inner-build fixes); the suite there 4,003/4,006, the
+three failures crash cells that ran out of disk under the parallel run
+(`No space left on device` copying a WAL under `/tmp`) and passed alone.
+
+- **Specs and manual** were written stage by stage: `parser-v2.md` I10, I11,
+  I19 (§7a, the query layer) and I20 (§7b, the DML forms), J2 and the join
+  surface; `aggregate.md` §2 and §8; `protocol.md` §7; the manual's select
+  list, WHERE, ordering, aggregates, joins, the query layer and the DML
+  forms; the `CLAUDE.md` row.
+- **Known gaps**: `docs/inflight/known-gaps.md` "The query layer and the DML
+  forms (BU)", verified at `a13ceb49` - every refusal and cost the stages'
+  reviews recorded and did not change.
+- **The overhead is not measured.** `ck-tester`'s A/B (A `eeb88f47`, the
+  binary BT's close built and hashed; B `8a2e44c2`; the scan row, the point
+  `SELECT`, the every-row `UPDATE`, `INSERT` and the listed `INSERT`) was
+  stopped by the operator after B's build, before any cell ran; its plan and
+  scripts stay in `/home/cdkbs/bench-runs/bu-close/scripts`. BU-R5's
+  prediction - no change for the AND-only statements - therefore stands
+  unmeasured, and so do the layer's costs `known-gaps.md` names.
+- **Left for a later order:** folding `fn_residual` into `bool_residual`
+  (BU-S1's review's largest cut), which rewrites AP-S4's plan text and cells
+  and changes no answer.

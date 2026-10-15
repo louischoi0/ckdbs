@@ -678,10 +678,7 @@ TEST_F(AggregateDispatchTest, EveryRefusalRowOfTheSpecTableIsRefused) {
         {"SELECT MIN(*) FROM h", "COUNT"},
         {"SELECT MAX(*) FROM h", "COUNT"},
         {"SELECT COUNT(DISTINCT *) FROM h", "name a column"},
-        {"SELECT tier, COUNT(*) FROM h GROUP BY tier HAVING COUNT(*) > 1", "HAVING"},
-        {"SELECT COUNT(*) FROM h WHERE id IN (SELECT COUNT(*) FROM j)", "subquery"},
         {"SELECT COUNT(*) FROM sys.tables", "catalog view"},
-        {"SELECT tier, COUNT(*) FROM h GROUP BY tier ORDER BY tier", "ORDER BY"},
     };
     for (const Case& c : cases) {
         const std::string reply = Run(c.sql);
@@ -705,11 +702,28 @@ TEST_F(AggregateDispatchTest, EveryParseTimeRefusalCarriesAPosition) {
     // this test is actually about is that the client is told *where*,
     // which no layer is excused from.
     for (const char* sql : {"SELECT AVG(qty) FROM h", "SELECT SUM(*) FROM h",
-                            "SELECT COUNT(DISTINCT *) FROM h",
-                            "SELECT tier, COUNT(*) FROM h GROUP BY tier HAVING COUNT(*) > 1"}) {
+                            "SELECT COUNT(DISTINCT *) FROM h"}) {
         const std::string reply = Run(sql);
         EXPECT_NE(reply.find("byte "), std::string::npos) << sql << " -> " << reply;
     }
+}
+
+// Three rows §2's table refused until BU-S5 - `HAVING`, an aggregate in a
+// subquery, `ORDER BY` over aggregated output - are answered by the query
+// layer since (`parser-v2.md` I19), each over the fold's NULL and overflow
+// rules (§3).
+TEST_F(AggregateDispatchTest, WhatTheQueryLayerAnswersSinceBuS5) {
+    Load();
+    EXPECT_EQ(Run("SELECT tier, COUNT(*) FROM h GROUP BY tier HAVING COUNT(*) > 1"),
+              "tier,count(*)\\n1,3\\n2,3");
+    EXPECT_EQ(Run("SELECT tier, COUNT(*) FROM h GROUP BY tier HAVING SUM(qty) > 100"),
+              "tier,count(*)\\n2,3");
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM h WHERE id IN (SELECT COUNT(*) FROM j)"),
+              "count(*)\\n1");
+    EXPECT_EQ(Run("SELECT tier, SUM(qty) FROM h GROUP BY tier ORDER BY SUM(qty) DESC"),
+              "tier,sum(qty)\\n2,120\\n1,90");
+    EXPECT_EQ(Run("SELECT tier, COUNT(*) FROM h GROUP BY tier ORDER BY tier DESC LIMIT 1"),
+              "tier,count(*)\\n2,3");
 }
 
 // ---- §9.7 Determinism, end to end ---------------------------------------

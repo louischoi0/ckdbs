@@ -433,6 +433,8 @@ bool ApplyCompare(const T& a, const T& b, parser::CompareOp op) {
     return false;
 }
 
+}  // namespace
+
 // `LIKE` over bytes (BU-Q6): `%` matches any run, `_` any one byte, every
 // other byte itself, case-sensitively. Iterative with one backtrack point -
 // the last `%` - so a pattern of many `%`s costs O(value x pattern) at
@@ -459,6 +461,8 @@ bool LikeMatch(std::string_view value, std::string_view pattern) {
     while (p < pattern.size() && pattern[p] == '%') ++p;
     return p == pattern.size();
 }
+
+namespace {
 
 // A `char(N)` cell's value: its bytes back to the first NUL and no further -
 // a char(N) cell is N bytes whatever the value's length, and the padding is
