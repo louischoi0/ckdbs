@@ -350,9 +350,11 @@ wait; one rolls back, the other passes), row 2 of a multi-row INSERT
 meeting an in-flight holder (`TxnConflict`, BX-Q3), a delete on one core and an insert
 of the key on the other, a deadlock between two writers each holding the
 other's key (one refused naming deadlock). Each cell forced with a barrier
-and repeated, never a single run (`mutation-testing-concurrency`). The
-simulation harness gains a unique index in its schema and an oracle that
-asserts no two live rows share a key after every restart.
+and repeated, never a single run (`mutation-testing-concurrency`). **As
+built**: a crash-and-mount cell on the file-backed rig in place of the
+simulation harness - the sim's oracle answers every errored `INSERT` as an
+unnamed row it then permits, so unique refusals would weaken its checks
+rather than test BX - and a KWP load chunk carrying one key twice.
 
 **BX-S4 — cut** (BX-Q1 (a), W1). `UNIQUE` in `CREATE TABLE` keeps its
 refusal.
@@ -422,3 +424,31 @@ BF's rules. Rejected - a hash-collision cell (no seam forces one; a
 collision is a wait the check then passes). Moved to BX-S3 - the KWP load
 cell and the mid-walk park. Suite 3967/3967. Overhead not measured;
 measured at the milestone's close.
+
+**BX-S3 - landed 2026-10-15** on `worktree-bx-unique-index`.
+`tests/index_unique_rig_test.cpp`: on the two-core rig, an insert parked on
+an undecided insert, move-off and delete of its key, each answered by a
+commit and by a rollback; a multi-row `INSERT`'s row 2 refused
+`TxnConflict` inside the fault net; an `UPDATE` parked mid-walk resumed at
+the holder's rollback (exact rows) and refused at its commit (row 1 taken
+back); the placement-to-append window, writer A paused by
+`SetAfterPlacementForTest` - **without the key unit it fails 3 of 3**, B
+admitted as a duplicate; a two-writer deadlock refused naming it; a
+crash-and-mount cell (flag, built tree and committed keys survive, a
+loser's key does not). The KWP refusal cell gains a unique index and a
+duplicate row, its other refusals keeping their codes. Every cell 3 runs
+green. **One engine change**: a key that does not encode is not checked,
+so a NULL or mistyped key keeps the row's own refusal, wording and byte
+(`AKeyThatDoesNotEncodeKeepsTheRefusalTheRowAlwaysHad`).
+`critics-developer`: accepted - the window cell's B key was one the seed
+held (the mutant's failures came from a tuple-key duplicate, not the
+unique one) and its flags outlived the hook; the mid-walk and multi-row
+checks made exact; a positive park sign; the delete and rollback cells;
+one refusal matcher; the KWP cell folded into the existing one; the
+trivial `sys.indexes` check cut. A first positive sign, a wait-for edge,
+was wrong - this park records none - and its failed assertion left core
+0's hook unreleased, which hung a run for about two hours before it was
+stopped; the sign is now "started and not ended in 150 ms" and a guard
+releases the hook on every exit. Rejected - a KWP busy-row cell (the same
+`ExecuteInsert` path the multi-row cell pins). Suite 3980/3980. Overhead
+not measured; measured at the milestone's close.

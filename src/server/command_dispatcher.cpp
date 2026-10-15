@@ -5601,10 +5601,10 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // then, or nothing of it is written (BX-Q2 (a)).
     UniqueKeyHolds unique_holds(locks_, scope.txn);
     if (!ta.indexes.empty()) {
-        auto unique_keys = UniqueKeysOf(ta, body, /*first_col_pos=*/1, /*previous=*/{});
-        if (!unique_keys.ok()) return unique_keys.status();
+        const UniqueKeysOfRow unique_keys =
+            UniqueKeysOf(ta, body, /*first_col_pos=*/1, /*previous=*/{});
         if (std::optional<Status> refused =
-                CheckUniqueKeys(scope, ta, unique_keys.value(), /*self=*/0, unique_holds)) {
+                CheckUniqueKeys(scope, ta, unique_keys, /*self=*/0, unique_holds)) {
             return *refused;
         }
     }
@@ -8572,12 +8572,11 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // resumed row is written under the clearance only if its keys encode
         // as the checked ones did; otherwise they are checked again.
         if (!ta.indexes.empty()) {
-            auto unique_keys = UniqueKeysOf(ta, row, /*first_col_pos=*/0, previous);
-            if (!unique_keys.ok()) return unique_keys.status();
-            if (!unique_keys.value().empty() &&
+            UniqueKeysOfRow unique_keys = UniqueKeysOf(ta, row, /*first_col_pos=*/0, previous);
+            if (!unique_keys.empty() &&
                 !(unique_cleared.has_value() && unique_cleared->first == id.value() &&
-                  same_keys(unique_cleared->second, unique_keys.value()))) {
-                unique_pending.emplace(id.value(), std::move(unique_keys.value()));
+                  same_keys(unique_cleared->second, unique_keys))) {
+                unique_pending.emplace(id.value(), std::move(unique_keys));
                 return Status::OK();
             }
         }
@@ -9733,14 +9732,19 @@ void CommandDispatcher::UniqueKeyHolds::Release() {
     units_.clear();
 }
 
-StatusOr<CommandDispatcher::UniqueKeysOfRow> CommandDispatcher::UniqueKeysOf(
+CommandDispatcher::UniqueKeysOfRow CommandDispatcher::UniqueKeysOf(
     const catalog::TableAccess& ta, std::span<const parser::AstValue> values,
     std::uint16_t first_col_pos, std::span<const parser::AstValue> previous) {
     UniqueKeysOfRow out;
     for (const catalog::TableAccess::IndexRef& ix : ta.indexes) {
         if (!ix.unique) continue;
         auto key = exec::EncodeUniqueKey(ta, ix, values, first_col_pos, previous);
-        if (!key.ok()) return key.status();
+        // **A key that does not encode is not checked**: the row cannot be
+        // written with it - the row's own encode refuses a NULL in a NOT NULL
+        // column or a mistyped literal, and the index append any value its
+        // encoder refuses - so the write keeps the refusal it always had,
+        // with its own wording and byte, rather than the key encoder's.
+        if (!key.ok()) return UniqueKeysOfRow{};
         if (key.value().has_value()) out.emplace_back(&ix, std::move(*key.value()));
     }
     return out;

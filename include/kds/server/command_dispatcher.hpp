@@ -978,8 +978,9 @@ private:
     };
 
     // `ta`'s unique keys the write moves, from `values` as `MaintainIndexes`
-    // takes them; empty for a relation with no unique index.
-    StatusOr<UniqueKeysOfRow> UniqueKeysOf(const catalog::TableAccess& ta,
+    // takes them; empty for a relation with no unique index, and for a row
+    // one of whose keys does not encode (the row's own encode refuses it).
+    UniqueKeysOfRow UniqueKeysOf(const catalog::TableAccess& ta,
                                            std::span<const parser::AstValue> values,
                                            std::uint16_t first_col_pos,
                                            std::span<const parser::AstValue> previous);

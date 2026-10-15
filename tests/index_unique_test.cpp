@@ -452,6 +452,21 @@ TEST_F(UniqueIndexSqlTest, ANullableKeyAndAnythingButIndexAfterUniqueAreRefused)
     EXPECT_NE(out.status.message().find("byte 14"), std::string::npos) << out.status.message();
 }
 
+TEST_F(UniqueIndexSqlTest, AKeyThatDoesNotEncodeKeepsTheRefusalTheRowAlwaysHad) {
+    // The check runs before the row's encode; a key it cannot encode is left
+    // to that encode, so a unique index changes no refusal's wording or byte.
+    Ok("CREATE TABLE u (id int64, owner int64, note int64) BTREE");
+    Ok("CREATE INDEX by_owner_u ON u (owner)");
+    UniqueOwner();
+    for (const char* values : {"(NULL, 1)", "('seven', 1)"}) {
+        const server::DispatchOutcome plain = Do(std::string("INSERT INTO u VALUES ") + values);
+        const server::DispatchOutcome unique = Do(std::string("INSERT INTO t VALUES ") + values);
+        ASSERT_FALSE(plain.status.ok()) << values;
+        EXPECT_EQ(unique.status.code(), plain.status.code()) << unique.response;
+        EXPECT_EQ(unique.status.message(), plain.status.message()) << values;
+    }
+}
+
 TEST_F(UniqueIndexSqlTest, AUniqueIndexAnswersReadsAsAnOrdinaryOneDoes) {
     // BX-R10: the read path does not move.
     Ok("CREATE TABLE a (id int64, owner int64) BTREE");

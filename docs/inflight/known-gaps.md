@@ -80,6 +80,13 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   at a host loadavg of 30 from other sessions; the stage (BM-S4, the scan
   kernel's strings) touches no reclaim path. It then passed 6 of 6 alone
   and 12 of 12 under `ctest --repeat`. **Owner: none**, no cause observed.
+  It failed once more on `worktree-bx-unique-index` at BX-S1 (`a994ecc3`'s
+  parent tree), 10 of 10 alone.
+
+- **`ContentionCountersTest.APageLatchWaitCountsItsSpinTurns` failed once
+  under `-j8` load** on `worktree-bx-unique-index` at BX-S3 (on top of
+  `e542bb7d`), a stage that changed tests only; 10 of 10 alone. **Owner:
+  none**, no cause observed.
 
 - **`IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
   times out under `-j8`.** It failed its `KickUntil(..., 20000ms)`
