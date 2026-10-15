@@ -12,6 +12,8 @@ recorded in English:
 - **W3:** *"Move the working directory to ckdbs, add the work order, and
   implement it the way kdbs development is already done."*
 
+**BU-S4 onward runs on the operator's standing go-ahead of 2026-10-13** (`go-ahead-achieving-milestone`, `raft-marks-2026-10-13.md` §10): BU-Q8..Q12 and any later decision are CLA's proposals adopted under it, recorded as such and never as the operator's own marks.
+
 **Written and opened 2026-10-13 on W3.** W0-W2 stand here as BU-R1..R3.
 The questions in §4 were unmarked when the order was written; W3 is the
 word to build, and CLA's proposals are adopted under it. **Each is recorded
@@ -185,6 +187,12 @@ not measured; measured at the milestone's close".
 | BU-Q5 | `<>`, bare alias, quote escaping, `NULLS FIRST/LAST` | stay refused (I13) | adopted on W3 |
 | BU-Q6 | `LIKE` | bytes, case-sensitive, `%` and `_`, no `ESCAPE` clause (refused `NotImplemented`) | adopted on W3 |
 | BU-Q7 | Outer-join placement of a `WHERE` conjunct on the nullable side | never moved into the `ON`; equality propagation never crosses the nullable side `[quiet-wrong]` | adopted on W3 |
+| BU-Q8 | Execution shape of the forms a step chain cannot carry - select-list expressions, `DISTINCT`, `ORDER BY` an expression, `HAVING`, outer and non-equi joins, set operations, derived tables, a select-list subquery: (a) a **query layer** over native walks - each relation, with every `WHERE` conjunct the native grammar reads that names it alone, is walked as a step chain under the statement's snapshot, and everything else is evaluated over the rows in hand; (b) extend the step compiler and VM form by form | (a): one evaluator for every remaining form, and every statement the native path answers today keeps its parse, chain and plan byte for byte, which is what BU-R5's measurement predicts. (b) is the deeper change a later order may make per form, against the answers BU pins | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
+| BU-Q9 | Which statements reach the layer | the native parse and compile run first; the layer is tried only when one of them refuses, and the native refusal is the answer when the query grammar refuses too, so no statement answered or refused today changes its reply unless the layer answers it | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
+| BU-Q10 | A bound on the rows the layer holds | no new setting (`CLAUDE.md`: no second name for a quantity): `sort_max_rows` re-scoped to every row set the layer holds - a relation's walk, a join's output, a sort, a set operation - and `aggregate_max_groups` to its group table, each refused `ResourceExhausted` naming the setting | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
+| BU-Q11 | The type of a select-list expression `[quiet-wrong]` | BJ's typer, no implicit conversion (BJ-R3); an untyped literal takes its context's type, and with none its natural one - an integer literal `int64`, a quoted string `varchar`, a bare decimal the `decimal(p,s)` of its own digits, a lone `NULL` `varchar`; a comparison or boolean is `bool` | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
+| BU-Q13 | `CAST(x AS varchar(N))`, F004 P07's spelling | stays refused, as BJ refuses it in a SET value: `varchar(N)`'s `N` is a column's cell width, not a length (`types.md` §3.2b), so PostgreSQL's truncation to `N` characters cannot be what KDS means; `CAST(x AS varchar)` is the spelling. P07 closes refused by this ruling (§0.1) | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
+| BU-Q12 | Waystone for a layer statement | none: a layer statement records no trail and registers no `sys.patterns` row, its relation walks carrying no fingerprint of their own; invariant 8 makes that a cost, never an answer | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
 
 ## 5. Measurement
 

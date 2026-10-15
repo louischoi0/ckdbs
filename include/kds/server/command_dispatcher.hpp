@@ -1476,6 +1476,34 @@ private:
                                  const txn::Snapshot* pinned = nullptr,
                                  const exec::StatementContext* context = nullptr);
 
+    // Everything `HandleSelect` does once `run` holds its snapshot and its
+    // parsed statement: the compile, the trail, the walk or its hand-off.
+    // `line` is the statement's text, empty for a query layer walk, which
+    // has no text of its own - and so no parser, no fingerprint and no trail
+    // (BU-Q12) - and is never handed back to the layer.
+    DispatchOutcome SelectBody(const std::shared_ptr<SelectRun>& run, Session& session,
+                               bool analyze, const exec::StatementContext* context,
+                               std::string_view line);
+
+    // The query layer's host (`exec::LayerHost`): a relation's description
+    // and its walks, at the statement's snapshot.
+    class LayerHostImpl;
+
+    // **The query layer's door** (BU-S4, BU-Q9): `line` as the query
+    // grammar reads it, run by `exec::RunQuery` at `snap`, its reply emitted
+    // through the session's sink. nullopt when the query grammar refuses
+    // the text too, and the caller's native refusal is then the answer.
+    std::optional<DispatchOutcome> TryQueryLayer(std::string_view line, Session& session,
+                                                 const txn::Snapshot& snap,
+                                                 const exec::StatementContext* context);
+
+    // One relation's walk for the query layer: `stmt` - a single-relation
+    // `SELECT *` with native conjuncts - run through `SelectBody` at `snap`,
+    // its rows captured as values.
+    StatusOr<std::vector<std::vector<parser::AstValue>>> WalkForLayer(
+        parser::SelectStmt stmt, Session& session, const txn::Snapshot& snap,
+        const exec::StatementContext& context);
+
     // Runs the walk a `DispatchAndStage` reply left in `out->select_run`
     // and writes the reply over `out` (BA-S15). `DispatchAsync` only.
     sched::Coro CompleteSelect(std::string_view line, DispatchOutcome* out);

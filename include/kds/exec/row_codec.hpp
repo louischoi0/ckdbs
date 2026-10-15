@@ -374,6 +374,9 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
 // its own scale, so `12.30` renders from the value alone.
 std::string FormatValue(std::uint32_t type_val, const parser::AstValue& value);
 
+// `LIKE` over bytes (BU-Q6): `%` any run, `_` any one byte, case-sensitive.
+bool LikeMatch(std::string_view value, std::string_view pattern);
+
 // The unsigned reading of a decoded integer value.
 //
 // **The one place that knows the `raw_int_text` rule**, which is worth

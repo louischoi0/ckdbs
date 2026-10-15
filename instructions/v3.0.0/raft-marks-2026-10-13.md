@@ -84,3 +84,12 @@ English**, translated from the Korean it was typed in.
 | **Mark** | **BN closed** and **BT closed** on the operator's word. Both stood closed by CLA under a standing go-ahead - BN at its close on 2026-10-11 (`bench/v3.0.0/results-bn-close-v2.7.0-787-g8679367e.md`), BT at BT-S5 on 2026-10-13 (`bench/v3.0.0/results-bt-close-v2.7.0-997-g4274ed81.md`, on `main` since `5ff40594`) - with no mark of the operator's own; this is that mark. It settles nothing either order left open: BN-S2, S6 and S7 stay not built, each with its number, and BT's remainders stay in `docs/inflight/known-gaps.md` ("The scan row (BM)") and `docs/inflight/bugs/payloadat-reads-a-slot-that-leaves-the-page.md` |
 | **Does not settle** | A tag or a version; the `PayloadAt` fix, which waits for its own word |
 | **Recorded at** | `workorder-bn-opt-read-update-path.md` and `workorder-bt-accept-tuple-row.md` headers; `index.md`'s BN and BT rows |
+
+## 10. BU to its close on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | *"`$!a` /go-ahead-achieving-milestone"* - choosing CLA's option (a) (move the stale untracked bug file aside, fast-forward the main checkout, start BU-S4 in a new worktree) and invoking the skill on BU: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
+| **Mark** | BU runs S4-S9 to its close in this session, on `worktree-bu-basic-query-surface-s4`. BU-Q8..Q12, written at BU-S4 with CLA's proposals, are adopted as proposed - BU-Q11 `[quiet-wrong]` - recorded as *"adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone)"*, never as the operator's own marks; so is any later decision a stage reaches |
+| **Does not settle** | The fix of `a-write-walks-subquery-sees-its-own-statements-writes.md`, which waits for its own word; a push, a merge to `main`, a tag or a version |
+| **Recorded at** | `workorder-bu-basic-query-surface.md` header, §4 and §6; `index.md`'s BU row |

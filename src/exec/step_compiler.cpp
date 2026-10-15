@@ -229,6 +229,13 @@ Status CoercePredicate(const Scope& scope, StepPredicate& pred, std::uint32_t by
 
 StatusOr<FunctionTerm> ResolveCall(const Scope& scope, const parser::FunctionCall& call) {
     const FunctionEntry* fn = FindFunction(call.name);
+    if (fn == nullptr && IsScalarFunctionName(call.name)) {
+        // A value function the native catalog does not hold is the query
+        // layer's (BU-S4, BU-Q9): declined here so the layer is asked.
+        return Status::NotImplemented("function '" + call.name +
+                                      "' in a WHERE comparison is answered by the query layer" +
+                                      Position(call.byte_offset));
+    }
     if (fn == nullptr) {
         // AP-Q3: InvalidArgument, as an unknown column is. The parser cannot
         // tell a function this engine lacks from a misspelling.

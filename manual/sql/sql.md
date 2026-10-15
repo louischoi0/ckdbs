@@ -719,11 +719,27 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
 
 ### Projection
 
-- `SELECT *` — single relation only. Over more than one relation it is
-  refused: which columns `*` means, and in what order, would depend on a
-  join order the client is promised is its own.
+- `SELECT *` — every column of the relations, in written order; `rel.*`
+  is one relation's columns.
 - Explicit lists: `SELECT x, a.y FROM ...` — columns, qualified or bare.
-  No expressions, no `AS` column aliases, no literals in the select list.
+- **Value expressions** (since BU-S4): `SELECT id, amount * 2, name || '@'
+  || region AS addr, CASE WHEN amount >= 250 THEN 'big' ELSE 'small' END,
+  COALESCE(tier, 0), CAST(amount AS varchar(16)), UPPER(name) FROM ...` -
+  the value expressions of an `UPDATE ... SET` (arithmetic, `||`, the
+  comparisons and `AND`/`OR`/`NOT`/`IS NULL` as bool values, `CASE`,
+  `COALESCE`/`NULLIF`/`GREATEST`/`LEAST`, `CAST` and `::`, the scalar
+  functions of types.md §3.2b, date +/- days) over any column of the `FROM`
+  list, each optionally `AS alias`. **Typed at compile with no implicit
+  conversion** (`name + 1` is refused whether or not a row matches); a
+  literal with nothing to type it takes its natural type - an integer
+  `int64`, a string `varchar`, `1.50` `decimal(3,2)`, a lone `NULL`
+  `varchar`. A column without an alias is headed by its name, a function by
+  its name, anything else `?column?`.
+- `SELECT DISTINCT <list>` keeps one row per distinct value of the list;
+  NULLs are one value.
+- `SELECT 1 + 1` - a select list with no `FROM` - is one row.
+- Every form in this list that a plain column list is not runs on the
+  **query layer** (below).
 
 ### FROM and joins
 
@@ -824,6 +840,33 @@ is one of (verified — the `PredicateKind` enum):
   preference order — selection is a function of shape and catalog, never of
   data statistics.
 
+### The query layer (since BU-S4)
+
+A `SELECT` the step chain cannot carry - a value expression in the select
+list, `DISTINCT`, an expression in `WHERE` (`amount * 2 > 400`,
+`UPPER(name) = 'BOB'`), `ORDER BY` an expression, an alias or a position, a
+select list with no `FROM` - is answered by the query layer
+(`exec/query_layer.hpp`, workorder BU-Q8). What changes for the client:
+
+- **Every statement the chain answered before answers exactly as before**
+  (BU-Q9): the layer is tried only when the native grammar or compiler
+  declines a statement, and the native refusal stands when the layer's
+  grammar declines it too.
+- **Each relation is still walked by the engine**, under the statement's
+  one snapshot, carrying every top-level `WHERE` term that names it alone
+  and that a plain `WHERE` could have held - so `WHERE id = 12 AND amount %
+  100 = 0` is still a keyed descent on `id`, the expression filtering what
+  the descent found. Joins, the remaining terms, the select list and the
+  ordering are evaluated over the rows the walks returned, a join hashing
+  on its `ON` equalities.
+- **It holds rows**: every row set it keeps - a relation's walk, a join's
+  output, a sort - is bounded by `sort_max_rows`, and a statement that
+  would pass it fails with `RESOURCE_EXHAUSTED` naming the setting, never a
+  partial answer.
+- No Waystone trail is recorded or replayed for a layer statement, and
+  `ANALYZE` does not describe one: `ANALYZE` of a layer statement answers
+  the native refusal.
+
 ### Aggregation (built, AG01-AG10)
 
 ```sql
@@ -873,6 +916,10 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
   `NULLS FIRST` / `NULLS LAST` grammar to override it.
 - `ORDER BY` takes **any column or columns**, of any relation the
   statement names, each `ASC` (the default) or `DESC`, up to eight keys.
+  Since BU-S4 a key may also be an expression (`ORDER BY amount * -1`), an
+  output column's alias (`SELECT amount AS a ... ORDER BY a`) or its
+  position (`ORDER BY 2, 1`), answered on the query layer; under `SELECT
+  DISTINCT` an expression key must be one of the select list's.
   Earlier keys decide; later keys break their ties. A key need not be
   projected: `SELECT a FROM t ORDER BY b` is legal.
 - **Rows the clause does not distinguish keep the order they would have
@@ -1108,20 +1155,13 @@ they were before the split.
 - **No derived tables.** `FROM (SELECT ...)` is refused by the relation
   reference itself: materializing an inner result breaks pk-direct probing
   into the next step and puts a temp relation in the storage layer.
-- **No window functions, no expressions.** The grammar has no expression
-  tree outside a `SET` value — no arithmetic in a predicate (`OR`, `NOT`
-  and parentheses do exist in a WHERE since BU-S1). Outside the five aggregates
-  there are two scalar functions, and they may appear only as one side of a
-  WHERE comparison: `DATE(timestamp)`, the UTC day an instant falls on, and
-  `NOW()`, the statement's instant (the same value for every call in one
-  statement). `WHERE DATE(ts) = '2026-10-02'` and `WHERE ts < NOW()` work;
-  a function in the select list, `ORDER BY`, `GROUP BY` or `HAVING`, a
-  nested call or a literal argument answers `NOT_IMPLEMENTED` with its
-  position, and an unknown name answers like an unknown column. A function
-  comparison filters rows the statement found some other way - it never
-  becomes a key, an index range or a Cabin probe. A smaller grammar every
-  statement of which executes predictably was chosen over a larger one with
-  unpredictable corners.
+- **No window functions.** `OVER`, `FILTER`, `WINDOW` and `QUALIFY` answer
+  `NOT_IMPLEMENTED` with their position. Value expressions stand in the
+  select list, in `WHERE` and in `ORDER BY` since BU-S4 (the query layer,
+  §4); an expression in `WHERE` filters rows a walk found and never becomes
+  a key, an index range or a Cabin probe, as a function comparison never
+  has. `DATE(timestamp)` and `NOW()` in a plain `WHERE` comparison remain
+  the native forms they were.
 - **No outer joins.** `LEFT`/`RIGHT`/`FULL`/`OUTER` are reserved keywords
   that answer `NOT_IMPLEMENTED` with their own position, so the grammar will
   not shift if they ever land.

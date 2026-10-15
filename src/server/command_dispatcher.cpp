@@ -40,6 +40,7 @@
 
 #include "kds/catalog/foreign_key.hpp"
 #include "kds/catalog/keystone_budget.hpp"
+#include "kds/exec/query_layer.hpp"
 #include "kds/exec/catalog_view.hpp"
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/fk_check.hpp"
@@ -7254,12 +7255,27 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     parser::Parser& parser = run->parser.emplace(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
+        // BU-Q9: what the native grammar refuses, the query layer may read.
+        if (!analyze) {
+            if (auto layered = TryQueryLayer(line, session, snap, context); layered.has_value()) {
+                return std::move(*layered);
+            }
+        }
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
     }
     if (!std::holds_alternative<parser::SelectStmt>(parsed.value())) {
         return {"ERR expected a SELECT statement", false};
     }
-    auto& stmt = std::get<parser::SelectStmt>(run->statement.emplace(std::move(parsed.value())));
+    run->statement.emplace(std::move(parsed.value()));
+    return SelectBody(run, session, analyze, context, line);
+}
+
+DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& run,
+                                              Session& session, bool analyze,
+                                              const exec::StatementContext* context,
+                                              std::string_view line) {
+    const txn::Snapshot& snap = run->snapshot->snap;
+    auto& stmt = std::get<parser::SelectStmt>(*run->statement);
 
     // A catalog view (`SELECT * FROM sys.tables`) is answered before the
     // compiler is asked for a chain, because it is not a relation: its
@@ -7343,6 +7359,13 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                                resolve_view.has_value() ? &*resolve_view : nullptr, &borrow,
                                context);
     if (!chain.ok()) {
+        // BU-Q9: a form the native compile declines goes to the query layer,
+        // whose refusal stands only if its grammar reads the text.
+        if (!analyze && !line.empty() && chain.status().code() == StatusCode::kNotImplemented) {
+            if (auto layered = TryQueryLayer(line, session, snap, context); layered.has_value()) {
+                return std::move(*layered);
+            }
+        }
         return {ErrorReply(chain.status()), false, 0, chain.status()};
     }
 
@@ -7406,8 +7429,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // invariant 9 keeps Waystone away from. The trail and replay reads
     // below still guard on their own switches, so deriving the identity
     // here costs nothing they did not already pay.
-    if (waystone_usable || optimizer_signals_ != nullptr) {
-        if (auto fingerprint = parser.fingerprint(); fingerprint.has_value()) {
+    if (run->parser.has_value() && (waystone_usable || optimizer_signals_ != nullptr)) {
+        if (auto fingerprint = run->parser->fingerprint(); fingerprint.has_value()) {
             identity = StatementIdentity{
                 stats::InstanceKey{fingerprint->fetch_id, fingerprint->arg_hash},
                 fingerprint->pattern_id};
@@ -7927,6 +7950,174 @@ StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser
     result.value = sink.TakeValue();
     result.value.byte_offset = node.byte_offset;
     return result;
+}
+
+// ---- The query layer's door (BU-S4, BU-Q8, BU-Q9) ---------------------------
+
+namespace {
+
+// A layer walk's rows, captured as values. The row's text is the index of
+// its values, `ScalarSubquerySink`'s device, so what `Emit` keeps is the row
+// that was encoded for it.
+class LayerWalkSink final : public ResultSink {
+public:
+    Status Describe(std::vector<wire::FieldDescription>) override { return Status::OK(); }
+    Status EncodeProjectedRow(std::span<const exec::ColumnRef> projection,
+                              std::span<const std::uint32_t>, const exec::ChainFrame& frame,
+                              std::string& out) override {
+        std::vector<parser::AstValue> row;
+        row.reserve(projection.size());
+        for (const exec::ColumnRef& ref : projection) row.push_back(frame.Get(ref));
+        rendered_.push_back(std::move(row));
+        out = std::to_string(rendered_.size() - 1);
+        return Status::OK();
+    }
+    Status EncodeValueRow(std::span<const std::uint32_t>, std::span<const parser::AstValue> values,
+                          std::string& out) override {
+        rendered_.emplace_back(values.begin(), values.end());
+        out = std::to_string(rendered_.size() - 1);
+        return Status::OK();
+    }
+    Status Emit(std::string_view row) override {
+        rows_.push_back(std::move(rendered_[static_cast<std::size_t>(std::stoull(std::string(row)))]));
+        return Status::OK();
+    }
+    std::vector<std::vector<parser::AstValue>> TakeRows() { return std::move(rows_); }
+
+private:
+    std::vector<std::vector<parser::AstValue>> rendered_;
+    std::vector<std::vector<parser::AstValue>> rows_;
+};
+
+}  // namespace
+
+// What the layer asks of the dispatcher: a relation's description and its
+// walks, every one at the statement's snapshot.
+class CommandDispatcher::LayerHostImpl final : public exec::LayerHost {
+public:
+    LayerHostImpl(CommandDispatcher& d, Session& session, const txn::Snapshot& snap,
+                  const exec::StatementContext& context)
+        : d_(d), session_(session), snap_(snap), context_(context) {}
+
+    StatusOr<std::vector<exec::LayerColumn>> DescribeRelation(
+        const parser::RelationRef& rel) override {
+        if (IEquals(rel.schema, exec::kCatalogSchema)) {
+            return Status::NotImplemented("a catalog view in this query form is not supported (byte " +
+                                          std::to_string(rel.byte_offset) +
+                                          "); sys.* rows are produced by the catalog's readers");
+        }
+        parser::SelectStmt probe;
+        probe.from = rel;
+        const std::optional<txn::ReadView> view = d_.ViewFor(session_);
+        auto chain = exec::Compile(d_.catalog_, probe, view.has_value() ? &*view : nullptr);
+        if (!chain.ok()) return chain.status();
+        auto access = d_.catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
+        if (!access.ok()) return access.status();
+        std::vector<exec::LayerColumn> out;
+        const auto& columns = access.value()->schema.columns;
+        for (std::size_t i = 0; i < columns.size(); ++i) {
+            exec::LayerColumn c;
+            c.name = std::string(catalog::NameView(columns[i].name));
+            c.type.kind = exec::SetType::Kind::kConcrete;
+            c.type.type_val = columns[i].type_val;
+            c.type.len = columns[i].len;
+            c.keystone = i == 0;
+            out.push_back(std::move(c));
+        }
+        return out;
+    }
+
+    StatusOr<exec::RowSet> WalkRelation(const parser::RelationRef& rel,
+                                        const std::vector<parser::Condition>& where) override {
+        parser::SelectStmt stmt;
+        stmt.from = rel;
+        stmt.where = where;
+        auto rows = d_.WalkForLayer(std::move(stmt), session_, snap_, context_);
+        if (!rows.ok()) return rows.status();
+        exec::RowSet out;
+        out.rows = std::move(rows.value());
+        return out;
+    }
+
+private:
+    CommandDispatcher& d_;
+    Session& session_;
+    const txn::Snapshot& snap_;
+    const exec::StatementContext& context_;
+};
+
+StatusOr<std::vector<std::vector<parser::AstValue>>> CommandDispatcher::WalkForLayer(
+    parser::SelectStmt stmt, Session& session, const txn::Snapshot& snap,
+    const exec::StatementContext& context) {
+    LayerWalkSink sink;
+    ResultSink* const previous = session.result_sink();
+    session.set_result_sink(&sink);
+    struct Restore {
+        Session& session;
+        ResultSink* sink;
+        ~Restore() { session.set_result_sink(sink); }
+    } restore{session, previous};
+
+    const auto run = std::make_shared<SelectRun>(*this, session);
+    run->snapshot.emplace(txn::LeasedSnapshot{snap, {}});
+    run->statement.emplace(std::move(stmt));
+    DispatchOutcome out = SelectBody(run, session, /*analyze=*/false, &context, {});
+    if (out.select_run != nullptr) {
+        const std::shared_ptr<SelectRun> handed = std::move(out.select_run);
+        out = handed->RunInline();
+    }
+    if (!out.status.ok()) return out.status;
+    if (out.response.rfind("ERR", 0) == 0) return Status::InvalidArgument(out.response.substr(4));
+    return sink.TakeRows();
+}
+
+std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
+    std::string_view line, Session& session, const txn::Snapshot& snap,
+    const exec::StatementContext* context) {
+    parser::Parser parser(line);
+    auto query = parser.ParseQuery();
+    if (!query.ok()) return std::nullopt;
+
+    const exec::StatementContext now =
+        context != nullptr ? *context : exec::StatementContextNow();
+    LayerHostImpl host(*this, session, snap, now);
+    exec::LayerLimits limits;
+    limits.max_rows = sort_max_rows_;
+    limits.max_groups = aggregate_limits_.max_groups;
+    auto result = exec::RunQuery(query.value(), line, host, now, limits);
+    if (!result.ok()) return DispatchOutcome{ErrorReply(result.status()), false, 0, result.status()};
+
+    TextResultSink text_sink;
+    ResultSink& sink = session.result_sink() != nullptr ? *session.result_sink()
+                                                        : static_cast<ResultSink&>(text_sink);
+    const exec::RowSet& rs = result.value();
+    std::vector<wire::FieldDescription> fields;
+    std::vector<std::uint32_t> wire_types;
+    for (const exec::LayerColumn& c : rs.columns) {
+        wire::FieldDescription f;
+        f.name = c.name;
+        f.type_oid = c.type.type_val;
+        const std::uint32_t wire_type =
+            c.keystone ? wire::WireValueType(c.type.type_val, 0) : c.type.type_val;
+        f.type_len = wire::WireTypeLen(wire_type);
+        f.type_mod = catalog::TypeModOf(c.type.type_val, c.type.len);
+        if (c.keystone) f.flags |= wire::kFieldFlagKeystone;
+        fields.push_back(std::move(f));
+        wire_types.push_back(wire_type);
+    }
+    if (Status s = sink.Describe(std::move(fields)); !s.ok()) {
+        return DispatchOutcome{ErrorReply(s), false, 0, s};
+    }
+    std::string row_scratch;
+    for (const auto& row : rs.rows) {
+        if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) {
+            return DispatchOutcome{ErrorReply(s), false, 0, s};
+        }
+        if (Status s = sink.Emit(row_scratch); !s.ok()) {
+            return DispatchOutcome{ErrorReply(s), false, 0, s};
+        }
+    }
+    return DispatchOutcome{text_sink.Take(), false};
 }
 
 DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope& scope,

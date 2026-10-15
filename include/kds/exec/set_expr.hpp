@@ -96,6 +96,9 @@ struct TypedSetExpr {
     std::unique_ptr<TypedSetExpr> rhs;
     // kCall: `kCase`'s `[when, then, ..., else?]`, or the n-ary forms' operands.
     std::vector<std::unique_ptr<TypedSetExpr>> args;
+    // kSubquery under the query layer (BU-S4): the handle `ExprScope::subquery`
+    // gave, passed back to the `SubqueryEvaluator`; `lhs` is an `IN`'s operand.
+    std::size_t subquery_id = 0;
 };
 
 // A scalar subquery's answer (BJ-S7): the single value it returned, or NULL
@@ -119,6 +122,57 @@ StatusOr<std::unique_ptr<TypedSetExpr>> TypeSetExpression(const catalog::TableAc
                                                           const parser::Expr& expr,
                                                           const catalog::SysColumnRow& target,
                                                           const SubqueryResolver* subqueries = nullptr);
+
+// ---- The query layer's typing (BU-S4, BU-Q11) -------------------------------
+//
+// The same typer over a row the query layer assembles rather than one
+// relation's schema: a column resolves to a position in that row through
+// `ExprScope::resolve`, an expression a grouped block has computed already (a
+// `GROUP BY` key, an aggregate) answers as a column of the group row through
+// `computed`, and a subquery is typed - and later answered - by the layer.
+
+struct ResolvedColumn {
+    std::size_t index = 0;
+    SetType type;
+};
+
+struct ExprScope {
+    // A column reference: nullopt when nothing by that name is in scope, a
+    // refusal for an ambiguous one.
+    std::function<StatusOr<std::optional<ResolvedColumn>>(const parser::Expr& column)> resolve;
+    // Asked before a node is typed; may be empty.
+    std::function<std::optional<ResolvedColumn>(const parser::Expr& node)> computed;
+    // A query-layer subquery node (`Expr::query`): the type of its one
+    // column - a scalar's value, an `IN`'s set - with `id` set to the handle
+    // evaluation passes back. May be empty, and a subquery is then refused.
+    std::function<StatusOr<SetType>(const parser::Expr& node, std::size_t& id)> subquery;
+    // Where an aggregate may stand, a refusal names the clause it is in.
+    std::string clause = "here";
+};
+
+// Types `expr` in `scope` with no target: the result is concrete, an untyped
+// literal taking its natural type - an integer `int64`, a string `varchar`, a
+// bare decimal the `decimal(p,s)` of its own digits, a NULL `varchar`
+// (BU-Q11). No implicit conversion, as for a SET value (BJ-R3).
+StatusOr<std::unique_ptr<TypedSetExpr>> TypeQueryExpression(const parser::Expr& expr,
+                                                            const ExprScope& scope);
+
+// Answers one query-layer subquery node for `row`: a scalar's value, an
+// `EXISTS`, or an `IN` over `*operand` (NULL-aware, three-valued).
+using SubqueryEvaluator = std::function<StatusOr<parser::AstValue>(
+    const TypedSetExpr& node, const std::vector<parser::AstValue>& row,
+    const parser::AstValue* operand)>;
+
+// `EvaluateSetExpression` for a query-layer tree: `subqueries` answers its
+// subquery nodes, and may be null when the tree has none.
+StatusOr<parser::AstValue> EvaluateQueryExpression(const TypedSetExpr& expr,
+                                                   const std::vector<parser::AstValue>& row,
+                                                   const StatementContext& context,
+                                                   const SubqueryEvaluator* subqueries);
+
+// Whether `name` is one of the scalar functions a value expression may call
+// (types.md §3.2b), in any case.
+bool IsScalarFunctionName(std::string_view name);
 
 // Whether the expression reads no column - a constant, which BJ-Q10 folds
 // at compile so a foreign-key column keeps its hoisted parent.
