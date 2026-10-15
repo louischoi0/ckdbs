@@ -434,3 +434,15 @@ path. Re-walking without a pushed term the native compile refuses: no
 case reaches it now that `Walkable` excludes the one found; recorded here
 rather than built. The per-row `Concat` copy, the by-value cache returns
 and the linear `IN (subquery)` probe are costs, measured at BU-S9.
+
+### BU-S4 - the suite and F004, stated
+
+Full suite (Debug, `-LE heap-suspended`) at `b45f60ff`: 3,910/3,910
+passed, 4 disabled (the S5 cell among them). The run before the review at
+`256b86e9` had 9 failures: six pinned refusals the layer answered (three
+S4 forms, re-pinned in `FunctionConjunctTest`; three S5/S6 forms, which
+the gate restores) and three were the host's disk filling (`/tmp` at
+99 %, stale test directories removed; each passed alone). F004 against a
+release build at `b45f60ff`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2
+14 ok and P07 refused by BU-Q13, phases 3-6 unbuilt behind the gate,
+wrong=0 in every phase - S4's gate (phase 2, W24, W25) is met.
