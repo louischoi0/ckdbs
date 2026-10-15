@@ -8194,9 +8194,11 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     bool row_poisoned = false;
     // The negation of `NoteCabinWrite`'s and `MaintainIndexes`' early
     // returns: loosen either and that hook is handed `kUndecoded`.
-    const bool hooked =
-        (cabins_ != nullptr && (ta.cabin_mask != 0 || !ta.expr_cabins.empty())) ||
-        !ta.indexes.empty();
+    // Whether any Cabin witnesses this relation's writes - asked once per
+    // statement, so a relation with none pays no per-row call (AQ's close:
+    // the call alone cost an every-row UPDATE 20-30 ns a row).
+    const bool witnessed = cabins_ != nullptr && (ta.cabin_mask != 0 || !ta.expr_cabins.empty());
+    const bool hooked = witnessed || !ta.indexes.empty();
     std::uint64_t set_read_mask = 0;
     for (const exec::CompiledAssignment& c : compiled) {
         if (c.expr != nullptr) set_read_mask |= exec::SetExpressionColumns(*c.expr);
@@ -8663,7 +8665,9 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // The location is unchanged by construction - an UPDATE is an
         // in-place overwrite under invariant 13 - so the appended hint is
         // the row's real address.
-        NoteCabinWrite(ta, row, /*first_col_pos=*/0, id.value(), page_id, slot, previous);
+        if (witnessed) {
+            NoteCabinWrite(ta, row, /*first_col_pos=*/0, id.value(), page_id, slot, previous);
+        }
 
         // The index half. `previous` is what makes §2's rule work: an UPDATE
         // that moved no key and no covered column appends nothing, which is
