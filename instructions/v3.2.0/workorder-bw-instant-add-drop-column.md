@@ -684,6 +684,11 @@ Every stage runs the full suite and gets a `critics-developer` review
 
 ## 6. Where to start
 
+**BW-Q12.3 overridden after the close** (2026-10-15, `raft-marks-2026-10-15.md`
+§1-§2): every column name matches ignoring case, an `INSERT` column list
+included, and names are unique ignoring case; landed at `12170d1d`, BW
+still closed.
+
 **BW is closed again, with BW-S6** - on the operator's word of 2026-10-14
 (W8, `raft-marks-2026-10-14.md` §12), at the merge `3b5daa80`. BW-S6 (the
 `INSERT` column list, BW-Q12/BW-R13) landed at `e1e17abc`, its review at
