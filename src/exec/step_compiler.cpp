@@ -1846,9 +1846,9 @@ Status CompileAssignments(const catalog::TableAccess& access,
             if (fk != nullptr) {
                 if (!IsConstantSetExpression(*entry.expr)) {
                     // BJ-Q10: the parent is a per-row value, and resolving it
-                    // per row under the walk's exclusive leaf is the open
-                    // page-latch cycle (a-write-walks-subquery-reads-pages-
-                    // under-its-exclusive-leaf-hold.md). Refused rather than
+                    // per row under the walk's exclusive leaf would be the
+                    // page-latch cycle `rules.md` §3's page latch row
+                    // forbids. Refused rather than
                     // checked against a key the row never gets.
                     if (!deferred.has_value()) {
                         deferred = Status::NotImplemented(
@@ -1882,10 +1882,11 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
     out.kind = AccessKind::kScan;  // the caller walks the relation itself
 
     std::uint32_t next_step_id = 1;  // 0 is this step
-    // `inner_build=false`, v1's SELECT-only rule (workplan JB1): a sub-chain
-    // here runs per row of a statement that *writes*, and its own writes
-    // between outer rows are what would invalidate a map the first row built
-    // (join-inner-build.md §4).
+    // `inner_build=false`, v1's SELECT-only rule (workplan JB1,
+    // join-inner-build.md §8): its reason was a write's own rows landing
+    // between outer rows, which the dispatcher's collection pass has since
+    // ruled out - a write's WHERE runs over the relation before its first
+    // write (parser-v2.md R2). Lifting the rule is its own decision.
     const auto lower_subquery = [&](const parser::Condition& cond) {
         return LowerSubquery(catalog, scope, cond, next_step_id, /*depth=*/1, view,
                              /*inner_build=*/false, declare);

@@ -1991,9 +1991,9 @@ private:
     // before the walk, through the SELECT path under the session's view, and
     // answered as a single typed value (NULL for no row). More than one row or
     // column is refused, and so is a correlated one - a per-row sub-chain under
-    // the write walk's exclusive leaf is the open page-latch cycle
-    // (`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`),
-    // and the view would show it this statement's own earlier rows.
+    // the write walk's exclusive leaf would be the page-latch cycle
+    // `rules.md` §3's page latch row forbids, and the view would show it this
+    // statement's own earlier rows.
     StatusOr<exec::SubqueryResult> RunScalarSubquery(const parser::Expr& node,
                                                      const parser::UpdateStmt& stmt,
                                                      WriteScope& scope,

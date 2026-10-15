@@ -926,15 +926,6 @@ bool ForEachStep(const Step& step, Fn fn) {
     return fn(step) && detail::VisitSubChains(step.sub_chains, fn);
 }
 
-// Whether a step under `step`'s sub-chains reads relation `oid`. A write
-// whose WHERE does, over the relation it writes, collects its targets before
-// its first write: a sub-chain re-run per row would otherwise read the rows
-// the statement has already written (parser-v2.md R2).
-inline bool SubChainsRead(const Step& step, catalog::Oid oid) {
-    auto other = [oid](const Step& s) { return s.rel_oid != oid; };
-    return !detail::VisitSubChains(step.sub_chains, other);
-}
-
 // Whether any step anywhere in `chain` - sub-chains included - is one a
 // Waystone trail may replace.
 //
