@@ -307,6 +307,7 @@ private:
     // `||`, `+ -`, `* / %`, a unary sign, then `::`.
     Status ParseSetValue(Assignment& a);
     Status ParseInsertTail(InsertStmt& stmt);
+    StatusOr<RelationRef> ParseOtherRelation(const std::string& target);
     Status ParseRowValueAssignments(std::vector<Assignment>& out);
     StatusOr<std::shared_ptr<const Expr>> ParseExprOr();
     StatusOr<std::shared_ptr<const Expr>> ParseExprAnd();

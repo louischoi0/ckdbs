@@ -3367,6 +3367,8 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
     return stmt;
 }
 
+std::vector<Condition> ExistsOver(RelationRef rel, std::vector<Condition> where, bool at_most_one);
+
 StatusOr<DeleteStmt> Parser::ParseDelete() {
     DeleteStmt stmt;
 
@@ -3377,15 +3379,66 @@ StatusOr<DeleteStmt> Parser::ParseDelete() {
         return s;
     }
 
+    // `DELETE FROM t USING u WHERE ...` (BU-S8): one more relation the
+    // WHERE reads, made an EXISTS below.
+    std::optional<RelationRef> using_rel;
+    if (IsWord(lexer_.Peek(), "USING")) {
+        lexer_.Next();
+        auto rel = ParseOtherRelation(stmt.table_name);
+        if (!rel.ok()) return rel.status();
+        using_rel = std::move(rel.value());
+    }
+
     // Depth 0 and the same production UPDATE uses: a DELETE's WHERE is an
     // outermost query block, and a predicate-position subquery in it nests
     // exactly as a SELECT's does.
     auto where = ParseOptionalWhere(/*depth=*/0);
     if (!where.ok()) return where.status();
     stmt.where = std::move(where.value());
+    if (using_rel.has_value()) {
+        stmt.where = ExistsOver(std::move(*using_rel), std::move(stmt.where), /*at_most_one=*/false);
+    }
 
     ConsumeOptionalSemicolon();
     return stmt;
+}
+
+// The relation `UPDATE ... FROM` or `DELETE ... USING` names (BU-S8): one,
+// bound apart from the statement's own `target`.
+StatusOr<RelationRef> Parser::ParseOtherRelation(const std::string& target) {
+    auto rel = ParseRelationRef();
+    if (!rel.ok()) return rel.status();
+    const Token& next = lexer_.Peek();
+    if (next.type == TokenType::kComma ||
+        (next.type == TokenType::kKeyword && next.kw == Keyword::kJoin)) {
+        return Status::NotImplemented("more than one relation after FROM or USING is not "
+                                      "supported" + At(next.byte_offset) +
+                                      "; name one, and put the rest in an EXISTS");
+    }
+    if (IEquals(rel.value().binding(), target)) {
+        return Status::InvalidArgument("the name '" + rel.value().binding() +
+                                       "' is bound twice" + At(rel.value().byte_offset) +
+                                       "; give the second one an alias with AS");
+    }
+    return rel;
+}
+
+// The statement's WHERE as one EXISTS over `rel` (BU-S8): the subquery
+// reads `rel` under `where`, in one name space with the statement, so a row
+// is written when some `rel` row meets the conditions - and for `UPDATE`
+// (`at_most_one`) when exactly one does.
+std::vector<Condition> ExistsOver(RelationRef rel, std::vector<Condition> where, bool at_most_one) {
+    auto sub = std::make_shared<SelectStmt>();
+    sub->from = std::move(rel);
+    sub->where = std::move(where);
+    sub->shares_parent_names = true;
+    Condition exists;
+    exists.kind = PredicateKind::kExists;
+    exists.at_most_one = at_most_one;
+    exists.subquery = std::move(sub);
+    std::vector<Condition> out;
+    out.push_back(std::move(exists));
+    return out;
 }
 
 StatusOr<PurgeStmt> Parser::ParsePurge() {
@@ -3520,6 +3573,17 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
         break;
     }
 
+    // `UPDATE t SET ... FROM u WHERE ...` (BU-S8): one more relation the
+    // WHERE reads, made an EXISTS that refuses a second match (BU-Q16). A
+    // SET value reads the target's columns only.
+    std::optional<RelationRef> from_rel;
+    if (IsWord(lexer_.Peek(), "FROM")) {
+        lexer_.Next();
+        auto rel = ParseOtherRelation(stmt.table_name);
+        if (!rel.ok()) return rel.status();
+        from_rel = std::move(rel.value());
+    }
+
     // Depth 0: an UPDATE's WHERE is an outermost query block, and a
     // subquery in it is `[OPEN: revisit]` in spec section 2 only for the
     // *value* position (`SET a = (SELECT ...)`), which BJ-S7 built as an
@@ -3528,6 +3592,9 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
     auto where = ParseOptionalWhere(/*depth=*/0);
     if (!where.ok()) return where.status();
     stmt.where = std::move(where.value());
+    if (from_rel.has_value()) {
+        stmt.where = ExistsOver(std::move(*from_rel), std::move(stmt.where), /*at_most_one=*/true);
+    }
 
     ConsumeOptionalSemicolon();
     return stmt;

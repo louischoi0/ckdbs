@@ -545,6 +545,10 @@ struct SubChain {
     // names it evaluates it. Never hoisted, correlated or not - a false
     // `EXISTS` under an `OR` must not empty the statement.
     bool in_tree = false;
+
+    // `UPDATE ... FROM`'s EXISTS (BU-Q16): reads up to two rows, and a
+    // second is `CardinalityViolation`. Never hoisted.
+    bool at_most_one = false;
 };
 
 struct Step {

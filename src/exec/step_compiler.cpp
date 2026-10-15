@@ -45,6 +45,8 @@ struct BoundRelation {
 struct Scope {
     std::vector<BoundRelation> relations;
     const Scope* parent = nullptr;
+    // One name space with the parent (`SelectStmt::shares_parent_names`).
+    bool shares_parent_names = false;
 
     // The statement's constants (exec/functions.hpp), set on the root scope.
     // A SELECT is compiled once per execution, so taking them at compile is
@@ -697,6 +699,19 @@ StatusOr<ColumnRef> ResolveColumn(const Scope& scope, const parser::ColumnName& 
                     ": more than one relation in scope has it; qualify it (`a." + name.name + "`)");
             }
             found = ColumnRef{up, static_cast<std::uint16_t>(i), col_pos};
+        }
+        if (found.has_value() && s->shares_parent_names && s->parent != nullptr) {
+            for (const BoundRelation& r : s->parent->relations) {
+                std::uint16_t col_pos = 0;
+                auto matched = FindColumnPos(r.access->schema, name, col_pos);
+                if (!matched.ok()) return matched.status();
+                if (matched.value()) {
+                    return Status::InvalidArgument(
+                        "column '" + name.name + "' is ambiguous" + Position(name.byte_offset) +
+                        ": the statement's relation and its FROM relation both have it; "
+                        "qualify it (`a." + name.name + "`)");
+                }
+            }
         }
         if (found.has_value()) return *found;
         // No match at this level: keep going outward. This is the
@@ -1724,6 +1739,7 @@ StatusOr<SubChain> LowerSubquery(catalog::Catalog& catalog, const Scope& scope,
     SubChain sub;
     sub.kind = cond.kind;
     sub.op = cond.op;
+    sub.at_most_one = cond.at_most_one;
 
     // The outer column being tested, for the forms that have one.
     // EXISTS and NOT EXISTS have nothing on their left.
@@ -1960,6 +1976,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // ---- 1. Bind every relation in written order --------------------------
     Scope scope;
     scope.parent = parent;
+    scope.shares_parent_names = stmt.shares_parent_names;
     // A nested block reads its outermost's through `parent`.
     if (parent == nullptr) scope.context = context != nullptr ? *context : StatementContextNow();
     std::vector<const parser::RelationRef*> refs;
@@ -2126,7 +2143,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // materialized, it attaches to the step carrying its outer
         // column and re-runs per row: correct, and slower than it needs
         // to be for an uncorrelated one.
-        if (!sub.correlated && !sub.has_value) {
+        if (!sub.correlated && !sub.has_value && !sub.at_most_one) {
             chain.hoisted.push_back(std::move(sub));
             continue;
         }

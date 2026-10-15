@@ -289,6 +289,10 @@ struct Condition {
     // for `subquery`'s reason.
     std::shared_ptr<const BoolExpr> tree;
 
+    // kExists only: `UPDATE ... FROM`'s condition (BU-S8, BU-Q16) - true
+    // for exactly one row, `CardinalityViolation` for a second.
+    bool at_most_one = false;
+
     bool has_subquery() const noexcept { return subquery != nullptr; }
 };
 
@@ -691,6 +695,10 @@ struct SelectStmt {
     // the predicate that attached it.
     RelationRef from;
     std::vector<JoinClause> joins;  // empty = single-relation statement
+    // `UPDATE ... FROM` / `DELETE ... USING`'s block (BU-S8): it and the
+    // statement it qualifies are one name space, so a bare column both have
+    // is ambiguous rather than this block's.
+    bool shares_parent_names = false;
 
     std::vector<Condition> where;  // empty = no WHERE clause; AND-combined
 

@@ -180,5 +180,45 @@ TEST_F(DmlFormsTest, OnConflictRefusesWhatItDoesNotDo) {
                   "");
 }
 
+// ---- UPDATE ... FROM and DELETE ... USING (BU-Q16) ---------------------------
+
+TEST_F(DmlFormsTest, UpdateFromWritesTheRowsThatMatchExactlyOneFromRow) {
+    Ok("UPDATE w SET tier = 7 FROM ord WHERE ord.cust_id = w.id AND ord.amount >= 500");
+    ExpectRows("SELECT id, tier FROM w WHERE tier = 7", {"id,tier", "4,7"});
+    // An uncorrelated FROM: every row matches the one order above 400.
+    Ok("UPDATE w SET tier = tier + 10 FROM ord WHERE ord.amount > 400 AND w.id < 3");
+    ExpectRows("SELECT id, tier FROM w WHERE id < 3", {"id,tier", "1,11", "2,12"});
+    // The relation itself, under an alias.
+    Ok("UPDATE w SET tier = 9 FROM w AS x WHERE x.id = w.id AND x.region = 'APAC'");
+    ExpectRows("SELECT id, tier FROM w WHERE region = 'APAC'", {"id,tier", "4,9"});
+}
+
+// BU-Q16 [quiet-wrong]: a row matching two FROM rows has no one value to
+// take, so the statement is refused and writes nothing.
+TEST_F(DmlFormsTest, UpdateFromRefusesARowMatchingTwoFromRows) {
+    ExpectRefused("UPDATE w SET tier = 8 FROM ord WHERE ord.cust_id = w.id", "more than one");
+    ExpectRefused("UPDATE w SET tier = 8 FROM ord WHERE ord.amount > 200 AND w.id = 6",
+                  "more than one");
+    ExpectRows("SELECT COUNT(*) FROM w WHERE tier = 8", {"count(*)", "0"});
+}
+
+TEST_F(DmlFormsTest, DeleteUsingDeletesEachMatchedRowOnce) {
+    Ok("DELETE FROM w USING ord WHERE ord.cust_id = w.id AND ord.status = 'cancel'");
+    ExpectRows("SELECT id FROM w", {"id", "1", "3", "4", "5", "6"});
+    // Customer 1 has two orders and is deleted once.
+    Ok("DELETE FROM w USING ord WHERE ord.cust_id = w.id");
+    ExpectRows("SELECT id FROM w", {"id", "3", "5"});
+}
+
+TEST_F(DmlFormsTest, FromAndUsingAreOneNameSpaceWithTheStatement) {
+    // `id` is both relations': ambiguous, not the FROM relation's.
+    ExpectRefused("UPDATE w SET tier = 1 FROM cust WHERE id = 3", "ambiguous");
+    ExpectRefused("DELETE FROM w USING cust WHERE region = 'EU'", "ambiguous");
+    ExpectRefused("UPDATE w SET tier = 1 FROM w WHERE w.id = 3", "bound twice");
+    ExpectRefused("UPDATE w SET tier = 1 FROM ord, cust WHERE ord.cust_id = w.id",
+                  "more than one relation");
+    ExpectRows("SELECT COUNT(*) FROM w WHERE tier = 1", {"count(*)", "1"});
+}
+
 }  // namespace
 }  // namespace kds::server
