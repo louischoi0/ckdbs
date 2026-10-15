@@ -104,6 +104,11 @@ std::string_view OpText(ExprOp op) {
         case ExprOp::kLeast: return "LEAST";
         case ExprOp::kCast: return "CAST";
         case ExprOp::kFunction: return "function";
+        case ExprOp::kLike: return "LIKE";
+        case ExprOp::kInList: return "IN";
+        case ExprOp::kScalarSubquery: return "subquery";
+        case ExprOp::kExists: return "EXISTS";
+        case ExprOp::kInSubquery: return "IN";
     }
     return "?";
 }
@@ -290,10 +295,33 @@ StatusOr<SetType> DecimalTypeOfLiteral(const parser::AstValue& v) {
     return DecimalType(digits, fraction);
 }
 
+// The scalar functions of types.md §3.2b, by lower-case name.
+struct FunctionSpec {
+    std::string_view name;
+    SetFunction fn;
+    std::size_t min_args;
+    std::size_t max_args;
+};
+constexpr FunctionSpec kSpecs[] = {
+    {"abs", SetFunction::kAbs, 1, 1},         {"sign", SetFunction::kSign, 1, 1},
+    {"ceil", SetFunction::kCeil, 1, 1},       {"ceiling", SetFunction::kCeil, 1, 1},
+    {"floor", SetFunction::kFloor, 1, 1},     {"round", SetFunction::kRound, 1, 2},
+    {"trunc", SetFunction::kTrunc, 1, 2},     {"upper", SetFunction::kUpper, 1, 1},
+    {"lower", SetFunction::kLower, 1, 1},     {"length", SetFunction::kLength, 1, 1},
+    {"substring", SetFunction::kSubstring, 2, 3},
+    {"trim", SetFunction::kTrim, 1, 2},       {"ltrim", SetFunction::kLtrim, 1, 2},
+    {"rtrim", SetFunction::kRtrim, 1, 2},     {"position", SetFunction::kPosition, 2, 2},
+    {"replace", SetFunction::kReplace, 3, 3}, {"lpad", SetFunction::kLpad, 2, 3},
+    {"rpad", SetFunction::kRpad, 2, 3},       {"concat", SetFunction::kConcat, 1, 128},
+    {"now", SetFunction::kNow, 0, 0},         {"date", SetFunction::kDate, 1, 1},
+};
+using Spec = FunctionSpec;
+
 class Typer {
 public:
     Typer(const catalog::TableAccess& access, const SubqueryResolver* subqueries)
-        : access_(access), subqueries_(subqueries) {}
+        : access_(&access), subqueries_(subqueries) {}
+    explicit Typer(const ExprScope& scope) : scope_(&scope) {}
 
     using Node = std::unique_ptr<TypedSetExpr>;
 
@@ -301,6 +329,15 @@ public:
     // `Resolve` gives it its context's type, so a node's children are typed
     // once and a chain of n terms costs n.
     StatusOr<Node> Type(const Expr& e) {
+        if (scope_ != nullptr && scope_->computed) {
+            if (std::optional<ResolvedColumn> c = scope_->computed(e); c.has_value()) {
+                Node n = Make(e);
+                n->kind = Expr::Kind::kColumn;
+                n->column_no = c->index;
+                n->type = c->type;
+                return n;
+            }
+        }
         switch (e.kind) {
             case Expr::Kind::kLiteral: return Literal(e);
             case Expr::Kind::kColumn: return Column(e);
@@ -308,6 +345,10 @@ public:
             case Expr::Kind::kBinary: return Binary(e);
             case Expr::Kind::kCall: return Call(e);
             case Expr::Kind::kSubquery: return Subquery(e);
+            case Expr::Kind::kAggregate:
+                return Status::InvalidArgument(
+                    "an aggregate is not allowed " + (scope_ != nullptr ? scope_->clause : "here") +
+                    At(e.byte_offset));
         }
         return Status::Corruption("an expression node of an unknown kind");
     }
@@ -319,7 +360,8 @@ public:
         switch (n.kind) {
             case Expr::Kind::kLiteral: return CoerceInto(n, want);
             case Expr::Kind::kColumn:
-            case Expr::Kind::kSubquery: return Status::OK();  // always concrete
+            case Expr::Kind::kSubquery:
+            case Expr::Kind::kAggregate: return Status::OK();  // always concrete
             case Expr::Kind::kUnary: {
                 if (Status s = Resolve(*n.lhs, want); !s.ok()) return s;
                 n.type = n.lhs->type;
@@ -469,14 +511,27 @@ private:
     }
 
     StatusOr<Node> Column(const Expr& e) {
+        if (scope_ != nullptr) {
+            auto found = scope_->resolve(e);
+            if (!found.ok()) return found.status();
+            if (found.value().has_value()) {
+                Node n = Make(e);
+                n->column_no = found.value()->index;
+                n->type = found.value()->type;
+                return n;
+            }
+        }
         // A column read in a SET value resolves as every read does - ignoring
         // case (`catalog::Schema::FindColumn`), two or more matches refused
         // as ambiguous - so the WHERE and the SET of one statement read one
         // column for one spelling.
-        auto found = access_.schema.FindColumn(e.column, e.byte_offset);
-        if (!found.ok()) return found.status();
-        const catalog::SysColumnRow* col = found.value();
-        if (col == nullptr && Lower(e.column) == "current_date") {
+        const catalog::SysColumnRow* col = nullptr;
+        if (access_ != nullptr) {
+            auto found = access_->schema.FindColumn(e.column, e.byte_offset);
+            if (!found.ok()) return found.status();
+            col = found.value();
+        }
+        if (col == nullptr && e.qualifier.empty() && Lower(e.column) == "current_date") {
             // BJ-Q4: a column of the relation with this name wins - in any
             // case, as a read matches it - so the function is reachable only
             // where there is none.
@@ -488,10 +543,12 @@ private:
             return n;
         }
         if (col == nullptr) {
-            return Status::InvalidArgument("unknown column '" + e.column + "'" + At(e.byte_offset));
+            return Status::InvalidArgument(
+                "unknown column '" + (e.qualifier.empty() ? "" : e.qualifier + ".") + e.column +
+                "'" + At(e.byte_offset));
         }
         Node n = Make(e);
-        n->column_no = static_cast<std::size_t>(col - access_.schema.columns.data());
+        n->column_no = static_cast<std::size_t>(col - access_->schema.columns.data());
         n->type = Concrete(col->type_val, col->len);
         return n;
     }
@@ -673,25 +730,6 @@ private:
     }
 
     StatusOr<Node> Function(const Expr& e) {
-        struct Spec {
-            std::string_view name;
-            SetFunction fn;
-            std::size_t min_args;
-            std::size_t max_args;
-        };
-        static constexpr Spec kSpecs[] = {
-            {"abs", SetFunction::kAbs, 1, 1},         {"sign", SetFunction::kSign, 1, 1},
-            {"ceil", SetFunction::kCeil, 1, 1},       {"ceiling", SetFunction::kCeil, 1, 1},
-            {"floor", SetFunction::kFloor, 1, 1},     {"round", SetFunction::kRound, 1, 2},
-            {"trunc", SetFunction::kTrunc, 1, 2},     {"upper", SetFunction::kUpper, 1, 1},
-            {"lower", SetFunction::kLower, 1, 1},     {"length", SetFunction::kLength, 1, 1},
-            {"substring", SetFunction::kSubstring, 2, 3},
-            {"trim", SetFunction::kTrim, 1, 2},       {"ltrim", SetFunction::kLtrim, 1, 2},
-            {"rtrim", SetFunction::kRtrim, 1, 2},     {"position", SetFunction::kPosition, 2, 2},
-            {"replace", SetFunction::kReplace, 3, 3}, {"lpad", SetFunction::kLpad, 2, 3},
-            {"rpad", SetFunction::kRpad, 2, 3},       {"concat", SetFunction::kConcat, 1, 128},
-            {"now", SetFunction::kNow, 0, 0},         {"date", SetFunction::kDate, 1, 1},
-        };
         const std::string name = Lower(e.function);
         const Spec* spec = nullptr;
         for (const Spec& candidate : kSpecs) {
@@ -881,6 +919,7 @@ private:
 
     StatusOr<Node> Call(const Expr& e) {
         if (e.op == ExprOp::kFunction) return Function(e);
+        if (e.op == ExprOp::kInList) return InList(e);
         Node n = Make(e);
         for (const auto& arg : e.args) {
             auto a = Type(*arg);
@@ -950,6 +989,7 @@ private:
         Node lhs = std::move(l.value());
         Node rhs = std::move(r.value());
 
+        if (e.op == ExprOp::kLike) return Like(e, std::move(lhs), std::move(rhs));
         if (IsBooleanBinary(e.op)) return BooleanBinary(e, std::move(lhs), std::move(rhs));
 
         // A timestamp has no arithmetic: there is no INTERVAL type to give a
@@ -1133,6 +1173,7 @@ private:
     // A `(SELECT ...)` value: run once by the dispatcher, and from here on a
     // typed constant - a literal of the type its one column has.
     StatusOr<Node> Subquery(const Expr& e) {
+        if (e.query != nullptr) return LayerSubquery(e);
         if (subqueries_ == nullptr || !*subqueries_) {
             return Status::NotImplemented("a subquery in a SET value needs a statement to run it" +
                                           At(e.byte_offset));
@@ -1146,8 +1187,92 @@ private:
         return n;
     }
 
-    const catalog::TableAccess& access_;
-    const SubqueryResolver* subqueries_;
+    // A query-layer subquery (BU-S4): typed by the layer, answered per row.
+    StatusOr<Node> LayerSubquery(const Expr& e) {
+        if (!scope_->subquery) {
+            return Status::NotImplemented("a subquery is not supported here" + At(e.byte_offset));
+        }
+        Node n = Make(e);
+        auto column = scope_->subquery(e, n->subquery_id);
+        if (!column.ok()) return column.status();
+        switch (e.op) {
+            case ExprOp::kScalarSubquery: n->type = column.value(); return n;
+            case ExprOp::kExists: n->type = BoolType(); return n;
+            case ExprOp::kInSubquery: {
+                auto operand = Type(*e.lhs);
+                if (!operand.ok()) return operand;
+                if (Status s = ResolveExactly(*operand.value(), column.value()); !s.ok()) {
+                    return Refuse(e.op_byte_offset, "IN compares " +
+                                                        SetTypeName(operand.value()->type) +
+                                                        " with a subquery of " +
+                                                        SetTypeName(column.value()));
+                }
+                n->lhs = std::move(operand.value());
+                n->type = BoolType();
+                return n;
+            }
+            default: return Status::Corruption("a subquery node of an unknown form");
+        }
+    }
+
+    // `a LIKE p` (BU-Q6): two texts, a string literal or a NULL being varchar.
+    StatusOr<Node> Like(const Expr& e, Node lhs, Node rhs) {
+        for (TypedSetExpr* side : {lhs.get(), rhs.get()}) {
+            if (!side->type.concrete() && (side->type.kind == SetType::Kind::kString ||
+                                           side->type.kind == SetType::Kind::kNull)) {
+                if (Status s = Resolve(*side, Concrete(kTypeValVarchar, 0)); !s.ok()) return s;
+            }
+            if (!side->type.concrete() || !IsText(side->type.type_val)) {
+                return CannotApply(e.op, e.op_byte_offset, lhs->type, rhs->type);
+            }
+        }
+        Node n = Make(e);
+        n->type = BoolType();
+        n->lhs = std::move(lhs);
+        n->rhs = std::move(rhs);
+        return n;
+    }
+
+    // `x IN (a, b, ...)`: one type for all, as a comparison has, and a bool.
+    StatusOr<Node> InList(const Expr& e) {
+        Node n = Make(e);
+        std::vector<TypedSetExpr*> values;
+        for (const auto& arg : e.args) {
+            auto a = Type(*arg);
+            if (!a.ok()) return a;
+            n->args.push_back(std::move(a.value()));
+            values.push_back(n->args.back().get());
+        }
+        auto t = Unify(values, e.op_byte_offset, "IN", /*widen_scaled=*/true);
+        if (!t.ok()) return t.status();
+        if (!t.value().concrete()) {
+            auto type = DefaultOf(t.value(), e.byte_offset);
+            if (!type.ok()) return type.status();
+            for (TypedSetExpr* v : values) {
+                if (Status s = ResolveExactly(*v, type.value()); !s.ok()) return s;
+            }
+        }
+        n->type = BoolType();
+        return n;
+    }
+
+public:
+    // The natural type of a tree no context types (BU-Q11).
+    Status Settle(TypedSetExpr& n) const {
+        if (n.type.concrete()) return Status::OK();
+        if (n.type.kind == SetType::Kind::kNull) return Resolve(n, Concrete(kTypeValVarchar, 0));
+        if (n.type.kind == SetType::Kind::kNumeric && n.kind == Expr::Kind::kLiteral) {
+            auto t = DecimalTypeOfLiteral(n.literal);
+            if (!t.ok()) return t.status();
+            return Resolve(n, t.value());
+        }
+        return SettleByDefault(n);
+    }
+
+private:
+    const catalog::TableAccess* access_ = nullptr;
+    const SubqueryResolver* subqueries_ = nullptr;
+    const ExprScope* scope_ = nullptr;
 };
 
 // ---- Evaluation (BJ-S4) --------------------------------------------------
@@ -1219,8 +1344,9 @@ parser::AstValue ValueOf(Int128 v, const SetType& t) {
 
 class Evaluator {
 public:
-    Evaluator(const std::vector<parser::AstValue>& row, const StatementContext& context)
-        : row_(row), context_(context) {}
+    Evaluator(const std::vector<parser::AstValue>& row, const StatementContext& context,
+              const SubqueryEvaluator* subqueries = nullptr)
+        : row_(row), context_(context), subqueries_(subqueries) {}
 
     StatusOr<parser::AstValue> Eval(const TypedSetExpr& e) const {
         switch (e.kind) {
@@ -1241,13 +1367,45 @@ public:
             case Expr::Kind::kUnary: return Unary(e);
             case Expr::Kind::kBinary: return Binary(e);
             case Expr::Kind::kCall: return Call(e);
-            case Expr::Kind::kSubquery:
-                return Status::Corruption("a subquery reached evaluation untyped");
+            case Expr::Kind::kSubquery: return LayerSubquery(e);
+            case Expr::Kind::kAggregate:
+                return Status::Corruption("an aggregate reached evaluation uncomputed");
         }
         return Status::Corruption("an expression node of an unknown kind");
     }
 
 private:
+    StatusOr<parser::AstValue> LayerSubquery(const TypedSetExpr& e) const {
+        if (subqueries_ == nullptr || !*subqueries_) {
+            return Status::Corruption("a subquery reached evaluation untyped");
+        }
+        if (e.op != ExprOp::kInSubquery) return (*subqueries_)(e, row_, nullptr);
+        auto operand = Eval(*e.lhs);
+        if (!operand.ok()) return operand;
+        return (*subqueries_)(e, row_, &operand.value());
+    }
+
+    // Three-valued: true on a match, else NULL if the operand or any value
+    // is NULL, else false.
+    StatusOr<parser::AstValue> InList(const TypedSetExpr& e) const {
+        auto x = Eval(*e.args[0]);
+        if (!x.ok()) return x;
+        if (IsNull(x.value())) return parser::AstValue{};
+        bool unknown = false;
+        for (std::size_t i = 1; i < e.args.size(); ++i) {
+            auto v = Eval(*e.args[i]);
+            if (!v.ok()) return v;
+            if (IsNull(v.value())) {
+                unknown = true;
+                continue;
+            }
+            auto c = Compare(x.value(), v.value(), e.args[0]->type);
+            if (!c.ok()) return c.status();
+            if (c.value() == 0) return Bool(true);
+        }
+        return unknown ? parser::AstValue{} : Bool(false);
+    }
+
     // A bool is `kInt` 0 or 1, as a bool column decodes; unknown is NULL.
     static parser::AstValue Bool(bool v) {
         parser::AstValue out;
@@ -1298,6 +1456,7 @@ private:
 
     StatusOr<parser::AstValue> Call(const TypedSetExpr& e) const {
         if (e.op == ExprOp::kFunction) return Function(e);
+        if (e.op == ExprOp::kInList) return InList(e);
         switch (e.op) {
             case ExprOp::kCase: {
                 const std::size_t pairs = e.args.size() / 2;
@@ -1794,6 +1953,7 @@ private:
                 default: return Bool(c.value() >= 0);
             }
         }
+        if (e.op == ExprOp::kLike) return Bool(LikeMatch(l.value().str_val, r.value().str_val));
         if (e.op == ExprOp::kConcat) {
             if (l.value().str_val.size() + r.value().str_val.size() > kMaxStringBytes) {
                 return BuildsTooMuch("||", e.op_byte_offset);
@@ -1845,15 +2005,32 @@ private:
 
     const std::vector<parser::AstValue>& row_;
     const StatementContext& context_;
+    const SubqueryEvaluator* subqueries_;
 };
 
 }  // namespace
+
+bool IsScalarFunctionName(std::string_view name) {
+    const std::string lower = Lower(name);
+    for (const FunctionSpec& spec : kSpecs) {
+        if (spec.name == lower) return true;
+    }
+    return false;
+}
+
+bool ValueInRange(const parser::AstValue& value, const SetType& t) {
+    if (value.type == ValueType::kNull) return true;
+    if (!IsInteger(t.type_val) && !IsDecimal(t.type_val)) return true;
+    auto n = NumberOf(value, t);
+    return n.ok() && InRange(n.value(), t);
+}
 
 bool IsConstantSetExpression(const TypedSetExpr& expr) {
     switch (expr.kind) {
         case Expr::Kind::kLiteral: return true;
         case Expr::Kind::kColumn:
-        case Expr::Kind::kSubquery: return false;
+        case Expr::Kind::kSubquery:
+        case Expr::Kind::kAggregate: return false;
         case Expr::Kind::kUnary: return IsConstantSetExpression(*expr.lhs);
         case Expr::Kind::kBinary:
             return IsConstantSetExpression(*expr.lhs) && IsConstantSetExpression(*expr.rhs);
@@ -1874,7 +2051,8 @@ bool IsConstantSetExpression(const TypedSetExpr& expr) {
 std::uint64_t SetExpressionColumns(const TypedSetExpr& expr) {
     switch (expr.kind) {
         case Expr::Kind::kLiteral:
-        case Expr::Kind::kSubquery: return 0;
+        case Expr::Kind::kSubquery:
+        case Expr::Kind::kAggregate: return 0;
         case Expr::Kind::kColumn:
             return expr.column_no < 64 ? std::uint64_t{1} << expr.column_no : kAllColumnsMask;
         case Expr::Kind::kUnary: return SetExpressionColumns(*expr.lhs);
@@ -1893,6 +2071,22 @@ StatusOr<parser::AstValue> EvaluateSetExpression(const TypedSetExpr& expr,
                                                  const std::vector<parser::AstValue>& row,
                                                  const StatementContext& context) {
     return Evaluator(row, context).Eval(expr);
+}
+
+StatusOr<parser::AstValue> EvaluateQueryExpression(const TypedSetExpr& expr,
+                                                   const std::vector<parser::AstValue>& row,
+                                                   const StatementContext& context,
+                                                   const SubqueryEvaluator* subqueries) {
+    return Evaluator(row, context, subqueries).Eval(expr);
+}
+
+StatusOr<std::unique_ptr<TypedSetExpr>> TypeQueryExpression(const parser::Expr& expr,
+                                                            const ExprScope& scope) {
+    Typer typer(scope);
+    auto typed = typer.Type(expr);
+    if (!typed.ok()) return typed;
+    if (Status st = typer.Settle(*typed.value()); !st.ok()) return st;
+    return typed;
 }
 
 std::string SetTypeName(const SetType& t) {

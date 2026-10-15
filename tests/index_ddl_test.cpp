@@ -104,14 +104,19 @@ TEST(IndexGrammarTest, NothingIsReservedSoAColumnMayStillBeNamedIndex) {
     EXPECT_EQ(ParseIndexStmt(on_them.value()).index_name, "unique");
 }
 
-TEST(IndexGrammarTest, UniqueIsRefusedAtItsOwnByte) {
+TEST(IndexGrammarTest, UniqueParsesAsAnIndexMarkedUnique) {
+    // BX-Q1 (a): `CREATE UNIQUE INDEX` is the one spelling of a unique key.
     auto stmt = Parse("CREATE UNIQUE INDEX ix ON t (a)");
-    ASSERT_FALSE(stmt.ok());
-    EXPECT_EQ(stmt.status().code(), StatusCode::kNotImplemented);
-    // The word's own position, which is the point of refusing at the
-    // dispatch rather than parsing and rejecting later.
-    EXPECT_NE(stmt.status().message().find("byte 7"), std::string::npos)
-        << stmt.status().message();
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    const auto& index = std::get<parser::IndexStmt>(stmt.value());
+    EXPECT_TRUE(index.unique);
+    EXPECT_EQ(index.index_name, "ix");
+    EXPECT_FALSE(std::get<parser::IndexStmt>(Parse("CREATE INDEX ix ON t (a)").value()).unique);
+
+    auto other = Parse("CREATE UNIQUE CABIN ON t (a)");
+    ASSERT_FALSE(other.ok());
+    EXPECT_NE(other.status().message().find("byte 14"), std::string::npos)
+        << other.status().message();
 }
 
 TEST(IndexGrammarTest, AnOverCapColumnListIsRefusedWithAPosition) {
@@ -309,10 +314,12 @@ TEST_F(IndexDdlTest, ARefusalOnAFullAnchorCostsNoPages) {
         << "a refusal allocated pages; that is the leak this test exists for";
 }
 
-TEST_F(IndexDdlTest, UniqueIsRefusedThroughTheDispatcherToo) {
-    const std::string out = Run("CREATE UNIQUE INDEX ix ON t (a)").response;
-    EXPECT_EQ(out.substr(0, 3), "ERR") << out;
-    EXPECT_NE(out.find("IX11"), std::string::npos) << out;
+TEST_F(IndexDdlTest, UniqueIsBuiltThroughTheDispatcher) {
+    // The enforcement's cells are `index_unique_test.cpp`'s; this one pins
+    // that the dispatcher no longer refuses the statement (IX11, BX).
+    ASSERT_EQ(Run("CREATE TABLE t (id int64, owner int64) BTREE").response.substr(0, 3), "CRE");
+    const std::string out = Run("CREATE UNIQUE INDEX ix ON t (owner)").response;
+    EXPECT_NE(out.find("CREATED INDEX name=ix"), std::string::npos) << out;
 }
 
 }  // namespace

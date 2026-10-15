@@ -22,3 +22,47 @@
 | **Does not settle** | Relation names (untouched); a relation created before uniqueness-ignoring-case holding a case pair, whose two columns no statement can name (stated in the manual and `catalog.md` CT7); BW-Q11's positional-`INSERT` gap; cleaning (D-e); no tag, no version |
 | **Recorded at** | this file; `index.md`'s row for it; `workorder-bw-instant-add-drop-column.md` §6 |
 
+## 3. BU continued; BU-S8's decisions marked
+
+| | |
+|---|---|
+| **Word** | *"Continue the BU milestone."* Then, on CLA's four questions at BU-S7's close, each answered with CLA's recommended option: an `UPDATE ... FROM` target matching several `FROM` rows - *"Refuse the multi-match"*; `RETURNING` - *"Build: rows then tag"*; `ON CONFLICT DO NOTHING` - *"Tuple key only"*; what next - *"Proceed with S8"* |
+| **Mark** | BU-S4 through S7 run in this session on `worktree-bu-basic-query-surface-s4` under the word to continue, their decisions (BU-Q14, BU-Q15) CLA's proposals adopted under it. **BU-Q16 (a)** `[quiet-wrong]`: an `UPDATE ... FROM` whose target row matches two or more `FROM` rows is refused `CardinalityViolation` and writes nothing; `DELETE ... USING` deletes a row once however many rows it matches. **BU-Q17 (a)**: `RETURNING` on `INSERT`, `UPDATE` and `DELETE` describes and emits its rows as a `SELECT` does, then the command tag; the after-image (the before-image for `DELETE`). **BU-Q18 (a)**: `ON CONFLICT DO NOTHING` skips a row whose tuple key is placed, live or delete-marked (BD-R5's `AlreadyExists`), an undecided insert of the key waited for as BD-Q9 waits; a conflict target other than the tuple key, and `DO UPDATE`, refused `NotImplemented`. BU-S8 then runs, BU-S9 after it |
+| **Does not settle** | A merge to `main`, a push, a tag or a version |
+| **Recorded at** | `instructions/v3.0.0/workorder-bu-basic-query-surface.md` §4 (BU-Q16..Q18) and §6; this file's index row |
+
+## 4. BU's close measurement stopped
+
+| | |
+|---|---|
+| **Word** | The operator stopped the `ck-tester` run of BU's close A/B after its B build and before any cell ran, then wrote *"go ahead"* |
+| **Mark** | Read by CLA as: close BU-S9 without the measurement, saying so. BU stands built to its close with **its overhead not measured** (`workorder-bu-basic-query-surface.md` §6, BU-S9) - BU-R5's prediction of no change for the AND-only statements unverified |
+| **Does not settle** | A merge to `main`, a push, a tag or a version; whether the measurement runs later |
+| **Recorded at** | `workorder-bu-basic-query-surface.md` header and §6; `index.md`'s BU row |
+
+## 5. BU closed
+
+| | |
+|---|---|
+| **Word** | *"Push."* - then *"close milestone"* |
+| **Mark** | BU-S4 through S9 pushed to `main` (`a1de2db5..621b93da`) with the hook skipped, the full suite having run green at `621b93da` (4,010/4,010). **BU closed** on the operator's word, with its overhead not measured (§4) - BU-R5's prediction unverified, and the layer's costs `known-gaps.md` names unmeasured |
+| **Does not settle** | A tag or a version; whether BU's close measurement runs later; `fn_residual`'s fold into `bool_residual`, left for a later order |
+| **Recorded at** | `workorder-bu-basic-query-surface.md` header; `index.md`'s BU row and this file's row |
+
+## 6. BX written, BX-Q1..Q5 marked (a), BX opened
+
+| | |
+|---|---|
+| **Word** | *"Compose the milestone for the UNIQUE constraint and index."* (W0), then *"BX-Q1..Q5 $!a, go ahead"* (W1) |
+| **Mark** | **BX-Q1 (a)**: `CREATE UNIQUE INDEX` is the one surface; `UNIQUE` in `CREATE TABLE` and `ALTER TABLE ... ADD CONSTRAINT` stay refused, so BX-S4 is cut - **the operator's choice, against CLA's proposal (b)**. **BX-Q2 (a)**: the key unit is released once the row's entry is appended. **BX-Q3 (a)**: a busy verdict uses the waits that exist; row 2 onward of a multi-row `INSERT`, and a KWP load row past its chunk's first, is refused `TxnConflict`. **BX-Q4 (a)**: checked per row, immediately. **BX-Q5 (a)**: a nullable key column stays refused. Q2..Q5 are as CLA proposed. *"go ahead"* opens BX at BX-S1 |
+| **Does not settle** | INSERT resume (BX-Q3 (b)); NULLs in a unique key; a foreign key referencing a unique column; no tag, no version |
+| **Recorded at** | this file; `workorder-bx-unique-index.md` (header W1, §4, §5, §6); `index.md`'s row for it |
+
+## 7. BX-Q6 marked (b), BX-S6 opened
+
+| | |
+|---|---|
+| **Word** | *"Q6 $!b, go ahead"* (after CLA's account of the pages a refused `CREATE UNIQUE INDEX` leaves) |
+| **Mark** | **BX-Q6 (b)**: a failed `CREATE INDEX` build frees its partial tree. Freeing pages never logged and named by nothing is ruled within BF's precondition (`page.md` §5: no record that names the page can be replayed again, no reader can reach it), so `FreePage` gains a second caller beside a dropped relation's reclaim. Built as BX-S6 |
+| **Does not settle** | Pages a failed divide left unlinked; a build that fails after its tree is logged; a crash before the free map is written |
+| **Recorded at** | this file; `workorder-bx-unique-index.md` (W2, BX-Q6, BX-S6); `index.md` §12; `known-gaps.md` |

@@ -80,6 +80,13 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   at a host loadavg of 30 from other sessions; the stage (BM-S4, the scan
   kernel's strings) touches no reclaim path. It then passed 6 of 6 alone
   and 12 of 12 under `ctest --repeat`. **Owner: none**, no cause observed.
+  It failed once more on `worktree-bx-unique-index` at BX-S1 (`a994ecc3`'s
+  parent tree), 10 of 10 alone.
+
+- **`ContentionCountersTest.APageLatchWaitCountsItsSpinTurns` failed once
+  under `-j8` load** on `worktree-bx-unique-index` at BX-S3 (on top of
+  `e542bb7d`), a stage that changed tests only; 10 of 10 alone. **Owner:
+  none**, no cause observed.
 
 - **`IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
   times out under `-j8`.** It failed its `KickUntil(..., 20000ms)`
@@ -673,7 +680,10 @@ pages and the cases it does not reach.
   roots reach, so these stay allocated for the life of the volume:
   - a page left unlinked by a failed heap growth, btree split or var-heap
     growth;
-  - a failed `CREATE INDEX`'s tree, which no anchor slot names;
+  - a failed `CREATE INDEX`'s page that its freeing does not reach (BX-Q6
+    (b), `index.md` §12): one a failed divide left unlinked, one whose
+    frame a writeback held, every page of a tree the guarded walk refused,
+    and every page after a crash before the map was written;
   - a failed or rolled-back `CREATE TABLE`'s pages, which no tombstone
     names;
   - a refused catalog report's page (WAL, above);
@@ -1149,6 +1159,67 @@ Verified on `worktree-aq-expression-cabins` at AQ-S1
   AQ; only the expression and predicate shapes take the relation `X`
   (AQ-Q13), because their text names columns by position and a create
   racing `DROP COLUMN` would leave one naming a dropped column.
+
+## Unique indexes (BX)
+
+Verified on `worktree-bx-unique-index` at BX-S2
+(`instructions/v3.2.0/workorder-bx-unique-index.md`).
+
+- **A unique build over string keys sharing their 32-byte prefix costs
+  O(n²) entry visits**: each row's check walks the whole run (BX-R7 as
+  built).
+- **A busy verdict counts any undecided writer of a row the run names**,
+  whether or not its pending version carries the key (`CheckUniqueKey`'s
+  conservative busy): a write can wait on a transaction that only touched a
+  row whose stale entry names the key. A wait it did not need, never a
+  duplicate admitted.
+- **Row 2 onward of a multi-row `INSERT`, and a KWP load row past its
+  chunk's first, meeting an undecided writer of its key is refused
+  `TxnConflict`** rather than waited for (BX-Q3 (a)): `ExecuteInsert`
+  cannot park mid-statement.
+- **`ON CONFLICT DO NOTHING` skips a tuple-key conflict only** (BU-Q18,
+  met by BX at the merge of `origin/main` after `d152a715`): a row whose
+  unique-index key is held is refused `AlreadyExists`, where PostgreSQL's
+  target-less form skips it; and `ON CONFLICT (<col>)` naming a
+  uniquely indexed column is refused `NotImplemented` with BU's reason,
+  "the tuple key is the one conflict there is", which BX made untrue. A
+  refusal, never a wrong row. Owner: none - a decision, not a defect.
+
+## The query layer and the DML forms (BU)
+
+Verified on `worktree-bu-basic-query-surface-s4` at `a13ceb49`
+(`instructions/v3.0.0/workorder-bu-basic-query-surface.md` §6, the review
+rows of BU-S4 to S8). Each is a refusal or a cost, never a wrong answer.
+
+- **The query grammar's refusals by name reach no client** (BU-Q9): when it
+  refuses a statement too, the native refusal is the reply, so `OVER`,
+  `NATURAL JOIN`, `DISTINCT ON` and `NULLS FIRST` answer the native parse's
+  "expected ..." (`InvalidArgument`) rather than `NotImplemented` by name;
+  `WITH` and `LIKE ... ESCAPE` happen to be refused by name natively.
+- **A statement opening with `(`** - `(SELECT ...) UNION ...` - is routed by
+  the dispatcher as an unknown command and reaches neither grammar.
+- **An aggregate reading an enclosing query's column inside a subquery** is
+  refused "an aggregate is not allowed here" where PostgreSQL answers the
+  mixed form; the pure-outer form is refused rightly, by the wrong message.
+- **A lone `NULL` is `varchar`** (BU-Q11): `HAVING NULL`, `WHERE NULL`,
+  `SELECT NULL UNION SELECT 1` and `INSERT ... SELECT NULL` into a non-text
+  column are refused; `CAST` is the spelling. Likewise a bare `5` from an
+  `INSERT ... SELECT` source into an `int32` column.
+- **`UPDATE ... FROM` reads its `FROM` row only in its WHERE**: a SET value
+  or a RETURNING item naming it is refused `NotImplemented`. One relation
+  after `FROM` or `USING`; a comma then a `LEFT` or inner join whose `ON`
+  reads a relation before the comma is answered where PostgreSQL refuses it.
+- **Costs measured at BU's close, not cut:** a layer statement holds every
+  relation's rows it walks (bounded by `sort_max_rows`), copies each row per
+  evaluation stage, returns a cached subquery result by value per outer row,
+  and probes `IN (subquery)` linearly; `UPDATE ... FROM`'s EXISTS carries the
+  target's own conjuncts, so even a point update walks the target.
+- **Without a transaction manager** (a test configuration; production always
+  builds one) a RETURNING is refused after its rows are written.
+- **`ON CONFLICT`'s pre-check** keeps the units it took across a wait and
+  re-run inside an explicit transaction, and takes a key's unit before the
+  foreign-key parent's - the reverse of the row path, a cycle the deadlock
+  detector breaks; `DmlFormsTest` has no lock table, so its wait has no cell.
 
 ## Decisions the revision has not taken
 

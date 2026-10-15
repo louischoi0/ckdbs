@@ -1167,7 +1167,7 @@ public:
     // a duplicate or out-of-range column position, an index on the tuple
     // key (the clustered tree already is one), a heap-clustered relation
     // (spec IX3 - there is no tuple key descent to resolve an entry through), and
-    // `kIndexFlagUnique` (spec IX11).
+    // a flag bit other than `kIndexFlagUnique` (spec IX11).
     //
     // It does **not** build the tree or check the key columns' types: the
     // root page is allocated and formatted by the caller, which is what

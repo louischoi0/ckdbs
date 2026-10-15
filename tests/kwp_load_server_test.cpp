@@ -669,6 +669,12 @@ TEST_F(KwpLoadServerTest, ARefusedRowKillsTheLoadWithTheGatesOwnCode) {
               "CREATED");
     ASSERT_EQ(dispatcher_->Dispatch("INSERT INTO t VALUES (100, '1.00', 0)").response.substr(0, 8),
               "INSERTED");
+    // BX: the load writes through `ExecuteInsert`, so a unique index refuses
+    // a chunk's duplicate as a statement's row would - and changes none of
+    // the other refusals' codes below, its check leaving a key that does not
+    // encode to the row's own encode.
+    ASSERT_EQ(dispatcher_->Dispatch("CREATE UNIQUE INDEX by_h ON t (h)").response.substr(0, 7),
+              "CREATED");
     catalog::Schema schema;
     schema.columns = {Col(catalog::kTypeValInt64),
                       Col(catalog::kTypeValDecimal, catalog::PackDecimalLen(5, 2)),
@@ -715,6 +721,7 @@ TEST_F(KwpLoadServerTest, ARefusedRowKillsTheLoadWithTheGatesOwnCode) {
                 << what << ": " << decoded.value().message;
         };
         refused({Int(100), Dec(1, 2), Int(0)}, StatusCode::kAlreadyExists, "duplicate key");
+        refused({Null(), Dec(250, 2), Int(0)}, StatusCode::kAlreadyExists, "unique");
         refused({Null(), Dec(1000000, 2), Int(0)}, StatusCode::kOutOfRange, "precision");
         refused({Null(), Null(), Int(0)}, StatusCode::kInvalidArgument, "NOT NULL");
         refused({Null(), Dec(1, 2), Int(1)}, StatusCode::kInvalidArgument, "bool", 2);

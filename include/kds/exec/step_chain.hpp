@@ -82,8 +82,9 @@ enum class AccessKind : std::uint8_t {
     // tuple key equality against a value produced by an earlier step or by an
     // enclosing chain's row.
     kProbe,
-    // tuple key range through the leaf chain, from `BETWEEN <low> AND <high>` on
-    // the relation's tuple key. Emitted since the BETWEEN half of V08.
+    // tuple key range through the leaf chain, from a low and a high bound
+    // on the relation's tuple key: `BETWEEN`, `>=`/`<=`, or with a strict
+    // `>`/`<` end, which ranks last (`TupleKeyRangeOf`, step_compiler.cpp).
     kRange,
     // An equality against a literal on a non-tuple-key column that carries a
     // **Cabin** (docs/spec/cabin.md): a probe of the Cabin's observed set,
@@ -181,8 +182,9 @@ constexpr bool IsTrailReplayable(AccessKind kind) noexcept {
 
 // The inclusive tuple key bounds a kRange step walks between.
 //
-// A **hint on top of the residual**, never a replacement for it: the two
-// conjuncts a `BETWEEN` lowers to (`>= low`, `<= high`) stay in
+// A **hint on top of the residual**, never a replacement for it: the
+// conjuncts the bounds came from (`>= low`, `<= high`, or a strict `>`/`<`
+// one key outside them) stay in
 // `Step::residual` exactly as a lookup's equality does. That is what keeps
 // "downgrading any step to a plain kScan cannot change the result" true,
 // and it is the property invariant 9's fall-through and the
@@ -545,6 +547,10 @@ struct SubChain {
     // names it evaluates it. Never hoisted, correlated or not - a false
     // `EXISTS` under an `OR` must not empty the statement.
     bool in_tree = false;
+
+    // `UPDATE ... FROM`'s EXISTS (BU-Q16): reads up to two rows, and a
+    // second is `CardinalityViolation`. Never hoisted.
+    bool at_most_one = false;
 };
 
 struct Step {

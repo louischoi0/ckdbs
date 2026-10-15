@@ -278,6 +278,40 @@ TEST_F(KwpSessionTest, ASelectStarDescribesTheWholeSchema) {
         << "field 0 of every user relation is the Keystone id";
 }
 
+TEST_F(KwpSessionTest, ANullableDrivingRelationsKeyIsNotFlaggedTheTupleKey) {
+    // The flag promises a value that is never NULL; a RIGHT join's left
+    // relation is null-extended (BU-S6, the query layer).
+    Handshake();
+    auto frames = RunStatement("SELECT u.id, w.id FROM t AS u RIGHT JOIN t AS w ON u.id = w.id");
+    ASSERT_GE(frames.size(), 3u);
+    auto desc = wire::DecodeRowDescription(frames[0].payload);
+    ASSERT_TRUE(desc.ok()) << desc.status().message();
+    ASSERT_EQ(desc.value().size(), 2u);
+    EXPECT_EQ(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
+    frames = RunStatement("SELECT u.id, w.id FROM t AS u LEFT JOIN t AS w ON u.id = w.id");
+    ASSERT_GE(frames.size(), 3u);
+    desc = wire::DecodeRowDescription(frames[0].payload);
+    ASSERT_TRUE(desc.ok()) << desc.status().message();
+    EXPECT_NE(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
+}
+
+TEST_F(KwpSessionTest, ADerivedTableKeepsItsOwnOutputsTupleKeyFlag) {
+    // A derived table's column 0 is flagged only if its own output flagged
+    // it (BU-S7): a LEFT join's right key is NULL where nothing matched.
+    Handshake();
+    auto frames = RunStatement(
+        "SELECT x.k FROM (SELECT w.id AS k FROM t AS u LEFT JOIN t AS w ON w.id = u.id + 100) AS x");
+    ASSERT_GE(frames.size(), 3u);
+    auto desc = wire::DecodeRowDescription(frames[0].payload);
+    ASSERT_TRUE(desc.ok()) << desc.status().message();
+    EXPECT_EQ(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
+    frames = RunStatement("SELECT x.id FROM (SELECT id FROM t) AS x");
+    ASSERT_GE(frames.size(), 3u);
+    desc = wire::DecodeRowDescription(frames[0].payload);
+    ASSERT_TRUE(desc.ok()) << desc.status().message();
+    EXPECT_NE(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
+}
+
 TEST_F(KwpSessionTest, ANarrowTupleKeyPastItsDeclaredWidthReachesTheClientWhole) {
     // protocol.md §6: a relation's column 0 is its Keystone id, u64 on the
     // wire whatever integer width it declares - in any projected position
@@ -327,6 +361,27 @@ TEST_F(KwpSessionTest, AWriteAnswersACompletionWithItsRowCountAndNoDescription) 
     ASSERT_TRUE(tag.has_value() && tag->has_value());
     EXPECT_EQ((**tag).substr(0, 8), "INSERTED");
     EXPECT_EQ(*affected, 1u) << "the tag's own count, read off the reply the engine wrote";
+}
+
+// RETURNING (BU-S8, BU-Q17): the rows as a SELECT's, then the write's own
+// completion - its tag and its count, not `SELECT`'s.
+TEST_F(KwpSessionTest, AReturningWriteAnswersItsRowsThenItsOwnCompletion) {
+    Handshake();
+    auto frames = RunStatement("UPDATE t SET name = 'z' WHERE id < 3 RETURNING id, name");
+    ASSERT_EQ(frames.size(), 3u);
+    ASSERT_EQ(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kRowDesc));
+    auto desc = wire::DecodeRowDescription(frames[0].payload);
+    ASSERT_TRUE(desc.ok()) << desc.status().message();
+    ASSERT_EQ(desc.value().size(), 2u);
+    EXPECT_NE(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
+    ASSERT_EQ(frames[1].type, static_cast<std::uint8_t>(ServerFrameType::kRowBatch));
+    ASSERT_EQ(frames[2].type, static_cast<std::uint8_t>(ServerFrameType::kComplete));
+    wire::PayloadReader r(frames[2].payload);
+    auto tag = r.Text();
+    auto affected = r.U64();
+    ASSERT_TRUE(tag.has_value() && tag->has_value());
+    EXPECT_EQ(**tag, "UPDATED 2");
+    EXPECT_EQ(*affected, 2u);
 }
 
 TEST_F(KwpSessionTest, AMultiLineDiagnosticArrivesAsAOneColumnTextResultSet) {
@@ -500,14 +555,14 @@ TEST_F(KwpSessionTest, AnEngineRefusalKeepsItsOwnCategory) {
         // folding into INVALID_ARGUMENT erased.
         //
         // `NotImplemented` and not `Unsupported`, which is the operator's
-        // 2026-08-31 rule read correctly: an outer join is a form the
-        // design admits and nobody built, so a later release could lift the
-        // refusal without changing the architecture. It is also the case
+        // 2026-08-31 rule read correctly: a CTE is a form the design admits
+        // and nobody built, so a later release could lift the refusal
+        // without changing the architecture (an outer join was this case
+        // until BU-S6 built it). It is also the case
         // that makes this test worth having - the two codes are one word
         // apart in the message and two categories apart on the wire, and a
         // client's feature detection reads only the second.
-        {"SELECT t.id FROM t LEFT JOIN t AS u ON t.id = u.id",
-         wire::ErrorCategory::kNotImplemented},
+        {"WITH w AS (SELECT id FROM t) SELECT id FROM w", wire::ErrorCategory::kNotImplemented},
     };
     for (const Case& c : kCases) {
         auto frames = RunStatement(c.sql);

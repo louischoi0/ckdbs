@@ -1,6 +1,7 @@
 #include "kds/exec/index_ddl.hpp"
 
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "kds/catalog/schema.hpp"
@@ -13,9 +14,11 @@
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/index/index_page.hpp"
 #include "kds/storage/log_page_image.hpp"
+#include "kds/storage/page_header.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 #include "kds/storage/index/index_tree.hpp"
+#include "kds/txn/read_view.hpp"
 #include "kds/txn/undo_log.hpp"
 
 namespace kds::exec {
@@ -58,52 +61,126 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
 struct StagedRow {
     std::uint64_t tuple_key = 0;
     std::uint64_t undo_ptr = 0;
+    bool deleted = false;
     std::vector<std::byte> payload;
 };
 
-// RV3's record of the whole built tree: one full page image per page,
-// depth-first from the root. Order among the images is irrelevant - each
-// describes a whole page and redo's FPI arm creates the page it names -
-// and every image is stamped so the WAL-before-data gate holds the pages
-// until the images are durable. A null `wal` no-ops (tests, bootstrap).
-Status LogBuiltTree(wal::WalManager* wal, storage::PageStore& store, std::uint64_t trx_id,
-                    PageId page_id) {
-    if (wal == nullptr) return Status::OK();
-
-    // The children first, collected under a scope that drops this page's
-    // pin before recursing - depth bounds the pin count either way, but a
-    // copied id list keeps the shape obviously safe.
-    std::vector<PageId> children;
-    {
-        auto bytes = store.GetForRead(page_id);
-        if (!bytes.ok()) return bytes.status();
-        if (storage::RawPageType(bytes.value().bytes()) ==
-            static_cast<std::uint8_t>(PageType::kIndexInternal)) {
-            index::IndexInternalView node(bytes.value().bytes());
-            children.push_back(node.leftmost_child());
-            for (std::uint16_t i = 0; i < node.entry_count(); ++i) {
-                auto child = node.Child(i);
-                if (!child.ok()) return child.status();
-                children.push_back(child.value());
-            }
-        }
-    }
-    for (const PageId child : children) {
-        if (Status s = LogBuiltTree(wal, store, trx_id, child); !s.ok()) return s;
-    }
-
-    return storage::LogFullPageImage(wal, store, trx_id, page_id);
+// BX-R7: a unique index's build refuses a key two live rows hold. Asked of
+// each row's latest version once its entries are in, so of every pair the
+// later row finds the earlier one in the run. Under the build's relation `X`
+// (AT-S5e) no other writer is undecided - each decided before its `IX` was
+// released - so every version on a page is committed or the build's own
+// transaction's, and an everything-visible view is the latest state.
+// `values` is the row's latest version, decoded by its append.
+Status CheckBuiltKeyUnique(storage::PageStore& store, const catalog::TableAccess& access,
+                           const catalog::TableAccess::IndexRef& ix, const StagedRow& row,
+                           std::span<const parser::AstValue> values) {
+    if (row.deleted) return Status::OK();
+    auto key = EncodeUniqueKey(access, ix, values, /*first_col_pos=*/0);
+    if (!key.ok()) return key.status();
+    auto verdict = CheckUniqueKey(store, access, ix, *key.value(), txn::ReadView::Everything(),
+                                  row.tuple_key);
+    if (!verdict.ok()) return verdict.status();
+    if (verdict.value().kind == UniqueVerdict::Kind::kFree) return Status::OK();
+    return Status::AlreadyExists(UniqueKeyText(access, ix, *key.value()) +
+                                 " is held by both tuple key " +
+                                 std::to_string(verdict.value().tuple_key) + " and tuple key " +
+                                 std::to_string(row.tuple_key));
 }
 
-// Appends one version's entry, decoding the key columns out of `payload`.
+// The pages of a built or half-built tree, pre-order from `root`: every
+// ancestor before its descendants.
+//
+// **Guarded, because a failed build frees what this returns.** Every page of
+// the tree carries the index's oid from birth (`PrepareIndexDef` pre-issues
+// it, page.md §2a) and is an index page; one that is not, or one reached
+// twice, is not this tree's, and the walk refuses `Corruption` rather than
+// hand another relation's page - or one freed and reissued in between - to
+// `FreePage`. The visited set also bounds a cycle.
+StatusOr<std::vector<PageId>> CollectTreePages(storage::PageStore& store, PageId root,
+                                               catalog::Oid owner) {
+    std::vector<PageId> pages;
+    std::unordered_set<PageId> seen;
+    std::vector<PageId> pending{root};
+    while (!pending.empty()) {
+        const PageId id = pending.back();
+        pending.pop_back();
+        if (!seen.insert(id).second) {
+            return Status::Corruption("index oid " + std::to_string(owner) + ": page " +
+                                      std::to_string(id) + " is reached twice");
+        }
+        auto bytes = store.GetForRead(id);
+        if (!bytes.ok()) return bytes.status();
+        const std::uint8_t type = storage::RawPageType(bytes.value().bytes());
+        const bool internal = type == static_cast<std::uint8_t>(PageType::kIndexInternal);
+        if ((!internal && type != static_cast<std::uint8_t>(PageType::kIndexLeaf)) ||
+            storage::GetOwnerOid(bytes.value().bytes()) != owner) {
+            return Status::Corruption("index oid " + std::to_string(owner) + ": page " +
+                                      std::to_string(id) + " is not one of its pages");
+        }
+        pages.push_back(id);
+        if (!internal) continue;
+        index::IndexInternalView node(bytes.value().bytes());
+        pending.push_back(node.leftmost_child());
+        for (std::uint16_t i = 0; i < node.entry_count(); ++i) {
+            auto child = node.Child(i);
+            if (!child.ok()) return child.status();
+            pending.push_back(child.value());
+        }
+    }
+    return pages;
+}
+
+// RV3's record of the whole built tree: one full page image per page,
+// descendants first. Order among the images is irrelevant - each describes
+// a whole page and redo's FPI arm creates the page it names - and every
+// image is stamped so the WAL-before-data gate holds the pages until the
+// images are durable. A null `wal` no-ops (tests, bootstrap).
+Status LogBuiltTree(wal::WalManager* wal, storage::PageStore& store, std::uint64_t trx_id,
+                    PageId root, catalog::Oid owner) {
+    if (wal == nullptr) return Status::OK();
+    auto pages = CollectTreePages(store, root, owner);
+    if (!pages.ok()) return pages.status();
+    for (auto page = pages.value().rbegin(); page != pages.value().rend(); ++page) {
+        if (Status s = storage::LogFullPageImage(wal, store, trx_id, *page); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
+// Gives back the pages of a tree a failed build filled (BX-Q6 (b),
+// `instructions/v3.2.0/workorder-bx-unique-index.md`). `FreePage`'s
+// precondition holds by the build's order: the tree is logged only after the
+// backfill succeeds (`LogBuiltTree`), and named only after that (the
+// `sys.indexes` row, its anchor slot), so no record that names a page can
+// be replayed and no reader can reach one.
+//
+// **Best-effort, and a leak where it falls short** - as every failed build
+// leaked before: a tree the guarded walk refuses frees nothing; a page a
+// failed divide left unlinked is not reached; a frame a writeback holds
+// (`kDeferred`) keeps its page; and a store that cannot free frees none. No
+// map sync follows: a crash before the map is next written leaves the bits
+// set, which is the leak there was.
+void FreeUnbuiltTree(storage::PageStore& store, PageId root, catalog::Oid owner) {
+    auto pages = CollectTreePages(store, root, owner);
+    if (!pages.ok()) return;
+    for (const PageId id : pages.value()) {
+        auto freed = store.FreePage(id);
+        if (!freed.ok() && freed.status().code() == StatusCode::kNotImplemented) return;
+    }
+}
+
+// Appends one version's entry, decoding the key columns out of `payload`,
+// and returns the decoded version for a unique build's check.
 //
 // Through `AppendIndexEntry`, the same function the write hook loops over -
 // so a backfilled entry and a written one cannot disagree about what an entry
 // is. `previous` is empty, which is what makes every version append rather
 // than only the ones that moved.
-Status AppendVersion(storage::PageStore& store, const catalog::TableAccess& access,
-                     catalog::TableAccess::IndexRef& ix, std::uint64_t tuple_key,
-                     std::span<const std::byte> payload) {
+StatusOr<std::vector<parser::AstValue>> AppendVersion(storage::PageStore& store,
+                                                      const catalog::TableAccess& access,
+                                                      catalog::TableAccess::IndexRef& ix,
+                                                      std::uint64_t tuple_key,
+                                                      std::span<const std::byte> payload) {
     std::vector<PendingSpill> spills;
     auto row = DecodeRow(access.schema, access.layout, payload, &spills);
     if (!row.ok()) return row.status();
@@ -118,7 +195,7 @@ Status AppendVersion(storage::PageStore& store, const catalog::TableAccess& acce
     // the index has no sys.indexes row yet, which is the point of building it
     // before it is visible.
     if (moved.value() != kInvalidPageId) ix.root_page_id = moved.value();
-    return Status::OK();
+    return std::move(row.value());
 }
 
 // Builds `ix`'s tree over everything the relation already holds, and returns
@@ -134,8 +211,12 @@ Status AppendVersion(storage::PageStore& store, const catalog::TableAccess& acce
 // A **delete-marked** row is walked like any other: it is gone for newer
 // readers and still there for older ones, which is exactly the case the undo
 // chain exists for.
+//
+// `ix` is the caller's, so its `root_page_id` names the root the tree has
+// grown to even when the backfill fails - which is what a failed build frees
+// from (BX-Q6 (b)).
 StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess& access,
-                          catalog::TableAccess::IndexRef ix) {
+                          catalog::TableAccess::IndexRef& ix) {
     // Reads only, so a locally-built log is correct: Read/Walk resolve a
     // pointer against pages and carry no allocation state. And safe under
     // the undo purge for two reasons that must both stay true: this walk
@@ -178,6 +259,7 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
                 StagedRow row;
                 row.tuple_key = tuple_key.value();
                 row.undo_ptr = tuple.value().undo_ptr;
+                row.deleted = tuple.value().deleted;
                 row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
                 staged.push_back(std::move(row));
             }
@@ -186,23 +268,30 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 
         // ---- Phase 2: append, with nothing live -------------------------
         for (const StagedRow& row : staged) {
-            if (Status s = AppendVersion(store, access, ix, row.tuple_key, row.payload); !s.ok()) {
-                return s;
-            }
+            auto latest = AppendVersion(store, access, ix, row.tuple_key, row.payload);
+            if (!latest.ok()) return latest.status();
 
+            // A failed append stops the walk and fails the build: a version
+            // with no entry is a row an older snapshot misses (spec §10a).
+            Status appended = Status::OK();
             Status walked = undo.Walk(
                 row.undo_ptr, [&](const txn::UndoVersion& version) -> bool {
                     // A delete-mark's image is empty because a mark changes
                     // no tuple bytes - the version it supersedes is the one
                     // already appended, so there is nothing new here.
                     if (version.image.empty()) return true;
-                    if (Status s = AppendVersion(store, access, ix, row.tuple_key, version.image);
-                        !s.ok()) {
-                        return false;
-                    }
-                    return true;
+                    auto older = AppendVersion(store, access, ix, row.tuple_key, version.image);
+                    if (!older.ok()) appended = older.status();
+                    return older.ok();
                 });
             if (!walked.ok()) return walked;
+            if (!appended.ok()) return appended;
+            if (ix.unique) {
+                if (Status s = CheckBuiltKeyUnique(store, access, ix, row, latest.value());
+                    !s.ok()) {
+                    return s;
+                }
+            }
         }
 
         leaf = next;
@@ -274,6 +363,7 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
         return s.WithContext("index '" + stmt.index_name + "'");
     }
     def.key_width = layout.key_width;
+    if (stmt.unique) def.flags |= catalog::kIndexFlagUnique;
     def.entry_width = static_cast<std::uint16_t>(layout.leaf_entry_width());
 
     // Every refusal, before a page is walked. `Catalog::CreateIndex` runs
@@ -342,13 +432,20 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
     building.entry_width = def.entry_width;
     building.nkeys = static_cast<std::uint8_t>(def.key_cols.size());
     building.ncovered = static_cast<std::uint8_t>(def.covered_cols.size());
+    building.unique = (def.flags & catalog::kIndexFlagUnique) != 0;
+    building.name = def.name;
     for (std::size_t i = 0; i < def.key_cols.size(); ++i) building.key_cols[i] = def.key_cols[i];
     for (std::size_t i = 0; i < def.covered_cols.size(); ++i) {
         building.covered_cols[i] = def.covered_cols[i];
     }
 
     auto final_root = Backfill(store, access, building);
-    if (!final_root.ok()) return final_root.status();
+    if (!final_root.ok()) {
+        // Nothing has logged the tree yet and nothing names it, so its pages
+        // go back now rather than leaking for the volume's life (BX-Q6 (b)).
+        FreeUnbuiltTree(store, building.root_page_id, def.index_oid);
+        return final_root.status();
+    }
 
     // RV3: the built tree travels as full page images, **before** the
     // sys.indexes row that publishes it - a crash after the commit must
@@ -356,7 +453,8 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
     // logged nothing per entry. An FPI both creates and fills a page at
     // redo, so no PAGE_INIT is needed; the cost is tree bytes per CREATE
     // INDEX, on a statement that is already O(relation).
-    if (Status s = LogBuiltTree(wal, store, trx_id, final_root.value()); !s.ok()) {
+    if (Status s = LogBuiltTree(wal, store, trx_id, final_root.value(), def.index_oid);
+        !s.ok()) {
         return s.WithContext("logging the built tree");
     }
     return final_root.value();
@@ -374,6 +472,14 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     if (!access.ok()) return access.status();
     auto root = BuildIndexTree(store, *access.value(), def, trx_id, wal);
     if (!root.ok()) {
+        // A duplicate the unique build found (BX-R7) is the statement's
+        // refusal, so it carries the index name's byte. It is the build's
+        // only `AlreadyExists`: no two entries share a sort key, so no
+        // divide is refused one (index.md IX4b).
+        if (root.status().code() == StatusCode::kAlreadyExists) {
+            return root.status().WithMessage(root.status().message() + " (byte " +
+                                             std::to_string(stmt.byte_offset) + ")");
+        }
         return root.status().WithContext("building index '" + stmt.index_name + "'");
     }
     def.root_page_id = root.value();

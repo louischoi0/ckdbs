@@ -433,10 +433,9 @@ static_assert(offsetof(SysTypeRow, len) == SysTypeRow::kLenOffset);
 inline constexpr std::size_t kMaxIndexKeyColumns = 4;
 inline constexpr std::size_t kMaxIndexCoveredColumns = 8;
 
-// Defined and never written (spec IX11). v1 is a read accelerator that
-// cannot fail a write for a reason of its own, so `UNIQUE` is refused at
-// declaration; the bit exists so turning it on later is a code change and
-// not a format event, exactly as `UndoRecordType::kInsert` does.
+// `CREATE UNIQUE INDEX` (spec IX11, BX): a write that would give two live
+// rows one key value is refused. Written since superblock 27, so no binary
+// that ignores the bit can mount a volume carrying it.
 inline constexpr std::uint8_t kIndexFlagUnique = 0x1;
 
 struct SysIndexRow {

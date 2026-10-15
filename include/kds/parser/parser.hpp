@@ -93,6 +93,21 @@ public:
     // not SELECT/INSERT/UPDATE - which is not an error and never was.
     std::optional<Fingerprint> fingerprint() const noexcept { return lexer_.fingerprint(); }
 
+    // **The query grammar** (BU-S4, `workorder-bu-basic-query-surface.md`
+    // BU-Q8, BU-Q9): one SELECT, or set operations over several, with value
+    // expressions wherever a value stands, `DISTINCT`, every join kind,
+    // derived tables, `GROUP BY`/`HAVING` over expressions and `ORDER BY` an
+    // expression, alias or ordinal. What the native grammar refuses and this
+    // one reads runs on the query layer (`exec/query_layer.hpp`); the native
+    // `Parse()` is always tried first and is unchanged by this entry.
+    StatusOr<Query> ParseQuery();
+
+    // A WHERE clause's body alone, to the end of the text, as the native
+    // grammar reads it: the query layer asks this of one top-level term so a
+    // relation's walk can carry it (BU-Q8). The text is the statement's,
+    // blanked outside the term, so every byte reported is the statement's.
+    StatusOr<std::vector<Condition>> ParseConditions();
+
 private:
     StatusOr<CreateTableStmt> ParseCreateTable();
     StatusOr<ColumnDef> ParseColumnDef();
@@ -261,11 +276,40 @@ private:
 
     StatusOr<std::string> ParseIdent();
 
+    // ---- The query grammar (BU-S4) ----------------------------------------
+    // `UNION`/`EXCEPT` over `INTERSECT` terms, then the shared tail.
+    StatusOr<std::shared_ptr<const Query>> ParseQueryExpr();
+    StatusOr<std::shared_ptr<const Query>> ParseQueryTerm();
+    StatusOr<std::shared_ptr<const Query>> ParseQueryPrimary();
+    StatusOr<std::shared_ptr<const QueryBlock>> ParseQueryBlock();
+    Status ParseQueryTail(Query& q);
+    StatusOr<FromItem> ParseFromItem();
+    Status ParseQueryJoins(QueryBlock& block);
+    // A nested query in parentheses whose `(` at `open` is consumed: the
+    // query, and its `)`.
+    StatusOr<std::shared_ptr<const Query>> ParseNestedQuery(const Token& open);
+    // The rest of a primary that began with the identifier `tok`, already
+    // consumed: a column, a call, a CASE.
+    StatusOr<std::shared_ptr<const Expr>> ParseExprAfterIdent(const Token& tok);
+    // `(SELECT ...)` as a value, its `(` at `open` and already consumed; `op`
+    // is the form, `lhs` an `IN`'s operand.
+    StatusOr<std::shared_ptr<const Expr>> ParseExprQuerySubquery(const Token& open, ExprOp op,
+                                                                 std::shared_ptr<const Expr> lhs);
+    // `COUNT(*)`, `SUM([DISTINCT] expr)`, ... with the name and `(` consumed.
+    StatusOr<std::shared_ptr<const Expr>> ParseExprAggregate(const Token& name, AggFunc func);
+    // What may follow a value at comparison level in the query grammar:
+    // `[NOT] IN`, `[NOT] BETWEEN`, `[NOT] LIKE`, or nothing.
+    StatusOr<std::shared_ptr<const Expr>> ParseExprQueryComparison(std::shared_ptr<const Expr> lhs);
+
     // A SET value (BJ-S2, BJ-S5): one bare literal into `a.val`, anything
     // else into `a.expr`. The levels below are precedence climbing in
     // PostgreSQL's order, loosest first: OR, AND, NOT, IS, the comparisons,
     // `||`, `+ -`, `* / %`, a unary sign, then `::`.
     Status ParseSetValue(Assignment& a);
+    Status ParseInsertTail(InsertStmt& stmt);
+    Status ParseOutputItems(std::vector<OutputItem>& items);
+    Status ParseReturning(Returning& out);
+    StatusOr<RelationRef> ParseOtherRelation(const std::string& target);
     Status ParseRowValueAssignments(std::vector<Assignment>& out);
     StatusOr<std::shared_ptr<const Expr>> ParseExprOr();
     StatusOr<std::shared_ptr<const Expr>> ParseExprAnd();
@@ -317,6 +361,12 @@ private:
     // primary to carry on from (`ParseSetValue`): when an operator follows it,
     // the expression chain is entered with the literal as its first primary.
     std::shared_ptr<const Expr> pending_primary_;
+    // Set by `ParseQuery`: the expression levels read the query grammar's
+    // forms (qualified columns, aggregates, `IN`, `LIKE`, subqueries).
+    bool query_mode_ = false;
+    // The query blocks open around the one being parsed, bounded by
+    // `kMaxSubqueryDepth`.
+    std::uint32_t query_depth_ = 0;
 
 };
 

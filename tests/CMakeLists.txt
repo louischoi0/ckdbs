@@ -84,6 +84,8 @@ add_executable(kds_tests
     ddl_fence_rig_test.cpp
     assertion_publish_rig_test.cpp
     index_maintain_test.cpp
+    index_unique_test.cpp
+    index_unique_rig_test.cpp
     index_compile_test.cpp
     index_contract_test.cpp
     superblock_test.cpp
@@ -125,6 +127,8 @@ add_executable(kds_tests
     where_bool_test.cpp
     where_value_list_test.cpp
     where_bool_subquery_test.cpp
+    query_layer_test.cpp
+    dml_forms_test.cpp
     waystone_contract_test.cpp
     cabin_contract_test.cpp
     foreign_key_test.cpp

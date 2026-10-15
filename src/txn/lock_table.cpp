@@ -38,6 +38,8 @@ const char* LockUnitName(LockUnit unit) noexcept {
             return "slice";
         case LockUnit::kTuple:
             return "tuple";
+        case LockUnit::kIndexKey:
+            return "index key";
     }
     return "?";
 }

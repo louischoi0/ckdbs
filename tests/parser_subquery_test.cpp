@@ -224,12 +224,12 @@ TEST(ParserSubqueryTest, ACteIsNotImplementedRatherThanAnUnknownKeyword) {
         << parsed.status().message();
 }
 
-TEST(ParserSubqueryTest, ASubqueryInAnInsertValuePositionIsRejectedAndAnUpdatesIsAnExpression) {
-    // Spec section 2 lists value positions as out of scope, `[OPEN: revisit]`.
-    // An INSERT value is refused because no value production reaches a SELECT.
-    // **An UPDATE's SET value is the one exception since BJ-S7**: a scalar
-    // subquery is an expression there, run once before the walk (BJ-Q6).
-    EXPECT_FALSE(Parse("INSERT INTO t VALUES ((SELECT id FROM u))").ok());
+TEST(ParserSubqueryTest, ASubqueryInAValuePositionParsesAsAnExpression) {
+    // An UPDATE's SET value reads a scalar subquery since BJ-S7, run once
+    // before the walk (BJ-Q6). An INSERT value takes the SET value's grammar
+    // since BU-S8, so it parses too; its refusal is the typer's
+    // (`DmlFormsTest.AValuesExpressionIsRefusedForWhatItCannotBe`).
+    EXPECT_TRUE(Parse("INSERT INTO t VALUES ((SELECT id FROM u))").ok());
     EXPECT_TRUE(Parse("UPDATE t SET a = (SELECT id FROM u)").ok());
 }
 

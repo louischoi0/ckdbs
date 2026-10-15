@@ -111,3 +111,12 @@ English**, translated from the Korean it was typed in.
 | **Mark** | BO runs every stage to its close in this session. BO-Q2 (a) `[quiet-wrong]`, Q4 (a) at the session's core, Q5 (b) memory-resident, Q6 (a) with `fetch_id = 0` for unfingerprinted kinds, Q7 (a) per core, Q8 no switch, Q9 (a), Q10 (a), Q11 (a), Q12 (a) with a required key, Q13 (a), and Q3's aggregation refused, are adopted as CLA proposed - several revised against `cd7c7c4e` by the opening review first - recorded as *"adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone)"*, never as the operator's own marks; so is any later decision a stage reaches. BO-S4 is not run under Q5 (b) |
 | **Does not settle** | A push, a merge to `main`, a tag or a version |
 | **Recorded at** | `workorder-bo-sys-statistics-show-sugar.md` header, §5 and §7; `index.md`'s BO row |
+
+## 13. BU to its close on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | *"`$!a` /go-ahead-achieving-milestone"* - choosing CLA's option (a) (move the stale untracked bug file aside, fast-forward the main checkout, start BU-S4 in a new worktree) and invoking the skill on BU: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
+| **Mark** | BU runs S4-S9 to its close in this session, on `worktree-bu-basic-query-surface-s4`. BU-Q8..Q12, written at BU-S4 with CLA's proposals, are adopted as proposed - BU-Q11 `[quiet-wrong]` - recorded as *"adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone)"*, never as the operator's own marks; so is any later decision a stage reaches |
+| **Does not settle** | The fix of `a-write-walks-subquery-sees-its-own-statements-writes.md`, which waits for its own word; a push, a merge to `main`, a tag or a version |
+| **Recorded at** | `workorder-bu-basic-query-surface.md` header, §4 and §6; `index.md`'s BU row |

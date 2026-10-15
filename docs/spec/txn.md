@@ -686,7 +686,11 @@ persisted lock bit, no page bit, no superblock field; a crash releases every
 lock because the loser is rolled back at mount). **The lock table is a
 second source** (AO-S6c-b): a transaction may hold a *unit* rather than a
 row - a range declared by a predicate-covering write (AO-0 item 14) - and a
-row's header inside it names its last writer, not the holder. A borrow the
+row's header inside it names its last writer, not the holder. **A fifth
+unit, `kIndexKey`, names one value of one unique index** (BX,
+`index.md` §10.2): taken `X` by a writer of that value from its check to
+its append, outside the relation-range-slice-tuple nesting, and overlapping
+no fence and no tuple. A borrow the
 lock table refuses is a conflict of its own, reported in the same shape and
 naming the **holder**. Where a dispatcher has no lock table the header is
 all there is. **Detection is followed by a wait, not a refusal** (M2,

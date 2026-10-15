@@ -157,12 +157,18 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // migration, the standing order of 2026-10-07, which supersedes the order's
 // read-a-28-byte-row-by-length mechanism.
 //
-// 27 (`docs/spec/index.md` IX4b, 2026-10-15): a secondary index orders by
+// 27 (BX-S2, `instructions/v3.2.0/workorder-bx-unique-index.md` BX-R8):
+// `sys.indexes` rows may carry `kIndexFlagUnique`, which a version-26 binary
+// would read past and so admit duplicates into a volume that promises none.
+// The row's size does not change. Refused with no migration, the standing
+// order of 2026-10-07.
+//
+// 28 (`docs/spec/index.md` IX4b, 2026-10-15): a secondary index orders by
 // the whole entry, covered bytes included, so a separator is a whole entry
-// wide and an internal node's header stores that width - a version-26
+// wide and an internal node's header stores that width - a version-27
 // index's internal nodes and its leaves' order are both wrong. Refused with
 // no migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 27;
+inline constexpr std::uint32_t kSuperBlockVersion = 28;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

@@ -289,6 +289,10 @@ struct Condition {
     // for `subquery`'s reason.
     std::shared_ptr<const BoolExpr> tree;
 
+    // kExists only: `UPDATE ... FROM`'s condition (BU-S8, BU-Q16) - true
+    // for exactly one row, `CardinalityViolation` for a second.
+    bool at_most_one = false;
+
     bool has_subquery() const noexcept { return subquery != nullptr; }
 };
 
@@ -520,6 +524,27 @@ struct DescribedShape {
 // row cap is **not** enforced here: the parser is a pure syntax layer with
 // no config access, so the first config-aware layer (the dispatcher)
 // refuses an over-cap statement naming the cap and the count.
+struct Expr;   // a VALUES expression - see InsertStmt::ValueExpr
+struct Query;  // INSERT ... SELECT's source - see InsertStmt::select
+
+// One select-list item: an expression with its alias, or `*` / `rel.*`.
+struct OutputItem {
+    std::shared_ptr<const Expr> expr;  // unset for a star
+    std::string alias;                 // `AS alias`, empty when none
+    bool star = false;
+    std::string star_qualifier;  // `rel` in `rel.*`; empty for a bare `*`
+    std::string text;  // the expression as written, which heads an unaliased column
+    std::uint32_t byte_offset = 0;
+};
+
+// `RETURNING <items>` (BU-S8, BU-Q17): what an INSERT, UPDATE or DELETE
+// answers with besides its tag - each written row's after-image (a
+// DELETE's before-image) through the items, in the query grammar.
+struct Returning {
+    std::vector<OutputItem> items;  // empty when the statement has none
+    std::uint32_t byte_offset = 0;  // the RETURNING word
+};
+
 struct InsertStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above
@@ -531,6 +556,29 @@ struct InsertStmt {
     std::vector<IndexColumnRef> columns;
     std::uint32_t columns_byte_offset = 0;
     std::vector<std::vector<AstValue>> rows;
+    // A value written as an expression (BU-S8): `rows[row][col]` holds a NULL
+    // placeholder carrying the expression's byte until the dispatcher types
+    // it for its column and evaluates it, once, before any row is placed. A
+    // bare literal is never here - it keeps the shape it always had.
+    struct ValueExpr {
+        std::size_t row = 0;
+        std::size_t col = 0;
+        std::shared_ptr<const Expr> expr;
+    };
+    std::vector<ValueExpr> value_exprs;
+    // `INSERT ... SELECT` (BU-S8): the source in the query grammar, run by
+    // the query layer at the statement's snapshot and read whole before any
+    // row is placed; `rows` is then empty. `select_text` is the statement's
+    // text, which the query's spans index.
+    std::shared_ptr<const Query> select;
+    std::string select_text;
+    std::uint32_t select_byte_offset = 0;
+    // `ON CONFLICT [(col)] DO NOTHING` (BU-S8, BU-Q18): a row whose tuple key
+    // is placed is skipped. `conflict_target` is the written `(col)`, which
+    // the dispatcher requires to be the tuple key.
+    bool on_conflict_do_nothing = false;
+    std::optional<IndexColumnRef> conflict_target;
+    Returning returning;
     DescribedShape described;
 };
 
@@ -666,6 +714,10 @@ struct SelectStmt {
     // the predicate that attached it.
     RelationRef from;
     std::vector<JoinClause> joins;  // empty = single-relation statement
+    // `UPDATE ... FROM` / `DELETE ... USING`'s block (BU-S8): it and the
+    // statement it qualifies are one name space, so a bare column both have
+    // is ambiguous rather than this block's.
+    bool shares_parent_names = false;
 
     std::vector<Condition> where;  // empty = no WHERE clause; AND-combined
 
@@ -789,10 +841,28 @@ enum class ExprOp : std::uint8_t {
     // `kCall`: a scalar function by name (`Expr::function`), BJ-S6. Which
     // names exist, their signatures and their results are the typer's.
     kFunction,
+    // The query layer's forms (BU-S4, `workorder-bu-basic-query-surface.md`
+    // BU-Q8), parsed only by `Parser::ParseQuery`; a SET value never holds
+    // one. `kBinary`: `lhs LIKE rhs` (BU-Q6). `kCall`: `args[0] IN (args[1..])`.
+    // `kSubquery`: a scalar `(SELECT ...)`, `EXISTS (SELECT ...)`, and
+    // `lhs IN (SELECT ...)`. `NOT LIKE`, `NOT IN` and `NOT EXISTS` are `kNot`
+    // over the form; `BETWEEN` is the `AND` of two comparisons.
+    kLike,
+    kInList,
+    kScalarSubquery,
+    kExists,
+    kInSubquery,
 };
 
+struct Query;  // a query-layer subquery - see Expr::query
+
 struct Expr {
-    enum class Kind : std::uint8_t { kLiteral, kColumn, kUnary, kBinary, kCall, kSubquery };
+    // `kAggregate` is the query layer's (BU-S4): `COUNT(*)`, `SUM(x)`, ... over
+    // an expression, its function in `agg_func` and its argument in `lhs`
+    // (null for `COUNT(*)`).
+    enum class Kind : std::uint8_t {
+        kLiteral, kColumn, kUnary, kBinary, kCall, kSubquery, kAggregate
+    };
 
     Kind kind = Kind::kLiteral;
 
@@ -825,6 +895,9 @@ struct Expr {
     bool bare_numeric = false;
 
     std::string column;         // kColumn, as written
+    // kColumn: the relation it is qualified by, `a` in `a.x`; empty when
+    // written bare. Only the query grammar reads one (BU-S4).
+    std::string qualifier;
     ExprOp op = ExprOp::kAdd;   // kUnary, kBinary, kCall
     std::shared_ptr<const Expr> lhs;  // kUnary's operand, kBinary's left
     std::shared_ptr<const Expr> rhs;  // kBinary's right
@@ -836,6 +909,80 @@ struct Expr {
     // the SELECT path once, before the walk.
     std::shared_ptr<SelectStmt> subquery;
     std::string subquery_sql;
+    // kSubquery under the query grammar (BU-S4): the block as a query-layer
+    // query, `op` saying which form; `subquery` is then unset.
+    std::shared_ptr<const Query> query;
+    // kAggregate: the function, `DISTINCT` as written.
+    AggFunc agg_func = AggFunc::kCount;
+    bool agg_distinct = false;
+};
+
+// ---- The query layer's statement (BU-S4, BU-Q8) ---------------------------
+//
+// What `Parser::ParseQuery` makes of a SELECT the native grammar refuses:
+// value expressions in the select list, `DISTINCT`, `ORDER BY` an
+// expression, an alias or an ordinal, `HAVING` over expressions, every join
+// kind, derived tables and set operations. **Never a `Statement`**: the
+// dispatcher reaches it only after the native parse or compile refused
+// (BU-Q9), and runs it through `exec/query_layer.hpp`.
+
+// `OutputItem` - one select-list item - is above, with the DML statements
+// that carry a RETURNING list of them.
+
+enum class JoinKind : std::uint8_t { kInner, kLeft, kRight, kFull, kCross };
+
+// One FROM item: a relation, or a derived table `(SELECT ...) AS name`.
+struct FromItem {
+    RelationRef rel;                      // `rel.alias` is a derived table's name
+    std::shared_ptr<const Query> derived;  // set for a derived table
+    std::uint32_t byte_offset = 0;
+};
+
+// A FROM item joined to everything left of it.
+struct FromJoin {
+    JoinKind kind = JoinKind::kInner;
+    FromItem item;
+    std::shared_ptr<const Expr> on;    // unset for CROSS, a comma and USING
+    std::vector<ColumnName> using_columns;
+    std::uint32_t byte_offset = 0;     // the join's first word
+    bool comma = false;                // a `,` rather than CROSS JOIN: binds looser than JOIN
+};
+
+// One `SELECT ... [FROM ...] [WHERE ...] [GROUP BY ...] [HAVING ...]` block.
+struct QueryBlock {
+    bool distinct = false;
+    std::vector<OutputItem> items;
+    bool has_from = false;  // `SELECT 1 + 1` has none
+    FromItem from;
+    std::vector<FromJoin> joins;
+    std::shared_ptr<const Expr> where;
+    // A conjunct's text span `[begin, end)` per top-level `AND` term of the
+    // WHERE, in written order, so a term the native grammar reads can be
+    // walked natively (BU-Q8).
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> where_spans;
+    std::vector<std::shared_ptr<const Expr>> group_by;
+    std::shared_ptr<const Expr> having;
+    std::uint32_t byte_offset = 0;
+};
+
+struct OrderItem {
+    std::shared_ptr<const Expr> expr;
+    bool descending = false;
+};
+
+// A block, or a set operation over two queries; the order and the count
+// apply to the whole.
+struct Query {
+    enum class Op : std::uint8_t { kBlock, kUnion, kIntersect, kExcept };
+    Op op = Op::kBlock;
+    bool all = false;  // `UNION ALL`, ...
+    std::shared_ptr<const QueryBlock> block;  // kBlock
+    std::shared_ptr<const Query> lhs;         // the set operations
+    std::shared_ptr<const Query> rhs;
+    std::vector<OrderItem> order_by;
+    std::optional<std::uint64_t> limit;
+    std::uint64_t offset = 0;
+    std::uint32_t byte_offset = 0;
 };
 
 struct Assignment {
@@ -869,6 +1016,7 @@ struct UpdateStmt {
     std::uint32_t table_byte_offset = 0;
     std::vector<Assignment> assignments;  // SET list, at least one
     std::vector<Condition> where;         // empty = no WHERE clause; AND-combined
+    Returning returning;
 };
 
 // `DELETE FROM <t> [WHERE ...]`.
@@ -887,6 +1035,7 @@ struct DeleteStmt {
     std::string schema;  // see the namespace-qualifier rule above
     std::uint32_t table_byte_offset = 0;
     std::vector<Condition> where;  // empty = every row
+    Returning returning;
 };
 
 // `PURGE FROM <t> WHERE <tuple key comparisons>` (BH,
@@ -1012,6 +1161,7 @@ struct IndexStmt {
     std::uint32_t byte_offset = 0;        // of the index name
     std::uint32_t table_byte_offset = 0;
     bool drop = false;
+    bool unique = false;  // `CREATE UNIQUE INDEX` (BX)
 };
 
 // `CREATE ASSERTION <name> ON <rel> GROUP BY (<col>, ...)

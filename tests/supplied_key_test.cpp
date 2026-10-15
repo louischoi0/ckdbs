@@ -340,6 +340,35 @@ std::vector<std::uint64_t> EmittedIds(const std::string& response) {
     return ids;
 }
 
+TEST_F(SuppliedKeySqlTest, AStrictTupleKeyWindowReturnsExactlyItsKeysAcrossLeaves) {
+    // `>` and `<` compile to a range walk (an inclusive window one key in
+    // from each), so a wrong +1 or -1 would drop or add an edge row here,
+    // and 200 rows span several leaves for the seek and the pruning.
+    auto d = Dispatcher();
+    CreateBtree(d);
+    const int kRows = 200;
+    for (int id = 1; id <= kRows; ++id) {
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", " +
+                             std::to_string(id) + ")")
+                      .response.substr(0, 8),
+                  "INSERTED");
+    }
+    auto ids_of = [&](const std::string& where) {
+        return EmittedIds(d.Dispatch("SELECT * FROM t WHERE " + where).response);
+    };
+    auto window = [](std::uint64_t lo, std::uint64_t hi) {
+        std::vector<std::uint64_t> out;
+        for (std::uint64_t id = lo; id <= hi; ++id) out.push_back(id);
+        return out;
+    };
+    EXPECT_EQ(ids_of("id >= 120 AND id < 150"), window(120, 149));
+    EXPECT_EQ(ids_of("id > 120 AND id <= 150"), window(121, 150));
+    EXPECT_EQ(ids_of("id > 0 AND id < 201"), window(1, 200));
+    EXPECT_EQ(ids_of("id >= 190 AND id < 1000"), window(190, 200));
+    EXPECT_TRUE(ids_of("id > 5 AND id < 6").empty());
+    EXPECT_TRUE(ids_of("id >= 0 AND id < 0").empty());
+}
+
 TEST_F(SuppliedKeySqlTest, OrderByEmitsKeyOrderAfterADescendingLoad) {
     auto d = Dispatcher();
     CreateBtree(d);

@@ -1,7 +1,7 @@
 # ASSERTION — Group-Level Declarative Constraints
 
 Status: **ADOPTED (v1 scope), built and enforcing on every core**
-Related documents: `docs/spec/cabin.md` (§12 is the Bound Cabin class split this spec requires), `docs/spec/wal.md`, `docs/spec/txn.md`, `docs/spec/foreign-keys.md`, `docs/spec/crosscore.md`. The U5 durability tier §5 cites is a design reference with no owning doc — v1 has no unique index (`docs/spec/index.md` IX11). ANALYZE's surface is `manual/sql/sql.md` §4.
+Related documents: `docs/spec/cabin.md` (§12 is the Bound Cabin class split this spec requires), `docs/spec/wal.md`, `docs/spec/txn.md`, `docs/spec/foreign-keys.md`, `docs/spec/crosscore.md`. The U5 durability tier §5 cites is a design reference with no owning doc; the unique index BX built (`docs/spec/index.md` §10.2, IX11) is a write check, not that tier. ANALYZE's surface is `manual/sql/sql.md` §4.
 
 ---
 
