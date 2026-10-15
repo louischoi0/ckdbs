@@ -4,9 +4,11 @@ Written 2026-10-15 on `worktree-bx-unique-index` from `87d2893c`
 (`v3.2.0-58-g87d2893c`), on the operator's word, recorded in English:
 
 - **W0**: "Compose the milestone for the UNIQUE constraint and index."
-
-W0 asks for the order, not for the work: **BX opens no stage until the
-operator marks it** (§4's questions, then §6). Nothing below is ratified.
+- **W1** (2026-10-15): *"BX-Q1..Q5 $!a, go ahead"* - every question
+  marked (a) by the operator, and BX opened. **BX-Q1 (a) is the operator's
+  choice against CLA's proposal (b)**: `CREATE UNIQUE INDEX` is the one
+  surface, `UNIQUE` in `CREATE TABLE` stays refused, and BX-S4 is cut.
+  Q2..Q5 (a) are CLA's proposals (`raft-marks-2026-10-15.md` §3).
 
 **Claim tags**: `[source-read]` with `path:line` at `87d2893c`; `[design]`
 for reasoning about code not yet written; `[quiet-wrong]` where a wrong
@@ -137,8 +139,11 @@ strings.
 
 **BX-R3 — two writers of one key are serialized by a key unit**
 (BX-Q2 decides how long it is held). A new unit, `LockUnit::kIndexKey`,
-identified by the index's oid and a hash of the **encoded** key masked to
-63 bits, so `hi = lo + 1` cannot wrap. A writer that writes a key of a
+named under the **relation's** oid - so the writer's `IX` on the relation
+is its intention, and an index oid, a different number space (§1), never
+stands where a relation oid is read - with an interval that is a hash of
+the index's oid and the **encoded** key, masked to 63 bits so
+`hi = lo + 1` cannot wrap. A writer that writes a key of a
 unique index takes it `X` **before its check** and holds it at least until
 its entry is appended. A hash collision costs a wait, never an answer: the
 check still compares values. The unit draws wait-for edges, the deadlock
@@ -146,10 +151,10 @@ detector sees it, and nothing of it is persisted.
 
 The unit sits outside the relation-range-slice-tuple nesting: it is a
 descendant of none, takes no intention on anything, and **a fence never
-overlaps it**. Because an index oid can equal a relation oid (§1),
-`Overlaps` and every fence scan must compare the unit as well, or a
-relation's whole-range `X` fence on oid `N` meets the key units of index
-`N` - spurious waits and deadlocks, never a wrong answer.
+overlaps it**. A key unit shares its relation's oid with every fence on
+that relation, so `Overlaps` must compare the unit as well, or a
+whole-range `X` fence `[0, 2^48)` meets every key unit whose hash falls
+inside it - spurious waits and deadlocks, never a wrong answer.
 
 **BX-R4 — the check runs before the row is placed.** A refused write has
 written nothing: no placement to take back, no entry, no log record. The
@@ -212,7 +217,7 @@ inherits it.
 
 ---
 
-## 4. Questions — open, each with CLA's proposal
+## 4. Questions — every one marked (a) by the operator (W1)
 
 **BX-Q1 — the surface.**
 - (a) `CREATE UNIQUE INDEX <name> ON <t> (<cols>) [COVERING (...)]` only.
@@ -228,7 +233,8 @@ already has one (`manual/sql/sql.md`, "No cross-dialect shims"), and (b)'s
 own spelling, not another dialect's, and W0 names the constraint beside the
 index. **CLA proposes (b)**, built as its own stage (BX-S4) so it can be
 cut without touching the rest; (c) is refused `NotImplemented` naming
-`CREATE UNIQUE INDEX`.
+`CREATE UNIQUE INDEX`. **Marked (a) by the operator (W1)**: BX-S4 is cut,
+and `UNIQUE` in `CREATE TABLE` keeps its refusal.
 
 **BX-Q2 — how long the key unit is held** `[quiet-wrong]`.
 - (a) **Released once the row's entry is appended.** By then the row and
@@ -300,8 +306,9 @@ resolve each under a minted check view, compare full values, answer
 held / free / busy with the holder. Cells: every row of BX-R1's table,
 a string pair sharing a 32-byte prefix (free), a surplus entry after an
 UPDATE moved the key (free), a rolled-back and a purged key (free), a
-hash collision (a wait, then free), a relation's whole-range `X` fence and
-a key unit of an index with the same oid (no conflict).
+relation's whole-range `X` fence and a key unit of that relation whose hash
+falls inside it (no conflict). A hash collision is a wait at the
+dispatcher, so its cell is BX-S2's.
 
 **BX-S2 — `CREATE UNIQUE INDEX`, one core.** The parser's and the
 catalog's refusals replaced; the flag written; superblock 27; `SHOW
@@ -325,9 +332,8 @@ and repeated, never a single run (`mutation-testing-concurrency`). The
 simulation harness gains a unique index in its schema and an oracle that
 asserts no two live rows share a key after every restart.
 
-**BX-S4 — `UNIQUE` in `CREATE TABLE`** (only if BX-Q1 is (b)). The column
-and table constraint forms, the derived name, one transaction with the
-relation; `ALTER TABLE ... ADD CONSTRAINT` refused with its byte.
+**BX-S4 — cut** (BX-Q1 (a), W1). `UNIQUE` in `CREATE TABLE` keeps its
+refusal.
 
 **BX-S5 — the close.** `docs/spec/index.md` IX11 rewritten as the rule BX
 built, §8's "there is no unique index" sentence and §13's list updated;
@@ -344,11 +350,27 @@ the run walk, stated).
 
 ## 6. Where to start
 
-The operator marks BX-Q1..Q5. BX-S1 needs Q2 and Q3; BX-S2 needs Q4 and
-Q5; BX-S4 needs Q1.
+Every question is marked (W1). BX-S1 is the first stage.
 
 ---
 
 ## 7. Stage log
 
-Empty: no stage has opened.
+**BX-S1 - landed 2026-10-15** on `worktree-bx-unique-index`.
+`LockUnit::kIndexKey` (`LockKey::IndexKey`, 63-bit mask; `Overlaps` excludes
+it), and `exec::EncodeUniqueKey` / `UniqueKeyUnit` / `CheckUniqueKey` /
+`UniqueViolation` in `index_maintain.{hpp,cpp}`, the key encode shared with
+`AppendIndexEntry` through one helper. 17 cells in
+`tests/index_unique_test.cpp`; a mutant of `Overlaps` fails both key-unit
+cells. `critics-developer`: no S1 bug; accepted - the encode loop and the
+moved test merged into one helper (`UniqueKeyMoved` deleted), the redundant
+finalizer cut, BX-R3's text corrected to the code's naming, a purged-key and
+a DATE-key cell added. Rejected - a shared `IndexLayoutOf` across
+`step_vm.cpp` and `index_ddl.cpp` (outside BX; the helper stays local to
+`index_maintain.cpp`), reusing another file's FNV-1a (each is file-local).
+Deferred to S2 - `BorrowOrWait`'s refusal text for a key unit, the
+hash-collision cell. Suite: 3951/3951 before the review fixes; after them
+3952/3953, the one failure
+`DropTableReclaimServingTest.ATwoCoreMountReclaimsOnceEveryCoreHasCheckpointedWhileServing`,
+the load flake `known-gaps.md` records, 10/10 alone. Overhead not measured;
+measured at the milestone's close.

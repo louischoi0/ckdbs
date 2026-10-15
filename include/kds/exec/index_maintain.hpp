@@ -3,12 +3,16 @@
 #include <cstdint>
 #include <span>
 #include <functional>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/txn/lock_table.hpp"
+#include "kds/txn/read_view.hpp"
 
 // The secondary-index write hook (docs/spec/index.md §2, workplan IX06):
 // one implementation, called from the same three doors `fk_check.hpp` uses.
@@ -153,5 +157,77 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::span<const parser::AstValue> previous = {},
                                   const IndexWriteLog* log = nullptr,
                                   catalog::Catalog* publish = nullptr);
+
+// ---- Unique indexes (BX, `instructions/v3.2.0/workorder-bx-unique-index.md`)
+//
+// A unique index refuses a write that would give two live rows one key
+// value. Its entries are still a superset (IX1, IX2): a key's run names rows
+// that moved off the key, were deleted, rolled back or purged, and with a
+// string longer than `kIndexStringKeyBytes` rows sharing only the prefix.
+// So the check walks the run, resolves every tuple key it names and
+// compares **full values** at latest state (BX-R1, BX-R2), never the encoded
+// key alone.
+//
+// **Called holding no page.** The check descends the clustered tree, and two
+// user relation pages are unordered (`page.md` §6): a writer holding its own
+// leaf while it descends to another could deadlock against a writer doing
+// the reverse. An INSERT checks before its placement; an UPDATE stops its
+// walk and checks with its span released (BX-R4).
+
+// One key of one unique index, as a write would carry it: the encoded key
+// the index orders by, and the values it was encoded from, coerced to their
+// columns' storage forms, in declared index order.
+struct UniqueKey {
+    std::vector<std::byte> encoded;
+    std::vector<parser::AstValue> values;
+};
+
+// `values`/`first_col_pos`/`previous` as `AppendIndexEntry` takes them.
+// Empty when the write moved no key column of `ix` - never for an INSERT's
+// empty `previous`: a covered column moving appends an entry but is not
+// checked (BX-R5), so the gate is the key, not the append.
+StatusOr<std::optional<UniqueKey>> EncodeUniqueKey(const catalog::TableAccess& access,
+                                                   const catalog::TableAccess::IndexRef& ix,
+                                                   std::span<const parser::AstValue> values,
+                                                   std::uint16_t first_col_pos,
+                                                   std::span<const parser::AstValue> previous = {});
+
+// The lock unit a writer of `key` takes `X` from its check to its append
+// (BX-R3, BX-Q2 (a)): the relation's oid, and a hash of the index's oid and
+// the encoded key.
+txn::LockKey UniqueKeyUnit(const catalog::TableAccess& access,
+                           const catalog::TableAccess::IndexRef& ix, const UniqueKey& key);
+
+struct UniqueVerdict {
+    enum class Kind : std::uint8_t {
+        kFree,  // no live row holds the key
+        kHeld,  // `tuple_key`'s latest version is live and carries the key
+        kBusy,  // `tuple_key` is being written by `writer`, undecided
+    };
+    Kind kind = Kind::kFree;
+    std::uint64_t tuple_key = 0;
+    std::uint64_t writer = 0;
+};
+
+// The latest-state check (BX-R1) under `check_view`, minted at check time
+// with the writer's own id (`TransactionManager::MintCheckView`), so the
+// writer's own pending rows count. `self` is the row being written - an
+// UPDATE's own row, which holds its old key - and is skipped.
+//
+// **Busy is conservative**: any row the run names whose latest writer is in
+// flight answers busy, whether or not its pending version carries the key -
+// the committed version under it may, and latest state does not walk undo.
+// A wait it did not need is the cost; a duplicate admitted is impossible.
+StatusOr<UniqueVerdict> CheckUniqueKey(storage::PageStore& store,
+                                       const catalog::TableAccess& access,
+                                       const catalog::TableAccess::IndexRef& ix,
+                                       const UniqueKey& key, const txn::ReadView& check_view,
+                                       std::uint64_t self);
+
+// BX-R6's refusal: `AlreadyExists`, naming the index, its columns and values,
+// the tuple key that holds them and `byte`, the written value's position.
+Status UniqueViolation(const catalog::TableAccess& access,
+                       const catalog::TableAccess::IndexRef& ix, std::string_view index_name,
+                       const UniqueKey& key, std::uint64_t holder, std::uint32_t byte);
 
 }  // namespace kds::exec

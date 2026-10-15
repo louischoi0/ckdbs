@@ -22,3 +22,12 @@
 | **Does not settle** | Relation names (untouched); a relation created before uniqueness-ignoring-case holding a case pair, whose two columns no statement can name (stated in the manual and `catalog.md` CT7); BW-Q11's positional-`INSERT` gap; cleaning (D-e); no tag, no version |
 | **Recorded at** | this file; `index.md`'s row for it; `workorder-bw-instant-add-drop-column.md` §6 |
 
+
+## 3. BX written, BX-Q1..Q5 marked (a), BX opened
+
+| | |
+|---|---|
+| **Word** | *"Compose the milestone for the UNIQUE constraint and index."* (W0), then *"BX-Q1..Q5 $!a, go ahead"* (W1) |
+| **Mark** | **BX-Q1 (a)**: `CREATE UNIQUE INDEX` is the one surface; `UNIQUE` in `CREATE TABLE` and `ALTER TABLE ... ADD CONSTRAINT` stay refused, so BX-S4 is cut - **the operator's choice, against CLA's proposal (b)**. **BX-Q2 (a)**: the key unit is released once the row's entry is appended. **BX-Q3 (a)**: a busy verdict uses the waits that exist; row 2 onward of a multi-row `INSERT`, and a KWP load row past its chunk's first, is refused `TxnConflict`. **BX-Q4 (a)**: checked per row, immediately. **BX-Q5 (a)**: a nullable key column stays refused. Q2..Q5 are as CLA proposed. *"go ahead"* opens BX at BX-S1 |
+| **Does not settle** | INSERT resume (BX-Q3 (b)); NULLs in a unique key; a foreign key referencing a unique column; no tag, no version |
+| **Recorded at** | this file; `workorder-bx-unique-index.md` (header W1, §4, §5, §6); `index.md`'s row for it |

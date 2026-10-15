@@ -191,12 +191,23 @@ class WakeRegistry;
 namespace kds::txn {
 
 // The nesting order is the enum's order, so an ancestor compares less than
-// its descendants.
+// its descendants - for the first four.
+//
+// **`kIndexKey` sits outside that nesting** (BX-R3,
+// `instructions/v3.2.0/workorder-bx-unique-index.md`): one value of one
+// unique index, taken `X` by a writer of that value from its check to its
+// append, so two writers of one key cannot both find it free. It is named
+// under its **relation's** oid - so the writer's `IX` on the relation is its
+// intention, as a tuple's is - and its interval is a hash of the index oid
+// and the encoded key, which no fence and no tuple share: `Overlaps` never
+// matches it. A hash collision costs a wait, never an answer; the check
+// compares values.
 enum class LockUnit : std::uint8_t {
     kRelation = 1,
     kRange = 2,
     kSlice = 3,
     kTuple = 4,
+    kIndexKey = 5,
 };
 
 enum class LockMode : std::uint8_t {
@@ -281,6 +292,12 @@ struct LockKey {
     static constexpr LockKey Tuple(catalog::Oid rel, std::uint64_t tuple_key) noexcept {
         return LockKey{rel, LockUnit::kTuple, tuple_key, tuple_key + 1};
     }
+    // `key_hash` names the index and the encoded value together
+    // (`exec::UniqueKeyUnit`); masked to 63 bits so `hi = lo + 1` cannot wrap.
+    static constexpr LockKey IndexKey(catalog::Oid rel, std::uint64_t key_hash) noexcept {
+        const std::uint64_t lo = key_hash & (~std::uint64_t{0} >> 1);
+        return LockKey{rel, LockUnit::kIndexKey, lo, lo + 1};
+    }
 
     friend constexpr bool operator==(const LockKey& a, const LockKey& b) noexcept {
         return a.rel_oid == b.rel_oid && a.unit == b.unit && a.lo == b.lo && a.hi == b.hi;
@@ -300,9 +317,12 @@ struct LockKey {
     // Do two units' key intervals meet? A relation unit carries the empty
     // interval `[0, 0)` and therefore overlaps nothing - which is right,
     // because a relation conflict is caught at the relation entry by the
-    // intention rule and never needs a scan.
+    // intention rule and never needs a scan. An index-key unit's interval is
+    // a hash, not tuple keys, so it overlaps nothing either: a fence over
+    // `[0, 2^48)` must not meet a key unit whose hash falls inside it.
     constexpr bool Overlaps(const LockKey& other) const noexcept {
-        return rel_oid == other.rel_oid && lo < other.hi && other.lo < hi;
+        return rel_oid == other.rel_oid && unit != LockUnit::kIndexKey &&
+               other.unit != LockUnit::kIndexKey && lo < other.hi && other.lo < hi;
     }
 };
 
