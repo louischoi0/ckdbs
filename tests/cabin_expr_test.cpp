@@ -708,10 +708,8 @@ TEST_F(CabinPredicateTest, SpellingsOfOneLiteralAndNullTestsMatch) {
 // A conjunct on an **enclosing** row's columns is not the step's own, though
 // it names the same positions: served from `p`'s set, the inner step would
 // answer as though its own row passed `p`. Matched only on own columns, the
-// step is no Cabin probe and the Cabin changes no answer. (The answer itself
-// is the inner build's to get right - such a step takes no build since
-// `join-inner-build.md` §8 excluded it - and its contract suite pins that
-// against hand-computed rows.)
+// step is no Cabin probe and the Cabin changes no answer - and the answer is
+// twin's own rows passing `p`, since every twin row has its `sym` twin in `t`.
 TEST_F(CabinPredicateTest, AnEnclosingRowsConjunctIsNotTheStepsOwn) {
     ASSERT_FALSE(ServedAsWalked(kExact));
     const std::string sql =
@@ -720,6 +718,7 @@ TEST_F(CabinPredicateTest, AnEnclosingRowsConjunctIsNotTheStepsOwn) {
     const std::string analyzed = Run("ANALYZE " + sql);
     EXPECT_EQ(analyzed.find("CabinProbe"), std::string::npos) << analyzed;
     const std::string reply = Run(sql);
+    EXPECT_EQ(reply, Run("SELECT id FROM twin WHERE state = 'closed' AND amount > 1000"));
     Ok("DROP CABIN ON t (state = 'closed' AND amount > 1000)");
     EXPECT_EQ(reply, Run(sql)) << "the Cabin changed the answer";
 }

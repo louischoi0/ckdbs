@@ -513,7 +513,8 @@ On `worktree-aq-expression-cabins` from `1099ad88`.
   through is S2's, whose rig cell covers it.
 - **Found, not caused by AQ**: an inner build buckets a conjunct on the
   enclosing row by the first outer row alone `[quiet-wrong]`
-  (`docs/inflight/bugs/an-inner-build-buckets-outer-only-conjuncts-for-the-first-outer-row.md`),
+  (`docs/inflight/bugs/an-inner-build-buckets-outer-only-conjuncts-for-the-first-outer-row.md`,
+  removed when `a406b508` fixed it: `git show a406b508^:<path>`),
   reproduced with no Cabin; not fixed here (`join-inner-build.md`'s).
 - **Suite**: 3911/3911. Overhead not measured; measured at the milestone's
   close.
@@ -599,7 +600,8 @@ On `worktree-aq-expression-cabins`.
   the heap hint-failure re-record under `F` has a cell only for a cover
   (`AHeapCoversFailedHintBanksNothing`); and the inner-build `[quiet-wrong]`
   AQ-S3 found, not AQ's
-  (`docs/inflight/bugs/an-inner-build-buckets-outer-only-conjuncts-for-the-first-outer-row.md`).
+  (`docs/inflight/bugs/an-inner-build-buckets-outer-only-conjuncts-for-the-first-outer-row.md`,
+  since fixed at `a406b508`).
 - **Review of the close's code** (`critics-developer`, the merge's
   resolution and `e53514f2`): no bug; `witnessed` is exactly the per-row
   test it replaces. Applied: one `CabinsWitness` for the early return and

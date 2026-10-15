@@ -21,9 +21,7 @@ TEST_F(InnerBuildContractTest, EveryCapAnswersTheSameBytes) {
     // The whole contract in one sweep: default (build + probe), 0 (pure
     // walk), 1 and 2 (capped mid-build), 5 (exactly the inner row count -
     // the boundary that must still publish). Byte-for-byte, order
-    // included. The EXISTS row cannot deviate today - the stopping class
-    // is gated out of the arm at every cap - and is here so the sweep
-    // starts failing the day JB6 arms it with the rule wrong.
+    // included, the EXISTS row's prefix map (spec §6) among them.
     const char* statements[] = {
         "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id",
         "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id WHERE tr.qty <= 30",
@@ -230,6 +228,8 @@ TEST_F(InnerBuildContractTest, AConjunctOnTheOuterRowDeclinesTheBuild) {
             ExecStats stats;
             EXPECT_EQ(Run(sql, &stats, cap), expected) << sql << " at cap " << cap;
             EXPECT_EQ(stats.Total().build_rows, 0u) << sql << " at cap " << cap;
+            EXPECT_EQ(stats.Total().inner_builds, 0u) << sql << " at cap " << cap;
+            EXPECT_EQ(stats.Total().build_probes, 0u) << sql << " at cap " << cap;
         }
     }
 }
