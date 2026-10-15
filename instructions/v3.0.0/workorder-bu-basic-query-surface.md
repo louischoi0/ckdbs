@@ -501,3 +501,11 @@ not the reason; `HAVING NULL` is refused as not a bool, BU-Q11's lone
 folding the grouped `resolve` lambda into `ResolveIn` (the review's cut 1),
 which would merge two refusal messages a client reads apart; splitting the
 overflow check by width, which reads no simpler.
+
+### BU-S5 - the suite and F004, stated
+
+Full suite (Debug, `-LE heap-suspended`) at `58c15228`: 3,964/3,964; at
+`17500b6b`, with the review applied: 3,969/3,969. F004 against a release
+build at `17500b6b`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
+P07 refused by BU-Q13, **phase 3 8/8**, phases 4-6 unbuilt behind the gate
+(D01 answers natively), wrong=0 in every phase - S5's gate is met.
