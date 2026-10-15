@@ -9365,7 +9365,9 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // is the other statement shape whose cost is otherwise linear in the
     // relation. Any reason to decline falls through to the scan, which
     // produces the identical result - the locator picks the slot to look
-    // at, never which rows match.
+    // at, never which rows match. Its target is the WHERE's only conjunct,
+    // so a point write carries no subquery to evaluate under the exclusive
+    // leaf (the collection pass's reason, below).
     if (std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where); tuple_key.has_value()) {
         TupleKeyLookup found = LocateByTupleKey(ta, *tuple_key);
         if (found.kind == TupleKeyLookup::Kind::kAbsent) {
@@ -9396,12 +9398,17 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         }
     }
 
-    // **The collection pass**, when the WHERE reads the relation this writes
-    // (`exec::SubChainsRead`): a read walk that evaluates the WHERE over
-    // every row and writes nothing, so the walk below writes exactly the
-    // rows that matched before any was written. A resume carries its
-    // targets and does not collect again.
-    if (targets == nullptr && exec::SubChainsRead(predicates.value(), ta.oid)) {
+    // **The collection pass**, when the WHERE holds a subquery: a read walk
+    // that evaluates the WHERE over every row and writes nothing, so the
+    // walk below writes exactly the rows that matched and runs no subquery.
+    // Two reasons, either sufficient. Over the relation this writes, a
+    // subquery re-run per row would read the rows the statement has already
+    // written (parser-v2.md R2). Over any relation, it would read pages
+    // under the write walk's exclusive leaf: a held `X` asking an `S`, which
+    // two statements on two cores close into a cycle no latch wait breaks
+    // (`rules.md` §3's page latch row). A resume carries its targets and
+    // does not collect again, and one that collects nothing writes nothing.
+    if (targets == nullptr && !predicates.value().sub_chains.empty()) {
         auto collected = std::make_shared<std::unordered_set<std::uint64_t>>();
         collecting = collected.get();
         Status pass = VisitRelation(
@@ -9414,6 +9421,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             /*cursor=*/nullptr);
         collecting = nullptr;
         if (!pass.ok()) return {ErrorReply(pass), false, 0, pass};
+        if (collected->empty()) return {"UPDATED " + std::to_string(updated), false, updated};
         targets = std::move(collected);
     }
 
@@ -11040,6 +11048,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // The same point-lookup fast path SELECT and UPDATE take, and the same
     // contract: the locator picks the slot to look at, never which rows
     // match, so falling through to the scan produces the identical answer.
+    // Its target is the WHERE's only conjunct, so it carries no subquery.
     if (std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where); tuple_key.has_value()) {
         TupleKeyLookup found = LocateByTupleKey(ta, *tuple_key);
         if (found.kind == TupleKeyLookup::Kind::kAbsent) {
@@ -11063,7 +11072,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     }
 
     // The collection pass, and `UpdateInner`'s site states the argument.
-    if (targets == nullptr && exec::SubChainsRead(predicates.value(), ta.oid)) {
+    if (targets == nullptr && !predicates.value().sub_chains.empty()) {
         auto collected = std::make_shared<std::unordered_set<std::uint64_t>>();
         Status pass = VisitRelation(
             ta, storage::PageAccess::kRead,
@@ -11076,6 +11085,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             },
             /*cursor=*/nullptr);
         if (!pass.ok()) return {ErrorReply(pass), false, 0, pass};
+        if (collected->empty()) return {"DELETED " + std::to_string(deleted), false, deleted};
         targets = std::move(collected);
     }
 

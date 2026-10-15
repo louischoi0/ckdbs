@@ -3,8 +3,8 @@
 //
 // A subquery evaluated per row would see the rows this statement had already
 // written (a view always sees its own transaction's writes), and over another
-// relation it is the page-latch cycle the write walk's exclusive leaf makes
-// (`a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`).
+// relation it would be the page-latch cycle the write walk's exclusive leaf
+// makes (`rules.md` §3's page latch row).
 // So the answer is taken before the first row, and a subquery that reads the
 // row being updated is refused.
 

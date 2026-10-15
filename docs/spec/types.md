@@ -370,13 +370,13 @@ t)` assigns, while a decimal `SUM` or `AVG` is typed at the type's maximum
 precision (18, or 38 for `decimal128`) at the column's scale, and needs a
 `CAST` to a narrower column. So `SET v = v + (SELECT SUM(v) FROM t)` raises
 every row by the sum the table had before the statement, not by a sum that
-grows as the walk writes: **a WHERE-position subquery is re-run per row and
-sees the statement's earlier rows; a SET-position one does not.** A subquery
+grows as the walk writes - as a WHERE-position subquery is evaluated over the
+relation as it stood, before the first write (`parser-v2.md` R2). A subquery
 that reads the row being updated (a correlated one) is `NotImplemented`, as is
 one over a catalog view and the row form `SET (a, b) = (SELECT ...)`: a per-row
-sub-chain under the write walk's exclusive leaf is the open page-latch cycle
-(`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`),
-and a view always sees its own transaction's writes.
+sub-chain under the write walk's exclusive leaf would be the page-latch cycle
+`docs/rules/rules.md` §3's page latch row forbids, and a view always sees its
+own transaction's writes.
 
 It is **run wherever it is written**: a subquery inside a `CASE` branch no row
 takes, or after a `COALESCE` that settles, still runs, and its error (more than

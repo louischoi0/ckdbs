@@ -21,9 +21,7 @@ TEST_F(InnerBuildContractTest, EveryCapAnswersTheSameBytes) {
     // The whole contract in one sweep: default (build + probe), 0 (pure
     // walk), 1 and 2 (capped mid-build), 5 (exactly the inner row count -
     // the boundary that must still publish). Byte-for-byte, order
-    // included. The EXISTS row cannot deviate today - the stopping class
-    // is gated out of the arm at every cap - and is here so the sweep
-    // starts failing the day JB6 arms it with the rule wrong.
+    // included, the EXISTS row's prefix map (spec §6) among them.
     const char* statements[] = {
         "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id",
         "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id WHERE tr.qty <= 30",
@@ -204,6 +202,35 @@ TEST_F(InnerBuildContractTest, ANullProbeNotInStopsItsWalkAndAnswersTheSameBuilt
     for (std::size_t cap : {std::size_t{1}, std::size_t{2}, std::size_t{5},
                             kDefaultJoinBuildMaxRows}) {
         EXPECT_EQ(Run(sql, nullptr, cap), reference) << "cap " << cap;
+    }
+}
+
+// A conjunct beside the keyed equality that reads an earlier step's or the
+// enclosing row's column is a property of the outer row, not of the inner
+// relation: bucketed against the first outer row, it dropped every later
+// row's matches (`join-inner-build.md` §8). The step takes no build, and
+// every cap answers the walk's rows, pinned by hand.
+TEST_F(InnerBuildContractTest, AConjunctOnTheOuterRowDeclinesTheBuild) {
+    const std::pair<const char*, std::vector<std::string>> cases[] = {
+        // The enclosing row's column against a literal: alice's walk would
+        // bucket nothing, and bob's probe would answer an empty bucket.
+        {"SELECT au.name FROM au WHERE EXISTS (SELECT tr.id FROM tr WHERE au.name = 'bob' "
+         "AND tr.au_id = au.id)",
+         {"bob"}},
+        // An earlier step's column in a non-equality: alice's walk would
+        // bucket tr id 1 alone, and bob's (2,20) would be missed.
+        {"SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id WHERE tr.id <= au.id",
+         {"alice|10", "bob|20"}},
+    };
+    for (const auto& [sql, expected] : cases) {
+        for (std::size_t cap : {std::size_t{0}, std::size_t{1}, std::size_t{5},
+                                kDefaultJoinBuildMaxRows}) {
+            ExecStats stats;
+            EXPECT_EQ(Run(sql, &stats, cap), expected) << sql << " at cap " << cap;
+            EXPECT_EQ(stats.Total().build_rows, 0u) << sql << " at cap " << cap;
+            EXPECT_EQ(stats.Total().inner_builds, 0u) << sql << " at cap " << cap;
+            EXPECT_EQ(stats.Total().build_probes, 0u) << sql << " at cap " << cap;
+        }
     }
 }
 
