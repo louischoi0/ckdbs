@@ -618,7 +618,7 @@ TEST(WalPayloadTest, IndexInsertRoundTrips) {
 }
 
 TEST(WalPayloadTest, IndexInsertRefusesAnEmptyEntryAndALyingLength) {
-    // An entry is never empty - a key is at least one byte plus the pk - and
+    // An entry is never empty - a key is at least one byte plus the tuple key - and
     // a length claiming more than was written must not size a read.
     std::vector<std::byte> buf(kIndexInsertFixedSize + 4);
     EXPECT_FALSE(EncodeIndexInsert(buf, IndexInsertPayload{0, 0}, {}).ok());

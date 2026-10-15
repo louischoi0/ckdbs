@@ -76,7 +76,7 @@ TEST(ParserTest, CreateTableStillTakesEXPLICITInEitherOrderAndItDoesNothing) {
 
 TEST(ParserTest, CreateTableRefusesASSIGNEDWithItsByte) {
     // Not ignored, which would be accepting a spelling and enforcing
-    // something else: the word means "supplying a pk is refused", and on the
+    // something else: the word means "supplying a tuple key is refused", and on the
     // relation this statement makes, supplying one is admitted.
     auto stmt = Parse("CREATE TABLE t (id int64) HEAP ASSIGNED");
     ASSERT_FALSE(stmt.ok());
@@ -195,6 +195,54 @@ TEST(ParserTest, InsertRequiresAtLeastOneValue) {
     EXPECT_FALSE(stmt.ok());
 }
 
+// BW-S6 (BW-Q12.1 of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`):
+// a column list, each name with its byte, and the list's `(` byte. A
+// positional statement has none.
+TEST(ParserTest, InsertTakesAColumnListWithItsBytes) {
+    //                 0         1         2         3
+    //                 0123456789012345678901234567890123456
+    auto stmt = Parse("INSERT INTO t (b, id) VALUES (1, 2), (3, 4)");
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    auto* ins = std::get_if<InsertStmt>(&stmt.value());
+    ASSERT_NE(ins, nullptr);
+    EXPECT_EQ(ins->columns_byte_offset, 14u);
+    ASSERT_EQ(ins->columns.size(), 2u);
+    EXPECT_EQ(ins->columns[0].name, "b");
+    EXPECT_EQ(ins->columns[0].byte_offset, 15u);
+    EXPECT_EQ(ins->columns[1].name, "id");
+    EXPECT_EQ(ins->columns[1].byte_offset, 18u);
+    ASSERT_EQ(ins->rows.size(), 2u);
+    EXPECT_EQ(ins->rows[1][0].int_val, 3);
+
+    auto positional = Parse("INSERT INTO t VALUES (1)");
+    ASSERT_TRUE(positional.ok());
+    EXPECT_TRUE(std::get<InsertStmt>(positional.value()).columns.empty());
+}
+
+// BW-Q12.2, BW-Q12.5, BW-Q12.11, BW-Q12.12 step 1: every parse refusal of the
+// list is `InvalidArgument` at its token's byte.
+TEST(ParserTest, AColumnListsParseRefusalsNameTheirByte) {
+    struct Case {
+        const char* sql;
+        const char* at;
+    };
+    const Case cases[] = {
+        {"INSERT INTO t () VALUES (1)", "at byte 15"},       // empty list: the `)`
+        {"INSERT INTO t (1) VALUES (1)", "at byte 15"},      // not an identifier
+        {"INSERT INTO t (?) VALUES (1)", "at byte 15"},      // a parameter is no name
+        {"INSERT INTO t (a,) VALUES (1)", "at byte 17"},     // a trailing comma
+        {"INSERT INTO t (a, b VALUES (1, 2)", "at byte 20"},  // the missing `)`
+        {"INSERT INTO t (a, b) (1, 2)", "at byte 21"},       // the missing VALUES
+    };
+    for (const Case& c : cases) {
+        auto stmt = Parse(c.sql);
+        ASSERT_FALSE(stmt.ok()) << c.sql;
+        EXPECT_EQ(stmt.status().code(), StatusCode::kInvalidArgument) << c.sql;
+        EXPECT_NE(stmt.status().message().find(c.at), std::string::npos)
+            << c.sql << " -> " << stmt.status().message();
+    }
+}
+
 TEST(ParserTest, SelectStarNoWhere) {
     auto stmt = Parse("SELECT * FROM accounts");
     ASSERT_TRUE(stmt.ok()) << stmt.status().message();
@@ -274,11 +322,11 @@ TEST(ParserTest, UpdateMultipleAssignmentsWithWhere) {
 }
 
 // K-M3's parser half, and it is a *negative* obligation: assigning the
-// primary key must reach the compiler, because which column is the pk is
+// tuple key must reach the compiler, because which column is the tuple key is
 // catalog knowledge and the parser has no catalog. A parser that guessed
 // - by the name `id`, say - would refuse a legal statement on a relation
 // whose second column happens to be called that.
-TEST(ParserTest, AssigningThePrimaryKeyParses) {
+TEST(ParserTest, AssigningTheTupleKeyParses) {
     auto stmt = Parse("UPDATE accounts SET id = 99");
     ASSERT_TRUE(stmt.ok()) << stmt.status().message();
 

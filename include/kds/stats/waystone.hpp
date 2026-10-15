@@ -31,9 +31,9 @@
 //
 // The consequence for every consumer, stated once: **a waystone may
 // replace a lookup, never a search.** A step whose authoritative work is a
-// keyed lookup - a pk equality, or a nested-loop join probing the next
-// relation by pk - may be served from the trail, because completeness for
-// that step follows from pk uniqueness rather than from the trail. A step
+// keyed lookup - a tuple key equality, or a nested-loop join probing the next
+// relation by tuple key - may be served from the trail, because completeness for
+// that step follows from tuple key uniqueness rather than from the trail. A step
 // that must search still searches, whatever the trail says.
 //
 // The failure modes are not symmetric, which is why the rule is a rule. A
@@ -121,7 +121,7 @@ static_assert(sizeof(WaystoneHeader) == kWaystoneHeaderSize);
 struct WaystoneEntry {
     // The tuple's Keystone id, zero-extended (invariant 7: the bits above
     // kKeystoneIdBits are 0). Never packed narrower than its eight bytes.
-    std::uint64_t pk;
+    std::uint64_t tuple_key;
 
     // **The field that makes a cross-relation trail possible.** One page
     // holds the Keystones of every relation the execution touched, so an
@@ -161,7 +161,7 @@ struct WaystoneEntry {
     std::uint16_t reserved;  // 0
 };
 
-inline constexpr std::size_t kWaystoneEntryPkOffset = 0;
+inline constexpr std::size_t kWaystoneEntryTupleKeyOffset = 0;
 inline constexpr std::size_t kWaystoneEntryRelOidOffset = 8;
 inline constexpr std::size_t kWaystoneEntryPageIdOffset = 16;
 inline constexpr std::size_t kWaystoneEntryPageEpochOffset = 20;
@@ -172,7 +172,7 @@ inline constexpr std::size_t kWaystoneEntryReservedOffset = 30;
 // 8+8+4+4+2+2+2+2 = 32, every field naturally aligned, no tail padding.
 inline constexpr std::size_t kWaystoneEntrySize = 32;
 
-static_assert(offsetof(WaystoneEntry, pk) == kWaystoneEntryPkOffset);
+static_assert(offsetof(WaystoneEntry, tuple_key) == kWaystoneEntryTupleKeyOffset);
 static_assert(offsetof(WaystoneEntry, rel_oid) == kWaystoneEntryRelOidOffset);
 static_assert(offsetof(WaystoneEntry, page_id) == kWaystoneEntryPageIdOffset);
 static_assert(offsetof(WaystoneEntry, page_epoch) == kWaystoneEntryPageEpochOffset);
@@ -183,8 +183,8 @@ static_assert(offsetof(WaystoneEntry, reserved) == kWaystoneEntryReservedOffset)
 static_assert(sizeof(WaystoneEntry) == kWaystoneEntrySize);
 
 // Set when the entry describes a tuple. A never-written entry reads back
-// all-zero, which decodes to pk 0 and page_id 0 - both plausible-looking
-// values - so a reader tests this flag, never `pk != 0`.
+// all-zero, which decodes to tuple key 0 and page_id 0 - both plausible-looking
+// values - so a reader tests this flag, never `tuple key != 0`.
 inline constexpr std::uint16_t kWaystoneEntryValid = 1u << 0;
 
 // ---- How many fit --------------------------------------------------------
@@ -196,7 +196,7 @@ inline constexpr std::uint16_t kWaystoneEntryValid = 1u << 0;
 //     (8160 - 40) / 32 = 8120 / 32 = 253 entries, 24 bytes of tail slack
 //
 // **Not a power of two, and that is now allowed.** The structure this
-// replaces addressed entries as `pk >> 8` / `pk & 0xFF`, which forced an
+// replaces addressed entries as `tuple key >> 8` / `tuple key & 0xFF`, which forced an
 // exact power-of-two tiling and left no room for a page header - which in
 // turn cost those pages their checksum. Nothing here is addressed by
 // arithmetic: a trail is walked front to back, so 253 is as good as 256

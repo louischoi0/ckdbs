@@ -67,6 +67,8 @@ add_library(kds
     src/stats/waystone_page.cpp
     src/stats/waystone_dir.cpp
     src/stats/trail_store.cpp
+    src/stats/lock_wait_log.cpp
+    src/stats/statement_stats.cpp
     src/stats/trail_recorder.cpp
     src/stats/access_stats.cpp
     src/stats/cabin_store.cpp
@@ -77,6 +79,7 @@ add_library(kds
     src/catalog/catalog.cpp
     src/bootstrap/bootstrap.cpp
     src/server/command_dispatcher.cpp
+    src/server/sys_views.cpp
     src/server/expeditor.cpp
     src/server/config_file.cpp
     src/server/tcp_server.cpp
@@ -111,7 +114,6 @@ add_library(kds
     src/exec/catalog_spills.cpp
     src/exec/purge_key.cpp
     src/exec/varheap_sweep.cpp
-    src/stats/trace.cpp
     src/exec/index_key.cpp
     src/exec/fk_check.cpp
     src/exec/plan_printer.cpp
@@ -125,7 +127,6 @@ add_library(kds
     src/exec/chain_frame.cpp
     src/exec/step_vm.cpp
     src/exec/budget.cpp
-    src/exec/catalog_view.cpp
     src/exec/trail_replay.cpp
     src/exec/tuple_verify.cpp
     src/exec/wal_row_log.cpp
@@ -133,6 +134,9 @@ add_library(kds
     src/exec/index_ddl.cpp
     src/exec/assertion_build.cpp
     src/exec/assertion_catalog.cpp
+    src/exec/declaration_relation.cpp
+    src/exec/transition_catalog.cpp
+    src/exec/transition.cpp
     src/exec/assertion_check.cpp
     src/exec/assertion_replay.cpp
     src/exec/assertion_violation.cpp

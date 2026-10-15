@@ -20,6 +20,7 @@
 #include "kds/exec/aggregate.hpp"
 #include "kds/exec/sort.hpp"
 #include "kds/exec/assertion_check.hpp"
+#include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/fk_check.hpp"
 #include "kds/exec/set_expr.hpp"
@@ -33,12 +34,14 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
+#include "kds/stats/lock_wait_log.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/coro.hpp"
 
 
-#include "kds/stats/trace.hpp"
 #include "kds/server/result_sink.hpp"
+#include "kds/server/sys_views.hpp"
+#include "kds/exec/catalog_view.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -57,7 +60,7 @@
 //
 // CREATE TABLE keeps a bare-name form with no parens, which asks for a
 // zero-column table and therefore always errors (every relation needs a
-// Keystone pk column); a '(' after the name selects the full form.
+// Keystone tuple key column); a '(' after the name selects the full form.
 //
 // Newline protocol: one command per line, case-insensitive keyword; a
 // response is exactly one line with no embedded newline - the listener
@@ -81,7 +84,7 @@
 // heap_chain.hpp) or a clustered B+ tree (`kBtree`, btree.hpp), and every
 // statement handler below branches on `TableAccess::clustered_type` in
 // exactly one place each - `InsertOneRow`'s placement, `VisitRelation`,
-// `LocateByPk`, and `LogInsert`'s record (a leaf's row is a `BTREE_INSERT`
+// `LocateByTupleKey`, and `LogInsert`'s record (a leaf's row is a `BTREE_INSERT`
 // or rides a `BTREE_SPLIT`, BD-R12).
 // Everything else in this file is storage-agnostic, which is possible
 // because a btree **leaf is a heap page**: the row codec, `PageView`
@@ -93,7 +96,7 @@
 //   - `SELECT`/`UPDATE ... WHERE id = <n>` on a btree relation descends
 //     the tree, which is **authoritative** - a miss means the row does not
 //     exist, and no scan follows. The same statement on a heap relation
-//     scans the chain, because a heap relation has no pk index at all.
+//     scans the chain, because a heap relation has no tuple key index at all.
 //   - `INSERT` may split a leaf and grow the tree a level, in which case
 //     the relation's `desc_page_id` is repointed at the new root before
 //     the client is answered.
@@ -211,9 +214,12 @@ struct DispatchOutcome {
     // names - and there the wait polls `IsInFlight`.
     struct WriteBlock {
         std::uint64_t trx_id = 0;  // the holder being waited for
-        std::uint64_t pk = 0;      // the row it holds
+        std::uint64_t tuple_key = 0;      // the row it holds
         txn::LockKey key{};        // the unit `slot` is registered on
         std::shared_ptr<txn::LockWaitSlot> slot;
+        // The mode the refused ask wanted, for `sys.lock_waits`; meaningful
+        // only beside a `slot`.
+        txn::LockMode mode = txn::LockMode::kExclusive;
     };
     std::optional<WriteBlock> write_block = std::nullopt;
 
@@ -242,6 +248,9 @@ struct DispatchOutcome {
         // transaction - false for a statement that is not the transaction's,
         // a `CREATE ASSERTION`'s build (AT-S5e).
         bool poisons = true;
+        // The mode the refused ask wanted (`sys.lock_waits`). Every site
+        // names it; the default is only aggregate initialization's.
+        txn::LockMode mode = txn::LockMode::kExclusive;
     };
     std::optional<LockWait> lock_wait = std::nullopt;
 
@@ -253,7 +262,7 @@ struct DispatchOutcome {
     // answers with that refusal at once, which is `response`. A poll,
     // because no release or horizon advance kicks it (`known-gaps.md`).
     struct PurgeWait {
-        std::uint64_t pk = 0;
+        std::uint64_t tuple_key = 0;
         std::uint64_t trx_id = 0;  // the writer waited for, or the deleter
         bool horizon = false;      // waiting for every reader, not a decide
     };
@@ -305,6 +314,12 @@ struct DispatchOutcome {
     // statement's head and the end of `DispatchAsync`, and would overwrite
     // a member.
     bool poison_withheld = false;
+
+    // **The statement's shape for `sys.statement_stats`** (BO-S5): its
+    // fingerprint's `fetch_id`, 0 for a kind that carries none (only
+    // `SELECT`, `INSERT` and `UPDATE` do). Carried for `poison_withheld`'s
+    // reason: another statement of this core can run before this one ends.
+    std::uint64_t fetch_id = 0;
 };
 
 // The one spelling of an error reply on the newline protocol (docs/spec/txn.md
@@ -443,6 +458,14 @@ public:
         // leave the later manager installed, the same relation the single
         // `catalog_` reference already has.
         if (txn != nullptr) catalog.SetTransactionManager(txn);
+        // The transition loader (BV-S2), here for the manager's reason: a
+        // construction site cannot forget it, so every serving catalog fills
+        // `TableAccess::transitions`. It captures the catalog and the store,
+        // never the dispatcher, which a test may destroy before them.
+        catalog.SetTransitionLoader(
+            [&catalog, &page_store](catalog::TableAccess& access) {
+                return exec::LoadTransitions(catalog, page_store, access);
+            });
         ArmAssertionRecordBudget();
     }
 
@@ -505,13 +528,13 @@ public:
     //                             for a BTREE relation), then one "\n"-escaped
     //                            (see SHOW PAGE above) section per column:
     //                            "pos=<n> name=<s> type=<s> len=<n>
-    //                             notnull=<yes|no> pk=<yes|no>
+    //                             notnull=<yes|no> tuple_key=<yes|no>
     //                             autoincrement=<if-omitted|no>". DESC is
     //                            accepted as a synonym.
     //   CREATE TABLE <name>   -> the bare, pre-parser form: a zero-column
     //                            table. Now always "ERR ...", because
     //                            every relation's first column is its
-    //                            mandatory Keystone primary key
+    //                            mandatory Keystone tuple key
     //                            (heap-and-tuple.md section 4) and a
     //                            zero-column relation cannot have one.
     //                            Kept only so the failure names the
@@ -523,23 +546,26 @@ public:
     //                            src/parser, types resolved through
     //                            Catalog::ResolveTypeByName(). The storage
     //                            word: BTREE (default) is a clustered B+
-    //                            tree on the Keystone pk; HEAP is refused
+    //                            tree on the Keystone tuple key; HEAP is refused
     //                            `Unsupported` since SUS-1. EXPLICIT is
     //                            accepted and does nothing; ASSIGNED is
     //                            refused. Either order, each at most once.
     //                            See src/exec/row_codec.hpp for the
     //                            supported column type set.
-    //   INSERT INTO <name> VALUES (<val> [, ...]) [, (...)]*
+    //   INSERT INTO <name> [(<col> [, ...])] VALUES (<val> [, ...]) [, (...)]*
     //                         -> "INSERTED oid=<n> id=<n> page=<n> slot=<n>"
     //                            for one row, "INSERTED oid=<n> rows=<n>
     //                            first_id=<n> last_id=<n>" for several, or
-    //                            "ERR ...". Positional, no column list; per
-    //                            row, `n` values name the pk first and
-    //                            `n - 1` have it issued (heap-and-tuple.md
-    //                            §4.1, invariant 11).
+    //                            "ERR ...". Without a column list, positional:
+    //                            per row, `n` values name the tuple key first
+    //                            and `n - 1` have it issued (heap-and-tuple.md
+    //                            §4.1, invariant 11). With one (BW-S6), one
+    //                            value per listed column; the tuple key left
+    //                            out or `NULL` is issued, and a nullable
+    //                            column left out is NULL.
     //   SELECT * FROM <name> [WHERE <cond> [AND <cond>]*]
     //                         -> a full ordered scan of the relation,
-    //                            WHERE-filtered; a bare `WHERE <pk> = <n>`
+    //                            WHERE-filtered; a bare `WHERE <tuple key> = <n>`
     //                            instead takes the point path (a tree
     //                            descent, on a btree relation).
     //                            One wire line: "col1,col2,..." then one
@@ -556,6 +582,13 @@ public:
     // **null means autocommit through a private session**. A cache-dropping
     // boundary, as `DispatchAndStage` below states.
     DispatchOutcome Dispatch(std::string_view line, Session* session = nullptr);
+
+    // `Dispatch` for a statement **the engine issues itself** - a listener's
+    // ROLLBACK at a transaction's lifetime ceiling or a client's disconnect,
+    // a KWP load's own BEGIN, COMMIT and ROLLBACK. It runs exactly as
+    // `Dispatch` does and is no client's statement, so `sys.statement_stats`
+    // does not count it (BO-S5); `Dispatch` is this, timed and counted.
+    DispatchOutcome DispatchInternal(std::string_view line, Session* session);
 
     // The statement path without the durability wait: it runs the statement
     // and reports any commit it staged through `DispatchOutcome::pending_lsn`.
@@ -614,7 +647,7 @@ public:
     }
 
     // **A test seam at the instant a row's id is fixed** (BB-S2): runs once
-    // per id `InsertOneRow` fixes for a row - on a btree's omitted pk once
+    // per id `InsertOneRow` fixes for a row - on a btree's omitted tuple key once
     // per draw, so a draw that collides with a named key and is burned
     // (BD-S3's re-draw) fires it again with the next id - once its id is
     // borrowed and its row encoded. On a heap it sits under the exclusive
@@ -627,7 +660,7 @@ public:
         after_row_id_fixed_for_test_ = std::move(hook);
     }
 
-    // **A test seam between an omitted pk's issue and its borrow** (BD-S3's
+    // **A test seam between an omitted tuple key's issue and its borrow** (BD-S3's
     // review): runs once per issue on a btree, with the id drawn. A cell that
     // stops here lets a named key place the same id first - the one
     // collision BD-R6 leaves, which the insert answers by drawing again.
@@ -781,7 +814,7 @@ private:
         // waiter's view.
         kCapable,
     };
-    void NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx, std::uint64_t pk,
+    void NoteBlockingWriter(const txn::Transaction* waiter, std::uint64_t trx, std::uint64_t tuple_key,
                             RepeatableReadWait rerun);
 
     // Ends a parked write with `refused`, on every channel a client reads.
@@ -806,8 +839,19 @@ private:
     // `statement_deadline_ns` is in-out and zero means "not taken yet":
     // the fault net bounds the *statement*, so a second entry inherits the
     // first one's deadline instead of starting a fresh one.
+    // `parser::Parse`, setting `statement_fetch_id_` from the parse (BO-S5).
+    StatusOr<parser::Statement> ParseKeepingShape(std::string_view line);
+    // One statement's `sys.statement_stats` count, at its end (BO-S5):
+    // `began_ns` is when it entered, re-runs and waits included.
+    void RecordStatement(std::string_view line, const DispatchOutcome& out,
+                         sched::MonoTimeNs began_ns) const;
+
     sched::Coro AwaitWriteBlock(std::string_view line, Session* session, DispatchOutcome* out,
                                 sched::MonoTimeNs* statement_deadline_ns);
+    // A `sys.lock_waits` row for a wait on `key` (BO-S3), stamped with this
+    // core and the wall instant; the caller sets its outcome or times it.
+    stats::LockWaitRecord LockWaitRow(const txn::LockKey& key, txn::LockMode mode,
+                                      std::uint64_t waiter, std::uint64_t holder) const;
 
     // **The statement waits for the unit it was refused, then runs again
     // whole** (AO-S6e-b). It polls the table's slot - one atomic load per
@@ -854,7 +898,7 @@ private:
     // (a dispatcher with no lock table). Zero out means nothing to wait for
     // and the refusal is the plain conflict, which the write sites test.
     Status CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,
-                                      std::uint64_t pk, std::uint64_t& blocker);
+                                      std::uint64_t tuple_key, std::uint64_t& blocker);
 
     // The refusal a borrow the table declined produces, in
     // `CheckWriteConflict`'s own shape - `txn/manager.cpp` calls that
@@ -863,7 +907,7 @@ private:
     // the **holder** rather than the row's writer, because that is who the
     // client is waiting for and, for a range fence, the two are not the
     // same transaction.
-    static Status HeldByHolder(std::uint64_t pk, std::uint64_t holder);
+    static Status HeldByHolder(std::uint64_t tuple_key, std::uint64_t holder);
 
     // **The borrow, and the refusal a unit somebody else holds produces.**
     // `nullopt` means the unit is this statement's to write. A `Status`
@@ -903,8 +947,8 @@ private:
                                        FunctionRef<Status()> before_wait = {});
 
     // Is `cond` a non-negative integer literal compared against `access`'s
-    // primary key, and if so which id? The shared half of the test
-    // `PkEqualityTarget` and `DeclaredWriteBorrow` both need.
+    // tuple key, and if so which id? The shared half of the test
+    // `TupleKeyEqualityTarget` and `DeclaredWriteBorrow` both need.
     //
     // **`kind` before `op` and before `val`, which is why this is one
     // function.** `ast.hpp` records that both default to a value reading as
@@ -912,7 +956,7 @@ private:
     // one row and answer `UPDATED 1`. Answers `nullopt` for every kind that
     // is not a `kCompareValue` against a literal, leaving `kBetween` to the
     // caller that knows it carries two bounds.
-    std::optional<std::uint64_t> PkLiteral(const catalog::TableAccess& access,
+    std::optional<std::uint64_t> TupleKeyLiteral(const catalog::TableAccess& access,
                                            const parser::Condition& cond) const;
 
     // **The unit a write declares before it walks** (AO-0 item 14, marked
@@ -936,27 +980,27 @@ private:
     // than per-row, a wrong answer rather than a cost;
     // `LockTable::ConflictingOverlap` makes them meet.
     //
-    // **What it does not reach**: a predicate naming no pk window - `WHERE
+    // **What it does not reach**: a predicate naming no tuple key window - `WHERE
     // name = 'x'` - stays per-row and is the one shape the cap can refuse.
     std::optional<txn::LockKey> DeclaredWriteBorrow(
         const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const;
 
-    // **The pk window an AND-list bounds** - the one recognizer of it (BH-R2),
+    // **The tuple key window an AND-list bounds** - the one recognizer of it (BH-R2),
     // shared by `DeclaredWriteBorrow` and `PURGE`. `[lo, hi)` is folded from
-    // every conjunct that compares the pk with a non-negative integer literal
+    // every conjunct that compares the tuple key with a non-negative integer literal
     // in one of PU1's six forms; `bounded` says at least one did. `unfolded`
     // is the first conjunct that did not, which the two callers answer in
     // opposite ways and both soundly: a borrow skips it, because an AND-list
     // only removes rows and the window is a superset of what is written; a
     // `PURGE` refuses it, because skipping one would *widen* what it frees
     // (`id > 0 AND id <> 5` would free 5).
-    struct PkWindow {
+    struct TupleKeyWindow {
         std::uint64_t lo = 0;
         std::uint64_t hi = 0;
         bool bounded = false;
         const parser::Condition* unfolded = nullptr;
     };
-    PkWindow FoldPkWindow(const catalog::TableAccess& access,
+    TupleKeyWindow FoldTupleKeyWindow(const catalog::TableAccess& access,
                           const std::vector<parser::Condition>& where) const;
 
     // Whether an already-resolved relation lives in the `sys` namespace
@@ -1016,28 +1060,10 @@ private:
     void TakeLockWait(std::optional<DispatchOutcome::LockWait>& into,
                       DispatchOutcome::LockWait wait);
 
-    DispatchOutcome HandleShowMeta();
-    DispatchOutcome HandleListTables(Session& session);
-
-    // `SHOW NAMESPACES` (`docs/spec/namespace.md` NS9). `sys.objects`
-    // filtered by type, the way `SHOW TABLES` filters by `kTypeTable`.
-    DispatchOutcome HandleShowNamespaces(Session& session);
 
     // `{CREATE | DROP} NAMESPACE <name>` (AF-T3). One handler for both, as
     // the parser has one production - see `NamespaceStmt` (ast.hpp).
     DispatchOutcome HandleNamespace(std::string_view line, Session& session);
-    DispatchOutcome HandleDescribe(std::string_view args, Session& session);
-    DispatchOutcome HandleShowPage(std::string_view args);
-    DispatchOutcome HandleShowPatterns();
-    DispatchOutcome HandleShowAccess();
-
-    // `SHOW BUDGET` - every relation's Keystone id consumption
-    // (`docs/rules/keystoneid-invariant.md` K-M4). Listed for *every* relation
-    // including the catalog's own, because some of those - sys.patterns,
-    // sys.cabins, sys.assertions - genuinely issue ids, and a listing that
-    // hid them would hide the only relations whose consumption an operator
-    // does not control.
-    DispatchOutcome HandleShowBudget();
 
     // Both take the session so a `CREATE TABLE` inside an explicit
     // transaction stamps its catalog rows with that transaction's id and
@@ -1115,6 +1141,40 @@ private:
     // decision, taken: pay for isolation only where isolation is at
     // stake.
     std::optional<txn::ReadView> ViewFor(Session& session);
+    // `ViewFor`'s minting half, whatever the count says.
+    txn::ReadView MintResolveView(Session& session);
+    // A relation's name and the qualifier written with it, under `view`.
+    StatusOr<catalog::Oid> ResolveQualifiedRelation(std::string_view qualifier,
+                                                    std::string_view name,
+                                                    std::uint32_t byte_offset,
+                                                    const txn::ReadView* view);
+
+    // **Every name resolution goes through this** (`ddl-transactional.md`
+    // §4): `resolve(view)` runs under `ViewFor`'s answer, and once more under
+    // a minted view when the fast path was taken and a DDL opened anywhere
+    // meanwhile (`InstanceVisibility::DdlGeneration` moved) - the unfiltered
+    // read may then have found the row that DDL wrote. A DDL moves the
+    // generation before its first catalog write, so a lookup that saw the
+    // row sees the move. With no session there is no view to resolve under.
+    template <typename Fn>
+    auto ResolveNames(Session* session, Fn&& resolve) {
+        if (session == nullptr) return resolve(nullptr);
+        const std::uint64_t generation =
+            txn_ != nullptr ? txn_->visibility().DdlGeneration() : 0;
+        std::optional<txn::ReadView> view = ViewFor(*session);
+        if (after_view_for_test_) after_view_for_test_();
+        auto answer = resolve(view.has_value() ? &*view : nullptr);
+        if (!view.has_value() && txn_ != nullptr &&
+            txn_->visibility().DdlGeneration() != generation) {
+            view = MintResolveView(*session);
+            answer = resolve(&*view);
+        }
+        return answer;
+    }
+    template <typename Fn>
+    auto ResolveNames(Session& session, Fn&& resolve) {
+        return ResolveNames(&session, std::forward<Fn>(resolve));
+    }
 
     // **The statement boundary, taken exactly once per statement.**
     // Under READ COMMITTED a transaction re-mints its view at each
@@ -1137,9 +1197,10 @@ private:
 
     void NoteDdlRows(DdlScope& scope);
 
-    // Transactions holding catalog rows nobody has committed yet. Empty
-    // is the normal state and the one `ViewFor` optimises for. Entries
-    // are removed when the transaction resolves, by `EndDdlScope`.
+    // This core's transactions that opened a DDL scope and have not been
+    // decided. Each is counted once in the instance's open-DDL count
+    // (`OpenDdl`), which is what `ViewFor` asks. Entries are removed when the
+    // transaction resolves, by `EndDdlScope`.
     std::vector<std::uint64_t> ddl_txns_;
     void EndDdlScope(const Session& session, wal::Lsn committed_lsn = wal::kNoLsn);
 
@@ -1168,9 +1229,14 @@ private:
         bool operator==(const PurgeSeen&) const = default;
     };
     std::optional<PurgeSeen> purge_seen_;
-    // Records that this transaction now holds uncommitted catalog rows,
-    // which is what turns on `ViewFor`'s filtering.
+    // Records that this transaction now holds uncommitted catalog rows, so
+    // the schema word moves at its decide. Its DDL scope opened it already
+    // (`DdlScopeFor`, `OpenDdl`).
     void MarkHoldsDdl(txn::Transaction& txn);
+    // Adds the transaction to `ddl_txns_` and, the first time, to the
+    // instance's open-DDL count, which is what turns on every core's
+    // `ViewFor` filtering. `EndDdlScopeById` closes both.
+    void OpenDdl(std::uint64_t txn_id);
 
     // `CREATE CABIN` / `DROP CABIN` (docs/spec/cabin.md §10). One handler
     // for both: they share a parse and a reply shape, and differ only in
@@ -1184,6 +1250,28 @@ private:
     // reason; the AL4 assertion RESTRICT and the AL7 system-relation
     // refusal live here, before the catalog write.
     DispatchOutcome HandleAlter(std::string_view line, Session& session);
+    // `ALTER TABLE ... DROP COLUMN` (BW-R6..R8): under the relation `X`, in
+    // the statement's DDL transaction.
+    DispatchOutcome HandleDropColumn(const parser::AlterStmt& stmt, Session& session);
+    // `ALTER TABLE ... ADD COLUMN` (BW-R4, BW-R5, BW-R7): a nullable column
+    // in the lowest free slot, under the relation `X`, in the statement's
+    // DDL transaction.
+    DispatchOutcome HandleAddColumn(const parser::AlterStmt& stmt, Session& session);
+    // Every ALTER form's head: the relation resolved under the session's
+    // view and its qualifier, a system relation refused (AL7).
+    StatusOr<catalog::Oid> ResolveAlterTarget(const parser::AlterStmt& stmt, Session& session);
+    // The two column forms' head: `ResolveAlterTarget`, then the relation `X`
+    // taken for `scope`'s transaction (BW-R7).
+    StatusOr<catalog::Oid> AlterColumnRelation(const parser::AlterStmt& stmt, Session& session,
+                                               WriteScope& scope);
+    // A parsed column definition as its `sys.columns` row at `pos`, or the
+    // refusal (CREATE TABLE's and ADD COLUMN's one resolver).
+    std::optional<DispatchOutcome> ColumnRowOf(const parser::ColumnDef& col, std::uint32_t pos,
+                                               catalog::SysColumnRow& row);
+    // BW-R8: the first object that depends on column `pos` of `oid`, named,
+    // or nullopt. Asked under the relation `X`.
+    StatusOr<std::optional<std::string>> DropColumnRestriction(catalog::Oid oid,
+                                                               std::uint16_t pos);
 
     // `DROP TABLE <name>` (docs/spec/drop-table.md, workplan DT03). The
     // DT3 RESTRICT gate lives here - a referencing foreign key and an
@@ -1191,14 +1279,6 @@ private:
     // tombstone-and-retire; the in-memory Cabin sets are forgotten after.
     DispatchOutcome HandleDropTable(std::string_view line, Session& session);
 
-    // `SHOW CABINS` - every declared Cabin, with what it has observed.
-    //
-    // The line joins two sources on purpose: the catalog's declaration
-    // (relation, column, who declared it, whether it serves - DDL, durable)
-    // and the instance's store (values observed, entries, probes - runtime
-    // state, which by §9 does not survive a restart), so "this Cabin exists
-    // but has never been probed" is visible.
-    DispatchOutcome HandleShowCabins();
 
     // Emits one INDEX_INSERT per index mutation, or one BTREE_SPLIT of the
     // pages a split restructured, with the anchor when it grew a root.
@@ -1217,20 +1297,19 @@ private:
     exec::IndexWriteLog IndexWriteLogFor(const WriteScope& scope,
                                          std::vector<exec::IndexWrite>& pending);
 
-    // `VarHeapSink::on_append` for a row `pk` of `rel_oid` (AT-S21's
+    // `VarHeapSink::on_append` for a row `tuple_key` of `rel_oid` (AT-S21's
     // review): with a manager owning the transaction, the spill's undo record
     // (`NoteSpills`) and then its records (`exec::LogSpill`), under the
     // var-heap page's hold. Null without a manager, whose spills are
     // collected and logged by `LogInsert`.
     std::function<Status(const exec::AppendedSpill&)> SpillLogFor(const WriteScope& scope,
                                                                   std::uint32_t rel_oid,
-                                                                  std::uint64_t pk);
+                                                                  std::uint64_t tuple_key);
 
     // `CREATE INDEX` / `DROP INDEX` (docs/spec/index.md §10). One handler
     // for both, for HandleCabin's reason. Both take the relation `X` before
     // their first catalog write and build where the session is (AT-S5e).
     DispatchOutcome HandleIndex(std::string_view line, Session& session);
-    DispatchOutcome HandleShowIndexes(Session& session);
 
     // `CREATE ASSERTION` / `DROP ASSERTION` (docs/spec/assertion.md §3,
     // workplan AST03). One handler for both, for HandleCabin's reason.
@@ -1246,34 +1325,34 @@ private:
     // writer's when the build's relation `X` is refused (AT-S5e).
     DispatchOutcome HandleAssertion(std::string_view line, Session& session);
 
-    // `SHOW ASSERTIONS` - every declared assertion, with the relation it is
-    // on and its declaration verbatim.
-    //
-    // The `SHOW` surface rather than `SELECT * FROM sys.assertions`: a
-    // catalog *view* is read through `catalog::Catalog` alone, and a
-    // row-codec relation's rows need a `PageStore` to resolve their
-    // var-heap spills. So the one row-codec catalog relation is surfaced by
-    // `SHOW`, which has one. `sys.pattern_defs` had no view for the same
-    // reason until it was withdrawn on 2026-08-31.
-    DispatchOutcome HandleShowAssertions();
-    DispatchOutcome HandleShowRelayout(std::string_view rest);
+    // `CREATE TRANSITION` / `DROP TRANSITION` (BV-S2,
+    // `instructions/v3.2.0/workorder-bv-transition-constraints.md`): under
+    // the relation `X` of a transaction of the statement's own, as
+    // `CREATE ASSERTION`'s build is (BV-R4), and committed at the statement
+    // like it - never with the session's transaction. `SHOW TRANSITIONS` is
+    // `SELECT * FROM sys.transitions` (BO's SV1).
+    DispatchOutcome HandleTransition(std::string_view line, Session& session);
+
+    // **The relation `X` a declaration's build holds** (AT-S5e, AT-0 item
+    // 13), shared by `HandleAssertion` and `HandleTransition`: a
+    // transaction of the statement's own that writes nothing and is rolled
+    // back when the lock goes out of scope, so a failed build poisons
+    // nothing - a transaction rather than a minted id because a waiter names
+    // its holder. No manager or lock table: no lock, which is the pre-MVCC
+    // engine every socket-free test runs on. Returns the refusal, if any.
+    struct DdlBuildLock {
+        txn::TransactionManager* manager = nullptr;
+        txn::Transaction* txn = nullptr;
+        DdlBuildLock() = default;
+        DdlBuildLock(const DdlBuildLock&) = delete;
+        DdlBuildLock& operator=(const DdlBuildLock&) = delete;
+        ~DdlBuildLock();
+    };
+    std::optional<Status> TakeDdlBuildLock(Session& session, catalog::Oid relation,
+                                           std::string_view relation_name, std::string_view verb,
+                                           DdlBuildLock& out);
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
 
-    // `SHOW CABIN_OPTIMIZER` - PO9's view (workplan PHY06): the switch and
-    // budget line, the executor's applied-action counters, and one line
-    // per managed candidate with its state, last B/C scores, S3 quality
-    // rates and last logged action. Everything it prints already exists on
-    // an inspection surface (`ManagedEntries`, `DecisionLog`, `counters`,
-    // `QualityOf`) - this handler renders and never computes.
-    DispatchOutcome HandleShowCabinOptimizer();
-
-    // H6 step 3 (`observability.md` §10): `TRACE ON|OFF` is the manual
-    // sampler, `SHOW TRACES` the ring, `SHOW TRACE <id>` one span tree with
-    // self-time separated from child-time - which is the number that finds
-    // the culprit, where total only says which subtree to open next.
-    DispatchOutcome HandleTrace(std::string_view rest);
-    DispatchOutcome HandleShowTraces();
-    DispatchOutcome HandleShowTrace(std::string_view rest);
 
     // ---- Foreign-key checks (docs/spec/foreign-keys.md §§2-4) -----------
     //
@@ -1291,7 +1370,7 @@ private:
     // (a conflict names the child and parent relations; any other code
     // stands).
     Status ParentRowHeld(const catalog::TableAccess& child, catalog::Oid parent_rel,
-                         std::uint64_t pk, const Status& held);
+                         std::uint64_t tuple_key, const Status& held);
 
     // The forward check for one foreign key and one written value (§2),
     // **answered from what the extraction pass already resolved** (§2a,
@@ -1308,8 +1387,8 @@ private:
                                   const catalog::ForeignKeyRef& fk, const parser::AstValue& value,
                                   const exec::FkParentVerdicts& held, const WriteScope& scope);
 
-    // The extraction pass (§2a, AH-R1): resolves every parent pk one row's
-    // body names, into `into`, deduplicated by (parent relation, pk) so a
+    // The extraction pass (§2a, AH-R1): resolves every parent tuple key one row's
+    // body names, into `into`, deduplicated by (parent relation, tuple key) so a
     // statement naming one parent from a thousand rows descends once.
     //
     // Called **before any row work** - at the dispatch fork for a statement
@@ -1326,10 +1405,12 @@ private:
 
 
     // The body `ResolveForeignKeyParents` and the FK checks index into: the
-    // columns after the pk, which is the shape every downstream consumer
-    // takes. Mirrors `InsertOneRow`'s arity split without repeating its
-    // refusals - a row of neither legal length yields an empty body here and
-    // is refused there, in the order it always was.
+    // columns after the tuple key, which is the shape every downstream
+    // consumer takes - a positional row's and a column-listed row's alike,
+    // since `NormalizeInsertRows` maps a listed row onto it first (BW-S6).
+    // Mirrors `InsertOneRow`'s arity split without repeating its refusals -
+    // a row of neither legal length yields an empty body here and is
+    // refused there, in the order it always was.
     static std::vector<parser::AstValue> InsertBodyOf(
         const catalog::TableAccess& ta, const std::vector<parser::AstValue>& values);
 
@@ -1343,14 +1424,14 @@ private:
     //
     // A busy answer naming a child writer records a wait on it (AY-Q8,
     // `WaitForChildRowWriter`), which the caller parks its walk on.
-    Status CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent, std::uint64_t parent_pk,
+    Status CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent, std::uint64_t parent_tuple_key,
                                        const WriteScope& scope);
 
-    // **The reverse check's wait** (AY-Q8): the child row `pk` of
+    // **The reverse check's wait** (AY-Q8): the child row `tuple_key` of
     // `child_rel` is being written by `holder`, which holds no `S` on the
     // parent. Registers a wake on that row where a table and a reactor exist,
     // and records the block.
-    void WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel, std::uint64_t pk,
+    void WaitForChildRowWriter(const WriteScope& scope, catalog::Oid child_rel, std::uint64_t tuple_key,
                                std::uint64_t holder);
 
     // One access shape, recorded by hand because a check is not a step
@@ -1373,11 +1454,6 @@ private:
     // execution is what parser-v2.md I11 forbids.
     std::string RelationNameOf(catalog::Oid oid);
 
-    // Every declared foreign key (docs/spec/foreign-keys.md §1). One line
-    // per sys.fkeys row: which relation references which, through which
-    // column. Prints `action=RESTRICT` unconditionally, because v1 has one
-    // action (F2) - a stored action field would have exactly one value.
-    DispatchOutcome HandleShowFkeys();
     DispatchOutcome HandleInsert(std::string_view line, Session& session);
 
     // The statement itself, inside a write scope the wrapper opened and
@@ -1567,11 +1643,6 @@ public:
     }
 
 
-    // H6: the core-local trace ring this dispatcher records into when a
-    // session has asked for it (`TRACE ON`). A dispatcher never told
-    // collects nothing, which is every configuration that does not want the
-    // instrument. `sink` must outlive this.
-    void SetTraceSink(stats::TraceSink* sink) noexcept { traces_ = sink; }
 
     // The instance's reclaim counters (BF-R11), which `SHOW META` prints on
     // every core; null - every hand-built dispatcher - prints none of the
@@ -1634,7 +1705,14 @@ public:
         before_drop_exclusive_for_test_ = std::move(hook);
     }
 
-    // **A seam after an `UPDATE` wrote a row** (BJ-R9), handed the row's pk:
+    // **A seam in `DROP COLUMN`** between its RESTRICT ask and the catalog
+    // door's write: a RENAME COLUMN landing there must not move the drop
+    // onto another column. Empty in production.
+    void SetBeforeDropColumnWriteForTest(std::function<void()> hook) {
+        before_drop_column_write_for_test_ = std::move(hook);
+    }
+
+    // **A seam after an `UPDATE` wrote a row** (BJ-R9), handed the row's tuple key:
     // the application count a non-idempotent `SET` makes load-bearing. A
     // literal `SET` is idempotent, so a path that applied it twice to one
     // row was invisible; the cell counts the calls instead of reading a
@@ -1642,6 +1720,12 @@ public:
     // Empty in production.
     void SetAfterUpdateRowAppliedForTest(std::function<void(std::uint64_t)> hook) {
         after_update_row_applied_for_test_ = std::move(hook);
+    }
+    // **A seam between `ViewFor`'s answer and the resolution it serves**
+    // (`ResolveNames`): where another core's DDL opening lands in the
+    // window the generation re-check closes. Empty in production.
+    void SetAfterViewForTest(std::function<void()> hook) {
+        after_view_for_test_ = std::move(hook);
     }
 
     // The access-batch setters (AT-S7) and R6-5's in-doubt ceiling (AT-S6)
@@ -1851,8 +1935,8 @@ private:
     // unnecessary. The surplus is subtracted at read time by verification.
     //
     // `values[i]` is the value of column `first_col_pos + i`: INSERT passes
-    // the row's body (`first_col_pos` 1, after the pk) and UPDATE the whole
-    // decoded row (0). `pk`, `page_id` and `slot` are the tuple's identity
+    // the row's body (`first_col_pos` 1, after the tuple key) and UPDATE the whole
+    // decoded row (0). `tuple_key`, `page_id` and `slot` are the tuple's identity
     // and location, already in hand at both sites, so C6's hints cost
     // nothing to produce.
     //
@@ -1869,7 +1953,7 @@ private:
     // corollary) and is always legal.
     void NoteCabinWrite(const catalog::TableAccess& access,
                         std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
-                        std::uint64_t pk, PageId page_id, std::uint16_t slot,
+                        std::uint64_t tuple_key, PageId page_id, std::uint16_t slot,
                         std::span<const parser::AstValue> previous = {});
     DispatchOutcome HandleUpdate(std::string_view line, Session& session);
 
@@ -1888,7 +1972,7 @@ private:
     // dropping its entry would break the superset invariant. The surplus is
     // subtracted at read time, which now includes the visibility predicate.
     DispatchOutcome HandleDelete(std::string_view line, Session& session);
-    // `PURGE FROM t WHERE <pk window>` (BH): one whole attempt - judge the
+    // `PURGE FROM t WHERE <tuple key window>` (BH): one whole attempt - judge the
     // window, then write it key by key - under an owned transaction of its
     // own, so each re-drive after a wait begins with a fresh view (BH-R5)
     // and holds no unit while it waits. A key still pending - an undecided
@@ -1943,7 +2027,46 @@ private:
     // catalog view is materialized from the catalog's typed readers, not
     // walked out of pages, so it is not a relation a step can read
     // (exec/catalog_view.hpp).
-    DispatchOutcome HandleCatalogView(const parser::SelectStmt& stmt);
+    DispatchOutcome HandleCatalogView(const parser::SelectStmt& stmt, Session& session);
+
+    // `SHOW <target> [<arg>]` and `DESCRIBE <t>`: one `SELECT` over one
+    // view each (SV1), built as an AST so an argument keeps its byte.
+    DispatchOutcome HandleShow(std::string_view line, std::string_view target,
+                               std::string_view arg, Session& session);
+
+    // ---- The `sys` views (src/server/sys_views.cpp) ----------------------
+    //
+    // One builder per view; `ReadSysView` dispatches on the registry entry.
+    // `key` is the view's key literal where the statement wrote one
+    // (`sys_views.hpp`), null otherwise; a schema-object view reads under
+    // `view` (BO-Q2), null for unfiltered; `byte` is the view name's, which a
+    // refusal that is not about a literal names.
+    StatusOr<exec::CatalogView> ReadSysView(const SysViewSpec& spec, Session& session,
+                                            const parser::AstValue* key, std::uint32_t byte);
+    StatusOr<exec::CatalogView> TablesView(const txn::ReadView* view);
+    StatusOr<exec::CatalogView> ObjectsView(const txn::ReadView* view);
+    StatusOr<exec::CatalogView> ColumnsView(const txn::ReadView* view,
+                                            const parser::AstValue* rel_name);
+    StatusOr<exec::CatalogView> TypesView();
+    StatusOr<exec::CatalogView> PatternsView();
+    StatusOr<exec::CatalogView> NamespacesView(const txn::ReadView* view);
+    StatusOr<exec::CatalogView> IndexesView(const txn::ReadView* view);
+    StatusOr<exec::CatalogView> FkeysView(const txn::ReadView* view);
+    StatusOr<exec::CatalogView> AccessStatsView();
+    StatusOr<exec::CatalogView> RelationStatsView();
+    StatusOr<exec::CatalogView> CabinsView();
+    StatusOr<exec::CatalogView> AssertionsView();
+    StatusOr<exec::CatalogView> TransitionsView();
+    StatusOr<exec::CatalogView> RelayoutView(const parser::AstValue* name, std::uint32_t byte);
+    StatusOr<exec::CatalogView> CabinOptimizerView(std::uint32_t byte);
+    StatusOr<exec::CatalogView> LockWaitsView();
+    StatusOr<exec::CatalogView> StatementStatsView();
+    StatusOr<exec::CatalogView> PageSlotsView(const parser::AstValue& page_id);
+    StatusOr<exec::CatalogView> MetaView();
+    // The clustered root a relation's anchor names, or its descriptor page.
+    StatusOr<PageId> CurrentRootOf(const catalog::SysTableRow& row);
+    // `sys.meta`'s fields: each section's `key=value` tokens.
+    std::vector<std::pair<std::string_view, std::string>> MetaSections();
 
     // A full ordered scan of the relation, whichever storage it uses. Both
     // walk sibling/next links left to right, so the row order is identical.
@@ -1994,7 +2117,7 @@ private:
     // A scope with no transaction records nothing (a dispatcher built
     // without a manager, and the `kNoTxnId` writes `LogChainInsert` makes
     // for the assertion catalog); those spills leak on rollback.
-    Status NoteSpills(const WriteScope& scope, std::uint32_t rel_oid, std::uint64_t pk,
+    Status NoteSpills(const WriteScope& scope, std::uint32_t rel_oid, std::uint64_t tuple_key,
                       const std::vector<exec::AppendedSpill>& spills);
 
     // Logs an insert **under the holds its placement handed out** (AT-S21,
@@ -2058,33 +2181,33 @@ private:
     //
     //   kScan    no shortcut. Scan; the scan is the authoritative path and
     //            produces the same answer. Every heap relation lands here,
-    //            having no pk index to descend.
+    //            having no tuple key index to descend.
     //   kAt      look at this (page, slot) - a btree descent, which is
     //            authoritative - through `at.leaf`, held **exclusive**:
     //            every caller writes the slot (btree.hpp `Location`).
     //   kAbsent  **no such row**, on authority. Only a btree descent can
     //            say this, so a heap relation never produces it.
-    struct PkLookup {
+    struct TupleKeyLookup {
         enum class Kind { kScan, kAt, kAbsent };
         Kind kind = Kind::kScan;
         btree::Location at;
     };
-    PkLookup LocateByPk(const catalog::TableAccess& access, std::uint64_t pk);
+    TupleKeyLookup LocateByTupleKey(const catalog::TableAccess& access, std::uint64_t tuple_key);
 
     // The row-relocation callback a rollback needs when a leaf division has
     // moved rows this transaction wrote (txn/manager.hpp's RowLocator).
     // Built per abort, never stored on the manager - see the definition.
     txn::TransactionManager::RowLocator RowLocatorForRollback();
 
-    // The pk value a WHERE clause is a *bare* equality against, or nullopt
-    // if it is anything else - no WHERE, more than one condition, a non-pk
+    // The tuple key value a WHERE clause is a *bare* equality against, or nullopt
+    // if it is anything else - no WHERE, more than one condition, a non-tuple-key
     // column, a non-equality operator, or a non-integer or negative
     // literal.
     //
     // Shared by SELECT and UPDATE so the two cannot disagree about which
     // predicates take the point path. Duplicating this check is how one
     // path ends up descending for a query the other correctly scans.
-    std::optional<std::uint64_t> PkEqualityTarget(
+    std::optional<std::uint64_t> TupleKeyEqualityTarget(
         const catalog::TableAccess& access,
         const std::vector<parser::Condition>& where) const;
 
@@ -2241,7 +2364,7 @@ private:
     exec::AggregateLimits aggregate_limits_;
 
     // The fold, **reused rather than constructed per statement** (AP03):
-    // building one per statement cost about 4 us of server CPU on a pk
+    // building one per statement cost about 4 us of server CPU on a tuple key
     // lookup, nearly all of it buffer allocation.
     //
     // `Reset` points it at each statement's spec and labels, which live on
@@ -2319,7 +2442,9 @@ private:
     EpochSeam epoch_seam_at_ = EpochSeam::kBeforePublish;
     std::function<void()> epoch_seam_for_test_;
     std::function<void()> before_drop_exclusive_for_test_;
+    std::function<void()> before_drop_column_write_for_test_;
     std::function<void(std::uint64_t)> after_update_row_applied_for_test_;
+    std::function<void()> after_view_for_test_;
     std::function<void()> purge_seam_for_test_;
     // **What an open transaction's drops owe** (BF-R9): recorded when the
     // drop's catalog write succeeds, queued by `EndDdlScopeById` at the
@@ -2353,13 +2478,13 @@ private:
     // Per-statement members, on `pending_commit_lsn_`'s terms (one statement
     // at a time on a core), zeroed at the top of `DispatchAndStage` and read
     // out at its end. `blocking_writer_` is the undecided transaction that
-    // refused this statement, `blocked_pk_` the row it holds, and
+    // refused this statement, `blocked_tuple_key_` the row it holds, and
     // `statement_trail_mark_` the transaction's trail length when this
     // statement's write scope opened - which says whether the statement
     // wrote anything before it was refused, so whether a re-run is a repeat
     // or a second application.
     std::uint64_t blocking_writer_ = 0;
-    std::uint64_t blocked_pk_ = 0;
+    std::uint64_t blocked_tuple_key_ = 0;
 
     // On `blocking_writer_`'s terms, the relation lock wait (AO-S6e-b): set
     // where the borrow is refused, read back out by `DispatchAndStage` into
@@ -2367,6 +2492,9 @@ private:
     // **The wake a refused unit ask registered** (AX-S2b), on the same
     std::optional<DispatchOutcome::LockWait> blocking_wake_ = std::nullopt;
     std::size_t statement_trail_mark_ = 0;
+    // The running statement's `fetch_id`, set by the parse that has one and
+    // copied onto its outcome by `DispatchAndStage` (BO-S5).
+    std::uint64_t statement_fetch_id_ = 0;
 
     // **The fault net every wait in this file is bounded by**, and the
     // one thing `lock_wait_fault_net_ms` sets; defaults to the constant.
@@ -2457,18 +2585,6 @@ private:
     // never constructed (`cabins = off`, or a test that wired neither).
     const stats::CabinOptimizer* cabin_controller_ = nullptr;
     const exec::CabinOptimizerExecutor* cabin_executor_ = nullptr;
-    // ---- H6: per-request tracing (`observability.md` §10 steps 1-3) -----
-    //
-    // `traces_` is the core-local ring; `tracing_` is the session's
-    // `TRACE ON`; `trace_` is the context of the statement in flight, null
-    // on every untraced one - which is what every `SpanScope` in this file
-    // branches on and the whole of the disabled path.
-    //
-    // Members for `pending_commit_lsn_`'s reason (one statement at a time on
-    // a core). Off by default.
-    stats::TraceSink* traces_ = nullptr;
-    stats::TraceContext* trace_ = nullptr;
-    bool tracing_ = false;
 
     // This core's reactor, set_scheduler_view(); null off a reactor.
     const sched::Scheduler* scheduler_view_ = nullptr;

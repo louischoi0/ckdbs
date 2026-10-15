@@ -37,6 +37,7 @@
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/wal/log_scanner.hpp"
 #include "kds/wal/payload.hpp"
+#include "view_text.hpp"
 
 // One core's stack, and the shutdown protocol that stops it
 // (docs/inflight/in-progress/workplan-crosscore.md P2).
@@ -413,12 +414,15 @@ TEST_F(CoreRuntimeTest, APeerStatementSeesADdlThroughItsOwnBoundary) {
     Session s;
     const std::string first = peer.value()->dispatcher().Dispatch("DESCRIBE early", &s).response;
     ASSERT_NE(first.rfind("ERR", 0), 0u) << first;
-    ASSERT_NE(first.find("v"), std::string::npos) << first;
+    ASSERT_EQ(testing_view::ReadViewText(first).Column("name"),
+              (std::vector<std::string>{"id", "v"}))
+        << first;
 
     ASSERT_TRUE(core0_->catalog.RenameColumn(oid.value(), "v", "renamed").ok());
     const std::string second = peer.value()->dispatcher().Dispatch("DESCRIBE early", &s).response;
     ASSERT_NE(second.rfind("ERR", 0), 0u) << second;
-    EXPECT_NE(second.find("renamed"), std::string::npos)
+    EXPECT_EQ(testing_view::ReadViewText(second).Column("name"),
+              (std::vector<std::string>{"id", "renamed"}))
         << "the peer's statement described a column name a DDL had renamed: " << second;
 }
 
@@ -671,7 +675,7 @@ TEST_F(CoreRuntimeTest, APeerHandedTheOptimizerSurfaceSetsTheInstancesSwitchAndS
     EXPECT_TRUE(instance_switch.load()) << "the peer's SET moved a flag the controller never reads";
 
     const std::string show = d.Dispatch("SHOW CABIN_OPTIMIZER").response;
-    EXPECT_EQ(show.find("absent"), std::string::npos) << "the peer cannot see the controller: " << show;
+    EXPECT_NE(show.rfind("ERR", 0), 0u) << "the peer cannot see the controller: " << show;
 
     // And the read waits out a tick: the view latch held here as core 0's
     // cadence holds it. **Mutation**: drop the handler's guard and the SHOW
@@ -986,16 +990,16 @@ TEST_F(CoreRuntimeTest, APeersOwnSuperblockAnswersForTheVolumeAndNotWithZeros) {
     // Asserted through `SHOW META` rather than through the fields, because
     // the report is where every wrong answer reached a client.
     const std::string meta = peer.value()->dispatcher().Dispatch("SHOW META").response;
-    EXPECT_NE(meta.find("wal_topology=single"), std::string::npos) << meta;
-    EXPECT_EQ(meta.find("wal_anchor_count="), std::string::npos)
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_topology"), "single") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_anchor_count"), std::nullopt)
         << "printed only under per-core, and this volume is not: " << meta;
     // The three the review found live. `version=0` is not a version this
     // build ever wrote, and a zero `create_time` renders as the epoch - the
     // reading an operator would act on.
-    EXPECT_EQ(meta.find("version=0 "), std::string::npos) << meta;
-    EXPECT_EQ(meta.find("create_time=0 "), std::string::npos) << meta;
-    EXPECT_EQ(meta.find("last_mount_time=0 "), std::string::npos) << meta;
-    EXPECT_NE(meta.find("version=" + std::to_string(kSuperBlockVersion)), std::string::npos)
+    EXPECT_NE(testing_view::MetaField(meta, "version"), "0") << meta;
+    EXPECT_NE(testing_view::MetaField(meta, "create_time"), "0") << meta;
+    EXPECT_NE(testing_view::MetaField(meta, "last_mount_time"), "0") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "version"), std::to_string(kSuperBlockVersion))
         << "a peer must answer the volume's version, not its copy's: " << meta;
 }
 
@@ -1866,9 +1870,9 @@ TEST_F(CoreRuntimeTest, APeerMaintainsInsertsIntoAnIndexCore0BuiltAndReadsAnswer
     rig.Pump(8);
 
     // Entries before: the backfill covered the three rows the rig wrote.
-    const std::string before =
-        rig.peer->dispatcher().Dispatch("SHOW INDEXES").response;
-    EXPECT_NE(before.find("entries=3"), std::string::npos) << before;
+    const std::string entries = "SELECT name, entries FROM sys.indexes";
+    const std::string before = rig.peer->dispatcher().Dispatch(entries).response;
+    EXPECT_EQ(testing_view::ReadViewText(before).Find("name", "mix", "entries"), "3") << before;
 
     // A run of INSERTs, each admitted and maintained.
     for (int v : {40, 50, 60, 70}) {
@@ -1878,9 +1882,8 @@ TEST_F(CoreRuntimeTest, APeerMaintainsInsertsIntoAnIndexCore0BuiltAndReadsAnswer
                 .response;
         ASSERT_NE(ins.rfind("ERR", 0), 0u) << ins;
     }
-    const std::string after =
-        rig.peer->dispatcher().Dispatch("SHOW INDEXES").response;
-    EXPECT_NE(after.find("entries=7"), std::string::npos)
+    const std::string after = rig.peer->dispatcher().Dispatch(entries).response;
+    EXPECT_EQ(testing_view::ReadViewText(after).Find("name", "mix", "entries"), "7")
         << "the four INSERTs were not all maintained: " << after;
 
     // Every value present reads whole through the index; an absent one
@@ -2113,7 +2116,7 @@ TEST_F(CoreRuntimeTest, AReadWithAVeryWideAnswerIsAnsweredWhole) {
 // ---- A1: outcome integrity under adversarial delivery -------------------
 //
 // The post-SS5 verification order's first item, driven over the real ring
-// rather than at the seam: engine-issued pks make a blind retry a second
+// rather than at the seam: engine-issued tuple keys make a blind retry a second
 // row, so the dedup record is attacked here with the two deliveries a
 // routing layer will produce - the same identity arriving twice, and a
 // reply lost after the owner has committed. Each case's verdict is the row
@@ -2245,7 +2248,7 @@ TEST_F(CoreRuntimeTest, AnInsertWithAParentFromAnotherCoreResolvesItAndWritesThe
     // each granted page before restamping it (until AW-S1b); kept.
     ASSERT_TRUE(core0_store_->Sync().ok());
 
-    // A parent row with a **named** pk, so the child below references a
+    // A parent row with a **named** tuple key, so the child below references a
     // value this test knows rather than one it parses back out of a reply.
     ASSERT_NE(rig.dispatcher->Dispatch("INSERT INTO aiparent VALUES (7, 5)").response.rfind("ERR",
                                                                                             0),
@@ -2356,10 +2359,10 @@ TEST_F(CoreRuntimeTest, AParentDeleteFromAnotherCoreOnASynchronousPathRunsRather
 // AJ-T3 built the chain - fork, register, intent check, fan-out, park,
 // resume, per-row check from held verdicts - and AK-S3 its collect pass;
 // both went at AT-S5f. The cells kept here drive the walk that replaced
-// them, for the two shapes they were written for: a bare pk equality and
+// them, for the two shapes they were written for: a bare tuple key equality and
 // any other WHERE.
 
-TEST_F(CoreRuntimeTest, AParentDeleteFromAnotherCoreByPkChecksItsChildAndDeletes) {
+TEST_F(CoreRuntimeTest, AParentDeleteFromAnotherCoreByTupleKeyChecksItsChildAndDeletes) {
     ForeignIndexRig rig(clock_);
     OpenForeignIndexRig(rig, "ak3_pk");
     OpenCrossOwnerFkPair(rig, "pk");
@@ -2402,7 +2405,7 @@ TEST_F(CoreRuntimeTest, AParentDeleteFromAnotherCoreByPredicateChecksEveryRowItM
     ASSERT_TRUE(rig.Drive(*wrote)) << child.response;
     ASSERT_NE(child.response.rfind("ERR", 0), 0u) << child.response;
 
-    // Three rows named by a non-pk predicate: each checked against the
+    // Three rows named by a non-tuple-key predicate: each checked against the
     // child as the walk reaches it, and deleted.
     DispatchOutcome three;
     auto del5 = rig.Start("DELETE FROM prp WHERE v = 5", three);
@@ -2425,7 +2428,7 @@ TEST_F(CoreRuntimeTest, AParentDeleteFromAnotherCoreByPredicateChecksEveryRowItM
 }
 
 // **Four cells went at AT-S5f**, each the reverse fan-out's own machinery:
-//   - `ACollectedSetPastOneMessageTakesAnotherRound` (AK-S3): a pk set
+//   - `ACollectedSetPastOneMessageTakesAnotherRound` (AK-S3): a tuple key set
 //     larger than one reverse message took a second round. There are no
 //     messages and no rounds; the walk checks every row it marks.
 //   - `ARowAppearingWhileParkedIsRefusedRetryablyAndDeletedOnRetry` (AK-S3):

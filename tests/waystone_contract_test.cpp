@@ -115,7 +115,7 @@ const std::vector<std::string>& Queries() {
 
         // ---- The walked join (docs/spec/join-inner-build.md, JB7) ------
         //
-        // The inner is `h` keyed on `h.v`: not a pk, no index (only
+        // The inner is `h` keyed on `h.v`: not a tuple key, no index (only
         // `b(v)` has one), no Cabin - so every arm of the structure
         // ladder declines and the step builds a statement-local map,
         // then serves seven of the eight outer rows from it.
@@ -386,7 +386,7 @@ TEST(WaystoneContractTest, ACorruptedTrailChangesNoReply) {
             for (const stats::WaystoneEntry& entry : existing.value()) {
                 exec::TouchedTuple t;
                 t.rel_oid = entry.rel_oid;
-                t.pk = entry.pk;  // still claims its key, so it is still consulted
+                t.tuple_key = entry.tuple_key;  // still claims its key, so it is still consulted
                 t.page_id = entry.page_id;
                 t.slot = static_cast<std::uint16_t>(entry.slot == 0 ? 1 : 0);
                 t.step_id = entry.step_id;
@@ -405,7 +405,7 @@ TEST(WaystoneContractTest, ACorruptedTrailChangesNoReply) {
 
 // ---- §11-4: lookup-not-search --------------------------------------------
 
-TEST(WaystoneContractTest, ANonPkPredicateStillSearchesAndSaysSo) {
+TEST(WaystoneContractTest, ANonTupleKeyPredicateStillSearchesAndSaysSo) {
     // The instrumented half. A trail may replace a lookup and never a
     // search (invariant 9), and a wrongly skipped search returns *plausible*
     // rows - so the only evidence is the work that was still done.
@@ -433,7 +433,7 @@ TEST(WaystoneContractTest, ANonPkPredicateStillSearchesAndSaysSo) {
     EXPECT_NE(analyzed.find("matched=1"), std::string::npos) << analyzed;
 }
 
-TEST(WaystoneContractTest, AnUnindexedNonPkPredicateStillScans) {
+TEST(WaystoneContractTest, AnUnindexedNonTupleKeyPredicateStillScans) {
     // The control the test above used to be. `h.v` carries no index, so the
     // same predicate is a filter scan - which is the shape that proves the
     // index above changed the *kind* and not the trust class.

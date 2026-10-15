@@ -238,7 +238,7 @@ TEST(VarHeapPageTest, ReleasingASlotOnAPageThatIsNotAVarHeapPageIsCorruption) {
     // mis-addressed release passes the bound test and writes two zero bytes
     // over `min_key` - invariant 2, broken silently. The input is untrusted
     // where it matters: recovery's undo takes the target page id off an
-    // undo page a crash may have torn, and the pk identity check that saves
+    // undo page a crash may have torn, and the tuple key identity check that saves
     // every other record type is the one thing this type skips.
     PageBuf buf{};
     storage::FormatPage(AsSpan(buf), PageType::kHeap, /*flags=*/0, /*owner_oid=*/9);

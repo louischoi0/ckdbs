@@ -102,7 +102,7 @@ TEST(IdAllocationAcrossCores, TwoCoresWritingOneRelationIssueOneSequence) {
     // burned id 1 falls below the span. A block cached on
     // either core would leave its unspent remainder - thousands of ids - as
     // a gap, and a block leased ahead of the mark would put one core's ids
-    // above the other's later ones. The primary key refuses a duplicate, so
+    // above the other's later ones. The tuple key refuses a duplicate, so
     // a count of every row written is also a count of distinct ids.
     const std::string reply = d0.Dispatch("SELECT COUNT(*), MIN(id), MAX(id) FROM ids").response;
     const std::string kHeader = "count(*),min(id),max(id)\\n";

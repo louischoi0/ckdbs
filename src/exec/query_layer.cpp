@@ -28,7 +28,9 @@
 
 #include "kds/base/int128.hpp"
 #include "kds/catalog/rows.hpp"
+#include "kds/catalog/schema.hpp"
 #include "kds/catalog/well_known.hpp"
+#include "kds/exec/functions.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/type_literals.hpp"
 #include "kds/parser/parser.hpp"
@@ -306,20 +308,27 @@ bool HasSubquery(const TypedSetExpr& e) {
 // Whether a native conjunct may ride a relation's walk: a comparison, a
 // range, a function comparison, or a boolean tree of them - never one that
 // carries a subquery, whose correlation the walk could not resolve.
-bool BoolTreeHasSubquery(const parser::BoolExpr& node) {
-    if (node.op == parser::BoolExpr::Op::kLeaf) return node.leaf.has_subquery();
-    for (const parser::BoolExpr& c : node.children) {
-        if (BoolTreeHasSubquery(c)) return true;
+// Nor one calling a function the native catalog does not hold: the native
+// compile declines it (`step_compiler.cpp`'s `ResolveCall`), so the term is
+// the layer's to evaluate, not the walk's.
+bool CallsNative(const parser::Condition& c) {
+    return (!c.lhs_fn.has_value() || FindFunction(c.lhs_fn->name) != nullptr) &&
+           (!c.rhs_fn.has_value() || FindFunction(c.rhs_fn->name) != nullptr);
+}
+
+bool BoolTreeWalkable(const parser::BoolExpr& node) {
+    if (node.op == parser::BoolExpr::Op::kLeaf) {
+        return !node.leaf.has_subquery() && CallsNative(node.leaf);
     }
-    return false;
+    return std::all_of(node.children.begin(), node.children.end(), BoolTreeWalkable);
 }
 
 bool Walkable(const parser::Condition& c) {
     switch (c.kind) {
         case parser::PredicateKind::kCompareValue:
-        case parser::PredicateKind::kBetween:
-        case parser::PredicateKind::kCompareFunction: return true;
-        case parser::PredicateKind::kBoolTree: return !BoolTreeHasSubquery(*c.tree);
+        case parser::PredicateKind::kBetween: return true;
+        case parser::PredicateKind::kCompareFunction: return CallsNative(c);
+        case parser::PredicateKind::kBoolTree: return BoolTreeWalkable(*c.tree);
         default: return false;
     }
 }
@@ -362,7 +371,7 @@ struct CompiledBlock {
     std::vector<Source> sources;
     std::vector<Join> joins;  // joins[i] attaches sources[i + 1]
     std::vector<LayerColumn> wide;
-    std::map<std::string, std::size_t> merged;  // a USING column's name -> the index it reads
+    std::map<std::string, std::size_t> merged;  // a USING column's name, folded (`FoldName`) -> the index it reads
     std::vector<std::unique_ptr<TypedSetExpr>> where;
     bool grouped = false;
     bool has_group_by = false;
@@ -395,7 +404,17 @@ struct CompiledQuery {
     std::optional<RowSet> cached;
 };
 
-// How a context resolves a column name: its own columns, then its parent's.
+// A column name as `catalog::ColumnNamesCollide` compares it: ASCII case
+// folded, so a USING column found by one spelling is found by every other.
+std::string FoldName(std::string name) {
+    for (char& c : name) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    return name;
+}
+
+// How a context resolves a column name - ignoring case, as every read does
+// (`catalog::ColumnNamesCollide`): its own columns, then its parent's.
 struct Scope {
     const std::vector<LayerColumn>* columns = nullptr;
     std::size_t width = 0;  // the context's own part of the evaluation row
@@ -411,13 +430,14 @@ StatusOr<std::optional<ResolvedColumn>> ResolveIn(const Scope& s, const Expr& e)
     if (s.columns != nullptr) {
         for (std::size_t i = 0; i < s.columns->size(); ++i) {
             const LayerColumn& c = (*s.columns)[i];
-            if (c.name == e.column && (e.qualifier.empty() || c.qualifier == e.qualifier)) {
+            if (catalog::ColumnNamesCollide(c.name, e.column) &&
+                (e.qualifier.empty() || c.qualifier == e.qualifier)) {
                 hits.push_back(i);
             }
         }
     }
     if (hits.size() > 1 && e.qualifier.empty() && s.merged != nullptr) {
-        if (auto it = s.merged->find(e.column); it != s.merged->end()) {
+        if (auto it = s.merged->find(FoldName(e.column)); it != s.merged->end()) {
             hits.assign(1, it->second);
         }
     }
@@ -596,7 +616,7 @@ Status Runner::CompileSetOrder(const Query& q, CompiledQuery& cq) {
             index = static_cast<std::size_t>(k - 1);
         } else if (e.kind == Expr::Kind::kColumn && e.qualifier.empty()) {
             for (std::size_t i = 0; i < cq.columns.size(); ++i) {
-                if (cq.columns[i].name != e.column) continue;
+                if (!catalog::ColumnNamesCollide(cq.columns[i].name, e.column)) continue;
                 if (index.has_value()) {
                     return Status::InvalidArgument("ORDER BY '" + e.column + "' is ambiguous" +
                                                    At(e.byte_offset));
@@ -677,7 +697,7 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
             for (const parser::ColumnName& col : fj.using_columns) {
                 std::optional<std::size_t> left_hit;
                 for (std::size_t c = 0; c < right.offset; ++c) {
-                    if (cb.wide[c].name != col.name) continue;
+                    if (!catalog::ColumnNamesCollide(cb.wide[c].name, col.name)) continue;
                     if (left_hit.has_value()) {
                         return Status::InvalidArgument("USING column '" + col.name +
                                                        "' is ambiguous on the left" +
@@ -687,7 +707,9 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
                 }
                 std::optional<std::size_t> right_hit;
                 for (std::size_t c = 0; c < right.columns.size(); ++c) {
-                    if (right.columns[c].name == col.name) right_hit = right.offset + c;
+                    if (catalog::ColumnNamesCollide(right.columns[c].name, col.name)) {
+                        right_hit = right.offset + c;
+                    }
                 }
                 if (!left_hit.has_value() || !right_hit.has_value()) {
                     return Status::InvalidArgument("USING column '" + col.name +
@@ -720,7 +742,7 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
                     both->rhs = eq;
                     on = both;
                 }
-                cb.merged[col.name] = fj.kind == JoinKind::kRight ? *right_hit : *left_hit;
+                cb.merged[FoldName(col.name)] = fj.kind == JoinKind::kRight ? *right_hit : *left_hit;
             }
         }
         if (on != nullptr) {
@@ -1093,7 +1115,7 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
             index = static_cast<std::size_t>(k - 1);
         } else if (e.kind == Expr::Kind::kColumn && e.qualifier.empty()) {
             for (std::size_t i = 0; i < cb.visible; ++i) {
-                if (q.columns[i].name != e.column) continue;
+                if (!catalog::ColumnNamesCollide(q.columns[i].name, e.column)) continue;
                 // A star column or a bare column item of that name is the
                 // same column the input name reads; only two different
                 // output columns of one name are ambiguous.

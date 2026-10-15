@@ -140,7 +140,7 @@ protected:
                (r.U64().value_or(0) & wire::kCapBulkLoad) != 0;
     }
 
-    // Encodes one chunk of `rows` against `schema` - every column, the pk
+    // Encodes one chunk of `rows` against `schema` - every column, the tuple key
     // first - through the same codec the server decodes with.
     static std::vector<std::byte> Chunk(std::uint64_t load_id, std::uint32_t seq,
                                         const catalog::Schema& schema,
@@ -163,7 +163,7 @@ protected:
         return out;
     }
 
-    // One chunk of int-only rows for `t (id, a, b)`, every pk NULL - the
+    // One chunk of int-only rows for `t (id, a, b)`, every tuple key NULL - the
     // engine issues each.
     static std::vector<std::byte> Chunk(
         std::uint64_t load_id, std::uint32_t seq,
@@ -270,7 +270,7 @@ TEST_F(KwpLoadServerTest, ALoadLandsRowsThroughTheOneWritePath) {
         const std::uint64_t load_id = r.U64().value_or(0);
         EXPECT_EQ(r.U16().value_or(0), kKwpLoadWindow);
         EXPECT_EQ(r.U32().value_or(0), kKwpMaxChunkBytes);
-        EXPECT_EQ(r.U16().value_or(0), 3u);  // every column, the pk first (BI15)
+        EXPECT_EQ(r.U16().value_or(0), 3u);  // every column, the tuple key first (BI15)
 
         // Two chunks: three rows, then two, every key issued.
         const std::pair<std::int64_t, std::int64_t> first[] = {{10, 1}, {20, 2}, {30, 3}};
@@ -467,7 +467,7 @@ TEST_F(KwpLoadServerTest, ALoadConnectionCarriesTheConfiguredKeepalive) {
     client.join();
 }
 
-// BI15 and BI16: every storable type loads, NULL included, and the pk field
+// BI15 and BI16: every storable type loads, NULL included, and the tuple key field
 // decides each row - NULL takes an issued id, a value names one - so one
 // chunk mixes the two exactly as one T1 statement does.
 TEST_F(KwpLoadServerTest, EveryTypeLoadsAndOneChunkMixesNamedAndIssuedKeys) {
@@ -505,9 +505,9 @@ TEST_F(KwpLoadServerTest, EveryTypeLoadsAndOneChunkMixesNamedAndIssuedKeys) {
         // (BD). `d` is a uint64 above INT64_MAX on every row.
         parser::AstValue big = Int(-1);
         big.raw_int_text = "18446744073709551615";
-        const auto row = [&](parser::AstValue pk, std::int64_t tag) {
+        const auto row = [&](parser::AstValue tuple_key, std::int64_t tag) {
             return std::vector<parser::AstValue>{
-                std::move(pk),       Int(-7),     Int(-300),       Int(70000),
+                std::move(tuple_key),       Int(-7),     Int(-300),       Int(70000),
                 big,                 Int(1),      Int(20454),      Int(1767225600000000),
                 Dec(-12345, 2),      DecWide(-1, -123456789, 4),
                 Str("ab"),           Str(std::string(100, 'x')),
@@ -546,9 +546,9 @@ TEST_F(KwpLoadServerTest, EveryTypeLoadsAndOneChunkMixesNamedAndIssuedKeys) {
     client.join();
 }
 
-// A relation that is its pk alone: a NULL pk row is a row of no values,
-// T1's omitted-pk arity at width zero, and takes an issued id.
-TEST_F(KwpLoadServerTest, APkOnlyRelationLoadsIssuedAndNamedKeys) {
+// A relation that is its tuple key alone: a NULL tuple key row is a row of no values,
+// T1's omitted-tuple key arity at width zero, and takes an issued id.
+TEST_F(KwpLoadServerTest, ATupleKeyOnlyRelationLoadsIssuedAndNamedKeys) {
     constexpr std::uint16_t kTextPort = 25723;
     constexpr std::uint16_t kKwpPort = 25724;
     ASSERT_EQ(dispatcher_->Dispatch("CREATE TABLE t (id int64)").response.substr(0, 7), "CREATED");
@@ -588,10 +588,10 @@ TEST_F(KwpLoadServerTest, APkOnlyRelationLoadsIssuedAndNamedKeys) {
     client.join();
 }
 
-// A narrow pk travels as u64 in a load chunk as in a result (protocol.md
+// A narrow tuple key travels as u64 in a load chunk as in a result (protocol.md
 // §6): 8 bytes past the declared width land whole, and the declared width's
 // 4 bytes are refused, because S_LOAD_READY described the field as 8.
-TEST_F(KwpLoadServerTest, ANarrowPkLoadsAsEightBytesPastItsDeclaredWidth) {
+TEST_F(KwpLoadServerTest, ANarrowTupleKeyLoadsAsEightBytesPastItsDeclaredWidth) {
     constexpr std::uint16_t kTextPort = 25725;
     constexpr std::uint16_t kKwpPort = 25726;
     ASSERT_EQ(dispatcher_->Dispatch("CREATE TABLE t (id int32, a int64)").response.substr(0, 7),

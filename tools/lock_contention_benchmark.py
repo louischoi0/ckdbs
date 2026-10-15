@@ -80,6 +80,7 @@ import time
 
 from bench_common import Phase, nearest_rank
 from ckdbs_cli import DEFAULT_HOST, ServerConnection
+import sys_meta
 
 RELATION = "c3_lock"
 
@@ -117,11 +118,7 @@ class Session:
         self.index = index
         self.conn = ServerConnection(host, port)
         self.core = None
-        meta = self.conn.send_command("SHOW META")
-        for token in meta.replace("\\n", " ").split():
-            if token.startswith("core="):
-                self.core = token[len("core="):]
-                break
+        self.core = sys_meta.from_text(self.conn.send_command("SHOW META")).get("core")
 
     def close(self):
         try:

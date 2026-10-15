@@ -11,7 +11,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
-// `kRange`: a pk `BETWEEN` walked with `min_key` pruning.
+// `kRange`: a tuple key `BETWEEN` walked with `min_key` pruning.
 //
 // The kind is an accelerator, and the only thing that makes an accelerator
 // safe is that it is invisible. So every test below is a comparison against
@@ -87,7 +87,7 @@ TEST_F(RangeScanTest, ARangeReturnsExactlyWhatTheSamePredicateScannedGives) {
         const Outcome ranged =
             RunWithStats("SELECT id, v FROM " + rel + " WHERE id BETWEEN 50 AND 60");
         // The same rows, asked for in a way that cannot become a range: the
-        // bounds are there but so is a non-pk conjunct that keeps every
+        // bounds are there but so is a non-tuple-key conjunct that keeps every
         // row being examined... which is not enough on its own, so this
         // instead compares against the *unpruned* form below.
         const Outcome scanned =

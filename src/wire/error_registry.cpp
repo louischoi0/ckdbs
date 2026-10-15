@@ -40,6 +40,7 @@ ErrorCategory CategoryOf(StatusCode code) noexcept {
         case StatusCode::kUnknownOutcome: return ErrorCategory::kUnknownOutcome;
         case StatusCode::kFkViolation: return ErrorCategory::kFkViolation;
         case StatusCode::kAssertionViolation: return ErrorCategory::kAssertionViolation;
+        case StatusCode::kTransitionViolation: return ErrorCategory::kTransitionViolation;
         // The wire's category since KWP/1; the engine code since BA-S15.
         case StatusCode::kCancelled: return ErrorCategory::kCancelled;
         // Not an error, and reached only by a caller that ignored the
@@ -72,6 +73,7 @@ std::string_view ErrorCategoryName(ErrorCategory category) noexcept {
         case ErrorCategory::kNotImplemented: return "NOT_IMPLEMENTED";
         case ErrorCategory::kFkViolation: return "FK_VIOLATION";
         case ErrorCategory::kAssertionViolation: return "ASSERTION_VIOLATION";
+        case ErrorCategory::kTransitionViolation: return "TRANSITION_VIOLATION";
     }
     return "INTERNAL";
 }

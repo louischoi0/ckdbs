@@ -27,6 +27,7 @@
 #include "kds/server/restore.hpp"
 #include "kds/server/wal_archive.hpp"
 #include "kds/storage/file_page_device.hpp"
+#include "view_text.hpp"
 
 namespace kds::server {
 namespace {
@@ -555,12 +556,13 @@ TEST(PointInTimeTest, ARestoreToAnLsnPastTheStopEndsJustBeforeIt) {
 
 // ---- Every page by its own CRC32C ---------------------------------------------
 
-// `key=`'s number out of a `DESCRIBE` reply.
+// The relation's `sys.tables` column `key`, as a number.
 std::uint64_t Described(Expeditor& db, const std::string& table, const std::string& key) {
-    const std::string shape = Reply(db, "DESCRIBE " + table);
-    const std::size_t at = shape.find(key + "=");
-    EXPECT_NE(at, std::string::npos) << shape;
-    return at == std::string::npos ? 0 : std::strtoull(shape.c_str() + at + key.size() + 1, nullptr, 10);
+    const std::string shown =
+        Reply(db, "SELECT name, " + key + " FROM sys.tables WHERE name = '" + table + "'");
+    const auto value = testing_view::ReadViewText(shown).Find("name", table, key);
+    EXPECT_TRUE(value.has_value()) << shown;
+    return value.has_value() ? std::strtoull(value->c_str(), nullptr, 10) : 0;
 }
 
 // Half a page overwritten from another write: what a snapshot that did not

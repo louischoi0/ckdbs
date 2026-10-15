@@ -22,7 +22,7 @@ using storage::cabin::kEntryHintValid;
 using storage::cabin::kEntryReserved;
 
 // Schema position -> the caller's value. INSERT statements carry columns
-// after the pk (first_col_pos 1); UPDATE/DELETE hand the decoded row
+// after the tuple key (first_col_pos 1); UPDATE/DELETE hand the decoded row
 // (first_col_pos 0) - the same convention NoteCabinWrite and MaintainIndexes
 // take, for the same reason.
 const parser::AstValue& ValueAt(std::span<const parser::AstValue> values,
@@ -523,7 +523,7 @@ Status AssertionEnforcer::AdmitInsert(catalog::Oid oid,
 
 Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager* wal,
                                      std::uint64_t txn_id, Live& live, const std::string& key,
-                                     bool departure, std::int64_t value, std::uint64_t pk,
+                                     bool departure, std::int64_t value, std::uint64_t tuple_key,
                                      PageId row_page, std::uint16_t row_slot,
                                      std::uint64_t serial) {
     LiveAssertion& a = live.a;
@@ -532,7 +532,7 @@ Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager*
     const LatchGuard chain(live.chain_latch.get());
 
     BoundCabinEntry entry;
-    entry.pk = pk;
+    entry.tuple_key = tuple_key;
     entry.flags = static_cast<std::uint8_t>(kEntryReserved | kEntryHintValid |
                                             (departure ? kEntryDeparture : 0));
     entry.page_id = row_page;
@@ -592,7 +592,7 @@ Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager*
 Status AssertionEnforcer::ReserveInsert(storage::PageStore& store, wal::WalManager* wal,
                                         std::uint64_t txn_id, Hold& hold, catalog::Oid oid,
                                         std::span<const parser::AstValue> values,
-                                        std::uint64_t pk, PageId row_page,
+                                        std::uint64_t tuple_key, PageId row_page,
                                         std::uint16_t row_slot) {
     struct Work {
         std::shared_ptr<Live> live;
@@ -636,7 +636,7 @@ Status AssertionEnforcer::ReserveInsert(storage::PageStore& store, wal::WalManag
     }
     for (Work& w : work) {
         if (Status s = ReserveOne(store, wal, txn_id, *w.live, w.key, /*departure=*/false,
-                                  w.value, pk, row_page, row_slot, w.serial);
+                                  w.value, tuple_key, row_page, row_slot, w.serial);
             !s.ok()) {
             return s;  // `hold` gives back what was not converted
         }
@@ -655,7 +655,7 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
                                                 std::uint64_t txn_id, catalog::Oid oid,
                                                 std::span<const parser::AstValue> old_row,
                                                 std::span<const parser::AstValue> new_row,
-                                                std::uint64_t pk, PageId row_page,
+                                                std::uint64_t tuple_key, PageId row_page,
                                                 std::uint16_t row_slot,
                                                 std::uint64_t* reserver) {
     std::optional<Status> unenforceable;
@@ -736,12 +736,12 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
         // contribution leaves, the new one arrives - and both halves are
         // entries, so header == Σ(entries) survives.
         if (Status s = ReserveOne(store, wal, txn_id, *live, old_key, /*departure=*/true,
-                                  old_contrib, pk, row_page, row_slot, /*serial=*/0);
+                                  old_contrib, tuple_key, row_page, row_slot, /*serial=*/0);
             !s.ok()) {
             return s;
         }
         if (Status s = ReserveOne(store, wal, txn_id, *live, new_key, /*departure=*/false,
-                                  new_contrib, pk, row_page, row_slot, hold.items_.front().serial);
+                                  new_contrib, tuple_key, row_page, row_slot, hold.items_.front().serial);
             !s.ok()) {
             return s;
         }
@@ -754,7 +754,7 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
 Status AssertionEnforcer::ReserveDelete(storage::PageStore& store, wal::WalManager* wal,
                                         std::uint64_t txn_id, catalog::Oid oid,
                                         std::span<const parser::AstValue> old_row,
-                                        std::uint64_t pk, PageId row_page,
+                                        std::uint64_t tuple_key, PageId row_page,
                                         std::uint16_t row_slot) {
     const std::vector<std::shared_ptr<Live>> lives = [&] {
         const LatchGuard guard(latch_.get());
@@ -764,7 +764,7 @@ Status AssertionEnforcer::ReserveDelete(storage::PageStore& store, wal::WalManag
         const StatusOr<std::string> key = KeyFor(live->a, old_row, 0);
         if (!key.ok()) return key.status();
         if (Status s = ReserveOne(store, wal, txn_id, *live, key.value(),
-                                  /*departure=*/true, ContributionOf(live->a, old_row, 0), pk,
+                                  /*departure=*/true, ContributionOf(live->a, old_row, 0), tuple_key,
                                   row_page, row_slot, /*serial=*/0);
             !s.ok()) {
             return s;

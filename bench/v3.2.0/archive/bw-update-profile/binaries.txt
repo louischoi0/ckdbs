@@ -1,0 +1,2 @@
+7ac8bb6d96ea27ae4ab65958e6f00eccbf61b1fe15134663286e3db0adf6caf3  build-A/kds_server
+7cf535e7e666a5cb503d338100e01a96f43b2038c6a02442323362aa81b5693a  build-B/kds_server

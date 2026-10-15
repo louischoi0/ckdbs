@@ -246,6 +246,9 @@ enum class ErrorCategory : std::uint16_t {
     // 15 to anything already compiled against it. These two take 16 and 17.
     kFkViolation,
     kAssertionViolation,
+    // Appended for StatusCode::kTransitionViolation (BV-Q3), 18, on the
+    // same rule as the two above it.
+    kTransitionViolation,
 };
 
 // Packs a wire error code as `category u16 << 16 | detail u16` (spec

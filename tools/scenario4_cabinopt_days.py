@@ -91,6 +91,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_common import Phase, report
 from ckdbs_cli import DEFAULT_HOST, ServerConnection, format_reply
+import sys_meta
 
 # ---- the shared shape (the PostgreSQL twin imports these) -----------------
 #
@@ -265,25 +266,15 @@ class Arm:
         self.cpu[key] = self.cpu.get(key, 0.0) + seconds
 
 
-def parse_kv(line):
-    out = {}
-    for tok in line.split():
-        if "=" in tok:
-            k, _, v = tok.partition("=")
-            out[k] = v
-    return out
-
-
 def capture_optimizer(arm):
-    reply = arm("SHOW CABIN_OPTIMIZER")
-    lines = reply.splitlines()
-    return {"header": lines[0],
-            "entries": [ln for ln in lines[1:] if ln.strip()]}
+    """The controller's `sys.meta` fields and `sys.cabin_optimizer`'s rows."""
+    header, entries = sys_meta.cabin_optimizer_state(arm)
+    return {"header": header, "entries": entries}
 
 
 def capture_cabins(arm):
-    reply = arm("SHOW CABINS")
-    return [ln for ln in reply.splitlines() if ln.strip()]
+    """`sys.cabins`' rows."""
+    return sys_meta.view_rows(arm("SHOW CABINS"))
 
 
 # ---- setup ----------------------------------------------------------------
@@ -488,9 +479,8 @@ def run_days(args, arms, names, plans, run_t0):
             if on_arm:
                 cap = capture_optimizer(on_arm)
                 states = tuple(sorted(
-                    (parse_kv(e).get("rel", "?"), parse_kv(e).get("state", "?"))
-                    for e in cap["entries"]))
-                header_drops = parse_kv(cap["header"]).get("drops")
+                    (e.get("rel", "?"), e.get("state", "?")) for e in cap["entries"]))
+                header_drops = cap["header"].get("drops")
                 key = (states, header_drops)
                 if key != last_states:
                     evidence.append({"t_wall_s": round(time.time() - run_t0, 1),

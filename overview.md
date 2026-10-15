@@ -12,7 +12,7 @@ KDS does not try to be everything a traditional RDBMS is. It deliberately narrow
 
 ## Design Philosophy
 
-- **OLTP-first, not general-purpose.** Primary-key point reads/writes, inner equi-join chains, predicate-position subqueries, pagination, short transactions. Every statement compiles to a **step chain** executed in written order — *the query is the plan*: execution shape is classified at parse time and dispatched without plan search. No CTEs, no window functions, no dialect-compatibility shims.
+- **OLTP-first, not general-purpose.** Tuple key point reads/writes, inner equi-join chains, predicate-position subqueries, pagination, short transactions. Every statement compiles to a **step chain** executed in written order — *the query is the plan*: execution shape is classified at parse time and dispatched without plan search. No CTEs, no window functions, no dialect-compatibility shims.
 - **The engine observes, then reorganizes.** Executions feed a statistics layer (**Waystone**). Time-decayed scores classify data hot/warm/cold; the physical optimizer clusters hot tuples, compacts dead ones, and co-locates rows that recurring patterns touch together. Statistics change *where bytes live*, not just how queries run.
 - **Advisory by construction.** Everything learned — trails, scores, placement hints — is structurally advisory: delete all of it and every query still returns the same rows, just slower. The B+ tree stays the sole authority. This is a hard invariant with its own test family, not a design preference.
 - **Reliability is a product feature.** Write-ahead logging with per-transaction durability classes, page checksums, full-page-image torn-write recovery, and crash-recovery paths that are exercised — not assumed — by deterministic fault-injection tests.
@@ -53,7 +53,7 @@ One property makes the last step sane rather than reckless, and it is structural
                         └───────────┬───────────┘      │  + sys.patterns │
                                     │    record/replay └────────┬────────┘
                         ┌───────────▼───────────┐               │ hot sets
-                        │    B+ tree (pk)       │◀─ validates ──┤
+                        │  B+ tree (tuple key)  │◀─ validates ──┤
                         └───────────┬───────────┘               ▼
                                     │                ┌───────────────────────┐
                                     │   relayout ◀── │  Physical optimizer   │
@@ -83,7 +83,7 @@ One property makes the last step sane rather than reckless, and it is structural
 | **Executor (step VM)** | Every statement is a **step chain** — lookups, probes, scans, nested sub-chains — run in written order. Replay-eligible steps consult the instance's trail first (validated per entry); the rest run authoritatively. Records trails from an instance's second execution |
 | **Waystone** | The trail store: per pattern instance `(pattern_id, arg_hash)`, the recorded Keystones of the rows it touched, with last-seen locations and step tags. Reached through `sys.patterns` and a per-pattern directory. Strictly advisory — droppable wholesale without changing any result |
 | **Semi-sorted heap** | 8 KiB pages with an immutable per-page key lower bound (`min_key`): pages are unordered inside, ordered between — range pruning without full sorting. Each tuple carries a 64-bit **Keystone** word (48-bit id · flags byte · reserved byte) as its identity |
-| **B+ tree** | The authoritative pk → location index. One tree core, thin facades; append-optimized for monotonic engine-issued ids (rightmost fast path, asymmetric splits) |
+| **B+ tree** | The authoritative tuple key → location index. One tree core, thin facades; append-optimized for monotonic engine-issued ids (rightmost fast path, asymmetric splits) |
 | **Physical optimizer** *(shadow mode built)* | The shadow half exists: `SHOW RELAYOUT` reports every candidate relayout plan with its lazy-decay-weighted benefit and the gate blocking it, and the page epoch that makes moving tuples safe is live at every validation site. The mover does not exist yet, so nothing moves — deliberately: the promotion gate applied to the optimizer itself, with the shadow report as the evidence that opening a gate pays |
 | **Buffer pool** | One for the instance, its frames shared by every core. RAII pinned-page handles, clock eviction, background writer, WAL-ordering gate enforced in code. Hit path: a frame-table probe and a pin, no syscalls |
 | **WAL** | One append-only stream for the instance. Physiological redo + undo-chain MVCC (writer trx-id + undo pointer; no xmax). Durability classes per transaction: `strict` / `group` / `relaxed`. Fuzzy checkpoints, full-page images, point-in-time-recovery-ready archives |

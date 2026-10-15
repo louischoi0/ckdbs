@@ -85,7 +85,7 @@ struct TypedSetExpr {
 
     // kLiteral: the value coerced to `type` when the context typed it.
     parser::AstValue literal;
-    // kColumn: the position in the relation's schema (0 is the pk, which an
+    // kColumn: the position in the relation's schema (0 is the tuple key, which an
     // expression may read, BJ-R5).
     std::size_t column_no = 0;
     // kCall with kFunction: which one, and ROUND/TRUNC's number of places.

@@ -13,7 +13,7 @@ Three findings carry rules:
    catalog write (§4).
 2. **Issue-once is affordable only with bump-ahead allocation, and the
    block size has a floor**: 4096 (§5).
-3. **The oid half of (oid, pk) holds only if the oid counter recovers its
+3. **The oid half of (oid, tuple key) holds only if the oid counter recovers its
    position from the catalog.** It does (§6).
 
 ---
@@ -25,7 +25,7 @@ id space with one implementation:
 
 | caller | what it issues |
 |---|---|
-| `src/server/command_dispatcher.cpp` | a user tuple's pk — the Keystone id |
+| `src/server/command_dispatcher.cpp` | a user tuple's tuple key — the Keystone id |
 | `Catalog::RegisterPattern` | the **oid** a `sys.patterns` row carries: a body field, not a Keystone word |
 | `src/exec/assertion_catalog.cpp`, `src/exec/index_ddl.cpp`, the cabin and fkey catalog writes (and the range writes, until `sys.ranges` was removed on 2026-09-30) | the Keystone id of a catalog row (`sys.assertions`, `sys.indexes`, `sys.ranges`, `sys.cabins`, `sys.fkeys`) |
 
@@ -102,14 +102,14 @@ unlogged INSERT. Measured pre-v3 with `bench/keystone_alloc_bench.cpp` at
 
 **The catalog relations chain.** Each fixed catalog page id is a chain
 *root*; a full page links to the next, taken from the reserved range
-`kCatalogOverflowFirst`..`kCatalogOverflowLimit` (16..128,
+`kCatalogOverflowFirst`..`kCatalogOverflowLimit` (17..128,
 `include/kds/catalog/well_known.hpp`). A page holds 68 `sys.columns`
-rows, so the 112-page range caps the instance at roughly 7,600 column rows. The range is
+rows, so the 111-page range caps the instance at roughly 7,500 column rows. The range is
 bounded so "every catalog page" stays nameable (a fixture's flush for a
 second store over the device still needs it). §3's scan is O(relations)
 across pages; that scaling belongs to the catalog's lookup path.
 
-## 6. The oid half of (oid, pk)
+## 6. The oid half of (oid, tuple key)
 
 `Catalog::GenerateUserOid()` recovers its position on first use from the
 highest oid `sys.objects` and `sys.columns` carry, then increments in
@@ -135,6 +135,6 @@ to the recovery, which is what to check before adding a caller.
 
 Applied there. K3 is "No density promise", with what rests on ordering
 settled dependency by dependency in that document's §1 (quote that list,
-not this file); its §1.2 states (oid, pk) uniqueness with the oid half
+not this file); its §1.2 states (oid, tuple key) uniqueness with the oid half
 resting on §6 here; its §2 persists the mark through the logged catalog
 write §4 here required.

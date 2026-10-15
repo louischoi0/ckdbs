@@ -44,6 +44,7 @@
 #include "kds/storage/page_store_checkpoint_target.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "kds/wal/checkpointer.hpp"
+#include "view_text.hpp"
 
 namespace kds::server {
 namespace {
@@ -85,7 +86,7 @@ catalog::Oid Relation(TwoCoreRig& rig, const std::string& name) {
     return oid.ok() ? oid.value() : 0;
 }
 
-// An `INSERT`'s values after the pk: the one column, `v`.
+// An `INSERT`'s values after the tuple key: the one column, `v`.
 std::vector<parser::AstValue> Row(std::int64_t v) {
     std::vector<parser::AstValue> row(1);
     row[0].type = parser::ValueType::kInt;
@@ -260,7 +261,7 @@ TEST(AssertionPublishRigTest, ACreateOnACoreWithNoOpenDdlRefusesARelationAnother
         d0.Dispatch("CREATE ASSERTION cap ON ghost GROUP BY (g) CHECK COUNT(*) <= 1").response;
     EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
     EXPECT_NE(refused.find("no relation named 'ghost'"), std::string::npos) << refused;
-    EXPECT_NE(d0.Dispatch("SHOW ASSERTIONS").response.find("assertions=0"), std::string::npos);
+    EXPECT_EQ(testing_view::ReadViewText(d0.Dispatch("SHOW ASSERTIONS").response).rows.size(), 0u);
 
     // The creator's table is free of it, and settles normally.
     EXPECT_EQ(d1.Dispatch("INSERT INTO ghost VALUES (1)", &creator).response.rfind("INSERTED", 0),

@@ -748,7 +748,7 @@ StatusOr<std::optional<storage::InsertPlacement>> CompactLeafAndInsert(
 // leaf's `relayout_epoch` is bumped: every Waystone trail entry and Cabin
 // hint pointing into it becomes untrusted at once (section 3.1a's pairing
 // rule). Secondary indexes need nothing - an index entry's sort key is
-// `key || pk` (index_page.hpp), never a location - and the undo chain is
+// `key || tuple key` (index_page.hpp), never a location - and the undo chain is
 // likewise addressed by `undo_ptr`, not by where the version sits.
 //
 // The delete mark travels with the tuple. A delete-marked version carries
@@ -939,13 +939,13 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid)
 
 Status DuplicateKey(std::uint64_t id, PageId leaf_id, std::uint16_t slot, bool deleted) {
     if (deleted) {
-        return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
+        return Status::AlreadyExists("duplicate tuple key " + std::to_string(id) +
                                      ": a row with this key was deleted; PURGE frees its key "
                                      "(page " +
                                      std::to_string(leaf_id) + " slot " + std::to_string(slot) +
                                      ")");
     }
-    return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
+    return Status::AlreadyExists("duplicate tuple key " + std::to_string(id) +
                                  " already present at page " + std::to_string(leaf_id) + " slot " +
                                  std::to_string(slot));
 }
@@ -1207,7 +1207,7 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
             covered = covers.value();
         }
         if (covered) {
-            return Status::NotFound("no tuple with primary key " + std::to_string(id) +
+            return Status::NotFound("no tuple with tuple key " + std::to_string(id) +
                                     " in leaf " + std::to_string(leaf_id));
         }
         // The key belongs past this leaf now, so the miss says nothing about
@@ -1217,7 +1217,7 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
     }
     Contention::Add(Tally::kRefusalBtreeLookup);
     storage::NoteStructuralRefusal();
-    return Status::TxnConflict("lookup of primary key " + std::to_string(id) + " from page " +
+    return Status::TxnConflict("lookup of tuple key " + std::to_string(id) + " from page " +
                                std::to_string(root) + " gave up after " +
                                std::to_string(kMaxDescentRestarts + 1) +
                                " attempts: each leaf it reached had already given the key away. "

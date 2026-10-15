@@ -29,6 +29,7 @@
 #if KDS_WITH_TLS
 #include "kds/server/auth.hpp"
 #include "kds/server/scram.hpp"
+#include "view_text.hpp"
 #endif
 
 // Real loopback-socket integration test: starts a TcpServer on a
@@ -158,12 +159,11 @@ TEST_F(TcpServerTest, ServesMultipleCommandsBeforeStop) {
     ASSERT_GE(client, 0);
 
     EXPECT_EQ(SendAndReceiveLine(client, "PING"), "PONG");
-    EXPECT_NE(SendAndReceiveLine(client, "SHOW META")
-                  .find("version=" + std::to_string(server::kSuperBlockVersion)),
-              std::string::npos);
-    EXPECT_NE(SendAndReceiveLine(client, "DESCRIBE tables")
-                  .find("oid=" + std::to_string(catalog::kSysTablesTable)),
-              std::string::npos);
+    EXPECT_EQ(testing_view::MetaField(SendAndReceiveLine(client, "SHOW META"), "version"),
+              std::to_string(server::kSuperBlockVersion));
+    EXPECT_EQ(testing_view::ReadViewText(SendAndReceiveLine(client, "SELECT name, oid FROM sys.tables"))
+                  .Find("name", "tables", "oid"),
+              std::to_string(catalog::kSysTablesTable));
     EXPECT_EQ(SendAndReceiveLine(client, "STOP"), "OK bye");
 
     ::close(client);

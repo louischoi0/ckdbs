@@ -186,7 +186,7 @@ Status TransactionManager::StartStatement(Transaction& txn) {
 }
 
 Status TransactionManager::CheckWriteConflict(const Transaction& txn, std::uint64_t cur,
-                                              std::uint64_t pk) const {
+                                              std::uint64_t tuple_key) const {
     if (cur == kAlwaysVisibleTrxId) return Status::OK();
     if (cur == txn.id_) {
         // My own earlier write. The new undo record links to the old one,
@@ -202,23 +202,23 @@ Status TransactionManager::CheckWriteConflict(const Transaction& txn, std::uint6
     // than re-reading (section 5).
     //
     // The message is part of the wire contract, not a diagnostic.
-    return Status::TxnConflict("row id=" + std::to_string(pk) + " was written by transaction " +
+    return Status::TxnConflict("row id=" + std::to_string(tuple_key) + " was written by transaction " +
                                std::to_string(cur));
 }
 
 void TransactionManager::NoteInsert(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
-                                    std::uint16_t slot, std::uint64_t pk) {
+                                    std::uint16_t slot, std::uint64_t tuple_key) {
     TrailEntry entry;
     entry.action = TrailAction::kInsert;
     entry.rel_oid = rel_oid;
     entry.page_id = page_id;
     entry.slot = slot;
-    entry.pk = pk;
+    entry.tuple_key = tuple_key;
     txn.trail_.push_back(std::move(entry));
 }
 
 void TransactionManager::NoteOverwrite(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
-                                       std::uint16_t slot, std::uint64_t pk,
+                                       std::uint16_t slot, std::uint64_t tuple_key,
                                        std::uint64_t prior_trx_id, std::uint64_t prior_undo_ptr,
                                        std::span<const std::byte> image) {
     TrailEntry entry;
@@ -226,7 +226,7 @@ void TransactionManager::NoteOverwrite(Transaction& txn, std::uint32_t rel_oid, 
     entry.rel_oid = rel_oid;
     entry.page_id = page_id;
     entry.slot = slot;
-    entry.pk = pk;
+    entry.tuple_key = tuple_key;
     entry.prior_trx_id = prior_trx_id;
     entry.prior_undo_ptr = prior_undo_ptr;
     entry.image.assign(image.begin(), image.end());
@@ -235,7 +235,7 @@ void TransactionManager::NoteOverwrite(Transaction& txn, std::uint32_t rel_oid, 
 
 Status TransactionManager::NoteVarHeapAppend(Transaction& txn, std::uint32_t rel_oid,
                                              PageId page_id, std::uint16_t slot,
-                                             std::uint64_t pk) {
+                                             std::uint64_t tuple_key) {
     // No prior version and no image: an append supersedes nothing, and
     // there is nothing to restore - releasing the slot is the whole
     // compensation. The record exists to be a link in the transaction's
@@ -247,20 +247,20 @@ Status TransactionManager::NoteVarHeapAppend(Transaction& txn, std::uint32_t rel
     rec.target_page_id = page_id;  // a kVarHeap page, not a heap one
     rec.target_slot = slot;
     rec.type = static_cast<std::uint8_t>(UndoRecordType::kVarHeapAppend);
-    if (auto ptr = AppendUndo(txn, rec, pk, {}); !ptr.ok()) return ptr.status();
+    if (auto ptr = AppendUndo(txn, rec, tuple_key, {}); !ptr.ok()) return ptr.status();
 
     TrailEntry entry;
     entry.action = TrailAction::kVarHeapAppend;
     entry.rel_oid = rel_oid;
     entry.page_id = page_id;
     entry.slot = slot;
-    entry.pk = pk;
+    entry.tuple_key = tuple_key;
     txn.trail_.push_back(std::move(entry));
     return Status::OK();
 }
 
 void TransactionManager::NoteDeleteMark(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
-                                        std::uint16_t slot, std::uint64_t pk,
+                                        std::uint16_t slot, std::uint64_t tuple_key,
                                         std::uint64_t prior_trx_id,
                                         std::uint64_t prior_undo_ptr) {
     TrailEntry entry;
@@ -268,7 +268,7 @@ void TransactionManager::NoteDeleteMark(Transaction& txn, std::uint32_t rel_oid,
     entry.rel_oid = rel_oid;
     entry.page_id = page_id;
     entry.slot = slot;
-    entry.pk = pk;
+    entry.tuple_key = tuple_key;
     entry.prior_trx_id = prior_trx_id;
     entry.prior_undo_ptr = prior_undo_ptr;
     txn.trail_.push_back(std::move(entry));
@@ -434,7 +434,7 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
     // The trail recorded an address, and a btree leaf division can have
     // moved the row since (manager.hpp's RowLocator). So the address is
     // checked against the identity it is supposed to reach before a single
-    // byte is written: `pk` is the row, `(page_id, slot)` is only where it
+    // byte is written: `tuple_key` is the row, `(page_id, slot)` is only where it
     // was last seen.
     //
     // The check is one payload read on a page already in hand, and it is
@@ -455,7 +455,7 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
         bool matches = false;
         if (auto payload = view.PayloadAt(slot, view.slot_count()); payload.ok()) {
             if (auto id = KeystoneIdOfPayload(payload.value()); id.ok()) {
-                matches = id.value() == entry.pk;
+                matches = id.value() == entry.tuple_key;
             }
         }
         if (!matches) {
@@ -465,7 +465,7 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
                 // a row this transaction never touched, which is worse than
                 // an unwound rollback that says so.
                 return Status::Corruption(
-                    "row id " + std::to_string(entry.pk) + " of relation oid " +
+                    "row id " + std::to_string(entry.tuple_key) + " of relation oid " +
                     std::to_string(entry.rel_oid) + " is no longer at page " +
                     std::to_string(page_id) + " slot " + std::to_string(slot) +
                     ", and no row locator is installed to find it");
@@ -473,7 +473,7 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
             // Released first, so the compensation holds exactly one page:
             // the one the locator hands back.
             bytes.value().Release();
-            auto found = locate_row(entry.rel_oid, entry.pk);
+            auto found = locate_row(entry.rel_oid, entry.tuple_key);
             if (!found.ok()) return found.status();
             page_id = found.value().page_id;
             slot = found.value().slot;
@@ -743,11 +743,11 @@ std::vector<wal::CheckpointActiveTxn> TransactionManager::Snapshot() const {
 }
 
 StatusOr<std::uint64_t> TransactionManager::AppendUndo(Transaction& txn,
-                                                       UndoRecordFields fields, std::uint64_t pk,
+                                                       UndoRecordFields fields, std::uint64_t tuple_key,
                                                        std::span<const std::byte> image) {
     // Both set here and nowhere else - manager.hpp says why.
     fields.txn_prev_undo_ptr = txn.last_undo_ptr_;
-    fields.pk = pk;
+    fields.tuple_key = tuple_key;
 
     if (before_undo_append_for_test_) {
         if (Status s = before_undo_append_for_test_(fields); !s.ok()) return s;

@@ -80,10 +80,11 @@ client parses:
 | Statement | Success reply |
 |---|---|
 | `PING` | `PONG` |
-| `INSERT` (one row) | `INSERTED oid=<n> id=<n> page=<n> slot=<n>` — the engine-assigned primary key comes back as `id=` |
+| `INSERT` (one row) | `INSERTED oid=<n> id=<n> page=<n> slot=<n>` — the engine-assigned tuple key comes back as `id=` |
 | `INSERT` (multi-row `VALUES (...), (...)`) | `INSERTED oid=<n> rows=<n> first_id=<n> last_id=<n>` — the id range, with no contiguity promise; over `max_insert_rows` (1024) refuses whole |
 | `DROP TABLE` | `DROPPED TABLE <name> oid=<n>` — catalog-scoped; RESTRICTs on assertions and referencing FKs |
 | `ALTER TABLE ... RENAME ...` | `RENAMED TABLE <t> TO <new>` / `RENAMED COLUMN <t>.<old> TO <new>` — catalog-only |
+| `ALTER TABLE ... ADD COLUMN ...` / `DROP COLUMN ...` | `ADDED COLUMN <t>.<col>` / `DROPPED COLUMN <t>.<col>` — catalog-only, transactional |
 | `UPDATE` / `DELETE` | `UPDATED <n>` / `DELETED <n>` (rows affected) |
 | `SELECT` | header line, then one `\n`-escaped comma row per match (per group when aggregated; groups in first-seen order) |
 | `CREATE TABLE` (SQL form) | `CREATED oid=<n> ...` |
@@ -153,7 +154,7 @@ nothing else.
 
 ## 6. Data rules a client must know
 
-- **The primary key is the engine's.** Column 0 is the Keystone id;
+- **The tuple key is the engine's.** Column 0 is the Keystone id;
   `INSERT` supplies columns 1..n-1 only and the assigned key returns as
   `id=<n>`. Supplying it is a dedicated error. `UPDATE` cannot change it.
 - **No NULL storage yet**: `NULL` parses as a literal, but rows with NULLs
@@ -165,7 +166,7 @@ nothing else.
   columns, up to eight keys, each with its own direction; ties keep the
   order the engine would have emitted anyway, so a paged client sees a
   stable order across requests. Two costs worth designing around:
-  ordering by the primary key ascending is free, every other order is a
+  ordering by the tuple key ascending is free, every other order is a
   real sort; and a *sorted* `LIMIT` bounds what you receive but not what
   the engine reads. No cursors: a reply still streams whole, so prefer
   keyset form (`WHERE id > <last seen> LIMIT n`) over a growing `OFFSET`.

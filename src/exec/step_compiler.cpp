@@ -16,7 +16,7 @@
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_vm.hpp"  // PositionSink - the declaration sink AT-R1 threads
-#include "kds/storage/index/index_page.hpp"  // kIndexPkWidth - the sort-key suffix
+#include "kds/storage/index/index_page.hpp"  // kIndexTupleKeyWidth - the sort-key suffix
 
 namespace kds::exec {
 
@@ -65,17 +65,22 @@ std::string Position(std::uint32_t byte_offset) {
     return " at byte " + std::to_string(byte_offset);
 }
 
-// Finds `name` among a relation's columns. Returns the schema position,
+// Finds `name` among a relation's live columns, ignoring case
+// (`catalog::Schema::FindColumn`). Sets `out` to the schema position,
 // which is exactly what ColumnRef::col_pos is - BuildSchemaFromColumns()
-// returns columns sorted by `pos`, so the vector index is the position.
-bool FindColumnPos(const catalog::Schema& schema, std::string_view name, std::uint16_t& out) {
-    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
-        if (IEquals(catalog::NameView(schema.columns[i].name), name)) {
-            out = static_cast<std::uint16_t>(i);
-            return true;
-        }
-    }
-    return false;
+// returns columns sorted by `pos`, so the vector index is the position -
+// and answers whether it matched. Two or more matches is refused rather
+// than resolved to the first: column names are unique ignoring case since
+// CREATE TABLE, ADD COLUMN and RENAME COLUMN refuse a twin, but a relation
+// created before that can still hold `id` beside `ID`, and taking the
+// first would answer `SELECT ID` with `id`'s values.
+StatusOr<bool> FindColumnPos(const catalog::Schema& schema, const parser::ColumnName& name,
+                             std::uint16_t& out) {
+    auto found = schema.FindColumn(name.name, name.byte_offset);
+    if (!found.ok()) return found.status();
+    if (found.value() == nullptr) return false;
+    out = static_cast<std::uint16_t>(found.value()->pos);  // the vector index (BW-R6)
+    return true;
 }
 
 // Resolves one written column name to a compiled reference.
@@ -664,7 +669,9 @@ StatusOr<ColumnRef> ResolveColumn(const Scope& scope, const parser::ColumnName& 
                 if (!IEquals(s->relations[i].binding, name.qualifier)) continue;
 
                 std::uint16_t col_pos = 0;
-                if (!FindColumnPos(s->relations[i].access->schema, name.name, col_pos)) {
+                auto matched = FindColumnPos(s->relations[i].access->schema, name, col_pos);
+                if (!matched.ok()) return matched.status();
+                if (!matched.value()) {
                     return Status::InvalidArgument("relation '" + name.qualifier +
                                                     "' has no column '" + name.name + "'" +
                                                     Position(name.byte_offset));
@@ -678,7 +685,9 @@ StatusOr<ColumnRef> ResolveColumn(const Scope& scope, const parser::ColumnName& 
         std::optional<ColumnRef> found;
         for (std::size_t i = 0; i < s->relations.size(); ++i) {
             std::uint16_t col_pos = 0;
-            if (!FindColumnPos(s->relations[i].access->schema, name.name, col_pos)) continue;
+            auto matched = FindColumnPos(s->relations[i].access->schema, name, col_pos);
+            if (!matched.ok()) return matched.status();
+            if (!matched.value()) continue;
             if (found.has_value()) {
                 return Status::InvalidArgument(
                     "column '" + name.name + "' is ambiguous" + Position(name.byte_offset) +
@@ -719,8 +728,8 @@ std::uint16_t PredicateReadyAt(const StepPredicate& pred) {
     return at;
 }
 
-bool IsPrimaryKey(const ColumnRef& ref) {
-    // Invariant 11: a relation's first column is its pk, carried by the
+bool IsTupleKey(const ColumnRef& ref) {
+    // Invariant 11: a relation's first column is its tuple key, carried by the
     // Keystone word. It is the only column a descent can
     // address, so it is the only one that can make a step a lookup.
     return ref.col_pos == 0;
@@ -827,14 +836,14 @@ void PropagateEqualities(const Scope& scope, std::vector<StepPredicate>& predica
     }
 }
 
-// A non-negative integer literal, as a pk bound. Anything else - a string,
-// a NULL, a `$param`, a negative number - is not a pk value
+// A non-negative integer literal, as a tuple key bound. Anything else - a string,
+// a NULL, a `$param`, a negative number - is not a tuple key value
 // (invariant 7: ids are zero-extended, kKeystoneIdBits wide), so it cannot bound a range.
-std::optional<std::uint64_t> PkBound(const Operand& operand) {
+std::optional<std::uint64_t> TupleKeyBound(const Operand& operand) {
     if (operand.kind != OperandKind::kLiteral) return std::nullopt;
     if (operand.literal.type != parser::ValueType::kInt) return std::nullopt;
     // A literal past int64 wrapped in the lexer, so `int_val` is not its
-    // value. Coercion refuses every such literal an integer pk cannot hold
+    // value. Coercion refuses every such literal an integer tuple key cannot hold
     // before this runs; kept so a bound is never keyed at the number one
     // wrapped to, whichever caller reaches here.
     if (parser::IntLiteralWrapped(operand.literal)) return std::nullopt;
@@ -842,23 +851,23 @@ std::optional<std::uint64_t> PkBound(const Operand& operand) {
     return static_cast<std::uint64_t>(operand.literal.int_val);
 }
 
-// The pk bounds this step's residual implies, if any.
+// The tuple key bounds this step's residual implies, if any.
 //
 // Reads the *lowered* conjuncts rather than the AST's `BETWEEN`, which is
 // deliberate: it means a hand-written `id >= 1 AND id <= 5` gets the same
 // range as `id BETWEEN 1 AND 5`, because they are the same statement once
 // the parser is done with them. A range from one spelling and not the other
 // would be an optimizer that rewards phrasing.
-std::optional<RangeBounds> PkRangeOf(const Step& step, std::uint16_t slot) {
+std::optional<RangeBounds> TupleKeyRangeOf(const Step& step, std::uint16_t slot) {
     std::optional<std::uint64_t> low;
     std::optional<std::uint64_t> high;
     for (const StepPredicate& pred : step.residual) {
-        if (!IsOwnColumn(pred.lhs, slot) || !IsPrimaryKey(pred.lhs)) continue;
-        auto bound = PkBound(pred.rhs);
+        if (!IsOwnColumn(pred.lhs, slot) || !IsTupleKey(pred.lhs)) continue;
+        auto bound = TupleKeyBound(pred.rhs);
         if (!bound.has_value()) continue;
         // Only the inclusive forms, which is what BETWEEN lowers to. A
         // strict `>` would need low+1 and an underflow check for nothing:
-        // the grammar has no way to write one against a pk that BETWEEN
+        // the grammar has no way to write one against a tuple key that BETWEEN
         // does not already cover.
         if (pred.op == parser::CompareOp::kGte && (!low || *bound > *low)) low = bound;
         if (pred.op == parser::CompareOp::kLte && (!high || *bound < *high)) high = bound;
@@ -872,7 +881,7 @@ std::optional<RangeBounds> PkRangeOf(const Step& step, std::uint16_t slot) {
 }
 
 // Whether this step has at least one equality against a literal on a
-// non-pk column that carries no index - the thing kFilterScan names.
+// non-tuple-key column that carries no index - the thing kFilterScan names.
 //
 // **Asks the cached `index_mask`, not the catalog.** It called
 // `Catalog::FindIndexOnColumn` when nothing created indexes and the answer
@@ -891,7 +900,7 @@ bool HasUnindexedEqualityFilter(const catalog::TableAccess& access, const Step& 
     for (const StepPredicate& pred : step.residual) {
         if (pred.op != parser::CompareOp::kEq) continue;
         if (pred.rhs.kind != OperandKind::kLiteral) continue;
-        if (!IsOwnColumn(pred.lhs, slot) || IsPrimaryKey(pred.lhs)) continue;
+        if (!IsOwnColumn(pred.lhs, slot) || IsTupleKey(pred.lhs)) continue;
         if (access.IndexOn(pred.lhs.col_pos) != nullptr) continue;
         return true;
     }
@@ -962,7 +971,7 @@ IndexProbe ProbeOverIndex(const catalog::TableAccess::IndexRef& ix) {
     probe.key_cols.assign(ix.keys().begin(), ix.keys().end());
     probe.covered_cols.assign(ix.covered().begin(), ix.covered().end());
     const std::size_t sort_key_width =
-        static_cast<std::size_t>(ix.key_width) + index::kIndexPkWidth;
+        static_cast<std::size_t>(ix.key_width) + index::kIndexTupleKeyWidth;
     probe.low.assign(sort_key_width, std::byte{0x00});
     probe.high.assign(sort_key_width, std::byte{0xFF});
     return probe;
@@ -1043,7 +1052,7 @@ std::optional<IndexProbe> IndexProbeOf(const catalog::TableAccess& access, const
 // column-column conjunct with one side owned by this step and the other
 // available before it runs - an earlier slot, or an enclosing chain's row
 // (`up > 0`), which is bound before this chain opens. Both orientations
-// are examined, as the pk-probe arm does and for its reason; a
+// are examined, as the tuple-key-probe arm does and for its reason; a
 // same-relation equality excludes itself through the availability test.
 // One home for the rule, so the index and cabin arms cannot drift.
 struct CorrelatedEquality {
@@ -1099,7 +1108,7 @@ bool SameDescriptor(const catalog::SysColumnRow& a, const catalog::SysColumnRow&
 //  - **The other side must be available before this step runs** (an earlier
 //    slot, or `up > 0` - an enclosing chain's row is bound before this
 //    chain opens). A reference to this step or a later one has no value
-//    when the descent happens; same rule as the pk-probe arm.
+//    when the descent happens; same rule as the tuple-key-probe arm.
 std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
                                                  const catalog::TableAccess& access,
                                                  const Step& step, std::uint16_t slot) {
@@ -1135,7 +1144,7 @@ std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
 // The Cabin this step can probe, or nullopt.
 //
 // The shape is exactly `HasUnindexedEqualityFilter`'s - an own-relation,
-// non-pk equality against a literal - and that is the point: a cabined
+// non-tuple-key equality against a literal - and that is the point: a cabined
 // column's equality *is* the filter scan, and the Cabin is the reason it
 // need not be one.
 //
@@ -1157,7 +1166,7 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
     for (const StepPredicate& pred : step.residual) {
         if (pred.op != parser::CompareOp::kEq) continue;
         if (pred.rhs.kind != OperandKind::kLiteral) continue;
-        if (!IsOwnColumn(pred.lhs, slot) || IsPrimaryKey(pred.lhs)) continue;
+        if (!IsOwnColumn(pred.lhs, slot) || IsTupleKey(pred.lhs)) continue;
 
         const catalog::TableAccess::CabinRef cabin = access.CabinOn(pred.lhs.col_pos);
         if (cabin.id == 0) continue;
@@ -1183,8 +1192,8 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
 // cabined column bound by equality to an earlier step's or an enclosing
 // chain's column - the join shape, IX17's selection one trust class over.
 // Reached only after the literal form declined; first qualifying conjunct
-// in residual order; both ON orientations, the pk excluded on either side
-// (the pk arm already served it better). The identical-descriptor guard is
+// in residual order; both ON orientations, the tuple key excluded on either side
+// (the tuple key arm already served it better). The identical-descriptor guard is
 // what makes the frame value the form the set was keyed on: the write hook
 // observes values coerced to the cabin column's type, so only a column of
 // the same (type_val, len) produces byte-identical keys.
@@ -1201,10 +1210,10 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
     if (access.cabin_mask == 0) return std::nullopt;
     for (const StepPredicate& pred : step.residual) {
         auto eq = CorrelatedEqualityOf(pred, slot);
-        // The pk exclusion is this arm's own: an index's leading column can
-        // never be the pk (CREATE INDEX refuses it), but a join written on
-        // the pk reaches here and is already served better by the pk arm.
-        if (!eq.has_value() || IsPrimaryKey(eq->own)) continue;
+        // The tuple key exclusion is this arm's own: an index's leading column can
+        // never be the tuple key (CREATE INDEX refuses it), but a join written on
+        // the tuple key reaches here and is already served better by the tuple key arm.
+        if (!eq.has_value() || IsTupleKey(eq->own)) continue;
 
         const catalog::TableAccess::CabinRef cabin = access.CabinOn(eq->own.col_pos);
         if (cabin.id == 0) continue;
@@ -1231,7 +1240,7 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
 //  - **Multi-column join keys** (CB12's scope rule): a second correlated
 //    equality declines the arm outright rather than keying a map on one
 //    column of a key the statement wrote as two.
-//  - The pk skip is defensive: a pk correlated equality became kProbe in
+//  - The tuple key skip is defensive: a tuple key correlated equality became kProbe in
 //    the kind pass, so this arm never sees one unless the ladder is ever
 //    reordered.
 // The kFilterScan, CompileWhere and scalar-sub-chain declines are the call
@@ -1242,7 +1251,7 @@ std::optional<BuildKey> BuildKeyOf(const Scope& scope, const catalog::TableAcces
     bool correlated_seen = false;
     for (std::size_t i = 0; i < step.residual.size(); ++i) {
         auto eq = CorrelatedEqualityOf(step.residual[i], slot);
-        if (!eq.has_value() || IsPrimaryKey(eq->own)) continue;
+        if (!eq.has_value() || IsTupleKey(eq->own)) continue;
         if (correlated_seen) return std::nullopt;  // multi-column join key
         correlated_seen = true;
         // Nothing bounds a statement's conjunct count - the parser's WHERE
@@ -1275,7 +1284,7 @@ std::vector<std::uint16_t> AccessColumnsOf(const Step& step, std::uint16_t slot)
         case AccessKind::kLookup:
         case AccessKind::kProbe:
         case AccessKind::kRange:
-            // All three address the relation by its pk and nothing else.
+            // All three address the relation by its tuple key and nothing else.
             out.push_back(0);
             return out;
         case AccessKind::kIndexProbe:
@@ -1306,7 +1315,7 @@ std::vector<std::uint16_t> AccessColumnsOf(const Step& step, std::uint16_t slot)
             for (const StepPredicate& pred : step.residual) {
                 if (pred.op != parser::CompareOp::kEq) continue;
                 if (pred.rhs.kind != OperandKind::kLiteral) continue;
-                if (!IsOwnColumn(pred.lhs, slot) || IsPrimaryKey(pred.lhs)) continue;
+                if (!IsOwnColumn(pred.lhs, slot) || IsTupleKey(pred.lhs)) continue;
                 out.push_back(pred.lhs.col_pos);
             }
             break;
@@ -1470,16 +1479,16 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
     // the driving one.
     for (const SortKey& key : chain.sort_keys) note(key.ref);
 
-    // The trail records the Keystone pk of every row a replayable step
+    // The trail records the Keystone tuple key of every row a replayable step
     // accepts, and reads it from the frame rather than looking it up. The
     // *kind* is a compile-time fact, so this costs a column only on the
     // steps that can record one.
     if (IsTrailReplayable(step.kind)) {
-        mask |= 1;  // column 0 is the pk (invariant 11)
+        mask |= 1;  // column 0 is the tuple key (invariant 11)
     }
 
-    // A Cabin's miss walk records the key column and the pk. At execute
-    // time the walk decodes `filter_columns` per row, plus the pk for a
+    // A Cabin's miss walk records the key column and the tuple key. At execute
+    // time the walk decodes `filter_columns` per row, plus the tuple key for a
     // row whose key matches (step_vm.cpp), and naming both here keeps the
     // survivors' remaining-columns decode honest about what was already read.
     if (step.cabin.has_value() && step.cabin->col_pos < 64) {
@@ -1610,13 +1619,13 @@ Status CompileAssignments(const catalog::TableAccess& access,
                           std::vector<CompiledAssignment>* compiled,
                           const SubqueryResolver* subqueries) {
     // An empty schema cannot happen for a relation the catalog resolved
-    // (invariant 11 makes column 0 mandatory), but the pk name is read
+    // (invariant 11 makes column 0 mandatory), but the tuple key name is read
     // from `front()` and a check costs nothing against a wrong answer.
     if (access.schema.columns.empty()) {
         return Status::Corruption("relation oid " + std::to_string(access.oid) +
                                   " has no columns");
     }
-    const std::string_view pk_name = catalog::NameView(access.schema.columns.front().name);
+    const std::string_view tuple_key_name = catalog::NameView(access.schema.columns.front().name);
 
     std::vector<const catalog::SysColumnRow*> assigned;
     // A refusal that is only a `NotImplemented` waits until every assignment
@@ -1627,7 +1636,9 @@ Status CompileAssignments(const catalog::TableAccess& access,
         compiled->reserve(assignments.size());
     }
     for (const parser::Assignment& a : assignments) {
-        const auto* column = access.schema.FindColumn(a.col_name);
+        auto found = access.schema.FindColumn(a.col_name, a.byte_offset);
+        if (!found.ok()) return found.status();
+        const catalog::SysColumnRow* column = found.value();
         if (column == nullptr) {
             return Status::InvalidArgument("unknown column '" + a.col_name + "' at byte " +
                                            std::to_string(a.byte_offset));
@@ -1644,9 +1655,10 @@ Status CompileAssignments(const catalog::TableAccess& access,
         // `InvalidArgument`: the statement is understood and declined. The
         // column exists and the value would encode; what cannot happen is
         // the write, because the id names the tuple everywhere else in the
-        // engine.
-        if (a.col_name == pk_name) {
-            return Status::Unsupported("primary-key column '" + std::string(pk_name) +
+        // engine. Asked of the resolved column, never the written bytes: a
+        // name resolves ignoring case, so `SET ID` is the tuple key `id`.
+        if (column == &access.schema.columns.front()) {
+            return Status::Unsupported("tuple key column '" + std::string(tuple_key_name) +
                                        "' cannot be updated at byte " +
                                        std::to_string(a.byte_offset) +
                                        "; it is the tuple's identity, not a field of it");
@@ -1977,10 +1989,10 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // ---- 4. Assign an access kind ----------------------------------------
     //
     // One rule, applied per step: the step is a lookup or a probe iff some
-    // conjunct attached to it is an equality binding **this relation's pk**
+    // conjunct attached to it is an equality binding **this relation's tuple key**
     // to a value already available. Anything else is a scan.
     //
-    // Deliberately NOT PkEqualityTarget (the dispatcher's point-statement
+    // Deliberately NOT TupleKeyEqualityTarget (the dispatcher's point-statement
     // check): that refuses whenever the WHERE holds more than one
     // condition, which is right for a statement that must answer with a
     // single tuple and cannot shortcut a second predicate - but a chain
@@ -1998,13 +2010,13 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             // relation could probe would depend on the order the client
             // happened to type the two sides in.
             const bool lhs_is_key = pred.lhs.up == 0 && pred.lhs.rel_slot == i &&
-                                    IsPrimaryKey(pred.lhs);
+                                    IsTupleKey(pred.lhs);
             const bool rhs_is_key = pred.rhs.kind == OperandKind::kColumn &&
                                     pred.rhs.column.up == 0 && pred.rhs.column.rel_slot == i &&
-                                    IsPrimaryKey(pred.rhs.column);
+                                    IsTupleKey(pred.rhs.column);
 
             // The value the descent would be keyed on: whichever side is
-            // not this step's pk.
+            // not this step's tuple key.
             std::optional<Operand> candidate;
             if (lhs_is_key) {
                 candidate = pred.rhs;
@@ -2014,20 +2026,20 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 from_lhs.column = pred.lhs;
                 candidate = from_lhs;
             } else {
-                continue;  // neither side is this relation's pk
+                continue;  // neither side is this relation's tuple key
             }
 
             if (candidate->kind == OperandKind::kLiteral) {
-                // A negative literal cannot be a pk: ids are zero-extended
+                // A negative literal cannot be a tuple key: ids are zero-extended
                 // unsigned values (invariant 7), so this equality can never
                 // hold. Left as a scan with the residual intact, which
                 // returns the correct empty answer rather than probing an
                 // enormous unsigned key.
                 //
                 // A kParam falls through this check like any other
-                // non-integer literal (background: it was pk-eligible here
+                // non-integer literal (background: it was tuple-key-eligible here
                 // until declared patterns were withdrawn, 2026-08-31).
-                if (!PkBound(*candidate).has_value()) continue;
+                if (!TupleKeyBound(*candidate).has_value()) continue;
                 step.kind = AccessKind::kLookup;
                 step.key = candidate;
                 break;
@@ -2046,10 +2058,10 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // ---- Range and filter scans -------------------------------------
         //
         // Only reached when the step did not become a keyed descent: a
-        // relation with a pk equality is already served better than either
+        // relation with a tuple key equality is already served better than either
         // of these could serve it.
         if (step.kind == AccessKind::kScan) {
-            if (auto bounds = PkRangeOf(step, static_cast<std::uint16_t>(i));
+            if (auto bounds = TupleKeyRangeOf(step, static_cast<std::uint16_t>(i));
                 bounds.has_value()) {
                 step.kind = AccessKind::kRange;
                 step.range = bounds;
@@ -2187,6 +2199,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // the projection empty too, and labelling its output with the
         // relation's columns would name a row it never emits.
         for (const auto& column : scope.relations[0].access->schema.columns) {
+            // A dropped column is not in `*` (BW-R6); `DescribeStar` skips
+            // the same columns, so names and values stay aligned.
+            if (column.dropped()) continue;
             chain.column_names.push_back(std::string(catalog::NameView(column.name)));
         }
     }
@@ -2216,29 +2231,29 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
 
     // ---- The elision: an order the chain already emits needs no sort -----
     //
-    // One key, ascending, on the driving relation's pk names the order the
-    // chain already emits (V09; I12 - written order across steps, pk order
+    // One key, ascending, on the driving relation's tuple key names the order the
+    // chain already emits (V09; I12 - written order across steps, tuple key order
     // within one), so the keys are dropped and the path costs nothing.
     //
-    // The premise is that step 0 emits in pk order. A walk or range does
+    // The premise is that step 0 emits in tuple key order. A walk or range does
     // (page-wise `min_key`, which a division preserves); an index step does
-    // because IX8a sorts its pks back into that order deliberately; a
+    // because IX8a sorts its tuple keys back into that order deliberately; a
     // lookup or probe emits one row. **Every page's slot order is its key
     // order** - a btree leaf's by placement (BD-R1,
     // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`), a heap
     // page's by issue order under its tail's hold (BB-R7) - which is the
     // premise all of that rests on. A Cabin probe stays excluded by
-    // name: a served set is sorted by pk into the walk's order, but the
+    // name: a served set is sorted by tuple key into the walk's order, but the
     // exclusion is a fix, not a precaution - the discarding version of this
-    // clause answered `ORDER BY <pk>` over a Cabin-probed relation with
+    // clause answered `ORDER BY <tuple key>` over a Cabin-probed relation with
     // whatever order the entry set happened to hold - and lifting it is not
     // BB's to decide.
-    const bool one_ascending_pk =
+    const bool one_ascending_tuple_key =
         chain.sort_keys.size() == 1 && !chain.sort_keys[0].descending &&
-        chain.sort_keys[0].ref.rel_slot == 0 && IsPrimaryKey(chain.sort_keys[0].ref);
-    const bool driving_emits_pk_order =
+        chain.sort_keys[0].ref.rel_slot == 0 && IsTupleKey(chain.sort_keys[0].ref);
+    const bool driving_emits_tuple_key_order =
         !chain.steps.empty() && chain.steps[0].kind != AccessKind::kCabinProbe;
-    if (one_ascending_pk && driving_emits_pk_order) {
+    if (one_ascending_tuple_key && driving_emits_tuple_key_order) {
         chain.sort_keys.clear();
     }
     chain.limit = stmt.limit;

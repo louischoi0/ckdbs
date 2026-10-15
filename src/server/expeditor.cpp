@@ -364,7 +364,7 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // unknown-key rule exists to prevent.
         return Status::Unsupported(
             "config key 'default_key_mode' no longer exists: every relation takes a "
-            "caller-supplied primary key or issues one when INSERT omits it, so there is no "
+            "caller-supplied tuple key or issues one when INSERT omits it, so there is no "
             "default to set - remove the line");
     }
     if (file.Has("waystone_replay")) {
@@ -1888,7 +1888,7 @@ Status Expeditor::Start() {
             core_config.schema_word = &schema_version_;
             // **The instance's Cabin store** (AT-S7): every peer observes
             // into core 0's and serves from it, which is what makes a set
-            // a superset of every pk carrying its value when every core
+            // a superset of every tuple key carrying its value when every core
             // writes and reads one relation.
             core_config.cabins_store = cabin_store_ ? &*cabin_store_ : nullptr;
             core_config.oid_sequence = &oid_sequence_;

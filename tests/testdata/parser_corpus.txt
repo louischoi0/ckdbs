@@ -130,9 +130,29 @@ InvalidArgument	a2266ff85c0a8df6	cbf29ce484222325	a2266ff85c0a8df6	INSERT INTO t
 # (neither ever parsed): `... (1) extra` now hashes as the plain 1-row
 # insert, since `extra` sits past the first group and folds nothing; the
 # column-list form's first group is `(a, b)`, so its VALUES row became
-# args. Verdicts unchanged - the grammar still refuses both.
+# args. The grammar still refuses the first.
+# [BW-S6] The column-list form parses since BW-S6 (BW-Q12.10 of
+# instructions/v3.2.0/workorder-bw-instant-add-drop-column.md): the verdict
+# flips to ok with every hash unchanged - the list is the first group, so
+# the shape covers `INSERT INTO t ( a , b )` and every VALUES row folds into
+# arg_hash. No kFingerprintVersion move.
 InvalidArgument	a2266ff85c0a8df6	b5d414774c8002cc	a2266ff85c0a8df6	INSERT INTO t VALUES (1) extra
-InvalidArgument	ce1fd11975f0684e	78f79099c419719c	ce1fd11975f0684e	INSERT INTO t (a, b) VALUES (1, 2)
+ok	ce1fd11975f0684e	78f79099c419719c	ce1fd11975f0684e	INSERT INTO t (a, b) VALUES (1, 2)
+
+# ---- INSERT with a column list (BW-S6) ---------------------------------------
+# One list, any row count: one shape; another order of the list is another.
+ok	ce1fd11975f0684e	64581e83365d3b85	ce1fd11975f0684e	INSERT INTO t (a, b) VALUES (1, 2), (3, 4)
+ok	52718e7f86473c50	70617908996b938c	52718e7f86473c50	INSERT INTO t (b, a) VALUES (2, 1)
+ok	aa00f57a0188a170	b5d414774c8002cc	aa00f57a0188a170	INSERT INTO t (id, a) VALUES (NULL, 1)
+ok	562130d414824e3a	b5d414774c8002cc	562130d414824e3a	INSERT INTO ns.t (a) VALUES (1)
+ok	7a4b4d8950e38c6e	b5d414774c8002cc	7a4b4d8950e38c6e	insert into t (a) values (1);
+# Refused at the parse, each at its token's byte (BW-Q12.12 step 1).
+InvalidArgument	563d0ca21a18a3d9	b5d414774c8002cc	563d0ca21a18a3d9	INSERT INTO t () VALUES (1)
+InvalidArgument	a263b37257e147cb	b5d414774c8002cc	a263b37257e147cb	INSERT INTO t (?) VALUES (1)
+InvalidArgument	b17dcb5472a4c0da	b5d414774c8002cc	b17dcb5472a4c0da	INSERT INTO t (a,) VALUES (1)
+InvalidArgument	e0757fe10b52d98f	78f79099c419719c	e0757fe10b52d98f	INSERT INTO t (a, b VALUES (1, 2)
+InvalidArgument	ce1fd11975f0684e	78f79099c419719c	ce1fd11975f0684e	INSERT INTO t (a, b) (1, 2)
+InvalidArgument	ea462f82071b00c6	b5d414774c8002cc	ea462f82071b00c6	INSERT INTO t (a.b) VALUES (1)
 
 # ---- SELECT — accepted -----------------------------------------------------
 ok	0455e27e7d802f0c	cbf29ce484222325	d591805ceb2c9c23	SELECT * FROM t
@@ -292,14 +312,16 @@ ok	fe758a469156cb26	b5d414774c8002cc	35e5c4c06838a2b7	SELECT b, COUNT(*) FROM t 
 ok	61193a3cf78e857f	cbf29ce484222325	bb8d52fd15f1001c	SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b
 
 # ---- ALTER (docs/spec/alter.md AL1, AL7) -----------------------------------
-# ALTER is not a patternable leading word, so every line is "-". The
-# refusal class is the feature: v1 is catalog-only, and ADD/DROP answer a
-# positioned Unsupported carrying invariant 13's reason.
+# ALTER is not a patternable leading word, so every line is "-". Every
+# admitted form changes catalog rows and no tuple byte; `DROP COLUMN` flipped
+# to ok at BW-S2 and `ADD COLUMN` at BW-S3
+# (`instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`); the parse
+# admits `x int`, and the dispatcher refuses it for not saying NULL (BW-R5).
 ok	-	-	-	ALTER TABLE t RENAME TO u
 ok	-	-	-	ALTER TABLE t RENAME COLUMN a TO b
 ok	-	-	-	alter table t rename to u;
-NotImplemented	-	-	-	ALTER TABLE t ADD COLUMN x int
-NotImplemented	-	-	-	ALTER TABLE t DROP COLUMN a
+ok	-	-	-	ALTER TABLE t ADD COLUMN x int
+ok	-	-	-	ALTER TABLE t DROP COLUMN a
 InvalidArgument	-	-	-	ALTER TABLE t
 InvalidArgument	-	-	-	ALTER t RENAME TO u
 
@@ -420,8 +442,8 @@ Unsupported	a6d47bc00b1c1048	cbf29ce484222325	e0142405ae5d7287	SELECT * FROM t W
 # head. These read NotImplemented since 2026-08-31, and the older argument
 # for calling them architectural is what changed: it was that a derived
 # table's result would have to become a relation probed by something other
-# than a pk, and `exec::InnerBuild` (join-inner-build.md) now buckets a
-# statement-scoped row set and probes it by a non-pk key. The shape is
+# than a tuple key, and `exec::InnerBuild` (join-inner-build.md) now buckets a
+# statement-scoped row set and probes it by a key other than the tuple key. The shape is
 # unbuilt, not excluded.
 # [BU-S1] a bare `NOT` over a predicate parses since 2026-10-13; the
 # hashes did not move.

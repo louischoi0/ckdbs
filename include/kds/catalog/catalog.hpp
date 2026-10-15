@@ -185,7 +185,7 @@ public:
         // The identity the compensation will re-read - the Keystone word
         // of the row's payload, never a `.oid` member (DT5's rule, which
         // not every catalog row has).
-        std::uint64_t pk = 0;
+        std::uint64_t tuple_key = 0;
     };
     using DdlUndoHook = std::function<Status(const DdlUndoEvent&)>;
 
@@ -196,6 +196,28 @@ public:
     // the row-id carve and bump, heat - which are never rolled back by
     // design (an abort burns ids, K3).
     void SetDdlUndoHook(DdlUndoHook hook) { ddl_undo_hook_ = std::move(hook); }
+
+    // **The transition loader** (BV-S2): fills a user relation's
+    // `TableAccess::transitions` from sys.transitions. A seam rather than a
+    // call because the rows are row-codec and their declarations re-parsed,
+    // which is `exec/`'s, and `exec/` depends on this layer. Armed by the
+    // `CommandDispatcher` constructor - every serving catalog has one, and
+    // every write runs through a dispatcher. Unarmed (bootstrap, recovery, a
+    // bare-store test) a fill leaves the list empty.
+    using TransitionLoader = std::function<Status(TableAccess&)>;
+    // Drops the memo: an entry filled before the loader was armed would
+    // serve its relation without its Transitions.
+    void SetTransitionLoader(TransitionLoader loader) {
+        transition_loader_ = std::move(loader);
+        cache_.Invalidate();
+    }
+
+    // The schema word moved for a declaration row whose readers cache it -
+    // `CREATE`/`DROP TRANSITION`, which write through `exec/`. After the
+    // row's write, before the DDL's relation `X` is released (D21's order).
+    // A named door onto `BumpVersion`, which stays private: every other
+    // caller is a catalog write of this class's own.
+    void NoteDeclarationsChanged(std::string_view what) { BumpVersion(what); }
 
     // **The schema version word** (AT-S2, `docs/spec/catalog.md`; AR0-5
     // §2.1, D21). One `std::atomic` for the instance, owned by `Expeditor`
@@ -388,7 +410,7 @@ public:
     // the requested clustered type, and inserts the corresponding
     // sys.objects/sys.tables/sys.columns rows.
     //
-    // No key-mode parameter: every relation takes a supplied pk or issues
+    // No key-mode parameter: every relation takes a supplied tuple key or issues
     // one per row (heap-and-tuple.md §4.1; the mode went 2026-08-25).
     // `trx_id` stamps the `sys.objects` / `sys.tables` / `sys.columns`
     // rows this writes (DT2). `kBootstrapXid` is the default and the
@@ -547,6 +569,34 @@ public:
                        std::uint64_t own_trx_id = txn::kNoTrxId);
     Status RenameColumn(Oid table_oid, std::string_view old_name, std::string_view new_name);
 
+    // `ALTER TABLE ... DROP COLUMN` (BW-R6, BW-R7 of
+    // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
+    // live column at `pos` gets `kColumnDropped` on its `sys.columns` row and
+    // nothing else moves - its `pos`, its bytes in every tuple, its bit. The
+    // overwrite is `trx_id`'s, its prior image handed to the DDL undo hook
+    // and to `changed` (when non-null) so a rollback restores it, as
+    // `DropTable`'s retype is. The lookup and the write are one hold of
+    // `sys.columns`' root page (CT7). `pos` is the column the caller
+    // resolved `name` to (`Schema::FindColumn`) and asked its RESTRICT of;
+    // the door never resolves the name again, so a RENAME COLUMN racing
+    // the drop cannot move the drop onto another column - a position no
+    // longer carrying `name` (ignoring case) is `TxnConflict`. The tuple key
+    // is refused `InvalidArgument`; an absent or already-dropped position is
+    // `NotFound`. What depends on the column is the caller's to refuse
+    // first, under the relation `X`.
+    Status DropColumn(Oid table_oid, std::uint16_t pos, std::string_view name,
+                      std::uint64_t trx_id, std::vector<CatalogRowChange>* changed);
+
+    // `ALTER TABLE ... ADD COLUMN` (BW-R4, BW-R5): `column` - its name, type,
+    // `len` and nothing else read - becomes a nullable column at the next
+    // position, in the relation's lowest free slot, its `sys.columns` row
+    // inserted under `trx_id` and reported through `where`. The name check,
+    // the slot count and the insert are one hold of `sys.columns`' root page
+    // (CT7). A taken live name is `AlreadyExists`; a relation with no free
+    // slot, and a cell wider than a slot, are `NotImplemented` (D-c, BW-R4).
+    Status AddColumn(Oid table_oid, const SysColumnRow& column, std::uint64_t trx_id,
+                     CatalogRowRef* where);
+
     // DROP TABLE's catalog half (docs/spec/drop-table.md DT1-DT3, workplan
     // DT02). The sys.objects row is **retyped to kTypeDroppedTable, never
     // retired** - the rows are GenerateUserOid()'s counter, so the row
@@ -643,7 +693,7 @@ public:
     StatusOr<const TableAccess*> InitTableAccess(Oid oid);
 
     // Issues the next Keystone id for `table_oid` and persists the bumped
-    // sequence. This is what an `INSERT` that **omits** the pk calls, on
+    // sequence. This is what an `INSERT` that **omits** the tuple key calls, on
     // every relation - there is no longer a key mode that makes it illegal
     // (section 4.1). Ids are unique by construction and rise above every id
     // the relation has ever placed, since `AdmitExplicitRowId` moves the same
@@ -662,7 +712,7 @@ public:
     // spreading off.
     StatusOr<std::uint64_t> AllocateRowId(Oid table_oid);
 
-    // What an `INSERT` that **supplies** the pk calls (docs/spec/heap-and-tuple.md
+    // What an `INSERT` that **supplies** the tuple key calls (docs/spec/heap-and-tuple.md
     // section 4.1): admits a caller-named id and moves the relation's
     // high-water mark past it. Every relation may be inserted into either
     // way; which of the two functions runs is a property of the row, not of
@@ -921,14 +971,14 @@ public:
 
     // ---- sys.cabins (docs/spec/cabin.md §10) -----------------------------
 
-    // Declares a Cabin on one non-pk column and returns its `cabin_id`.
+    // Declares a Cabin on one non-tuple-key column and returns its `cabin_id`.
     //
     // What this writes is that the Cabin **exists**. Nothing is observed by
     // creating one: the read path's miss branch is what fills it (spec §4),
     // so a fresh Cabin costs a catalog row and changes no answer until
     // traffic teaches it something.
     //
-    // Fails with InvalidArgument for column 0 - the pk's Cabin is the
+    // Fails with InvalidArgument for column 0 - the tuple key's Cabin is the
     // clustered tree itself (§2), which is not a refusal a caller can talk
     // its way out of - and for a `col_pos` past the relation's schema;
     // NotFound for an unknown relation; AlreadyExists for a second Cabin on
@@ -1058,7 +1108,8 @@ public:
                               PageId varheap_page_id,
                               PageId anchor_page_id = kInvalidPageId,
                               std::uint64_t trx_id = kBootstrapXid,
-                              CatalogRowRef* where = nullptr);
+                              CatalogRowRef* where = nullptr,
+                              std::uint16_t spare_slots = 0);
 
     // ---- Secondary indexes (docs/spec/index.md §12) --------------------
 
@@ -1090,9 +1141,9 @@ public:
     //
     // Refuses, each naming the reason: a name already in use, an empty or
     // over-cap column list (a cap **refuses**, never truncates - spec §11),
-    // a duplicate or out-of-range column position, an index on the primary
+    // a duplicate or out-of-range column position, an index on the tuple
     // key (the clustered tree already is one), a heap-clustered relation
-    // (spec IX3 - there is no pk descent to resolve an entry through), and
+    // (spec IX3 - there is no tuple key descent to resolve an entry through), and
     // `kIndexFlagUnique` (spec IX11).
     //
     // It does **not** build the tree or check the key columns' types: the
@@ -1215,13 +1266,14 @@ private:
         const std::function<bool(std::uint64_t deleter)>& settled,
         std::uint64_t* remaining_out = nullptr);
 
-    // Phase 5 of Bootstrap(): creates sys.assertions as an ordinary
-    // row-codec relation - fixed root page, var-heap chain, six sys.columns
-    // rows at fixed oids (docs/spec/assertion.md §8.2, workplan AST03).
-    // Split out because it is the one bootstrap relation that is not just a
-    // page and two rows, and folding it into Bootstrap() would bury the
-    // reason it differs.
-    Status BootstrapAssertions();
+    // Phases 5 and 6 of Bootstrap(): the two row-codec declaration
+    // relations, sys.assertions and sys.transitions - one shape (fixed root
+    // page, var-heap chain, six sys.columns rows at fixed oids), built by
+    // hand rather than through CreateTable() for the reasons Bootstrap()
+    // states. Split out because they are the bootstrap relations that are
+    // not just a page and two rows.
+    Status BootstrapDeclarations(Oid rel_oid, std::string_view name, PageId root_page,
+                                 const Schema& schema);
 
     // `cabin_policy` is one of the `kCabinPolicy*` values (rows.hpp) and
     // defaults to unset, which every reader treats as `auto`. It is a
@@ -1233,7 +1285,7 @@ private:
                             std::uint32_t type_val, std::uint32_t len, bool notnull,
                             std::uint8_t cabin_policy = kCabinPolicyUnset,
                             std::uint64_t trx_id = kBootstrapXid,
-                            CatalogRowRef* where = nullptr);
+                            CatalogRowRef* where = nullptr, std::uint8_t flags = 0);
     Status InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type_val,
                           std::uint32_t len);
 
@@ -1340,6 +1392,7 @@ private:
     wal::WalManager* wal_ = nullptr;
     // RV3-3: per-DDL-statement, dispatcher-installed; empty = no undo.
     DdlUndoHook ddl_undo_hook_;
+    TransitionLoader transition_loader_;
     // Delete-marks written this run and possibly still on a page - the
     // gate that keeps PurgeSettledDeleteMarks() from Get()-dirtying every
     // catalog page after a DDL that marked nothing (found when D2 made

@@ -8,7 +8,7 @@
 // happens only for a statement that wrote nothing - and none of them had a
 // cell that could see a second application. This file is those cells: the
 // dispatcher's `SetAfterUpdateRowAppliedForTest` seam counts the writes per
-// pk, so the count is read directly and does not depend on a `SET` value.
+// tuple key, so the count is read directly and does not depend on a `SET` value.
 
 #include "two_core_rig.hpp"
 
@@ -40,27 +40,27 @@ bool StartsWith(const std::string& reply, std::string_view prefix) {
     return reply.rfind(prefix, 0) == 0;
 }
 
-// The applications per pk, written from a reactor and read from the test
+// The applications per tuple key, written from a reactor and read from the test
 // thread once the statement is done.
 struct Applied {
     std::mutex mu;
     std::map<std::uint64_t, int> count;
 
     void Attach(CommandDispatcher& d) {
-        d.SetAfterUpdateRowAppliedForTest([this](std::uint64_t pk) {
+        d.SetAfterUpdateRowAppliedForTest([this](std::uint64_t tuple_key) {
             std::lock_guard<std::mutex> lock(mu);
-            ++count[pk];
+            ++count[tuple_key];
         });
     }
-    int Of(std::uint64_t pk) {
+    int Of(std::uint64_t tuple_key) {
         std::lock_guard<std::mutex> lock(mu);
-        const auto it = count.find(pk);
+        const auto it = count.find(tuple_key);
         return it == count.end() ? 0 : it->second;
     }
     int Max() {
         std::lock_guard<std::mutex> lock(mu);
         int m = 0;
-        for (const auto& [pk, n] : count) m = std::max(m, n);
+        for (const auto& [tuple_key, n] : count) m = std::max(m, n);
         return m;
     }
 };
@@ -121,8 +121,8 @@ TEST(BjSingleWriteRigTest, AMultiRowWalkAppliesEveryRowExactlyOnce) {
     applied.Attach(d0);
     const std::string out = d0.Dispatch("UPDATE t SET v = 7 WHERE v >= 0").response;
     ASSERT_TRUE(StartsWith(out, "UPDATED " + std::to_string(kRows))) << out;
-    for (int pk = 1; pk <= kRows; ++pk) {
-        ASSERT_EQ(applied.Of(static_cast<std::uint64_t>(pk)), 1) << "row " << pk;
+    for (int tuple_key = 1; tuple_key <= kRows; ++tuple_key) {
+        ASSERT_EQ(applied.Of(static_cast<std::uint64_t>(tuple_key)), 1) << "row " << tuple_key;
     }
 }
 
@@ -177,8 +177,8 @@ struct ParkedWalk {
         sched::Scheduler& peer = rig->core(1).scheduler();
         if (!Within(2000ms, [&] { return peer.idle_blocks() >= 1; })) return false;
         parked_before_decide = !update.done.load(std::memory_order_acquire);
-        for (int pk = 1; pk <= rows; ++pk) {
-            parked_counts.push_back(applied.Of(static_cast<std::uint64_t>(pk)));
+        for (int tuple_key = 1; tuple_key <= rows; ++tuple_key) {
+            parked_counts.push_back(applied.Of(static_cast<std::uint64_t>(tuple_key)));
         }
 
         // A statement that changes the world while the walk is parked, if the
@@ -223,7 +223,7 @@ struct ParkedWalk {
     Statement mid;
     Applied applied;
     bool parked_before_decide = false;
-    std::vector<int> parked_counts;  // per pk 1..rows, read while the walk was parked
+    std::vector<int> parked_counts;  // per tuple key 1..rows, read while the walk was parked
 };
 
 TEST(BjSingleWriteRigTest, AWalkParkedMidwayResumesPastWhatItWroteAndWritesTheRestOnce) {
@@ -237,9 +237,9 @@ TEST(BjSingleWriteRigTest, AWalkParkedMidwayResumesPastWhatItWroteAndWritesTheRe
     // Rows before the held one written once, the held one and the rest not yet.
     EXPECT_EQ(w.parked_counts, (std::vector<int>{1, 1, 0, 0, 0}));
     EXPECT_TRUE(StartsWith(w.update.out.response, "UPDATED 5")) << w.update.out.response;
-    for (std::uint64_t pk = 1; pk <= 5; ++pk) {
-        EXPECT_EQ(w.applied.Of(pk), 1) << "row " << pk << " was written "
-                                       << w.applied.Of(pk) << " time(s)";
+    for (std::uint64_t tuple_key = 1; tuple_key <= 5; ++tuple_key) {
+        EXPECT_EQ(w.applied.Of(tuple_key), 1) << "row " << tuple_key << " was written "
+                                       << w.applied.Of(tuple_key) << " time(s)";
     }
 }
 
@@ -270,9 +270,9 @@ TEST(BjSingleWriteRigTest, AStatementThatWroteNothingBeforeItsParkRunsOnceAfterI
     EXPECT_EQ(w.parked_counts, (std::vector<int>{0, 0, 0, 0, 0}))
         << "a row was written before the first one's park";
     EXPECT_TRUE(StartsWith(w.update.out.response, "UPDATED 5")) << w.update.out.response;
-    for (std::uint64_t pk = 1; pk <= 5; ++pk) {
-        EXPECT_EQ(w.applied.Of(pk), 1) << "row " << pk << " was written "
-                                       << w.applied.Of(pk) << " time(s)";
+    for (std::uint64_t tuple_key = 1; tuple_key <= 5; ++tuple_key) {
+        EXPECT_EQ(w.applied.Of(tuple_key), 1) << "row " << tuple_key << " was written "
+                                       << w.applied.Of(tuple_key) << " time(s)";
     }
 }
 

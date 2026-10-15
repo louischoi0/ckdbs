@@ -425,7 +425,7 @@ TEST(BtreeRaceTest, AWriteLookupHoldsItsLeafExclusiveAndItsMissIsAuthoritative) 
 
 TEST(BtreeRaceTest, AScanOfTheChainStillReturnsEveryRowInOrder) {
     // **What the damage looks like from outside the storage layer.** On a
-    // btree relation the chain *is* the ordered scan: `ORDER BY <pk> ASC`
+    // btree relation the chain *is* the ordered scan: `ORDER BY <tuple key> ASC`
     // is served by walking `next_page_id` and reading each leaf, with no
     // sort, because the leaves ascend. A tuple written into a leaf that had
     // already handed its key range away leaves that ordering false, so the

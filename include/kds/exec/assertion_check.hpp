@@ -284,7 +284,7 @@ public:
 
     // INSERT's admission - run before the row id is allocated, FK's
     // ordering, so a refusal burns nothing. `values` are the statement's
-    // VALUES list: columns after the pk, so schema position p is values[p-1].
+    // VALUES list: columns after the tuple key, so schema position p is values[p-1].
     // An admitted row's contribution is **held** in `hold` until
     // `ReserveInsert` logs it; mandatory, so no write path can admit a row
     // another core's admission does not see.
@@ -303,22 +303,22 @@ public:
     // refusal is the statement's failure and not a wait.
     Status ReserveInsert(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id,
                          Hold& hold, catalog::Oid oid, std::span<const parser::AstValue> values,
-                         std::uint64_t pk, PageId row_page, std::uint16_t row_slot);
+                         std::uint64_t tuple_key, PageId row_page, std::uint16_t row_slot);
 
     // UPDATE's per-row check-and-reserve, §4.2's table. `old_row`/`new_row`
-    // are schema-indexed (pk at 0). Refusal leaves the row untouched - the
+    // are schema-indexed (tuple key at 0). Refusal leaves the row untouched - the
     // caller runs this before the undo record and the overwrite.
     Status AdmitAndReserveUpdate(storage::PageStore& store, wal::WalManager* wal,
                                  std::uint64_t txn_id, catalog::Oid oid,
                                  std::span<const parser::AstValue> old_row,
-                                 std::span<const parser::AstValue> new_row, std::uint64_t pk,
+                                 std::span<const parser::AstValue> new_row, std::uint64_t tuple_key,
                                  PageId row_page, std::uint16_t row_slot,
                                  std::uint64_t* reserver = nullptr);
 
     // DELETE's per-row departure: check-free (AS11), maintenance only.
     Status ReserveDelete(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id,
                          catalog::Oid oid, std::span<const parser::AstValue> old_row,
-                         std::uint64_t pk, PageId row_page, std::uint16_t row_slot);
+                         std::uint64_t tuple_key, PageId row_page, std::uint16_t row_slot);
 
     // Transaction end. Commit clears RESERVED flags on the entry pages and
     // logs ASSERT_COMMIT per (assertion, page); the aggregates were correct
@@ -412,7 +412,7 @@ private:
     // directory latch; the page work runs under `live`'s chain latch only.
     Status ReserveOne(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id,
                       Live& live, const std::string& key, bool departure, std::int64_t value,
-                      std::uint64_t pk, PageId row_page, std::uint16_t row_slot,
+                      std::uint64_t tuple_key, PageId row_page, std::uint16_t row_slot,
                       std::uint64_t serial);
 
     std::vector<std::shared_ptr<Live>> OnLocked(catalog::Oid oid) const;

@@ -132,7 +132,7 @@ struct UndoVersion {
     PageId target_page_id = kInvalidPageId;
     std::uint16_t target_slot = 0;
     std::uint64_t txn_prev_undo_ptr = kNoUndoPtr;  // the transaction chain (RV10)
-    std::uint64_t pk = 0;                          // the identity check (§4a)
+    std::uint64_t tuple_key = 0;                          // the identity check (§4a)
 };
 
 class UndoLog {

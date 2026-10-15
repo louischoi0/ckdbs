@@ -587,7 +587,7 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `PurgeKeyTest.CensusDADeleteOfASystemRelationIsRefusedOnlyByAccident`
   pins the accident. Owner: `heap-and-tuple.md` §4.
 
-- **An omitted pk on a btree can be refused `AlreadyExists`.** Verified at
+- **An omitted tuple key on a btree can be refused `AlreadyExists`.** Verified at
   `91c998a3` (BD-S5), by reading `CommandDispatcher::InsertOneRow`. The id
   is issued before the descent, under no leaf's hold (BD-R6), so a named key
   equal to it can be borrowed, placed and committed first; the placement's
@@ -733,7 +733,7 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
   `exec::SlicePolicy::pages_per_slice` (64) pages. Nothing else running
   gives its core back:
   - a write;
-  - a pk descent, run inline by design;
+  - a tuple key descent, run inline by design;
   - an index walk (`RunIndexStep`);
   - a join's inner walk under one outer page;
   - a heap relation's lookup that falls back to a chain walk.
@@ -889,7 +889,7 @@ stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
   client that prepares is the only one a cached parse would help; no driver
   in the tree prepares. A text parameter containing a single quote stays
   unbindable at `C_BIND` for the same reason.
-- **Waystone records a trail for a point `SELECT` by pk**: recording and the
+- **Waystone records a trail for a point `SELECT` by tuple key**: recording and the
   replay attempt are 7-9 % of its server CPU (BN-S1's census), for a lookup
   the descent already answers directly. No BN proposal named it.
 - **The request path's floor is the kernel's**: a `C_PING` round trip costs
@@ -941,7 +941,7 @@ last entries restated at BT's close, verified at `4274ed81`. Owned by
   kernel is armed only once that step's checks have run (BM-R6), so a
   statement whose step sees one row gains nothing from it.
 - **The kernel holds a conjunct against a literal only**: a column on the
-  right, a function conjunct, a spilled `varchar`, a `uint64` pk and
+  right, a function conjunct, a spilled `varchar`, a `uint64` tuple key and
   `UPDATE` / `DELETE`'s own row loops are filtered as before.
 - **The every-row `UPDATE` may still pay a few µs for BM-S2** (verified
   at `952c67e5`, `bench/v3.0.0/results-bm-s6-remedy-v2.7.0-948-g952c67e5.md`).
@@ -1065,8 +1065,76 @@ the procedures are `manual/server/backup-restore.md`.
   reserve (4 segments) and the hour that ends an idle backup stay
   `[provisional]`**: BR-S10 measured each at one value only (its results
   file says why each stays).
-- **An engine defect BR found and did not fix**, in `bugs/`: a full page
-  image cannot heal an allocated checksum-failed page.
+
+## Transitions (BV)
+
+Verified on `cn4-transition-refresh` (BV's close). Owned by
+`docs/spec/transition.md`.
+
+- **Not built** (BV §0.2, CN-4 §7):
+  - a trigger or any action on a transition;
+  - a stored history or audit log;
+  - a state machine spanning columns or relations;
+  - guarded edges;
+  - freezing a row in a terminal state.
+- **A crash between a `DROP TABLE`'s commit and the retirement of its
+  Transitions leaves an inert row.** The row names a relation that is gone
+  and can never return, because an oid is never reissued. It keeps its name
+  taken until `DROP TRANSITION`, and `SHOW TRANSITIONS` prints it with
+  `rel=oid=<n>`. Nothing at mount sweeps it.
+- **The sim harness has no Transition op.** BV-S3 replaced it with
+  exhaustive cut-everywhere crash cells (`tests/transition_crash_test.cpp`)
+  for `CREATE`, an `UPDATE` along an edge, and `DROP`. A seeded workload
+  interleaving state moves with transactions, rollbacks and faults is not
+  generated.
+- **The sorted heap fill's skip has no cell.** The fill is ineligible for a
+  governed relation (`SortedFillEligible`), but no heap relation can be
+  created since SUS-1 to exercise it.
+- **`CREATE`/`DROP TRANSITION` inside an explicit transaction commit at the
+  statement**, as `CREATE`/`DROP ASSERTION` do. A `ROLLBACK` does not undo
+  them.
+
+## Column slots and `ADD`/`DROP COLUMN` (BW)
+
+Verified on `worktree-bw-instant-add-drop-column` over `bc42a011`
+(`instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
+
+- **A positional `INSERT` written before a column change is caught by its
+  count only in part** `[quiet-wrong]` (`alter.md` AL11, BW-Q9); a
+  column-listed one is not exposed (BW-S6). After an
+  `ADD` every stale row is refused. After a `DROP`, a row written for the
+  old columns with its key left out has the new full form's length and is
+  admitted with its first value as the key and every other value one column
+  over; after one `DROP` and one `ADD`, an old full row has the new full
+  length. Positional SQL text carries no described shape, unlike a KWP load
+  (BW-Q10). The column list closes it for a writer who uses it: built in
+  BW-S6 (BW-Q11 (a), BW-R13), a column-listed `INSERT` names its columns,
+  so no column change can shift it. Verified for BW-S6 on
+  `worktree-bw-instant-add-drop-column` over `e3450498`.
+- **A value's type refusal at encode carries no byte** (predates BW): an
+  `INSERT` value of the wrong type - positional or column-listed - is
+  refused by `exec::EncodeRow` (`row_codec.cpp`, "column 'a' expects an
+  integer"), which `InsertOneRow` passes through as it is; a multi-row
+  statement adds only `(row k)`. Every other `INSERT` refusal names the
+  value's byte. Found by BW-S6's review on
+  `worktree-bw-instant-add-drop-column` at `e1e17abc`; not fixed there, as
+  the codec has no `AstValue` and threading the byte is outside BW.
+
+- **A dropped column's slot and bytes are never reclaimed.** A drop flags the
+  column's `sys.columns` row and leaves its bytes in every row, a dropped
+  varchar's spills included until purge reclaims the row; a dropped slot is
+  never taken again. Cleaning - resetting the flags and rewriting rows to a
+  smaller size - is D-e (a)'s separate milestone, not built.
+- **Readers see an open `ADD`/`DROP COLUMN`** (BW-Q8 (a)): the catalog row
+  is rewritten in place under the DDL's transaction, so another session's
+  read can see the undecided column set - a column missing from `SELECT *`,
+  a name refused, an added column reading NULL - before the decide. Writers
+  are fenced by the relation `X`; no value a reader shows is wrong.
+- **An automatic `CreateCabin` takes no relation lock**, so the Cabin
+  controller can land a Cabin on a column between `DROP COLUMN`'s restrict
+  check and its write. The Cabin is never served - no statement can name
+  the column - and `DROP CABIN` is refused only by the name it cannot
+  resolve; harmless, and not fenced.
 
 ## Decisions the revision has not taken
 

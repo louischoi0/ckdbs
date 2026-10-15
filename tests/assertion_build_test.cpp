@@ -22,6 +22,7 @@
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
+#include "view_text.hpp"
 
 // The CREATE-time builder and its cutover (docs/spec/assertion.md §8.1,
 // workplan AST06), tested through the statement surface: what a client sees
@@ -91,8 +92,10 @@ TEST_F(AssertionBuildTest, ACountBuildIncorporatesEveryLiveRowAndReportsIt) {
     // ...and the reply says it enforces (AST07): built, checked on the
     // write path, and held by this dispatcher's registry - all three.
     EXPECT_NE(out.find("enforcing=1"), std::string::npos) << out;
-    const std::string shown = Run("SHOW ASSERTIONS");
-    EXPECT_NE(shown.find("enforcing=1"), std::string::npos) << shown;
+    const std::string shown = Run("SELECT enforcing FROM sys.assertions");
+    EXPECT_EQ(testing_view::ReadViewText(shown).Column("enforcing"),
+              std::vector<std::string>{"1"})
+        << shown;
 }
 
 TEST_F(AssertionBuildTest, ViolatingDataFailsTheCreateNamingTheFirstGroup) {
@@ -109,7 +112,7 @@ TEST_F(AssertionBuildTest, ViolatingDataFailsTheCreateNamingTheFirstGroup) {
     EXPECT_NE(out.find("SUM(qty) would exceed bound 100"), std::string::npos) << out;
 
     // No trace: no catalog row, and the name is free for a corrected retry.
-    EXPECT_NE(Run("SHOW ASSERTIONS").find("assertions=0"), std::string::npos);
+    EXPECT_EQ(testing_view::ReadViewText(Run("SHOW ASSERTIONS")).rows.size(), 0u);
     EXPECT_EQ(Run("CREATE ASSERTION exposure_cap ON trades GROUP BY (account) "
                   "CHECK SUM(qty) <= 200")
                   .substr(0, 7),
@@ -182,7 +185,7 @@ TEST_F(AssertionBuildTest, DropThenRecreateLeavesNoResidue) {
                   .substr(0, 7),
               "CREATED");
     ASSERT_EQ(Run("DROP ASSERTION per_account_cap").substr(0, 7), "DROPPED");
-    EXPECT_NE(Run("SHOW ASSERTIONS").find("assertions=0"), std::string::npos);
+    EXPECT_EQ(testing_view::ReadViewText(Run("SHOW ASSERTIONS")).rows.size(), 0u);
     EXPECT_EQ(Run("CREATE ASSERTION per_account_cap ON trades GROUP BY (account) "
                   "CHECK COUNT(*) <= 5")
                   .substr(0, 7),

@@ -110,6 +110,7 @@ public:
 
 private:
     StatusOr<CreateTableStmt> ParseCreateTable();
+    StatusOr<ColumnDef> ParseColumnDef();
     StatusOr<InsertStmt> ParseInsert();
     StatusOr<UpdateStmt> ParseUpdate();
     StatusOr<DeleteStmt> ParseDelete();
@@ -135,6 +136,11 @@ private:
     // leading two words already consumed. One production for both, for
     // ParseCabin's reason - see AssertionStmt (ast.hpp).
     StatusOr<AssertionStmt> ParseAssertion(bool drop);
+    // `CREATE`/`DROP TRANSITION` (BV-S2): TransitionStmt in ast.hpp.
+    StatusOr<TransitionStmt> ParseTransition(bool drop);
+    // One `(<state>, ...)` list of a Transition clause; `what` names the
+    // clause in a refusal.
+    Status ParseTransitionStates(std::vector<AstValue>& out, std::string_view what);
 
     // A parenthesised comma-separated column list, as both halves of a
     // CREATE INDEX declaration and an assertion's GROUP BY list are. `what`

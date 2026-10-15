@@ -57,6 +57,7 @@ std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     std::memcpy(base + kVarHeapPageIdOffset, &varheap_page_id, sizeof(varheap_page_id));
     std::memcpy(base + kRetiredKeyOrderOffset, &retired_key_order, sizeof(retired_key_order));
     std::memcpy(base + kAnchorPageIdOffset, &anchor_page_id, sizeof(anchor_page_id));
+    std::memcpy(base + kSpareSlotsOffset, &spare_slots, sizeof(spare_slots));
     return buf;
 }
 
@@ -77,6 +78,7 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&row.retired_key_order, base + kRetiredKeyOrderOffset,
                 sizeof(row.retired_key_order));
     std::memcpy(&row.anchor_page_id, base + kAnchorPageIdOffset, sizeof(row.anchor_page_id));
+    std::memcpy(&row.spare_slots, base + kSpareSlotsOffset, sizeof(row.spare_slots));
     return row;
 }
 
@@ -94,6 +96,7 @@ std::array<std::byte, SysColumnRow::kOnDiskSize> SysColumnRow::Encode() const {
     auto nn = static_cast<std::uint8_t>(notnull ? 1 : 0);
     std::memcpy(base + kNotNullOffset, &nn, sizeof(nn));
     std::memcpy(base + kCabinPolicyOffset, &cabin_policy, sizeof(cabin_policy));
+    std::memcpy(base + kFlagsOffset, &flags, sizeof(flags));
     return buf;
 }
 
@@ -112,6 +115,7 @@ StatusOr<SysColumnRow> SysColumnRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&nn, base + kNotNullOffset, sizeof(nn));
     row.notnull = (nn != 0);
     std::memcpy(&row.cabin_policy, base + kCabinPolicyOffset, sizeof(row.cabin_policy));
+    std::memcpy(&row.flags, base + kFlagsOffset, sizeof(row.flags));
     // Pure, like its neighbours. `cabin_policy == kCabinPolicyUnset` is a
     // legitimate stored value ("nothing was said"), and turning it into the
     // effective policy is the reader's job through EffectiveCabinPolicy() -
@@ -309,7 +313,7 @@ StatusOr<SysCabinRow> SysCabinRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&row.status, base + kStatusOffset, sizeof(row.status));
     // Pure, like its neighbours: whether `origin` and `status` name real
     // values is the acting layer's question, and `column_no == 0` - a row
-    // claiming a Cabin on the pk - is CreateCabin()'s to refuse, not this
+    // claiming a Cabin on the tuple key - is CreateCabin()'s to refuse, not this
     // function's to reinterpret.
     return row;
 }
@@ -336,7 +340,7 @@ StatusOr<SysFkeyRow> SysFkeyRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&row.child_column_no, base + kChildColumnNoOffset, sizeof(row.child_column_no));
     std::memcpy(&row.flags, base + kFlagsOffset, sizeof(row.flags));
     // Pure, like its neighbours: a `child_column_no == 0` - a foreign key
-    // claiming the child's own pk - is CreateForeignKey()'s to refuse, and
+    // claiming the child's own tuple key - is CreateForeignKey()'s to refuse, and
     // whether the two oids name live relations is a question this function
     // has no catalog to ask.
     return row;

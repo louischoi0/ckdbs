@@ -32,6 +32,7 @@
 #include "kds/wal/durability.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
+#include "view_text.hpp"
 
 namespace kds::server {
 namespace {
@@ -457,18 +458,20 @@ TEST(ContentionCountersTest, AnOwningManagersSyncCountsAsInline) {
 TEST(ContentionCountersTest, ShowMetaPrintsTheBlockForEveryKindAndTally) {
     std::unique_ptr<TwoCoreRig> rig = OpenRig();
     ASSERT_NE(rig, nullptr);
-    const std::string meta = rig->core(1).dispatcher().Dispatch("SHOW META").response;
+    const testing_view::ViewText meta = testing_view::ReadViewText(
+        rig->core(1).dispatcher().Dispatch("SHOW META").response);
+    const auto filed = [&meta](const std::string& field) {
+        return meta.Find("field", field, "section") == "contention";
+    };
     for (const char* name : kLatchKindNames) {
-        EXPECT_NE(meta.find(std::string(" contention_") + name + "_waits="), std::string::npos)
-            << name;
-        EXPECT_NE(meta.find(std::string(" contention_") + name + "_wait_us="), std::string::npos)
-            << name;
+        EXPECT_TRUE(filed(std::string("contention_") + name + "_waits")) << name;
+        EXPECT_TRUE(filed(std::string("contention_") + name + "_wait_us")) << name;
     }
     for (const char* name : kTallyNames) {
-        EXPECT_NE(meta.find(std::string(" contention_") + name + "="), std::string::npos) << name;
+        EXPECT_TRUE(filed(std::string("contention_") + name)) << name;
     }
     for (const char* name : kLongestNames) {
-        EXPECT_NE(meta.find(std::string(" contention_") + name + "="), std::string::npos) << name;
+        EXPECT_TRUE(filed(std::string("contention_") + name)) << name;
     }
 }
 

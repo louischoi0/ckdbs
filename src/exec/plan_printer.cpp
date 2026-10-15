@@ -428,7 +428,7 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         // Cabin (docs/spec/cabin.md §7). A hit means the step served an
         // observed value's entry set **authoritatively** and did not walk;
         // the entries/hint pair below says how much of that was the C6
-        // location advice and how much needed a pk resolution.
+        // location advice and how much needed a tuple key resolution.
         //
         // A hit beside an `examined` count the size of the relation is the
         // shape to look for: it would mean the set was not actually serving.

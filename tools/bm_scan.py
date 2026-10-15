@@ -81,6 +81,7 @@ import argparse, hashlib, json, os, signal, subprocess, sys, threading, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kwp  # noqa: E402
+import sys_meta  # noqa: E402
 import bn_census as bc  # noqa: E402
 from bn_census import (Server, sched_ns, self_ns, literal_of, quiet_gate, host_state,  # noqa: E402
                        pct, must, wait_idle, parse_arms, rotated, clean_cell,
@@ -223,21 +224,10 @@ def load_rel(conn, name):
 # -- measurement ------------------------------------------------------------------
 
 def meta_vals(conn, keys=()):
-    """SHOW META as a dict of every `key=int` token (or only `keys`)."""
+    """`sys.meta` as a dict of every integer field (or only `keys`)."""
     _, rows, tag, _ = conn.execute("SHOW META")
-    text = tag + " " + " ".join(b" ".join(c or b"" for c in r).decode() for r in rows)
-    out = {}
-    for tok in text.replace("\\n", " ").split():
-        if "=" not in tok:
-            continue
-        k, v = tok.split("=", 1)
-        if keys and k not in keys:
-            continue
-        try:
-            out[k] = int(v)
-        except ValueError:
-            pass
-    return out
+    fields = sys_meta.numeric(sys_meta.from_rows(rows, tag))
+    return {k: v for k, v in fields.items() if not keys or k in keys}
 
 
 def lookups_of(m, core=None):

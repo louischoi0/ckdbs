@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -15,7 +16,7 @@
 // A catalog row is not a row-codec tuple. `SysTableRow::Encode()` memcpy's
 // its fields at fixed offsets (catalog/rows.hpp): no Keystone word, `oid`
 // is a plain 8-byte value at offset 0, `name` a fixed 64-byte array. A user
-// tuple is `[Keystone word][packed body]` with the pk carried *only* in the
+// tuple is `[Keystone word][packed body]` with the tuple key carried *only* in the
 // word (invariant 11) and varchar length-prefixed. The two formats have
 // nothing in common, so attaching a `sys.columns` schema to a catalog table
 // would not make `DecodeRow` read it - it would misread every field.
@@ -50,20 +51,13 @@ inline constexpr std::string_view kCatalogSchema = "sys";
 // and the rows under them.
 struct CatalogView {
     std::vector<std::string> column_names;
+    // Each column's type, beside its name: `uint64` for every integer a view
+    // holds and `varchar` for every string. Declared rather than read off a
+    // row, so a WHERE literal is judged against the column before any row is
+    // read (docs/spec/types.md §3.1a) and an empty view refuses what a full
+    // one does.
+    std::vector<std::uint32_t> column_types;
     std::vector<std::vector<parser::AstValue>> rows;
 };
-
-// True when `name` is one of the views below. Case-insensitive.
-bool IsCatalogView(std::string_view name) noexcept;
-
-// Every view name, for an error message that can say what does exist.
-std::vector<std::string> CatalogViewNames();
-
-// Materializes one view.
-//
-// Fails with NotFound when `name` is not a view - callers that have
-// already checked IsCatalogView will not see it - and propagates whatever
-// the catalog reports when a row cannot be read.
-StatusOr<CatalogView> ReadCatalogView(catalog::Catalog& catalog, std::string_view name);
 
 }  // namespace kds::exec

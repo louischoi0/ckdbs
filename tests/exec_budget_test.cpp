@@ -23,7 +23,7 @@
 //
 //   the budget   nothing suspends mid-statement on a cooperative core, so
 //                an unbounded statement holds that core against every
-//                other client on it. A correlated subquery over a non-pk
+//                other client on it. A correlated subquery over a non-tuple-key
 //                column is n² decodes from one line of SQL. The budget
 //                turns that from a hang into a bounded failure, which is
 //                the kinder answer: a client can rewrite a statement it
@@ -187,7 +187,7 @@ TEST_F(ExecBudgetTest, ZeroMeansUnlimited) {
 // ---- The budget in the executor ------------------------------------------
 
 TEST_F(ExecBudgetTest, ARunawayCorrelatedScanFailsInsteadOfRunningToCompletion) {
-    // The shape the budget exists for: a correlated subquery on a **non-pk**
+    // The shape the budget exists for: a correlated subquery on a **non-tuple-key**
     // column reads the whole inner relation once per outer row. 40 x 40 is
     // 1,600 decodes plus the outer 40 - small here, but it is the same
     // statement that is n² at any size, and one line of SQL.
@@ -358,7 +358,7 @@ TEST_F(ExecBudgetTest, TheMemoIsPerStepAndNeverServesOneRelationsLocationToAnoth
     //
     // A ChainRunner owns *one* memo but runs every step of its chain
     // through it. Keyed on the probe key alone, a chain with two
-    // pk-descending steps whose keys coincide served the second step the
+    // tuple-key-descending steps whose keys coincide served the second step the
     // first relation's cached (page, slot) - and the row was then decoded
     // with the wrong relation's schema. Different row widths gave a
     // Corruption error; **equal widths returned a row from the wrong
@@ -418,7 +418,7 @@ TEST_F(ExecBudgetTest, AMemoHitReturnsTheSameRowAFreshDescentWould) {
 }
 
 TEST_F(ExecBudgetTest, TheMemoDoesNotFireOnAHeapRelation) {
-    // A heap relation has no pk index, so a Probe step falls through to a
+    // A heap relation has no tuple key index, so a Probe step falls through to a
     // chain walk (step_vm.cpp's RunPointStep) and there is no descent to
     // memoize. Worth pinning: a memo that "hit" here would be caching
     // something the code never looked up.
@@ -445,7 +445,7 @@ TEST_F(ExecBudgetTest, TheCorrelatedScanCounterNamesTheExpensiveShape) {
         Insert("i2", {Int(i)});
     }
 
-    // Correlated on a non-pk column: the inner step is a Scan, counted.
+    // Correlated on a non-tuple-key column: the inner step is a Scan, counted.
     ExecStats scanning;
     ASSERT_TRUE(TryRun("SELECT o2.id FROM o2 WHERE EXISTS "
                        "(SELECT i2.id FROM i2 WHERE i2.tag = o2.tag)",
@@ -453,7 +453,7 @@ TEST_F(ExecBudgetTest, TheCorrelatedScanCounterNamesTheExpensiveShape) {
                     .ok());
     EXPECT_EQ(scanning.Total().correlated_scans, 5u);
 
-    // Correlated on the pk of a BTREE inner: a real descent per outer row,
+    // Correlated on the tuple key of a BTREE inner: a real descent per outer row,
     // not a walk - not counted. That distinction is the point of the
     // counter: it names the quadratic shape, not correlation.
     Create("CREATE TABLE i3 (id int64, tag int64) BTREE");
@@ -466,7 +466,7 @@ TEST_F(ExecBudgetTest, TheCorrelatedScanCounterNamesTheExpensiveShape) {
     EXPECT_EQ(probing.Total().correlated_scans, 0u);
 
     // The same shape over the HEAP inner is a different execution: a heap
-    // pk probe has no descent and falls through to the walk, so it *is*
+    // tuple key probe has no descent and falls through to the walk, so it *is*
     // the quadratic shape - and the walk-level counting (2026-08-19,
     // step_vm.hpp) says so, where the old compile-time kind test called it
     // a Probe and reported zero for a statement that walked the relation

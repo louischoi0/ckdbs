@@ -342,9 +342,50 @@ Status LogCatPageImage(wal::WalManager* wal, storage::PageStore& store, std::uin
 // The identity a compensation re-reads (DT5's rule): the Keystone word of
 // the payload, or 0 for a payload too short to carry one - which no
 // catalog row is, so the fallback is a never-taken safety.
-std::uint64_t UndoPkOf(std::span<const std::byte> payload) {
+std::uint64_t UndoTupleKeyOf(std::span<const std::byte> payload) {
     auto id = KeystoneIdOfPayload(payload);
     return id.ok() ? id.value() : 0;
+}
+
+// **A DDL's overwrite of one catalog row** - `DropTable`'s and
+// `DropNamespace`'s retype, `DropColumn`'s flag. The prior image goes to the
+// undo hook first (the hook's contract: it is the only copy a crash leaves of
+// these bytes, since a catalog row has no undo chain), then the row is
+// rewritten and logged, stamped with `trx_id` so the change is that
+// transaction's to undo - or, at `kBootstrapXid`, outside any transaction
+// with the row's own stamp kept. Returns the change a rollback restores.
+StatusOr<CatalogRowChange> OverwriteForDdl(const Catalog::DdlUndoHook& undo_hook,
+                                           wal::WalManager* wal, storage::PageStore& store,
+                                           heap::PageView& page, PageId page_id,
+                                           std::uint16_t slot,
+                                           const heap::PageView::Tuple& tuple, Oid rel_oid,
+                                           Oid oid, std::span<const std::byte> before,
+                                           std::span<const std::byte> after,
+                                           std::uint64_t trx_id) {
+    CatalogRowChange change;
+    change.page_id = page_id;
+    change.slot = slot;
+    change.oid = oid;
+    change.rel_oid = rel_oid;
+    change.prior_trx_id = tuple.trx_id;
+    change.prior_undo_ptr = tuple.undo_ptr;
+    change.prior_image.assign(before.begin(), before.end());
+    if (undo_hook) {
+        if (Status s = undo_hook({Catalog::DdlUndoEvent::Kind::kOverwrite, page_id, slot,
+                                  change.prior_image, tuple.trx_id, tuple.undo_ptr,
+                                  UndoTupleKeyOf(change.prior_image)});
+            !s.ok()) {
+            return s;
+        }
+    }
+    const bool transactional = trx_id != kBootstrapXid;
+    if (Status s = OverwriteLogged(wal, store, page, page_id, slot, after,
+                                   transactional ? trx_id : wal::kNoTxnId,
+                                   transactional ? trx_id : tuple.trx_id, tuple.undo_ptr);
+        !s.ok()) {
+        return s;
+    }
+    return change;
 }
 
 // The new page comes back held, exclusive: its caller writes and logs it
@@ -391,7 +432,7 @@ Status ReportPlacedRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
                        std::uint64_t trx_id) {
     if (hook) {
         if (Status s = hook({Catalog::DdlUndoEvent::Kind::kInsert, page_id, slot, encoded, 0, 0,
-                             UndoPkOf(encoded)});
+                             UndoTupleKeyOf(encoded)});
             !s.ok()) {
             if (Status back = page.UnInsertTuple(slot); !back.ok()) {
                 return back.WithContext("taking back a catalog row after: " + s.message());
@@ -412,7 +453,7 @@ Status ReportPlacedRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
 // the tail is full.
 //
 // This is `heap::ChainInsert` minus the one thing a catalog row does not
-// have: a **Keystone id**. A user tuple's first word is its primary key, and
+// have: a **Keystone id**. A user tuple's first word is its tuple key, and
 // the heap chain uses it to keep pages key-ordered and to enforce `min_key`
 // (invariant 3). A catalog row is a fixed-offset struct with no such word,
 // so there is no key to order by and every page carries `min_key = 0` - the
@@ -560,6 +601,52 @@ void Catalog::InitWellKnownObjects() {
     register_type(kTypeUint64, "type_uint64");
 }
 
+namespace {
+
+Schema DeclarationSchema(Oid rel_oid, Oid column_oid_base, std::string_view aux_name,
+                         std::uint32_t aux_type_val, std::uint32_t aux_len) {
+    // Six columns, the shape `assertion.md` §8.2 gave sys.assertions and
+    // sys.transitions copies (`exec/declaration_relation.hpp`): the
+    // Keystone tuple key `id`, the constrained relation, one fixed column of the
+    // relation's own (`aux`), `flags`, and two varchars - the name and the
+    // declaration verbatim.
+    //
+    // `id` is the Keystone tuple key because every relation stored in user tuple
+    // format has one (invariant 11), and it **is** the declaration's id -
+    // engine-issued, unique, never reused (K1) - rather than a second
+    // sequence beside it.
+    //
+    // Nothing stores the parsed declaration: it is recovered by re-parsing
+    // `source_text` (AS10's model), so a longer list costs text rather than
+    // a wider row, and no decoded sibling can drift from the canon.
+    //
+    // `name` and `source_text` are varchar, so the relation can spill and
+    // gets a var-heap chain. A declaration longer than one var-heap page is
+    // refused rather than chained.
+    Schema schema;
+    auto column = [rel_oid](Oid oid, std::uint32_t pos, std::string_view name,
+                            std::uint32_t type_val, std::uint32_t len) {
+        SysColumnRow col{};
+        col.oid = oid;
+        col.rel_id = rel_oid;
+        col.pos = pos;
+        SetName(col.name, name);
+        col.type_val = type_val;
+        col.len = len;
+        col.notnull = true;
+        return col;
+    };
+    schema.columns.push_back(column(column_oid_base + 0, 0, "id", kTypeValInt64, 8));
+    schema.columns.push_back(column(column_oid_base + 1, 1, "target_oid", kTypeValInt32, 4));
+    schema.columns.push_back(column(column_oid_base + 2, 2, aux_name, aux_type_val, aux_len));
+    schema.columns.push_back(column(column_oid_base + 3, 3, "flags", kTypeValInt32, 4));
+    schema.columns.push_back(column(column_oid_base + 4, 4, "name", kTypeValVarchar, 0));
+    schema.columns.push_back(column(column_oid_base + 5, 5, "source_text", kTypeValVarchar, 0));
+    return schema;
+}
+
+}  // namespace
+
 Status Catalog::Bootstrap() {
     InitWellKnownObjects();
 
@@ -678,86 +765,55 @@ Status Catalog::Bootstrap() {
         }
     }
 
-    // Phase 5: sys.assertions, the one catalog relation stored in ordinary
-    // user tuple format (well_known.hpp explains why). It is built here by
-    // hand rather than through CreateTable() for two reasons: CreateTable()
-    // takes its oids from GenerateUserOid(), which is in-memory at bootstrap
-    // time and could not recover a position from the very pages being built,
-    // and it roots the relation on a dynamically allocated page, which
-    // nothing could find at bootstrap without first reading the catalog it
-    // is part of.
+    // Phase 5: the two declaration relations, sys.assertions and
+    // sys.transitions - the catalog relations stored in ordinary user tuple
+    // format (well_known.hpp explains why). Built here by hand rather than
+    // through CreateTable() for two reasons: CreateTable() takes its oids
+    // from GenerateUserOid(), which is in-memory at bootstrap time and could
+    // not recover a position from the very pages being built, and it roots
+    // the relation on a dynamically allocated page, which nothing could find
+    // at bootstrap without first reading the catalog it is part of.
     //
-    // It must come after phase 4: AssertionsSchema() names its column types
-    // by the type_val tags phase 4 just registered.
-    if (Status s = BootstrapAssertions(); !s.ok()) return s;
+    // After phase 4: their schemas name column types by the type_val tags
+    // phase 4 just registered. Each has one fixed column of its own:
+    // sys.assertions' Bound Cabin root, sys.transitions' governed column.
+    struct Declarations {
+        Oid oid;
+        std::string_view name;
+        PageId page_id;
+        Oid column_oid_base;
+        std::string_view aux_name;
+        std::uint32_t aux_type_val;
+        std::uint32_t aux_len;
+    };
+    static constexpr Declarations kDeclarations[] = {
+        {kSysAssertionsTable, "assertions", kCatalogPageAssertions,
+         kSysAssertionsColumnOidBase, "cabin_root", kTypeValInt64, 8},
+        {kSysTransitionsTable, "transitions", kCatalogPageTransitions,
+         kSysTransitionsColumnOidBase, "column_no", kTypeValInt32, 4},
+    };
+    for (const Declarations& d : kDeclarations) {
+        if (Status s = BootstrapDeclarations(
+                d.oid, d.name, d.page_id,
+                DeclarationSchema(d.oid, d.column_oid_base, d.aux_name, d.aux_type_val, d.aux_len));
+            !s.ok()) {
+            return s;
+        }
+    }
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
-        // + 1: sys.assertions (phase 5) is bootstrapped outside the array.
-        log_->Info("catalog", "bootstrapped " + std::to_string(std::size(kSysTables) + 1) +
+        log_->Info("catalog", "bootstrapped " +
+                                  std::to_string(std::size(kSysTables) + std::size(kDeclarations)) +
                                   " system tables and " + std::to_string(kTypes.size()) +
                                   " types on the fixed catalog pages");
     }
     return Status::OK();
 }
 
-namespace {
 
-Schema AssertionsSchema() {
-    // Six columns, and the shape is §8.2's table with one addition and one
-    // subtraction, both forced.
-    //
-    // Added: `id`, the Keystone pk, because every relation stored in user
-    // tuple format has one (invariant 11). It **is** §8.2's `assertion_id` -
-    // engine-issued, unique, never reused (K1) - rather than a second
-    // sequence beside it, because a second sequence is a second thing to keep
-    // monotonic and there is nothing the first cannot say.
-    //
-    // Subtracted: nothing stores the parsed declaration. The group columns,
-    // the aggregate, the operator and the bound are all recoverable from
-    // `source_text` by re-parsing it, which is the model AS10 names - and it is what lets the GROUP BY list be uncapped, since a
-    // longer list costs text rather than a wider row. A decoded sibling table
-    // would be a second copy that can drift from the canon.
-    //
-    // `cabin_root` is the Bound Cabin anchor, written by `CREATE ASSERTION`
-    // (`exec/assertion_catalog.cpp`).
-    //
-    // `name` and `source_text` are varchar, so the relation can spill and
-    // gets a var-heap chain. A declaration longer than one var-heap page is
-    // refused rather than chained: the spilled-value size cap is open and
-    // this does not settle it.
-    Schema schema;
-    auto column = [](Oid oid, std::uint32_t pos, std::string_view name, std::uint32_t type_val,
-                     std::uint32_t len) {
-        SysColumnRow col{};
-        col.oid = oid;
-        col.rel_id = kSysAssertionsTable;
-        col.pos = pos;
-        SetName(col.name, name);
-        col.type_val = type_val;
-        col.len = len;
-        col.notnull = true;
-        return col;
-    };
-    schema.columns.push_back(column(kSysAssertionsColumnOidBase + 0, 0, "id", kTypeValInt64, 8));
-    schema.columns.push_back(
-        column(kSysAssertionsColumnOidBase + 1, 1, "target_oid", kTypeValInt32, 4));
-    schema.columns.push_back(
-        column(kSysAssertionsColumnOidBase + 2, 2, "cabin_root", kTypeValInt64, 8));
-    schema.columns.push_back(
-        column(kSysAssertionsColumnOidBase + 3, 3, "flags", kTypeValInt32, 4));
-    schema.columns.push_back(
-        column(kSysAssertionsColumnOidBase + 4, 4, "name", kTypeValVarchar, 0));
-    schema.columns.push_back(
-        column(kSysAssertionsColumnOidBase + 5, 5, "source_text", kTypeValVarchar, 0));
-    return schema;
-}
-
-}  // namespace
-
-Status Catalog::BootstrapAssertions() {
-    const Schema schema = AssertionsSchema();
-
-    // Refused at bootstrap rather than at the first CREATE ASSERTION, for
+Status Catalog::BootstrapDeclarations(Oid rel_oid, std::string_view name, PageId root_page,
+                                      const Schema& schema) {
+    // Refused at bootstrap rather than at the first CREATE, for
     // CreateTable()'s reason: a relation whose row size cannot be computed
     // is one no row could ever be written to, and it also proves the schema
     // is expressible under whatever inline_cell_width this instance
@@ -766,31 +822,29 @@ Status Catalog::BootstrapAssertions() {
         return layout.status();
     }
 
-    auto created = store_.CreateAt(kCatalogPageAssertions);
+    auto created = store_.CreateAt(root_page);
     if (!created.ok()) return created.status();
     // min_key 0: scanned in full, by name or by target_oid, never by key
     // range - like every other catalog page. Stamped with the relation's
     // own oid (page.md §2a), unlike the fixed catalog core: this chain
     // grows through ChainInsert, which stamps, so the root must agree with
     // the pages that follow it.
-    auto root = heap::PageView::CreateEmpty(created.value().bytes(), 0, kSysAssertionsTable);
+    auto root = heap::PageView::CreateEmpty(created.value().bytes(), 0, rel_oid);
     if (!root.ok()) return root.status();
 
-    auto varheap_root = varheap::CreateChain(store_, kSysAssertionsTable);
+    auto varheap_root = varheap::CreateChain(store_, rel_oid);
     if (!varheap_root.ok()) return varheap_root.status();
 
-    if (Status s = InsertObjectRow(kSysAssertionsTable, kNamespaceSys, kTypeTable, "assertions");
-        !s.ok()) {
+    if (Status s = InsertObjectRow(rel_oid, kNamespaceSys, kTypeTable, name); !s.ok()) {
         return s;
     }
-    if (Status s = InsertRelationRow(kSysAssertionsTable, kNamespaceSys, "assertions",
-                                      kCatalogPageAssertions, ClusteredType::kHeap,
-                                      varheap_root.value());
+    if (Status s = InsertRelationRow(rel_oid, kNamespaceSys, name, root_page,
+                                      ClusteredType::kHeap, varheap_root.value());
         !s.ok()) {
         return s;
     }
     for (const auto& col : schema.columns) {
-        if (Status s = InsertColumnRow(col.oid, kSysAssertionsTable, col.pos, NameView(col.name),
+        if (Status s = InsertColumnRow(col.oid, rel_oid, col.pos, NameView(col.name),
                                         col.type_val, col.len, col.notnull);
             !s.ok()) {
             return s;
@@ -1159,7 +1213,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
                                    PageId desc_page_id, ClusteredType clustered_type,
                                    PageId varheap_page_id,
                                    PageId anchor_page_id, std::uint64_t trx_id,
-                                   CatalogRowRef* where) {
+                                   CatalogRowRef* where, std::uint16_t spare_slots) {
     SysTableRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
@@ -1169,6 +1223,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.next_id = kFirstRowId;
     row.varheap_page_id = varheap_page_id;
     row.anchor_page_id = anchor_page_id;
+    row.spare_slots = spare_slots;
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageTables, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysTablesTable;
     if (s.ok()) BumpVersion("sys.tables insert");
@@ -1178,7 +1233,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
 Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::string_view name,
                                  std::uint32_t type_val, std::uint32_t len, bool notnull,
                                  std::uint8_t cabin_policy, std::uint64_t trx_id,
-                                 CatalogRowRef* where) {
+                                 CatalogRowRef* where, std::uint8_t flags) {
     SysColumnRow row{};
     row.oid = oid;
     row.rel_id = rel_id;
@@ -1188,6 +1243,7 @@ Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::str
     row.len = len;
     row.notnull = notnull;
     row.cabin_policy = cabin_policy;
+    row.flags = flags;
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageColumns, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysColumnsTable;
     // A new column row changes the schema half of a cached TableAccess.
@@ -1222,11 +1278,16 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // No key-mode refusal here any more. Until 2026-08-25 an EXPLICIT
     // relation was required to be btree-clustered and this is where the
     // pairing was refused; the mode is gone, both storage types take a
-    // caller-supplied pk, and what a relation cannot take is refused per
+    // caller-supplied tuple key, and what a relation cannot take is refused per
     // *id* by the insert path rather than per relation - on a heap a key
     // below its mark (BB-R3, kept by BD-Q4), on a btree a duplicate or an
     // exhausted key (BD-R5).
     if (Status s = CheckDeclarableColumnTypes(schema); !s.ok()) return s;
+
+    // Column names are unique ignoring case. The dispatcher refuses a twin
+    // first, at its byte; this is the door's own defense for a schema built
+    // by any other caller.
+    if (Status s = CheckColumnNamesUnique(schema); !s.ok()) return s;
 
     // Same argument, extended by the fixed-length rule: the relation's row
     // size is a schema constant, so if it cannot be computed - a column
@@ -1302,8 +1363,13 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // page per relation that *could* spill, whether or not it ever does -
     // which is why relations that cannot spill get kInvalidPageId and no
     // page at all.
+    //
+    // A relation with slots gets its chain whether or not a declared column
+    // can spill (BW-R10): a `varchar(16)` a later `ADD COLUMN` places in a
+    // slot spills into it, and allocating then would move a root this rule
+    // keeps fixed at CREATE.
     PageId varheap_root = kInvalidPageId;
-    if (SchemaCanSpill(schema)) {
+    if (SchemaCanSpill(schema) || schema.spare_slots > 0) {
         auto created_varheap = varheap::CreateChain(store_, new_oid);
         if (!created_varheap.ok()) return created_varheap.status();
         varheap_root = created_varheap.value();
@@ -1377,7 +1443,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     note(ref);
     if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
                                       varheap_root, anchor_id, trx_id,
-                                      &ref);
+                                      &ref, schema.spare_slots);
         !s.ok()) {
         return s;
     }
@@ -1684,27 +1750,81 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     // of one relation onto one name both pass the read.
     auto columns = store_.Get(kCatalogPageColumns);
     if (!columns.ok()) return columns.status();
-    auto rows = ScanAll<SysColumnRow>(store_, kCatalogPageColumns, nullptr, txn_);
-    if (!rows.ok()) return rows.status();
-    bool found_old = false;
-    for (const SysColumnRow& row : rows.value()) {
-        if (row.rel_id != table_oid) continue;
-        if (NameView(row.name) == new_name) {
-            return Status::AlreadyExists("the relation already has a column named '" +
-                                          std::string(new_name) + "'");
-        }
-        if (NameView(row.name) == old_name) found_old = true;
-    }
-    if (!found_old) {
+    // A dropped column's name is free (BW-R6) **once its drop is decided**
+    // (DT9: an object exists until its removal commits). The rename is
+    // transactionless and the drop's overwrite in place, so a name taken
+    // from an undecided drop would survive the drop's rollback as a second
+    // live column of that name. Hence a walk that reads `trx_id`, which
+    // `ScanAll` drops.
+    const auto settled = [this](std::uint64_t trx) {
+        return txn_ == nullptr || !txn_->IsInFlight(trx);
+    };
+    // The old name resolves as every written column name does - ignoring
+    // case (`ColumnNamesCollide`), two or more live matches refused as
+    // ambiguous (`Schema::FindColumn`'s rule, defended here under the hold).
+    std::size_t old_matches = 0;
+    std::uint32_t old_pos = 0;
+    std::string old_stored;  // the renamed column's name as declared
+    std::string holder;      // the colliding column's name as declared
+    auto scanned = ForFirstRow<SysColumnRow>(
+        store_, kCatalogPageColumns,
+        [&](SysColumnRow& row, heap::PageView&, PageId, std::uint16_t,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.rel_id != table_oid) return false;
+            if (tuple.deleted && settled(tuple.trx_id)) return false;  // ScanAll's rule
+            // Names collide ignoring case (`ColumnNamesCollide`); the column
+            // being renamed collides only with itself, so `id` may become
+            // `ID`.
+            if (row.dropped()) {
+                if (holder.empty() && !settled(tuple.trx_id) &&
+                    ColumnNamesCollide(NameView(row.name), new_name)) {
+                    holder = NameView(row.name);
+                }
+                return false;
+            }
+            if (ColumnNamesCollide(NameView(row.name), old_name)) {
+                if (old_matches++ == 0) {
+                    old_pos = row.pos;
+                    old_stored = NameView(row.name);
+                }
+                return false;
+            }
+            if (holder.empty() && ColumnNamesCollide(NameView(row.name), new_name)) {
+                holder = NameView(row.name);
+            }
+            return false;
+        },
+        nullptr, storage::PageAccess::kRead);
+    if (!scanned.ok()) return scanned.status();
+    if (old_matches == 0) {
         return Status::NotFound("the relation has no column named '" + std::string(old_name) +
                                  "'");
+    }
+    if (old_matches > 1) {
+        return Status::InvalidArgument("column name '" + std::string(old_name) +
+                                       "' is ambiguous: " + std::to_string(old_matches) +
+                                       " live columns have it ignoring case");
+    }
+    if (!holder.empty()) {
+        return Status::AlreadyExists("the relation already has a column named '" + holder +
+                                     "' (names are unique ignoring case)");
+    }
+    // A rename onto the name the column already has, byte for byte, is
+    // refused: it would rewrite, log and bump the version for nothing. A
+    // new name differing from the stored one only in case is a rename.
+    if (old_stored == new_name) {
+        return Status::AlreadyExists("the column is already named '" + std::string(new_name) +
+                                     "'");
     }
 
     auto acted = ForFirstRow<SysColumnRow>(
         store_, kCatalogPageColumns,
         [&](SysColumnRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-            if (row.rel_id != table_oid || NameView(row.name) != old_name) return false;
+            if (row.rel_id != table_oid || row.dropped() || row.pos != old_pos ||
+                (tuple.deleted && settled(tuple.trx_id))) {
+                return false;
+            }
             SetName(row.name, new_name);
             const auto encoded = row.Encode();
             if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
@@ -1717,6 +1837,145 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     if (!acted.value()) return Status::NotFound("the column vanished between check and write");
 
     BumpVersion("rename column");
+    return Status::OK();
+}
+
+Status Catalog::AddColumn(Oid table_oid, const SysColumnRow& column, std::uint64_t trx_id,
+                          CatalogRowRef* where) {
+    // The slot count is fixed at CREATE, so it is read before the hold.
+    auto table_row = GetSysTableRow(table_oid);
+    if (!table_row.ok()) return table_row.status();
+    // One hold of `sys.columns`' root page across the name check, the slot
+    // count and the insert (CT7), so two adds cannot take one name or one
+    // slot.
+    auto columns_page = store_.Get(kCatalogPageColumns);
+    if (!columns_page.ok()) return columns_page.status();
+
+    auto schema = ScanSchemaFromColumns(table_oid);
+    if (!schema.ok()) return schema.status();
+    schema.value().spare_slots = table_row.value().spare_slots;
+    std::uint16_t held = 0;
+    for (const SysColumnRow& existing : schema.value().columns) {
+        if (existing.in_slot()) ++held;
+        if (!existing.dropped() &&
+            ColumnNamesCollide(NameView(existing.name), NameView(column.name))) {
+            return Status::AlreadyExists("the relation already has a column named '" +
+                                         std::string(NameView(existing.name)) +
+                                         "' (names are unique ignoring case)");
+        }
+    }
+    if (held >= table_row.value().spare_slots) {
+        return Status::NotImplemented(
+            table_row.value().spare_slots == 0
+                ? std::string("the relation reserved no column slots (CREATE TABLE ... SPARE n); "
+                              "adding a column to it would rewrite every row (invariant 13)")
+                : "all " + std::to_string(table_row.value().spare_slots) +
+                      " of the relation's column slots are taken - a dropped column keeps its "
+                      "slot - and adding a column would rewrite every row (invariant 13)");
+    }
+
+    SysColumnRow row = column;
+    row.rel_id = table_oid;
+    row.pos = static_cast<std::uint32_t>(schema.value().columns.size());
+    row.notnull = false;
+    row.flags = SysColumnRow::kColumnInSlot;
+    auto width = RowLayout::ColumnWidth(row, inline_cell_width_);
+    if (!width.ok()) return width.status();
+    if (width.value() > kColumnSlotWidth) {
+        return Status::NotImplemented(
+            "a column slot is " + std::to_string(kColumnSlotWidth) + " bytes and this column's " +
+            "cell is " + std::to_string(width.value()) +
+            "; a string column added to a relation is varchar(16), which holds a value of any "
+            "length and spills one past 13 bytes");
+    }
+    // The layout the relation will have, built before anything is written:
+    // the row size it computes is the one every row already has.
+    schema.value().columns.push_back(row);
+    if (Status s = CheckDeclarableColumnTypes(schema.value()); !s.ok()) return s;
+    if (auto layout = RowLayout::Build(schema.value(), inline_cell_width_); !layout.ok()) {
+        return layout.status();
+    }
+
+    auto col_oid = GenerateUserOid();
+    if (!col_oid.ok()) return col_oid.status();
+    if (Status s = InsertColumnRow(col_oid.value(), table_oid, row.pos, NameView(row.name),
+                                   row.type_val, row.len, row.notnull, row.cabin_policy, trx_id,
+                                   where, row.flags);
+        !s.ok()) {
+        return s;
+    }
+    if (where != nullptr) where->oid = col_oid.value();
+    return Status::OK();
+}
+
+Status Catalog::DropColumn(Oid table_oid, std::uint16_t pos, std::string_view name,
+                           std::uint64_t trx_id, std::vector<CatalogRowChange>* changed) {
+    // One hold of `sys.columns`' root page across the check and the write
+    // (CT7), as `RenameColumn` takes it.
+    auto columns = store_.Get(kCatalogPageColumns);
+    if (!columns.ok()) return columns.status();
+
+    // The column is the one the caller resolved (`Schema::FindColumn`) and
+    // asked its RESTRICT of, named by position - never resolved again here
+    // by name: RENAME COLUMN takes no relation lock, so between the
+    // caller's ask and this hold another core can move `name` onto another
+    // column, and a second resolution would drop a column nobody asked the
+    // RESTRICT of. The position must still be live and still carry `name`
+    // (ignoring case); a column renamed in that window refuses the drop.
+    std::string now_named;
+    bool live = false;
+    auto checked = ForFirstRow<SysColumnRow>(
+        store_, kCatalogPageColumns,
+        [&](SysColumnRow& row, heap::PageView&, PageId, std::uint16_t,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.rel_id != table_oid || tuple.deleted || row.dropped() || row.pos != pos) {
+                return false;
+            }
+            live = true;
+            now_named = NameView(row.name);
+            return true;
+        },
+        nullptr, storage::PageAccess::kRead);
+    if (!checked.ok()) return checked.status();
+    if (!live) {
+        return Status::NotFound("the relation has no column named '" + std::string(name) + "'");
+    }
+    if (!ColumnNamesCollide(now_named, name)) {
+        return Status::TxnConflict("column '" + std::string(name) + "' (position " +
+                                   std::to_string(pos) + ") was renamed to '" + now_named +
+                                   "' while the drop resolved it");
+    }
+
+    CatalogRowChange change;
+    auto acted = ForFirstRow<SysColumnRow>(
+        store_, kCatalogPageColumns,
+        [&](SysColumnRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.rel_id != table_oid || row.dropped() || tuple.deleted ||
+                row.pos != pos) {
+                return false;
+            }
+            // Identity is the Keystone word at position 0 (invariant 11).
+            if (row.pos == 0) {
+                return Status::InvalidArgument("column '" + std::string(name) +
+                                                "' is the tuple key and cannot be dropped "
+                                                "(invariant 11)");
+            }
+            const auto before = row.Encode();
+            row.flags |= SysColumnRow::kColumnDropped;
+            auto overwritten = OverwriteForDdl(ddl_undo_hook_, wal_, store_, page, page_id, i,
+                                               tuple, kSysColumnsTable, row.oid, before,
+                                               row.Encode(), trx_id);
+            if (!overwritten.ok()) return overwritten.status();
+            change = std::move(overwritten.value());
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) {
+        return Status::NotFound("the relation has no column named '" + std::string(name) + "'");
+    }
+    if (trx_id != kBootstrapXid && changed != nullptr) changed->push_back(std::move(change));
+    BumpVersion("drop column");
     return Status::OK();
 }
 
@@ -1864,7 +2123,7 @@ StatusOr<Oid> Catalog::CreateNamespace(std::string_view name, std::uint64_t trx_
     }
     // **`InsertObjectRow` does not fill `oid`, and a trail entry without it
     // cannot be rolled back.** `CreateTable` sets it by hand at each of its
-    // three inserts; this one did not, so the entry recorded pk 0, the
+    // three inserts; this one did not, so the entry recorded tuple key 0, the
     // abort found the row's real oid at that slot, decided it had moved,
     // and asked `RowLocatorForRollback` to relocate a *catalog* row - which
     // answers "no columns for this rel_id", because a bootstrap relation
@@ -1898,54 +2157,25 @@ Status Catalog::DropNamespace(Oid namespace_oid, std::uint64_t trx_id,
     if (!names.ok()) return names.status();
     if (Status s = CheckNamespaceEmpty(namespace_oid, trx_id); !s.ok()) return s;
 
-    const bool transactional = trx_id != kBootstrapXid;
-    PageId retyped_page = kInvalidPageId;
     CatalogRowChange retype_change;
     auto retyped = ForFirstRow<SysObjectRow>(
         store_, kCatalogPageObjects,
         [&](SysObjectRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.type_oid != kTypeNamespace || row.oid != namespace_oid) return false;
-
-            // The before-image, captured before the overwrite: it is what
-            // a rollback writes back and it is the only copy - a catalog
-            // row has no undo chain. `DropTable`'s step 1, one row wide.
-            CatalogRowChange change;
-            change.slot = i;
-            change.oid = row.oid;
-            change.rel_oid = kSysObjectsTable;
-            change.prior_trx_id = tuple.trx_id;
-            change.prior_undo_ptr = tuple.undo_ptr;
+            // `DropTable`'s step 1, one row wide.
             const auto before = row.Encode();
-            change.prior_image.assign(before.begin(), before.end());
-
             row.type_oid = kTypeDroppedNamespace;
-            const auto encoded = row.Encode();
-            if (ddl_undo_hook_) {
-                if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kOverwrite, page_id, i,
-                                               change.prior_image, tuple.trx_id, tuple.undo_ptr,
-                                               UndoPkOf(change.prior_image)});
-                    !s.ok()) {
-                    return s;
-                }
-            }
-            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded,
-                                           transactional ? trx_id : wal::kNoTxnId,
-                                           transactional ? trx_id : tuple.trx_id,
-                                           tuple.undo_ptr);
-                !s.ok()) {
-                return s;
-            }
-            retype_change = std::move(change);
+            auto overwritten = OverwriteForDdl(ddl_undo_hook_, wal_, store_, page, page_id, i,
+                                               tuple, kSysObjectsTable, row.oid, before,
+                                               row.Encode(), trx_id);
+            if (!overwritten.ok()) return overwritten.status();
+            retype_change = std::move(overwritten.value());
             return true;
-        },
-        &retyped_page);
+        });
     if (!retyped.ok()) return retyped.status();
     if (!retyped.value()) return Status::NotFound("no sys.objects row for this namespace");
-    if (transactional && written != nullptr) {
-        retype_change.page_id = retyped_page;  // known only once the walk found it
-        written->push_back(retype_change);
-    }
+    if (trx_id != kBootstrapXid && written != nullptr) written->push_back(retype_change);
 
     BumpVersion("drop namespace");
     return Status::OK();
@@ -1975,7 +2205,6 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
     if (!owed.ok()) return owed.status();
     const std::uint64_t pending_roots = PackPendingRoots(
         PendingRoots{owed.value().anchor_page_id, owed.value().varheap_page_id});
-    PageId retyped_page = kInvalidPageId;
     CatalogRowChange retype_change;
     auto retyped = ForFirstRow<SysObjectRow>(
         store_, kCatalogPageObjects,
@@ -1988,51 +2217,19 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
                                                 std::string(NameView(row.name)) +
                                                 "' is a system relation and cannot be dropped");
             }
-            // The before-image, captured *before* the overwrite: it is
-            // what a rollback writes back, and it is the only copy - a
-            // catalog row has no undo chain to recover it from.
-            CatalogRowChange change;
-            change.slot = i;
-            change.oid = row.oid;
-            change.rel_oid = kSysObjectsTable;
-            change.prior_trx_id = tuple.trx_id;
-            change.prior_undo_ptr = tuple.undo_ptr;
             const auto before = row.Encode();
-            change.prior_image.assign(before.begin(), before.end());
-
             row.type_oid = kTypeDroppedTable;
             row.pending_roots = pending_roots;
-            const auto encoded = row.Encode();
-            // The undo record first (hook contract, catalog.hpp): the
-            // prior image is the only copy a crash leaves of these bytes.
-            if (ddl_undo_hook_) {
-                if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kOverwrite, page_id, i,
-                                               change.prior_image, tuple.trx_id,
-                                               tuple.undo_ptr,
-                                               UndoPkOf(change.prior_image)});
-                    !s.ok()) {
-                    return s;
-                }
-            }
-            // Stamped with the dropping transaction when there is one, so
-            // the retype is this transaction's to undo.
-            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded,
-                                           transactional ? trx_id : wal::kNoTxnId,
-                                           transactional ? trx_id : tuple.trx_id,
-                                           tuple.undo_ptr);
-                !s.ok()) {
-                return s;
-            }
-            retype_change = std::move(change);
+            auto overwritten = OverwriteForDdl(ddl_undo_hook_, wal_, store_, page, page_id, i,
+                                               tuple, kSysObjectsTable, row.oid, before,
+                                               row.Encode(), trx_id);
+            if (!overwritten.ok()) return overwritten.status();
+            retype_change = std::move(overwritten.value());
             return true;
-        },
-        &retyped_page);
+        });
     if (!retyped.ok()) return retyped.status();
     if (!retyped.value()) return Status::NotFound("no sys.objects row for this relation");
-    if (transactional) {
-        retype_change.page_id = retyped_page;  // known only once the walk found it
-        note(retype_change);
-    }
+    if (transactional) note(retype_change);
 
     // 2. Everything the relation owns retires (DT3's "dependents out").
     //    Retired, not delete-marked - DropCabin() states the argument:
@@ -2072,7 +2269,7 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
                     if (ddl_undo_hook_) {
                         if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kDeleteMark, page_id,
                                                        i, {}, tuple.trx_id, tuple.undo_ptr,
-                                                       UndoPkOf(tuple.payload)});
+                                                       UndoTupleKeyOf(tuple.payload)});
                             !s.ok()) {
                             return s;
                         }
@@ -2176,7 +2373,14 @@ StatusOr<Schema> Catalog::BuildSchemaFromColumns(Oid rel_id) {
     if (const TableAccess* cached = cache_.FindTableAccess(rel_id); cached != nullptr) {
         return cached->schema;
     }
-    return ScanSchemaFromColumns(rel_id);
+    auto schema = ScanSchemaFromColumns(rel_id);
+    if (!schema.ok()) return schema;
+    // After the column scan, so a relation with no columns answers NotFound
+    // as it always has (BW-R2's slot count, as `InitTableAccess` sets it).
+    auto table_row = GetSysTableRow(rel_id);
+    if (!table_row.ok()) return table_row.status();
+    schema.value().spare_slots = table_row.value().spare_slots;
+    return schema;
 }
 
 StatusOr<Schema> Catalog::ScanSchemaFromColumns(Oid rel_id) {
@@ -2256,6 +2460,9 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.namespace_oid = table_row.value().namespace_oid;
     access.oid = oid;
     access.schema = std::move(schema.value());
+    // The slot count rides with the columns because the layout is the
+    // schema's alone (BW-R2).
+    access.schema.spare_slots = table_row.value().spare_slots;
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
     access.varheap_page_id = table_row.value().varheap_page_id;
@@ -2424,6 +2631,15 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
                   return a.index_oid < b.index_oid;
               });
 
+    // The relation's Transitions (BV-S2), failing shut for the fkeys'
+    // reason. After the anchor is let go: the loader reads sys.transitions
+    // and its var-heap, and holds nothing of this relation. A catalog
+    // relation carries none, and asking would recurse into its own fill.
+    anchor_held.reset();
+    if (transition_loader_ && oid >= kUserOidStart) {
+        if (Status s = transition_loader_(access); !s.ok()) return s;
+    }
+
     return cache_.PutTableAccess(std::move(access));
 }
 
@@ -2446,7 +2662,7 @@ StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.oid != table_oid) return false;
             // No key-mode refusal: a carve is legal on every relation now,
-            // because every relation's omitted-pk inserts draw from this same
+            // because every relation's omitted-tuple key inserts draw from this same
             // mark. What a carve costs is stated at the call site and in
             // section 4.1 - the ids inside it are spent from the mark's point
             // of view before they are placed. The carve is the heap's
@@ -2486,7 +2702,7 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
         if (row.oid != table_oid) return false;
 
-        // No key-mode refusal: this is what every INSERT that omits the pk
+        // No key-mode refusal: this is what every INSERT that omits the tuple key
         // calls, whatever the relation. The id it hands out is safe from a
         // caller-supplied one for the same reason it always was - the mark
         // only ever moves forward, and AdmitExplicitRowId moves it past every
@@ -2533,13 +2749,13 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
 
 Status CheckNamedRowIdSpellable(std::uint64_t id) {
     if (id < kFirstRowId) {
-        return Status::OutOfRange("primary key " + std::to_string(id) +
+        return Status::OutOfRange("tuple key " + std::to_string(id) +
                                   " is below the first issuable id (" +
                                        std::to_string(kFirstRowId) +
                                        "); 0 is reserved for \"unset\"");
     }
     if (id > kMaxKeystoneId) {
-        return Status::OutOfRange("primary key " + std::to_string(id) +
+        return Status::OutOfRange("tuple key " + std::to_string(id) +
                                   " does not fit the Keystone id space (max " +
                                        std::to_string(kMaxKeystoneId) + ")");
     }
@@ -2548,7 +2764,7 @@ Status CheckNamedRowIdSpellable(std::uint64_t id) {
 
 Status RefuseRowIdBelowMark(Oid table_oid, std::uint64_t id, std::uint64_t mark) {
     return Status::OutOfRange(
-        "primary key " + std::to_string(id) + " is below relation " + std::to_string(table_oid) +
+        "tuple key " + std::to_string(id) + " is below relation " + std::to_string(table_oid) +
         "'s high-water mark " + std::to_string(mark) +
         "; a named key must sort above every key the relation has placed or issued, which is "
         "what keeps every page's slot order its key order");
@@ -2981,11 +3197,11 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
         return Status::InvalidArgument("catalog: unknown cabin origin");
     }
     if (col_pos == 0) {
-        // Not a policy choice and not a limitation: the pk column's Cabin
+        // Not a policy choice and not a limitation: the tuple key column's Cabin
         // is the clustered tree, which is already authoritative for every
         // value rather than for the observed ones (spec section 2).
         return Status::InvalidArgument(
-            "catalog: the primary-key column needs no cabin - the clustered tree is its cabin");
+            "catalog: the tuple key column needs no cabin - the clustered tree is its cabin");
     }
 
     // Through InitTableAccess() rather than the sys.columns scan, because
@@ -3000,7 +3216,10 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     // rewritten at AT-S7), and every walk that banks one covers the whole
     // relation. The **auto** path came through here
     // too and is admitted on the same terms.
-    if (col_pos >= access.value()->schema.columns.size()) {
+    // A dropped column keeps its position and has no name (BW-R6), so no
+    // door accepts it.
+    if (col_pos >= access.value()->schema.columns.size() ||
+        access.value()->schema.columns[col_pos].dropped()) {
         return Status::InvalidArgument("catalog: relation oid " + std::to_string(rel_oid) +
                                        " has no column at position " + std::to_string(col_pos));
     }
@@ -3114,7 +3333,8 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
     auto parent = InitTableAccess(parent_rel_oid);
     if (!parent.ok()) return parent.status();
 
-    if (child_column_no >= child.value()->schema.columns.size()) {
+    if (child_column_no >= child.value()->schema.columns.size() ||
+        child.value()->schema.columns[child_column_no].dropped()) {
         return Status::InvalidArgument("catalog: relation oid " + std::to_string(child_rel_oid) +
                                        " has no column at position " +
                                        std::to_string(child_column_no));
@@ -3307,14 +3527,14 @@ Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
     auto access = InitTableAccess(def.table_oid);
     if (!access.ok()) return access.status();
     const Schema& schema = access.value()->schema;
-    // A heap relation has no pk index, so resolving an entry's pk would be a
+    // A heap relation has no tuple key index, so resolving an entry's tuple key would be a
     // chain scan and an index over it would turn one full scan into N
     // partial ones. The same rule and the same argument as
     // foreign-keys.md F1's refusal of a heap parent.
     if (access.value()->clustered_type != ClusteredType::kBtree) {
         return Status::InvalidArgument(
             "catalog: relation oid " + std::to_string(def.table_oid) +
-            " is heap-clustered; a secondary index resolves an entry through the primary key, "
+            " is heap-clustered; a secondary index resolves an entry through the tuple key, "
             "which a heap relation has no index for (docs/spec/index.md IX3)");
     }
 
@@ -3324,16 +3544,20 @@ Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
                                             std::to_string(pos) + " is past the relation's " +
                                             std::to_string(schema.columns.size()) + " columns");
         }
+        if (schema.columns[pos].dropped()) {
+            return Status::InvalidArgument("catalog: " + std::string(role) + " column position " +
+                                            std::to_string(pos) + " is a dropped column");
+        }
         return Status::OK();
     };
     for (std::size_t i = 0; i < def.key_cols.size(); ++i) {
         if (Status s = check_column(def.key_cols[i], "key"); !s.ok()) return s;
-        // The pk is carried only by the Keystone word and the clustered tree
+        // The tuple key is carried only by the Keystone word and the clustered tree
         // already indexes it; a second copy would be maintained forever to
         // answer questions the descent answers faster.
         if (def.key_cols[i] == 0) {
             return Status::InvalidArgument(
-                "catalog: the primary key already has an index - the clustered tree is it");
+                "catalog: the tuple key already has an index - the clustered tree is it");
         }
         // D2 (`docs/workplan-null.md`): a nullable key column is refused in
         // v1, so the entry format, maintenance and backfill keep the
@@ -3511,7 +3735,7 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
                 if (ddl_undo_hook_) {
                     if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kDeleteMark, page_id, i,
                                                    {}, tuple.trx_id, tuple.undo_ptr,
-                                                   UndoPkOf(tuple.payload)});
+                                                   UndoTupleKeyOf(tuple.payload)});
                         !s.ok()) {
                         return s;
                     }

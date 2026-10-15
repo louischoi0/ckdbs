@@ -498,7 +498,7 @@ TEST_F(AnalysisTest, AnUndoWriteInRangeAdvancesTheHeadPastTheCheckpoints) {
         rec.target_page_id = 300;
         rec.target_slot = 1;
         rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
-        rec.pk = 4242;
+        rec.tuple_key = 4242;
         ASSERT_TRUE(txn::EncodeUndoRecordTail(tail, rec, {}).ok());
 
         std::vector<std::byte> buf(kUndoWriteFixedSize + tail.size(), std::byte{0});

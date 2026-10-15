@@ -160,7 +160,7 @@ std::unique_ptr<TwoCoreRig> OpenRigWithRelation() {
 }
 
 TEST(IssueUnderTheLeafRig, AnIdIssuedFirstIsPlacedBelowALaterOne) {
-    // Omitted pk against omitted pk (BB §1.2): core 0 is issued the first
+    // Omitted tuple key against omitted tuple key (BB §1.2): core 0 is issued the first
     // id and stops; core 1 is issued the next. Placement order must be issue
     // order, observed three ways: the bare walk (slot order), `ORDER BY id`
     // (which the compiler discards on the premise that a walk already emits
@@ -184,7 +184,7 @@ TEST(IssueUnderTheLeafRig, AnIdIssuedFirstIsPlacedBelowALaterOne) {
 
 TEST(IssueUnderTheLeafRig, ANamedKeyAndALaterIssuedIdLandInKeyOrder) {
     // BB §1.3's path, by placement (BD-R6): core 0 names 5 and stops,
-    // borrowed and encoded but not yet admitted; core 1 omits its pk, is
+    // borrowed and encoded but not yet admitted; core 1 omits its tuple key, is
     // issued 1 - the mark has not moved - and places it at once. Core 0 then
     // admits 5 and places it above. The walk is key order whatever order the
     // two placed in.
@@ -206,10 +206,10 @@ TEST(IssueUnderTheLeafRig, ANamedKeyAndALaterIssuedIdLandInKeyOrder) {
 TEST(IssueUnderTheLeafRig, AnIssuedIdANamedKeyPlacedFirstIsDrawnAgain) {
     // The one collision BD-R6 leaves (BD-S3's review), driven step by step:
     // core 0 names 1, the mark, and stops borrowed and not admitted; core 1
-    // omits its pk, is issued the same 1 - the mark has not moved - and stops
+    // omits its tuple key, is issued the same 1 - the mark has not moved - and stops
     // before its borrow; core 0 admits, places 1 and commits; core 1's borrow
     // of 1 is then granted and its placement finds 1 present - which is no
-    // reason an omitted pk is refused for. It burns 1 and is issued 2.
+    // reason an omitted tuple key is refused for. It burns 1 and is issued 2.
     std::unique_ptr<TwoCoreRig> rig = OpenRigWithRelation();
     ASSERT_NE(rig, nullptr);
     CommandDispatcher& d0 = rig->core(0).dispatcher();
@@ -252,7 +252,7 @@ TEST(IssueUnderTheLeafRig, AnIssuedIdANamedKeyPlacedFirstIsDrawnAgain) {
 
     EXPECT_TRUE(StartsWith(s0.out.response, "INSERTED")) << s0.out.response;
     ASSERT_TRUE(StartsWith(s1.out.response, "INSERTED"))
-        << "an omitted pk was refused for an id a named key placed: " << s1.out.response;
+        << "an omitted tuple key was refused for an id a named key placed: " << s1.out.response;
     EXPECT_NE(s1.out.response.find(" id=2 "), std::string::npos) << s1.out.response;
     EXPECT_EQ(issued.calls.load(), 2) << "the collision never happened";
     EXPECT_EQ(d0.Dispatch("SELECT id, v FROM t").response, "id,v\\n1,10\\n2,20");
@@ -341,7 +341,7 @@ TEST(IssueUnderTheLeafRig, OnAHeapANamedKeyAtTheMarkIsPlacedBelowALaterIssuedId)
 }
 
 TEST(IssueUnderTheLeafRig, OnAHeapASortedFillIsPlacedBelowALaterIssuedId) {
-    // The sorted fill (bulkinsert.md T3-2: every row omits its pk, a heap
+    // The sorted fill (bulkinsert.md T3-2: every row omits its tuple key, a heap
     // with no var-heap, index, Cabin or assertion) carves its block under the
     // hold of the tail it starts from (BB-R7); the seam runs once per fill,
     // with the block's first id, after the carve, the borrow and the encode.

@@ -74,7 +74,7 @@ mover.
 `Catalog::GenerateUserOid()` recovers its floor from the highest oid in
 `sys.objects`/`sys.columns` — the rows *are* the counter. Removing a
 dropped relation's rows outright could hand its oid to the next CREATE,
-and a reissued oid falsifies "(oid, pk) is forever-unique": stale
+and a reissued oid falsifies "(oid, tuple key) is forever-unique": stale
 advisory structures (trails, access stats) keyed by the dead oid would
 validate against the new relation, and with the dead relation's pages
 handed out again to another relation (DT1), a recorded location could

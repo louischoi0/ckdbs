@@ -25,6 +25,7 @@
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/stream.hpp"
+#include "view_text.hpp"
 
 // Recovery at mount (docs/workplan-wal-recovery.md RV1/RV2) - the seam that
 // turned `wal::RecoverCore` from a function only tests called into the thing
@@ -577,7 +578,7 @@ TEST_F(RecoveryAuditTest, ShowMetaCarriesTheRecoveryBlockOnlyWhenAReportIsInstal
     // Absent, not zeroed: a dispatcher with no report has no answer about
     // recovery, and printing zeroes would be an answer - the same rule
     // SHOW ASSERTIONS follows for an absent surface.
-    EXPECT_EQ(Run("SHOW META").find("recovery_records="), std::string::npos);
+    EXPECT_EQ(testing_view::MetaField(Run("SHOW META"), "recovery_records"), std::nullopt);
 
     MountRecovery report;
     report.records = 41;
@@ -589,15 +590,15 @@ TEST_F(RecoveryAuditTest, ShowMetaCarriesTheRecoveryBlockOnlyWhenAReportIsInstal
     dispatcher_->set_recovery(&report);
 
     const std::string meta = Run("SHOW META");
-    EXPECT_NE(meta.find("recovery_records=41"), std::string::npos) << meta;
-    EXPECT_NE(meta.find("recovery_rolled_back=2"), std::string::npos) << meta;
-    EXPECT_NE(meta.find("recovery_redo_us=5"), std::string::npos) << meta;
-    EXPECT_NE(meta.find("recovery_relations_checked=7"), std::string::npos) << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "recovery_records"), "41") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "recovery_rolled_back"), "2") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "recovery_redo_us"), "5") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "recovery_relations_checked"), "7") << meta;
     // RV3 closed 2026-08-19: catalog mutations are logged and DDL is a
     // real transaction, so the flags flip together - durable and recovered,
     // stated in the same breath they were disclaimed in for a week.
-    EXPECT_NE(meta.find("catalog_recovered=1"), std::string::npos) << meta;
-    EXPECT_NE(meta.find("ddl_durable=1"), std::string::npos) << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "catalog_recovered"), "1") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "ddl_durable"), "1") << meta;
 }
 
 TEST_F(RecoveryAuditTest, AnUntimedRecoveryPrintsNoDurations) {
@@ -606,8 +607,8 @@ TEST_F(RecoveryAuditTest, AnUntimedRecoveryPrintsNoDurations) {
     dispatcher_->set_recovery(&report);
 
     const std::string meta = Run("SHOW META");
-    EXPECT_NE(meta.find("recovery_records=5"), std::string::npos) << meta;
-    EXPECT_EQ(meta.find("recovery_redo_us="), std::string::npos)
+    EXPECT_EQ(testing_view::MetaField(meta, "recovery_records"), "5") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "recovery_redo_us"), std::nullopt)
         << "an unmeasured phase must not print a duration of zero: " << meta;
 }
 
@@ -624,8 +625,8 @@ TEST_F(RecoveryAuditTest, ARedoStartTheFloorRaisedIsPrintedWithWhatItRaised) {
 
     report.redo_start_floored_from = 4096;
     const std::string meta = Run("SHOW META");
-    EXPECT_NE(meta.find("recovery_redo_start=9000"), std::string::npos) << meta;
-    EXPECT_NE(meta.find("recovery_redo_start_recomputed=4096"), std::string::npos) << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "recovery_redo_start"), "9000") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "recovery_redo_start_recomputed"), "4096") << meta;
 }
 
 // BC-R6: the recycling fields are core 0's, beside `wal_syncs`.
@@ -645,9 +646,9 @@ TEST_F(RecoveryAuditTest, TheLogsRecyclingIsReportedWhereTheLogIsOwned) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, *faulty_, /*log=*/nullptr, &clock,
                         wal.value().get());
     const std::string meta = d.Dispatch("SHOW META").response;
-    EXPECT_NE(meta.find("wal_first_segment=2"), std::string::npos) << meta;
-    EXPECT_NE(meta.find("wal_segments_removed=2"), std::string::npos) << meta;
-    EXPECT_NE(meta.find("wal_remove_failures=0"), std::string::npos) << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_first_segment"), "2") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_segments_removed"), "2") << meta;
+    EXPECT_EQ(testing_view::MetaField(meta, "wal_remove_failures"), "0") << meta;
 }
 
 // `wal.md` §6-5: a stopped log is named in SHOW META, and only then.
@@ -664,7 +665,7 @@ TEST_F(RecoveryAuditTest, AFailStoppedLogIsNamedInShowMeta) {
     ASSERT_TRUE(wal.value()->Append({wal::RecordType::kHeapInsert, 1, 1}).ok());
     device.value()->FailNextWrite(Status::IoError("injected"));
     EXPECT_FALSE(wal.value()->Flush().ok());
-    EXPECT_NE(d.Dispatch("SHOW META").response.find(" wal_stopped=1"), std::string::npos);
+    EXPECT_EQ(testing_view::MetaField(d.Dispatch("SHOW META").response, "wal_stopped"), "1");
 }
 
 }  // namespace

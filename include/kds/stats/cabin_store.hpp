@@ -29,8 +29,8 @@ class OptimizerSignals;
 // ---- What "observed" means, precisely -----------------------------------
 //
 // **Observed ⇒ complete, superset form, per snapshot.** For an observed
-// value `v`, this store's entry set is a *superset* of the pks of every
-// visible tuple whose key column equals `v`. Missing a qualifying pk
+// value `v`, this store's entry set is a *superset* of the tuple keys of every
+// visible tuple whose key column equals `v`. Missing a qualifying tuple key
 // violates authority; a surplus entry never does, because the reader
 // subtracts it - MVCC visibility plus a re-check of the key equality, both
 // of which happen anyway on the authoritative path (spec §4).
@@ -43,7 +43,7 @@ class OptimizerSignals;
 //      unnecessary: an older snapshot may still be entitled to match the
 //      row through the undo chain.
 //   2. **A cap refuses to observe; it never truncates a set.** A truncated
-//      set marked observed is precisely the "missing a qualifying pk" the
+//      set marked observed is precisely the "missing a qualifying tuple key" the
 //      invariant forbids - a wrong answer, not a smaller one.
 //   3. **Un-observing is always legal**, and is therefore the correct
 //      response to *any* failure here. Dropping a value returns queries for
@@ -73,7 +73,7 @@ class OptimizerSignals;
 // set before the walk's own matches are merged in. What the announce
 // cannot cover - a write already made when it ran - is the banking gate's,
 // and §6a states the two halves as one rule. The Keystone issue-once
-// invariant (K1) is what makes a stored pk a name that can dangle, and the
+// invariant (K1) is what makes a stored tuple key a name that can dangle, and the
 // key re-check is what keeps a re-named rolled-back or purged key from
 // mis-attributing (`heap-and-tuple.md` §4.1c).
 //
@@ -100,7 +100,7 @@ namespace kds::stats {
 // Bit 0 of `CabinEntry::flags`: the location hint is worth trying.
 //
 // Cleared - never the entry dropped - when a hint has been proven wrong and
-// there was nothing better to heal it with. The **pk is the authority**
+// there was nothing better to heal it with. The **tuple key is the authority**
 // (C2), so an entry with no usable hint is still a complete, correct entry;
 // it just costs a descent.
 inline constexpr std::uint16_t kCabinHintValid = 0x1;
@@ -108,12 +108,12 @@ inline constexpr std::uint16_t kCabinHintValid = 0x1;
 // One entry of one value's set: the authoritative half and the advisory
 // half, in 24 bytes (spec §3, C2 + C6).
 //
-// **Authority lives in the pk, never in the location.** Under K1 a committed
+// **Authority lives in the tuple key, never in the location.** Under K1 a committed
 // tuple's Keystone id is rebound only after a `PURGE` freed it, so a stored
-// pk can dangle and names another committed row only then. That key, and a
-// pk an insert left before rolling back, can be named again (W12, BD-R4,
+// tuple key can dangle and names another committed row only then. That key, and a
+// tuple key an insert left before rolling back, can be named again (W12, BD-R4,
 // BH), and that is why every serve re-checks MVCC and the key column (§4):
-// authority is the pk plus that re-check, never the
+// authority is the tuple key plus that re-check, never the
 // location. That buys relocation invariance (the physical optimizer may move
 // pages without ever touching a Cabin), no incarnation protocol, and
 // "dangling ⇒ skip now, droppable on sight".
@@ -121,10 +121,10 @@ inline constexpr std::uint16_t kCabinHintValid = 0x1;
 // The location is waystone-class advice riding on cabin-class truth: it is
 // verified by the reader under the same rules and the *same code* as a
 // waystone entry (exec/tuple_verify.hpp), and any failure falls back to the
-// pk. Hints cost nothing to produce - the recording scan and the write hook
+// tuple key. Hints cost nothing to produce - the recording scan and the write hook
 // both hold the location in hand when they write the entry.
 struct CabinEntry {
-    std::uint64_t pk = 0;
+    std::uint64_t tuple_key = 0;
     PageId page_id = kInvalidPageId;
 
     // The page's relayout epoch at the time the entry was written or last
@@ -133,7 +133,7 @@ struct CabinEntry {
     // while the engine had no epoch, precisely so there would be nowhere
     // for the check *not* to happen the day it landed). Compared in
     // `exec/tuple_verify.hpp`, the one shared verifier; a mismatch is a
-    // hint miss, resolved through the pk like every other miss. Until a
+    // hint miss, resolved through the tuple key like every other miss. Until a
     // mover exists every page's epoch is 0 and the comparison's inputs are
     // constant.
     std::uint32_t page_epoch = 0;
@@ -467,7 +467,7 @@ public:
     // value that cannot include what the write hook appended while it
     // walked - and with one store for the instance those appends come from
     // cores the heal cannot stop. Dropping them leaves the set missing a
-    // live pk, which is the C1 break; keeping them is what the old
+    // live tuple key, which is the C1 break; keeping them is what the old
     // edit-the-vector-in-place heal got for free and what one store took
     // away.
     //

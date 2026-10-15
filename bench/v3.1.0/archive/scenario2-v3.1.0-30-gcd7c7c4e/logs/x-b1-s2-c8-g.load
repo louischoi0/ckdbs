@@ -1,0 +1,33 @@
+created 8 relations with suffix _xb1c8g:
+  organizations_xb1c8g
+  ships_xb1c8g
+  operations_xb1c8g
+  cargos_xb1c8g
+  fees_xb1c8g
+  recipes_xb1c8g
+  freights_xb1c8g
+  charges_xb1c8g
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/cdkbs/ckdbs/.claude/worktrees/bench-v3.1.0-scenarios/tools/scenario2_freight.py --suffix xb1c8g
+
+ckdbs benchmark - 68 columns, 4735 rows resident, 1 connection
+server 127.0.0.1:15605  table scenario2_xb1c8g
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0    1460.1   1268.8   1310.6   1360.9   2006.0   2006.0    2006.0     0
+load-organizations         300         0    1511.1   1105.0   1297.1   1349.4   2676.6   4284.3    6269.4     0
+load-ships                  30         0    1510.5   1228.8   1311.8   1355.6   2542.1   3857.6    3857.6     0
+load-operations            300         0    1521.1   1136.3   1288.2   1339.5   2055.8   5140.7   14215.2     0
+load-fees                   12         0    1388.6   1274.9   1294.4   1378.1   1552.0   1552.0    1552.0     0
+load-recipes                93         0    1348.4   1100.9   1212.5   1267.3   2040.0   3377.3    3377.3     0
+load-cargos               4000         0    1595.5   1050.1   1267.7   1336.1   2741.8   6256.3  116129.3     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.

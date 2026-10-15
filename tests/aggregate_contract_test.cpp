@@ -67,7 +67,7 @@ protected:
         ASSERT_TRUE(boot.ok());
         boot_.emplace(std::move(boot.value()));
 
-        // `id` is the pk of each by invariant 11 - the first column always
+        // `id` is the tuple key of each by invariant 11 - the first column always
         // is. `bar` carries a uint64 so §3.3's two uint64 rules have a
         // column to be about.
         Create("CREATE TABLE acct (id int64, name varchar, tier int32)");
@@ -225,13 +225,13 @@ TEST_F(AggregateContractTest, TheChainIsIdenticalWithAndWithoutTheFold) {
         // kScan
         {"SELECT qty FROM trade",
          "SELECT qty, COUNT(*) FROM trade GROUP BY qty"},
-        // kLookup - pk equality against a literal
+        // kLookup - tuple key equality against a literal
         {"SELECT qty FROM trade WHERE id = 7",
          "SELECT COUNT(*) FROM trade WHERE id = 7"},
-        // kRange - pk BETWEEN
+        // kRange - tuple key BETWEEN
         {"SELECT qty FROM trade WHERE id BETWEEN 3 AND 9",
          "SELECT SUM(qty) FROM trade WHERE id BETWEEN 3 AND 9"},
-        // kFilterScan - equality on an unindexed non-pk column
+        // kFilterScan - equality on an unindexed non-tuple-key column
         {"SELECT qty FROM trade WHERE sym = 'AAPL'",
          "SELECT MIN(qty), MAX(qty) FROM trade WHERE sym = 'AAPL'"},
         // A join, whose second step is a kProbe

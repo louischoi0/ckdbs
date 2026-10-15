@@ -86,8 +86,8 @@ TEST_F(IndexCompileTest, ARangeOnAnIndexedColumnCompilesToAnIndexRange) {
     EXPECT_EQ(KindOf("SELECT * FROM t WHERE a BETWEEN 2 AND 5"), "IndexRange");
 }
 
-TEST_F(IndexCompileTest, ThePrimaryKeyStillWinsOutright) {
-    // A relation with a pk equality is served better by the clustered tree
+TEST_F(IndexCompileTest, TheTupleKeyStillWinsOutright) {
+    // A relation with a tuple key equality is served better by the clustered tree
     // than any secondary index could serve it, so the index arm is not even
     // reached.
     Ok("CREATE TABLE t (id int64, a int64) BTREE");
@@ -236,7 +236,7 @@ TEST_F(IndexCompileTest, AnUpdatedKeyIsFoundUnderItsNewValueAndNotItsOld) {
 }
 
 TEST_F(IndexCompileTest, ARoundTrippedKeyEmitsItsRowOnce) {
-    // v -> v' -> v leaves two entries naming one pk under append-only
+    // v -> v' -> v leaves two entries naming one tuple key under append-only
     // maintenance, and resolving both would emit the row twice.
     Ok("CREATE TABLE t (id int64, a int64) BTREE");
     Ok("CREATE INDEX ix ON t (a)");
@@ -460,7 +460,7 @@ TEST_F(IndexCompileTest, AJoinKeyWithNoLiteralEntersTheIndexPerOuterRow) {
 
 TEST_F(IndexCompileTest, TheOnClauseOrientationDoesNotDecideTheCorrelatedProbe) {
     // `ON l.uid = u.id` and `ON u.id = l.uid` are the same join; both must
-    // give the inner step the probe, as the pk arm already guarantees for
+    // give the inner step the probe, as the tuple key arm already guarantees for
     // its kinds.
     Ok("CREATE TABLE u (id int64, code int64) BTREE");
     Ok("CREATE TABLE l (id int64, uid int64, v int64) BTREE");

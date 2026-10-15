@@ -11,6 +11,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "view_text.hpp"
 
 // `sys.access_stats` (docs/spec/heap-and-tuple.md §7): how often each access
 // *shape* ran, and when it last ran.
@@ -69,7 +70,7 @@ protected:
         return std::nullopt;
     }
 
-    static constexpr std::uint64_t kPk = 1ull << 0;
+    static constexpr std::uint64_t kTupleKey = 1ull << 0;
     static constexpr std::uint64_t kFlag = 1ull << 1;
     static constexpr std::uint64_t kName = 1ull << 2;
 
@@ -130,8 +131,8 @@ TEST_F(AccessStatsTest, EveryAccessKindIsRecordedTheSameWay) {
     Run("SELECT * FROM b WHERE flag = 1");               // FilterScan
     Run("SELECT * FROM b");                              // Scan
 
-    EXPECT_TRUE(Shape(exec::AccessKind::kLookup, "b", kPk).has_value());
-    EXPECT_TRUE(Shape(exec::AccessKind::kRange, "b", kPk).has_value());
+    EXPECT_TRUE(Shape(exec::AccessKind::kLookup, "b", kTupleKey).has_value());
+    EXPECT_TRUE(Shape(exec::AccessKind::kRange, "b", kTupleKey).has_value());
     EXPECT_TRUE(Shape(exec::AccessKind::kFilterScan, "b", kFlag).has_value());
     // A bare scan is steered by nothing, so its shape has no columns.
     EXPECT_TRUE(Shape(exec::AccessKind::kScan, "b", 0).has_value());
@@ -204,10 +205,14 @@ TEST_F(AccessStatsTest, ShowAccessNamesTheIndexKinds) {
     Run("SELECT * FROM b WHERE flag = 1");
     Run("SELECT * FROM b WHERE flag BETWEEN 1 AND 2");
 
-    const std::string shown = Run("SHOW ACCESS");
-    EXPECT_NE(shown.find("kind=IndexProbe"), std::string::npos) << shown;
-    EXPECT_NE(shown.find("kind=IndexRange"), std::string::npos) << shown;
-    EXPECT_EQ(shown.find("kind=?"), std::string::npos) << shown;
+    const std::string shown = Run("SELECT kind FROM sys.access_stats");
+    const std::vector<std::string> kinds = testing_view::ReadViewText(shown).Column("kind");
+    const auto has = [&kinds](const char* kind) {
+        return std::find(kinds.begin(), kinds.end(), kind) != kinds.end();
+    };
+    EXPECT_TRUE(has("IndexProbe")) << shown;
+    EXPECT_TRUE(has("IndexRange")) << shown;
+    EXPECT_FALSE(has("?")) << shown;
 }
 
 TEST_F(AccessStatsTest, AnIndexShapeCountsUsesLikeAnyOther) {
@@ -224,7 +229,7 @@ TEST_F(AccessStatsTest, AJoinRecordsBothOfItsSteps) {
     Run("SELECT a.id FROM b AS a JOIN h AS c ON a.id = c.id WHERE a.flag = 1");
     // The driving relation is filter-scanned; the inner one is probed.
     EXPECT_TRUE(Shape(exec::AccessKind::kFilterScan, "b", kFlag).has_value());
-    EXPECT_TRUE(Shape(exec::AccessKind::kProbe, "h", kPk).has_value());
+    EXPECT_TRUE(Shape(exec::AccessKind::kProbe, "h", kTupleKey).has_value());
 }
 
 // ---- Heat --------------------------------------------------------------

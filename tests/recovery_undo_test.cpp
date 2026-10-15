@@ -40,14 +40,14 @@ constexpr PageId kHeapPage = server::kFirstUserPageId;
 constexpr PageId kUndoPage = server::kFirstUserPageId + 1;
 constexpr std::uint64_t kLoser = 77;
 
-// A tuple payload whose Keystone word carries `pk`, padded out so the page
+// A tuple payload whose Keystone word carries `tuple_key`, padded out so the page
 // has something of a realistic width to move around. The word goes in by
 // hand because there is no store-side helper for it - `KeystoneIdOfPayload`
 // is the read half and the write half belongs to the row codec, which this
 // test deliberately does not drag in.
-std::vector<std::byte> Payload(std::uint64_t pk, unsigned char fill) {
+std::vector<std::byte> Payload(std::uint64_t tuple_key, unsigned char fill) {
     std::vector<std::byte> out(32, static_cast<std::byte>(fill));
-    auto word = Keystone::Encode(pk, /*flags=*/0, /*reserved=*/0);
+    auto word = Keystone::Encode(tuple_key, /*flags=*/0, /*reserved=*/0);
     EXPECT_TRUE(word.ok()) << word.status().message();
     const std::uint64_t w = word.ok() ? word.value() : 0;
     std::memcpy(out.data(), &w, sizeof(w));
@@ -90,7 +90,7 @@ protected:
 
     // The var-heap counterpart of `Record`: the target names a kVarHeap
     // page and slot rather than a row's, which is the whole difference.
-    std::uint64_t VarHeapRecord(PageId page, std::uint16_t slot, std::uint64_t pk,
+    std::uint64_t VarHeapRecord(PageId page, std::uint16_t slot, std::uint64_t tuple_key,
                                 std::uint64_t prev) {
         UndoRecordFields rec{};
         rec.prior_trx_id = 0;  // an append supersedes nothing
@@ -99,7 +99,7 @@ protected:
         rec.target_slot = slot;
         rec.type = static_cast<std::uint8_t>(UndoRecordType::kVarHeapAppend);
         rec.txn_prev_undo_ptr = prev;
-        rec.pk = pk;
+        rec.tuple_key = tuple_key;
         auto ptr = undo_.Append(kLoser, rec, {});
         EXPECT_TRUE(ptr.ok()) << ptr.status().message();
         return ptr.ok() ? ptr.value() : kNoUndoPtr;
@@ -108,7 +108,7 @@ protected:
     // `Record` with the target page named, for the H1 cases whose whole
     // point is that the page is not `kHeapPage` and may not exist at all.
     std::uint64_t RecordOnPage(PageId page, UndoRecordType type, std::uint16_t slot,
-                               std::uint64_t pk) {
+                               std::uint64_t tuple_key) {
         UndoRecordFields rec{};
         rec.prior_trx_id = 5;
         rec.prior_undo_ptr = kNoUndoPtr;
@@ -116,7 +116,7 @@ protected:
         rec.target_slot = slot;
         rec.type = static_cast<std::uint8_t>(type);
         rec.txn_prev_undo_ptr = kNoUndoPtr;
-        rec.pk = pk;
+        rec.tuple_key = tuple_key;
         auto ptr = undo_.Append(kLoser, rec, {});
         EXPECT_TRUE(ptr.ok()) << ptr.status().message();
         return ptr.ok() ? ptr.value() : kNoUndoPtr;
@@ -125,7 +125,7 @@ protected:
     // Appends one undo record for `kLoser`, linking it to `prev`, and
     // returns its pointer - the shape `TransactionManager::AppendUndo`
     // produces at runtime.
-    std::uint64_t Record(UndoRecordType type, std::uint16_t slot, std::uint64_t pk,
+    std::uint64_t Record(UndoRecordType type, std::uint16_t slot, std::uint64_t tuple_key,
                          std::uint64_t prev, std::span<const std::byte> image = {},
                          std::uint64_t prior_trx_id = 5) {
         UndoRecordFields rec{};
@@ -135,7 +135,7 @@ protected:
         rec.target_slot = slot;
         rec.type = static_cast<std::uint8_t>(type);
         rec.txn_prev_undo_ptr = prev;
-        rec.pk = pk;
+        rec.tuple_key = tuple_key;
         auto ptr = undo_.Append(kLoser, rec, image);
         EXPECT_TRUE(ptr.ok()) << ptr.status().message();
         return ptr.ok() ? ptr.value() : kNoUndoPtr;
@@ -293,7 +293,7 @@ TEST_F(RecoveryUndoTest, ARecordWhoseRowMovedIsCorruptionRatherThanAWrongWrite) 
     // live path refuses it without a locator, and recovery has none.
     heap::PageView view(Heap());
     ASSERT_TRUE(view.InsertTuple(Payload(999, 0x11), /*trx_id=*/5, kNoUndoPtr).ok());
-    const std::uint64_t head = Record(UndoRecordType::kOverwrite, 0, /*pk=*/42, kNoUndoPtr,
+    const std::uint64_t head = Record(UndoRecordType::kOverwrite, 0, /*tuple_key=*/42, kNoUndoPtr,
                                       Payload(42, 0xB0));
 
     RecoveryUndo undo(undo_);
@@ -329,7 +329,7 @@ TEST_F(RecoveryUndoTest, ALoserThatCrashedBetweenTheAppendAndTheTupleWriteLeaves
     const std::uint16_t kept = Spill(kVarHeapPage, "a committed value");
     const std::uint16_t doomed = Spill(kVarHeapPage, "the loser's value");
 
-    const std::uint64_t head = VarHeapRecord(kVarHeapPage, doomed, /*pk=*/1, kNoUndoPtr);
+    const std::uint64_t head = VarHeapRecord(kVarHeapPage, doomed, /*tuple_key=*/1, kNoUndoPtr);
 
     RecoveryUndo undo(undo_);
     ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok());
@@ -364,7 +364,7 @@ TEST_F(RecoveryUndoTest, ASpillWhoseAppendWasNeverRedoneIsWorkAlreadyDone) {
     ASSERT_TRUE(varheap::FormatPage(page.value().bytes(), /*owner_oid=*/9).ok());
     // The page exists but the append never landed: slot 0 is past its
     // (empty) directory.
-    const std::uint64_t head = VarHeapRecord(kVarHeapPage, /*slot=*/0, /*pk=*/1, kNoUndoPtr);
+    const std::uint64_t head = VarHeapRecord(kVarHeapPage, /*slot=*/0, /*tuple_key=*/1, kNoUndoPtr);
 
     RecoveryUndo undo(undo_);
     ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok())
@@ -378,7 +378,7 @@ TEST_F(RecoveryUndoTest, ASpillWhosePageWasNeverRedoneIsWorkAlreadyDone) {
     // is written with the append, so a prefix ending before both leaves the
     // record naming a page that does not exist either.
     const std::uint64_t head =
-        VarHeapRecord(server::kFirstUserPageId + 900, /*slot=*/0, /*pk=*/1, kNoUndoPtr);
+        VarHeapRecord(server::kFirstUserPageId + 900, /*slot=*/0, /*tuple_key=*/1, kNoUndoPtr);
 
     RecoveryUndo undo(undo_);
     ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok())
@@ -407,7 +407,7 @@ TEST_F(RecoveryUndoTest, AnInsertWhoseSlotWasNeverRedoneIsWorkAlreadyDone) {
     // never appended looks like. Before H1 the `slot < slot_count()` clause
     // sent exactly this through the identity check, and the mount refused
     // naming a row that had never been written.
-    const std::uint64_t head = Record(UndoRecordType::kInsert, /*slot=*/0, /*pk=*/42, kNoUndoPtr);
+    const std::uint64_t head = Record(UndoRecordType::kInsert, /*slot=*/0, /*tuple_key=*/42, kNoUndoPtr);
 
     RecoveryUndo undo(undo_);
     ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok())
@@ -422,7 +422,7 @@ TEST_F(RecoveryUndoTest, AnInsertWhosePageWasNeverRedoneIsWorkAlreadyDone) {
     // leaves the record naming a page that does not exist. The var-heap
     // twin is `ASpillWhosePageWasNeverRedoneIsWorkAlreadyDone`.
     const std::uint64_t head = RecordOnPage(server::kFirstUserPageId + 900,
-                                            UndoRecordType::kInsert, /*slot=*/0, /*pk=*/42);
+                                            UndoRecordType::kInsert, /*slot=*/0, /*tuple_key=*/42);
 
     RecoveryUndo undo(undo_);
     ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok())
@@ -438,7 +438,7 @@ TEST_F(RecoveryUndoTest, AnOverwriteWhosePageIsMissingStillFailsTheMount) {
     // row that existed before this transaction, so redo not having created
     // its page is damage rather than ordering.
     const std::uint64_t head = RecordOnPage(server::kFirstUserPageId + 901,
-                                            UndoRecordType::kOverwrite, /*slot=*/0, /*pk=*/42);
+                                            UndoRecordType::kOverwrite, /*slot=*/0, /*tuple_key=*/42);
 
     RecoveryUndo undo(undo_);
     EXPECT_FALSE(undo.RollBack(store_, Losing(head)).ok())
@@ -452,7 +452,7 @@ TEST_F(RecoveryUndoTest, ASpillNamingANonVarHeapPageStillFailsTheMount) {
     // it holds `nr_slots` at the same body offset - so it is the one tested.
     heap::PageView view(Heap());
     ASSERT_TRUE(view.InsertTuple(Payload(42, 0xA1), kLoser, kNoUndoPtr).ok());
-    const std::uint64_t head = VarHeapRecord(kHeapPage, /*slot=*/0, /*pk=*/42, kNoUndoPtr);
+    const std::uint64_t head = VarHeapRecord(kHeapPage, /*slot=*/0, /*tuple_key=*/42, kNoUndoPtr);
 
     RecoveryUndo undo(undo_);
     EXPECT_EQ(undo.RollBack(store_, Losing(head)).code(), StatusCode::kCorruption);
@@ -468,7 +468,7 @@ TEST_F(RecoveryUndoTest, ARunTwiceOverASpillIsAByteForByteNoOp) {
     ASSERT_TRUE(page.ok());
     ASSERT_TRUE(varheap::FormatPage(page.value().bytes(), /*owner_oid=*/9).ok());
     const std::uint16_t doomed = Spill(kVarHeapPage, "twice");
-    const std::uint64_t head = VarHeapRecord(kVarHeapPage, doomed, /*pk=*/1, kNoUndoPtr);
+    const std::uint64_t head = VarHeapRecord(kVarHeapPage, doomed, /*tuple_key=*/1, kNoUndoPtr);
 
     RecoveryUndo first(undo_);
     ASSERT_TRUE(first.RollBack(store_, Losing(head)).ok());
@@ -497,7 +497,7 @@ TEST_F(RecoveryUndoTest, AChainThatDoesNotTerminateIsCorruptionRatherThanAHang) 
     rec.target_page_id = kHeapPage;
     rec.target_slot = 0;
     rec.type = static_cast<std::uint8_t>(UndoRecordType::kDeleteMark);
-    rec.pk = 42;
+    rec.tuple_key = 42;
     // Appended first, then pointed at itself. Predicting the pointer instead
     // - `EncodeUndoPtr(kUndoPage, kUndoRecordsOffset)` - guesses which page
     // `UndoLog::Append` will allocate, and it does not use the fixture's
@@ -524,7 +524,7 @@ TEST_F(RecoveryUndoTest, AChainThatDoesNotTerminateIsCorruptionRatherThanAHang) 
 // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md` §1.2. Under
 // sorted placement a btree row's slot changes after its undo record named
 // it: a later insert below it shifts it right, a divide moves it to the
-// right sibling. Recovery undo re-finds the row by pk on a `kBtreeLeaf` -
+// right sibling. Recovery undo re-finds the row by tuple key on a `kBtreeLeaf` -
 // the recorded leaf, then rightward - and compensates only a version the
 // loser wrote. Red at BD-S0, where a dead or missing slot counts as done and
 // the row survives the crash.
@@ -565,8 +565,8 @@ TEST_F(RecoveryUndoLeafTest, ALoserWhoseFirstRowItsSecondShiftedRightIsRolledBac
     heap::PageView view(Heap());
     ASSERT_TRUE(view.InsertTuple(Payload(40, 0x40), kLoser, kNoUndoPtr).ok());
     ASSERT_TRUE(view.InsertTuple(Payload(50, 0x50), kLoser, kNoUndoPtr).ok());
-    const std::uint64_t first = Record(UndoRecordType::kInsert, /*slot=*/0, /*pk=*/50, kNoUndoPtr);
-    const std::uint64_t head = Record(UndoRecordType::kInsert, /*slot=*/0, /*pk=*/40, first);
+    const std::uint64_t first = Record(UndoRecordType::kInsert, /*slot=*/0, /*tuple_key=*/50, kNoUndoPtr);
+    const std::uint64_t head = Record(UndoRecordType::kInsert, /*slot=*/0, /*tuple_key=*/40, first);
 
     RecoveryUndo undo(undo_);
     ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok());
@@ -590,7 +590,7 @@ TEST_F(RecoveryUndoLeafTest, ALoserRowADivideMovedToTheRightSiblingIsRolledBack)
     ASSERT_TRUE(view.InsertTuple(Payload(10, 0x10), /*trx_id=*/5, kNoUndoPtr).ok());
     ASSERT_TRUE(view.InsertTuple(Payload(20, 0x20), /*trx_id=*/5, kNoUndoPtr).ok());
     view.set_next_page_id(kRightLeaf);
-    const std::uint64_t head = Record(UndoRecordType::kInsert, /*slot=*/2, /*pk=*/150, kNoUndoPtr);
+    const std::uint64_t head = Record(UndoRecordType::kInsert, /*slot=*/2, /*tuple_key=*/150, kNoUndoPtr);
 
     RecoveryUndo undo(undo_);
     ASSERT_TRUE(undo.RollBack(store_, Losing(head)).ok());

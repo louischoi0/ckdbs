@@ -66,7 +66,18 @@ namespace {
 // later record's LSN moves with it, and that checkpoint's CHECKPOINT_END names
 // its own BEGIN as the redo start. The script's records are otherwise the
 // same records; the run's own checkpoints keep their dirty tables.
-constexpr std::uint32_t kGoldenLogCrc = 0xdc289c97u;
+// **Re-pinned at BV-S1** (on `cn4-transition-refresh`,
+// `instructions/v3.2.0/workorder-bv-transition-constraints.md` BV-Q1 (a)):
+// bootstrap creates `sys.transitions`, so its `sys.objects`, `sys.tables`
+// and six `sys.columns` rows - logged through `InsertRow` - join the stream
+// after `sys.assertions'`, and every later record's LSN moves with them. No
+// record's format changes.
+// **Re-pinned at BW-S1** (on `worktree-bw-instant-add-drop-column`,
+// `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md` BW-R9): a
+// `sys.columns` row carries a flags byte and a `sys.tables` row a spare-slot
+// count, so every catalog row image the stream logs is one or two bytes
+// longer and every later LSN moves. No record kind's framing changes.
+constexpr std::uint32_t kGoldenLogCrc = 0xa98db205u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

@@ -1,4 +1,5 @@
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <thread>
@@ -164,6 +165,94 @@ TEST(FrameTableRaceTest, FlushingSurvivesConcurrentGrowthOfTheTable) {
     ASSERT_TRUE(store.value()->Flush().ok());
     EXPECT_TRUE(store.value()->DirtyPageIds().empty())
         << "a dirty page survived a quiescent flush, so a walk lost an entry";
+}
+
+// **The armed miss path, whose device read runs with the latch released.**
+// It used to reach the table through `Resolve`, whose `find` then ran
+// unlatched over a table another core's `InsertFrame` was growing. Faulters
+// re-read clean pages an evictor keeps dropping while inserters grow the
+// table; survival and every read answering its own page are the assertion.
+//
+// **A guard, not a reproduction**: unlike the stamping cell, the unlatched
+// code passed this 30 of 30 runs (and at three times the load), since the
+// window is one `find` against a rehash. What closes the race is the code,
+// which no longer reaches the table there except under holds of its own.
+TEST(FrameTableRaceTest, FaultingSurvivesConcurrentGrowthOfTheTable) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/512, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto store = DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{8192},
+                                       /*first_new_page_id=*/16);
+    ASSERT_TRUE(store.ok()) << store.status().message();
+    store.value()->SetLatchArmed(true, /*concurrent_pinners=*/8);
+
+    // Written to the device and clean, so the evictor can drop them and a
+    // read faults them back.
+    std::vector<PageId> seeded;
+    for (int i = 0; i < 256; ++i) {
+        auto made = store.value()->CreateNew();
+        ASSERT_TRUE(made.ok()) << made.status().message();
+        // The page's own id as its owner, so a read can tell it got its page.
+        FormatPage(made.value().second.bytes(), PageType::kHeap, /*flags=*/0,
+                   /*owner_oid=*/made.value().first);
+        seeded.push_back(made.value().first);
+        made.value().second.Release();
+    }
+    ASSERT_TRUE(store.value()->Flush().ok());
+
+    constexpr int kInserters = 2;
+    constexpr int kFaulters = 3;
+    constexpr int kRounds = 1000;
+    constexpr int kThreads = kInserters + kFaulters + 1;
+    std::atomic<int> ready{0};
+    std::atomic<int> faulters_done{0};
+    std::atomic<int> wrong{0};
+    std::atomic<std::size_t> evicted{0};
+    std::vector<std::thread> threads;
+    const auto start = [&](int core) {
+        SetCurrentCore(static_cast<std::uint32_t>(core));
+        ready.fetch_add(1, std::memory_order_acq_rel);
+        while (ready.load(std::memory_order_acquire) < kThreads) std::this_thread::yield();
+    };
+
+    for (int t = 0; t < kInserters; ++t) {
+        threads.emplace_back([&, t] {
+            start(t);
+            for (int i = 0; i < kRounds; ++i) {
+                auto made = store.value()->CreateNew();
+                if (!made.ok()) continue;
+                made.value().second.Release();
+            }
+        });
+    }
+    for (int t = 0; t < kFaulters; ++t) {
+        threads.emplace_back([&, t] {
+            start(kInserters + t);
+            for (int i = 0; i < kRounds; ++i) {
+                const PageId id = seeded[static_cast<std::size_t>(i * kFaulters + t) % seeded.size()];
+                auto read = store.value()->GetForRead(id);
+                if (!read.ok() || GetOwnerOid(read.value().bytes()) != id) {
+                    wrong.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            faulters_done.fetch_add(1, std::memory_order_acq_rel);
+        });
+    }
+    threads.emplace_back([&] {
+        start(kInserters + kFaulters);
+        // At least one sweep, however fast the faulters finish. Paced: a
+        // sweep that finds too few clean frames walks its whole step bound
+        // under the latch, and one re-taken at once starves every other
+        // thread of it.
+        do {
+            evicted.fetch_add(store.value()->EvictColdFrames(/*budget=*/16),
+                              std::memory_order_relaxed);
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        } while (faulters_done.load(std::memory_order_acquire) < kFaulters);
+    });
+    for (std::thread& th : threads) th.join();
+
+    EXPECT_EQ(wrong.load(), 0) << "a fault answered with an error or another page's bytes";
+    EXPECT_GT(evicted.load(), 0u) << "nothing was evicted, so no read faulted";
 }
 
 }  // namespace

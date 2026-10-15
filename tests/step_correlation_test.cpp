@@ -131,8 +131,8 @@ TEST_F(StepCorrelationTest, TheReferenceThatCorrelatesCarriesUpEqualsOne) {
 
 TEST_F(StepCorrelationTest, ACorrelatedProbeIsStillAProbe) {
     // The claim in spec §2 that makes correlation affordable: a correlated
-    // pk-equality subquery costs what a join step costs. The inner step
-    // binds its own pk against an outer column, so it descends rather
+    // tuple-key-equality subquery costs what a join step costs. The inner step
+    // binds its own tuple key against an outer column, so it descends rather
     // than scanning - and being a probe, it is trail-replayable.
     const StepChain chain = MustCompile(
         "SELECT * FROM trade WHERE EXISTS (SELECT * FROM acct WHERE acct.id = trade.acct_id)");

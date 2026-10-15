@@ -50,7 +50,7 @@ struct TouchedTuple {
     std::uint64_t rel_oid = 0;
 
     // Zero-extended Keystone id (invariant 7: the bits above kKeystoneIdBits are 0).
-    std::uint64_t pk = 0;
+    std::uint64_t tuple_key = 0;
 
     PageId page_id = kInvalidPageId;
 

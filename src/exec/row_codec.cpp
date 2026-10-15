@@ -396,27 +396,19 @@ Status CheckLayoutMatches(const catalog::Schema& schema, const catalog::RowLayou
     return Status::OK();
 }
 
-// The span of `payload` column `i` occupies: from its offset to the next
-// column's, or - for the last one - to where the null bitmap begins
-// (null.md §2.1: the bitmap is appended after the columns, so the
-// last column's cell must not run to the end of the row; a write there
-// would wipe every null bit. Zero bitmap bytes reduces to the old rule).
+// The span of `payload` column `i` occupies: exactly its column's width
+// (`RowLayout::cell_ends`). Never "to the next offset or the bitmap": the
+// bitmap follows the last column (null.md §2.1) and, with slots, the slot
+// region follows the last declared column (BW-R2); a char or tagged cell
+// sized by a longer span would claim those bytes as its own.
 std::span<const std::byte> CellOf(const catalog::RowLayout& layout,
                                    std::span<const std::byte> payload, std::size_t i) {
-    const std::size_t begin = layout.offsets[i];
-    const std::size_t end = (i + 1 < layout.offsets.size())
-                                ? layout.offsets[i + 1]
-                                : layout.row_size - layout.null_bitmap_bytes;
-    return payload.subspan(begin, end - begin);
+    return payload.subspan(layout.offsets[i], layout.cell_ends[i] - layout.offsets[i]);
 }
 
 std::span<std::byte> MutableCellOf(const catalog::RowLayout& layout, std::span<std::byte> payload,
                                     std::size_t i) {
-    const std::size_t begin = layout.offsets[i];
-    const std::size_t end = (i + 1 < layout.offsets.size())
-                                ? layout.offsets[i + 1]
-                                : layout.row_size - layout.null_bitmap_bytes;
-    return payload.subspan(begin, end - begin);
+    return payload.subspan(layout.offsets[i], layout.cell_ends[i] - layout.offsets[i]);
 }
 
 // The one relational switch, for every operand type CompareValues
@@ -935,7 +927,7 @@ Status StartRow(const catalog::Schema& schema, const catalog::RowLayout& layout,
     if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
     if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
     // The Keystone word leads every tuple (heap-and-tuple.md section 4).
-    // The pk column is therefore *not* encoded into the body: storing it
+    // The tuple key column is therefore *not* encoded into the body: storing it
     // twice is how the two copies come to disagree.
     auto word = Keystone::Encode(id, /*flags=*/0, /*reserved=*/0);
     if (!word.ok()) return word.status();
@@ -954,13 +946,20 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
     // cell that a short value does not fill (invariant 13).
     std::vector<std::byte> out(layout.row_size, std::byte{0});
     if (Status s = StartRow(schema, layout, id, out); !s.ok()) return s;
+    catalog::SetVacantSlotBits(out, layout);
     const std::size_t expected = schema.columns.size() - 1;
     if (values.size() != expected) {
         return Status::InvalidArgument("expected " + std::to_string(expected) +
-                                        " value(s) after the primary key, got " +
+                                        " value(s) after the tuple key, got " +
                                         std::to_string(values.size()));
     }
+    // BW-R6's gate, read once per call: an unaltered relation's loop asks a
+    // local, never the layout, per column.
+    const bool has_dropped = layout.has_dropped();
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
+        // A dropped column's cell stays zero with its bit clear (BW-R6): the
+        // caller's placeholder there is not a value.
+        if (has_dropped && schema.columns[i].dropped()) continue;
         if (Status s = EncodeColumn(schema, layout, i, values[i - 1], out, varheap); !s.ok()) {
             return s;
         }
@@ -1102,6 +1101,7 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
     // decoders already read row_size from, where null_bits is a separate
     // heap allocation.
     const bool has_nulls = layout.null_bitmap_bytes != 0;
+    const bool has_dropped = layout.has_dropped();  // BW-R6 gate, read once per call like has_nulls
 
     std::uint64_t remaining = columns;
     if (schema.columns.size() < 64) {
@@ -1115,7 +1115,8 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
             if (Status s = DecodeKeystoneInto(payload, out[0]); !s.ok()) return s;
             continue;
         }
-        if (has_nulls && catalog::NullBitIsSet(payload, layout, i)) {
+        if ((has_nulls && catalog::NullBitIsSet(payload, layout, i)) ||
+            (has_dropped && schema.columns[i].dropped())) {
             // The bitmap decides here exactly as in DecodeRowInto below.
             SetNullSlot(out[i]);
             continue;
@@ -1141,7 +1142,7 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     auto id = KeystoneIdOfPayload(payload);
     if (!id.ok()) return id.status();
 
-    // The pk is not in the body: it lives in the Keystone word, which is
+    // The tuple key is not in the body: it lives in the Keystone word, which is
     // why the loop below starts at column 1.
     out[0].type = parser::ValueType::kInt;
     out[0].int_val = static_cast<std::int64_t>(id.value());
@@ -1150,11 +1151,16 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     out[0].raw_int_text.clear();
     out[0].str_val.clear();
 
-    // The same zero-cost gate as DecodeColumnsInto.
+    // The same zero-cost gates as DecodeColumnsInto.
     const bool has_nulls = layout.null_bitmap_bytes != 0;
+    const bool has_dropped = layout.has_dropped();  // BW-R6 gate, read once per call like has_nulls
 
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
-        if (has_nulls && catalog::NullBitIsSet(payload, layout, i)) {
+        // A dropped column reads NULL and its cell is never interpreted
+        // (BW-R6): no statement can name it, and its bytes need not be a
+        // value its type would accept.
+        if ((has_nulls && catalog::NullBitIsSet(payload, layout, i)) ||
+            (has_dropped && schema.columns[i].dropped())) {
             // The bitmap decides (null.md §3); the cell is the defined
             // filler and is not read.
             SetNullSlot(out[i]);
@@ -1326,9 +1332,9 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
         };
         const auto a = exact(lhs);
         const auto b = exact(rhs);
-        // Digits outside [-2^63, 2^64 - 1] name no integer any column holds:
-        // the compiler refuses such a literal, and a catalog view, which
-        // compiles nothing, answers it as the non-match it is.
+        // Digits outside [-2^63, 2^64 - 1] name no integer any column holds,
+        // and every WHERE - a catalog view's included - refuses such a
+        // literal before a row is read; this is a guard, not an answer.
         if (!a.has_value() || !b.has_value()) return false;
         return ApplyCompare(*a, *b, op);
     }
@@ -1389,7 +1395,7 @@ std::optional<ScanKernelTerm> CompileScanKernelTerm(const catalog::Schema& schem
 
     if (column == 0) {
         // The Keystone id, compared as the int64 the decoder makes of it. A
-        // `uint64` pk compares through `ValueAsUint64` and is left to the
+        // `uint64` tuple key compares through `ValueAsUint64` and is left to the
         // residual; the id fits 48 bits, so taking it in later is a matter
         // of the literal's range alone.
         if (col.type_val == kTypeValUint64 || literal.type != parser::ValueType::kInt) return {};

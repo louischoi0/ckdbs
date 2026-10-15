@@ -141,12 +141,12 @@ never which rows they read.)
 **Identity is per logical tuple, not per version.** It is forced by facts
 confirmed elsewhere, not chosen freely:
 
-- The primary key cannot be updated — it is the tuple's identity, not a field of
+- The tuple key cannot be updated — it is the tuple's identity, not a field of
   it (`CLAUDE.md` invariant 11).
 - `PageView::OverwriteTuple` is in-place and keeps `(page_id, slot)`, so a
   tuple's physical address survives an update.
-- Waystone addresses entries directly by pk (`waystone-concpets.md` §4), and a
-  pk names a row, not a version.
+- Waystone addresses entries directly by tuple key (`waystone-concpets.md` §4), and a
+  tuple key names a row, not a version.
 - Old versions live in undo pages (§3), where they have no slot and therefore no
   address.
 
@@ -229,13 +229,13 @@ in-memory chain instead.
 | 25 | 1 | `flags` — 0 |
 | 26 | 2 | `reserved` — 0 |
 | 28 | 8 | `txn_prev_undo_ptr` — the writing transaction's previous undo record; `kNoUndoPtr` for its first |
-| 36 | 8 | `pk` — the Keystone id of the row this record is about, zero-extended (invariant 7) |
+| 36 | 8 | `tuple_key` — the Keystone id of the row this record is about, zero-extended (invariant 7) |
 | 44 | — | before-image bytes begin |
 
 `kUndoRecordHeaderSize = 44`. Records are **unpadded**: every access is a
 field-wise `memcpy` (`rules.md` §2), so alignment buys nothing and 8-byte padding
 would waste up to 7 bytes on a page holding ~290 records. `lower` advances by
-exactly `kUndoRecordHeaderSize + image_len`. `txn_prev_undo_ptr` and `pk` sit
+exactly `kUndoRecordHeaderSize + image_len`. `txn_prev_undo_ptr` and `tuple_key` sit
 at unaligned offsets: the codec memcpy's each field through its offset
 constant and never lays the struct over page bytes.
 
@@ -248,22 +248,22 @@ answer to "what did this transaction write": the WAL inside the replay range
 does not cover a write whose page was written back before a checkpoint, so
 recovery's undo phase walks this chain rather than the log.
 
-**`pk` is the identity check.** Compensation proves it is writing the row it
+**`tuple_key` is the identity check.** Compensation proves it is writing the row it
 means to before it writes: a btree leaf division moves tuples and renumbers
 slots, and a placement mid-leaf shifts every slot after it (BD-R2), so
 `(target_page_id, target_slot)` is where the row *was*
 (`TransactionManager::Compensate`, `txn::RecoveryUndo`). The live path reads
-the pk from its in-memory trail and, on a mismatch, re-finds the row by pk
+the tuple key from its in-memory trail and, on a mismatch, re-finds the row by tuple key
 with its leaf held. **Recovery undo re-finds a btree row by its key**
 (BD-R3 E1, BD-Q8 (a), `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`):
 on a `kBtreeLeaf` page it searches the recorded leaf, then rightward along
-the chain while a leaf's `min_key` is at or below the pk - keys only move
+the chain while a leaf's `min_key` is at or below the tuple key - keys only move
 right and leaves never merge - and compensates only a version the loser
 wrote, judged by the header's `trx_id`; a version naming another writer was
 already compensated and counts as done, as does an insert whose key is in
 no leaf on that path. Heap and catalog pages, which never shift, keep the
-exact slot-and-pk check. Recovery has only this record, and `kDeleteMark`
-and `kInsert` carry no image to recover a pk from, so every type carries
+exact slot-and-tuple key check. Recovery has only this record, and `kDeleteMark`
+and `kInsert` carry no image to recover a tuple key from, so every type carries
 it.
 
 ```
@@ -278,11 +278,11 @@ UndoRecordType: kInvalid = 0
 
 **`kVarHeapAppend`'s target is a value, not a row**, and that is the one
 thing separating it from its three siblings: `target_page_id` names a
-`kVarHeap` page, so the pk identity check every other compensation makes
+`kVarHeap` page, so the tuple key identity check every other compensation makes
 neither applies nor could run — a `heap::PageView` over var-heap bytes reads
 a slot directory that is not there. Both compensation paths,
 `TransactionManager::Compensate` and `txn::RecoveryUndo`, therefore handle it
-**before** the page is opened as a heap page. `pk` is still carried, for the
+**before** the page is opened as a heap page. `tuple_key` is still carried, for the
 diagnostic, and is never checked. The record exists because an undo record is
 a link in the writing transaction's chain (§3.6): a write that produced none
 would orphan everything the transaction did before it. A crash between a
@@ -335,7 +335,7 @@ that wrote the record" — is correct.
 
 **Everything else about the record is inside the tail, and that is the point.**
 Bytes `[+16, +44)` are `target_page_id`, `target_slot`, `image_len`, `type`,
-`flags`, `reserved`, `txn_prev_undo_ptr` and `pk` — the fields that say
+`flags`, `reserved`, `txn_prev_undo_ptr` and `tuple_key` — the fields that say
 **which tuple** a before-image belongs to and which transaction wrote it.
 Without them a chain rebuilt by redo names no row, and the undo phase would
 restore the wrong one rather than fail. The writer and redo share the one
@@ -359,7 +359,7 @@ only writer that ever leaves `undo_ptr == 0` is an insert, and every
 pre-existing row carries `trx_id == 1`, which is always visible (§4.2). Reading
 an insert therefore needs no undo record.
 
-**One is written anyway** — `kInsert`, image empty, carrying the row's `pk` —
+**One is written anyway** — `kInsert`, image empty, carrying the row's `tuple_key` —
 because an undo record is a link in the writing transaction's chain.
 `txn_prev_undo_ptr` (§3.3) is the only durable answer to "what did this
 transaction write", and an insert that wrote no record would break that chain
@@ -753,7 +753,7 @@ all-partition probe AO-R3's counter gates.
 
 Three things bound it, and none of them is a re-read loop. An **explicit
 transaction** keeps its read view across the re-run, so `REPEATABLE READ`
-reaches the verdict above exactly as before. A predicate that names **no pk
+reaches the verdict above exactly as before. A predicate that names **no tuple key
 window** — `WHERE name = 'x'` — declares nothing, takes the per-row path,
 and can still park mid-walk with rows already written, where the table
 above is what decides. And the wait is the ordinary one: it ends at the
@@ -976,8 +976,8 @@ recovery-driven rollback reuses this code path:
 | delete-mark | `ClearDeleteMark(slot, prior_trx_id, prior_undo_ptr)` | `HEAP_DELETE_UNMARK` |
 | var-heap append | `varheap::PageRelease(slot)` — the value dies with the version that wrote it | `VARHEAP_RELEASE` |
 
-On a btree each slot is the trail's, checked against the pk and re-found by
-pk under the leaf's hold on a mismatch (§3.3's identity check). No rollback
+On a btree each slot is the trail's, checked against the tuple key and re-found by
+tuple key under the leaf's hold on a mismatch (§3.3's identity check). No rollback
 clears a Waystone entry: a trail entry naming the retired slot is a miss at
 its next replay, which verifies the Keystone id (`heap-and-tuple.md` §8 invariant 9). A rollback
 leaves the insert's secondary index entries, which a reader verifies
@@ -1118,6 +1118,6 @@ sockets (`rules.md` §4).
    `STOP`/`PING`; two sessions over one dispatcher do not interfere; closing a
    connection with an open transaction rolls it back.
 9. **Waystone equivalence:** the probe path and the scan path return identical
-   bytes for the same pk under the same read view, across an unmodified row, an
+   bytes for the same tuple key under the same read view, across an unmodified row, an
    updated row read with an old view, a delete-marked row read with an old view,
    an entry cleared by `OnDelete`, and an entry corrupted to a wrong location.

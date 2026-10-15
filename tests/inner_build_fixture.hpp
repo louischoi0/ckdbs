@@ -28,7 +28,7 @@
 //
 // The relations, and the walk-order facts the assertions hand-compute
 // from: au(id, name) = alice/bob/carol (ids 1..3). tr(id, au_id, qty) =
-// (1,10) (2,20) (1,30) (9,5) (2,50) - au_id is non-pk, unindexed,
+// (1,10) (2,20) (1,30) (9,5) (2,50) - au_id is non-tuple-key, unindexed,
 // uncabined, so a join on it takes the build annotation; (9,5) matches
 // no au row ever. ln(id, tr_qty, amt) = (10,100) (10,101) (30,300)
 // (50,500) - joined on tr.qty for the two-annotated-step shapes.

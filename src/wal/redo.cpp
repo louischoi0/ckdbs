@@ -213,7 +213,7 @@ Status ApplyIndexInsert(std::span<std::byte, kPageSize> page, const DecodedRecor
     index::IndexLeafView leaf(page);
 
     // An index entry's position is a function of its bytes (entries sort by
-    // (key, pk), IX4b), so re-inserting reproduces the same slot rather
+    // (key, tuple key), IX4b), so re-inserting reproduces the same slot rather
     // than appending a duplicate. The re-application check is therefore a
     // comparison against what is already there.
     const std::uint16_t slot = decoded.value().fields.slot;
@@ -380,20 +380,19 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             page_bytes = got.value().bytes();
         } else if (got.status().code() == StatusCode::kCorruption) {
             // Checksum failure. Held, not failed: an image later in the
-            // stream is exactly what heals this (page.md §10).
+            // stream is exactly what heals this (page.md §10). The id is
+            // allocated and its bytes are not zeros, which `CreateAt`
+            // refuses as in use; `CreateOverTorn` takes it.
             if (!is_image) {
                 poisoned.insert(page_id);
                 return Status::OK();
             }
-            auto created = store.CreateAt(page_id);
+            auto created = store.CreateOverTorn(page_id);
             if (!created.ok()) {
                 return created.status();
             }
             created_ref = std::move(created.value());
             page_bytes = created_ref.bytes();
-            if (poisoned.erase(page_id) != 0) {
-                ++stats.pages_healed;
-            }
         } else if (record.type() == RecordType::kPageInit || is_image) {
             auto created = store.CreateAt(page_id);
             if (!created.ok()) {

@@ -99,6 +99,7 @@ import time
 
 from bench_common import report, run_phase, write_json
 from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
+import sys_meta
 
 # Four body columns after the Keystone pk = 5 columns total. Mixed widths
 # on purpose: an int-only row would not exercise row_codec's varchar path,
@@ -228,19 +229,17 @@ def child_insert_commands(child, rows, parent_rows, parent_smalls, rng):
                f"{match}, {rng.randint(0, 1_000_000)})")
 
 
-CLUSTERED_LINE = re.compile(r"clustered_type=(\w+)")
-
-
 def verify_clustered(conn, table, clustered):
     """Reads the storage organization back off the server rather than
     trusting the CREATE. --table can point at a table an earlier run
     created with the other clause, and an unnoticed mismatch turns a
     heap-vs-btree comparison into two runs of the same thing."""
-    reply = format_reply(conn.send_command(f"DESCRIBE {table}"))
-    m = CLUSTERED_LINE.search(reply)
-    if m is None:
+    reply = conn.send_command(
+        f"SELECT name, clustered_type FROM sys.tables WHERE name = '{table}'")
+    rows = [] if reply.startswith("ERR") else sys_meta.view_rows(reply)
+    if len(rows) != 1:
         fail("could not read the table's clustered_type back", reply)
-    actual = m.group(1).lower()
+    actual = rows[0]["clustered_type"].lower()
     if actual != clustered:
         fail(f"table {table} is {actual}-clustered, but --clustered {clustered} was asked for "
              f"(a pre-existing --table keeps the organization it was created with)")

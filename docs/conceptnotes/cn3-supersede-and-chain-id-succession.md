@@ -29,11 +29,11 @@ tuple can point at a successor. For a relation `user`:
 RETIRE user ON 1;
 INSERT INTO user VALUES (7, 'louis', active) CHAIN ON 1;
 
-SELECT * FROM user WHERE id = 1;   -- tuple 7's columns, pk shown as 1
-SELECT * FROM user WHERE id = 7;   -- tuple 7's columns, pk shown as 7
+SELECT * FROM user WHERE id = 1;   -- tuple 7's columns, tuple key shown as 1
+SELECT * FROM user WHERE id = 7;   -- tuple 7's columns, tuple key shown as 7
 ```
 
-Both queries return the same row body. The pk column echoes what was
+Both queries return the same row body. The tuple key column echoes what was
 asked for; every other column is tuple 7's. The use cases named are a
 member who leaves and re-registers, and a production row that was
 corrupted and must be re-expressed under a new id while the old id keeps
@@ -41,7 +41,7 @@ resolving.
 
 `[design]` In one sentence: **retirement is closure rather than
 deletion, a chain is a forward pointer from a closed id to a live one,
-and pk lookup resolves through the pointer while echoing the id it was
+and tuple key lookup resolves through the pointer while echoing the id it was
 given.** The grammar in this note uses `SUPERSEDE` for the closing verb
 (§5, D1); `RETIRE` is kept for the concept in prose only.
 
@@ -72,7 +72,7 @@ engine-held facts over it.**
 `[design]`
 
 - **Closed tuple** (the operator's *retired*). A tuple that has been
-  superseded. It is absent from every scan and every pk lookup that does
+  superseded. It is absent from every scan and every tuple key lookup that does
   not say `DEEPLY` (S1). Its body is gone (C2); what it holds is its id
   and, if chained, its successor's id.
 - **Live tuple.** Any tuple that is not closed and not delete-marked.
@@ -83,7 +83,7 @@ engine-held facts over it.**
 - **Alias.** An id that resolves to a tuple other than its own — a
   closed id with a chain. `where id = 1` under a chain 1→7 is an alias
   lookup.
-- **Resolution.** The step, at pk lookup, that follows a chain and
+- **Resolution.** The step, at tuple key lookup, that follows a chain and
   returns the successor's body under the asked-for id. Resolution is
   **read-only** (S4) and is switched off by `DEEPLY` (S5).
 - **"Retire" the word.** `heap_page.hpp` uses *retire* for physical slot
@@ -93,17 +93,17 @@ engine-held facts over it.**
   grammar or code (D1); it is spelled `SUPERSEDE`, and this note says
   *closed* where it means the logical state.
 
-## 3. The model — a resolution layer in front of pk lookup
+## 3. The model — a resolution layer in front of tuple key lookup
 
 `[design]` Everything below the resolution layer is unchanged: tuples,
 the Keystone word, MVCC, undo. The layer does three things and nothing
 else:
 
-1. **Hides closed tuples.** A scan skips them; a pk lookup that lands on
-   one with no chain answers *absent*; a pk lookup that lands on one
+1. **Hides closed tuples.** A scan skips them; a tuple key lookup that lands on
+   one with no chain answers *absent*; a tuple key lookup that lands on one
    with a chain follows it.
 2. **Echoes the asked-for id.** The resolved body is returned with the
-   lookup key in the pk column. Under `where id = 1` the row reads
+   lookup key in the tuple key column. Under `where id = 1` the row reads
    `(1, 'louis', active)`; under `where id = 7` it reads
    `(7, 'louis', active)`. The row body is the same physical tuple.
 3. **Deduplicates by physical tuple.** `where id IN (1, 7)` returns one
@@ -122,7 +122,7 @@ non-retryable error, never applied to 7.
 
 `[operator]` unless marked. The letter codes are §11's.
 
-- **S1 — Closed tuples are absent** from scans and from plain pk lookup.
+- **S1 — Closed tuples are absent** from scans and from plain tuple key lookup.
   A closed id with no chain answers *no row*. Reading a closed tuple as
   itself is `DEEPLY`'s job and nothing else's.
 - **S2 — Depth one.** One closed tuple, one successor, and the successor
@@ -146,7 +146,7 @@ non-retryable error, never applied to 7.
 - **S7 — A closed tuple's values are outside uniqueness.** `[design]`
   **Forward-looking at `fb1367b`**: the engine has no unique index
   (`docs/spec/index.md:375`, "There is no unique index (IX11)",
-  `[source-read]`), so today the only unique key is the pk, which S7
+  `[source-read]`), so today the only unique key is the tuple key, which S7
   cannot affect. The decision is recorded so that a unique index, when
   built, does not have to rediscover it.
 - **S8 — Re-pointing is allowed.** `INSERT ... CHAIN ON 1` when 1
@@ -162,9 +162,9 @@ non-retryable error, never applied to 7.
 `[operator]` D2, D3; `[design]` the spellings.
 
 ```
-SUPERSEDE <rel> ON <pk>;                     -- close pk; no successor
-INSERT INTO <rel> VALUES (...) CHAIN ON <pk>; -- new row succeeds pk
-INSERT INTO <rel> (cols) VALUES (...) CHAIN ON <pk>;  -- id omitted, D3
+SUPERSEDE <rel> ON <tuple_key>;                     -- close tuple key; no successor
+INSERT INTO <rel> VALUES (...) CHAIN ON <tuple_key>; -- new row succeeds tuple key
+INSERT INTO <rel> (cols) VALUES (...) CHAIN ON <tuple_key>;  -- id omitted, D3
 SELECT DEEPLY ... FROM <rel> ...;            -- resolution off, closed rows in
 ```
 
@@ -175,7 +175,7 @@ wants atomicity wraps them.
 
 `[design]` Errors, two new codes, both `retryable=0`, names provisional:
 `ERR ALIAS_READONLY` for S4; `ERR CHAIN_REFUSED` for S3/S9, with the
-reason in the message. Superseding a pk that does not exist, or is
+reason in the message. Superseding a tuple key that does not exist, or is
 already closed, is `ERR CHAIN_REFUSED` too.
 
 `[design]` Observability is `DEEPLY` (D5): a closed tuple's row under
@@ -234,8 +234,8 @@ the successor id is exposed is §10-2 — a hidden column visible only under
   bounds that to one extra key; `[design]` how the Cabin learns the
   chain is a §10 item.
 - **Waystone and the trail** (`docs/spec/parser-v2.md` I12, `docs/spec/waystone-concpets.md:35`):
-  a pk lookup may be served from the trail because completeness follows
-  from pk uniqueness. That remains true — the trail leads to tuple 1's
+  a tuple key lookup may be served from the trail because completeness follows
+  from tuple key uniqueness. That remains true — the trail leads to tuple 1's
   physical location, and resolution runs after the tuple is in hand.
   Resolution is therefore a step *after* the lookup, never a change to
   what the lookup finds.
@@ -257,7 +257,7 @@ What an engine-held chain does that the application pattern cannot:
 
 1. **Resolution cannot be forgotten.** The application pattern's
    recurring defect is one query path that skips the alias step. When
-   resolution is the pk lookup itself, that class of defect does not
+   resolution is the tuple key lookup itself, that class of defect does not
    exist.
 2. **Foreign keys survive succession** (S6). Millions of child rows
    referencing 1 need no rewrite when 7 succeeds it; under the
@@ -275,7 +275,7 @@ What weighs against it:
   eyes — "the engine showed me a different row" — and quiet-wrong is
   this project's primary named threat.
 - **Foreign tools.** ORMs, reporting and BI tools do not know a row
-  with pk 1 is physically tuple 7. `JOIN` on an alias, `GROUP BY id`,
+  with tuple key 1 is physically tuple 7. `JOIN` on an alias, `GROUP BY id`,
   `COUNT(DISTINCT id)` each need a stated answer, and having one does
   not stop a tool being surprised.
 - **Regulatory friction.** In the re-registration use case, that a
@@ -307,7 +307,7 @@ mandate.
 - No amendment to CN-2. The item §7 says CN-2 owes is recorded here for
   the operator to carry across.
 - No work order, no ordering beyond "after CN-2" (A2).
-- No measurement. Resolution's cost on a pk lookup is one flag test on
+- No measurement. Resolution's cost on a tuple key lookup is one flag test on
   the tuple already in hand plus, for an alias, one more lookup;
   `[design]`, not `[measured]`.
 
@@ -363,5 +363,5 @@ differed from it.
 | D3 | `CHAIN ON` with an omitted id | allowed |
 | D4 | error for alias writes | refused, non-retryable |
 | D5 | observability: `SHOW` vs a `SELECT` option | **a `SELECT` option (`DEEPLY`)** (CLA had recommended `SHOW`); DEEPLY = closed rows included, no resolution — confirmed |
-| — | pk echo under plain `where id = 1` | tuple 7's body, pk shown as 1 — confirmed |
+| — | tuple key echo under plain `where id = 1` | tuple 7's body, tuple key shown as 1 — confirmed |
 | — | re-pointing leaves the prior successor live and unchained | accepted by default (no objection) |

@@ -85,7 +85,7 @@ struct SysTableRow {
     Name name;
     PageId desc_page_id;
     ClusteredType clustered_type;
-    // Next Keystone id this relation will issue. The relation's pk is
+    // Next Keystone id this relation will issue. The relation's tuple key is
     // system-generated and autoincrement (heap-and-tuple.md section 4,
     // CLAUDE.md invariant 10), and the sequence has to be *persistent*
     // rather than derived: deriving it as max(id)+1 would reissue an id
@@ -129,6 +129,15 @@ struct SysTableRow {
     // on-disk position.
     PageId anchor_page_id;
 
+    // The relation's reserved 16-byte column slots (BW-R2 of
+    // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`):
+    // `CREATE TABLE ... SPARE n` fixes `n`, and it never changes, so the
+    // row size never does (invariant 13). `ALTER TABLE ADD COLUMN` places a
+    // column in the lowest slot no column holds. 0 for a relation that
+    // declared none, which lays out byte-identical to a relation from
+    // before slots existed. Appended after the anchor (superblock 25).
+    std::uint16_t spare_slots = 0;
+
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kNamespaceOidOffset = 8;
     static constexpr std::size_t kNameOffset = 16;
@@ -141,7 +150,8 @@ struct SysTableRow {
     static constexpr std::size_t kReservedOffset = kVarHeapPageIdOffset + sizeof(PageId);
     static constexpr std::size_t kRetiredKeyOrderOffset = kReservedOffset + sizeof(std::uint32_t);
     static constexpr std::size_t kAnchorPageIdOffset = kRetiredKeyOrderOffset + sizeof(std::uint8_t);
-    static constexpr std::size_t kOnDiskSize = kAnchorPageIdOffset + sizeof(PageId);
+    static constexpr std::size_t kSpareSlotsOffset = kAnchorPageIdOffset + sizeof(PageId);
+    static constexpr std::size_t kOnDiskSize = kSpareSlotsOffset + sizeof(std::uint16_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);
@@ -158,7 +168,8 @@ static_assert(SysTableRow::kVarHeapPageIdOffset == 93);
 static_assert(SysTableRow::kReservedOffset == 97, "the retired owner_core word; its bytes stay");
 static_assert(SysTableRow::kRetiredKeyOrderOffset == 101, "the retired key-order byte; it stays");
 static_assert(SysTableRow::kAnchorPageIdOffset == 102);
-static_assert(SysTableRow::kOnDiskSize == 106);
+static_assert(SysTableRow::kSpareSlotsOffset == 106);
+static_assert(SysTableRow::kOnDiskSize == 108);
 
 static_assert(offsetof(SysTableRow, oid) == SysTableRow::kOidOffset);
 static_assert(offsetof(SysTableRow, namespace_oid) == SysTableRow::kNamespaceOidOffset);
@@ -221,6 +232,23 @@ struct SysColumnRow {
     // not on the `sys.cabins` row.
     std::uint8_t cabin_policy;
 
+    // kColumnDropped / kColumnInSlot below (BW-R6, BW-R9 of
+    // `workorder-bw-instant-add-drop-column.md`). Explicit masks, never a
+    // bitfield (invariant 6). 0 for every column `CREATE TABLE` declared and
+    // nothing dropped.
+    std::uint8_t flags = 0;
+
+    // A dropped column: its row stays at its `pos`, so every stored position
+    // stays valid, and its bytes stay in every tuple. Storage walks it; no
+    // name, `SELECT *`, `DESCRIBE` or positional `VALUES` reaches it.
+    bool dropped() const noexcept { return (flags & kColumnDropped) != 0; }
+    // A column `ALTER TABLE ADD COLUMN` placed in one of the relation's
+    // 16-byte slots, rather than one `CREATE TABLE` packed.
+    bool in_slot() const noexcept { return (flags & kColumnInSlot) != 0; }
+
+    static constexpr std::uint8_t kColumnDropped = 0x01;
+    static constexpr std::uint8_t kColumnInSlot = 0x02;
+
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kRelIdOffset = 8;
     static constexpr std::size_t kPosOffset = 16;
@@ -229,7 +257,8 @@ struct SysColumnRow {
     static constexpr std::size_t kLenOffset = kTypeValOffset + sizeof(std::uint32_t);
     static constexpr std::size_t kNotNullOffset = kLenOffset + sizeof(std::uint32_t);
     static constexpr std::size_t kCabinPolicyOffset = kNotNullOffset + sizeof(std::uint8_t);
-    static constexpr std::size_t kOnDiskSize = kCabinPolicyOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kFlagsOffset = kCabinPolicyOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kOnDiskSize = kFlagsOffset + sizeof(std::uint8_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysColumnRow> Decode(std::span<const std::byte> bytes);
@@ -243,6 +272,8 @@ static_assert(offsetof(SysColumnRow, type_val) == SysColumnRow::kTypeValOffset);
 static_assert(offsetof(SysColumnRow, len) == SysColumnRow::kLenOffset);
 static_assert(offsetof(SysColumnRow, notnull) == SysColumnRow::kNotNullOffset);
 static_assert(offsetof(SysColumnRow, cabin_policy) == SysColumnRow::kCabinPolicyOffset);
+static_assert(offsetof(SysColumnRow, flags) == SysColumnRow::kFlagsOffset);
+static_assert(SysColumnRow::kOnDiskSize == 95, "a change here is a format event (superblock)");
 
 // ---- decimal(p, s) packed into `len` (docs/spec/types.md TY9) ----------
 //
@@ -666,7 +697,7 @@ struct SysAccessStatRow {
     Oid rel_id;
 
     // Bit per `col_pos` the access was keyed or filtered on: bit 0 (the
-    // pk) for a lookup, probe or range; the filtered columns for a filter
+    // tuple key) for a lookup, probe or range; the filtered columns for a filter
     // scan; 0 for a bare scan.
     //
     // A relation wider than 64 columns folds its high columns into no bit,
@@ -730,7 +761,7 @@ inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 
 // ---- sys.cabins -------------------------------------------------------
 //
-// One row per Cabin: a per-`(relation, non-pk column)` store that is
+// One row per Cabin: a per-`(relation, non-tuple-key column)` store that is
 // **authoritative for the values queries have observed** and for nothing
 // else (`docs/spec/cabin.md` §10, C1).
 //
@@ -763,7 +794,7 @@ struct SysCabinRow {
     // Live values, best-effort. See the note above.
     std::uint64_t observed_ct;
 
-    // The key column's schema position. **Never 0**: the pk's Cabin is the
+    // The key column's schema position. **Never 0**: the tuple key's Cabin is the
     // clustered tree itself (§2), so a 0 here is a row no writer produces.
     std::uint16_t column_no;
 
@@ -866,7 +897,7 @@ struct SysFkeyRow {
     Oid parent_rel_oid;
 
     // The referencing column's schema position. **Never 0**: column 0 is
-    // the Keystone pk, which is the child's own identity and not a field of
+    // the Keystone tuple key, which is the child's own identity and not a field of
     // it, so a 0 here is a row no writer produces.
     std::uint16_t child_column_no;
 
@@ -899,7 +930,7 @@ static_assert(SysFkeyRow::kOnDiskSize == 28);
 // Written by `Catalog::CreateForeignKey` from the child column's declared
 // nullability - the one writer, at the one moment the fact is known.
 // Enforcement never consults it: a NULL value skips the forward probe by
-// being a NULL, a NULL child cell matches no parent pk on the reverse walk,
+// being a NULL, a NULL child cell matches no parent tuple key on the reverse walk,
 // and a NOT NULL column refuses the NULL in the row codec before any row
 // lands. The bit records the declaration so `SHOW` prints it without a
 // second catalog read, and a stored 0 keeps its one reading: the check runs.

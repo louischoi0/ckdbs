@@ -23,7 +23,7 @@ this issue for now; leave it in a document"*.
 The load is xrock's `fetch` (`/home/cdkbs/xrock`, outside this tree): one
 session, `CREATE TABLE ... BTREE EXPLICIT` with five columns (`id int64, ts
 int64, side int8, price decimal(18,8), qty decimal(18,8)`), 1024-row
-multi-row `INSERT`s, named pks ascending (`day << 25 | seq`),
+multi-row `INSERT`s, named tuple keys ascending (`day << 25 | seq`),
 `durability = group`, `checkpoint_interval_ms = 5000`. Each day's archive
 is downloaded whole over HTTP before it is inserted.
 

@@ -147,7 +147,7 @@ timestamp, narrow-decimal, signed-integer and `bool` coercion refuse a
 wrapped literal outright rather than coercing the value it wrapped to. A
 `uint64` column reads the digits and refuses a literal outside
 `[0, 2^64 - 1]` `OutOfRange` - compared, one answered false under every
-operator, `!=` and `>` included - and a pk bounds a range or keys a lookup
+operator, `!=` and `>` included - and a tuple key bounds a range or keys a lookup
 only from a literal that did not wrap. Purely additive: no format
 change, no version bump, one `sys.types` row (`decimal128`, oid 33,
 type_val 13). `p > 38` has no representation and is refused.
@@ -193,7 +193,13 @@ whether or not a row would have matched.
   with a timestamp. **Integers compare by value** (operator, 2026-10-13,
   option (b)): `CompareValues` reads a `uint64` above `INT64_MAX` through
   its digits whichever side it is on, so an `int32` -1 is less than a
-  `uint64` 5, and a view's `oid > -1` is true.
+  `uint64` 5.
+- **A catalog view takes the same literal rule** (operator, 2026-10-13).
+  Each view declares its columns' types (`exec::CatalogView::column_types`):
+  every integer a `uint64` and every string a `varchar`, the two kinds its
+  builders emit. A literal is judged against the column before any row is
+  read, so `sys.tables WHERE name = 5`, `oid = 'x'` and `oid = -1` are
+  refused on a populated view and on an empty one alike.
 
 ### 3.2 DECIMAL arithmetic
 
@@ -251,7 +257,7 @@ evaluator refuses `Corruption` a column the decode left out (`exec::kUndecoded`)
 rather than read a default. The new image is the row's own bytes with only the
 assigned cells re-encoded (`exec::EncodeAssigned`, BN-R3, `heap-and-tuple.md`
 §3.4). A failure names the failing operator's byte, the
-expression's first byte and the row's pk. `exec::TypeSetExpression` (`include/kds/exec/set_expr.hpp`) is the
+expression's first byte and the row's tuple key. `exec::TypeSetExpression` (`include/kds/exec/set_expr.hpp`) is the
 one place the rules below live. §3.2's "there is none" stands for every other
 position: the grammar admits an expression in a SET value only.
 
@@ -326,7 +332,7 @@ NULL for a NULL argument except `CONCAT`, which skips them.
 | `LPAD`, `RPAD(s, n [, fill])` | text, a whole number, text | `varchar` of `n` bytes: a longer `s` is cut on the right, as the reference dialect does; refused past 1 MiB |
 | `CONCAT(a, b, ...)` | text | `varchar` |
 | `NOW()` | none | `timestamp`: **one value per statement**, the statement's clock (`StatementContext`), carried across a park |
-| `CURRENT_DATE` | none, written without parentheses | `date`; a column of that name wins, so the function is unreachable on a relation that has one (BJ-Q4) |
+| `CURRENT_DATE` | none, written without parentheses | `date`; a column of that name, in any case, wins - a `SET` value reads a column as every column name resolves, ignoring case - so the function is unreachable on a relation that has one (BJ-Q4) |
 | `DATE(ts)` | a timestamp | `date`, the day it falls in |
 
 **A scaled decimal.** `ROUND`, `TRUNC`, `CEIL`, `FLOOR` and, for a decimal,
@@ -383,7 +389,7 @@ Its errors name bytes of the UPDATE.
 Whether a NULL result fits a `NOT NULL` target is the row's verdict. The
 whole expression must be the target column's type, or the statement is
 refused naming both types: "the expression is `int32` but column `v` is
-`int64`". The pk is read, never written (BJ-R5).
+`int64`". The tuple key is read, never written (BJ-R5).
 
 ### 3.3 Rendering happens at the boundary
 
@@ -402,7 +408,7 @@ chose kInt reuse over a rendered representation.
 ### 3.4 NULLs, keys, and the rest
 
 A NULL date is a NULL like any other (`docs/spec/null.md`), skipped by
-aggregates, one group under GROUP BY. The Keystone pk remains uint64 —
+aggregates, one group under GROUP BY. The Keystone tuple key remains uint64 —
 none of these types can be column 0. Cabin keys, probe keys, and Waystone
 trails treat the types as the integers they are; no trust-model text
 changes.

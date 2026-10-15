@@ -151,7 +151,7 @@ Status InternalView::InsertEntry(std::uint64_t sep_key, PageId child) {
                                       " is already present in this internal node");
     }
 
-    // Shift the tail up one stride to open the hole. An issued pk inserts at
+    // Shift the tail up one stride to open the hole. An issued tuple key inserts at
     // the end and moves nothing; a named key or a divide below the tail
     // (BD) inserts mid-node, which this shift keeps sorted.
     const std::uint16_t insert_at = static_cast<std::uint16_t>(at + 1);

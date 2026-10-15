@@ -27,14 +27,27 @@ follows the operator's words of 2026-10-11, recorded in English
   sugar, and the same result must be referenceable through `SELECT` as
   well. And push it."*
 
-**Written, not opened.** W2 and W3 are the operator's decisions and stand
-here as BO-R1 and BO-R2. What they leave open is §5, BO-Q0..Q13, each with
-CLA's proposal and none marked. **Not reviewed**: BO-S0's
-`critics-developer` review of this order is owed before BO-Q0 is put to
-the operator (§7).
+**Opened 2026-10-13** on the operator's word *"Open the semantic sugar
+milestone."* (`raft-marks-2026-10-13.md` §10), in the worktree
+`bo-show-sugar` from `cd7c7c4e` (`origin/main`). BO-S0's owed
+`critics-developer` review ran at the opening and found twelve defects in
+§3 and §5 and four §1 claims no longer true; its corrections are applied
+below and listed in §7 ("BO opened"). **W4, the same day**, is the
+operator's own mark on BO-Q1 and BO-Q3: *"Every sys-related table must be
+output in the form of an ordinary table."* (`raft-marks-2026-10-13.md`
+§11), restated as BO-R3. **W5, the same day, is the standing go-ahead**
+(`raft-marks-2026-10-13.md` §12, `go-ahead-achieving-milestone`): BO runs
+to its close in this session, BO-Q2 and Q4..Q13 adopted as CLA proposed -
+several revised against `cd7c7c4e` first - and recorded in §5's mark
+column as adopted, never as the operator's marks.
+
+**State, 2026-10-14: in progress.** Built and reviewed: BO-S0, S1, S2, S3, S5; not run:
+S4 (BO-Q5 (b)); open: S6, S7, S8. On `main` from the merge of `bo-show-sugar` that day,
+after `v3.2.0` (BV's close), with no tag of its own. The stages' rows are §7.
 
 **Claim tags:**
-- `[source-read]` with `path:line` at `ab2c46d0`, read and not run;
+- `[source-read]` with `path:line` at `ab2c46d0` in §1.1-§1.6 and at
+  `cd7c7c4e` in §1.7 and below, read and not run;
 - `[design]` for CLA's reasoning about code not yet written;
 - `[measured]` with the invocation (none in this order);
 - `[quiet-wrong]` marks an item where a wrong choice turns a refusal or a
@@ -43,18 +56,20 @@ the operator (§7).
 The operator's words, and a rule that restates them, are decisions rather
 than claims, so they carry no tag.
 
-**The letter.** `[source-read]` BJ is the last order on `main`
-(`workorder-bj-expression-update.md`); no branch on `origin` and no file
-under `instructions/` or `docs/` uses BO. BO is the next free letter.
+**The letter.** `[source-read]` BJ was the last order on `main` at
+`ab2c46d0`; BO was the next free letter then, and the relettering of
+2026-10-11 confirmed it.
 
-**BO against other orders.** No order on `main` touches the `SHOW`
-surface or `src/exec/catalog_view.cpp`. **BI**
-(`workorder-bi-checkpoint-off-the-reactor.md`, not opened) changes how a
-checkpoint run is stepped and where its syncs wait; `sys.checkpoints`
-(§3.4) records a run's outcome and must be written by whatever shape BI
-leaves, so BO-S7 follows BI's S2 if BI is opened first. **AQ** and **BJ**
-share the expression evaluator; BO reads no expression. Not part of AR0
-§8's chain.
+**BO against other orders.** At `cd7c7c4e`, BU (`workorder-bu-basic-query-surface.md`)
+and the `sysview-strict-compare` change both edited `HandleCatalogView`:
+a view's columns carry declared types and its WHERE literals are coerced
+and compared under them, and a boolean conjunct over a view is refused
+`NotImplemented`. **BI** is closed; its S2 rule - a checkpoint step writes
+no map and allocates no page it does not write - binds §3.4, which is
+written to it (no catalog page from the checkpointer). **BR** discards
+`sys.access_stats` at a restore's mount; BO adds no persisted relation
+(BO-Q5 as revised), so nothing more is discarded. Not part of AR0 §8's
+chain.
 
 ---
 
@@ -234,6 +249,42 @@ superblock bump from 21 (`include/kds/server/superblock.hpp:266`), and
 every bump since AY-S8 has refused the version before it. A
 memory-resident view costs no format change.
 
+### 1.7 Re-read at `cd7c7c4e` (the opening review)
+
+`[source-read]` §1.1-§1.6 were read at `ab2c46d0`; the opening review
+re-read every claim on `bo-show-sugar` at `cd7c7c4e`. Every line number
+above has moved; the claims hold except these four, which are corrected
+here and govern where they disagree:
+
+- **A view's columns are typed.** `CatalogView::column_types`
+  (`include/kds/exec/catalog_view.hpp`) declares `uint64` or `varchar` per
+  column, and a WHERE literal is coerced and compared under it
+  (`src/server/command_dispatcher.cpp:6903-6961`). The reply still renders
+  untyped, comma-joined, as one KWP `TEXT` column named `line`
+  (`src/server/kwp_session.cpp:802-848`), so **a string holding a comma is
+  ambiguous** - harmless for today's identifier columns and wrong for
+  every string column §3 adds.
+- **`TouchPattern` is deleted** (BL-S4); `sys.patterns`' `use_count` and
+  `last_seen` are frozen at 0, and `SHOW PATTERNS` prints them as 0.
+- **A checkpoint run is recorded, not kept**: BI's `CheckpointRunReport`
+  (`include/kds/sched/checkpoint_census.hpp:60-86`) carries each run's
+  start and end, steps, pages, `dirty_at_start`, `resumed`, `completed`
+  and its park times, and is logged and dropped.
+- **The superblock is 23** (`include/kds/server/superblock.hpp:139`).
+
+Three facts §1 did not state:
+
+- **Every catalog relation overflows into one shared range**, pages
+  16..127 (`AllocateCatalogPage`, `src/catalog/catalog.cpp:352-361`); a
+  full range refuses every catalog relation's growth `OutOfSpace`, and a
+  4096-shape persisted `statement_stats` alone would need about 120 of its
+  112 pages. This is why BO-Q5 is revised to memory-resident.
+- **Only `select`, `insert` and `update` carry a fingerprint**
+  (`src/parser/fingerprint.cpp:130-131`); `DELETE`, `PURGE` and DDL have no
+  `fetch_id`.
+- **A restore discards `sys.access_stats`** (`src/server/restore.cpp:328`)
+  and a mount resets it when damaged (`src/server/expeditor.cpp:1054`).
+
 ---
 
 ## 2. Rulings
@@ -267,129 +318,144 @@ Restated as four rules, which BO-S8 lands in the spec that owns the
 
 How a reply is rendered under SV2 is BO-Q1; what a view filters is BO-Q2.
 
+### BO-R3 — A `sys` view answers as an ordinary table (W4)
+
+*"Every sys-related table must be output in the form of an ordinary
+table."* Restated:
+
+- **SV5 — one row path.** A `sys` view's result is described and emitted
+  through the statement's `ResultSink` exactly as a relation's `SELECT`
+  is: a typed field per column, a typed row per row. On KWP that is a
+  `S_ROW_DESC` naming every column with its type and typed `S_ROW_BATCH`es,
+  never the one `TEXT` column `line`; on the newline protocol it is the
+  same header line and rows a relation's `SELECT` prints. A `SHOW` target,
+  being one `SELECT` over one view (SV1), answers the same way.
+- What does not reach a result set - a completion with no rows, a refusal
+  - is unchanged.
+
+`DESCRIBE`, `ANALYZE` and any reply left outside a view keep
+`DeliverTextLines` only until the stage that moves them; at BO's close
+`ANALYZE` (a plan, not a table) is the one text-lines reply left, and the
+spec names it.
+
 ---
 
-## 3. The four relations — CLA's proposal `[design]`
+## 3. The four relations `[design]`
+
+As revised at the opening (§7, "BO opened") and adopted under W5.
 
 Common to all four: each is a view in the registry of §1.2 from the
-stage that builds it; its columns are typed (BO-Q3); its timestamps are
-UTC wall-clock nanoseconds, because an operator correlates these rows
-with events outside the engine (the logical `last_seen` of
-`sys.access_stats` and `sys.patterns` is not reused); a write into any of
-them **never fails, delays or reorders the statement or run it
-describes** - a failed or dropped write is counted, and the count is a
-column of `sys.meta` (SV3).
+stage that builds it, typed (SV5); **each is memory-resident** (BO-Q5
+(b)) - no oid, no root page, no format change, emptied by a restart and
+by a restore, and the spec says so; a point in time is a `TIMESTAMP`
+(UTC microseconds, `docs/spec/types.md` TY4) and a duration an integer
+`*_us`, so `WHERE started > '...'` works and no second time
+representation enters; a write into any of them **never fails, delays or
+reorders the statement or run it describes** - one that cannot be kept is
+dropped and counted, and the count is a `sys.meta` field (SV3). None is a
+statistic a reader acts on, so none can change a result: a wrong or lost
+value costs a reader's insight, never an answer.
+
+**Where the rows live.** Each core keeps its own part in memory, guarded
+by a latch of the part's own: the core that owns it takes the latch
+uncontended per write, and a view's builder, on whatever core the
+`SELECT` runs, takes each core's latch in turn to copy its rows. No core
+reads another's unguarded words (the opening review's finding 12), and no
+cross-core write is added to a statement's path.
 
 ### 3.1 `sys.statement_stats` — what a statement shape costs
 
-- **Answers:** which shapes run most, cost most in total, and cost most
-  per call; which are refused and how.
-- **Key:** `(fetch_id, kind)`, where `kind` is the statement class
-  (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `PURGE`, DDL). BO-Q6.
-- **Columns:** `fetch_id`, `kind`, `calls`, `ok`, `refused_conflict`
-  (`TxnConflict`, deadlock, fault net), `refused_other`, `rows_returned`,
-  `rows_written`, `pages_touched` (from `ExecStats`), `total_ns`,
-  `max_ns`, `first_seen`, `last_seen`, and `shape_text`, the first
-  statement seen of the shape with its literals masked, cut to a fixed
-  width.
-- **Writer:** each core accumulates its own statements in memory and
-  folds them into the relation on its own tick, under the relation's
-  root page held exclusive - the `sys.access_stats` shape (CC13) at a
-  tick's rate instead of a statement's, because a per-statement hold of
-  one page from every core is the contention point this table exists to
-  find. The view therefore lags by at most one tick, stated in the spec.
-- **Bound:** `kMaxStatementShapes` rows (4096 proposed, `access_stats`'
-  number); a new shape past it is dropped and counted (BO-Q7).
-- **Persistence and CR6:** persisted, unlogged (BO-Q5). The test: no
-  engine reader acts on it - the relayout planner reads
-  `sys.access_stats` and Waystone reads `sys.patterns`, and nothing would
-  read this - so its content is
-  only a statistic. If a reader ever acts on it, it leaves CR6.
-- **Switch:** `statement_statistics`, a new key, since no existing
-  setting expresses this quantity (BO-Q8).
+- **Answers:** which shapes run most, cost most in total and per call,
+  and which are refused.
+- **Key:** `(fetch_id, kind)`. `kind` is the statement's first keyword
+  (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `PURGE`, `CREATE`, ...); a kind
+  the parser gives no fingerprint (§1.7) is one row per kind with
+  `fetch_id = 0` (BO-Q6 as revised).
+- **Columns:** `fetch_id`, `kind`, `calls`, `refused`, `total_us`,
+  `max_us`, `first_seen`, `last_seen`, `shape_text` - the first statement
+  of the shape seen, cut to 256 bytes. A statement the engine re-runs
+  (BA-S14's structural re-run, a `PURGE` retry) is one call, timed whole.
+  Rows returned and pages touched are not columns: no one source counts
+  them across the walk, the descent and the fold, and two sources would be
+  a column that disagrees with itself.
+- **Bound:** 4096 shapes per core; a new shape past it is dropped and
+  counted.
+- **Writer:** the dispatcher, once per statement, at its end.
+- **No switch** (BO-Q8 as revised): a second key beside
+  `access_statistics` would name a neighbouring quantity, and the close
+  measures what the always-on recording costs; a cost that needs a switch
+  goes back to the operator as a new item.
 
 ### 3.2 `sys.relation_stats` — a relation's activity and budget
 
-- **Answers:** how much each relation is written, and how much of its
-  40-bit id space is spent.
-- **Key:** `oid`; `name` and `namespace` are resolved at read, because a
-  view cannot be joined (§1.2).
+- **Key:** `oid`, with `name`; a relation no longer in the catalog (a
+  dropped one) has no row - its counters are dropped at read.
 - **Exact columns, derived at read:** `next_id`, `ids_issued`,
   `ids_remaining`, `budget_used`, `budget_warning`, `budget_exhausted`,
-  through the same `BudgetOf` as today. `SHOW BUDGET` becomes a projection
-  of this view (SV1).
-- **Statistic columns:** `inserts`, `updates`, `deletes`, `purged`,
-  `refused`, `leaf_splits`, `var_heap_spills`, and `stats_since`, the time
-  the counters started from (a format, a discarded damaged page, or a
-  reset). The counters say *since `stats_since`* and nothing more.
-- **Writer:** the same per-core accumulation and tick fold as §3.1.
-- **Not in BO:** page counts and delete-marked slot counts, which would
-  have to be exact to be acted on (a `PURGE` decision) and therefore could
-  not be a statistic under CR6 (BO-Q13).
-- **Persistence and CR6:** the statistic columns persisted, unlogged; the
-  exact columns are never stored.
+  through the same `BudgetOf` as `SHOW BUDGET` today (48-bit, BK).
+- **Statistic columns:** `inserts`, `updates`, `deletes`, `purged` (rows,
+  since the instance started). Leaf splits, var-heap spills, page counts
+  and delete-marked slots are not in BO (BO-Q13): each is a hook in the
+  storage layer for a number no reader has asked for.
+- **Writer:** the dispatcher, from the rows a write statement reports.
 
 ### 3.3 `sys.lock_waits` — every lock wait, one row
 
-- **Answers:** what waits on what, for how long, and how it ends -
-  including the costs `docs/spec/foreign-keys.md` §2c states and nothing
-  measures.
-- **Row:** one per wait that parked, written when it ends: `seq`,
-  `core`, `started`, `waited_ns`, `unit`, `mode`, `rel_oid`, `key` (the
-  slice or tuple id, 0 for a relation unit), `waiter_trx`, `holder_trx`
-  (the refusing holder at the park), `fetch_id` of the waiting statement,
-  and `outcome`: `granted`, `deadlock_victim`, `fault_net`, `cancelled`.
-- **Writer:** the two park sites of §1.4, at the wait's end, into one ring
-  for the instance under a latch of its own. A path that polls with no
-  slot behind it (`docs/inflight/known-gaps.md`, Locks) is not a wait here
-  and the spec names each one.
-- **Bound:** a ring of `kLockWaitRingRows` (4096 proposed), the oldest
-  overwritten, overwrites counted.
-- **Persistence:** **memory-resident.** The lock family persists nothing
-  (`docs/spec/txn.md` §5), and writing a catalog page at the end of every
-  wait would add a hold exactly where the instance is already waiting. A
-  restart empties it, and the spec says so. CR6 is not invoked.
+- **Row:** one per wait that parked, written when it ends: `seq`, `core`,
+  `started`, `waited_us`, `unit`, `mode`, `rel_oid`, `key` (the slice or
+  tuple id, 0 for a relation unit), `waiter_trx`, `holder_trx`, and
+  `outcome`: `granted`, `deadlock`, `fault_net`, `cancelled`.
+- **Writer:** the two park sites (`AwaitWriteBlock`, `AwaitRelationLock`),
+  at the wait's end. A path that polls with no slot behind it
+  (`known-gaps.md`, Locks) is not a wait here and the spec names it.
+- **Bound:** a ring of 4096 per core, the oldest overwritten and counted.
 
-### 3.4 `sys.checkpoints` — the history of checkpoint runs
+### 3.4 `sys.checkpoints` — the recent checkpoint runs
 
-- **Answers:** how long each run took, what it wrote, where it moved the
-  redo start, and which runs the gate skipped - across restarts, so the
-  runs before a crash can be read after it.
-- **Row:** one per run, written after its anchor publish or its skip:
-  `seq`, `core`, `kind` (`periodic`, `shutdown`, `mount`), `started`,
-  `duration_ns`, `steps`, `pages_flushed`, `redo_start_lsn` (the durable
-  redo start after the publish), `outcome` (`published`, `skipped`,
-  `failed`), and `wal_first_segment` at the run's end.
-- **Writer:** the checkpointer, after `Complete()` or the gate's skip,
-  under the relation's root page held exclusive. The row of run `k` lands
-  on a page that run `k + 1` writes back, so a row is durable one run
-  later; the spec says so.
-- **Bound:** a ring of `kCheckpointHistoryRows` (1024 proposed) in the
-  relation, a row's slot being `seq mod N`.
-- **Persistence and CR6:** persisted, unlogged (BO-Q5). The test: no
-  reader acts on it - recovery reads the anchor and the log, never this.
-  The mount's recovery block stays in `sys.meta`, which is where `SHOW
-  META` prints it today.
+- **Row:** a projection of BI's `CheckpointRunReport`, one per run, kept
+  when the run ends: `seq`, `core`, `started`, `duration_us`, `steps`,
+  `pages_flushed`, `dirty_at_start`, `log_wait_us`, `data_wait_us`, and
+  `outcome`: `completed`, `resumed`, `failed`.
+- **Writer:** the checkpointer hands its finished report to its core's
+  ring and writes nothing else - no catalog page, per BI-S2's rule.
+- **Bound:** a ring of 1024 per core.
+- **Not across a restart**: the runs before a crash are gone with the
+  process (BO-Q5 (b)); the mount's recovery block stays in `sys.meta`.
 
 ### 3.5 The views the existing `SHOW` targets need (SV1)
 
-| `SHOW` spelling | rewritten into |
+| `SHOW` spelling | answered by |
 |---|---|
-| `META` | `SELECT * FROM sys.meta` (BO-Q4) |
-| `TABLES` | `SELECT * FROM sys.tables` |
-| `NAMESPACES` | `SELECT * FROM sys.namespaces` (new) |
-| `PAGE <id> [VALUES]` | `SELECT <cols> FROM sys.page_slots WHERE page_id = <id>`; `VALUES` adds the payload column (BO-Q12) |
-| `PATTERNS` | `SELECT * FROM sys.patterns`; the view's rendering is the one kept |
-| `ACCESS` | `SELECT * FROM sys.access_stats` (new view over the existing relation) |
-| `BUDGET` | `SELECT oid, name, next_id, ids_issued, ids_remaining, budget_used, budget_warning, budget_exhausted FROM sys.relation_stats`; the summary line becomes a query the operator writes (BO-Q3) |
-| `CABINS` | `SELECT * FROM sys.cabins` (new view: the relation and the store's counters) |
-| `INDEXES` | `SELECT * FROM sys.indexes` (new view) |
-| `FKEYS` | `SELECT * FROM sys.fkeys` (new view) |
-| `ASSERTIONS` | `SELECT * FROM sys.assertions` (new view: the relation and the enforcer's counters) |
-| `RELAYOUT [<table>]` | `SELECT * FROM sys.relayout [WHERE name = <table>]` (new view, planned at read) |
-| `CABIN_OPTIMIZER` | `SELECT * FROM sys.cabin_optimizer` (new view) |
-| `TRACES`, `TRACE <id>` | BO-Q9 |
-| `DESCRIBE <table>` | BO-Q11 |
+| `META` | `SELECT * FROM sys.meta`: `(section, field, value)`, `value` varchar, the session's core (BO-Q4) |
+| `TABLES` | `sys.tables`, filtered (BO-Q2) |
+| `NAMESPACES` | `sys.namespaces` (new), filtered |
+| `PAGE <id> [VALUES]` | `sys.page_slots WHERE page_id = <id>`, a required key (BO-Q12) |
+| `PATTERNS` | `sys.patterns`; the view's rendering is the one kept |
+| `ACCESS` | `sys.access_stats` (new view over the existing relation) |
+| `BUDGET` | the budget columns of `sys.relation_stats`; the summary line is deleted (aggregation over a view stays refused, BO-Q3) |
+| `CABINS` | `sys.cabins` (new) |
+| `INDEXES` | `sys.indexes` (new), filtered |
+| `FKEYS` | `sys.fkeys` (new), filtered - **a filter `SHOW FKEYS` does not have today** |
+| `ASSERTIONS` | `sys.assertions` (new) |
+| `RELAYOUT [<table>]` | `sys.relayout`, `[WHERE name = <table>]` |
+| `CABIN_OPTIMIZER` | `sys.cabin_optimizer` (new) |
+| `TRACES`, `TRACE <id>`, `TRACE ON` | retired with the trace sink (BO-Q9) |
+| `DESCRIBE <table>` | `sys.columns WHERE table_name = <table>` (BO-Q11) |
+
+**A required key.** `sys.page_slots` cannot be materialized whole (it
+would read every page of the volume), and `RELAYOUT <t>` walks the named
+relation, which the bare form does not; an unknown name is refused today.
+So a view may declare a **required key**: its builder receives the
+conjunct `key = <literal>` and refuses a `SELECT` without one
+`InvalidArgument` naming the key, and refuses an unknown key the way the
+`SHOW` does today - never zero rows (`[quiet-wrong]` otherwise: a refusal
+turned into an empty answer). `sys.relayout` with no key plans every
+relation without the walk, as the bare `SHOW RELAYOUT` does.
+
+**The `SHOW` path builds the `SELECT`'s AST, not its text.** The
+argument token keeps the byte offset the client wrote, so a refusal on it
+names the byte in the statement the client sent (SV2), and the AST goes
+to `HandleCatalogView` - the function the `SELECT` path calls.
 
 The four relations of §3.1-§3.4 get no `SHOW` spelling (BO-Q10).
 
@@ -397,76 +463,75 @@ The four relations of §3.1-§3.4 get no `SHOW` spelling (BO-Q10).
 
 ## 4. Stages
 
-- **BO-S0** — this order, `raft-marks-2026-10-11.md` and `index.md`'s BO
-  row. Its `critics-developer` review, then BO-Q0..Q13 put to the
-  operator.
-- **BO-S1** — red first: a contract suite, `show_sugar`, that runs every
-  `SHOW` spelling and the `SELECT` it is rewritten into on one instance
-  and compares the two replies byte for byte (SV2), failing for every
-  target at the start. Then the view registry gains typed columns (BO-Q3)
-  and the filter class of each view (BO-Q2).
-- **BO-S2** — the rewrite at parse, and the existing targets moved onto
-  views one at a time, each handler deleted as its target turns green in
-  `show_sugar` (SV4). `sys.meta` last, as the largest. Every test and
-  tool that parses a `SHOW` reply is migrated in the stage that changes
-  it (BO-Q1).
-- **BO-S3** — `sys.lock_waits`: the ring and the two park sites. No
-  format change.
-- **BO-S4** — the format, if BO-Q5 is (a): oids and root pages for the
-  three persisted relations, `kCatalogOverflowFirst` moved, superblock 22
-  refusing 21, the mount's discard of a damaged statistic page
-  generalized from `sys.access_stats` to the four, and CR6 amended to
-  name them.
-- **BO-S5** — `sys.statement_stats`: the per-core accumulator, the tick
-  fold, the switch.
+As revised at the opening.
+
+- **BO-S0** — this order, the marks and `index.md`'s row; the opening
+  review (§7). Done at the opening.
+- **BO-S1** — red first: the `show_sugar` contract suite - every `SHOW`
+  spelling against its `SELECT` on one instance, compared row for row
+  through both the newline protocol and KWP (SV2, SV5) - and cells that a
+  view answers as a typed result set. Then SV5 for the existing views:
+  `HandleCatalogView` emits through the `ResultSink`; `ORDER BY` over a
+  view, compared under the declared types with `exec::CompareValues`;
+  the filter class of each view (BO-Q2); the required key.
+- **BO-S2** — the existing targets moved onto views one at a time, each
+  handler deleted as its target turns green (SV4), `sys.meta` last; every
+  test and tool that parses a `SHOW` reply migrated in the step that
+  changes it; the trace sink retired (BO-Q9); `DESCRIBE` moved (BO-Q11).
+- **BO-S3** — `sys.lock_waits`.
+- **BO-S4** — **not run**: it was the format change for persisted
+  statistics, and BO-Q5 is (b).
+- **BO-S5** — `sys.statement_stats`.
 - **BO-S6** — `sys.relation_stats`.
-- **BO-S7** — `sys.checkpoints` (after BI-S2 if BI is opened first).
-- **BO-S8** — the close: the overhead measured once (§6); the spec
-  landed - a new `docs/spec/sys-views.md` owning SV1-SV4, every view and
-  its filter class, and the four relations; `docs/rules/rules.md` CR6;
-  `docs/spec/ddl-transactional.md` §5a; `manual/sql/sql.md` §6
-  rewritten; CLAUDE.md's Observability row flipped.
+- **BO-S7** — `sys.checkpoints`.
+- **BO-S8** — the close: the overhead measured once (§6); a new
+  `docs/spec/sys-views.md` owning SV1-SV5, every view, its filter class
+  and its required key; `docs/spec/ddl-transactional.md` §5a naming
+  `SHOW FKEYS`, `SHOW NAMESPACES` and the views; `manual/sql/sql.md`'s
+  introspection section rewritten (its `catalog_recovered` and missing
+  targets with it); CLAUDE.md's Observability row flipped.
 
 Each stage runs the full suite and gets its own `critics-developer`
 review, per the Session Workflow.
 
 ---
 
-## 5. Items for the operator
+## 5. Items
 
-None is marked. The proposal is CLA's.
+BO-Q0 is the operator's mark (W, `raft-marks-2026-10-13.md` §10), BO-Q1
+and BO-Q3 the operator's W4 (§11); every other mark is **adopted on the
+operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone)**
+(§12), with the revision made against `cd7c7c4e` named.
 
-| item | question | options | CLA proposes |
-|---|---|---|---|
-| **BO-Q0** | Open BO? | (a) open as written; (b) open with items changed; (c) hold | - |
-| **BO-Q1** | How is a `SHOW` reply rendered? | (a) it **is** the `SELECT`'s reply, byte for byte (CSV header and rows); the `key=value` form retires and every parser of it migrates; (b) a renderer keeps `key=value` over the same rows - same data, a second rendering | **(a)**: W3 says only sugar, and a second renderer is a second code path SV2 would have to police |
-| **BO-Q2** `[quiet-wrong]` | What does each view filter? | (a) §5a's line applied to views: schema-object views (`tables`, `objects`, `columns`, `namespaces`, `indexes`, `fkeys`) answer under the session's view, engine-state views do not; (b) none filters, and `SHOW TABLES`/`INDEXES`/`NAMESPACES` lose their filter; (c) every view filters | **(a)**: (b) removes the filter from three surfaces that have it, making §1.3's disagreement the rule; (c) hides an uncommitted relation from the diagnostics that exist to show what the instance holds |
-| **BO-Q3** | Do views get typed columns, admitting `ORDER BY` and aggregation? | (a) yes, both admitted; a join stays refused; (b) no, AG12 and the `ORDER BY` refusal stand | **(a)**: the refusal's stated reason is that a view has no schema to resolve a key against (`catalog_view.hpp`); a typed column list is that schema, and `ORDER BY total_ns DESC` is the first query anyone runs on §3.1 |
-| **BO-Q4** | `sys.meta`'s shape | (a) tall: `(core, section, field, value)`, one row per field per core, every core; (b) wide: one row per core, one column per field | **(a)**: the field list changes often and a tall row needs no schema change for it; (a) also makes `SHOW META` report every core, where today it reports the session's own. Reading a peer's counters needs each to be readable from another core, which the survey did not check field by field |
-| **BO-Q5** | What is persisted? | (a) `statement_stats`, `relation_stats`' statistic columns and `checkpoints` persisted unlogged under CR6, superblock 22 refusing 21; `lock_waits` memory-resident; (b) all four memory-resident, no format change, all history lost at a restart | **(a)**: the history most worth reading is the one before a crash |
-| **BO-Q6** | A statement's identity in §3.1 | (a) `fetch_id` with `kind`, so one key names a shape across `sys.patterns`, its trails and this; (b) `pattern_id`, which also splits by select list | **(a)** |
-| **BO-Q7** | Bounds and saturation | (a) 4096 shapes, new ones dropped and counted; rings of 4096 lock waits and 1024 checkpoint runs, overwritten and counted; (b) other numbers | **(a)** |
-| **BO-Q8** | Switches | (a) `statement_statistics`, default on; `lock_waits` and `checkpoints` always on (a wait already parks; a run is rare); (b) one switch for all four | **(a)** |
-| **BO-Q9** | `SHOW TRACES` / `SHOW TRACE` / `TRACE ON` | (a) retired with the sink, since nothing installs one (§1.1); (b) the sink installed and two views, `sys.traces` and `sys.trace_spans` | **(a)**: a surface that has answered `ERR` since it was wired off is not one anyone reads; §3.1 answers most of what a trace was for |
-| **BO-Q10** | `SHOW` spellings for the four relations | (a) none: they are read by `SELECT`; (b) `SHOW STATEMENTS`, `LOCK_WAITS`, `CHECKPOINTS` | **(a)**: sugar adds a name and nothing else |
-| **BO-Q11** | `DESCRIBE` | (a) in scope: `SELECT * FROM sys.columns WHERE table_name = <t>`, its table-level fields moving to `sys.tables` and `sys.relation_stats`; (b) out of scope, not being a `SHOW` | **(a)**: W3 says keywords *such as* these, and `DESCRIBE` is the same kind of surface |
-| **BO-Q12** | `SHOW PAGE` | (a) `sys.page_slots`, one row per slot with the page header repeated on each, refusing a read with no `page_id = <id>`; (b) `SHOW PAGE` kept as a named exception, a debugging surface over raw bytes | **(a)** |
-| **BO-Q13** | `relation_stats`' page and delete-marked counts | (a) not in BO; (b) maintained exactly and logged, outside CR6; (c) filled by an explicit walk statement | **(a)**: (b) puts a logged write on every data write, and (c) needs a statement nobody has asked for |
+| item | question | options | CLA proposes | mark |
+|---|---|---|---|---|
+| **BO-Q0** | Open BO? | (a) as written; (b) with items changed; (c) hold | - | **(a)**, operator, 2026-10-13 |
+| **BO-Q1** | How is a `SHOW` reply rendered? | (a) it **is** the `SELECT`'s reply; (b) a renderer keeps `key=value` | (a), as an ordinary table's result set: typed on KWP, header and rows on the newline protocol (revised: the CSV-in-`TEXT` form is ambiguous on a comma, §1.7) | **(a)**, operator's W4 |
+| **BO-Q2** `[quiet-wrong]` | What does each view filter? | (a) §5a's line: schema-object views (`tables`, `objects`, `columns`, `namespaces`, `indexes`, `fkeys`) under the session's view, engine-state views not; (b) none; (c) all | (a); premise re-read at `cd7c7c4e`: the views still call `ListTables()` with no view and `HandleCatalogView` takes no session, so the split stands. `SHOW FKEYS` gains a filter it lacks today, stated as a change | **(a)**, adopted |
+| **BO-Q3** | Typed columns, `ORDER BY`, aggregation over a view? | (a) all admitted; (b) none | revised: typed (done) and `ORDER BY` admitted through `exec::CompareValues`; aggregation stays refused (AG12): a fold needs a compiled `AggregateSpec` over a schema, a view has none, and a second fold is what AG12 refuses | **typed and `ORDER BY`**, operator's W4 ("an ordinary table") read with the revision; aggregation adopted as refused |
+| **BO-Q4** | `sys.meta`'s shape | (a) tall `(section, field, value)`; (b) wide | (a), revised: the session's own core only, as `SHOW META` is today - every core needs a field-by-field census of what is readable across cores, which is not in BO (`known-gaps.md`) | **(a)** as revised, adopted |
+| **BO-Q5** | What is persisted? | (a) three relations unlogged, superblock 24; (b) all four memory-resident | revised to **(b)**: (a) puts three growing relations in the 112-page catalog range every relation shares (§1.7), has the checkpointer write a catalog page BI-S2 rules out, and is discarded by a restore anyway | **(b)**, adopted |
+| **BO-Q6** | A statement's identity | (a) `(fetch_id, kind)`; (b) `pattern_id` | (a), revised: a kind with no fingerprint is one row per kind at `fetch_id = 0` | **(a)** as revised, adopted |
+| **BO-Q7** | Bounds | (a) 4096 shapes, rings of 4096 waits and 1024 runs, overflow counted; (b) other | (a), per core | **(a)**, adopted |
+| **BO-Q8** | Switches | (a) a new `statement_statistics`; (b) one switch | revised: **none** - a new key beside `access_statistics` is a parallel knob; the close measures the cost | **none**, adopted |
+| **BO-Q9** | `SHOW TRACES` / `TRACE` / `TRACE ON` | (a) retired with the sink; (b) installed | (a): `src/stats/trace.cpp`, `include/kds/stats/trace.hpp`, `tests/trace_test.cpp`, `HandleTrace`, `SetTraceSink`, `traces_` deleted | **(a)**, adopted |
+| **BO-Q10** | `SHOW` spellings for the four | (a) none; (b) three | (a) | **(a)**, adopted |
+| **BO-Q11** | `DESCRIBE` | (a) in scope; (b) out | (a) | **(a)**, adopted |
+| **BO-Q12** | `SHOW PAGE` | (a) `sys.page_slots` with a required key; (b) a named exception | (a), with the required key of §3.5, which `RELAYOUT <t>` needs anyway | **(a)**, adopted |
+| **BO-Q13** | page and delete-marked counts | (a) not in BO; (b) logged; (c) a walk | (a) | **(a)**, adopted |
 
 ---
 
 ## 6. Measurement
 
-The overhead is measured once, at BO-S8, per the Session Workflow:
-interleaved A/B in `build-release`, server CPU per statement, the commit
-BO opened from against the commit that closes it, and
-`statement_statistics` on against off at the close. The shapes are those
-of the last close (`bench/v3.0.0/`), single-row point reads and writes
-first, because §3.1's two clock reads and one table update per statement
-are a fixed cost that shows most on the cheapest statement. A stage
-lands with "overhead not measured; measured at the milestone's close".
-
----
+The overhead is measured once, at BO-S8: interleaved A/B in
+`build-release`, server CPU per statement, `cd7c7c4e` (where BO opened)
+against the commit that closes it, inside the hour the standing budget
+allows. Single-row point reads and writes first: §3.1's two clock reads
+and one latched table update per statement are a fixed cost that shows
+most on the cheapest statement (BN measured access statistics at 0.7 % of
+a point statement, BN-S6). A stage lands with "overhead not measured;
+measured at the milestone's close".
 
 ## 7. Row status
 
@@ -480,3 +545,195 @@ W3, with the pre-push hook skipped because the change is documents only
 **Not opened**: BO-Q0 is unmarked. The survey (§1) is read, not run;
 §1.3's filter split in particular is a reading of three call sites and
 has no reproduction yet.
+
+
+### BO opened — 2026-10-13
+
+BO was opened on the operator's word (`raft-marks-2026-10-13.md` §10) in
+the worktree `bo-show-sugar`, from `cd7c7c4e`. BO-S0's owed
+`critics-developer` review ran at the opening. It read the order and the
+tree and ran nothing.
+
+**Applied:**
+
+- **§1.7.** Four claims are false at `cd7c7c4e`: the views are typed,
+  `TouchPattern` is deleted, BI records each checkpoint run, and the
+  superblock is 23. Three facts were unstated: the 112-page catalog range
+  every relation shares, which statement kinds carry a fingerprint, and
+  the restore's discard of `sys.access_stats`.
+- **BO-Q5 revised to memory-resident** (findings 1, 3, 4): persisted
+  relations would grow in the shared range, would have the checkpointer
+  write a catalog page that BI-S2's rule forbids, and are discarded by a
+  restore anyway. This deletes BO-S4.
+- **The reply format** (finding 2): CSV in one `TEXT` column is ambiguous
+  once a string holds a comma. W4 then decided it.
+- **BO-Q6's key revised** (finding 5): a kind with no fingerprint is one
+  row at `fetch_id = 0`, and a re-run counts as one call.
+- **The `SHOW` path builds the AST** (finding 6), so a refusal names the
+  byte the client wrote.
+- **A required key for `PAGE` and `RELAYOUT <t>`** (finding 7): the
+  statement is refused rather than answered with zero rows.
+- **Time columns are `TIMESTAMP`** (finding 8).
+- **§3's CR6 argument replaced** (finding 9) by "a wrong value costs
+  insight, never an answer". Under (b) the point is moot.
+- **The tick fold dropped** (finding 10) for a latched per-core part,
+  written at the statement's end. This keeps CC13's "in the row before its
+  statement returns", and does not bring back CR7's retired batch.
+- **`SHOW FKEYS` gaining a filter** is stated as a change (finding 11).
+- **BO-Q4 held to the session's core** (finding 12).
+- **BO-Q8's new key withdrawn** as a parallel knob.
+- **BO-Q9's deletions named.**
+- **Stale text corrected**: the 40-bit id space, the superblock number,
+  and BI's state.
+
+**Rejected:** none. On the review's own reading, aggregation under BO-Q3
+stays refused (AG12).
+
+**Not cut, stated:** the migration's size. `SHOW META` is parsed in 15
+test files and 24 tools.
+
+### BO-S1 — 2026-10-13
+
+On `bo-show-sugar`, `92c9bc47` to `ac3ec07c`: a `sys` view answers as an
+ordinary table (SV5) - a typed `S_ROW_DESC` and typed row batches on KWP -
+takes `ORDER BY` under its declared types, and the schema-object views read
+under the session's view (BO-Q2 (a)); the `show_sugar` contract suite was
+written red first, its SV2 cells red until BO-S2; a `SET` value's subquery
+over a view runs as one over a table, and the refusal SV5 made dead is
+deleted. Its `critics-developer` review was applied at `ac3ec07c` (a
+view-column refusal names its byte; one keyed sort vector and one sink
+selection). **Not recorded by that session**: the review's rejected
+findings and the suite's pass count; the next session found BO-S2's work
+uncommitted on top of it and no handoff.
+
+### BO-S2 — 2026-10-14
+
+On `bo-show-sugar`, `a8d1425e` (engine and tests), `3ac864f3` (tools) and
+the review commit after them. Every `SHOW` target and `DESCRIBE` is one
+`SELECT` over one view, built as its AST and answered by
+`HandleCatalogView` (SV1, SV4); the fifteen handlers and the trace sink
+(BO-Q9) are deleted; the views are `src/server/sys_views.cpp`. `sys.meta`
+is `(section, field, value)` (BO-Q4), written per section. SV3 carried two
+headers no view had: `SHOW CABIN_OPTIMIZER`'s controller and executor
+numbers (`cabin_optimizer_*`) and `SHOW CABINS`' store counters
+(`cabins_unbankable_views`, `cabins_cap_refusals`), both `sys.meta` fields.
+Every test and tool that parsed a `key=value` reply reads the view
+(`tests/view_text.hpp`, `tools/sys_meta.py`; the tool reader also reads a
+pre-BO engine's line, which an A/B baseline still answers).
+
+**Deleted, by SV3's second clause:** `SHOW BUDGET`'s summary line (BO-Q3:
+a filter on `budget_warning` answers it); `SHOW RELAYOUT`'s per-shape lines
+(summed into `shapes` and `walk_weight_q8`, the shapes being
+`sys.access_stats`' rows); `DESCRIBE`'s `autoincrement=` (always
+`if-omitted` on the pk, derivable from `pk`) and `columns=` (the row
+count); `SHOW PAGE`'s internal-node `max_entries` (a constant);
+`SHOW PATTERNS`' `stale=v<n>` (derivable from `fingerprint_version`).
+**Behaviour changed, stated:** `SHOW RELAYOUT` with the optimizer off and
+`SHOW CABIN_OPTIMIZER` with no controller are refusals naming the view's
+byte, where the first answered a notice; `SHOW PAGE` refuses a page with an
+unreadable slot rather than skipping it; `SHOW BUDGET` refuses where a
+relation has no `sys.tables` row rather than printing an error row.
+
+**Review** (`critics-developer`, on `a8d1425e`). Applied: a view's key
+conjunct re-filtered the rows its builder had already resolved, so a
+qualified `DESCRIBE ns.t` and `SHOW RELAYOUT ns.t` answered zero rows
+(`[quiet-wrong]`; fixed, two new cells); `DESCRIBE` and a bare `SHOW` named
+garbage bytes (fixed); `sys.patterns` decided a directory by its root, not
+`HasWaystoneDirectory` (fixed); `DESCRIBE <unknown>` named no byte (fixed);
+the two configuration refusals named no byte (fixed); a rate over no
+lookups, an empty covering list and an unresolvable relation name read 0,
+`''` and `oid=N` (now NULL); every view took the session's read view, which
+ends a statement boundary under an open DDL (now only the schema-object
+views); a dead `Spelling` struct; two tests reading by position or by a
+substring the header also holds. **Rejected:** `Unsupported` for the two
+configuration refusals - the architecture admits both surfaces, this
+instance is configured without them, so `InvalidArgument` stays;
+`MetaSections` pushing triples instead of a `key=value` line its view
+parses back - the largest cut on offer, but the backup and archive blocks
+write the same line through `AppendMeta(std::ostream&)` and share it with
+`BACKUP STATUS`, so it is a change to those interfaces, not to this stage,
+and is left as named.
+
+Suite: 3759/3759 (`ctest -LE heap-suspended`, Debug). Overhead not
+measured; measured at the milestone's close.
+
+### BO-S3 — 2026-10-14
+
+On `bo-show-sugar`, `5c086e29` and its review commit. `sys.lock_waits` as
+§3.3 designs it, memory-resident (BO-Q5 (b)), a ring of 4096 per core
+(BO-Q7 (a)) in `stats::LockWaitLog`, written by `AwaitWriteBlock` and
+`AwaitRelationLock` through an RAII row whose destructor writes
+`cancelled`; `sys.meta`'s `lock_waits` section carries recorded,
+overwritten and dropped. **Decided in the building, stated:** a waiter
+refused at the edge for closing a cycle is a `deadlock` row with
+`waited_us` 0, although it never parked - §3.3 lists the outcome; a slot
+already flipped before the park (a stale memo's re-run, an ask granted
+after its refusal) is no wait; `unit`, `rel_oid` and `key` name the unit
+that refused, where the wait is registered, and `mode` what was asked -
+since AY-S2 they can be two units; `granted` means the slot flipped, not
+a grant, so a re-run that parks again is a second row; a waiter or holder
+that is no transaction reads NULL.
+
+**Review** (`critics-developer`, on `5c086e29`): no engine defect found;
+every exit checked, every site's mode checked against its ask, the
+cancelled path proved by a throwaway cell. Applied: a vacuous
+waiter-differs assertion pinned to the real value (NULL); a comment the
+new `sys.meta` block displaced; the deadlock arms follow the park's
+flipped-slot rule; the destructor's contract stated as the clock's; the
+engine's `LatchGuard` for `std::lock_guard`; the part count tied to
+`kMaxCores`; the record packed to 64 bytes; `unit`/`mode` and `granted`
+documented as above. **Not applied:** `AwaitRelationLock`'s waiter ignores
+`parked_write()` - an identity that predates this stage, inherited by the
+row, left for the lock family; `LockWaitRow` as a free function - it reads
+the core id and is one declaration; a shared per-core ring template, which
+the reviewer itself proposed for when `sys.checkpoints` repeats the shape
+(BO-S7).
+
+Suite: 3767/3767 (`ctest -LE heap-suspended`, Debug). Overhead not
+measured; measured at the milestone's close.
+
+### BO-S4 — not run
+
+BO-Q5 is (b): nothing is persisted, so the format change this stage was
+is not made (§4).
+
+### BO-S5 — 2026-10-14
+
+On `bo-show-sugar`, `4a2b16e9` and its review commit. `sys.statement_stats`
+as §3.1 designs it: `stats::StatementStats`, a part per core of up to 4096
+shapes merged by `(fetch_id, kind)` at read; a new shape past the bound is
+dropped and counted (`statement_stats_dropped`). Recorded once per
+statement at its end by `Dispatch` and `DispatchAsync`, timed whole (a
+park, a re-run and the group commit are one call); the `fetch_id` is the
+parse's own - `SELECT`'s parser, `INSERT`'s and `UPDATE`'s through
+`ParseKeepingShape` - so no statement is lexed twice, the first parse of a
+statement keeping the key a nested `SELECT` would otherwise take.
+**Decided in the building, stated:** a refused statement is a call and
+counts in `refused`; a frame destroyed at a park never replied and is no
+call; `kind` is the first whitespace-separated token, as `DispatchInner`
+routes it, and a token that is no routed verb is `OTHER`, so a client mints
+no row per misspelling; **a statement the engine issues itself is not
+counted** - a listener's `ROLLBACK` at the lifetime ceiling or a client's
+disconnect, a KWP load's own `BEGIN`/`COMMIT`/`ROLLBACK` go through
+`DispatchInternal` - and a KWP load's rows, a protocol frame and not a
+statement, are no row either; the cost per statement is **three clock
+reads** (two monotonic, one wall), not §6's two, and one latched map
+update.
+
+**Review** (`critics-developer`, on `4a2b16e9`). Fixed by the review: an
+`UPDATE` whose `SET` holds a subquery was keyed by the subquery's
+`fetch_id`; `Dispatch`'s refused commit dropped the key; `shape_text`
+could end inside a UTF-8 sequence, which a strict client decode refuses -
+each with a cell that failed first. Applied after it: the engine's own
+statements uncounted (above); `Record` derives the kind itself, so a key's
+pointer-hashed kind is always the static one; the kind split as the
+dispatcher splits. **Not applied:** one `IEquals` and one list of routed
+verbs for the engine (eight copies, four lists) - a refactor across the
+parser, exec and server, not this stage's; the per-core part and its
+count repeat `LockWaitLog`'s (BO-S3's deferral stands until BO-S7); a
+reader copying a part delays that core's next write by the copy - both
+stores share it, and the close measures it; an in-process sim restart
+keeps the store, which "emptied by a restart" means of a process.
+
+Suite: 3777/3777 (`ctest -LE heap-suspended`, Debug). Overhead not
+measured; measured at the milestone's close.

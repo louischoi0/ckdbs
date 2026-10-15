@@ -100,6 +100,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bench_common
 
 from ckdbs_cli import ServerConnection
+import sys_meta
 
 AMOUNT_MAX = 1000
 TAGS = ("none", "twin", "cnt", "multi")
@@ -202,13 +203,8 @@ def declare(side, suffix, count_ceiling, sum_ceiling):
 
 
 def observed_enforcing(side):
-    reply = side.conn.must("SHOW ASSERTIONS")
-    state = {}
-    for line in reply.split("\\n")[1:]:
-        name = re.search(r"\bname=(\S+)", line)
-        enf = re.search(r"\benforcing=(\d)", line)
-        if name and enf:
-            state[name.group(1)] = enf.group(1)
+    reply = side.conn.must("SELECT name, enforcing FROM sys.assertions")
+    state = {row["name"]: row["enforcing"] for row in sys_meta.view_rows(reply)}
     missing = [n for n in side.assertions if n not in state]
     if missing:
         raise RuntimeError("SHOW ASSERTIONS did not list: %s" % ", ".join(missing))

@@ -23,6 +23,8 @@
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wire/error_registry.hpp"
+#include "kds/stats/statement_stats.hpp"
+#include "view_text.hpp"
 
 // The lock family on one core, driven through the dispatcher's served path
 // (`instructions/v3.0.0/workorder-ay-following-letter.md`, AY-S1).
@@ -204,7 +206,7 @@ TEST_F(LockCapTest, AWritePastTheBorrowCapIsRefusedAndNamesTheCap) {
     // fence over them and no wait behind them, which is AO-R10's reason for
     // refusing instead.
     //
-    // The predicate names no pk window, which is the shape item 14's
+    // The predicate names no tuple key window, which is the shape item 14's
     // declared units deliberately do not reach, so it still accumulates one
     // entry per row - and is the one shape that can meet the cap at all.
     Session session;
@@ -340,7 +342,7 @@ TEST_F(LockCapOfOneTest, AnInsertTakesTheBorrowOfTheRowItWrites) {
 TEST_F(LockCapOfOneTest, ASortedFillBorrowsTheIdBlockItCarved) {
     // The INSERT path that routes **past** `InsertOneRow`: `t` is HEAP with
     // no var-heap, no index, no cabin and no assertion, so a multi-row
-    // VALUES whose every row omits its pk goes to `SortedFillInner`. Until
+    // VALUES whose every row omits its tuple key goes to `SortedFillInner`. Until
     // AO-S6c-a it wrote rows and borrowed nothing at all - the one writer
     // left in the "header `trx_id`, no table entry" shape the sub-stage
     // exists to remove, and the review is what found it.
@@ -367,7 +369,7 @@ TEST_F(LockCapTest, ARangePredicateDeclaresItsWindowRatherThanAccumulatingRows) 
     ASSERT_EQ(Local("INSERT INTO t VALUES (3, 0)").rfind("INSERTED", 0), 0u);
     ASSERT_EQ(Local("INSERT INTO t VALUES (4, 0)").rfind("INSERTED", 0), 0u);
 
-    // `id > 1` is a pk window of three rows. Declared, it is the relation
+    // `id > 1` is a tuple key window of three rows. Declared, it is the relation
     // `IX` plus one range - two entries under a cap of three. Per-row it
     // would be the `IX` plus three tuples, which reaches the cap on the
     // last of them.
@@ -815,7 +817,7 @@ TEST_F(LockDeadlockTest, ThePathThatCannotWaitPoisonsExactlyAsItAlwaysDid) {
 // ---- AY-S2: the containment wake ------------------------------------------
 
 TEST_F(LockDeadlockTest, AChildWhoseParentIsUnderARangeFenceWaitsForTheFence) {
-    // A parent `DELETE` with a pk window declares a range `X` and takes no
+    // A parent `DELETE` with a tuple key window declares a range `X` and takes no
     // tuple `X` per row, so the child's forward check - its tuple `S` on the
     // parent row, held from before the descent since AY-S5 - meets the fence
     // only in the lock table's verify arm. Until AY-S2 that refusal had no
@@ -1191,7 +1193,7 @@ TEST_F(LockDeadlockTest, ADuplicateIsRefusedAtOnceAndAnAbsentKeyWaitsOnAFenceOnA
     Pump();
     ASSERT_TRUE(*wd.done) << "a duplicate waited on a fence";
     EXPECT_EQ(wd.out->status.code(), StatusCode::kAlreadyExists) << wd.out->response;
-    EXPECT_NE(wd.out->response.find("duplicate primary key"), std::string::npos)
+    EXPECT_NE(wd.out->response.find("duplicate tuple key"), std::string::npos)
         << wd.out->response;
     EXPECT_EQ(locks_->EntryCount(), held) << "the refused ask left an entry";
     EXPECT_EQ(locks_->WaitEdgeCount(), 0u) << "the refused ask left an edge";
@@ -1246,7 +1248,7 @@ TEST_F(LockDeadlockTest, ASortedFillWaitsOnAFenceOverTheBlockItCarves) {
 // `instructions/v3.0.0/workorder-bb-issue-under-the-leaf.md` §1.4. A recorded
 // wait survives only while the statement's trail is unchanged, and a spill is
 // a trail entry - so a row whose borrow came after its encode would turn this
-// wait into a refusal. BB moves an omitted pk's issue, borrow and encode under
+// wait into a refusal. BB moves an omitted tuple key's issue, borrow and encode under
 // its leaf's hold (BB-R2) and a named key's admission after its descent
 // (BB-R3); both orders keep the borrow ahead of the encode, and these cells
 // are what says so. `varchar(16)` and a longer value make the encode spill.
@@ -1292,7 +1294,7 @@ TEST_F(LockDeadlockTest, ANamedRowWithASpilledValueWaitsOnAFence) {
 TEST_F(LockDeadlockTest, ANamedKeyRefusedAtItsEncodeGivesBackItsBorrow) {
     // The borrow goes back with the refusal. Nothing was written under it, so
     // it protected no row; and it stood where the next issued id lands - the
-    // mark had not moved - so an omitted-pk insert drew that very id and,
+    // mark had not moved - so an omitted-tuple key insert drew that very id and,
     // until this give-back, waited on a holder that could no longer place it:
     // until the holder's `ROLLBACK`, or until the 1 s fault net refused it. A
     // borrow the transaction held before the statement is kept (it can stand
@@ -1327,7 +1329,7 @@ TEST_F(LockDeadlockTest, ANamedKeyRefusedAtItsEncodeGivesBackItsBorrow) {
 TEST_F(LockDeadlockTest, ANamedKeyRefusedAfterItsValueSpilledLeavesTheRelationWhole) {
     // The duplicate check refuses after the encode's spills are logged at
     // their append and noted on the trail (`SpillLogFor`) - on a btree the
-    // only pk refusal that comes that late, since BD-R5's other reason is
+    // only tuple key refusal that comes that late, since BD-R5's other reason is
     // judged on the literal and the mark refuses nothing (BD-R6); every
     // other refusal cell names values that fit inline. What a refused
     // statement wrote to the var-heap is unwound with it - autocommit (BI4),
@@ -1345,7 +1347,7 @@ TEST_F(LockDeadlockTest, ANamedKeyRefusedAfterItsValueSpilledLeavesTheRelationWh
         std::uint64_t key;
         StatusCode code;
         const char* text;
-    } refusals[] = {{5, StatusCode::kAlreadyExists, "duplicate primary key"}};
+    } refusals[] = {{5, StatusCode::kAlreadyExists, "duplicate tuple key"}};
     std::uint64_t next = 6;  // the mark: a refused key moves nothing
     for (const bool in_txn : {false, true}) {
         for (const auto& r : refusals) {
@@ -1540,7 +1542,7 @@ TEST_F(LockDeadlockTest, AStatementThatHasWrittenRowsNowWaitsInsteadOfBeingRefus
 
     // A multi-row UPDATE that writes row 1 and then meets row 2.
     //
-    // **The predicate names no pk window, and since AO-S6c-c that is what
+    // **The predicate names no tuple key window, and since AO-S6c-c that is what
     // keeps this cell about a mid-walk park.** `WHERE id <= 2` would now
     // declare `Range(t, 0, 3)` (item 14), which overlaps the holder's tuple
     // and is refused *before* the walk starts - so the statement would wait
@@ -1738,7 +1740,7 @@ TEST_F(LockDeadlockTest, ARepeatableReadInsertThatWaitsOnAFenceStillCannotDuplic
     ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
     Pump();
     ASSERT_TRUE(*w.done) << "the wait never ended";
-    EXPECT_NE(w.out->response.find("duplicate primary key"), std::string::npos)
+    EXPECT_NE(w.out->response.find("duplicate tuple key"), std::string::npos)
         << "a repeatable-read insert wrote a key its own view could not see: "
         << w.out->response;
 }
@@ -2120,14 +2122,14 @@ protected:
     }
 
     // **Why every cell here writes `WHERE v >= 0` rather than no predicate
-    // or a pk one.** A `WHERE`-less write declares the relation (AO-0 item
-    // 14) and a pk-shaped one declares its range, and a declared unit is
+    // or a tuple key one.** A `WHERE`-less write declares the relation (AO-0 item
+    // 14) and a tuple-key-shaped one declares its range, and a declared unit is
     // borrowed **before the walk starts** - so such a statement waits
     // having written nothing and re-runs cleanly, which is the better
     // behaviour and has its own cell
     // (`ACoarseDeclarationWaitsBeforeItWritesAnythingAndThenSucceeds`).
     // The mid-walk park these cells exist to measure is what a predicate
-    // naming no pk window still takes. Every row is inserted with `v = 0`
+    // naming no tuple key window still takes. Every row is inserted with `v = 0`
     // and a holder's row carries `9`, so `v >= 0` matches all ten whichever
     // value the page holds - `apply` evaluates the WHERE against the page's
     // current bytes, not against the version the view would resolve.
@@ -2438,6 +2440,35 @@ TEST_F(MidWalkWaitTest, AClusteredBtreeParksAndResumesByKey) {
         << "the key-ordered skip did not hold - rows below the resume key were written twice";
 }
 
+TEST_F(MidWalkWaitTest, AResumedWriteOverItsOwnRelationWritesTheTargetsItCollected) {
+    // A write whose WHERE reads the relation it writes collects its targets
+    // before its first write (parser-v2.md R2). The park comes after six
+    // rows are written; a resume that collected again would see them -
+    // `x.v = 1` true below every later row - and write nothing more.
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE tb SET v = 9 WHERE id = 7", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
+    Started walk = Start(
+        "UPDATE tb SET v = 1 WHERE NOT EXISTS (SELECT id FROM tb AS x WHERE x.id < tb.id AND "
+        "x.v = 1)",
+        w);
+    Pump();
+    ASSERT_FALSE(*walk.done) << "the walk did not park: " << walk.out->response;
+    ASSERT_NE(w.transaction(), nullptr);
+    EXPECT_EQ(w.transaction()->trail().size(), 6u);
+
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*walk.done) << "the wait never ended";
+    EXPECT_EQ(walk.out->response.rfind("UPDATED 10", 0), 0u) << walk.out->response;
+    EXPECT_EQ(w.transaction()->trail().size(), 10u);
+}
+
 TEST_F(MidWalkWaitTest, ThePointLookupArmStillReportsTheConflictItCannotWriteThrough) {
     // **The arm that does not walk at all.** A bare `WHERE id = k` on a
     // btree relation is answered by a descent, not by `VisitRelation` - so
@@ -2535,16 +2566,15 @@ TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesAnAppendSplitUnderThePark) {
         << "the park must be at the seventh key, inside the leaf the append grows";
 
     // **The leaf count before and after, so the cell cannot pass
-    // vacuously.** `DESCRIBE`'s whole line will not do: it carries
+    // vacuously.** The relation's whole row will not do: it carries
     // `ids_issued`, which moves with every insert whether or not a leaf
-    // ever split, so comparing the lines would assert nothing about the
-    // tree. The assertion is on `leaves=` itself.
+    // ever split, so comparing the rows would assert nothing about the
+    // tree. The assertion is on `leaves` itself.
     const auto leaf_count = [&]() -> int {
-        const std::string shape = Local("DESCRIBE tb");
-        const std::size_t at = shape.find("leaves=");
-        EXPECT_NE(at, std::string::npos) << shape;
-        if (at == std::string::npos) return -1;
-        return std::atoi(shape.c_str() + at + std::string("leaves=").size());
+        const auto leaves = testing_view::RelationField(*dispatcher_, "relation_stats", "tb",
+                                                        "leaves");
+        EXPECT_TRUE(leaves.has_value());
+        return leaves.has_value() ? std::atoi(leaves->c_str()) : -1;
     };
     const int leaves_before = leaf_count();
     ASSERT_EQ(leaves_before, 1)
@@ -2623,16 +2653,15 @@ TEST_F(MidWalkWaitTest, ABtreeResumeSurvivesALeafSplitUnderThePark) {
         << "the park must be at the seventh key for the split to straddle it";
 
     // **The leaf count before and after, so the cell cannot pass
-    // vacuously.** `DESCRIBE`'s whole line will not do: it carries
+    // vacuously.** The relation's whole row will not do: it carries
     // `ids_issued`, which moves with every insert whether or not a leaf
-    // ever divided, so comparing the lines would assert nothing about the
-    // tree. The assertion is on `leaves=` itself.
+    // ever divided, so comparing the rows would assert nothing about the
+    // tree. The assertion is on `leaves` itself.
     const auto leaf_count = [&]() -> int {
-        const std::string shape = Local("DESCRIBE ts");
-        const std::size_t at = shape.find("leaves=");
-        EXPECT_NE(at, std::string::npos) << shape;
-        if (at == std::string::npos) return -1;
-        return std::atoi(shape.c_str() + at + std::string("leaves=").size());
+        const auto leaves = testing_view::RelationField(*dispatcher_, "relation_stats", "ts",
+                                                        "leaves");
+        EXPECT_TRUE(leaves.has_value());
+        return leaves.has_value() ? std::atoi(leaves->c_str()) : -1;
     };
     const int leaves_before = leaf_count();
     ASSERT_EQ(leaves_before, 1)
@@ -2681,9 +2710,9 @@ TEST_F(MidWalkWaitTest, ADeadlockBetweenTwoMidWalkParksUnwindsTheVictimsOpenScop
 
     // **The anchors carry distinguishing values, and since AO-S6c-c that is
     // what makes the shape reachable at all.** The cell used to give the two
-    // walkers disjoint pk windows (`id >= 5`, `id >= 2`); a pk-shaped
+    // walkers disjoint tuple key windows (`id >= 5`, `id >= 2`); a tuple-key-shaped
     // predicate now declares a range and is borrowed before the walk, so
-    // neither would write anything before conflicting. A non-pk predicate
+    // neither would write anything before conflicting. A non-tuple-key predicate
     // keeps the per-row path - but both walkers then start at row 1, and
     // the second meets the first's rows immediately and writes nothing,
     // which is the coverage this cell exists to add. So the anchors' values
@@ -3031,7 +3060,7 @@ TEST_F(PurgeWaitTest, AnUndecidedDeleterAtTheBoundIsRefusedRetryably) {
     ASSERT_TRUE(*purge.done) << "the wait outlived kPurgeHorizonWait";
     EXPECT_EQ(purge.out->status.code(), StatusCode::kTxnConflict) << purge.out->response;
     EXPECT_TRUE(purge.out->status.retryable()) << purge.out->response;
-    EXPECT_NE(purge.out->response.find("primary key 5"), std::string::npos)
+    EXPECT_NE(purge.out->response.find("tuple key 5"), std::string::npos)
         << "the refusal does not name the key: " << purge.out->response;
     ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &c).response.rfind("ROLLBACK", 0), 0u);
 }
@@ -3098,6 +3127,181 @@ TEST_F(PurgeWaitTest, ARerunThatMeetsADdlWaitsForItAndThenPurges) {
     ASSERT_TRUE(*purge.done) << "the purge never resumed after the DDL";
     EXPECT_EQ(purge.out->response, "PURGED 1");
     EXPECT_EQ(locks_->EntryCount(), 0u) << "a wait's registration outlived it";
+}
+
+// ---- BO-S3: `sys.lock_waits`, one row per wait ----------------------------
+//
+// `instructions/v3.0.0/workorder-bo-sys-statistics-show-sugar.md` §3.3. The
+// store is the process's, so each cell empties it first.
+
+class LockWaitsViewTest : public LockDeadlockTest {
+protected:
+    void SetUp() override {
+        LockDeadlockTest::SetUp();
+        stats::LockWaitLog::ResetForTest();
+    }
+
+    testing_view::ViewText Waits() {
+        return testing_view::ReadViewText(
+            Local("SELECT unit, mode, rel_oid, key, waiter_trx, holder_trx, waited_us, outcome "
+                  "FROM sys.lock_waits"));
+    }
+};
+
+TEST_F(LockWaitsViewTest, AGrantedRowWaitIsOneRowNamingItsUnitModeAndHolder) {
+    const std::uint64_t oid = OidIn(Local("INSERT INTO t VALUES (7, 1)"));
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+    const std::uint64_t holder_trx = holder.transaction()->id();
+
+    // The wall instant the row is stamped with, pinned so the TIMESTAMP
+    // column can be filtered as one.
+    const exec::ScopedStatementClockForTest pinned(86'400'000'000);  // 1970-01-02
+    Session waiter;
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 7", waiter);
+    Pump();
+    ASSERT_FALSE(*w.done) << w.out->response;
+    EXPECT_TRUE(Waits().rows.empty()) << "a row before the wait ended";
+
+    clock_.Advance(5'000'000);  // 5 ms parked
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done);
+
+    const testing_view::ViewText waits = Waits();
+    ASSERT_EQ(waits.rows.size(), 1u);
+    EXPECT_EQ(waits.Column("unit"), std::vector<std::string>{"tuple"});
+    EXPECT_EQ(waits.Column("mode"), std::vector<std::string>{"X"});
+    EXPECT_EQ(waits.Column("rel_oid"), std::vector<std::string>{std::to_string(oid)});
+    EXPECT_EQ(waits.Column("key"), std::vector<std::string>{"7"});
+    EXPECT_EQ(waits.Column("holder_trx"), std::vector<std::string>{std::to_string(holder_trx)});
+    // An autocommit statement refused before it wrote a row holds nothing
+    // the wait-for graph can name, so its waiter is NULL.
+    EXPECT_EQ(waits.Column("waiter_trx"), std::vector<std::string>{"NULL"});
+    EXPECT_EQ(waits.Column("waited_us"), std::vector<std::string>{"5000"});
+    EXPECT_EQ(waits.Column("outcome"), std::vector<std::string>{"granted"});
+    EXPECT_EQ(Local("SELECT seq, core FROM sys.lock_waits WHERE started = '1970-01-02 00:00:00'"),
+              "seq,core\\n1,0");
+    EXPECT_EQ(testing_view::MetaField(Local("SHOW META"), "lock_waits_recorded"), "1");
+}
+
+TEST_F(LockWaitsViewTest, AWaitTheFaultNetEndsIsAFaultNetRow) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+    Session waiter;
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 7", waiter);
+    Pump();
+    clock_.Advance(txn::kLockWaitFaultNetNs + 1);
+    Pump();
+    ASSERT_TRUE(*w.done);
+
+    const testing_view::ViewText waits = Waits();
+    EXPECT_EQ(waits.Column("outcome"), std::vector<std::string>{"fault_net"});
+    EXPECT_EQ(waits.Column("waited_us"),
+              std::vector<std::string>{std::to_string((txn::kLockWaitFaultNetNs + 1) / 1000)});
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+}
+
+TEST_F(LockWaitsViewTest, TheWaiterThatClosesACycleIsADeadlockRowAndTheSurvivorsIsGranted) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO t VALUES (8, 1)").rfind("INSERTED", 0), 0u);
+    Session a;
+    Session b;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &a).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &b).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &a).response, "UPDATED 1");
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 8", &b).response, "UPDATED 1");
+    const std::string a_trx = std::to_string(a.transaction()->id());
+    const std::string b_trx = std::to_string(b.transaction()->id());
+
+    Started wa = Start("UPDATE t SET v = 3 WHERE id = 8", a);
+    Pump();
+    Started wb = Start("UPDATE t SET v = 3 WHERE id = 7", b);
+    Pump();
+    ASSERT_TRUE(*wb.done) << "B closed the cycle and is the victim";
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &b).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*wa.done);
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &a).response.rfind("COMMIT", 0), 0u);
+
+    // B's refusal at the edge it would have parked on, then A's wait.
+    const testing_view::ViewText waits = Waits();
+    ASSERT_EQ(waits.rows.size(), 2u);
+    EXPECT_EQ(waits.Column("outcome"), (std::vector<std::string>{"deadlock", "granted"}));
+    EXPECT_EQ(waits.Column("waiter_trx"), (std::vector<std::string>{b_trx, a_trx}));
+    EXPECT_EQ(waits.Column("holder_trx"), (std::vector<std::string>{a_trx, b_trx}));
+    EXPECT_EQ(waits.Column("key"), (std::vector<std::string>{"7", "8"}));
+    EXPECT_EQ(waits.Column("waited_us").front(), "0") << "a victim never parked";
+}
+
+// BO-S5 (§3.1): a statement is timed whole - its park, its re-run and its
+// commit inside one call - and counted once, however many times it ran.
+TEST_F(LockWaitsViewTest, AStatementThatWaitedIsOneCallTimedWhole) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (7, 1)").rfind("INSERTED", 0), 0u);
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE t SET v = 2 WHERE id = 7", &holder).response,
+              "UPDATED 1");
+    stats::StatementStats::ResetForTest();
+
+    const exec::ScopedStatementClockForTest pinned(86'400'000'000);  // 1970-01-02
+    Session waiter;
+    Started w = Start("UPDATE t SET v = 3 WHERE id = 8", waiter);  // another shape's literal
+    Started parked = Start("UPDATE t SET v = 3 WHERE id = 7", waiter);
+    Pump();
+    ASSERT_FALSE(*parked.done);
+    clock_.Advance(5'000'000);
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done && *parked.done);
+
+    const testing_view::ViewText shapes = testing_view::ReadViewText(
+        Local("SELECT kind, calls, total_us, max_us, first_seen FROM sys.statement_stats "
+              "WHERE kind = 'UPDATE'"));
+    // One shape: the two UPDATEs differ in a literal only. The holder's
+    // UPDATE ran before the reset, and its COMMIT is another kind.
+    ASSERT_EQ(shapes.rows.size(), 1u);
+    EXPECT_EQ(shapes.Column("calls"), std::vector<std::string>{"2"});
+    EXPECT_EQ(shapes.Column("max_us"), std::vector<std::string>{"5000"})
+        << "the parked statement's 5 ms, re-run included, in one call";
+    EXPECT_EQ(shapes.Column("total_us"), std::vector<std::string>{"5000"});
+    EXPECT_EQ(shapes.Column("first_seen"), std::vector<std::string>{"1970-01-02 00:00:00"});
+}
+
+TEST_F(LockWaitsViewTest, ADropHeldByAPositionedReaderIsARelationRowWithNoTransactionOnEitherSide) {
+    ASSERT_EQ(Local("CREATE TABLE rb (id int64, v int64)").rfind("CREATED", 0), 0u);
+    const std::uint64_t oid = OidIn(Local("INSERT INTO rb VALUES (1, 1)"));
+    txn::LockHoldings reader;
+    const std::uint64_t reader_id = txn::kReadHolderBit | 7;
+    ASSERT_TRUE(locks_
+                    ->Acquire(reader_id, txn::LockKey::Relation(static_cast<catalog::Oid>(oid)),
+                              txn::LockMode::kIntentionShared, reader)
+                    .value()
+                    .granted);
+    Session s;
+    Started drop = Start("DROP TABLE rb", s);
+    Pump();
+    ASSERT_FALSE(*drop.done);
+    locks_->Release(reader_id, reader);
+    Pump();
+    ASSERT_TRUE(*drop.done);
+
+    // An autocommit DDL holds nothing while it waits, and a read borrow is
+    // no transaction: both parties read NULL rather than an id.
+    const testing_view::ViewText waits = Waits();
+    ASSERT_EQ(waits.rows.size(), 1u);
+    EXPECT_EQ(waits.Column("unit"), std::vector<std::string>{"relation"});
+    EXPECT_EQ(waits.Column("mode"), std::vector<std::string>{"X"});
+    EXPECT_EQ(waits.Column("rel_oid"), std::vector<std::string>{std::to_string(oid)});
+    EXPECT_EQ(waits.Column("key"), std::vector<std::string>{"0"});
+    EXPECT_EQ(waits.Column("waiter_trx"), std::vector<std::string>{"NULL"});
+    EXPECT_EQ(waits.Column("holder_trx"), std::vector<std::string>{"NULL"});
+    EXPECT_EQ(waits.Column("outcome"), std::vector<std::string>{"granted"});
 }
 
 }  // namespace

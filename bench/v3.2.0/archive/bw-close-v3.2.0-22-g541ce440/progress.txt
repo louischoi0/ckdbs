@@ -1,0 +1,26 @@
+08:12:53 start
+08:13:33 builds started
+08:15:13 build B done rc=0
+08:15:14 build A done rc=0
+08:15:37 watch phase=none driver=no last: 
+08:15:37 ORPHAN at , resuming
+08:15:45 phase start s1
+08:15:45 watch phase=none driver=no last: 
+08:16:45 watch phase=s1 driver=yes last: {"arm": "B", "cell": "wide-h", "kind": "scan", "rel": "wd", "path": "prepared", "ops": 96, "bad": 0, "rows": 10000, "server_cpu_us": 333.68, "driver_cpu_us": 85
+08:17:32 phase end s1 rc=0
+08:17:32 phase start u1
+08:17:45 watch phase=u1 driver=yes last: 
+08:18:45 watch phase=u1 driver=yes last: {"shape": "insert", "path": "literal", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 38.6, "p25_us": 43.64, "p50_us": 44.92, "p90_us": 65.16, "p99_us": 96.65, "me
+08:18:55 phase end u1 rc=0
+08:18:55 ALL DONE
+08:18:58 phase start s2
+08:18:58 watch2 phase=u1 driver=no last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates': 1000, 'pages_allocated_delta': 0}
+08:19:58 watch2 phase=s2 driver=yes last: {"arm": "A", "cell": "point:s", "kind": "point", "rel": "s", "path": "prepared", "ops": 1998, "bad": 0, "rows": 1, "server_cpu_us": 26.6, "driver_cpu_us": 29.76
+08:20:27 phase end s2 rc=0
+08:20:27 phase start z
+08:20:58 watch2 phase=z driver=yes last: {"arm": "B", "cell": "rows-1k", "kind": "scan", "rel": "s1k", "path": "prepared", "ops": 384, "bad": 0, "rows": 1000, "server_cpu_us": 55.74, "driver_cpu_us": 3
+08:21:10 phase end z rc=0
+08:21:10 phase start u2
+08:21:58 watch2 phase=u2 driver=yes last: {"shape": "insert", "path": "literal", "bin": "B", "ops": 1998, "bad": 0, "p0_us": 41.01, "p25_us": 43.37, "p50_us": 43.89, "p90_us": 52.02, "p99_us": 73.44, "m
+08:22:28 phase end u2 rc=0
+08:22:28 ALL DONE 2

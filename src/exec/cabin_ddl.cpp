@@ -9,9 +9,8 @@ namespace {
 
 // The relation and the column position `stmt` names.
 //
-// Resolution is exact-match, like `Schema::FindColumn` everywhere else: the
-// catalog stores a column's name as it was declared, and case folding here
-// alone would make `CREATE CABIN` accept a spelling no other statement does.
+// Resolution is `Schema::FindColumn`'s, every column name's: ignoring case,
+// two or more matches refused as ambiguous (docs/spec/parser-v2.md).
 struct Resolved {
     catalog::Oid rel_oid = 0;
     const catalog::TableAccess* access = nullptr;
@@ -35,14 +34,14 @@ StatusOr<Resolved> Resolve(catalog::Catalog& catalog, const parser::CabinStmt& s
     auto access = catalog.InitTableAccess(oid.value());
     if (!access.ok()) return access.status();
 
-    for (std::size_t i = 0; i < access.value()->schema.columns.size(); ++i) {
-        if (catalog::NameView(access.value()->schema.columns[i].name) != stmt.column_name) {
-            continue;
-        }
+    const catalog::Schema& schema = access.value()->schema;
+    auto found = schema.FindColumn(stmt.column_name, stmt.column_byte_offset);
+    if (!found.ok()) return found.status();
+    if (found.value() != nullptr) {
         Resolved out;
         out.rel_oid = oid.value();
         out.access = access.value();
-        out.col_pos = static_cast<std::uint16_t>(i);
+        out.col_pos = static_cast<std::uint16_t>(found.value() - schema.columns.data());
         return out;
     }
     return Status::NotFound("relation '" + stmt.table_name + "' has no column '" +
@@ -81,7 +80,7 @@ StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, const parser::Ca
     auto resolved = Resolve(catalog, stmt);
     if (!resolved.ok()) return resolved.status();
 
-    // The pk refusal and the duplicate refusal both live in the catalog, and
+    // The tuple key refusal and the duplicate refusal both live in the catalog, and
     // are deliberately not restated here: two answers to "why not" is how one
     // of them ends up wrong.
     auto cabin_id = catalog.CreateCabin(resolved.value().rel_oid, resolved.value().col_pos,

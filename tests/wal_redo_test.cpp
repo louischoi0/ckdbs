@@ -12,6 +12,8 @@
 
 #include "kds/server/superblock.hpp"
 #include "kds/storage/anchor_page.hpp"
+#include "kds/storage/device_page_store.hpp"
+#include "kds/storage/memory_page_device.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/keystone.hpp"
@@ -536,10 +538,10 @@ TEST_F(VarHeapWriteAtTest, ASlotPastTheEndIsCorruption) {
 // it, and refuses a record whose key does not sort there; a split's one
 // record replays every page it names.
 
-// A row whose Keystone word carries `pk`.
-std::vector<std::byte> Row(std::uint64_t pk) {
+// A row whose Keystone word carries `tuple_key`.
+std::vector<std::byte> Row(std::uint64_t tuple_key) {
     std::vector<std::byte> out(24, std::byte{0x5A});
-    auto word = Keystone::Encode(pk, 0, 0);
+    auto word = Keystone::Encode(tuple_key, 0, 0);
     EXPECT_TRUE(word.ok());
     const std::uint64_t w = word.ok() ? word.value() : 0;
     std::memcpy(out.data(), &w, sizeof(w));
@@ -554,8 +556,8 @@ void AppendLeafInit(WalStream& w) {
     ASSERT_TRUE(w.Append({RecordType::kPageInit, 1, kPage}, init).ok());
 }
 
-void AppendBtreeInsert(WalStream& w, std::uint16_t slot, std::uint64_t pk) {
-    const std::vector<std::byte> row = Row(pk);
+void AppendBtreeInsert(WalStream& w, std::uint16_t slot, std::uint64_t tuple_key) {
+    const std::vector<std::byte> row = Row(tuple_key);
     std::vector<std::byte> buf(kHeapWriteFixedSize + row.size());
     const HeapWritePayload hw{/*trx_id=*/7, /*undo_ptr=*/0, slot,
                               static_cast<std::uint16_t>(row.size())};
@@ -648,6 +650,136 @@ TEST_F(RedoTest, ABtreeSplitReplaysEveryPageItNamesAndAnalysisDirtiesEach) {
     ASSERT_TRUE(old_leaf.ok());
     EXPECT_EQ(heap::PageView(old_leaf.value().bytes()).next_page_id(), kNew)
         << "the link the split wrote did not replay with it";
+}
+
+// ---- The heal (wal.md §10) ------------------------------------------------
+//
+// On a `DevicePageStore`, because what refused the heal was the store's
+// claim: a torn page is an allocated id whose device bytes are neither
+// zeros nor a page that verifies.
+
+class RedoHealTest : public RedoTest {
+protected:
+    std::unique_ptr<storage::MemoryPageDevice> pages_ =
+        std::move(storage::MemoryPageDevice::Create(8, 0).value());
+
+    std::unique_ptr<storage::DevicePageStore> OpenPages() {
+        auto opened = storage::DevicePageStore::Open(*pages_, storage::FrameCapacity{4096},
+                                                     server::kFirstUserPageId);
+        EXPECT_TRUE(opened.ok()) << opened.status().message();
+        return opened.ok() ? std::move(opened.value()) : nullptr;
+    }
+
+    // A heap page with `rows` tuples written to the device, then one body
+    // byte flipped behind the store's back: the shape a torn write leaves.
+    void WriteTornPage() {
+        {
+            auto store = OpenPages();
+            ASSERT_NE(store, nullptr);
+            {
+                auto created = store->CreateAt(kPage);
+                ASSERT_TRUE(created.ok()) << created.status().message();
+                auto view = heap::PageView::CreateEmpty(created.value().bytes(), /*min_key=*/1);
+                ASSERT_TRUE(view.ok());
+                ASSERT_TRUE(view.value().InsertTuple(Bytes(24, 0x11), 3, 0).ok());
+            }
+            ASSERT_TRUE(store->Sync().ok());
+        }
+        std::array<std::byte, kPageSize> raw{};
+        ASSERT_TRUE(pages_->ReadPage(kPage, std::span<std::byte, kPageSize>(raw)).ok());
+        raw[kPageSize - 100] ^= std::byte{0xFF};
+        ASSERT_TRUE(pages_->WritePage(kPage, std::span<const std::byte, kPageSize>(raw)).ok());
+    }
+
+    void AppendImage(WalStream& w, int rows) {
+        std::vector<std::byte> image(kPageSize, std::byte{0});
+        auto view = heap::PageView::CreateEmpty(
+            std::span<std::byte, kPageSize>(image.data(), kPageSize), /*min_key=*/1);
+        ASSERT_TRUE(view.ok());
+        for (int i = 0; i < rows; ++i) {
+            ASSERT_TRUE(view.value().InsertTuple(Bytes(24, 0x20 + i), 3, 0).ok());
+        }
+        std::vector<std::byte> buf(kFullPageImagePayloadSize, std::byte{0});
+        ASSERT_TRUE(EncodeFullPageImage(
+                        buf, std::span<const std::byte, kPageSize>(image.data(), kPageSize))
+                        .ok());
+        ASSERT_TRUE(w.Append({RecordType::kFullPageImage, 3, kPage}, buf).ok());
+    }
+};
+
+TEST_F(RedoHealTest, AFullPageImageHealsAnAllocatedPageThatFailedItsChecksum) {
+    WriteTornPage();
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok()) << s.status().message();
+        // A delta before the image poisons the page; the image heals it; the
+        // delta after it lands on the healed bytes.
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/1, 0x30), 0u);
+        AppendImage(*s.value(), /*rows=*/1);
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/1, 0x40), 0u);
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    auto store = OpenPages();
+    ASSERT_NE(store, nullptr);
+    ASSERT_EQ(store->Get(kPage).status().code(), StatusCode::kCorruption) << "the page is not torn";
+    auto redone = Redo(*device_, 0, *store, Analyzed());
+    ASSERT_TRUE(redone.ok()) << redone.status().message();
+    EXPECT_EQ(redone.value().pages_healed, 1u);
+    EXPECT_EQ(redone.value().page_images, 1u);
+
+    auto page = store->Get(kPage);
+    ASSERT_TRUE(page.ok()) << page.status().message();
+    heap::PageView view(page.value().bytes());
+    ASSERT_EQ(view.slot_count(), 2u) << "the delta after the image did not land";
+    auto first = view.ReadTuple(0);
+    ASSERT_TRUE(first.ok());
+    EXPECT_EQ(std::vector<std::byte>(first.value().payload.begin(), first.value().payload.end()),
+              Bytes(24, 0x20))
+        << "slot 0 is not the image's";
+    auto second = view.ReadTuple(1);
+    ASSERT_TRUE(second.ok());
+    EXPECT_EQ(std::vector<std::byte>(second.value().payload.begin(), second.value().payload.end()),
+              Bytes(24, 0x40));
+}
+
+TEST_F(RedoHealTest, ATornPageNoImageRestoresIsStillRefusedByName) {
+    WriteTornPage();
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok()) << s.status().message();
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/1, 0x30), 0u);
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto store = OpenPages();
+    ASSERT_NE(store, nullptr);
+    auto redone = Redo(*device_, 0, *store, Analyzed());
+    ASSERT_FALSE(redone.ok());
+    EXPECT_EQ(redone.status().code(), StatusCode::kCorruption) << redone.status().message();
+    EXPECT_NE(redone.status().message().find("no full page image restored it"), std::string::npos)
+        << redone.status().message();
+}
+
+TEST_F(RedoHealTest, OnlyTheHealTakesATornIdAndNeitherTakesALivePage) {
+    WriteTornPage();
+    {
+        auto store = OpenPages();
+        ASSERT_NE(store, nullptr);
+        EXPECT_EQ(store->CreateAt(kPage).status().code(), StatusCode::kAlreadyExists)
+            << "an ordinary create took a torn page";
+        {
+            auto healed = store->CreateOverTorn(kPage);
+            ASSERT_TRUE(healed.ok()) << healed.status().message();
+            storage::FormatPage(healed.value().bytes(), PageType::kHeap);
+        }
+        ASSERT_TRUE(store->Sync().ok());
+    }
+    // The id now holds a page that verifies, on the device and not resident.
+    auto store = OpenPages();
+    ASSERT_NE(store, nullptr);
+    EXPECT_EQ(store->CreateOverTorn(kPage).status().code(), StatusCode::kAlreadyExists)
+        << "the heal clobbered a page that verifies";
+    EXPECT_TRUE(store->Get(kPage).ok());
 }
 
 }  // namespace

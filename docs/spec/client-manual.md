@@ -234,7 +234,7 @@ client author has to know to write one.
   `S_ROW_BATCH` frames, each `{row_count u16, rows…}`, each row a
   `{i32 len | -1 = NULL, bytes}` per field. Then `S_COMPLETE {tag,
   rows_affected}`.
-- **A relation's pk field is always 8 bytes**, little-endian, whatever
+- **A relation's tuple key field is always 8 bytes**, little-endian, whatever
   integer type the column declares: `type_oid` names the declared type,
   `type_len` is 8, and the value can exceed the declared range. A load
   chunk sends it the same way (`protocol.md` §6). Decode an integer by
@@ -282,7 +282,7 @@ hold on the debug port too (Appendix A gives the text spellings).
 - **`UNKNOWN_OUTCOME` means the statement may have run, and must not be
   retried.** The code stays in the pinned registry, and **nothing in this
   engine produces it**. A client should still handle
-  it as the contract says - this engine issues primary keys, so a retry
+  it as the contract says - this engine issues tuple keys, so a retry
   would insert a *second* row rather than replay an idempotent one; **read
   the data back**. It is not a `TXN_CONFLICT` and never carries
   `retryable = 1`.
@@ -296,11 +296,11 @@ hold on the debug port too (Appendix A gives the text spellings).
   both carry the byte position of what was declined, and neither is
   retryable. They differ in one thing, and it is the thing a client library
   wants: `UNSUPPORTED` is a form this engine's architecture cannot admit —
-  updating a primary key, comparing two decimals of different width, a
+  updating a tuple key, comparing two decimals of different width, a
   subquery nested deeper than the engine's fixed limit — so **no later server answers
   it** and the statement must be rewritten. `NOT_IMPLEMENTED` is a form the
   design admits and this release has not built — outer joins, CTEs,
-  `UNIQUE`, `ALTER TABLE ADD COLUMN` — so a client may feature-detect and
+  `UNIQUE`, `ALTER TABLE ... MODIFY` — so a client may feature-detect and
   try again against a newer server.
 - **`REPEATABLE READ` is one snapshot on one core.** A transaction pins
   its view at `BEGIN` and every statement of it - read and write - runs
@@ -329,8 +329,8 @@ ckdbs> PING
 PONG
 ckdbs> DESCRIBE accounts
 oid=4000 root_page_id=128 clustered_type=BTREE next_id=1 columns=2
-pos=0 name=id type=int64 notnull=yes pk=yes autoincrement=if-omitted
-pos=1 name=name type=varchar notnull=yes pk=no autoincrement=no
+pos=0 name=id type=int64 notnull=yes tuple_key=yes autoincrement=if-omitted
+pos=1 name=name type=varchar notnull=yes tuple_key=no autoincrement=no
 ckdbs> help        # local-only hint list (KNOWN_COMMANDS), not sent to the server
 ckdbs> exit         # local-only: closes this connection, does NOT stop the server
 ```
@@ -524,7 +524,8 @@ rendered.
 - **The special cases of §2 carry their category as a token** a retry
   loop reads rather than prose: `ERR TXN_CONFLICT retryable=1 ...`,
   `ERR UNKNOWN_OUTCOME retryable=0 ...`, `ERR UNSUPPORTED retryable=0 ...`,
-  `ERR NOT_IMPLEMENTED retryable=0 ...`, `ERR FK_VIOLATION retryable=0 ...`.
+  `ERR NOT_IMPLEMENTED retryable=0 ...`, `ERR FK_VIOLATION retryable=0 ...`,
+  `ERR ASSERTION_VIOLATION retryable=0 ...`, `ERR TRANSITION_VIOLATION retryable=0 ...`.
   The `retryable=` token will not change spelling. The semantics are §2's;
   every other `ERR` is not retryable. After a conflict the connection is
   in a failed transaction and answers only `ROLLBACK`/`ABORT`/`SYNC`/

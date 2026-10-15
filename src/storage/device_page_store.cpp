@@ -386,7 +386,7 @@ Status DevicePageStore::MarkHeaderlessBeforeInsert(PageId headerless_page) {
     // which is child 1 - so a frame inserted ahead of the mark could be
     // written out stamped while this read, write and sync run, and read
     // back after a crash as a directory whose child 1 is a checksum.
-    if (!DeviceHoldsOnlyZeros(headerless_page)) {
+    if (!DeviceHoldsNoPage(headerless_page, /*torn_is_none=*/false)) {
         const Page zeros{};
         if (Status s = device_.WritePage(headerless_page,
                                          std::span<const std::byte, kPageSize>(zeros));
@@ -895,13 +895,13 @@ void DevicePageStore::ReleaseFrameLocked(Frame& frame) noexcept {
     ReturnSlotLocked(slot);
 }
 
-StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId page_id,
-                                                                         bool mark_dirty,
-                                                                         FetchHeat heat) {
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Resolve(PageId page_id,
+                                                                  bool mark_dirty,
+                                                                  FetchHeat heat) {
     // Every core faults every page: the miss path always reads and always
     // verifies, and what serialises a shared page is `crosscore.md` CC11's
     // (per-core fault grants retired at AW-S1b, AT-S5).
-
+    if (!IsAllocated(page_id)) return NotAllocated(page_id);
     if (auto it = frames_.find(page_id); it != frames_.end()) {
         // Never clears the flag: a frame already dirty from an earlier
         // mutation stays dirty however many readers touch it afterwards.
@@ -913,7 +913,12 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
         if (heat != FetchHeat::kRing && it->second.usage < kClockUsageCap) ++it->second.usage;
         return std::span<std::byte, kPageSize>(*it->second.bytes);
     }
+    return FaultIn(page_id, mark_dirty, heat);
+}
 
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FaultIn(PageId page_id,
+                                                                   bool mark_dirty,
+                                                                   FetchHeat heat) {
     // The free map says this page exists and the device cannot address it:
     // the strongest form of "allocated but never written" (the all-zero
     // case below says when the map runs ahead of the bytes). NotFound for
@@ -1093,13 +1098,17 @@ std::unique_ptr<ScanFetcher> DevicePageStore::OpenScanRing(std::size_t frames) {
     return std::make_unique<ScanRing>(*this, frames);
 }
 
-bool DevicePageStore::DeviceHoldsOnlyZeros(PageId page_id) const {
+bool DevicePageStore::DeviceHoldsNoPage(PageId page_id, bool torn_is_none) const {
     // Not addressable is the strongest form of never written. A failed read
     // answers "in use": refusing a CreateAt is the safe error.
     if (page_id >= device_.page_capacity()) return true;
     auto bytes = std::make_unique<Page>();
     if (!device_.ReadPage(page_id, std::span<std::byte, kPageSize>(*bytes)).ok()) return false;
-    return PageIsAllZero(std::span<const std::byte, kPageSize>(*bytes));
+    const std::span<const std::byte, kPageSize> page(*bytes);
+    if (PageIsAllZero(page)) return true;
+    // The test `FaultIn` makes, so an id is torn here exactly when a fetch
+    // of it answers Corruption.
+    return torn_is_none && !IsHeaderless(page_id) && !VerifyPageChecksum(page).ok();
 }
 
 StatusOr<PageId> DevicePageStore::ClaimNextFreeIdLocked(std::uint32_t* missing_region) {
@@ -1147,14 +1156,16 @@ StatusOr<PageId> DevicePageStore::ClaimNextFreeIdLocked(std::uint32_t* missing_r
 }
 
 StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(PageId page_id,
-                                                                           bool zeros_known,
-                                                                           bool device_zeros) {
+                                                                           bool device_read,
+                                                                           bool device_spare) {
     // An allocated id is in use unless the device proves it was never
     // written - the page redo re-creates after a PAGE_INIT outran its first
-    // flush (`ResidentBytes` answers NotFound for the same page, and says
-    // why the map can be ahead of the bytes). Decided by a resident frame or
-    // the device's bytes, never by the map alone: the map bit is exactly
-    // what is true of both a live page and a never-written one.
+    // flush (`FaultIn` answers NotFound for the same page, and says
+    // why the map can be ahead of the bytes) - or, for redo's heal alone,
+    // that it holds a page failing its checksum (`DeviceHoldsNoPage`).
+    // Decided by a resident frame or the device's bytes, never by the map
+    // alone: the map bit is exactly what is true of both a live page and a
+    // never-written one.
     //
     // The two maps live in this object, not in a frame, and may not have
     // reached the device yet - in use by definition. Any region's bitmaps,
@@ -1182,8 +1193,8 @@ StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(Page
         }
         // The bit is set and the caller did not read the device, because it
         // saw the bit clear before it took the hold. It has to look now.
-        if (!zeros_known) return ClaimOutcome::kNeedsDeviceRead;
-        if (!device_zeros) return Status::AlreadyExists("page id already in use");
+        if (!device_read) return ClaimOutcome::kNeedsDeviceRead;
+        if (!device_spare) return Status::AlreadyExists("page id already in use");
     } else {
         ++allocated_pages_;
         // A freed id named directly - redo re-creating it, or a catalog
@@ -1198,6 +1209,16 @@ StatusOr<DevicePageStore::ClaimOutcome> DevicePageStore::ClaimNamedIdLocked(Page
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(PageId page_id) {
+    return CreateNamedIdUnpinned(page_id, /*over_torn=*/false);
+}
+
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateOverTornUnpinned(
+    PageId page_id) {
+    return CreateNamedIdUnpinned(page_id, /*over_torn=*/true);
+}
+
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateNamedIdUnpinned(PageId page_id,
+                                                                                 bool over_torn) {
     // **Any core may place a page at a chosen id** (AT-S5b, `catalog.md`
     // CT5): what admits exactly one caller per id is the claim itself,
     // `ClaimNamedIdLocked` under the structure and map latches, and every
@@ -1230,12 +1251,12 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
     // needed for; a clear bit is a free page and the device says nothing
     // about it. Racy on purpose - a bit that changes under us comes back as
     // `kNeedsDeviceRead` and this loop reads it then.
-    bool zeros_known = false;
-    bool device_zeros = false;
+    bool device_read = false;
+    bool device_spare = false;
     for (;;) {
-        if (IsAllocated(page_id) && !zeros_known) {
-            device_zeros = DeviceHoldsOnlyZeros(page_id);
-            zeros_known = true;
+        if (IsAllocated(page_id) && !device_read) {
+            device_spare = DeviceHoldsNoPage(page_id, over_torn);
+            device_read = true;
         }
         // **Both latches, frames outer and map inner** - the declared order
         // (`device_page_store.hpp`, AM-S3). `ClaimNamedIdLocked` reads the
@@ -1246,7 +1267,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
         // are re-validated under them.
         LatchGuard structure(structure_latch());
         LatchGuard alloc(map_latch());
-        auto claimed = ClaimNamedIdLocked(page_id, zeros_known, device_zeros);
+        auto claimed = ClaimNamedIdLocked(page_id, device_read, device_spare);
         if (!claimed.ok()) return claimed.status();
         if (claimed.value() == ClaimOutcome::kClaimed) {
             // Recorded under the same hold that set the bit, so no second
@@ -1256,7 +1277,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(Page
         }
         // The bit was set after all and nobody had asked the device yet.
         // The hold ends here, and the next turn asks.
-        zeros_known = false;
+        device_read = false;
     }
 
     // Drops the claim however this function leaves, so a failed
@@ -1560,13 +1581,6 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetUnpinned(PageId pa
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetForReadUnpinned(PageId page_id) {
     return Resolve(page_id, /*mark_dirty=*/false, FetchHeat::kWarm);
-}
-
-StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Resolve(PageId page_id,
-                                                                  bool mark_dirty,
-                                                                  FetchHeat heat) {
-    if (!IsAllocated(page_id)) return NotAllocated(page_id);
-    return ResidentBytes(page_id, mark_dirty, heat);
 }
 
 Status DevicePageStore::NotAllocated(PageId page_id) const {
@@ -2262,7 +2276,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
     // The hit path runs the raw fetch under the latch, and that does no I/O
     // because no clear bit has a resident frame (BF-R5: `FreePage` erases
     // the frame in the hold that clears the bit), so `IsAllocated` answers
-    // from memory and `ResidentBytes` reads the device only on a miss.
+    // from memory and `Resolve` reads the device only on a miss.
     AssertOrderBeforeFrames("FetchPinned");
     std::unique_lock<Latch> hold(*latch);
     for (;;) {
@@ -2305,7 +2319,13 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
             if (after_fault_published_for_test_) after_fault_published_for_test_(page_id);
             // The reservation (and its sweep, under holds of its own), the
             // device read and the checksum verify, all outside this hold.
-            auto loaded = Resolve(page_id, /*mark_dirty=*/!for_read, heat);
+            // **`FaultIn`, not `Resolve`**: absent under the latch above, and
+            // `loading_` excludes every other loader, so no `find` - which
+            // would run unlatched over a table another core may be
+            // rehashing. A frame inserted meanwhile meets `InsertFrame`'s
+            // lost-race arm.
+            if (!IsAllocated(page_id)) return NotAllocated(page_id);
+            auto loaded = FaultIn(page_id, /*mark_dirty=*/!for_read, heat);
             if (!loaded.ok()) return loaded.status();
         }
 
@@ -2368,9 +2388,9 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     // exactly the work step 2b moved off this latch on the fetch side.
     StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> made =
         Status::InvalidArgument("unreachable");
-    if (which == CreateKind::kAt || which == CreateKind::kClaimed) {
-        auto bytes = which == CreateKind::kAt ? CreateAtUnpinned(page_id)
-                                              : CreateClaimedUnpinned(page_id);
+    if (which == CreateKind::kAt || which == CreateKind::kClaimed ||
+        which == CreateKind::kOverTorn) {
+        auto bytes = CreateNamedUnpinned(which, page_id);
         if (!bytes.ok()) return bytes.status();
         made = std::pair<PageId, std::span<std::byte, kPageSize>>(page_id, bytes.value());
     } else {

@@ -25,7 +25,7 @@
 // Three groups of cells:
 //
 //   - **The consumers** (BH-S1's Census B, the order's §1.6, run through the
-//     statement since BH-S3): every structure that keeps a deleted row's pk
+//     statement since BH-S3): every structure that keeps a deleted row's tuple key
 //     - a secondary index, a Cabin, the foreign-key reverse check through a
 //     Cabin, the inner build, an assertion's directory and a Waystone trail
 //     - reads a key that was purged and placed again with different values
@@ -94,10 +94,10 @@ protected:
         ASSERT_EQ(out.rfind(prefix, 0), 0u) << sql << " -> " << out;
     }
 
-    // `DELETE` of `pk`, its `PURGE`, then `insert` naming `pk` again.
-    void DeletePurgeAndPlaceAgain(const std::string& table, std::uint64_t pk,
+    // `DELETE` of `tuple_key`, its `PURGE`, then `insert` naming `tuple_key` again.
+    void DeletePurgeAndPlaceAgain(const std::string& table, std::uint64_t tuple_key,
                                   const std::string& insert) {
-        const std::string where = " WHERE id = " + std::to_string(pk);
+        const std::string where = " WHERE id = " + std::to_string(tuple_key);
         Ok("DELETE FROM " + table + where, "DELETED 1");
         Ok("PURGE FROM " + table + where, "PURGED 1");
         const std::string placed = Run(insert);
@@ -255,7 +255,7 @@ TEST_F(PurgeKeyTest, CensusBAWaystoneReplayLandsWhereAFreshDescentWould) {
     for (int id : {1, 2, 5}) {
         Ok("INSERT INTO t VALUES (" + std::to_string(id) + ", 10, 'x')", "INSERTED");
     }
-    // **A pk lookup, because only a lookup replays**: a trail never serves a
+    // **A tuple key lookup, because only a lookup replays**: a trail never serves a
     // search (invariant 9, `IsTrailReplayable`), so a `WHERE v = ...` cell
     // would read no trail at all. The first run counts, the second records,
     // the third replays - and `replays=` is the evidence it did.
@@ -296,7 +296,7 @@ TEST_F(PurgeKeyTest, CensusDADeleteOfASystemRelationIsRefusedOnlyByAccident) {
 // ---- The statement ---------------------------------------------------------
 
 TEST_F(PurgeKeyTest, APurgedKeyIsNamedAgainAndPlaced) {
-    // W2: "another API that purges the pk information itself ... in this
+    // W2: "another API that purges the tuple key information itself ... in this
     // case re-insertion is possible".
     Ok("CREATE TABLE t (id int64, qty int64) BTREE", "CREATED");
     Ok("INSERT INTO t VALUES (5, 1)", "INSERTED");
@@ -511,7 +511,7 @@ TEST_F(PurgeKeyTest, ARefusalWhileWritingKeepsTheKeysItPurgedAndSaysHowMany) {
 
     const DispatchOutcome refused = d_->Dispatch("PURGE FROM t WHERE id BETWEEN 1 AND 3");
     EXPECT_EQ(refused.status.code(), StatusCode::kIoError) << refused.response;
-    EXPECT_NE(refused.response.find("primary key 2 is purged"), std::string::npos)
+    EXPECT_NE(refused.response.find("tuple key 2 is purged"), std::string::npos)
         << refused.response;
     EXPECT_NE(refused.response.find("purged 1 key(s) of its window before it"), std::string::npos)
         << refused.response;

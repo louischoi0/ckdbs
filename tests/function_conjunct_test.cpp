@@ -21,12 +21,12 @@
 //
 // The cells that matter most are the **readers** group. A function
 // conjunct is lowered to a residual kind of its own because a dozen compiler
-// readers take a `StepPredicate` as `col op value` and make it a pk bound,
+// readers take a `StepPredicate` as `col op value` and make it a tuple key bound,
 // an index bound, a Cabin probe, a join key or a build key (§1.7) - and
 // `f(col) op v` read as `col op v` returns wrong rows with no error. Each
 // reader cell puts a function of a column where that reader looks and
 // compares the reply with the plain statement it must equal. The shipped
-// functions take only a TIMESTAMP, which can be none of a pk, a join key or
+// functions take only a TIMESTAMP, which can be none of a tuple key, a join key or
 // an int index's column, so these cells register `plus_one(int64)` through
 // the test seam.
 
@@ -137,13 +137,13 @@ TEST_F(FunctionConjunctTest, NowIsOneInstantForTheWholeStatement) {
 
 // ---- The readers: a function conjunct is never a key [quiet-wrong] ------
 
-TEST_F(FunctionConjunctTest, OverThePkItIsNotALookup) {
+TEST_F(FunctionConjunctTest, OverTheTupleKeyItIsNotALookup) {
     exec::ScopedTestFunction plus_one(kPlusOne);
     EXPECT_EQ(Run("SELECT id, v FROM t WHERE plus_one(id) = 4"),
               Run("SELECT id, v FROM t WHERE id = 3"));
     EXPECT_EQ(Run("SELECT id, v FROM t WHERE plus_one(id) < 3"),
               Run("SELECT id, v FROM t WHERE id < 2"));
-    // The value side, on the pk: `id = plus_one(k)` holds on every row.
+    // The value side, on the tuple key: `id = plus_one(k)` holds on every row.
     EXPECT_EQ(RowsOf("SELECT id FROM t WHERE id = plus_one(k)"), "rows=6");
 }
 

@@ -56,6 +56,7 @@ import time
 
 from bench_common import Phase
 from ckdbs_cli import DEFAULT_HOST, ServerConnection
+import sys_meta
 
 PARENT, CHILD, PLAIN = "fk_p", "fk_c", "fk_n"
 KEYS = ("sched_foreground_polls", "sched_foreground_polled_us")
@@ -77,14 +78,8 @@ def host_state():
 
 
 def meta(conn):
-    text = conn.send_command("SHOW META").replace("\\n", " ")
-    out = {}
-    for tok in text.split():
-        if "=" in tok:
-            k, v = tok.split("=", 1)
-            if k in KEYS:
-                out[k] = float(v)
-    return out
+    fields = sys_meta.numeric(sys_meta.from_text(conn.send_command("SHOW META")), float)
+    return {k: v for k, v in fields.items() if k in KEYS}
 
 
 def must(conn, sql, prefix):

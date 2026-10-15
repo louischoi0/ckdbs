@@ -690,15 +690,15 @@ TEST(DropTableReclaimServingTest, ATwoCoreMountReclaimsOnceEveryCoreHasCheckpoin
 
 // ---- Red first: the defence checks (BF-R10) --------------------------------
 
-// A leaf of relation `owner` holding one row whose Keystone id is `pk`.
-PageId LeafHolding(storage::InMemoryPageStore& store, std::uint64_t owner, std::uint64_t pk) {
+// A leaf of relation `owner` holding one row whose Keystone id is `tuple_key`.
+PageId LeafHolding(storage::InMemoryPageStore& store, std::uint64_t owner, std::uint64_t tuple_key) {
     auto created = store.CreateNew();
     EXPECT_TRUE(created.ok());
     auto view = heap::PageView::CreateEmptyAs(created.value().second.bytes(), /*min_key=*/1,
                                               PageType::kBtreeLeaf, owner);
     EXPECT_TRUE(view.ok());
     std::array<std::byte, 16> payload{};
-    const std::uint64_t word = Keystone::Encode(pk, 0, 0).value();
+    const std::uint64_t word = Keystone::Encode(tuple_key, 0, 0).value();
     std::memcpy(payload.data(), &word, sizeof(word));
     EXPECT_TRUE(view.value().InsertTuple(payload, /*trx_id=*/1).ok());
     return created.value().first;
@@ -707,9 +707,9 @@ PageId LeafHolding(storage::InMemoryPageStore& store, std::uint64_t owner, std::
 // `VerifyTupleAt` for a location remembered for relation `owner`. The
 // verifier takes no owner at `df741e3c`; BF-R10 adds it, and passing
 // `owner` through is the one line BF-S3 changes here.
-exec::VerifiedTuple VerifyFor(storage::PageStore& store, PageId page, std::uint64_t pk,
+exec::VerifiedTuple VerifyFor(storage::PageStore& store, PageId page, std::uint64_t tuple_key,
                               std::uint64_t owner) {
-    return exec::VerifyTupleAt(store, page, /*slot=*/0, pk, /*recorded_epoch=*/0, owner);
+    return exec::VerifyTupleAt(store, page, /*slot=*/0, tuple_key, /*recorded_epoch=*/0, owner);
 }
 
 TEST(DropTableReclaimDefenceTest, TheVerifierMissesOnAnotherOwnersPage) {
@@ -717,12 +717,12 @@ TEST(DropTableReclaimDefenceTest, TheVerifierMissesOnAnotherOwnersPage) {
     // id, never the owner (`tuple_verify.hpp`). Keystone ids collide across
     // relations by design, so a location remembered for relation 88 that
     // names a page now owned by relation 77 - a reused id - validates
-    // whenever 77's row there carries the pk 88's entry expects.
+    // whenever 77's row there carries the tuple key 88's entry expects.
     storage::InMemoryPageStore store{kFirstUserPageId};
-    const PageId page = LeafHolding(store, /*owner=*/77, /*pk=*/5);
-    EXPECT_TRUE(VerifyFor(store, page, /*pk=*/5, /*owner=*/77).ok())
+    const PageId page = LeafHolding(store, /*owner=*/77, /*tuple_key=*/5);
+    EXPECT_TRUE(VerifyFor(store, page, /*tuple_key=*/5, /*owner=*/77).ok())
         << "the owner's own location must still verify";
-    EXPECT_FALSE(VerifyFor(store, page, /*pk=*/5, /*owner=*/88).ok())
+    EXPECT_FALSE(VerifyFor(store, page, /*tuple_key=*/5, /*owner=*/88).ok())
         << "a location remembered for relation 88 validated on 77's page";
 }
 

@@ -210,7 +210,7 @@ enum class PredicateKind : std::uint8_t {
     // `rhs_col` are unset. `op` is the comparison, `IS [NOT] NULL` included.
     //
     // **A kind of its own, so every reader that acts on a `kCompareValue`
-    // passes it by** - the point lookup's pk test, the write's lock window -
+    // passes it by** - the point lookup's tuple key test, the write's lock window -
     // rather than reading `col op val` off a conjunct that is about `f(col)`.
     // It lowers to a function conjunct (step_chain.hpp) and never to a
     // `StepPredicate`, which is what keeps it from ever being a key.
@@ -306,6 +306,7 @@ struct BoolExpr {
 
 struct ColumnDef {
     std::string name;
+    std::uint32_t name_byte_offset = 0;  // the name's first byte - a repeated name's refusal
     std::string type_name;  // unresolved - see file comment
 
     // `DECIMAL(p, s)`'s two arguments, as written (docs/spec/types.md TY2).
@@ -364,7 +365,7 @@ struct ColumnDef {
     std::uint8_t cabin_policy = 0;  // catalog::kCabinPolicyUnset
 
     // Where the policy keyword was written, for an error that can point at
-    // it - a cabin on the primary key is refused, and the refusal has to
+    // it - a cabin on the tuple key is refused, and the refusal has to
     // say where.
     std::uint32_t cabin_byte_offset = 0;
 
@@ -471,6 +472,11 @@ struct CreateTableStmt {
     // `clustered`'s default - which is one of the two nameable values, so
     // the field alone cannot tell.
     bool clustered_given = false;
+
+    // `SPARE <n>` (BW-R1 of
+    // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
+    // relation's reserved 16-byte column slots, 0 when the word is absent.
+    std::uint16_t spare_slots = 0;
 };
 
 // The per-statement row cap for a multi-row INSERT (docs/spec/bulkinsert.md
@@ -480,7 +486,34 @@ struct CreateTableStmt {
 // holds before execution begins.
 inline constexpr std::size_t kDefaultMaxInsertRows = 1024;
 
-// `INSERT INTO <t> VALUES (…) [, (…)]*` (docs/spec/bulkinsert.md T1, BI3).
+// One column named in a *declaration's* column list, with where it was
+// written - which is what lets "this relation has no column x" carry a
+// position.
+//
+// Named for the index because that is what first needed it; it serves any
+// parenthesised column list - an assertion's `GROUP BY (...)` and an
+// `INSERT`'s column list (BW-S6) reuse it rather than declaring a second
+// two-field struct. There is one production for all of them
+// (`Parser::ParseDeclaredColumnList`).
+struct IndexColumnRef {
+    std::string name;
+    std::uint32_t byte_offset = 0;
+};
+
+// The relation and column shape a KWP load described at LOAD BEGIN (BW-Q10
+// of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
+// load's rows are positional against it, so a relation that is not that
+// relation in that shape when a chunk takes its `IX` refuses the chunk.
+// `oid == 0` - every SQL statement - asks nothing.
+struct DescribedShape {
+    std::uint64_t oid = 0;
+    std::uint32_t physical_columns = 0;
+    std::uint32_t live_columns = 0;
+};
+
+// `INSERT INTO <t> [(<col>, …)] VALUES (…) [, (…)]*` (docs/spec/bulkinsert.md
+// T1, BI3; the column list is BW-S6 of
+// `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
 //
 // One or more rows; the single-row statement is a rows vector of size one,
 // and its parse is byte-identical in behavior to what it always was. The
@@ -491,7 +524,14 @@ struct InsertStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above
     std::uint32_t table_byte_offset = 0;
+    // The column list (BW-R13), in written order, each name with its byte;
+    // empty for a positional statement, whose values name the live columns
+    // in order. `columns_byte_offset` is the list's `(`, where a NOT NULL
+    // column the list leaves out is refused.
+    std::vector<IndexColumnRef> columns;
+    std::uint32_t columns_byte_offset = 0;
     std::vector<std::vector<AstValue>> rows;
+    DescribedShape described;
 };
 
 
@@ -668,14 +708,14 @@ struct SelectStmt {
     //
     // `LIMIT` without `ORDER BY` is well-defined here in a way general SQL
     // cannot promise: emission order is already a client contract (I12 -
-    // written order across steps, pk order within one), so the clause
+    // written order across steps, tuple key order within one), so the clause
     // takes a prefix of an order the statement has, not one it hopes for.
     //
     // `order_by` carries the written sort keys in written order, empty when
     // no `ORDER BY` was written. The parser judges *shape* only - a column
     // reference or (over a fold) an aggregate call, never an ordinal and
     // never an expression - because which relation a name belongs to,
-    // whether it is the pk, and whether it is a grouping key are catalog
+    // whether it is the tuple key, and whether it is a grouping key are catalog
     // knowledge, and the compiler is where catalog knowledge lives.
     //
     // `DESC` reaches the AST: an output sort does not walk, so descending
@@ -916,7 +956,7 @@ struct Assignment {
     // Where `col_name` was written. Carried for the same reason
     // `AstValue::byte_offset` is (types.md TY05): the SET list is
     // resolved against the catalog at compile, and both refusals it can
-    // produce - an unknown column, and the primary key, which is the
+    // produce - an unknown column, and the tuple key, which is the
     // tuple's identity and not a field of it (keystoneid-invariant.md K2)
     // - owe the client an exact position. Nothing compares this field, so
     // adding it moved no fingerprint: the hash folds from the token
@@ -950,7 +990,7 @@ struct DeleteStmt {
     std::vector<Condition> where;  // empty = every row
 };
 
-// `PURGE FROM <t> WHERE <pk comparisons>` (BH,
+// `PURGE FROM <t> WHERE <tuple key comparisons>` (BH,
 // `instructions/v3.0.0/workorder-bh-purge-key.md` PU1): retires, keyless,
 // the slot of every committed delete-marked row the window names once no
 // reader can see it, so the key may be named again. `DELETE`'s fields, and
@@ -965,29 +1005,42 @@ struct PurgeStmt {
     std::vector<Condition> where;  // never empty: the parser refuses a bare PURGE
 };
 
-// `ALTER TABLE <t> RENAME TO <new>` and
-// `ALTER TABLE <t> RENAME COLUMN <old> TO <new>` (docs/spec/alter.md AL1).
+// `ALTER TABLE <t> RENAME TO <new>`, `ALTER TABLE <t> RENAME COLUMN <old>
+// TO <new>` (docs/spec/alter.md AL1), `ALTER TABLE <t> DROP [COLUMN] <name>`
+// and `ALTER TABLE <t> ADD [COLUMN] <column definition>` (BW-R1 of
+// `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
 //
-// v1 is catalog-only: a rename changes a catalog label and no tuple
-// bytes. Everything else spelled under ALTER answers Unsupported at
-// parse with AL1's reason - the row size is a schema constant
-// (invariant 13), so a column-set change is a relation rewrite, not a
-// catalog edit. One struct for both forms, CabinStmt's precedent: they
-// share the resolution and differ in which catalog call they reach.
+// Every form changes catalog rows and no tuple byte: a rename a label, a
+// drop a flag on a column whose bytes stay in every row (BW-R6), an add a
+// column in a slot every row already has (BW-R2). One struct
+// for every form, CabinStmt's precedent: they share the resolution and
+// differ in which catalog call they reach.
+enum class AlterAction : std::uint8_t {
+    kRenameTable,
+    kRenameColumn,
+    kDropColumn,
+    kAddColumn,
+};
+
 struct AlterStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above
     std::uint32_t byte_offset = 0;  // of the table name
 
-    bool rename_column = false;  // false: RENAME TO, the relation itself
+    AlterAction action = AlterAction::kRenameTable;
 
-    // RENAME COLUMN only: the column as written.
+    // RENAME COLUMN and DROP COLUMN: the column as written.
     std::string old_column;
     std::uint32_t old_column_byte_offset = 0;
 
-    // The new name - of the table or the column, by `rename_column`.
+    // The new name - of the table or the column, by `action`.
     std::string new_name;
     std::uint32_t new_name_byte_offset = 0;
+
+    // ADD COLUMN only: the definition, in `CREATE TABLE`'s grammar, with
+    // the byte its name was written at.
+    ColumnDef column;
+    std::uint32_t column_byte_offset = 0;
 };
 
 // `CREATE PATTERN` / `DROP PATTERN` were withdrawn on 2026-08-31
@@ -1025,18 +1078,7 @@ struct CabinStmt {
     bool drop = false;
 };
 
-// One column named in a *declaration's* column list, with where it was
-// written - which is what lets "this relation has no column x" carry a
-// position.
-//
-// Named for the index because that is what first needed it; it serves any
-// declaration's parenthesised list, and an assertion's `GROUP BY (...)`
-// reuses it rather than declaring a second two-field struct. There is one
-// production for all of them (`Parser::ParseDeclaredColumnList`).
-struct IndexColumnRef {
-    std::string name;
-    std::uint32_t byte_offset = 0;
-};
+// `IndexColumnRef` is declared above `InsertStmt`, whose column list uses it.
 
 // `CREATE INDEX <name> ON <table>(<col>, ...) [COVERING (<col>, ...)]` and
 // `DROP INDEX <name>` (docs/spec/index.md §10).
@@ -1136,9 +1178,46 @@ struct AssertionStmt {
     }
 };
 
+// `CREATE TRANSITION <name> ON <table>(<column>) ON INSERT (<state>, ...)
+// ON UPDATE (<state> => <state>, ...) [ON DELETE FROM (<state>, ...)]` and
+// `DROP TRANSITION <name>` (`instructions/v3.2.0/workorder-bv-transition-
+// constraints.md`). A state is an integer or a string literal; which one a
+// column admits is the catalog's question, not the grammar's. One struct for
+// both statements, for AssertionStmt's reason: DROP fills `name` alone.
+struct TransitionStmt {
+    std::string name;
+    std::uint32_t byte_offset = 0;  // of the transition name
+
+    bool drop = false;
+
+    // CREATE only.
+    std::string table_name;
+    std::string schema;  // see the namespace-qualifier rule above
+    std::uint32_t table_byte_offset = 0;
+    std::string column;
+    std::uint32_t column_byte_offset = 0;
+
+    // `ON INSERT`: the states a row may be inserted in.
+    std::vector<AstValue> initial;
+    // `ON UPDATE`: the allowed `from => to` moves, as written.
+    struct Edge {
+        AstValue from;
+        AstValue to;
+    };
+    std::vector<Edge> edges;
+    // `ON DELETE FROM`: the states a row may be deleted from. Absent, every
+    // delete is allowed (CN-4 T10, adopted under BV's go-ahead).
+    bool delete_declared = false;
+    std::vector<AstValue> deletable;
+
+    // The whole declaration verbatim, for `sys.transitions.source_text`:
+    // the canon the reader re-parses (BV-Q1 (a)).
+    std::string source_text;
+};
+
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
                                DeleteStmt, PurgeStmt, CabinStmt, IndexStmt, AssertionStmt,
-                               AlterStmt, DropTableStmt, NamespaceStmt>;
+                               TransitionStmt, AlterStmt, DropTableStmt, NamespaceStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

@@ -1,0 +1,319 @@
+== s2-c8-s start 2026-10-13T23:38:29Z ==
+  s2-c8-s schema rc=0
+  s2-c8-s load rc=0
+== s2-c8-s end 2026-10-13T23:38:48Z rc=0 ==
+== s2-c1-s start 2026-10-13T23:38:48Z ==
+  s2-c1-s schema rc=0
+  s2-c1-s load rc=0
+== s2-c1-s end 2026-10-13T23:39:10Z rc=0 ==
+== s2-c1-g start 2026-10-13T23:39:10Z ==
+  s2-c1-g schema rc=0
+  s2-c1-g load rc=0
+== s2-c1-g end 2026-10-13T23:39:31Z rc=0 ==
+== s2-c8-g start 2026-10-13T23:39:31Z ==
+  s2-c8-g schema rc=0
+  s2-c8-g load rc=0
+== s2-c8-g end 2026-10-13T23:39:50Z rc=0 ==
+== r2-s2-c8-s start 2026-10-13T23:39:50Z ==
+  r2-s2-c8-s schema rc=0
+  r2-s2-c8-s load rc=0
+== r2-s2-c8-s end 2026-10-13T23:40:10Z rc=0 ==
+== r2-s2-c1-s start 2026-10-13T23:40:10Z ==
+  r2-s2-c1-s schema rc=0
+  r2-s2-c1-s load rc=0
+== r2-s2-c1-s end 2026-10-13T23:40:32Z rc=0 ==
+== r2-s2-c1-g start 2026-10-13T23:40:32Z ==
+  r2-s2-c1-g schema rc=0
+  r2-s2-c1-g load rc=0
+== r2-s2-c1-g end 2026-10-13T23:40:53Z rc=0 ==
+== r2-s2-c8-g start 2026-10-13T23:40:53Z ==
+  r2-s2-c8-g schema rc=0
+  r2-s2-c8-g load rc=0
+== r2-s2-c8-g end 2026-10-13T23:41:11Z rc=0 ==
+== r3-s2-c8-s start 2026-10-13T23:41:11Z ==
+  r3-s2-c8-s schema rc=0
+  r3-s2-c8-s load rc=0
+== r3-s2-c8-s end 2026-10-13T23:41:30Z rc=0 ==
+== r3-s2-c1-s start 2026-10-13T23:41:30Z ==
+  r3-s2-c1-s schema rc=0
+  r3-s2-c1-s load rc=0
+== r3-s2-c1-s end 2026-10-13T23:43:18Z rc=0 ==
+== r3-s2-c1-g start 2026-10-13T23:43:18Z ==
+  r3-s2-c1-g schema rc=0
+  r3-s2-c1-g load rc=0
+== r3-s2-c1-g end 2026-10-13T23:49:07Z rc=0 ==
+== r3-s2-c8-g start 2026-10-13T23:49:07Z ==
+  r3-s2-c8-g schema rc=0
+  r3-s2-c8-g load rc=0
+== r3-s2-c8-g end 2026-10-13T23:52:48Z rc=0 ==
+== rr-s2-c1-g start 2026-10-13T23:52:48Z ==
+  rr-s2-c1-g schema rc=0
+  rr-s2-c1-g load rc=0
+== rr-s2-c1-g end 2026-10-13T23:53:09Z rc=0 ==
+== rr-s2-c8-g start 2026-10-13T23:53:09Z ==
+  rr-s2-c8-g schema rc=0
+  rr-s2-c8-g load rc=0
+== rr-s2-c8-g end 2026-10-13T23:53:29Z rc=0 ==
+== s3-c1-n200-none start 2026-10-13T23:53:29Z ==
+== s3-c1-n200-none end 2026-10-13T23:53:33Z rc=0 ==
+== s3-c1-n200-all start 2026-10-13T23:53:33Z ==
+== s3-c1-n200-all end 2026-10-13T23:53:38Z rc=0 ==
+== s3-c1-n1000-none start 2026-10-13T23:53:38Z ==
+== s3-c1-n1000-none end 2026-10-13T23:53:44Z rc=0 ==
+== s3-c1-n1000-all start 2026-10-13T23:53:44Z ==
+== s3-c1-n1000-all end 2026-10-13T23:53:50Z rc=0 ==
+== s3-c1-n10000-none start 2026-10-13T23:53:50Z ==
+== r3-s2-c1-g CONTAMINATED (revalidate) ==
+== r3-s2-c1-s CONTAMINATED (revalidate) ==
+== r3-s2-c8-s CONTAMINATED (revalidate) ==
+== s3-c1-n1000-all CONTAMINATED (revalidate) ==
+== r3-s2-c8-s start 2026-10-13T23:54:48Z ==
+  r3-s2-c8-s schema rc=0
+  r3-s2-c8-s load rc=0
+== r3-s2-c8-s end 2026-10-13T23:58:08Z rc=0 ==
+== r3-s2-c8-s CONTAMINATED attempt 1: r3-s2-c8-s: samples=9 build/test=3 heavy=0 minor=3 who=['as', 'cc1plus'] ==
+== r3-s2-c8-s start 2026-10-13T23:58:12Z ==
+  r3-s2-c8-s schema rc=0
+  r3-s2-c8-s load rc=0
+== r3-s2-c8-s end 2026-10-13T23:58:41Z rc=0 ==
+== r3-s2-c1-s start 2026-10-13T23:58:45Z ==
+  r3-s2-c1-s schema rc=0
+  r3-s2-c1-s load rc=0
+== r3-s2-c1-s end 2026-10-13T23:59:08Z rc=0 ==
+== r3-s2-c1-g start 2026-10-13T23:59:12Z ==
+  r3-s2-c1-g schema rc=0
+  r3-s2-c1-g load rc=0
+== r3-s2-c1-g end 2026-10-13T23:59:33Z rc=0 ==
+== r3-s2-c1-g CONTAMINATED attempt 1: r3-s2-c1-g: samples=10 build/test=1 heavy=0 minor=1 who=['cc1plus'] ==
+== r3-s2-c1-g start 2026-10-13T23:59:37Z ==
+  r3-s2-c1-g schema rc=0
+  r3-s2-c1-g load rc=0
+== r3-s2-c1-g end 2026-10-14T00:04:06Z rc=0 ==
+== r3-s2-c1-g CONTAMINATED attempt 2: r3-s2-c1-g: samples=54 build/test=44 heavy=0 minor=0 who=['ctest', 'kds_tests'] ==
+== r3-s2-c1-g start 2026-10-14T00:04:10Z ==
+  r3-s2-c1-g schema rc=0
+  r3-s2-c1-g load rc=0
+== r3-s2-c1-g end 2026-10-14T00:07:44Z rc=0 ==
+== s3-c1-n1000-all start 2026-10-14T00:07:48Z ==
+== s3-c1-n1000-all end 2026-10-14T00:07:54Z rc=0 ==
+== s3-c1-n10000-none start 2026-10-14T00:07:58Z ==
+== s3-c1-n10000-none end 2026-10-14T00:08:28Z rc=0 ==
+== s3-c1-n10000-all start 2026-10-14T00:08:32Z ==
+== s3-c1-n10000-all end 2026-10-14T00:09:01Z rc=0 ==
+== s3-c8-n200-none start 2026-10-14T00:09:05Z ==
+== s3-c8-n200-none end 2026-10-14T00:11:50Z rc=0 ==
+== s3-c8-n200-none CONTAMINATED attempt 1: s3-c8-n200-none: samples=3 build/test=1 heavy=0 minor=1 who=['cc1plus'] ==
+== s3-c8-n200-none start 2026-10-14T00:11:54Z ==
+== s3-c8-n200-none end 2026-10-14T00:16:43Z rc=0 ==
+== s3-c8-n200-all start 2026-10-14T00:16:47Z ==
+== s3-c8-n200-all end 2026-10-14T00:16:51Z rc=0 ==
+== s3-c8-n1000-none start 2026-10-14T00:16:56Z ==
+== s3-c8-n1000-none end 2026-10-14T00:17:03Z rc=0 ==
+== s3-c8-n1000-all start 2026-10-14T00:17:07Z ==
+== s3-c8-n1000-all end 2026-10-14T00:17:13Z rc=0 ==
+== s3-c8-n10000-none start 2026-10-14T00:17:17Z ==
+== s3-c8-n10000-none end 2026-10-14T00:17:48Z rc=0 ==
+== s3-c8-n10000-all start 2026-10-14T00:17:52Z ==
+== s3-c8-n10000-all end 2026-10-14T00:18:22Z rc=0 ==
+== r2-s3-c1-n200-none start 2026-10-14T00:18:26Z ==
+== r2-s3-c1-n200-none end 2026-10-14T00:18:31Z rc=0 ==
+== r2-s3-c1-n200-all start 2026-10-14T00:18:35Z ==
+== r2-s3-c1-n200-all end 2026-10-14T00:18:39Z rc=0 ==
+== r2-s3-c1-n1000-none start 2026-10-14T00:18:43Z ==
+== r2-s3-c1-n1000-none end 2026-10-14T00:18:50Z rc=0 ==
+== r2-s3-c1-n1000-all start 2026-10-14T00:18:54Z ==
+== r2-s3-c1-n1000-all end 2026-10-14T00:19:00Z rc=0 ==
+== r2-s3-c1-n10000-none start 2026-10-14T00:19:04Z ==
+== r2-s3-c1-n10000-none end 2026-10-14T00:19:33Z rc=0 ==
+== r2-s3-c1-n10000-all start 2026-10-14T00:19:37Z ==
+== r2-s3-c1-n10000-all end 2026-10-14T00:20:06Z rc=0 ==
+== r2-s3-c8-n200-none start 2026-10-14T00:20:10Z ==
+== r2-s3-c8-n200-none end 2026-10-14T00:20:14Z rc=0 ==
+== r2-s3-c8-n200-all start 2026-10-14T00:20:18Z ==
+== r2-s3-c8-n200-all end 2026-10-14T00:20:23Z rc=0 ==
+== r2-s3-c8-n1000-none start 2026-10-14T00:20:27Z ==
+== r2-s3-c8-n1000-none end 2026-10-14T00:20:33Z rc=0 ==
+== r2-s3-c8-n1000-all start 2026-10-14T00:20:37Z ==
+== r2-s3-c8-n1000-all end 2026-10-14T00:20:44Z rc=0 ==
+== r2-s3-c8-n10000-none start 2026-10-14T00:20:48Z ==
+== r2-s3-c8-n10000-none end 2026-10-14T00:21:17Z rc=0 ==
+== r2-s3-c8-n10000-all start 2026-10-14T00:21:21Z ==
+== r2-s3-c8-n10000-all end 2026-10-14T00:21:50Z rc=0 ==
+== r3-s3-c1-n200-none start 2026-10-14T00:21:54Z ==
+== r3-s3-c1-n200-none end 2026-10-14T00:21:59Z rc=0 ==
+== r3-s3-c1-n200-all start 2026-10-14T00:22:03Z ==
+== r3-s3-c1-n200-all end 2026-10-14T00:22:07Z rc=0 ==
+== r3-s3-c1-n1000-none start 2026-10-14T00:22:12Z ==
+== r3-s3-c1-n1000-none end 2026-10-14T00:22:18Z rc=0 ==
+== r3-s3-c1-n1000-all start 2026-10-14T00:22:22Z ==
+== r3-s3-c1-n1000-all end 2026-10-14T00:22:28Z rc=0 ==
+== r3-s3-c1-n10000-none start 2026-10-14T00:22:33Z ==
+== r3-s3-c1-n10000-none end 2026-10-14T00:23:01Z rc=0 ==
+== r3-s3-c1-n10000-all start 2026-10-14T00:23:05Z ==
+== r3-s3-c1-n10000-all end 2026-10-14T00:23:34Z rc=0 ==
+== r3-s3-c8-n200-none start 2026-10-14T00:23:38Z ==
+== r3-s3-c8-n200-none end 2026-10-14T00:23:43Z rc=0 ==
+== r3-s3-c8-n200-all start 2026-10-14T00:23:47Z ==
+== r3-s3-c8-n200-all end 2026-10-14T00:23:52Z rc=0 ==
+== r3-s3-c8-n1000-none start 2026-10-14T00:23:56Z ==
+== r3-s3-c8-n1000-none end 2026-10-14T00:24:02Z rc=0 ==
+== r3-s3-c8-n1000-all start 2026-10-14T00:24:06Z ==
+== r3-s3-c8-n1000-all end 2026-10-14T00:24:13Z rc=0 ==
+== r3-s3-c8-n10000-none start 2026-10-14T00:24:17Z ==
+== r3-s3-c8-n10000-none end 2026-10-14T00:24:47Z rc=0 ==
+== r3-s3-c8-n10000-all start 2026-10-14T00:24:51Z ==
+== r3-s3-c8-n10000-all end 2026-10-14T00:25:20Z rc=0 ==
+== s1u-c1-g start 2026-10-14T00:25:24Z ==
+== s1u-c1-g end 2026-10-14T00:25:28Z rc=1 ==
+== s1u-c8-g start 2026-10-14T00:25:32Z ==
+== s1u-c8-g end 2026-10-14T00:25:36Z rc=1 ==
+== s1u-c1-s start 2026-10-14T00:25:40Z ==
+== s1u-c1-s end 2026-10-14T00:25:44Z rc=1 ==
+== s1b-c1-g start 2026-10-14T00:25:48Z ==
+== s1b-c1-g end 2026-10-14T00:26:41Z rc=0 ==
+== s1b-c8-g start 2026-10-14T00:26:45Z ==
+== s1b-c8-g end 2026-10-14T00:27:38Z rc=0 ==
+== s1b-c1-s start 2026-10-14T00:27:42Z ==
+== s1b-c1-s end 2026-10-14T00:28:35Z rc=0 ==
+== r2-s1b-c1-g start 2026-10-14T00:28:39Z ==
+== r2-s1b-c1-g end 2026-10-14T00:29:32Z rc=0 ==
+== r2-s1b-c8-g start 2026-10-14T00:29:36Z ==
+== r2-s1b-c8-g end 2026-10-14T00:30:30Z rc=0 ==
+== r2-s1b-c1-s start 2026-10-14T00:30:34Z ==
+== r2-s1b-c1-s end 2026-10-14T00:31:27Z rc=0 ==
+== r3-s1b-c1-g start 2026-10-14T00:31:31Z ==
+== r3-s1b-c1-g end 2026-10-14T00:32:27Z rc=0 ==
+== r3-s1b-c8-g start 2026-10-14T00:32:31Z ==
+== r3-s1b-c8-g end 2026-10-14T00:33:25Z rc=0 ==
+== r3-s1b-c1-s start 2026-10-14T00:33:29Z ==
+== r3-s1b-c1-s end 2026-10-14T00:34:22Z rc=0 ==
+== s4 start 2026-10-14T00:34:26Z ==
+== s4 end 2026-10-14T00:39:15Z rc=0 ==
+== cd2-s4 start 2026-10-14T00:39:19Z ==
+== cd2-s4 end 2026-10-14T00:44:10Z rc=0 ==
+== b1-s2-c1-g start 2026-10-14T00:44:40Z ==
+  b1-s2-c1-g schema rc=0
+  b1-s2-c1-g load rc=0
+== b1-s2-c1-g end 2026-10-14T00:45:07Z rc=0 ==
+== b1-s2-c1-s start 2026-10-14T00:45:11Z ==
+  b1-s2-c1-s schema rc=0
+  b1-s2-c1-s load rc=0
+== b1-s2-c1-s end 2026-10-14T00:45:38Z rc=0 ==
+== r2-b1-s2-c1-g start 2026-10-14T00:45:42Z ==
+  r2-b1-s2-c1-g schema rc=0
+  r2-b1-s2-c1-g load rc=0
+== r2-b1-s2-c1-g end 2026-10-14T00:46:10Z rc=0 ==
+== r2-b1-s2-c1-s start 2026-10-14T00:46:14Z ==
+  r2-b1-s2-c1-s schema rc=0
+  r2-b1-s2-c1-s load rc=0
+== r2-b1-s2-c1-s end 2026-10-14T00:46:41Z rc=0 ==
+== r3-b1-s2-c1-g start 2026-10-14T00:46:45Z ==
+  r3-b1-s2-c1-g schema rc=0
+  r3-b1-s2-c1-g load rc=0
+== r3-b1-s2-c1-g end 2026-10-14T00:47:12Z rc=0 ==
+== r3-b1-s2-c1-s start 2026-10-14T00:47:16Z ==
+  r3-b1-s2-c1-s schema rc=0
+  r3-b1-s2-c1-s load rc=0
+== r3-b1-s2-c1-s end 2026-10-14T00:47:43Z rc=0 ==
+== x-b1-s2-c8-g start 2026-10-14T00:53:52Z ==
+  x-b1-s2-c8-g schema rc=0
+  x-b1-s2-c8-g load rc=0
+== x-b1-s2-c8-g end 2026-10-14T00:54:31Z rc=0 ==
+== x-b1-s2-c8-g CONTAMINATED attempt 1: x-b1-s2-c8-g: samples=19 build/test=11 heavy=0 minor=4 who=['as', 'cc1plus'] ==
+== x-b1-s2-c8-g start 2026-10-14T00:54:35Z ==
+  x-b1-s2-c8-g schema rc=0
+  x-b1-s2-c8-g load rc=0
+== x-b1-s2-c8-g end 2026-10-14T00:57:47Z rc=0 ==
+== x-b1-s2-c8-s start 2026-10-14T00:57:51Z ==
+  x-b1-s2-c8-s schema rc=0
+  x-b1-s2-c8-s load rc=0
+== x-b1-s2-c8-s end 2026-10-14T00:58:20Z rc=0 ==
+== x-b1-s2-c8-s CONTAMINATED attempt 1: x-b1-s2-c8-s: samples=14 build/test=3 heavy=0 minor=2 who=['as', 'cc1plus'] ==
+== x-b1-s2-c8-s start 2026-10-14T00:58:24Z ==
+  x-b1-s2-c8-s schema rc=0
+  x-b1-s2-c8-s load rc=0
+== x-b1-s2-c8-s end 2026-10-14T00:59:05Z rc=0 ==
+== x-b1-s2-c8-s CONTAMINATED attempt 2: x-b1-s2-c8-s: samples=15 build/test=10 heavy=0 minor=1 who=['as', 'cc1plus', 'ld'] ==
+== x-b1-s2-c8-s start 2026-10-14T00:59:09Z ==
+  x-b1-s2-c8-s schema rc=0
+  x-b1-s2-c8-s load rc=0
+== x-b1-s2-c8-s end 2026-10-14T01:04:30Z rc=0 ==
+== x-b2-s2-c8-g start 2026-10-14T01:04:34Z ==
+  x-b2-s2-c8-g schema rc=0
+  x-b2-s2-c8-g load rc=0
+== x-b2-s2-c8-g end 2026-10-14T01:04:56Z rc=0 ==
+== x-b2-s2-c8-s start 2026-10-14T01:05:00Z ==
+  x-b2-s2-c8-s schema rc=0
+  x-b2-s2-c8-s load rc=0
+== x-b2-s2-c8-s end 2026-10-14T01:05:24Z rc=0 ==
+== x-b4-s2-c8-g start 2026-10-14T01:05:28Z ==
+  x-b4-s2-c8-g schema rc=0
+  x-b4-s2-c8-g load rc=0
+== x-b4-s2-c8-g end 2026-10-14T01:05:51Z rc=0 ==
+== x-b4-s2-c8-g CONTAMINATED attempt 1: x-b4-s2-c8-g: samples=11 build/test=7 heavy=0 minor=3 who=['[cc1plus]', 'cc1plus'] ==
+== x-b4-s2-c8-g start 2026-10-14T01:05:55Z ==
+  x-b4-s2-c8-g schema rc=0
+  x-b4-s2-c8-g load rc=0
+== x-b4-s2-c8-g end 2026-10-14T01:10:38Z rc=0 ==
+== x-b4-s2-c8-g CONTAMINATED attempt 2: x-b4-s2-c8-g: samples=11 build/test=5 heavy=0 minor=1 who=['as', 'cc1plus'] ==
+== x-b4-s2-c8-g start 2026-10-14T01:10:42Z ==
+  x-b4-s2-c8-g schema rc=0
+  x-b4-s2-c8-g load rc=0
+== x-b4-s2-c8-g end 2026-10-14T01:11:24Z rc=0 ==
+== x-b4-s2-c8-g CONTAMINATED attempt 3: x-b4-s2-c8-g: samples=11 build/test=3 heavy=0 minor=2 who=['as', 'cc1plus'] ==
+== x-b4-s2-c8-g start 2026-10-14T01:11:28Z ==
+  x-b4-s2-c8-g schema rc=0
+  x-b4-s2-c8-g load rc=0
+== x-b4-s2-c8-g end 2026-10-14T01:12:34Z rc=0 ==
+== x-b4-s2-c8-g CONTAMINATED attempt 4: x-b4-s2-c8-g: samples=17 build/test=9 heavy=0 minor=0 who=['kds_tests'] ==
+== x-b4-s2-c8-g start 2026-10-14T01:12:39Z ==
+  x-b4-s2-c8-g schema rc=0
+  x-b4-s2-c8-g load rc=0
+== x-b4-s2-c8-g end 2026-10-14T01:14:33Z rc=0 ==
+== x-b4-s2-c8-g CONTAMINATED attempt 5: x-b4-s2-c8-g: samples=16 build/test=7 heavy=0 minor=4 who=['kds_tests'] ==
+== x-b4-s2-c8-g start 2026-10-14T01:14:37Z ==
+  x-b4-s2-c8-g schema rc=0
+  x-b4-s2-c8-g load rc=0
+== x-b4-s2-c8-g end 2026-10-14T01:17:39Z rc=0 ==
+== x-b4-s2-c8-g CONTAMINATED attempt 6: x-b4-s2-c8-g: samples=46 build/test=38 heavy=0 minor=4 who=['ctest', 'kds_tests'] ==
+== x-b4-s2-c8-g start 2026-10-14T01:17:43Z ==
+  x-b4-s2-c8-g schema rc=0
+  x-b4-s2-c8-g load rc=0
+== x-b4-s2-c8-g end 2026-10-14T01:21:24Z rc=0 ==
+== x-b4-s2-c8-s start 2026-10-14T01:21:28Z ==
+  x-b4-s2-c8-s schema rc=0
+  x-b4-s2-c8-s load rc=0
+== x-b4-s2-c8-s end 2026-10-14T01:21:47Z rc=0 ==
+== x-b16-s2-c8-g start 2026-10-14T01:21:51Z ==
+  x-b16-s2-c8-g schema rc=0
+  x-b16-s2-c8-g load rc=0
+== x-b16-s2-c8-g end 2026-10-14T01:22:10Z rc=0 ==
+== x-b16-s2-c8-s start 2026-10-14T01:22:14Z ==
+  x-b16-s2-c8-s schema rc=0
+  x-b16-s2-c8-s load rc=0
+== x-b16-s2-c8-s end 2026-10-14T01:22:35Z rc=0 ==
+== x-b16-s2-c8-s CONTAMINATED attempt 1: x-b16-s2-c8-s: samples=10 build/test=6 heavy=0 minor=3 who=['as', 'cc1plus'] ==
+== x-b16-s2-c8-s start 2026-10-14T01:22:39Z ==
+  x-b16-s2-c8-s schema rc=0
+  x-b16-s2-c8-s load rc=0
+== x-b16-s2-c8-s end 2026-10-14T01:29:31Z rc=0 ==
+== s1s-n252-c1-g start 2026-10-14T01:30:14Z ==
+== s1s-n252-c1-g end 2026-10-14T01:30:23Z rc=0 ==
+== s1s-n1008-c1-g start 2026-10-14T01:30:27Z ==
+== s1s-n1008-c1-g end 2026-10-14T01:30:38Z rc=0 ==
+== s1s-n10080-c1-g start 2026-10-14T01:30:42Z ==
+== s1s-n10080-c1-g end 2026-10-14T01:31:00Z rc=0 ==
+== r2-s1s-n252-c1-g start 2026-10-14T01:31:04Z ==
+== r2-s1s-n252-c1-g end 2026-10-14T01:31:17Z rc=0 ==
+== r2-s1s-n252-c1-g CONTAMINATED attempt 1: r2-s1s-n252-c1-g: samples=6 build/test=2 heavy=0 minor=2 who=['cc1plus'] ==
+== r2-s1s-n252-c1-g start 2026-10-14T01:31:21Z ==
+== r2-s1s-n252-c1-g end 2026-10-14T01:33:41Z rc=0 ==
+== r2-s1s-n1008-c1-g start 2026-10-14T01:33:45Z ==
+== r2-s1s-n1008-c1-g end 2026-10-14T01:33:57Z rc=0 ==
+== r2-s1s-n10080-c1-g start 2026-10-14T01:34:02Z ==
+== r2-s1s-n10080-c1-g end 2026-10-14T01:34:50Z rc=0 ==
+== r2-s1s-n10080-c1-g CONTAMINATED attempt 1: r2-s1s-n10080-c1-g: samples=9 build/test=6 heavy=0 minor=4 who=['as', 'cc1plus', 'ld'] ==
+== r2-s1s-n10080-c1-g start 2026-10-14T01:34:54Z ==
+== r2-s1s-n10080-c1-g end 2026-10-14T01:35:13Z rc=0 ==
+== r2-s1s-n10080-c1-g CONTAMINATED attempt 2: r2-s1s-n10080-c1-g: samples=9 build/test=7 heavy=0 minor=3 who=['as', 'cc1plus', 'ld'] ==
+== r2-s1s-n10080-c1-g start 2026-10-14T01:35:17Z ==

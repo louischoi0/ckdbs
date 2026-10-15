@@ -877,7 +877,7 @@ void TcpServer::ExpireOverdueTransactions() {
         const std::uint64_t id = open->id();
         // The connection-close path's own rollback (`CloseClient`), so the
         // sweep adds no second way to end a transaction.
-        const DispatchOutcome rolled = dispatcher_->Dispatch("ROLLBACK", &conn.session);
+        const DispatchOutcome rolled = dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         // A failure is logged whichever side of the transaction's end it
         // fell on: the client's refusal will say its writes are undone,
         // and this line is where an operator learns when that is untrue.
@@ -1043,7 +1043,7 @@ void TcpServer::CloseClient(int client_fd) {
             log_->Info("client", "fd=" + std::to_string(client_fd) +
                                      " closed with a transaction open; rolling it back");
         }
-        (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
+        (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
     }
 
     // The orderly TLS goodbye (close_notify), appended to the outbox and

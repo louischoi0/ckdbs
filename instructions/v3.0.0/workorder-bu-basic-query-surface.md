@@ -12,7 +12,7 @@ recorded in English:
 - **W3:** *"Move the working directory to ckdbs, add the work order, and
   implement it the way kdbs development is already done."*
 
-**BU-S4 onward runs on the operator's standing go-ahead of 2026-10-13** (`go-ahead-achieving-milestone`, `raft-marks-2026-10-13.md` §10): BU-Q8..Q12 and any later decision are CLA's proposals adopted under it, recorded as such and never as the operator's own marks.
+**BU-S4 onward runs on the operator's standing go-ahead of 2026-10-13** (`go-ahead-achieving-milestone`, `raft-marks-2026-10-13.md` §13): BU-Q8..Q12 and any later decision are CLA's proposals adopted under it, recorded as such and never as the operator's own marks.
 
 **Written and opened 2026-10-13 on W3.** W0-W2 stand here as BU-R1..R3.
 The questions in §4 were unmarked when the order was written; W3 is the
@@ -167,7 +167,7 @@ refusing every conjunct that is not a pk window, `OR` included.
 | **BU-S5** | `HAVING`, `ORDER BY`/`LIMIT` over groups, aggregate alias, aggregate over an expression, aggregate in a subquery | F004 phase 3 |
 | **BU-S6** | `INNER JOIN`, `CROSS JOIN` and comma joins, `ON` with several conditions or a non-equality, `USING`; `LEFT`/`RIGHT`/`FULL` outer joins | F004 phase 4 |
 | **BU-S7** | `UNION [ALL]`, `INTERSECT`, `EXCEPT`, derived tables, a scalar subquery in the select list | F004 phase 5 |
-| **BU-S8** | `INSERT` with a column list, `INSERT ... SELECT`, expressions in `VALUES`, `RETURNING`; `UPDATE ... FROM`, `DELETE ... USING`, `ON CONFLICT DO NOTHING` | F004 phase 6 |
+| **BU-S8** | `INSERT` with a column list (**moved to BW-S6 on the operator's word of 2026-10-14**, `instructions/v3.2.0/raft-marks-2026-10-14.md` §11), `INSERT ... SELECT`, expressions in `VALUES`, `RETURNING`; `UPDATE ... FROM`, `DELETE ... USING`, `ON CONFLICT DO NOTHING` | F004 phase 6 |
 | **BU-S9** | the close: specs, manual, census, overhead measured once | - |
 
 Each stage runs the Session Workflow: a `critics-developer` review of the

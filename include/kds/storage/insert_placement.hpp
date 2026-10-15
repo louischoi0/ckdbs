@@ -161,7 +161,7 @@ struct InsertPlacement {
 // `FunctionRef`s - a reference, no allocation per row - so a caller binds a
 // named callable, or a temporary in the call's own expression.
 
-// An omitted pk on a heap (BB-R2): issue the id, borrow its lock, encode the
+// An omitted tuple key on a heap (BB-R2): issue the id, borrow its lock, encode the
 // row, and return the encoded payload - whose Keystone word carries the
 // issued id and whose bytes stay valid until the insert returns.
 using IssueUnderHold = FunctionRef<StatusOr<std::span<const std::byte>>()>;

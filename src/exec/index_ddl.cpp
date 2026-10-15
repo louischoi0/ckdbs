@@ -21,28 +21,27 @@
 namespace kds::exec {
 namespace {
 
-// Resolution is exact-match, like `Schema::FindColumn` everywhere else: the
-// catalog stores a column's name as it was declared, and case folding here
-// alone would make `CREATE INDEX` accept a spelling no other statement does.
+// Resolution is `Schema::FindColumn`'s, every column name's: ignoring case,
+// two or more matches refused as ambiguous (docs/spec/parser-v2.md).
 StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
                                        const parser::IndexColumnRef& col,
                                        const std::string& table_name) {
-    for (std::size_t i = 0; i < access.schema.columns.size(); ++i) {
-        if (catalog::NameView(access.schema.columns[i].name) == col.name) {
-            // D2 (docs/spec/null.md): no nullable column enters an index in
-            // v1, key or covered - an entry has no NULL encoding. Refused
-            // here because this is the layer that still holds the byte;
-            // Catalog::CheckIndexDef re-checks as the catalog's own defense,
-            // the same one-implementation-two-doors split the pre-check
-            // below describes.
-            if (!access.schema.columns[i].notnull) {
-                return Status::NotImplemented(
-                    "column '" + col.name + "' is nullable and cannot be in an index "
-                    "(docs/spec/null.md D2; declare it NOT NULL or leave it unindexed) (byte " +
-                    std::to_string(col.byte_offset) + ")");
-            }
-            return static_cast<std::uint16_t>(i);
+    auto found = access.schema.FindColumn(col.name, col.byte_offset);
+    if (!found.ok()) return found.status();
+    if (const catalog::SysColumnRow* column = found.value(); column != nullptr) {
+        // D2 (docs/spec/null.md): no nullable column enters an index in
+        // v1, key or covered - an entry has no NULL encoding. Refused
+        // here because this is the layer that still holds the byte;
+        // Catalog::CheckIndexDef re-checks as the catalog's own defense,
+        // the same one-implementation-two-doors split the pre-check
+        // below describes.
+        if (!column->notnull) {
+            return Status::NotImplemented(
+                "column '" + col.name + "' is nullable and cannot be in an index "
+                "(docs/spec/null.md D2; declare it NOT NULL or leave it unindexed) (byte " +
+                std::to_string(col.byte_offset) + ")");
         }
+        return static_cast<std::uint16_t>(column - access.schema.columns.data());
     }
     return Status::NotFound("relation '" + table_name + "' has no column '" + col.name +
                             "' (byte " + std::to_string(col.byte_offset) + ")");
@@ -57,7 +56,7 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
 // tuples out, drop the span, then append - which bounds the memory at one
 // page rather than at one relation.
 struct StagedRow {
-    std::uint64_t pk = 0;
+    std::uint64_t tuple_key = 0;
     std::uint64_t undo_ptr = 0;
     std::vector<std::byte> payload;
 };
@@ -103,7 +102,7 @@ Status LogBuiltTree(wal::WalManager* wal, storage::PageStore& store, std::uint64
 // is. `previous` is empty, which is what makes every version append rather
 // than only the ones that moved.
 Status AppendVersion(storage::PageStore& store, const catalog::TableAccess& access,
-                     catalog::TableAccess::IndexRef& ix, std::uint64_t pk,
+                     catalog::TableAccess::IndexRef& ix, std::uint64_t tuple_key,
                      std::span<const std::byte> payload) {
     std::vector<PendingSpill> spills;
     auto row = DecodeRow(access.schema, access.layout, payload, &spills);
@@ -113,7 +112,7 @@ Status AppendVersion(storage::PageStore& store, const catalog::TableAccess& acce
     if (Status s = ResolveSpills(store, spills, row.value()); !s.ok()) return s;
 
     auto moved = AppendIndexEntry(store, access, ix, row.value(), /*first_col_pos=*/0, payload,
-                                  pk, /*previous=*/{});
+                                  tuple_key, /*previous=*/{});
     if (!moved.ok()) return moved.status();
     // The root is held in the caller's own IndexRef rather than published:
     // the index has no sys.indexes row yet, which is the point of building it
@@ -127,7 +126,7 @@ Status AppendVersion(storage::PageStore& store, const catalog::TableAccess& acce
 //
 // **Every version, not only the current one.** A reader holding an older
 // snapshot that probes the index must find *its* version through it. Every version
-// of a logical tuple shares one pk, so the walk is bounded by the undo chain
+// of a logical tuple shares one tuple key, so the walk is bounded by the undo chain
 // and the entries are the ordinary shape. `IndexInsert` deduplicates a
 // byte-identical entry, so a version that did not move the key costs nothing
 // and needs no distinctness tracking here.
@@ -173,11 +172,11 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
                 if (tuple.status().code() == StatusCode::kNotFound) continue;
                 if (!tuple.ok()) return tuple.status();
 
-                auto pk = kds::KeystoneIdOfPayload(tuple.value().payload);
-                if (!pk.ok()) return pk.status();
+                auto tuple_key = kds::KeystoneIdOfPayload(tuple.value().payload);
+                if (!tuple_key.ok()) return tuple_key.status();
 
                 StagedRow row;
-                row.pk = pk.value();
+                row.tuple_key = tuple_key.value();
                 row.undo_ptr = tuple.value().undo_ptr;
                 row.payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
                 staged.push_back(std::move(row));
@@ -187,7 +186,7 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 
         // ---- Phase 2: append, with nothing live -------------------------
         for (const StagedRow& row : staged) {
-            if (Status s = AppendVersion(store, access, ix, row.pk, row.payload); !s.ok()) {
+            if (Status s = AppendVersion(store, access, ix, row.tuple_key, row.payload); !s.ok()) {
                 return s;
             }
 
@@ -197,7 +196,7 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
                     // no tuple bytes - the version it supersedes is the one
                     // already appended, so there is nothing new here.
                     if (version.image.empty()) return true;
-                    if (Status s = AppendVersion(store, access, ix, row.pk, version.image);
+                    if (Status s = AppendVersion(store, access, ix, row.tuple_key, version.image);
                         !s.ok()) {
                         return false;
                     }
@@ -301,12 +300,12 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
                                 wal::WalManager* wal) {
     // The layout the definition's widths encode: `PrepareIndexDef` stored
     // `entry_width` as `leaf_entry_width()`, so the covered width is what
-    // is left after the key and the pk. Re-derived rather than carried, and
+    // is left after the key and the tuple key. Re-derived rather than carried, and
     // guarded; `FormatRoot` re-checks the layout as a whole.
-    if (def.entry_width < def.key_width + index::kIndexPkWidth) {
+    if (def.entry_width < def.key_width + index::kIndexTupleKeyWidth) {
         return Status::InvalidArgument("index oid " + std::to_string(def.index_oid) +
                                        ": entry width " + std::to_string(def.entry_width) +
-                                       " is narrower than its key and pk");
+                                       " is narrower than its key and tuple key");
     }
     // The same guard for the column counts, and here it is memory safety
     // rather than a message: `IndexRef`'s arrays are fixed at the caps, and
@@ -324,7 +323,7 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
     index::IndexLayout layout;
     layout.key_width = def.key_width;
     layout.covered_width =
-        static_cast<std::uint16_t>(def.entry_width - def.key_width - index::kIndexPkWidth);
+        static_cast<std::uint16_t>(def.entry_width - def.key_width - index::kIndexTupleKeyWidth);
 
     // The root, scoped so its pin drops before the walk below fetches pages.
     PageId root_id = kInvalidPageId;

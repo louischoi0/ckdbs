@@ -37,35 +37,35 @@ Status CheckIndexLayout(const IndexLayout& layout) {
             "index entry is " + std::to_string(std::max(leaf, internal)) +
             " bytes, above the " + std::to_string(kMaxIndexEntryWidth) +
             "-byte limit; a page must hold two entries or a full page has no split to make "
-            "(key " + std::to_string(layout.key_width) + " + pk " + std::to_string(kIndexPkWidth) +
+            "(key " + std::to_string(layout.key_width) + " + tuple key " + std::to_string(kIndexTupleKeyWidth) +
             " + covered " + std::to_string(layout.covered_width) + ")");
     }
     return Status::OK();
 }
 
-void PutIndexPk(std::span<std::byte> out, std::uint64_t pk) {
-    for (std::uint32_t i = 0; i < kIndexPkWidth; ++i) {
-        out[i] = static_cast<std::byte>((pk >> (8 * (kIndexPkWidth - 1 - i))) & 0xFF);
+void PutIndexTupleKey(std::span<std::byte> out, std::uint64_t tuple_key) {
+    for (std::uint32_t i = 0; i < kIndexTupleKeyWidth; ++i) {
+        out[i] = static_cast<std::byte>((tuple_key >> (8 * (kIndexTupleKeyWidth - 1 - i))) & 0xFF);
     }
 }
 
-std::uint64_t GetIndexPk(std::span<const std::byte> in) {
-    std::uint64_t pk = 0;
-    for (std::uint32_t i = 0; i < kIndexPkWidth; ++i) {
-        pk = (pk << 8) | static_cast<std::uint64_t>(in[i]);
+std::uint64_t GetIndexTupleKey(std::span<const std::byte> in) {
+    std::uint64_t tuple_key = 0;
+    for (std::uint32_t i = 0; i < kIndexTupleKeyWidth; ++i) {
+        tuple_key = (tuple_key << 8) | static_cast<std::uint64_t>(in[i]);
     }
-    return pk;
+    return tuple_key;
 }
 
 Status EncodeIndexSortKey(const IndexLayout& layout, std::span<const std::byte> key,
-                          std::uint64_t pk, std::span<std::byte> out) {
+                          std::uint64_t tuple_key, std::span<std::byte> out) {
     if (key.size() != layout.key_width || out.size() != layout.sort_key_width()) {
         return Status::InvalidArgument("index sort key expects a " +
                                        std::to_string(layout.key_width) + "-byte key into a " +
                                        std::to_string(layout.sort_key_width()) + "-byte buffer");
     }
     std::memcpy(out.data(), key.data(), key.size());
-    PutIndexPk(out.subspan(layout.key_width), pk);
+    PutIndexTupleKey(out.subspan(layout.key_width), tuple_key);
     return Status::OK();
 }
 
@@ -156,12 +156,12 @@ StatusOr<std::span<const std::byte>> IndexLeafView::SortKey(std::uint16_t idx) c
     auto entry = Entry(idx);
     if (!entry.ok()) return entry.status();
     const IndexLeafHeaderFields h = ReadHeader();
-    return entry.value().subspan(0, static_cast<std::size_t>(h.key_width) + kIndexPkWidth);
+    return entry.value().subspan(0, static_cast<std::size_t>(h.key_width) + kIndexTupleKeyWidth);
 }
 
 std::uint16_t IndexLeafView::LowerBound(std::span<const std::byte> sort_key) const {
     const IndexLeafHeaderFields h = ReadHeader();
-    const std::size_t stored_len = static_cast<std::size_t>(h.key_width) + kIndexPkWidth;
+    const std::size_t stored_len = static_cast<std::size_t>(h.key_width) + kIndexTupleKeyWidth;
 
     std::uint16_t lo = 0;
     std::uint16_t hi = h.nr_entries;
@@ -190,10 +190,10 @@ StatusOr<std::uint16_t> IndexLeafView::InsertEntry(std::span<const std::byte> en
     }
 
     const std::uint16_t at =
-        LowerBound(entry.subspan(0, static_cast<std::size_t>(h.key_width) + kIndexPkWidth));
+        LowerBound(entry.subspan(0, static_cast<std::size_t>(h.key_width) + kIndexTupleKeyWidth));
 
     // Open the hole with one move of the tail. Unlike the clustered tree's
-    // internal node - where a monotonic pk means the insert is always at the
+    // internal node - where a monotonic tuple key means the insert is always at the
     // end - a secondary key arrives in arbitrary order, so this move is the
     // normal case rather than a formality.
     std::byte* base = page_.data();
@@ -295,7 +295,7 @@ void IndexInternalView::WriteHeader(const IndexInternalHeaderFields& h) {
 }
 
 std::uint32_t IndexInternalView::entry_stride() const {
-    return static_cast<std::uint32_t>(ReadHeader().key_width) + kIndexPkWidth +
+    return static_cast<std::uint32_t>(ReadHeader().key_width) + kIndexTupleKeyWidth +
            static_cast<std::uint32_t>(sizeof(PageId));
 }
 
@@ -345,7 +345,7 @@ StatusOr<std::span<const std::byte>> IndexInternalView::Separator(std::uint16_t 
                                   std::to_string(h.nr_entries) + " this node holds");
     }
     return std::span<const std::byte>(page_.data() + EntryOffset(idx),
-                                      static_cast<std::size_t>(h.key_width) + kIndexPkWidth);
+                                      static_cast<std::size_t>(h.key_width) + kIndexTupleKeyWidth);
 }
 
 StatusOr<PageId> IndexInternalView::Child(std::uint16_t idx) const {
@@ -357,7 +357,7 @@ StatusOr<PageId> IndexInternalView::Child(std::uint16_t idx) const {
     PageId child = kInvalidPageId;
     std::memcpy(&child,
                 page_.data() + EntryOffset(idx) + static_cast<std::size_t>(h.key_width) +
-                    kIndexPkWidth,
+                    kIndexTupleKeyWidth,
                 sizeof(child));
     return child;
 }
@@ -379,7 +379,7 @@ int IndexInternalView::FindSlot(std::span<const std::byte> sort_key) const {
     // back, so `lo` ends as the count of separators <= the probe and -1
     // correctly means "all separators are above it, follow leftmost_child".
     const IndexInternalHeaderFields h = ReadHeader();
-    const std::size_t sep_len = static_cast<std::size_t>(h.key_width) + kIndexPkWidth;
+    const std::size_t sep_len = static_cast<std::size_t>(h.key_width) + kIndexTupleKeyWidth;
 
     std::uint16_t lo = 0;
     std::uint16_t hi = h.nr_entries;
@@ -405,7 +405,7 @@ PageId IndexInternalView::ChildFor(std::span<const std::byte> sort_key) const {
 Status IndexInternalView::InsertEntry(const IndexLayout& layout,
                                       std::span<const std::byte> separator, PageId child) {
     IndexInternalHeaderFields h = ReadHeader();
-    const std::size_t sep_len = static_cast<std::size_t>(h.key_width) + kIndexPkWidth;
+    const std::size_t sep_len = static_cast<std::size_t>(h.key_width) + kIndexTupleKeyWidth;
     if (separator.size() != sep_len) {
         return Status::InvalidArgument("index separator is " + std::to_string(separator.size()) +
                                        " bytes, this node holds " + std::to_string(sep_len));
@@ -442,7 +442,7 @@ Status IndexInternalView::InsertEntry(const IndexLayout& layout,
 
 Status IndexInternalView::SplitInto(IndexInternalView& into, std::span<std::byte> sep_out) {
     IndexInternalHeaderFields h = ReadHeader();
-    const std::size_t sep_len = static_cast<std::size_t>(h.key_width) + kIndexPkWidth;
+    const std::size_t sep_len = static_cast<std::size_t>(h.key_width) + kIndexTupleKeyWidth;
 
     if (into.ReadHeader().key_width != h.key_width) {
         return Status::InvalidArgument("index node split target has a different key width");

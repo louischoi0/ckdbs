@@ -15,7 +15,7 @@
 //
 // The same line `index_ddl.hpp` draws: an
 // **error** is a declaration that could never do what it says - a Cabin on
-// the primary key, on a column the relation does not have, on a column that
+// the tuple key, on a column the relation does not have, on a column that
 // already has one. A **warning** is a declaration that works and will
 // disappoint - a Cabin nothing will ever probe, or one on a relation with no
 // rows to observe. Refusing the second would be the engine overruling an
@@ -47,7 +47,7 @@ struct CabinDdlResult {
 // `sys.cabins` row.
 //
 // Fails with NotFound for an unknown relation or column, and with
-// InvalidArgument for the pk column or a duplicate - the catalog owns those
+// InvalidArgument for the tuple key column or a duplicate - the catalog owns those
 // last two refusals (`Catalog::CreateCabin`) and this passes them through
 // rather than restating them, so there is one answer to "why not" and not
 // two that can drift.

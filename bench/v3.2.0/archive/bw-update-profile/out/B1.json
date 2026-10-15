@@ -1,0 +1,75 @@
+{
+ "args": {
+  "bin": "build-B/kds_server",
+  "bin_b": null,
+  "arm": null,
+  "scan_kernel": null,
+  "workdir": "wd-B1",
+  "port": 31931,
+  "pin_server": "2",
+  "pin_driver": "4",
+  "rows": 1000,
+  "scan_rows": 10000,
+  "ops": 3000,
+  "scan_ops": 200,
+  "range_ops": 60,
+  "blocks": 12,
+  "runs": 0,
+  "quiet_load": 0.0,
+  "quiet_wait": 600.0,
+  "cell_quiet_pct": 0.0,
+  "cell_quiet_wait": 600.0,
+  "cell_clean_pct": 20.0,
+  "cell_foreign_pct": 5.0,
+  "cell_retries": 3,
+  "sampler": "/home/cdkbs/bench-runs/bw-update-prof/sampler.so",
+  "sampler_dir": "/home/cdkbs/bench-runs/bw-update-prof/out/B1",
+  "profile_ops": 100000,
+  "profile_range_ops": 8000,
+  "profile_scan_ops": 0,
+  "profile_only": "update-range",
+  "only": null,
+  "out": "out/B1.json"
+ },
+ "runs": [],
+ "profile": [
+  {
+   "shape": "update-range",
+   "path": "literal",
+   "bin": "prof",
+   "ops": 8000,
+   "bad": 0,
+   "p0_us": 707.1369327604771,
+   "p25_us": 737.4230772256851,
+   "p50_us": 745.9570188075304,
+   "p90_us": 858.8971104472876,
+   "p99_us": 4064.1678497195244,
+   "mean_us": 2130.539875855902,
+   "server_cpu_us": 794.36054125,
+   "driver_cpu_us": 27.4705355,
+   "block_server_us": [
+    794.36
+   ],
+   "dump": "/home/cdkbs/bench-runs/bw-update-prof/out/B1/dump.0"
+  },
+  {
+   "shape": "update-range",
+   "path": "prepared",
+   "bin": "prof",
+   "ops": 8000,
+   "bad": 0,
+   "p0_us": 687.3880047351122,
+   "p25_us": 722.8520698845387,
+   "p50_us": 737.9141170531511,
+   "p90_us": 847.791088744998,
+   "p99_us": 3730.96507973969,
+   "mean_us": 2123.0207008775324,
+   "server_cpu_us": 789.38847075,
+   "driver_cpu_us": 24.707963625,
+   "block_server_us": [
+    789.39
+   ],
+   "dump": "/home/cdkbs/bench-runs/bw-update-prof/out/B1/dump.1"
+  }
+ ]
+}

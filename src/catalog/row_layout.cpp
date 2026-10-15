@@ -55,9 +55,10 @@ StatusOr<RowLayout> RowLayout::Build(const Schema& schema, std::uint32_t inline_
     RowLayout layout;
     layout.inline_cell_width = inline_cell_width;
     layout.offsets.reserve(schema.columns.size());
+    layout.cell_ends.reserve(schema.columns.size());
     layout.null_bits.reserve(schema.columns.size());
 
-    // The Keystone word leads every tuple and the pk is carried *only*
+    // The Keystone word leads every tuple and the tuple key is carried *only*
     // there, never also as a body column (invariant 11), so column 0
     // occupies the word and the body starts after it - and it can never
     // be nullable, because the word has no NULL encoding. CREATE TABLE
@@ -65,34 +66,83 @@ StatusOr<RowLayout> RowLayout::Build(const Schema& schema, std::uint32_t inline_
     // own defense for a schema that arrives by another door.
     if (!schema.columns.empty() && !schema.columns[0].notnull) {
         return Status::InvalidArgument(
-            "the first column is the primary key and cannot be nullable (invariant 11: the "
+            "the first column is the tuple key and cannot be nullable (invariant 11: the "
             "Keystone word has no NULL encoding)");
     }
     layout.offsets.push_back(0);
+    layout.cell_ends.push_back(kKeystoneWordSize);
     layout.null_bits.push_back(kNoNullBit);
+    layout.live_columns = 1;  // the tuple key, which no drop reaches
     std::uint32_t offset = kKeystoneWordSize;
     std::uint16_t next_bit = 0;
 
+    // Two regions (BW-R2): the columns `CREATE TABLE` declared, packed as
+    // they always were, then `spare_slots` 16-byte slots, the j-th column
+    // `ADD COLUMN` placed taking slot j. Slot j's bit is the declared bits'
+    // count plus j, held or not, so the bitmap is fixed at CREATE with the
+    // row. A dropped column keeps its offset and its bit - its bytes are
+    // still in every row - so nothing below asks whether a column is
+    // dropped. The slot shape is on-disk data, so a breach is Corruption.
+    if (schema.spare_slots > kMaxSpareSlots) {
+        return Status::Corruption("the relation declares " + std::to_string(schema.spare_slots) +
+                                  " spare slots; at most " + std::to_string(kMaxSpareSlots) +
+                                  " exist");
+    }
+    std::uint32_t slot_region = 0;   // set at the first slot column
+    std::uint16_t first_slot_bit = 0;
+    std::uint16_t slots_held = 0;
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
-        auto width = ColumnWidth(schema.columns[i], inline_cell_width);
+        const SysColumnRow& col = schema.columns[i];
+        auto width = ColumnWidth(col, inline_cell_width);
         if (!width.ok()) return width.status();
+        if (!col.dropped()) ++layout.live_columns;
 
-        // A zero-width column would give two columns the same offset, which
-        // makes the layout ambiguous rather than merely useless. `char`
-        // with len 0 is the only way to reach it.
-        if (width.value() == 0) {
-            return Status::InvalidArgument("column '" +
-                                            std::string(NameView(schema.columns[i].name)) +
-                                            "' has zero width; every column must occupy bytes");
+        if (slots_held == 0 && !col.in_slot()) {
+            // A zero-width column would give two columns the same offset,
+            // which makes the layout ambiguous rather than merely useless.
+            // `char` with len 0 is the only way to reach it.
+            if (width.value() == 0) {
+                return Status::InvalidArgument("column '" + std::string(NameView(col.name)) +
+                                                "' has zero width; every column must occupy "
+                                                "bytes");
+            }
+            layout.offsets.push_back(offset);
+            offset += width.value();
+            layout.cell_ends.push_back(offset);
+            // One bit per nullable column, in ascending schema position
+            // (null.md §2); NOT NULL columns consume no bit, which is
+            // what keeps every existing relation's bitmap at zero bytes.
+            layout.null_bits.push_back(col.notnull ? kNoNullBit : next_bit++);
+            continue;
         }
 
-        layout.offsets.push_back(offset);
-        offset += width.value();
-        // One bit per nullable column, in ascending schema position
-        // (null.md §2); NOT NULL columns consume no bit, which is
-        // what keeps every existing relation's bitmap at zero bytes.
-        layout.null_bits.push_back(schema.columns[i].notnull ? kNoNullBit : next_bit++);
+        if (slots_held == 0) {
+            slot_region = offset;
+            first_slot_bit = next_bit;
+        }
+        if (!col.in_slot() || col.notnull || slots_held == schema.spare_slots ||
+            width.value() == 0 || width.value() > kColumnSlotWidth) {
+            return Status::Corruption("column '" + std::string(NameView(col.name)) +
+                                      "' is not a nullable column of 1.." +
+                                      std::to_string(kColumnSlotWidth) +
+                                      " bytes in a free slot of a relation with " +
+                                      std::to_string(schema.spare_slots));
+        }
+        const std::uint32_t slot_offset = slot_region + slots_held * kColumnSlotWidth;
+        layout.offsets.push_back(slot_offset);
+        layout.cell_ends.push_back(slot_offset + width.value());
+        layout.null_bits.push_back(static_cast<std::uint16_t>(first_slot_bit + slots_held));
+        ++slots_held;
     }
+    if (slots_held == 0) {
+        slot_region = offset;
+        first_slot_bit = next_bit;
+    }
+    offset = slot_region + static_cast<std::uint32_t>(schema.spare_slots) * kColumnSlotWidth;
+    next_bit = static_cast<std::uint16_t>(first_slot_bit + schema.spare_slots);
+    layout.slots_held = slots_held;
+    layout.vacant_slot_bit_begin = static_cast<std::uint16_t>(first_slot_bit + slots_held);
+    layout.vacant_slot_bit_end = next_bit;
 
     // Appended after the last column, so every offset above is unchanged
     // and a zero-filled payload still means "nothing is NULL".

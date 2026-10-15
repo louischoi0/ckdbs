@@ -44,7 +44,7 @@ protected:
 // Every relation needs a first column that can carry the Keystone id
 // (heap-and-tuple.md section 4), so a schema-less CreateTable is no longer
 // a legal table to build a fixture on.
-Schema MinimalPkSchema() {
+Schema MinimalTupleKeySchema() {
     Schema schema;
     SysColumnRow col{};
     col.pos = 0;
@@ -114,7 +114,7 @@ TEST_F(CatalogTest, ARelationInAUserNamespaceIsRenamableAndDroppable) {
     auto ns = catalog_.CreateNamespace("af_test");
     ASSERT_TRUE(ns.ok()) << ns.status().message();
 
-    auto oid = catalog_.CreateTable(ns.value(), "orders_line", MinimalPkSchema(),
+    auto oid = catalog_.CreateTable(ns.value(), "orders_line", MinimalTupleKeySchema(),
                                     ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
@@ -212,7 +212,7 @@ TEST_F(CatalogTest, DroppingANamespaceIsRestrictedByTheRelationsInIt) {
     auto ns = catalog_.CreateNamespace("orders");
     ASSERT_TRUE(ns.ok()) << ns.status().message();
 
-    auto rel = catalog_.CreateTable(ns.value(), "orders_line", MinimalPkSchema(),
+    auto rel = catalog_.CreateTable(ns.value(), "orders_line", MinimalTupleKeySchema(),
                                     ClusteredType::kHeap);
     ASSERT_TRUE(rel.ok()) << rel.status().message();
 
@@ -285,7 +285,9 @@ TEST_F(CatalogTest, CreateTableInsertsObjectTableAndColumnRows) {
     auto built_schema = catalog_.BuildSchemaFromColumns(oid.value());
     ASSERT_TRUE(built_schema.ok());
     ASSERT_EQ(built_schema.value().columns.size(), 2u);
-    const SysColumnRow* id_found = built_schema.value().FindColumn("id");
+    auto id_lookup = built_schema.value().FindColumn("id", /*byte_offset=*/0);
+    ASSERT_TRUE(id_lookup.ok());
+    const SysColumnRow* id_found = id_lookup.value();
     ASSERT_NE(id_found, nullptr);
     EXPECT_EQ(id_found->type_val, 5u);
     EXPECT_TRUE(id_found->notnull);
@@ -334,7 +336,7 @@ TEST_F(CatalogTest, InitTableAccessReturnsSchemaAndDescPageId) {
 // TableAccess does not carry it.
 TEST_F(CatalogTest, ATableAccessPointerSurvivesRowIdAllocation) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    Schema schema = MinimalPkSchema();
+    Schema schema = MinimalTupleKeySchema();
     auto oid = catalog_.CreateTable(kNamespacePublic, "held", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
 
@@ -356,7 +358,7 @@ TEST_F(CatalogTest, ATableAccessPointerSurvivesRowIdAllocation) {
 // the new fact. The pointer is not reused across that boundary.
 TEST_F(CatalogTest, DdlInvalidatesACachedTableAccess) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    Schema schema = MinimalPkSchema();
+    Schema schema = MinimalTupleKeySchema();
     auto oid = catalog_.CreateTable(kNamespacePublic, "relinked", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
 
@@ -389,7 +391,7 @@ TEST_F(CatalogTest, BuildSchemaFromColumnsStillReportsNotFoundForACatalogTable) 
 TEST_F(CatalogTest, PublishRootPreservesRowIdentity) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
-    Schema schema = MinimalPkSchema();
+    Schema schema = MinimalTupleKeySchema();
     auto oid = catalog_.CreateTable(kNamespacePublic, "movable", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
 
@@ -417,9 +419,9 @@ TEST_F(CatalogTest, PublishRootPreservesRowIdentity) {
 // ---- Secondary indexes (docs/spec/index.md §12, workplan IX03) ----------
 
 // Three columns, so an index can be declared on something that is neither
-// the primary key nor the only other column.
+// the tuple key nor the only other column.
 Schema IndexableSchema() {
-    Schema schema = MinimalPkSchema();
+    Schema schema = MinimalTupleKeySchema();
     for (const char* name : {"owner", "amount"}) {
         SysColumnRow col{};
         col.pos = static_cast<std::uint32_t>(schema.columns.size());
@@ -495,7 +497,7 @@ TEST_F(CatalogTest, FindIndexOnColumnAnswersForTheLeadingKeyColumnOnly) {
 }
 
 TEST_F(CatalogTest, AHeapClusteredRelationTakesNoIndex) {
-    // Spec IX3: an entry resolves through the primary key, which a heap
+    // Spec IX3: an entry resolves through the tuple key, which a heap
     // relation has no index for - so every probe would be a chain scan.
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "h", IndexableSchema(),
@@ -513,7 +515,7 @@ TEST_F(CatalogTest, CreateIndexRefusesRatherThanTruncatingOrGuessing) {
                                       ClusteredType::kBtree);
     ASSERT_TRUE(table.ok());
 
-    // The primary key: the clustered tree already indexes it.
+    // The tuple key: the clustered tree already indexes it.
     EXPECT_FALSE(catalog_.CreateIndex(SimpleIndex(table.value(), "on_pk", 0)).ok());
 
     // A column the relation does not have.
@@ -692,7 +694,7 @@ TEST_F(CatalogTest, TheIndexMaskNamesLeadingKeyColumnsOnly) {
     // step a filter scan while leaving it exactly as slow.
     EXPECT_NE(access.value()->index_mask & (std::uint64_t{1} << 1), 0u);
     EXPECT_EQ(access.value()->index_mask & (std::uint64_t{1} << 2), 0u);
-    // Bit 0 is always clear: CreateIndex refuses the primary key.
+    // Bit 0 is always clear: CreateIndex refuses the tuple key.
     EXPECT_EQ(access.value()->index_mask & 1u, 0u);
 
     ASSERT_NE(access.value()->IndexOn(1), nullptr);
@@ -817,7 +819,7 @@ TEST_F(CatalogTest, EveryDdlBumpsTheSchemaWordAndTheWriterKeepsItsOwnCache) {
     const std::uint64_t after_bootstrap = word.load();
     EXPECT_GT(after_bootstrap, 0u) << "bootstrap writes catalog rows and bumps";
 
-    auto oid = catalog_.CreateTable(kNamespacePublic, "w", MinimalPkSchema(), ClusteredType::kBtree);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "w", MinimalTupleKeySchema(), ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     EXPECT_GT(word.load(), after_bootstrap);
 
@@ -838,8 +840,8 @@ TEST_F(CatalogTest, AReaderDropsOnlyAtItsBoundaryNeverInsideARead) {
     // what drops.
     catalog_.SetSchemaWord(&word);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    auto a = catalog_.CreateTable(kNamespacePublic, "a", MinimalPkSchema(), ClusteredType::kBtree);
-    auto b = catalog_.CreateTable(kNamespacePublic, "b", MinimalPkSchema(), ClusteredType::kBtree);
+    auto a = catalog_.CreateTable(kNamespacePublic, "a", MinimalTupleKeySchema(), ClusteredType::kBtree);
+    auto b = catalog_.CreateTable(kNamespacePublic, "b", MinimalTupleKeySchema(), ClusteredType::kBtree);
     ASSERT_TRUE(a.ok() && b.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
@@ -849,7 +851,7 @@ TEST_F(CatalogTest, AReaderDropsOnlyAtItsBoundaryNeverInsideARead) {
     ASSERT_TRUE(held.ok());
     const std::uint64_t drops = reader.cache_stats().invalidations;
 
-    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "c", MinimalPkSchema(), ClusteredType::kBtree).ok());
+    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "c", MinimalTupleKeySchema(), ClusteredType::kBtree).ok());
     ASSERT_TRUE(reader.InitTableAccess(b.value()).ok());
     // ASSERT, not EXPECT: under the mutant this cell exists to kill the
     // next line reads through a freed entry and would crash the binary
@@ -870,7 +872,7 @@ TEST_F(CatalogTest, ABumpFromACacheThatIsBehindDoesNotSwallowTheOneItMissed) {
     // good. The next boundary must still drop.
     catalog_.SetSchemaWord(&word);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    auto oid = catalog_.CreateTable(kNamespacePublic, "s", MinimalPkSchema(), ClusteredType::kBtree);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "s", MinimalTupleKeySchema(), ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
@@ -880,7 +882,7 @@ TEST_F(CatalogTest, ABumpFromACacheThatIsBehindDoesNotSwallowTheOneItMissed) {
     const std::uint64_t drops = reader.cache_stats().invalidations;
 
     // The reader falls behind, then bumps while behind.
-    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "s2", MinimalPkSchema(), ClusteredType::kBtree).ok());
+    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "s2", MinimalTupleKeySchema(), ClusteredType::kBtree).ok());
     reader.InvalidateAfterCompensation();
     // Its own bump dropped its cache once; the boundary must drop again for
     // the change it missed, which is what a swallowed bump would hide.
@@ -898,7 +900,7 @@ TEST_F(CatalogTest, ARefusedBelowMarkKeyMovesNoWordAndDropsNoCache) {
     // must cost neither the writer its entry nor every reader a refill.
     catalog_.SetSchemaWord(&word);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    auto oid = catalog_.CreateTable(kNamespacePublic, "f", MinimalPkSchema(), ClusteredType::kHeap);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "f", MinimalTupleKeySchema(), ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
     for (int i = 0; i < 3; ++i) ASSERT_TRUE(catalog_.AllocateRowId(oid.value()).ok());
     ASSERT_TRUE(catalog_.InitTableAccess(oid.value()).ok());
@@ -939,7 +941,7 @@ TEST_F(CatalogTest, AReaderDropsItsCacheWhenTheWordMovesAndOnlyThen) {
     // still, the memo is served.
     catalog_.SetSchemaWord(&word);
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    auto oid = catalog_.CreateTable(kNamespacePublic, "r", MinimalPkSchema(), ClusteredType::kBtree);
+    auto oid = catalog_.CreateTable(kNamespacePublic, "r", MinimalTupleKeySchema(), ClusteredType::kBtree);
     ASSERT_TRUE(oid.ok());
 
     Catalog reader(store_, storage::kDefaultInlineCellWidth);
@@ -953,7 +955,7 @@ TEST_F(CatalogTest, AReaderDropsItsCacheWhenTheWordMovesAndOnlyThen) {
 
     // A DDL on the writer: the reader's next boundary drops, its next read
     // refills.
-    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "r2", MinimalPkSchema(), ClusteredType::kBtree).ok());
+    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "r2", MinimalTupleKeySchema(), ClusteredType::kBtree).ok());
     reader.Revalidate();
     ASSERT_TRUE(reader.InitTableAccess(oid.value()).ok());
     EXPECT_EQ(reader.cache_stats().fills, filled.fills + 1)
@@ -982,7 +984,7 @@ TEST_F(CatalogTest, DdlBumpsTheCatalogVersion) {
     const std::uint64_t after_bootstrap = catalog_.catalog_version();
     EXPECT_GT(after_bootstrap, 0u);
 
-    Schema schema = MinimalPkSchema();
+    Schema schema = MinimalTupleKeySchema();
     auto oid = catalog_.CreateTable(kNamespacePublic, "versioned", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     const std::uint64_t after_create = catalog_.catalog_version();
@@ -1004,7 +1006,7 @@ TEST_F(CatalogTest, DdlBumpsTheCatalogVersion) {
 // every insert.
 TEST_F(CatalogTest, AllocateRowIdAndReadsDoNotBumpTheCatalogVersion) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    Schema schema = MinimalPkSchema();
+    Schema schema = MinimalTupleKeySchema();
     auto oid = catalog_.CreateTable(kNamespacePublic, "seq", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
 
@@ -1058,7 +1060,7 @@ TEST_F(CatalogTest, DdlRefreshesTheTableListAndKeepsTypes) {
     ASSERT_TRUE(before.ok());
     const std::size_t count_before = before.value().size();
 
-    Schema schema = MinimalPkSchema();
+    Schema schema = MinimalTupleKeySchema();
     ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "listed", schema, ClusteredType::kHeap).ok());
 
     auto after = catalog_.ListTables();
@@ -1092,7 +1094,7 @@ TEST(CatalogCacheWriteAmplificationTest, CachedReadsDoNotDirtyCatalogPages) {
 
     Catalog catalog(*store.value());
     ASSERT_TRUE(catalog.Bootstrap().ok());
-    Schema schema = MinimalPkSchema();
+    Schema schema = MinimalTupleKeySchema();
     auto oid = catalog.CreateTable(kNamespacePublic, "hot", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
@@ -1340,7 +1342,7 @@ TEST_F(PatternCatalogTest, SettingTheRootOfAnUnknownPatternIsNotFound) {
 // ---- What registration must not disturb -----------------------------------
 
 TEST_F(PatternCatalogTest, RegisteringAPatternDoesNotInvalidateTableAccess) {
-    auto oid = catalog_.CreateTable(kNamespacePublic, "t", MinimalPkSchema(),
+    auto oid = catalog_.CreateTable(kNamespacePublic, "t", MinimalTupleKeySchema(),
                                      ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
     auto access = catalog_.InitTableAccess(oid.value());
@@ -1695,7 +1697,7 @@ TEST_F(CatalogTest, CreateTableStampsItsRowsWithTheTransactionIdItWasGiven) {
     // beside it is the other half of the claim.
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     constexpr std::uint64_t kDdlTrx = 4242;
-    auto oid = catalog_.CreateTable(kNamespacePublic, "stamped", MinimalPkSchema(),
+    auto oid = catalog_.CreateTable(kNamespacePublic, "stamped", MinimalTupleKeySchema(),
                                     ClusteredType::kHeap, kDdlTrx);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
@@ -1716,7 +1718,7 @@ TEST_F(CatalogTest, ADefaultedCreateTableStillStampsBootstrapAndBootstrapRowsAlw
     // visible to a read view minted before any transaction existed
     // (ddl-transactional.md §3).
     ASSERT_TRUE(catalog_.Bootstrap().ok());
-    auto oid = catalog_.CreateTable(kNamespacePublic, "unstamped", MinimalPkSchema(),
+    auto oid = catalog_.CreateTable(kNamespacePublic, "unstamped", MinimalTupleKeySchema(),
                                     ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
@@ -1735,7 +1737,7 @@ TEST_F(CatalogTest, ADefaultedCreateTableStillStampsBootstrapAndBootstrapRowsAlw
 TEST_F(CatalogTest, ARelationCreatedByAnUnseenTransactionDoesNotExistForThatReader) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     constexpr std::uint64_t kCreator = 500;
-    auto oid = catalog_.CreateTable(kNamespacePublic, "pending", MinimalPkSchema(),
+    auto oid = catalog_.CreateTable(kNamespacePublic, "pending", MinimalTupleKeySchema(),
                                     ClusteredType::kHeap, kCreator);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
@@ -1783,7 +1785,7 @@ TEST_F(CatalogTest, ATransactionalLookupNeitherReadsNorFillsTheSharedCache) {
     // reader - and one that read it would be served that publication.
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     constexpr std::uint64_t kCreator = 700;
-    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "half_open", MinimalPkSchema(),
+    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "half_open", MinimalTupleKeySchema(),
                                      ClusteredType::kHeap, kCreator)
                     .ok());
 
@@ -1823,7 +1825,7 @@ TEST_F(CatalogTest, ARolledBackCreateTableLeavesNoRelationEvenToALaterReader) {
     ASSERT_TRUE(txn.ok()) << txn.status().message();
 
     std::vector<CatalogRowRef> written;
-    auto oid = catalog_.CreateTable(kNamespacePublic, "doomed", MinimalPkSchema(),
+    auto oid = catalog_.CreateTable(kNamespacePublic, "doomed", MinimalTupleKeySchema(),
                                     ClusteredType::kHeap,
                                     txn.value()->id(), &written);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
@@ -1904,7 +1906,7 @@ TEST_F(CatalogTest, AnUndoHookThatFailsOnTheTailLeavesTheChainAsItWas) {
         return Status::IoError("injected: the undo record could not be appended");
     });
     std::vector<CatalogRowRef> written;
-    auto created = catalog_.CreateTable(kNamespacePublic, "unhooked", MinimalPkSchema(),
+    auto created = catalog_.CreateTable(kNamespacePublic, "unhooked", MinimalTupleKeySchema(),
                                         ClusteredType::kBtree, /*trx_id=*/7, &written);
     catalog_.SetDdlUndoHook(nullptr);
 
@@ -2009,7 +2011,7 @@ TEST_F(CatalogTest, ARowWhoseRecordCannotBeAppendedIsRetiredWhereItLies) {
         return Status::OK();
     });
     std::vector<CatalogRowRef> written;
-    auto created = catalog_.CreateTable(kNamespacePublic, "unlogged", MinimalPkSchema(),
+    auto created = catalog_.CreateTable(kNamespacePublic, "unlogged", MinimalTupleKeySchema(),
                                         ClusteredType::kBtree, /*trx_id=*/7, &written);
     catalog_.SetDdlUndoHook(nullptr);
     catalog_.SetWal(nullptr);

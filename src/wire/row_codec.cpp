@@ -121,6 +121,9 @@ std::vector<FieldDescription> DescribeSchema(const catalog::Schema& schema) {
     std::vector<FieldDescription> fields;
     fields.reserve(schema.columns.size());
     for (const auto& col : schema.columns) {
+        // A dropped column is not described (BW-R6): a KWP load's rows carry
+        // the live columns, and the insert path expands them.
+        if (col.dropped()) continue;
         FieldDescription f;
         f.name = std::string(catalog::NameView(col.name));
         f.type_oid = col.type_val;
@@ -190,7 +193,7 @@ Status EncodeValue(std::uint32_t type_val, std::uint32_t type_mod,
             const std::int16_t width = WireTypeLen(type_val);
             // Written at the declared width, so a value that does not fit
             // it would reach the client as another number. Refused rather
-            // than cut: a narrow pk's id is widened by WireValueType before
+            // than cut: a narrow tuple key's id is widened by WireValueType before
             // it gets here, so nothing a relation stores reaches this.
             if (!FitsSigned(value.int_val, width)) {
                 return Status::OutOfRange("wire row codec: " + std::to_string(value.int_val) +

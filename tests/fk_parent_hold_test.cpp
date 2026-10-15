@@ -91,18 +91,18 @@ protected:
     // Another session's statement, on the second dispatcher.
     std::string Other(const std::string& sql) { return other_->Dispatch(sql).response; }
 
-    // `p`'s row `pk` still held at `X` by `session`'s transaction: in its
+    // `p`'s row `tuple_key` still held at `X` by `session`'s transaction: in its
     // ledger, and in the table, where a foreign `X` is refused. Read here
     // rather than through another session's write, which the undecided
     // delete refuses whether the `X` is held or not.
-    void ExpectRowXHeld(Session& session, std::uint64_t pk) {
+    void ExpectRowXHeld(Session& session, std::uint64_t tuple_key) {
         auto p = boot_->catalog.FindTableOidByName("p");
         ASSERT_TRUE(p.ok()) << p.status().message();
-        const txn::LockKey row = txn::LockKey::Tuple(p.value(), pk);
+        const txn::LockKey row = txn::LockKey::Tuple(p.value(), tuple_key);
         ASSERT_NE(session.transaction(), nullptr);
         EXPECT_TRUE(session.transaction()->borrows().Holds(row))
             << "the violation dropped the row from the transaction's ledger";
-        constexpr std::uint64_t kForeign = txn::kMaxTrxId;  // a holder, not a pk: no session's txn
+        constexpr std::uint64_t kForeign = txn::kMaxTrxId;  // a holder, not a tuple key: no session's txn
         txn::LockHoldings scratch;
         auto foreign = locks_->TryAcquire(kForeign, row, txn::LockMode::kExclusive, scratch);
         ASSERT_TRUE(foreign.ok()) << foreign.status().message();
@@ -152,7 +152,7 @@ TEST_F(FkParentHoldTest, AParentRowHeldByAWriterIsNotReadBeforeTheChildHoldsIt) 
 // The child-leaf seam is armed **from inside** the parent-leaf seam, so it
 // can fire only once the check has started reading the parent: its first
 // fetch of `c`'s leaf after that is the descent that places the row (an
-// omitted pk, issued under that leaf's hold, BB-R2). One thread, as the cells
+// omitted tuple key, issued under that leaf's hold, BB-R2). One thread, as the cells
 // above: the `DELETE` runs on the second dispatcher inside the fetch, and on
 // the synchronous path a refused hold is the refusal.
 //
@@ -256,7 +256,7 @@ TEST_F(FkParentHoldTest, AChildWrittenWhileTheSetIsReadCannotBeMadeToReferenceTh
     EXPECT_TRUE(parent_gone) << deleted;  // the set, drained, cleared it
 }
 
-// AY-Q8 through the Cabin: an `UPDATE` moving a child off 7 leaves its pk in
+// AY-Q8 through the Cabin: an `UPDATE` moving a child off 7 leaves its tuple key in
 // 7's set (maintenance is append-only), and its page holds the new value, so
 // the loop skips it as not a child of 7. A set the loop exhausts that way is
 // not a "no children": the writer is undecided and its rollback puts the

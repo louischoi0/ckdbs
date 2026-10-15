@@ -46,8 +46,15 @@ no nullable column pays nothing.
 - The bitmap has one bit per **nullable** column — a column whose
   `sys.columns.notnull` is false — in ascending schema position. Columns
   declared `NOT NULL` consume no bit.
-- `null_bitmap_bytes = ceil(nullable_column_count / 8)`, and is **0 when the
-  relation has no nullable column**.
+- **And one bit per reserved column slot** (`alter.md` AL11, BW): slot `j`'s
+  bit is the declared nullable columns' count plus `j`, whether a column
+  holds the slot or not, so the bitmap's size is fixed at `CREATE`. A
+  dropped column keeps its bit. A **vacant** slot's bit is set in every row
+  `EncodeRow` writes - the slot is NULL - which is what makes a column a
+  later `ADD COLUMN` places there read NULL in every older row; one polarity
+  for every bit, set meaning NULL.
+- `null_bitmap_bytes = ceil((nullable_column_count + spare_slots) / 8)`, and
+  is **0 when the relation has no nullable column and no slot**.
 - A set bit means the column is NULL. The payload is zero-filled before
   encoding, so all-zero means all-present.
 - The bitmap is the **sole authority** on whether a column is NULL. No reader
@@ -157,8 +164,8 @@ belongs to the doc named.
   `NOT IN` is true whatever the probe. A value list (BU-S2) is read the
   same way: `IN (1, NULL)` is true only where the probe is 1, and
   `NOT IN (1, NULL)` is never true.
-- **The primary key is never NULL**, and this is not a policy but invariant 11:
-  the pk is carried by the Keystone word, which has no NULL encoding. A first
+- **The tuple key is never NULL**, and this is not a policy but invariant 11:
+  the tuple key is carried by the Keystone word, which has no NULL encoding. A first
   column declared `NULL` is refused at `CREATE TABLE`.
 - **Secondary indexes** (D2, `docs/spec/index.md`). **No nullable column
   enters an index**, as a key or as a covered column; `CREATE INDEX` refuses
@@ -191,9 +198,10 @@ belongs to the doc named.
 ## 5. Open decisions
 
 The decisions once listed here are ratified and stated normatively in §2.3
-and §4. One consequence stands as a fact: `ALTER TABLE ADD COLUMN <nullable>`
-is refused — it changes `row_size`, and under `docs/spec/alter.md` AL1
-everything data-moving is refused.
+and §4. One consequence stands as a fact: `ALTER TABLE ADD COLUMN` admits
+only a nullable column, and only into a reserved slot (§2.1,
+`docs/spec/alter.md` AL11) - with none free it is refused, since it would
+change `row_size`.
 
 ## 6. Testing requirements
 

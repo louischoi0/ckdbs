@@ -196,7 +196,7 @@ TEST(LockTableTest, AnUncontendedExclusiveRegistersOneEntryAndTheTableEmptiesOnR
 
 TEST(LockTableTest, TheUnitKindIsInTheKeyBecauseFourUnitsShareABound) {
     // What the unit kind in AO-R2's key actually buys. For a tuple with
-    // `pk != 0` the bound alone already separates it from its relation, so
+    // `tuple key != 0` the bound alone already separates it from its relation, so
     // a collision census over many tuples measures the hash rather than the
     // design. The keys that need the unit kind are the four carrying the
     // **same** `lo = 0`: without it they would be one entry, and a relation
@@ -295,9 +295,9 @@ TEST(LockTableTest, TheCapRefusesTheEntryPastItAndNeverTruncates) {
     auto table = MakeTable(8, kCap);
     LockHoldings h;
 
-    for (std::uint64_t pk = 0; pk < kCap; ++pk) {
-        auto r = table->Acquire(1, LockKey::Tuple(kRel, pk), LockMode::kExclusive, h);
-        ASSERT_TRUE(r.ok()) << "at " << pk;
+    for (std::uint64_t tuple_key = 0; tuple_key < kCap; ++tuple_key) {
+        auto r = table->Acquire(1, LockKey::Tuple(kRel, tuple_key), LockMode::kExclusive, h);
+        ASSERT_TRUE(r.ok()) << "at " << tuple_key;
         ASSERT_TRUE(r.value().granted);
     }
     EXPECT_EQ(h.size(), kCap);
@@ -529,8 +529,8 @@ TEST(LockTableTest, DistinctPartitionsCarryDistinctLatchesAndDisjointBorrowsAllG
     auto table = MakeTable(8);
     const LockKey a = LockKey::Tuple(kRel, 1);
     LockKey b = LockKey::Tuple(kRel, 2);
-    for (std::uint64_t pk = 2; pk < 4096; ++pk) {
-        b = LockKey::Tuple(kRel, pk);
+    for (std::uint64_t tuple_key = 2; tuple_key < 4096; ++tuple_key) {
+        b = LockKey::Tuple(kRel, tuple_key);
         if (table->PartitionOf(b) != table->PartitionOf(a)) break;
     }
     ASSERT_NE(table->PartitionOf(a), table->PartitionOf(b));
@@ -551,12 +551,12 @@ TEST(LockTableTest, DistinctPartitionsCarryDistinctLatchesAndDisjointBorrowsAllG
             LockHoldings h;
             for (int i = 0; i < kPerThread; ++i) {
                 // Disjoint by construction: thread t owns every key with
-                // `pk % kThreads == t`, so no two threads ever meet on a
+                // `tuple key % kThreads == t`, so no two threads ever meet on a
                 // unit and every acquire must be granted.
-                const std::uint64_t pk =
+                const std::uint64_t tuple_key =
                     static_cast<std::uint64_t>(i) * kThreads + static_cast<std::uint64_t>(t);
                 auto r = table->Acquire(static_cast<std::uint64_t>(t) + 1,
-                                        LockKey::Tuple(kRel, pk), LockMode::kExclusive, h);
+                                        LockKey::Tuple(kRel, tuple_key), LockMode::kExclusive, h);
                 if (r.ok() && r.value().granted) {
                     granted.fetch_add(1, std::memory_order_relaxed);
                 } else {

@@ -39,6 +39,7 @@
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/txn/lock_table.hpp"
+#include "view_text.hpp"
 
 namespace kds::server {
 namespace {
@@ -148,8 +149,9 @@ TEST(DdlFenceRigTest, AnInsertOnAPeerWaitsForACreateIndexOnCoreZeroAndItsRowIsIn
     const std::string found =
         rig->core(1).dispatcher().Dispatch("SELECT * FROM fenced_ix WHERE v = 99").response;
     EXPECT_NE(found.find(",99"), std::string::npos) << "the index missed the fenced row: " << found;
-    const std::string shown = rig->core(1).dispatcher().Dispatch("SHOW INDEXES").response;
-    EXPECT_NE(shown.find("entries=4"), std::string::npos) << shown;
+    const std::string shown =
+        rig->core(1).dispatcher().Dispatch("SELECT name, entries FROM sys.indexes").response;
+    EXPECT_EQ(testing_view::ReadViewText(shown).Find("name", "fix", "entries"), "4") << shown;
 }
 
 TEST(DdlFenceRigTest, ACreateAssertionOnCoreZeroWaitsForAWriterOnAPeerAndCountsItsRow) {
@@ -329,9 +331,11 @@ TEST(DdlFenceRigTest, ADropIndexRolledBackOnCoreZeroKeepsTheRowAPeerWroteWhileIt
     }
     rig->Stop();
 
-    const std::string shown = rig->core(1).dispatcher().Dispatch("SHOW INDEXES").response;
-    EXPECT_NE(shown.find("name=dix"), std::string::npos) << "the rollbacks lost the index: " << shown;
-    EXPECT_NE(shown.find("entries=" + std::to_string(3 + kRounds)), std::string::npos)
+    const std::string shown =
+        rig->core(1).dispatcher().Dispatch("SELECT name, entries FROM sys.indexes").response;
+    const auto entries = testing_view::ReadViewText(shown).Find("name", "dix", "entries");
+    ASSERT_TRUE(entries.has_value()) << "the rollbacks lost the index: " << shown;
+    EXPECT_EQ(*entries, std::to_string(3 + kRounds))
         << "a row written while a drop was open is missing from the index it kept: " << shown;
 }
 

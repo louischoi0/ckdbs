@@ -39,12 +39,12 @@ using crash_rig::TempDir;
 // Long enough to spill out of a 16-byte inline cell.
 const std::string kLong(100, 'x');
 
-// The var-heap slots `pk`'s current version names.
+// The var-heap slots `tuple_key`'s current version names.
 std::vector<exec::SpillRef> SpillsOf(storage::PageStore& store,
-                                     const catalog::TableAccess& access, std::uint64_t pk) {
+                                     const catalog::TableAccess& access, std::uint64_t tuple_key) {
     std::vector<exec::SpillRef> out;
-    auto at = btree::BtreeLookup(store, access.desc_page_id, pk);
-    EXPECT_TRUE(at.ok()) << pk << ": " << at.status().message();
+    auto at = btree::BtreeLookup(store, access.desc_page_id, tuple_key);
+    EXPECT_TRUE(at.ok()) << tuple_key << ": " << at.status().message();
     if (!at.ok()) return out;
     heap::PageView leaf(at.value().leaf.bytes());
     auto tuple = leaf.ReadTuple(at.value().slot);
@@ -74,8 +74,8 @@ void Load(CommandDispatcher& d) {
     Ok(d, "INSERT INTO t VALUES (9, '" + kLong + "', 1)");
 }
 
-std::string Row(Expeditor& db, std::uint64_t pk) {
-    return db.dispatcher().Dispatch("SELECT s, n FROM t WHERE id = " + std::to_string(pk)).response;
+std::string Row(Expeditor& db, std::uint64_t tuple_key) {
+    return db.dispatcher().Dispatch("SELECT s, n FROM t WHERE id = " + std::to_string(tuple_key)).response;
 }
 
 TEST(VarHeapCarryCrashTest, ACarryingUpdateCutAtEveryRecordKeepsTheValue) {

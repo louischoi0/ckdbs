@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <optional>
 #include <string>
 
@@ -14,6 +15,7 @@
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
+#include "view_text.hpp"
 
 // **FK-M1: the catalog and the DDL surface** (docs/spec/foreign-keys.md §1).
 //
@@ -198,7 +200,7 @@ TEST_F(ForeignKeyTest, ReferencesIsNotAReservedWord) {
 // ---- Introspectable ------------------------------------------------------
 
 TEST_F(ForeignKeyTest, ShowFkeysListsWhatWasDeclared) {
-    EXPECT_EQ(Run("SHOW FKEYS"), "fkeys=0");
+    EXPECT_EQ(testing_view::ReadViewText(Run("SHOW FKEYS")).rows.size(), 0u);
 
     ASSERT_EQ(Run("CREATE TABLE accounts (id int64, owner varchar) BTREE").substr(0, 7),
               "CREATED");
@@ -207,12 +209,12 @@ TEST_F(ForeignKeyTest, ShowFkeysListsWhatWasDeclared) {
               "CREATED");
 
     const std::string out = Run("SHOW FKEYS");
-    EXPECT_NE(out.find("fkeys=1"), std::string::npos) << out;
-    EXPECT_NE(out.find("child=trades"), std::string::npos) << out;
-    EXPECT_NE(out.find("column=account_id"), std::string::npos) << out;
-    EXPECT_NE(out.find("parent=accounts"), std::string::npos) << out;
-    EXPECT_NE(out.find("action=RESTRICT"), std::string::npos) << out;
-    EXPECT_NE(out.find("nullable=no"), std::string::npos) << out;
+    const auto shown = testing_view::ReadViewText(out);
+    ASSERT_EQ(shown.rows.size(), 1u) << out;
+    EXPECT_EQ(shown.Find("child", "trades", "column"), "account_id") << out;
+    EXPECT_EQ(shown.Find("child", "trades", "parent"), "accounts") << out;
+    EXPECT_EQ(shown.Find("child", "trades", "action"), "RESTRICT") << out;
+    EXPECT_EQ(shown.Find("child", "trades", "nullable"), "0") << out;
 }
 
 TEST_F(ForeignKeyTest, DescribeNamesTheReferencedRelation) {
@@ -224,11 +226,9 @@ TEST_F(ForeignKeyTest, DescribeNamesTheReferencedRelation) {
               "CREATED");
 
     const std::string out = Run("DESCRIBE trades");
-    EXPECT_NE(out.find("name=account_id"), std::string::npos) << out;
-    EXPECT_NE(out.find("references=accounts"), std::string::npos) << out;
     // Only the referencing column carries the annotation.
-    EXPECT_EQ(out.find("references=accounts", out.find("references=accounts") + 1),
-              std::string::npos)
+    EXPECT_EQ(testing_view::ReadViewText(out).Column("references"),
+              (std::vector<std::string>{"NULL", "accounts", "NULL"}))
         << out;
 }
 
@@ -267,16 +267,16 @@ TEST_F(ForeignKeyTest, AColumnThatCannotHoldAKeystoneIdIsRefused) {
     EXPECT_FALSE(boot_->catalog.FindTableOidByName("trades").ok());
 }
 
-// The pk is the row's identity, not a field of it: a reference stored there
+// The tuple key is the row's identity, not a field of it: a reference stored there
 // would make one row's identity a statement about another row.
-TEST_F(ForeignKeyTest, AForeignKeyOnThePrimaryKeyIsRefused) {
+TEST_F(ForeignKeyTest, AForeignKeyOnTheTupleKeyIsRefused) {
     ASSERT_EQ(Run("CREATE TABLE accounts (id int64, owner varchar) BTREE").substr(0, 7),
               "CREATED");
 
     const std::string out =
         Run("CREATE TABLE trades (id int64 REFERENCES accounts, qty int64) BTREE");
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
-    EXPECT_NE(out.find("primary key"), std::string::npos) << out;
+    EXPECT_NE(out.find("tuple key"), std::string::npos) << out;
     EXPECT_FALSE(boot_->catalog.FindTableOidByName("trades").ok());
 }
 
@@ -327,7 +327,7 @@ TEST_F(ForeignKeyTest, TheCatalogRefusesADeclarationTheDdlSurfaceWouldHaveCaught
     ASSERT_TRUE(trades.ok());
     ASSERT_TRUE(accounts.ok());
 
-    // Column 0 - the pk - and a column past the schema, refused at the door
+    // Column 0 - the tuple key - and a column past the schema, refused at the door
     // rather than only at the CREATE TABLE clause.
     EXPECT_EQ(boot_->catalog.CreateForeignKey(trades.value(), 0, accounts.value()).status().code(),
               StatusCode::kInvalidArgument);
@@ -418,7 +418,7 @@ TEST_F(ForeignKeyCheckTest, AChildReferencingNoParentIsRefused) {
     EXPECT_EQ(RowCount("SELECT * FROM trades"), 0u);
 }
 
-// A parent's pk is a Keystone id in [1, 2^40 - 1], so an integer outside it
+// A parent's tuple key is a Keystone id in [1, 2^40 - 1], so an integer outside it
 // names no parent that can exist: an absent parent, refused like any other.
 // A negative one used to pass unchecked and be stored.
 TEST_F(ForeignKeyCheckTest, AnIntegerThatIsNoKeystoneIdReferencesNoParent) {
@@ -532,12 +532,14 @@ TEST_F(ForeignKeyCheckTest, ManyChildrenOfOneParentResolveItOnce) {
     const std::string inserted = Run(sql);
     ASSERT_EQ(inserted.substr(0, 8), "INSERTED") << inserted;
 
-    // One Lookup recorded against the parent, not twenty. `uses=` is the
-    // shape's counter (`SHOW ACCESS`), and before the hoist this read
-    // `uses=20`.
-    const std::string access = Run("SHOW ACCESS");
-    EXPECT_NE(access.find("kind=Lookup rel=accounts"), std::string::npos) << access;
-    EXPECT_NE(access.find("kind=Lookup rel=accounts columns=[id] uses=1"), std::string::npos)
+    // One Lookup recorded against the parent, not twenty. `uses` is the
+    // shape's counter (`sys.access_stats`), and before the hoist this read
+    // 20.
+    const std::string access =
+        Run("SELECT kind, uses, columns FROM sys.access_stats WHERE rel_name = 'accounts'");
+    const auto shown = testing_view::ReadViewText(access);
+    EXPECT_EQ(shown.Find("kind", "Lookup", "columns"), "id") << access;
+    EXPECT_EQ(shown.Find("kind", "Lookup", "uses"), "1")
         << "the parent was resolved once per row rather than once: " << access;
 }
 
@@ -690,12 +692,13 @@ TEST_F(ForeignKeyCheckTest, ChecksAreVisibleInShowAccess) {
     ASSERT_EQ(Run("INSERT INTO trades VALUES (1, 100)").substr(0, 8), "INSERTED");
     ASSERT_EQ(Run("DELETE FROM accounts WHERE id = 2"), "DELETED 1");
 
-    const std::string out = Run("SHOW ACCESS");
-    // The forward check is a pk lookup on the parent; the reverse check is a
+    const std::string out = Run("SELECT rel_name FROM sys.access_stats");
+    // The forward check is a tuple key lookup on the parent; the reverse check is a
     // filtered walk of the child. Both relations appear, which is the point:
     // an operator can see what the constraints cost.
-    EXPECT_NE(out.find("rel=accounts"), std::string::npos) << out;
-    EXPECT_NE(out.find("rel=trades"), std::string::npos) << out;
+    const std::vector<std::string> names = testing_view::ReadViewText(out).Column("rel_name");
+    EXPECT_NE(std::find(names.begin(), names.end(), "accounts"), names.end()) << out;
+    EXPECT_NE(std::find(names.begin(), names.end(), "trades"), names.end()) << out;
 }
 
 // ---- FK-M5: the reverse check reads a Cabin -------------------------------
@@ -722,13 +725,13 @@ TEST_F(ForeignKeyCheckTest, AnObservedCabinAnswersTheReverseCheckWithoutWalking)
 
 // The surplus an append-only set carries has to be subtracted by the reverse
 // check too: a child moved off the value is not a reference to it, even
-// though its pk is still in that value's entry set (§1's superset rule).
+// though its tuple key is still in that value's entry set (§1's superset rule).
 TEST_F(ForeignKeyCheckTest, ACabinSurplusEntryDoesNotBlockADelete) {
     ASSERT_EQ(Run("CREATE CABIN ON trades(account_id)").substr(0, 7), "CREATED");
     ASSERT_EQ(Run("INSERT INTO trades VALUES (1, 100)").substr(0, 8), "INSERTED");
     ASSERT_EQ(RowCount("SELECT * FROM trades WHERE account_id = 1"), 1u);
 
-    // The row moves to account 2. Append-only maintenance leaves its pk in
+    // The row moves to account 2. Append-only maintenance leaves its tuple key in
     // account 1's set, where it no longer belongs.
     ASSERT_EQ(Run("UPDATE trades SET account_id = 2 WHERE id = 1"), "UPDATED 1");
 
@@ -811,9 +814,10 @@ TEST_F(ForeignKeyCheckTest, ANullableForeignKeyColumnShowsNullableYes) {
                   .substr(0, 7),
               "CREATED");
     const std::string out = Run("SHOW FKEYS");
-    EXPECT_NE(out.find("nullable=yes"), std::string::npos) << out;
-    // The fixture's NOT NULL fk on trades keeps printing nullable=no beside it.
-    EXPECT_NE(out.find("nullable=no"), std::string::npos) << out;
+    const auto shown = testing_view::ReadViewText(out);
+    EXPECT_EQ(shown.Find("child", "orders", "nullable"), "1") << out;
+    // The fixture's NOT NULL fk on trades keeps reading 0 beside it.
+    EXPECT_EQ(shown.Find("child", "trades", "nullable"), "0") << out;
 }
 
 // ---- AF-T4: the namespace remedy, spoken where a user is choosing --------

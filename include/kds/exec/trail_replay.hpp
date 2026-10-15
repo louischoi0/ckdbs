@@ -33,13 +33,13 @@
 //
 // Spec §2 rule 0 is the one the storage-level checks cannot supply:
 // **re-derive the probe key from the current outer row and require it to
-// equal the entry's `pk`**. Every other rule in spec section 2
+// equal the entry's `tuple_key`**. Every other rule in spec section 2
 // validates the trail against *storage*, and none looks at the query - so if
 // a driving row's join column is updated between recording and replay, an
 // entry for the old key passes `rel_oid`, the Keystone id, the epoch and
 // visibility, and the join emits the wrong row.
 //
-// Here that rule is **structural**: the index is keyed on `(step_id, pk)`,
+// Here that rule is **structural**: the index is keyed on `(step_id, tuple key)`,
 // and the caller's lookup key is the key its step just computed - from the
 // current outer row for a probe, from the statement's own values for the
 // driving step, which the rule covers too (spec section 2 rule 0). An entry
@@ -107,27 +107,27 @@ public:
     // Drops every indexed entry, keeping the allocation.
     void Clear() noexcept { by_key_.clear(); }
 
-    // The recorded location for `pk` at `step_id`, or null.
+    // The recorded location for `tuple_key` at `step_id`, or null.
     //
     // Null is the ordinary answer and never an error: an instance nobody
     // recorded, an outer row whose key was not in the recorded set, and a
     // trail whose entry was dropped at build all arrive here identically,
     // because the caller does the same thing in all of them - descend.
-    const TrailLocation* Find(std::uint32_t step_id, std::uint64_t pk) const noexcept;
+    const TrailLocation* Find(std::uint32_t step_id, std::uint64_t tuple_key) const noexcept;
 
     bool empty() const noexcept { return by_key_.empty(); }
     std::size_t size() const noexcept { return by_key_.size(); }
 
 private:
-    // `(step_id, pk)` packed into one key: the pk in the id's bits, the step
+    // `(step_id, tuple key)` packed into one key: the tuple key in the id's bits, the step
     // id above them. Step ids are 16-bit in the entry format and the id is
     // kKeystoneIdBits wide (invariant 5), so the pair fits a uint64 exactly
     // - which keeps the map's hash a single integer rather than a pair.
     // `Find` answers null for a step id the entry format cannot hold, so
     // nothing wider than 16 bits reaches this (BK-R3).
     static_assert(16 + kKeystoneIdBits <= 64);
-    static constexpr std::uint64_t PackKey(std::uint16_t step_id, std::uint64_t pk) noexcept {
-        return (static_cast<std::uint64_t>(step_id) << kKeystoneIdBits) | (pk & kMaxKeystoneId);
+    static constexpr std::uint64_t PackKey(std::uint16_t step_id, std::uint64_t tuple_key) noexcept {
+        return (static_cast<std::uint64_t>(step_id) << kKeystoneIdBits) | (tuple_key & kMaxKeystoneId);
     }
 
     std::unordered_map<std::uint64_t, TrailLocation> by_key_;

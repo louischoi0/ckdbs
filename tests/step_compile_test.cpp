@@ -20,7 +20,7 @@
 //               (phase V-6) is that it emits *identical* chains, which is
 //               a checkable statement only if identical means something.
 //
-//   the kind    a step is Lookup/Probe iff its equality binds the pk. That
+//   the kind    a step is Lookup/Probe iff its equality binds the tuple key. That
 //               single line is simultaneously the executor's probe
 //               strategy and Waystone's replayable/not-replayable
 //               boundary - one decision with two consumers, so getting it
@@ -38,7 +38,7 @@ protected:
         boot_.emplace(std::move(boot.value()));
 
         // acct(id, name, tier) and trade(id, acct_id, sym). `id` is the
-        // pk of each by invariant 11 - the first column always is.
+        // tuple key of each by invariant 11 - the first column always is.
         Create("CREATE TABLE acct (id int64, name varchar, tier varchar)");
         Create("CREATE TABLE trade (id int64, acct_id int64, sym varchar)");
     }
@@ -88,7 +88,7 @@ protected:
 
 // ---- Access kinds: the line that is also Waystone's trust boundary -------
 
-TEST_F(StepCompileTest, PkEqualityAgainstALiteralCompilesToLookup) {
+TEST_F(StepCompileTest, TupleKeyEqualityAgainstALiteralCompilesToLookup) {
     const StepChain chain = MustCompile("SELECT * FROM acct WHERE id = 7");
     ASSERT_EQ(chain.steps.size(), 1u);
     EXPECT_EQ(chain.steps[0].kind, AccessKind::kLookup);
@@ -98,8 +98,8 @@ TEST_F(StepCompileTest, PkEqualityAgainstALiteralCompilesToLookup) {
     EXPECT_TRUE(IsTrailReplayable(chain.steps[0].kind));
 }
 
-TEST_F(StepCompileTest, EqualityOnANonPkColumnIsAFilterScanHoweverSelective) {
-    // `name` may be unique in practice; it is not the pk, and only the pk
+TEST_F(StepCompileTest, EqualityOnANonTupleKeyColumnIsAFilterScanHoweverSelective) {
+    // `name` may be unique in practice; it is not the tuple key, and only the tuple key
     // can be addressed by a descent (invariant 11).
     //
     // It is a **kFilterScan** rather than a bare kScan - a walk that exists
@@ -118,7 +118,7 @@ TEST_F(StepCompileTest, EqualityOnANonPkColumnIsAFilterScanHoweverSelective) {
     // And the column it was classified for is recorded, which is what the
     // access statistics key on.
     ASSERT_EQ(chain.steps[0].access_columns.size(), 1u);
-    EXPECT_NE(chain.steps[0].access_columns[0], 0) << "the pk is not a filter column";
+    EXPECT_NE(chain.steps[0].access_columns[0], 0) << "the tuple key is not a filter column";
 }
 
 TEST_F(StepCompileTest, ABareSelectIsAPlainScanWithNoAccessColumns) {
@@ -130,7 +130,7 @@ TEST_F(StepCompileTest, ABareSelectIsAPlainScanWithNoAccessColumns) {
     EXPECT_TRUE(chain.steps[0].access_columns.empty());
 }
 
-TEST_F(StepCompileTest, BetweenOnThePkCompilesToARangeWithItsBoundsKept) {
+TEST_F(StepCompileTest, BetweenOnTheTupleKeyCompilesToARangeWithItsBoundsKept) {
     const StepChain chain = MustCompile("SELECT * FROM acct WHERE id BETWEEN 10 AND 20");
     ASSERT_EQ(chain.steps.size(), 1u);
     EXPECT_EQ(chain.steps[0].kind, AccessKind::kRange);
@@ -154,8 +154,8 @@ TEST_F(StepCompileTest, BetweenOnThePkCompilesToARangeWithItsBoundsKept) {
     EXPECT_EQ(spelled.steps[0].range->high, 20u);
 }
 
-TEST_F(StepCompileTest, BetweenOnANonPkColumnIsNotARange) {
-    // There is no structure to exploit: the relation is ordered by pk, so
+TEST_F(StepCompileTest, BetweenOnANonTupleKeyColumnIsNotARange) {
+    // There is no structure to exploit: the relation is ordered by tuple key, so
     // a range over any other column is a search that has to look at every
     // row. Calling it a Range would be a promise the storage cannot keep.
     const StepChain chain = MustCompile("SELECT * FROM acct WHERE tier BETWEEN 'a' AND 'z'");
@@ -174,7 +174,7 @@ TEST_F(StepCompileTest, AnInvertedRangeStaysAPlainScan) {
     EXPECT_FALSE(chain.steps[0].range.has_value());
 }
 
-TEST_F(StepCompileTest, AJoinOntoAPkCompilesToProbe) {
+TEST_F(StepCompileTest, AJoinOntoATupleKeyCompilesToProbe) {
     // The shape the whole execution model is built for: the second step
     // descends to exactly one row per outer row.
     const StepChain chain =
@@ -191,8 +191,8 @@ TEST_F(StepCompileTest, AJoinOntoAPkCompilesToProbe) {
     EXPECT_EQ(chain.steps[1].key->column.up, 0);
 }
 
-TEST_F(StepCompileTest, AJoinOnANonPkColumnCompilesToScan) {
-    // Same statement shape, different column: `acct.name` is not a pk, so
+TEST_F(StepCompileTest, AJoinOnANonTupleKeyColumnCompilesToScan) {
+    // Same statement shape, different column: `acct.name` is not a tuple key, so
     // the second relation must be walked. The workplan names this pair
     // explicitly because the two must not be conflated.
     const StepChain chain =
@@ -204,10 +204,10 @@ TEST_F(StepCompileTest, AJoinOnANonPkColumnCompilesToScan) {
 
 TEST_F(StepCompileTest, AProbeKeyMustComeFromAnEarlierStepNotALaterOne) {
     // Written the other way round: `acct` is the driving relation and the
-    // ON binds acct.id, which is step 0's own pk against step 1's column.
+    // ON binds acct.id, which is step 0's own tuple key against step 1's column.
     // Step 0 cannot probe on a value step 1 has not produced yet, so it
     // stays a scan - and step 1 is a scan too, since trade.acct_id is not
-    // trade's pk.
+    // trade's tuple key.
     const StepChain chain =
         MustCompile("SELECT acct.name, trade.sym FROM acct JOIN trade ON acct.id = trade.acct_id");
     ASSERT_EQ(chain.steps.size(), 2u);
@@ -215,7 +215,7 @@ TEST_F(StepCompileTest, AProbeKeyMustComeFromAnEarlierStepNotALaterOne) {
     EXPECT_EQ(chain.steps[1].kind, AccessKind::kScan);
 }
 
-TEST_F(StepCompileTest, ANegativeLiteralPkIsAScanRatherThanAProbeIntoAHugeKey) {
+TEST_F(StepCompileTest, ANegativeLiteralTupleKeyIsAScanRatherThanAProbeIntoAHugeKey) {
     // Ids are zero-extended unsigned values (invariant 7), so `id = -1` can
     // never hold. Compiling it to a lookup would cast the literal to an
     // enormous unsigned key; as a scan with the residual intact it
@@ -227,7 +227,7 @@ TEST_F(StepCompileTest, ANegativeLiteralPkIsAScanRatherThanAProbeIntoAHugeKey) {
 }
 
 TEST_F(StepCompileTest, AWhereClauseDoesNotDowngradeALookupToAScan) {
-    // The PkEqualityTarget trap the workplan calls out. That helper
+    // The TupleKeyEqualityTarget trap the workplan calls out. That helper
     // refuses whenever the WHERE holds more than one condition - correct
     // for a point statement, wrong for a chain step, which only locates a
     // candidate and evaluates the rest on the located row.
@@ -321,8 +321,8 @@ TEST_F(StepCompileTest, ALiteralOnTheJoinKeyPropagatesToTheOtherSide) {
     EXPECT_EQ(chain.steps[1].residual.size(), 2u);
 }
 
-TEST_F(StepCompileTest, PropagationOntoThePkMakesTheStepALookup) {
-    // The restriction written against the non-pk side: the implied
+TEST_F(StepCompileTest, PropagationOntoTheTupleKeyMakesTheStepALookup) {
+    // The restriction written against the non-tuple-key side: the implied
     // `acct.id = 7` turns step 0 from the scan
     // AProbeKeyMustComeFromAnEarlierStepNotALaterOne pins into a lookup.
     const StepChain chain = MustCompile(
@@ -650,7 +650,7 @@ TEST_F(StepCompileTest, StarReadsEveryColumn) {
         << "SELECT * emits every column by definition";
 }
 
-TEST_F(StepCompileTest, ALookupReadsThePkForTheTrail) {
+TEST_F(StepCompileTest, ALookupReadsTheTupleKeyForTheTrail) {
     // A replayable step records the Keystone id of every row it accepts,
     // and reads it out of the frame. The kind is a compile-time fact, so
     // only the steps that can record one pay for the column.
@@ -669,7 +669,7 @@ TEST_F(StepCompileTest, AJoinsEarlierStepIsReadByTheLaterStepsPredicate) {
         "SELECT COUNT(*) FROM acct AS a JOIN trade AS t ON a.id = t.acct_id");
     ASSERT_EQ(chain.steps.size(), 2u);
     EXPECT_TRUE(chain.steps[0].read_columns & Col(0))
-        << "step 0's pk is read by step 1's probe key and predicate";
+        << "step 0's tuple key is read by step 1's probe key and predicate";
 }
 
 TEST_F(StepCompileTest, AProbeKeyIsCountedAsAReadOfTheStepItPointsAt) {
@@ -725,7 +725,7 @@ TEST_F(StepCompileTest, AJoinOnACabinedColumnCompilesToACorrelatedCabinProbe) {
     // cabin.md §4a: the cabined join column with no literal anywhere -
     // the shape that walked the inner relation once per outer row, and the
     // only accelerable shape a heap relation's join column has. Both ON
-    // orientations must give the same probe, per the pk arm's argument.
+    // orientations must give the same probe, per the tuple key arm's argument.
     auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
     ASSERT_TRUE(trade_oid.ok());
     ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
@@ -809,7 +809,7 @@ TEST_F(StepCompileTest, ACorrelatedSubChainProbesTheCabinThroughTheFrame) {
 // construction and not by audit.
 
 TEST_F(StepCompileTest, TheWalkedJoinCarriesTheBuildAnnotation) {
-    // The shape nothing serves: a join on a non-pk column with no index and
+    // The shape nothing serves: a join on a non-tuple-key column with no index and
     // no Cabin. Before JB1 this compiled to a bare kScan walked once per
     // outer row; it still compiles to that kScan, now carrying the one
     // piece of state the executor needs to build once instead (JB3).
@@ -857,8 +857,8 @@ TEST_F(StepCompileTest, OnlyTheWalkedJoinShapeIsAnnotated) {
     // the priority tests below, not repeated here.
     for (const char* sql : {
              "SELECT * FROM trade",  // bare scan, nothing correlated
-             // The pk-probe join: the correlated equality binds the inner
-             // relation's pk, which the probe arm serves outright.
+             // The tuple-key-probe join: the correlated equality binds the inner
+             // relation's tuple key, which the probe arm serves outright.
              "SELECT a.name FROM trade AS t JOIN acct AS a ON t.acct_id = a.id",
              // An uncorrelated inner set: no equality reaches outward, so
              // there is no key to build a map on.
@@ -1146,7 +1146,7 @@ TEST_F(StepCompileTest, ADefaultConstructedStepDecodesEverything) {
 // `limit`/`offset` ride the chain for the dispatcher's emission quota, and
 // since OB3 the resolved `ORDER BY` keys ride it too, for the dispatcher's
 // sort. The one form that still does not is the one V09 was written for:
-// a single ascending key on the driving relation's pk names the order the
+// a single ascending key on the driving relation's tuple key names the order the
 // chain already emits, so the compiler *elides* it and the statement pays
 // nothing.
 
@@ -1182,14 +1182,14 @@ TEST_F(StepCompileTest, TheTailChangesNoStep) {
 // The elision, and the whole reason it is worth having: the statement that
 // V09 accepted compiles to no sort at all, so its cost is unchanged rather
 // than merely small.
-TEST_F(StepCompileTest, OrderByThePkIsElidedNotSorted) {
+TEST_F(StepCompileTest, OrderByTheTupleKeyIsElidedNotSorted) {
     const StepChain chain = MustCompile("SELECT name FROM acct ORDER BY id");
     ASSERT_EQ(chain.steps.size(), 1u);
     EXPECT_EQ(chain.steps[0].kind, AccessKind::kScan);
     EXPECT_FALSE(chain.sorted());
 }
 
-TEST_F(StepCompileTest, OrderByTheQualifiedPkOfTheDrivingRelationIsElided) {
+TEST_F(StepCompileTest, OrderByTheQualifiedTupleKeyOfTheDrivingRelationIsElided) {
     const StepChain chain = MustCompile(
         "SELECT a.name, t.sym FROM acct AS a JOIN trade AS t ON t.acct_id = a.id "
         "ORDER BY a.id LIMIT 5");
@@ -1199,16 +1199,16 @@ TEST_F(StepCompileTest, OrderByTheQualifiedPkOfTheDrivingRelationIsElided) {
     EXPECT_FALSE(chain.sorted());
 }
 
-// ...and the elision is exactly that narrow. Descending on the same pk is
+// ...and the elision is exactly that narrow. Descending on the same tuple key is
 // not an order any chain emits, because every chain links forward only.
-TEST_F(StepCompileTest, OrderByThePkDescendingIsSorted) {
+TEST_F(StepCompileTest, OrderByTheTupleKeyDescendingIsSorted) {
     const StepChain chain = MustCompile("SELECT name FROM acct ORDER BY id DESC");
     ASSERT_EQ(chain.sort_keys.size(), 1u);
     EXPECT_TRUE(chain.sort_keys[0].descending);
     EXPECT_EQ(chain.sort_keys[0].ref.col_pos, 0u);
 }
 
-TEST_F(StepCompileTest, OrderByANonPkColumnCompilesToASortKey) {
+TEST_F(StepCompileTest, OrderByANonTupleKeyColumnCompilesToASortKey) {
     const StepChain chain = MustCompile("SELECT name FROM acct ORDER BY name");
     ASSERT_EQ(chain.sort_keys.size(), 1u);
     EXPECT_EQ(chain.sort_keys[0].ref.rel_slot, 0u);
@@ -1277,7 +1277,7 @@ protected:
     }
 };
 
-TEST_F(CompileAssignmentsTest, AssigningThePrimaryKeyIsUnsupportedNotInvalid) {
+TEST_F(CompileAssignmentsTest, AssigningTheTupleKeyIsUnsupportedNotInvalid) {
     // K2: the id names the tuple in the clustered tree, in every index and
     // Cabin entry, and in every recorded trail. The column exists and the
     // value would encode - the statement is understood and declined, which
@@ -1288,7 +1288,7 @@ TEST_F(CompileAssignmentsTest, AssigningThePrimaryKeyIsUnsupportedNotInvalid) {
     EXPECT_NE(s.message().find("at byte "), std::string::npos) << s.message();
 }
 
-TEST_F(CompileAssignmentsTest, ThePkIsRefusedWhereverItSitsInTheSetList) {
+TEST_F(CompileAssignmentsTest, TheTupleKeyIsRefusedWhereverItSitsInTheSetList) {
     // The loop must not stop at the first legal target.
     const Status s = Check("UPDATE acct SET name = 'x', tier = 'y', id = 99");
     ASSERT_FALSE(s.ok());
@@ -1333,7 +1333,7 @@ TEST_F(CompileAssignmentsTest, AColumnAssignedTwiceIsInvalidAndNamesTheSecondByt
         << s.message();
 }
 
-TEST_F(CompileAssignmentsTest, APkNamedOnAnotherRelationIsNotThisRelationsPk) {
+TEST_F(CompileAssignmentsTest, ATupleKeyNamedOnAnotherRelationIsNotThisRelationsTupleKey) {
     // `acct_id` is trade's second column and an ordinary field. Nothing
     // about the *name* is what makes a column refusable - position 0 is.
     EXPECT_TRUE(Check("UPDATE trade SET acct_id = 3").ok());

@@ -121,7 +121,7 @@ struct StepStats {
     //
     // **`trail_replays` is how spec §11-4 is checked rather than asserted.**
     // A trail may replace a lookup and never a search (invariant 9), so a
-    // step whose predicate is not a pk equality must report zero here
+    // step whose predicate is not a tuple key equality must report zero here
     // forever. That is a property nothing else makes visible: a search that
     // was wrongly skipped returns *plausible* rows, so the only evidence is
     // the work not done.
@@ -141,9 +141,9 @@ struct StepStats {
     // Secondary index (docs/spec/index.md §§1, 7).
     //
     // `index_entries_scanned` counts entries the walk read between its two
-    // bounds; `index_rows_resolved` counts the pks it then descended for.
+    // bounds; `index_rows_resolved` counts the tuple keys it then descended for.
     // The gap between them is what the layer actually saved, and it has two
-    // sources the third counter separates: a duplicate pk (maintenance is
+    // sources the third counter separates: a duplicate tuple key (maintenance is
     // append-only, so a key round trip leaves two entries naming one row)
     // and `index_entries_filtered`, a row a **covered** column already
     // disqualified.
@@ -172,9 +172,9 @@ struct StepStats {
     //
     // `cabin_hint_hits` / `cabin_hint_misses` split the C6 advisory tier out
     // of that: how often an entry's location was still right, and how often
-    // it had to be resolved through the pk instead. A rising miss count is a
+    // it had to be resolved through the tuple key instead. A rising miss count is a
     // relation whose tuples are moving - a btree leaf divided, or a row
-    // placed below them shifted them a slot (BD-R2); the pk check catches
+    // placed below them shifted them a slot (BD-R2); the tuple key check catches
     // both (BD-R3's epoch rule: a shift bumps no epoch).
     //
     // `cabin_recordings` counts values that *became* observed during this

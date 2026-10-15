@@ -196,7 +196,7 @@ void KwpLoadServer::Detach() noexcept {
     if (scheduler_ == nullptr) return;
     for (auto& [fd, conn] : clients_) {
         if (conn.phase == Phase::kLoading && dispatcher_ != nullptr) {
-            (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
+            (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         }
         (void)scheduler_->UnregisterIoHandler(fd);
         ::close(fd);
@@ -356,7 +356,7 @@ bool KwpLoadServer::HandleFrame(int client_fd, Connection& conn,
                     // KW4's modality: the load is dead and the transaction
                     // with it - v0's collapse of §5's discard-to-sync.
                     SendError(conn, wire::ProtocolDetail::kUnexpectedFrame, "frame not legal inside a load session");
-                    (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
+                    (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
                     conn.phase = Phase::kIdle;
                     conn.load = LoadState{};
                     return true;
@@ -399,12 +399,20 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // `schema` refers into - so what the load needs is copied out first and
     // the borrow is not touched again.
     //
-    // **Every column, the pk first** (bulkinsert.md BI15): field 0 is the
+    // **Every column, the tuple key first** (bulkinsert.md BI15): field 0 is the
     // Keystone id, and a row names it or leaves it NULL for the engine to
     // issue - per row, so one chunk may mix the two as one T1 statement may.
     // Every storable type loads (BI16); no column is refused here.
     LoadState load;
     load.relation = begin.value().relation;
+    // Every chunk's rows are positional against this shape, and each chunk
+    // re-resolves the relation by name: a drop and an add of equal net width
+    // between here and a chunk's `IX` would land values in other columns,
+    // so the chunk is refused unless the relation is still this one in this
+    // shape (BW-Q10).
+    load.shape = parser::DescribedShape{oid.value(),
+                                        static_cast<std::uint32_t>(schema.columns.size()),
+                                        access.value()->layout.live_columns};
     load.fields = wire::DescribeSchema(schema);
 
     // The implicit transaction (KW5, BI11): the same BEGIN the text
@@ -413,7 +421,7 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     // from the transaction lifetime ceiling** (docs/spec/txn.md §1,
     // exemption 4): this listener has no sweep, because a bulk load may
     // honestly outlive `txn_lifetime_ceiling_ms`.
-    if (auto out = dispatcher_->Dispatch("BEGIN", &conn.session);
+    if (auto out = dispatcher_->DispatchInternal("BEGIN", &conn.session);
         out.response.rfind("ERR", 0) == 0) {
         SendError(conn, StatusFromErrorReply(out.response));
         return;
@@ -445,7 +453,7 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     const CommandDispatcher::StatementEpochScope epoch(*dispatcher_);  // BF-R9
     const auto fail_load = [&](const Status& status) {
         SendError(conn, status);
-        (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
+        (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         conn.phase = Phase::kIdle;
         conn.load = LoadState{};
     };
@@ -485,19 +493,24 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
     // path, and it is a *transliteration*, not a coercion: the column's
     // type decides at the same gates a T1 statement goes through.
     //
-    // **The pk field decides the row's arity** (BI15): NULL leaves it out,
-    // which is a T1 row that omits its pk and takes an issued id; a value
-    // keeps it, which is a T1 row that names one. The pk is never NULL in
+    // **The tuple key field decides the row's arity** (BI15): NULL leaves it out,
+    // which is a T1 row that omits its tuple key and takes an issued id; a value
+    // keeps it, which is a T1 row that names one. The tuple key is never NULL in
     // a relation, so the NULL has no other reading to collide with.
     const std::string chunk = "chunk " + std::to_string(header.value().chunk_seq);
     parser::InsertStmt stmt;
     stmt.table_name = conn.load.relation;
+    stmt.described = conn.load.shape;
     stmt.rows.reserve(rows.value().size());
     for (std::size_t r = 0; r < rows.value().size(); ++r) {
         const std::vector<wire::DecodedField>& row = rows.value()[r];
         std::vector<parser::AstValue> values;
         values.reserve(row.size());
-        for (std::size_t f = row[0].is_null ? 1 : 0; f < row.size(); ++f) {
+        // Every field, a NULL tuple key included: the insert path reads a full row
+        // with a NULL tuple key as one asking for an issued id, and refuses a
+        // row of another width on a relation whose columns were changed by
+        // ALTER TABLE since this load described them (BW-Q9).
+        for (std::size_t f = 0; f < row.size(); ++f) {
             auto v = ValueOf(row[f], conn.load.fields[f]);
             if (!v.ok()) {
                 fail_load(v.status().WithContext(chunk + ", row " + std::to_string(r + 1)));
@@ -532,10 +545,10 @@ void KwpLoadServer::HandleLoadChunk(Connection& conn, const wire::DecodedFrame& 
 
 void KwpLoadServer::HandleLoadEnd(Connection& conn, bool abort) {
     const std::uint64_t rows = abort ? 0 : conn.load.rows_accepted;
-    auto out = dispatcher_->Dispatch(abort ? "ROLLBACK" : "COMMIT", &conn.session);
+    auto out = dispatcher_->DispatchInternal(abort ? "ROLLBACK" : "COMMIT", &conn.session);
     if (!abort && out.response.rfind("ERR", 0) == 0) {
         SendError(conn, StatusFromErrorReply(out.response));
-        (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
+        (void)dispatcher_->DispatchInternal("ROLLBACK", &conn.session);
         conn.phase = Phase::kIdle;
         conn.load = LoadState{};
         return;
@@ -624,7 +637,7 @@ void KwpLoadServer::CloseClient(int client_fd) {
     }
     if (it->second.phase == Phase::kLoading && dispatcher_ != nullptr) {
         // BI11: a connection dying mid-load unwinds its transaction.
-        (void)dispatcher_->Dispatch("ROLLBACK", &it->second.session);
+        (void)dispatcher_->DispatchInternal("ROLLBACK", &it->second.session);
     }
     if (scheduler_ != nullptr) (void)scheduler_->UnregisterIoHandler(client_fd);
     ::close(client_fd);

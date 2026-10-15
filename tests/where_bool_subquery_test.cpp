@@ -178,16 +178,36 @@ TEST_F(WhereBoolSubqueryTest, AnUpdateAndADeleteWriteTheRowsTheSelectFinds) {
     EXPECT_EQ(Ids("id > 0"), "id\\n2\\n3\\n4");
 }
 
-// A write's subquery over its own relation sees the statement's earlier rows
-// (docs/inflight/bugs/a-write-walks-subquery-sees-its-own-statements-writes.md):
-// the flat form and the OR form alike. Disabled until that entry's fix.
-TEST_F(WhereBoolSubqueryTest, DISABLED_AWritesSubqueryOverItsOwnRelationSeesNoneOfItsWrites) {
-    const std::string first = "NOT EXISTS (SELECT id FROM t AS x WHERE x.id < t.id)";
-    EXPECT_EQ(Ids(first), "id\\n1");
-    // Answers DELETED 6: each delete makes the next row the first. The flat
-    // `WHERE` + first takes the same path.
-    EXPECT_EQ(Run("DELETE FROM t WHERE id = 99 OR " + first), "DELETED 1");
+// A write whose WHERE reads the relation it writes collects its targets
+// before its first write, so a sub-chain re-run per row never reads the
+// statement's own writes: each form below answered as if it did before.
+const std::string kFirst = "NOT EXISTS (SELECT id FROM t AS x WHERE x.id < t.id)";
+
+TEST_F(WhereBoolSubqueryTest, AWritesSubqueryOverItsOwnRelationSeesNoneOfItsWrites) {
+    EXPECT_EQ(Ids(kFirst), "id\\n1");
+    // Was DELETED 6: each delete made the next row the first.
+    EXPECT_EQ(Run("DELETE FROM t WHERE id = 99 OR " + kFirst), "DELETED 1");
     EXPECT_EQ(Ids("id > 0"), "id\\n2\\n3\\n4\\n5\\n6");
+}
+
+TEST_F(WhereBoolSubqueryTest, AFlatDeleteOverItsOwnRelationSeesNoneOfItsWrites) {
+    EXPECT_EQ(Run("DELETE FROM t WHERE " + kFirst), "DELETED 1");
+    EXPECT_EQ(Ids("id > 0"), "id\\n2\\n3\\n4\\n5\\n6");
+}
+
+TEST_F(WhereBoolSubqueryTest, AnUncorrelatedDeleteOverItsOwnRelationSeesNoneOfItsWrites) {
+    // Was DELETED 1: deleting id 1 made the EXISTS false for every later row.
+    EXPECT_EQ(Run("DELETE FROM t WHERE EXISTS (SELECT id FROM t AS x WHERE x.id = 1)"),
+              "DELETED 6");
+    EXPECT_EQ(Ids("id > 0"), "id");
+}
+
+TEST_F(WhereBoolSubqueryTest, AnUpdateOverItsOwnRelationSeesNoneOfItsWrites) {
+    // Was UPDATED 1: the first row's n = 7 made the NOT EXISTS false for the rest.
+    EXPECT_EQ(Run("UPDATE t SET n = 7 WHERE NOT EXISTS "
+                  "(SELECT id FROM t AS x WHERE x.id < t.id AND x.n = 7)"),
+              "UPDATED 6");
+    EXPECT_EQ(Ids("n = 7"), "id\\n1\\n2\\n3\\n4\\n5\\n6");
 }
 
 // ---- The plan ---------------------------------------------------------------

@@ -1,0 +1,2 @@
+1791940233 WARN [query] "UPDATE operations_xb4c8g SET booked_cbm = 194000, revenue = 1024711 WHERE id = 520" -> ERR TXN_CONFLICT retryable=1 row id=520 was written by transaction 78041 in 14us
+1791940235 WARN [query] "UPDATE organizations_xb4c8g SET outstanding = 17206509 WHERE id = 591" -> ERR TXN_CONFLICT retryable=1 row id=591 was written by transaction 74554 in 10us

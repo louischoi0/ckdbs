@@ -56,6 +56,9 @@ add_executable(kds_tests
     index_ddl_test.cpp
     assertion_ddl_test.cpp
     assertion_catalog_test.cpp
+    transition_catalog_test.cpp
+    transition_test.cpp
+    transition_crash_test.cpp
     assertion_violation_test.cpp
     assertion_wal_test.cpp
     assertion_build_test.cpp
@@ -91,6 +94,10 @@ add_executable(kds_tests
     types_e2e_test.cpp
     types_contract_test.cpp
     row_layout_test.cpp
+    alter_column_test.cpp
+    column_name_case_test.cpp
+    insert_column_list_test.cpp
+    column_slot_test.cpp
     tagged_cell_test.cpp
     analyze_test.cpp
     varheap_test.cpp
@@ -99,9 +106,10 @@ add_executable(kds_tests
     catalog_row_test.cpp
     waystone_page_test.cpp
     waystone_dir_test.cpp
-    trace_test.cpp
     range_scan_test.cpp
     access_stats_test.cpp
+    lock_wait_log_test.cpp
+    statement_stats_test.cpp
     decay_test.cpp
     relayout_planner_test.cpp
     show_relayout_test.cpp
@@ -195,6 +203,7 @@ add_executable(kds_tests
     kwp_handshake_test.cpp
     kwp_error_test.cpp
     kwp_session_test.cpp
+    show_sugar_contract_test.cpp
     kwp_conformance_test.cpp
     kwp_endpoint_test.cpp
     wire_row_codec_test.cpp

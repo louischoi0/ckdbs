@@ -53,6 +53,7 @@
 #include "kds/sched/coro.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/server/session.hpp"
+#include "view_text.hpp"
 
 namespace kds::server {
 namespace {
@@ -379,12 +380,12 @@ struct ScriptRig {
         script.Allow(n);
         return KickUntil(*r.rig, core, [&] { return script.Done(n); }, 4000ms);
     }
-    // Whether `script`'s statement `n - 1` is parked on the row `(rel, pk)`
+    // Whether `script`'s statement `n - 1` is parked on the row `(rel, tuple key)`
     // rather than finished: what "parks on the parent row" means below.
     bool ParkedOn(std::uint32_t core, Script& script, std::size_t n, catalog::Oid rel,
-                  std::uint64_t pk) {
+                  std::uint64_t tuple_key) {
         script.Allow(n);
-        const txn::LockKey row = txn::LockKey::Tuple(rel, pk);
+        const txn::LockKey row = txn::LockKey::Tuple(rel, tuple_key);
         auto waiting = [&] { return r.rig->locks().WaiterCount(row) >= 1; };
         KickUntil(*r.rig, core, [&] { return script.Done(n) || waiting(); }, 4000ms);
         return !script.Done(n) && waiting();
@@ -578,7 +579,7 @@ TEST(FkCrossCoreRigTest, AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRol
 
 // ---- The Cabin's "no children" answer (AY-S6) ----------------------------
 //
-// An observed value's set is a superset of the pks that carry it (`cabin.md`
+// An observed value's set is a superset of the tuple keys that carry it (`cabin.md`
 // §1), so a set whose every entry fails to be a live child of 7 is an
 // authoritative "no children" - F6's whole reason. AT-S5f took that answer
 // away while the store was a dispatcher's own, a child written on another
@@ -587,14 +588,13 @@ TEST(FkCrossCoreRigTest, AParentDeleteWaitsOutAChildMovedOffItAndRefusesAtItsRol
 // every child writer that sets the fk to 7 on `S(7)`, which the `DELETE`'s
 // `X(7)` refuses (`foreign-keys.md` §3a).
 
-// `uses=` of the `SHOW ACCESS` line for `kind` on `rel`, or 0 without one.
+// `uses` of the `sys.access_stats` row for `kind` on `rel`, or 0 without one.
 std::uint64_t AccessUses(CommandDispatcher& d, const std::string& kind, const std::string& rel) {
-    const std::string shown = d.Dispatch("SHOW ACCESS").response;
-    const std::string anchor = "kind=" + kind + " rel=" + rel + " ";
-    const std::size_t at = shown.find(anchor);
-    if (at == std::string::npos) return 0;
-    const std::size_t uses = shown.find("uses=", at);
-    return uses == std::string::npos ? 0 : std::stoull(shown.substr(uses + 5));
+    const std::string shown =
+        d.Dispatch("SELECT kind, uses FROM sys.access_stats WHERE rel_name = '" + rel + "'")
+            .response;
+    const auto uses = testing_view::ReadViewText(shown).Find("kind", kind, "uses");
+    return uses.has_value() ? std::stoull(*uses) : 0;
 }
 
 // A child committed on core 1 is found in core 0's banked set, and once the
@@ -613,7 +613,7 @@ TEST(FkCrossCoreRigTest, ADrainedCabinSetClearsTheParentAndAChildOnAnotherCoreIs
     ASSERT_EQ(d0.Dispatch("INSERT INTO p VALUES (7, 0)").response.rfind("INSERTED", 0), 0u);
     ASSERT_EQ(d0.Dispatch("CREATE CABIN ON c(pid)").response.rfind("CRE", 0), 0u);
     // A child of 7 and the read that banks the set for 7; the child then
-    // goes, leaving its pk in the set as a surplus entry.
+    // goes, leaving its tuple key in the set as a surplus entry.
     ASSERT_EQ(d0.Dispatch("INSERT INTO c VALUES (7)").response.rfind("INSERTED", 0), 0u);
     ASSERT_EQ(d0.Dispatch("SELECT id FROM c WHERE pid = 7").response, "id\\n1");
     ASSERT_EQ(d0.Dispatch("DELETE FROM c WHERE pid = 7").response, "DELETED 1");

@@ -85,7 +85,34 @@ English**, translated from the Korean it was typed in.
 | **Does not settle** | A tag or a version; the `PayloadAt` fix, which waits for its own word |
 | **Recorded at** | `workorder-bn-opt-read-update-path.md` and `workorder-bt-accept-tuple-row.md` headers; `index.md`'s BN and BT rows |
 
-## 10. BU to its close on the standing go-ahead
+## 10. BO opened
+
+| | |
+|---|---|
+| **Word** | *"Open the semantic sugar milestone."* The milestone is BO (`workorder-bo-sys-statistics-show-sugar.md`), whose W3 makes every `SHOW` target syntactic sugar over a `SELECT` |
+| **Mark** | **BO-Q0: (a) opened**, with BO-R1, BO-R2 (SV1-SV4) and BO-S0..S8 as written, in its own worktree `bo-show-sugar` from `cd7c7c4e`. BO-S0's owed `critics-developer` review ran at the opening; its findings are applied to the order as corrections of fact against `cd7c7c4e` (`workorder-bo-sys-statistics-show-sugar.md` §7, "BO opened") |
+| **Does not settle** | BO-Q1..Q13, which stay unmarked with CLA's proposals beside them; BO-S1 starts only after they are marked; a push, a merge to `main`, a tag or a version |
+| **Recorded at** | `workorder-bo-sys-statistics-show-sugar.md` header, §5 and §7; `index.md`'s BO row |
+
+## 11. Every `sys` table answers as an ordinary table (W4)
+
+| | |
+|---|---|
+| **Word** | *"Every sys-related table must be output in the form of an ordinary table."* |
+| **Mark** | The operator's own mark on **BO-Q1** - a `SHOW` reply is the `SELECT`'s reply - and on **BO-Q3**'s typed columns, restated as **BO-R3 / SV5**: a `sys` view's result is described and emitted through the statement's `ResultSink` as a relation's `SELECT` is, typed fields and typed rows on KWP, never the one `TEXT` column `line`. BO-Q3's `ORDER BY` is read into it; its aggregation is not (adopted as refused under §12, AG12) |
+| **Does not settle** | BO-Q2, Q4..Q13 (§12); a push, a merge to `main`, a tag or a version |
+| **Recorded at** | `workorder-bo-sys-statistics-show-sugar.md` header, BO-R3 and §5; `index.md`'s BO row |
+
+## 12. BO to its close on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | The `go-ahead-achieving-milestone` skill, invoked on BO with W4: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
+| **Mark** | BO runs every stage to its close in this session. BO-Q2 (a) `[quiet-wrong]`, Q4 (a) at the session's core, Q5 (b) memory-resident, Q6 (a) with `fetch_id = 0` for unfingerprinted kinds, Q7 (a) per core, Q8 no switch, Q9 (a), Q10 (a), Q11 (a), Q12 (a) with a required key, Q13 (a), and Q3's aggregation refused, are adopted as CLA proposed - several revised against `cd7c7c4e` by the opening review first - recorded as *"adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone)"*, never as the operator's own marks; so is any later decision a stage reaches. BO-S4 is not run under Q5 (b) |
+| **Does not settle** | A push, a merge to `main`, a tag or a version |
+| **Recorded at** | `workorder-bo-sys-statistics-show-sugar.md` header, §5 and §7; `index.md`'s BO row |
+
+## 13. BU to its close on the standing go-ahead
 
 | | |
 |---|---|

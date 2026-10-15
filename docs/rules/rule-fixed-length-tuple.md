@@ -25,6 +25,7 @@ The cost, accepted knowingly: variable-length management is **relocated, not eli
 - Fixed-width types (integers, bool, dates, timestamps, decimals, `char(N)`, the Keystone word, the MVCC header) occupy their natural widths.
 - Every variable-width type (`TEXT`/`VARCHAR`, future blobs) occupies exactly **one tagged cell** (§3), regardless of the value stored. Its width is `kds.inline_cell_width` — the instance's, or **the column's own** when it was declared `varchar(N)` (§4).
 - No code path may produce a tuple whose size differs from its relation's constant. This is asserted in the row codec, not policed by convention.
+- **Reserved column slots are part of the constant** (`alter.md` AL11, BW): `CREATE TABLE ... SPARE n` lays `n` 16-byte slots after the declared columns, fixed at `CREATE`, and `ALTER TABLE ... ADD COLUMN` places a column of at most 16 bytes in one, so an added or dropped column never changes the row size. A cell's span is its column's width (`RowLayout::cell_ends`), never the gap to the next offset.
 
 ## 3. The Tagged Cell `[CONFIRMED format; widths PROPOSED]`
 

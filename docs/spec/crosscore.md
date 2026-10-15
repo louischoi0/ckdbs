@@ -23,7 +23,7 @@ default with what is shared declared, deterministic testability).
 | CC5 | Cancellation & errors | **Nothing cross-core to cancel**: a statement's errors are its own core's, framed by its session (§7) |
 | CC6 | Scheduling | **Nothing crosses to be scheduled**: a kick carries no group, and the woken core's own parked task runs in its own group |
 | CC7 | Page placement | **No page belongs to a core** (AR0-5 D17). `sys.tables.owner_core`'s four bytes are a reserved word - written 0, never read - and nothing names a core on disk, so the core count is not pinned: a mount at another `cores` records it. Every core reads and writes every page under the page latch (CC11, `page.md` §6) |
-| CC8 | Relation structure | **A relation is one structure headed by `sys.tables.desc_page_id`** - one heap chain or one btree - and nothing divides it by pk (`instructions/v3.0.0/raft-marks-2026-09-30.md` §9). A volume at any superblock version but the current one (23, `server/superblock.hpp`) is refused at mount |
+| CC8 | Relation structure | **A relation is one structure headed by `sys.tables.desc_page_id`** - one heap chain or one btree - and nothing divides it by tuple key (`instructions/v3.0.0/raft-marks-2026-09-30.md` §9). A volume at any superblock version but the current one (23, `server/superblock.hpp`) is refused at mount |
 | CC9 | Reserved catalog ids | Root page 15 and oid 133 are unused and not reissued |
 | CC10 | Refused keys | `range_size_ids`, `placement` and `peer_listeners` are refused by name at boot (`src/server/expeditor.cpp`) |
 | CC11 | Shared-structure access | **Every core reads and writes with the same authority** (AR0-5 §0). **Which transactions are running** is every core's to read since AX-S1: each core publishes its own into an in-flight table no other core writes, so `IsInFlight` is the instance's answer (`txn.md` §4.1, `rules.md` §3). What serialises the superblock, the free map and the catalog pages is named where each is written: the **page latch** across cores for the bytes of any page (`page.md` §6), and within one core the rule that no task parks under a page span, which is what makes a catalog row's read-modify-write atomic (`catalog.md` CT5, `AdmitExplicitRowId`'s hook); the free map's own `map_latch_` for allocation (AM-S3, `page.md` §5); the **schema version word** for every core's memo of the catalog (`catalog.md` CT2); and page 0's persisted transaction-id ceiling, which every core's `TrxIdSequence::Carve` reads and raises in one step under the superblock latch (`txn.md` §4.2). A relation's row-id mark is a catalog row like any other, bumped in place under its page latch by whichever core issues (`heap-and-tuple.md` §4.1a). DDL runs where the session is, under the DDL's own relation `X` (`txn.md` §5) where it has one; a name-creating DDL - `CREATE TABLE`, `RENAME TO`, `CREATE NAMESPACE`, `RENAME COLUMN`, an index's or an assertion's name - checks and writes the name under one hold of its catalog relation's root page since AT-S17 (`catalog.md` CT7). A page faulted on one core is served from the frame another loaded (`eviction.md`). |
@@ -100,8 +100,8 @@ the walk reads it (`foreign-keys.md` §2a/§3a). Nothing inside a
 
 ### 6b. Inserts and the Tail
 
-Every core issues an omitted pk from the relation's one row-id mark,
-bumped in place under its page latch, so **an issued pk is an identity
+Every core issues an omitted tuple key from the relation's one row-id mark,
+bumped in place under its page latch, so **an issued tuple key is an identity
 and a sequence**, monotonic in issue order across every core; a named key
 carries no order on a btree
 (`docs/spec/heap-and-tuple.md` §4.1, §4.1a; invariant 11).
@@ -123,7 +123,7 @@ rig's seeded `SimWakerTable` (`docs/spec/sched.md` §8).
    commits while a statement reads them; the statement's answer contains
    all of that transaction's writes or none (§5's one view per
    statement, pinned against the torn read).
-2. **One sequence across cores:** k cores inserting omitted-pk rows into
+2. **One sequence across cores:** k cores inserting omitted-tuple key rows into
    one relation at once issue ids unique across cores (K1's issue-once
    contract) and ascending in issue order (§6b).
 

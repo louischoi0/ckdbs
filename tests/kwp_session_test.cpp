@@ -278,7 +278,7 @@ TEST_F(KwpSessionTest, ASelectStarDescribesTheWholeSchema) {
         << "field 0 of every user relation is the Keystone id";
 }
 
-TEST_F(KwpSessionTest, ANarrowPkPastItsDeclaredWidthReachesTheClientWhole) {
+TEST_F(KwpSessionTest, ANarrowTupleKeyPastItsDeclaredWidthReachesTheClientWhole) {
     // protocol.md §6: a relation's column 0 is its Keystone id, u64 on the
     // wire whatever integer width it declares - in any projected position
     // and on a joined relation as much as the first one.
@@ -330,8 +330,10 @@ TEST_F(KwpSessionTest, AWriteAnswersACompletionWithItsRowCountAndNoDescription) 
 }
 
 TEST_F(KwpSessionTest, AMultiLineDiagnosticArrivesAsAOneColumnTextResultSet) {
+    // `ANALYZE` - a plan, not a table - is the one text-lines reply BO-R3
+    // leaves; every `sys` view and `SHOW` answers as a typed result set.
     Handshake();
-    auto frames = RunStatement("DESCRIBE t");
+    auto frames = RunStatement("ANALYZE SELECT * FROM t");
     ASSERT_EQ(frames.size(), 3u);
     auto desc = wire::DecodeRowDescription(frames[0].payload);
     ASSERT_TRUE(desc.ok());
@@ -348,15 +350,15 @@ TEST_F(KwpSessionTest, ASingleLineDiagnosticIsTheCompletionTagItself) {
     // The rule, stated where it can be checked: a statement with no typed
     // result set answers with its reply as the tag, and only a reply
     // carrying lines becomes a text result set - because a tag has no
-    // lines. `SHOW META` is one line, so it is a tag.
+    // lines. `PING` is one line, so it is a tag.
     Handshake();
-    auto frames = RunStatement("SHOW META");
+    auto frames = RunStatement("PING");
     ASSERT_EQ(frames.size(), 1u);
     ASSERT_EQ(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kComplete));
     wire::PayloadReader r(frames[0].payload);
     auto tag = r.Text();
     ASSERT_TRUE(tag.has_value() && tag->has_value());
-    EXPECT_NE((**tag).find("version="), std::string::npos);
+    EXPECT_EQ(**tag, "PONG");
 }
 
 // ---- P08: named statements, portals and their caps ------------------------
@@ -618,6 +620,30 @@ TEST_F(KwpSessionTest, ATextParameterCarryingAQuoteIsRefusedWithTheGrammarsReaso
     ASSERT_TRUE(err.ok());
     EXPECT_NE(err.value().message.find("no escape for a quote"), std::string::npos)
         << "the refusal names the grammar's limit, which is whose it is";
+}
+
+// BW-S6 (BW-Q12.11 of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`):
+// a prepared column-listed INSERT takes its `?` in VALUES through the same
+// substitution as every other statement, and each value lands in its named
+// column.
+TEST_F(KwpSessionTest, APreparedColumnListedInsertBindsItsValues) {
+    Handshake();
+    Feed(ClientFrameType::kParse, Parse("s", "INSERT INTO t (name, v) VALUES (?, ?)"));
+    const std::string name = "delta";
+    std::vector<std::byte> v(4);
+    v[0] = static_cast<std::byte>(40);
+    wire::BoundParam a;
+    a.type_oid = catalog::kTypeValVarchar;
+    a.bytes = std::span<const std::byte>(reinterpret_cast<const std::byte*>(name.data()),
+                                         name.size());
+    wire::BoundParam b;
+    b.type_oid = catalog::kTypeValInt32;
+    b.bytes = std::span<const std::byte>(v);
+    Feed(ClientFrameType::kBind, Bind("p", "s", {a, b}));
+    auto frames = Feed(ClientFrameType::kExecute, Execute("p", 0));
+    ASSERT_FALSE(frames.empty());
+    EXPECT_NE(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError));
+    EXPECT_EQ(Run("SELECT v, name FROM t WHERE name = 'delta'"), "v,name\\n40,delta");
 }
 
 TEST_F(KwpSessionTest, AParameterCountThatDisagreesWithThePlaceholdersIsRefused) {

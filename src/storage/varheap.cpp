@@ -239,7 +239,7 @@ Status PageRelease(std::span<std::byte, kPageSize> page, std::uint16_t slot) {
     // pointer, breaking invariant 2 silently. The input is untrusted where
     // it matters most: `RecoveryUndo::Compensate` takes `target_page_id`
     // off an undo page a crash may have torn, and every other undo type is
-    // saved from that by the pk identity check this one skips.
+    // saved from that by the tuple key identity check this one skips.
     if (storage::RawPageType(page) != static_cast<std::uint8_t>(PageType::kVarHeap)) {
         return Status::Corruption("var-heap release names page type " +
                                   std::to_string(storage::RawPageType(page)) +

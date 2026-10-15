@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -85,14 +86,14 @@ namespace kds::server {
 // answer. Heap pages append slots and a heap chain never loses a page, so
 // nothing this walk already passed moves to a position it has yet to reach.
 //
-// **A btree resumes by key instead, and `pk` is that key.** A clustered
+// **A btree resumes by key instead, and `tuple_key` is that key.** A clustered
 // btree leaf splits by moving its upper half to a new right sibling, so a
 // split whose midpoint fell below a `(page, slot)` cursor would carry rows
 // this walk had already written into a page it had yet to visit, and it
 // would write them twice. The key ordering is what removes the hazard: the
-// resume **descends afresh** to whichever leaf now holds `pk` and skips
+// resume **descends afresh** to whichever leaf now holds `tuple_key` and skips
 // every key below it, so wherever a split moved a row, one this walk has
-// finished sorts below `pk` and one it has not sorts at or above. That
+// finished sorts below `tuple_key` and one it has not sorts at or above. That
 // makes the btree arm immune to concurrent structure change rather than
 // merely unlikely to meet it.
 //
@@ -108,7 +109,7 @@ struct WalkCursor {
     // stepping past it. Btree relations only: a heap page is unordered
     // (invariant 4), so there is no key to resume a heap walk from and the
     // position above is what it carries.
-    std::uint64_t pk = 0;
+    std::uint64_t tuple_key = 0;
     bool active = false;
     // **How many rows the statement has written so far**, carried because
     // the count a client is told is the *statement's* and the resume is a
@@ -118,6 +119,12 @@ struct WalkCursor {
     // walk itself; the caller that owns the counter seeds it and writes it
     // back.
     std::uint32_t rows_done = 0;
+    // **The rows a write collected before its first write**, by tuple key:
+    // set when its WHERE reads the relation it writes (`SubChainsRead`), so
+    // the WHERE is evaluated once over the relation as it stood and never
+    // over the statement's own writes. Carried so a resume writes exactly
+    // these rows rather than re-evaluating over what it already wrote.
+    std::shared_ptr<const std::unordered_set<std::uint64_t>> targets;
 };
 
 class Session {

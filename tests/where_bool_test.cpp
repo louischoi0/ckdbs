@@ -17,7 +17,7 @@
 // with a NULL operand is unknown inside the tree, and only the root's
 // unknown is false - so `NOT (n = 1)` keeps no row whose `n` is NULL. And
 // **the readers** (BU-R5): a comparison under an `OR` is optional, so a
-// reader that took it for a conjunct - a pk lookup, an index or Cabin
+// reader that took it for a conjunct - a tuple key lookup, an index or Cabin
 // probe, a join key, equality propagation, a write's point target, PURGE's
 // window - would return or write the wrong rows. Each reader cell puts an
 // `OR` where that reader looks and pins the exact reply.
@@ -124,13 +124,13 @@ TEST_F(WhereBoolTest, ANullLiteralUnderNotIsUnknown) {
 
 // ---- The readers (BU-R5) --------------------------------------------------
 
-TEST_F(WhereBoolTest, OverThePkItIsNotALookupOrARange) {
+TEST_F(WhereBoolTest, OverTheTupleKeyItIsNotALookupOrARange) {
     EXPECT_EQ(Ids("id = 2 OR id = 5"), "id\\n2\\n5");
     EXPECT_EQ(Ids("id BETWEEN 2 AND 3 OR id = 6"), "id\\n2\\n3\\n6");
     EXPECT_EQ(Ids("NOT (id = 2)"), "id\\n1\\n3\\n4\\n5\\n6");
 }
 
-TEST_F(WhereBoolTest, BesideAPkEqualityTheLookupStillFilters) {
+TEST_F(WhereBoolTest, BesideATupleKeyEqualityTheLookupStillFilters) {
     EXPECT_EQ(Ids("id = 2 AND (v = 20 OR v = 30)"), "id\\n2");
     EXPECT_EQ(Ids("id = 2 AND (v = 10 OR v = 30)"), "id");
 }
@@ -175,7 +175,7 @@ TEST_F(WhereBoolTest, InsideACorrelatedSubqueryItReadsTheOuterRow) {
 TEST_F(WhereBoolTest, AnUpdateAndADeleteWriteTheRowsTheSelectFinds) {
     EXPECT_EQ(Run("UPDATE t SET k = 100 WHERE sym = 'c' OR n IS NULL"), "UPDATED 3");
     EXPECT_EQ(Ids("k = 100"), "id\\n2\\n5\\n6");
-    // A pk equality beside an OR is not a point write that skips the OR.
+    // A tuple key equality beside an OR is not a point write that skips the OR.
     EXPECT_EQ(Run("UPDATE t SET k = 7 WHERE id = 1 AND (v = 999 OR sym = 'z')"), "UPDATED 0");
     EXPECT_EQ(Run("DELETE FROM t WHERE NOT (n = 1) OR id = 2"), "DELETED 3");
     EXPECT_EQ(Ids("id > 0"), "id\\n1\\n4\\n5");
@@ -211,9 +211,9 @@ TEST_F(WhereBoolTest, WhatIsRefusedAndWhere) {
     EXPECT_EQ(Run("SELECT name FROM sys.tables WHERE oid = 1 OR oid = 2"),
               "ERR NOT_IMPLEMENTED retryable=0 a boolean conjunct (OR, NOT, an IN list, LIKE) over a "
               "catalog view (byte 34)");
-    // PURGE's window is a conjunction of pk comparisons, OR included.
+    // PURGE's window is a conjunction of tuple key comparisons, OR included.
     EXPECT_EQ(Run("PURGE FROM t WHERE id = 1 OR id = 9"),
-              "ERR NOT_IMPLEMENTED retryable=0 PURGE admits only comparisons of the primary key "
+              "ERR NOT_IMPLEMENTED retryable=0 PURGE admits only comparisons of the tuple key "
               "with an integer literal (=, <, <=, >, >=, BETWEEN); this conjunct is not one "
               "(byte 19)");
     // An unclosed group.

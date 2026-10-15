@@ -1,0 +1,68 @@
+2026-10-13T23:38:29Z master=none alive=n status_age=0s status=
+2026-10-13T23:38:29Z ORPHAN: master gone, restarting
+2026-10-13T23:39:29Z master=1620304 alive=y status_age=19s status=2026-10-13T23:39:10Z s2-c1-g start
+2026-10-13T23:40:29Z master=1620304 alive=y status_age=19s status=2026-10-13T23:40:10Z r2-s2-c1-s start
+2026-10-13T23:41:29Z master=1620304 alive=y status_age=18s status=2026-10-13T23:41:11Z r3-s2-c8-s start
+2026-10-13T23:42:29Z master=1620304 alive=y status_age=5s status=2026-10-13T23:42:24Z r3-s2-c1-s waiting for a quiet host: busy=69% procs=25
+2026-10-13T23:43:29Z master=1620304 alive=y status_age=8s status=2026-10-13T23:43:21Z r3-s2-c1-g waiting for a quiet host: busy=19% procs=2
+2026-10-13T23:44:29Z master=1620304 alive=y status_age=8s status=2026-10-13T23:44:21Z r3-s2-c1-g waiting for a quiet host: busy=82% procs=10
+2026-10-13T23:45:29Z master=1620304 alive=y status_age=7s status=2026-10-13T23:45:22Z r3-s2-c1-g waiting for a quiet host: busy=98% procs=10
+2026-10-13T23:46:29Z master=1620304 alive=y status_age=7s status=2026-10-13T23:46:22Z r3-s2-c1-g waiting for a quiet host: busy=4% procs=10
+2026-10-13T23:47:29Z master=1620304 alive=y status_age=6s status=2026-10-13T23:47:23Z r3-s2-c1-g waiting for a quiet host: busy=67% procs=10
+2026-10-13T23:48:29Z master=1620304 alive=y status_age=56s status=2026-10-13T23:47:33Z r3-s2-c1-g waiting for a quiet host: busy=91% procs=3
+2026-10-13T23:49:29Z master=1620304 alive=y status_age=9s status=2026-10-13T23:49:20Z r3-s2-c8-g waiting for a quiet host: busy=97% procs=10
+2026-10-13T23:50:30Z master=1620304 alive=y status_age=9s status=2026-10-13T23:50:21Z r3-s2-c8-g waiting for a quiet host: busy=23% procs=10
+2026-10-13T23:51:30Z master=1620304 alive=y status_age=8s status=2026-10-13T23:51:22Z r3-s2-c8-g waiting for a quiet host: busy=6% procs=10
+2026-10-13T23:52:30Z master=1620304 alive=y status_age=8s status=2026-10-13T23:52:22Z r3-s2-c8-g waiting for a quiet host: busy=15% procs=5
+2026-10-13T23:53:30Z master=1620304 alive=y status_age=1s status=2026-10-13T23:53:29Z s3-c1-n200-none start
+2026-10-13T23:54:48Z master=none alive=n status_age=45s status=2026-10-13T23:54:03Z s3-c1-n10000-none waiting for a quiet host: busy=79% procs=12
+2026-10-13T23:54:48Z ORPHAN: master gone, restarting
+2026-10-13T23:55:48Z master=1640357 alive=y status_age=7s status=2026-10-13T23:55:41Z r3-s2-c8-s waiting for a quiet host: busy=76% procs=25
+2026-10-13T23:56:48Z master=1640357 alive=y status_age=7s status=2026-10-13T23:56:41Z r3-s2-c8-s waiting for a quiet host: busy=77% procs=25
+2026-10-13T23:57:48Z master=1640357 alive=y status_age=6s status=2026-10-13T23:57:42Z r3-s2-c8-s waiting for a quiet host: busy=9% procs=12
+2026-10-13T23:58:48Z master=1640357 alive=y status_age=3s status=2026-10-13T23:58:45Z r3-s2-c1-s start
+2026-10-13T23:59:48Z master=1640357 alive=y status_age=8s status=2026-10-13T23:59:40Z r3-s2-c1-g waiting for a quiet host: busy=74% procs=12
+2026-10-14T00:00:48Z master=1640357 alive=y status_age=8s status=2026-10-14T00:00:40Z r3-s2-c1-g waiting for a quiet host: busy=76% procs=25
+2026-10-14T00:01:48Z master=1640357 alive=y status_age=8s status=2026-10-14T00:01:40Z r3-s2-c1-g waiting for a quiet host: busy=76% procs=25
+2026-10-14T00:02:48Z master=1640357 alive=y status_age=47s status=2026-10-14T00:02:01Z r3-s2-c1-g waiting for a quiet host: busy=2% procs=9
+2026-10-14T00:03:48Z master=1640357 alive=y status_age=107s status=2026-10-14T00:02:01Z r3-s2-c1-g waiting for a quiet host: busy=2% procs=9
+2026-10-14T00:04:48Z master=1640357 alive=y status_age=5s status=2026-10-14T00:04:43Z r3-s2-c1-g waiting for a quiet host: busy=98% procs=10
+2026-10-14T00:05:48Z master=1640357 alive=y status_age=4s status=2026-10-14T00:05:44Z r3-s2-c1-g waiting for a quiet host: busy=17% procs=10
+2026-10-14T00:06:48Z master=1640357 alive=y status_age=3s status=2026-10-14T00:06:45Z r3-s2-c1-g waiting for a quiet host: busy=100% procs=10
+2026-10-14T00:07:48Z master=1640357 alive=y status_age=0s status=2026-10-14T00:07:48Z s3-c1-n1000-all start
+2026-10-14T00:08:48Z master=1640357 alive=y status_age=16s status=2026-10-14T00:08:32Z s3-c1-n10000-all start
+2026-10-14T00:09:48Z master=1640357 alive=y status_age=0s status=2026-10-14T00:09:48Z s3-c8-n200-none waiting for a quiet host: busy=99% procs=27
+2026-10-14T00:10:48Z master=1640357 alive=y status_age=10s status=2026-10-14T00:10:38Z s3-c8-n200-none waiting for a quiet host: busy=99% procs=28
+2026-10-14T00:11:48Z master=1640357 alive=y status_age=9s status=2026-10-14T00:11:39Z s3-c8-n200-none waiting for a quiet host: busy=1% procs=3
+2026-10-14T00:12:48Z master=1640357 alive=y status_age=0s status=2026-10-14T00:12:48Z s3-c8-n200-none waiting for a quiet host: busy=42% procs=10
+2026-10-14T00:13:48Z master=1640357 alive=y status_age=9s status=2026-10-14T00:13:39Z s3-c8-n200-none waiting for a quiet host: busy=99% procs=10
+2026-10-14T00:14:48Z master=1640357 alive=y status_age=9s status=2026-10-14T00:14:39Z s3-c8-n200-none waiting for a quiet host: busy=22% procs=10
+2026-10-14T00:15:48Z master=1640357 alive=y status_age=8s status=2026-10-14T00:15:40Z s3-c8-n200-none waiting for a quiet host: busy=1% procs=10
+2026-10-14T00:16:48Z master=1640357 alive=y status_age=1s status=2026-10-14T00:16:47Z s3-c8-n200-all start
+2026-10-14T00:17:48Z master=1640357 alive=y status_age=31s status=2026-10-14T00:17:17Z s3-c8-n10000-none start
+2026-10-14T00:18:48Z master=1640357 alive=y status_age=5s status=2026-10-14T00:18:43Z r2-s3-c1-n1000-none start
+2026-10-14T00:19:48Z master=1640357 alive=y status_age=11s status=2026-10-14T00:19:37Z r2-s3-c1-n10000-all start
+2026-10-14T00:20:48Z master=1640357 alive=y status_age=0s status=2026-10-14T00:20:48Z r2-s3-c8-n10000-none start
+2026-10-14T00:21:48Z master=1640357 alive=y status_age=27s status=2026-10-14T00:21:21Z r2-s3-c8-n10000-all start
+2026-10-14T00:22:48Z master=1640357 alive=y status_age=15s status=2026-10-14T00:22:33Z r3-s3-c1-n10000-none start
+2026-10-14T00:23:48Z master=1640357 alive=y status_age=1s status=2026-10-14T00:23:47Z r3-s3-c8-n200-all start
+2026-10-14T00:24:48Z master=1640357 alive=y status_age=1s status=2026-10-14T00:24:47Z r3-s3-c8-n10000-none end
+2026-10-14T00:25:48Z master=1640357 alive=y status_age=0s status=2026-10-14T00:25:48Z s1b-c1-g start
+2026-10-14T00:26:48Z master=1640357 alive=y status_age=3s status=2026-10-14T00:26:45Z s1b-c8-g start
+2026-10-14T00:27:48Z master=1640357 alive=y status_age=6s status=2026-10-14T00:27:42Z s1b-c1-s start
+2026-10-14T00:28:48Z master=1640357 alive=y status_age=9s status=2026-10-14T00:28:39Z r2-s1b-c1-g start
+2026-10-14T00:29:48Z master=1640357 alive=y status_age=12s status=2026-10-14T00:29:36Z r2-s1b-c8-g start
+2026-10-14T00:30:48Z master=1640357 alive=y status_age=14s status=2026-10-14T00:30:34Z r2-s1b-c1-s start
+2026-10-14T00:31:48Z master=1640357 alive=y status_age=17s status=2026-10-14T00:31:31Z r3-s1b-c1-g start
+2026-10-14T00:32:48Z master=1640357 alive=y status_age=17s status=2026-10-14T00:32:31Z r3-s1b-c8-g start
+2026-10-14T00:33:48Z master=1640357 alive=y status_age=19s status=2026-10-14T00:33:29Z r3-s1b-c1-s start
+2026-10-14T00:34:48Z master=1640357 alive=y status_age=22s status=2026-10-14T00:34:26Z s4 start
+2026-10-14T00:35:48Z master=1640357 alive=y status_age=82s status=2026-10-14T00:34:26Z s4 start
+2026-10-14T00:36:48Z master=1640357 alive=y status_age=142s status=2026-10-14T00:34:26Z s4 start
+2026-10-14T00:37:48Z master=1640357 alive=y status_age=202s status=2026-10-14T00:34:26Z s4 start
+2026-10-14T00:38:48Z master=1640357 alive=y status_age=262s status=2026-10-14T00:34:26Z s4 start
+2026-10-14T00:39:48Z master=1640357 alive=y status_age=29s status=2026-10-14T00:39:19Z cd2-s4 start
+2026-10-14T00:40:48Z master=1640357 alive=y status_age=89s status=2026-10-14T00:39:19Z cd2-s4 start
+2026-10-14T00:41:48Z master=1640357 alive=y status_age=149s status=2026-10-14T00:39:19Z cd2-s4 start
+2026-10-14T00:42:48Z master=1640357 alive=y status_age=209s status=2026-10-14T00:39:19Z cd2-s4 start
+2026-10-14T00:43:48Z master=1640357 alive=y status_age=269s status=2026-10-14T00:39:19Z cd2-s4 start

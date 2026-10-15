@@ -30,8 +30,8 @@
 // (docs/spec/waystone-concpets.md §2), deliberately one decision with two
 // consumers rather than two that can drift apart:
 //
-//   kLookup / kProbe   pk-equality descent. **Trail-replayable** -
-//                      completeness follows from pk uniqueness, so a
+//   kLookup / kProbe   tuple-key-equality descent. **Trail-replayable** -
+//                      completeness follows from tuple key uniqueness, so a
 //                      recorded location can replace the descent.
 //   kScan / kRange     a search. **Never replayable.** A stored set that
 //                      is missing a row inserted since it was recorded is
@@ -40,7 +40,7 @@
 //                      trail may prefetch for these and nothing more.
 //
 // A step is kLookup/kProbe **iff** its equality binds the relation's first
-// schema column - the Keystone pk, the only column a lookup can address
+// schema column - the Keystone tuple key, the only column a lookup can address
 // (invariant 11). Any other column, however selective, is a scan.
 //
 // ---- No identifiers past this point ------------------------------------
@@ -68,28 +68,28 @@ struct ColumnRef {
     bool operator==(const ColumnRef&) const = default;
 };
 
-// Whether a step reads its relation by pk descent or by walking it.
+// Whether a step reads its relation by tuple key descent or by walking it.
 // Written in the order of the table in docs/spec/parser-v2.md §1.
 enum class AccessKind : std::uint8_t {
-    // pk equality against a value known before the chain runs.
+    // tuple key equality against a value known before the chain runs.
     kLookup,
-    // pk equality against a value produced by an earlier step or by an
+    // tuple key equality against a value produced by an earlier step or by an
     // enclosing chain's row.
     kProbe,
-    // pk range through the leaf chain, from `BETWEEN <low> AND <high>` on
-    // the relation's primary key. Emitted since the BETWEEN half of V08.
+    // tuple key range through the leaf chain, from `BETWEEN <low> AND <high>` on
+    // the relation's tuple key. Emitted since the BETWEEN half of V08.
     kRange,
-    // An equality against a literal on a non-pk column that carries a
+    // An equality against a literal on a non-tuple-key column that carries a
     // **Cabin** (docs/spec/cabin.md): a probe of the Cabin's observed set,
     // falling back to the walk below when the value has not been observed.
     //
-    // The third trust class, and the only kind here that is neither a pk
+    // The third trust class, and the only kind here that is neither a tuple key
     // descent nor a walk. A Cabin is **authoritative for observed values**:
     // its entry set for an observed value is a superset of the qualifying
-    // pks, and the read subtracts the surplus by re-checking visibility and
+    // tuple keys, and the read subtracts the surplus by re-checking visibility and
     // the key equality. So an observed value's *empty* set is an
     // authoritative "no rows" - which nothing else in this enum can say
-    // about a non-pk predicate.
+    // about a non-tuple-key predicate.
     //
     // Whether a column has a Cabin is **catalog** state, so the plan stays
     // `f(shape, catalog)` and nothing about the data influences it. Whether
@@ -98,7 +98,7 @@ enum class AccessKind : std::uint8_t {
     kCabinProbe,
     // An equality on a **prefix of a secondary index's key**
     // (docs/spec/index.md §8): descend the index, walk its entries while the
-    // prefix matches, resolve each pk through the clustered tree.
+    // prefix matches, resolve each tuple key through the clustered tree.
     //
     // The second entry in the first trust class: an index is authoritative
     // for **every** key value, where a Cabin is authoritative only for the
@@ -123,7 +123,7 @@ enum class AccessKind : std::uint8_t {
     // tests are what should stop it.
     kIndexRange,
     // A walk **driven by a filter**: at least one equality against a
-    // literal on a non-pk column with no index.
+    // literal on a non-tuple-key column with no index.
     //
     // Split out of kScan because the two are identical in cost today and
     // completely different as a signal. A `kScan` is a statement that
@@ -173,7 +173,7 @@ constexpr bool IsTrailReplayable(AccessKind kind) noexcept {
 // recorded, which no per-tuple validation can detect. So a trail may
 // prefetch for an index step and may never replace one.
 
-// The inclusive pk bounds a kRange step walks between.
+// The inclusive tuple key bounds a kRange step walks between.
 //
 // A **hint on top of the residual**, never a replacement for it: the two
 // conjuncts a `BETWEEN` lowers to (`>= low`, `<= high`) stay in
@@ -251,7 +251,7 @@ struct CabinProbe {
 // `Step::residual`, so downgrading the step to a plain kScan still cannot
 // change the result. Here that property carries the whole trust argument -
 // an index's entry set for a key is a *superset* of the qualifying visible
-// pks (docs/spec/index.md §1), and the surplus is subtracted by re-checking
+// tuple keys (docs/spec/index.md §1), and the surplus is subtracted by re-checking
 // the predicate against the resolved version. That re-check is not extra
 // code; it is the residual the compiler already attached.
 struct IndexProbe {
@@ -315,7 +315,7 @@ struct IndexProbe {
 // answers identically: the correlated conjunct stays in `Step::residual`,
 // which is the same downgrade-safety every other access hint has.
 //
-// What makes one build serve every outer row: `PkBound` accepts literals
+// What makes one build serve every outer row: `TupleKeyBound` accepts literals
 // only, so no scan bound varies per outer row - a kScan inner is always the
 // full relation, and one walk's map answers every later key (spec §5).
 struct BuildKey {
@@ -365,7 +365,7 @@ struct StepPredicate {
 //
 // **A residual kind of its own, and the whole of its safety is that.** A
 // dozen compiler readers take a `StepPredicate` as `col op value` and turn
-// it into a pk bound, an index bound, a Cabin probe, a join key or a
+// it into a tuple key bound, an index bound, a Cabin probe, a join key or a
 // `BuildKey` (step_compiler.cpp). Lowered as one, `DATE(ts) >= '...'` would
 // be read as `ts >= '...'` and return wrong rows with no error. So a function
 // conjunct is never a `StepPredicate`: it lives in `Step::fn_residual`, which
@@ -547,13 +547,13 @@ struct Step {
 
     AccessKind kind = AccessKind::kScan;
 
-    // The pk key, for kLookup (a literal) and kProbe (a column produced
+    // The tuple key, for kLookup (a literal) and kProbe (a column produced
     // by an earlier step). Empty for every other kind - a correlated
     // kIndexProbe's key source lives in `IndexProbe::key_from`, its single
     // authority, which the plan printer renders directly.
     std::optional<Operand> key;
 
-    // The pk bounds, for kRange. Empty for every other kind.
+    // The tuple key bounds, for kRange. Empty for every other kind.
     std::optional<RangeBounds> range;
 
     // The Cabin and the value, for kCabinProbe. Empty for every other kind.
@@ -564,7 +564,7 @@ struct Step {
     std::optional<IndexProbe> index;
 
     // The columns this step's kind was assigned for, in schema order:
-    // the filtered columns for kFilterScan, the pk for kLookup/kProbe/
+    // the filtered columns for kFilterScan, the tuple key for kLookup/kProbe/
     // kRange, empty for a bare kScan.
     //
     // Computed once here rather than re-derived per execution, because it
@@ -579,7 +579,7 @@ struct Step {
     // the earliest point it can be evaluated. Deterministic, and not an
     // optimizer choice.
     //
-    // **The key is repeated here.** A kLookup's pk equality is already
+    // **The key is repeated here.** A kLookup's tuple key equality is already
     // enforced by the descent, so re-checking it costs one comparison on
     // exactly one row. It is kept because it makes an important property
     // structural rather than argued: since the residual list alone fully
@@ -618,7 +618,7 @@ struct Step {
     // The superset of `filter_columns`: every column of this step's relation
     // that *any* consumer of the row touches - a later step's join predicate
     // or probe key, the projection, the fold's items and group keys, the
-    // trail's pk. A step decodes `filter_columns` before the residual and
+    // trail's tuple key. A step decodes `filter_columns` before the residual and
     // then only `read_columns & ~filter_columns` after it, instead of
     // everything else (workplan AP01). `filter_columns` alone narrows only a
     // rejected row's decode; this narrows a surviving one's, so `SELECT
@@ -855,7 +855,7 @@ struct StepChain {
     // **Empty means "emit in chain order"**, which covers two different
     // statements: one that wrote no `ORDER BY`, and one whose `ORDER BY` the
     // compiler *elided* because the chain already emits that order. The
-    // elision is why `ORDER BY <pk> ASC` still costs nothing - it compiles
+    // elision is why `ORDER BY <tuple key> ASC` still costs nothing - it compiles
     // to no sort, not to a sort that happens to find its input ordered.
     //
     // Read by the dispatcher only, like `limit`, `offset` and `aggregate`;
@@ -905,6 +905,15 @@ bool ForEachStep(const Step& step, Fn fn) {
     return fn(step) && detail::VisitSubChains(step.sub_chains, fn);
 }
 
+// Whether a step under `step`'s sub-chains reads relation `oid`. A write
+// whose WHERE does, over the relation it writes, collects its targets before
+// its first write: a sub-chain re-run per row would otherwise read the rows
+// the statement has already written (parser-v2.md R2).
+inline bool SubChainsRead(const Step& step, catalog::Oid oid) {
+    auto other = [oid](const Step& s) { return s.rel_oid != oid; };
+    return !detail::VisitSubChains(step.sub_chains, other);
+}
+
 // Whether any step anywhere in `chain` - sub-chains included - is one a
 // Waystone trail may replace.
 //
@@ -916,7 +925,7 @@ bool HasReplayableStep(const StepChain& chain) noexcept;
 // The value `SysAccessStatRow::kind` stores for an access kind.
 //
 // **Not a cast**, for `StoredStatementClass`'s reason: `kLookup` is 0 and so is a zeroed catalog row, so a straight cast
-// would make every never-written row read as a recorded pk lookup. Mapping
+// would make every never-written row read as a recorded tuple key lookup. Mapping
 // it explicitly also means this enum can gain a value or be reordered
 // without silently changing what stored statistics mean.
 std::uint8_t StoredAccessKind(AccessKind kind) noexcept;

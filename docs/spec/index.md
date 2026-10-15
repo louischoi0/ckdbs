@@ -9,7 +9,7 @@ Documented in `CLAUDE.md`, `docs/spec/client-manual.md` and
 settle.
 
 This document owns the secondary index. It does **not** own the clustered
-primary-key tree (`include/kds/storage/btree/`), which is a relation's
+tuple key tree (`include/kds/storage/btree/`), which is a relation's
 *storage* and is a different thing wearing a similar shape — §4 says why
 that module is not reused.
 
@@ -18,7 +18,7 @@ that module is not reused.
 ## 1. What an index is here, and which trust class it lands in
 
 A secondary index is a durable, always-maintained, ordered map from an
-**index key** — one or more non-pk columns — to a **primary key**, over one
+**index key** — one or more non-tuple-key columns — to a **tuple key**, over one
 relation.
 
 The engine already has three trust classes. This is not a fourth; it is the
@@ -27,7 +27,7 @@ whole of the design:
 
 | structure | authoritative for | maintained on |
 |---|---|---|
-| clustered pk tree | every pk | every write |
+| clustered tuple key tree | every tuple key | every write |
 | **secondary index** | **every key value** | **every write** |
 | Cabin | values queries have observed | every write, for observed values |
 | Waystone trail | nothing — advisory always | nothing |
@@ -38,7 +38,7 @@ precondition struck out.
 
 > **IX1 — observed ⇒ complete becomes simply complete, superset form, per
 > snapshot.** An index's entry set for a key value is a **superset** of the
-> pks of the visible rows qualifying on that key, and the surplus is
+> tuple keys of the visible rows qualifying on that key, and the surplus is
 > subtracted at read time by verification — MVCC visibility, plus a re-check
 > of the key predicate against the resolved version.
 
@@ -58,9 +58,9 @@ Work the two-version case through, because it is the case that makes the
 design sound rather than merely convenient. Version identity is per logical
 tuple (`docs/spec/txn.md`): `OverwriteTuple` keeps `(page_id, slot)`, and undo
 versions have no address. So an UPDATE of key `v → v′` leaves two entries,
-both naming the same pk.
+both naming the same tuple key.
 
-- Old-snapshot reader probing `v`: finds the entry, resolves the pk to the
+- Old-snapshot reader probing `v`: finds the entry, resolves the tuple key to the
   version its snapshot sees — the old one — key matches. Correct.
 - New-snapshot reader probing `v`: finds the same entry, resolves to the new
   version, key re-check fails, row dropped. Correct.
@@ -112,22 +112,22 @@ Cabin, and it is why the index is not also a constraint (IX11).
 > `CREATE INDEX` on a heap-clustered relation is refused
 > (`Catalog::CheckIndexDef`, `InvalidArgument`, naming this rule).
 
-An entry's payload is the pk. Resolving a pk costs one descent on a btree
+An entry's payload is the tuple key. Resolving a tuple key costs one descent on a btree
 relation and a **chain scan** on a heap one, so an index over a heap
 relation would turn one full scan into N partial ones — the identical
 argument as `foreign-keys.md` F1's refusal of a heap parent. A heap
-relation's banked acceleration on a non-pk column is its Cabin
+relation's banked acceleration on a non-tuple-key column is its Cabin
 (`cabin.md` §4a), whose hint-plus-walk fallback exists precisely because a
-heap has no pk descent to heal with.
+heap has no tuple key descent to heal with.
 
 Three consequences of the entry format:
 
 1. **The entry carries no location hint** — no `(page_id, slot)`, no
    epoch — so nothing here can dangle and nothing needs healing.
-2. **Relayout cannot invalidate an index.** A pk is stable for life
+2. **Relayout cannot invalidate an index.** A tuple key is stable for life
    (invariant 11, K1), so moving a tuple moves nothing an index knows about.
 3. **An index step grants no key order.** Phase 1 collects in index-key
-   order and sorts into **pk** order before resolving (IX8a), so an
+   order and sorts into **tuple key** order before resolving (IX8a), so an
    `ORDER BY` on the key column keeps its sort step, and a planner that
    reads sortedness out of a `kIndexProbe` is reading something it never
    promised.
@@ -143,7 +143,7 @@ Three consequences of the entry format:
 `storage/btree/btree.hpp` cannot host this, and not by accident: an index
 page is a different *kind* of page. The clustered tree's leaf is a heap page
 holding tuples addressed by one Keystone id; an index page holds entries
-keyed by `key || pk`, with no Keystone word, no MVCC header and no
+keyed by `key || tuple key`, with no Keystone word, no MVCC header and no
 `PageView`. Teaching the clustered module to also store entries would be the
 merge that costs both, and **a secondary key is not monotonic** —
 arbitrary-order arrival is the defining property of the thing, so its
@@ -193,8 +193,8 @@ Internal nodes are `btree_page.hpp`'s shape with the key widened from
 ### 4.2 Entry layout
 
 ```
-[ key : key_width bytes ]  the encoded composite key (§5)
-[ pk  : 8 bytes         ]  zero-extended Keystone id (invariant 7)
+[ key       : key_width bytes ]  the encoded composite key (§5)
+[ tuple_key : 8 bytes         ]  zero-extended Keystone id (invariant 7)
 [ covered cells         ]  ncovered * inline_cell_width, or 0 bytes (§7)
 ```
 
@@ -203,18 +203,18 @@ Internal nodes are `btree_page.hpp`'s shape with the key widened from
 `RowLayout::row_size` has to a relation. An entry whose length disagrees is
 `Corruption`, never interpreted, exactly as invariant 13 requires of a tuple.
 
-Duplicate keys are ordinary: entries sort by `(key, pk)`, so the pk breaks
+Duplicate keys are ordinary: entries sort by `(key, tuple key)`, so the tuple key breaks
 the tie and the total order is strict. That also makes an entry's position
 deterministic, which a split's arithmetic wants.
 
-> **IX4b — the tree routes on the whole `(key, pk)` sort key, and a probe
+> **IX4b — the tree routes on the whole `(key, tuple key)` sort key, and a probe
 > that knows less is zero-padded rather than compared short.** A
 > correctness rule, not a convenience.
 
 A secondary key is not unique, so a run of duplicates can span leaves. If a
 separator carried only the key, a probe for a duplicated key would compare
 *equal* to it and route right — past the entries in the left subtree carrying
-that same key with a lower pk. Half the duplicates would be unreachable by
+that same key with a lower tuple key. Half the duplicates would be unreachable by
 descent while still being reachable by walk, which is the shape of bug a walk
 test cannot see.
 
@@ -225,11 +225,11 @@ them — which makes a partial composite-key probe (`WHERE a = 3` on an index
 over `(a, b)`) encode `a`, leave the rest zero, and land on the first entry
 that can match.
 
-Two entries may also share a `(key, pk)` pair — an UPDATE that changes a
+Two entries may also share a `(key, tuple key)` pair — an UPDATE that changes a
 covered column appends one — and that is information, so it is kept. A
 **byte-identical** entry is not, and `IndexInsert` reports it rather than
 storing it twice: nothing reclaims an index entry, and a probe that resolved
-one pk twice would emit its row twice. Deduplicating *by pk* remains the read
+one tuple key twice would emit its row twice. Deduplicating *by tuple key* remains the read
 path's job (IX11).
 
 ---
@@ -304,7 +304,7 @@ often a probe pays a base descent it did not have to.
 
 ## 7. Covering, and why there is no index-only scan
 
-Covered columns are stored in the entry after the pk, as their **inline cell
+Covered columns are stored in the entry after the tuple key, as their **inline cell
 bytes verbatim** — tag included, so a spilled covered value stores its spill
 pointer and reading it costs the var-heap fetch it would have cost anyway.
 
@@ -324,7 +324,7 @@ So the base row is always fetched before a row is emitted, and even
 
 What covering does buy, and it is the larger half of the win on a selective
 statement: **residual predicates on covered columns are evaluated from the
-entry**, so a row that will not survive the filter never costs a pk descent.
+entry**, so a row that will not survive the filter never costs a tuple key descent.
 On a probe returning 10 rows from 10,000 entries, that is the whole cost.
 
 `ANALYZE` prices it directly: `index_filtered` counts descents the covered
@@ -334,12 +334,12 @@ exactly the write cost it added.
 **An entry judges itself, never its row** (AT-S22). Maintenance is
 append-only, so a row can own several entries, and a stale one can be walked
 first: its key moved with a covered column, or an update of a covered column
-alone appended an entry with the same `(key, pk)`, which sorts to the front of
-its run. So the probe claims a pk for its dedup only once one of its entries
+alone appended an entry with the same `(key, tuple key)`, which sorts to the front of
+its run. So the probe claims a tuple key for its dedup only once one of its entries
 passes the filter, and keeps the row when **any** entry does. That is still a
 superset - every version that wrote a key or covered value has an entry
 carrying it, the version a snapshot sees among them, and the base read's
-residual and visibility decide the row - where claiming the pk at the first
+residual and visibility decide the row - where claiming the tuple key at the first
 entry dropped a row whose stale entry failed and whose current one would have
 passed. `index_filtered` counts a row once, and only if every one of its
 entries failed.
@@ -366,17 +366,17 @@ direction wrong is the difference between a lost row and a wasted descent.
 - `kIndexRange` — equalities covering a prefix, plus an inclusive range on
   the next key column; or a range on the first.
 
-> **IX8a — an index step emits its rows in primary-key order.**
+> **IX8a — an index step emits its rows in tuple key order.**
 
-The walk collects pks in *index key* order; a scan of the same relation emits
-them in pk order. Without a sort between the two phases, creating an index
+The walk collects tuple keys in *index key* order; a scan of the same relation emits
+them in tuple key order. Without a sort between the two phases, creating an index
 would **reorder a reply** — and "an accelerator may cost performance and must
 never change a query result" is the standard invariant 8 holds Waystone to,
 which an authoritative structure does not get to fall below. The equivalence
 test compares byte for byte precisely so this cannot be missed.
 
 It costs one sort of the matched set against one descent per element of it,
-and it buys locality as well: on a btree relation pk order *is* leaf order,
+and it buys locality as well: on a btree relation tuple key order *is* leaf order,
 so the descents walk the tree forwards instead of jumping.
 
 Invariant 9's line is **lookup versus search**, not authoritative versus
@@ -527,7 +527,7 @@ non-obvious requirement:
 > one — and it runs **before** the `sys.indexes` row exists.
 
 A reader holding an older snapshot must find its version through the new
-index. Every version of a logical tuple shares one pk, so the walk is bounded
+index. Every version of a logical tuple shares one tuple key, so the walk is bounded
 by the chain and the entries are the same shape. Omitting it would make an
 old-snapshot read silently return fewer rows — the failure `cabin.md` §5
 calls invisible without a baseline. A **delete-marked** row is walked like
@@ -574,7 +574,7 @@ Also refused, each naming the reason:
 
 - **A heap-clustered relation** (IX3, `InvalidArgument`).
 - **A nullable key column** (`NotImplemented`, `docs/spec/null.md`).
-- **An index on the primary key** — the clustered tree already is one.
+- **An index on the tuple key** — the clustered tree already is one.
 - **A `float` column** — nothing settled its encoding, so it is not
   declarable in the first place.
 - **More than `kMaxIndexKeyColumns` key or `kMaxIndexCoveredColumns` covered
@@ -584,7 +584,7 @@ Also refused, each naming the reason:
   fall back because a Cabin is only ever a shortcut.
 - **`ORDER BY` served from an index.** An output sort exists
   (`docs/spec/parser-v2.md`), and an index is not it, for four independent
-  reasons. **IX8a** has `RunIndexStep` sort its matched pks *back* into pk
+  reasons. **IX8a** has `RunIndexStep` sort its matched tuple keys *back* into tuple key
   order on purpose, because creating an index must not reorder a reply.
   **IX2's append-only maintenance** leaves an updated row with entries at
   two keys, and the dedup keeps the lowest rather than the visible

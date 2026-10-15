@@ -37,7 +37,7 @@ class WalManager;
 //
 // ---- Why this is not in catalog/ ----------------------------------------
 //
-// `sys.assertions` is the one catalog relation stored in ordinary user
+// `sys.assertions` is one of the two catalog relations stored in ordinary user
 // tuple format - a Keystone word, tagged cells, a var-heap for values too
 // long to inline - because a declaration's text is neither fixed-width nor
 // small. Reading such a row needs `exec::DecodeRowInto`, and `exec/` depends

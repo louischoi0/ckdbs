@@ -2,6 +2,7 @@
 #include "kds/parser/parser.hpp"
 
 #include "kds/catalog/rows.hpp"
+#include "kds/catalog/schema.hpp"  // kMaxSpareSlots (BW-R1)
 
 #include <algorithm>
 #include <cctype>
@@ -112,8 +113,11 @@ bool AggFuncOf(std::string_view name, AggFunc& out) noexcept {
 Status Parser::ExpectKeyword(std::string_view keyword) {
     Token tok = lexer_.Next();
     if (tok.type != TokenType::kIdent || !IEquals(tok.text, keyword)) {
+        // The byte, as `ExpectToken` gives it (BW-Q12.2 of
+        // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`).
         return Status::InvalidArgument("expected '" + std::string(keyword) + "', got '" +
-                                        std::string(Describe(tok)) + "'");
+                                        std::string(Describe(tok)) + "' at byte " +
+                                        std::to_string(tok.byte_offset));
     }
     return Status::OK();
 }
@@ -136,7 +140,8 @@ StatusOr<std::string> Parser::ParseIdent() {
     Token tok = lexer_.Next();
     if (tok.type != TokenType::kIdent) {
         return Status::InvalidArgument("expected identifier, got '" +
-                                        std::string(Describe(tok)) + "'");
+                                        std::string(Describe(tok)) + "' at byte " +
+                                        std::to_string(tok.byte_offset));
     }
     // The AST owns its names: docs/parser.md I4's copy-at-the-boundary
     // rule, and what lets a Statement outlive the SQL it came from now that
@@ -1623,6 +1628,122 @@ StatusOr<BoolExpr> Parser::ParseValueList(ColumnName col, bool negated, std::uin
     return node;
 }
 
+// One column definition, `CREATE TABLE`'s and `ALTER TABLE ... ADD
+// COLUMN`'s (BW-R1): a name, a type with its arguments, then the suffixes
+// in their fixed order - nullability, `REFERENCES`, the cabin policy.
+StatusOr<ColumnDef> Parser::ParseColumnDef() {
+    ColumnDef col;
+
+    col.name_byte_offset = lexer_.Peek().byte_offset;
+    auto col_name = ParseIdent();
+    if (!col_name.ok()) return col_name.status();
+    col.name = std::move(col_name.value());
+
+    // The type, with its arguments: `DECIMAL(p, s)` takes two
+    // (docs/spec/types.md §2), `CHAR(n)` and `VARCHAR(n)` one
+    // (`instructions/v2.5.0/varchar-char-architecture.md` §3).
+    TypeSpec spec;
+    if (Status s = ParseTypeSpec(spec); !s.ok()) return s;
+    col.type_name = std::move(spec.name);
+    col.type_byte_offset = spec.byte_offset;
+    col.type_arg_byte_offset = spec.arg_byte_offset;
+    col.has_precision = spec.has_precision;
+    col.precision = spec.precision;
+    col.scale = spec.scale;
+    col.has_width = spec.has_width;
+    col.width = spec.width;
+    if (IEquals(col.type_name, "DECIMAL") && !col.has_precision) {
+        // **A bare `decimal` is refused, never defaulted.** A default
+        // scale is a silent decision about someone's money, and the
+        // parser is the only layer that can still tell the difference
+        // between "said nothing" and "said zero".
+        return Status::InvalidArgument(
+            "column '" + col.name + "' needs a precision and a scale - `decimal(p, s)` - "
+            "at byte " + std::to_string(col.type_byte_offset) +
+            "; there is no default scale, because one would be a silent decision about "
+            "what a stored value means");
+    }
+
+    // Optional nullability, directly after the type and before every
+    // other suffix (docs/spec/null.md §2.3, D1): `NULL` opts a column
+    // into nullability; `NOT NULL` spells the default for
+    // standard-minded schemas and changes nothing. First in the suffix
+    // chain because it modifies the type, not the column's relations.
+    if (lexer_.Peek().type == TokenType::kNullLit) {
+        col.null_byte_offset = lexer_.Peek().byte_offset;
+        lexer_.Next();
+        col.notnull = false;
+    } else if (lexer_.Peek().type == TokenType::kKeyword &&
+               lexer_.Peek().kw == Keyword::kNot) {
+        lexer_.Next();
+        if (lexer_.Peek().type != TokenType::kNullLit) {
+            return Status::InvalidArgument(
+                "expected NULL after NOT in a column declaration (byte " +
+                std::to_string(lexer_.Peek().byte_offset) + ")");
+        }
+        lexer_.Next();
+        col.notnull = true;  // the default, said out loud
+    }
+
+    // Optional `REFERENCES <table>` (docs/spec/foreign-keys.md §1).
+    // Peeked like the cabin clause below it, and written *before* it
+    // when both appear - a fixed order, because two optional suffixes
+    // accepted in either order is a grammar with a shape nobody can
+    // state, and the fingerprint would have to hash both spellings of
+    // one declaration.
+    if (const Token& refs = lexer_.Peek();
+        refs.type == TokenType::kIdent && IEquals(refs.text, "REFERENCES")) {
+        col.references_byte_offset = refs.byte_offset;
+        lexer_.Next();
+
+        if (Status s = ParseQualifiedName(col.references_schema, col.references_table);
+            !s.ok()) {
+            return s.WithContext("REFERENCES names the parent relation");
+        }
+
+        // `REFERENCES parent(col)` is refused rather than parsed and
+        // checked: the parent side is always the Keystone id (F1), so
+        // the only column that could be named is the one the engine
+        // would have used anyway, and naming any other is asking for a
+        // reference the engine cannot store.
+        if (lexer_.Peek().type == TokenType::kLParen) {
+            return Status::Unsupported(
+                "a foreign key references the parent's tuple key and no other column, so "
+                "REFERENCES takes no column list (byte " +
+                std::to_string(lexer_.Peek().byte_offset) + ")");
+        }
+    }
+
+    // Optional cabin policy: `CABIN`, `CABIN AUTO`, or `NO CABIN`
+    // (docs/spec/cabin.md). Peeked rather than required, so every
+    // pre-existing CREATE TABLE parses unchanged and lands on
+    // kCabinPolicyUnset.
+    const Token& policy = lexer_.Peek();
+    if (policy.type == TokenType::kIdent && IEquals(policy.text, "CABIN")) {
+        col.cabin_byte_offset = policy.byte_offset;
+        lexer_.Next();
+        const Token& mode = lexer_.Peek();
+        if (mode.type == TokenType::kIdent && IEquals(mode.text, "AUTO")) {
+            lexer_.Next();
+            col.cabin_policy = catalog::kCabinPolicyAuto;
+        } else {
+            col.cabin_policy = catalog::kCabinPolicyEnabled;
+        }
+    } else if (policy.type == TokenType::kIdent && IEquals(policy.text, "NO")) {
+        col.cabin_byte_offset = policy.byte_offset;
+        lexer_.Next();
+        // `NO` is only ever the start of `NO CABIN` here. Saying so
+        // beats letting `no` fall through to the trailing-garbage check,
+        // which would point at the wrong token.
+        if (Status s = ExpectKeyword("CABIN"); !s.ok()) {
+            return s.WithContext("the only NO clause on a column is `NO CABIN`");
+        }
+        col.cabin_policy = catalog::kCabinPolicyDisabled;
+    }
+
+    return col;
+}
+
 StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
     if (Status s = ExpectKeyword("TABLE"); !s.ok()) return s;
 
@@ -1639,115 +1760,9 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
     if (Status s = ExpectToken(TokenType::kLParen, "'('"); !s.ok()) return s;
 
     for (;;) {
-        ColumnDef col;
-
-        auto col_name = ParseIdent();
-        if (!col_name.ok()) return col_name.status();
-        col.name = std::move(col_name.value());
-
-        // The type, with its arguments: `DECIMAL(p, s)` takes two
-        // (docs/spec/types.md §2), `CHAR(n)` and `VARCHAR(n)` one
-        // (`instructions/v2.5.0/varchar-char-architecture.md` §3).
-        TypeSpec spec;
-        if (Status s = ParseTypeSpec(spec); !s.ok()) return s;
-        col.type_name = std::move(spec.name);
-        col.type_byte_offset = spec.byte_offset;
-        col.type_arg_byte_offset = spec.arg_byte_offset;
-        col.has_precision = spec.has_precision;
-        col.precision = spec.precision;
-        col.scale = spec.scale;
-        col.has_width = spec.has_width;
-        col.width = spec.width;
-        if (IEquals(col.type_name, "DECIMAL") && !col.has_precision) {
-            // **A bare `decimal` is refused, never defaulted.** A default
-            // scale is a silent decision about someone's money, and the
-            // parser is the only layer that can still tell the difference
-            // between "said nothing" and "said zero".
-            return Status::InvalidArgument(
-                "column '" + col.name + "' needs a precision and a scale - `decimal(p, s)` - "
-                "at byte " + std::to_string(col.type_byte_offset) +
-                "; there is no default scale, because one would be a silent decision about "
-                "what a stored value means");
-        }
-
-        // Optional nullability, directly after the type and before every
-        // other suffix (docs/spec/null.md §2.3, D1): `NULL` opts a column
-        // into nullability; `NOT NULL` spells the default for
-        // standard-minded schemas and changes nothing. First in the suffix
-        // chain because it modifies the type, not the column's relations.
-        if (lexer_.Peek().type == TokenType::kNullLit) {
-            col.null_byte_offset = lexer_.Peek().byte_offset;
-            lexer_.Next();
-            col.notnull = false;
-        } else if (lexer_.Peek().type == TokenType::kKeyword &&
-                   lexer_.Peek().kw == Keyword::kNot) {
-            lexer_.Next();
-            if (lexer_.Peek().type != TokenType::kNullLit) {
-                return Status::InvalidArgument(
-                    "expected NULL after NOT in a column declaration (byte " +
-                    std::to_string(lexer_.Peek().byte_offset) + ")");
-            }
-            lexer_.Next();
-            col.notnull = true;  // the default, said out loud
-        }
-
-        // Optional `REFERENCES <table>` (docs/spec/foreign-keys.md §1).
-        // Peeked like the cabin clause below it, and written *before* it
-        // when both appear - a fixed order, because two optional suffixes
-        // accepted in either order is a grammar with a shape nobody can
-        // state, and the fingerprint would have to hash both spellings of
-        // one declaration.
-        if (const Token& refs = lexer_.Peek();
-            refs.type == TokenType::kIdent && IEquals(refs.text, "REFERENCES")) {
-            col.references_byte_offset = refs.byte_offset;
-            lexer_.Next();
-
-            if (Status s = ParseQualifiedName(col.references_schema, col.references_table);
-                !s.ok()) {
-                return s.WithContext("REFERENCES names the parent relation");
-            }
-
-            // `REFERENCES parent(col)` is refused rather than parsed and
-            // checked: the parent side is always the Keystone id (F1), so
-            // the only column that could be named is the one the engine
-            // would have used anyway, and naming any other is asking for a
-            // reference the engine cannot store.
-            if (lexer_.Peek().type == TokenType::kLParen) {
-                return Status::Unsupported(
-                    "a foreign key references the parent's primary key and no other column, so "
-                    "REFERENCES takes no column list (byte " +
-                    std::to_string(lexer_.Peek().byte_offset) + ")");
-            }
-        }
-
-        // Optional cabin policy: `CABIN`, `CABIN AUTO`, or `NO CABIN`
-        // (docs/spec/cabin.md). Peeked rather than required, so every
-        // pre-existing CREATE TABLE parses unchanged and lands on
-        // kCabinPolicyUnset.
-        const Token& policy = lexer_.Peek();
-        if (policy.type == TokenType::kIdent && IEquals(policy.text, "CABIN")) {
-            col.cabin_byte_offset = policy.byte_offset;
-            lexer_.Next();
-            const Token& mode = lexer_.Peek();
-            if (mode.type == TokenType::kIdent && IEquals(mode.text, "AUTO")) {
-                lexer_.Next();
-                col.cabin_policy = catalog::kCabinPolicyAuto;
-            } else {
-                col.cabin_policy = catalog::kCabinPolicyEnabled;
-            }
-        } else if (policy.type == TokenType::kIdent && IEquals(policy.text, "NO")) {
-            col.cabin_byte_offset = policy.byte_offset;
-            lexer_.Next();
-            // `NO` is only ever the start of `NO CABIN` here. Saying so
-            // beats letting `no` fall through to the trailing-garbage check,
-            // which would point at the wrong token.
-            if (Status s = ExpectKeyword("CABIN"); !s.ok()) {
-                return s.WithContext("the only NO clause on a column is `NO CABIN`");
-            }
-            col.cabin_policy = catalog::kCabinPolicyDisabled;
-        }
-
-        stmt.columns.push_back(std::move(col));
+        auto col = ParseColumnDef();
+        if (!col.ok()) return col.status();
+        stmt.columns.push_back(std::move(col.value()));
 
         if (lexer_.Peek().type == TokenType::kComma) {
             lexer_.Next();
@@ -1777,8 +1792,13 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
     // **refused** `Unsupported` with its byte: it means "supplying an id is
     // refused", which this relation would not enforce (the truthfulness
     // rule).
+    //
+    // `SPARE <n>` (BW-R1) joins the loop: the relation's reserved 16-byte
+    // column slots, a fact about the whole relation like the other two, and
+    // an identifier like them.
     bool storage_given = false;
     bool key_word_given = false;
+    bool spare_given = false;
     for (;;) {
         const Token word = lexer_.Peek();
         if (word.type != TokenType::kIdent) break;
@@ -1787,7 +1807,29 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         const bool is_btree = IEquals(word.text, "BTREE");
         const bool is_assigned = IEquals(word.text, "ASSIGNED");
         const bool is_explicit = IEquals(word.text, "EXPLICIT");
-        if (!is_heap && !is_btree && !is_assigned && !is_explicit) break;
+        const bool is_spare = IEquals(word.text, "SPARE");
+        if (!is_heap && !is_btree && !is_assigned && !is_explicit && !is_spare) break;
+
+        if (is_spare) {
+            if (spare_given) {
+                return Status::InvalidArgument(
+                    "CREATE TABLE takes one SPARE and this is the second (byte " +
+                    std::to_string(word.byte_offset) + ")");
+            }
+            spare_given = true;
+            lexer_.Next();
+            const std::uint32_t count_at = lexer_.Peek().byte_offset;
+            auto count = ParseTypeArgument("SPARE slot count");
+            if (!count.ok()) return count.status();
+            if (count.value() > catalog::kMaxSpareSlots) {
+                return Status::InvalidArgument(
+                    "SPARE " + std::to_string(count.value()) + " exceeds the " +
+                    std::to_string(catalog::kMaxSpareSlots) + " slots a relation may reserve (byte " +
+                    std::to_string(count_at) + ")");
+            }
+            stmt.spare_slots = static_cast<std::uint16_t>(count.value());
+            continue;
+        }
 
         // A category given twice is refused rather than last-one-wins:
         // `HEAP BTREE` names two different relations, so silently keeping
@@ -1821,7 +1863,7 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
             return Status::Unsupported(
                 "the ASSIGNED key mode no longer exists (byte " +
                 std::to_string(word.byte_offset) +
-                ") - every relation takes a caller-supplied primary key or issues one when "
+                ") - every relation takes a caller-supplied tuple key or issues one when "
                 "INSERT omits it, so there is nothing for this word to select");
         } else {
             if (key_word_given) {
@@ -2318,6 +2360,142 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
     return stmt;
 }
 
+StatusOr<TransitionStmt> Parser::ParseTransition(bool drop) {
+    TransitionStmt stmt;
+    stmt.drop = drop;
+
+    stmt.byte_offset = lexer_.Peek().byte_offset;
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    stmt.name = std::move(name.value());
+
+    // A Transition's name is unique instance-wide, so DROP names nothing else.
+    if (drop) {
+        ConsumeOptionalSemicolon();
+        return stmt;
+    }
+
+    // `ON` is a reserved keyword (it joins); ParseAssertion has the same
+    // wrinkle. Every other word of this grammar - TRANSITION, INSERT,
+    // UPDATE, DELETE, FROM - is matched by text and reserves nothing (BV-R5).
+    const auto is_on = [](const Token& t) {
+        return t.type == TokenType::kKeyword && t.kw == Keyword::kOn;
+    };
+    if (const Token& on = lexer_.Peek(); !is_on(on)) {
+        return Status::InvalidArgument(
+            "CREATE TRANSITION names the column it governs: `CREATE TRANSITION <name> ON "
+            "<table>(<column>) ON INSERT (...) ON UPDATE (... => ...)` (byte " +
+            std::to_string(on.byte_offset) + ")");
+    }
+    lexer_.Next();
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = ExpectToken(TokenType::kLParen, "'(' and the governed column"); !s.ok()) {
+        return s;
+    }
+    stmt.column_byte_offset = lexer_.Peek().byte_offset;
+    auto column = ParseIdent();
+    if (!column.ok()) return column.status();
+    stmt.column = std::move(column.value());
+    if (Status s = ExpectToken(TokenType::kRParen, "')' after the governed column"); !s.ok()) {
+        return s;
+    }
+
+    // `ON <event>`, in the fixed order INSERT, UPDATE, DELETE. INSERT and
+    // UPDATE are required (CN-4 T10): without both, §2's path property
+    // does not follow from the graph, and a declaration that gave it up
+    // silently would promise what it does not enforce.
+    const auto clause = [&](std::string_view event) -> bool {
+        const Token& on = lexer_.Peek();
+        if (!is_on(on)) return false;
+        Lexer probe = lexer_;
+        probe.Next();
+        if (!IsWord(probe.Peek(), event)) return false;
+        lexer_.Next();
+        lexer_.Next();
+        return true;
+    };
+    const auto required = [&](std::string_view event) -> Status {
+        if (clause(event)) return Status::OK();
+        return Status::InvalidArgument("CREATE TRANSITION requires ON " + std::string(event) +
+                                       ", in the order ON INSERT, ON UPDATE, ON DELETE FROM "
+                                       "(byte " +
+                                       std::to_string(lexer_.Peek().byte_offset) + ")");
+    };
+
+    if (Status s = required("INSERT"); !s.ok()) return s;
+    if (Status s = ParseTransitionStates(stmt.initial, "ON INSERT"); !s.ok()) return s;
+
+    if (Status s = required("UPDATE"); !s.ok()) return s;
+    if (Status s = ExpectToken(TokenType::kLParen, "'(' and the ON UPDATE edges"); !s.ok()) {
+        return s;
+    }
+    for (;;) {
+        TransitionStmt::Edge edge;
+        auto from = ParseValue();
+        if (!from.ok()) return from.status();
+        edge.from = std::move(from.value());
+        // `=>` is `=` immediately followed by `>`: two tokens, adjacent,
+        // so the arrow costs the lexer nothing and the fingerprint nothing.
+        const Token eq = lexer_.Next();
+        const Token gt = lexer_.Next();
+        if (eq.type != TokenType::kEq || gt.type != TokenType::kGt ||
+            gt.byte_offset != eq.byte_offset + 1) {
+            return Status::InvalidArgument("an ON UPDATE edge is `<state> => <state>` (byte " +
+                                           std::to_string(eq.byte_offset) + ")");
+        }
+        auto to = ParseValue();
+        if (!to.ok()) return to.status();
+        edge.to = std::move(to.value());
+        stmt.edges.push_back(std::move(edge));
+        const Token next = lexer_.Next();
+        if (next.type == TokenType::kRParen) break;
+        if (next.type != TokenType::kComma) {
+            return Status::InvalidArgument("expected ',' or ')' in ON UPDATE (byte " +
+                                           std::to_string(next.byte_offset) + ")");
+        }
+    }
+
+    if (clause("DELETE")) {
+        if (const Token& from = lexer_.Next(); !IsWord(from, "FROM")) {
+            return Status::InvalidArgument("ON DELETE is `ON DELETE FROM (<state>, ...)` (byte " +
+                                           std::to_string(from.byte_offset) + ")");
+        }
+        stmt.delete_declared = true;
+        if (Status s = ParseTransitionStates(stmt.deletable, "ON DELETE FROM"); !s.ok()) return s;
+    }
+
+    ConsumeOptionalSemicolon();
+
+    // Sliced from the input, never rebuilt from the AST, for ParseAssertion's
+    // reason: a rebuild is a second spelling that can drift. `Parse()`
+    // refuses trailing garbage, so the statement is exactly the input.
+    std::string_view text = sql_;
+    while (!text.empty() && (text.back() == ';' ||
+                             std::isspace(static_cast<unsigned char>(text.back())) != 0)) {
+        text.remove_suffix(1);
+    }
+    stmt.source_text = std::string(text);
+    return stmt;
+}
+
+Status Parser::ParseTransitionStates(std::vector<AstValue>& out, std::string_view what) {
+    if (Status s = ExpectToken(TokenType::kLParen, "'(' and a list of states"); !s.ok()) return s;
+    for (;;) {
+        auto value = ParseValue();
+        if (!value.ok()) return value.status();
+        out.push_back(std::move(value.value()));
+        const Token next = lexer_.Next();
+        if (next.type == TokenType::kRParen) return Status::OK();
+        if (next.type != TokenType::kComma) {
+            return Status::InvalidArgument("expected ',' or ')' in " + std::string(what) +
+                                           " (byte " + std::to_string(next.byte_offset) + ")");
+        }
+    }
+}
+
 StatusOr<InsertStmt> Parser::ParseInsert() {
     if (Status s = ExpectKeyword("INTO"); !s.ok()) return s;
 
@@ -2326,6 +2504,19 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
     if (Status s = ParseQualifiedName(stmt.schema, stmt.table_name, &stmt.table_byte_offset);
         !s.ok()) {
         return s;
+    }
+
+    // `( <col> [, <col>]* )` (BW-S6, BW-Q12.1 of
+    // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
+    // columns the rows' values are for, so no column change can shift them.
+    // The paren decides it unambiguously - a positional statement has
+    // `VALUES` here. Names are resolved by the dispatcher, under the
+    // relation's `IX`; an empty list is `ParseIdent`'s refusal at the `)`.
+    if (lexer_.Peek().type == TokenType::kLParen) {
+        stmt.columns_byte_offset = lexer_.Peek().byte_offset;
+        if (Status s = ParseDeclaredColumnList(stmt.columns, "column list", /*cap=*/0); !s.ok()) {
+            return s;
+        }
     }
 
     if (Status s = ExpectKeyword("VALUES"); !s.ok()) return s;
@@ -2375,8 +2566,8 @@ StatusOr<RelationRef> Parser::ParseRelationRef() {
     //
     // Why it stays out, since the error should not have to explain it: a
     // derived table's result must become a relation with a schema,
-    // materialized somewhere and probed by something other than a pk.
-    // That breaks pk-direct probing into the next step, which is the
+    // materialized somewhere and probed by something other than a tuple key.
+    // That breaks tuple-key-direct probing into the next step, which is the
     // shape of the whole execution model, and puts a temporary relation
     // in the storage layer.
     if (lexer_.Peek().type == TokenType::kLParen) {
@@ -3095,7 +3286,7 @@ StatusOr<PurgeStmt> Parser::ParsePurge() {
     // `PURGE FROM t` would be a sweep of the relation, which nobody asked
     // for and a later word could add - so it is declined, not wrong. Which
     // conjuncts the statement admits is the dispatcher's question, asked of
-    // the relation's pk column; the grammar is `DELETE`'s, so the parse
+    // the relation's tuple key column; the grammar is `DELETE`'s, so the parse
     // gives every byte a refusal there needs.
     PurgeStmt stmt;
     if (Status s = ExpectKeyword("FROM"); !s.ok()) return s;
@@ -3106,7 +3297,7 @@ StatusOr<PurgeStmt> Parser::ParsePurge() {
     const Token& peek = lexer_.Peek();
     stmt.where_byte_offset = peek.byte_offset;
     if (peek.type != TokenType::kIdent || !IEquals(peek.text, "WHERE")) {
-        return Status::NotImplemented("PURGE needs a WHERE naming the primary key; purging every "
+        return Status::NotImplemented("PURGE needs a WHERE naming the tuple key; purging every "
                                       "deleted key of a relation is not implemented (byte " +
                                       std::to_string(peek.byte_offset) + ")");
     }
@@ -3277,6 +3468,11 @@ StatusOr<Statement> Parser::Parse() {
             auto s = ParseAssertion(/*drop=*/false);
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "TRANSITION")) {
+            lexer_.Next();
+            auto s = ParseTransition(/*drop=*/false);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
         } else if (what.type == TokenType::kIdent && IEquals(what.text, "NAMESPACE")) {
             lexer_.Next();
             auto s = ParseNamespace(/*drop=*/false);
@@ -3308,6 +3504,11 @@ StatusOr<Statement> Parser::Parse() {
             auto s = ParseAssertion(/*drop=*/true);
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "TRANSITION")) {
+            lexer_.Next();
+            auto s = ParseTransition(/*drop=*/true);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
         } else if (what.type == TokenType::kIdent && IEquals(what.text, "NAMESPACE")) {
             lexer_.Next();
             auto s = ParseNamespace(/*drop=*/true);
@@ -3327,8 +3528,8 @@ StatusOr<Statement> Parser::Parse() {
             stmt = std::move(drop);
         } else {
             return Status::NotImplemented(
-                "only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX and DROP ASSERTION "
-                "are supported (byte " +
+                "only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX, DROP ASSERTION and "
+                "DROP TRANSITION are supported (byte " +
                 std::to_string(what.byte_offset) + ")");
         }
     } else if (IEquals(tok.text, "INSERT")) {
@@ -3381,14 +3582,15 @@ StatusOr<Statement> Parser::Parse() {
     return stmt;
 }
 
-// `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new>`
-// (docs/spec/alter.md AL1, AL7), with `ALTER` already consumed.
+// `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new> |
+// ADD [COLUMN] <column definition> | DROP [COLUMN] <name>`
+// (docs/spec/alter.md AL1, AL7, AL11), with `ALTER` already consumed.
 //
-// `TABLE`, `RENAME`, `COLUMN` and `TO` are ordinary identifiers matched by
-// text, like every clause head this grammar has grown - and the refusal
-// surface is parsed *before* the accepted form, so `ADD`/`DROP`/`MODIFY`/
-// `SET` answer with AL1's reason at their own byte rather than a syntax
-// error pointing past them.
+// `TABLE`, `RENAME`, `ADD`, `DROP`, `COLUMN` and `TO` are ordinary identifiers
+// matched by text, like every clause head this grammar has grown - and the
+// refusal surface is parsed *before* the accepted forms, so `MODIFY`/`SET`
+// answer at their own byte rather than with a syntax error pointing past
+// them.
 StatusOr<AlterStmt> Parser::ParseAlter() {
     if (Status s = ExpectKeyword("TABLE"); !s.ok()) return s;
 
@@ -3399,27 +3601,48 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
     }
 
     const Token verb = lexer_.Peek();
+    // `ADD [COLUMN] <column definition>` (BW-R1): a column in one of the
+    // relation's reserved slots, every row of which already has the bytes.
+    if (verb.type == TokenType::kIdent && IEquals(verb.text, "ADD")) {
+        lexer_.Next();
+        if (const Token what = lexer_.Peek();
+            what.type == TokenType::kIdent && IEquals(what.text, "COLUMN")) {
+            lexer_.Next();
+        }
+        stmt.action = AlterAction::kAddColumn;
+        stmt.column_byte_offset = lexer_.Peek().byte_offset;
+        auto column = ParseColumnDef();
+        if (!column.ok()) return column.status();
+        stmt.column = std::move(column.value());
+        ConsumeOptionalSemicolon();
+        return stmt;
+    }
     if (verb.type == TokenType::kIdent &&
-        (IEquals(verb.text, "ADD") || IEquals(verb.text, "MODIFY") ||
-         IEquals(verb.text, "SET"))) {
+        (IEquals(verb.text, "MODIFY") || IEquals(verb.text, "SET"))) {
         return Status::NotImplemented(
             "ALTER TABLE " + std::string(verb.text) +
             " is not supported (byte " + std::to_string(verb.byte_offset) +
-            "); v1 is catalog-only - RENAME TO and RENAME COLUMN - because a relation's row "
-            "size is a schema constant (invariant 13), so changing the column set is a "
-            "relation rewrite, not a catalog edit");
+            "); ALTER changes catalog rows and no tuple byte, and this form would rewrite "
+            "every row of the relation (invariant 13)");
     }
-    // `DROP` under ALTER is the same class, worded for what was written:
-    // dropping a column is the rewrite, dropping the table is DROP TABLE's
-    // feature, and neither is a rename.
+    // `DROP [COLUMN] <name>` (BW-R1): a flag on the column's catalog row,
+    // its bytes left in every tuple (BW-R6).
     if (verb.type == TokenType::kIdent && IEquals(verb.text, "DROP")) {
-        return Status::NotImplemented(
-            "ALTER TABLE DROP is not supported (byte " + std::to_string(verb.byte_offset) +
-            "); dropping a column changes the row size (invariant 13), and dropping the "
-            "relation is DROP TABLE's feature, which does not exist yet");
+        lexer_.Next();
+        if (const Token what = lexer_.Peek();
+            what.type == TokenType::kIdent && IEquals(what.text, "COLUMN")) {
+            lexer_.Next();
+        }
+        stmt.action = AlterAction::kDropColumn;
+        stmt.old_column_byte_offset = lexer_.Peek().byte_offset;
+        auto column = ParseIdent();
+        if (!column.ok()) return column.status();
+        stmt.old_column = std::move(column.value());
+        ConsumeOptionalSemicolon();
+        return stmt;
     }
     if (verb.type != TokenType::kIdent || !IEquals(verb.text, "RENAME")) {
-        return Status::InvalidArgument("expected RENAME after the table name, got '" +
+        return Status::InvalidArgument("expected RENAME, ADD or DROP after the table name, got '" +
                                         std::string(Describe(verb)) + "' at byte " +
                                         std::to_string(verb.byte_offset));
     }
@@ -3428,7 +3651,7 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
     if (const Token what = lexer_.Peek();
         what.type == TokenType::kIdent && IEquals(what.text, "COLUMN")) {
         lexer_.Next();
-        stmt.rename_column = true;
+        stmt.action = AlterAction::kRenameColumn;
         stmt.old_column_byte_offset = lexer_.Peek().byte_offset;
         auto old_col = ParseIdent();
         if (!old_col.ok()) return old_col.status();

@@ -521,11 +521,20 @@ private:
                 return n;
             }
         }
-        const catalog::SysColumnRow* col =
-            access_ != nullptr ? access_->schema.FindColumn(e.column) : nullptr;
+        // A column read in a SET value resolves as every read does - ignoring
+        // case (`catalog::Schema::FindColumn`), two or more matches refused
+        // as ambiguous - so the WHERE and the SET of one statement read one
+        // column for one spelling.
+        const catalog::SysColumnRow* col = nullptr;
+        if (access_ != nullptr) {
+            auto found = access_->schema.FindColumn(e.column, e.byte_offset);
+            if (!found.ok()) return found.status();
+            col = found.value();
+        }
         if (col == nullptr && e.qualifier.empty() && Lower(e.column) == "current_date") {
-            // BJ-Q4: a column of the relation with this name wins, so the
-            // function is reachable only where there is none.
+            // BJ-Q4: a column of the relation with this name wins - in any
+            // case, as a read matches it - so the function is reachable only
+            // where there is none.
             Node n = Make(e);
             n->kind = Expr::Kind::kCall;
             n->op = ExprOp::kFunction;

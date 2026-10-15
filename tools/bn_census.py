@@ -61,6 +61,7 @@ import argparse, json, os, shutil, signal, struct, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kwp  # noqa: E402
+import sys_meta  # noqa: E402
 from bb_overhead_benchmark import host_state  # noqa: E402
 
 SPILL = "x" * 300  # longer than the instance's inline cell, so it spills
@@ -118,12 +119,9 @@ def pct(xs, p):
 
 
 def meta(conn, key):
+    """One numeric `sys.meta` field, or None where it is absent."""
     _, rows, tag, _ = conn.execute("SHOW META")
-    text = tag + " " + " ".join(b" ".join(c or b"" for c in r).decode() for r in rows)
-    for tok in text.replace("\\n", " ").split():
-        if tok.startswith(key + "="):
-            return int(tok.split("=", 1)[1])
-    return None
+    return sys_meta.numeric(sys_meta.from_rows(rows, tag)).get(key)
 
 
 class Server:
@@ -222,6 +220,8 @@ def shapes(a):
          lambda q: [txt(q), i64(key(q))], "UPDATED 1", "point"),
         ("insert", "INSERT INTO i VALUES (?, ?, ?)",
          lambda q: [i64(10_000_000 + q)] * 3, "INSERT", "point"),
+        ("insert-listed", "INSERT INTO i (w, id, v) VALUES (?, ?, ?)",
+         lambda q: [i64(20_000_000 + q)] * 3, "INSERT", "point"),
         ("delete-pk", "DELETE FROM d WHERE id = ?", lambda q: [i64(q)], "DELETED 1", "point"),
         ("update-range", "UPDATE r SET v = ? WHERE id >= 1",
          lambda q: [i64(q)], f"UPDATED {n}", "range"),

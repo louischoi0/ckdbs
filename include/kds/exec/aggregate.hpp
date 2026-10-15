@@ -95,7 +95,7 @@ public:
     // The dispatcher already hoists `trail_scratch_` and `replay_scratch_`
     // for the same reason and against the same measurement - constructing a
     // collector per statement cost 18% on a point join - and a fold costs
-    // about **4 microseconds of server CPU** on a pk lookup, roughly 6.5% of
+    // about **4 microseconds of server CPU** on a tuple key lookup, roughly 6.5% of
     // what the whole statement spends there, almost all of it setup rather
     // than per-row work.
     //

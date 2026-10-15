@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "kds/base/common.hpp"
@@ -15,20 +17,60 @@
 namespace kds::catalog {
 
 struct Schema {
+    // Every physical column in `pos` order, a dropped one included: the
+    // vector index is the position every index, foreign key, Cabin,
+    // Transition and assertion stores (BW-R6).
     std::vector<SysColumnRow> columns;
 
-    const SysColumnRow* FindColumn(std::string_view name) const noexcept;
+    // The relation's reserved 16-byte slots, from its `sys.tables` row
+    // (BW-R2). Part of the schema because the row size is derived from the
+    // schema alone (RowLayout below).
+    std::uint16_t spare_slots = 0;
+
+    // The live column whose name equals `name` ignoring case
+    // (`ColumnNamesCollide`), or nullptr when there is none; a dropped
+    // column has no name a statement can reach (BW-R6). The one resolver of
+    // a column name a statement writes - a read, a SET target, an INSERT
+    // column list, DROP and RENAME COLUMN's old name, and the column CREATE
+    // INDEX, CABIN, ASSERTION or TRANSITION names, a stored assertion canon
+    // re-parsed at mount included (raft-marks-2026-10-15.md section 1). Two
+    // or more matches - which only a relation created before names were
+    // unique ignoring case can hold - are refused as ambiguous
+    // (InvalidArgument at `byte_offset`, naming each match), never resolved
+    // to the first.
+    StatusOr<const SysColumnRow*> FindColumn(std::string_view name,
+                                             std::uint32_t byte_offset) const;
 };
+
+// The one rule deciding whether two column names are the same name:
+// equal ignoring ASCII case. A relation's live column names are unique
+// under it (CREATE TABLE, ADD COLUMN and RENAME COLUMN refuse a twin), and
+// every statement resolves a written column name under it (`FindColumn`).
+bool ColumnNamesCollide(std::string_view a, std::string_view b) noexcept;
+
+// Refuses a schema two of whose live columns' names collide - the catalog
+// door's own defense of CREATE TABLE's check (InvalidArgument; the
+// dispatcher's check, which runs first, carries the byte).
+Status CheckColumnNamesUnique(const Schema& schema);
+
+// One reserved column slot's width (BW-R2, D-a): the narrowest tagged cell
+// (`storage::CheckInlineCellWidth`'s floor), so `varchar(16)` fits one and
+// so does every fixed-width type but a wide `char`.
+inline constexpr std::uint32_t kColumnSlotWidth = 16;
+
+// `CREATE TABLE ... SPARE n`'s ceiling (BW-R1): 64 keeps every slot of a
+// relation of up to 64 declared columns inside `cabin_mask`/`index_mask`.
+inline constexpr std::uint16_t kMaxSpareSlots = 64;
 
 // True for the integer types a Keystone id can be declared as. Float,
 // decimal, bool, char and varchar are not among them: none can represent a
-// Keystone id, and a pk that cannot hold its own value is a table no row can
+// Keystone id, and a tuple key that cannot hold its own value is a table no row can
 // be written to.
 bool IsIntegerTypeVal(std::uint32_t type_val) noexcept;
 
 // Rejects a schema that cannot carry a Keystone word: no columns at all,
 // or a first column whose declared type is not an integer one. Every
-// relation's first column is its system-generated primary key
+// relation's first column is its system-generated tuple key
 // (heap-and-tuple.md section 4), so this is a property of the schema
 // itself, checked at CREATE TABLE rather than at the first INSERT.
 Status CheckKeystoneColumn(const Schema& schema);
@@ -98,6 +140,13 @@ struct RowLayout {
     // which is appended after the last column (null.md §2.1).
     std::vector<std::uint32_t> offsets;
 
+    // One past each column's last byte: `offsets[i] + ColumnWidth`, aligned
+    // with `offsets`. A cell is exactly its column's width, never "up to the
+    // next offset": with slots (BW-R2) the last declared column is followed
+    // by the slot region and a slot column by vacant slots, and a char or
+    // tagged cell sized by its span would take those bytes as its own.
+    std::vector<std::uint32_t> cell_ends;
+
     // The null-bit index of each column, positionally aligned with
     // Schema::columns; kNoNullBit for a NOT NULL column. Bit i lives in
     // bitmap byte i/8 at bit i%8 from the least significant end - explicit
@@ -110,6 +159,38 @@ struct RowLayout {
     // at `row_size - null_bitmap_bytes`, zero-filled meaning all-present -
     // which is exactly what a row written before this feature means.
     std::uint32_t null_bitmap_bytes = 0;
+
+    // The null bits of the slots no column holds yet, `[begin, end)`
+    // (BW-R3). Slots are taken lowest first and a dropped column keeps its
+    // slot, so the vacant ones are always the suffix. `EncodeRow` sets these
+    // bits in every row it builds, so a column a later `ADD` places in one
+    // reads NULL in every row that predates it. **`[quiet-wrong]`**: without
+    // them a vacant slot's zero bytes would read as a present 0.
+    std::uint16_t vacant_slot_bit_begin = 0;
+    std::uint16_t vacant_slot_bit_end = 0;
+
+    // The columns a statement can see, the tuple key included: every column but a
+    // dropped one (BW-R6). Positional `VALUES` count these.
+    std::uint32_t live_columns = 0;
+
+    // Whether any column is dropped - the codec's gate, as
+    // `null_bitmap_bytes` is the bitmap's: a relation with no dropped column
+    // asks no column whether it is. A dropped column's cell is written zero
+    // and never interpreted - its bytes may be a NOT NULL varchar's zero
+    // `kNull` tag, which a decode would otherwise refuse.
+    bool has_dropped() const noexcept { return live_columns != offsets.size(); }
+
+    // The slots a column holds, a dropped one's included (BW-R2).
+    std::uint16_t slots_held = 0;
+
+    // Whether the relation's column set has changed since `CREATE TABLE` - a
+    // column added or dropped. **`[quiet-wrong]`** (BW-Q9): on such a
+    // relation a positional row carries every live column, the tuple key `NULL` to
+    // have it issued, because after an `ADD` the short form's length is that
+    // of a row written for the old columns with its key named, and admitting
+    // it would shift every value one column over. A `DROP` leaves a case no
+    // length catches (BW-Q11, `known-gaps.md`).
+    bool column_set_changed() const noexcept { return has_dropped() || slots_held != 0; }
 
     // The instance-pinned kds.inline_cell_width this layout was built for.
     // Carried so the codec never has to be told twice.
@@ -131,7 +212,7 @@ struct RowLayout {
 };
 
 // The bitmap is the sole authority on nullness (null.md §3), and these
-// three are its only reader and writers - explicit shift and mask, invariant
+// four are its only reader and writers - explicit shift and mask, invariant
 // 6, with the byte's address computed in exactly one place. `payload` is
 // the whole tuple payload of exactly `layout.row_size` bytes; a column with
 // kNoNullBit is never NULL by construction, and callers of SetNullBit
@@ -164,6 +245,17 @@ inline void ClearNullBit(std::span<std::byte> payload, const RowLayout& layout,
     payload[NullByteOf(layout, bit)] &= ~std::byte{static_cast<unsigned char>(1u << (bit % 8))};
 }
 
+// Every vacant slot's bit set (BW-R3): a slot no column holds is NULL in
+// every row, so the column a later `ADD COLUMN` places there reads NULL in
+// the rows that predate it. `EncodeRow` calls it on every row it builds;
+// `EncodeAssigned` copies the bits with the before-image.
+inline void SetVacantSlotBits(std::span<std::byte> payload, const RowLayout& layout) noexcept {
+    for (std::uint16_t bit = layout.vacant_slot_bit_begin; bit < layout.vacant_slot_bit_end;
+         ++bit) {
+        payload[NullByteOf(layout, bit)] |= std::byte{static_cast<unsigned char>(1u << (bit % 8))};
+    }
+}
+
 // True if any column of `schema` can produce a spilled value - i.e. any
 // column occupies a tagged cell. Decides whether CREATE TABLE allocates the
 // relation a var-heap chain at all, so a relation of plain integers costs
@@ -180,6 +272,22 @@ struct ForeignKeyRef {
     Oid rel_oid = 0;
     std::uint16_t column_no = 0;
     std::uint16_t flags = 0;
+};
+
+// One Transition on a relation, parsed from its `sys.transitions` row
+// (`exec/transition.hpp` builds it, BV-S2). Every state is held as its
+// **state key**: a string column's value as its bytes, an integer column's
+// as its decimal spelling - one canonical spelling per value, so a check is
+// a comparison of two strings whatever the column's type.
+struct TransitionRef {
+    std::uint64_t id = 0;
+    std::string name;
+    std::uint16_t column_no = 0;
+    std::vector<std::string> initial;
+    std::vector<std::pair<std::string, std::string>> edges;
+    // Absent `ON DELETE FROM`: every delete is allowed (CN-4 T10).
+    bool delete_declared = false;
+    std::vector<std::string> deletable;
 };
 
 struct TableAccess {
@@ -242,7 +350,7 @@ struct TableAccess {
     // have one and says nothing about the rest.
     //
     // `cabin_mask` holds a bit per `col_pos`. Bit 0 is always clear: the
-    // pk's Cabin is the clustered tree itself (spec section 2), so
+    // tuple key's Cabin is the clustered tree itself (spec section 2), so
     // CreateCabin() refuses column 0. A relation wider than 64 columns
     // folds its high columns into no bit - which loses the *acceleration*
     // for those columns and can never lose a row, since an unnoticed
@@ -292,6 +400,26 @@ struct TableAccess {
     // then works from what it compiled, exactly as §1 requires.
     std::vector<ForeignKeyRef> fkeys_out;
     std::vector<ForeignKeyRef> fkeys_in;
+
+    // ---- Transitions on this relation (BV-S2) ---------------------------
+    //
+    // At most one per column (CN-4 T6). A DDL fact by the foreign key's
+    // test, cached here and dropped by the schema word. **The fence is the
+    // memo** (BV-R4): `CREATE TRANSITION` writes its row under the relation
+    // `X` and moves the word before release, so a writer's first relation
+    // intention (`MemoIsCurrent`) re-runs a statement compiled against an
+    // entry without it. Filled by the catalog's transition loader; a fill
+    // that cannot read sys.transitions fails, as one that cannot read
+    // sys.fkeys does - a constraint the write path cannot see does not run.
+    std::vector<TransitionRef> transitions;
+
+    // The Transition on `col_pos`, or nullptr.
+    const TransitionRef* TransitionOn(std::uint16_t col_pos) const noexcept {
+        for (const TransitionRef& t : transitions) {
+            if (t.column_no == col_pos) return &t;
+        }
+        return nullptr;
+    }
 
     // The foreign key on `col_pos`, or nullptr. Linear over a list whose
     // length is the number of references a relation declares - single
@@ -361,7 +489,7 @@ struct TableAccess {
     // FindIndexOnColumn` makes for the same reason: an index on `(a, b)`
     // cannot serve an equality on `b`, so a bit for `b` would stop the
     // compiler calling that step a filter scan while leaving it exactly as
-    // slow. Bit 0 is always clear - `CreateIndex` refuses the primary key,
+    // slow. Bit 0 is always clear - `CreateIndex` refuses the tuple key,
     // whose index is the clustered tree. A relation wider than 64 columns
     // folds its high columns into no bit, which loses the acceleration and
     // never a row.

@@ -51,7 +51,7 @@
 // **HEAL** is the batch form of the read path's per-probe heal, through
 // the same primitives ("reuses the read-path heal primitive"):
 // `VerifyTupleAt` per hint, `BtreeLookup` + current-epoch stamp on a
-// miss, a dangling pk erased outright (no row now; a later insert under
+// miss, a dangling tuple key erased outright (no row now; a later insert under
 // the key witnesses itself), and a heap relation's set un-observed - no descent to heal
 // with, §5's rule.
 //

@@ -251,9 +251,9 @@ Status CheckKeystoneColumn(const catalog::Schema& schema);
 // `layout.row_size` bytes.
 //
 // The payload is `[Keystone word][columns 1..n-1]`: the first schema
-// column IS the primary key and is carried by the Keystone word's id
+// column IS the tuple key and is carried by the Keystone word's id
 // field, so `values` supplies only the columns after it. `id` is the
-// row's Keystone id, issued or named - the pk is never encoded into the
+// row's Keystone id, issued or named - the tuple key is never encoded into the
 // body as well, since two copies of one value is how the two come to
 // disagree.
 //
@@ -272,7 +272,7 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
                                             const VarHeapSink& varheap = {});
 
 // One assignment `EncodeAssigned` writes: a column of the schema (never the
-// pk, column 0) and the value it takes.
+// tuple key, column 0) and the value it takes.
 struct AssignedCell {
     std::size_t column = 0;
     const parser::AstValue* value = nullptr;
@@ -301,7 +301,7 @@ StatusOr<std::vector<std::byte>> EncodeAssigned(const catalog::Schema& schema,
                                                  const VarHeapSink& varheap = {});
 
 // Decodes a tuple payload back into one value per `schema.columns` entry,
-// pk first, in the same order EncodeRow() wrote them. Fails with
+// tuple key first, in the same order EncodeRow() wrote them. Fails with
 // Corruption if `payload.size()` is not exactly `layout.row_size` - see
 // the file comment on checked redundancy.
 StatusOr<std::vector<parser::AstValue>> DecodeRow(const catalog::Schema& schema,
@@ -442,7 +442,7 @@ using ScanKernel = std::vector<ScanKernelTerm>;
 // The term for `schema.columns[column] <op> literal`, or nothing when the
 // pair is outside the kernel's domain: an operator other than the six, a
 // literal of another value kind or scale than the column compares in, a
-// `uint64` literal `ValueAsUint64` refuses, or a `uint64` pk. Nothing is
+// `uint64` literal `ValueAsUint64` refuses, or a `uint64` tuple key. Nothing is
 // refused here; a pair the kernel does not hold is the residual's, as it
 // always was.
 std::optional<ScanKernelTerm> CompileScanKernelTerm(const catalog::Schema& schema,

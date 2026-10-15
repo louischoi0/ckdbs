@@ -342,6 +342,28 @@ public:
         return cores_with_unresolved_.load(std::memory_order_acquire) != 0;
     }
 
+    // **Is a DDL transaction open anywhere in the instance**
+    // (`ddl-transactional.md` §4). A core opens one before its first catalog
+    // write and closes it after the transaction is decided, so while it is
+    // open every core resolves names under a view. The generation moves at
+    // every open and never back, so a reader that took the unfiltered path
+    // can ask afterwards whether a DDL opened while it read
+    // (`CommandDispatcher::ResolveNames`); the count alone returns to zero.
+    //
+    // **The count moves first.** A reader reads the generation, then the
+    // count, then the catalog, then the generation again: one whose first
+    // read already holds this move must also see the count, or it would
+    // take the unfiltered path with nothing left to tell it so.
+    void NoteDdlOpened() noexcept {
+        open_ddl_.fetch_add(1, std::memory_order_acq_rel);
+        ddl_generation_.fetch_add(1, std::memory_order_acq_rel);
+    }
+    void NoteDdlClosed() noexcept { open_ddl_.fetch_sub(1, std::memory_order_acq_rel); }
+    bool AnyDdlOpen() const noexcept { return open_ddl_.load(std::memory_order_acquire) != 0; }
+    std::uint64_t DdlGeneration() const noexcept {
+        return ddl_generation_.load(std::memory_order_acquire);
+    }
+
     // ---- The in-flight tables (the header's note) -------------------------
 
     // Builds `core`'s table if it has none. By that core alone, before its
@@ -605,6 +627,11 @@ private:
     // so the transition it observes is its own and the count cannot race
     // itself. `AnyUnresolved` is the reader.
     std::atomic<std::uint32_t> cores_with_unresolved_{0};
+
+    // Open DDL transactions across every core (`AnyDdlOpen`), and how many
+    // have ever opened (`DdlGeneration`).
+    std::atomic<std::uint32_t> open_ddl_{0};
+    std::atomic<std::uint64_t> ddl_generation_{0};
 
     // One past the highest core that has published anything. Every walk
     // over the slots stops here rather than at `kMaxCores`, so

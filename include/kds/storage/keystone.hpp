@@ -18,7 +18,7 @@
 // layer, which stores whatever payload bytes it is given; an id is read
 // back through `KeystoneIdOfPayload` alone.
 //
-// The id is the relation's primary key. Per row, the `INSERT` names it or
+// The id is the relation's tuple key. Per row, the `INSERT` names it or
 // the catalog issues it from the relation's `next_id` mark (rows.hpp); on
 // a btree its uniqueness is the descent's and on a heap the mark's
 // (heap-and-tuple.md section 4.1, invariant 11).
@@ -51,7 +51,7 @@ static_assert(kKeystoneWordSize * 8 ==
 inline constexpr std::uint64_t kMaxKeystoneId = (std::uint64_t{1} << kKeystoneIdBits) - 1;
 
 // One past the largest id: the exclusive upper bound of a relation's whole
-// id space, so `[0, kIdSpaceEnd)` is "every row" wherever a half-open pk
+// id space, so `[0, kIdSpaceEnd)` is "every row" wherever a half-open tuple key
 // interval is declared (a read borrow, a range lock).
 inline constexpr std::uint64_t kIdSpaceEnd = kMaxKeystoneId + 1;
 

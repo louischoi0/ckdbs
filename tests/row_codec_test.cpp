@@ -14,7 +14,7 @@
 #include "kds/storage/tagged_cell.hpp"
 
 // The row codec's contract after the Keystone change: a tuple payload is
-// `[Keystone word][columns 1..n-1]`, the first schema column is the primary
+// `[Keystone word][columns 1..n-1]`, the first schema column is the tuple
 // key and lives only in that word, and the id is the caller's to pass in -
 // never something the value list carries (heap-and-tuple.md section 4).
 
@@ -70,7 +70,7 @@ TEST(RowCodecKeystoneTest, PayloadStartsWithTheKeystoneWord) {
 
     // 8-byte word + one tagged cell of the pinned width, whatever the
     // value's length: the row size is a schema constant (invariant 13). The
-    // pk is NOT also encoded into the body.
+    // tuple key is NOT also encoded into the body.
     EXPECT_EQ(encoded.value().size(), kKeystoneWordSize + storage::kDefaultInlineCellWidth);
     EXPECT_EQ(encoded.value().size(), LayoutFor(TwoColumnSchema()).row_size);
 
@@ -79,7 +79,7 @@ TEST(RowCodecKeystoneTest, PayloadStartsWithTheKeystoneWord) {
     EXPECT_EQ(id.value(), 7u);
 }
 
-TEST(RowCodecKeystoneTest, RoundTripsWithThePrimaryKeyFirst) {
+TEST(RowCodecKeystoneTest, RoundTripsWithTheTupleKeyFirst) {
     auto encoded = EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), /*id=*/42, {Str("bob")});
     ASSERT_TRUE(encoded.ok());
 
@@ -90,8 +90,8 @@ TEST(RowCodecKeystoneTest, RoundTripsWithThePrimaryKeyFirst) {
     EXPECT_EQ(FormatValue(/*type_val=*/0, row.value()[1]), "bob");
 }
 
-TEST(RowCodecKeystoneTest, ValueListCoversEveryColumnButThePrimaryKey) {
-    // One value too many - the arity a caller supplying the pk would send.
+TEST(RowCodecKeystoneTest, ValueListCoversEveryColumnButTheTupleKey) {
+    // One value too many - the arity a caller supplying the tuple key would send.
     auto extra = EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), 1, {Int(1), Str("alice")});
     EXPECT_FALSE(extra.ok());
     EXPECT_EQ(extra.status().code(), StatusCode::kInvalidArgument);
@@ -146,7 +146,7 @@ TEST(RowCodecKeystoneTest, ANonIntegerFirstColumnIsRefused) {
     EXPECT_NE(s.message().find("must be an integer type"), std::string::npos) << s.message();
 }
 
-TEST(RowCodecKeystoneTest, EveryIntegerWidthIsAcceptedAsAPrimaryKey) {
+TEST(RowCodecKeystoneTest, EveryIntegerWidthIsAcceptedAsATupleKey) {
     for (std::uint32_t type_val :
          {catalog::kTypeValInt8, catalog::kTypeValInt16, catalog::kTypeValInt32,
           catalog::kTypeValInt64, catalog::kTypeValUint64}) {
@@ -156,9 +156,9 @@ TEST(RowCodecKeystoneTest, EveryIntegerWidthIsAcceptedAsAPrimaryKey) {
     }
 }
 
-TEST(RowCodecKeystoneTest, ThePrimaryKeyIsNotConstrainedByItsDeclaredWidth) {
+TEST(RowCodecKeystoneTest, TheTupleKeyIsNotConstrainedByItsDeclaredWidth) {
     // The id lives in the Keystone field, not in an int8 column, so
-    // declaring a narrow pk type does not cap the sequence. The declared
+    // declaring a narrow tuple key type does not cap the sequence. The declared
     // type is display metadata (DESCRIBE), not the storage.
     catalog::Schema schema;
     schema.columns.push_back(Col(0, "id", catalog::kTypeValInt8, 1));
@@ -287,7 +287,7 @@ parser::AstValue RoundTrip(const catalog::Schema& schema, const parser::AstValue
     auto row = DecodeRow(schema, layout, encoded.value());
     status = row.status();
     if (!status.ok()) return out;
-    // [0] is the pk carried by the Keystone word; [1] is the value.
+    // [0] is the tuple key carried by the Keystone word; [1] is the value.
     return row.value()[1];
 }
 
@@ -678,7 +678,7 @@ TEST(RowCodecEncodeAssignedTest, ARefusedValueAndAWrongImageAreRefused) {
     const std::vector<std::byte> short_image(image.value().begin(), image.value().end() - 1);
     EXPECT_EQ(EncodeAssigned(schema, layout, 11, short_image, cell).status().code(),
               StatusCode::kCorruption);
-    // Nor is a cell naming the pk or no column at all.
+    // Nor is a cell naming the tuple key or no column at all.
     for (const std::size_t bad : {std::size_t{0}, schema.columns.size()}) {
         const AssignedCell wrong[] = {{bad, &one}};
         EXPECT_EQ(EncodeAssigned(schema, layout, 11, image.value(), wrong).status().code(),

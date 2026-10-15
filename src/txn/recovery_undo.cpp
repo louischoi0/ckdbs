@@ -17,12 +17,12 @@
 namespace kds::txn {
 namespace {
 
-// The pk the page currently holds at `slot`, or nullopt when the slot holds
+// The tuple key the page currently holds at `slot`, or nullopt when the slot holds
 // no readable tuple - out of range, dead, or a payload too short to carry a
 // Keystone word. The three are not distinguished here on purpose: the
 // caller's next question is always "is this the row I meant", and every one
 // of them answers no.
-std::optional<std::uint64_t> PkAt(heap::PageView& view, std::uint16_t slot) {
+std::optional<std::uint64_t> TupleKeyAt(heap::PageView& view, std::uint16_t slot) {
     auto payload = view.PayloadAt(slot, view.slot_count());
     if (!payload.ok()) return std::nullopt;
     auto id = KeystoneIdOfPayload(payload.value());
@@ -37,7 +37,7 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
     // ---- The var-heap arm, before the page is read as a heap page --------
     //
     // A loser's spill: the record names a kVarHeap slot, not a row, so
-    // there is no pk at the address and the identity check below neither
+    // there is no tuple key at the address and the identity check below neither
     // applies nor could run - `heap::PageView` over var-heap bytes reads a
     // slot directory that is not there. Releasing it is the whole
     // compensation.
@@ -113,14 +113,14 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
     }
 
     heap::PageView view(bytes.value().bytes());
-    const std::optional<std::uint64_t> here = PkAt(view, rec.target_slot);
+    const std::optional<std::uint64_t> here = TupleKeyAt(view, rec.target_slot);
 
     // ---- Nothing to retire? ---------------------------------------------
     //
     // Only kInsert can look like this, and **the one rule covers two
     // causes** - which is the point of stating it as one (H1/CH1, and the
     // rule `kVarHeapAppend` above already holds). Either the previous undo
-    // attempt retired the slot, after which no pk is readable there; or
+    // attempt retired the slot, after which no tuple key is readable there; or
     // redo never created it, because the UNDO_WRITE is written *before*
     // the HEAP_INSERT it can undo and the log's readable prefix ended
     // between the two. The engine cannot tell them apart at this point and
@@ -131,7 +131,7 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
     // the first cause the only admitted one, so a slot *past* the
     // directory - the second cause's exact signature, since a slot redo
     // never appended is past its end - fell through to the identity check
-    // and refused the mount naming a row that was never written. `PkAt`
+    // and refused the mount naming a row that was never written. `TupleKeyAt`
     // already answers nullopt for out-of-range, dead and too-short alike,
     // and its own comment says why it does not distinguish them: every one
     // of them answers "not the row I meant".
@@ -141,12 +141,12 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
     }
 
     // ---- The identity check (§4a) ----------------------------------------
-    if (!here.has_value() || here.value() != rec.pk) {
+    if (!here.has_value() || here.value() != rec.tuple_key) {
         // Reported, never guessed - the live path's no-locator branch, and
         // recovery has no locator at all (recovery_undo.hpp). Compensating
         // here would write a row this transaction never touched.
         return Status::Corruption(
-            "undo: row id " + std::to_string(rec.pk) + " is no longer at page " +
+            "undo: row id " + std::to_string(rec.tuple_key) + " is no longer at page " +
             std::to_string(rec.target_page_id) + " slot " + std::to_string(rec.target_slot) +
             " (found " + (here.has_value() ? std::to_string(here.value()) : std::string("nothing")) +
             "); a heap or catalog page never moves a row, so the page is not the one "
@@ -174,8 +174,8 @@ Status RecoveryUndo::CompensateOnLeaf(storage::PageStore& store, std::uint64_t t
                                       std::to_string(rec.target_page_id) + " is not a leaf");
         }
         heap::PageView view(bytes.value().bytes());
-        if (view.min_key() > rec.pk) break;  // keys only move right: past here it is nowhere
-        auto at = btree::SearchLeaf(view, rec.pk);
+        if (view.min_key() > rec.tuple_key) break;  // keys only move right: past here it is nowhere
+        auto at = btree::SearchLeaf(view, rec.tuple_key);
         if (!at.ok()) return at.status();
         if (at.value().present) {
             auto tuple = view.ReadTuple(at.value().at);
@@ -199,7 +199,7 @@ Status RecoveryUndo::CompensateOnLeaf(storage::PageStore& store, std::uint64_t t
         ++already_done_;
         return Status::OK();
     }
-    return Status::Corruption("undo: row id " + std::to_string(rec.pk) +
+    return Status::Corruption("undo: row id " + std::to_string(rec.tuple_key) +
                               " is in no leaf from page " + std::to_string(rec.target_page_id) +
                               " rightward, where its key sorts");
 }
