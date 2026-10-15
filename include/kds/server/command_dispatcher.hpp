@@ -1677,6 +1677,13 @@ public:
         before_drop_exclusive_for_test_ = std::move(hook);
     }
 
+    // **A seam in `DROP COLUMN`** between its RESTRICT ask and the catalog
+    // door's write: a RENAME COLUMN landing there must not move the drop
+    // onto another column. Empty in production.
+    void SetBeforeDropColumnWriteForTest(std::function<void()> hook) {
+        before_drop_column_write_for_test_ = std::move(hook);
+    }
+
     // **A seam after an `UPDATE` wrote a row** (BJ-R9), handed the row's tuple key:
     // the application count a non-idempotent `SET` makes load-bearing. A
     // literal `SET` is idempotent, so a path that applied it twice to one
@@ -2407,6 +2414,7 @@ private:
     EpochSeam epoch_seam_at_ = EpochSeam::kBeforePublish;
     std::function<void()> epoch_seam_for_test_;
     std::function<void()> before_drop_exclusive_for_test_;
+    std::function<void()> before_drop_column_write_for_test_;
     std::function<void(std::uint64_t)> after_update_row_applied_for_test_;
     std::function<void()> after_view_for_test_;
     std::function<void()> purge_seam_for_test_;

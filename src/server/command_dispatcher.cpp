@@ -105,15 +105,15 @@ bool IEquals(std::string_view a, std::string_view b) {
 
 // True when a written column name resolves to the tuple key column (position
 // 0) and to nothing else, under the compiler's rule
-// (`catalog::Schema::MatchColumns`). A name that also matches another live
+// (`catalog::Schema::FindColumn`). A name that also matches another live
 // column ignoring case - possible only on a relation created before names
 // were unique ignoring case - is not the tuple key's: the fast paths decline
 // it and the compiler - or, for PURGE, which has none, `PurgeConjunctRefusal`
 // - refuses it as ambiguous, rather than probing the key
 // for a name the statement may have meant as another column.
 bool NamesTupleKey(const catalog::Schema& schema, std::string_view name) {
-    const std::vector<std::uint16_t> matches = schema.MatchColumns(name);
-    return matches.size() == 1 && matches.front() == 0;
+    auto found = schema.FindColumn(name, 0);
+    return found.ok() && found.value() != nullptr && found.value()->pos == 0;
 }
 
 // Splits `line` into the first whitespace-delimited token and "the rest"
@@ -2398,7 +2398,9 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
                   // column carries the old name's, and so does an old name
                   // matching two live columns ignoring case - resolved here
                   // first (`Schema::FindColumn`), the catalog door asking
-                  // again under its hold.
+                  // again under its hold. The door's own ambiguity refusal
+                  // would take the new name's byte below; it is unreachable,
+                  // since no twin can be created after this check.
                   auto access = catalog_.InitTableAccess(oid.value());
                   if (!access.ok()) return access.status();
                   if (auto old = access.value()->schema.FindColumn(
@@ -2641,10 +2643,15 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
                     false};
         }
 
+        if (before_drop_column_write_for_test_) before_drop_column_write_for_test_();
         DdlScope ddl = DdlScopeFor(scope);
         std::vector<catalog::CatalogRowChange> changed;
+        // By the position the RESTRICT was asked of: a RENAME COLUMN takes
+        // no relation lock, so a second resolution by name could reach
+        // another column (the door refuses a renamed one).
         const Status dropped =
-            catalog_.DropColumn(oid.value(), stmt.old_column, ddl.trx_id, &changed);
+            catalog_.DropColumn(oid.value(), static_cast<std::uint16_t>(column->pos),
+                                stmt.old_column, ddl.trx_id, &changed);
         NoteCatalogRowChanges(ddl, changed);
         if (!dropped.ok()) {
             const Status s = dropped.WithContext("byte " + std::to_string(stmt.old_column_byte_offset));
@@ -9742,11 +9749,12 @@ Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Co
     // A name matching two live columns ignoring case is why the fold could
     // not read it (`NamesTupleKey`), and PURGE has no compiler behind it to
     // say so: the refusal is the ambiguity, not a form nobody built.
+    bool on_tuple_key = false;
     if (!cond.col.name.empty()) {
         auto found = access.schema.FindColumn(cond.col.name, cond.col.byte_offset);
         if (!found.ok()) return found.status();
+        on_tuple_key = found.value() != nullptr && found.value()->pos == 0;
     }
-    const bool on_tuple_key = NamesTupleKey(access.schema, cond.col.name);
     const bool literal = cond.rhs_kind == parser::RhsKind::kLiteral &&
                          (cond.kind == parser::PredicateKind::kCompareValue ||
                           cond.kind == parser::PredicateKind::kBetween);

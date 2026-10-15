@@ -327,15 +327,43 @@ TEST_F(ColumnNameCaseTest, AnExactTwinIsRefusedByEveryResolution) {
     Refused("ALTER TABLE t RENAME COLUMN aa TO w", {"is ambiguous", "byte 28"});
     EXPECT_EQ(Run("SELECT * FROM t"), "id,aa,aa,v\\n1,10,20,7");
 
-    // The catalog's doors refuse the pair on their own.
+    // RENAME's catalog door refuses the pair on its own; DROP's takes the
+    // position the dispatcher resolved, which refused the pair above.
     auto oid = boot_->catalog.FindTableOidByName("t");
     ASSERT_TRUE(oid.ok());
-    const Status dropped =
-        boot_->catalog.DropColumn(oid.value(), "AA", catalog::kBootstrapXid, nullptr);
-    EXPECT_EQ(dropped.code(), StatusCode::kInvalidArgument) << dropped.message();
     const Status renamed = boot_->catalog.RenameColumn(oid.value(), "Aa", "w");
     EXPECT_EQ(renamed.code(), StatusCode::kInvalidArgument) << renamed.message();
     EXPECT_NE(renamed.message().find("ambiguous"), std::string::npos) << renamed.message();
+}
+
+// DROP COLUMN asks its RESTRICT of one column and writes that column: a
+// RENAME COLUMN takes no relation lock, so one landing between the ask and
+// the catalog door's write could move the dropped name onto an indexed
+// column, which the door - resolving the name again - then dropped, the
+// index left on a dropped slot ([quiet-wrong], BW-R8). The door takes the
+// asked position and refuses one no longer carrying the name.
+TEST_F(ColumnNameCaseTest, ARenameRacingADropColumnCannotMoveItOntoAnotherColumn) {
+    Ok("CREATE TABLE t (id int64, b int64, c int64)");
+    Ok("INSERT INTO t VALUES (1, 2)");
+    Ok("CREATE INDEX t_c ON t (c)");
+    auto oid = boot_->catalog.FindTableOidByName("t");
+    ASSERT_TRUE(oid.ok());
+    int fired = 0;
+    dispatcher_->SetBeforeDropColumnWriteForTest([&] {
+        if (fired++ != 0) return;
+        EXPECT_TRUE(boot_->catalog.RenameColumn(oid.value(), "b", "z").ok());
+        EXPECT_TRUE(boot_->catalog.RenameColumn(oid.value(), "c", "B").ok());
+    });
+    //            0         1         2
+    //            012345678901234567890123456
+    Refused("ALTER TABLE t DROP COLUMN b", {"was renamed", "byte 26"});
+    dispatcher_->SetBeforeDropColumnWriteForTest(nullptr);
+    EXPECT_EQ(fired, 1);
+    // Nothing was dropped: the indexed column is live under its new name.
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,z,B\\n1,1,2");
+    // Asked again, the name resolves to the indexed column and the index
+    // refuses the drop.
+    Refused("ALTER TABLE t DROP COLUMN b", {"cannot be dropped"});
 }
 
 // Every write path resolves a column name ignoring case, as a read does

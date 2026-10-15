@@ -40,17 +40,6 @@ struct Schema {
     // to the first.
     StatusOr<const SysColumnRow*> FindColumn(std::string_view name,
                                              std::uint32_t byte_offset) const;
-
-    // The position of the column `FindColumn` returned (the vector index is
-    // the position, BW-R6).
-    std::uint16_t PositionOf(const SysColumnRow& column) const {
-        return static_cast<std::uint16_t>(&column - columns.data());
-    }
-
-    // Every live column whose name equals `name` ignoring case, in `pos`
-    // order: `FindColumn`'s matching, for a caller that asks a question of
-    // the matches without resolving the name (`NamesTupleKey`).
-    std::vector<std::uint16_t> MatchColumns(std::string_view name) const;
 };
 
 // The one rule deciding whether two column names are the same name:

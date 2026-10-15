@@ -25,29 +25,34 @@ Status AmbiguousColumnName(const Schema& schema, std::string_view written,
                                    " ignoring case (byte " + std::to_string(byte_offset) + ")");
 }
 
-}  // namespace
-
-StatusOr<const SysColumnRow*> Schema::FindColumn(std::string_view name,
-                                                std::uint32_t byte_offset) const {
-    const std::vector<std::uint16_t> matches = MatchColumns(name);
-    if (matches.empty()) return static_cast<const SysColumnRow*>(nullptr);
-    if (matches.size() > 1) return AmbiguousColumnName(*this, name, matches, byte_offset);
-    return &columns[matches.front()];
-}
-
-std::vector<std::uint16_t> Schema::MatchColumns(std::string_view name) const {
+// Every live column of `schema` whose name equals `name` ignoring case, in
+// `pos` order.
+std::vector<std::uint16_t> MatchColumns(const Schema& schema, std::string_view name) {
     std::vector<std::uint16_t> out;
-    for (std::size_t i = 0; i < columns.size(); ++i) {
-        if (!columns[i].dropped() && ColumnNamesCollide(NameView(columns[i].name), name)) {
+    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
+        if (!schema.columns[i].dropped() &&
+            ColumnNamesCollide(NameView(schema.columns[i].name), name)) {
             out.push_back(static_cast<std::uint16_t>(i));
         }
     }
     return out;
 }
 
-// ASCII only, and not `std::tolower`, whose answer is the locale's: the
-// lexer admits no other identifier byte, and whether two names are one must
-// not move with the process's locale.
+}  // namespace
+
+StatusOr<const SysColumnRow*> Schema::FindColumn(std::string_view name,
+                                                std::uint32_t byte_offset) const {
+    const std::vector<std::uint16_t> matches = MatchColumns(*this, name);
+    if (matches.empty()) return static_cast<const SysColumnRow*>(nullptr);
+    if (matches.size() > 1) return AmbiguousColumnName(*this, name, matches, byte_offset);
+    return &columns[matches.front()];
+}
+
+// ASCII only, and not `std::tolower`, whose answer is the locale's: whether
+// two names are one must not move with the process's locale. No other
+// identifier byte reaches a resolver only because the lexer's `std::isalpha`
+// runs in the C locale - nothing calls `setlocale` - so a non-ASCII letter
+// is never an identifier byte.
 bool ColumnNamesCollide(std::string_view a, std::string_view b) noexcept {
     const auto fold = [](char c) {
         return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;

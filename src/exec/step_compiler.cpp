@@ -79,7 +79,7 @@ StatusOr<bool> FindColumnPos(const catalog::Schema& schema, const parser::Column
     auto found = schema.FindColumn(name.name, name.byte_offset);
     if (!found.ok()) return found.status();
     if (found.value() == nullptr) return false;
-    out = schema.PositionOf(*found.value());
+    out = static_cast<std::uint16_t>(found.value()->pos);  // the vector index (BW-R6)
     return true;
 }
 

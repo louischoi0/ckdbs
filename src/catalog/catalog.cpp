@@ -1908,39 +1908,42 @@ Status Catalog::AddColumn(Oid table_oid, const SysColumnRow& column, std::uint64
     return Status::OK();
 }
 
-Status Catalog::DropColumn(Oid table_oid, std::string_view name, std::uint64_t trx_id,
-                           std::vector<CatalogRowChange>* changed) {
-    // One hold of `sys.columns`' root page across the lookup and the write
+Status Catalog::DropColumn(Oid table_oid, std::uint16_t pos, std::string_view name,
+                           std::uint64_t trx_id, std::vector<CatalogRowChange>* changed) {
+    // One hold of `sys.columns`' root page across the check and the write
     // (CT7), as `RenameColumn` takes it.
     auto columns = store_.Get(kCatalogPageColumns);
     if (!columns.ok()) return columns.status();
 
-    // The catalog door's own defense of `Schema::FindColumn`: the name
-    // resolves ignoring case (`ColumnNamesCollide`), and two live matches -
-    // which only a relation created before names were unique ignoring case
-    // can hold - leave no column the statement named; dropping the first
-    // would be a choice.
-    std::size_t named = 0;
-    std::uint32_t named_pos = 0;
-    auto counted = ForFirstRow<SysColumnRow>(
+    // The column is the one the caller resolved (`Schema::FindColumn`) and
+    // asked its RESTRICT of, named by position - never resolved again here
+    // by name: RENAME COLUMN takes no relation lock, so between the
+    // caller's ask and this hold another core can move `name` onto another
+    // column, and a second resolution would drop a column nobody asked the
+    // RESTRICT of. The position must still be live and still carry `name`
+    // (ignoring case); a column renamed in that window refuses the drop.
+    std::string now_named;
+    bool live = false;
+    auto checked = ForFirstRow<SysColumnRow>(
         store_, kCatalogPageColumns,
         [&](SysColumnRow& row, heap::PageView&, PageId, std::uint16_t,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-            if (row.rel_id == table_oid && !tuple.deleted && !row.dropped() &&
-                ColumnNamesCollide(NameView(row.name), name)) {
-                if (named++ == 0) named_pos = row.pos;
+            if (row.rel_id != table_oid || tuple.deleted || row.dropped() || row.pos != pos) {
+                return false;
             }
-            return false;
+            live = true;
+            now_named = NameView(row.name);
+            return true;
         },
         nullptr, storage::PageAccess::kRead);
-    if (!counted.ok()) return counted.status();
-    if (named > 1) {
-        return Status::InvalidArgument("column name '" + std::string(name) +
-                                       "' is ambiguous: " + std::to_string(named) +
-                                       " live columns have it ignoring case");
-    }
-    if (named == 0) {
+    if (!checked.ok()) return checked.status();
+    if (!live) {
         return Status::NotFound("the relation has no column named '" + std::string(name) + "'");
+    }
+    if (!ColumnNamesCollide(now_named, name)) {
+        return Status::TxnConflict("column '" + std::string(name) + "' (position " +
+                                   std::to_string(pos) + ") was renamed to '" + now_named +
+                                   "' while the drop resolved it");
     }
 
     CatalogRowChange change;
@@ -1949,7 +1952,7 @@ Status Catalog::DropColumn(Oid table_oid, std::string_view name, std::uint64_t t
         [&](SysColumnRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.rel_id != table_oid || row.dropped() || tuple.deleted ||
-                row.pos != named_pos) {
+                row.pos != pos) {
                 return false;
             }
             // Identity is the Keystone word at position 0 (invariant 11).
