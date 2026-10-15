@@ -147,5 +147,60 @@ TEST(CabinServeAcrossCores, ASetBankedByAPeerServesThisCoresQuery) {
     rig->Stop();
 }
 
+// **AQ-S2's witness across cores**: an expression Cabin's day banked by core
+// 0, then a row inserted into that day and a row updated into it by a session
+// on core 1 - each witnessed where it ran, into the instance's one store - and
+// core 0 served the day with all three.
+//
+// **The mutation**: drop the expression arm of `NoteCabinWrite` and core 0's
+// served answer is `id\n1`.
+TEST(CabinServeAcrossCores, AnExpressionCabinsDayIsWitnessedByAPeersWrites) {
+    TwoCoreRig::Options options;
+    options.wal_drain_interval_ns = 1'000'000;
+    auto opened = TwoCoreRig::Open(options);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    auto rig = std::move(opened.value());
+
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    ASSERT_EQ(d0.Dispatch("CREATE TABLE r0 (id int64, ts timestamp) BTREE").response.substr(0, 3),
+              "CRE");
+    ASSERT_EQ(d0.Dispatch("CREATE CABIN ON r0 (DATE(ts))").response.substr(0, 3), "CRE");
+    ASSERT_TRUE(rig->store().FlushPages(catalog::kEveryCatalogPage).ok());
+    ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES ('2026-10-01 01:00:00')").response.substr(0, 8),
+              "INSERTED");
+    ASSERT_EQ(d0.Dispatch("INSERT INTO r0 VALUES ('2026-10-05 01:00:00')").response.substr(0, 8),
+              "INSERTED");
+    const std::string first =
+        d0.Dispatch("SELECT id FROM r0 WHERE DATE(ts) = '2026-10-01'").response;
+    ASSERT_EQ(first, "id\\n1") << first;
+
+    OneShot insert;
+    insert.statement = "INSERT INTO r0 VALUES ('2026-10-01 02:00:00')";
+    rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground, RunOne(rig->core(1).dispatcher(), insert)));
+    rig->Start();
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return insert.done.load(std::memory_order_acquire); },
+                          8000ms))
+        << insert.out.response;
+    ASSERT_EQ(insert.out.response.rfind("INSERTED", 0), 0u) << insert.out.response;
+
+    OneShot update;
+    update.statement = "UPDATE r0 SET ts = '2026-10-01 03:00:00' WHERE id = 2";
+    rig->core(1).scheduler().Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground, RunOne(rig->core(1).dispatcher(), update)));
+    ASSERT_TRUE(KickUntil(*rig, 1, [&] { return update.done.load(std::memory_order_acquire); },
+                          8000ms))
+        << update.out.response;
+    ASSERT_EQ(update.out.response.rfind("UPDATED", 0), 0u) << update.out.response;
+
+    const std::uint64_t hits_before = rig->core(0).cabins()->stats().hits;
+    const std::string again =
+        d0.Dispatch("SELECT id FROM r0 WHERE DATE(ts) = '2026-10-01'").response;
+    EXPECT_EQ(again, "id\\n1\\n2\\n3") << again;
+    EXPECT_EQ(rig->core(0).cabins()->stats().hits, hits_before + 1)
+        << "the answer above came from a walk, not from the banked set";
+    rig->Stop();
+}
+
 }  // namespace
 }  // namespace kds::server

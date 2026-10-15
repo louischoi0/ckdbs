@@ -65,6 +65,16 @@ traffic registers new patterns on the ordinary n=2 path. **No pattern
 migration is attempted**: rewriting stored SQL text would make the catalog
 a second parser, and a wrong rewrite is a wrong canon forever.
 
+**A Cabin is not a pattern, and a rename keeps it** (AQ-Q2, AR1-V3). An
+expression or predicate Cabin's key function is stored and identified by
+column **positions** (`sys.cabin_exprs`, `docs/spec/cabin.md` §10), not
+names, so `RENAME TO` and `RENAME COLUMN` move nothing it reads, and the
+same `F` respelled with the new name is the same Cabin. The two answer
+differently because they cost differently: a pattern lost to a rename is a
+trail rebuilt on the n=2 path for free, while a Cabin is a declared
+structure with a maintained witness whose loss is the operator's to
+decide. `DROP COLUMN` of an input is refused (AL11, BW-R8).
+
 ## 4. AL4 — Assertions RESTRICT a rename
 
 `sys.assertions` stores the declaration's `source_text` as the one canon

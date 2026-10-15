@@ -1322,7 +1322,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "CABIN")) {
-            return HandleCabin(Trim(line));
+            return HandleCabin(Trim(line), session);
         }
         if (IEquals(sub, "ASSERTION")) {
             return HandleAssertion(Trim(line), session);
@@ -1364,7 +1364,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         // error pointing at its name. `PATTERN` was one of these until
         // 2026-08-31, when the operator withdrew declared patterns.
         if (IEquals(sub, "CABIN")) {
-            return HandleCabin(Trim(line));
+            return HandleCabin(Trim(line), session);
         }
         if (IEquals(sub, "INDEX")) {
             return HandleIndex(Trim(line), session);
@@ -2300,7 +2300,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     });
 }
 
-DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
+DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line, Session& session) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
@@ -2309,12 +2309,39 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
         return {"ERR expected a CREATE CABIN or DROP CABIN statement", false};
     }
     const auto& stmt = std::get<parser::CabinStmt>(parsed.value());
+    if (stmt.shape == catalog::kCabinShapeColumn) return RunCabinDdl(stmt);
 
+    // ---- AQ-S1: an expression or predicate Cabin takes the relation `X` --
+    //
+    // `CREATE INDEX`'s hold (AT-S5e), for two reasons of its own. `DROP
+    // COLUMN` decides under the `X` whether a Cabin's key reads the column,
+    // and a create compiled against the column on another core must not land
+    // its text after that answer - the text would name a dropped column and
+    // fail every fill of the relation. And a writer holds its `IX` from before
+    // it reads the relation's Cabins until it decides, so a Cabin appears
+    // only between writers, never under one that compiled without it.
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        const std::optional<catalog::Oid> relation =
+            ResolveNames(session, [&](const txn::ReadView* v) {
+                auto oid = catalog_.FindTableOidByName(stmt.table_name, v);
+                return oid.ok() ? std::optional<catalog::Oid>(oid.value()) : std::nullopt;
+            });
+        if (relation.has_value()) {
+            if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, *relation);
+                held.has_value()) {
+                return {ErrorReply(*held), false, 0, *held};
+            }
+        }
+        return RunCabinDdl(stmt);
+    });
+}
+
+DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt) {
     // One handler for both, because the two statements share a parse and a
     // reply shape and differ only in which catalog call they reach - the same
     // reason CabinStmt is one struct (ast.hpp).
     if (stmt.drop) {
-        auto cabin_id = exec::DropCabin(catalog_, stmt);
+        auto cabin_id = exec::DropCabin(catalog_, page_store_, wal_, stmt);
         if (!cabin_id.ok()) {
             return {ErrorReply(cabin_id.status()), false, 0, cabin_id.status()};
         }
@@ -2327,15 +2354,17 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
         // sys.cabins row is logged but no commit record follows it.
         if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false, 0, s};
         std::ostringstream os;
-        os << "DROPPED CABIN on=" << stmt.table_name << '.' << stmt.column_name
-           << " cabin_id=" << cabin_id.value();
+        os << "DROPPED CABIN on=" << stmt.table_name;
+        if (stmt.shape == catalog::kCabinShapeColumn) os << '.' << stmt.column_name;
+        os << " cabin_id=" << cabin_id.value();
         if (logging(LogLevel::kInfo)) {
-            log_->Info("ddl", "dropped cabin on " + stmt.table_name + "." + stmt.column_name);
+            log_->Info("ddl", "dropped cabin " + std::to_string(cabin_id.value()) + " on " +
+                                  stmt.table_name);
         }
         return {os.str(), false};
     }
 
-    auto result = exec::CreateCabin(catalog_, stmt);
+    auto result = exec::CreateCabin(catalog_, page_store_, wal_, stmt);
     if (!result.ok()) {
         return {ErrorReply(result.status()), false, 0, result.status()};
     }
@@ -2345,14 +2374,21 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
     // `observed=0` is printed rather than left out, because it is the thing
     // most likely to be misunderstood: creating a Cabin observes nothing and
     // accelerates nothing until traffic fills it (spec §4's miss path).
-    os << "CREATED CABIN on=" << stmt.table_name << '.' << stmt.column_name
-       << " cabin_id=" << result.value().cabin_id << " column=" << result.value().col_pos
-       << " observed=0";
+    if (stmt.shape == catalog::kCabinShapeColumn) {
+        os << "CREATED CABIN on=" << stmt.table_name << '.' << result.value().key
+           << " cabin_id=" << result.value().cabin_id << " column=" << result.value().col_pos
+           << " observed=0";
+    } else {
+        // The key as the engine canonicalised it, so an operator sees what
+        // a statement must spell to be served (AQ-R5, R6).
+        os << "CREATED CABIN on=" << stmt.table_name << " (" << result.value().key << ")"
+           << " cabin_id=" << result.value().cabin_id << " observed=0";
+    }
     for (const std::string& warning : result.value().warnings) {
         os << "\\n" << "WARN " << warning;
     }
     if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "created cabin on " + stmt.table_name + "." + stmt.column_name);
+        log_->Info("ddl", "created cabin on " + stmt.table_name + " (" + result.value().key + ")");
     }
     return {os.str(), false};
 }
@@ -2492,9 +2528,18 @@ StatusOr<std::optional<std::string>> CommandDispatcher::DropColumnRestriction(
     auto cabins = catalog_.ListCabins();
     if (!cabins.ok()) return cabins.status();
     for (const catalog::SysCabinRow& cabin : cabins.value()) {
-        if (cabin.rel_oid == oid && cabin.column_no == pos) {
+        if (cabin.rel_oid == oid && cabin.shape == catalog::kCabinShapeColumn &&
+            cabin.column_no == pos) {
             return std::optional<std::string>("a Cabin is on it; DROP CABIN first");
         }
+    }
+    // An expression or predicate Cabin reads it by position too (AQ-S1).
+    auto access = catalog_.InitTableAccess(oid);
+    if (!access.ok()) return access.status();
+    auto read = exec::AnyCabinKeyReads(catalog_, page_store_, *access.value(), pos);
+    if (!read.ok()) return read.status();
+    if (read.value()) {
+        return std::optional<std::string>("a Cabin's key reads it; DROP CABIN first");
     }
     // AL4's predicate, by relation: an assertion's canon is its source
     // text, and a coarser refusal is never wrong.
@@ -2823,6 +2868,15 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         if (!cleared.ok() && logging(LogLevel::kWarn)) {
             log_->Warn("ddl", "a dropped relation's transitions were not all removed: " +
                                   cleared.message());
+        }
+        // Its expression Cabins' texts, on the same terms (AQ-S1): inside an
+        // explicit transaction the drop can still roll back its Cabins'
+        // rows, so their texts stay - inert once the drop commits, since
+        // nothing reads a text no sys.cabins row names.
+        if (Status s = exec::ForgetCabinTexts(catalog_, page_store_, wal_, *dropped_oid);
+            !s.ok() && logging(LogLevel::kWarn)) {
+            log_->Warn("ddl", "a dropped relation's cabin key functions were not all removed: " +
+                                  s.message());
         }
     }
     return out;
@@ -5200,6 +5254,7 @@ bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
     // Heap-only, so SUS-1 leaves it to relations created before it.
     return ta.clustered_type == catalog::ClusteredType::kHeap &&
            ta.varheap_page_id == kInvalidPageId && ta.indexes.empty() && ta.cabin_mask == 0 &&
+           ta.expr_cabins.empty() &&
            ta.transitions.empty() && !enforcer_->AnyOn(oid);
 }
 
@@ -7619,11 +7674,29 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
                                         std::uint16_t first_col_pos, std::uint64_t tuple_key,
                                         PageId page_id, std::uint16_t slot,
                                         std::span<const parser::AstValue> previous) {
-    // The two tests a relation with no Cabin pays, and nothing else.
-    if (cabins_ == nullptr || access.cabin_mask == 0) return;
+    // The test a relation with no Cabin pays, and nothing else.
+    if (!CabinsWitness(access)) return;
 
     // Filled on the first entry actually appended (see below).
     std::optional<std::uint32_t> write_epoch;
+    const auto append = [&](const stats::CabinKey& key) {
+        stats::CabinEntry entry;
+        entry.tuple_key = tuple_key;
+        entry.page_id = page_id;
+        // The page's current epoch, fetched lazily - once per statement
+        // that actually appends, and only then - so a relation whose write
+        // touches no cabined column pays nothing new. A buffer hit: the
+        // page was written by this very statement moments ago. Through the
+        // one producer both heal sites use, so a hint minted here and a
+        // hint repaired there carry the same stamp by construction.
+        if (!write_epoch.has_value()) {
+            write_epoch = exec::CurrentRelayoutEpoch(page_store_, page_id);
+        }
+        entry.page_epoch = *write_epoch;
+        entry.slot = slot;
+        entry.flags = stats::kCabinHintValid;
+        cabins_->NoteWrite(key, entry);
+    };
 
     for (std::uint16_t col = 1; col < 64; ++col) {
         if ((access.cabin_mask & (std::uint64_t{1} << col)) == 0) continue;
@@ -7652,10 +7725,10 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
             // and always legal (cabin.md §1) - a set that might have
             // missed an append is not a superset, and serving it would lose
             // a row.
-            if (auto stale = stats::MakeCabinKey(access.CabinOn(col).id, values[at]);
-                stale.has_value()) {
-                cabins_->Unobserve(*stale);
-            }
+            // `Discard`, not `Unobserve` of the uncoerced key, which no
+            // reader looks up, nor `Forget`, which drops an in-flight
+            // recording's mark and lets its walk bank a set missing this row.
+            cabins_->Discard(access.CabinOn(col).id);
             continue;
         }
 
@@ -7683,23 +7756,70 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
         // cannot have a set to append to either, so there is nothing to
         // witness. Silent, exactly as it is on the read path.
         if (!key.has_value()) continue;
+        append(*key);
+    }
 
-        stats::CabinEntry entry;
-        entry.tuple_key = tuple_key;
-        entry.page_id = page_id;
-        // The page's current epoch, fetched lazily - once per statement
-        // that actually appends, and only then - so a relation whose write
-        // touches no cabined column pays nothing new. A buffer hit: the
-        // page was written by this very statement moments ago. Through the
-        // one producer both heal sites use, so a hint minted here and a
-        // hint repaired there carry the same stamp by construction.
-        if (!write_epoch.has_value()) {
-            write_epoch = exec::CurrentRelayoutEpoch(page_store_, page_id);
+    // ---- Expression and predicate Cabins (AQ-R4, `[quiet-wrong]`) -------
+    //
+    // AR1 §10's witness for a key function `F`: evaluate `F` on the new row
+    // and append under its key. **A write that skips this leaves a set
+    // missing a row**, so every write site that reaches the column loop
+    // above reaches this too - the two callers, INSERT and UPDATE, are the
+    // whole surface.
+    if (access.expr_cabins.empty()) return;
+
+    // `F` reads its inputs by schema position, coerced to their columns'
+    // types - the same coercion the column arm above makes, so a key on the
+    // write side is the value the read side compares. Only inputs are
+    // filled; the tuple key is in hand where the row body leaves it out.
+    std::vector<parser::AstValue> row(access.schema.columns.size());
+    const auto input = [&](std::uint16_t pos) -> bool {
+        if (pos < first_col_pos) {
+            row[pos].type = parser::ValueType::kInt;
+            row[pos].int_val = static_cast<std::int64_t>(tuple_key);
+        } else {
+            const std::size_t at = static_cast<std::size_t>(pos - first_col_pos);
+            if (at >= values.size()) return false;
+            row[pos] = values[at];
+            if (!exec::CoerceLiteralToColumn(access.schema.columns[pos], row[pos]).ok()) {
+                return false;
+            }
         }
-        entry.page_epoch = *write_epoch;
-        entry.slot = slot;
-        entry.flags = stats::kCabinHintValid;
-        cabins_->NoteWrite(*key, entry);
+        return true;
+    };
+    for (const catalog::TableAccess::ExprCabinRef& ref : access.expr_cabins) {
+        // An `F` the loader did not fill is one no statement compiled a
+        // probe for, so nothing observed under it (`Catalog::SetDeclarationLoader`).
+        if (ref.f == nullptr) continue;
+        bool readable = true;
+        bool changed = previous.empty();
+        for (const std::uint16_t pos : ref.f->inputs) {
+            if (!input(pos)) {
+                readable = false;
+                break;
+            }
+            // §5's third row, on `F`'s inputs (AR1 §10): an UPDATE that moved
+            // none of them leaves every key where it was.
+            if (!changed && (pos >= previous.size() ||
+                             !exec::CompareValues(access.schema.columns[pos].type_val,
+                                                  previous[pos], row[pos],
+                                                  parser::CompareOp::kEq))) {
+                changed = true;
+            }
+        }
+        if (!readable) {
+            // Unreachable for the column arm's reason: encode accepted this
+            // row. A key that cannot be computed cannot be witnessed, so
+            // every value of the Cabin is un-observed - always legal (§1) -
+            // through `Discard`, which also refuses an in-flight recording's
+            // commit, where `Forget` would let it bank a set missing this row.
+            cabins_->Discard(ref.id);
+            continue;
+        }
+        if (!changed) continue;
+        const std::optional<parser::AstValue> value = exec::CabinKeyOf(*ref.f, row);
+        if (!value.has_value()) continue;
+        if (auto key = stats::MakeCabinKey(ref.id, *value); key.has_value()) append(*key);
     }
 }
 
@@ -7724,27 +7844,31 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIden
     if (optimizer_signals_ == nullptr || !identity.has_value()) return;
 
     // The shape's cabin candidacy (§II.4's Σ_i linkage): a kCabinProbe step
-    // names its Cabin outright; otherwise the first kFilterScan's filtered
-    // column is the column a Cabin *would* serve - the shape whose decayed
-    // frequency prices a CREATE. A chain with neither has no candidacy and
-    // is recorded as pure heat.
+    // on a column Cabin names it outright; otherwise the first kFilterScan's
+    // equality column is the column a Cabin *would* serve - the shape whose
+    // decayed frequency prices a CREATE. A chain with neither has no
+    // candidacy and is recorded as pure heat. An expression Cabin is not a
+    // column's and the controller prices columns only (AQ-Q5), so its probe
+    // names no candidate.
     stats::CandidateRef candidate;
     for (const exec::Step& step : chain.steps) {
         if (step.kind == exec::AccessKind::kCabinProbe && step.cabin.has_value()) {
+            if (step.cabin->f != nullptr) continue;
             candidate.rel_oid = step.rel_oid;
             candidate.col_pos = step.cabin->col_pos;
             candidate.cabin_id = step.cabin->cabin_id;
             break;
         }
-        if (step.kind == exec::AccessKind::kFilterScan && !candidate.valid()) {
-            // The lowest filtered non-tuple-key column: a single-column equality's
-            // mask has one bit, and a multi-column residual's lowest is a
-            // deterministic pick rather than a claim of primacy.
-            const std::uint64_t non_tuple_key = step.filter_columns & ~std::uint64_t{1};
-            if (non_tuple_key != 0 && step.filter_columns != exec::Step::kAllColumns) {
-                candidate.rel_oid = step.rel_oid;
-                candidate.col_pos = static_cast<std::uint16_t>(std::countr_zero(non_tuple_key));
-            }
+        // **The lowest non-tuple-key column of an equality in the residual**
+        // (AQ-R7) - `access_columns`, sorted - a deterministic pick rather
+        // than a claim of primacy. Not `filter_columns`, which holds a
+        // function's arguments since AP-S4: `DATE(ts) = d` priced as a column
+        // Cabin on `ts` would build one no such statement probes. Below 64,
+        // the columns a Cabin's mask can carry (`TableAccess::cabin_mask`).
+        if (step.kind == exec::AccessKind::kFilterScan && !candidate.valid() &&
+            !step.access_columns.empty() && step.access_columns.front() < 64) {
+            candidate.rel_oid = step.rel_oid;
+            candidate.col_pos = step.access_columns.front();
         }
     }
     optimizer_signals_->NoteExecution(identity->pattern_id, stats.Total().pages_fetched,
@@ -8282,7 +8406,11 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     bool row_poisoned = false;
     // The negation of `NoteCabinWrite`'s and `MaintainIndexes`' early
     // returns: loosen either and that hook is handed `kUndecoded`.
-    const bool hooked = (cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty();
+    // `CabinsWitness` is asked once per statement, so a relation with no
+    // Cabin pays no per-row call (AQ's close: the call alone cost an
+    // every-row UPDATE 20-30 ns a row).
+    const bool witnessed = CabinsWitness(ta);
+    const bool hooked = witnessed || !ta.indexes.empty();
     std::uint64_t set_read_mask = 0;
     for (const exec::CompiledAssignment& c : compiled) {
         if (c.expr != nullptr) set_read_mask |= exec::SetExpressionColumns(*c.expr);
@@ -8749,7 +8877,9 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // The location is unchanged by construction - an UPDATE is an
         // in-place overwrite under invariant 13 - so the appended hint is
         // the row's real address.
-        NoteCabinWrite(ta, row, /*first_col_pos=*/0, id.value(), page_id, slot, previous);
+        if (witnessed) {
+            NoteCabinWrite(ta, row, /*first_col_pos=*/0, id.value(), page_id, slot, previous);
+        }
 
         // The index half. `previous` is what makes §2's rule work: an UPDATE
         // that moved no key and no covered column appends nothing, which is

@@ -1,0 +1,40 @@
+
+#### r200: server CPU per statement, us
+
+| shape | path | n runs | A | A' | B | B - A paired, median [min, max] | % of A | B below A | A' - A typical / largest abs gap | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| select-pk | literal | 3 | 28.89 | 28.77 | 29.18 | 0.29 [0.05, 3.17] | +1.0 % | 0 of 3 | 0.62 / 1.18 | inside |
+| select-pk | prepared | 3 | 27.78 | 26.74 | 27.28 | 0.19 [-0.68, 1.24] | +0.7 % | 1 of 3 | 0.80 / 1.44 | inside |
+| insert | literal | 3 | 24.50 | 24.40 | 23.88 | -0.03 [-1.47, 2.98] | -0.1 % | 2 of 3 | 0.63 / 5.18 | inside |
+| insert | prepared | 3 | 22.68 | 23.75 | 22.35 | -0.16 [-0.33, 3.41] | -0.7 % | 2 of 3 | 1.07 / 1.99 | inside |
+| update-range | literal | 3 | 171.31 | 170.20 | 174.85 | 3.94 [-0.18, 11.45] | +2.3 % | 1 of 3 | 1.77 / 2.53 | OUTSIDE |
+| update-range | prepared | 3 | 173.77 | 169.50 | 174.88 | 5.41 [-1.16, 9.46] | +3.1 % | 1 of 3 | 5.18 / 5.50 | inside |
+
+#### r200: statement wall latency, us (median over runs of each run's percentile); mean-derived QPS; CPU split
+
+| shape | path | arm | ops | p0 | p25 | p50 | p90 | p99 | QPS at mean (derived) | server CPU us | driver CPU us | wall mean - server CPU us (client, socket, scheduling) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| select-pk | literal | A | 5994 | 53.7 | 55.6 | 56.6 | 69.4 | 92.0 | 10033 | 28.9 | 32.7 | 70.8 |
+| select-pk | literal | A_ | 5994 | 53.2 | 55.4 | 56.5 | 69.7 | 95.7 | 16318 | 28.8 | 32.5 | 32.5 |
+| select-pk | literal | B | 5994 | 54.1 | 56.1 | 57.1 | 69.7 | 131.5 | 15747 | 29.2 | 32.6 | 34.3 |
+| select-pk | prepared | A | 5994 | 51.3 | 52.7 | 53.6 | 63.7 | 81.0 | 17523 | 27.8 | 29.7 | 29.3 |
+| select-pk | prepared | A_ | 5994 | 50.8 | 52.3 | 53.1 | 62.1 | 78.9 | 17689 | 26.7 | 29.7 | 29.8 |
+| select-pk | prepared | B | 5994 | 50.8 | 52.7 | 53.7 | 68.5 | 92.5 | 17219 | 27.3 | 31.1 | 30.8 |
+| insert | literal | A | 5994 | 41.4 | 43.8 | 44.5 | 57.1 | 100.0 | 19969 | 24.5 | 25.1 | 25.6 |
+| insert | literal | A_ | 5994 | 41.9 | 44.0 | 44.6 | 55.8 | 113.1 | 14396 | 24.4 | 24.8 | 45.1 |
+| insert | literal | B | 5994 | 41.1 | 43.8 | 45.3 | 60.8 | 117.5 | 18605 | 23.9 | 26.6 | 29.9 |
+| insert | prepared | A | 5994 | 38.4 | 41.0 | 41.5 | 52.7 | 82.3 | 12525 | 22.7 | 23.0 | 57.2 |
+| insert | prepared | A_ | 5994 | 38.9 | 41.2 | 41.9 | 52.1 | 88.9 | 11194 | 23.7 | 22.8 | 65.6 |
+| insert | prepared | B | 5994 | 37.8 | 41.0 | 41.7 | 54.4 | 85.0 | 9371 | 22.4 | 24.5 | 84.4 |
+| update-range | literal | A | 720 | 177.1 | 183.0 | 190.0 | 233.1 | 328.5 | 4983 | 171.3 | 29.3 | 29.4 |
+| update-range | literal | A_ | 720 | 175.8 | 181.7 | 188.1 | 223.7 | 329.1 | 5021 | 170.2 | 29.7 | 28.9 |
+| update-range | literal | B | 720 | 182.3 | 187.5 | 194.2 | 221.7 | 331.4 | 4915 | 174.9 | 30.5 | 28.6 |
+| update-range | prepared | A | 720 | 173.5 | 179.4 | 188.6 | 226.4 | 324.8 | 5000 | 173.8 | 25.3 | 26.2 |
+| update-range | prepared | A_ | 720 | 173.6 | 178.4 | 185.9 | 227.7 | 309.7 | 5127 | 169.5 | 25.3 | 25.6 |
+| update-range | prepared | B | 720 | 177.8 | 183.0 | 190.0 | 225.6 | 311.5 | 4980 | 174.9 | 25.6 | 25.9 |
+
+bad replies: 0; unclean windows: 12 [(1, 'select-pk', 'prepared', 'A'), (1, 'select-pk', 'prepared', 'A2'), (1, 'select-pk', 'prepared', 'B'), (1, 'select-pk', 'literal', 'A'), (1, 'select-pk', 'literal', 'A2'), (1, 'select-pk', 'literal', 'B'), (1, 'insert', 'prepared', 'A'), (1, 'insert', 'prepared', 'A2')]; n runs 3
+run 0 end_state: {'A': {'range_v_ok': True, 'spill_txt_ok': True}, 'A2': {'range_v_ok': True, 'spill_txt_ok': True}, 'B': {'range_v_ok': True, 'spill_txt_ok': True}}
+run 1 end_state: {'A': {'range_v_ok': True, 'spill_txt_ok': True}, 'A2': {'range_v_ok': True, 'spill_txt_ok': True}, 'B': {'range_v_ok': True, 'spill_txt_ok': True}}
+run 2 end_state: {'A': {'range_v_ok': True, 'spill_txt_ok': True}, 'A2': {'range_v_ok': True, 'spill_txt_ok': True}, 'B': {'range_v_ok': True, 'spill_txt_ok': True}}
+quiet gate loads: [5.23, 5.61, 2.53]

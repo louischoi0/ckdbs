@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string_view>
 #include <string>
@@ -10,6 +11,12 @@
 
 #include "kds/base/common.hpp"
 #include "kds/catalog/rows.hpp"
+
+namespace kds::exec {
+// An expression or predicate Cabin's compiled key function
+// (`exec/cabin_expr.hpp`), held by `TableAccess::ExprCabinRef`.
+struct CompiledCabinExpr;
+}  // namespace kds::exec
 
 // In-memory schema, built from the sys.columns rows for a given rel_id,
 // plus the per-relation access handles the cache hands out.
@@ -376,6 +383,21 @@ struct TableAccess {
     CabinRef CabinOn(std::uint16_t col_pos) const noexcept {
         return col_pos < cabin_ids.size() ? cabin_ids[col_pos] : CabinRef{};
     }
+
+    // The relation's **expression and predicate** Cabins (AQ-R3): a list
+    // beside the column map, which keeps the column shape's path byte for
+    // byte. Each carries its compiled key function `F`, filled by the
+    // declaration loader from `sys.cabin_exprs` - `exec/`'s, which is why
+    // `F` is a pointer to a type this layer only names. A relation with
+    // none pays one `empty()` test on the write path.
+    struct ExprCabinRef {
+        std::uint64_t id = 0;
+        std::uint8_t origin = kCabinOriginUnset;
+        std::uint8_t shape = kCabinShapeUnset;
+        std::uint64_t expr_id = 0;
+        std::shared_ptr<const exec::CompiledCabinExpr> f;
+    };
+    std::vector<ExprCabinRef> expr_cabins;
 
     // ---- Foreign keys at both ends (docs/spec/foreign-keys.md §1) -------
     //

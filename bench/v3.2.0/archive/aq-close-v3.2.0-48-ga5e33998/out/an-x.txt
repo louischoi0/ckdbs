@@ -1,0 +1,36 @@
+
+#### x: B only, server CPU per statement, us; B2 = the same B binary started a second time (noise floor)
+
+| shape | path | n runs | B | B2 | B2 - B paired, median [min, max] | largest abs gap |
+|---|---|---|---|---|---|---|
+| plain-insert | literal | 4 | 23.06 | 22.51 | -0.38 [-0.71, -0.04] | 0.71 |
+| plain-insert | prepared | 4 | 22.33 | 21.98 | -0.37 [-0.67, -0.21] | 0.67 |
+| cab-insert | literal | 4 | 23.88 | 23.11 | -0.39 [-0.88, 0.24] | 0.88 |
+| cab-insert | prepared | 4 | 22.82 | 22.86 | -0.30 [-0.61, 1.29] | 1.29 |
+| x-insert-plain | literal | 4 | 23.55 | 23.12 | -0.58 [-0.82, 0.03] | 0.82 |
+| x-insert-plain | prepared | 4 | 23.39 | 22.96 | -0.84 [-4.09, 0.33] | 4.09 |
+| x-insert | literal | 4 | 24.39 | 23.47 | -0.54 [-1.37, 0.12] | 1.37 |
+| x-insert | prepared | 4 | 24.36 | 23.91 | -0.42 [-1.60, 0.85] | 1.60 |
+| x-walk | literal | 4 | 116.40 | 115.72 | -0.65 [-4.16, 0.86] | 4.16 |
+| x-walk | prepared | 4 | 117.53 | 115.76 | -1.32 [-2.70, 0.82] | 2.70 |
+| x-select | literal | 4 | 40.06 | 39.56 | -0.29 [-0.60, 0.25] | 0.60 |
+| x-select | prepared | 4 | 40.16 | 39.96 | -0.13 [-0.84, 0.91] | 0.91 |
+
+#### x: latency (B and B2 pooled per run: median of the two arms' percentiles), us; QPS derived from the mean
+
+| shape | path | ops (both arms) | p0 | p25 | p50 | p90 | p99 | QPS at mean (derived) | server CPU us | driver CPU us | wall mean - server CPU us |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| plain-insert | literal | 15984 | 39.3 | 43.8 | 44.3 | 53.3 | 72.9 | 20878 | 22.7 | 25.6 | 25.2 |
+| plain-insert | prepared | 15984 | 36.3 | 40.9 | 41.5 | 49.2 | 70.5 | 22147 | 22.2 | 22.9 | 22.9 |
+| cab-insert | literal | 15984 | 39.0 | 44.6 | 45.2 | 54.7 | 74.3 | 20539 | 23.5 | 25.8 | 25.2 |
+| cab-insert | prepared | 15984 | 37.6 | 41.6 | 42.0 | 49.5 | 69.6 | 22137 | 22.8 | 22.7 | 22.4 |
+| x-insert-plain | literal | 15984 | 41.0 | 46.3 | 46.9 | 55.4 | 75.5 | 19630 | 23.3 | 27.6 | 27.6 |
+| x-insert-plain | prepared | 15984 | 37.6 | 41.7 | 42.3 | 49.5 | 69.2 | 22019 | 23.0 | 22.9 | 22.5 |
+| x-insert | literal | 15984 | 41.5 | 47.1 | 47.7 | 56.6 | 73.8 | 19487 | 23.9 | 27.4 | 27.4 |
+| x-insert | prepared | 15984 | 37.9 | 42.6 | 43.1 | 50.7 | 73.8 | 21015 | 23.9 | 22.6 | 23.7 |
+| x-walk | literal | 15984 | 165.1 | 168.9 | 172.7 | 188.5 | 216.7 | 5616 | 115.9 | 60.6 | 62.2 |
+| x-walk | prepared | 15984 | 160.6 | 164.0 | 167.2 | 186.1 | 224.8 | 5733 | 116.7 | 56.5 | 57.7 |
+| x-select | literal | 15984 | 92.0 | 94.3 | 95.6 | 107.4 | 129.7 | 10022 | 39.9 | 59.6 | 59.9 |
+| x-select | prepared | 15984 | 87.4 | 89.7 | 91.4 | 103.1 | 123.2 | 10466 | 40.2 | 55.2 | 55.4 |
+
+bad replies: 0; n runs 4

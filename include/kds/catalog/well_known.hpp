@@ -228,6 +228,26 @@ inline constexpr Oid kSysTransitionsTable = 146;
 // oid sequence cannot answer yet.
 inline constexpr Oid kSysTransitionsColumnOidBase = 147;
 
+// sys.cabin_exprs (docs/spec/cabin.md §10, AQ-R1): the canonical text of an
+// expression or predicate Cabin's key function `F`, one row per such Cabin,
+// keyed by its `cabin_id` in the `aux` column. The third declaration
+// relation, for sys.assertions' reason: a predicate's literals are neither
+// fixed-width nor bounded, so `sys.cabins` keeps its fixed row and the text
+// lives here. A column Cabin has no row.
+inline constexpr Oid kSysCabinExprsTable = 153;
+
+// Fixed oids for sys.cabin_exprs' six sys.columns rows, 154..159.
+inline constexpr Oid kSysCabinExprsColumnOidBase = 154;
+
+// A Cabin's shape (`SysCabinRow::shape`, AR1-4: column, expression and
+// predicate are shapes of one key function), with **0 reserved for "unset"**
+// so a zeroed row reads as no Cabin of any shape. Here rather than in
+// rows.hpp because the parser's `CabinStmt` carries one too.
+inline constexpr std::uint8_t kCabinShapeUnset = 0;
+inline constexpr std::uint8_t kCabinShapeColumn = 1;
+inline constexpr std::uint8_t kCabinShapeExpression = 2;
+inline constexpr std::uint8_t kCabinShapePredicate = 3;
+
 // The **floor** for user-created object oids, not a counter.
 //
 // `Catalog::GenerateUserOid()` starts here on an empty database and, on a
@@ -272,7 +292,8 @@ inline constexpr Oid kAllWellKnownOids[] = {
     kSysColumnsTable,     kSysTablesTable,       kSysIndexesTable,
     kSysPatternsTable,    kSysAssertionsTable,   kSysAccessStatsTable,
     kSysCabinsTable,      kSysFkeysTable,        kSysAssertionsColumnOidBase,
-    kSysTransitionsTable, kSysTransitionsColumnOidBase, kUserOidStart,
+    kSysTransitionsTable, kSysTransitionsColumnOidBase, kSysCabinExprsTable,
+    kSysCabinExprsColumnOidBase, kUserOidStart,
 };
 
 // O(n^2) over ~39 values is ~750 compile-time comparisons - a sort would be
@@ -337,9 +358,12 @@ inline constexpr PageId kCatalogPageFkeys = 13;
 // on the ordinary relation rules) is what governs.
 inline constexpr PageId kCatalogPageAssertions = 14;
 
-// Page 15 was `sys.ranges`' root until the split relation was retired
-// (2026-09-30). Nothing creates it; `kCatalogOverflowFirst` stays at 16,
-// because moving it back would buy one page for a format event.
+// Root heap page of sys.cabin_exprs (superblock 26, AQ-S1). Page 15 was
+// `sys.ranges`' root until the split relation was retired (2026-09-30) and
+// nothing created it since, so the new relation takes it and
+// `kCatalogOverflowFirst` does not move. Its var-heap root is allocated, as
+// sys.assertions' is.
+inline constexpr PageId kCatalogPageCabinExprs = 15;
 
 // Root heap page of sys.transitions (superblock 24), the first id past the
 // old overflow start, which moved to 17 with it. Its var-heap root is
@@ -364,7 +388,7 @@ inline constexpr PageId kAllCatalogPages[] = {
     kCatalogPageTypes,       kCatalogPageColumns,    kCatalogPageObjects,
     kCatalogPageTables,      kCatalogPageIndexes,    kCatalogPagePatterns,
     kCatalogPageAccessStats, kCatalogPageCabins,     kCatalogPageFkeys,
-    kCatalogPageAssertions,  kCatalogPageTransitions,
+    kCatalogPageAssertions,  kCatalogPageCabinExprs, kCatalogPageTransitions,
 };
 
 // ---- Where a catalog chain grows into ------------------------------------

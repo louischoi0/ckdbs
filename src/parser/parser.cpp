@@ -1909,10 +1909,42 @@ StatusOr<CabinStmt> Parser::ParseCabin(bool drop) {
         return s;
     }
 
+    // **The key function's shape, decided by reading ahead and rewinding**
+    // (AQ-S1): a bare name is a column, a bare call is an expression, and
+    // anything else is a predicate, parsed by the WHERE grammar from the
+    // start. The lexer is a value, so the rewind is a copy.
     stmt.column_byte_offset = lexer_.Peek().byte_offset;
-    auto column = ParseIdent();
-    if (!column.ok()) return column.status();
-    stmt.column_name = std::move(column.value());
+    stmt.expr_byte_offset = stmt.column_byte_offset;
+    const Lexer start = lexer_;
+    const bool named = lexer_.Peek().type == TokenType::kIdent;
+    if (named) {
+        auto column = ParseIdent();
+        if (!column.ok()) return column.status();
+        stmt.column_name = std::move(column.value());
+    }
+
+    if (named && lexer_.Peek().type == TokenType::kLParen) {
+        ColumnName head;
+        head.name = stmt.column_name;
+        head.byte_offset = stmt.column_byte_offset;
+        auto call = ParseFunctionCall(std::move(head));
+        if (!call.ok()) return call.status();
+        if (lexer_.Peek().type == TokenType::kRParen) {
+            stmt.shape = catalog::kCabinShapeExpression;
+            stmt.expr = std::move(call.value());
+            stmt.column_name.clear();
+        }
+    }
+    if (!named || (stmt.shape != catalog::kCabinShapeExpression &&
+                   lexer_.Peek().type != TokenType::kRParen &&
+                   lexer_.Peek().type != TokenType::kComma)) {
+        lexer_ = start;
+        auto tree = ParseBoolChain(/*depth=*/0, /*is_or=*/true);
+        if (!tree.ok()) return tree.status();
+        if (Status s = Flatten(std::move(tree.value()), stmt.predicate); !s.ok()) return s;
+        stmt.shape = catalog::kCabinShapePredicate;
+        stmt.column_name.clear();
+    }
 
     // **One column, and the refusal is here rather than at the catalog.**
     // C3 keeps multi-column keys out of v1, and a comma is exactly what an

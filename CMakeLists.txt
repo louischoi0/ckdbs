@@ -131,6 +131,7 @@ add_library(kds
     src/exec/tuple_verify.cpp
     src/exec/wal_row_log.cpp
     src/exec/cabin_ddl.cpp
+    src/exec/cabin_expr.cpp
     src/exec/index_ddl.cpp
     src/exec/assertion_build.cpp
     src/exec/assertion_catalog.cpp

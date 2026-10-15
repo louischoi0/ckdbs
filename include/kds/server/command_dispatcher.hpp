@@ -27,6 +27,7 @@
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/cabin_ddl.hpp"
+#include "kds/exec/cabin_expr.hpp"
 #include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/parser/ast.hpp"
@@ -458,13 +459,17 @@ public:
         // leave the later manager installed, the same relation the single
         // `catalog_` reference already has.
         if (txn != nullptr) catalog.SetTransactionManager(txn);
-        // The transition loader (BV-S2), here for the manager's reason: a
-        // construction site cannot forget it, so every serving catalog fills
-        // `TableAccess::transitions`. It captures the catalog and the store,
-        // never the dispatcher, which a test may destroy before them.
-        catalog.SetTransitionLoader(
+        // The declaration loader (BV-S2, AQ-S1), here for the manager's
+        // reason: a construction site cannot forget it, so every serving
+        // catalog fills `TableAccess::transitions` and every expression
+        // Cabin's `F`. It captures the catalog and the store, never the
+        // dispatcher, which a test may destroy before them.
+        catalog.SetDeclarationLoader(
             [&catalog, &page_store](catalog::TableAccess& access) {
-                return exec::LoadTransitions(catalog, page_store, access);
+                if (Status s = exec::LoadTransitions(catalog, page_store, access); !s.ok()) {
+                    return s;
+                }
+                return exec::LoadExprCabins(catalog, page_store, access);
             });
         ArmAssertionRecordBudget();
     }
@@ -1243,7 +1248,10 @@ private:
     // which catalog call they reach. Takes the whole statement line rather
     // than a suffix, because the parser is what resolves the two
     // identifiers.
-    DispatchOutcome HandleCabin(std::string_view line);
+    DispatchOutcome HandleCabin(std::string_view line, Session& session);
+    // Both statements' catalog half and reply, under whatever hold
+    // `HandleCabin` took.
+    DispatchOutcome RunCabinDdl(const parser::CabinStmt& stmt);
 
     // `ALTER TABLE ... RENAME TO | RENAME COLUMN` (docs/spec/alter.md,
     // workplan ALT03). One handler for both forms, for HandleCabin's
@@ -1951,6 +1959,12 @@ private:
     // Never fails: a Cabin that cannot witness a write un-observes the value
     // instead, which returns it to the authoritative scan path (§1's
     // corollary) and is always legal.
+    // Whether any Cabin witnesses `access`'s writes: `NoteCabinWrite`'s own
+    // early return, and the UPDATE loop's once-per-statement skip of it -
+    // one test, so the skip cannot drift from what the call would do.
+    bool CabinsWitness(const catalog::TableAccess& access) const noexcept {
+        return cabins_ != nullptr && (access.cabin_mask != 0 || !access.expr_cabins.empty());
+    }
     void NoteCabinWrite(const catalog::TableAccess& access,
                         std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
                         std::uint64_t tuple_key, PageId page_id, std::uint16_t slot,

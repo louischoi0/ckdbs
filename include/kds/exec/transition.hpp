@@ -57,7 +57,7 @@ StatusOr<catalog::TransitionRef> CompileTransition(const catalog::TableAccess& a
                                                    const parser::TransitionStmt& stmt,
                                                    std::uint64_t id, std::uint16_t column_no);
 
-// The catalog's transition loader (`Catalog::SetTransitionLoader`): every
+// The declaration loader's Transition half (`Catalog::SetDeclarationLoader`): every
 // Transition on `access`'s relation, re-parsed from its stored text against
 // the governed column the row names by number, so `ALTER TABLE RENAME`
 // moves nothing. A stored declaration that no longer parses or compiles is

@@ -1069,6 +1069,136 @@ TEST(CabinContractTest, ANeverRepeatingKeyObservesNothing) {
         << "the declared literal probe records first-touch";
 }
 
+
+// ---- Expression Cabins (AQ-S2) --------------------------------------------
+//
+// The same contract for a key function: `DATE(ts)`'s set for a day must
+// neither lose nor gain a row, on a btree and a heap relation, against a
+// database with no Cabin at all - serving, and through writes made after
+// observation, re-read after every write.
+
+void LoadDated(Instance& db) {
+    for (const char* sql : {"CREATE TABLE eb (id int64, ts timestamp NULL, qty int64) BTREE",
+                            "CREATE TABLE eh (id int64, ts timestamp NULL, qty int64) HEAP"}) {
+        ASSERT_EQ(db.Run(sql).substr(0, 7), "CREATED");
+    }
+    const char* kStamps[] = {"'2026-10-01 00:00:00'", "'2026-10-01 23:59:59.999999'",
+                             "'2026-10-02 00:00:00'", "NULL",
+                             "'1969-12-31 23:00:00'", "'2026-10-01 12:00:00'"};
+    for (int i = 0; i < 6; ++i) {
+        const std::string row = std::string("(") + kStamps[i] + ", " + std::to_string(i) + ")";
+        ASSERT_EQ(db.Run("INSERT INTO eb VALUES " + row).substr(0, 8), "INSERTED");
+        ASSERT_EQ(db.Run("INSERT INTO eh VALUES " + row).substr(0, 8), "INSERTED");
+    }
+}
+
+const std::vector<std::string>& DatedQueries() {
+    static const std::vector<std::string> kQueries = {
+        "SELECT * FROM eb WHERE DATE(ts) = '2026-10-01'",
+        "SELECT * FROM eb WHERE DATE(ts) = '2026-10-02'",
+        "SELECT * FROM eb WHERE DATE(ts) = '1969-12-31'",
+        "SELECT * FROM eb WHERE DATE(ts) = '2000-01-01'",
+        "SELECT id FROM eb WHERE DATE(ts) = '2026-10-01' AND qty > 0",
+        "SELECT * FROM eh WHERE DATE(ts) = '2026-10-01'",
+        "SELECT * FROM eh WHERE DATE(ts) = '2000-01-01'",
+        "SELECT * FROM eb",
+    };
+    return kQueries;
+}
+
+std::vector<std::string> RunDated(Instance& db, int rounds) {
+    std::vector<std::string> out;
+    for (int r = 0; r < rounds; ++r) {
+        for (const std::string& sql : DatedQueries()) out.push_back(db.Run(sql));
+    }
+    return out;
+}
+
+TEST(CabinContractTest, ExpressionCabinsChangeNoReplyServingOrWitnessing) {
+    Instance db(/*cabins=*/true);
+    Instance ref(/*cabins=*/false);
+    LoadDated(db);
+    LoadDated(ref);
+    ASSERT_EQ(db.Run("CREATE CABIN ON eb (DATE(ts))").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("CREATE CABIN ON eh (DATE(ts))").substr(0, 7), "CREATED");
+
+    std::vector<std::string> got = RunDated(db, 3);
+    std::vector<std::string> want = RunDated(ref, 3);
+    EXPECT_GT(db.cabins().stats().hits, 0u) << "nothing was served, so nothing was tested";
+
+    const std::vector<std::string> kWrites = {
+        "INSERT INTO eb VALUES ('2026-10-01 06:00:00', 7)",  // into an observed day
+        "INSERT INTO eh VALUES ('2026-10-01 06:00:00', 7)",
+        "INSERT INTO eb VALUES ('2000-01-01 06:00:00', 8)",  // a day observed as empty
+        "INSERT INTO eh VALUES ('2000-01-01 06:00:00', 8)",
+        "UPDATE eb SET ts = '2026-10-02 05:00:00' WHERE id = 1",  // one day to another
+        "UPDATE eh SET ts = '2026-10-02 05:00:00' WHERE id = 1",
+        "UPDATE eb SET ts = '2026-10-01 05:00:00' WHERE id = 1",  // and back
+        "UPDATE eh SET ts = '2026-10-01 05:00:00' WHERE id = 1",
+        "UPDATE eb SET ts = '2026-10-01 07:00:00' WHERE id = 4",  // from NULL
+        "UPDATE eh SET ts = '2026-10-01 07:00:00' WHERE id = 4",
+        "UPDATE eb SET qty = 70 WHERE id = 2",  // no input moved
+        "UPDATE eh SET qty = 70 WHERE id = 2",
+        "UPDATE eb SET ts = NULL WHERE id = 6",  // to NULL: no key
+        "UPDATE eh SET ts = NULL WHERE id = 6",
+        "DELETE FROM eb WHERE id = 3",
+        "DELETE FROM eh WHERE id = 3",
+    };
+    for (const std::string& write : kWrites) {
+        const std::string a = db.Run(write);
+        ASSERT_EQ(a, ref.Run(write)) << write;
+        ASSERT_NE(a.substr(0, 3), "ERR") << write << " -> " << a;
+        const std::vector<std::string> after_db = RunDated(db, 1);
+        const std::vector<std::string> after_ref = RunDated(ref, 1);
+        got.insert(got.end(), after_db.begin(), after_db.end());
+        want.insert(want.end(), after_ref.begin(), after_ref.end());
+    }
+    ASSERT_EQ(got.size(), want.size());
+    for (std::size_t i = 0; i < want.size(); ++i) {
+        EXPECT_EQ(got[i], want[i]) << "diverged at reply " << i << " ("
+                                   << DatedQueries()[i % DatedQueries().size()] << ")";
+    }
+}
+
+// A cover on a **heap** relation whose hint fails walks and records nothing -
+// for a one-day cover too. Re-recorded, its day would be banked against the
+// cover's empty probe value: an empty set, served as authoritative for every
+// later `DATE(ts) = d`.
+TEST(CabinContractTest, AHeapCoversFailedHintBanksNothing) {
+    Instance db(/*cabins=*/true);
+    Instance ref(/*cabins=*/false);
+    LoadDated(db);
+    LoadDated(ref);
+    ASSERT_EQ(db.Run("CREATE CABIN ON eh (DATE(ts))").substr(0, 7), "CREATED");
+    const std::string day = "SELECT * FROM eh WHERE DATE(ts) = '2026-10-01'";
+    const std::string cover =
+        "SELECT * FROM eh WHERE ts BETWEEN '2026-10-01 00:00:00' AND '2026-10-01 23:59:59'";
+    ASSERT_EQ(db.Run(day), ref.Run(day));  // observes the day
+
+    auto oid = db.catalog().FindTableOidByName("eh");
+    ASSERT_TRUE(oid.ok());
+    auto access = db.catalog().InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    ASSERT_EQ(access.value()->expr_cabins.size(), 1u);
+    parser::AstValue value;
+    value.type = parser::ValueType::kInt;
+    value.int_val = 20727;  // 2026-10-01
+    auto key = stats::MakeCabinKey(access.value()->expr_cabins[0].id, value);
+    ASSERT_TRUE(key.has_value());
+    const stats::CabinSet entries = db.cabins().Find(*key);
+    ASSERT_TRUE(entries.valid());
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const stats::CabinEntry entry = entries.At(i);
+        entries.Heal(i, entry.page_id, static_cast<std::uint16_t>((entry.slot + 3) % 6),
+                     entry.page_epoch);
+    }
+
+    EXPECT_EQ(db.Run(cover), ref.Run(cover));
+    for (int round = 0; round < 3; ++round) {
+        EXPECT_EQ(db.Run(day), ref.Run(day)) << "round " << round;
+        EXPECT_EQ(db.Run(cover), ref.Run(cover)) << "round " << round;
+    }
+}
+
 }  // namespace
 }  // namespace kds::server
-

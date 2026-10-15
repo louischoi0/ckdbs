@@ -13,6 +13,7 @@
 // value a predicate compares and the value a write keys on are identical by
 // construction.
 #include "kds/storage/keystone.hpp"  // kIdSpaceEnd - a bind's whole-relation declaration
+#include "kds/exec/cabin_expr.hpp"
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_vm.hpp"  // PositionSink - the declaration sink AT-R1 threads
@@ -1190,6 +1191,160 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
     return std::nullopt;
 }
 
+// A function conjunct's call as a Cabin term, when every argument is this
+// step's own column - never a correlated or another relation's.
+std::optional<CabinTerm> OwnCallTerm(const FunctionTerm& call, std::uint16_t slot) {
+    CabinTerm term;
+    term.fn = call.fn;
+    for (const ColumnRef& arg : call.args) {
+        if (!IsOwnColumn(arg, slot)) return std::nullopt;
+        term.args.push_back(arg.col_pos);
+    }
+    return term;
+}
+
+CabinProbe ProbeFor(const catalog::TableAccess::ExprCabinRef& ref, parser::AstValue value) {
+    CabinProbe probe;
+    probe.cabin_id = ref.id;
+    probe.col_pos = ref.f->inputs.front();
+    probe.value = std::move(value);
+    probe.f = ref.f;
+    probe.declared = ref.origin == catalog::kCabinOriginUser;
+    probe.managed = ref.origin == catalog::kCabinOriginAuto;
+    return probe;
+}
+
+bool AnyShaped(const catalog::TableAccess& access, std::uint8_t shape) {
+    return std::any_of(access.expr_cabins.begin(), access.expr_cabins.end(),
+                       [shape](const auto& ref) { return ref.shape == shape && ref.f != nullptr; });
+}
+
+// The expression Cabin probe (AQ-R5), or nullopt: a function conjunct
+// `F(cols) = literal` over this step's own columns whose `F` is an
+// expression Cabin's - **confirmed by its canonical text** (AQ-R2), the
+// identity `CREATE CABIN` refused a duplicate of, never by a hash. Reached
+// after the column Cabin's arm, at its rank. The conjunct stays in
+// `fn_residual`: the probe is a hint on top of it, as every probe is on top
+// of its residual, so a served row is re-checked and a step downgraded to a
+// walk answers the same.
+//
+// Never a key, a bound, an index or join key, or a `BuildKey`: this arm
+// reads `fn_residual` and writes nothing but `Step::cabin`. The correlated
+// form (§4a) is not extended to `F`.
+std::optional<CabinProbe> ExprCabinProbeOf(const catalog::TableAccess& access, const Step& step,
+                                           std::uint16_t slot) {
+    if (!AnyShaped(access, catalog::kCabinShapeExpression)) return std::nullopt;
+    for (const FunctionPredicate& pred : step.fn_residual) {
+        if (pred.op != parser::CompareOp::kEq || !pred.lhs.call.has_value()) continue;
+        if (pred.rhs.call.has_value() || pred.rhs.plain.kind != OperandKind::kLiteral) continue;
+        const std::optional<CabinTerm> term = OwnCallTerm(*pred.lhs.call, slot);
+        if (!term.has_value()) continue;
+        const std::string text = CabinTermText(*term);
+        for (const catalog::TableAccess::ExprCabinRef& ref : access.expr_cabins) {
+            if (ref.shape == catalog::kCabinShapeExpression && ref.f != nullptr &&
+                ref.f->text == text) {
+                return ProbeFor(ref, pred.rhs.plain.literal);
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+// The predicate Cabin probe (AQ-R6, `[quiet-wrong]`), or nullopt: a Cabin
+// `p = (c1 AND c2 ...)` serves a step when **every** `ci` equals one of the
+// step's own **lowered** conjuncts - a plain comparison with a literal or an
+// `IS [NOT] NULL` in `residual`, an immutable call's in `fn_residual` - by
+// canonical text: same column positions, same operator, same coerced
+// literal. Nothing is normalised beyond the lowering every conjunct already
+// gets (no `<` against `>`, no `>= 1001` against `> 1000`); a statement's
+// `BETWEEN` lowers exactly to its two bounds, which are therefore its
+// conjuncts (AQ-Q15). So the match errs toward the walk: a wrong match
+// serves `E(true)` to a statement whose WHERE does not imply `p` and loses
+// every row passing it and failing `p`. Every conjunct, `p`'s included,
+// stays where it is and re-checks the served rows. After the expression
+// arm, at the column Cabin's rank.
+std::optional<CabinProbe> PredicateCabinProbeOf(const catalog::TableAccess& access,
+                                                const Step& step, std::uint16_t slot) {
+    if (!AnyShaped(access, catalog::kCabinShapePredicate)) return std::nullopt;
+    std::vector<std::string> own;
+    for (const StepPredicate& pred : step.residual) {
+        if (!IsOwnColumn(pred.lhs, slot)) continue;
+        if (TakesLiteral(pred.op) && pred.rhs.kind != OperandKind::kLiteral) continue;
+        CabinConjunct c;
+        c.term.args.push_back(pred.lhs.col_pos);
+        c.op = pred.op;
+        c.literal = pred.rhs.literal;
+        own.push_back(CabinConjunctText(c));
+    }
+    for (const FunctionPredicate& pred : step.fn_residual) {
+        if (!pred.lhs.call.has_value() || pred.rhs.call.has_value()) continue;
+        if (TakesLiteral(pred.op) && pred.rhs.plain.kind != OperandKind::kLiteral) continue;
+        std::optional<CabinTerm> term = OwnCallTerm(*pred.lhs.call, slot);
+        if (!term.has_value()) continue;
+        CabinConjunct c;
+        c.term = std::move(*term);
+        c.op = pred.op;
+        c.literal = pred.rhs.plain.literal;
+        own.push_back(CabinConjunctText(c));
+    }
+    if (own.empty()) return std::nullopt;
+    std::sort(own.begin(), own.end());
+
+    for (const catalog::TableAccess::ExprCabinRef& ref : access.expr_cabins) {
+        if (ref.shape != catalog::kCabinShapePredicate || ref.f == nullptr) continue;
+        const bool implied = std::all_of(
+            ref.f->conjuncts.begin(), ref.f->conjuncts.end(), [&](const CabinConjunct& c) {
+                return std::binary_search(own.begin(), own.end(), CabinConjunctText(c));
+            });
+        if (implied) return ProbeFor(ref, PredicateKey());
+    }
+    return std::nullopt;
+}
+
+// The cover probe (AQ-R8), or nullopt: a step whose residual bounds a column
+// `x` on both sides - `>=`/`>` and `<=`/`<` against literals, a `BETWEEN`'s two
+// halves, or an equality, which is both - where `x` is the one argument of an
+// expression Cabin whose function declares a cover. The tightest bound on each
+// side is taken; any pair would do, since every bound is a conjunct and the
+// cover of any pair is a superset of the rows passing them all. The bounds
+// stay in the residual and trim the cover's surplus.
+std::optional<CabinProbe> CoverCabinProbeOf(const catalog::TableAccess& access, const Step& step,
+                                            std::uint16_t slot) {
+    if (!AnyShaped(access, catalog::kCabinShapeExpression)) return std::nullopt;
+    for (const catalog::TableAccess::ExprCabinRef& ref : access.expr_cabins) {
+        if (ref.shape != catalog::kCabinShapeExpression || ref.f == nullptr) continue;
+        const CabinTerm& term = ref.f->expr;
+        if (term.fn->cover == nullptr || term.args.size() != 1) continue;
+        std::optional<std::int64_t> low;
+        std::optional<std::int64_t> high;
+        for (const StepPredicate& pred : step.residual) {
+            if (!IsOwnColumn(pred.lhs, slot) || pred.lhs.col_pos != term.args.front()) continue;
+            if (pred.rhs.kind != OperandKind::kLiteral ||
+                pred.rhs.literal.type != parser::ValueType::kInt) {
+                continue;
+            }
+            const std::int64_t v = pred.rhs.literal.int_val;
+            const bool lower = pred.op == parser::CompareOp::kGte ||
+                               pred.op == parser::CompareOp::kGt ||
+                               pred.op == parser::CompareOp::kEq;
+            const bool upper = pred.op == parser::CompareOp::kLte ||
+                               pred.op == parser::CompareOp::kLt ||
+                               pred.op == parser::CompareOp::kEq;
+            if (lower) low = low.has_value() ? std::max(*low, v) : v;
+            if (upper) high = high.has_value() ? std::min(*high, v) : v;
+        }
+        if (!low.has_value() || !high.has_value() || *low > *high) continue;
+        std::int64_t first = 0;
+        std::int64_t last = 0;
+        term.fn->cover(*low, *high, first, last);
+        if (first > last) continue;
+        CabinProbe probe = ProbeFor(ref, parser::AstValue{});
+        probe.cover = std::make_pair(first, last);
+        return probe;
+    }
+    return std::nullopt;
+}
+
 // The correlated cabin probe (docs/spec/cabin.md §4a), or nullopt: a
 // cabined column bound by equality to an earlier step's or an enclosing
 // chain's column - the join shape, IX17's selection one trust class over.
@@ -1310,8 +1465,13 @@ std::vector<std::uint16_t> AccessColumnsOf(const Step& step, std::uint16_t slot)
             // access was assigned *for* that one, and the rest are residual
             // whatever the kind. Reporting them all would merge this shape
             // with the filter scan below and lose the distinction the
-            // statistics exist to draw.
-            if (step.cabin.has_value()) out.push_back(step.cabin->col_pos);
+            // statistics exist to draw. **An expression Cabin's probe reports
+            // none** (AQ-Q14): the statistics are keyed by column, `F` is not
+            // one, and filing `DATE(ts) = d` under `ts` would merge it with a
+            // column Cabin on `ts`.
+            if (step.cabin.has_value() && step.cabin->f == nullptr) {
+                out.push_back(step.cabin->col_pos);
+            }
             return out;
         case AccessKind::kFilterScan:
             for (const StepPredicate& pred : step.residual) {
@@ -1493,8 +1653,16 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
     // time the walk decodes `filter_columns` per row, plus the tuple key for a
     // row whose key matches (step_vm.cpp), and naming both here keeps the
     // survivors' remaining-columns decode honest about what was already read.
-    if (step.cabin.has_value() && step.cabin->col_pos < 64) {
-        mask |= std::uint64_t{1} << step.cabin->col_pos;
+    // An expression Cabin's walk reads every input of `F` (AQ-R5).
+    if (step.cabin.has_value()) {
+        const auto note = [&mask](std::uint16_t pos) {
+            if (pos < 64) mask |= std::uint64_t{1} << pos;
+        };
+        if (step.cabin->f != nullptr) {
+            for (const std::uint16_t pos : step.cabin->f->inputs) note(pos);
+        } else {
+            note(step.cabin->col_pos);
+        }
         mask |= 1;
     }
 
@@ -2096,6 +2264,19 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // names, and the Cabin is the reason it need not be one.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(probe);
+            } else if (auto ep = ExprCabinProbeOf(*scope.relations[i].access, step,
+                                                   static_cast<std::uint16_t>(i));
+                       ep.has_value()) {
+                // An expression Cabin at the column Cabin's rank (AQ-R5):
+                // a compile-time key, before the correlated form.
+                step.kind = AccessKind::kCabinProbe;
+                step.cabin = std::move(ep);
+            } else if (auto pp = PredicateCabinProbeOf(*scope.relations[i].access, step,
+                                                        static_cast<std::uint16_t>(i));
+                       pp.has_value()) {
+                // A predicate Cabin, after the expression arm: AQ-R6.
+                step.kind = AccessKind::kCabinProbe;
+                step.cabin = std::move(pp);
             } else if (auto cp = CorrelatedCabinProbeOf(scope, *scope.relations[i].access, step,
                                                          static_cast<std::uint16_t>(i));
                        cp.has_value()) {
@@ -2109,6 +2290,15 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // serve beats any per-statement rebuild (spec §5).
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cp);
+            } else if (auto cv = CoverCabinProbeOf(*scope.relations[i].access, step,
+                                                    static_cast<std::uint16_t>(i));
+                       cv.has_value()) {
+                // An expression Cabin's cover of a two-sided range (AQ-R8),
+                // after the correlated arm (AQ-Q16): a join's inner step keyed
+                // per outer row by a Cabin is served one set at a time, where
+                // a cover would re-serve its whole union for every outer row.
+                step.kind = AccessKind::kCabinProbe;
+                step.cabin = std::move(cv);
             } else if (HasUnindexedEqualityFilter(*scope.relations[i].access, step,
                                                    static_cast<std::uint16_t>(i))) {
                 // Ahead of the build annotation by decision, not

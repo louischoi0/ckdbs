@@ -33,8 +33,8 @@ using SpillRef = std::pair<PageId, std::uint16_t>;
 //     and sweeping it would put a second authority over the same bytes;
 //   - the **grant** requires only that a peer reads the relation.
 //
-// Both entries - the two declaration relations (`declaration_relation.hpp`)
-// - satisfy both: each logs its spills through `LogChainInsert` at
+// Every entry - the three declaration relations (`declaration_relation.hpp`)
+// - satisfies both: each logs its spills through `LogChainInsert` at
 // `kBootstrapXid`, which is `kNoTxnId`. A relation that satisfies one test
 // and not the other needs its own list, not an entry here.
 //
@@ -44,6 +44,7 @@ using SpillRef = std::pair<PageId, std::uint16_t>;
 inline constexpr catalog::Oid kVarHeapCatalogRelations[] = {
     catalog::kSysAssertionsTable,
     catalog::kSysTransitionsTable,
+    catalog::kSysCabinExprsTable,
 };
 
 // The var-heap slots one row's payload points at, appended to `out` in

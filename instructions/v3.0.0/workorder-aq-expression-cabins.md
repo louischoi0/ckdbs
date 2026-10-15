@@ -10,6 +10,15 @@ its own letter.
 **Opened as AQ on 2026-10-06, with every §4 item marked as proposed**
 (`raft-marks-2026-10-06.md` §2). Every stage waits for its own word. It cuts no tag; the v3.0.0 tag waits on M4.
 
+**Taken up on 2026-10-14 on the operator's standing go-ahead
+(go-ahead-achieving-milestone)**, on `worktree-aq-expression-cabins` from
+`7c234766` (`v3.2.0-44-g7c234766`), `instructions/v3.2.0/raft-marks-2026-10-14.md`
+§14: that word is every stage's own. **AQ-R1's read-by-length mechanism is
+superseded** by the operator's standing order of 2026-10-07 (no superblock
+backward compatibility), which postdates AQ-Q1's mark: superblock 26 refuses
+every older volume, and no 28-byte row is read. AQ-Q7..Q16 (§4) are CLA's
+proposals adopted on the standing go-ahead, not the operator's marks.
+
 ## 0. What AQ is
 
 AR1 §14 gives AQ this content and these dependencies:
@@ -305,6 +314,24 @@ Each stage waits for the operator's word.
 | AQ-Q5 | **Automatic creation of expression and predicate Cabins** by the cabin optimizer (AR1 §8: "when a D0 pattern's predicate-position `expr_id` crosses the sighting threshold") | scope | not in AQ. Declared Cabins first; the controller's pricing of an expression is its own work. `CABIN AUTO` stays a column policy until then |
 | AQ-Q6 | **D1's fold, carried from AP-Q5** | cost | stays deferred: AQ gives it no consumer (§1.6). It moves with whichever letter first observes a `kStable` value |
 
+### Items surfaced in the stages - adopted on the operator's standing go-ahead of 2026-10-14 (go-ahead-achieving-milestone)
+
+| # | item | class | CLA proposal, adopted |
+|---|---|---|---|
+| AQ-Q7 | **AQ-Q1's mechanism against the standing order of 2026-10-07** | format | the order governs: `sys.cabins` rows are 37 B (`expr_id`, `shape` added), superblock 25 -> 26, a version-25 volume refused with no migration. Not a re-opening of AQ-Q1: its text-in-a-relation half stands, its read-by-length half is the case the later order decides. Costs: every existing volume stops mounting |
+| AQ-Q8 | **D7's "`column_no` dropped"** | format | **kept for the column shape**, 0 for the other two. AQ-R1's own v2 layout leaves a column Cabin no other carrier for its column (it has no `sys.cabin_exprs` row), and AQ-R3 keeps the column path byte for byte. `key_width` is **not** added: its reader is D3's sortable directory, which AQ-Q4 defers, and a field with no reader is a promise nothing checks |
+| AQ-Q9 | **Where `sys.cabin_exprs` lives** | format | a third declaration relation (`exec/declaration_relation.hpp`'s shape: `aux` = `cabin_id`, `name` = `cabin_<id>`) on **fixed page 15**, the retired `sys.ranges` root nothing creates, so `kCatalogOverflowFirst` does not move; oid 153, column oids 154..159 |
+| AQ-Q10 | **AQ-R2's "compiled `F` equals"**, made concrete | spec, **quiet-wrong** | the **canonical text** of the lowered `F` is the identity: column positions, the function's catalog name, the operator, and every field of the literal after coercion (a uint64's digits without leading zeros); a predicate's conjuncts sorted by their text and de-duplicated, so `a AND b` is `b AND a`. The stored text is that string, and a load recompiles and re-canonicalises it, refusing `Corruption` when the two differ or the `expr_id` does not match. `expr_id` is FNV-1a over the text with every literal folded to its kind (AR1 §6), so `state = 'open'` and `state = 'closed'` share one and are kept apart by text |
+| AQ-Q11 | **A dropped relation's texts** | gap | removed after the drop commits in autocommit, as its Transitions are (CN-4 T7); inside an explicit transaction they stay - the drop can still roll back its Cabins' rows - and are inert once it commits, since nothing reads a text no `sys.cabins` row names. Stated in `known-gaps.md` |
+| AQ-Q12 | **The tuple key as an input** | spec | admitted beside another column (`id > 5 AND state = 'open'`); refused when `F` reads it alone (the S1 exit's refusal), and the write hook reads it from the tuple key in hand at INSERT. A key reading no column at all is refused too |
+| AQ-Q13 | **A lock for an expression Cabin's DDL** (AQ-S1's review, B2) | spec, **quiet-wrong** | the relation `X`, as `CREATE INDEX` takes it (AT-S5e), for the expression and predicate shapes only. Without it a create compiled on one core could land its text after another core's `DROP COLUMN` found no Cabin reading the column, leaving a text that names a dropped column and fails every fill of the relation; and a writer's `IX`, held from before it reads the relation's Cabins until it decides, keeps a Cabin from appearing under a writer that compiled without it - the witness's premise in AQ-S2. The column shape keeps its unlocked path (known-gaps.md) |
+
+| AQ-Q14 | **What an expression probe reports to the access statistics** (AQ-S2's review, B3) | spec | **no column**: the statistics are keyed by column (`SHOW ACCESS`, the controller's candidate), `F` is not one, and filing `DATE(ts) = d` under `ts` would merge it with a column Cabin on `ts`. The probe's shape is still recorded, as a `kCabinProbe` with an empty column set |
+
+| AQ-Q15 | **A statement's `BETWEEN` against AQ-R6's "no `BETWEEN` against two bounds"** (AQ-S3's review) | spec, **quiet-wrong** | the match is on **lowered** conjuncts (AQ-R6's own wording), and a statement's `BETWEEN a AND b` lowers exactly to `>= a` and `<= b` (`LowerComparison`), so a Cabin declared as those two bounds is served by it - sound, since the lowering is the statement's meaning. AQ-R6's sentence is read as: no normalisation beyond that lowering, and no `BETWEEN` in a declaration (refused at `CREATE`). The S3 exit's "not served ... as a `BETWEEN`" holds for a Cabin whose bounds a `BETWEEN` cannot spell (`amount > 1000`), which is the cell's case |
+
+| AQ-Q16 | **The cover arm's rank in the ladder** (AQ-S4's review; AQ-R8 is silent) | cost | **after the correlated Cabin arm**, before the build annotation: on a join's inner step a Cabin keyed per outer row serves one set at a time, where a cover would re-serve and re-sort its whole union for every outer row. Every index arm and the literal Cabin arms stay ahead of it. Speed only; no answer depends on the rank |
+
 Three surfaces in this order are `[quiet-wrong]`: AQ-R2's identity, AQ-R4's
 witness and AQ-R6's match. AQ-R2 and AQ-R4 are rulings here, and their
 cells are the stages' exits. AQ-R6's form is AQ-Q3's.
@@ -341,3 +368,246 @@ proposed (`raft-marks-2026-10-06.md` §2), and the order landed on `main`.
   the operator.
 
 No stage has started.
+
+### AQ-S1 - the catalog and the grammar, landed 2026-10-14
+
+On `worktree-aq-expression-cabins` from `7c234766`, on the standing
+go-ahead (`instructions/v3.2.0/raft-marks-2026-10-14.md` §14).
+
+- **Built.** `SysCabinRow` is 37 B with `expr_id` and `shape`
+  (superblock 26, AQ-Q7, AQ-Q8); `sys.cabin_exprs` is the third declaration
+  relation, on page 15 (AQ-Q9); `CREATE CABIN ON t (F)` parses a column, an
+  immutable call or a conjunction (`ParseCabin` reads ahead and rewinds the
+  lexer); `exec/cabin_expr` compiles `F` to its canonical text - the
+  identity (AQ-Q10) - and recompiles it at load; `TableAccess::expr_cabins`
+  is filled by the catalog's declaration loader (renamed from the transition
+  loader) and fails shut; `SHOW CABINS` gains `shape` and `key`; `DROP
+  COLUMN` restricts a column any Cabin's key reads, of any status; `DROP
+  TABLE` removes the texts in autocommit (AQ-Q11); the expression shapes'
+  DDL takes the relation `X` (AQ-Q13). The golden WAL log is re-pinned
+  (bootstrap's three new catalog rows).
+- **The exit, cell by cell** (`tests/cabin_expr_test.cpp`): a `DATE(ts)`
+  Cabin creates a v2 row and a text row and lists its key; a predicate is
+  canonical and its commuted, repeated spelling is the same key; a column
+  Cabin is unchanged - its reply, its row, its mask; **a row of the old
+  width is refused** rather than read (AQ-Q7 replaces the planted-v1-row
+  cell); refusals at their byte for a non-immutable function, a key reading
+  only the tuple key or no column, a duplicate `F`, a `NO CABIN` input and
+  every form AQ-R6 does not admit; **two keys sharing an `expr_id` are kept
+  apart** (`state = 'open'` and `state = 'closed'`, the natural collision:
+  literals fold out of the hash) and `DROP CABIN` takes the one it names; a
+  stored text that is not canonical is `Corruption`; a reopened catalog
+  recompiles every key, every literal kind round-trips its text, and a
+  renamed input keeps its Cabin.
+- **Review** (`critics-developer`): B1 - a negative integer literal's signed
+  digit text was stored and refused by the reader, disabling the relation;
+  fixed (the text is kept only for a wrapped uint64 literal) with the
+  every-literal-kind cell. B2 - a create racing `DROP COLUMN` across cores;
+  fixed by AQ-Q13. B3 - `DROP COLUMN` checked serving Cabins only; fixed
+  (every status, from the texts). B4 - `DROP CABIN` failed after its row was
+  gone; fixed. B5 - a zero-argument key wrote an unreadable text; refused.
+  B6 - a `sys.tables` page nested under the `sys.cabins` hold; the text's id
+  is issued before it and the order is stated. S2-S6 applied (one row
+  insert for both doors, one text lookup, texts removed by relation, the
+  shape constants in `well_known.hpp`, one label). **Rejected: S1** (delete
+  the evaluator `CabinKeyOf` until it has a caller) - AQ-S2 is its caller
+  and lands next with its cells; `result_type_val`, the duplicate it named,
+  is deleted.
+- **Suite**: 3890/3890 at the stage's commit. Overhead not measured;
+  measured at the milestone's close.
+
+### AQ-S2 - the expression Cabin's witness, serve and record, landed 2026-10-15
+
+On `worktree-aq-expression-cabins` from `f3e6d1fd`.
+
+- **Built.** `NoteCabinWrite` evaluates every expression Cabin's `F` on the
+  new row at INSERT, and at UPDATE when an input moved, appending under
+  `F(new)` (AQ-R4); a key it cannot compute discards the Cabin's sets. The
+  UPDATE path decodes whole rows for such a relation, and the sorted heap
+  fill excludes it. `ExprCabinProbeOf` turns `F(cols) = literal` in
+  `fn_residual` into a `kCabinProbe` carrying `CabinProbe::f`, matched by
+  canonical text at the column Cabin's rank; the conjunct stays and
+  re-checks every served row (AQ-R5). The recording walk compares `F(row)`
+  (`RecordsRow`). The optimizer's candidate is the lowest equality column
+  below 64 of `access_columns` (AQ-R7); an expression probe names none, and
+  reports no column to the statistics (AQ-Q14).
+- **The exit, cell by cell.** Red first: before the declaration the conjunct
+  compiles to no Cabin probe (`AnObservedDayIsServedAndAnswersAsTheWalkDoes`'s
+  first assertion; the stage's own red run at `f3e6d1fd` was **not
+  executed** - at that commit no arm could make the probe). Green: served
+  (`cabin_hits=1`) and byte-identical to the walk. Witness cells: INSERT,
+  multi-row and column-list INSERT, UPDATE into the day (and from NULL),
+  UPDATE out of it, UPDATE of a non-input column (no append), one core and
+  across two (`CabinServeAcrossCores.AnExpressionCabinsDayIsWitnessedByAPeersWrites`),
+  each read served and compared with the walk. The contract suite gains
+  `ExpressionCabinsChangeNoReplyServingOrWitnessing` (btree and heap,
+  re-read after every write against no Cabin at all). AQ-R7's cell
+  (`AFunctionsArgumentIsNeverTheCandidate`).
+- **Mutations, each killed**: the write hook's expression arm removed (9
+  failures, among them the rig cell and the contract cell); the probe
+  matched by function alone (`AnotherColumnsCallIsNotThisCabinsKey`); the
+  served row's `fn_residual` skipped (the planted-surplus cell); the
+  recording compared on the column (`AnObservedDay...`). **Identity on
+  `expr_id` alone** has no mutant here: the probe never reads `expr_id` - it
+  compares the text - and an expression `F` carries no literal to fold, so
+  two expression keys share an `expr_id` only by a real hash collision. The
+  collision cell for a serve is AQ-S3's, where predicates differing in a
+  literal share one by construction.
+- **Review** (`critics-developer`): no write path skips the witness (multi-
+  row, KWP, column-list, parked writes, PURGE, rollback traced). B1 - the
+  failure fallback called `Forget`, which drops an in-flight recording's
+  mark so its walk could bank a set missing the row; now `Discard`, in the
+  expression arm and in the column arm, whose old fallback un-observed an
+  uncoerced key nobody looks up. B2 - the candidate could name a column
+  past 64; fixed with S1 (`access_columns`). B3 - ruled as AQ-Q14. S2 (the
+  input memo), S3 (a bounds check in `RecordsRow`), S4 (the decode mask
+  names every input) applied. The test gaps it named - multi-row and
+  column-list INSERT - are cells now; **the heap hint-failure re-record with
+  `F` has no cell**, since SUS-1 refuses a new heap and the contract
+  suite's heap relation is served without a hint failure.
+- **Suite**: 3901/3901 before the review's fixes; after them 3901/3902 -
+  the one failure `IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`,
+  a cell touching no Cabin that memory records timing out under `-j8` load,
+  which then passed 5/5 alone. Overhead not measured; measured at the
+  milestone's close.
+
+### AQ-S3 - the predicate shape, landed 2026-10-15
+
+On `worktree-aq-expression-cabins` from `1099ad88`.
+
+- **Built.** `PredicateCabinProbeOf` serves a step from a predicate Cabin
+  when every conjunct of `p` equals, by canonical text, one of the step's
+  own lowered conjuncts in `residual` (a comparison with a literal, `IS
+  [NOT] NULL`) or `fn_residual` (an immutable call's), with no
+  normalisation beyond the lowering (AQ-R6, AQ-Q15); the key is `true`;
+  every conjunct stays and re-checks. The witness and the recording are
+  S2's, which already evaluate `p` whole. The literal text writes a uint64's
+  digits only where they are its value, so a statement's `1000` and a
+  stored one are one text. The two expression arms share `OwnCallTerm`,
+  `ProbeFor` and an early return when the relation has no Cabin of the
+  arm's shape.
+- **The exit, cell by cell** (`CabinPredicateTest`): served with every
+  conjunct, in either order and beside others; not served with one missing,
+  another literal, `>=` for `>`, an equivalent but unequal bound, a
+  `BETWEEN` that cannot spell `>`, an `OR` group, or another state - each
+  reply compared with the walk on a twin relation; every write witnessed
+  (INSERT single, multi-row and column-listed, UPDATE into and out of `p`,
+  DELETE), re-read after each; no append for a non-input column; **two
+  keys sharing an `expr_id` serve their own sets** (the serve half of
+  AQ-R2's collision); a `BETWEEN`'s bounds served (AQ-Q15); leading zeros
+  and `IS [NOT] NULL` conjuncts; a function conjunct inside `p`; an
+  enclosing row's conjunct is not the step's own.
+- **Mutation**: the match loosened to any one conjunct - killed (15
+  failures).
+- **Review** (`critics-developer`): no correctness bug - the sources of
+  `Step::residual` (WHERE, inner-join equalities, propagation; outer joins
+  refused; `bool_residual` unread), canonical-text collisions and the
+  witness traced. The `BETWEEN` conflict ruled as AQ-Q15. Applied: the
+  shared helpers, `TakesLiteral` exported, the early return, stale comments,
+  `OnTwin` asserting it rewrote, and the cells it named (multi-row and
+  column-list witness, IS NULL, leading zeros, the enclosing row). Rejected:
+  moving the statement-side conjunct-to-text conversion into
+  `cabin_expr.cpp` - it reads the compiler's slot and `IsOwnColumn`, and the
+  text grammar already has one home in `CabinConjunctText`. The predicate
+  shape's two-core witness is not a cell of its own: the arm it runs
+  through is S2's, whose rig cell covers it.
+- **Found, not caused by AQ**: an inner build buckets a conjunct on the
+  enclosing row by the first outer row alone `[quiet-wrong]`
+  (`docs/inflight/bugs/an-inner-build-buckets-outer-only-conjuncts-for-the-first-outer-row.md`),
+  reproduced with no Cabin; not fixed here (`join-inner-build.md`'s).
+- **Suite**: 3911/3911. Overhead not measured; measured at the milestone's
+  close.
+
+### AQ-S4 - cover serving for `DATE`, landed 2026-10-15
+
+On `worktree-aq-expression-cabins` from `fce79b85`.
+
+- **Built.** `FunctionEntry::cover` (DATE: `[floor(low), floor(high)]` in
+  days); `CoverCabinProbeOf` makes a step whose residual bounds an expression
+  Cabin's single argument on both sides (`>=`/`>`, `<=`/`<`, an equality;
+  the tightest of each) a `kCabinProbe` with `CabinProbe::cover`, ranked
+  after the correlated Cabin arm (AQ-Q16); `RunCoverStep` serves the union of
+  every covered day's set when every one is observed, and walks - counting a
+  miss - when one is not, or without asking when the width passes
+  `cabin_max_values` (AQ-R8; no new setting). `ServeFromCabin` takes several
+  sets, deduped across them and sorted into the walk's order. A cover
+  records nothing, and a heap hint failure under one un-observes the
+  failing day and walks.
+- **The exit, cell by cell** (`CabinCoverTest`, and the contract suite's
+  heap cell): one, two and many days served; one unobserved day walks, then
+  serves once observed, and a write after observation is in its day's set;
+  open and closed bounds at midnight and the last microsecond of a day; a
+  day before the epoch; the value cap; a one-sided range and an inverted one
+  walk, an equality is a one-day cover, an index on the argument outranks
+  the Cabin; a miss is counted.
+- **Mutations, each killed**: the cover's last day dropped (2 failures);
+  the heap fallback's single-set branch (the review's bug) put back (6
+  failures in `AHeapCoversFailedHintBanksNothing`).
+- **Review** (`critics-developer`): **one `[quiet-wrong]` bug, fixed** - a
+  one-day cover on a heap whose hint failed took the single-set path,
+  `FallBackAndReRecord`, and re-recorded its day against the cover's empty
+  probe value: an empty set banked and served as authoritative. The
+  fallback now branches on whether the step is a cover, with the heap cell
+  above. Applied: `ServedSet` by pointer (no key copy per column-Cabin hit),
+  a `first > last` guard, the key check written once, the self-comparing
+  oracle and a redundant line in the cells, and the compile-side cells it
+  named. The ladder rank ruled as AQ-Q16. Not applied: sharing a bounds
+  helper with `TupleKeyRangeOf` (the two differ in sign handling and in
+  which bounds count; the review called it optional). **No cell covers a
+  cover on a join's inner step** - a rank question with no answer at stake.
+- **Also**: the canonical text writes `!=` for an inequality, the spelling
+  the grammar takes, so `SHOW CABINS` prints a key an operator can write.
+- **Suite**: 3919/3919. Overhead not measured; measured at the milestone's
+  close.
+
+### AQ-S5 - the close, 2026-10-15
+
+On `worktree-aq-expression-cabins`.
+
+- **A row per stage**: §6 above - S1 `f3e6d1fd`, S2 `1099ad88`, S3
+  `fce79b85`, S4 `a5e33998`; the prose `c30f03ff`; the merge of
+  `origin/main` (`43cabf49`, the column-name case work) `fecfb88a`, whose one
+  code conflict put AQ's two column resolvers on `Schema::FindColumn`; the
+  regression's fix `e53514f2`.
+- **The overhead, measured once over the whole change**
+  (`bench/v3.2.0/results-aq-close-v3.2.0-48-ga5e33998.md`, A `7c234766`
+  `v3.2.0-44-g7c234766`, where AQ opened - not the order's `740d954a`, which
+  predates every milestone since and would charge them to AQ - against B
+  `a5e33998` `v3.2.0-48-ga5e33998`, release, interleaved with an A'
+  control). **The column-Cabin write path and its served read show none**
+  (an INSERT into a relation with a column Cabin -0.46 / -0.26 us, a
+  served `sym = 'x'` +0.26 / +0.35 us, inside the spread; the served read at
+  10,000 rows, prepared, +1.5 us unresolved). **One regression found and
+  fixed in the milestone**: the every-row `UPDATE` of a relation with **no**
+  Cabin cost +29.5 / +23.0 us (+4.0 / +2.9 %, about 20-30 ns a row) - the
+  per-row `NoteCabinWrite` call, whose body AQ grew; `e53514f2` asks once per
+  statement and skips the call where no Cabin witnesses. Re-measured (§8 of
+  the file, 12 pairs): the fixed build reads inside A's spread on both paths
+  (-5.3 / -4.8 us), its p0 floor at A's where the unfixed one sat 14-16 us
+  above; the fix's own gain over the unfixed build is not resolved against
+  the noise, and the unfixed build reproduced about half its close-run
+  delta. The point `SELECT` by tuple key reads inside. **The expression
+  write path's cost, B only** (the feature's): a `DATE(ts)` Cabin adds +0.73
+  / +0.92 us to an INSERT, about 0.5 us over a column Cabin's, a direction at
+  the size of the noise floor; served `DATE(ts) = d` costs 39.9 us against
+  115.9 us walked. Cut for the hour: no scan-row census, no predicate or
+  cover shape timed, no profile, 3-12 pairs per cell.
+- **What AQ carries out**: AQ-Q4's deferrals (monotone serving, D3's
+  sortable directory), AQ-Q5 (automatic creation of expression and
+  predicate Cabins), AQ-Q6 (D1's fold); `known-gaps.md`'s AQ section (texts
+  left by a transactional `DROP TABLE`, the column shape's unlocked DDL);
+  the heap hint-failure re-record under `F` has a cell only for a cover
+  (`AHeapCoversFailedHintBanksNothing`); and the inner-build `[quiet-wrong]`
+  AQ-S3 found, not AQ's
+  (`docs/inflight/bugs/an-inner-build-buckets-outer-only-conjuncts-for-the-first-outer-row.md`).
+- **Review of the close's code** (`critics-developer`, the merge's
+  resolution and `e53514f2`): no bug; `witnessed` is exactly the per-row
+  test it replaces. Applied: one `CabinsWitness` for the early return and
+  the skip, the reply naming the column as declared, `pos` for the
+  position, and a cell that a key's columns resolve ignoring case.
+- **Suite**: 3936/3936 at the close. The first run hit a full disk
+  (`DropTableReclaimCrashTest`, "No space left on device" in `/tmp`): the
+  close measurement's server data files, 16 GB under
+  `/home/cdkbs/bench-runs/aq-close/wd-*`, were removed and the suite re-run.
+- **Not merged to `main`, not pushed, not tagged**: those wait for the
+  operator's word.

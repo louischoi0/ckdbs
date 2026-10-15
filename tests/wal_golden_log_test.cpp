@@ -77,7 +77,13 @@ namespace {
 // `sys.columns` row carries a flags byte and a `sys.tables` row a spare-slot
 // count, so every catalog row image the stream logs is one or two bytes
 // longer and every later LSN moves. No record kind's framing changes.
-constexpr std::uint32_t kGoldenLogCrc = 0xa98db205u;
+// **Re-pinned at AQ-S1** (on `worktree-aq-expression-cabins`,
+// `instructions/v3.0.0/workorder-aq-expression-cabins.md` AQ-Q9): bootstrap
+// creates `sys.cabin_exprs`, so its `sys.objects`, `sys.tables` and six
+// `sys.columns` rows join the stream after `sys.transitions'`, and every later
+// record's LSN moves with them. The script declares no Cabin, so no record's
+// format changes.
+constexpr std::uint32_t kGoldenLogCrc = 0x34900fceu;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

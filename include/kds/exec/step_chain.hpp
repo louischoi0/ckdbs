@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "kds/base/status.hpp"
@@ -53,6 +55,10 @@
 // "no match" instead of an error.
 
 namespace kds::exec {
+
+// An expression Cabin's compiled key function (cabin_expr.hpp), held by
+// `CabinProbe::f`.
+struct CompiledCabinExpr;
 
 // A resolved reference to one column of one relation.
 //
@@ -202,7 +208,22 @@ struct CabinProbe {
 
     // The cabined column's schema position, for the access statistics and
     // for re-deriving the probe value from a decoded row on the write path.
+    // An expression Cabin's first input (`f` below).
     std::uint16_t col_pos = 0;
+
+    // An **expression or predicate** Cabin's key function (AQ-R5, R6): set,
+    // the step probes `F(row) = value` and the recording walk compares `F` on
+    // each row; null, it is a column Cabin and compares `col_pos`. The
+    // conjuncts the probe was derived from stay in `Step::residual` and
+    // `Step::fn_residual` and re-check every served row.
+    std::shared_ptr<const CompiledCabinExpr> f;
+
+    // **Cover** (AQ-R8): the closed interval of `F`'s keys a range of its
+    // argument maps to - a `DATE(ts)` Cabin's days for `ts` bounded on both
+    // sides. Set, the step is served from the union of those keys' sets, all
+    // observed or none (a walk); `value` is unused. The bounds stay in
+    // `Step::residual` and re-check every served row.
+    std::optional<std::pair<std::int64_t, std::int64_t>> cover;
 
     // The value being probed for, when the equality binds a literal.
     // Unused when `key_from` below is set.

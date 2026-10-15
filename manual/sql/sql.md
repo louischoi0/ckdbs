@@ -527,18 +527,39 @@ Rules:
 - **`ALTER TABLE RENAME COLUMN`** keeps the Transition. It names the column
   by position.
 
-### CREATE CABIN / DROP CABIN (built, CB01-CB11)
+### CREATE CABIN / DROP CABIN (built, CB01-CB11; expressions and predicates since AQ)
 
 ```sql
 CREATE CABIN ON accounts(owner);
-DROP CABIN ON accounts(owner);
+CREATE CABIN ON trades (DATE(ts));
+CREATE CABIN ON orders (state = 'closed' AND amount > 1000);
+DROP CABIN ON trades (DATE(ts));
 ```
 
-- A Cabin is named by what it is on — `(table, column)` — never by a name of
-  its own. One column only in v1; a comma in the column list is refused with
-  a message naming decision C3.
-- Refused on the tuple key and on a `NO CABIN` column, whoever asks.
-- `SHOW CABINS` lists them. Entry sets are memory-resident and do not survive
+- A Cabin is named by what it is on — its table and its key — never by a
+  name of its own. The key is a column, an **immutable** function of columns
+  (`DATE(ts)`; `NOW()` is refused), or a **conjunction** of comparisons of a
+  column or an immutable call with a literal (`=`, `<`, `<=`, `>`, `>=`, `!=`,
+  `IS [NOT] NULL`). Refused, at their byte: `OR`, `NOT`, `BETWEEN` (write its
+  two bounds), `IN`, `LIKE`, a subquery, a comparison of two columns, `=
+  NULL`, a key reading only the tuple key or no column, a second Cabin on the
+  same key (conjuncts in any order are one key), a comma-separated column
+  list (multi-column keys are not built).
+- Refused on the tuple key and on a `NO CABIN` column, whoever asks — as a
+  column Cabin or as any input of a key.
+- **What is served.** `DATE(ts) = '2026-10-01'` from a `DATE(ts)` Cabin; a
+  range of `ts` bounded on both sides (`BETWEEN`, or `>=`/`>` with `<=`/`<`)
+  from the sets of every day it touches, when every one of those days has
+  been observed and they number no more than `cabin_max_values`; and a
+  statement whose WHERE carries **every** conjunct of a predicate Cabin,
+  written exactly - `amount >= 1001` is not `amount > 1000`. Every other
+  statement walks; no answer changes either way. A column renamed is a key
+  kept (keys name columns by position); a column a key reads cannot be
+  dropped until the Cabin is.
+- The expression and predicate forms wait for open writes to the relation,
+  as `CREATE INDEX` does.
+- `SHOW CABINS` lists them, with each one's `shape` (`column`, `expression`,
+  `predicate`) and `key`. Entry sets are memory-resident and do not survive
   a restart; only the catalog row persists.
 - `SHOW CABINS` no longer prints `scope_declines`: every walk covers the
   whole relation, so no probe falls through for its scope.

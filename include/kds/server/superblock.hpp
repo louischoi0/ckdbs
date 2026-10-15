@@ -149,7 +149,14 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // in a slot) and `sys.tables` rows the relation's spare-slot count, so a
 // version-24 catalog page's rows are the wrong size; refused with no
 // migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 25;
+//
+// 26 (AQ-S1, `instructions/v3.0.0/workorder-aq-expression-cabins.md`
+// AQ-R1 as revised): `sys.cabins` rows gained the Cabin's shape and its
+// `expr_id`, so a version-25 catalog page's rows are the wrong size, and
+// bootstrap gained `sys.cabin_exprs` on fixed page 15. Refused with no
+// migration, the standing order of 2026-10-07, which supersedes the order's
+// read-a-28-byte-row-by-length mechanism.
+inline constexpr std::uint32_t kSuperBlockVersion = 26;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

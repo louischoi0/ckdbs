@@ -197,18 +197,21 @@ public:
     // design (an abort burns ids, K3).
     void SetDdlUndoHook(DdlUndoHook hook) { ddl_undo_hook_ = std::move(hook); }
 
-    // **The transition loader** (BV-S2): fills a user relation's
-    // `TableAccess::transitions` from sys.transitions. A seam rather than a
-    // call because the rows are row-codec and their declarations re-parsed,
-    // which is `exec/`'s, and `exec/` depends on this layer. Armed by the
-    // `CommandDispatcher` constructor - every serving catalog has one, and
-    // every write runs through a dispatcher. Unarmed (bootstrap, recovery, a
-    // bare-store test) a fill leaves the list empty.
-    using TransitionLoader = std::function<Status(TableAccess&)>;
+    // **The declaration loader** (BV-S2, AQ-S1): fills a user relation's
+    // `TableAccess::transitions` from sys.transitions and each
+    // `TableAccess::expr_cabins` entry's `F` from sys.cabin_exprs. A seam
+    // rather than a call because the rows are row-codec and their texts
+    // re-parsed, which is `exec/`'s, and `exec/` depends on this layer.
+    // Armed by the `CommandDispatcher` constructor - every serving catalog
+    // has one, and every write runs through a dispatcher. Unarmed
+    // (bootstrap, recovery, a bare-store test) a fill leaves the Transitions
+    // empty and every expression Cabin's `F` null, which nothing serves or
+    // witnesses.
+    using DeclarationLoader = std::function<Status(TableAccess&)>;
     // Drops the memo: an entry filled before the loader was armed would
     // serve its relation without its Transitions.
-    void SetTransitionLoader(TransitionLoader loader) {
-        transition_loader_ = std::move(loader);
+    void SetDeclarationLoader(DeclarationLoader loader) {
+        declaration_loader_ = std::move(loader);
         cache_.Invalidate();
     }
 
@@ -1016,6 +1019,26 @@ public:
     // this per step (catalog_cache.hpp's absence rule).
     StatusOr<SysCabinRow> FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos);
 
+    // Declares an **expression or predicate** Cabin (AQ-R1, R2) and returns
+    // its `cabin_id`. `F` is `exec/`'s, so the two questions only it can
+    // answer are asked back: `same_f(row)` - whether an existing Cabin of
+    // this relation, shape and `expr_id` has the compiled `F` being declared
+    // - and `record_f(cabin_id)`, which writes `F`'s text into
+    // sys.cabin_exprs. Both run under sys.cabins' root page held exclusive,
+    // so two cores cannot both declare one `F`; `record_f` runs before the
+    // row lands. AlreadyExists for a second Cabin on one `F`.
+    using SameKeyFunction = std::function<StatusOr<bool>(const SysCabinRow&)>;
+    using RecordKeyFunction = std::function<Status(std::uint64_t cabin_id)>;
+    StatusOr<std::uint64_t> CreateExprCabin(Oid rel_oid, std::uint8_t shape, std::uint64_t expr_id,
+                                            std::uint8_t origin, const SameKeyFunction& same_f,
+                                            const RecordKeyFunction& record_f);
+
+private:
+    // Both doors' last act: the row, the schema word, the log line.
+    Status InsertCabinRow(const SysCabinRow& row);
+
+public:
+
     // ---- Foreign keys (docs/spec/foreign-keys.md, FK-M1) ----------------
 
     // Records that `child_rel_oid`'s column `child_column_no` references
@@ -1392,7 +1415,7 @@ private:
     wal::WalManager* wal_ = nullptr;
     // RV3-3: per-DDL-statement, dispatcher-installed; empty = no undo.
     DdlUndoHook ddl_undo_hook_;
-    TransitionLoader transition_loader_;
+    DeclarationLoader declaration_loader_;
     // Delete-marks written this run and possibly still on a page - the
     // gate that keeps PurgeSettledDeleteMarks() from Get()-dirtying every
     // catalog page after a DDL that marked nothing (found when D2 made

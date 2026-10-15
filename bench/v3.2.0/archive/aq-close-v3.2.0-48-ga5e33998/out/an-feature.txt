@@ -1,0 +1,19 @@
+| comparison (server CPU us, same server, same run) | path | n | base | feature | feature - base, median [min, max] | feature above base |
+|---|---|---|---|---|---|---|
+| cab-insert - plain-insert, B arm of c1+c2 | literal | 6 | 23.09 | 23.78 | +0.61 [+0.48, +1.32] (+2.7 %) | 6 of 6 |
+| cab-insert - plain-insert, B arm of c1+c2 | prepared | 6 | 22.65 | 23.38 | +0.69 [+0.56, +0.80] (+3.1 %) | 6 of 6 |
+| cab-insert - plain-insert, A arm of c1+c2 (A has the column Cabin too) | literal | 6 | 23.62 | 24.28 | +0.83 [+0.52, +1.54] (+3.5 %) | 6 of 6 |
+| cab-insert - plain-insert, A arm of c1+c2 (A has the column Cabin too) | prepared | 6 | 22.93 | 23.62 | +0.68 [+0.58, +0.81] (+3.0 %) | 6 of 6 |
+| cab-insert - plain-insert, B and B2 of x | literal | 8 | 22.70 | 23.53 | +0.59 [+0.31, +1.10] (+2.6 %) | 8 of 8 |
+| cab-insert - plain-insert, B and B2 of x | prepared | 8 | 22.24 | 22.82 | +0.72 [-0.23, +1.63] (+3.3 %) | 7 of 8 |
+| x-insert - x-insert-plain (DATE(ts) expression Cabin), B and B2 of x | literal | 8 | 23.29 | 23.93 | +0.73 [-0.17, +1.15] (+3.1 %) | 7 of 8 |
+| x-insert - x-insert-plain (DATE(ts) expression Cabin), B and B2 of x | prepared | 8 | 22.96 | 23.92 | +0.92 [-1.95, +1.83] (+4.0 %) | 7 of 8 |
+| x-insert - cab-insert (expression vs column Cabin), B and B2 of x | literal | 8 | 23.53 | 23.93 | +0.46 [+0.20, +0.69] (+1.9 %) | 8 of 8 |
+| x-insert - cab-insert (expression vs column Cabin), B and B2 of x | prepared | 8 | 22.82 | 23.92 | +0.77 [+0.32, +2.33] (+3.4 %) | 8 of 8 |
+
+| served against walked (server CPU us, same server, same run) | path | n | walked | served | walked / served | served above walked |
+|---|---|---|---|---|---|---|
+| DATE(ts) = d: x-walk vs x-select, B and B2 of x | literal | 8 | 115.86 | 39.86 | 2.92x | 0 of 8 |
+| DATE(ts) = d: x-walk vs x-select, B and B2 of x | prepared | 8 | 116.73 | 40.16 | 2.93x | 0 of 8 |
+| sym = 'x': plain-select vs cab-select, B arm of c1+c2 | literal | 6 | 64.29 | 31.68 | 2.01x | 0 of 6 |
+| sym = 'x': plain-select vs cab-select, B arm of c1+c2 | prepared | 6 | 62.83 | 31.13 | 2.02x | 0 of 6 |
