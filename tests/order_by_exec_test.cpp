@@ -412,15 +412,18 @@ TEST_F(OrderByExecTest, AZeroCapRefusesALimitedSortToo) {
     EXPECT_TRUE(Rows("SELECT v FROM t ORDER BY v LIMIT 0").empty());
 }
 
-// ---- 8. What stays refused ------------------------------------------------
+// ---- 8. Aggregated output ---------------------------------------------------
 
-TEST_F(OrderByExecTest, OrderByOverAnAggregatedStatementIsStillRefused) {
+// The native compile still declines ORDER BY over aggregated output (fold
+// order is no contract, aggregate.md §2); the query layer answers it since
+// BU-S5 (parser-v2.md I19), sorting the groups it holds.
+TEST_F(OrderByExecTest, OrderByOverAnAggregatedStatementIsTheQueryLayers) {
     Run("CREATE TABLE t (id int64, grp varchar)");
-    Run("INSERT INTO t VALUES ('a')");
-    const std::string reply = RunExpectingError("SELECT grp, COUNT(*) FROM t GROUP BY grp "
-                                                "ORDER BY grp");
-    EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
-    EXPECT_NE(reply.find("ORDER BY"), std::string::npos) << reply;
+    for (const char* g : {"b", "a", "b", "c"}) Run(std::string("INSERT INTO t VALUES ('") + g + "')");
+    EXPECT_EQ(Rows("SELECT grp, COUNT(*) FROM t GROUP BY grp ORDER BY grp"),
+              (std::vector<std::string>{"a,1", "b,2", "c,1"}));
+    EXPECT_EQ(Rows("SELECT grp, COUNT(*) FROM t GROUP BY grp ORDER BY COUNT(*) DESC, grp LIMIT 2"),
+              (std::vector<std::string>{"b,2", "a,1"}));
 }
 
 // ---- 9. OrderKey: the ordering decision, unit-tested -----------------------

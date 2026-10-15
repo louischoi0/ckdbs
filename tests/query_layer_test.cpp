@@ -198,9 +198,7 @@ TEST_F(QueryLayerTest, ARelationWalkIsBoundedBySortMaxRowsAsItRuns) {
     ExpectRows("SELECT id + 0 FROM ord WHERE id < 13", {"id + 0", "10", "11", "12"});
 }
 
-// A grouped layer statement is a BU-S5 form (`exec::FormsLanded`); BU-S5
-// enables this cell with the arm it deletes.
-TEST_F(QueryLayerTest, DISABLED_AggregateMaxGroupsOfZeroRefusesAsTheNativeFoldDoes) {
+TEST_F(QueryLayerTest, AggregateMaxGroupsOfZeroRefusesAsTheNativeFoldDoes) {
     exec::AggregateLimits limits;
     limits.max_groups = 0;
     dispatcher_->set_aggregate_limits(limits);
@@ -255,8 +253,6 @@ TEST_F(QueryLayerTest, AQualifierMatchesItsBindingIgnoringCase) {
 // (`exec::FormsLanded`): the layer reads these and does not answer them.
 TEST_F(QueryLayerTest, ALaterStagesFormKeepsTheNativeRefusal) {
     for (const char* sql : {
-             "SELECT region, COUNT(*) FROM cust GROUP BY region HAVING COUNT(*) > 1",  // S5
-             "SELECT region, COUNT(*) + 0 FROM cust GROUP BY region",                // S5
              "SELECT c.id FROM cust AS c LEFT JOIN ord AS o ON c.id = o.cust_id",      // S6
              "SELECT c.id FROM cust AS c, ord AS o WHERE c.id = o.cust_id",            // S6
              "SELECT id FROM cust UNION SELECT id FROM ord",                           // S7
@@ -266,6 +262,66 @@ TEST_F(QueryLayerTest, ALaterStagesFormKeepsTheNativeRefusal) {
         const std::string reply = Run(sql);
         EXPECT_EQ(reply.rfind("ERR", 0), 0u) << sql << " -> " << reply;
     }
+}
+
+// ---- BU-S5: grouped statements ---------------------------------------------
+
+TEST_F(QueryLayerTest, HavingKeepsAGroupOnlyWhenItsConditionIsTrue) {
+    ExpectRows("SELECT cust_id, SUM(amount) FROM ord GROUP BY cust_id HAVING SUM(amount) > 200",
+               {"cust_id,sum(amount)", "1,350", "2,375", "4,550"});
+    ExpectRows("SELECT status, COUNT(*) FROM ord GROUP BY status "
+               "HAVING COUNT(*) > 3 OR MAX(amount) > 400",
+               {"status,count(*)", "open,4", "paid,3"});
+    // A NULL condition drops the group (BU-R4): below id 17, MAX(note) is
+    // NULL for 'open'.
+    ExpectRows("SELECT status FROM ord WHERE id < 17 GROUP BY status HAVING MAX(note) != 'zzz'",
+               {"status", "cancel", "paid"});
+    // HAVING without GROUP BY makes one global group.
+    ExpectRows("SELECT COUNT(*) FROM ord HAVING COUNT(*) > 100", {"count(*)"});
+}
+
+TEST_F(QueryLayerTest, OrderByAndLimitOverGroups) {
+    ExpectRows("SELECT status, COUNT(*) FROM ord GROUP BY status ORDER BY status",
+               {"status,count(*)", "cancel,1", "open,4", "paid,3"}, /*ordered=*/true);
+    ExpectRows("SELECT cust_id, SUM(amount) FROM ord GROUP BY cust_id "
+               "ORDER BY SUM(amount) DESC, cust_id",
+               {"cust_id,sum(amount)", "4,550", "2,375", "1,350", "6,120", "99,10"},
+               /*ordered=*/true);
+    ExpectRows("SELECT cust_id, COUNT(*) AS n FROM ord GROUP BY cust_id ORDER BY n DESC, 1 "
+               "LIMIT 2 OFFSET 1",
+               {"cust_id,n", "2,2", "4,2"}, /*ordered=*/true);
+}
+
+TEST_F(QueryLayerTest, AnAggregateTakesAnAliasAndAnExpression) {
+    ExpectRows("SELECT COUNT(*) AS n FROM ord", {"n", "8"});
+    ExpectRows("SELECT SUM(amount * 2) FROM ord", {"SUM(amount * 2)", "2810"});
+    ExpectRows("SELECT COUNT(*) + 1, MAX(amount) - MIN(amount) AS spread FROM ord",
+               {"COUNT(*) + 1,spread", "9,490"});
+    // GROUP BY an expression (BU-Q14), a select item reading it as written.
+    ExpectRows("SELECT amount / 100, COUNT(*) FROM ord GROUP BY amount / 100",
+               {"amount / 100,count(*)", "0,3", "1,2", "2,1", "3,1", "5,1"});
+    ExpectRefused("SELECT amount + 1 FROM ord GROUP BY amount / 100", "must appear in GROUP BY");
+    ExpectRefused("SELECT SUM(COUNT(*)) FROM ord", "aggregate");
+}
+
+TEST_F(QueryLayerTest, AnAggregateInASubquery) {
+    ExpectRows("SELECT id FROM cust WHERE id IN "
+               "(SELECT cust_id FROM ord GROUP BY cust_id HAVING COUNT(*) > 1)",
+               {"id", "1", "2", "4"});
+    ExpectRows("SELECT id FROM ord WHERE CAST(amount AS decimal(18,2)) > "
+               "(SELECT AVG(CAST(amount AS decimal(18,2))) FROM ord) ORDER BY id",
+               {"id", "11", "13", "15"}, /*ordered=*/true);
+}
+
+// The native fold checks every addition (aggregate.md AG3): a SUM crossing
+// INT64_MAX fails though a later row brings it back.
+TEST_F(QueryLayerTest, ASumCrossingInt64MaxFailsAsTheNativeFoldDoes) {
+    Ok("CREATE TABLE big (id int64, v int64)");
+    Ok("INSERT INTO big VALUES (1, 9223372036854775807)");
+    Ok("INSERT INTO big VALUES (2, 1)");
+    Ok("INSERT INTO big VALUES (3, -5)");
+    ExpectRefused("SELECT SUM(v + 0) FROM big", "SUM overflow");
+    ExpectRefused("SELECT SUM(v) FROM big HAVING COUNT(*) > 0", "SUM overflow");
 }
 
 }  // namespace

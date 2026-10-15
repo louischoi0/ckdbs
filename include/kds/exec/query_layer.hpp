@@ -80,12 +80,11 @@ public:
 };
 
 // Whether every form `query` holds belongs to a stage that has landed. The
-// layer reads the forms of BU-S5..S7 already; until each stage lands with
+// layer reads the forms of BU-S6..S7 already; until each stage lands with
 // its spec, cells and review, a statement holding one is not the layer's
-// (the dispatcher keeps the native refusal, BU-Q9): S5 a grouped block
-// (`GROUP BY`, `HAVING`, an aggregate anywhere), S6 a join that is not one
-// inner `ON a.x = b.y`, S7 a set operation, a derived table, a subquery as
-// a value outside a condition. Each stage deletes its arm.
+// (the dispatcher keeps the native refusal, BU-Q9): S6 a join that is not
+// one inner `ON a.x = b.y`, S7 a set operation, a derived table, a subquery
+// as a value outside a condition. Each stage deletes its arm.
 bool FormsLanded(const parser::Query& query);
 
 // Runs `query`, whose text is `sql`, and returns its result.

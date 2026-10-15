@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -375,9 +376,7 @@ struct CompiledBlock {
     std::map<std::string, std::size_t> merged;  // a USING column's name, folded (`FoldName`) -> the index it reads
     std::vector<std::unique_ptr<TypedSetExpr>> where;
     bool grouped = false;
-    bool has_group_by = false;
-    std::vector<std::unique_ptr<TypedSetExpr>> keys;
-    std::vector<SetType> key_types;
+    std::vector<std::unique_ptr<TypedSetExpr>> keys;  // GROUP BY's; empty for one global group
     std::vector<Agg> aggs;
     std::vector<LayerColumn> group_columns;  // keys, then aggregates
     std::unique_ptr<TypedSetExpr> having;
@@ -500,6 +499,8 @@ private:
                                                  const std::function<std::optional<ResolvedColumn>(
                                                      const Expr&)>& computed = {});
     Status CompileSetOrder(const Query& q, CompiledQuery& cq);
+    std::function<StatusOr<SetType>(const Expr&, std::size_t&)> SubqueryTyper(const Scope& scope,
+                                                                              CompiledBlock& cb);
 
     StatusOr<std::vector<Row>> ExecuteBlock(CompiledBlock& b, const Row& outer);
     StatusOr<std::vector<Row>> SourceRows(Source& s);
@@ -540,7 +541,15 @@ StatusOr<std::unique_ptr<TypedSetExpr>> Runner::Type(
     es.clause = clause;
     es.computed = computed;
     es.resolve = [&scope](const Expr& col) { return ResolveIn(scope, col); };
-    es.subquery = [this, &scope, &cb](const Expr& node, std::size_t& id) -> StatusOr<SetType> {
+    es.subquery = SubqueryTyper(scope, cb);
+    return TypeQueryExpression(e, es);
+}
+
+// Types a subquery `node` names as a block of `scope`'s, and files it in
+// `cb.subqueries` under `id`.
+std::function<StatusOr<SetType>(const Expr&, std::size_t&)> Runner::SubqueryTyper(
+    const Scope& scope, CompiledBlock& cb) {
+    return [this, &scope, &cb](const Expr& node, std::size_t& id) -> StatusOr<SetType> {
         auto sub = Compile(*node.query, &scope);
         if (!sub.ok()) return sub.status();
         const CompiledQuery& q = *sub.value();
@@ -554,7 +563,6 @@ StatusOr<std::unique_ptr<TypedSetExpr>> Runner::Type(
         cb.subqueries.push_back(std::move(sub.value()));
         return t;
     };
-    return TypeQueryExpression(e, es);
 }
 
 StatusOr<std::unique_ptr<CompiledQuery>> Runner::Compile(const Query& q, const Scope* parent) {
@@ -843,6 +851,15 @@ Status Runner::CompileWhere(const QueryBlock& b, const Scope& wide, CompiledBloc
     return Status::OK();
 }
 
+// A decimal SUM's or AVG's type: the argument's scale at its family's
+// widest precision, as the native fold answers (aggregate.md AG3).
+SetType DecimalResult(const SetType& arg) {
+    const bool wide = arg.type_val == catalog::kTypeValDecimalWide;
+    return Concrete(arg.type_val,
+                    catalog::PackDecimalLen(wide ? kMaxDecimalPrecisionWide : kMaxDecimalPrecision,
+                                            catalog::DecimalScaleOf(arg.len)));
+}
+
 Status Runner::CompileGrouping(const QueryBlock& b, const std::vector<parser::OrderItem>& order,
                                const Scope& wide, CompiledBlock& cb) {
     const auto same_column = SameColumnIn(wide);
@@ -862,7 +879,6 @@ Status Runner::CompileGrouping(const QueryBlock& b, const std::vector<parser::Or
         if (g->kind == Expr::Kind::kColumn) col.qualifier = cb.wide[typed.value()->column_no].qualifier;
         col.type = typed.value()->type;
         cb.group_columns.push_back(col);
-        cb.key_types.push_back(typed.value()->type);
         cb.keys.push_back(std::move(typed.value()));
     }
 
@@ -909,10 +925,7 @@ Status Runner::CompileGrouping(const QueryBlock& b, const std::vector<parser::Or
                 if (catalog::IsIntegerTypeVal(tv)) {
                     agg.out = Concrete(catalog::kTypeValInt64, 0);
                 } else if (IsDecimalType(tv)) {
-                    const bool w = tv == catalog::kTypeValDecimalWide;
-                    agg.out = Concrete(tv, catalog::PackDecimalLen(
-                                               w ? kMaxDecimalPrecisionWide : kMaxDecimalPrecision,
-                                               catalog::DecimalScaleOf(arg_type.len)));
+                    agg.out = DecimalResult(arg_type);
                 } else {
                     return Status::InvalidArgument("SUM requires a signed integer or decimal "
                                                    "value, not " + SetTypeName(arg_type) +
@@ -927,10 +940,7 @@ Status Runner::CompileGrouping(const QueryBlock& b, const std::vector<parser::Or
                         "; the answer is given at the value's declared scale - CAST it to "
                         "DECIMAL(p, s), or compute SUM and COUNT");
                 } else {
-                    const bool w = tv == catalog::kTypeValDecimalWide;
-                    agg.out = Concrete(tv, catalog::PackDecimalLen(
-                                               w ? kMaxDecimalPrecisionWide : kMaxDecimalPrecision,
-                                               catalog::DecimalScaleOf(arg_type.len)));
+                    agg.out = DecimalResult(arg_type);
                 }
                 break;
         }
@@ -966,7 +976,6 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
     for (const parser::OutputItem& item : b.items) aggregated |= HasAggregate(item.expr.get());
     for (const parser::OrderItem& o : order) aggregated |= HasAggregate(o.expr.get());
     cb.grouped = aggregated;
-    cb.has_group_by = !b.group_by.empty();
 
     // The context the select list, HAVING and ORDER BY are typed in.
     Scope grouped_scope;
@@ -985,7 +994,7 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
         computed = [&cb, key_nodes, same_column](const Expr& e) -> std::optional<ResolvedColumn> {
             for (std::size_t i = 0; i < key_nodes.size(); ++i) {
                 if (SameExpr(*key_nodes[i], e, same_column)) {
-                    return ResolvedColumn{i, cb.key_types[i]};
+                    return ResolvedColumn{i, cb.keys[i]->type};
                 }
             }
             if (e.kind == Expr::Kind::kAggregate) {
@@ -1023,21 +1032,7 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
                 ResolvedColumn{cb.group_columns.size() + outer.value()->index,
                                outer.value()->type});
         };
-        es.subquery = [this, &grouped_scope, &cb](const Expr& node,
-                                                  std::size_t& id) -> StatusOr<SetType> {
-            auto sub = Compile(*node.query, &grouped_scope);
-            if (!sub.ok()) return sub.status();
-            const CompiledQuery& sq = *sub.value();
-            if (node.op != ExprOp::kExists && sq.columns.size() != 1) {
-                return Status::InvalidArgument("a subquery used as a value returns one column, "
-                                               "not " + std::to_string(sq.columns.size()) +
-                                               At(node.op_byte_offset));
-            }
-            id = cb.subqueries.size();
-            SetType t = sq.columns.front().type;
-            cb.subqueries.push_back(std::move(sub.value()));
-            return t;
-        };
+        es.subquery = SubqueryTyper(grouped_scope, cb);
         return TypeQueryExpression(e, es);
     };
     if (b.having != nullptr) {
@@ -1358,27 +1353,27 @@ StatusOr<std::vector<Row>> Runner::GroupRows(CompiledBlock& b, const std::vector
         groups.push_back(Group{std::move(keys), std::vector<AggState>(b.aggs.size())});
         return groups.size() - 1;
     };
-    if (!b.has_group_by) {
+    if (b.keys.empty()) {
         if (auto g = new_group({}); !g.ok()) return g.status();
     }
     for (const Row& wide_row : rows) {
         const Row eval = outer.empty() ? wide_row : Concat(wide_row, outer);
         std::size_t g = 0;
-        if (b.has_group_by) {
+        if (!b.keys.empty()) {
             Row keys;
             keys.reserve(b.keys.size());
+            std::string key;
             for (const auto& k : b.keys) {
                 auto v = Eval(*k, eval, b);
                 if (!v.ok()) return v.status();
+                if (Status s = AppendKey(key, v.value(), k->type); !s.ok()) return s;
                 keys.push_back(std::move(v.value()));
             }
-            auto key = KeyOf(keys, 0, keys.size(), b.key_types);
-            if (!key.ok()) return key.status();
-            auto it = by_key.find(key.value());
+            auto it = by_key.find(key);
             if (it == by_key.end()) {
                 auto made = new_group(std::move(keys));
                 if (!made.ok()) return made.status();
-                it = by_key.emplace(std::move(key.value()), made.value()).first;
+                it = by_key.emplace(std::move(key), made.value()).first;
             }
             g = it->second;
         }
@@ -1404,9 +1399,15 @@ StatusOr<std::vector<Row>> Runner::GroupRows(CompiledBlock& b, const std::vector
                 case AggFunc::kAvg: {
                     auto n = NumberOf(v.value());
                     if (!n.ok()) return n.status();
-                    if (__builtin_add_overflow(st.sum, n.value(), &st.sum)) {
-                        return Status::OutOfRange(std::string(parser::AggFuncText(agg.func)) +
-                                                  " overflowed" + At(agg.node->byte_offset));
+                    // Checked at every step in the native fold's accumulator
+                    // (aggregate.md AG3): int64, int128 for a DECIMAL128 -
+                    // so a sum crossing INT64_MAX fails even if it comes back.
+                    const bool wide = agg.out.type_val == catalog::kTypeValDecimalWide;
+                    if (__builtin_add_overflow(st.sum, n.value(), &st.sum) ||
+                        (!wide && (st.sum > std::numeric_limits<std::int64_t>::max() ||
+                                   st.sum < std::numeric_limits<std::int64_t>::min()))) {
+                        return Status::OutOfRange(std::string(agg.func == AggFunc::kAvg ? "AVG" : "SUM") +
+                                                  " overflow" + At(agg.node->byte_offset));
                     }
                     break;
                 }
@@ -1656,10 +1657,10 @@ namespace {
 
 bool QueryLanded(const parser::Query& q);
 
-// `in_condition`: the node sits under a WHERE, where a subquery is S4's.
+// `in_condition`: the node sits under a WHERE or a HAVING, where a
+// subquery is a condition's (S4) rather than a value's.
 bool ExprLanded(const Expr& e, bool in_condition) {
     switch (e.kind) {
-        case Expr::Kind::kAggregate: return false;  // S5
         case Expr::Kind::kSubquery:
             if (!in_condition) return false;  // S7: a subquery as a value
             if (e.query != nullptr && !QueryLanded(*e.query)) return false;
@@ -1684,8 +1685,7 @@ bool JoinLanded(const parser::FromJoin& j) {
 bool QueryLanded(const parser::Query& q) {
     if (q.op != parser::Query::Op::kBlock || q.block == nullptr) return false;  // S7
     const parser::QueryBlock& b = *q.block;
-    if (!b.group_by.empty() || b.having != nullptr) return false;  // S5
-    if (b.from.derived != nullptr) return false;                    // S7
+    if (b.from.derived != nullptr) return false;  // S7
     if (!std::all_of(b.joins.begin(), b.joins.end(), JoinLanded)) return false;  // S6
     for (const parser::OutputItem& item : b.items) {
         if (item.expr != nullptr && !ExprLanded(*item.expr, false)) return false;
@@ -1693,6 +1693,10 @@ bool QueryLanded(const parser::Query& q) {
     for (const parser::OrderItem& o : q.order_by) {
         if (o.expr != nullptr && !ExprLanded(*o.expr, false)) return false;
     }
+    for (const auto& g : b.group_by) {
+        if (!ExprLanded(*g, false)) return false;
+    }
+    if (b.having != nullptr && !ExprLanded(*b.having, true)) return false;
     return b.where == nullptr || ExprLanded(*b.where, true);
 }
 

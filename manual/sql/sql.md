@@ -1035,12 +1035,20 @@ select list with no `FROM` - is answered by the query layer
   output, a sort - is bounded by `sort_max_rows`, and a statement that
   would pass it fails with `RESOURCE_EXHAUSTED` naming the setting, never a
   partial answer.
-- **What it answers grows stage by stage.** `HAVING`, an aggregate over an
-  expression or in a subquery, outer, cross, comma and `USING` joins, an
-  `ON` beyond one column equality, set operations, derived tables and a
-  subquery in the select list are read by the layer's grammar but answered
-  only once their stage of BU lands; until then each keeps the refusal it
-  has always had.
+- **Grouped statements on the layer** (since BU-S5): `HAVING` (any
+  condition over the keys and aggregates, three-valued - a group whose
+  condition is unknown is dropped), `ORDER BY` / `LIMIT` / `OFFSET` over
+  groups, an aggregate under an alias, an aggregate over an expression
+  (`SUM(amount * 2)`), an expression over aggregates (`COUNT(*) + 1`),
+  `GROUP BY` an expression, and an aggregate inside a subquery. The fold's
+  rules hold unchanged: NULLs per §3.1 of `aggregate.md`, `SUM` checked
+  int64 at every row, `AVG` over a decimal only, `aggregate_max_groups`
+  refusing past the cap.
+- **What it answers grows stage by stage.** Outer, cross, comma and
+  `USING` joins, an `ON` beyond one column equality, set operations,
+  derived tables and a subquery in the select list are read by the layer's
+  grammar but answered only once their stage of BU lands; until then each
+  keeps the refusal it has always had.
 - No Waystone trail is recorded or replayed for a layer statement, and
   `ANALYZE` does not describe one: `ANALYZE` of a layer statement answers
   the native refusal.
@@ -1056,14 +1064,16 @@ SELECT AVG(balance) FROM accounts;
 - Functions: `COUNT`, `SUM`, `MIN`, `MAX`, `AVG`; `DISTINCT` accepted inside
   any of them (`MIN`/`MAX` treat it as the standard's no-op). `COUNT(*)` is
   the one star form; `COUNT(DISTINCT *)` is refused.
-- `GROUP BY <col> [, ...]` — column references only, unparenthesized (the
-  assertion grammar's parenthesized list is a different production).
+- `GROUP BY <col> [, ...]` — column references on the native path,
+  unparenthesized (the assertion grammar's parenthesized list is a
+  different production); `GROUP BY` an expression is the query layer's.
 - `SELECT b FROM t GROUP BY b` is aggregated (one row per group) even with
   no function.
-- Refused with a position: `HAVING`; `ORDER BY` over aggregated output; a
-  bare column not in `GROUP BY` (there is no "any row" mode); `SELECT *`
-  with `GROUP BY`; an aggregate or `GROUP BY` inside a subquery (AG8,
-  permanent for v1); aggregation over `sys.*` views (AG12).
+- `HAVING`, `ORDER BY`/`LIMIT` over aggregated output and an aggregate
+  inside a subquery are answered by the query layer since BU-S5.
+- Refused with a position: a bare column not in `GROUP BY` (there is no
+  "any row" mode); `SELECT *` with `GROUP BY`; aggregation over `sys.*`
+  views (AG12).
 - `SUM` is checked int64 — overflow fails the statement, never wraps.
   `AVG` over an integer column is refused at compile (it would invent
   digits); `AVG(DECIMAL(p,s))` answers at exactly scale `s`, half-even.
@@ -1125,11 +1135,11 @@ across steps, tuple key order within one — so `LIMIT n OFFSET m` means rows
   naming the key. It never returns a partial ordering, and it never
   spills to disk. Adding a `LIMIT` is usually the answer: it caps what is
   held at `offset + limit` regardless of the relation's size.
-- Ordering over aggregated output (`GROUP BY`) is still refused with a
-  byte position.
-- The tail is refused over an aggregated statement (groups emit in fold
-  order, which is not a contract) and inside a subquery, each with a
-  byte position.
+- Ordering and the tail over aggregated output (`GROUP BY`) are the query
+  layer's since BU-S5: the groups are sorted where the statement says, and
+  without an `ORDER BY` a `LIMIT` takes a prefix of fold order, which is
+  not a contract.
+- The tail is refused inside a subquery, with a byte position.
 - **Over a catalog view (`sys.*`), `LIMIT` and `OFFSET` apply and
   `ORDER BY` is refused with a byte position.** A view's rows are
   materialized by the catalog's readers rather than walked out of pages,
@@ -1317,7 +1327,7 @@ worth anything:
 - **`ERR NOT_IMPLEMENTED retryable=0 …`** — the design admits this form and
   this release has not built it. Feature-detect and try again against a later
   server. Most of this section is this one: CTEs, derived tables, outer
-  joins, `HAVING`, `UNIQUE` indexes, `ALTER TABLE`'s row-rewriting forms (a type change, an `ADD` with no free slot), a
+  joins, `UNIQUE` indexes, `ALTER TABLE`'s row-rewriting forms (a type change, an `ADD` with no free slot), a
   value wider than one var-heap page.
 - **`ERR UNSUPPORTED retryable=0 …`** — this engine's architecture cannot
   admit the form, so no later server answers it and the statement must be
@@ -1367,13 +1377,10 @@ they were before the split.
   without changing a single reply. What stays forbidden is what the rule
   was always about: no algorithm gets *chosen*, and no statement is
   rewritten.
-- **No `HAVING`, and no `ORDER BY` over aggregated output.** `HAVING`
-  answers with "filter before the fold with WHERE, or filter the result
-  client-side". Ordering *aggregated* output stays refused deliberately:
-  it is one half of a decision to be made with `HAVING`, and answering
-  half of it would settle the rest by accident. Ordinary statements do
-  have a full `ORDER BY` — any columns, `ASC`/`DESC` — since 2026-08-11;
-  see Ordering and pagination.
+- **`HAVING` and `ORDER BY` over aggregated output are answered off the
+  step chain.** Since BU-S5 both run on the query layer, over the groups
+  it holds; the native fold still emits groups in first-seen order and
+  never sorts them.
 - **No cross-dialect shims.** No `SERIAL`, no `AUTO_INCREMENT` (every tuple key is
   already both when the `INSERT` omits it, and deliberately neither when the
   `INSERT` names it), no `IF NOT EXISTS`, no `public.` schema

@@ -322,8 +322,7 @@ TEST_F(FunctionConjunctTest, WhatIsRefusedAndWhere) {
         {"SELECT id FROM t WHERE v = NOW()", "different types at byte 27"},
         // What the native path declines, the query layer types (BU-S4,
         // parser-v2.md I19), and refuses where the types disagree.
-        {"SELECT id FROM t GROUP BY DATE(ts)",
-         "NOT_IMPLEMENTED retryable=0 GROUP BY takes column references only"},
+        {"SELECT id FROM t GROUP BY DATE(ts)", "must appear in GROUP BY"},
         {"SELECT id FROM t WHERE DATE('2026-10-01') = '2026-10-01'",
          "string literal does not fit timestamp (byte 28)"},
         {"SELECT id FROM t WHERE DATE(ts) IN (SELECT id FROM u)", "no implicit conversion"},
