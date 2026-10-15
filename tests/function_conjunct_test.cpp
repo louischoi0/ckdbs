@@ -320,21 +320,12 @@ TEST_F(FunctionConjunctTest, WhatIsRefusedAndWhere) {
         {"SELECT id FROM t WHERE DATE(ts) = 5000000",
          "a function comparison's literal at byte 34"},
         {"SELECT id FROM t WHERE v = NOW()", "different types at byte 27"},
-        // Understood and not built.
-        {"SELECT DATE(ts) FROM t", "NOT_IMPLEMENTED retryable=0 a function call is supported "
-                                   "only in a WHERE comparison and a SET value (byte 7)"},
-        {"SELECT id FROM t ORDER BY DATE(ts)", "NOT_IMPLEMENTED"},
-        {"SELECT id FROM t GROUP BY DATE(ts)", "NOT_IMPLEMENTED"},
-        {"SELECT id FROM t WHERE DATE(DATE(ts)) = '2026-10-01'",
-         "a function call inside a function call (byte 28)"},
+        // What the native path declines, the query layer types (BU-S4,
+        // parser-v2.md I19), and refuses where the types disagree.
+        {"SELECT id FROM t GROUP BY DATE(ts)", "must appear in GROUP BY"},
         {"SELECT id FROM t WHERE DATE('2026-10-01') = '2026-10-01'",
-         "a function's argument is a column reference (byte 28)"},
-        {"SELECT id FROM t WHERE DATE(ts) BETWEEN '2026-10-01' AND '2026-10-02'",
-         "NOT_IMPLEMENTED"},
-        {"SELECT id FROM t WHERE DATE(ts) IN (SELECT id FROM u)", "NOT_IMPLEMENTED"},
-        // A value position reads no call: named, not "expected value".
-        {"SELECT id FROM t WHERE ts BETWEEN NOW() AND NOW()",
-         "a function call is supported only in a WHERE comparison and a SET value (byte 34)"},
+         "string literal does not fit timestamp (byte 28)"},
+        {"SELECT id FROM t WHERE DATE(ts) IN (SELECT id FROM u)", "no implicit conversion"},
         // BJ-S6: a SET value calls NOW() (a timestamp), and the typer says what
         // it is where an int64 column wants a number.
         {"UPDATE t SET k = NOW() WHERE id = 1",
@@ -346,6 +337,28 @@ TEST_F(FunctionConjunctTest, WhatIsRefusedAndWhere) {
         const std::string reply = Run(c.sql);
         EXPECT_EQ(reply.rfind("ERR", 0), 0u) << c.sql << " -> " << reply;
         EXPECT_NE(reply.find(c.says), std::string::npos) << c.sql << " -> " << reply;
+    }
+}
+
+// A call where the native grammar reads none - the select list, ORDER BY,
+// a nested call, a BETWEEN over a call or with a call as its bound - is
+// answered by the query layer since BU-S4 (parser-v2.md I19).
+TEST_F(FunctionConjunctTest, WhatTheQueryLayerAnswers) {
+    struct Case {
+        const char* sql;
+        const char* reply;
+    };
+    const Case cases[] = {
+        {"SELECT DATE(ts) FROM t ORDER BY id",
+         "DATE(ts)\\n2026-10-01\\n2026-10-01\\n2026-10-02\\n1969-12-31\\nNULL\\n2999-01-01"},
+        {"SELECT id FROM t ORDER BY DATE(ts), id", "id\\n4\\n1\\n2\\n3\\n6\\n5"},
+        {"SELECT id FROM t WHERE DATE(DATE(ts)) = '2026-10-01' ORDER BY id", "id\\n1\\n2"},
+        {"SELECT id FROM t WHERE DATE(ts) BETWEEN '2026-10-01' AND '2026-10-02' ORDER BY id",
+         "id\\n1\\n2\\n3"},
+        {"SELECT id FROM t WHERE ts BETWEEN NOW() AND NOW()", "id"},
+    };
+    for (const Case& c : cases) {
+        EXPECT_EQ(Run(c.sql), c.reply) << c.sql;
     }
 }
 

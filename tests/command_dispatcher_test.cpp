@@ -744,12 +744,13 @@ TEST_F(CommandDispatcherTest, TheTwoRefusalTokensAreDistinctAndRoundTrip) {
     ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int32, a int32)").response.substr(0, 7), "CREATED");
     ASSERT_EQ(d.Dispatch("CREATE TABLE u (id int32, b int32)").response.substr(0, 7), "CREATED");
 
-    // An outer join is a form the design admits and the engine has not
-    // built (parser-v2.md J2), so it is the "not yet" half.
-    const auto not_built = d.Dispatch("SELECT * FROM t LEFT JOIN u ON t.id = u.id");
+    // A CTE is a form the design admits and the engine has not built (an
+    // outer join was this example until BU-S6 built it), so it is the
+    // "not yet" half.
+    const auto not_built = d.Dispatch("WITH w AS (SELECT id FROM t) SELECT id FROM w");
     EXPECT_EQ(not_built.response.rfind("ERR NOT_IMPLEMENTED retryable=0 ", 0), 0u)
         << not_built.response;
-    EXPECT_NE(not_built.response.find("at byte "), std::string::npos) << not_built.response;
+    EXPECT_NE(not_built.response.find("(byte 0)"), std::string::npos) << not_built.response;
 
     // A tuple key UPDATE is invariant 11, so it is the "never" half. Same
     // statement class, same `ERR ` prefix, different answer to the only

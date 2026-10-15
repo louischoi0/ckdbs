@@ -97,15 +97,24 @@ Refusals, each with an exact byte position:
 | `SELECT * … GROUP BY a` | `InvalidArgument` — which columns `*` folds was never written |
 | bare column not in GROUP BY | `InvalidArgument` (AG5) |
 | duplicate GROUP BY column | `InvalidArgument` — always a slip, and it doubles the key encoding for nothing |
-| `GROUP BY` on an expression | `NotImplemented` (AG9) |
+| `GROUP BY` on an expression | `NotImplemented` on the native path (AG9); answered by the query layer since BU-S5 |
 | `AVG(…)` over a non-decimal column | `InvalidArgument` at compile (§3.4) — the column declared no scale, and the refusal names the two honest options: declare `DECIMAL(p, s)`, or compute SUM and COUNT and choose your own rounding |
 | `SUM(*)`, `MIN(*)`, `MAX(*)` | `InvalidArgument` — `*` is only an argument of COUNT |
 | `COUNT(DISTINCT *)` | `InvalidArgument` — distinctness of whole rows was never written |
-| `HAVING …` | `NotImplemented` at compile (AG7); a malformed right side `NotImplemented` or `InvalidArgument` at parse |
-| aggregate inside a subquery | `NotImplemented` (AG8 / J2) |
+| `HAVING …` | `NotImplemented` at the native compile (AG7), and then answered by the query layer since BU-S5 (`parser-v2.md` I19) |
+| aggregate inside a subquery | `NotImplemented` in a step chain (AG8 / J2); answered by the query layer since BU-S5 |
 | aggregate over `sys.*` | refused (AG12) |
-| `ORDER BY` on an aggregated statement | parsed — an aggregate is admitted as a key — and `NotImplemented` at compile: an aggregated statement's output rows are not chain rows |
-| `LIMIT` / `OFFSET` on an aggregated statement | `NotImplemented` at parse: groups are emitted in fold order, which is not a contract, so which rows survive the clause would be a guess |
+| `ORDER BY` on an aggregated statement | `NotImplemented` at the native compile - an aggregated statement's output rows are not chain rows - and answered by the query layer since BU-S5, which sorts the groups it holds |
+| `LIMIT` / `OFFSET` on an aggregated statement | `NotImplemented` at the native parse, then the query layer's since BU-S5; without an `ORDER BY` the prefix is of fold order, which is not a contract |
+
+**The query layer (BU-S5).** Every row of this table that names the query
+layer is a statement the native path declines and the layer then answers
+(`parser-v2.md` I19, BU-Q9). The layer folds with this document's rules:
+§3.1's NULLs, AG3's checked accumulator at every row (int64, int128 for
+`DECIMAL128`), §3.4's AVG, AG11's `aggregate_max_groups` and `aggregate_max_distinct` (the global group counting against neither, as the native fold's does not) - and adds an
+aggregate over any typed expression, an expression over aggregates and a
+`GROUP BY` over expressions. What it never does is change a statement the
+native fold answers.
 
 ## 3. Semantics
 
@@ -272,10 +281,10 @@ like `durability`.
 
 ## 8. What v1 is not
 
-`HAVING` (AG7) · `ORDER BY`/`LIMIT`/`OFFSET` over aggregated output (§2
-table) · `AVG` over anything but a decimal column (§3.4) · expressions
-anywhere (AG9) · aggregates in subqueries (AG8) · aggregation over catalog
-views (AG12) · spill or partial answers (AG11) · pre-aggregation below
+`HAVING` (AG7), `ORDER BY`/`LIMIT`/`OFFSET` over aggregated output,
+expressions (AG9) and aggregates in subqueries (AG8) in a step chain - each
+the query layer's since BU-S5 · `AVG` over anything but a decimal (§3.4) ·
+aggregation over catalog views (AG12) · spill or partial answers (AG11) · pre-aggregation below
 joins (§1) · persistence of anything — the fold is per statement and
 leaves nothing behind.
 

@@ -806,6 +806,62 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
   still answers `UPDATED 0`.
 - Reply: `UPDATED <n>`.
 
+### The DML forms of BU-S8
+
+```sql
+-- An expression in VALUES, typed for its column and folded once
+INSERT INTO w VALUES (30, 'h' || 'al', 'US', 1 + 1);
+
+-- INSERT ... SELECT: the source is read whole before a row is placed
+INSERT INTO w SELECT id + 100, name, region, tier FROM cust WHERE region = 'US';
+
+-- ON CONFLICT DO NOTHING: a row whose tuple key is placed is skipped
+INSERT INTO w VALUES (1, 'alice', 'EU', 1) ON CONFLICT DO NOTHING;
+
+-- UPDATE ... FROM and DELETE ... USING: one more relation the WHERE reads
+UPDATE w SET tier = 7 FROM ord WHERE ord.cust_id = w.id AND ord.amount >= 500;
+DELETE FROM w USING ord WHERE ord.cust_id = w.id AND ord.status = 'cancel';
+
+-- RETURNING: the rows written, then the tag
+UPDATE w SET tier = 5 WHERE id = 1 RETURNING id, tier;
+```
+
+- **A VALUES value** is a SET value's expression (`types.md` §3.2b), typed for
+  the column its position reaches, with no implicit conversion. It reads no
+  column - a VALUES row has none to read - and a subquery in it is refused
+  `NOT_IMPLEMENTED`.
+- **`INSERT ... SELECT`** takes any query of the query layer as its source,
+  run at the statement's snapshot and read whole before the first row is
+  placed, so a statement reading the relation it writes reads only what was
+  there. Each source column must be of its target's type - two text types
+  meet, a decimal at the target's scale, its every value checked against the
+  target's precision - and the source is typed before its target is known, so
+  a bare literal takes its natural type (an integer `int64`, a lone `NULL`
+  `varchar`): `CAST` it for an `int32` or a non-text NULL. `max_insert_rows`
+  bounds the rows, as for `VALUES`.
+- **`ON CONFLICT [(tuple key)] DO NOTHING`** skips a row whose tuple key is
+  placed - live, delete-marked (its row is the tombstone until `PURGE`), or
+  named by an earlier row of the statement - and decides it before the row
+  is admitted, so a skipped row takes no foreign-key check, no assertion
+  reservation and no id. The tuple key is the one conflict there is: another
+  target, and `DO UPDATE`, answer `NOT_IMPLEMENTED`. The reply counts the
+  rows placed (`rows=0` when every row was skipped).
+- **`UPDATE ... FROM` and `DELETE ... USING`** name one more relation, which
+  the statement's relation and the WHERE share one name space with: a bare
+  column both relations have is refused as ambiguous - qualify it. **A row
+  matching two or more `FROM` rows refuses the `UPDATE`**
+  (`CARDINALITY_VIOLATION`) and nothing is written, where PostgreSQL would
+  apply one of them; a `DELETE` deletes a row once however many rows it
+  matches. One relation only; a SET value and a RETURNING item read the
+  updated relation's columns, never the FROM relation's.
+- **`RETURNING <items>`** on `INSERT`, `UPDATE` and `DELETE`: the items - `*`,
+  columns, value expressions, each with an optional alias - over each row
+  the statement wrote, its after-image (a `DELETE`'s before-image), in the
+  order written. Over KWP the rows arrive as a `SELECT`'s and the
+  completion carries the write's own tag and count; the debug text surface
+  prints the rows, then the tag. A RETURNING that fails fails the
+  statement.
+
 ### DELETE (verified — it exists)
 
 ```sql
@@ -889,11 +945,29 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
 
 ### Projection
 
-- `SELECT *` — single relation only. Over more than one relation it is
-  refused: which columns `*` means, and in what order, would depend on a
-  join order the client is promised is its own.
+- `SELECT *` — every column of the relations, in written order; `rel.*`
+  is one relation's columns.
 - Explicit lists: `SELECT x, a.y FROM ...` — columns, qualified or bare.
-  No expressions, no `AS` column aliases, no literals in the select list.
+- **Value expressions** (since BU-S4): `SELECT id, amount * 2, name || '@'
+  || region AS addr, CASE WHEN amount >= 250 THEN 'big' ELSE 'small' END,
+  COALESCE(tier, 0), CAST(amount AS varchar), UPPER(name) FROM ...` -
+  the value expressions of an `UPDATE ... SET` (arithmetic, `||`, the
+  comparisons and `AND`/`OR`/`NOT`/`IS NULL` as bool values, `CASE`,
+  `COALESCE`/`NULLIF`/`GREATEST`/`LEAST`, `CAST` and `::`, the scalar
+  functions of types.md §3.2b, date +/- days) over any column of the `FROM`
+  list, each optionally `AS alias`. **Typed at compile with no implicit
+  conversion** (`name + 1` is refused whether or not a row matches); a
+  literal with nothing to type it takes its natural type - an integer
+  `int64`, a string `varchar`, `1.50` `decimal(3,2)`, a lone `NULL`
+  `varchar`. `CAST(x AS varchar(N))` is refused: `N` is a column's cell
+  width, not a length (types.md §3.2b). A column without an alias is
+  headed as written (`o.id`), anything else by its text as written
+  (`amount * 2`).
+- `SELECT DISTINCT <list>` keeps one row per distinct value of the list;
+  NULLs are one value.
+- `SELECT 1 + 1` - a select list with no `FROM` - is one row.
+- Every form in this list that a plain column list is not runs on the
+  **query layer** (below).
 
 ### FROM and joins
 
@@ -998,6 +1072,63 @@ is one of (verified — the `PredicateKind` enum):
   preference order — selection is a function of shape and catalog, never of
   data statistics.
 
+### The query layer (since BU-S4)
+
+A `SELECT` the step chain cannot carry - a value expression in the select
+list, `DISTINCT`, an expression in `WHERE` (`amount * 2 > 400`,
+`UPPER(name) = 'BOB'`), `ORDER BY` an expression, an alias or a position, a
+select list with no `FROM` - is answered by the query layer
+(`exec/query_layer.hpp`, workorder BU-Q8). What changes for the client:
+
+- **Every statement the chain answered before answers exactly as before**
+  (BU-Q9): the layer is tried only when the native grammar or compiler
+  declines a statement, and the native refusal stands when the layer's
+  grammar declines it too.
+- **Each relation is still walked by the engine**, under the statement's
+  one snapshot, carrying every top-level `WHERE` term that names it alone
+  and that a plain `WHERE` could have held - so `WHERE id = 12 AND amount %
+  100 = 0` is still a keyed descent on `id`, the expression filtering what
+  the descent found. Joins, the remaining terms, the select list and the
+  ordering are evaluated over the rows the walks returned, a join hashing
+  on its `ON` equalities.
+- **It holds rows**: every row set it keeps - a relation's walk, a join's
+  output, a sort - is bounded by `sort_max_rows`, and a statement that
+  would pass it fails with `RESOURCE_EXHAUSTED` naming the setting, never a
+  partial answer.
+- **Grouped statements on the layer** (since BU-S5): `HAVING` (any
+  condition over the keys and aggregates, three-valued - a group whose
+  condition is unknown is dropped), `ORDER BY` / `LIMIT` / `OFFSET` over
+  groups, an aggregate under an alias, an aggregate over an expression
+  (`SUM(amount * 2)`), an expression over aggregates (`COUNT(*) + 1`),
+  `GROUP BY` an expression, and an aggregate inside a subquery. The fold's
+  rules hold unchanged: NULLs per §3.1 of `aggregate.md`, `SUM` checked
+  int64 at every row, `AVG` over a decimal only, `aggregate_max_groups`
+  and `aggregate_max_distinct` refusing past their caps.
+- **Joins on the layer** (since BU-S6): `LEFT`, `RIGHT` and `FULL [OUTER]
+  JOIN`, `CROSS JOIN` and comma joins, `ON` with several conditions or a
+  non-equality, and `USING (col, ...)` (not under `FULL`, and `SELECT *`
+  over a `USING` join is refused: name the columns). An outer join extends
+  the missing side with NULLs; a condition in `ON` decides the match and
+  never removes a preserved row, while a `WHERE` term filters after the
+  join - and is never applied early to a nullable side, where it would
+  null-extend rows instead of removing them. A join hashes on the column
+  equalities among its `ON`'s top-level `AND` terms and tests the rest per
+  pair; its output counts against `sort_max_rows`. Join order is the
+  written order, as everywhere. A comma binds looser than `JOIN`, so a
+  `RIGHT` or `FULL` join after a comma is refused: name the comma-joined
+  relation after the outer join.
+- **Set operations, derived tables and subqueries as values on the layer**
+  (since BU-S7): `UNION`, `INTERSECT` and `EXCEPT`, with or without `ALL`
+  (`INTERSECT` binds tighter; NULLs are one value; the sides' columns must
+  have one type each, two text types meeting as `varchar`); a derived
+  table `FROM (SELECT ...) AS x`, joinable like a relation, not correlated
+  with anything outside it; a subquery as a value anywhere an expression
+  stands - `SELECT id, (SELECT COUNT(*) FROM ord AS o WHERE o.cust_id =
+  c.id) AS n FROM cust AS c` - returning one column and at most one row.
+- No Waystone trail is recorded or replayed for a layer statement, and
+  `ANALYZE` does not describe one: `ANALYZE` of a layer statement answers
+  the native refusal.
+
 ### Aggregation (built, AG01-AG10)
 
 ```sql
@@ -1009,14 +1140,16 @@ SELECT AVG(balance) FROM accounts;
 - Functions: `COUNT`, `SUM`, `MIN`, `MAX`, `AVG`; `DISTINCT` accepted inside
   any of them (`MIN`/`MAX` treat it as the standard's no-op). `COUNT(*)` is
   the one star form; `COUNT(DISTINCT *)` is refused.
-- `GROUP BY <col> [, ...]` — column references only, unparenthesized (the
-  assertion grammar's parenthesized list is a different production).
+- `GROUP BY <col> [, ...]` — column references on the native path,
+  unparenthesized (the assertion grammar's parenthesized list is a
+  different production); `GROUP BY` an expression is the query layer's.
 - `SELECT b FROM t GROUP BY b` is aggregated (one row per group) even with
   no function.
-- Refused with a position: `HAVING`; `ORDER BY` over aggregated output; a
-  bare column not in `GROUP BY` (there is no "any row" mode); `SELECT *`
-  with `GROUP BY`; an aggregate or `GROUP BY` inside a subquery (AG8,
-  permanent for v1); aggregation over `sys.*` views (AG12).
+- `HAVING`, `ORDER BY`/`LIMIT` over aggregated output and an aggregate
+  inside a subquery are answered by the query layer since BU-S5.
+- Refused with a position: a bare column not in `GROUP BY` (there is no
+  "any row" mode); `SELECT *` with `GROUP BY`; aggregation over `sys.*`
+  views (AG12).
 - `SUM` is checked int64 — overflow fails the statement, never wraps.
   `AVG` over an integer column is refused at compile (it would invent
   digits); `AVG(DECIMAL(p,s))` answers at exactly scale `s`, half-even.
@@ -1047,6 +1180,10 @@ across steps, tuple key order within one — so `LIMIT n OFFSET m` means rows
   `NULLS FIRST` / `NULLS LAST` grammar to override it.
 - `ORDER BY` takes **any column or columns**, of any relation the
   statement names, each `ASC` (the default) or `DESC`, up to eight keys.
+  Since BU-S4 a key may also be an expression (`ORDER BY amount * -1`), an
+  output column's alias (`SELECT amount AS a ... ORDER BY a`) or its
+  position (`ORDER BY 2, 1`), answered on the query layer; under `SELECT
+  DISTINCT` an expression key must be one of the select list's.
   Earlier keys decide; later keys break their ties. A key need not be
   projected: `SELECT a FROM t ORDER BY b` is legal.
 - **Rows the clause does not distinguish keep the order they would have
@@ -1074,11 +1211,11 @@ across steps, tuple key order within one — so `LIMIT n OFFSET m` means rows
   naming the key. It never returns a partial ordering, and it never
   spills to disk. Adding a `LIMIT` is usually the answer: it caps what is
   held at `offset + limit` regardless of the relation's size.
-- Ordering over aggregated output (`GROUP BY`) is still refused with a
-  byte position.
-- The tail is refused over an aggregated statement (groups emit in fold
-  order, which is not a contract) and inside a subquery, each with a
-  byte position.
+- Ordering and the tail over aggregated output (`GROUP BY`) are the query
+  layer's since BU-S5: the groups are sorted where the statement says, and
+  without an `ORDER BY` a `LIMIT` takes a prefix of fold order, which is
+  not a contract.
+- The tail is refused inside a subquery, with a byte position.
 - **Over a catalog view (`sys.*`), `LIMIT` and `OFFSET` apply and
   `ORDER BY` is refused with a byte position.** A view's rows are
   materialized by the catalog's readers rather than walked out of pages,
@@ -1268,8 +1405,8 @@ worth anything:
 
 - **`ERR NOT_IMPLEMENTED retryable=0 …`** — the design admits this form and
   this release has not built it. Feature-detect and try again against a later
-  server. Most of this section is this one: CTEs, derived tables, outer
-  joins, `HAVING`, `UNIQUE` indexes, `ALTER TABLE`'s row-rewriting forms (a type change, an `ADD` with no free slot), a
+  server. Most of this section is this one: CTEs,
+  `UNIQUE` indexes, `ALTER TABLE`'s row-rewriting forms (a type change, an `ADD` with no free slot), a
   value wider than one var-heap page.
 - **`ERR UNSUPPORTED retryable=0 …`** — this engine's architecture cannot
   admit the form, so no later server answers it and the statement must be
@@ -1284,27 +1421,23 @@ they were before the split.
   table-position nesting, and the inner result would have to become a
   relation with a schema. *"common table expressions (WITH) are not
   supported; subqueries are allowed in predicate position only."*
-- **No derived tables.** `FROM (SELECT ...)` is refused by the relation
-  reference itself: materializing an inner result breaks tuple-key-direct probing
-  into the next step and puts a temp relation in the storage layer.
-- **No window functions, no expressions.** The grammar has no expression
-  tree outside a `SET` value — no arithmetic in a predicate (`OR`, `NOT`
-  and parentheses do exist in a WHERE since BU-S1). Outside the five aggregates
-  there are two scalar functions, and they may appear only as one side of a
-  WHERE comparison: `DATE(timestamp)`, the UTC day an instant falls on, and
-  `NOW()`, the statement's instant (the same value for every call in one
-  statement). `WHERE DATE(ts) = '2026-10-02'` and `WHERE ts < NOW()` work;
-  a function in the select list, `ORDER BY`, `GROUP BY` or `HAVING`, a
-  nested call or a literal argument answers `NOT_IMPLEMENTED` with its
-  position, and an unknown name answers like an unknown column. A function
-  comparison filters rows the statement found some other way - it never
-  becomes a key, an index range or a Cabin probe. A smaller grammar every
-  statement of which executes predictably was chosen over a larger one with
-  unpredictable corners.
-- **No outer joins.** `LEFT`/`RIGHT`/`FULL`/`OUTER` are reserved keywords
-  that answer `NOT_IMPLEMENTED` with their own position, so the grammar will
-  not shift if they ever land.
-- **The join rule.** KDS supports inner equi-join chains, executed in
+- **Derived tables are the query layer's.** The native grammar refuses
+  `FROM (SELECT ...)` at the relation reference: materializing an inner
+  result breaks tuple-key-direct probing into the next step. Since BU-S7 the
+  query layer answers it over the rows it holds, never as a step.
+- **No window functions.** `OVER`, `FILTER`, `WINDOW` and `QUALIFY` are
+  refused with their position; a window call in the select list answers
+  the native parse's error (`expected 'FROM', got 'OVER'`). Value expressions stand in the
+  select list, in `WHERE` and in `ORDER BY` since BU-S4 (the query layer,
+  §4); an expression in `WHERE` filters rows a walk found and never becomes
+  a key, an index range or a Cabin probe, as a function comparison never
+  has. `DATE(timestamp)` and `NOW()` in a plain `WHERE` comparison remain
+  the native forms they were.
+- **Outer joins are the query layer's.** `LEFT`/`RIGHT`/`FULL`/`OUTER`
+  stay reserved and refused by the native grammar; since BU-S6 the query
+  layer answers them (above), as it does a cross, comma or `USING` join and
+  an `ON` beyond one column equality.
+- **The join rule.** On the native path KDS supports inner equi-join chains, executed in
   written order, probing by tuple key where the ON allows it. There is no
   merge join and no plan search **— the query is the plan.** Written order
   is a client contract; decorrelation rewrites are forbidden, not merely
@@ -1326,13 +1459,10 @@ they were before the split.
   without changing a single reply. What stays forbidden is what the rule
   was always about: no algorithm gets *chosen*, and no statement is
   rewritten.
-- **No `HAVING`, and no `ORDER BY` over aggregated output.** `HAVING`
-  answers with "filter before the fold with WHERE, or filter the result
-  client-side". Ordering *aggregated* output stays refused deliberately:
-  it is one half of a decision to be made with `HAVING`, and answering
-  half of it would settle the rest by accident. Ordinary statements do
-  have a full `ORDER BY` — any columns, `ASC`/`DESC` — since 2026-08-11;
-  see Ordering and pagination.
+- **`HAVING` and `ORDER BY` over aggregated output are answered off the
+  step chain.** Since BU-S5 both run on the query layer, over the groups
+  it holds; the native fold still emits groups in first-seen order and
+  never sorts them.
 - **No cross-dialect shims.** No `SERIAL`, no `AUTO_INCREMENT` (every tuple key is
   already both when the `INSERT` omits it, and deliberately neither when the
   `INSERT` names it), no `IF NOT EXISTS`, no `public.` schema

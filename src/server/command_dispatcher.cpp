@@ -41,6 +41,7 @@
 
 #include "kds/catalog/foreign_key.hpp"
 #include "kds/catalog/keystone_budget.hpp"
+#include "kds/exec/query_layer.hpp"
 #include "kds/exec/catalog_view.hpp"
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/fk_check.hpp"
@@ -3254,6 +3255,16 @@ Status InsertArityRefusal(const catalog::TableAccess& ta, std::size_t columns,
         at);
 }
 
+// Whether `text` holds `word`, ASCII case ignored - RETURNING's cheap gate,
+// so a write without one is never parsed twice.
+bool ContainsWordIgnoringCase(std::string_view text, std::string_view word) {
+    if (word.size() > text.size()) return false;
+    for (std::size_t i = 0; i + word.size() <= text.size(); ++i) {
+        if (IEquals(text.substr(i, word.size()), word)) return true;
+    }
+    return false;
+}
+
 // A statement's header - relation, namespace, byte and described shape - with
 // no column list and no rows: what both normalizers fill with physical rows.
 parser::InsertStmt InsertShellOf(const parser::InsertStmt& written) {
@@ -3262,6 +3273,67 @@ parser::InsertStmt InsertShellOf(const parser::InsertStmt& written) {
     out.schema = written.schema;
     out.table_byte_offset = written.table_byte_offset;
     out.described = written.described;
+    return out;
+}
+
+// The column each value of a `width`-long row is for: the listed column,
+// or the live column at its position, one later when the row leaves its
+// tuple key out. Empty when the length reaches no column - the arity
+// refusal of the normalization below answers that row.
+StatusOr<std::vector<const catalog::SysColumnRow*>> InsertTargetColumns(
+    const catalog::TableAccess& ta, const parser::InsertStmt& written, std::size_t width) {
+    std::vector<const catalog::SysColumnRow*> out;
+    if (!written.columns.empty()) {
+        if (width != written.columns.size()) return out;
+        for (const parser::IndexColumnRef& named : written.columns) {
+            auto found = ta.schema.FindColumn(named.name, named.byte_offset);
+            if (!found.ok()) return found.status();
+            if (found.value() == nullptr) return std::vector<const catalog::SysColumnRow*>();
+            out.push_back(found.value());
+        }
+        return out;
+    }
+    std::vector<const catalog::SysColumnRow*> live;
+    for (const catalog::SysColumnRow& c : ta.schema.columns) {
+        if (!c.dropped()) live.push_back(&c);
+    }
+    if (width == live.size()) return live;
+    if (width + 1 == live.size()) return std::vector<const catalog::SysColumnRow*>(live.begin() + 1, live.end());
+    return out;
+}
+
+// **The values written as expressions, typed and evaluated** (BU-S8): each
+// for the column its position reaches - the listed column, or the live
+// column at its position, one later when the row leaves its tuple key out -
+// by the SET value's typer (BJ-R3, no implicit conversion), then folded
+// once, before any row is placed. A VALUES row has no row to read, so an
+// expression naming a column is refused; a row whose length reaches no
+// column is left to the arity refusal below.
+StatusOr<parser::InsertStmt> EvaluateInsertExpressions(const catalog::TableAccess& ta,
+                                                       const parser::InsertStmt& written) {
+    const exec::StatementContext context = exec::StatementContextNow();
+    parser::InsertStmt out = written;
+    out.value_exprs.clear();
+    for (const parser::InsertStmt::ValueExpr& v : written.value_exprs) {
+        auto targets = InsertTargetColumns(ta, written, written.rows[v.row].size());
+        if (!targets.ok()) return targets.status();
+        if (targets.value().empty()) continue;
+        const catalog::SysColumnRow* target = targets.value()[v.col];
+        auto typed = exec::TypeSetExpression(ta, *v.expr, *target);
+        if (!typed.ok()) return typed.status();
+        // The column test, not `IsConstantSetExpression`: that one also says
+        // no to `NOW()` and `CURRENT_DATE`, which read no column and fold here
+        // against the statement's one instant.
+        if (exec::SetExpressionColumns(*typed.value()) != 0) {
+            return Status::InvalidArgument("a VALUES expression reads no column (byte " +
+                                           std::to_string(v.expr->byte_offset) +
+                                           "); a VALUES row has no row to read");
+        }
+        auto value = exec::EvaluateSetExpression(*typed.value(), {}, context);
+        if (!value.ok()) return value.status();
+        value.value().byte_offset = v.expr->byte_offset;
+        out.rows[v.row][v.col] = std::move(value.value());
+    }
     return out;
 }
 
@@ -4582,7 +4654,7 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
     WriteScope scope = opened.value();
 
-    DispatchOutcome out = InsertInner(line, scope);
+    DispatchOutcome out = WithReturning(line, session, scope, InsertInner(line, scope));
 
 
     // The reply is the verdict, which is the same rule Dispatch() itself
@@ -5052,6 +5124,77 @@ DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
     return out;
 }
 
+// **`INSERT ... SELECT`'s rows** (BU-S8): the source run by the query
+// layer at the statement's snapshot - taken after `BeginWrite`, as an
+// UPDATE takes its own - and read whole before any row is placed, so the
+// statement never reads a row it wrote. Each column is assignable to its
+// target as a SET value is (BJ-R3): one type, two text types meeting, a
+// decimal at the target's scale.
+StatusOr<parser::InsertStmt> CommandDispatcher::InsertSelectRows(const catalog::TableAccess& ta,
+                                                                 const parser::InsertStmt& written,
+                                                                 WriteScope& scope) {
+    if (scope.session == nullptr) {
+        return Status::NotImplemented("INSERT ... SELECT needs a session (byte " +
+                                      std::to_string(written.select_byte_offset) + ")");
+    }
+    auto snapshot = SnapshotFor(*scope.session);
+    if (!snapshot.ok()) return snapshot.status();
+    auto rs = RunLayerQuery(*written.select, written.select_text, *scope.session,
+                            snapshot.value().snap, exec::StatementContextNow());
+    if (!rs.ok()) return rs.status();
+    const std::vector<exec::LayerColumn>& from = rs.value().columns;
+    auto targets = InsertTargetColumns(ta, written, from.size());
+    if (!targets.ok()) return targets.status();
+    if (targets.value().empty()) {
+        return Status::InvalidArgument(
+            "the SELECT returns " + std::to_string(from.size()) + " column(s), which name no " +
+            (written.columns.empty() ? "row of the relation" : "row of the column list") +
+            " (byte " + std::to_string(written.select_byte_offset) + ")");
+    }
+    for (std::size_t i = 0; i < from.size(); ++i) {
+        const exec::SetType& got = from[i].type;
+        const catalog::SysColumnRow& want = *targets.value()[i];
+        const bool text = exec::TypeFamilyOf(got.type_val) == exec::TypeFamily::kText &&
+                          exec::TypeFamilyOf(want.type_val) == exec::TypeFamily::kText;
+        // `len` is a type only for a decimal (its scale, here) - for every
+        // other type it is a stored width, and a settled `int64` literal
+        // carries 0 where an `int64` column carries its width.
+        const bool decimal = want.type_val == catalog::kTypeValDecimal ||
+                             want.type_val == catalog::kTypeValDecimalWide;
+        const bool same = got.type_val == want.type_val &&
+                          (!decimal || catalog::DecimalScaleOf(got.len) ==
+                                           catalog::DecimalScaleOf(want.len));
+        if (!text && !same) {
+            return Status::InvalidArgument(
+                "the SELECT's column " + std::to_string(i + 1) + " is " + exec::SetTypeName(got) +
+                " but column '" + std::string(catalog::NameView(want.name)) + "' is " +
+                exec::SetTypeName(exec::SetType{exec::SetType::Kind::kConcrete, want.type_val,
+                                                want.len}) +
+                " (byte " + std::to_string(written.select_byte_offset) +
+                "); there is no implicit conversion (BJ-R3), CAST it");
+        }
+        // A decimal is matched by scale alone, so its precision is the row's
+        // check: the encoder stores any unscaled value of the right scale,
+        // and a decimal(12,2) value must not land in a decimal(10,2) column.
+        if (!decimal) continue;
+        const exec::SetType column{exec::SetType::Kind::kConcrete, want.type_val, want.len};
+        for (std::size_t r = 0; r < rs.value().rows.size(); ++r) {
+            if (!exec::ValueInRange(rs.value().rows[r][i], column)) {
+                return Status::OutOfRange(
+                    "row " + std::to_string(r + 1) + "'s value for column '" +
+                    std::string(catalog::NameView(want.name)) + "' does not fit " +
+                    exec::SetTypeName(column) + " (byte " +
+                    std::to_string(written.select_byte_offset) + ")");
+            }
+        }
+    }
+    parser::InsertStmt out = InsertShellOf(written);
+    out.columns = written.columns;
+    out.columns_byte_offset = written.columns_byte_offset;
+    out.rows = std::move(rs.value().rows);
+    return out;
+}
+
 DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& written,
                                                 WriteScope& scope) {
     // BI3: the row cap, at the first config-aware layer (the parser is a
@@ -5150,10 +5293,85 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
             "columns were changed by ALTER TABLE since; begin a new load");
         return {ErrorReply(s), false, 0, s};
     }
-    auto normalized = NormalizeInsertRows(*ta, written);
+    std::optional<parser::InsertStmt> evaluated;
+    if (!written.value_exprs.empty()) {
+        auto e = EvaluateInsertExpressions(*ta, written);
+        if (!e.ok()) return {ErrorReply(e.status()), false, 0, e.status()};
+        evaluated.emplace(std::move(e.value()));
+    }
+    if (written.select != nullptr) {
+        auto e = InsertSelectRows(*ta, written, scope);
+        if (!e.ok()) return {ErrorReply(e.status()), false, 0, e.status()};
+        evaluated.emplace(std::move(e.value()));
+        if (evaluated->rows.size() > max_insert_rows_) {
+            return {"ERR INSERT of " + std::to_string(evaluated->rows.size()) +
+                        " rows exceeds max_insert_rows (" + std::to_string(max_insert_rows_) + ")",
+                    false};
+        }
+        if (evaluated->rows.size() > 1 && txn_ == nullptr) {
+            return {"ERR a multi-row INSERT requires the transaction manager; this configuration "
+                    "cannot unwind a partially placed statement and is single-row only",
+                    false};
+        }
+        if (evaluated->rows.empty()) {
+            return {"INSERTED oid=" + std::to_string(oid.value()) + " rows=0", false, 0};
+        }
+    }
+    const parser::InsertStmt& valued = evaluated.has_value() ? *evaluated : written;
+    auto normalized = NormalizeInsertRows(*ta, valued);
     if (!normalized.ok()) return {ErrorReply(normalized.status()), false, 0, normalized.status()};
-    const parser::InsertStmt& stmt =
-        normalized.value().has_value() ? *normalized.value() : written;
+    const parser::InsertStmt& shaped =
+        normalized.value().has_value() ? *normalized.value() : valued;
+
+    // ---- ON CONFLICT DO NOTHING (BU-Q18) --------------------------------
+    //
+    // Decided for every row before any is admitted, so a skipped row takes
+    // no foreign-key hold, no assertion reservation and no id: a row naming
+    // a placed tuple key - live or delete-marked (BD-R5), or named by an
+    // earlier row of this statement - is dropped, and the key's row unit,
+    // taken as the placement would take it (BD-Q9's wait included), is kept
+    // for a row that stays, so no other writer can place it in between.
+    std::optional<parser::InsertStmt> kept;
+    if (written.on_conflict_do_nothing) {
+        if (ta->clustered_type != catalog::ClusteredType::kBtree) {
+            const Status s = Status::NotImplemented(
+                "ON CONFLICT on a heap relation is not supported (byte " +
+                std::to_string(written.table_byte_offset) + ")");
+            return {ErrorReply(s), false, 0, s};
+        }
+        if (written.conflict_target.has_value()) {
+            auto col = ta->schema.FindColumn(written.conflict_target->name,
+                                             written.conflict_target->byte_offset);
+            if (!col.ok()) return {ErrorReply(col.status()), false, 0, col.status()};
+            if (col.value() != &ta->schema.columns.front()) {
+                const Status s = Status::NotImplemented(
+                    "ON CONFLICT (" + written.conflict_target->name + ") at byte " +
+                    std::to_string(written.conflict_target->byte_offset) +
+                    ": the tuple key is the one conflict there is (BU-Q18); name it or no column");
+                return {ErrorReply(s), false, 0, s};
+            }
+        }
+        kept.emplace(InsertShellOf(shaped));
+        std::set<std::uint64_t> named;
+        for (const std::vector<parser::AstValue>& r : shaped.rows) {
+            const std::optional<std::uint64_t> id =
+                r.size() == ta->schema.columns.size() ? KeystoneIdOf(r.front()) : std::nullopt;
+            if (id.has_value()) {
+                if (named.count(*id) != 0) continue;
+                auto placed = TupleKeyPlaced(*ta, *id, r.front().byte_offset, scope);
+                if (!placed.ok()) {
+                    return {ErrorReply(placed.status()), false, 0, placed.status()};
+                }
+                if (placed.value()) continue;
+                named.insert(*id);
+            }
+            kept->rows.push_back(r);
+        }
+        if (kept->rows.empty()) {
+            return {"INSERTED oid=" + std::to_string(oid.value()) + " rows=0", false, 0};
+        }
+    }
+    const parser::InsertStmt& stmt = kept.has_value() ? *kept : shaped;
 
     // Whether every row omits its tuple key, the question T3's sorted fill further
     // down asks.
@@ -5227,7 +5445,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         last = row;
     }
 
-    if (bulk) {
+    if (bulk || written.on_conflict_do_nothing) {
         // rows= is BI13's rows_affected; the id range is what a loader
         // wants back, and with per-row allocation it is contiguous exactly
         // when nothing else allocated concurrently - so both ends are
@@ -5483,6 +5701,53 @@ constexpr int kMaxIssueRounds = 8;
 
 }  // namespace
 
+Status CommandDispatcher::NamedKeyVerdict(const catalog::TableAccess& ta, std::uint64_t id,
+                                          std::uint32_t byte, const txn::Transaction* own) {
+    auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, id);
+    if (!present.ok()) {
+        // Answered by the placement's own descent, so a structural refusal
+        // here is not the statement's (BA-S14).
+        storage::ClearStructuralRefusal();
+        return Status::OK();
+    }
+    auto version = heap::PageView(present.value().leaf.bytes()).ReadTuple(present.value().slot);
+    if (!version.ok()) return Status::OK();
+    const Status found = btree::DuplicateKey(id, present.value().page_id, present.value().slot,
+                                             version.value().deleted);
+    const Status duplicate =
+        Status::AlreadyExists(found.message() + " (byte " + std::to_string(byte) + ")");
+    if (own != nullptr && version.value().trx_id == own->id()) return duplicate;
+    const bool undecided = txn_ != nullptr && txn_->IsInFlight(version.value().trx_id);
+    const std::uint64_t undo_ptr = version.value().undo_ptr;
+    present.value().leaf.Release();  // before the undo pages are read
+    if (!undecided) return duplicate;
+    return UndecidedInsert(*txn_, undo_ptr) ? Status::OK() : duplicate;
+}
+
+StatusOr<bool> CommandDispatcher::TupleKeyPlaced(const catalog::TableAccess& ta, std::uint64_t id,
+                                                 std::uint32_t byte, WriteScope& scope) {
+    const txn::LockKey unit = txn::LockKey::Tuple(ta.oid, id);
+    const bool held_before = scope.txn != nullptr && scope.txn->borrows().Holds(unit);
+    if (std::optional<Status> held =
+            BorrowOrWait(scope, unit, RepeatableReadWait::kCapable, txn::LockMode::kExclusive,
+                         [&]() { return NamedKeyVerdict(ta, id, byte, scope.txn); })) {
+        if (held->code() == StatusCode::kAlreadyExists) return true;
+        return *held;
+    }
+    // Granted: with a lock table no other writer holds the key, so a slot
+    // keyed `id` is decided or this transaction's own - placed either way.
+    // The same verdict as the refusal's, not "any slot is placed": without a
+    // table every borrow is granted, and another's undecided insert must
+    // reach the placement (which answers it as a plain INSERT is answered),
+    // never be skipped as though its rollback could not free the key.
+    if (NamedKeyVerdict(ta, id, byte, scope.txn).ok()) return false;
+    if (!held_before && locks_ != nullptr && scope.txn != nullptr) {
+        locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
+                          [&](const txn::LockHoldings::Held& h) { return h.key == unit; });
+    }
+    return true;
+}
+
 std::optional<Status> CommandDispatcher::InsertOneRow(
     catalog::Oid oid, const catalog::TableAccess*& ta_ptr,
     const std::vector<parser::AstValue>& values, WriteScope& scope,
@@ -5715,25 +5980,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 if (supplied_id >= mark.value()) return Status::OK();
                 return catalog::RefuseRowIdBelowMark(oid, supplied_id, mark.value());
             }
-            auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, supplied_id);
-            if (!present.ok()) {
-                // Answered by the placement's own descent, so a structural
-                // refusal here is not the statement's (BA-S14).
-                storage::ClearStructuralRefusal();
-                return Status::OK();
-            }
-            auto version =
-                heap::PageView(present.value().leaf.bytes()).ReadTuple(present.value().slot);
-            if (!version.ok()) return Status::OK();
-            const bool undecided =
-                txn_ != nullptr && txn_->IsInFlight(version.value().trx_id);
-            const Status duplicate = duplicate_at_tuple_key(btree::DuplicateKey(
-                supplied_id, present.value().page_id, present.value().slot,
-                version.value().deleted));
-            const std::uint64_t undo_ptr = version.value().undo_ptr;
-            present.value().leaf.Release();  // before the undo pages are read
-            if (!undecided) return duplicate;
-            return UndecidedInsert(*txn_, undo_ptr) ? Status::OK() : duplicate;
+            return NamedKeyVerdict(ta, supplied_id, values.front().byte_offset, scope.txn);
         };
         const bool held_before = scope.txn != nullptr && scope.txn->borrows().Holds(key_unit);
         if (std::optional<Status> held =
@@ -7328,12 +7575,27 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         statement_fetch_id_ = fingerprint->fetch_id;
     }
     if (!parsed.ok()) {
+        // BU-Q9: what the native grammar refuses, the query layer may read.
+        if (!analyze) {
+            if (auto layered = TryQueryLayer(line, session, snap, context); layered.has_value()) {
+                return std::move(*layered);
+            }
+        }
         return {ErrorReply(parsed.status()), false, 0, parsed.status()};
     }
     if (!std::holds_alternative<parser::SelectStmt>(parsed.value())) {
         return {"ERR expected a SELECT statement", false};
     }
-    auto& stmt = std::get<parser::SelectStmt>(run->statement.emplace(std::move(parsed.value())));
+    run->statement.emplace(std::move(parsed.value()));
+    return SelectBody(run, session, analyze, context, line);
+}
+
+DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& run,
+                                              Session& session, bool analyze,
+                                              const exec::StatementContext* context,
+                                              std::string_view line) {
+    const txn::Snapshot& snap = run->snapshot->snap;
+    auto& stmt = std::get<parser::SelectStmt>(*run->statement);
 
     // A catalog view (`SELECT * FROM sys.tables`) is answered before the
     // compiler is asked for a chain, because it is not a relation: its
@@ -7417,6 +7679,13 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         return exec::Compile(catalog_, stmt, v, &borrow, context);
     });
     if (!chain.ok()) {
+        // BU-Q9: a form the native compile declines goes to the query layer,
+        // whose refusal stands only if its grammar reads the text.
+        if (!analyze && !line.empty() && chain.status().code() == StatusCode::kNotImplemented) {
+            if (auto layered = TryQueryLayer(line, session, snap, context); layered.has_value()) {
+                return std::move(*layered);
+            }
+        }
         return {ErrorReply(chain.status()), false, 0, chain.status()};
     }
 
@@ -7478,8 +7747,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // invariant 9 keeps Waystone away from. The trail and replay reads
     // below still guard on their own switches, so deriving the identity
     // here costs nothing they did not already pay.
-    if (waystone_usable || optimizer_signals_ != nullptr) {
-        if (auto fingerprint = parser.fingerprint(); fingerprint.has_value()) {
+    if (run->parser.has_value() && (waystone_usable || optimizer_signals_ != nullptr)) {
+        if (auto fingerprint = run->parser->fingerprint(); fingerprint.has_value()) {
             identity = StatementIdentity{
                 stats::InstanceKey{fingerprint->fetch_id, fingerprint->arg_hash},
                 fingerprint->pattern_id};
@@ -7917,6 +8186,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
                                                       std::move(subquery_answers)});
         return out;
     }
+    out = WithReturning(line, session, scope, std::move(out));
 
 
     const bool failed = out.response.rfind("ERR ", 0) == 0;
@@ -8061,6 +8331,362 @@ StatusOr<exec::SubqueryResult> CommandDispatcher::RunScalarSubquery(const parser
     result.value = sink.TakeValue();
     result.value.byte_offset = node.byte_offset;
     return result;
+}
+
+// ---- The query layer's door (BU-S4, BU-Q8, BU-Q9) ---------------------------
+
+namespace {
+
+// A layer walk's rows, captured as values. The row's text is the index of
+// its values, `ScalarSubquerySink`'s device, so what `Emit` keeps is the row
+// that was encoded for it. Bounded as the layer's own row sets are (BU-Q10):
+// the walk is refused at the row past `max_rows`, not held whole first.
+class LayerWalkSink final : public ResultSink {
+public:
+    explicit LayerWalkSink(std::size_t max_rows) : max_rows_(max_rows) {}
+    Status Describe(std::vector<wire::FieldDescription>) override { return Status::OK(); }
+    Status EncodeProjectedRow(std::span<const exec::ColumnRef> projection,
+                              std::span<const std::uint32_t>, const exec::ChainFrame& frame,
+                              std::string& out) override {
+        std::vector<parser::AstValue> row;
+        row.reserve(projection.size());
+        for (const exec::ColumnRef& ref : projection) row.push_back(frame.Get(ref));
+        rendered_.push_back(std::move(row));
+        out = std::to_string(rendered_.size() - 1);
+        return Status::OK();
+    }
+    Status EncodeValueRow(std::span<const std::uint32_t>, std::span<const parser::AstValue> values,
+                          std::string& out) override {
+        rendered_.emplace_back(values.begin(), values.end());
+        out = std::to_string(rendered_.size() - 1);
+        return Status::OK();
+    }
+    Status Emit(std::string_view row) override {
+        if (rows_.size() >= max_rows_) {
+            return Status::ResourceExhausted(
+                "this statement's relation walk would hold more than sort_max_rows (" +
+                std::to_string(max_rows_) +
+                ") rows; the query layer answers from rows it holds (BU-Q10) - raise "
+                "sort_max_rows, or narrow the statement");
+        }
+        rows_.push_back(std::move(rendered_[static_cast<std::size_t>(std::stoull(std::string(row)))]));
+        return Status::OK();
+    }
+    std::vector<std::vector<parser::AstValue>> TakeRows() { return std::move(rows_); }
+
+private:
+    std::size_t max_rows_;
+    std::vector<std::vector<parser::AstValue>> rendered_;
+    std::vector<std::vector<parser::AstValue>> rows_;
+};
+
+}  // namespace
+
+// What the layer asks of the dispatcher: a relation's description and its
+// walks, every one at the statement's snapshot.
+class CommandDispatcher::LayerHostImpl final : public exec::LayerHost {
+public:
+    LayerHostImpl(CommandDispatcher& d, Session& session, const txn::Snapshot& snap,
+                  const exec::StatementContext& context)
+        : d_(d),
+          session_(session),
+          snap_(snap),
+          context_(context),
+          borrow_(d.locks_, d.NextReadHolder(), &d.read_borrows_) {}
+
+    StatusOr<std::vector<exec::LayerColumn>> DescribeRelation(
+        const parser::RelationRef& rel) override {
+        if (IEquals(rel.schema, exec::kCatalogSchema)) {
+            return Status::NotImplemented("a catalog view in this query form is not supported (byte " +
+                                          std::to_string(rel.byte_offset) +
+                                          "); sys.* rows are produced by the catalog's readers");
+        }
+        parser::SelectStmt probe;
+        probe.from = rel;
+        // Resolved as the native path resolves a name, and declared into the
+        // statement's one borrow, held until the statement ends (AT-S1): a
+        // `DROP TABLE` waits for the layer's walks, as for a native read's.
+        auto chain = d_.ResolveNames(session_, [&](const txn::ReadView* v) {
+            return exec::Compile(d_.catalog_, probe, v, &borrow_);
+        });
+        if (!chain.ok()) return chain.status();
+        auto access = d_.catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
+        if (!access.ok()) return access.status();
+        std::vector<exec::LayerColumn> out;
+        const auto& columns = access.value()->schema.columns;
+        for (std::size_t i = 0; i < columns.size(); ++i) {
+            // A dropped column (BW) is in no row a walk emits, so it is no
+            // column of the layer's either.
+            if (columns[i].dropped()) continue;
+            exec::LayerColumn c;
+            c.name = std::string(catalog::NameView(columns[i].name));
+            c.type.kind = exec::SetType::Kind::kConcrete;
+            c.type.type_val = columns[i].type_val;
+            c.type.len = columns[i].len;
+            c.keystone = i == 0;
+            out.push_back(std::move(c));
+        }
+        return out;
+    }
+
+    StatusOr<exec::RowSet> WalkRelation(const parser::RelationRef& rel,
+                                        const std::vector<parser::Condition>& where) override {
+        parser::SelectStmt stmt;
+        stmt.from = rel;
+        stmt.where = where;
+        auto rows = d_.WalkForLayer(std::move(stmt), session_, snap_, context_);
+        if (!rows.ok()) return rows.status();
+        exec::RowSet out;
+        out.rows = std::move(rows.value());
+        return out;
+    }
+
+private:
+    CommandDispatcher& d_;
+    Session& session_;
+    const txn::Snapshot& snap_;
+    const exec::StatementContext& context_;
+    ReadBorrow borrow_;
+};
+
+StatusOr<std::vector<std::vector<parser::AstValue>>> CommandDispatcher::WalkForLayer(
+    parser::SelectStmt stmt, Session& session, const txn::Snapshot& snap,
+    const exec::StatementContext& context) {
+    LayerWalkSink sink(sort_max_rows_);
+    ResultSink* const previous = session.result_sink();
+    session.set_result_sink(&sink);
+    struct Restore {
+        Session& session;
+        ResultSink* sink;
+        ~Restore() { session.set_result_sink(sink); }
+    } restore{session, previous};
+
+    const auto run = std::make_shared<SelectRun>(*this, session);
+    run->snapshot.emplace(txn::LeasedSnapshot{snap, {}});
+    run->statement.emplace(std::move(stmt));
+    DispatchOutcome out = SelectBody(run, session, /*analyze=*/false, &context, {});
+    if (out.select_run != nullptr) {
+        const std::shared_ptr<SelectRun> handed = std::move(out.select_run);
+        out = handed->RunInline();
+    }
+    if (!out.status.ok()) return out.status;
+    if (out.response.rfind("ERR", 0) == 0) return Status::InvalidArgument(out.response.substr(4));
+    return sink.TakeRows();
+}
+
+DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session& session,
+                                                 WriteScope& scope, DispatchOutcome out) {
+    if (out.response.rfind("ERR", 0) == 0 || !ContainsWordIgnoringCase(line, "RETURNING")) {
+        return out;
+    }
+    parser::Parser parser(line);
+    auto parsed = parser.Parse();
+    if (!parsed.ok()) return out;
+    const parser::Returning* returning = nullptr;
+    std::string schema;
+    std::string table;
+    txn::TrailAction wrote = txn::TrailAction::kInsert;
+    if (const auto* ins = std::get_if<parser::InsertStmt>(&parsed.value())) {
+        returning = &ins->returning;
+        schema = ins->schema;
+        table = ins->table_name;
+    } else if (const auto* upd = std::get_if<parser::UpdateStmt>(&parsed.value())) {
+        returning = &upd->returning;
+        schema = upd->schema;
+        table = upd->table_name;
+        wrote = txn::TrailAction::kOverwrite;
+    } else if (const auto* del = std::get_if<parser::DeleteStmt>(&parsed.value())) {
+        returning = &del->returning;
+        schema = del->schema;
+        table = del->table_name;
+        wrote = txn::TrailAction::kDeleteMark;
+    }
+    if (returning == nullptr || returning->items.empty()) return out;
+    const auto refuse = [](const Status& s) {
+        return DispatchOutcome{ErrorReply(s), false, 0, s};
+    };
+    if (txn_ == nullptr || scope.txn == nullptr) {
+        return refuse(Status::NotImplemented(
+            "RETURNING needs the transaction manager, whose trail names the rows written (byte " +
+            std::to_string(returning->byte_offset) + ")"));
+    }
+    auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
+        return ResolveQualifiedRelation(schema, table, 0, v);
+    });
+    if (!oid.ok()) return refuse(oid.status());
+    auto access = catalog_.InitTableAccess(oid.value());
+    if (!access.ok()) return refuse(access.status());
+    const catalog::TableAccess& ta = *access.value();
+    if (ta.clustered_type != catalog::ClusteredType::kBtree) {
+        return refuse(Status::NotImplemented("RETURNING on a heap relation is not supported (byte " +
+                                             std::to_string(returning->byte_offset) + ")"));
+    }
+
+    // ---- The items, typed over the relation's live columns ---------------
+    const exec::StatementContext context = exec::StatementContextNow();
+    std::vector<std::unique_ptr<exec::TypedSetExpr>> items;
+    std::vector<wire::FieldDescription> fields;
+    std::vector<std::uint32_t> wire_types;
+    const auto add_field = [&](std::string name, const exec::SetType& type, bool key) {
+        wire::FieldDescription f;
+        f.name = std::move(name);
+        f.type_oid = type.type_val;
+        const std::uint32_t wire_type = key ? wire::WireValueType(type.type_val, 0) : type.type_val;
+        f.type_len = wire::WireTypeLen(wire_type);
+        f.type_mod = catalog::TypeModOf(type.type_val, type.len);
+        if (key) f.flags |= wire::kFieldFlagKeystone;
+        fields.push_back(std::move(f));
+        wire_types.push_back(wire_type);
+    };
+    const auto column_node = [&](std::size_t i) {
+        auto n = std::make_unique<exec::TypedSetExpr>();
+        n->kind = parser::Expr::Kind::kColumn;
+        n->column_no = i;
+        n->type = exec::SetType{exec::SetType::Kind::kConcrete, ta.schema.columns[i].type_val,
+                                ta.schema.columns[i].len};
+        return n;
+    };
+    exec::ExprScope scope_of;
+    scope_of.clause = "in RETURNING";
+    scope_of.resolve = [&](const parser::Expr& e) -> StatusOr<std::optional<exec::ResolvedColumn>> {
+        if (!e.qualifier.empty() && !IEquals(e.qualifier, table)) {
+            return Status::NotImplemented(
+                "RETURNING reads the written relation's columns only; '" + e.qualifier +
+                "' is not it (byte " + std::to_string(e.byte_offset) + ")");
+        }
+        auto col = ta.schema.FindColumn(e.column, e.byte_offset);
+        if (!col.ok()) return col.status();
+        if (col.value() == nullptr) return std::optional<exec::ResolvedColumn>();
+        const auto i = static_cast<std::size_t>(col.value() - ta.schema.columns.data());
+        return std::optional<exec::ResolvedColumn>(
+            exec::ResolvedColumn{i, column_node(i)->type});
+    };
+    for (const parser::OutputItem& item : returning->items) {
+        if (item.star) {
+            if (!item.star_qualifier.empty() && !IEquals(item.star_qualifier, table)) {
+                return refuse(Status::InvalidArgument(
+                    "'" + item.star_qualifier + "' names no relation of this statement (byte " +
+                    std::to_string(item.byte_offset) + ")"));
+            }
+            for (std::size_t i = 0; i < ta.schema.columns.size(); ++i) {
+                if (ta.schema.columns[i].dropped()) continue;
+                auto n = column_node(i);
+                add_field(std::string(catalog::NameView(ta.schema.columns[i].name)), n->type, i == 0);
+                items.push_back(std::move(n));
+            }
+            continue;
+        }
+        auto typed = exec::TypeQueryExpression(*item.expr, scope_of);
+        if (!typed.ok()) return refuse(typed.status());
+        const bool key = item.expr->kind == parser::Expr::Kind::kColumn &&
+                         typed.value()->column_no == 0;
+        // Headed as the query layer heads an item (parser-v2.md I19): the
+        // alias, else the item as written.
+        add_field(item.alias.empty() ? item.text : item.alias, typed.value()->type, key);
+        items.push_back(std::move(typed.value()));
+    }
+
+    // ---- The rows this statement wrote, in the order it wrote them -------
+    std::vector<std::uint64_t> keys;
+    std::set<std::uint64_t> seen;
+    const std::vector<txn::TrailEntry>& trail = scope.txn->trail();
+    for (std::size_t t = statement_trail_mark_; t < trail.size(); ++t) {
+        const txn::TrailEntry& e = trail[t];
+        if (e.rel_oid != ta.oid || e.action != wrote) continue;
+        if (seen.insert(e.tuple_key).second) keys.push_back(e.tuple_key);
+    }
+
+    TextResultSink text_sink;
+    ResultSink& sink = SinkFor(session, text_sink);
+    if (Status s = sink.Describe(std::move(fields)); !s.ok()) return refuse(s);
+    std::vector<parser::AstValue> image(ta.schema.columns.size());
+    std::vector<exec::PendingSpill> spills;
+    std::string row_scratch;
+    for (std::uint64_t key : keys) {
+        // The slot holds this statement's version: an INSERT's and an
+        // UPDATE's after-image, and a DELETE's before-image under its mark.
+        auto at = btree::BtreeLookup(page_store_, ta.desc_page_id, key);
+        if (!at.ok()) return refuse(at.status());
+        auto tuple = heap::PageView(at.value().leaf.bytes()).ReadTuple(at.value().slot);
+        if (!tuple.ok()) return refuse(tuple.status());
+        const std::vector<std::byte> payload(tuple.value().payload.begin(),
+                                             tuple.value().payload.end());
+        at.value().leaf.Release();
+        spills.clear();
+        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload, image,
+                                              exec::kAllColumnsMask, spills);
+            !s.ok()) {
+            return refuse(s);
+        }
+        std::vector<parser::AstValue> row;
+        row.reserve(items.size());
+        for (const auto& item : items) {
+            auto v = exec::EvaluateQueryExpression(*item, image, context, nullptr);
+            if (!v.ok()) return refuse(v.status());
+            row.push_back(std::move(v.value()));
+        }
+        if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) return refuse(s);
+        if (Status s = sink.Emit(row_scratch); !s.ok()) return refuse(s);
+    }
+    out.returning = true;
+    if (session.result_sink() == nullptr) out.response = text_sink.Take() + "\\n" + out.response;
+    return out;
+}
+
+StatusOr<exec::RowSet> CommandDispatcher::RunLayerQuery(const parser::Query& query,
+                                                        std::string_view text, Session& session,
+                                                        const txn::Snapshot& snap,
+                                                        const exec::StatementContext& context) {
+    LayerHostImpl host(*this, session, snap, context);
+    exec::LayerLimits limits;
+    limits.max_rows = sort_max_rows_;
+    limits.max_groups = aggregate_limits_.max_groups;
+    limits.max_distinct = aggregate_limits_.max_distinct;
+    return exec::RunQuery(query, text, host, context, limits);
+}
+
+std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
+    std::string_view line, Session& session, const txn::Snapshot& snap,
+    const exec::StatementContext* context) {
+    parser::Parser parser(line);
+    auto query = parser.ParseQuery();
+    if (!query.ok()) return std::nullopt;
+
+    const exec::StatementContext now =
+        context != nullptr ? *context : exec::StatementContextNow();
+    auto result = RunLayerQuery(query.value(), line, session, snap, now);
+    if (!result.ok()) return DispatchOutcome{ErrorReply(result.status()), false, 0, result.status()};
+
+    TextResultSink text_sink;
+    ResultSink& sink = SinkFor(session, text_sink);
+    const exec::RowSet& rs = result.value();
+    std::vector<wire::FieldDescription> fields;
+    std::vector<std::uint32_t> wire_types;
+    for (const exec::LayerColumn& c : rs.columns) {
+        wire::FieldDescription f;
+        f.name = c.heading.empty() ? c.name : c.heading;
+        f.type_oid = c.type.type_val;
+        const std::uint32_t wire_type =
+            c.keystone ? wire::WireValueType(c.type.type_val, 0) : c.type.type_val;
+        f.type_len = wire::WireTypeLen(wire_type);
+        f.type_mod = catalog::TypeModOf(c.type.type_val, c.type.len);
+        if (c.driving_keystone) f.flags |= wire::kFieldFlagKeystone;
+        fields.push_back(std::move(f));
+        wire_types.push_back(wire_type);
+    }
+    if (Status s = sink.Describe(std::move(fields)); !s.ok()) {
+        return DispatchOutcome{ErrorReply(s), false, 0, s};
+    }
+    std::string row_scratch;
+    for (const auto& row : rs.rows) {
+        if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) {
+            return DispatchOutcome{ErrorReply(s), false, 0, s};
+        }
+        if (Status s = sink.Emit(row_scratch); !s.ok()) {
+            return DispatchOutcome{ErrorReply(s), false, 0, s};
+        }
+    }
+    return DispatchOutcome{text_sink.Take(), false};
 }
 
 DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope& scope,
@@ -9866,6 +10492,7 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
                                                       /*is_delete=*/true, context});
         return out;
     }
+    out = WithReturning(line, session, scope, std::move(out));
 
 
     const bool failed = out.response.rfind("ERR ", 0) == 0;
