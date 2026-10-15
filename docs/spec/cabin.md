@@ -14,7 +14,9 @@ Decisions fixed by this spec:
 
 - **C1** — Cabin is authoritative **only for observed values**.
 - **C2** — entries store **Keystone ids (tuple keys), never tuple locations**.
-- **C3** — expression (filtered-index style) cabins are **out of v1**.
+- **C3** — ~~expression (filtered-index style) cabins are out of v1~~.
+  **Struck by AQ** (AR1-6): a Cabin is a key function `F`, and an
+  expression or a predicate is a shape of `F` (§2, §3).
 - **C4** — Cabin, Waystone, and patterns are distinct structures that
   **interlock cooperatively**; none absorbs another.
 - **C5** — observation may extend to **every value of the column**;
@@ -29,7 +31,8 @@ Decisions fixed by this spec:
   engine may — the cabin optimizer, off by default), or `CABIN`
   (created now, and its values observed on the **literal probe's** first
   selection; the correlated probe takes `n = 2` regardless, §4a). See
-  §8.1.
+  §8.1. **Since AQ it binds the expression too**: a `NO CABIN` column is
+  no input of any Cabin's `F`.
 
 ---
 
@@ -71,13 +74,24 @@ Two corollaries fall out:
   value-granular analog of waystone invariant 8, and it is what keeps an
   *authoritative* structure evictable.
 
-## 2. Scope (v1)
+## 2. Scope
 
-- Key: a **single non-tuple-key column** with an equality predicate. The tuple key
-  column needs no Cabin (the clustered tree is its Cabin).
-- **C3**: no predicate-scoped cabins (`WHERE state='closed'` subsets),
-  no multi-column keys, no range observation. The v1 shape is
-  `Cabin(relation, column)` with per-value entry sets, full stop.
+A Cabin is a **key function** `F: tuple -> K` over one relation (AR1-4),
+declared `CREATE CABIN ON <rel> (<F>)`, in one of three shapes:
+
+| shape | `F` | key | served for |
+|---|---|---|---|
+| **column** | a non-tuple-key column `x` | `x`'s value | `x = v` (§4), `x = outer.y` (§4a) |
+| **expression** | an immutable function of columns, `DATE(ts)` | `F`'s value; NULL observes nothing | `F(cols) = v`; and, for a function declaring a **cover**, a range of its argument bounded on both sides (§4d) |
+| **predicate** | a conjunction of comparisons of a column or an immutable call with a literal, `state = 'closed' AND amount > 1000` | the one value `true`, for every row `p` holds on | a step whose own conjuncts include every conjunct of `p`, exactly (§4d) |
+
+- The tuple key column needs no Cabin (the clustered tree is its Cabin); an
+  `F` reading only it, or no column, is refused.
+- **Not built**: multi-column keys, range observation of a column, the
+  monotone method of AR1 §9.2 and the sortable directory it needs (D3), a
+  correlated probe of `F`, automatic creation of an expression or predicate
+  Cabin (`CABIN AUTO` stays a column policy), `OR`/`NOT`/`BETWEEN`/subquery
+  /column-to-column comparisons inside a predicate.
 - Single relation only. Join acceleration stays with Waystone (§7);
   a Cabin never spans relations, so the write hook touches one relation's
   sets under one partition latch (§6).
@@ -85,7 +99,7 @@ Two corollaries fall out:
 ## 3. Data model
 
 ```
-Cabin            := (rel_oid, column_no)            — catalog object
+Cabin            := (rel_oid, F)                     — catalog object
 observed set     := { value → entry-set ref }        — the directory
 entry set (v)    := list of CabinEntry               — C2 + C6
 
@@ -275,6 +289,52 @@ so there is no transition for a set to be discarded across.
 **The serve keeps no counter of its own.** A Cabin's serve is read from
 `SHOW CABINS`' per-cabin `observed=`, `entries=`, `hits=` and `misses=`
 and from `ANALYZE`'s per-step `cabin_hits=`/`cabin_misses=` (§7).
+
+### 4d. Expression, predicate and cover serving (AQ)
+
+**Identity is the compiled `F`, never its hash** `[quiet-wrong]`. `F` has
+one canonical text, built from its lowered form - column **positions**, the
+function's catalog name, the operator and the literal after coercion, every
+field of it; a predicate's conjuncts sorted and de-duplicated
+(`exec/cabin_expr.hpp`). Two `F`s are one Cabin's key exactly when their
+texts are equal; `expr_id` is that text's FNV-1a with every literal folded
+to its kind (AR1 §6), a lookup key that `state = 'open'` and `state =
+'closed'` share and that decides nothing. `CREATE CABIN` refuses a second
+Cabin on one `F`, and a probe matches a Cabin by text.
+
+**The probe is a hint on top of the conjuncts, which stay** (AQ-R5): a
+function conjunct `F(cols) = v` stays in `fn_residual`, a predicate's
+conjuncts in `residual` and `fn_residual`, and each re-checks every served
+row - the key re-check §4 requires, for a key that is not a column. A step
+downgraded to a walk answers the same.
+
+**A predicate is matched conjunct for conjunct** `[quiet-wrong]` (AQ-R6): a
+predicate Cabin serves a step when every conjunct of `p` equals, by
+canonical text, one of the step's own **lowered** conjuncts. Nothing is
+normalised beyond the lowering every conjunct gets - no `<` against `>`, no
+`>= 1001` against `> 1000` - and a statement's `BETWEEN`, which lowers to
+its two bounds, carries those bounds (AQ-Q15). A wrong match would serve
+`E(true)` to a WHERE that does not imply `p` and lose a row, so the rule
+errs toward the walk. A conjunct on an enclosing row's column is not the
+step's own.
+
+**Cover** (AQ-R8): an expression Cabin whose function declares a cover
+(`FunctionEntry::cover`; `DATE` alone) serves a step that bounds its
+argument on both sides (`>=`/`>` with `<=`/`<`, a `BETWEEN`'s halves, or an
+equality) from the union of the sets of every key the bounds map to - for
+`DATE`, every day the interval touches, an open bound keeping its own day.
+**All or nothing**: one unobserved key walks the step, and a cover wider
+than `cabin_max_values` walks without asking. The bounds stay in the
+residual and trim the cover's surplus. A cover records nothing - it names
+no one value a walk could bank.
+
+**The witness for `F`** `[quiet-wrong]` (AQ-R4): `NoteCabinWrite` evaluates
+every expression and predicate Cabin's `F` on the new row at INSERT, and at
+UPDATE when an input of `F` moved, appending under `F(new)` - AR1 §10's
+"an input column of `F` changed", §5's third row over `F`'s inputs. A key
+it cannot compute discards the Cabin's sets (un-observing is always legal);
+the recording walk compares `F(row)`, the same evaluation, so a recorded
+set and a witnessed one are one function.
 
 ## 5. Write path — the witness
 
@@ -593,27 +653,45 @@ The Bound class is logged (§12).
 
 ## 10. Catalog
 
-`sys.cabins` (`SysCabinRow`, 28 bytes on disk, `include/kds/catalog/rows.hpp`):
+`sys.cabins` (`SysCabinRow`, 37 bytes on disk since superblock 26,
+`include/kds/catalog/rows.hpp`; a version-25 volume is refused, no row is
+read by its old length):
 
 ```
 sys.cabins
   cabin_id     u64     (AllocateRowId(kSysCabinsTable))
   rel_oid      u64
   observed_ct  u64     (values currently observed; best-effort)
-  column_no    u16     (schema position; never 0 — the tuple key has no Cabin)
+  expr_id      u64     (F's lookup key; 0 for a column Cabin)
+  column_no    u16     (the column shape's position, never 0; 0 for the others)
   origin       u8      (unset / auto / user)
   status       u8
+  shape        u8      (unset / column / expression / predicate)
 ```
 
-`CREATE CABIN ON trade(sym)` / `DROP CABIN` for the user path; the cabin
-optimizer's rows carry `origin = auto`, the tag that marks a Cabin the
-engine may drop on its own judgement.
+An expression or predicate Cabin's `F` is stored as its canonical text in
+**`sys.cabin_exprs`** (oid 153, root page 15), the third declaration
+relation (`exec/declaration_relation.hpp`), one row per Cabin with its
+`cabin_id` in `aux`; a column Cabin has none. The text names columns by
+position, so `RENAME COLUMN` keeps the Cabin (`alter.md`) and `DROP
+COLUMN` is refused while any Cabin's key reads the column. The catalog's
+declaration loader recompiles each `F` when a relation's entry is filled
+(`TableAccess::expr_cabins`) and fails the fill on a text it cannot read;
+the text is written before the row and removed after it.
+
+`CREATE CABIN ON trade(sym)`, `CREATE CABIN ON trade (DATE(ts))`, `CREATE
+CABIN ON trade (state = 'closed' AND amount > 1000)` and the matching `DROP
+CABIN` are the user path; an expression or predicate form takes the
+relation `X` (AQ-Q13). The cabin optimizer's rows carry `origin = auto`,
+the tag that marks a Cabin the engine may drop on its own judgement.
+`SHOW CABINS` gives each Cabin's `shape` and `key`.
 
 ## 11. Out of scope / open
 
-Expression and predicate-scoped cabins (C3), multi-column keys, range
-observation, budgets and demotion of write-hot values, pruning cadence,
-and the controller's tuning are decisions unrecorded here.
+Multi-column keys, range observation of a column, monotone serving and D3's
+sortable directory, automatic creation of expression and predicate Cabins
+(AQ-Q5), budgets and demotion of write-hot values, pruning cadence, and the
+controller's tuning are decisions unrecorded here.
 
 ---
 
@@ -638,6 +716,7 @@ not**.
 
 | Property | Observational Cabin | Bound Cabin |
 |---|---|---|
+| Source of completeness (AR1 §9) | The witness, per observed key: a key's set is complete because every write since its announce appended to it (§5, §6); a cover's union is complete because each of its keys' sets is | The pinned build plus the witness for every group, at every write |
 | Population | Lazy — observed values only (§5's witness, n=2/n=1) | Eager — full coverage of the group-column combination, built at `CREATE ASSERTION` |
 | Coverage contract | Partial by design; a value is either observed or it is not | 100% of the target relation's live rows, with no per-value opt-out |
 | Eviction | Allowed — §1's corollary, un-observing is always legal | **Forbidden.** Pages are pinned; un-observing is unavailable |
