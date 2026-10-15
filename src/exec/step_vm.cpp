@@ -2092,7 +2092,7 @@ private:
         // ---- The head seek (kRange on a clustered relation) --------------
         //
         // Tail pruning above ends the walk; this is what stops it starting
-        // at the beginning. A `BETWEEN` on a btree relation descends to the
+        // at the beginning. A tuple key range on a btree relation descends to the
         // leaf holding the low bound and walks siblings from there, so a
         // range near the end of the relation costs the range rather than
         // everything before it.
@@ -2541,8 +2541,10 @@ private:
         //
         // Split evaluation while this step's build is live: the
         // non-correlated conjuncts decide *bucketing*, the correlated one
-        // then decides *emission*. On a well-formed chain the two forms
-        // give one verdict - AND over total predicates commutes, and both
+        // then decides *emission*. Every conjunct but the key reads only
+        // this step's own columns - `BuildKeyOf` arms no other step - so
+        // the bucketing answers the same for every outer row. On a
+        // well-formed chain the two forms give one verdict - AND over total predicates commutes, and both
         // run the same EvaluateConjunctChecked body, so the split cannot
         // drift from the whole; the step's conjuncts were checked once
         // above, so a malformed chain never reaches either. The map holds

@@ -462,6 +462,16 @@ Two rules that keep every existing proof standing:
   INDEX` does not drop an existing Cabin — the Cabin simply stops being
   probed and its memory is the operator's to reclaim with `DROP CABIN`.
 
+- **A tuple key range ranks by its spelling, until a ruling says
+  otherwise.** A range bounded inclusively at both ends (`BETWEEN`,
+  `>=`/`<=`) is taken ahead of every index and Cabin arm, as it always was.
+  A range with a strict `>`/`<` end ranks **last**: it replaces only a step
+  every other arm left a bare walk with no build (the operator's ruling (a),
+  2026-10-15), so a wide window never displaces an index, a Cabin, a filter
+  scan or a statement-local build. Where a range belongs against those arms
+  is undecided, and the two spellings rank apart until it is decided
+  (`TupleKeyRangeOf`, `src/exec/step_compiler.cpp`).
+
 The compiler reads the relation's cached `index_mask` (§12), which names an
 index's **leading** key column only — exactly the right question.
 

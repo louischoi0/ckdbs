@@ -194,8 +194,8 @@ is a constant - no column reference, no `NOW()` - is folded at compile, and
 its value is what the hoist resolves and what the per-row check applies. One
 that reads a column, or the clock, is refused `NotImplemented` at its byte:
 resolving its parent per row would descend the parent under the write walk's
-exclusive leaf, the open page-latch cycle
-(`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`).
+exclusive leaf, the page-latch cycle `docs/rules/rules.md` §3's page latch
+row forbids.
 A scalar subquery is run once before the walk and is a constant from then on.
 
 **Nothing inside an open `WriteScope` waits** (AH-R1): the per-row check answers from the resolved

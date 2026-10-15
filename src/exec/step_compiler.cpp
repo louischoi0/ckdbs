@@ -851,27 +851,65 @@ std::optional<std::uint64_t> TupleKeyBound(const Operand& operand) {
 // deliberate: it means a hand-written `id >= 1 AND id <= 5` gets the same
 // range as `id BETWEEN 1 AND 5`, because they are the same statement once
 // the parser is done with them. A range from one spelling and not the other
-// would be an optimizer that rewards phrasing.
-std::optional<RangeBounds> TupleKeyRangeOf(const Step& step, std::uint16_t slot) {
+// would be an optimizer that rewards phrasing. The strict forms are the
+// same range with an inclusive end: `id > a` is `id >= a + 1` and `id < b`
+// is `id <= b - 1`, so `id >= a AND id < b` walks its window rather than
+// the relation. `id < 0` holds for no key and leaves the step a scan.
+//
+// Both ends, never one: a one-sided range promises nothing about how much
+// of the relation it walks.
+//
+// `strict` says a `>` or `<` set one of the two ends. Such a range ranks
+// last, not where an inclusive one does (operator's ruling (a),
+// 2026-10-15): it replaces only a step every other arm declined, so it
+// never displaces an index, a Cabin or a build. Where a range belongs
+// against those arms is undecided; until it is, the spellings rank apart.
+struct TupleKeyRange {
+    RangeBounds bounds;
+    bool strict = false;
+};
+
+std::optional<TupleKeyRange> TupleKeyRangeOf(const Step& step, std::uint16_t slot) {
     std::optional<std::uint64_t> low;
     std::optional<std::uint64_t> high;
+    bool low_strict = false;
+    bool high_strict = false;
     for (const StepPredicate& pred : step.residual) {
         if (!IsOwnColumn(pred.lhs, slot) || !IsTupleKey(pred.lhs)) continue;
         auto bound = TupleKeyBound(pred.rhs);
         if (!bound.has_value()) continue;
-        // Only the inclusive forms, which is what BETWEEN lowers to. A
-        // strict `>` would need low+1 and an underflow check for nothing:
-        // the grammar has no way to write one against a tuple key that BETWEEN
-        // does not already cover.
-        if (pred.op == parser::CompareOp::kGte && (!low || *bound > *low)) low = bound;
-        if (pred.op == parser::CompareOp::kLte && (!high || *bound < *high)) high = bound;
+        std::optional<std::uint64_t> inclusive_low;
+        std::optional<std::uint64_t> inclusive_high;
+        switch (pred.op) {
+            case parser::CompareOp::kGte: inclusive_low = *bound; break;
+            // A literal is at most INT64_MAX, so `+ 1` cannot wrap.
+            case parser::CompareOp::kGt: inclusive_low = *bound + 1; break;
+            case parser::CompareOp::kLte: inclusive_high = *bound; break;
+            case parser::CompareOp::kLt:
+                if (*bound == 0) return std::nullopt;
+                inclusive_high = *bound - 1;
+                break;
+            default: break;
+        }
+        // An end is strict only if no conjunct reaching the same bound wrote
+        // it inclusively, so the rank does not hang on conjunct order.
+        if (inclusive_low && (!low || *inclusive_low >= *low)) {
+            const bool strict = pred.op == parser::CompareOp::kGt;
+            low_strict = (low && *inclusive_low == *low) ? low_strict && strict : strict;
+            low = inclusive_low;
+        }
+        if (inclusive_high && (!high || *inclusive_high <= *high)) {
+            const bool strict = pred.op == parser::CompareOp::kLt;
+            high_strict = (high && *inclusive_high == *high) ? high_strict && strict : strict;
+            high = inclusive_high;
+        }
     }
     if (!low.has_value() || !high.has_value()) return std::nullopt;
     // An inverted range is legal to write and matches nothing. Left as a
     // plain scan: the residual returns the correct empty answer, and a
     // range walk would have to special-case it anyway.
     if (*low > *high) return std::nullopt;
-    return RangeBounds{*low, *high};
+    return TupleKeyRange{RangeBounds{*low, *high}, low_strict || high_strict};
 }
 
 // Whether this step has at least one equality against a literal on a
@@ -1383,37 +1421,39 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
 // The walked-join annotation (docs/spec/join-inner-build.md §5, workplan
 // JB1), or nullopt. Still `f(shape, catalog)` - the residual and two schema
 // descriptors are all it reads - and declining is never a wrong answer,
-// only a forgone build. Two declines are this loop's own, spec §8's by
-// name:
-//  - **Multi-column join keys** (CB12's scope rule): a second correlated
-//    equality declines the arm outright rather than keying a map on one
-//    column of a key the statement wrote as two.
-//  - The tuple key skip is defensive: a tuple key correlated equality became kProbe in
-//    the kind pass, so this arm never sees one unless the ladder is ever
-//    reordered.
+// only a forgone build.
+//
+// **One rule: exactly one conjunct may read a column that is not this
+// step's own, and it is the key** - a non-tuple-key correlated equality of
+// one descriptor. The map buckets the rows passing every other conjunct
+// once, against the first outer row, so each of those must answer the same
+// for every outer row: one reading an earlier step's or the enclosing row's
+// column would be judged for the first outer row alone, and every later
+// probe would miss the rows it admits for theirs (spec §8). The rule also
+// declines a multi-column join key (CB12's scope rule) and a
+// mixed-descriptor equality; a tuple key equality became kProbe in the kind
+// pass, so its decline here is defensive.
 // The kFilterScan, CompileWhere and scalar-sub-chain declines are the call
 // site's - they gate whether this arm runs at all.
 std::optional<BuildKey> BuildKeyOf(const Scope& scope, const catalog::TableAccess& access,
                                    const Step& step, std::uint16_t slot) {
+    // Nothing bounds a statement's conjunct count - the parser's WHERE loop
+    // appends while `AND` follows and stops at no cap - so a position past
+    // the field's width is expressible. A truncated `residual_pos` would name
+    // a *different* conjunct and partition the residual around the wrong
+    // one, so the arm declines rather than narrowing.
+    constexpr std::size_t kMaxResidualPos = 0xFFFF;  // BuildKey::residual_pos is uint16_t
     std::optional<BuildKey> out;
-    bool correlated_seen = false;
     for (std::size_t i = 0; i < step.residual.size(); ++i) {
-        auto eq = CorrelatedEqualityOf(step.residual[i], slot);
-        if (!eq.has_value() || IsTupleKey(eq->own)) continue;
-        if (correlated_seen) return std::nullopt;  // multi-column join key
-        correlated_seen = true;
-        // Nothing bounds a statement's conjunct count - the parser's WHERE
-        // loop appends while `AND` follows and stops at no cap - so a
-        // position past the field's width is expressible. A truncated
-        // `residual_pos` would name a *different* conjunct, and the build would
-        // then partition the residual around the wrong one: it
-        // would bucket only the first outer row's matches and every later
-        // probe would miss rows the walk returns. Declining is always
-        // legal, so the arm declines rather than narrowing.
-        constexpr std::size_t kMaxResidualPos = 0xFFFF;  // BuildKey::residual_pos is uint16_t
-        if (i > kMaxResidualPos) return std::nullopt;
-        if (!SameDescriptor(access.schema.columns[eq->own.col_pos], ColumnAt(scope, eq->other))) {
-            continue;  // mixed-descriptor: this conjunct cannot key a map
+        const StepPredicate& pred = step.residual[i];
+        if (IsOwnColumn(pred.lhs, slot) &&
+            (pred.rhs.kind != OperandKind::kColumn || IsOwnColumn(pred.rhs.column, slot))) {
+            continue;  // the same answer for every outer row: safe to bucket on
+        }
+        const auto eq = CorrelatedEqualityOf(pred, slot);
+        if (out.has_value() || !eq.has_value() || IsTupleKey(eq->own) || i > kMaxResidualPos ||
+            !SameDescriptor(access.schema.columns[eq->own.col_pos], ColumnAt(scope, eq->other))) {
+            return std::nullopt;
         }
         BuildKey key;
         key.col_pos = eq->own.col_pos;
@@ -1844,9 +1884,9 @@ Status CompileAssignments(const catalog::TableAccess& access,
             if (fk != nullptr) {
                 if (!IsConstantSetExpression(*entry.expr)) {
                     // BJ-Q10: the parent is a per-row value, and resolving it
-                    // per row under the walk's exclusive leaf is the open
-                    // page-latch cycle (a-write-walks-subquery-reads-pages-
-                    // under-its-exclusive-leaf-hold.md). Refused rather than
+                    // per row under the walk's exclusive leaf would be the
+                    // page-latch cycle `rules.md` §3's page latch row
+                    // forbids. Refused rather than
                     // checked against a key the row never gets.
                     if (!deferred.has_value()) {
                         deferred = Status::NotImplemented(
@@ -1880,10 +1920,11 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
     out.kind = AccessKind::kScan;  // the caller walks the relation itself
 
     std::uint32_t next_step_id = 1;  // 0 is this step
-    // `inner_build=false`, v1's SELECT-only rule (workplan JB1): a sub-chain
-    // here runs per row of a statement that *writes*, and its own writes
-    // between outer rows are what would invalidate a map the first row built
-    // (join-inner-build.md §4).
+    // `inner_build=false`, v1's SELECT-only rule (workplan JB1,
+    // join-inner-build.md §8): its reason was a write's own rows landing
+    // between outer rows, which the dispatcher's collection pass has since
+    // ruled out - a write's WHERE runs over the relation before its first
+    // write (parser-v2.md R2). Lifting the rule is its own decision.
     const auto lower_subquery = [&](const parser::Condition& cond) {
         return LowerSubquery(catalog, scope, cond, next_step_id, /*depth=*/1, view,
                              /*inner_build=*/false, declare);
@@ -2222,10 +2263,10 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // relation with a tuple key equality is already served better than either
         // of these could serve it.
         if (step.kind == AccessKind::kScan) {
-            if (auto bounds = TupleKeyRangeOf(step, static_cast<std::uint16_t>(i));
-                bounds.has_value()) {
+            const auto key_range = TupleKeyRangeOf(step, static_cast<std::uint16_t>(i));
+            if (key_range.has_value() && !key_range->strict) {
                 step.kind = AccessKind::kRange;
-                step.range = bounds;
+                step.range = key_range->bounds;
             } else if (auto ix = IndexProbeOf(*scope.relations[i].access, step,
                                                static_cast<std::uint16_t>(i));
                        ix.has_value()) {
@@ -2311,6 +2352,13 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // contract.
                 step.build = BuildKeyOf(scope, *scope.relations[i].access, step,
                                         static_cast<std::uint16_t>(i));
+            }
+            // A strict tuple key range, last (ruling (a), at
+            // TupleKeyRangeOf): only a step still a bare walk takes it.
+            if (step.kind == AccessKind::kScan && !step.build.has_value() &&
+                key_range.has_value()) {
+                step.kind = AccessKind::kRange;
+                step.range = key_range->bounds;
             }
         }
 
