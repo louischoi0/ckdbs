@@ -40,3 +40,12 @@
 | **Does not settle** | A merge to `main`, a push, a tag or a version; whether the measurement runs later |
 | **Recorded at** | `workorder-bu-basic-query-surface.md` header and §6; `index.md`'s BU row |
 
+## 5. BU closed
+
+| | |
+|---|---|
+| **Word** | *"Push."* - then *"close milestone"* |
+| **Mark** | BU-S4 through S9 pushed to `main` (`a1de2db5..621b93da`) with the hook skipped, the full suite having run green at `621b93da` (4,010/4,010). **BU closed** on the operator's word, with its overhead not measured (§4) - BU-R5's prediction unverified, and the layer's costs `known-gaps.md` names unmeasured |
+| **Does not settle** | A tag or a version; whether BU's close measurement runs later; `fn_residual`'s fold into `bool_residual`, left for a later order |
+| **Recorded at** | `workorder-bu-basic-query-surface.md` header; `index.md`'s BU row and this file's row |
+
