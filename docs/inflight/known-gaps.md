@@ -1065,8 +1065,6 @@ the procedures are `manual/server/backup-restore.md`.
   reserve (4 segments) and the hour that ends an idle backup stay
   `[provisional]`**: BR-S10 measured each at one value only (its results
   file says why each stays).
-- **An engine defect BR found and did not fix**, in `bugs/`: a full page
-  image cannot heal an allocated checksum-failed page.
 
 ## Transitions (BV)
 
