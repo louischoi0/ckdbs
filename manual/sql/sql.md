@@ -1043,7 +1043,7 @@ select list with no `FROM` - is answered by the query layer
   `GROUP BY` an expression, and an aggregate inside a subquery. The fold's
   rules hold unchanged: NULLs per §3.1 of `aggregate.md`, `SUM` checked
   int64 at every row, `AVG` over a decimal only, `aggregate_max_groups`
-  refusing past the cap.
+  and `aggregate_max_distinct` refusing past their caps.
 - **What it answers grows stage by stage.** Outer, cross, comma and
   `USING` joins, an `ON` beyond one column equality, set operations,
   derived tables and a subquery in the select list are read by the layer's

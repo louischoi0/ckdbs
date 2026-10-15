@@ -61,6 +61,9 @@ struct RowSet {
 struct LayerLimits {
     std::size_t max_rows = 0;    // sort_max_rows
     std::size_t max_groups = 0;  // aggregate_max_groups
+    // aggregate_max_distinct: the DISTINCT sets' entries, summed over every
+    // set of the statement, as the native fold counts them.
+    std::size_t max_distinct = 0;
 };
 
 // What the layer asks of the dispatcher.

@@ -111,7 +111,7 @@ Refusals, each with an exact byte position:
 layer is a statement the native path declines and the layer then answers
 (`parser-v2.md` I19, BU-Q9). The layer folds with this document's rules:
 §3.1's NULLs, AG3's checked accumulator at every row (int64, int128 for
-`DECIMAL128`), §3.4's AVG, AG11's `aggregate_max_groups` - and adds an
+`DECIMAL128`), §3.4's AVG, AG11's `aggregate_max_groups` and `aggregate_max_distinct` (the global group counting against neither, as the native fold's does not) - and adds an
 aggregate over any typed expression, an expression over aggregates and a
 `GROUP BY` over expressions. What it never does is change a statement the
 native fold answers.

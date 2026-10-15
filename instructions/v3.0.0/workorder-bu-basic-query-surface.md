@@ -447,3 +447,57 @@ the gate restores) and three were the host's disk filling (`/tmp` at
 release build at `b45f60ff`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2
 14 ok and P07 refused by BU-Q13, phases 3-6 unbuilt behind the gate,
 wrong=0 in every phase - S4's gate (phase 2, W24, W25) is met.
+
+### BU-S5 - grouped statements (built 2026-10-15)
+
+Resumed 2026-10-15 from the handoff `20261015-0427-bu-basic-query-surface-s4.md`
+on `worktree-bu-basic-query-surface-s4`, after merging `origin/main` at
+`ffade396` (AQ closed; the suite there 3,957/3,957). The stage is `58c15228`
+and its review.
+
+- **Gate.** `FormsLanded` loses its S5 arms: a grouped block is the
+  layer's. `HAVING` is checked as a condition (a subquery under it allowed),
+  `GROUP BY` items as value positions (a subquery there is still S7's).
+- **Fold.** The layer's `GroupRows` answers as `aggregate.md` does: SUM and
+  AVG check every addition in the native accumulator (int64, int128 for
+  `DECIMAL128`), so a sum crossing `INT64_MAX` fails as natively, said "SUM
+  overflow"; NULLs per §3.1; AVG half-even per §3.4.
+- **Forms.** `HAVING` (three-valued, kept only true), `ORDER BY`, `LIMIT`
+  and `OFFSET` over groups, an aggregate under an alias, over an expression
+  and inside one, `GROUP BY` an expression (BU-Q14), an aggregate in a
+  subquery.
+- **Cuts taken from S4's review** on this path: `has_group_by` and
+  `key_types` read off the keys, one `SubqueryTyper`, one `DecimalResult`.
+- **Docs.** `aggregate.md` §2's table and §8, `parser-v2.md` I11 and I19,
+  the manual's aggregate, ordering and "not supported" sections, the
+  `CLAUDE.md` row.
+- **Tests.** `tests/query_layer_test.cpp` gains the S5 cells and enables
+  S4's disabled one; `AggregateDispatchTest.WhatTheQueryLayerAnswersSinceBuS5`
+  takes §2's three rows that became answers;
+  `OrderByExecTest.OrderByOverAnAggregatedStatementIsTheQueryLayers`
+  replaces the refusal it pinned.
+
+Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S5 - the `critics-developer` review, applied
+
+Fixed by the reviewer, each with a cell: the global group was counted
+against `aggregate_max_groups`, refusing at 0 what the native fold answers
+(`Aggregator::Reset` founds it unchecked); a decimal SUM was bounded by its
+declared precision where the native fold bounds it only by its
+accumulator (`ValueOf` replaced by `AggregateValue`, `PowerOfTen`
+deleted); an aggregate over a subquery in `HAVING` was refused because
+`SameExpr` matched no subquery, not even itself; the overflow message now
+reads as §3.3 writes it. Applied by CLA on the review's flags: the layer
+counts DISTINCT entries against `aggregate_max_distinct`, summed over the
+statement as the native fold counts them (AG11; no new setting); a `GROUP
+BY` key named twice is refused as the native compile refuses it; the
+`ExprLanded` switch and the `key_nodes` copy cut. **Recorded, not
+changed:** an aggregate over only an outer column inside a subquery is
+refused - rightly, the standard binds it to the outer query - with the
+message "an aggregate is not allowed in HAVING", which names the clause and
+not the reason; `HAVING NULL` is refused as not a bool, BU-Q11's lone
+`NULL` being `varchar`, as `WHERE NULL` already was before S5. **Declined:**
+folding the grouped `resolve` lambda into `ResolveIn` (the review's cut 1),
+which would merge two refusal messages a client reads apart; splitting the
+overflow check by width, which reads no simpler.

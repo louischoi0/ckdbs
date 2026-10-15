@@ -324,5 +324,45 @@ TEST_F(QueryLayerTest, ASumCrossingInt64MaxFailsAsTheNativeFoldDoes) {
     ExpectRefused("SELECT SUM(v) FROM big HAVING COUNT(*) > 0", "SUM overflow");
 }
 
+// Review of BU-S5: the layer's fold answers as the native fold does where
+// both read the statement - a HAVING that keeps every group makes the
+// native statement the layer's.
+TEST_F(QueryLayerTest, TheGlobalGroupIsNotCountedAgainstAggregateMaxGroups) {
+    exec::AggregateLimits limits;
+    limits.max_groups = 0;
+    dispatcher_->set_aggregate_limits(limits);
+    ExpectRows("SELECT COUNT(*) FROM cust", {"count(*)", "6"});  // native
+    ExpectRows("SELECT COUNT(*) FROM cust HAVING COUNT(*) > 0", {"count(*)", "6"});
+    ExpectRows("SELECT COUNT(*) + 0 FROM cust", {"COUNT(*) + 0", "6"});
+}
+
+TEST_F(QueryLayerTest, ADecimalSumIsBoundedByItsAccumulatorNotItsPrecision) {
+    Ok("CREATE TABLE dsum (id int64, v decimal(18,0))");
+    Ok("INSERT INTO dsum VALUES (1, '900000000000000000')");
+    Ok("INSERT INTO dsum VALUES (2, '900000000000000001')");
+    ExpectRows("SELECT SUM(v) FROM dsum", {"sum(v)", "1800000000000000001"});  // native
+    ExpectRows("SELECT SUM(v) FROM dsum HAVING COUNT(*) > 0", {"sum(v)", "1800000000000000001"});
+}
+
+TEST_F(QueryLayerTest, AnAggregateOverASubqueryInHaving) {
+    ExpectRows("SELECT COUNT(*) FROM ord "
+               "HAVING SUM((SELECT COUNT(*) FROM cust WHERE cust.id = ord.cust_id)) > 1",
+               {"count(*)", "8"});
+}
+
+// AG11's other cap: DISTINCT sets' entries, summed over the statement.
+TEST_F(QueryLayerTest, AggregateMaxDistinctBoundsTheLayersDistinctSets) {
+    exec::AggregateLimits limits;
+    limits.max_distinct = 3;
+    dispatcher_->set_aggregate_limits(limits);
+    ExpectRefused("SELECT COUNT(DISTINCT amount) + 0 FROM ord", "aggregate_max_distinct (3)");
+    ExpectRows("SELECT COUNT(DISTINCT region) + 0 FROM cust", {"COUNT(DISTINCT region) + 0", "3"});
+}
+
+TEST_F(QueryLayerTest, AGroupByKeyNamedTwiceIsRefusedAsNatively) {
+    ExpectRefused("SELECT region FROM cust GROUP BY region, region HAVING COUNT(*) > 0",
+                  "appears twice in GROUP BY");
+}
+
 }  // namespace
 }  // namespace kds::server

@@ -8240,6 +8240,7 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
     exec::LayerLimits limits;
     limits.max_rows = sort_max_rows_;
     limits.max_groups = aggregate_limits_.max_groups;
+    limits.max_distinct = aggregate_limits_.max_distinct;
     auto result = exec::RunQuery(query.value(), line, host, now, limits);
     if (!result.ok()) return DispatchOutcome{ErrorReply(result.status()), false, 0, result.status()};
 

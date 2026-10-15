@@ -110,37 +110,22 @@ StatusOr<Int128> NumberOf(const AstValue& v) {
     }
 }
 
-Int128 PowerOfTen(unsigned n) {
-    Int128 p = 1;
-    for (unsigned i = 0; i < n; ++i) p *= 10;
-    return p;
-}
-
-// `v` as a value of `t` (an int64 or a decimal), or OutOfRange naming `what`.
-StatusOr<AstValue> ValueOf(Int128 v, const SetType& t, const std::string& what) {
+// A SUM's or AVG's answer `v` as a value of `t` (an int64 or a decimal).
+// No precision bound: the accumulator was checked at every addition
+// (int64, int128 for a DECIMAL128), and the native fold answers any sum
+// that fits it - a decimal(18) SUM may carry 19 digits there too
+// (`AggregateOutputType`, aggregate.md AG3).
+AstValue AggregateValue(Int128 v, const SetType& t) {
     AstValue out;
     if (t.type_val == catalog::kTypeValDecimalWide) {
-        const Int128 bound = PowerOfTen(kMaxDecimalPrecisionWide);
-        if (v >= bound || v <= -bound) return Status::OutOfRange(what + " is outside decimal(38)");
         out.type = ValueType::kDecimalWide;
         out.int_val = Int128Low(v);
         out.dec_hi = Int128High(v);
-        out.scale = catalog::DecimalScaleOf(t.len);
-        return out;
-    }
-    if (t.type_val == catalog::kTypeValDecimal) {
-        const Int128 bound = PowerOfTen(catalog::DecimalPrecisionOf(t.len));
-        if (v >= bound || v <= -bound) {
-            return Status::OutOfRange(what + " is outside " + SetTypeName(t));
-        }
-        out.type = ValueType::kDecimal;
+    } else {
+        out.type = t.type_val == catalog::kTypeValDecimal ? ValueType::kDecimal : ValueType::kInt;
         out.int_val = static_cast<std::int64_t>(v);
-        out.scale = catalog::DecimalScaleOf(t.len);
-        return out;
     }
-    if (v > INT64_MAX || v < INT64_MIN) return Status::OutOfRange(what + " is outside int64");
-    out.type = ValueType::kInt;
-    out.int_val = static_cast<std::int64_t>(v);
+    if (out.type != ValueType::kInt) out.scale = catalog::DecimalScaleOf(t.len);
     return out;
 }
 
@@ -215,7 +200,10 @@ bool SameExpr(const Expr& a, const Expr& b, SameColumn&& same_column) {
         case Expr::Kind::kLiteral:
             return a.bare_numeric == b.bare_numeric && SameValue(a.literal, b.literal);
         case Expr::Kind::kColumn: return same_column(a, b);
-        case Expr::Kind::kSubquery: return false;
+        // A subquery is the same computation only as the same node: an
+        // aggregate over one is matched back to itself (HAVING
+        // `SUM((SELECT ...))`), never to another spelling of it.
+        case Expr::Kind::kSubquery: return &a == &b;
         case Expr::Kind::kAggregate:
             if (a.agg_func != b.agg_func || a.agg_distinct != b.agg_distinct) return false;
             if ((a.lhs == nullptr) != (b.lhs == nullptr)) return false;
@@ -872,6 +860,14 @@ Status Runner::CompileGrouping(const QueryBlock& b, const std::vector<parser::Or
             return Status::InvalidArgument("an aggregate is not allowed in GROUP BY" +
                                            At(g->byte_offset));
         }
+        // A key named twice is the native compile's slip (aggregate.md §2).
+        for (const auto& earlier : b.group_by) {
+            if (earlier.get() == g.get()) break;
+            if (SameExpr(*earlier, *g, same_column)) {
+                return Status::InvalidArgument("'" + NameOf(*g) + "' appears twice in GROUP BY" +
+                                               At(g->byte_offset));
+            }
+        }
         auto typed = Type(*g, wide, cb, "in GROUP BY");
         if (!typed.ok()) return typed.status();
         LayerColumn col;
@@ -980,8 +976,6 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
     // The context the select list, HAVING and ORDER BY are typed in.
     Scope grouped_scope;
     std::function<std::optional<ResolvedColumn>(const Expr&)> computed;
-    std::vector<const Expr*> key_nodes;
-    for (const auto& g : b.group_by) key_nodes.push_back(g.get());
     const auto same_column = SameColumnIn(wide);
     if (cb.grouped) {
         if (Status s = CompileGrouping(b, order, wide, cb); !s.ok()) return s;
@@ -991,16 +985,16 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
         grouped_scope.owner = &q;
         grouped_scope.merged = &cb.merged;
         grouped_scope.grouped = true;
-        computed = [&cb, key_nodes, same_column](const Expr& e) -> std::optional<ResolvedColumn> {
-            for (std::size_t i = 0; i < key_nodes.size(); ++i) {
-                if (SameExpr(*key_nodes[i], e, same_column)) {
+        computed = [&cb, &b, same_column](const Expr& e) -> std::optional<ResolvedColumn> {
+            for (std::size_t i = 0; i < b.group_by.size(); ++i) {
+                if (SameExpr(*b.group_by[i], e, same_column)) {
                     return ResolvedColumn{i, cb.keys[i]->type};
                 }
             }
             if (e.kind == Expr::Kind::kAggregate) {
                 for (std::size_t i = 0; i < cb.aggs.size(); ++i) {
                     if (SameExpr(*cb.aggs[i].node, e, same_column)) {
-                        return ResolvedColumn{key_nodes.size() + i, cb.aggs[i].out};
+                        return ResolvedColumn{b.group_by.size() + i, cb.aggs[i].out};
                     }
                 }
             }
@@ -1342,20 +1336,11 @@ StatusOr<std::vector<Row>> Runner::GroupRows(CompiledBlock& b, const std::vector
     };
     std::vector<Group> groups;
     std::unordered_map<std::string, std::size_t> by_key;
-    const auto new_group = [&](Row keys) -> StatusOr<std::size_t> {
-        // 0 founds no group, as the native fold reads the setting
-        // (`expeditor.cpp`): every aggregated statement is refused.
-        if (groups.size() >= limits_.max_groups) {
-            return Status::ResourceExhausted(
-                "this statement would hold more than aggregate_max_groups (" +
-                std::to_string(limits_.max_groups) + ") groups (BU-Q10)");
-        }
-        groups.push_back(Group{std::move(keys), std::vector<AggState>(b.aggs.size())});
-        return groups.size() - 1;
-    };
-    if (b.keys.empty()) {
-        if (auto g = new_group({}); !g.ok()) return g.status();
-    }
+    // The global group is founded uncapped, as the native fold founds it
+    // (`Aggregator::Reset`): only a GROUP BY's groups count, so 0 refuses
+    // every grouped statement and no global one.
+    if (b.keys.empty()) groups.push_back(Group{{}, std::vector<AggState>(b.aggs.size())});
+    std::size_t distinct_entries = 0;  // summed over every set (aggregate.md AG11)
     for (const Row& wide_row : rows) {
         const Row eval = outer.empty() ? wide_row : Concat(wide_row, outer);
         std::size_t g = 0;
@@ -1371,9 +1356,13 @@ StatusOr<std::vector<Row>> Runner::GroupRows(CompiledBlock& b, const std::vector
             }
             auto it = by_key.find(key);
             if (it == by_key.end()) {
-                auto made = new_group(std::move(keys));
-                if (!made.ok()) return made.status();
-                it = by_key.emplace(std::move(key), made.value()).first;
+                if (groups.size() >= limits_.max_groups) {
+                    return Status::ResourceExhausted(
+                        "this statement would hold more than aggregate_max_groups (" +
+                        std::to_string(limits_.max_groups) + ") groups (BU-Q10)");
+                }
+                groups.push_back(Group{std::move(keys), std::vector<AggState>(b.aggs.size())});
+                it = by_key.emplace(std::move(key), groups.size() - 1).first;
             }
             g = it->second;
         }
@@ -1390,7 +1379,15 @@ StatusOr<std::vector<Row>> Runner::GroupRows(CompiledBlock& b, const std::vector
             if (agg.distinct) {
                 std::string key;
                 if (Status s = AppendKey(key, v.value(), agg.arg->type); !s.ok()) return s;
-                if (!st.seen.insert(std::move(key)).second) continue;
+                if (st.seen.count(key) != 0) continue;
+                if (distinct_entries >= limits_.max_distinct) {
+                    return Status::ResourceExhausted(
+                        "this statement exceeded aggregate_max_distinct (" +
+                        std::to_string(limits_.max_distinct) + ")" + At(agg.node->byte_offset) +
+                        "; no partial answer is emitted");
+                }
+                ++distinct_entries;
+                st.seen.insert(std::move(key));
             }
             ++st.count;
             switch (agg.func) {
@@ -1406,8 +1403,9 @@ StatusOr<std::vector<Row>> Runner::GroupRows(CompiledBlock& b, const std::vector
                     if (__builtin_add_overflow(st.sum, n.value(), &st.sum) ||
                         (!wide && (st.sum > std::numeric_limits<std::int64_t>::max() ||
                                    st.sum < std::numeric_limits<std::int64_t>::min()))) {
-                        return Status::OutOfRange(std::string(agg.func == AggFunc::kAvg ? "AVG" : "SUM") +
-                                                  " overflow" + At(agg.node->byte_offset));
+                        return Status::OutOfRange("SUM overflow in " +
+                                                  std::string(parser::AggFuncText(agg.func)) +
+                                                  At(agg.node->byte_offset));
                     }
                     break;
                 }
@@ -1435,7 +1433,6 @@ StatusOr<std::vector<Row>> Runner::GroupRows(CompiledBlock& b, const std::vector
         for (std::size_t a = 0; a < b.aggs.size(); ++a) {
             const Agg& agg = b.aggs[a];
             const AggState& st = grp.states[a];
-            const std::string what = std::string(parser::AggFuncText(agg.func)) + At(agg.node->byte_offset);
             switch (agg.func) {
                 case AggFunc::kCount: {
                     AstValue v;
@@ -1449,9 +1446,7 @@ StatusOr<std::vector<Row>> Runner::GroupRows(CompiledBlock& b, const std::vector
                         group_row.emplace_back();
                         break;
                     }
-                    auto v = ValueOf(st.sum, agg.out, what);
-                    if (!v.ok()) return v.status();
-                    group_row.push_back(std::move(v.value()));
+                    group_row.push_back(AggregateValue(st.sum, agg.out));
                     break;
                 }
                 case AggFunc::kAvg: {
@@ -1465,9 +1460,7 @@ StatusOr<std::vector<Row>> Runner::GroupRows(CompiledBlock& b, const std::vector
                     const Int128 r = st.sum % n;
                     const Int128 twice = (r < 0 ? -r : r) * 2;
                     if (twice > n || (twice == n && (q % 2 != 0))) q += st.sum < 0 ? -1 : 1;
-                    auto v = ValueOf(q, agg.out, what);
-                    if (!v.ok()) return v.status();
-                    group_row.push_back(std::move(v.value()));
+                    group_row.push_back(AggregateValue(q, agg.out));
                     break;
                 }
                 case AggFunc::kMin:
@@ -1660,12 +1653,9 @@ bool QueryLanded(const parser::Query& q);
 // `in_condition`: the node sits under a WHERE or a HAVING, where a
 // subquery is a condition's (S4) rather than a value's.
 bool ExprLanded(const Expr& e, bool in_condition) {
-    switch (e.kind) {
-        case Expr::Kind::kSubquery:
-            if (!in_condition) return false;  // S7: a subquery as a value
-            if (e.query != nullptr && !QueryLanded(*e.query)) return false;
-            break;
-        default: break;
+    if (e.kind == Expr::Kind::kSubquery) {
+        if (!in_condition) return false;  // S7: a subquery as a value
+        if (e.query != nullptr && !QueryLanded(*e.query)) return false;
     }
     if (e.lhs != nullptr && !ExprLanded(*e.lhs, in_condition)) return false;
     if (e.rhs != nullptr && !ExprLanded(*e.rhs, in_condition)) return false;
