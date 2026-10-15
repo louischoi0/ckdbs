@@ -559,3 +559,11 @@ S4's review, whose `LayerWalkSink` refuses at the first row past the cap.
 **Declined:** the `prefix` copy and a `MakeBinary` helper for the `USING`
 condition - each saves lines in code that runs once per statement and
 reads plainly as written.
+
+### BU-S6 - the suite and F004, stated
+
+Full suite (Debug, `-LE heap-suspended`) at `9d2fcc40`: 3,973/3,973; at
+`eccb9d31`, with the review applied: 3,978/3,978. F004 against a release
+build at `eccb9d31`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
+P07 refused by BU-Q13, phase 3 8/8, **phase 4 12/12**, phases 5-6 unbuilt
+behind the gate, wrong=0 in every phase - S6's gate is met.
