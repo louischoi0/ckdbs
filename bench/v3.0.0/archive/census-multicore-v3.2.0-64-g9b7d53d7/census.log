@@ -1,0 +1,241 @@
+load 0.26 1.09 4.30
+kds-point-relaxed-k1-s16-kernel-r0 load 0.26->0.80 stmts=225110 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=56140.4 p50=227.2
+kds-point-relaxed-k1-s16-kernel-r1 load 0.80->1.38 stmts=223213 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=55670.7 p50=232.6
+kds-point-relaxed-k1-s16-kernel-r2 load 1.38->1.97 stmts=221080 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=55135.5 p50=230.8
+load 1.97 1.42 4.33
+kds-point-relaxed-k2-s16-kernel-r0 load 1.97->3.11 stmts=287505 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=71727.5 p50=218.0
+kds-point-relaxed-k2-s16-kernel-r1 load 3.11->4.23 stmts=286307 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=71436.1 p50=217.7
+kds-point-relaxed-k2-s16-kernel-r2 load 4.23->5.25 stmts=290440 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=72446.6 p50=215.7
+load 5.25 2.20 4.51
+kds-point-relaxed-k4-s16-kernel-r0 load 5.25->6.04 stmts=227964 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=56855.4 p50=192.8
+kds-point-relaxed-k4-s16-kernel-r1 load 5.55->5.74 stmts=226631 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=56491.3 p50=189.1
+kds-point-relaxed-k4-s16-kernel-r2 load 5.74->5.98 stmts=224336 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=55910.1 p50=187.8
+load 5.98 2.70 4.59
+kds-point-relaxed-k1-s8-kernel-r0 load 5.98->5.38 stmts=225215 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=56256.8 p50=133.9
+kds-point-relaxed-k1-s8-kernel-r1 load 5.38->5.51 stmts=230750 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=57637.3 p50=129.5
+kds-point-relaxed-k1-s8-kernel-r2 load 5.51->5.14 stmts=229457 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=57314.0 p50=129.7
+load 5.14 2.76 4.56
+kds-point-relaxed-k2-s8-kernel-r0 load 5.14->5.07 stmts=270745 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=67625.1 p50=102.1
+kds-point-relaxed-k2-s8-kernel-r1 load 5.07->4.93 stmts=264864 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=66166.9 p50=102.3
+kds-point-relaxed-k2-s8-kernel-r2 load 4.93->4.81 stmts=267067 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=66702.7 p50=101.5
+load 4.81 2.90 4.54
+kds-point-relaxed-k4-s8-kernel-r0 load 4.81->5.31 stmts=202129 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=50489.7 p50=153.4
+kds-point-relaxed-k4-s8-kernel-r1 load 5.31->5.35 stmts=188772 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=47131.0 p50=168.1
+kds-point-relaxed-k4-s8-kernel-r2 load 5.35->5.48 stmts=199226 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=49749.0 p50=132.1
+load 5.48 3.21 4.60
+pg-point-off-s16-r0 load 5.48->6.00 stmts=106732 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=26621.7 p50=578.3
+pg-point-off-s16-r1 load 6.00->6.88 stmts=107503 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=26811.4 p50=574.7
+pg-point-off-s16-r2 load 5.82->6.29 stmts=106543 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=26571.9 p50=578.0
+load 6.29 3.66 4.70
+pg-point-off-s16-r0 load 5.79->6.26 stmts=209301 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=52205.7 p50=289.1
+pg-point-off-s16-r1 load 5.76->6.74 stmts=213057 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=53137.9 p50=257.0
+pg-point-off-s16-r2 load 5.70->6.19 stmts=210841 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=52588.2 p50=288.6
+load 6.19 3.97 4.75
+pg-point-off-s16-r0 load 5.69->6.82 stmts=310880 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=77530.8 p50=157.0
+pg-point-off-s16-r1 load 5.92->7.45 stmts=311039 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=77577.5 p50=153.4
+pg-point-off-s16-r2 load 5.80->7.22 stmts=310432 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=77426.7 p50=155.6
+load 7.22 4.55 4.91
+pg-point-off-s8-r0 load 5.69->5.46 stmts=108789 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=27176.0 p50=280.4
+pg-point-off-s8-r1 load 5.46->5.82 stmts=108732 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=27161.8 p50=282.0
+pg-point-off-s8-r2 load 5.43->5.64 stmts=108565 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=27116.1 p50=281.8
+load 5.64 4.43 4.85
+pg-point-off-s8-r0 load 5.64->5.57 stmts=221898 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=55423.7 p50=133.7
+pg-point-off-s8-r1 load 5.57->5.53 stmts=219687 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=54874.1 p50=135.2
+pg-point-off-s8-r2 load 5.53->5.97 stmts=222084 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=55466.9 p50=134.3
+load 5.97 4.60 4.89
+pg-point-off-s8-r0 load 5.97->6.33 stmts=331503 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=82806.7 p50=66.9
+pg-point-off-s8-r1 load 5.83->6.05 stmts=325661 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=81349.1 p50=67.6
+pg-point-off-s8-r2 load 5.56->6.16 stmts=329750 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=82359.6 p50=66.4
+load 6.16 4.77 4.93
+kds-insert1-relaxed-k1-s16-kernel-r0 load 5.66->5.35 stmts=228472 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=56986.8 p50=184.6
+kds-insert1-relaxed-k1-s16-kernel-r1 load 5.35->4.85 stmts=221479 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=59143.9 p50=185.2
+kds-insert1-relaxed-k1-s16-kernel-r2 load 4.85->4.50 stmts=219511 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=58953.4 p50=187.9
+load 4.50 4.50 4.84
+kds-insert1-relaxed-k2-s16-kernel-r0 load 4.50->5.26 stmts=358675 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=89463.3 p50=130.7
+kds-insert1-relaxed-k2-s16-kernel-r1 load 4.92->5.73 stmts=361402 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=90108.1 p50=131.2
+kds-insert1-relaxed-k2-s16-kernel-r2 load 5.73->5.17 stmts=358358 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=89374.7 p50=132.2
+load 5.17 4.68 4.89
+kds-insert1-relaxed-k4-s16-kernel-r0 load 5.17->5.89 stmts=262223 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=67294.5 p50=120.8
+kds-insert1-relaxed-k4-s16-kernel-r1 load 5.89->6.11 stmts=262521 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=67111.1 p50=127.9
+kds-insert1-relaxed-k4-s16-kernel-r2 load 5.62->6.45 stmts=262267 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=68891.4 p50=115.3
+load 6.01 4.95 4.97
+kds-insert1-relaxed-k1-s8-kernel-r0 load 5.61->5.56 stmts=232523 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=61968.9 p50=123.9
+kds-insert1-relaxed-k1-s8-kernel-r1 load 5.56->5.18 stmts=229726 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=61200.8 p50=125.2
+kds-insert1-relaxed-k1-s8-kernel-r2 load 5.18->4.79 stmts=227486 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=60790.3 p50=125.0
+load 4.79 4.75 4.90
+kds-insert1-relaxed-k2-s8-kernel-r0 load 4.79->4.77 stmts=329018 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=84284.4 p50=65.8
+kds-insert1-relaxed-k2-s8-kernel-r1 load 4.77->5.11 stmts=320650 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=80090.5 p50=67.0
+kds-insert1-relaxed-k2-s8-kernel-r2 load 5.11->5.20 stmts=319784 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=80850.3 p50=65.9
+load 5.20 4.84 4.93
+kds-insert1-relaxed-k4-s8-kernel-r0 load 5.20->5.36 stmts=249623 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=61361.5 p50=82.5
+kds-insert1-relaxed-k4-s8-kernel-r1 load 5.36->5.50 stmts=241339 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=57609.4 p50=82.4
+kds-insert1-relaxed-k4-s8-kernel-r2 load 5.50->5.45 stmts=246595 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0', '3.0'] stmt/s=58133.2 p50=75.8
+load 5.45 4.92 4.95
+pg-insert1-off-s16-r0 load 5.45->6.30 stmts=105506 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=26313.3 p50=576.3
+pg-insert1-off-s16-r1 load 5.79->6.34 stmts=105812 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=26399.5 p50=576.5
+pg-insert1-off-s16-r2 load 5.84->6.30 stmts=104841 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=26147.1 p50=581.2
+load 6.30 5.18 5.04
+pg-insert1-off-s16-r0 load 5.87->7.01 stmts=206143 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=51416.3 p50=288.7
+pg-insert1-off-s16-r1 load 5.93->6.53 stmts=205512 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=51262.1 p50=288.9
+pg-insert1-off-s16-r2 load 5.53->6.04 stmts=205619 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=51281.7 p50=289.5
+load 6.04 5.26 5.07
+pg-insert1-off-s16-r0 load 5.56->6.87 stmts=297397 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=74179.6 p50=153.4
+pg-insert1-off-s16-r1 load 5.81->8.42 stmts=296460 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=73945.6 p50=155.5
+pg-insert1-off-s16-r2 load 5.55->6.78 stmts=296830 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=74034.4 p50=156.1
+load 6.78 5.63 5.21
+pg-insert1-off-s8-r0 load 5.89->6.06 stmts=107417 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=26828.4 p50=279.3
+pg-insert1-off-s8-r1 load 5.65->5.92 stmts=108222 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=27033.9 p50=279.6
+pg-insert1-off-s8-r2 load 5.92->5.73 stmts=108184 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=27022.3 p50=279.7
+load 5.73 5.47 5.17
+pg-insert1-off-s8-r0 load 5.73->5.99 stmts=218804 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=54653.8 p50=131.5
+pg-insert1-off-s8-r1 load 5.99->6.46 stmts=217284 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=54277.5 p50=132.2
+pg-insert1-off-s8-r2 load 5.94->5.83 stmts=219356 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=54788.1 p50=131.2
+load 5.83 5.53 5.20
+pg-insert1-off-s8-r0 load 5.83->6.16 stmts=264403 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=66042.1 p50=100.4
+pg-insert1-off-s8-r1 load 5.75->6.09 stmts=257698 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=64359.1 p50=108.3
+pg-insert1-off-s8-r2 load 5.60->5.78 stmts=265548 errors=0 refusals=0 client_bound=False cores=['None'] stmt/s=66325.7 p50=101.3
+load 5.78 5.54 5.22
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    client(args)
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+    sys.exit(main())
+    sys.exit(main())
+             ^^^^^^
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+    client(args)
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+BrokenPipeError: [Errno 32] Broken pipe
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+    sys.exit(main())
+BrokenPipeError: [Errno 32] Broken pipe
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+Traceback (most recent call last):
+BrokenPipeError: [Errno 32] Broken pipe
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+Traceback (most recent call last):
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 637, in <module>
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
+    sys.exit(main())
+             ^^^^^^
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 611, in main
+    client(args)
+  File "/home/cdkbs/ckdbs/.claude/worktrees/pk-range-strict-bounds/tools/ba_census.py", line 332, in client
+    print(json.dumps({"index": args.client_index, "core": core, "reconnects": reconnects, "t_start": t_start, "t_end": t_end,
+BrokenPipeError: [Errno 32] Broken pipe
