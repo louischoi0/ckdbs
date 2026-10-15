@@ -82,13 +82,6 @@ public:
                                           const std::vector<parser::Condition>& where) = 0;
 };
 
-// Whether every form `query` holds belongs to a stage that has landed. The
-// layer reads the forms of BU-S7 already; until the stage lands with its
-// spec, cells and review, a statement holding one is not the layer's (the
-// dispatcher keeps the native refusal, BU-Q9): a set operation, a derived
-// table, a subquery as a value outside a condition.
-bool FormsLanded(const parser::Query& query);
-
 // Runs `query`, whose text is `sql`, and returns its result.
 StatusOr<RowSet> RunQuery(const parser::Query& query, std::string_view sql, LayerHost& host,
                           const StatementContext& context, const LayerLimits& limits);

@@ -1057,10 +1057,14 @@ select list with no `FROM` - is answered by the query layer
   written order, as everywhere. A comma binds looser than `JOIN`, so a
   `RIGHT` or `FULL` join after a comma is refused: name the comma-joined
   relation after the outer join.
-- **What it answers grows stage by stage.** Set operations, derived tables
-  and a subquery in the select list are read by the layer's grammar but
-  answered only once BU-S7 lands; until then each keeps the refusal it has
-  always had.
+- **Set operations, derived tables and subqueries as values on the layer**
+  (since BU-S7): `UNION`, `INTERSECT` and `EXCEPT`, with or without `ALL`
+  (`INTERSECT` binds tighter; NULLs are one value; the sides' columns must
+  have one type each, two text types meeting as `varchar`); a derived
+  table `FROM (SELECT ...) AS x`, joinable like a relation, not correlated
+  with anything outside it; a subquery as a value anywhere an expression
+  stands - `SELECT id, (SELECT COUNT(*) FROM ord AS o WHERE o.cust_id =
+  c.id) AS n FROM cust AS c` - returning one column and at most one row.
 - No Waystone trail is recorded or replayed for a layer statement, and
   `ANALYZE` does not describe one: `ANALYZE` of a layer statement answers
   the native refusal.
@@ -1338,7 +1342,7 @@ worth anything:
 
 - **`ERR NOT_IMPLEMENTED retryable=0 …`** — the design admits this form and
   this release has not built it. Feature-detect and try again against a later
-  server. Most of this section is this one: CTEs, derived tables,
+  server. Most of this section is this one: CTEs,
   `UNIQUE` indexes, `ALTER TABLE`'s row-rewriting forms (a type change, an `ADD` with no free slot), a
   value wider than one var-heap page.
 - **`ERR UNSUPPORTED retryable=0 …`** — this engine's architecture cannot
@@ -1354,9 +1358,10 @@ they were before the split.
   table-position nesting, and the inner result would have to become a
   relation with a schema. *"common table expressions (WITH) are not
   supported; subqueries are allowed in predicate position only."*
-- **No derived tables.** `FROM (SELECT ...)` is refused by the relation
-  reference itself: materializing an inner result breaks tuple-key-direct probing
-  into the next step and puts a temp relation in the storage layer.
+- **Derived tables are the query layer's.** The native grammar refuses
+  `FROM (SELECT ...)` at the relation reference: materializing an inner
+  result breaks tuple-key-direct probing into the next step. Since BU-S7 the
+  query layer answers it over the rows it holds, never as a step.
 - **No window functions.** `OVER`, `FILTER`, `WINDOW` and `QUALIFY` are
   refused with their position; a window call in the select list answers
   the native parse's error (`expected 'FROM', got 'OVER'`). Value expressions stand in the

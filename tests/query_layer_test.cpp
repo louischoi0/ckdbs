@@ -249,19 +249,6 @@ TEST_F(QueryLayerTest, AQualifierMatchesItsBindingIgnoringCase) {
     ExpectRefused("SELECT 1 FROM cust AS x JOIN ord AS X ON x.id = X.cust_id", "bound twice");
 }
 
-// What a later stage builds keeps the native reply until that stage lands
-// (`exec::FormsLanded`): the layer reads these and does not answer them.
-TEST_F(QueryLayerTest, ALaterStagesFormKeepsTheNativeRefusal) {
-    for (const char* sql : {
-             "SELECT id FROM cust UNION SELECT id FROM ord",                           // S7
-             "SELECT d.id FROM (SELECT id FROM cust) AS d",                            // S7
-             "SELECT id, (SELECT 1) FROM cust",                                        // S7
-         }) {
-        const std::string reply = Run(sql);
-        EXPECT_EQ(reply.rfind("ERR", 0), 0u) << sql << " -> " << reply;
-    }
-}
-
 // ---- BU-S5: grouped statements ---------------------------------------------
 
 TEST_F(QueryLayerTest, HavingKeepsAGroupOnlyWhenItsConditionIsTrue) {
@@ -483,6 +470,67 @@ TEST_F(QueryLayerTest, OnIsThreeValuedPerPair) {
 TEST_F(QueryLayerTest, AUsingColumnNamedTwiceIsRefused) {
     ExpectRefused("SELECT o.id FROM ord AS o JOIN ord AS p USING (cust_id, CUST_ID)",
                   "named twice");
+}
+
+// ---- BU-S7: set operations, derived tables, subqueries as values -----------
+
+TEST_F(QueryLayerTest, SetOperations) {
+    ExpectRows("SELECT cust_id FROM ord UNION SELECT id FROM cust",
+               {"cust_id", "1", "2", "3", "4", "5", "6", "99"});
+    ExpectRows("SELECT cust_id FROM ord WHERE amount > 200 UNION ALL "
+               "SELECT id FROM cust WHERE region = 'EU'",
+               {"cust_id", "1", "2", "4", "1", "3", "6"});
+    ExpectRows("SELECT cust_id FROM ord INTERSECT SELECT id FROM cust",
+               {"cust_id", "1", "2", "4", "6"});
+    ExpectRows("SELECT id FROM cust EXCEPT SELECT cust_id FROM ord", {"id", "3", "5"});
+    // ALL counts multiplicities: ord holds 1, 2 and 4 twice each, paid once each.
+    ExpectRows("SELECT cust_id FROM ord INTERSECT ALL "
+               "SELECT cust_id FROM ord WHERE status = 'paid'",
+               {"cust_id", "1", "2", "4"});
+    ExpectRows("SELECT cust_id FROM ord EXCEPT ALL "
+               "SELECT cust_id FROM ord WHERE status = 'paid'",
+               {"cust_id", "1", "2", "4", "6", "99"});
+    // INTERSECT binds tighter than EXCEPT: {1..6} EXCEPT {1, 2, 4}.
+    ExpectRows("SELECT id FROM cust EXCEPT SELECT cust_id FROM ord "
+               "INTERSECT SELECT cust_id FROM ord WHERE status = 'paid'",
+               {"id", "3", "5", "6"});
+    // NULLs are one value to a set operation.
+    ExpectRows("SELECT tier FROM cust UNION SELECT tier FROM cust",
+               {"tier", "1", "2", "3", "NULL"});
+    ExpectRows("SELECT cust_id FROM ord UNION SELECT id FROM cust ORDER BY 1 DESC LIMIT 3",
+               {"cust_id", "99", "6", "5"}, /*ordered=*/true);
+    ExpectRefused("SELECT id FROM cust UNION SELECT name FROM cust", "no implicit conversion");
+    ExpectRefused("SELECT id, name FROM cust UNION SELECT id FROM cust", "same number of columns");
+}
+
+TEST_F(QueryLayerTest, DerivedTables) {
+    ExpectRows("SELECT x.id FROM (SELECT id, amount FROM ord WHERE amount > 100) AS x",
+               {"x.id", "11", "13", "15", "16"});
+    ExpectRows("SELECT x.cust_id, x.total FROM "
+               "(SELECT cust_id, SUM(amount) AS total FROM ord GROUP BY cust_id) AS x "
+               "WHERE x.total > 200",
+               {"x.cust_id,x.total", "1,350", "2,375", "4,550"});
+    ExpectRows("SELECT c.name, x.n FROM cust AS c JOIN "
+               "(SELECT cust_id, COUNT(*) AS n FROM ord GROUP BY cust_id) AS x "
+               "ON x.cust_id = c.id",
+               {"c.name,x.n", "alice,2", "bob,2", "dave,2", "frank,1"});
+    ExpectRows("SELECT x.id FROM (SELECT id FROM cust UNION SELECT cust_id FROM ord) AS x "
+               "WHERE x.id > 5",
+               {"x.id", "6", "99"});
+}
+
+TEST_F(QueryLayerTest, ASubqueryAsAValueOutsideACondition) {
+    ExpectRows("SELECT id, (SELECT MAX(amount) FROM ord) AS m FROM cust WHERE id < 3",
+               {"id,m", "1,500", "2,500"});
+    ExpectRows("SELECT c.id, (SELECT COUNT(*) FROM ord AS o WHERE o.cust_id = c.id) AS n "
+               "FROM cust AS c",
+               {"c.id,n", "1,2", "2,2", "3,0", "4,2", "5,0", "6,1"});
+    ExpectRows("SELECT id FROM cust ORDER BY "
+               "(SELECT COUNT(*) FROM ord AS o WHERE o.cust_id = cust.id) DESC, id",
+               {"id", "1", "2", "4", "6", "3", "5"}, /*ordered=*/true);
+    ExpectRefused("SELECT id, (SELECT id FROM ord) AS x FROM cust",
+                  "a subquery used as a value returned");
+    ExpectRefused("SELECT id, (SELECT id, amount FROM ord) AS x FROM cust", "one column");
 }
 
 }  // namespace

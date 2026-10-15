@@ -8232,7 +8232,7 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
     const exec::StatementContext* context) {
     parser::Parser parser(line);
     auto query = parser.ParseQuery();
-    if (!query.ok() || !exec::FormsLanded(query.value())) return std::nullopt;
+    if (!query.ok()) return std::nullopt;
 
     const exec::StatementContext now =
         context != nullptr ? *context : exec::StatementContextNow();

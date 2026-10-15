@@ -370,7 +370,6 @@ struct CompiledBlock {
     std::vector<LayerColumn> group_columns;  // keys, then aggregates
     std::unique_ptr<TypedSetExpr> having;
     std::vector<std::unique_ptr<TypedSetExpr>> items;  // visible, then ORDER BY's hidden keys
-    std::vector<SetType> item_types;
     std::size_t visible = 0;
     bool distinct = false;
     std::vector<std::unique_ptr<CompiledQuery>> subqueries;
@@ -386,7 +385,6 @@ struct CompiledQuery {
     // Sort keys over the row a block emits (visible, then hidden) or over a
     // set operation's output row.
     std::vector<std::pair<std::size_t, bool>> sort;
-    std::vector<SetType> sort_types;
     std::optional<std::uint64_t> limit;
     std::uint64_t offset = 0;
     bool correlated = false;  // reads a column of an enclosing query
@@ -599,34 +597,47 @@ StatusOr<std::unique_ptr<CompiledQuery>> Runner::Compile(const Query& q, const S
 }
 
 // ORDER BY over a set operation names an output column, by name or position.
+// An ORDER BY key that names an output column: a position, or a bare name
+// matching one of the first `visible` columns. Two hits are ambiguous unless
+// `same(a, b)` says they read one column.
+template <typename Same>
+StatusOr<std::optional<std::size_t>> OutputColumn(const Expr& e,
+                                                  const std::vector<LayerColumn>& columns,
+                                                  std::size_t visible, Same&& same) {
+    std::optional<std::size_t> index;
+    if (e.kind == Expr::Kind::kLiteral && e.literal.type == ValueType::kInt && !e.bare_numeric) {
+        const std::int64_t k = e.literal.int_val;
+        if (k < 1 || static_cast<std::size_t>(k) > visible) {
+            return Status::InvalidArgument("ORDER BY position " + std::to_string(k) +
+                                           " is not in the select list" + At(e.byte_offset));
+        }
+        index = static_cast<std::size_t>(k - 1);
+    } else if (e.kind == Expr::Kind::kColumn && e.qualifier.empty()) {
+        for (std::size_t i = 0; i < visible; ++i) {
+            if (!catalog::ColumnNamesCollide(columns[i].name, e.column)) continue;
+            if (index.has_value() && !same(*index, i)) {
+                return Status::InvalidArgument("ORDER BY '" + e.column + "' is ambiguous" +
+                                               At(e.byte_offset));
+            }
+            if (!index.has_value()) index = i;
+        }
+    }
+    return index;
+}
+
 Status Runner::CompileSetOrder(const Query& q, CompiledQuery& cq) {
     for (const parser::OrderItem& item : q.order_by) {
         const Expr& e = *item.expr;
-        std::optional<std::size_t> index;
-        if (e.kind == Expr::Kind::kLiteral && e.literal.type == ValueType::kInt && !e.bare_numeric) {
-            const std::int64_t k = e.literal.int_val;
-            if (k < 1 || static_cast<std::size_t>(k) > cq.columns.size()) {
-                return Status::InvalidArgument("ORDER BY position " + std::to_string(k) +
-                                               " is not in the select list" + At(e.byte_offset));
-            }
-            index = static_cast<std::size_t>(k - 1);
-        } else if (e.kind == Expr::Kind::kColumn && e.qualifier.empty()) {
-            for (std::size_t i = 0; i < cq.columns.size(); ++i) {
-                if (!catalog::ColumnNamesCollide(cq.columns[i].name, e.column)) continue;
-                if (index.has_value()) {
-                    return Status::InvalidArgument("ORDER BY '" + e.column + "' is ambiguous" +
-                                                   At(e.byte_offset));
-                }
-                index = i;
-            }
-        }
+        auto found = OutputColumn(e, cq.columns, cq.columns.size(),
+                                  [](std::size_t, std::size_t) { return false; });
+        if (!found.ok()) return found.status();
+        const std::optional<std::size_t> index = found.value();
         if (!index.has_value()) {
             return Status::NotImplemented(
                 "ORDER BY over a set operation takes an output column's name or position" +
                 At(e.byte_offset));
         }
         cq.sort.emplace_back(*index, item.descending);
-        cq.sort_types.push_back(cq.columns[*index].type);
     }
     return Status::OK();
 }
@@ -1093,7 +1104,6 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
                 LayerColumn out = cb.wide[c];
                 out.qualifier.clear();
                 q.columns.push_back(out);
-                cb.item_types.push_back(n->type);
                 cb.items.push_back(std::move(n));
                 item_exprs.push_back(nullptr);
             }
@@ -1114,7 +1124,6 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
             out.driving_keystone = cb.wide[typed.value()->column_no].driving_keystone;
         }
         q.columns.push_back(out);
-        cb.item_types.push_back(typed.value()->type);
         cb.items.push_back(std::move(typed.value()));
         item_exprs.push_back(item.expr.get());
     }
@@ -1123,33 +1132,17 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
     // ---- ORDER BY: a position, an output name, or an expression -----------
     for (const parser::OrderItem& o : order) {
         const Expr& e = *o.expr;
-        std::optional<std::size_t> index;
-        if (e.kind == Expr::Kind::kLiteral && e.literal.type == ValueType::kInt && !e.bare_numeric) {
-            const std::int64_t k = e.literal.int_val;
-            if (k < 1 || static_cast<std::size_t>(k) > cb.visible) {
-                return Status::InvalidArgument("ORDER BY position " + std::to_string(k) +
-                                               " is not in the select list" + At(e.byte_offset));
-            }
-            index = static_cast<std::size_t>(k - 1);
-        } else if (e.kind == Expr::Kind::kColumn && e.qualifier.empty()) {
-            for (std::size_t i = 0; i < cb.visible; ++i) {
-                if (!catalog::ColumnNamesCollide(q.columns[i].name, e.column)) continue;
-                // A star column or a bare column item of that name is the
-                // same column the input name reads; only two different
-                // output columns of one name are ambiguous.
-                if (index.has_value()) {
-                    const TypedSetExpr& a = *cb.items[*index];
-                    const TypedSetExpr& c = *cb.items[i];
-                    if (a.kind == Expr::Kind::kColumn && c.kind == Expr::Kind::kColumn &&
-                        a.column_no == c.column_no) {
-                        continue;
-                    }
-                    return Status::InvalidArgument("ORDER BY '" + e.column + "' is ambiguous" +
-                                                   At(e.byte_offset));
-                }
-                index = i;
-            }
-        }
+        // A star column or a bare column item of that name is the same column
+        // the input name reads; only two different output columns of one
+        // name are ambiguous.
+        auto found = OutputColumn(e, q.columns, cb.visible, [&](std::size_t x, std::size_t y) {
+            const TypedSetExpr& a = *cb.items[x];
+            const TypedSetExpr& c = *cb.items[y];
+            return a.kind == Expr::Kind::kColumn && c.kind == Expr::Kind::kColumn &&
+                   a.column_no == c.column_no;
+        });
+        if (!found.ok()) return found.status();
+        std::optional<std::size_t> index = found.value();
         if (!index.has_value()) {
             for (std::size_t i = 0; i < cb.visible; ++i) {
                 if (item_exprs[i] != nullptr && SameExpr(*item_exprs[i], e, same_column)) {
@@ -1167,11 +1160,9 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
             auto typed = type_in_context(e, "here");
             if (!typed.ok()) return typed.status();
             index = cb.items.size();
-            cb.item_types.push_back(typed.value()->type);
             cb.items.push_back(std::move(typed.value()));
         }
         q.sort.emplace_back(*index, o.descending);
-        q.sort_types.push_back(cb.item_types[*index]);
     }
     q.block = std::move(cbp);
     return Status::OK();
@@ -1555,9 +1546,11 @@ StatusOr<std::vector<Row>> Runner::ExecuteBlock(CompiledBlock& b, const Row& out
             item_row.push_back(std::move(v.value()));
         }
         if (b.distinct) {
-            auto key = KeyOf(item_row, 0, b.visible, b.item_types);
-            if (!key.ok()) return key.status();
-            if (!seen.insert(std::move(key.value())).second) continue;
+            std::string key;
+            for (std::size_t i = 0; i < b.visible; ++i) {
+                if (Status s = AppendKey(key, item_row[i], b.items[i]->type); !s.ok()) return s;
+            }
+            if (!seen.insert(std::move(key)).second) continue;
         }
         out.push_back(std::move(item_row));
     }
@@ -1570,7 +1563,9 @@ Status Runner::SortAndCut(CompiledQuery& q, std::vector<Row>& rows) {
         std::vector<std::vector<OrderKey>> keys(rows.size());
         for (std::size_t r = 0; r < rows.size(); ++r) {
             for (std::size_t k = 0; k < q.sort.size(); ++k) {
-                auto key = OrderKeyOf(q.sort_types[k].type_val, rows[r][q.sort[k].first]);
+                const std::size_t at = q.sort[k].first;
+                const SetType& type = q.block != nullptr ? q.block->items[at]->type : q.columns[at].type;
+                auto key = OrderKeyOf(type.type_val, rows[r][at]);
                 if (!key.ok()) return key.status();
                 keys[r].push_back(std::move(key.value()));
             }
@@ -1668,49 +1663,6 @@ StatusOr<RowSet> Runner::Execute(CompiledQuery& q, const Row& outer) {
 }
 
 }  // namespace
-
-namespace {
-
-bool QueryLanded(const parser::Query& q);
-
-// `in_condition`: the node sits under a WHERE or a HAVING, where a
-// subquery is a condition's (S4) rather than a value's.
-bool ExprLanded(const Expr& e, bool in_condition) {
-    if (e.kind == Expr::Kind::kSubquery) {
-        if (!in_condition) return false;  // S7: a subquery as a value
-        if (e.query != nullptr && !QueryLanded(*e.query)) return false;
-    }
-    if (e.lhs != nullptr && !ExprLanded(*e.lhs, in_condition)) return false;
-    if (e.rhs != nullptr && !ExprLanded(*e.rhs, in_condition)) return false;
-    return std::all_of(e.args.begin(), e.args.end(),
-                       [&](const auto& a) { return a == nullptr || ExprLanded(*a, in_condition); });
-}
-
-bool QueryLanded(const parser::Query& q) {
-    if (q.op != parser::Query::Op::kBlock || q.block == nullptr) return false;  // S7
-    const parser::QueryBlock& b = *q.block;
-    // S7: a derived table, first or joined.
-    if (b.from.derived != nullptr) return false;
-    for (const parser::FromJoin& j : b.joins) {
-        if (j.item.derived != nullptr) return false;
-        if (j.on != nullptr && !ExprLanded(*j.on, true)) return false;
-    }
-    for (const parser::OutputItem& item : b.items) {
-        if (item.expr != nullptr && !ExprLanded(*item.expr, false)) return false;
-    }
-    for (const parser::OrderItem& o : q.order_by) {
-        if (o.expr != nullptr && !ExprLanded(*o.expr, false)) return false;
-    }
-    for (const auto& g : b.group_by) {
-        if (!ExprLanded(*g, false)) return false;
-    }
-    if (b.having != nullptr && !ExprLanded(*b.having, true)) return false;
-    return b.where == nullptr || ExprLanded(*b.where, true);
-}
-
-}  // namespace
-
-bool FormsLanded(const parser::Query& query) { return QueryLanded(query); }
 
 StatusOr<RowSet> RunQuery(const parser::Query& query, std::string_view sql, LayerHost& host,
                           const StatementContext& context, const LayerLimits& limits) {
