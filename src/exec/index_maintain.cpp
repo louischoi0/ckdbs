@@ -341,9 +341,8 @@ StatusOr<UniqueVerdict> CheckUniqueKey(storage::PageStore& store,
     return UniqueVerdict{};
 }
 
-Status UniqueViolation(const catalog::TableAccess& access,
-                       const catalog::TableAccess::IndexRef& ix, std::string_view index_name,
-                       const UniqueKey& key, std::uint64_t holder, std::uint32_t byte) {
+std::string UniqueKeyText(const catalog::TableAccess& access,
+                          const catalog::TableAccess::IndexRef& ix, const UniqueKey& key) {
     std::string columns;
     std::string values;
     for (std::size_t i = 0; i < ix.nkeys; ++i) {
@@ -355,9 +354,15 @@ Status UniqueViolation(const catalog::TableAccess& access,
         columns += catalog::NameView(col.name);
         values += FormatValue(col.type_val, key.values[i]);
     }
-    return Status::AlreadyExists("unique index '" + std::string(index_name) + "' on (" +
-                                 columns + "): (" + values + ") is already held by tuple key " +
-                                 std::to_string(holder) + " (byte " + std::to_string(byte) + ")");
+    return "unique index '" + ix.name + "' on (" + columns + "): (" + values + ")";
+}
+
+Status UniqueViolation(const catalog::TableAccess& access,
+                       const catalog::TableAccess::IndexRef& ix, const UniqueKey& key,
+                       std::uint64_t holder, std::uint32_t byte) {
+    return Status::AlreadyExists(UniqueKeyText(access, ix, key) +
+                                 " is already held by tuple key " + std::to_string(holder) +
+                                 " (byte " + std::to_string(byte) + ")");
 }
 
 Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,

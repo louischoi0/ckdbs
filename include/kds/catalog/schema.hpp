@@ -480,6 +480,10 @@ struct TableAccess {
         std::uint16_t entry_width = 0;
         std::uint8_t nkeys = 0;
         std::uint8_t ncovered = 0;
+        // `kIndexFlagUnique`: every write that moves a key is checked (BX).
+        bool unique = false;
+        // For a unique index's refusal, which names it.
+        std::string name;
         // In **declared index order**, which is the order the key encoding
         // concatenates them in - part of the format, not a presentation
         // choice.

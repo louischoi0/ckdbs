@@ -224,10 +224,14 @@ StatusOr<UniqueVerdict> CheckUniqueKey(storage::PageStore& store,
                                        const UniqueKey& key, const txn::ReadView& check_view,
                                        std::uint64_t self);
 
+// "unique index '<name>' on (<columns>): (<values>)" - what a refusal names.
+std::string UniqueKeyText(const catalog::TableAccess& access,
+                          const catalog::TableAccess::IndexRef& ix, const UniqueKey& key);
+
 // BX-R6's refusal: `AlreadyExists`, naming the index, its columns and values,
 // the tuple key that holds them and `byte`, the written value's position.
 Status UniqueViolation(const catalog::TableAccess& access,
-                       const catalog::TableAccess::IndexRef& ix, std::string_view index_name,
-                       const UniqueKey& key, std::uint64_t holder, std::uint32_t byte);
+                       const catalog::TableAccess::IndexRef& ix, const UniqueKey& key,
+                       std::uint64_t holder, std::uint32_t byte);
 
 }  // namespace kds::exec

@@ -2625,6 +2625,8 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
         ref.entry_width = row.entry_width;
         ref.nkeys = row.nkeys;
         ref.ncovered = row.ncovered;
+        ref.unique = (row.flags & kIndexFlagUnique) != 0;
+        ref.name = NameView(row.name);
         ref.key_cols = row.key_cols;
         ref.covered_cols = row.covered_cols;
         access.indexes.push_back(ref);
@@ -3594,10 +3596,9 @@ Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
                                         " columns, this one declares " +
                                         std::to_string(def.covered_cols.size()));
     }
-    if ((def.flags & kIndexFlagUnique) != 0) {
-        return Status::NotImplemented(
-            "catalog: UNIQUE indexes are not supported (docs/spec/index.md IX11); v1 is a read "
-            "accelerator that cannot fail a write for a reason of its own");
+    if ((def.flags & ~kIndexFlagUnique) != 0) {
+        return Status::InvalidArgument("catalog: index flags " + std::to_string(def.flags) +
+                                       " name a bit nothing defines");
     }
 
     auto access = InitTableAccess(def.table_oid);

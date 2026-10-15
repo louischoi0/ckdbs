@@ -3404,21 +3404,23 @@ StatusOr<Statement> Parser::Parse() {
         // One token of lookahead picks the object. `TABLE` still goes
         // through ParseCreateTable's own ExpectKeyword.
         const Token& what = lexer_.Peek();
-        if (what.type == TokenType::kIdent && IEquals(what.text, "INDEX")) {
+        const bool unique = what.type == TokenType::kIdent && IEquals(what.text, "UNIQUE");
+        if (unique || (what.type == TokenType::kIdent && IEquals(what.text, "INDEX"))) {
+            // `CREATE UNIQUE INDEX` is the one spelling of a unique key (BX-Q1
+            // (a)); `UNIQUE` followed by anything else names no object.
             lexer_.Next();
+            if (unique) {
+                const Token& object = lexer_.Peek();
+                if (object.type != TokenType::kIdent || !IEquals(object.text, "INDEX")) {
+                    return Status::InvalidArgument("expected INDEX after CREATE UNIQUE (byte " +
+                                                   std::to_string(object.byte_offset) + ")");
+                }
+                lexer_.Next();
+            }
             auto s = ParseIndex(/*drop=*/false);
             if (!s.ok()) return s.status();
+            s.value().unique = unique;
             stmt = std::move(s.value());
-        } else if (what.type == TokenType::kIdent && IEquals(what.text, "UNIQUE")) {
-            // Refused here rather than parsed and rejected later, because
-            // the position that matters is this word's. Enforcing
-            // uniqueness makes the index a *constraint*, which needs a
-            // second write-conflict path and would let an index failure
-            // abort a write (docs/spec/index.md IX11).
-            return Status::NotImplemented(
-                "UNIQUE indexes are not supported (byte " + std::to_string(what.byte_offset) +
-                "); v1 is a read accelerator that cannot fail a write for a reason of its own "
-                "(docs/spec/index.md IX11)");
         } else if (what.type == TokenType::kIdent && IEquals(what.text, "CABIN")) {
             lexer_.Next();
             auto s = ParseCabin(/*drop=*/false);

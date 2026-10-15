@@ -11,6 +11,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "kds/txn/manager.hpp"
+#include "view_text.hpp"
 
 // BX-S1 (`instructions/v3.2.0/workorder-bx-unique-index.md`): the key unit
 // and the latest-state check, below any SQL surface. The index under test is
@@ -273,12 +274,202 @@ TEST_F(IndexUniqueTest, TheViolationNamesIndexColumnsValueHolderAndByte) {
     Ok("CREATE TABLE t (id int64, owner int64) BTREE");
     Ok("CREATE INDEX by_owner ON t (owner)");
     const catalog::TableAccess& access = Access("t");
-    const Status refused =
-        UniqueViolation(access, access.indexes.front(), "by_owner", Key(access, 1, Int(7)),
-                        /*holder=*/3, /*byte=*/29);
+    const Status refused = UniqueViolation(access, access.indexes.front(),
+                                           Key(access, 1, Int(7)), /*holder=*/3, /*byte=*/29);
     EXPECT_EQ(refused.code(), StatusCode::kAlreadyExists);
     EXPECT_EQ(refused.message(),
               "unique index 'by_owner' on (owner): (7) is already held by tuple key 3 (byte 29)");
+}
+
+// ---- BX-S2: `CREATE UNIQUE INDEX`, one core ------------------------------
+
+class UniqueIndexSqlTest : public IndexUniqueTest {
+protected:
+    server::DispatchOutcome Do(const std::string& sql, server::Session* session = nullptr) {
+        return dispatcher_->Dispatch(sql, session);
+    }
+
+    StatusCode Code(const std::string& sql, server::Session* session = nullptr) {
+        return Do(sql, session).status.code();
+    }
+
+    std::string Rows(const std::string& sql) { return Run(sql); }
+
+    void UniqueOwner() {
+        Ok("CREATE TABLE t (id int64, owner int64, note int64) BTREE");
+        Ok("CREATE UNIQUE INDEX by_owner ON t (owner)");
+    }
+};
+
+TEST_F(UniqueIndexSqlTest, ADuplicateInsertIsRefusedNamingIndexValueHolderAndByte) {
+    UniqueOwner();
+    Ok("INSERT INTO t VALUES (7, 0)");
+    const server::DispatchOutcome out = Do("INSERT INTO t VALUES (7, 1)");
+    ASSERT_EQ(out.status.code(), StatusCode::kAlreadyExists) << out.response;
+    EXPECT_NE(out.status.message().find("unique index 'by_owner' on (owner): (7) is already "
+                                        "held by tuple key 1 (byte 22)"),
+              std::string::npos)
+        << out.status.message();
+    Ok("INSERT INTO t VALUES (8, 1)");
+}
+
+TEST_F(UniqueIndexSqlTest, SysIndexesSaysWhichIndexIsUnique) {
+    UniqueOwner();
+    Ok("CREATE INDEX by_note ON t (note)");
+    const std::string shown = Rows("SELECT name, unique FROM sys.indexes");
+    const auto view = testing_view::ReadViewText(shown);
+    EXPECT_EQ(view.Find("name", "by_owner", "unique"), std::optional<std::string>("1")) << shown;
+    EXPECT_EQ(view.Find("name", "by_note", "unique"), std::optional<std::string>("0")) << shown;
+}
+
+TEST_F(UniqueIndexSqlTest, AMultiRowInsertRefusesItsSecondRowAgainstItsFirst) {
+    UniqueOwner();
+    EXPECT_EQ(Code("INSERT INTO t VALUES (7, 0), (7, 1)"), StatusCode::kAlreadyExists);
+    // Autocommit is the statement: the first row went with it.
+    EXPECT_EQ(Code("INSERT INTO t VALUES (7, 2)"), StatusCode::kOk);
+}
+
+TEST_F(UniqueIndexSqlTest, ADeleteThenAnInsertOfTheKeyInOneTransactionPasses) {
+    UniqueOwner();
+    Ok("INSERT INTO t VALUES (7, 0)");
+    server::Session s;
+    Ok("BEGIN", &s);
+    Ok("DELETE FROM t WHERE owner = 7", &s);
+    Ok("INSERT INTO t VALUES (7, 1)", &s);
+    Ok("COMMIT", &s);
+    EXPECT_EQ(Code("INSERT INTO t VALUES (7, 2)"), StatusCode::kAlreadyExists);
+}
+
+TEST_F(UniqueIndexSqlTest, AViolationInsideATransactionFailsIt) {
+    UniqueOwner();
+    Ok("INSERT INTO t VALUES (7, 0)");
+    server::Session s;
+    Ok("BEGIN", &s);
+    Ok("INSERT INTO t VALUES (8, 0)", &s);
+    EXPECT_EQ(Code("INSERT INTO t VALUES (7, 1)", &s), StatusCode::kAlreadyExists);
+    EXPECT_TRUE(s.failed());
+    EXPECT_EQ(Run("INSERT INTO t VALUES (9, 0)", &s).rfind("ERR", 0), 0u)
+        << "a failed transaction takes no further write";
+    Ok("ROLLBACK", &s);
+    EXPECT_EQ(Code("INSERT INTO t VALUES (8, 0)"), StatusCode::kOk) << "8 went with the rollback";
+}
+
+TEST_F(UniqueIndexSqlTest, AnUpdateOntoAHeldKeyIsRefusedByProbeAndByWalk) {
+    UniqueOwner();
+    Ok("INSERT INTO t VALUES (7, 0), (8, 0)");
+    // The tuple key probe (`WHERE id = 2`) and the walk (`WHERE note = 0`).
+    EXPECT_EQ(Code("UPDATE t SET owner = 7 WHERE id = 2"), StatusCode::kAlreadyExists);
+    EXPECT_EQ(Code("UPDATE t SET owner = 7 WHERE owner = 8"), StatusCode::kAlreadyExists);
+    EXPECT_NE(Rows("SELECT owner FROM t WHERE id = 2").find("8"), std::string::npos);
+}
+
+TEST_F(UniqueIndexSqlTest, AnUpdateToAFreeKeyIsWrittenByProbeAndByWalk) {
+    UniqueOwner();
+    Ok("INSERT INTO t VALUES (7, 0), (8, 0), (9, 0)");
+    const server::DispatchOutcome probe = Do("UPDATE t SET owner = 70 WHERE id = 1");
+    ASSERT_TRUE(probe.status.ok()) << probe.response;
+    EXPECT_EQ(probe.response, "UPDATED 1");
+    // The walk stops at each row to check, and resumes at it.
+    const server::DispatchOutcome walk = Do("UPDATE t SET owner = owner + 100 WHERE note = 0");
+    ASSERT_TRUE(walk.status.ok()) << walk.response;
+    EXPECT_EQ(walk.response, "UPDATED 3");
+    EXPECT_EQ(Code("INSERT INTO t VALUES (170, 1)"), StatusCode::kAlreadyExists);
+    EXPECT_EQ(Code("INSERT INTO t VALUES (108, 1)"), StatusCode::kAlreadyExists);
+    EXPECT_EQ(Code("INSERT INTO t VALUES (7, 1)"), StatusCode::kOk) << "7 moved off";
+}
+
+TEST_F(UniqueIndexSqlTest, AnUpdateThatMovesNoKeyIsNotChecked) {
+    // BX-R5: `note` and an owner assigned its own value move no key.
+    UniqueOwner();
+    Ok("INSERT INTO t VALUES (7, 0)");
+    Ok("UPDATE t SET note = 5 WHERE owner = 7");
+    Ok("UPDATE t SET owner = 7 WHERE id = 1");
+    EXPECT_NE(Rows("SELECT note FROM t WHERE id = 1").find("5"), std::string::npos);
+}
+
+TEST_F(UniqueIndexSqlTest, AShiftOverConsecutiveKeysIsRefusedPerRow) {
+    // BX-Q4 (a): checked per row, immediately, in tuple key order - row 1's
+    // new value is row 2's current one. The standard admits it; this does
+    // not, and says so.
+    UniqueOwner();
+    Ok("INSERT INTO t VALUES (1, 0), (2, 0)");
+    EXPECT_EQ(Code("UPDATE t SET owner = owner + 1 WHERE note = 0"), StatusCode::kAlreadyExists);
+}
+
+TEST_F(UniqueIndexSqlTest, AnUndecidedWriterOfTheKeyRefusesWhereNothingCanWait) {
+    // A synchronous dispatch cannot park, so the busy verdict is answered
+    // retryably; its decide then answers the key.
+    UniqueOwner();
+    server::Session a;
+    Ok("BEGIN", &a);
+    Ok("INSERT INTO t VALUES (7, 0)", &a);
+    EXPECT_EQ(Code("INSERT INTO t VALUES (7, 1)"), StatusCode::kTxnConflict);
+    Ok("ROLLBACK", &a);
+    Ok("INSERT INTO t VALUES (7, 1)");
+
+    Ok("BEGIN", &a);
+    Ok("UPDATE t SET owner = 8 WHERE owner = 7", &a);
+    EXPECT_EQ(Code("INSERT INTO t VALUES (8, 2)"), StatusCode::kTxnConflict);
+    EXPECT_EQ(Code("INSERT INTO t VALUES (7, 2)"), StatusCode::kTxnConflict)
+        << "the move off 7 is undecided, so 7 is not free yet";
+    Ok("COMMIT", &a);
+    EXPECT_EQ(Code("INSERT INTO t VALUES (8, 2)"), StatusCode::kAlreadyExists);
+    EXPECT_EQ(Code("INSERT INTO t VALUES (7, 2)"), StatusCode::kOk);
+}
+
+TEST_F(UniqueIndexSqlTest, ABuildOverDuplicatesIsRefusedAndLeavesNoIndex) {
+    Ok("CREATE TABLE t (id int64, owner int64) BTREE");
+    Ok("INSERT INTO t VALUES (7), (8), (7)");
+    const server::DispatchOutcome out = Do("CREATE UNIQUE INDEX by_owner ON t (owner)");
+    ASSERT_EQ(out.status.code(), StatusCode::kAlreadyExists) << out.response;
+    EXPECT_NE(out.status.message().find("(7) is held by both tuple key 1 and tuple key 3 "
+                                        "(byte 20)"),
+              std::string::npos)
+        << out.status.message();
+    EXPECT_EQ(Rows("SELECT name FROM sys.indexes").find("by_owner"), std::string::npos);
+
+    // A deleted duplicate holds nothing.
+    Ok("DELETE FROM t WHERE id = 3");
+    Ok("CREATE UNIQUE INDEX by_owner ON t (owner)");
+    EXPECT_EQ(Code("INSERT INTO t VALUES (8)"), StatusCode::kAlreadyExists);
+}
+
+TEST_F(UniqueIndexSqlTest, TheBuildSeesItsOwnTransactionsRows) {
+    Ok("CREATE TABLE t (id int64, owner int64) BTREE");
+    server::Session s;
+    Ok("BEGIN", &s);
+    Ok("INSERT INTO t VALUES (7), (7)", &s);
+    EXPECT_EQ(Code("CREATE UNIQUE INDEX by_owner ON t (owner)", &s),
+              StatusCode::kAlreadyExists);
+    Ok("ROLLBACK", &s);
+}
+
+TEST_F(UniqueIndexSqlTest, ANullableKeyAndAnythingButIndexAfterUniqueAreRefused) {
+    Ok("CREATE TABLE t (id int64, owner int64 NULL) BTREE");
+    EXPECT_EQ(Code("CREATE UNIQUE INDEX u ON t (owner)"), StatusCode::kNotImplemented);
+    const server::DispatchOutcome out = Do("CREATE UNIQUE TABLE x (id int64)");
+    EXPECT_EQ(out.status.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(out.status.message().find("byte 14"), std::string::npos) << out.status.message();
+}
+
+TEST_F(UniqueIndexSqlTest, AUniqueIndexAnswersReadsAsAnOrdinaryOneDoes) {
+    // BX-R10: the read path does not move.
+    Ok("CREATE TABLE a (id int64, owner int64) BTREE");
+    Ok("CREATE TABLE b (id int64, owner int64) BTREE");
+    Ok("CREATE INDEX a_owner ON a (owner)");
+    Ok("CREATE UNIQUE INDEX b_owner ON b (owner)");
+    for (int i = 0; i < 50; ++i) {
+        Ok("INSERT INTO a VALUES (" + std::to_string(i * 3) + ")");
+        Ok("INSERT INTO b VALUES (" + std::to_string(i * 3) + ")");
+    }
+    Ok("UPDATE a SET owner = 1000 WHERE id = 4");
+    Ok("UPDATE b SET owner = 1000 WHERE id = 4");
+    for (const std::string where :
+         {"owner = 9", "owner = 1000", "owner = 10", "owner BETWEEN 30 AND 60"}) {
+        EXPECT_EQ(Rows("SELECT id, owner FROM a WHERE " + where),
+                  Rows("SELECT id, owner FROM b WHERE " + where))
+            << where;
+    }
 }
 
 // ---- The key unit (BX-R3) ---------------------------------------------------

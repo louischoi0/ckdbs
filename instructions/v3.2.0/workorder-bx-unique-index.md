@@ -176,12 +176,17 @@ statement failure does (`docs/spec/txn.md`).
 **BX-R7 — `CREATE UNIQUE INDEX` verifies while it builds.** The backfill
 already runs under the relation's `X` (AT-S5e), so no writer is open: each
 row's latest version is its committed one. The build appends every version
-(IX10a, unchanged), then walks the built tree once in key order: within each
-encoded-key run it resolves the distinct tuple keys' latest versions and
-compares full values, so memory is one run, never a set of every key. A
-duplicate refuses the create `AlreadyExists` naming both tuple keys, the
-tree unreachable and no `sys.indexes` row written - IX10a's "complete or
-absent" covers it with no new rule.
+(IX10a, unchanged) and, **as built in BX-S2**, asks `CheckUniqueKey` of each
+row's latest version once that row's entries are in - so of every pair the
+later row finds the earlier one, with memory one run, never a set of every
+key. That is one index descent per row, and O(n²) entry visits for `n` rows
+whose string keys share their 32-byte prefix (IX6); the single key-order
+walk this ruling first proposed would cost one pass, and was set aside for
+the reuse. A duplicate refuses the create `AlreadyExists` naming both tuple
+keys, the tree unreachable and no `sys.indexes` row written - IX10a's
+"complete or absent" covers it with no new rule. **The unreachable tree's
+pages leak** (`index.md` §12 states it of every failed build), and a
+refused unique build is the one a client can repeat at will (BX-Q6).
 
 **BX-R8 — the format moves.** The flag is written, so a binary that
 ignores it would admit duplicates into a volume that promises none
@@ -289,6 +294,23 @@ new value another row still holds. The spec and the manual say so.
 **CLA proposes (a)**. (b) is a change to the index's key encoding (§5's
 discriminator byte) and to the null spec, and is its own decision.
 
+**BX-Q6 — a refused unique build's pages** (raised at BX-S2's review, open).
+A failed `CREATE INDEX` leaves its partial tree allocated and named by
+nothing (`index.md` §12); before BX only a device or structural failure got
+there, and a refused `CREATE UNIQUE INDEX` over duplicates now does on every
+attempt.
+- (a) Leave it, stated in `known-gaps.md`: the leak is bounded by the
+  relation's size per attempt.
+- (b) Free the partial tree on a failed build: its pages were never logged
+  and nothing names them, so the BF free primitive (`page.md` §5) could
+  take each - which is a reading of BF's rules nobody has ruled on.
+- (c) Check before building: sort every live row's key in memory first,
+  allocating nothing on a refusal, at the cost of memory proportional to
+  the relation.
+
+**CLA proposes (b)**, after the operator's ruling that freeing never-logged
+pages is within BF; (a) stands until then.
+
 ---
 
 ## 5. Stages
@@ -311,8 +333,8 @@ falls inside it (no conflict). A hash collision is a wait at the
 dispatcher, so its cell is BX-S2's.
 
 **BX-S2 — `CREATE UNIQUE INDEX`, one core.** The parser's and the
-catalog's refusals replaced; the flag written; superblock 27; `SHOW
-INDEXES` and `DESCRIBE` print `unique`. The backfill's duplicate check
+catalog's refusals replaced; the flag written; superblock 27; `sys.indexes`
+(and so `SHOW INDEXES`) prints `unique`. The backfill's duplicate check
 (BX-R7). INSERT and UPDATE take the unit, check before placement, refuse
 (BX-R4, BX-R6), gated on key columns (BX-R5); the KWP load stream is
 covered through `ExecuteInsert` (§1). Cells: the refusals, the multi-row
@@ -373,4 +395,30 @@ hash-collision cell. Suite: 3951/3951 before the review fixes; after them
 3952/3953, the one failure
 `DropTableReclaimServingTest.ATwoCoreMountReclaimsOnceEveryCoreHasCheckpointedWhileServing`,
 the load flake `known-gaps.md` records, 10/10 alone. Overhead not measured;
+measured at the milestone's close.
+
+**BX-S2 - landed 2026-10-15** on `worktree-bx-unique-index`. `CREATE UNIQUE
+INDEX` parses (`UNIQUE` before anything but `INDEX` refused at its byte);
+the catalog admits `kIndexFlagUnique` and refuses any other bit;
+`IndexRef` carries `unique` and the name; superblock 27; `sys.indexes`
+prints `unique`. The build checks each row's latest version once its
+entries are in (BX-R7 as built). The dispatcher's `UniqueKeysOf` /
+`CheckUniqueKeys` / `UniqueKeyHolds`: an INSERT checks before its
+admission, holding each key unit until the row's function returns; an
+UPDATE stops its walk or its tuple-key probe at a row that moves a unique
+key, checks with no page held, and resumes at the row (BX-R4). 14 SQL cells
+in `index_unique_test.cpp`; the index contract suite gains a unique column
+(`code`) in every indexed configuration, five probes on it, all
+byte-identical to the plain baseline; the golden corpus pins
+`CREATE UNIQUE INDEX` as `ok`. Mutants disabling the INSERT check (7 cells
+fail) and the UPDATE check (2 cells fail) are caught. `critics-developer`:
+no wrong-answer bug; accepted - the backfill decodes each row once, the
+dead `held_before` deleted, `UniqueKeysOfRow` an alias, the parser's two
+branches merged, a stale comment and the `AlreadyExists` byte rule
+commented, BX-R7 amended to what was built. Recorded rather than fixed -
+a refused unique build leaks its partial tree on every attempt (BX-Q6,
+open; `known-gaps.md`), since freeing never-logged pages needs a ruling on
+BF's rules. Rejected - a hash-collision cell (no seam forces one; a
+collision is a wait the check then passes). Moved to BX-S3 - the KWP load
+cell and the mid-walk park. Suite 3967/3967. Overhead not measured;
 measured at the milestone's close.

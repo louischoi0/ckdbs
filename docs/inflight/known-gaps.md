@@ -1154,6 +1154,29 @@ Verified on `worktree-aq-expression-cabins` at AQ-S1
   (AQ-Q13), because their text names columns by position and a create
   racing `DROP COLUMN` would leave one naming a dropped column.
 
+## Unique indexes (BX)
+
+Verified on `worktree-bx-unique-index` at BX-S2
+(`instructions/v3.2.0/workorder-bx-unique-index.md`).
+
+- **A refused `CREATE UNIQUE INDEX` leaks its partial tree, on every
+  attempt.** The build fills its tree before it finds the duplicate, and a
+  failed build's tree is named by nothing (`index.md` §12); a client
+  repeating the statement over duplicates leaks up to the relation's
+  index size each time. Owner: BX-Q6.
+- **A unique build over string keys sharing their 32-byte prefix costs
+  O(n²) entry visits**: each row's check walks the whole run (BX-R7 as
+  built).
+- **A busy verdict counts any undecided writer of a row the run names**,
+  whether or not its pending version carries the key (`CheckUniqueKey`'s
+  conservative busy): a write can wait on a transaction that only touched a
+  row whose stale entry names the key. A wait it did not need, never a
+  duplicate admitted.
+- **Row 2 onward of a multi-row `INSERT`, and a KWP load row past its
+  chunk's first, meeting an undecided writer of its key is refused
+  `TxnConflict`** rather than waited for (BX-Q3 (a)): `ExecuteInsert`
+  cannot park mid-statement.
+
 ## Decisions the revision has not taken
 
 - **AR0's D1-D16: what is taken.** `workorder-al-m0-single-wal.md` took D3,

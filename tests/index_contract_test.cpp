@@ -92,7 +92,8 @@ private:
 // truncated key path is exercised by the shared set too, and `qty` gives the
 // composite index a second column.
 void Schema(Instance& db) {
-    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, owner int64, qty int64, sym varchar) BTREE")
+    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, owner int64, qty int64, sym varchar, "
+                     "code int64) BTREE")
                   .substr(0, 7),
               "CREATED");
 }
@@ -102,7 +103,9 @@ void Rows(Instance& db) {
         const std::string owner = std::to_string(i % 5);
         const std::string qty = std::to_string(i % 4);
         const std::string sym = "'s" + std::to_string(i % 3) + "'";
-        ASSERT_EQ(db.Run("INSERT INTO b VALUES (" + owner + ", " + qty + ", " + sym + ")")
+        const std::string code = std::to_string(i * 7);
+        ASSERT_EQ(db.Run("INSERT INTO b VALUES (" + owner + ", " + qty + ", " + sym + ", " +
+                         code + ")")
                       .substr(0, 8),
                   "INSERTED");
     }
@@ -113,6 +116,11 @@ void Rows(Instance& db) {
     ASSERT_EQ(db.Run("UPDATE b SET owner = 0 WHERE id = 4").substr(0, 7), "UPDATED");
     ASSERT_EQ(db.Run("UPDATE b SET qty = 7 WHERE id = 5").substr(0, 7), "UPDATED");
     ASSERT_EQ(db.Run("DELETE FROM b WHERE id = 6").substr(0, 7), "DELETED");
+    // `code` is unique (BX): a key moved off, a free key taken by the moved
+    // row's neighbour, and the deleted row's key, which it no longer holds.
+    ASSERT_EQ(db.Run("UPDATE b SET code = 1000 WHERE id = 3").substr(0, 7), "UPDATED");
+    ASSERT_EQ(db.Run("UPDATE b SET code = 14 WHERE id = 8").substr(0, 7), "UPDATED");
+    ASSERT_EQ(db.Run("INSERT INTO b VALUES (1, 1, 's1', 35)").substr(0, 8), "INSERTED");
 }
 
 void Indexes(Instance& db) {
@@ -120,6 +128,7 @@ void Indexes(Instance& db) {
               "CREATED");
     ASSERT_EQ(db.Run("CREATE INDEX by_owner_qty ON b (owner, qty)").substr(0, 7), "CREATED");
     ASSERT_EQ(db.Run("CREATE INDEX by_sym ON b (sym)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("CREATE UNIQUE INDEX by_code ON b (code)").substr(0, 7), "CREATED");
 }
 
 // 1 and 3: declared first, so the write hook fills them.
@@ -170,8 +179,16 @@ const std::vector<std::string>& Queries() {
         "SELECT COUNT(*) FROM b WHERE owner = 1",
         "SELECT COUNT(*), MIN(qty), MAX(qty) FROM b WHERE owner = 2",
         "SELECT owner, COUNT(*) FROM b GROUP BY owner",
+        // The unique key (BX-R10: the read path does not move): a hit, the
+        // key a row moved to, the key it left and another row took, the
+        // deleted row's key re-inserted, a range.
+        "SELECT id, code FROM b WHERE code = 21",
+        "SELECT id, code FROM b WHERE code = 1000",
+        "SELECT id, code FROM b WHERE code = 14",
+        "SELECT id, code FROM b WHERE code = 35",
+        "SELECT id, code FROM b WHERE code BETWEEN 0 AND 60",
         // And the whole relation, which every configuration must agree on.
-        "SELECT id, owner, qty, sym FROM b",
+        "SELECT id, owner, qty, sym, code FROM b",
 
         // ---- Paginated statements (docs/spec/parser-v2.md I11, V09) ---------
         //
@@ -325,8 +342,8 @@ TEST(IndexContractTest, ADeletedRowsEntrySurvivesAndStillReturnsNothing) {
     Indexes(db);
     Schema(plain);
     for (Instance* i : {&db, &plain}) {
-        ASSERT_EQ(i->Run("INSERT INTO b VALUES (5, 1, 'a')").substr(0, 8), "INSERTED");
-        ASSERT_EQ(i->Run("INSERT INTO b VALUES (5, 2, 'b')").substr(0, 8), "INSERTED");
+        ASSERT_EQ(i->Run("INSERT INTO b VALUES (5, 1, 'a', 1)").substr(0, 8), "INSERTED");
+        ASSERT_EQ(i->Run("INSERT INTO b VALUES (5, 2, 'b', 2)").substr(0, 8), "INSERTED");
         ASSERT_EQ(i->Run("DELETE FROM b WHERE id = 1").substr(0, 7), "DELETED");
     }
 

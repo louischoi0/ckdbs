@@ -23,6 +23,7 @@
 #include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/fk_check.hpp"
+#include "kds/exec/index_maintain.hpp"
 #include "kds/exec/set_expr.hpp"
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
@@ -950,6 +951,49 @@ private:
                                        RepeatableReadWait rerun,
                                        txn::LockMode mode = txn::LockMode::kExclusive,
                                        FunctionRef<Status()> before_wait = {});
+
+    // **The unique keys one row writes** (BX), each with the index it
+    // belongs to. Encoded under the row's span; checked with it released.
+    using UniqueKeysOfRow =
+        std::vector<std::pair<const catalog::TableAccess::IndexRef*, exec::UniqueKey>>;
+
+    // The key units a row's unique checks took, given back when the row's
+    // write ends - its entries appended, or nothing of it written (BX-Q2
+    // (a)). Every unit is given back before the next row's check, so none
+    // is held across two.
+    class UniqueKeyHolds {
+    public:
+        UniqueKeyHolds(txn::LockTable* locks, txn::Transaction* txn) noexcept
+            : locks_(locks), txn_(txn) {}
+        UniqueKeyHolds(const UniqueKeyHolds&) = delete;
+        UniqueKeyHolds& operator=(const UniqueKeyHolds&) = delete;
+        ~UniqueKeyHolds() { Release(); }
+        void Add(const txn::LockKey& unit) { units_.push_back(unit); }
+        void Release();
+
+    private:
+        txn::LockTable* locks_;
+        txn::Transaction* txn_;
+        std::vector<txn::LockKey> units_;
+    };
+
+    // `ta`'s unique keys the write moves, from `values` as `MaintainIndexes`
+    // takes them; empty for a relation with no unique index.
+    StatusOr<UniqueKeysOfRow> UniqueKeysOf(const catalog::TableAccess& ta,
+                                           std::span<const parser::AstValue> values,
+                                           std::uint16_t first_col_pos,
+                                           std::span<const parser::AstValue> previous);
+
+    // BX-R1..R4: for each key, its unit `X` (a refusal is a wait, as any
+    // refused borrow), then the latest-state check - held is the row's
+    // refusal at the written value's byte, busy a wait on the holder's
+    // decide. Holding no page: the check descends the clustered tree. `self`
+    // is an UPDATE's own row. `nullopt` when every key is free, its unit in
+    // `holds`.
+    std::optional<Status> CheckUniqueKeys(const WriteScope& scope,
+                                          const catalog::TableAccess& ta,
+                                          const UniqueKeysOfRow& keys, std::uint64_t self,
+                                          UniqueKeyHolds& holds);
 
     // Is `cond` a non-negative integer literal compared against `access`'s
     // tuple key, and if so which id? The shared half of the test

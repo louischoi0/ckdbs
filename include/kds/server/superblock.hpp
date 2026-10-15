@@ -156,7 +156,13 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // bootstrap gained `sys.cabin_exprs` on fixed page 15. Refused with no
 // migration, the standing order of 2026-10-07, which supersedes the order's
 // read-a-28-byte-row-by-length mechanism.
-inline constexpr std::uint32_t kSuperBlockVersion = 26;
+//
+// 27 (BX-S2, `instructions/v3.2.0/workorder-bx-unique-index.md` BX-R8):
+// `sys.indexes` rows may carry `kIndexFlagUnique`, which a version-26 binary
+// would read past and so admit duplicates into a volume that promises none.
+// The row's size does not change. Refused with no migration, the standing
+// order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 27;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

@@ -448,7 +448,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
                   {"key_width", kInt},
                   {"entry_width", kInt},
                   {"height", kInt},
-                  {"entries", kInt}});
+                  {"entries", kInt},
+                  {"unique", kInt}});
     auto rows = catalog_.ListIndexes(view_of);
     if (!rows.ok()) return rows.status();
     for (const catalog::SysIndexRow& row : rows.value()) {
@@ -483,7 +484,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
              row.ncovered == 0 ? Null() : Str(columns(row.covered_cols.data(), row.ncovered)),
              Int(root), Int(row.key_width),
              Int(row.entry_width), height.ok() ? Int(height.value()) : Null(),
-             entries.ok() ? Int(entries.value()) : Null()});
+             entries.ok() ? Int(entries.value()) : Null(),
+             Int((row.flags & catalog::kIndexFlagUnique) != 0 ? 1 : 0)});
     }
     return view;
 }

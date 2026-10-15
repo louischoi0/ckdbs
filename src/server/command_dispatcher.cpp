@@ -1329,9 +1329,8 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "TRANSITION")) {
             return HandleTransition(Trim(line), session);
         }
-        // `UNIQUE` routes here too, so its refusal comes from the parser
-        // with the byte offset of the word itself rather than from this
-        // layer as "unknown CREATE target".
+        // `CREATE UNIQUE INDEX` (BX); `UNIQUE` before anything else is
+        // refused by the parser at that word's byte.
         if (IEquals(sub, "INDEX") || IEquals(sub, "UNIQUE")) {
             return HandleIndex(Trim(line), session);
         }
@@ -5481,6 +5480,12 @@ bool UndecidedInsert(txn::TransactionManager& txn, std::uint64_t undo_ptr) {
 // client naming the mark itself, so a small bound is a guard, not a budget.
 constexpr int kMaxIssueRounds = 8;
 
+// How many times a unique check asks again when the writer it found busy
+// had decided by the time the wait would be recorded (BX). Each round needs
+// a decide in its gap, so a small bound is a guard, not a budget; the last
+// round's busy verdict is answered retryably.
+constexpr int kUniqueCheckRounds = 3;
+
 }  // namespace
 
 std::optional<Status> CommandDispatcher::InsertOneRow(
@@ -5585,6 +5590,23 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // be an initial state.
     if (!ta.transitions.empty()) {
         if (Status s = exec::CheckTransitionInsert(ta, body, supplied_id); !s.ok()) return s;
+    }
+
+    // ---- The unique check (BX-R4) --------------------------------------
+    //
+    // Before the id, for the forward check's reason, and before anything is
+    // placed, so a refused row is a row nothing touched - and holding no
+    // page, since the check descends the clustered tree. The key units stay
+    // held until this function returns: the row's entries are appended by
+    // then, or nothing of it is written (BX-Q2 (a)).
+    UniqueKeyHolds unique_holds(locks_, scope.txn);
+    if (!ta.indexes.empty()) {
+        auto unique_keys = UniqueKeysOf(ta, body, /*first_col_pos=*/1, /*previous=*/{});
+        if (!unique_keys.ok()) return unique_keys.status();
+        if (std::optional<Status> refused =
+                CheckUniqueKeys(scope, ta, unique_keys.value(), /*self=*/0, unique_holds)) {
+            return *refused;
+        }
     }
 
     // ---- The admission check (docs/spec/assertion.md §6.2 step 2) -------
@@ -8300,6 +8322,22 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         }
     }
 
+    // **A row that moves a unique key is checked with the span released**
+    // (BX-R4). `apply` encodes its keys under the walk's span and stops
+    // there with nothing of the row written (`unique_pending`); `clear_unique`
+    // takes the key units and checks with no page held - the check descends
+    // the clustered tree, and two user relation pages are unordered
+    // (`page.md` §6) - and the walk resumes at the row, which finds its keys
+    // cleared (`unique_cleared`) and writes, the units held in between.
+    std::optional<std::pair<std::uint64_t, UniqueKeysOfRow>> unique_pending;
+    std::optional<std::pair<std::uint64_t, UniqueKeysOfRow>> unique_cleared;
+    UniqueKeyHolds unique_holds(locks_, scope.txn);
+    const auto same_keys = [](const UniqueKeysOfRow& a, const UniqueKeysOfRow& b) {
+        return std::ranges::equal(a, b, [](const auto& x, const auto& y) {
+            return x.first == y.first && x.second.encoded == y.second.encoded;
+        });
+    };
+
     // Applies the SET list to one slot if it matches the WHERE. Shared by
     // the probe path and the scan, for the same reason SELECT shares its
     // formatter: two copies of "how a row is updated" is two chances for
@@ -8527,6 +8565,23 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
         }
 
+        // ---- The unique check (BX-R4, BX-R5) ---------------------------
+        //
+        // Only the keys this SET moved. Not yet cleared, the row stops the
+        // walk here, before the assertion reservation and every write. A
+        // resumed row is written under the clearance only if its keys encode
+        // as the checked ones did; otherwise they are checked again.
+        if (!ta.indexes.empty()) {
+            auto unique_keys = UniqueKeysOf(ta, row, /*first_col_pos=*/0, previous);
+            if (!unique_keys.ok()) return unique_keys.status();
+            if (!unique_keys.value().empty() &&
+                !(unique_cleared.has_value() && unique_cleared->first == id.value() &&
+                  same_keys(unique_cleared->second, unique_keys.value()))) {
+                unique_pending.emplace(id.value(), std::move(unique_keys.value()));
+                return Status::OK();
+            }
+        }
+
         // ---- The assertion check, §4.2's delta rules --------------------
         //
         // Before the undo record and the overwrite, so a refused row is a
@@ -8680,6 +8735,9 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             !s.ok()) {
             return s;
         }
+        // The row's entries are in, so its key units go back (BX-Q2 (a)).
+        unique_holds.Release();
+        unique_cleared.reset();
 
         // ---- HEAP_OVERWRITE (wal.md section 5.2) -----------------------
         //
@@ -8740,18 +8798,53 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // relation. Any reason to decline falls through to the scan, which
     // produces the identical result - the locator picks the slot to look
     // at, never which rows match.
-    if (std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where); tuple_key.has_value()) {
-        TupleKeyLookup found = LocateByTupleKey(ta, *tuple_key);
-        if (found.kind == TupleKeyLookup::Kind::kAbsent) {
-            return {"UPDATED 0", false, 0};  // no such row, on the tree's authority
+    // Runs with no page held: the walk or the probe has stopped at the row
+    // `unique_pending` names. A refusal that is a wait parks the statement as
+    // a held row does (AO-S3b); `blocking_writer_` is cleared around the
+    // check so only this check's note can read as one.
+    const auto clear_unique = [&]() -> Status {
+        auto pending = std::move(*unique_pending);
+        unique_pending.reset();
+        unique_holds.Release();
+        const std::uint64_t noted_before = blocking_writer_;
+        blocking_writer_ = 0;
+        if (std::optional<Status> refused =
+                CheckUniqueKeys(scope, ta, pending.second, pending.first, unique_holds)) {
+            unique_holds.Release();
+            if (blocking_writer_ != 0) {
+                parked_on_row = true;
+                blocked_verdict = *refused;
+                return Status::OK();
+            }
+            blocking_writer_ = noted_before;
+            return *refused;
         }
-        if (found.kind == TupleKeyLookup::Kind::kAt) {
+        blocking_writer_ = noted_before;
+        unique_cleared = std::move(pending);
+        return Status::OK();
+    };
+
+    if (std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where); tuple_key.has_value()) {
+        // A second round only when a moved unique key sent the row round:
+        // checked with the leaf released, then found and applied again under
+        // the clearance (BX-R4).
+        for (;;) {
+            TupleKeyLookup found = LocateByTupleKey(ta, *tuple_key);
+            if (found.kind == TupleKeyLookup::Kind::kAbsent) {
+                return {"UPDATED 0", false, 0};  // no such row, on the tree's authority
+            }
+            if (found.kind != TupleKeyLookup::Kind::kAt) break;
             // Through the leaf the descent holds exclusive and dirty (btree.hpp
             // `Location`): a shared lookup then `Get()` let a divide renumber
             // the slot, and `apply` declined another row on the WHERE.
             heap::PageView page(found.at.leaf.bytes());
             if (Status s = apply(found.at.page_id, page, found.at.slot); !s.ok()) {
                 return {ErrorReply(s), false, 0, s};
+            }
+            if (unique_pending.has_value()) {
+                found.at.leaf.Release();
+                if (Status s = clear_unique(); !s.ok()) return {ErrorReply(s), false, 0, s};
+                if (!parked_on_row) continue;
             }
             // **`apply` answers OK for a row it declined to write**
             // (AO-S3b), so without this a held row would render
@@ -8795,20 +8888,34 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // "from the head"; a resumed statement is handed the one its park left.
     WalkCursor walk_cursor = resume_from;
     walk_cursor.targets = targets;
-    Status scan = VisitRelation(
-        ta, storage::PageAccess::kWrite,
-        [&](PageId page_id, heap::PageView& page,
-            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-            // UPDATE has no early exit *of its own*: it must consider every
-            // row, since the WHERE is evaluated per tuple and any of them
-            // may match. The one stop it can make is AO-S3b's - a row held
-            // by a writer that has not decided, where the walk stops so the
-            // page span is released and the statement above can park.
-            if (Status s = apply(page_id, page, slot); !s.ok()) return s;
-            if (parked_on_row) return storage::VisitControl::kStop;
-            return storage::VisitControl::kContinue;
-        },
-        &walk_cursor);
+    Status scan;
+    for (;;) {
+        scan = VisitRelation(
+            ta, storage::PageAccess::kWrite,
+            [&](PageId page_id, heap::PageView& page,
+                std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+                // UPDATE has no early exit *of its own*: it must consider every
+                // row, since the WHERE is evaluated per tuple and any of them
+                // may match. It stops at a row held by a writer that has not
+                // decided (AO-S3b), so the page span is released and the
+                // statement above can park, and at a row whose unique key it
+                // must check with no span (BX-R4).
+                if (Status s = apply(page_id, page, slot); !s.ok()) return s;
+                if (parked_on_row || unique_pending.has_value()) {
+                    return storage::VisitControl::kStop;
+                }
+                return storage::VisitControl::kContinue;
+            },
+            &walk_cursor);
+        // The stop left the cursor at the row, so the next walk offers it
+        // again, now cleared.
+        if (!scan.ok() || !unique_pending.has_value()) break;
+        if (Status s = clear_unique(); !s.ok()) {
+            scan = s;
+            break;
+        }
+        if (parked_on_row) break;
+    }
     if (!scan.ok()) {
         // Partial **within the statement**, which is section 6's stated
         // rule rather than an exposure now. In autocommit EndWrite() aborts
@@ -9602,10 +9709,102 @@ std::optional<Status> CommandDispatcher::BorrowOrWait(const WriteScope& scope,
     // item 17). The unit asked for says nothing about who refused it: an
     // `INSERT` asks for a tuple and a range fence is what stops it, and a
     // declared range can be stopped by a tuple holder that wrote the row.
+    //
+    // A key unit's interval is a hash, not tuple keys (BX-R3), so it names
+    // no row to the wait and none to the client.
+    if (unit.unit == txn::LockUnit::kIndexKey) {
+        NoteBlockingWriter(scope.txn, blocker, /*tuple_key=*/0, rerun);
+        return Status::TxnConflict("a key of a unique index of relation oid " +
+                                   std::to_string(unit.rel_oid) + " is being written by " +
+                                   HolderName(blocker));
+    }
     NoteBlockingWriter(scope.txn, blocker, unit.lo, rerun);
     if (unit.unit == txn::LockUnit::kTuple) return HeldByHolder(unit.lo, blocker);
     return Status::TxnConflict("rows id=[" + std::to_string(unit.lo) + ", " +
                                std::to_string(unit.hi) + ") are held by " + HolderName(blocker));
+}
+
+void CommandDispatcher::UniqueKeyHolds::Release() {
+    if (!units_.empty() && locks_ != nullptr && txn_ != nullptr) {
+        locks_->ReleaseIf(txn_->id(), txn_->borrows(), [&](const txn::LockHoldings::Held& h) {
+            return std::find(units_.begin(), units_.end(), h.key) != units_.end();
+        });
+    }
+    units_.clear();
+}
+
+StatusOr<CommandDispatcher::UniqueKeysOfRow> CommandDispatcher::UniqueKeysOf(
+    const catalog::TableAccess& ta, std::span<const parser::AstValue> values,
+    std::uint16_t first_col_pos, std::span<const parser::AstValue> previous) {
+    UniqueKeysOfRow out;
+    for (const catalog::TableAccess::IndexRef& ix : ta.indexes) {
+        if (!ix.unique) continue;
+        auto key = exec::EncodeUniqueKey(ta, ix, values, first_col_pos, previous);
+        if (!key.ok()) return key.status();
+        if (key.value().has_value()) out.emplace_back(&ix, std::move(*key.value()));
+    }
+    return out;
+}
+
+std::optional<Status> CommandDispatcher::CheckUniqueKeys(const WriteScope& scope,
+                                                         const catalog::TableAccess& ta,
+                                                         const UniqueKeysOfRow& keys,
+                                                         std::uint64_t self,
+                                                         UniqueKeyHolds& holds) {
+    for (const auto& [ix, key] : keys) {
+        // The refusal's byte: the first key value the statement wrote. A key
+        // column an UPDATE did not assign carries 0, a decoded value's.
+        std::uint32_t byte = 0;
+        for (const parser::AstValue& v : key.values) {
+            if (v.byte_offset != 0) {
+                byte = v.byte_offset;
+                break;
+            }
+        }
+        // The unit before the check, held until the row's entry is in
+        // (BX-Q2 (a)): two writers of one key cannot both find it free.
+        // `kCapable`: the check reads latest state, never the waiter's view,
+        // so a repeatable-read re-run is not futile.
+        const txn::LockKey unit = exec::UniqueKeyUnit(ta, *ix, key);
+        if (std::optional<Status> held =
+                BorrowOrWait(scope, unit, RepeatableReadWait::kCapable)) {
+            return held;
+        }
+        holds.Add(unit);
+
+        // A busy writer that decided between the check and here is asked
+        // again rather than waited for: nothing would flip a wait on a
+        // transaction that is gone. Bounded, since each round is a decide.
+        StatusOr<exec::UniqueVerdict> verdict = exec::UniqueVerdict{};
+        for (int round = 0; round < kUniqueCheckRounds; ++round) {
+            const txn::ReadView view = txn_ != nullptr
+                                           ? txn_->MintCheckView(WriterId(scope))
+                                           : txn::ReadView::Everything();
+            verdict = exec::CheckUniqueKey(page_store_, ta, *ix, key, view, self);
+            if (!verdict.ok()) return verdict.status();
+            if (verdict.value().kind != exec::UniqueVerdict::Kind::kBusy ||
+                txn_->IsInFlight(verdict.value().writer)) {
+                break;
+            }
+        }
+        switch (verdict.value().kind) {
+            case exec::UniqueVerdict::Kind::kFree:
+                break;
+            case exec::UniqueVerdict::Kind::kHeld:
+                return exec::UniqueViolation(ta, *ix, key, verdict.value().tuple_key, byte);
+            case exec::UniqueVerdict::Kind::kBusy:
+                // Its decide answers: a commit makes the key held, a rollback
+                // frees it (BX-Q3 (a)). Waited for where nothing of the
+                // statement is written yet; refused where something is.
+                NoteBlockingWriter(scope.txn, verdict.value().writer, verdict.value().tuple_key,
+                                   RepeatableReadWait::kCapable);
+                return Status::TxnConflict(exec::UniqueKeyText(ta, *ix, key) +
+                                           " is being written by " +
+                                           HolderName(verdict.value().writer) + " in tuple key " +
+                                           std::to_string(verdict.value().tuple_key));
+        }
+    }
+    return std::nullopt;
 }
 
 Status CommandDispatcher::CheckWriteConflictBlocking(const WriteScope& scope, std::uint64_t cur,

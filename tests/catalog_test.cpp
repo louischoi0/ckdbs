@@ -542,13 +542,16 @@ TEST_F(CatalogTest, CreateIndexRefusesRatherThanTruncatingOrGuessing) {
     too_covered.covered_cols.assign(kMaxIndexCoveredColumns + 1, 2);
     EXPECT_FALSE(catalog_.CreateIndex(too_covered).ok());
 
-    // UNIQUE (spec IX11): v1 is a read accelerator that cannot fail a write
-    // for a reason of its own.
+    // UNIQUE is admitted since BX (spec IX11); a flag bit nothing defines is
+    // not.
+    Catalog::IndexDef unknown = SimpleIndex(table.value(), "unknown", 1);
+    unknown.flags = kIndexFlagUnique << 1;
+    auto refused = catalog_.CreateIndex(unknown);
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
     Catalog::IndexDef unique = SimpleIndex(table.value(), "unique", 1);
     unique.flags = kIndexFlagUnique;
-    auto refused = catalog_.CreateIndex(unique);
-    EXPECT_FALSE(refused.ok());
-    EXPECT_EQ(refused.status().code(), StatusCode::kNotImplemented);
+    EXPECT_TRUE(catalog_.CreateIndex(unique).ok());
 
     // A name already in use.
     ASSERT_TRUE(catalog_.CreateIndex(SimpleIndex(table.value(), "taken", 1)).ok());
