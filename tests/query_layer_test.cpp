@@ -253,8 +253,6 @@ TEST_F(QueryLayerTest, AQualifierMatchesItsBindingIgnoringCase) {
 // (`exec::FormsLanded`): the layer reads these and does not answer them.
 TEST_F(QueryLayerTest, ALaterStagesFormKeepsTheNativeRefusal) {
     for (const char* sql : {
-             "SELECT c.id FROM cust AS c LEFT JOIN ord AS o ON c.id = o.cust_id",      // S6
-             "SELECT c.id FROM cust AS c, ord AS o WHERE c.id = o.cust_id",            // S6
              "SELECT id FROM cust UNION SELECT id FROM ord",                           // S7
              "SELECT d.id FROM (SELECT id FROM cust) AS d",                            // S7
              "SELECT id, (SELECT 1) FROM cust",                                        // S7
@@ -362,6 +360,66 @@ TEST_F(QueryLayerTest, AggregateMaxDistinctBoundsTheLayersDistinctSets) {
 TEST_F(QueryLayerTest, AGroupByKeyNamedTwiceIsRefusedAsNatively) {
     ExpectRefused("SELECT region FROM cust GROUP BY region, region HAVING COUNT(*) > 0",
                   "appears twice in GROUP BY");
+}
+
+// ---- BU-S6: joins ----------------------------------------------------------
+
+TEST_F(QueryLayerTest, OuterJoinsExtendTheMissingSideWithNulls) {
+    ExpectRows("SELECT c.id, o.id FROM cust AS c LEFT JOIN ord AS o ON o.cust_id = c.id",
+               {"c.id,o.id", "1,10", "1,11", "2,12", "2,13", "3,NULL", "4,14", "4,15", "5,NULL",
+                "6,16"});
+    ExpectRows("SELECT c.id, o.id FROM cust AS c RIGHT JOIN ord AS o ON o.cust_id = c.id",
+               {"c.id,o.id", "1,10", "1,11", "2,12", "2,13", "4,14", "4,15", "6,16", "NULL,17"});
+    ExpectRows("SELECT c.id, o.id FROM cust AS c FULL JOIN ord AS o ON o.cust_id = c.id",
+               {"c.id,o.id", "1,10", "1,11", "2,12", "2,13", "3,NULL", "4,14", "4,15", "5,NULL",
+                "6,16", "NULL,17"});
+    // A condition in ON filters the match, not the preserved side.
+    ExpectRows("SELECT c.id, o.id FROM cust AS c LEFT JOIN ord AS o "
+               "ON o.cust_id = c.id AND o.status = 'paid'",
+               {"c.id,o.id", "1,11", "2,12", "3,NULL", "4,15", "5,NULL", "6,NULL"});
+    ExpectRows("SELECT c.id FROM cust AS c LEFT JOIN ord AS o ON o.cust_id = c.id "
+               "WHERE o.id IS NULL",
+               {"c.id", "3", "5"});
+}
+
+// BU-Q7 [quiet-wrong]: a WHERE term on a nullable side is evaluated after the
+// join, never carried by that side's walk, which would null-extend the rows
+// it dropped instead of removing them.
+TEST_F(QueryLayerTest, AWhereTermOnTheNullableSideIsNotPushedIntoItsWalk) {
+    ExpectRows("SELECT c.id, o.id FROM cust AS c RIGHT JOIN ord AS o ON o.cust_id = c.id "
+               "WHERE c.region = 'EU'",
+               {"c.id,o.id", "1,10", "1,11", "6,16"});
+    ExpectRows("SELECT c.id, o.id FROM cust AS c LEFT JOIN ord AS o ON o.cust_id = c.id "
+               "WHERE o.amount > 200",
+               {"c.id,o.id", "1,11", "2,13", "4,15"});
+    // On the preserved side the term may be carried: the answer is the same.
+    ExpectRows("SELECT c.id, o.id FROM cust AS c LEFT JOIN ord AS o ON o.cust_id = c.id "
+               "WHERE c.region = 'EU'",
+               {"c.id,o.id", "1,10", "1,11", "3,NULL", "6,16"});
+}
+
+TEST_F(QueryLayerTest, CrossCommaUsingAndConditionJoins) {
+    ExpectRows("SELECT COUNT(*) FROM cust CROSS JOIN ord", {"count(*)", "48"});
+    ExpectRows("SELECT o.id, c.name FROM ord AS o, cust AS c WHERE o.cust_id = c.id",
+               {"o.id,c.name", "10,alice", "11,alice", "12,bob", "13,bob", "14,dave", "15,dave",
+                "16,frank"});
+    ExpectRows("SELECT o.id FROM ord AS o JOIN cust AS c ON o.cust_id = c.id AND c.region = 'EU'",
+               {"o.id", "10", "11", "16"});
+    ExpectRows("SELECT a.id, b.id FROM ord AS a JOIN ord AS b "
+               "ON a.amount < b.amount AND a.cust_id = b.cust_id",
+               {"a.id,b.id", "10,11", "12,13", "14,15"});
+    ExpectRows("SELECT o.id FROM ord AS o JOIN ord AS p USING (cust_id) WHERE o.id < p.id",
+               {"o.id", "10", "12", "14"});
+    ExpectRows("SELECT c.id, COUNT(o.id) FROM cust AS c LEFT JOIN ord AS o "
+               "ON o.cust_id = c.id GROUP BY c.id",
+               {"c.id,count(o.id)", "1,2", "2,2", "3,0", "4,2", "5,0", "6,1"});
+    ExpectRefused("SELECT * FROM ord AS o JOIN ord AS p USING (cust_id)", "USING");
+    ExpectRefused("SELECT 1 FROM cust AS c FULL JOIN ord AS o USING (id)", "FULL JOIN");
+}
+
+TEST_F(QueryLayerTest, AJoinsOutputIsBoundedBySortMaxRows) {
+    dispatcher_->set_sort_max_rows(20);
+    ExpectRefused("SELECT COUNT(*) FROM cust CROSS JOIN ord", "sort_max_rows (20)");
 }
 
 }  // namespace

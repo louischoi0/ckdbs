@@ -1663,20 +1663,15 @@ bool ExprLanded(const Expr& e, bool in_condition) {
                        [&](const auto& a) { return a == nullptr || ExprLanded(*a, in_condition); });
 }
 
-// The one join the native grammar reads: inner, `ON` one column equality.
-bool JoinLanded(const parser::FromJoin& j) {
-    if (j.kind != JoinKind::kInner || j.on == nullptr || j.item.derived != nullptr) return false;
-    const Expr& on = *j.on;
-    return on.kind == Expr::Kind::kBinary && on.op == parser::ExprOp::kEq && on.lhs != nullptr &&
-           on.rhs != nullptr && on.lhs->kind == Expr::Kind::kColumn &&
-           on.rhs->kind == Expr::Kind::kColumn;
-}
-
 bool QueryLanded(const parser::Query& q) {
     if (q.op != parser::Query::Op::kBlock || q.block == nullptr) return false;  // S7
     const parser::QueryBlock& b = *q.block;
-    if (b.from.derived != nullptr) return false;  // S7
-    if (!std::all_of(b.joins.begin(), b.joins.end(), JoinLanded)) return false;  // S6
+    // S7: a derived table, first or joined.
+    if (b.from.derived != nullptr) return false;
+    for (const parser::FromJoin& j : b.joins) {
+        if (j.item.derived != nullptr) return false;
+        if (j.on != nullptr && !ExprLanded(*j.on, true)) return false;
+    }
     for (const parser::OutputItem& item : b.items) {
         if (item.expr != nullptr && !ExprLanded(*item.expr, false)) return false;
     }

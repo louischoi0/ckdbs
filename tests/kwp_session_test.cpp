@@ -500,14 +500,14 @@ TEST_F(KwpSessionTest, AnEngineRefusalKeepsItsOwnCategory) {
         // folding into INVALID_ARGUMENT erased.
         //
         // `NotImplemented` and not `Unsupported`, which is the operator's
-        // 2026-08-31 rule read correctly: an outer join is a form the
-        // design admits and nobody built, so a later release could lift the
-        // refusal without changing the architecture. It is also the case
+        // 2026-08-31 rule read correctly: a CTE is a form the design admits
+        // and nobody built, so a later release could lift the refusal
+        // without changing the architecture (an outer join was this case
+        // until BU-S6 built it). It is also the case
         // that makes this test worth having - the two codes are one word
         // apart in the message and two categories apart on the wire, and a
         // client's feature detection reads only the second.
-        {"SELECT t.id FROM t LEFT JOIN t AS u ON t.id = u.id",
-         wire::ErrorCategory::kNotImplemented},
+        {"WITH w AS (SELECT id FROM t) SELECT id FROM w", wire::ErrorCategory::kNotImplemented},
     };
     for (const Case& c : kCases) {
         auto frames = RunStatement(c.sql);

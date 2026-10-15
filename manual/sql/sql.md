@@ -1044,11 +1044,21 @@ select list with no `FROM` - is answered by the query layer
   rules hold unchanged: NULLs per §3.1 of `aggregate.md`, `SUM` checked
   int64 at every row, `AVG` over a decimal only, `aggregate_max_groups`
   and `aggregate_max_distinct` refusing past their caps.
-- **What it answers grows stage by stage.** Outer, cross, comma and
-  `USING` joins, an `ON` beyond one column equality, set operations,
-  derived tables and a subquery in the select list are read by the layer's
-  grammar but answered only once their stage of BU lands; until then each
-  keeps the refusal it has always had.
+- **Joins on the layer** (since BU-S6): `LEFT`, `RIGHT` and `FULL [OUTER]
+  JOIN`, `CROSS JOIN` and comma joins, `ON` with several conditions or a
+  non-equality, and `USING (col, ...)` (not under `FULL`, and `SELECT *`
+  over a `USING` join is refused: name the columns). An outer join extends
+  the missing side with NULLs; a condition in `ON` decides the match and
+  never removes a preserved row, while a `WHERE` term filters after the
+  join - and is never applied early to a nullable side, where it would
+  null-extend rows instead of removing them. A join hashes on the column
+  equalities among its `ON`'s top-level `AND` terms and tests the rest per
+  pair; its output counts against `sort_max_rows`. Join order is the
+  written order, as everywhere.
+- **What it answers grows stage by stage.** Set operations, derived tables
+  and a subquery in the select list are read by the layer's grammar but
+  answered only once BU-S7 lands; until then each keeps the refusal it has
+  always had.
 - No Waystone trail is recorded or replayed for a layer statement, and
   `ANALYZE` does not describe one: `ANALYZE` of a layer statement answers
   the native refusal.
@@ -1326,8 +1336,8 @@ worth anything:
 
 - **`ERR NOT_IMPLEMENTED retryable=0 …`** — the design admits this form and
   this release has not built it. Feature-detect and try again against a later
-  server. Most of this section is this one: CTEs, derived tables, outer
-  joins, `UNIQUE` indexes, `ALTER TABLE`'s row-rewriting forms (a type change, an `ADD` with no free slot), a
+  server. Most of this section is this one: CTEs, derived tables,
+  `UNIQUE` indexes, `ALTER TABLE`'s row-rewriting forms (a type change, an `ADD` with no free slot), a
   value wider than one var-heap page.
 - **`ERR UNSUPPORTED retryable=0 …`** — this engine's architecture cannot
   admit the form, so no later server answers it and the statement must be
@@ -1345,17 +1355,19 @@ they were before the split.
 - **No derived tables.** `FROM (SELECT ...)` is refused by the relation
   reference itself: materializing an inner result breaks tuple-key-direct probing
   into the next step and puts a temp relation in the storage layer.
-- **No window functions.** `OVER`, `FILTER`, `WINDOW` and `QUALIFY` answer
-  `NOT_IMPLEMENTED` with their position. Value expressions stand in the
+- **No window functions.** `OVER`, `FILTER`, `WINDOW` and `QUALIFY` are
+  refused with their position; a window call in the select list answers
+  the native parse's error (`expected 'FROM', got 'OVER'`). Value expressions stand in the
   select list, in `WHERE` and in `ORDER BY` since BU-S4 (the query layer,
   §4); an expression in `WHERE` filters rows a walk found and never becomes
   a key, an index range or a Cabin probe, as a function comparison never
   has. `DATE(timestamp)` and `NOW()` in a plain `WHERE` comparison remain
   the native forms they were.
-- **No outer joins.** `LEFT`/`RIGHT`/`FULL`/`OUTER` are reserved keywords
-  that answer `NOT_IMPLEMENTED` with their own position, so the grammar will
-  not shift if they ever land.
-- **The join rule.** KDS supports inner equi-join chains, executed in
+- **Outer joins are the query layer's.** `LEFT`/`RIGHT`/`FULL`/`OUTER`
+  stay reserved and refused by the native grammar; since BU-S6 the query
+  layer answers them (above), as it does a cross, comma or `USING` join and
+  an `ON` beyond one column equality.
+- **The join rule.** On the native path KDS supports inner equi-join chains, executed in
   written order, probing by tuple key where the ON allows it. There is no
   merge join and no plan search **— the query is the plan.** Written order
   is a client contract; decorrelation rewrites are forbidden, not merely
