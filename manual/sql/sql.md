@@ -806,6 +806,59 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
   still answers `UPDATED 0`.
 - Reply: `UPDATED <n>`.
 
+### The DML forms of BU-S8
+
+```sql
+-- An expression in VALUES, typed for its column and folded once
+INSERT INTO w VALUES (30, 'h' || 'al', 'US', 1 + 1);
+
+-- INSERT ... SELECT: the source is read whole before a row is placed
+INSERT INTO w SELECT id + 100, name, region, tier FROM cust WHERE region = 'US';
+
+-- ON CONFLICT DO NOTHING: a row whose tuple key is placed is skipped
+INSERT INTO w VALUES (1, 'alice', 'EU', 1) ON CONFLICT DO NOTHING;
+
+-- UPDATE ... FROM and DELETE ... USING: one more relation the WHERE reads
+UPDATE w SET tier = 7 FROM ord WHERE ord.cust_id = w.id AND ord.amount >= 500;
+DELETE FROM w USING ord WHERE ord.cust_id = w.id AND ord.status = 'cancel';
+
+-- RETURNING: the rows written, then the tag
+UPDATE w SET tier = 5 WHERE id = 1 RETURNING id, tier;
+```
+
+- **A VALUES value** is a SET value's expression (`types.md` §3.2b), typed for
+  the column its position reaches, with no implicit conversion. It reads no
+  column - a VALUES row has none to read - and a subquery in it is refused
+  `NOT_IMPLEMENTED`.
+- **`INSERT ... SELECT`** takes any query of the query layer as its source,
+  run at the statement's snapshot and read whole before the first row is
+  placed, so a statement reading the relation it writes reads only what was
+  there. Each source column must be assignable to its target as a SET value
+  is: one type, two text types meeting, a decimal at the target's scale.
+  `max_insert_rows` bounds the rows, as for `VALUES`.
+- **`ON CONFLICT [(tuple key)] DO NOTHING`** skips a row whose tuple key is
+  placed - live, delete-marked (its row is the tombstone until `PURGE`), or
+  named by an earlier row of the statement - and decides it before the row
+  is admitted, so a skipped row takes no foreign-key check, no assertion
+  reservation and no id. The tuple key is the one conflict there is: another
+  target, and `DO UPDATE`, answer `NOT_IMPLEMENTED`. The reply counts the
+  rows placed (`rows=0` when every row was skipped).
+- **`UPDATE ... FROM` and `DELETE ... USING`** name one more relation, which
+  the statement's relation and the WHERE share one name space with: a bare
+  column both relations have is refused as ambiguous - qualify it. **A row
+  matching two or more `FROM` rows refuses the `UPDATE`**
+  (`CARDINALITY_VIOLATION`) and nothing is written, where PostgreSQL would
+  apply one of them; a `DELETE` deletes a row once however many rows it
+  matches. One relation only; a SET value reads the updated relation's
+  columns.
+- **`RETURNING <items>`** on `INSERT`, `UPDATE` and `DELETE`: the items - `*`,
+  columns, value expressions, each with an optional alias - over each row
+  the statement wrote, its after-image (a `DELETE`'s before-image), in the
+  order written. Over KWP the rows arrive as a `SELECT`'s and the
+  completion carries the write's own tag and count; the debug text surface
+  prints the rows, then the tag. A RETURNING that fails fails the
+  statement.
+
 ### DELETE (verified — it exists)
 
 ```sql

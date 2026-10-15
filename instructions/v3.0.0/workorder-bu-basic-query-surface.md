@@ -626,3 +626,39 @@ Full suite (Debug, `-LE heap-suspended`) at `14f4579b`: 3,980/3,980; at
 build at `84af2912`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
 P07 refused by BU-Q13, phase 3 8/8, phase 4 12/12, **phase 5 9/9**, phase 6
 (S8's DML) 1 ok and 6 unbuilt, wrong=0 in every phase - S7's gate is met.
+
+### BU-S8 - the DML forms (built 2026-10-15)
+
+On `worktree-bu-basic-query-surface-s4` from `ecd6f071`, after the
+operator marked BU-Q16..Q18 (`instructions/v3.2.0/raft-marks-2026-10-15.md`
+§3, `50d74101`), in four commits: `2982d3b6` (expressions in `VALUES`,
+`INSERT ... SELECT`), `efeb1604` (`ON CONFLICT DO NOTHING`), `f1467c38`
+(`UPDATE ... FROM`, `DELETE ... USING`), `0f7fa2fa` (`RETURNING`). The
+`INSERT` column list is BW-S6's, landed before.
+
+- **`VALUES` expressions** take the SET value's grammar and typer and are
+  folded once before any row is placed; one reading a column is refused.
+- **`INSERT ... SELECT`** runs its source through the query layer
+  (`RunLayerQuery`, now `TryQueryLayer`'s way in too) at a snapshot taken
+  after `BeginWrite`, read whole before the first row - a statement reading
+  the relation it writes reads only what was there - each column assignable
+  to its target as a SET value is.
+- **`ON CONFLICT DO NOTHING`** (BU-Q18) decides every row before any is
+  admitted (`TupleKeyPlaced`, the key's row unit taken as a placement takes
+  it), so a skipped row takes no foreign-key hold, no assertion reservation
+  and no id; `NamedKeyVerdict` is the one btree duplicate verdict for it and
+  `InsertOneRow`.
+- **`UPDATE ... FROM` / `DELETE ... USING`** (BU-Q16) are the WHERE made one
+  `EXISTS` over the named relation in the statement's name space; `UPDATE`'s
+  reads a second row and refuses `CardinalityViolation`, never hoisted.
+- **`RETURNING`** (BU-Q17) reads the rows off the transaction's trail since
+  the statement's mark, back by tuple key, before the write scope ends; KWP
+  completes under the write's own tag.
+- **Docs.** `parser-v2.md` I20 (new) and I10, `protocol.md` §7, the
+  manual's DML section, the `CLAUDE.md` row.
+- **Tests.** `tests/dml_forms_test.cpp` (14 cells), a KWP cell for
+  `RETURNING`'s completion; the parser cell and the golden corpus move two
+  `INSERT` verdicts to `ok` (an expression in `VALUES` now parses), hashes
+  unmoved.
+
+Overhead not measured; measured at the milestone's close (§5).
