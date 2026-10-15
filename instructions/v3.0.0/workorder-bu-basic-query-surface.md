@@ -615,3 +615,11 @@ is refused, BU-Q11's lone `NULL` being `varchar`. **Measured at BU-S9, not
 cut:** `Execute` returns a cached result by value, copied per outer row for
 an uncorrelated subquery. **Declined:** one key helper for the set
 operation and `DISTINCT` - the two loops differ in where their types live.
+
+### BU-S7 - the suite and F004, stated
+
+Full suite (Debug, `-LE heap-suspended`) at `14f4579b`: 3,980/3,980; at
+`84af2912`, with the review applied: 3,983/3,983. F004 against a release
+build at `84af2912`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
+P07 refused by BU-Q13, phase 3 8/8, phase 4 12/12, **phase 5 9/9**, phase 6
+(S8's DML) 1 ok and 6 unbuilt, wrong=0 in every phase - S7's gate is met.
