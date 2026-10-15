@@ -184,6 +184,12 @@ bool IsConstantSetExpression(const TypedSetExpr& expr);
 // subquery reads none: it is answered once before the walk.
 std::uint64_t SetExpressionColumns(const TypedSetExpr& expr);
 
+// Whether `value` - a value of type `t` - lies in `t`'s range: the check an
+// evaluated value meets at every step (BJ-R3), for a value that did not come
+// through this typer (`INSERT ... SELECT`'s, whose decimal is matched to its
+// column by scale only). A NULL and a non-numeric value are in range.
+bool ValueInRange(const parser::AstValue& value, const SetType& t);
+
 // Evaluates a typed expression against `row`, the decoded before-image of the
 // row being updated (BJ-R2: every assignment reads the row as the walk read
 // it, never an earlier assignment's result). The value is in the form

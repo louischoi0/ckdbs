@@ -662,3 +662,40 @@ operator marked BU-Q16..Q18 (`instructions/v3.2.0/raft-marks-2026-10-15.md`
   unmoved.
 
 Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S8 - the `critics-developer` review, applied
+
+Fixed by the reviewer, each with a cell: `INSERT ... SELECT` compared every
+type's `len`, so an integer literal (`len` 0) was refused for an `int64`
+column - now only a decimal's scale is compared; it stored a decimal wider
+than the column's precision, the encoder checking scale alone
+`[quiet-wrong]` - every decimal value is now range-checked per row
+(`exec::ValueInRange`, the typer's own check); a `VALUES` expression calling
+`NOW()` or `CURRENT_DATE` was refused as reading a column - the test is now
+`SetExpressionColumns`, folded at the statement's one instant; with no lock
+table, `ON CONFLICT` skipped a key an undecided insert held, which a
+rollback then lost - `NamedKeyVerdict` takes the writing transaction, its own
+version always a duplicate, another's undecided insert never. Applied by CLA:
+a RETURNING item naming the `FROM` relation is refused `NotImplemented` with
+what it is, not "names no relation"; a multi-row `INSERT ... SELECT` needs
+the transaction manager as a multi-row `VALUES` does; misplaced comments
+moved to their declarations. **Recorded, not changed:** the source of
+`INSERT ... SELECT` is typed before its target is known, so a bare `5` into
+an `int32` and a bare `NULL` into a non-text column are refused - `CAST` is
+the spelling (the manual says so); a SET value cannot read the `FROM` row,
+refused `NotImplemented`; the `EXISTS` rewrite moves conjuncts on the target
+alone into the sub-chain, so a point `UPDATE ... FROM` walks the target - a
+cost, measured at BU-S9; without a transaction manager a RETURNING is
+refused after the rows are written (a test configuration only - production
+always builds one); `ON CONFLICT`'s pre-check keeps the units it took across
+a wait-and-re-run inside an explicit transaction, and takes the key before
+the foreign-key parent, the reverse of the row path (the deadlock detector
+covers the cycle); `DmlFormsTest` has no lock table, so the pre-check's wait
+has no cell; `INSERT INTO t (SELECT ...)` is a parse error. **Declined:**
+carrying the parsed RETURNING out of the three `*Inner` paths instead of
+re-parsing - the re-parse is gated on the word and costs one parse per
+RETURNING statement, while the carry would thread state through the park
+and resume of `UPDATE` and `DELETE`; one shared assignability rule with
+`set_expr.cpp` - the two answer different questions (an expression for a
+column, a typed column for a column); one shared give-back with
+`InsertOneRow` - two three-line lambdas over different locals.

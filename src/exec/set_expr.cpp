@@ -2018,6 +2018,13 @@ bool IsScalarFunctionName(std::string_view name) {
     return false;
 }
 
+bool ValueInRange(const parser::AstValue& value, const SetType& t) {
+    if (value.type == ValueType::kNull) return true;
+    if (!IsInteger(t.type_val) && !IsDecimal(t.type_val)) return true;
+    auto n = NumberOf(value, t);
+    return n.ok() && InRange(n.value(), t);
+}
+
 bool IsConstantSetExpression(const TypedSetExpr& expr) {
     switch (expr.kind) {
         case Expr::Kind::kLiteral: return true;

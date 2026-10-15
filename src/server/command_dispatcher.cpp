@@ -3255,8 +3255,6 @@ Status InsertArityRefusal(const catalog::TableAccess& ta, std::size_t columns,
         at);
 }
 
-// A statement's header - relation, namespace, byte and described shape - with
-// no column list and no rows: what both normalizers fill with physical rows.
 // Whether `text` holds `word`, ASCII case ignored - RETURNING's cheap gate,
 // so a write without one is never parsed twice.
 bool ContainsWordIgnoringCase(std::string_view text, std::string_view word) {
@@ -3267,6 +3265,8 @@ bool ContainsWordIgnoringCase(std::string_view text, std::string_view word) {
     return false;
 }
 
+// A statement's header - relation, namespace, byte and described shape - with
+// no column list and no rows: what both normalizers fill with physical rows.
 parser::InsertStmt InsertShellOf(const parser::InsertStmt& written) {
     parser::InsertStmt out;
     out.table_name = written.table_name;
@@ -3276,13 +3276,6 @@ parser::InsertStmt InsertShellOf(const parser::InsertStmt& written) {
     return out;
 }
 
-// **The values written as expressions, typed and evaluated** (BU-S8): each
-// for the column its position reaches - the listed column, or the live
-// column at its position, one later when the row leaves its tuple key out -
-// by the SET value's typer (BJ-R3, no implicit conversion), then folded
-// once, before any row is placed. A VALUES row has no row to read, so an
-// expression naming a column is refused; a row whose length reaches no
-// column is left to the arity refusal below.
 // The column each value of a `width`-long row is for: the listed column,
 // or the live column at its position, one later when the row leaves its
 // tuple key out. Empty when the length reaches no column - the arity
@@ -3309,6 +3302,13 @@ StatusOr<std::vector<const catalog::SysColumnRow*>> InsertTargetColumns(
     return out;
 }
 
+// **The values written as expressions, typed and evaluated** (BU-S8): each
+// for the column its position reaches - the listed column, or the live
+// column at its position, one later when the row leaves its tuple key out -
+// by the SET value's typer (BJ-R3, no implicit conversion), then folded
+// once, before any row is placed. A VALUES row has no row to read, so an
+// expression naming a column is refused; a row whose length reaches no
+// column is left to the arity refusal below.
 StatusOr<parser::InsertStmt> EvaluateInsertExpressions(const catalog::TableAccess& ta,
                                                        const parser::InsertStmt& written) {
     const exec::StatementContext context = exec::StatementContextNow();
@@ -3321,7 +3321,10 @@ StatusOr<parser::InsertStmt> EvaluateInsertExpressions(const catalog::TableAcces
         const catalog::SysColumnRow* target = targets.value()[v.col];
         auto typed = exec::TypeSetExpression(ta, *v.expr, *target);
         if (!typed.ok()) return typed.status();
-        if (!exec::IsConstantSetExpression(*typed.value())) {
+        // The column test, not `IsConstantSetExpression`: that one also says
+        // no to `NOW()` and `CURRENT_DATE`, which read no column and fold here
+        // against the statement's one instant.
+        if (exec::SetExpressionColumns(*typed.value()) != 0) {
             return Status::InvalidArgument("a VALUES expression reads no column (byte " +
                                            std::to_string(v.expr->byte_offset) +
                                            "); a VALUES row has no row to read");
@@ -5153,13 +5156,15 @@ StatusOr<parser::InsertStmt> CommandDispatcher::InsertSelectRows(const catalog::
         const catalog::SysColumnRow& want = *targets.value()[i];
         const bool text = exec::TypeFamilyOf(got.type_val) == exec::TypeFamily::kText &&
                           exec::TypeFamilyOf(want.type_val) == exec::TypeFamily::kText;
-        const bool decimal = got.type_val == want.type_val &&
-                             (want.type_val == catalog::kTypeValDecimal ||
-                              want.type_val == catalog::kTypeValDecimalWide) &&
-                             catalog::DecimalScaleOf(got.len) == catalog::DecimalScaleOf(want.len);
+        // `len` is a type only for a decimal (its scale, here) - for every
+        // other type it is a stored width, and a settled `int64` literal
+        // carries 0 where an `int64` column carries its width.
+        const bool decimal = want.type_val == catalog::kTypeValDecimal ||
+                             want.type_val == catalog::kTypeValDecimalWide;
         const bool same = got.type_val == want.type_val &&
-                          (got.len == want.len || got.type_val == catalog::kTypeValBool);
-        if (!text && !decimal && !same) {
+                          (!decimal || catalog::DecimalScaleOf(got.len) ==
+                                           catalog::DecimalScaleOf(want.len));
+        if (!text && !same) {
             return Status::InvalidArgument(
                 "the SELECT's column " + std::to_string(i + 1) + " is " + exec::SetTypeName(got) +
                 " but column '" + std::string(catalog::NameView(want.name)) + "' is " +
@@ -5167,6 +5172,20 @@ StatusOr<parser::InsertStmt> CommandDispatcher::InsertSelectRows(const catalog::
                                                 want.len}) +
                 " (byte " + std::to_string(written.select_byte_offset) +
                 "); there is no implicit conversion (BJ-R3), CAST it");
+        }
+        // A decimal is matched by scale alone, so its precision is the row's
+        // check: the encoder stores any unscaled value of the right scale,
+        // and a decimal(12,2) value must not land in a decimal(10,2) column.
+        if (!decimal) continue;
+        const exec::SetType column{exec::SetType::Kind::kConcrete, want.type_val, want.len};
+        for (std::size_t r = 0; r < rs.value().rows.size(); ++r) {
+            if (!exec::ValueInRange(rs.value().rows[r][i], column)) {
+                return Status::OutOfRange(
+                    "row " + std::to_string(r + 1) + "'s value for column '" +
+                    std::string(catalog::NameView(want.name)) + "' does not fit " +
+                    exec::SetTypeName(column) + " (byte " +
+                    std::to_string(written.select_byte_offset) + ")");
+            }
         }
     }
     parser::InsertStmt out = InsertShellOf(written);
@@ -5287,6 +5306,11 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         if (evaluated->rows.size() > max_insert_rows_) {
             return {"ERR INSERT of " + std::to_string(evaluated->rows.size()) +
                         " rows exceeds max_insert_rows (" + std::to_string(max_insert_rows_) + ")",
+                    false};
+        }
+        if (evaluated->rows.size() > 1 && txn_ == nullptr) {
+            return {"ERR a multi-row INSERT requires the transaction manager; this configuration "
+                    "cannot unwind a partially placed statement and is single-row only",
                     false};
         }
         if (evaluated->rows.empty()) {
@@ -5678,7 +5702,7 @@ constexpr int kMaxIssueRounds = 8;
 }  // namespace
 
 Status CommandDispatcher::NamedKeyVerdict(const catalog::TableAccess& ta, std::uint64_t id,
-                                          std::uint32_t byte, bool own_is_duplicate) {
+                                          std::uint32_t byte, const txn::Transaction* own) {
     auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, id);
     if (!present.ok()) {
         // Answered by the placement's own descent, so a structural refusal
@@ -5692,7 +5716,7 @@ Status CommandDispatcher::NamedKeyVerdict(const catalog::TableAccess& ta, std::u
                                              version.value().deleted);
     const Status duplicate =
         Status::AlreadyExists(found.message() + " (byte " + std::to_string(byte) + ")");
-    if (own_is_duplicate) return duplicate;
+    if (own != nullptr && version.value().trx_id == own->id()) return duplicate;
     const bool undecided = txn_ != nullptr && txn_->IsInFlight(version.value().trx_id);
     const std::uint64_t undo_ptr = version.value().undo_ptr;
     present.value().leaf.Release();  // before the undo pages are read
@@ -5706,13 +5730,17 @@ StatusOr<bool> CommandDispatcher::TupleKeyPlaced(const catalog::TableAccess& ta,
     const bool held_before = scope.txn != nullptr && scope.txn->borrows().Holds(unit);
     if (std::optional<Status> held =
             BorrowOrWait(scope, unit, RepeatableReadWait::kCapable, txn::LockMode::kExclusive,
-                         [&]() { return NamedKeyVerdict(ta, id, byte, false); })) {
+                         [&]() { return NamedKeyVerdict(ta, id, byte, scope.txn); })) {
         if (held->code() == StatusCode::kAlreadyExists) return true;
         return *held;
     }
-    // Granted: no other writer holds the key, so a slot keyed `id` is
-    // decided or this transaction's own - placed either way.
-    if (NamedKeyVerdict(ta, id, byte, /*own_is_duplicate=*/true).ok()) return false;
+    // Granted: with a lock table no other writer holds the key, so a slot
+    // keyed `id` is decided or this transaction's own - placed either way.
+    // The same verdict as the refusal's, not "any slot is placed": without a
+    // table every borrow is granted, and another's undecided insert must
+    // reach the placement (which answers it as a plain INSERT is answered),
+    // never be skipped as though its rollback could not free the key.
+    if (NamedKeyVerdict(ta, id, byte, scope.txn).ok()) return false;
     if (!held_before && locks_ != nullptr && scope.txn != nullptr) {
         locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
                           [&](const txn::LockHoldings::Held& h) { return h.key == unit; });
@@ -5952,8 +5980,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 if (supplied_id >= mark.value()) return Status::OK();
                 return catalog::RefuseRowIdBelowMark(oid, supplied_id, mark.value());
             }
-            return NamedKeyVerdict(ta, supplied_id, values.front().byte_offset,
-                                   /*own_is_duplicate=*/false);
+            return NamedKeyVerdict(ta, supplied_id, values.front().byte_offset, scope.txn);
         };
         const bool held_before = scope.txn != nullptr && scope.txn->borrows().Holds(key_unit);
         if (std::optional<Status> held =
@@ -8523,8 +8550,9 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
     scope_of.clause = "in RETURNING";
     scope_of.resolve = [&](const parser::Expr& e) -> StatusOr<std::optional<exec::ResolvedColumn>> {
         if (!e.qualifier.empty() && !IEquals(e.qualifier, table)) {
-            return Status::InvalidArgument("'" + e.qualifier + "' names no relation of this "
-                                           "statement (byte " + std::to_string(e.byte_offset) + ")");
+            return Status::NotImplemented(
+                "RETURNING reads the written relation's columns only; '" + e.qualifier +
+                "' is not it (byte " + std::to_string(e.byte_offset) + ")");
         }
         auto col = ta.schema.FindColumn(e.column, e.byte_offset);
         if (!col.ok()) return col.status();

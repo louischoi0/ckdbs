@@ -257,7 +257,57 @@ TEST_F(DmlFormsTest, AFailingReturningUndoesTheStatement) {
     ExpectRows("SELECT tier FROM w WHERE id = 4", {"tier", "3"});
     ExpectRefused("UPDATE w SET tier = 1 WHERE id = 4 RETURNING nosuch", "nosuch");
     ExpectRefused("UPDATE w SET tier = 1 WHERE id = 4 RETURNING COUNT(*)", "aggregate");
+    ExpectRefused("UPDATE w SET tier = 1 FROM ord WHERE ord.cust_id = w.id AND ord.amount >= 500 "
+                  "RETURNING ord.amount",
+                  "the written relation's columns only");
     ExpectRows("SELECT tier FROM w WHERE id = 4", {"tier", "3"});
+}
+
+
+// ---- Review fixes -------------------------------------------------------------
+
+// `NOW()` and `CURRENT_DATE` read no column: one value per statement, folded
+// with the rest of the row (the column test, not the constant test).
+TEST_F(DmlFormsTest, AValuesExpressionMayCallNowAndCurrentDate) {
+    Ok("CREATE TABLE ev (id int64, d date, ts timestamp)");
+    Ok("INSERT INTO ev VALUES (1, CURRENT_DATE, NOW())");
+    ExpectRows("SELECT COUNT(*) FROM ev WHERE d IS NOT NULL", {"count(*)", "1"});
+}
+
+// An integer literal settles as `int64` with no stored width; an `int64`
+// column carries one. Only a decimal's `len` is part of its type.
+TEST_F(DmlFormsTest, InsertSelectTakesALiteralForAColumnOfItsType) {
+    ExpectReply("INSERT INTO w SELECT 90, name, region, tier FROM cust WHERE id = 1",
+                "INSERTED oid=4005 id=90 page=135 slot=6");
+}
+
+// A decimal is matched to its column by scale, so its precision is checked
+// per row: the encoder would store any unscaled value of the right scale.
+TEST_F(DmlFormsTest, InsertSelectRefusesADecimalWiderThanItsColumn) {
+    Ok("CREATE TABLE px (id int64, m decimal(10,2))");
+    Ok("INSERT INTO px VALUES (1, 12.34)");
+    Ok("CREATE TABLE py (id int64, m decimal(10,2))");
+    Ok("INSERT INTO py SELECT id, m * 2 FROM px");
+    ExpectRefused("INSERT INTO py SELECT 2, CAST(123456789.55 AS decimal(12,2)) FROM px",
+                  "does not fit decimal(10,2)");
+    ExpectRows("SELECT * FROM py", {"id,m", "1,24.68"});
+}
+
+// Without a lock table every borrow is granted, so the pre-check's granted
+// branch must not read another transaction's undecided insert as placed: the
+// row is not skipped (its rollback would free the key), and once that
+// transaction rolls back the key is placed.
+TEST_F(DmlFormsTest, OnConflictDoesNotSkipAKeyAnUndecidedInsertHolds) {
+    Session a;
+    ASSERT_NE(dispatcher_->Dispatch("BEGIN", &a).response.rfind("ERR", 0), 0u);
+    ASSERT_NE(dispatcher_->Dispatch("INSERT INTO w VALUES (90, 'a', 'EU', 1)", &a)
+                  .response.rfind("ERR", 0),
+              0u);
+    EXPECT_NE(Run("INSERT INTO w VALUES (90, 'b', 'EU', 1) ON CONFLICT DO NOTHING"),
+              "INSERTED oid=4005 rows=0");
+    ASSERT_NE(dispatcher_->Dispatch("ROLLBACK", &a).response.rfind("ERR", 0), 0u);
+    ExpectReply("INSERT INTO w VALUES (90, 'b', 'EU', 1) ON CONFLICT DO NOTHING",
+                "INSERTED oid=4005 rows=1 first_id=90 last_id=90");
 }
 
 }  // namespace

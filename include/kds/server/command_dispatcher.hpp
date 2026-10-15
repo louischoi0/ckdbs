@@ -166,7 +166,6 @@ struct DispatchOutcome {
     // the truthful answer for a read, a DDL and a session statement.
     std::uint64_t rows_affected = 0;
 
-
     // **Why the statement failed, as a `Status`.** OK on every success and
     // on the handful of refusals built from a bare message.
     //
@@ -1483,6 +1482,19 @@ private:
         std::uint16_t slot = 0;
     };
 
+    // Whether a btree slot keyed `id` makes a named key a duplicate now
+    // (BD-R5): `AlreadyExists` at `byte` when one is there, except one an
+    // undecided insert of a transaction other than `own` wrote, whose
+    // rollback frees it (BD-Q9, a wait); OK when absent. `own`'s own version
+    // is a duplicate whatever it is: no decide of another frees it.
+    Status NamedKeyVerdict(const catalog::TableAccess& ta, std::uint64_t id, std::uint32_t byte,
+                           const txn::Transaction* own);
+    // ON CONFLICT DO NOTHING's question (BU-Q18): is `id` placed? Takes the
+    // key's row unit as a named-key insert does, waiting as it waits, and
+    // keeps it only when the answer is no.
+    StatusOr<bool> TupleKeyPlaced(const catalog::TableAccess& ta, std::uint64_t id,
+                                  std::uint32_t byte, WriteScope& scope);
+
     // The per-row write pipeline, verbatim and in order (bulkinsert.md
     // §4, BI2): arity, FK forward check, assertion admission, id, encode +
     // spill, placement, Cabin witness, index maintenance, reservation,
@@ -1505,17 +1517,6 @@ private:
     //
     // A refusal comes back as its `Status`, rendered by the caller (BB-S3):
     // the code it carries reaches the wire, not only its line.
-    // Whether a btree slot keyed `id` makes a named key a duplicate now
-    // (BD-R5): `AlreadyExists` at `byte` when one is there, except - unless
-    // `own_is_duplicate` - one an undecided insert wrote, whose rollback frees
-    // it (BD-Q9, a wait); OK when absent.
-    Status NamedKeyVerdict(const catalog::TableAccess& ta, std::uint64_t id, std::uint32_t byte,
-                           bool own_is_duplicate);
-    // ON CONFLICT DO NOTHING's question (BU-Q18): is `id` placed? Takes the
-    // key's row unit as a named-key insert does, waiting as it waits, and
-    // keeps it only when the answer is no.
-    StatusOr<bool> TupleKeyPlaced(const catalog::TableAccess& ta, std::uint64_t id,
-                                  std::uint32_t byte, WriteScope& scope);
     std::optional<Status> InsertOneRow(catalog::Oid oid, const catalog::TableAccess*& ta,
                                        const std::vector<parser::AstValue>& values,
                                        WriteScope& scope, const exec::FkParentVerdicts& fk_held,
@@ -1598,9 +1599,6 @@ private:
     std::optional<DispatchOutcome> TryQueryLayer(std::string_view line, Session& session,
                                                  const txn::Snapshot& snap,
                                                  const exec::StatementContext* context);
-    // Runs a query-layer query whose text is `text` at `snap`, under this
-    // dispatcher's row and group caps (BU-Q10): TryQueryLayer's and
-    // INSERT ... SELECT's one way in.
     // RETURNING (BU-Q17): when `line` - an INSERT, UPDATE or DELETE that
     // answered `out` - has a RETURNING list, the rows this statement wrote,
     // found on its transaction's trail since the statement's mark and read
@@ -1611,6 +1609,9 @@ private:
     StatusOr<parser::InsertStmt> InsertSelectRows(const catalog::TableAccess& ta,
                                                   const parser::InsertStmt& written,
                                                   WriteScope& scope);
+    // Runs a query-layer query whose text is `text` at `snap`, under this
+    // dispatcher's row and group caps (BU-Q10): TryQueryLayer's and
+    // INSERT ... SELECT's one way in.
     StatusOr<exec::RowSet> RunLayerQuery(const parser::Query& query, std::string_view text,
                                          Session& session, const txn::Snapshot& snap,
                                          const exec::StatementContext& context);

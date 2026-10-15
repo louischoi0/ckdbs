@@ -833,9 +833,12 @@ UPDATE w SET tier = 5 WHERE id = 1 RETURNING id, tier;
 - **`INSERT ... SELECT`** takes any query of the query layer as its source,
   run at the statement's snapshot and read whole before the first row is
   placed, so a statement reading the relation it writes reads only what was
-  there. Each source column must be assignable to its target as a SET value
-  is: one type, two text types meeting, a decimal at the target's scale.
-  `max_insert_rows` bounds the rows, as for `VALUES`.
+  there. Each source column must be of its target's type - two text types
+  meet, a decimal at the target's scale, its every value checked against the
+  target's precision - and the source is typed before its target is known, so
+  a bare literal takes its natural type (an integer `int64`, a lone `NULL`
+  `varchar`): `CAST` it for an `int32` or a non-text NULL. `max_insert_rows`
+  bounds the rows, as for `VALUES`.
 - **`ON CONFLICT [(tuple key)] DO NOTHING`** skips a row whose tuple key is
   placed - live, delete-marked (its row is the tombstone until `PURGE`), or
   named by an earlier row of the statement - and decides it before the row
@@ -849,8 +852,8 @@ UPDATE w SET tier = 5 WHERE id = 1 RETURNING id, tier;
   matching two or more `FROM` rows refuses the `UPDATE`**
   (`CARDINALITY_VIOLATION`) and nothing is written, where PostgreSQL would
   apply one of them; a `DELETE` deletes a row once however many rows it
-  matches. One relation only; a SET value reads the updated relation's
-  columns.
+  matches. One relation only; a SET value and a RETURNING item read the
+  updated relation's columns, never the FROM relation's.
 - **`RETURNING <items>`** on `INSERT`, `UPDATE` and `DELETE`: the items - `*`,
   columns, value expressions, each with an optional alias - over each row
   the statement wrote, its after-image (a `DELETE`'s before-image), in the
