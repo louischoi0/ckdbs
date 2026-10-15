@@ -96,6 +96,25 @@ TEST_F(IndexCompileTest, TheTupleKeyStillWinsOutright) {
     EXPECT_EQ(KindOf("SELECT * FROM t WHERE id BETWEEN 1 AND 5 AND a = 2"), "Range");
 }
 
+TEST_F(IndexCompileTest, AStrictTupleKeyRangeRanksBelowAnIndex) {
+    // Ruling (a), 2026-10-15: a range with a `>` or `<` end takes only a
+    // step every other arm declined, so a wide window never displaces a
+    // selective index. The inclusive spelling keeps its rank (above).
+    Ok("CREATE TABLE t (id int64, a int64) BTREE");
+    Ok("CREATE INDEX ix ON t (a)");
+    EXPECT_EQ(KindOf("SELECT * FROM t WHERE id >= 1 AND id < 6 AND a = 2"), "IndexProbe");
+    EXPECT_EQ(KindOf("SELECT * FROM t WHERE id > 0 AND id <= 5 AND a = 2"), "IndexProbe");
+    EXPECT_EQ(KindOf("SELECT * FROM t WHERE id >= 1 AND id < 6"), "Range");
+    // An end written both ways is inclusive whichever conjunct came first,
+    // so the plan does not depend on the order they were typed in.
+    EXPECT_EQ(KindOf("SELECT * FROM t WHERE id > 10 AND id >= 11 AND id <= 20 AND a = 2"),
+              "Range");
+    EXPECT_EQ(KindOf("SELECT * FROM t WHERE id >= 11 AND id > 10 AND id <= 20 AND a = 2"),
+              "Range");
+    EXPECT_EQ(KindOf("SELECT * FROM t WHERE id >= 11 AND id <= 20 AND id < 21 AND a = 2"),
+              "Range");
+}
+
 TEST_F(IndexCompileTest, AnIndexBeatsACabinOnTheSameColumn) {
     // Spec §9: an index is complete for every value where a Cabin is
     // authoritative only for the observed ones.

@@ -2092,7 +2092,7 @@ private:
         // ---- The head seek (kRange on a clustered relation) --------------
         //
         // Tail pruning above ends the walk; this is what stops it starting
-        // at the beginning. A `BETWEEN` on a btree relation descends to the
+        // at the beginning. A tuple key range on a btree relation descends to the
         // leaf holding the low bound and walks siblings from there, so a
         // range near the end of the relation costs the range rather than
         // everything before it.
