@@ -1499,6 +1499,17 @@ private:
     //
     // A refusal comes back as its `Status`, rendered by the caller (BB-S3):
     // the code it carries reaches the wire, not only its line.
+    // Whether a btree slot keyed `id` makes a named key a duplicate now
+    // (BD-R5): `AlreadyExists` at `byte` when one is there, except - unless
+    // `own_is_duplicate` - one an undecided insert wrote, whose rollback frees
+    // it (BD-Q9, a wait); OK when absent.
+    Status NamedKeyVerdict(const catalog::TableAccess& ta, std::uint64_t id, std::uint32_t byte,
+                           bool own_is_duplicate);
+    // ON CONFLICT DO NOTHING's question (BU-Q18): is `id` placed? Takes the
+    // key's row unit as a named-key insert does, waiting as it waits, and
+    // keeps it only when the answer is no.
+    StatusOr<bool> TupleKeyPlaced(const catalog::TableAccess& ta, std::uint64_t id,
+                                  std::uint32_t byte, WriteScope& scope);
     std::optional<Status> InsertOneRow(catalog::Oid oid, const catalog::TableAccess*& ta,
                                        const std::vector<parser::AstValue>& values,
                                        WriteScope& scope, const exec::FkParentVerdicts& fk_held,

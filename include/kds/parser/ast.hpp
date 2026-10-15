@@ -551,6 +551,11 @@ struct InsertStmt {
     std::shared_ptr<const Query> select;
     std::string select_text;
     std::uint32_t select_byte_offset = 0;
+    // `ON CONFLICT [(col)] DO NOTHING` (BU-S8, BU-Q18): a row whose tuple key
+    // is placed is skipped. `conflict_target` is the written `(col)`, which
+    // the dispatcher requires to be the tuple key.
+    bool on_conflict_do_nothing = false;
+    std::optional<IndexColumnRef> conflict_target;
     DescribedShape described;
 };
 

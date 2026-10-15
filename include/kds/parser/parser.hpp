@@ -306,6 +306,7 @@ private:
     // PostgreSQL's order, loosest first: OR, AND, NOT, IS, the comparisons,
     // `||`, `+ -`, `* / %`, a unary sign, then `::`.
     Status ParseSetValue(Assignment& a);
+    Status ParseInsertTail(InsertStmt& stmt);
     Status ParseRowValueAssignments(std::vector<Assignment>& out);
     StatusOr<std::shared_ptr<const Expr>> ParseExprOr();
     StatusOr<std::shared_ptr<const Expr>> ParseExprAnd();

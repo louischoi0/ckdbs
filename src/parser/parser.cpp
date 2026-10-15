@@ -467,6 +467,8 @@ constexpr std::size_t kMaxExprArgs = 128;
 
 // A token after which a SET value is complete: the next assignment, the
 // statement's end, a row value's `)`, or the WHERE.
+std::string At(std::uint32_t byte) { return " (byte " + std::to_string(byte) + ")"; }
+
 bool EndsSetValue(const Token& t) {
     return t.type == TokenType::kComma || t.type == TokenType::kEof ||
            t.type == TokenType::kSemicolon || t.type == TokenType::kRParen ||
@@ -2562,6 +2564,7 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
         if (!source.ok()) return source.status();
         stmt.select = std::move(source.value());
         stmt.select_text = std::string(sql_);
+        if (Status s = ParseInsertTail(stmt); !s.ok()) return s;
         ConsumeOptionalSemicolon();
         return stmt;
     }
@@ -2608,8 +2611,55 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
         break;
     }
 
+    if (Status s = ParseInsertTail(stmt); !s.ok()) return s;
     ConsumeOptionalSemicolon();
     return stmt;
+}
+
+// What follows an INSERT's rows (BU-S8): `ON CONFLICT [(col)] DO NOTHING`
+// (BU-Q18). `DO UPDATE` is understood and not built.
+Status Parser::ParseInsertTail(InsertStmt& stmt) {
+    const Token& on = lexer_.Peek();
+    if (on.type != TokenType::kKeyword || on.kw != Keyword::kOn) return Status::OK();
+    lexer_.Next();
+    if (!IsWord(lexer_.Peek(), "CONFLICT")) {
+        return Status::InvalidArgument("expected CONFLICT after ON, got '" +
+                                       std::string(Describe(lexer_.Peek())) + "'" +
+                                       At(lexer_.Peek().byte_offset));
+    }
+    lexer_.Next();
+    if (lexer_.Peek().type == TokenType::kLParen) {
+        lexer_.Next();
+        IndexColumnRef target;
+        target.byte_offset = lexer_.Peek().byte_offset;
+        auto name = ParseIdent();
+        if (!name.ok()) return name.status();
+        target.name = std::move(name.value());
+        if (lexer_.Peek().type != TokenType::kRParen) {
+            return Status::NotImplemented("a conflict target of more than one column is not "
+                                          "supported" + At(lexer_.Peek().byte_offset) +
+                                          "; the tuple key is the one conflict there is");
+        }
+        lexer_.Next();
+        stmt.conflict_target = std::move(target);
+    }
+    if (!IsWord(lexer_.Peek(), "DO")) {
+        return Status::InvalidArgument("expected DO, got '" + std::string(Describe(lexer_.Peek())) +
+                                       "'" + At(lexer_.Peek().byte_offset));
+    }
+    lexer_.Next();
+    if (IsWord(lexer_.Peek(), "UPDATE")) {
+        return Status::NotImplemented("ON CONFLICT DO UPDATE is not supported" +
+                                      At(lexer_.Peek().byte_offset) + "; DO NOTHING is");
+    }
+    if (!IsWord(lexer_.Peek(), "NOTHING")) {
+        return Status::InvalidArgument("expected NOTHING, got '" +
+                                       std::string(Describe(lexer_.Peek())) + "'" +
+                                       At(lexer_.Peek().byte_offset));
+    }
+    lexer_.Next();
+    stmt.on_conflict_do_nothing = true;
+    return Status::OK();
 }
 
 StatusOr<RelationRef> Parser::ParseRelationRef() {
@@ -3732,12 +3782,6 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
 // expression levels above with the SET value grammar, `query_mode_` turning
 // on what only a query reads: qualified columns, aggregates, `[NOT] IN`,
 // `[NOT] BETWEEN`, `[NOT] LIKE`, `EXISTS` and a subquery as a value.
-
-namespace {
-
-std::string At(std::uint32_t byte) { return " (byte " + std::to_string(byte) + ")"; }
-
-}  // namespace
 
 StatusOr<Query> Parser::ParseQuery() {
     query_mode_ = true;

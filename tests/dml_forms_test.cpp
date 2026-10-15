@@ -107,6 +107,8 @@ TEST_F(DmlFormsTest, AValuesExpressionIsRefusedForWhatItCannotBe) {
     ExpectRefused("INSERT INTO w VALUES (31, name, 'US', 1)", "reads no column");
     ExpectRefused("INSERT INTO w VALUES (32, 'a', 'US', 'x' || 'y')", "not int64");
     ExpectRefused("INSERT INTO w VALUES (33, 'a', 'US', 1 / 0)", "division by zero");
+    ExpectRefused("INSERT INTO w VALUES (34, 'a', 'US', (SELECT MAX(tier) FROM cust))",
+                  "NOT_IMPLEMENTED");
     ExpectRows("SELECT COUNT(*) FROM w", {"count(*)", "6"});
 }
 
@@ -144,6 +146,38 @@ TEST_F(DmlFormsTest, InsertSelectIsTypedAndAtomic) {
                   "UNION ALL SELECT 401, 'dup', 'EU', 1",
                   "");
     ExpectRows("SELECT COUNT(*) FROM w", {"count(*)", "6"});
+}
+
+// ---- ON CONFLICT DO NOTHING (BU-Q18) ----------------------------------------
+
+TEST_F(DmlFormsTest, OnConflictDoNothingSkipsARowWhoseTupleKeyIsPlaced) {
+    ExpectReply("INSERT INTO w VALUES (1, 'alice', 'EU', 1) ON CONFLICT DO NOTHING",
+                "INSERTED oid=4005 rows=0");
+    // A placed key and a key named twice in the statement skip; the rest is placed.
+    ExpectReply("INSERT INTO w VALUES (1, 'x', 'EU', 1), (60, 'g', 'EU', 1), (60, 'h', 'EU', 1) "
+                "ON CONFLICT (id) DO NOTHING",
+                "INSERTED oid=4005 rows=1 first_id=60 last_id=60");
+    ExpectRows("SELECT id, name FROM w WHERE id = 1 OR id = 60", {"id,name", "1,alice", "60,g"});
+    // A delete-marked key is placed (BD-R5): its row is the tombstone.
+    Ok("DELETE FROM w WHERE id = 2");
+    ExpectRefused("INSERT INTO w VALUES (2, 'x', 'US', 1)", "duplicate tuple key");
+    ExpectReply("INSERT INTO w VALUES (2, 'x', 'US', 1) ON CONFLICT DO NOTHING",
+                "INSERTED oid=4005 rows=0");
+    // A row that leaves its key out has no conflict.
+    Ok("INSERT INTO w (name, region) VALUES ('n', 'EU') ON CONFLICT DO NOTHING");
+    ExpectRows("SELECT COUNT(*) FROM w WHERE name = 'n'", {"count(*)", "1"});
+    // INSERT ... SELECT: ids 6..11, of which 6 is placed.
+    ExpectReply("INSERT INTO w SELECT id + 5, name, region, tier FROM cust ON CONFLICT DO NOTHING",
+                "INSERTED oid=4005 rows=5 first_id=7 last_id=11");
+}
+
+TEST_F(DmlFormsTest, OnConflictRefusesWhatItDoesNotDo) {
+    ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (id) DO UPDATE SET tier = 2",
+                  "NOT_IMPLEMENTED");
+    ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (name) DO NOTHING",
+                  "the tuple key is the one conflict");
+    ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (nosuch) DO NOTHING",
+                  "");
 }
 
 }  // namespace

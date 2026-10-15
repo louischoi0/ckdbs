@@ -5286,8 +5286,58 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     const parser::InsertStmt& valued = evaluated.has_value() ? *evaluated : written;
     auto normalized = NormalizeInsertRows(*ta, valued);
     if (!normalized.ok()) return {ErrorReply(normalized.status()), false, 0, normalized.status()};
-    const parser::InsertStmt& stmt =
+    const parser::InsertStmt& shaped =
         normalized.value().has_value() ? *normalized.value() : valued;
+
+    // ---- ON CONFLICT DO NOTHING (BU-Q18) --------------------------------
+    //
+    // Decided for every row before any is admitted, so a skipped row takes
+    // no foreign-key hold, no assertion reservation and no id: a row naming
+    // a placed tuple key - live or delete-marked (BD-R5), or named by an
+    // earlier row of this statement - is dropped, and the key's row unit,
+    // taken as the placement would take it (BD-Q9's wait included), is kept
+    // for a row that stays, so no other writer can place it in between.
+    std::optional<parser::InsertStmt> kept;
+    if (written.on_conflict_do_nothing) {
+        if (ta->clustered_type != catalog::ClusteredType::kBtree) {
+            const Status s = Status::NotImplemented(
+                "ON CONFLICT on a heap relation is not supported (byte " +
+                std::to_string(written.table_byte_offset) + ")");
+            return {ErrorReply(s), false, 0, s};
+        }
+        if (written.conflict_target.has_value()) {
+            auto col = ta->schema.FindColumn(written.conflict_target->name,
+                                             written.conflict_target->byte_offset);
+            if (!col.ok()) return {ErrorReply(col.status()), false, 0, col.status()};
+            if (col.value() != &ta->schema.columns.front()) {
+                const Status s = Status::NotImplemented(
+                    "ON CONFLICT (" + written.conflict_target->name + ") at byte " +
+                    std::to_string(written.conflict_target->byte_offset) +
+                    ": the tuple key is the one conflict there is (BU-Q18); name it or no column");
+                return {ErrorReply(s), false, 0, s};
+            }
+        }
+        kept.emplace(InsertShellOf(shaped));
+        std::set<std::uint64_t> named;
+        for (const std::vector<parser::AstValue>& r : shaped.rows) {
+            const std::optional<std::uint64_t> id =
+                r.size() == ta->schema.columns.size() ? KeystoneIdOf(r.front()) : std::nullopt;
+            if (id.has_value()) {
+                if (named.count(*id) != 0) continue;
+                auto placed = TupleKeyPlaced(*ta, *id, r.front().byte_offset, scope);
+                if (!placed.ok()) {
+                    return {ErrorReply(placed.status()), false, 0, placed.status()};
+                }
+                if (placed.value()) continue;
+                named.insert(*id);
+            }
+            kept->rows.push_back(r);
+        }
+        if (kept->rows.empty()) {
+            return {"INSERTED oid=" + std::to_string(oid.value()) + " rows=0", false, 0};
+        }
+    }
+    const parser::InsertStmt& stmt = kept.has_value() ? *kept : shaped;
 
     // Whether every row omits its tuple key, the question T3's sorted fill further
     // down asks.
@@ -5361,7 +5411,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         last = row;
     }
 
-    if (bulk) {
+    if (bulk || written.on_conflict_do_nothing) {
         // rows= is BI13's rows_affected; the id range is what a loader
         // wants back, and with per-row allocation it is contiguous exactly
         // when nothing else allocated concurrently - so both ends are
@@ -5617,6 +5667,49 @@ constexpr int kMaxIssueRounds = 8;
 
 }  // namespace
 
+Status CommandDispatcher::NamedKeyVerdict(const catalog::TableAccess& ta, std::uint64_t id,
+                                          std::uint32_t byte, bool own_is_duplicate) {
+    auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, id);
+    if (!present.ok()) {
+        // Answered by the placement's own descent, so a structural refusal
+        // here is not the statement's (BA-S14).
+        storage::ClearStructuralRefusal();
+        return Status::OK();
+    }
+    auto version = heap::PageView(present.value().leaf.bytes()).ReadTuple(present.value().slot);
+    if (!version.ok()) return Status::OK();
+    const Status found = btree::DuplicateKey(id, present.value().page_id, present.value().slot,
+                                             version.value().deleted);
+    const Status duplicate =
+        Status::AlreadyExists(found.message() + " (byte " + std::to_string(byte) + ")");
+    if (own_is_duplicate) return duplicate;
+    const bool undecided = txn_ != nullptr && txn_->IsInFlight(version.value().trx_id);
+    const std::uint64_t undo_ptr = version.value().undo_ptr;
+    present.value().leaf.Release();  // before the undo pages are read
+    if (!undecided) return duplicate;
+    return UndecidedInsert(*txn_, undo_ptr) ? Status::OK() : duplicate;
+}
+
+StatusOr<bool> CommandDispatcher::TupleKeyPlaced(const catalog::TableAccess& ta, std::uint64_t id,
+                                                 std::uint32_t byte, WriteScope& scope) {
+    const txn::LockKey unit = txn::LockKey::Tuple(ta.oid, id);
+    const bool held_before = scope.txn != nullptr && scope.txn->borrows().Holds(unit);
+    if (std::optional<Status> held =
+            BorrowOrWait(scope, unit, RepeatableReadWait::kCapable, txn::LockMode::kExclusive,
+                         [&]() { return NamedKeyVerdict(ta, id, byte, false); })) {
+        if (held->code() == StatusCode::kAlreadyExists) return true;
+        return *held;
+    }
+    // Granted: no other writer holds the key, so a slot keyed `id` is
+    // decided or this transaction's own - placed either way.
+    if (NamedKeyVerdict(ta, id, byte, /*own_is_duplicate=*/true).ok()) return false;
+    if (!held_before && locks_ != nullptr && scope.txn != nullptr) {
+        locks_->ReleaseIf(scope.txn->id(), scope.txn->borrows(),
+                          [&](const txn::LockHoldings::Held& h) { return h.key == unit; });
+    }
+    return true;
+}
+
 std::optional<Status> CommandDispatcher::InsertOneRow(
     catalog::Oid oid, const catalog::TableAccess*& ta_ptr,
     const std::vector<parser::AstValue>& values, WriteScope& scope,
@@ -5849,25 +5942,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 if (supplied_id >= mark.value()) return Status::OK();
                 return catalog::RefuseRowIdBelowMark(oid, supplied_id, mark.value());
             }
-            auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, supplied_id);
-            if (!present.ok()) {
-                // Answered by the placement's own descent, so a structural
-                // refusal here is not the statement's (BA-S14).
-                storage::ClearStructuralRefusal();
-                return Status::OK();
-            }
-            auto version =
-                heap::PageView(present.value().leaf.bytes()).ReadTuple(present.value().slot);
-            if (!version.ok()) return Status::OK();
-            const bool undecided =
-                txn_ != nullptr && txn_->IsInFlight(version.value().trx_id);
-            const Status duplicate = duplicate_at_tuple_key(btree::DuplicateKey(
-                supplied_id, present.value().page_id, present.value().slot,
-                version.value().deleted));
-            const std::uint64_t undo_ptr = version.value().undo_ptr;
-            present.value().leaf.Release();  // before the undo pages are read
-            if (!undecided) return duplicate;
-            return UndecidedInsert(*txn_, undo_ptr) ? Status::OK() : duplicate;
+            return NamedKeyVerdict(ta, supplied_id, values.front().byte_offset,
+                                   /*own_is_duplicate=*/false);
         };
         const bool held_before = scope.txn != nullptr && scope.txn->borrows().Holds(key_unit);
         if (std::optional<Status> held =
