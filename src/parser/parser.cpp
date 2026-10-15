@@ -3994,6 +3994,7 @@ Status Parser::ParseQueryJoins(QueryBlock& block) {
         if (t.type == TokenType::kComma) {
             lexer_.Next();
             join.kind = JoinKind::kCross;
+            join.comma = true;
         } else if (t.type == TokenType::kKeyword && t.kw == Keyword::kJoin) {
             lexer_.Next();
             join.kind = JoinKind::kInner;
@@ -4030,7 +4031,7 @@ Status Parser::ParseQueryJoins(QueryBlock& block) {
         if (!item.ok()) return item.status();
         join.item = std::move(item.value());
 
-        if (join.kind != JoinKind::kCross || t.type != TokenType::kComma) {
+        if (!join.comma) {
             const Token& cond = lexer_.Peek();
             if (cond.type == TokenType::kKeyword && cond.kw == Keyword::kOn) {
                 if (join.kind == JoinKind::kCross) {

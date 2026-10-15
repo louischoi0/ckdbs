@@ -193,6 +193,7 @@ not measured; measured at the milestone's close".
 | BU-Q11 | The type of a select-list expression `[quiet-wrong]` | BJ's typer, no implicit conversion (BJ-R3); an untyped literal takes its context's type, and with none its natural one - an integer literal `int64`, a quoted string `varchar`, a bare decimal the `decimal(p,s)` of its own digits, a lone `NULL` `varchar`; a comparison or boolean is `bool` | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
 | BU-Q13 | `CAST(x AS varchar(N))`, F004 P07's spelling | stays refused, as BJ refuses it in a SET value: `varchar(N)`'s `N` is a column's cell width, not a length (`types.md` §3.2b), so PostgreSQL's truncation to `N` characters cannot be what KDS means; `CAST(x AS varchar)` is the spelling. P07 closes refused by this ruling (§0.1) | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
 | BU-Q14 | `GROUP BY` an expression, which §3's stages do not list | taken into BU-S5: the grouped path types `GROUP BY` items as expressions already, and a gate arm kept for it alone would refuse a form the stage's code answers and tests; AG9 then holds for the step chain only | adopted on the operator's request of 2026-10-15 to continue BU, as CLA proposed |
+| BU-Q15 | A `RIGHT` or `FULL` join after a comma, which binds looser than `JOIN` (`x, o RIGHT JOIN c` is `x CROSS (o RIGHT JOIN c)`) while the layer reads every join left-deep `[quiet-wrong]` | refused `NotImplemented`, naming the comma-joined relation to move after the outer join: a left-deep reading null-extends `x` instead of crossing it, and nothing else in the layer nests a join; a `LEFT` or inner join after a comma reads the same either way and is answered | adopted on the operator's request of 2026-10-15 to continue BU, as CLA proposed at BU-S6's review |
 | BU-Q12 | Waystone for a layer statement | none: a layer statement records no trail and registers no `sys.patterns` row, its relation walks carrying no fingerprint of their own; invariant 8 makes that a cost, never an answer | adopted on the operator's standing go-ahead of 2026-10-13 (go-ahead-achieving-milestone) |
 
 ## 5. Measurement
@@ -509,3 +510,52 @@ Full suite (Debug, `-LE heap-suspended`) at `58c15228`: 3,964/3,964; at
 build at `17500b6b`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
 P07 refused by BU-Q13, **phase 3 8/8**, phases 4-6 unbuilt behind the gate
 (D01 answers natively), wrong=0 in every phase - S5's gate is met.
+
+### BU-S6 - joins (built 2026-10-15)
+
+On `worktree-bu-basic-query-surface-s4` from `59e5be6f`; the stage is
+`9d2fcc40` and its review.
+
+- **Gate.** `FormsLanded` loses its join arm: `LEFT`, `RIGHT`, `FULL
+  [OUTER]`, `CROSS` and comma joins, `USING`, and an `ON` of any typed
+  condition are the layer's; an `ON` is checked as a condition, and a
+  derived table in a join stays S7's.
+- **Semantics** (built at S4, exercised first here): written order; a hash
+  on the top-level `AND`'s same-typed column equalities, the whole `ON`
+  tested per candidate pair in three values; null extension of the side
+  with no match, a `FULL` join's unmatched right rows once; output bounded
+  by `sort_max_rows`; no `WHERE` term carried by a walk on a nullable side
+  (BU-Q7).
+- **Cells.** Each join kind against its answer; `ON` filtering the match,
+  never the preserved side; BU-Q7 on both sides; `USING`; a non-equality
+  `ON`; a `LEFT JOIN` under `GROUP BY`; the join's bound. The dispatcher's
+  and KWP's `NotImplemented` example moves from a `LEFT JOIN` to a CTE.
+- **Docs.** `parser-v2.md` I19's joins, J2 and the join surface; the
+  manual's join rule, the layer's join bullet and the not-built list; I19's
+  "refused by name" corrected to what a client gets under BU-Q9 (`OVER`
+  answers the native parse's "expected 'FROM'"); the `CLAUDE.md` row.
+
+Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S6 - the `critics-developer` review, applied
+
+Fixed by the reviewer, each with a cell shown failing on `9d2fcc40`'s
+source and passing with the fix: a `RIGHT` or `FULL` join after a comma
+answered wrong - the layer reads joins left-deep, so the comma's relation
+was null-extended instead of crossed (54 rows by PostgreSQL, 44 here) -
+now refused (BU-Q15, `FromJoin::comma`); a bare `USING` name resolved
+through a name map, picking `a.cust_id` where PostgreSQL calls it
+ambiguous and refusing a second `USING` PostgreSQL answers - replaced by
+`CompiledBlock::hidden`, the partner a bare name does not read (the right
+side's column, the left's under `RIGHT`); the wire flagged a tuple key
+that a `RIGHT` or `FULL` join can null-extend, which the flag promises is
+never NULL. Taken: `Join::eq_types` folded into the typed nodes, one key
+function in `JoinRows`. Applied by CLA: `USING (k, k)` refused, as
+PostgreSQL refuses it. **Recorded, not changed:** a comma then a `LEFT` or
+inner join whose `ON` reads a relation before the comma is answered where
+PostgreSQL refuses it - never a wrong answer to valid SQL; the review's
+note that `SourceRows` caps a walk only after it returned is answered by
+S4's review, whose `LayerWalkSink` refuses at the first row past the cap.
+**Declined:** the `prefix` copy and a `MakeBinary` helper for the `USING`
+condition - each saves lines in code that runs once per statement and
+reads plainly as written.

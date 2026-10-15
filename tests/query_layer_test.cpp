@@ -422,5 +422,68 @@ TEST_F(QueryLayerTest, AJoinsOutputIsBoundedBySortMaxRows) {
     ExpectRefused("SELECT COUNT(*) FROM cust CROSS JOIN ord", "sort_max_rows (20)");
 }
 
+// A comma binds looser than JOIN: `x, o RIGHT JOIN c` is `x CROSS (o RIGHT
+// JOIN c)`, which pairs every unmatched `c` with every `x` (PostgreSQL: 54).
+// Read left-deep it would null-extend `x` instead (44), so a RIGHT or FULL
+// join after a comma is refused rather than answered wrong.
+TEST_F(QueryLayerTest, ARightOrFullJoinAfterACommaIsRefused) {
+    ExpectRefused("SELECT COUNT(*) FROM cust AS x, ord AS o RIGHT JOIN cust AS c "
+                  "ON o.cust_id = c.id",
+                  "after a comma");
+    ExpectRefused("SELECT COUNT(*) FROM cust AS x, ord AS o FULL JOIN cust AS c "
+                  "ON o.cust_id = c.id",
+                  "after a comma");
+    // CROSS JOIN is a JOIN, left-associative: (x CROSS JOIN o) RIGHT JOIN c.
+    ExpectRows("SELECT COUNT(*) FROM cust AS x CROSS JOIN ord AS o RIGHT JOIN cust AS c "
+               "ON o.cust_id = c.id",
+               {"count(*)", "44"});
+    // A LEFT or inner join after a comma commutes with the cross product.
+    ExpectRows("SELECT COUNT(*) FROM cust AS x, cust AS c LEFT JOIN ord AS o "
+               "ON o.cust_id = c.id",
+               {"count(*)", "54"});
+}
+
+// A USING column a bare name reads is the merged one; the other side's copy
+// is reachable only qualified, so a third relation's column of that name
+// makes the bare name ambiguous, and a second USING over it is not.
+TEST_F(QueryLayerTest, AUsingColumnHidesItsPartnerFromABareName) {
+    ExpectRows("SELECT COUNT(*) FROM ord AS a JOIN ord AS b USING (cust_id) "
+               "JOIN ord AS c USING (cust_id)",
+               {"count(*)", "26"});
+    ExpectRefused("SELECT cust_id FROM ord AS a JOIN ord AS b USING (cust_id) "
+                  "CROSS JOIN ord AS c",
+                  "ambiguous");
+    // Under RIGHT the merged name reads the right side, filters included.
+    ExpectRows("SELECT id, c.id FROM cust AS c RIGHT JOIN ord AS o USING (id) WHERE id > 15",
+               {"id,c.id", "16,NULL", "17,NULL"});
+}
+
+// ON in three-valued logic per pair: NULL keys never match, an OR is never a
+// hash key, a subquery and an enclosing query's column are read per pair.
+TEST_F(QueryLayerTest, OnIsThreeValuedPerPair) {
+    ExpectRows("SELECT COUNT(*) FROM cust AS a JOIN cust AS b ON a.tier = b.tier", {"count(*)", "6"});
+    ExpectRows("SELECT COUNT(*) FROM cust AS a JOIN cust AS b "
+               "ON a.tier = b.tier OR a.tier IS NULL AND b.tier IS NULL",
+               {"count(*)", "10"});
+    ExpectRows("SELECT c.id, o.id FROM cust AS c LEFT JOIN ord AS o "
+               "ON o.cust_id = c.id AND o.amount = (SELECT MAX(amount) FROM ord)",
+               {"c.id,o.id", "1,NULL", "2,NULL", "3,NULL", "4,15", "5,NULL", "6,NULL"});
+    ExpectRows("SELECT x.id FROM cust AS x WHERE EXISTS (SELECT 1 FROM cust AS c LEFT JOIN "
+               "ord AS o ON o.cust_id = c.id AND o.amount > x.id * 100 "
+               "WHERE c.id = x.id AND o.id IS NOT NULL)",
+               {"x.id", "1", "2", "4"});
+    ExpectRows("SELECT COUNT(*) FROM cust AS c LEFT JOIN ord AS o ON o.cust_id = c.id "
+               "JOIN cust AS d ON d.id = o.cust_id",
+               {"count(*)", "7"});
+    ExpectRows("SELECT c.id, o.id FROM cust AS c LEFT JOIN ord AS o ON c.id = 2",
+               {"c.id,o.id", "1,NULL", "2,10", "2,11", "2,12", "2,13", "2,14", "2,15", "2,16",
+                "2,17", "3,NULL", "4,NULL", "5,NULL", "6,NULL"});
+}
+
+TEST_F(QueryLayerTest, AUsingColumnNamedTwiceIsRefused) {
+    ExpectRefused("SELECT o.id FROM ord AS o JOIN ord AS p USING (cust_id, CUST_ID)",
+                  "named twice");
+}
+
 }  // namespace
 }  // namespace kds::server

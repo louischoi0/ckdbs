@@ -342,11 +342,10 @@ struct Join {
     std::unique_ptr<TypedSetExpr> on;  // null for a cross join
     std::size_t left_width = 0;
     std::size_t right_width = 0;
-    // Equalities of a left column and a right column among `on`'s top-level
-    // `AND` terms, which the join hashes on: (left index, right index within
-    // the right row), with the type the two share.
-    std::vector<std::pair<std::size_t, std::size_t>> eq;
-    std::vector<SetType> eq_types;
+    // Equalities of a left column and a right column of one type among
+    // `on`'s top-level `AND` terms, which the join hashes on: (left, right)
+    // column nodes of `on`.
+    std::vector<std::pair<const TypedSetExpr*, const TypedSetExpr*>> eq;
 };
 
 struct Agg {
@@ -361,7 +360,9 @@ struct CompiledBlock {
     std::vector<Source> sources;
     std::vector<Join> joins;  // joins[i] attaches sources[i + 1]
     std::vector<LayerColumn> wide;
-    std::map<std::string, std::size_t> merged;  // a USING column's name, folded (`FoldName`) -> the index it reads
+    // A USING pair's column a bare name does not read - the right one, the
+    // left one under RIGHT; a qualified name still reaches it.
+    std::set<std::size_t> hidden;
     std::vector<std::unique_ptr<TypedSetExpr>> where;
     bool grouped = false;
     std::vector<std::unique_ptr<TypedSetExpr>> keys;  // GROUP BY's; empty for one global group
@@ -392,8 +393,7 @@ struct CompiledQuery {
     std::optional<RowSet> cached;
 };
 
-// A column name as `catalog::ColumnNamesCollide` compares it: ASCII case
-// folded, so a USING column found by one spelling is found by every other.
+// A binding as a qualifier matches it (`IEq`): ASCII case folded.
 std::string FoldName(std::string name) {
     for (char& c : name) {
         if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
@@ -408,7 +408,7 @@ struct Scope {
     std::size_t width = 0;  // the context's own part of the evaluation row
     const Scope* parent = nullptr;
     CompiledQuery* owner = nullptr;
-    const std::map<std::string, std::size_t>* merged = nullptr;
+    const std::set<std::size_t>* hidden = nullptr;
     // A grouped context: a subquery may not reach into it for a column.
     bool grouped = false;
 };
@@ -424,10 +424,8 @@ StatusOr<std::optional<ResolvedColumn>> ResolveIn(const Scope& s, const Expr& e)
             }
         }
     }
-    if (hits.size() > 1 && e.qualifier.empty() && s.merged != nullptr) {
-        if (auto it = s.merged->find(FoldName(e.column)); it != s.merged->end()) {
-            hits.assign(1, it->second);
-        }
+    if (e.qualifier.empty() && s.hidden != nullptr) {
+        std::erase_if(hits, [&](std::size_t i) { return s.hidden->count(i) != 0; });
     }
     if (hits.size() > 1) {
         return Status::InvalidArgument("column reference '" + e.column + "' is ambiguous" +
@@ -669,12 +667,28 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
         cb.sources.push_back(std::move(s));
     }
     // Nullable sides: a LEFT join's right relation, a RIGHT join's every
-    // relation left of it, both sides of a FULL one.
+    // relation left of it, both sides of a FULL one. Read left-deep, which a
+    // comma is not - it binds looser than JOIN, so `x, a RIGHT JOIN b` is
+    // `x CROSS JOIN (a RIGHT JOIN b)` and must not null-extend `x`.
+    bool after_comma = false;
     for (std::size_t i = 0; i < b.joins.size(); ++i) {
         const JoinKind k = b.joins[i].kind;
+        after_comma |= b.joins[i].comma;
+        if (after_comma && (k == JoinKind::kRight || k == JoinKind::kFull)) {
+            return Status::NotImplemented(
+                std::string(k == JoinKind::kRight ? "RIGHT" : "FULL") +
+                " JOIN after a comma in FROM is not supported" + At(b.joins[i].byte_offset) +
+                "; name the comma-joined relation after the outer join");
+        }
         if (k == JoinKind::kLeft || k == JoinKind::kFull) cb.sources[i + 1].nullable = true;
         if (k == JoinKind::kRight || k == JoinKind::kFull) {
             for (std::size_t j = 0; j <= i; ++j) cb.sources[j].nullable = true;
+        }
+    }
+    // The wire's tuple-key flag promises a value that is never NULL.
+    if (cb.sources[0].nullable) {
+        for (std::size_t c = 0; c < cb.sources[0].columns.size(); ++c) {
+            cb.wide[c].driving_keystone = false;
         }
     }
 
@@ -695,10 +709,20 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
                 return Status::NotImplemented("FULL JOIN ... USING is not supported" +
                                               At(fj.byte_offset) + "; write the ON condition");
             }
-            for (const parser::ColumnName& col : fj.using_columns) {
+            for (std::size_t u = 0; u < fj.using_columns.size(); ++u) {
+                const parser::ColumnName& col = fj.using_columns[u];
+                for (std::size_t e = 0; e < u; ++e) {
+                    if (catalog::ColumnNamesCollide(fj.using_columns[e].name, col.name)) {
+                        return Status::InvalidArgument("USING column '" + col.name +
+                                                       "' is named twice" + At(col.byte_offset));
+                    }
+                }
                 std::optional<std::size_t> left_hit;
                 for (std::size_t c = 0; c < right.offset; ++c) {
-                    if (!catalog::ColumnNamesCollide(cb.wide[c].name, col.name)) continue;
+                    if (cb.hidden.count(c) != 0 ||
+                        !catalog::ColumnNamesCollide(cb.wide[c].name, col.name)) {
+                        continue;
+                    }
                     if (left_hit.has_value()) {
                         return Status::InvalidArgument("USING column '" + col.name +
                                                        "' is ambiguous on the left" +
@@ -743,7 +767,7 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
                     both->rhs = eq;
                     on = both;
                 }
-                cb.merged[FoldName(col.name)] = fj.kind == JoinKind::kRight ? *right_hit : *left_hit;
+                cb.hidden.insert(fj.kind == JoinKind::kRight ? *left_hit : *right_hit);
             }
         }
         if (on != nullptr) {
@@ -752,7 +776,7 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
             scope.width = prefix->size();
             scope.parent = parent;
             scope.owner = &q;
-            scope.merged = &cb.merged;
+            scope.hidden = &cb.hidden;
             auto typed = Type(*on, scope, cb, "in an ON condition");
             if (!typed.ok()) return typed.status();
             if (typed.value()->type.type_val != catalog::kTypeValBool) {
@@ -783,8 +807,7 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
                     a->type.len != c->type.len) {
                     continue;
                 }
-                j.eq.emplace_back(a->column_no, c->column_no - right.offset);
-                j.eq_types.push_back(a->type);
+                j.eq.emplace_back(a, c);
             }
         }
         cb.joins.push_back(std::move(j));
@@ -964,7 +987,7 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
     wide.width = cb.wide.size();
     wide.parent = parent;
     wide.owner = &q;
-    wide.merged = &cb.merged;
+    wide.hidden = &cb.hidden;
 
     if (Status s = CompileWhere(b, wide, cb); !s.ok()) return s;
 
@@ -983,7 +1006,7 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
         grouped_scope.width = cb.group_columns.size();
         grouped_scope.parent = parent;
         grouped_scope.owner = &q;
-        grouped_scope.merged = &cb.merged;
+        grouped_scope.hidden = &cb.hidden;
         grouped_scope.grouped = true;
         computed = [&cb, &b, same_column](const Expr& e) -> std::optional<ResolvedColumn> {
             for (std::size_t i = 0; i < b.group_by.size(); ++i) {
@@ -1052,7 +1075,7 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
             if (!b.has_from) {
                 return Status::InvalidArgument("SELECT * needs a FROM" + At(item.byte_offset));
             }
-            if (!cb.merged.empty()) {
+            if (!cb.hidden.empty()) {
                 return Status::NotImplemented("* over a join with USING is not supported" +
                                               At(item.byte_offset) + "; name the columns");
             }
@@ -1260,17 +1283,22 @@ StatusOr<std::vector<Row>> Runner::JoinRows(const Join& j, std::vector<Row> left
     const Row right_nulls(j.right_width);
 
     // Candidates by the hashed equalities; every pair when there are none.
+    // A NULL key matches nothing: its `=` is unknown, so the `AND` is not true.
+    const auto key_of = [&j](const Row& row, bool left_side) -> StatusOr<std::optional<std::string>> {
+        std::string key;
+        for (const auto& [l, r] : j.eq) {
+            const AstValue& v = left_side ? row[l->column_no] : row[r->column_no - j.left_width];
+            if (IsNull(v)) return std::optional<std::string>();
+            if (Status s = AppendKey(key, v, l->type); !s.ok()) return s;
+        }
+        return std::optional<std::string>(std::move(key));
+    };
     std::unordered_map<std::string, std::vector<std::size_t>> index;
     if (!j.eq.empty()) {
         for (std::size_t r = 0; r < right.size(); ++r) {
-            std::string key;
-            bool has_null = false;
-            for (std::size_t k = 0; k < j.eq.size(); ++k) {
-                const AstValue& v = right[r][j.eq[k].second];
-                if (IsNull(v)) has_null = true;
-                if (Status s = AppendKey(key, v, j.eq_types[k]); !s.ok()) return s;
-            }
-            if (!has_null) index[key].push_back(r);
+            auto key = key_of(right[r], false);
+            if (!key.ok()) return key.status();
+            if (key.value().has_value()) index[*key.value()].push_back(r);
         }
     }
     std::vector<std::size_t> all;
@@ -1282,14 +1310,9 @@ StatusOr<std::vector<Row>> Runner::JoinRows(const Join& j, std::vector<Row> left
     for (Row& l : left) {
         const std::vector<std::size_t>* candidates = &all;
         if (!j.eq.empty()) {
-            std::string key;
-            bool has_null = false;
-            for (std::size_t k = 0; k < j.eq.size(); ++k) {
-                const AstValue& v = l[j.eq[k].first];
-                if (IsNull(v)) has_null = true;
-                if (Status s = AppendKey(key, v, j.eq_types[k]); !s.ok()) return s;
-            }
-            auto it = has_null ? index.end() : index.find(key);
+            auto key = key_of(l, true);
+            if (!key.ok()) return key.status();
+            auto it = key.value().has_value() ? index.find(*key.value()) : index.end();
             candidates = it == index.end() ? &kNone : &it->second;
         }
         bool matched = false;

@@ -900,6 +900,7 @@ struct FromJoin {
     std::shared_ptr<const Expr> on;    // unset for CROSS, a comma and USING
     std::vector<ColumnName> using_columns;
     std::uint32_t byte_offset = 0;     // the join's first word
+    bool comma = false;                // a `,` rather than CROSS JOIN: binds looser than JOIN
 };
 
 // One `SELECT ... [FROM ...] [WHERE ...] [GROUP BY ...] [HAVING ...]` block.

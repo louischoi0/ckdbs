@@ -1054,7 +1054,9 @@ select list with no `FROM` - is answered by the query layer
   null-extend rows instead of removing them. A join hashes on the column
   equalities among its `ON`'s top-level `AND` terms and tests the rest per
   pair; its output counts against `sort_max_rows`. Join order is the
-  written order, as everywhere.
+  written order, as everywhere. A comma binds looser than `JOIN`, so a
+  `RIGHT` or `FULL` join after a comma is refused: name the comma-joined
+  relation after the outer join.
 - **What it answers grows stage by stage.** Set operations, derived tables
   and a subquery in the select list are read by the layer's grammar but
   answered only once BU-S7 lands; until then each keeps the refusal it has

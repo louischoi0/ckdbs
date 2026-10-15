@@ -278,6 +278,23 @@ TEST_F(KwpSessionTest, ASelectStarDescribesTheWholeSchema) {
         << "field 0 of every user relation is the Keystone id";
 }
 
+TEST_F(KwpSessionTest, ANullableDrivingRelationsKeyIsNotFlaggedTheTupleKey) {
+    // The flag promises a value that is never NULL; a RIGHT join's left
+    // relation is null-extended (BU-S6, the query layer).
+    Handshake();
+    auto frames = RunStatement("SELECT u.id, w.id FROM t AS u RIGHT JOIN t AS w ON u.id = w.id");
+    ASSERT_GE(frames.size(), 3u);
+    auto desc = wire::DecodeRowDescription(frames[0].payload);
+    ASSERT_TRUE(desc.ok()) << desc.status().message();
+    ASSERT_EQ(desc.value().size(), 2u);
+    EXPECT_EQ(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
+    frames = RunStatement("SELECT u.id, w.id FROM t AS u LEFT JOIN t AS w ON u.id = w.id");
+    ASSERT_GE(frames.size(), 3u);
+    desc = wire::DecodeRowDescription(frames[0].payload);
+    ASSERT_TRUE(desc.ok()) << desc.status().message();
+    EXPECT_NE(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
+}
+
 TEST_F(KwpSessionTest, ANarrowTupleKeyPastItsDeclaredWidthReachesTheClientWhole) {
     // protocol.md §6: a relation's column 0 is its Keystone id, u64 on the
     // wire whatever integer width it declares - in any projected position
