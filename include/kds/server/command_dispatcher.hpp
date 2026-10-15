@@ -166,6 +166,7 @@ struct DispatchOutcome {
     // the truthful answer for a read, a DDL and a session statement.
     std::uint64_t rows_affected = 0;
 
+
     // **Why the statement failed, as a `Status`.** OK on every success and
     // on the handful of refusals built from a bare message.
     //
@@ -322,6 +323,11 @@ struct DispatchOutcome {
     // `SELECT`, `INSERT` and `UPDATE` do). Carried for `poison_withheld`'s
     // reason: another statement of this core can run before this one ends.
     std::uint64_t fetch_id = 0;
+
+    // **The reply carries rows besides its tag** (RETURNING, BU-Q17): the
+    // rows went out through the session's sink, and `response` is still the
+    // DML's tag, which a KWP `S_COMPLETE` carries in place of `SELECT`.
+    bool returning = false;
 };
 
 // The one spelling of an error reply on the newline protocol (docs/spec/txn.md
@@ -1595,6 +1601,13 @@ private:
     // Runs a query-layer query whose text is `text` at `snap`, under this
     // dispatcher's row and group caps (BU-Q10): TryQueryLayer's and
     // INSERT ... SELECT's one way in.
+    // RETURNING (BU-Q17): when `line` - an INSERT, UPDATE or DELETE that
+    // answered `out` - has a RETURNING list, the rows this statement wrote,
+    // found on its transaction's trail since the statement's mark and read
+    // back by tuple key, emitted through the session's sink. Read before
+    // the write scope ends, so a failure here fails the statement.
+    DispatchOutcome WithReturning(std::string_view line, Session& session, WriteScope& scope,
+                                  DispatchOutcome out);
     StatusOr<parser::InsertStmt> InsertSelectRows(const catalog::TableAccess& ta,
                                                   const parser::InsertStmt& written,
                                                   WriteScope& scope);

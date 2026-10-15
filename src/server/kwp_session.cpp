@@ -745,8 +745,11 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
         std::vector<std::byte> desc;
         wire::EncodeRowDescription(portal->sink.fields(), desc);
         Send(out, ServerFrameType::kRowDesc, 0, desc);
-        portal->complete_tag = "SELECT";
-        portal->rows_affected = portal->sink.row_count();
+        // A write's RETURNING rows complete under the write's own tag
+        // (BU-Q17).
+        portal->complete_tag = outcome.returning ? outcome.response : "SELECT";
+        portal->rows_affected =
+            outcome.returning ? outcome.rows_affected : portal->sink.row_count();
     } else {
         // No result set: the reply *is* the completion tag. A multi-line
         // diagnostic answer (`SHOW META`, `DESCRIBE`, `ANALYZE`) is carried

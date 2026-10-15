@@ -220,5 +220,45 @@ TEST_F(DmlFormsTest, FromAndUsingAreOneNameSpaceWithTheStatement) {
     ExpectRows("SELECT COUNT(*) FROM w WHERE tier = 1", {"count(*)", "1"});
 }
 
+// ---- RETURNING (BU-Q17) -------------------------------------------------------
+
+// The text surface answers the rows, then the statement's own tag.
+TEST_F(DmlFormsTest, ReturningAnswersTheRowsThenTheTag) {
+    ExpectReply("UPDATE w SET tier = 5 WHERE id = 1 RETURNING id, tier",
+                "id,tier\\n1,5\\nUPDATED 1");
+    ExpectReply("UPDATE w SET tier = tier + 1 WHERE id = 6 RETURNING id, tier * 10 AS t10",
+                "id,t10\\n6,30\\nUPDATED 1");
+    ExpectReply("UPDATE w SET tier = 1 WHERE id = 999 RETURNING id", "id\\nUPDATED 0");
+    // A DELETE answers its before-images.
+    ExpectReply("DELETE FROM w WHERE region = 'US' RETURNING id, name",
+                "id,name\\n2,bob\\n5,erin\\nDELETED 2");
+    // An INSERT's, with the issued key.
+    const std::string issued = Run("INSERT INTO w (name, region) VALUES ('q', 'US') RETURNING id, name");
+    EXPECT_EQ(issued.rfind("id,name\\n7,q\\nINSERTED ", 0), 0u) << issued;
+    const std::string star = Run("INSERT INTO w VALUES (70, 'z', 'EU', NULL) RETURNING *");
+    EXPECT_EQ(star.rfind("id,name,region,tier\\n70,z,EU,NULL\\nINSERTED ", 0), 0u) << star;
+}
+
+TEST_F(DmlFormsTest, ReturningRidesWithTheOtherForms) {
+    ExpectReply("INSERT INTO w VALUES (1, 'x', 'EU', 1), (71, 'y', 'EU', 1) "
+                "ON CONFLICT DO NOTHING RETURNING id",
+                "id\\n71\\nINSERTED oid=4005 rows=1 first_id=71 last_id=71");
+    ExpectReply("UPDATE w SET tier = 7 FROM ord WHERE ord.cust_id = w.id AND ord.amount >= 500 "
+                "RETURNING w.id, tier",
+                "w.id,tier\\n4,7\\nUPDATED 1");
+    ExpectReply("INSERT INTO w SELECT id + 100, name, region, tier FROM cust WHERE id = 3 "
+                "RETURNING id, tier",
+                "id,tier\\n103,NULL\\nINSERTED oid=4005 id=103 page=135 slot=7");
+}
+
+// RETURNING is read before the statement ends, so its failure fails it.
+TEST_F(DmlFormsTest, AFailingReturningUndoesTheStatement) {
+    ExpectRefused("UPDATE w SET tier = 0 WHERE id = 4 RETURNING 10 / tier", "division by zero");
+    ExpectRows("SELECT tier FROM w WHERE id = 4", {"tier", "3"});
+    ExpectRefused("UPDATE w SET tier = 1 WHERE id = 4 RETURNING nosuch", "nosuch");
+    ExpectRefused("UPDATE w SET tier = 1 WHERE id = 4 RETURNING COUNT(*)", "aggregate");
+    ExpectRows("SELECT tier FROM w WHERE id = 4", {"tier", "3"});
+}
+
 }  // namespace
 }  // namespace kds::server

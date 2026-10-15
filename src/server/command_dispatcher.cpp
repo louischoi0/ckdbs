@@ -3257,6 +3257,16 @@ Status InsertArityRefusal(const catalog::TableAccess& ta, std::size_t columns,
 
 // A statement's header - relation, namespace, byte and described shape - with
 // no column list and no rows: what both normalizers fill with physical rows.
+// Whether `text` holds `word`, ASCII case ignored - RETURNING's cheap gate,
+// so a write without one is never parsed twice.
+bool ContainsWordIgnoringCase(std::string_view text, std::string_view word) {
+    if (word.size() > text.size()) return false;
+    for (std::size_t i = 0; i + word.size() <= text.size(); ++i) {
+        if (IEquals(text.substr(i, word.size()), word)) return true;
+    }
+    return false;
+}
+
 parser::InsertStmt InsertShellOf(const parser::InsertStmt& written) {
     parser::InsertStmt out;
     out.table_name = written.table_name;
@@ -4641,7 +4651,7 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     if (!opened.ok()) return {ErrorReply(opened.status()), false, 0, opened.status()};
     WriteScope scope = opened.value();
 
-    DispatchOutcome out = InsertInner(line, scope);
+    DispatchOutcome out = WithReturning(line, session, scope, InsertInner(line, scope));
 
 
     // The reply is the verdict, which is the same rule Dispatch() itself
@@ -8149,6 +8159,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
                                                       std::move(subquery_answers)});
         return out;
     }
+    out = WithReturning(line, session, scope, std::move(out));
 
 
     const bool failed = out.response.rfind("ERR ", 0) == 0;
@@ -8434,6 +8445,164 @@ StatusOr<std::vector<std::vector<parser::AstValue>>> CommandDispatcher::WalkForL
     if (!out.status.ok()) return out.status;
     if (out.response.rfind("ERR", 0) == 0) return Status::InvalidArgument(out.response.substr(4));
     return sink.TakeRows();
+}
+
+DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session& session,
+                                                 WriteScope& scope, DispatchOutcome out) {
+    if (out.response.rfind("ERR", 0) == 0 || !ContainsWordIgnoringCase(line, "RETURNING")) {
+        return out;
+    }
+    parser::Parser parser(line);
+    auto parsed = parser.Parse();
+    if (!parsed.ok()) return out;
+    const parser::Returning* returning = nullptr;
+    std::string schema;
+    std::string table;
+    txn::TrailAction wrote = txn::TrailAction::kInsert;
+    if (const auto* ins = std::get_if<parser::InsertStmt>(&parsed.value())) {
+        returning = &ins->returning;
+        schema = ins->schema;
+        table = ins->table_name;
+    } else if (const auto* upd = std::get_if<parser::UpdateStmt>(&parsed.value())) {
+        returning = &upd->returning;
+        schema = upd->schema;
+        table = upd->table_name;
+        wrote = txn::TrailAction::kOverwrite;
+    } else if (const auto* del = std::get_if<parser::DeleteStmt>(&parsed.value())) {
+        returning = &del->returning;
+        schema = del->schema;
+        table = del->table_name;
+        wrote = txn::TrailAction::kDeleteMark;
+    }
+    if (returning == nullptr || returning->items.empty()) return out;
+    const auto refuse = [](const Status& s) {
+        return DispatchOutcome{ErrorReply(s), false, 0, s};
+    };
+    if (txn_ == nullptr || scope.txn == nullptr) {
+        return refuse(Status::NotImplemented(
+            "RETURNING needs the transaction manager, whose trail names the rows written (byte " +
+            std::to_string(returning->byte_offset) + ")"));
+    }
+    auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
+        return ResolveQualifiedRelation(schema, table, 0, v);
+    });
+    if (!oid.ok()) return refuse(oid.status());
+    auto access = catalog_.InitTableAccess(oid.value());
+    if (!access.ok()) return refuse(access.status());
+    const catalog::TableAccess& ta = *access.value();
+    if (ta.clustered_type != catalog::ClusteredType::kBtree) {
+        return refuse(Status::NotImplemented("RETURNING on a heap relation is not supported (byte " +
+                                             std::to_string(returning->byte_offset) + ")"));
+    }
+
+    // ---- The items, typed over the relation's live columns ---------------
+    const exec::StatementContext context = exec::StatementContextNow();
+    std::vector<std::unique_ptr<exec::TypedSetExpr>> items;
+    std::vector<wire::FieldDescription> fields;
+    std::vector<std::uint32_t> wire_types;
+    const auto add_field = [&](std::string name, const exec::SetType& type, bool key) {
+        wire::FieldDescription f;
+        f.name = std::move(name);
+        f.type_oid = type.type_val;
+        const std::uint32_t wire_type = key ? wire::WireValueType(type.type_val, 0) : type.type_val;
+        f.type_len = wire::WireTypeLen(wire_type);
+        f.type_mod = catalog::TypeModOf(type.type_val, type.len);
+        if (key) f.flags |= wire::kFieldFlagKeystone;
+        fields.push_back(std::move(f));
+        wire_types.push_back(wire_type);
+    };
+    const auto column_node = [&](std::size_t i) {
+        auto n = std::make_unique<exec::TypedSetExpr>();
+        n->kind = parser::Expr::Kind::kColumn;
+        n->column_no = i;
+        n->type = exec::SetType{exec::SetType::Kind::kConcrete, ta.schema.columns[i].type_val,
+                                ta.schema.columns[i].len};
+        return n;
+    };
+    exec::ExprScope scope_of;
+    scope_of.clause = "in RETURNING";
+    scope_of.resolve = [&](const parser::Expr& e) -> StatusOr<std::optional<exec::ResolvedColumn>> {
+        if (!e.qualifier.empty() && !IEquals(e.qualifier, table)) {
+            return Status::InvalidArgument("'" + e.qualifier + "' names no relation of this "
+                                           "statement (byte " + std::to_string(e.byte_offset) + ")");
+        }
+        auto col = ta.schema.FindColumn(e.column, e.byte_offset);
+        if (!col.ok()) return col.status();
+        if (col.value() == nullptr) return std::optional<exec::ResolvedColumn>();
+        const auto i = static_cast<std::size_t>(col.value() - ta.schema.columns.data());
+        return std::optional<exec::ResolvedColumn>(
+            exec::ResolvedColumn{i, column_node(i)->type});
+    };
+    for (const parser::OutputItem& item : returning->items) {
+        if (item.star) {
+            if (!item.star_qualifier.empty() && !IEquals(item.star_qualifier, table)) {
+                return refuse(Status::InvalidArgument(
+                    "'" + item.star_qualifier + "' names no relation of this statement (byte " +
+                    std::to_string(item.byte_offset) + ")"));
+            }
+            for (std::size_t i = 0; i < ta.schema.columns.size(); ++i) {
+                if (ta.schema.columns[i].dropped()) continue;
+                auto n = column_node(i);
+                add_field(std::string(catalog::NameView(ta.schema.columns[i].name)), n->type, i == 0);
+                items.push_back(std::move(n));
+            }
+            continue;
+        }
+        auto typed = exec::TypeQueryExpression(*item.expr, scope_of);
+        if (!typed.ok()) return refuse(typed.status());
+        const bool key = item.expr->kind == parser::Expr::Kind::kColumn &&
+                         typed.value()->column_no == 0;
+        // Headed as the query layer heads an item (parser-v2.md I19): the
+        // alias, else the item as written.
+        add_field(item.alias.empty() ? item.text : item.alias, typed.value()->type, key);
+        items.push_back(std::move(typed.value()));
+    }
+
+    // ---- The rows this statement wrote, in the order it wrote them -------
+    std::vector<std::uint64_t> keys;
+    std::set<std::uint64_t> seen;
+    const std::vector<txn::TrailEntry>& trail = scope.txn->trail();
+    for (std::size_t t = statement_trail_mark_; t < trail.size(); ++t) {
+        const txn::TrailEntry& e = trail[t];
+        if (e.rel_oid != ta.oid || e.action != wrote) continue;
+        if (seen.insert(e.tuple_key).second) keys.push_back(e.tuple_key);
+    }
+
+    TextResultSink text_sink;
+    ResultSink& sink = SinkFor(session, text_sink);
+    if (Status s = sink.Describe(std::move(fields)); !s.ok()) return refuse(s);
+    std::vector<parser::AstValue> image(ta.schema.columns.size());
+    std::vector<exec::PendingSpill> spills;
+    std::string row_scratch;
+    for (std::uint64_t key : keys) {
+        // The slot holds this statement's version: an INSERT's and an
+        // UPDATE's after-image, and a DELETE's before-image under its mark.
+        auto at = btree::BtreeLookup(page_store_, ta.desc_page_id, key);
+        if (!at.ok()) return refuse(at.status());
+        auto tuple = heap::PageView(at.value().leaf.bytes()).ReadTuple(at.value().slot);
+        if (!tuple.ok()) return refuse(tuple.status());
+        const std::vector<std::byte> payload(tuple.value().payload.begin(),
+                                             tuple.value().payload.end());
+        at.value().leaf.Release();
+        spills.clear();
+        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload, image,
+                                              exec::kAllColumnsMask, spills);
+            !s.ok()) {
+            return refuse(s);
+        }
+        std::vector<parser::AstValue> row;
+        row.reserve(items.size());
+        for (const auto& item : items) {
+            auto v = exec::EvaluateQueryExpression(*item, image, context, nullptr);
+            if (!v.ok()) return refuse(v.status());
+            row.push_back(std::move(v.value()));
+        }
+        if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) return refuse(s);
+        if (Status s = sink.Emit(row_scratch); !s.ok()) return refuse(s);
+    }
+    out.returning = true;
+    if (session.result_sink() == nullptr) out.response = text_sink.Take() + "\\n" + out.response;
+    return out;
 }
 
 StatusOr<exec::RowSet> CommandDispatcher::RunLayerQuery(const parser::Query& query,
@@ -10287,6 +10456,7 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
                                                       /*is_delete=*/true, context});
         return out;
     }
+    out = WithReturning(line, session, scope, std::move(out));
 
 
     const bool failed = out.response.rfind("ERR ", 0) == 0;

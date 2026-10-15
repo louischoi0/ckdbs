@@ -527,6 +527,24 @@ struct DescribedShape {
 struct Expr;   // a VALUES expression - see InsertStmt::ValueExpr
 struct Query;  // INSERT ... SELECT's source - see InsertStmt::select
 
+// One select-list item: an expression with its alias, or `*` / `rel.*`.
+struct OutputItem {
+    std::shared_ptr<const Expr> expr;  // unset for a star
+    std::string alias;                 // `AS alias`, empty when none
+    bool star = false;
+    std::string star_qualifier;  // `rel` in `rel.*`; empty for a bare `*`
+    std::string text;  // the expression as written, which heads an unaliased column
+    std::uint32_t byte_offset = 0;
+};
+
+// `RETURNING <items>` (BU-S8, BU-Q17): what an INSERT, UPDATE or DELETE
+// answers with besides its tag - each written row's after-image (a
+// DELETE's before-image) through the items, in the query grammar.
+struct Returning {
+    std::vector<OutputItem> items;  // empty when the statement has none
+    std::uint32_t byte_offset = 0;  // the RETURNING word
+};
+
 struct InsertStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above
@@ -560,6 +578,7 @@ struct InsertStmt {
     // the dispatcher requires to be the tuple key.
     bool on_conflict_do_nothing = false;
     std::optional<IndexColumnRef> conflict_target;
+    Returning returning;
     DescribedShape described;
 };
 
@@ -907,15 +926,8 @@ struct Expr {
 // dispatcher reaches it only after the native parse or compile refused
 // (BU-Q9), and runs it through `exec/query_layer.hpp`.
 
-// One select-list item: an expression with its alias, or `*` / `rel.*`.
-struct OutputItem {
-    std::shared_ptr<const Expr> expr;  // unset for a star
-    std::string alias;                 // `AS alias`, empty when none
-    bool star = false;
-    std::string star_qualifier;  // `rel` in `rel.*`; empty for a bare `*`
-    std::string text;  // the expression as written, which heads an unaliased column
-    std::uint32_t byte_offset = 0;
-};
+// `OutputItem` - one select-list item - is above, with the DML statements
+// that carry a RETURNING list of them.
 
 enum class JoinKind : std::uint8_t { kInner, kLeft, kRight, kFull, kCross };
 
@@ -1004,6 +1016,7 @@ struct UpdateStmt {
     std::uint32_t table_byte_offset = 0;
     std::vector<Assignment> assignments;  // SET list, at least one
     std::vector<Condition> where;         // empty = no WHERE clause; AND-combined
+    Returning returning;
 };
 
 // `DELETE FROM <t> [WHERE ...]`.
@@ -1022,6 +1035,7 @@ struct DeleteStmt {
     std::string schema;  // see the namespace-qualifier rule above
     std::uint32_t table_byte_offset = 0;
     std::vector<Condition> where;  // empty = every row
+    Returning returning;
 };
 
 // `PURGE FROM <t> WHERE <tuple key comparisons>` (BH,

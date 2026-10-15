@@ -2617,10 +2617,11 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
 }
 
 // What follows an INSERT's rows (BU-S8): `ON CONFLICT [(col)] DO NOTHING`
-// (BU-Q18). `DO UPDATE` is understood and not built.
+// (BU-Q18), then `RETURNING` (BU-Q17). `DO UPDATE` is understood and not
+// built.
 Status Parser::ParseInsertTail(InsertStmt& stmt) {
     const Token& on = lexer_.Peek();
-    if (on.type != TokenType::kKeyword || on.kw != Keyword::kOn) return Status::OK();
+    if (on.type != TokenType::kKeyword || on.kw != Keyword::kOn) return ParseReturning(stmt.returning);
     lexer_.Next();
     if (!IsWord(lexer_.Peek(), "CONFLICT")) {
         return Status::InvalidArgument("expected CONFLICT after ON, got '" +
@@ -2659,7 +2660,7 @@ Status Parser::ParseInsertTail(InsertStmt& stmt) {
     }
     lexer_.Next();
     stmt.on_conflict_do_nothing = true;
-    return Status::OK();
+    return ParseReturning(stmt.returning);
 }
 
 StatusOr<RelationRef> Parser::ParseRelationRef() {
@@ -3398,6 +3399,7 @@ StatusOr<DeleteStmt> Parser::ParseDelete() {
     if (using_rel.has_value()) {
         stmt.where = ExistsOver(std::move(*using_rel), std::move(stmt.where), /*at_most_one=*/false);
     }
+    if (Status s = ParseReturning(stmt.returning); !s.ok()) return s;
 
     ConsumeOptionalSemicolon();
     return stmt;
@@ -3595,6 +3597,7 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
     if (from_rel.has_value()) {
         stmt.where = ExistsOver(std::move(*from_rel), std::move(stmt.where), /*at_most_one=*/true);
     }
+    if (Status s = ParseReturning(stmt.returning); !s.ok()) return s;
 
     ConsumeOptionalSemicolon();
     return stmt;
@@ -3955,22 +3958,9 @@ StatusOr<std::shared_ptr<const Query>> Parser::ParseNestedQuery(const Token& ope
     return q;
 }
 
-StatusOr<std::shared_ptr<const QueryBlock>> Parser::ParseQueryBlock() {
-    auto block = std::make_shared<QueryBlock>();
-    block->byte_offset = lexer_.Peek().byte_offset;
-    if (Status s = ExpectKeyword("SELECT"); !s.ok()) return s;
-    if (IsWord(lexer_.Peek(), "DISTINCT")) {
-        lexer_.Next();
-        if (lexer_.Peek().type == TokenType::kKeyword && lexer_.Peek().kw == Keyword::kOn) {
-            return Status::NotImplemented("DISTINCT ON is not supported" +
-                                          At(lexer_.Peek().byte_offset));
-        }
-        block->distinct = true;
-    } else if (IsWord(lexer_.Peek(), "ALL")) {
-        lexer_.Next();
-    }
-
-    // ---- The select list ----------------------------------------------------
+// A select list of the query grammar: `*`, `rel.*`, or an expression with
+// an optional `AS alias`, comma-separated - a block's, and RETURNING's.
+Status Parser::ParseOutputItems(std::vector<OutputItem>& items) {
     for (;;) {
         OutputItem item;
         const Token first = lexer_.Peek();
@@ -4024,10 +4014,41 @@ StatusOr<std::shared_ptr<const QueryBlock>> Parser::ParseQueryBlock() {
                 }
             }
         }
-        block->items.push_back(std::move(item));
+        items.push_back(std::move(item));
         if (lexer_.Peek().type != TokenType::kComma) break;
         lexer_.Next();
     }
+    return Status::OK();
+}
+
+// `RETURNING <items>` (BU-S8, BU-Q17), after a DML statement's own clauses.
+Status Parser::ParseReturning(Returning& out) {
+    if (!IsWord(lexer_.Peek(), "RETURNING")) return Status::OK();
+    out.byte_offset = lexer_.Next().byte_offset;
+    const bool was = query_mode_;
+    query_mode_ = true;
+    Status parsed = ParseOutputItems(out.items);
+    query_mode_ = was;
+    return parsed;
+}
+
+StatusOr<std::shared_ptr<const QueryBlock>> Parser::ParseQueryBlock() {
+    auto block = std::make_shared<QueryBlock>();
+    block->byte_offset = lexer_.Peek().byte_offset;
+    if (Status s = ExpectKeyword("SELECT"); !s.ok()) return s;
+    if (IsWord(lexer_.Peek(), "DISTINCT")) {
+        lexer_.Next();
+        if (lexer_.Peek().type == TokenType::kKeyword && lexer_.Peek().kw == Keyword::kOn) {
+            return Status::NotImplemented("DISTINCT ON is not supported" +
+                                          At(lexer_.Peek().byte_offset));
+        }
+        block->distinct = true;
+    } else if (IsWord(lexer_.Peek(), "ALL")) {
+        lexer_.Next();
+    }
+
+    // ---- The select list ----------------------------------------------------
+    if (Status st = ParseOutputItems(block->items); !st.ok()) return st;
 
     // ---- FROM ---------------------------------------------------------------
     if (IsWord(lexer_.Peek(), "FROM")) {

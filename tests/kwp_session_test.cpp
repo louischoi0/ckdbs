@@ -363,6 +363,27 @@ TEST_F(KwpSessionTest, AWriteAnswersACompletionWithItsRowCountAndNoDescription) 
     EXPECT_EQ(*affected, 1u) << "the tag's own count, read off the reply the engine wrote";
 }
 
+// RETURNING (BU-S8, BU-Q17): the rows as a SELECT's, then the write's own
+// completion - its tag and its count, not `SELECT`'s.
+TEST_F(KwpSessionTest, AReturningWriteAnswersItsRowsThenItsOwnCompletion) {
+    Handshake();
+    auto frames = RunStatement("UPDATE t SET name = 'z' WHERE id < 3 RETURNING id, name");
+    ASSERT_EQ(frames.size(), 3u);
+    ASSERT_EQ(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kRowDesc));
+    auto desc = wire::DecodeRowDescription(frames[0].payload);
+    ASSERT_TRUE(desc.ok()) << desc.status().message();
+    ASSERT_EQ(desc.value().size(), 2u);
+    EXPECT_NE(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
+    ASSERT_EQ(frames[1].type, static_cast<std::uint8_t>(ServerFrameType::kRowBatch));
+    ASSERT_EQ(frames[2].type, static_cast<std::uint8_t>(ServerFrameType::kComplete));
+    wire::PayloadReader r(frames[2].payload);
+    auto tag = r.Text();
+    auto affected = r.U64();
+    ASSERT_TRUE(tag.has_value() && tag->has_value());
+    EXPECT_EQ(**tag, "UPDATED 2");
+    EXPECT_EQ(*affected, 2u);
+}
+
 TEST_F(KwpSessionTest, AMultiLineDiagnosticArrivesAsAOneColumnTextResultSet) {
     // `ANALYZE` - a plan, not a table - is the one text-lines reply BO-R3
     // leaves; every `sys` view and `SHOW` answers as a typed result set.
