@@ -1759,9 +1759,14 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     const auto settled = [this](std::uint64_t trx) {
         return txn_ == nullptr || !txn_->IsInFlight(trx);
     };
-    bool found_old = false;
-    std::string holder;  // the colliding column's name as declared
-    auto collided = ForFirstRow<SysColumnRow>(
+    // The old name resolves as every written column name does - ignoring
+    // case (`ColumnNamesCollide`), two or more live matches refused as
+    // ambiguous (`Schema::FindColumn`'s rule, defended here under the hold).
+    std::size_t old_matches = 0;
+    std::uint32_t old_pos = 0;
+    std::string old_stored;  // the renamed column's name as declared
+    std::string holder;      // the colliding column's name as declared
+    auto scanned = ForFirstRow<SysColumnRow>(
         store_, kCatalogPageColumns,
         [&](SysColumnRow& row, heap::PageView&, PageId, std::uint16_t,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
@@ -1771,41 +1776,43 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
             // being renamed collides only with itself, so `id` may become
             // `ID`.
             if (row.dropped()) {
-                if (!settled(tuple.trx_id) && ColumnNamesCollide(NameView(row.name), new_name)) {
+                if (holder.empty() && !settled(tuple.trx_id) &&
+                    ColumnNamesCollide(NameView(row.name), new_name)) {
                     holder = NameView(row.name);
-                    return true;
                 }
                 return false;
             }
-            // Only the first exact `old_name` is the column renamed - the
-            // rewrite below takes the first - so a second one, which only a
-            // relation created before CREATE TABLE refused a repeated name
-            // can hold, is a sibling like any other: `zz` may become `w`,
-            // the way out of the pair, but not `ZZ`, which keeps it.
-            if (!found_old && NameView(row.name) == old_name) {
-                found_old = true;
+            if (ColumnNamesCollide(NameView(row.name), old_name)) {
+                if (old_matches++ == 0) {
+                    old_pos = row.pos;
+                    old_stored = NameView(row.name);
+                }
                 return false;
             }
-            if (ColumnNamesCollide(NameView(row.name), new_name)) {
+            if (holder.empty() && ColumnNamesCollide(NameView(row.name), new_name)) {
                 holder = NameView(row.name);
-                return true;
             }
             return false;
         },
         nullptr, storage::PageAccess::kRead);
-    if (!collided.ok()) return collided.status();
-    if (collided.value()) {
-        return Status::AlreadyExists("the relation already has a column named '" + holder +
-                                     "' (names are unique ignoring case)");
-    }
-    if (!found_old) {
+    if (!scanned.ok()) return scanned.status();
+    if (old_matches == 0) {
         return Status::NotFound("the relation has no column named '" + std::string(old_name) +
                                  "'");
     }
-    // A rename onto the name the column already has is refused, as it was
-    // before a column stopped colliding with itself: it would rewrite,
-    // log and bump the version for nothing.
-    if (old_name == new_name) {
+    if (old_matches > 1) {
+        return Status::InvalidArgument("column name '" + std::string(old_name) +
+                                       "' is ambiguous: " + std::to_string(old_matches) +
+                                       " live columns have it ignoring case");
+    }
+    if (!holder.empty()) {
+        return Status::AlreadyExists("the relation already has a column named '" + holder +
+                                     "' (names are unique ignoring case)");
+    }
+    // A rename onto the name the column already has, byte for byte, is
+    // refused: it would rewrite, log and bump the version for nothing. A
+    // new name differing from the stored one only in case is a rename.
+    if (old_stored == new_name) {
         return Status::AlreadyExists("the column is already named '" + std::string(new_name) +
                                      "'");
     }
@@ -1814,7 +1821,8 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
         store_, kCatalogPageColumns,
         [&](SysColumnRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-            if (row.rel_id != table_oid || row.dropped() || NameView(row.name) != old_name) {
+            if (row.rel_id != table_oid || row.dropped() || row.pos != old_pos ||
+                (tuple.deleted && settled(tuple.trx_id))) {
                 return false;
             }
             SetName(row.name, new_name);
@@ -1907,18 +1915,20 @@ Status Catalog::DropColumn(Oid table_oid, std::string_view name, std::uint64_t t
     auto columns = store_.Get(kCatalogPageColumns);
     if (!columns.ok()) return columns.status();
 
-    // The catalog door's own defense of `Schema::FindColumn`'s refusal: two
-    // live columns named exactly `name` - which only a relation created
-    // before CREATE TABLE refused a repeated name can hold - leave no column
-    // the statement named, and dropping the first would be a choice.
+    // The catalog door's own defense of `Schema::FindColumn`: the name
+    // resolves ignoring case (`ColumnNamesCollide`), and two live matches -
+    // which only a relation created before names were unique ignoring case
+    // can hold - leave no column the statement named; dropping the first
+    // would be a choice.
     std::size_t named = 0;
+    std::uint32_t named_pos = 0;
     auto counted = ForFirstRow<SysColumnRow>(
         store_, kCatalogPageColumns,
         [&](SysColumnRow& row, heap::PageView&, PageId, std::uint16_t,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.rel_id == table_oid && !tuple.deleted && !row.dropped() &&
-                NameView(row.name) == name) {
-                ++named;
+                ColumnNamesCollide(NameView(row.name), name)) {
+                if (named++ == 0) named_pos = row.pos;
             }
             return false;
         },
@@ -1927,7 +1937,10 @@ Status Catalog::DropColumn(Oid table_oid, std::string_view name, std::uint64_t t
     if (named > 1) {
         return Status::InvalidArgument("column name '" + std::string(name) +
                                        "' is ambiguous: " + std::to_string(named) +
-                                       " live columns have it");
+                                       " live columns have it ignoring case");
+    }
+    if (named == 0) {
+        return Status::NotFound("the relation has no column named '" + std::string(name) + "'");
     }
 
     CatalogRowChange change;
@@ -1935,7 +1948,8 @@ Status Catalog::DropColumn(Oid table_oid, std::string_view name, std::uint64_t t
         store_, kCatalogPageColumns,
         [&](SysColumnRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-            if (row.rel_id != table_oid || row.dropped() || NameView(row.name) != name) {
+            if (row.rel_id != table_oid || row.dropped() || tuple.deleted ||
+                row.pos != named_pos) {
                 return false;
             }
             // Identity is the Keystone word at position 0 (invariant 11).

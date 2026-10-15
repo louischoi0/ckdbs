@@ -231,14 +231,19 @@ schema two of whose columns' names are equal ignoring ASCII case
 `RenameColumn` refuse a name equal ignoring case to a live column's
 (`AlreadyExists`, naming that column as declared). A dropped column's name
 is free in any case (BW-R6) - once its drop is decided, for
-`RenameColumn`, whose rewrite is transactionless. `RenameColumn`'s scan
-skips the column being renamed - the first live column named exactly
-`old_name`, the one its rewrite takes - so `a` may become `A`, while a
-rename onto the name the column already has is `AlreadyExists`. A relation
-created before the rule may still hold two such names, or two equal ones
-(CREATE TABLE once admitted `(a, a)`); a statement naming them is refused
-as ambiguous (`parser-v2.md`'s resolution rules), and `DropColumn` refuses
-a name two live columns carry exactly, as its own defense. A column name
+`RenameColumn`, whose rewrite is transactionless. `RenameColumn` and
+`DropColumn` resolve the name they are given as every statement does -
+ignoring case, the one live column it matches (`parser-v2.md`'s resolution
+rules; `instructions/v3.2.0/raft-marks-2026-10-15.md` §1) - and write that
+column by its position. `RenameColumn`'s collision scan skips the column
+being renamed, so `a` may become `A` (`RENAME COLUMN A TO Id` on `a` is a
+rename too), while a rename onto the name the column already has, byte for
+byte, is `AlreadyExists`. A relation created before the rule may still hold
+two such names, or two equal ones (CREATE TABLE once admitted `(a, a)`); a
+statement naming them is refused as ambiguous, and `RenameColumn` and
+`DropColumn` refuse a name two live columns match ignoring case
+(`InvalidArgument`), as their own defense - so no statement can name
+either column of such a pair. A column name
 is at most 63 bytes (`kCatalogNameMax - 1`): CREATE TABLE and ADD COLUMN
 refuse a longer one at its byte, as `RenameColumn` does, rather than store
 it truncated.

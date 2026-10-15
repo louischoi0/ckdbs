@@ -237,7 +237,8 @@ shape to check, so a positional statement written before a change is the
 writer's to re-read. **A column list closes it** (BW-S6, BW-R13 of
 `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): `INSERT
 INTO t (c1, c2, ...) VALUES (...)` names its columns, so no column change
-can shift its values. Names match exactly, as `UPDATE SET`'s do; an unknown
+can shift its values. Names match ignoring case, as every column name does
+(`parser-v2.md`; `instructions/v3.2.0/raft-marks-2026-10-15.md` §1); an unknown
 or dropped name and a repeated one are refused at their byte; a nullable
 column the list leaves out is NULL - every added column is nullable, so a
 list written before an `ADD` stays valid after it - and a NOT NULL one left

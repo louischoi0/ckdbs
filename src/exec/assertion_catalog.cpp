@@ -100,10 +100,12 @@ Status DeleteAssertion(catalog::Catalog& catalog, storage::PageStore& store,
 
 namespace {
 
-// Exact-match resolution, `Schema::FindColumn`'s, as every resolution that is
-// not a read's: only a read folds case (docs/spec/parser-v2.md). (The
-// *assertion's own* name is matched case-insensitively, which is a different
-// question - that is an object name, like a pattern's.)
+// Resolution is `Schema::FindColumn`'s, every column name's: ignoring case,
+// two or more matches refused as ambiguous (docs/spec/parser-v2.md) - at
+// CREATE and DROP ASSERTION and when mount re-parses a stored canon, so a
+// canon written while this matched exactly still resolves. (The
+// *assertion's own* name is matched case-insensitively too, which is a
+// different question - that is an object name, like a pattern's.)
 StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
                                        const parser::IndexColumnRef& col,
                                        const std::string& table_name) {

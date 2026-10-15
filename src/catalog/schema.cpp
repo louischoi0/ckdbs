@@ -8,18 +8,30 @@
 
 namespace kds::catalog {
 
+namespace {
+
+// The refusal of a written name that resolves to more than one live column
+// (`matches`: positions, two or more), naming each match with its position.
+Status AmbiguousColumnName(const Schema& schema, std::string_view written,
+                           const std::vector<std::uint16_t>& matches, std::uint32_t byte_offset) {
+    std::string listed;
+    for (std::size_t i = 0; i < matches.size(); ++i) {
+        if (i > 0) listed += i + 1 == matches.size() ? " and " : ", ";
+        listed += "'" + std::string(NameView(schema.columns[matches[i]].name)) + "' (position " +
+                  std::to_string(matches[i]) + ")";
+    }
+    return Status::InvalidArgument("column name '" + std::string(written) +
+                                   "' is ambiguous: it matches " + listed +
+                                   " ignoring case (byte " + std::to_string(byte_offset) + ")");
+}
+
+}  // namespace
+
 StatusOr<const SysColumnRow*> Schema::FindColumn(std::string_view name,
                                                 std::uint32_t byte_offset) const {
-    std::vector<std::uint16_t> matches;
-    for (std::size_t i = 0; i < columns.size(); ++i) {
-        if (!columns[i].dropped() && NameView(columns[i].name) == name) {
-            matches.push_back(static_cast<std::uint16_t>(i));
-        }
-    }
+    const std::vector<std::uint16_t> matches = MatchColumns(name);
     if (matches.empty()) return static_cast<const SysColumnRow*>(nullptr);
-    if (matches.size() > 1) {
-        return AmbiguousColumnName(name, matches, /*ignoring_case=*/false, byte_offset);
-    }
+    if (matches.size() > 1) return AmbiguousColumnName(*this, name, matches, byte_offset);
     return &columns[matches.front()];
 }
 
@@ -31,21 +43,6 @@ std::vector<std::uint16_t> Schema::MatchColumns(std::string_view name) const {
         }
     }
     return out;
-}
-
-Status Schema::AmbiguousColumnName(std::string_view written,
-                                   const std::vector<std::uint16_t>& matches, bool ignoring_case,
-                                   std::uint32_t byte_offset) const {
-    std::string listed;
-    for (std::size_t i = 0; i < matches.size(); ++i) {
-        if (i > 0) listed += i + 1 == matches.size() ? " and " : ", ";
-        listed += "'" + std::string(NameView(columns[matches[i]].name)) + "' (position " +
-                  std::to_string(matches[i]) + ")";
-    }
-    return Status::InvalidArgument("column name '" + std::string(written) +
-                                   "' is ambiguous: it matches " + listed +
-                                   (ignoring_case ? " ignoring case" : " exactly") + " (byte " +
-                                   std::to_string(byte_offset) + ")");
 }
 
 // ASCII only, and not `std::tolower`, whose answer is the locale's: the

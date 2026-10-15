@@ -9,6 +9,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/catalog/schema.hpp"
 #include "kds/catalog/well_known.hpp"
+#include "kds/exec/assertion_catalog.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
 #include "kds/stats/cabin_store.hpp"
@@ -19,10 +20,13 @@
 
 // Column names are unique ignoring case (raft-marks-2026-10-14.md §13,
 // option (a)): CREATE TABLE, ALTER TABLE ADD COLUMN and RENAME COLUMN refuse
-// a name equal to a live one ignoring case. A relation created before the
-// rule can still hold `id` beside `ID`; a read naming such a pair is refused
-// as ambiguous rather than answered with the first column's values, which
-// is what it did before ([quiet-wrong]).
+// a name equal to a live one ignoring case. And every column name a
+// statement writes - a read's and a write's alike - resolves ignoring case
+// (raft-marks-2026-10-15.md §1): one resolver, `Schema::FindColumn`. A
+// relation created before the uniqueness rule can still hold `id` beside
+// `ID`; any statement naming such a pair is refused as ambiguous rather
+// than resolved to the first column, which is what a read did before
+// ([quiet-wrong]).
 
 namespace kds::server {
 namespace {
@@ -232,10 +236,13 @@ TEST_F(ColumnNameCaseTest, AReadMatchingTwoColumnsIgnoringCaseIsRefusedAsAmbiguo
     // A name matching one column reads as before, and so does `*`.
     EXPECT_EQ(Run("SELECT V FROM t WHERE v = 8"), "V\\n8");
     EXPECT_EQ(Run("SELECT * FROM t"), "id,ID,Id,v\\n1,100,200,7\\n2,101,201,8");
-    // Writes resolve their own names exactly, as they always did.
-    Ok("UPDATE t SET Id = 5 WHERE v = 7");
-    Ok("INSERT INTO t (Id, ID, v) VALUES (2, 1, 9)");
-    EXPECT_EQ(Run("SELECT * FROM t"), "id,ID,Id,v\\n1,100,5,7\\n2,101,201,8\\n3,1,2,9");
+    // A write resolves its names by the same rule, so it is refused too.
+    //            0         1
+    //            0123456789012345
+    Refused("UPDATE t SET Id = 5 WHERE v = 7", {"column name 'Id' is ambiguous", "byte 13"});
+    Refused("INSERT INTO t (Id, ID, v) VALUES (2, 1, 9)",
+            {"column name 'Id' is ambiguous", "byte 15"});
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,ID,Id,v\\n1,100,200,7\\n2,101,201,8");
 }
 
 // PURGE has no compiler behind its fold: a tuple-key name the fold declines
@@ -298,10 +305,10 @@ TEST_F(ColumnNameCaseTest, ASetValueReadsAColumnIgnoringCaseAsEveryReadDoes) {
 }
 
 // A relation from before CREATE TABLE refused a repeated name can hold two
-// columns named exactly `aa`. Every resolution that matches exactly took the
-// first ([quiet-wrong]); each now refuses the name as ambiguous, and RENAME
-// of one copy to a fresh name is the way out.
-TEST_F(ColumnNameCaseTest, AnExactTwinIsRefusedByEveryExactResolution) {
+// columns named exactly `aa`. Every resolution took the first
+// ([quiet-wrong]); each now refuses the name as ambiguous - RENAME's old name
+// included, so no statement can name either copy.
+TEST_F(ColumnNameCaseTest, AnExactTwinIsRefusedByEveryResolution) {
     Ok("CREATE TABLE t (id int64, aa int64, qa int64, v int64)");
     Ok("INSERT INTO t VALUES (10, 20, 7)");
     RewriteColumnName("qa", "aa");
@@ -310,29 +317,107 @@ TEST_F(ColumnNameCaseTest, AnExactTwinIsRefusedByEveryExactResolution) {
             {"'aa' (position 1) and 'aa' (position 2) ignoring case", "byte 7"});
     //            0         1
     //            0123456789012345
-    Refused("UPDATE t SET aa = 0", {"is ambiguous", "exactly", "byte 13"});
+    Refused("UPDATE t SET aa = 0", {"is ambiguous", "ignoring case", "byte 13"});
     Refused("UPDATE t SET v = aa", {"is ambiguous"});
-    Refused("INSERT INTO t (aa, v) VALUES (1, 2)", {"is ambiguous", "exactly", "byte 15"});
-    Refused("CREATE INDEX t_aa ON t (aa)", {"is ambiguous", "exactly"});
+    Refused("INSERT INTO t (aa, v) VALUES (1, 2)", {"is ambiguous", "ignoring case", "byte 15"});
+    Refused("CREATE INDEX t_aa ON t (aa)", {"is ambiguous", "ignoring case"});
     //            0         1         2
     //            012345678901234567890123456
-    Refused("ALTER TABLE t DROP COLUMN aa", {"is ambiguous", "exactly", "byte 26"});
+    Refused("ALTER TABLE t DROP COLUMN aa", {"is ambiguous", "ignoring case", "byte 26"});
+    Refused("ALTER TABLE t RENAME COLUMN aa TO w", {"is ambiguous", "byte 28"});
     EXPECT_EQ(Run("SELECT * FROM t"), "id,aa,aa,v\\n1,10,20,7");
 
-    // The catalog's door refuses a drop of the pair on its own.
+    // The catalog's doors refuse the pair on their own.
     auto oid = boot_->catalog.FindTableOidByName("t");
     ASSERT_TRUE(oid.ok());
     const Status dropped =
-        boot_->catalog.DropColumn(oid.value(), "aa", catalog::kBootstrapXid, nullptr);
+        boot_->catalog.DropColumn(oid.value(), "AA", catalog::kBootstrapXid, nullptr);
     EXPECT_EQ(dropped.code(), StatusCode::kInvalidArgument) << dropped.message();
+    const Status renamed = boot_->catalog.RenameColumn(oid.value(), "Aa", "w");
+    EXPECT_EQ(renamed.code(), StatusCode::kInvalidArgument) << renamed.message();
+    EXPECT_NE(renamed.message().find("ambiguous"), std::string::npos) << renamed.message();
+}
 
-    // RENAME takes the first copy; onto a case variant the second still
-    // collides, onto a fresh name the pair is undone.
-    Refused("ALTER TABLE t RENAME COLUMN aa TO AA", {"named 'aa'"});
-    EXPECT_EQ(Run("ALTER TABLE t RENAME COLUMN aa TO w"), "RENAMED COLUMN t.aa TO w");
-    EXPECT_EQ(Run("SELECT w, aa FROM t"), "w,aa\\n10,20");
-    Ok("UPDATE t SET aa = 21");
-    EXPECT_EQ(Run("SELECT * FROM t"), "id,w,aa,v\\n1,10,21,7");
+// Every write path resolves a column name ignoring case, as a read does
+// (raft-marks-2026-10-15.md §1).
+TEST_F(ColumnNameCaseTest, EveryWritePathResolvesANameInAnotherCase) {
+    Ok("CREATE TABLE t (id int64, Amount int64, st varchar, g int64, x int64 NULL) SPARE 1");
+    // INSERT column list and SET target.
+    Ok("INSERT INTO t (AMOUNT, ST, G) VALUES (5, 'new', 1)");
+    Ok("UPDATE t SET amount = 6, X = 3 WHERE g = 1");
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,Amount,st,g,x\\n1,6,new,1,3");
+    // `SET ID` is the tuple key `id`: refused by K2, never written as a field.
+    //            0         1
+    //            0123456789012345
+    Refused("UPDATE t SET ID = 99", {"tuple key column 'id' cannot be updated", "byte 13"});
+    Refused("UPDATE t SET Id = 99, x = 1", {"tuple key column 'id' cannot be updated"});
+    EXPECT_EQ(Run("SELECT id FROM t"), "id\\n1");
+    // `INSERT (a, A)` names one column twice.
+    Refused("INSERT INTO t (g, G, amount, st) VALUES (1, 2, 3, 'new')",
+            {"'G' is listed twice", "at byte 18"});
+    // CREATE INDEX, CABIN, ASSERTION, TRANSITION.
+    Ok("CREATE INDEX t_amount ON t (aMOUNT)");
+    EXPECT_EQ(Run("SELECT amount FROM t WHERE AMOUNT = 6"), "amount\\n6");
+    Ok("CREATE CABIN ON t(G)");
+    Ok("CREATE ASSERTION cap ON t GROUP BY (G) CHECK COUNT(*) <= 5");
+    Ok("CREATE TRANSITION flow ON t(St) ON INSERT ('new') ON UPDATE ('new' => 'done')");
+    Refused("INSERT INTO t (amount, st, g) VALUES (1, 'done', 1)", {"transition"});
+    // RENAME's old name, and onto its own case variant.
+    Ok("DROP ASSERTION cap");
+    EXPECT_EQ(Run("ALTER TABLE t RENAME COLUMN AMOUNT TO amount"),
+              "RENAMED COLUMN t.AMOUNT TO amount");
+    EXPECT_EQ(Run("SELECT name FROM sys.columns WHERE rel_name = 't' AND name = 'amount'"),
+              "name\\namount");
+    // DROP COLUMN's name.
+    Ok("ALTER TABLE t DROP COLUMN X");
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,amount,st,g\\n1,6,new,1");
+    Refused("ALTER TABLE t DROP COLUMN ID", {"is the tuple key"});
+}
+
+// On a relation from before the uniqueness rule, a case twin is refused as
+// ambiguous at the name's byte by every write path, never resolved to the
+// first column.
+TEST_F(ColumnNameCaseTest, ACaseTwinIsRefusedByEveryWritePath) {
+    Ok("CREATE TABLE t (id int64, st varchar, qt varchar, v int64)");
+    Ok("INSERT INTO t VALUES ('new', 'new', 1)");
+    RewriteColumnName("qt", "ST");
+    const auto ambiguous = [&](const std::string& sql, std::size_t byte) {
+        Refused(sql, {"is ambiguous", "ignoring case", "byte " + std::to_string(byte)});
+    };
+    //         0         1         2         3
+    //         0123456789012345678901234567890123456
+    ambiguous("UPDATE t SET St = 'x'", 13);
+    ambiguous("INSERT INTO t (st, v) VALUES ('a', 2)", 15);
+    ambiguous("CREATE INDEX t_st ON t (sT)", 24);
+    ambiguous("CREATE CABIN ON t(St)", 18);
+    ambiguous("CREATE ASSERTION cap ON t GROUP BY (st) CHECK COUNT(*) <= 5", 36);
+    ambiguous("CREATE TRANSITION flow ON t(st) ON INSERT ('new') ON UPDATE ('new' => 'done')",
+              28);
+    ambiguous("ALTER TABLE t DROP COLUMN st", 26);
+    ambiguous("ALTER TABLE t RENAME COLUMN St TO w", 28);
+    EXPECT_EQ(Run("SELECT * FROM t"), "id,st,ST,v\\n1,new,new,1");
+}
+
+// A stored assertion canon is re-parsed at mount and resolves as a
+// statement does: ignoring case, so a canon written in any case revives,
+// and a twin that came to match it is refused as ambiguous - the assertion
+// comes up unenforcing rather than bound to the first column.
+TEST_F(ColumnNameCaseTest, ARevivedAssertionCanonResolvesIgnoringCase) {
+    Ok("CREATE TABLE t (id int64, g int64, q int64)");
+    Ok("CREATE ASSERTION cap ON t GROUP BY (g) CHECK COUNT(*) <= 5");
+    auto def = exec::FindAssertionByName(boot_->catalog, store_, "cap");
+    ASSERT_TRUE(def.ok() && def.value().has_value());
+    exec::AssertionDef stored = *def.value();
+    ASSERT_NE(stored.source_text.find("(g)"), std::string::npos) << stored.source_text;
+    stored.source_text.replace(stored.source_text.find("(g)"), 3, "(G)");
+    auto revived = exec::ReviveAssertion(boot_->catalog, store_, stored);
+    EXPECT_TRUE(revived.ok()) << revived.status().message();
+
+    RewriteColumnName("q", "G");
+    auto twinned = exec::ReviveAssertion(boot_->catalog, store_, *def.value());
+    ASSERT_FALSE(twinned.ok());
+    EXPECT_NE(twinned.status().message().find("is ambiguous"), std::string::npos)
+        << twinned.status().message();
 }
 
 // RENAME COLUMN's refusals carry their token's byte, and a rename onto the
@@ -346,6 +431,9 @@ TEST_F(ColumnNameCaseTest, RenameColumnRefusalsCarryTheirBytes) {
     Refused("ALTER TABLE t RENAME COLUMN z TO b", {"no column named 'z'", "byte 28"});
     Refused("ALTER TABLE t RENAME COLUMN a TO " + std::string(64, 'y'),
             {"longer than 63 bytes", "byte 33"});
+    // The old name resolves ignoring case; the "already named" test is the
+    // stored name against the new one, byte for byte.
+    Refused("ALTER TABLE t RENAME COLUMN A TO a", {"already named 'a'", "byte 33"});
     EXPECT_EQ(Run("ALTER TABLE t RENAME COLUMN a TO A"), "RENAMED COLUMN t.a TO A");
 }
 

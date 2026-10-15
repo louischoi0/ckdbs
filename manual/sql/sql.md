@@ -123,11 +123,12 @@ CREATE TABLE [<namespace>.]<name>
   is refused at the later name's byte: `ERR column 'A' repeats column 'a'
   (names are unique ignoring case) (byte <n>)`, and so is an exact repeat.
   A name is at most 63 bytes; a longer one is refused at its byte.
-  **A read may write a column's name in any case** (`SELECT A` reads `a`,
-  in a `WHERE`, an `ORDER BY` and a `SET` value alike). Everywhere else a
-  column is named - a `SET` target, an `INSERT` column list, `DROP COLUMN`,
-  `RENAME COLUMN`'s old name, `CREATE INDEX`, `CABIN`, `ASSERTION` and
-  `TRANSITION` - the name matches exactly, case included.
+  **Case is ignored everywhere a column is named**: `SELECT A` reads `a`,
+  and so do a `WHERE`, an `ORDER BY` and a `SET` value; `UPDATE ... SET A`,
+  an `INSERT` column list, `DROP COLUMN A`, `RENAME COLUMN A TO b`,
+  `CREATE INDEX`, `CABIN`, `ASSERTION` and `TRANSITION` resolve `A` to `a`
+  the same way. `SET ID = ...` on a relation whose tuple key is `id` is the
+  tuple key, and refused. A relation's own name is not covered by this.
 
 - **`SPARE <n>` reserves `n` column slots** (0 to 64, default 0) for
   `ALTER TABLE ... ADD COLUMN` (below). Each slot is 16 bytes plus one null
@@ -646,9 +647,9 @@ INSERT INTO trades (sym, id, qty) VALUES ('IBM', 8000, 2);
   refusal never a truncation).
 - **With a column list, each value goes to the column it names** (BW-S6),
   so no `ALTER TABLE` can shift it. Each row has exactly one value per
-  listed name. Names match exactly, case included (`A` is not `a`); an
-  unknown or dropped name, and a name listed twice, are refused at its
-  byte. The tuple key may be listed anywhere or left out: left out, or
+  listed name. Names match ignoring case (`A` is `a`, so `(a, A)` lists
+  one column twice); an unknown or dropped name, and a name listed twice,
+  are refused at its byte. The tuple key may be listed anywhere or left out: left out, or
   `NULL`, it is issued. A column declared `NULL` that the list leaves out
   is written NULL; a `NOT NULL` one left out refuses the statement at the
   list's `(` - there is no `DEFAULT`. Every column `ADD COLUMN` creates is
@@ -1350,11 +1351,10 @@ in §7 below now carries and which both used to reach a client as a bare
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
 | A row that is neither `n` nor `n - 1` values long | `ERR expected <n> value(s) including tuple key column '<name>', or <n-1> to have it issued; got <k> (byte <b>)` |
 | A row that is not `n` values long, on a relation `ALTER TABLE ... ADD`/`DROP COLUMN` changed | `ERR expected <n> value(s), one per column, with tuple key column '<name>' NULL to have it issued; got <k> (byte <b>). The relation's columns were changed by ALTER TABLE, ...` |
-| An `INSERT` column list naming no live column (unknown or dropped; matched exactly, case included) | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
+| An `INSERT` column list naming no live column (unknown or dropped; matched ignoring case) | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
 | A column name in `CREATE TABLE` equal, ignoring case, to an earlier one | `InvalidArgument` — `ERR column '<name>' repeats column '<earlier>' (names are unique ignoring case) (byte <n>)` (the later name's byte; nothing is created) |
 | `ADD COLUMN` or `RENAME COLUMN` to a name equal, ignoring case, to a live column's | `AlreadyExists` — `ERR the relation already has a column named '<existing>' (names are unique ignoring case)`, with the new name's byte |
-| A read naming a column that matches two or more columns ignoring case (only a relation created before names were unique ignoring case can hold them) | `InvalidArgument` — `ERR column name '<name>' is ambiguous: it matches '<a>' (position <i>) and '<b>' (position <j>) ignoring case (byte <n>)` |
-| A `SET` target, `INSERT` column list, `DROP COLUMN`, `CREATE INDEX`, `CABIN`, `ASSERTION` or `TRANSITION` naming a column two columns carry exactly (only such an older relation can) | `InvalidArgument` — the same message, ending `exactly (byte <n>)`; `RENAME COLUMN` renames the first and is the way out |
+| Any statement - a read, a `SET` target, an `INSERT` column list, `DROP COLUMN`, `RENAME COLUMN`'s old name, `CREATE INDEX`, `CABIN`, `ASSERTION` or `TRANSITION` - naming a column that matches two or more columns ignoring case (only a relation created before names were unique ignoring case can hold them) | `InvalidArgument` — `ERR column name '<name>' is ambiguous: it matches '<a>' (position <i>) and '<b>' (position <j>) ignoring case (byte <n>)`; no statement can name either column of such a pair |
 | A column name longer than 63 bytes in `CREATE TABLE`, `ADD COLUMN` or `RENAME COLUMN` | `InvalidArgument` at the name's byte |
 | A column named twice in an `INSERT` column list | `InvalidArgument` — `ERR column '<name>' is listed twice in the column list at byte <n>` (the second occurrence's byte) |
 | An `INSERT` column list that leaves out a `NOT NULL` column | `InvalidArgument` — `ERR column '<name>' is NOT NULL and the column list leaves it out (byte <n>); there is no DEFAULT` (the list's `(`; nothing is written) |

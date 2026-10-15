@@ -66,7 +66,7 @@ std::string Position(std::uint32_t byte_offset) {
 }
 
 // Finds `name` among a relation's live columns, ignoring case
-// (`catalog::Schema::MatchColumns`). Sets `out` to the schema position,
+// (`catalog::Schema::FindColumn`). Sets `out` to the schema position,
 // which is exactly what ColumnRef::col_pos is - BuildSchemaFromColumns()
 // returns columns sorted by `pos`, so the vector index is the position -
 // and answers whether it matched. Two or more matches is refused rather
@@ -76,13 +76,10 @@ std::string Position(std::uint32_t byte_offset) {
 // first would answer `SELECT ID` with `id`'s values.
 StatusOr<bool> FindColumnPos(const catalog::Schema& schema, const parser::ColumnName& name,
                              std::uint16_t& out) {
-    const std::vector<std::uint16_t> matches = schema.MatchColumns(name.name);
-    if (matches.empty()) return false;
-    if (matches.size() > 1) {
-        return schema.AmbiguousColumnName(name.name, matches, /*ignoring_case=*/true,
-                                          name.byte_offset);
-    }
-    out = matches.front();
+    auto found = schema.FindColumn(name.name, name.byte_offset);
+    if (!found.ok()) return found.status();
+    if (found.value() == nullptr) return false;
+    out = schema.PositionOf(*found.value());
     return true;
 }
 
@@ -1651,8 +1648,9 @@ Status CompileAssignments(const catalog::TableAccess& access,
         // `InvalidArgument`: the statement is understood and declined. The
         // column exists and the value would encode; what cannot happen is
         // the write, because the id names the tuple everywhere else in the
-        // engine.
-        if (a.col_name == tuple_key_name) {
+        // engine. Asked of the resolved column, never the written bytes: a
+        // name resolves ignoring case, so `SET ID` is the tuple key `id`.
+        if (column == &access.schema.columns.front()) {
             return Status::Unsupported("tuple key column '" + std::string(tuple_key_name) +
                                        "' cannot be updated at byte " +
                                        std::to_string(a.byte_offset) +

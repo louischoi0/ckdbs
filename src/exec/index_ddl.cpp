@@ -21,8 +21,8 @@
 namespace kds::exec {
 namespace {
 
-// Resolution is exact-match, `Schema::FindColumn`'s, as every resolution
-// that is not a read's: only a read folds case (docs/spec/parser-v2.md).
+// Resolution is `Schema::FindColumn`'s, every column name's: ignoring case,
+// two or more matches refused as ambiguous (docs/spec/parser-v2.md).
 StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
                                        const parser::IndexColumnRef& col,
                                        const std::string& table_name) {

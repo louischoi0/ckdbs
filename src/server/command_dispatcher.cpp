@@ -2395,7 +2395,17 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
             ? [&] {
                   // A collision or an unstorable name is the new name's
                   // fault, so it carries that name's byte; a missing old
-                  // column carries the old name's.
+                  // column carries the old name's, and so does an old name
+                  // matching two live columns ignoring case - resolved here
+                  // first (`Schema::FindColumn`), the catalog door asking
+                  // again under its hold.
+                  auto access = catalog_.InitTableAccess(oid.value());
+                  if (!access.ok()) return access.status();
+                  if (auto old = access.value()->schema.FindColumn(
+                          stmt.old_column, stmt.old_column_byte_offset);
+                      !old.ok()) {
+                      return old.status();
+                  }
                   const Status r =
                       catalog_.RenameColumn(oid.value(), stmt.old_column, stmt.new_name);
                   const auto at = [&](std::uint32_t byte) {
@@ -3205,7 +3215,8 @@ parser::InsertStmt InsertShellOf(const parser::InsertStmt& written) {
 //
 // Refused in BW-Q12.12's order, each `InvalidArgument` at a real byte: a
 // name the relation has no live column for (a dropped column's included,
-// BW-R6), matched exactly as `UPDATE SET` matches (BW-Q12.3); a name listed
+// BW-R6), matched ignoring case as every column name is (`Schema::FindColumn`;
+// raft-marks-2026-10-15.md section 1 overrode BW-Q12.3); a name listed
 // twice, at its second occurrence; a NOT NULL column the list leaves out,
 // once, at the list's `(` - before any row, and never left to the codec,
 // whose placeholder would carry byte 0; and a row whose length is not the
@@ -9732,11 +9743,8 @@ Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Co
     // not read it (`NamesTupleKey`), and PURGE has no compiler behind it to
     // say so: the refusal is the ambiguity, not a form nobody built.
     if (!cond.col.name.empty()) {
-        const std::vector<std::uint16_t> matches = access.schema.MatchColumns(cond.col.name);
-        if (matches.size() > 1) {
-            return access.schema.AmbiguousColumnName(cond.col.name, matches,
-                                                     /*ignoring_case=*/true, cond.col.byte_offset);
-        }
+        auto found = access.schema.FindColumn(cond.col.name, cond.col.byte_offset);
+        if (!found.ok()) return found.status();
     }
     const bool on_tuple_key = NamesTupleKey(access.schema, cond.col.name);
     const bool literal = cond.rhs_kind == parser::RhsKind::kLiteral &&

@@ -165,16 +165,20 @@ TEST_F(InsertColumnListTest, BadNamesAreRefusedAtTheirByte) {
     Refused("INSERT INTO t (a, x) VALUES (1, 2)", {"unknown column 'x'", "at byte 18"});
     Refused("INSERT INTO t (a, d) VALUES (1, 2)", {"unknown column 'd'", "at byte 18"});
     Refused("INSERT INTO t (a, a) VALUES (1, 2)", {"'a' is listed twice", "at byte 18"});
-    // Exact case: `A` is not `a` (a write never picks between two names).
-    Refused("INSERT INTO t (A) VALUES (1)", {"unknown column 'A'", "at byte 15"});
+    // Case is ignored (raft-marks-2026-10-15.md §1, overriding BW-Q12.3):
+    // `A` is `a`, and so `(a, A)` lists one column twice.
+    Refused("INSERT INTO t (a, A) VALUES (1, 2)", {"'A' is listed twice", "at byte 18"});
     // In written order: the first bad name is the one named.
     Refused("INSERT INTO t (y, a, a) VALUES (1, 2, 3)", {"unknown column 'y'", "at byte 15"});
     EXPECT_EQ(Run("SELECT COUNT(*) FROM t"), "count(*)\\n0");
+    Ok("INSERT INTO t (A) VALUES (1)");
+    EXPECT_EQ(Run("SELECT a FROM t"), "a\\n1");
 }
 
 // Two names that differ only in case cannot be declared any more (column
-// names are unique ignoring case); a relation created before that rule keeps
-// them apart in a list, which `column_name_case_test.cpp` pins.
+// names are unique ignoring case); on a relation created before that rule a
+// list naming such a pair is refused as ambiguous, which
+// `column_name_case_test.cpp` pins.
 
 // ---- BW-Q12.8: row width ---------------------------------------------------
 

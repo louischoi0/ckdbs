@@ -27,37 +27,36 @@ struct Schema {
     // schema alone (RowLayout below).
     std::uint16_t spare_slots = 0;
 
-    // The live column named exactly `name`, or nullptr when there is none;
-    // a dropped column has no name a statement can reach (BW-R6). What a
-    // statement resolves a name against where it does not fold case - a SET
-    // target, an INSERT column list, DROP COLUMN, and the column CREATE
-    // INDEX, CABIN, ASSERTION or TRANSITION names. Two or more exact
-    // matches - which only a relation created before CREATE TABLE refused a
-    // repeated name can hold - are refused as ambiguous at `byte_offset`
-    // (`AmbiguousColumnName`), never resolved to the first.
+    // The live column whose name equals `name` ignoring case
+    // (`ColumnNamesCollide`), or nullptr when there is none; a dropped
+    // column has no name a statement can reach (BW-R6). The one resolver of
+    // a column name a statement writes - a read, a SET target, an INSERT
+    // column list, DROP and RENAME COLUMN's old name, and the column CREATE
+    // INDEX, CABIN, ASSERTION or TRANSITION names, a stored assertion canon
+    // re-parsed at mount included (raft-marks-2026-10-15.md section 1). Two
+    // or more matches - which only a relation created before names were
+    // unique ignoring case can hold - are refused as ambiguous
+    // (InvalidArgument at `byte_offset`, naming each match), never resolved
+    // to the first.
     StatusOr<const SysColumnRow*> FindColumn(std::string_view name,
                                              std::uint32_t byte_offset) const;
 
-    // Every live column whose name equals `name` ignoring case
-    // (`ColumnNamesCollide`), in `pos` order. What a statement's read
-    // resolves a written name against: exactly one is the column, none is
-    // an unknown name, and two or more - which only a relation created
-    // before names were unique ignoring case can hold - is ambiguous and
-    // refused, never a choice of the first.
-    std::vector<std::uint16_t> MatchColumns(std::string_view name) const;
+    // The position of the column `FindColumn` returned (the vector index is
+    // the position, BW-R6).
+    std::uint16_t PositionOf(const SysColumnRow& column) const {
+        return static_cast<std::uint16_t>(&column - columns.data());
+    }
 
-    // The refusal of a written name that resolves to more than one live
-    // column (`matches`: positions, two or more): InvalidArgument naming
-    // each match with its position, at `byte_offset`. `ignoring_case` says
-    // which rule matched them - `MatchColumns`' or `FindColumn`'s.
-    Status AmbiguousColumnName(std::string_view written, const std::vector<std::uint16_t>& matches,
-                               bool ignoring_case, std::uint32_t byte_offset) const;
+    // Every live column whose name equals `name` ignoring case, in `pos`
+    // order: `FindColumn`'s matching, for a caller that asks a question of
+    // the matches without resolving the name (`NamesTupleKey`).
+    std::vector<std::uint16_t> MatchColumns(std::string_view name) const;
 };
 
 // The one rule deciding whether two column names are the same name:
 // equal ignoring ASCII case. A relation's live column names are unique
 // under it (CREATE TABLE, ADD COLUMN and RENAME COLUMN refuse a twin), and
-// a read resolves a written name under it.
+// every statement resolves a written column name under it (`FindColumn`).
 bool ColumnNamesCollide(std::string_view a, std::string_view b) noexcept;
 
 // Refuses a schema two of whose live columns' names collide - the catalog
