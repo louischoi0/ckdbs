@@ -1,0 +1,55 @@
+01:02:24 phase start u1
+01:02:24 watch phase=none driver=no last: 
+01:03:24 watch phase=u1 driver=yes last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates': 1000, 'pages_allocated_delta': 0}
+01:04:24 watch phase=u1 driver=yes last: {"shape": "insert", "path": "literal", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 37.97, "p25_us": 43.46, "p50_us": 43.99, "p90_us": 51.92,
+01:04:32 phase end u1 rc=0
+01:04:32 phase start c1
+01:05:24 watch phase=c1 driver=yes last: {"shape": "cab-insert", "path": "prepared", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 38.89, "p25_us": 42.51, "p50_us": 43.03, "p90_us": 5
+01:06:05 phase end c1 rc=0
+01:06:05 phase start u2
+01:06:24 watch phase=u2 driver=yes last: {"shape": "insert", "path": "literal", "bin": "B", "ops": 1998, "bad": 0, "p0_us": 41.24, "p25_us": 43.69, "p50_us": 44.14, "p90_us": 51.29,
+01:07:23 phase end u2 rc=0
+01:07:23 phase start c2
+01:07:24 watch phase=c2 driver=yes last: 
+01:08:24 watch phase=c2 driver=yes last: B {'range_v_ok': False, 'spill_txt_ok': True, 'cabins': [{'cabin_id': '1', 'rel_oid': '4032', 'rel_name': 'ci', 'column': 'sym', 'origin': '
+01:08:54 phase end c2 rc=0
+01:08:54 phase start x
+01:09:24 watch phase=x driver=yes last: {"shape": "x-walk", "path": "literal", "bin": "B2", "ops": 1998, "bad": 0, "p0_us": 167.2, "p25_us": 171.79, "p50_us": 174.53, "p90_us": 188
+01:10:24 watch phase=x driver=yes last: {"shape": "cab-insert", "path": "prepared", "bin": "B2", "ops": 1998, "bad": 0, "p0_us": 36.56, "p25_us": 41.15, "p50_us": 41.73, "p90_us": 
+01:11:18 phase end x rc=0
+01:11:18 ALL DONE
+01:12:33 phase start u3
+01:12:33 watch2 phase=x driver=no last: B2 {'range_v_ok': False, 'spill_txt_ok': True, 'cabins': [{'cabin_id': '1', 'rel_oid': '4032', 'rel_name': 'ci', 'column': 'sym', 'origin': 
+01:13:33 watch2 phase=u3 driver=yes last: 
+01:14:33 watch2 phase=u3 driver=yes last: {"shape": "select-pk", "path": "literal", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 81.39, "p25_us": 143.87, "p50_us": 179.48, "p90_us": 9
+01:15:33 watch2 phase=u3 driver=yes last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates': 1000, 'pages_allocated_delta': 0}
+01:16:33 watch2 phase=u3 driver=yes last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates': 1000, 'pages_allocated_delta': 0}
+01:17:33 watch2 phase=u3 driver=yes last: {"shape": "select-pk", "path": "prepared", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 51.12, "p25_us": 53.01, "p50_us": 54.03, "p90_us": 63
+01:18:33 watch2 phase=u3 driver=yes last: {"shape": "select-pk", "path": "prepared", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 50.89, "p25_us": 52.95, "p50_us": 54.2, "p90_us": 67.
+01:19:33 watch2 phase=u3 driver=yes last: {"shape": "select-pk", "path": "literal", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 53.06, "p25_us": 55.96, "p50_us": 56.93, "p90_us": 65.
+01:20:33 watch2 phase=u3 driver=yes last: {"shape": "update-range", "path": "prepared", "bin": "A", "ops": 120, "bad": 0, "p0_us": 693.17, "p25_us": 726.09, "p50_us": 753.17, "p90_us
+01:21:33 watch2 phase=u3 driver=yes last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates': 1000, 'pages_allocated_delta': 0}
+01:22:33 watch2 phase=u3 driver=yes last: {"shape": "update-range", "path": "literal", "bin": "A", "ops": 120, "bad": 0, "p0_us": 693.6, "p25_us": 723.11, "p50_us": 736.24, "p90_us":
+01:23:33 watch2 phase=u3 driver=yes last: A {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 1000, 'pages_allocated_delta': 0} {'updates': 1000, 'pages_allocated_delta': 0}
+01:23:43 phase end u3 rc=1
+01:23:43 phase start r200
+01:24:33 watch2 phase=r200 driver=yes last: 
+01:25:33 watch2 phase=r200 driver=yes last: B {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 200, 'pages_allocated_delta': 0} {'updates': 200, 'pages_allocated_delta': 0}
+01:26:33 watch2 phase=r200 driver=yes last: B {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 200, 'pages_allocated_delta': 0} {'updates': 200, 'pages_allocated_delta': 0}
+01:27:33 watch2 phase=r200 driver=yes last: {"shape": "select-pk", "path": "prepared", "bin": "B", "ops": 1998, "bad": 0, "p0_us": 61.26, "p25_us": 79.09, "p50_us": 88.57, "p90_us": 10
+01:28:33 watch2 phase=r200 driver=yes last: {"shape": "insert", "path": "prepared", "bin": "B", "ops": 1998, "bad": 0, "p0_us": 52.28, "p25_us": 70.01, "p50_us": 76.62, "p90_us": 103.4
+01:29:33 watch2 phase=r200 driver=yes last: B {'range_v_ok': True, 'spill_txt_ok': True} {'updates': 200, 'pages_allocated_delta': 0} {'updates': 200, 'pages_allocated_delta': 0}
+01:30:04 phase end r200 rc=0
+01:30:04 phase start r10k
+01:30:33 watch2 phase=r10k driver=yes last: {"shape": "update-range", "path": "literal", "bin": "A", "ops": 24, "bad": 0, "p0_us": 6789.49, "p25_us": 6931.06, "p50_us": 6976.17, "p90_u
+01:31:33 watch2 phase=r10k driver=yes last: {"shape": "insert", "path": "literal", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 39.54, "p25_us": 43.25, "p50_us": 43.88, "p90_us": 53.91,
+01:32:33 watch2 phase=r10k driver=yes last: {"shape": "insert", "path": "literal", "bin": "A", "ops": 1998, "bad": 0, "p0_us": 36.71, "p25_us": 43.3, "p50_us": 44.01, "p90_us": 59.35, 
+01:32:47 phase end r10k rc=0
+01:32:47 phase start c200
+01:33:33 watch2 phase=c200 driver=yes last: B {'range_v_ok': False, 'spill_txt_ok': True, 'cabins': [{'cabin_id': '1', 'rel_oid': '4032', 'rel_name': 'ci', 'column': 'sym', 'origin': '
+01:34:24 phase end c200 rc=0
+01:34:24 phase start c10k
+01:34:33 watch2 phase=c10k driver=yes last: 
+01:35:33 watch2 phase=c10k driver=yes last: {"shape": "plain-select", "path": "literal", "bin": "A", "ops": 1200, "bad": 0, "p0_us": 444.04, "p25_us": 457.4, "p50_us": 465.2, "p90_us":
+01:36:24 phase end c10k rc=0
+01:36:24 ALL DONE 2

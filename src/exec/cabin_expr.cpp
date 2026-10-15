@@ -167,7 +167,7 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::Schema& schema,
         return Status::InvalidArgument("column '" + name.name + "' was declared NO CABIN" +
                                        At(name.byte_offset));
     }
-    return static_cast<std::uint16_t>(found.value() - schema.columns.data());
+    return static_cast<std::uint16_t>(found.value()->pos);
 }
 
 StatusOr<CabinTerm> CompileCall(const parser::FunctionCall& call, const catalog::Schema& schema) {

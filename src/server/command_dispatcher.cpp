@@ -2374,7 +2374,7 @@ DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt) {
     // most likely to be misunderstood: creating a Cabin observes nothing and
     // accelerates nothing until traffic fills it (spec §4's miss path).
     if (stmt.shape == catalog::kCabinShapeColumn) {
-        os << "CREATED CABIN on=" << stmt.table_name << '.' << stmt.column_name
+        os << "CREATED CABIN on=" << stmt.table_name << '.' << result.value().key
            << " cabin_id=" << result.value().cabin_id << " column=" << result.value().col_pos
            << " observed=0";
     } else {
@@ -7651,8 +7651,8 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
                                         std::uint16_t first_col_pos, std::uint64_t tuple_key,
                                         PageId page_id, std::uint16_t slot,
                                         std::span<const parser::AstValue> previous) {
-    // The tests a relation with no Cabin pays, and nothing else.
-    if (cabins_ == nullptr || (access.cabin_mask == 0 && access.expr_cabins.empty())) return;
+    // The test a relation with no Cabin pays, and nothing else.
+    if (!CabinsWitness(access)) return;
 
     // Filled on the first entry actually appended (see below).
     std::optional<std::uint32_t> write_epoch;
@@ -8194,10 +8194,10 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     bool row_poisoned = false;
     // The negation of `NoteCabinWrite`'s and `MaintainIndexes`' early
     // returns: loosen either and that hook is handed `kUndecoded`.
-    // Whether any Cabin witnesses this relation's writes - asked once per
-    // statement, so a relation with none pays no per-row call (AQ's close:
-    // the call alone cost an every-row UPDATE 20-30 ns a row).
-    const bool witnessed = cabins_ != nullptr && (ta.cabin_mask != 0 || !ta.expr_cabins.empty());
+    // `CabinsWitness` is asked once per statement, so a relation with no
+    // Cabin pays no per-row call (AQ's close: the call alone cost an
+    // every-row UPDATE 20-30 ns a row).
+    const bool witnessed = CabinsWitness(ta);
     const bool hooked = witnessed || !ta.indexes.empty();
     std::uint64_t set_read_mask = 0;
     for (const exec::CompiledAssignment& c : compiled) {

@@ -1,0 +1,6 @@
+select-pk literal n=6 B-A med +0.97 (B>A 4), A'-A med -0.11 (A'>A 2), B-A' med +0.26 (B>A' 5); mean B-A +0.54, mean A'-A +0.07; B-A excluding largest |A'-A| run: +0.93
+select-pk prepared n=6 B-A med +0.49 (B>A 4), A'-A med +0.13 (A'>A 4), B-A' med +0.24 (B>A' 4); mean B-A +0.12, mean A'-A +0.07; B-A excluding largest |A'-A| run: +0.32
+insert literal n=6 B-A med +0.33 (B>A 4), A'-A med +0.21 (A'>A 4), B-A' med +0.05 (B>A' 3); mean B-A +0.23, mean A'-A +0.22; B-A excluding largest |A'-A| run: +0.31
+insert prepared n=6 B-A med +0.32 (B>A 4), A'-A med -0.15 (A'>A 3), B-A' med +0.03 (B>A' 4); mean B-A +0.19, mean A'-A +0.03; B-A excluding largest |A'-A| run: +0.30
+update-range literal n=6 B-A med +29.53 (B>A 6), A'-A med -9.39 (A'>A 1), B-A' med +31.54 (B>A' 6); mean B-A +27.37, mean A'-A -9.68; B-A excluding largest |A'-A| run: +29.39
+update-range prepared n=6 B-A med +23.04 (B>A 5), A'-A med +2.86 (A'>A 3), B-A' med +22.37 (B>A' 5); mean B-A +23.17, mean A'-A +1.46; B-A excluding largest |A'-A| run: +16.59

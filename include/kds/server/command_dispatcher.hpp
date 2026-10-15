@@ -1931,6 +1931,12 @@ private:
     // Never fails: a Cabin that cannot witness a write un-observes the value
     // instead, which returns it to the authoritative scan path (§1's
     // corollary) and is always legal.
+    // Whether any Cabin witnesses `access`'s writes: `NoteCabinWrite`'s own
+    // early return, and the UPDATE loop's once-per-statement skip of it -
+    // one test, so the skip cannot drift from what the call would do.
+    bool CabinsWitness(const catalog::TableAccess& access) const noexcept {
+        return cabins_ != nullptr && (access.cabin_mask != 0 || !access.expr_cabins.empty());
+    }
     void NoteCabinWrite(const catalog::TableAccess& access,
                         std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
                         std::uint64_t tuple_key, PageId page_id, std::uint16_t slot,

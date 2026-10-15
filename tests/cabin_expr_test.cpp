@@ -349,6 +349,18 @@ TEST_F(CabinExprTest, ARenamedInputKeepsItsCabin) {
     EXPECT_EQ(again.rfind("ERR", 0), 0u) << again;
 }
 
+// A key's column resolves as every column name does (`Schema::FindColumn`):
+// ignoring case, so a respelled key is the same Cabin and the stored text is
+// positions whatever the spelling.
+TEST_F(CabinExprTest, AKeysColumnsResolveIgnoringCase) {
+    ASSERT_EQ(Run("CREATE CABIN ON t (DATE(TS))").rfind("CREATED CABIN on=t (DATE(ts))", 0), 0u);
+    EXPECT_EQ(StoredTexts(boot_->catalog), std::vector<std::string>{"date($3)"});
+    EXPECT_NE(Run("CREATE CABIN ON t (date(ts))").find("already has a cabin"), std::string::npos);
+    EXPECT_EQ(Run("DROP CABIN ON t (Date(Ts))").rfind("DROPPED CABIN", 0), 0u);
+    const std::string column = Run("CREATE CABIN ON t(SYM)");
+    EXPECT_EQ(column.rfind("CREATED CABIN on=t.sym", 0), 0u) << column;
+}
+
 TEST_F(CabinExprTest, DroppingAnInputColumnIsRestricted) {
     Ok("CREATE CABIN ON t (state = 'closed' AND amount > 1000)");
     const std::string out = Run("ALTER TABLE t DROP COLUMN amount");

@@ -559,3 +559,55 @@ On `worktree-aq-expression-cabins` from `fce79b85`.
   the grammar takes, so `SHOW CABINS` prints a key an operator can write.
 - **Suite**: 3919/3919. Overhead not measured; measured at the milestone's
   close.
+
+### AQ-S5 - the close, 2026-10-15
+
+On `worktree-aq-expression-cabins`.
+
+- **A row per stage**: §6 above - S1 `f3e6d1fd`, S2 `1099ad88`, S3
+  `fce79b85`, S4 `a5e33998`; the prose `c30f03ff`; the merge of
+  `origin/main` (`43cabf49`, the column-name case work) `fecfb88a`, whose one
+  code conflict put AQ's two column resolvers on `Schema::FindColumn`; the
+  regression's fix `e53514f2`.
+- **The overhead, measured once over the whole change**
+  (`bench/v3.2.0/results-aq-close-v3.2.0-48-ga5e33998.md`, A `7c234766`
+  `v3.2.0-44-g7c234766`, where AQ opened - not the order's `740d954a`, which
+  predates every milestone since and would charge them to AQ - against B
+  `a5e33998` `v3.2.0-48-ga5e33998`, release, interleaved with an A'
+  control). **The column-Cabin write path and its served read show none**
+  (an INSERT into a relation with a column Cabin -0.46 / -0.26 us, a
+  served `sym = 'x'` +0.26 / +0.35 us, inside the spread; the served read at
+  10,000 rows, prepared, +1.5 us unresolved). **One regression found and
+  fixed in the milestone**: the every-row `UPDATE` of a relation with **no**
+  Cabin cost +29.5 / +23.0 us (+4.0 / +2.9 %, about 20-30 ns a row) - the
+  per-row `NoteCabinWrite` call, whose body AQ grew; `e53514f2` asks once per
+  statement and skips the call where no Cabin witnesses. Re-measured (§8 of
+  the file, 12 pairs): the fixed build reads inside A's spread on both paths
+  (-5.3 / -4.8 us), its p0 floor at A's where the unfixed one sat 14-16 us
+  above; the fix's own gain over the unfixed build is not resolved against
+  the noise, and the unfixed build reproduced about half its close-run
+  delta. The point `SELECT` by tuple key reads inside. **The expression
+  write path's cost, B only** (the feature's): a `DATE(ts)` Cabin adds +0.73
+  / +0.92 us to an INSERT, about 0.5 us over a column Cabin's, a direction at
+  the size of the noise floor; served `DATE(ts) = d` costs 39.9 us against
+  115.9 us walked. Cut for the hour: no scan-row census, no predicate or
+  cover shape timed, no profile, 3-12 pairs per cell.
+- **What AQ carries out**: AQ-Q4's deferrals (monotone serving, D3's
+  sortable directory), AQ-Q5 (automatic creation of expression and
+  predicate Cabins), AQ-Q6 (D1's fold); `known-gaps.md`'s AQ section (texts
+  left by a transactional `DROP TABLE`, the column shape's unlocked DDL);
+  the heap hint-failure re-record under `F` has a cell only for a cover
+  (`AHeapCoversFailedHintBanksNothing`); and the inner-build `[quiet-wrong]`
+  AQ-S3 found, not AQ's
+  (`docs/inflight/bugs/an-inner-build-buckets-outer-only-conjuncts-for-the-first-outer-row.md`).
+- **Review of the close's code** (`critics-developer`, the merge's
+  resolution and `e53514f2`): no bug; `witnessed` is exactly the per-row
+  test it replaces. Applied: one `CabinsWitness` for the early return and
+  the skip, the reply naming the column as declared, `pos` for the
+  position, and a cell that a key's columns resolve ignoring case.
+- **Suite**: 3936/3936 at the close. The first run hit a full disk
+  (`DropTableReclaimCrashTest`, "No space left on device" in `/tmp`): the
+  close measurement's server data files, 16 GB under
+  `/home/cdkbs/bench-runs/aq-close/wd-*`, were removed and the suite re-run.
+- **Not merged to `main`, not pushed, not tagged**: those wait for the
+  operator's word.

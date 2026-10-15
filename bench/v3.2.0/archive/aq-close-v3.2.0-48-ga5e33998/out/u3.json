@@ -1,0 +1,3204 @@
+{
+ "args": {
+  "bin": null,
+  "bin_b": null,
+  "arm": [
+   "A2=/home/cdkbs/bench-runs/aq-close/bin/kds_server-A2",
+   "B=/home/cdkbs/bench-runs/aq-close/bin/kds_server-B",
+   "A=/home/cdkbs/bench-runs/aq-close/bin/kds_server-A"
+  ],
+  "scan_kernel": null,
+  "workdir": "/home/cdkbs/bench-runs/aq-close/wd-u3",
+  "port": 32881,
+  "pin_server": "2",
+  "pin_driver": "4",
+  "rows": 1000,
+  "scan_rows": 1000,
+  "ops": 2000,
+  "scan_ops": 200,
+  "range_ops": 120,
+  "blocks": 6,
+  "runs": 6,
+  "quiet_load": 2.0,
+  "quiet_wait": 30.0,
+  "cell_quiet_pct": 10.0,
+  "cell_quiet_wait": 30.0,
+  "cell_clean_pct": 20.0,
+  "cell_foreign_pct": 15.0,
+  "cell_retries": 1,
+  "sampler": null,
+  "sampler_dir": null,
+  "profile_ops": 100000,
+  "profile_range_ops": 0,
+  "profile_scan_ops": 0,
+  "profile_only": null,
+  "only": "select-pk,update-range",
+  "out": "/home/cdkbs/bench-runs/aq-close/out/u3.json"
+ },
+ "runs": [
+  {
+   "run": 0,
+   "host_before": {
+    "loadavg": "6.51 3.34 5.78 9/456 2313914",
+    "competing": [
+     "2312430 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+     "2312431 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+     "2312432 cmake --build build -j8",
+     "2312433 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+     "2313864 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/strict_park_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/strict_park_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/strict_park_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/strict_park_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase strict_park_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccsxmykB.s",
+     "2313876 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/trx_id_carve_crash_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/trx_id_carve_crash_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/trx_id_carve_crash_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/trx_id_carve_crash_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase trx_id_carve_crash_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccjAdVwW.s",
+     "2313883 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/structural_rerun_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/structural_rerun_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/structural_rerun_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/structural_rerun_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase structural_rerun_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc3TEd93.s",
+     "2313889 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/walk_slice_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/walk_slice_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/walk_slice_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/walk_slice_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase walk_slice_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccBFQIe2.s",
+     "2313896 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/issue_under_the_leaf_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/issue_under_the_leaf_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/issue_under_the_leaf_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/issue_under_the_leaf_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase issue_under_the_leaf_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccyY3xFJ.s",
+     "2313902 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/lock_family_test.cpp.d -MF CMakeFiles/kds_tests.dir/lock_family_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/lock_family_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/lock_family_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase lock_family_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccj2ELle.s",
+     "2313909 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/insert_log_crash_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/insert_log_crash_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/insert_log_crash_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/insert_log_crash_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase insert_log_crash_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccmLU0iY.s",
+     "2313914 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/ddl_fence_rig_test.cpp.d -MF CMakeFiles/kds_tests.dir/ddl_fence_rig_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/ddl_fence_rig_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/ddl_fence_rig_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase ddl_fence_rig_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccFcHD2A.s"
+    ]
+   },
+   "arms": [
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 91.16716682910919,
+     "p25_us": 146.7219553887844,
+     "p50_us": 182.23514780402184,
+     "p90_us": 470.23012302815914,
+     "p99_us": 1169.5560533553362,
+     "mean_us": 274.64364573277453,
+     "server_cpu_us": 64.46302802802803,
+     "driver_cpu_us": 73.36769119119118,
+     "block_server_us": [
+      62.98,
+      66.29,
+      66.11,
+      65.23,
+      60.55,
+      65.61
+     ],
+     "host": {
+      "loadavg": "7.89 4.48 5.99 12/470 2314678",
+      "competing": [
+       "2312430 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+       "2312431 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+       "2312432 cmake --build build -j8",
+       "2312433 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+       "2314621 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/backup_archive_test.cpp.d -MF CMakeFiles/kds_tests.dir/backup_archive_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/backup_archive_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/backup_archive_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase backup_archive_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc3z7c1L.s",
+       "2314645 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/in_run_reclaim_test.cpp.d -MF CMakeFiles/kds_tests.dir/in_run_reclaim_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/in_run_reclaim_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/in_run_reclaim_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase in_run_reclaim_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccG9P79R.s",
+       "2314654 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/kwp_load_server_test.cpp.d -MF CMakeFiles/kds_tests.dir/kwp_load_server_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/kwp_load_server_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/kwp_load_server_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase kwp_load_server_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cceoV3BB.s",
+       "2314661 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/aggregate_contract_test.cpp.d -MF CMakeFiles/kds_tests.dir/aggregate_contract_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/aggregate_contract_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/aggregate_contract_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase aggregate_contract_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccfkkfpj.s",
+       "2314666 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/aggregate_test.cpp.d -MF CMakeFiles/kds_tests.dir/aggregate_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/aggregate_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/aggregate_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase aggregate_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc9bUBAt.s",
+       "2314673 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/bad_alloc_death_test.cpp.d -MF CMakeFiles/kds_tests.dir/bad_alloc_death_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/bad_alloc_death_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/bad_alloc_death_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase bad_alloc_death_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccCFgEts.s",
+       "2314678 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/type_literals_test.cpp.d -MF CMakeFiles/kds_tests.dir/type_literals_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/type_literals_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/type_literals_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase type_literals_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccmSC8yu.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 100.0,
+       "2": 99.4,
+       "3": 100.0,
+       "4": 99.4,
+       "5": 100.0,
+       "6": 100.0,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 100.0,
+      "wait_pct": 127.72,
+      "foreign_server_cpu_pct": 75.6,
+      "foreign_driver_cpu_pct": 74.3,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 90.90709500014782,
+     "p25_us": 149.53501522541046,
+     "p50_us": 182.02513456344604,
+     "p90_us": 403.6589525640011,
+     "p99_us": 1234.8440941423178,
+     "mean_us": 266.97392290638936,
+     "server_cpu_us": 65.60162562562563,
+     "driver_cpu_us": 73.21074624624625,
+     "block_server_us": [
+      64.05,
+      63.31,
+      65.77,
+      69.76,
+      64.32,
+      66.39
+     ],
+     "host": {
+      "loadavg": "7.89 4.48 5.99 12/470 2314678",
+      "competing": [
+       "2312430 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+       "2312431 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+       "2312432 cmake --build build -j8",
+       "2312433 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+       "2314621 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/backup_archive_test.cpp.d -MF CMakeFiles/kds_tests.dir/backup_archive_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/backup_archive_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/backup_archive_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase backup_archive_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc3z7c1L.s",
+       "2314645 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/in_run_reclaim_test.cpp.d -MF CMakeFiles/kds_tests.dir/in_run_reclaim_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/in_run_reclaim_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/in_run_reclaim_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase in_run_reclaim_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccG9P79R.s",
+       "2314654 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/kwp_load_server_test.cpp.d -MF CMakeFiles/kds_tests.dir/kwp_load_server_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/kwp_load_server_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/kwp_load_server_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase kwp_load_server_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cceoV3BB.s",
+       "2314661 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/aggregate_contract_test.cpp.d -MF CMakeFiles/kds_tests.dir/aggregate_contract_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/aggregate_contract_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/aggregate_contract_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase aggregate_contract_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccfkkfpj.s",
+       "2314666 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/aggregate_test.cpp.d -MF CMakeFiles/kds_tests.dir/aggregate_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/aggregate_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/aggregate_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase aggregate_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc9bUBAt.s",
+       "2314673 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/bad_alloc_death_test.cpp.d -MF CMakeFiles/kds_tests.dir/bad_alloc_death_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/bad_alloc_death_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/bad_alloc_death_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase bad_alloc_death_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccCFgEts.s",
+       "2314678 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/type_literals_test.cpp.d -MF CMakeFiles/kds_tests.dir/type_literals_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/type_literals_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/type_literals_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase type_literals_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccmSC8yu.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 100.0,
+       "2": 99.4,
+       "3": 100.0,
+       "4": 99.4,
+       "5": 100.0,
+       "6": 100.0,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 100.0,
+      "wait_pct": 127.72,
+      "foreign_server_cpu_pct": 75.6,
+      "foreign_driver_cpu_pct": 74.3,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 81.39293640851974,
+     "p25_us": 143.86698603630066,
+     "p50_us": 179.4809941202402,
+     "p90_us": 995.4629931598902,
+     "p99_us": 1365.5910734087229,
+     "mean_us": 321.6309476181403,
+     "server_cpu_us": 64.24309559559559,
+     "driver_cpu_us": 70.66802002002002,
+     "block_server_us": [
+      60.6,
+      62.92,
+      73.69,
+      69.42,
+      55.59,
+      63.23
+     ],
+     "host": {
+      "loadavg": "7.89 4.48 5.99 12/470 2314678",
+      "competing": [
+       "2312430 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+       "2312431 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+       "2312432 cmake --build build -j8",
+       "2312433 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval '(cmake --build build -j8 2>&1 | grep -E '\"'\"'error|Error|warning: unused'\"'\"' | head -40; echo BUILD_EXIT=${PIPESTATUS[0]}) ' < /dev/null && pwd -P >| /tmp/claude-e852-cwd",
+       "2314621 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/backup_archive_test.cpp.d -MF CMakeFiles/kds_tests.dir/backup_archive_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/backup_archive_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/backup_archive_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase backup_archive_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc3z7c1L.s",
+       "2314645 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/in_run_reclaim_test.cpp.d -MF CMakeFiles/kds_tests.dir/in_run_reclaim_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/in_run_reclaim_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/in_run_reclaim_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase in_run_reclaim_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccG9P79R.s",
+       "2314654 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/kwp_load_server_test.cpp.d -MF CMakeFiles/kds_tests.dir/kwp_load_server_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/kwp_load_server_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/kwp_load_server_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase kwp_load_server_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cceoV3BB.s",
+       "2314661 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/aggregate_contract_test.cpp.d -MF CMakeFiles/kds_tests.dir/aggregate_contract_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/aggregate_contract_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/aggregate_contract_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase aggregate_contract_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccfkkfpj.s",
+       "2314666 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/aggregate_test.cpp.d -MF CMakeFiles/kds_tests.dir/aggregate_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/aggregate_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/aggregate_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase aggregate_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/cc9bUBAt.s",
+       "2314673 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/bad_alloc_death_test.cpp.d -MF CMakeFiles/kds_tests.dir/bad_alloc_death_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/bad_alloc_death_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/bad_alloc_death_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase bad_alloc_death_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccCFgEts.s",
+       "2314678 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4 -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_tests.dir/type_literals_test.cpp.d -MF CMakeFiles/kds_tests.dir/type_literals_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/type_literals_test.cpp.o -D_GNU_SOURCE -D KDS_BINARY_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build\" -D KDS_CABIN_TRACES=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4\" -D KDS_WITH_TLS=1 -D GTEST_HAS_PTHREAD=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/tests/type_literals_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase type_literals_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccmSC8yu.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 100.0,
+       "2": 99.4,
+       "3": 100.0,
+       "4": 99.4,
+       "5": 100.0,
+       "6": 100.0,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 100.0,
+      "wait_pct": 127.72,
+      "foreign_server_cpu_pct": 75.6,
+      "foreign_driver_cpu_pct": 74.3,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.23600533604622,
+     "p25_us": 52.08887159824371,
+     "p50_us": 53.03020589053631,
+     "p90_us": 61.43213249742985,
+     "p99_us": 85.378997027874,
+     "mean_us": 55.9992306782781,
+     "server_cpu_us": 26.61372822822823,
+     "driver_cpu_us": 29.51195245245245,
+     "block_server_us": [
+      26.5,
+      26.86,
+      26.32,
+      26.55,
+      26.94,
+      26.53
+     ],
+     "host": {
+      "loadavg": "7.59 4.94 6.08 1/431 2315109",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 2.9,
+       "2": 53.1,
+       "3": 2.9,
+       "4": 53.1,
+       "5": 0.0,
+       "6": 5.6,
+       "7": 2.9
+      },
+      "sibling_busy_pct": 1.4,
+      "wait_pct": 3.12,
+      "foreign_server_cpu_pct": 4.4,
+      "foreign_driver_cpu_pct": 1.8,
+      "attempts": 2,
+      "quiet_waited_s": 42.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 51.04788579046726,
+     "p25_us": 53.170137107372284,
+     "p50_us": 54.05186675488949,
+     "p90_us": 62.0339997112751,
+     "p99_us": 74.19195026159286,
+     "mean_us": 56.561405977441204,
+     "server_cpu_us": 27.703410410410413,
+     "driver_cpu_us": 29.148653653653653,
+     "block_server_us": [
+      28.83,
+      27.59,
+      27.36,
+      27.14,
+      27.34,
+      27.95
+     ],
+     "host": {
+      "loadavg": "7.59 4.94 6.08 1/431 2315109",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 2.9,
+       "2": 53.1,
+       "3": 2.9,
+       "4": 53.1,
+       "5": 0.0,
+       "6": 5.6,
+       "7": 2.9
+      },
+      "sibling_busy_pct": 1.4,
+      "wait_pct": 3.12,
+      "foreign_server_cpu_pct": 4.4,
+      "foreign_driver_cpu_pct": 1.8,
+      "attempts": 2,
+      "quiet_waited_s": 42.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.836941227316856,
+     "p25_us": 52.95919254422188,
+     "p50_us": 53.91193553805351,
+     "p90_us": 61.842845752835274,
+     "p99_us": 78.84902879595757,
+     "mean_us": 57.480079485467066,
+     "server_cpu_us": 27.407479979979982,
+     "driver_cpu_us": 29.20525725725726,
+     "block_server_us": [
+      27.68,
+      27.11,
+      27.33,
+      27.79,
+      27.33,
+      27.21
+     ],
+     "host": {
+      "loadavg": "7.59 4.94 6.08 1/431 2315109",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 2.9,
+       "2": 53.1,
+       "3": 2.9,
+       "4": 53.1,
+       "5": 0.0,
+       "6": 5.6,
+       "7": 2.9
+      },
+      "sibling_busy_pct": 1.4,
+      "wait_pct": 3.12,
+      "foreign_server_cpu_pct": 4.4,
+      "foreign_driver_cpu_pct": 1.8,
+      "attempts": 2,
+      "quiet_waited_s": 42.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 693.6979480087757,
+     "p25_us": 723.3419455587864,
+     "p50_us": 737.363938242197,
+     "p90_us": 860.3490423411131,
+     "p99_us": 1008.572056889534,
+     "mean_us": 765.8102025743574,
+     "server_cpu_us": 728.8783666666667,
+     "driver_cpu_us": 36.17771666666667,
+     "block_server_us": [
+      726.91,
+      732.35,
+      722.77,
+      739.58,
+      734.93,
+      716.73
+     ],
+     "host": {
+      "loadavg": "7.59 4.94 6.08 1/431 2315134",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 96.6,
+       "3": 10.3,
+       "4": 0.0,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 13.8
+      },
+      "sibling_busy_pct": 5.2,
+      "wait_pct": 10.86,
+      "foreign_server_cpu_pct": 0.6,
+      "foreign_driver_cpu_pct": -4.6,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "B",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 710.5928380042315,
+     "p25_us": 740.5481301248074,
+     "p50_us": 753.4280885010958,
+     "p90_us": 1063.0050674080849,
+     "p99_us": 1279.1110202670097,
+     "mean_us": 835.1378763715426,
+     "server_cpu_us": 793.1274083333333,
+     "driver_cpu_us": 36.03151666666667,
+     "block_server_us": [
+      758.45,
+      903.51,
+      794.36,
+      781.35,
+      753.66,
+      767.43
+     ],
+     "host": {
+      "loadavg": "7.59 4.94 6.08 1/431 2315134",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 96.6,
+       "3": 10.3,
+       "4": 0.0,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 13.8
+      },
+      "sibling_busy_pct": 5.2,
+      "wait_pct": 10.86,
+      "foreign_server_cpu_pct": 0.6,
+      "foreign_driver_cpu_pct": -4.6,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "A",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 698.203919455409,
+     "p25_us": 725.0839844346046,
+     "p50_us": 741.5290456265211,
+     "p90_us": 1023.2650674879551,
+     "p99_us": 1214.8329988121986,
+     "mean_us": 808.7446078813324,
+     "server_cpu_us": 771.8077416666667,
+     "driver_cpu_us": 36.45205833333333,
+     "block_server_us": [
+      1028.17,
+      724.68,
+      724.0,
+      730.37,
+      712.84,
+      710.79
+     ],
+     "host": {
+      "loadavg": "7.59 4.94 6.08 1/431 2315134",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 96.6,
+       "3": 10.3,
+       "4": 0.0,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 13.8
+      },
+      "sibling_busy_pct": 5.2,
+      "wait_pct": 10.86,
+      "foreign_server_cpu_pct": 0.6,
+      "foreign_driver_cpu_pct": -4.6,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 694.9089001864195,
+     "p25_us": 730.9140637516975,
+     "p50_us": 754.84998524189,
+     "p90_us": 1227.133208885789,
+     "p99_us": 2320.1529402285814,
+     "mean_us": 883.662417375793,
+     "server_cpu_us": 752.2329416666666,
+     "driver_cpu_us": 39.06163333333333,
+     "block_server_us": [
+      742.22,
+      882.5,
+      720.6,
+      710.73,
+      728.92,
+      728.43
+     ],
+     "host": {
+      "loadavg": "6.58 4.81 6.02 1/443 2315369",
+      "competing": [
+       "2315136 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'ctest --test-dir build -j8 -R '\"'\"'QueryLayer|WhereBool|WhereValueList|ExpressionUpdate|SetExpr|ColumnCase|IgnoringCase'\"'\"' 2>&1 | tail -25' < /dev/null && pwd -P >| /tmp/claude-ae5d-cwd",
+       "2315137 ctest --test-dir build -j8 -R QueryLayer|WhereBool|WhereValueList|ExpressionUpdate|SetExpr|ColumnCase|IgnoringCase"
+      ],
+      "cpu_busy_pct": {
+       "0": 2.2,
+       "1": 0.0,
+       "2": 69.6,
+       "3": 4.3,
+       "4": 2.3,
+       "5": 0.0,
+       "6": 4.3,
+       "7": 2.2
+      },
+      "sibling_busy_pct": 2.1,
+      "wait_pct": 43.28,
+      "foreign_server_cpu_pct": 1.1,
+      "foreign_driver_cpu_pct": -0.8,
+      "attempts": 1,
+      "quiet_waited_s": 6.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 706.6370453685522,
+     "p25_us": 740.978168323636,
+     "p50_us": 757.7331271022558,
+     "p90_us": 870.2839259058237,
+     "p99_us": 1150.8269235491753,
+     "mean_us": 812.6871117080252,
+     "server_cpu_us": 778.525975,
+     "driver_cpu_us": 34.67890833333333,
+     "block_server_us": [
+      767.33,
+      938.2,
+      728.02,
+      750.41,
+      736.99,
+      750.21
+     ],
+     "host": {
+      "loadavg": "6.58 4.81 6.02 1/443 2315369",
+      "competing": [
+       "2315136 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'ctest --test-dir build -j8 -R '\"'\"'QueryLayer|WhereBool|WhereValueList|ExpressionUpdate|SetExpr|ColumnCase|IgnoringCase'\"'\"' 2>&1 | tail -25' < /dev/null && pwd -P >| /tmp/claude-ae5d-cwd",
+       "2315137 ctest --test-dir build -j8 -R QueryLayer|WhereBool|WhereValueList|ExpressionUpdate|SetExpr|ColumnCase|IgnoringCase"
+      ],
+      "cpu_busy_pct": {
+       "0": 2.2,
+       "1": 0.0,
+       "2": 69.6,
+       "3": 4.3,
+       "4": 2.3,
+       "5": 0.0,
+       "6": 4.3,
+       "7": 2.2
+      },
+      "sibling_busy_pct": 2.1,
+      "wait_pct": 43.28,
+      "foreign_server_cpu_pct": 1.1,
+      "foreign_driver_cpu_pct": -0.8,
+      "attempts": 1,
+      "quiet_waited_s": 6.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 682.8110199421644,
+     "p25_us": 734.2079188674688,
+     "p50_us": 759.677030146122,
+     "p90_us": 1711.6640228778124,
+     "p99_us": 2098.267897963524,
+     "mean_us": 2069.2932652309537,
+     "server_cpu_us": 754.8485833333334,
+     "driver_cpu_us": 39.840525,
+     "block_server_us": [
+      730.68,
+      815.75,
+      785.31,
+      743.87,
+      716.89,
+      736.59
+     ],
+     "host": {
+      "loadavg": "6.58 4.81 6.02 1/443 2315369",
+      "competing": [
+       "2315136 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'ctest --test-dir build -j8 -R '\"'\"'QueryLayer|WhereBool|WhereValueList|ExpressionUpdate|SetExpr|ColumnCase|IgnoringCase'\"'\"' 2>&1 | tail -25' < /dev/null && pwd -P >| /tmp/claude-ae5d-cwd",
+       "2315137 ctest --test-dir build -j8 -R QueryLayer|WhereBool|WhereValueList|ExpressionUpdate|SetExpr|ColumnCase|IgnoringCase"
+      ],
+      "cpu_busy_pct": {
+       "0": 2.2,
+       "1": 0.0,
+       "2": 69.6,
+       "3": 4.3,
+       "4": 2.3,
+       "5": 0.0,
+       "6": 4.3,
+       "7": 2.2
+      },
+      "sibling_busy_pct": 2.1,
+      "wait_pct": 43.28,
+      "foreign_server_cpu_pct": 1.1,
+      "foreign_driver_cpu_pct": -0.8,
+      "attempts": 1,
+      "quiet_waited_s": 6.0,
+      "clean": true
+     }
+    }
+   ],
+   "idle_cpu_us_per_s": {
+    "A2": 6809.736,
+    "B": 7269.067,
+    "A": 6212.573
+   },
+   "quiet_gate": {
+    "waited_s": 30.0,
+    "load": 6.51
+   },
+   "end_state": {
+    "A2": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    },
+    "B": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    },
+    "A": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    }
+   },
+   "pages-unspilled": {
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "pages-spilled": {
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "host_after": {
+    "loadavg": "6.58 4.81 6.02 2/443 2315390",
+    "competing": [
+     "2315136 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'ctest --test-dir build -j8 -R '\"'\"'QueryLayer|WhereBool|WhereValueList|ExpressionUpdate|SetExpr|ColumnCase|IgnoringCase'\"'\"' 2>&1 | tail -25' < /dev/null && pwd -P >| /tmp/claude-ae5d-cwd",
+     "2315137 ctest --test-dir build -j8 -R QueryLayer|WhereBool|WhereValueList|ExpressionUpdate|SetExpr|ColumnCase|IgnoringCase"
+    ]
+   }
+  },
+  {
+   "run": 1,
+   "host_before": {
+    "loadavg": "4.05 4.37 5.84 1/439 2315497",
+    "competing": []
+   },
+   "arms": [
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 51.446957513689995,
+     "p25_us": 53.40995267033577,
+     "p50_us": 58.8390976190567,
+     "p90_us": 68.9139124006033,
+     "p99_us": 98.22798892855644,
+     "mean_us": 60.7047010459252,
+     "server_cpu_us": 31.015675675675677,
+     "driver_cpu_us": 29.889655655655655,
+     "block_server_us": [
+      27.29,
+      26.81,
+      26.91,
+      35.72,
+      34.82,
+      34.54
+     ],
+     "host": {
+      "loadavg": "3.43 4.22 5.77 5/445 2315523",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 2.7,
+       "1": 0.0,
+       "2": 54.3,
+       "3": 0.0,
+       "4": 46.9,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.69,
+      "foreign_server_cpu_pct": 2.3,
+      "foreign_driver_cpu_pct": -1.7,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 51.2970145791769,
+     "p25_us": 53.87095734477043,
+     "p50_us": 59.22908894717693,
+     "p90_us": 69.14394907653332,
+     "p99_us": 93.23097765445709,
+     "mean_us": 60.899790984254935,
+     "server_cpu_us": 31.459535535535537,
+     "driver_cpu_us": 29.612306306306305,
+     "block_server_us": [
+      28.03,
+      27.28,
+      26.92,
+      36.53,
+      35.34,
+      34.65
+     ],
+     "host": {
+      "loadavg": "3.43 4.22 5.77 5/445 2315523",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 2.7,
+       "1": 0.0,
+       "2": 54.3,
+       "3": 0.0,
+       "4": 46.9,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.69,
+      "foreign_server_cpu_pct": 2.3,
+      "foreign_driver_cpu_pct": -1.7,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 51.24695599079132,
+     "p25_us": 53.45093086361885,
+     "p50_us": 59.09893661737442,
+     "p90_us": 68.9139124006033,
+     "p99_us": 94.29315105080605,
+     "mean_us": 60.725494057641136,
+     "server_cpu_us": 31.08317817817818,
+     "driver_cpu_us": 29.541705205205204,
+     "block_server_us": [
+      27.52,
+      26.97,
+      26.66,
+      36.1,
+      34.54,
+      34.71
+     ],
+     "host": {
+      "loadavg": "3.43 4.22 5.77 5/445 2315523",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 2.7,
+       "1": 0.0,
+       "2": 54.3,
+       "3": 0.0,
+       "4": 46.9,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.69,
+      "foreign_server_cpu_pct": 2.3,
+      "foreign_driver_cpu_pct": -1.7,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 54.26211282610893,
+     "p25_us": 56.15502595901489,
+     "p50_us": 57.42697976529598,
+     "p90_us": 67.15115159749985,
+     "p99_us": 85.12800559401512,
+     "mean_us": 60.542359005648635,
+     "server_cpu_us": 29.228614114114112,
+     "driver_cpu_us": 31.62171971971972,
+     "block_server_us": [
+      30.26,
+      29.29,
+      28.92,
+      29.07,
+      29.25,
+      28.58
+     ],
+     "host": {
+      "loadavg": "3.31 4.18 5.75 1/445 2315531",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 48.4,
+       "3": 0.0,
+       "4": 55.6,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.11,
+      "foreign_server_cpu_pct": -0.8,
+      "foreign_driver_cpu_pct": 3.7,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 53.18992771208286,
+     "p25_us": 56.51521496474743,
+     "p50_us": 57.59694613516331,
+     "p90_us": 67.00190715491772,
+     "p99_us": 87.23209612071514,
+     "mean_us": 60.68485683656193,
+     "server_cpu_us": 29.562292792792793,
+     "driver_cpu_us": 31.51917867867868,
+     "block_server_us": [
+      29.24,
+      30.14,
+      29.77,
+      29.26,
+      29.64,
+      29.33
+     ],
+     "host": {
+      "loadavg": "3.31 4.18 5.75 1/445 2315531",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 48.4,
+       "3": 0.0,
+       "4": 55.6,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.11,
+      "foreign_server_cpu_pct": -0.8,
+      "foreign_driver_cpu_pct": 3.7,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 54.41298708319664,
+     "p25_us": 56.2549103051424,
+     "p50_us": 57.295896112918854,
+     "p90_us": 66.93112663924694,
+     "p99_us": 83.19597691297531,
+     "mean_us": 60.30006189686102,
+     "server_cpu_us": 29.128745245245245,
+     "driver_cpu_us": 31.544743743743744,
+     "block_server_us": [
+      29.58,
+      29.27,
+      29.17,
+      28.51,
+      29.27,
+      28.98
+     ],
+     "host": {
+      "loadavg": "3.31 4.18 5.75 1/445 2315531",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 48.4,
+       "3": 0.0,
+       "4": 55.6,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.11,
+      "foreign_server_cpu_pct": -0.8,
+      "foreign_driver_cpu_pct": 3.7,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 686.5959148854017,
+     "p25_us": 728.2991427928209,
+     "p50_us": 749.9021012336016,
+     "p90_us": 862.4419569969177,
+     "p99_us": 943.0339559912682,
+     "mean_us": 768.7069921909521,
+     "server_cpu_us": 735.0722166666667,
+     "driver_cpu_us": 33.39210833333333,
+     "block_server_us": [
+      742.91,
+      741.21,
+      735.02,
+      743.27,
+      724.75,
+      723.28
+     ],
+     "host": {
+      "loadavg": "3.31 4.18 5.75 2/447 2315581",
+      "competing": [
+       "2315533 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd",
+       "2315535 cmake --build build -j8",
+       "2315536 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd",
+       "2315580 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/exec/query_layer.cpp.d -MF CMakeFiles/kds.dir/src/exec/query_layer.cpp.o.d -MT CMakeFiles/kds.dir/src/exec/query_layer.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/src/exec/query_layer.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/exec/ -dumpbase query_layer.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccU4RzPQ.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 0.0,
+       "2": 96.4,
+       "3": 0.0,
+       "4": 6.9,
+       "5": 0.0,
+       "6": 3.4,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 9.2,
+      "foreign_server_cpu_pct": 0.4,
+      "foreign_driver_cpu_pct": 2.4,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 724.0129634737968,
+     "p25_us": 748.9901036024094,
+     "p50_us": 766.195822507143,
+     "p90_us": 879.3768938630819,
+     "p99_us": 984.0161073952913,
+     "mean_us": 793.2082264839361,
+     "server_cpu_us": 756.6856166666666,
+     "driver_cpu_us": 33.4089,
+     "block_server_us": [
+      760.53,
+      764.04,
+      751.39,
+      759.75,
+      759.16,
+      745.25
+     ],
+     "host": {
+      "loadavg": "3.31 4.18 5.75 2/447 2315581",
+      "competing": [
+       "2315533 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd",
+       "2315535 cmake --build build -j8",
+       "2315536 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd",
+       "2315580 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/exec/query_layer.cpp.d -MF CMakeFiles/kds.dir/src/exec/query_layer.cpp.o.d -MT CMakeFiles/kds.dir/src/exec/query_layer.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/src/exec/query_layer.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/exec/ -dumpbase query_layer.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccU4RzPQ.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 0.0,
+       "2": 96.4,
+       "3": 0.0,
+       "4": 6.9,
+       "5": 0.0,
+       "6": 3.4,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 9.2,
+      "foreign_server_cpu_pct": 0.4,
+      "foreign_driver_cpu_pct": 2.4,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 691.073015332222,
+     "p25_us": 731.2637753784657,
+     "p50_us": 749.0909192711115,
+     "p90_us": 867.4988057464361,
+     "p99_us": 941.6311513632536,
+     "mean_us": 773.7460158144435,
+     "server_cpu_us": 739.047175,
+     "driver_cpu_us": 33.40813333333333,
+     "block_server_us": [
+      751.28,
+      747.97,
+      748.96,
+      723.61,
+      728.5,
+      733.96
+     ],
+     "host": {
+      "loadavg": "3.31 4.18 5.75 2/447 2315581",
+      "competing": [
+       "2315533 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd",
+       "2315535 cmake --build build -j8",
+       "2315536 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd",
+       "2315580 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/include -I /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/build/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/exec/query_layer.cpp.d -MF CMakeFiles/kds.dir/src/exec/query_layer.cpp.o.d -MT CMakeFiles/kds.dir/src/exec/query_layer.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 /home/cdkbs/ckdbs/.claude/worktrees/bu-basic-query-surface-s4/src/exec/query_layer.cpp -quiet -dumpdir CMakeFiles/kds.dir/src/exec/ -dumpbase query_layer.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -g -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccU4RzPQ.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 100.0,
+       "1": 0.0,
+       "2": 96.4,
+       "3": 0.0,
+       "4": 6.9,
+       "5": 0.0,
+       "6": 3.4,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 9.2,
+      "foreign_server_cpu_pct": 0.4,
+      "foreign_driver_cpu_pct": 2.4,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 724.4730368256569,
+     "p25_us": 744.7439711540937,
+     "p50_us": 764.0840485692024,
+     "p90_us": 872.8981483727694,
+     "p99_us": 2338.9209527522326,
+     "mean_us": 5904.869797329108,
+     "server_cpu_us": 747.8665583333334,
+     "driver_cpu_us": 60.327875,
+     "block_server_us": [
+      733.71,
+      748.49,
+      722.18,
+      719.43,
+      715.91,
+      847.47
+     ],
+     "host": {
+      "loadavg": "4.13 4.33 5.78 1/445 2315597",
+      "competing": [
+       "2315533 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd",
+       "2315535 cmake --build build -j8",
+       "2315536 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd"
+      ],
+      "cpu_busy_pct": {
+       "0": 27.6,
+       "1": 52.6,
+       "2": 25.4,
+       "3": 0.9,
+       "4": 6.9,
+       "5": 78.8,
+       "6": 70.7,
+       "7": 7.8
+      },
+      "sibling_busy_pct": 39.9,
+      "wait_pct": 18.95,
+      "foreign_server_cpu_pct": 0.7,
+      "foreign_driver_cpu_pct": 4.8,
+      "attempts": 2,
+      "quiet_waited_s": 6.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "B",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 734.8689250648022,
+     "p25_us": 761.799979954958,
+     "p50_us": 775.96097253263,
+     "p90_us": 903.8851130753756,
+     "p99_us": 21385.994972661138,
+     "mean_us": 2730.592377095794,
+     "server_cpu_us": 754.0145166666667,
+     "driver_cpu_us": 67.91231666666667,
+     "block_server_us": [
+      755.43,
+      767.93,
+      734.74,
+      728.49,
+      732.13,
+      805.36
+     ],
+     "host": {
+      "loadavg": "4.13 4.33 5.78 1/445 2315597",
+      "competing": [
+       "2315533 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd",
+       "2315535 cmake --build build -j8",
+       "2315536 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd"
+      ],
+      "cpu_busy_pct": {
+       "0": 27.6,
+       "1": 52.6,
+       "2": 25.4,
+       "3": 0.9,
+       "4": 6.9,
+       "5": 78.8,
+       "6": 70.7,
+       "7": 7.8
+      },
+      "sibling_busy_pct": 39.9,
+      "wait_pct": 18.95,
+      "foreign_server_cpu_pct": 0.7,
+      "foreign_driver_cpu_pct": 4.8,
+      "attempts": 2,
+      "quiet_waited_s": 6.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "A",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 701.2090645730495,
+     "p25_us": 742.4999494105577,
+     "p50_us": 756.7328866571188,
+     "p90_us": 1030.2748996764421,
+     "p99_us": 2997.3050113767385,
+     "mean_us": 1025.639670357729,
+     "server_cpu_us": 758.5259666666667,
+     "driver_cpu_us": 64.78158333333333,
+     "block_server_us": [
+      737.07,
+      743.95,
+      720.58,
+      859.88,
+      718.24,
+      771.43
+     ],
+     "host": {
+      "loadavg": "4.13 4.33 5.78 1/445 2315597",
+      "competing": [
+       "2315533 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd",
+       "2315535 cmake --build build -j8",
+       "2315536 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd"
+      ],
+      "cpu_busy_pct": {
+       "0": 27.6,
+       "1": 52.6,
+       "2": 25.4,
+       "3": 0.9,
+       "4": 6.9,
+       "5": 78.8,
+       "6": 70.7,
+       "7": 7.8
+      },
+      "sibling_busy_pct": 39.9,
+      "wait_pct": 18.95,
+      "foreign_server_cpu_pct": 0.7,
+      "foreign_driver_cpu_pct": 4.8,
+      "attempts": 2,
+      "quiet_waited_s": 6.0,
+      "clean": false
+     }
+    }
+   ],
+   "idle_cpu_us_per_s": {
+    "A2": 4012.619,
+    "B": 4556.035,
+    "A": 4011.512
+   },
+   "quiet_gate": {
+    "waited_s": 30.0,
+    "load": 4.05
+   },
+   "end_state": {
+    "A2": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    },
+    "B": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    },
+    "A": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    }
+   },
+   "pages-unspilled": {
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "pages-spilled": {
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "host_after": {
+    "loadavg": "4.13 4.33 5.78 4/448 2315646",
+    "competing": [
+     "2315533 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd",
+     "2315535 cmake --build build -j8",
+     "2315536 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'python3 -I /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/walkable.py \"$PWD\" && cmake --build build -j8 2>&1 | grep -E '\"'\"'error'\"'\"' | head; ./build/tests/kds_tests --gtest_filter='\"'\"'QueryLayerTest.*'\"'\"' 2>&1 | grep -E '\"'\"'Failure|->|PASSED|FAILED'\"'\"' | head -20' < /dev/null && pwd -P >| /tmp/claude-9717-cwd"
+    ]
+   }
+  },
+  {
+   "run": 2,
+   "host_before": {
+    "loadavg": "2.74 3.98 5.62 9/455 2315986",
+    "competing": [
+     "2315809 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+     "2315852 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+     "2315853 cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8",
+     "2315854 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+     "2315946 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/anti-kdbs/upstream/include -I /home/cdkbs/anti-kdbs/upstream/build-release/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/varheap.cpp.d -MF CMakeFiles/kds.dir/src/storage/varheap.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/varheap.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 -D NDEBUG /home/cdkbs/anti-kdbs/upstream/src/storage/varheap.cpp -D_FORTIFY_SOURCE=3 -quiet -dumpdir CMakeFiles/kds.dir/src/storage/ -dumpbase varheap.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -O3 -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccBkhiIi.s",
+     "2315951 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/anti-kdbs/upstream/include -I /home/cdkbs/anti-kdbs/upstream/build-release/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/heap/heap_page.cpp.d -MF CMakeFiles/kds.dir/src/storage/heap/heap_page.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/heap/heap_page.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 -D NDEBUG /home/cdkbs/anti-kdbs/upstream/src/storage/heap/heap_page.cpp -D_FORTIFY_SOURCE=3 -quiet -dumpdir CMakeFiles/kds.dir/src/storage/heap/ -dumpbase heap_page.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -O3 -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccJ2BGXE.s",
+     "2315956 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/anti-kdbs/upstream/include -I /home/cdkbs/anti-kdbs/upstream/build-release/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/heap/heap_chain.cpp.d -MF CMakeFiles/kds.dir/src/storage/heap/heap_chain.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/heap/heap_chain.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 -D NDEBUG /home/cdkbs/anti-kdbs/upstream/src/storage/heap/heap_chain.cpp -D_FORTIFY_SOURCE=3 -quiet -dumpdir CMakeFiles/kds.dir/src/storage/heap/ -dumpbase heap_chain.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -O3 -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccucNQAn.s",
+     "2315969 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/anti-kdbs/upstream/include -I /home/cdkbs/anti-kdbs/upstream/build-release/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/btree/btree.cpp.d -MF CMakeFiles/kds.dir/src/storage/btree/btree.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/btree/btree.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 -D NDEBUG /home/cdkbs/anti-kdbs/upstream/src/storage/btree/btree.cpp -D_FORTIFY_SOURCE=3 -quiet -dumpdir CMakeFiles/kds.dir/src/storage/btree/ -dumpbase btree.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -O3 -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccSw6IhB.s",
+     "2315971 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/anti-kdbs/upstream/include -I /home/cdkbs/anti-kdbs/upstream/build-release/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/index/index_page.cpp.d -MF CMakeFiles/kds.dir/src/storage/index/index_page.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/index/index_page.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 -D NDEBUG /home/cdkbs/anti-kdbs/upstream/src/storage/index/index_page.cpp -D_FORTIFY_SOURCE=3 -quiet -dumpdir CMakeFiles/kds.dir/src/storage/index/ -dumpbase index_page.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -O3 -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccORj4Yw.s",
+     "2315976 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/anti-kdbs/upstream/include -I /home/cdkbs/anti-kdbs/upstream/build-release/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/index/index_tree.cpp.d -MF CMakeFiles/kds.dir/src/storage/index/index_tree.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/index/index_tree.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 -D NDEBUG /home/cdkbs/anti-kdbs/upstream/src/storage/index/index_tree.cpp -D_FORTIFY_SOURCE=3 -quiet -dumpdir CMakeFiles/kds.dir/src/storage/index/ -dumpbase index_tree.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -O3 -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccf26Ghs.s",
+     "2315984 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/anti-kdbs/upstream/include -I /home/cdkbs/anti-kdbs/upstream/build-release/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/storage/free_map.cpp.d -MF CMakeFiles/kds.dir/src/storage/free_map.cpp.o.d -MT CMakeFiles/kds.dir/src/storage/free_map.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 -D NDEBUG /home/cdkbs/anti-kdbs/upstream/src/storage/free_map.cpp -D_FORTIFY_SOURCE=3 -quiet -dumpdir CMakeFiles/kds.dir/src/storage/ -dumpbase free_map.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -O3 -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccf2oxzS.s",
+     "2315986 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/anti-kdbs/upstream/include -I /home/cdkbs/anti-kdbs/upstream/build-release/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds.dir/src/txn/undo_page.cpp.d -MF CMakeFiles/kds.dir/src/txn/undo_page.cpp.o.d -MT CMakeFiles/kds.dir/src/txn/undo_page.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 -D NDEBUG /home/cdkbs/anti-kdbs/upstream/src/txn/undo_page.cpp -D_FORTIFY_SOURCE=3 -quiet -dumpdir CMakeFiles/kds.dir/src/txn/ -dumpbase undo_page.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -O3 -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccHCchR5.s"
+    ]
+   },
+   "arms": [
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 53.72101441025734,
+     "p25_us": 58.178091421723366,
+     "p50_us": 86.31101809442043,
+     "p90_us": 97.43706323206425,
+     "p99_us": 117.30683036148548,
+     "mean_us": 82.02544590635402,
+     "server_cpu_us": 27.932116116116113,
+     "driver_cpu_us": 54.31069119119119,
+     "block_server_us": [
+      27.5,
+      27.21,
+      27.98,
+      28.04,
+      27.86,
+      29.0
+     ],
+     "host": {
+      "loadavg": "5.87 4.69 5.78 2/449 2316691",
+      "competing": [
+       "2315809 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+       "2315852 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+       "2315853 cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8",
+       "2315854 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+       "2316691 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/anti-kdbs/upstream/include -I /home/cdkbs/anti-kdbs/upstream/build-release/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_server.dir/src/server/main.cpp.d -MF CMakeFiles/kds_server.dir/src/server/main.cpp.o.d -MT CMakeFiles/kds_server.dir/src/server/main.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 -D NDEBUG /home/cdkbs/anti-kdbs/upstream/src/server/main.cpp -D_FORTIFY_SOURCE=3 -quiet -dumpdir CMakeFiles/kds_server.dir/src/server/ -dumpbase main.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -O3 -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccQphce1.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 2.0,
+       "1": 0.0,
+       "2": 37.0,
+       "3": 0.0,
+       "4": 68.1,
+       "5": 72.5,
+       "6": 27.5,
+       "7": 10.0
+      },
+      "sibling_busy_pct": 36.2,
+      "wait_pct": 6.87,
+      "foreign_server_cpu_pct": 2.1,
+      "foreign_driver_cpu_pct": 4.7,
+      "attempts": 2,
+      "quiet_waited_s": 34.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 54.511940106749535,
+     "p25_us": 58.178091421723366,
+     "p50_us": 81.35312236845493,
+     "p90_us": 96.064992249012,
+     "p99_us": 177.78808251023293,
+     "mean_us": 84.83146348999844,
+     "server_cpu_us": 28.292436436436436,
+     "driver_cpu_us": 50.58923423423423,
+     "block_server_us": [
+      27.66,
+      29.46,
+      27.9,
+      28.31,
+      28.36,
+      28.06
+     ],
+     "host": {
+      "loadavg": "5.87 4.69 5.78 2/449 2316691",
+      "competing": [
+       "2315809 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+       "2315852 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+       "2315853 cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8",
+       "2315854 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+       "2316691 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/anti-kdbs/upstream/include -I /home/cdkbs/anti-kdbs/upstream/build-release/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_server.dir/src/server/main.cpp.d -MF CMakeFiles/kds_server.dir/src/server/main.cpp.o.d -MT CMakeFiles/kds_server.dir/src/server/main.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 -D NDEBUG /home/cdkbs/anti-kdbs/upstream/src/server/main.cpp -D_FORTIFY_SOURCE=3 -quiet -dumpdir CMakeFiles/kds_server.dir/src/server/ -dumpbase main.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -O3 -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccQphce1.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 2.0,
+       "1": 0.0,
+       "2": 37.0,
+       "3": 0.0,
+       "4": 68.1,
+       "5": 72.5,
+       "6": 27.5,
+       "7": 10.0
+      },
+      "sibling_busy_pct": 36.2,
+      "wait_pct": 6.87,
+      "foreign_server_cpu_pct": 2.1,
+      "foreign_driver_cpu_pct": 4.7,
+      "attempts": 2,
+      "quiet_waited_s": 34.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 53.341034799814224,
+     "p25_us": 59.138983488082886,
+     "p50_us": 86.80112659931183,
+     "p90_us": 97.47711010277271,
+     "p99_us": 114.1820102930069,
+     "mean_us": 82.26545910734134,
+     "server_cpu_us": 28.669253753753754,
+     "driver_cpu_us": 54.13902102102102,
+     "block_server_us": [
+      28.2,
+      29.09,
+      28.68,
+      28.5,
+      28.77,
+      28.77
+     ],
+     "host": {
+      "loadavg": "5.87 4.69 5.78 2/449 2316691",
+      "competing": [
+       "2315809 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+       "2315852 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+       "2315853 cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8",
+       "2315854 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'git -C /home/cdkbs/anti-kdbs/upstream checkout -q --detach 256b86e9 && git -C /home/cdkbs/anti-kdbs/upstream log --oneline -1 && (cmake --build /home/cdkbs/anti-kdbs/upstream/build-release --target kds_server -j8 2>&1 | grep -E '\"'\"' error|Linking'\"'\"' | tail -5; echo EXIT=${PIPESTATUS[0]})' < /dev/null && pwd -P >| /tmp/claude-c0e0-cwd",
+       "2316691 /usr/libexec/gcc/x86_64-linux-gnu/13/cc1plus -quiet -I /home/cdkbs/anti-kdbs/upstream/include -I /home/cdkbs/anti-kdbs/upstream/build-release/generated -imultiarch x86_64-linux-gnu -MD CMakeFiles/kds_server.dir/src/server/main.cpp.d -MF CMakeFiles/kds_server.dir/src/server/main.cpp.o.d -MT CMakeFiles/kds_server.dir/src/server/main.cpp.o -D_GNU_SOURCE -D KDS_WITH_TLS=1 -D NDEBUG /home/cdkbs/anti-kdbs/upstream/src/server/main.cpp -D_FORTIFY_SOURCE=3 -quiet -dumpdir CMakeFiles/kds_server.dir/src/server/ -dumpbase main.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -O3 -Wall -Wextra -std=c++20 -fasynchronous-unwind-tables -fstack-protector-strong -Wformat-security -fstack-clash-protection -fcf-protection -o /tmp/ccQphce1.s"
+      ],
+      "cpu_busy_pct": {
+       "0": 2.0,
+       "1": 0.0,
+       "2": 37.0,
+       "3": 0.0,
+       "4": 68.1,
+       "5": 72.5,
+       "6": 27.5,
+       "7": 10.0
+      },
+      "sibling_busy_pct": 36.2,
+      "wait_pct": 6.87,
+      "foreign_server_cpu_pct": 2.1,
+      "foreign_driver_cpu_pct": 4.7,
+      "attempts": 2,
+      "quiet_waited_s": 34.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.685834139585495,
+     "p25_us": 52.27886140346527,
+     "p50_us": 53.369905799627304,
+     "p90_us": 62.264036387205124,
+     "p99_us": 79.34006862342358,
+     "mean_us": 56.20033948685045,
+     "server_cpu_us": 27.604551551551552,
+     "driver_cpu_us": 28.97076176176176,
+     "block_server_us": [
+      27.96,
+      27.37,
+      27.71,
+      27.53,
+      27.38,
+      27.68
+     ],
+     "host": {
+      "loadavg": "5.40 4.61 5.75 1/438 2316715",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 50.0,
+       "3": 0.0,
+       "4": 54.5,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.14,
+      "foreign_server_cpu_pct": -0.1,
+      "foreign_driver_cpu_pct": 3.5,
+      "attempts": 1,
+      "quiet_waited_s": 4.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.68606697022915,
+     "p25_us": 52.51890979707241,
+     "p50_us": 53.490977734327316,
+     "p90_us": 62.26380355656147,
+     "p99_us": 77.34703831374645,
+     "mean_us": 56.24295623452814,
+     "server_cpu_us": 27.72277127127127,
+     "driver_cpu_us": 28.951090090090087,
+     "block_server_us": [
+      27.99,
+      27.72,
+      27.41,
+      27.94,
+      27.61,
+      27.67
+     ],
+     "host": {
+      "loadavg": "5.40 4.61 5.75 1/438 2316715",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 50.0,
+       "3": 0.0,
+       "4": 54.5,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.14,
+      "foreign_server_cpu_pct": -0.1,
+      "foreign_driver_cpu_pct": 3.5,
+      "attempts": 1,
+      "quiet_waited_s": 4.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 51.11796781420708,
+     "p25_us": 53.00994962453842,
+     "p50_us": 54.031843319535255,
+     "p90_us": 63.77603858709335,
+     "p99_us": 80.77197708189487,
+     "mean_us": 57.21758624111806,
+     "server_cpu_us": 28.36934284284284,
+     "driver_cpu_us": 29.03751951951952,
+     "block_server_us": [
+      28.74,
+      28.42,
+      28.18,
+      28.1,
+      28.65,
+      28.13
+     ],
+     "host": {
+      "loadavg": "5.40 4.61 5.75 1/438 2316715",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 50.0,
+       "3": 0.0,
+       "4": 54.5,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 2.14,
+      "foreign_server_cpu_pct": -0.1,
+      "foreign_driver_cpu_pct": 3.5,
+      "attempts": 1,
+      "quiet_waited_s": 4.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 691.0630036145449,
+     "p25_us": 735.7310969382524,
+     "p50_us": 756.3119288533926,
+     "p90_us": 849.0018080919981,
+     "p99_us": 943.1231301277876,
+     "mean_us": 775.1495596797516,
+     "server_cpu_us": 737.0653249999999,
+     "driver_cpu_us": 37.881566666666664,
+     "block_server_us": [
+      737.37,
+      732.62,
+      741.99,
+      737.06,
+      737.78,
+      735.56
+     ],
+     "host": {
+      "loadavg": "5.40 4.61 5.75 1/436 2316745",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 3.4,
+       "2": 93.1,
+       "3": 0.0,
+       "4": 6.9,
+       "5": 0.0,
+       "6": 6.9,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 14.63,
+      "foreign_server_cpu_pct": -0.6,
+      "foreign_driver_cpu_pct": 1.9,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "B",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 727.2178772836924,
+     "p25_us": 754.8988796770573,
+     "p50_us": 775.5300030112267,
+     "p90_us": 890.4449641704559,
+     "p99_us": 1176.8259573727846,
+     "mean_us": 827.9594515139858,
+     "server_cpu_us": 760.6203833333333,
+     "driver_cpu_us": 39.519083333333334,
+     "block_server_us": [
+      765.42,
+      761.19,
+      759.72,
+      753.66,
+      747.27,
+      776.46
+     ],
+     "host": {
+      "loadavg": "5.40 4.61 5.75 1/436 2316745",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 3.4,
+       "2": 93.1,
+       "3": 0.0,
+       "4": 6.9,
+       "5": 0.0,
+       "6": 6.9,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 14.63,
+      "foreign_server_cpu_pct": -0.6,
+      "foreign_driver_cpu_pct": 1.9,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "A",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 710.4629185050726,
+     "p25_us": 740.7590746879578,
+     "p50_us": 758.2348771393299,
+     "p90_us": 862.9721123725176,
+     "p99_us": 1361.0650785267353,
+     "mean_us": 797.7836416102946,
+     "server_cpu_us": 734.8657916666666,
+     "driver_cpu_us": 43.491058333333335,
+     "block_server_us": [
+      747.85,
+      735.93,
+      741.4,
+      745.51,
+      734.69,
+      703.82
+     ],
+     "host": {
+      "loadavg": "5.40 4.61 5.75 1/436 2316745",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 3.4,
+       "2": 93.1,
+       "3": 0.0,
+       "4": 6.9,
+       "5": 0.0,
+       "6": 6.9,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 14.63,
+      "foreign_server_cpu_pct": -0.6,
+      "foreign_driver_cpu_pct": 1.9,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 684.3439768999815,
+     "p25_us": 712.9968143999577,
+     "p50_us": 724.113080650568,
+     "p90_us": 809.1919589787722,
+     "p99_us": 909.9128656089306,
+     "mean_us": 762.6085406324515,
+     "server_cpu_us": 731.6724250000001,
+     "driver_cpu_us": 32.55493333333333,
+     "block_server_us": [
+      719.76,
+      851.63,
+      708.64,
+      699.38,
+      710.05,
+      700.57
+     ],
+     "host": {
+      "loadavg": "5.05 4.55 5.72 3/431 2317003",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 96.9,
+       "3": 0.0,
+       "4": 3.3,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 45.41,
+      "foreign_server_cpu_pct": -0.2,
+      "foreign_driver_cpu_pct": -0.7,
+      "attempts": 1,
+      "quiet_waited_s": 4.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 699.2961280047894,
+     "p25_us": 736.5620695054531,
+     "p50_us": 788.9610715210438,
+     "p90_us": 1842.231024056673,
+     "p99_us": 2552.423160523176,
+     "mean_us": 992.8842754258462,
+     "server_cpu_us": 754.4429416666667,
+     "driver_cpu_us": 34.5605,
+     "block_server_us": [
+      743.41,
+      875.9,
+      718.86,
+      725.57,
+      744.55,
+      718.37
+     ],
+     "host": {
+      "loadavg": "5.05 4.55 5.72 3/431 2317003",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 96.9,
+       "3": 0.0,
+       "4": 3.3,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 45.41,
+      "foreign_server_cpu_pct": -0.2,
+      "foreign_driver_cpu_pct": -0.7,
+      "attempts": 1,
+      "quiet_waited_s": 4.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 688.3591413497925,
+     "p25_us": 722.2809363156557,
+     "p50_us": 733.997905626893,
+     "p90_us": 1001.6020387411118,
+     "p99_us": 2271.748846396804,
+     "mean_us": 842.4970631798109,
+     "server_cpu_us": 799.4762666666667,
+     "driver_cpu_us": 33.102325,
+     "block_server_us": [
+      735.92,
+      745.95,
+      1179.01,
+      710.85,
+      712.86,
+      712.27
+     ],
+     "host": {
+      "loadavg": "5.05 4.55 5.72 3/431 2317003",
+      "competing": [],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 96.9,
+       "3": 0.0,
+       "4": 3.3,
+       "5": 0.0,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 0.0,
+      "wait_pct": 45.41,
+      "foreign_server_cpu_pct": -0.2,
+      "foreign_driver_cpu_pct": -0.7,
+      "attempts": 1,
+      "quiet_waited_s": 4.0,
+      "clean": true
+     }
+    }
+   ],
+   "idle_cpu_us_per_s": {
+    "A2": 6948.832,
+    "B": 6618.733,
+    "A": 6708.057
+   },
+   "quiet_gate": {
+    "waited_s": 30.0,
+    "load": 2.74
+   },
+   "end_state": {
+    "A2": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    },
+    "B": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    },
+    "A": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    }
+   },
+   "pages-unspilled": {
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "pages-spilled": {
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "host_after": {
+    "loadavg": "5.05 4.55 5.72 2/429 2317014",
+    "competing": []
+   }
+  },
+  {
+   "run": 3,
+   "host_before": {
+    "loadavg": "3.06 4.12 5.54 2/442 2317123",
+    "competing": []
+   },
+   "arms": [
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 49.77593198418617,
+     "p25_us": 52.77898162603378,
+     "p50_us": 54.412055760622025,
+     "p90_us": 67.44195707142353,
+     "p99_us": 86.63092739880085,
+     "mean_us": 59.021561331040154,
+     "server_cpu_us": 27.896505505505505,
+     "driver_cpu_us": 30.898976476476477,
+     "block_server_us": [
+      27.63,
+      27.84,
+      27.34,
+      27.3,
+      28.93,
+      28.35
+     ],
+     "host": {
+      "loadavg": "4.47 4.35 5.58 1/458 2317609",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 50.0,
+       "3": 0.0,
+       "4": 53.3,
+       "5": 5.7,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 2.9,
+      "wait_pct": 2.98,
+      "foreign_server_cpu_pct": 1.7,
+      "foreign_driver_cpu_pct": 1.4,
+      "attempts": 2,
+      "quiet_waited_s": 8.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.67605525255203,
+     "p25_us": 53.13009023666382,
+     "p50_us": 54.44185808300972,
+     "p90_us": 68.21309216320515,
+     "p99_us": 86.00996807217598,
+     "mean_us": 58.72790991618588,
+     "server_cpu_us": 27.978750750750752,
+     "driver_cpu_us": 30.653845845845844,
+     "block_server_us": [
+      27.98,
+      28.06,
+      27.6,
+      26.92,
+      28.54,
+      28.77
+     ],
+     "host": {
+      "loadavg": "4.47 4.35 5.58 1/458 2317609",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 50.0,
+       "3": 0.0,
+       "4": 53.3,
+       "5": 5.7,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 2.9,
+      "wait_pct": 2.98,
+      "foreign_server_cpu_pct": 1.7,
+      "foreign_driver_cpu_pct": 1.4,
+      "attempts": 2,
+      "quiet_waited_s": 8.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 50.88699981570244,
+     "p25_us": 52.94987931847572,
+     "p50_us": 54.202042520046234,
+     "p90_us": 67.87292659282684,
+     "p99_us": 87.13197894394398,
+     "mean_us": 58.300357924455454,
+     "server_cpu_us": 27.932349349349348,
+     "driver_cpu_us": 30.665481481481482,
+     "block_server_us": [
+      27.59,
+      27.53,
+      27.04,
+      28.26,
+      28.64,
+      28.53
+     ],
+     "host": {
+      "loadavg": "4.47 4.35 5.58 1/458 2317609",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 50.0,
+       "3": 0.0,
+       "4": 53.3,
+       "5": 5.7,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 2.9,
+      "wait_pct": 2.98,
+      "foreign_server_cpu_pct": 1.7,
+      "foreign_driver_cpu_pct": 1.4,
+      "attempts": 2,
+      "quiet_waited_s": 8.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 53.9110042154789,
+     "p25_us": 55.935001000761986,
+     "p50_us": 57.236989960074425,
+     "p90_us": 66.65010005235672,
+     "p99_us": 91.16809815168381,
+     "mean_us": 61.488431250048166,
+     "server_cpu_us": 29.169954954954957,
+     "driver_cpu_us": 31.83424974974975,
+     "block_server_us": [
+      33.78,
+      27.74,
+      27.65,
+      30.12,
+      28.1,
+      27.63
+     ],
+     "host": {
+      "loadavg": "6.25 4.88 5.69 2/451 2319291",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.3,
+       "1": 2.7,
+       "2": 51.5,
+       "3": 13.9,
+       "4": 54.3,
+       "5": 0.0,
+       "6": 2.8,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 7.0,
+      "wait_pct": 2.99,
+      "foreign_server_cpu_pct": 2.8,
+      "foreign_driver_cpu_pct": 2.7,
+      "attempts": 2,
+      "quiet_waited_s": 54.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 54.02206443250179,
+     "p25_us": 56.134071201086044,
+     "p50_us": 57.54712037742138,
+     "p90_us": 68.77398118376732,
+     "p99_us": 88.59299123287201,
+     "mean_us": 61.24426333888157,
+     "server_cpu_us": 29.776812312312313,
+     "driver_cpu_us": 31.50956056056056,
+     "block_server_us": [
+      30.78,
+      32.69,
+      28.41,
+      29.93,
+      27.91,
+      28.94
+     ],
+     "host": {
+      "loadavg": "6.25 4.88 5.69 2/451 2319291",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.3,
+       "1": 2.7,
+       "2": 51.5,
+       "3": 13.9,
+       "4": 54.3,
+       "5": 0.0,
+       "6": 2.8,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 7.0,
+      "wait_pct": 2.99,
+      "foreign_server_cpu_pct": 2.8,
+      "foreign_driver_cpu_pct": 2.7,
+      "attempts": 2,
+      "quiet_waited_s": 54.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 53.060008212924004,
+     "p25_us": 55.96480332314968,
+     "p50_us": 56.92616105079651,
+     "p90_us": 65.78885950148106,
+     "p99_us": 82.48514495790005,
+     "mean_us": 59.81665234211031,
+     "server_cpu_us": 28.557597097097094,
+     "driver_cpu_us": 31.561574074074073,
+     "block_server_us": [
+      29.29,
+      29.02,
+      28.08,
+      28.53,
+      28.53,
+      27.89
+     ],
+     "host": {
+      "loadavg": "6.25 4.88 5.69 2/451 2319291",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.3,
+       "1": 2.7,
+       "2": 51.5,
+       "3": 13.9,
+       "4": 54.3,
+       "5": 0.0,
+       "6": 2.8,
+       "7": 100.0
+      },
+      "sibling_busy_pct": 7.0,
+      "wait_pct": 2.99,
+      "foreign_server_cpu_pct": 2.8,
+      "foreign_driver_cpu_pct": 2.7,
+      "attempts": 2,
+      "quiet_waited_s": 54.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 677.6428781449795,
+     "p25_us": 718.56495924294,
+     "p50_us": 734.1881282627583,
+     "p90_us": 942.3031006008387,
+     "p99_us": 1437.1690340340137,
+     "mean_us": 793.3142924836527,
+     "server_cpu_us": 735.87535,
+     "driver_cpu_us": 40.26891666666666,
+     "block_server_us": [
+      732.13,
+      742.49,
+      727.72,
+      765.36,
+      711.98,
+      735.58
+     ],
+     "host": {
+      "loadavg": "7.21 5.24 5.78 2/453 2319629",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 9.8,
+       "1": 100.0,
+       "2": 45.0,
+       "3": 1.6,
+       "4": 4.9,
+       "5": 9.8,
+       "6": 13.3,
+       "7": 1.7
+      },
+      "sibling_busy_pct": 5.7,
+      "wait_pct": 15.67,
+      "foreign_server_cpu_pct": -0.3,
+      "foreign_driver_cpu_pct": 2.2,
+      "attempts": 1,
+      "quiet_waited_s": 30.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 706.0961797833443,
+     "p25_us": 742.7309174090624,
+     "p50_us": 763.9431860297918,
+     "p90_us": 974.1010144352913,
+     "p99_us": 94191.18403457105,
+     "mean_us": 2412.1038848534226,
+     "server_cpu_us": 765.2689499999999,
+     "driver_cpu_us": 46.06665,
+     "block_server_us": [
+      759.11,
+      754.83,
+      745.72,
+      744.63,
+      846.17,
+      741.15
+     ],
+     "host": {
+      "loadavg": "7.21 5.24 5.78 2/453 2319629",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 9.8,
+       "1": 100.0,
+       "2": 45.0,
+       "3": 1.6,
+       "4": 4.9,
+       "5": 9.8,
+       "6": 13.3,
+       "7": 1.7
+      },
+      "sibling_busy_pct": 5.7,
+      "wait_pct": 15.67,
+      "foreign_server_cpu_pct": -0.3,
+      "foreign_driver_cpu_pct": 2.2,
+      "attempts": 1,
+      "quiet_waited_s": 30.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 693.1670941412449,
+     "p25_us": 726.0858546942472,
+     "p50_us": 753.1670853495598,
+     "p90_us": 924.6258996427059,
+     "p99_us": 39866.5729444474,
+     "mean_us": 1915.9849325660616,
+     "server_cpu_us": 751.4783833333333,
+     "driver_cpu_us": 46.596833333333336,
+     "block_server_us": [
+      753.3,
+      746.58,
+      828.3,
+      710.44,
+      754.15,
+      716.1
+     ],
+     "host": {
+      "loadavg": "7.21 5.24 5.78 2/453 2319629",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 9.8,
+       "1": 100.0,
+       "2": 45.0,
+       "3": 1.6,
+       "4": 4.9,
+       "5": 9.8,
+       "6": 13.3,
+       "7": 1.7
+      },
+      "sibling_busy_pct": 5.7,
+      "wait_pct": 15.67,
+      "foreign_server_cpu_pct": -0.3,
+      "foreign_driver_cpu_pct": 2.2,
+      "attempts": 1,
+      "quiet_waited_s": 30.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 714.2778486013412,
+     "p25_us": 759.767135605216,
+     "p50_us": 796.882901340723,
+     "p90_us": 1418.971922248602,
+     "p99_us": 65850.50001740456,
+     "mean_us": 2556.2949071172625,
+     "server_cpu_us": 907.020625,
+     "driver_cpu_us": 61.917408333333334,
+     "block_server_us": [
+      1265.99,
+      1156.95,
+      742.05,
+      732.72,
+      750.76,
+      793.65
+     ],
+     "host": {
+      "loadavg": "7.15 5.57 5.86 4/460 2321163",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.4,
+       "1": 100.0,
+       "2": 31.0,
+       "3": 22.9,
+       "4": 7.6,
+       "5": 100.0,
+       "6": 86.5,
+       "7": 13.8
+      },
+      "sibling_busy_pct": 61.5,
+      "wait_pct": 30.67,
+      "foreign_server_cpu_pct": 3.8,
+      "foreign_driver_cpu_pct": 5.9,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "B",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 732.2649471461773,
+     "p25_us": 783.032039180398,
+     "p50_us": 998.0772156268358,
+     "p90_us": 2377.3089051246643,
+     "p99_us": 4068.652167916298,
+     "mean_us": 1510.3587686705093,
+     "server_cpu_us": 992.7633916666667,
+     "driver_cpu_us": 62.038175,
+     "block_server_us": [
+      1271.39,
+      1279.11,
+      764.0,
+      753.66,
+      767.23,
+      1121.19
+     ],
+     "host": {
+      "loadavg": "7.15 5.57 5.86 4/460 2321163",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.4,
+       "1": 100.0,
+       "2": 31.0,
+       "3": 22.9,
+       "4": 7.6,
+       "5": 100.0,
+       "6": 86.5,
+       "7": 13.8
+      },
+      "sibling_busy_pct": 61.5,
+      "wait_pct": 30.67,
+      "foreign_server_cpu_pct": 3.8,
+      "foreign_driver_cpu_pct": 5.9,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "A",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 713.8468790799379,
+     "p25_us": 747.4280428141356,
+     "p50_us": 800.7381111383438,
+     "p90_us": 1616.4900735020638,
+     "p99_us": 2133.179921656847,
+     "mean_us": 6898.5625422404455,
+     "server_cpu_us": 936.4601166666667,
+     "driver_cpu_us": 58.80285833333333,
+     "block_server_us": [
+      1318.32,
+      1240.32,
+      739.04,
+      751.3,
+      729.85,
+      839.92
+     ],
+     "host": {
+      "loadavg": "7.15 5.57 5.86 4/460 2321163",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.4,
+       "1": 100.0,
+       "2": 31.0,
+       "3": 22.9,
+       "4": 7.6,
+       "5": 100.0,
+       "6": 86.5,
+       "7": 13.8
+      },
+      "sibling_busy_pct": 61.5,
+      "wait_pct": 30.67,
+      "foreign_server_cpu_pct": 3.8,
+      "foreign_driver_cpu_pct": 5.9,
+      "attempts": 2,
+      "quiet_waited_s": 60.0,
+      "clean": false
+     }
+    }
+   ],
+   "idle_cpu_us_per_s": {
+    "A2": 6203.586,
+    "B": 5771.599,
+    "A": 5064.036
+   },
+   "quiet_gate": {
+    "waited_s": 30.0,
+    "load": 3.06
+   },
+   "end_state": {
+    "A2": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    },
+    "B": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    },
+    "A": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    }
+   },
+   "pages-unspilled": {
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "pages-spilled": {
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "host_after": {
+    "loadavg": "7.38 5.64 5.89 6/440 2321173",
+    "competing": [
+     "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+     "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+    ]
+   }
+  },
+  {
+   "run": 4,
+   "host_before": {
+    "loadavg": "6.96 5.71 5.90 7/439 2321635",
+    "competing": [
+     "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+     "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+    ]
+   },
+   "arms": [
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 54.19203080236912,
+     "p25_us": 57.077035307884216,
+     "p50_us": 62.92504258453846,
+     "p90_us": 75.60406811535358,
+     "p99_us": 104.79800403118134,
+     "mean_us": 65.69219469740703,
+     "server_cpu_us": 33.58985235235235,
+     "driver_cpu_us": 32.15397947947948,
+     "block_server_us": [
+      29.37,
+      29.08,
+      28.1,
+      38.42,
+      37.98,
+      38.59
+     ],
+     "host": {
+      "loadavg": "8.17 6.16 6.04 1/466 2321934",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 2.5,
+       "2": 46.9,
+       "3": 2.6,
+       "4": 55.0,
+       "5": 2.6,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 2.6,
+      "wait_pct": 3.2,
+      "foreign_server_cpu_pct": -4.7,
+      "foreign_driver_cpu_pct": 6.1,
+      "attempts": 1,
+      "quiet_waited_s": 28.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 54.712872952222824,
+     "p25_us": 56.97598680853844,
+     "p50_us": 62.24401295185089,
+     "p90_us": 75.2829946577549,
+     "p99_us": 99.4198489934206,
+     "mean_us": 65.66890102864296,
+     "server_cpu_us": 32.93812162162162,
+     "driver_cpu_us": 32.14709009009009,
+     "block_server_us": [
+      29.25,
+      29.01,
+      29.22,
+      38.17,
+      37.19,
+      34.8
+     ],
+     "host": {
+      "loadavg": "8.17 6.16 6.04 1/466 2321934",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 2.5,
+       "2": 46.9,
+       "3": 2.6,
+       "4": 55.0,
+       "5": 2.6,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 2.6,
+      "wait_pct": 3.2,
+      "foreign_server_cpu_pct": -4.7,
+      "foreign_driver_cpu_pct": 6.1,
+      "attempts": 1,
+      "quiet_waited_s": 28.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "literal",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 54.46188151836395,
+     "p25_us": 57.12592974305153,
+     "p50_us": 62.4039676040411,
+     "p90_us": 73.59101437032223,
+     "p99_us": 100.88295675814152,
+     "mean_us": 64.32298550361747,
+     "server_cpu_us": 32.81077477477478,
+     "driver_cpu_us": 31.838652152152154,
+     "block_server_us": [
+      29.24,
+      28.51,
+      28.99,
+      38.1,
+      36.9,
+      35.11
+     ],
+     "host": {
+      "loadavg": "8.17 6.16 6.04 1/466 2321934",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 2.5,
+       "2": 46.9,
+       "3": 2.6,
+       "4": 55.0,
+       "5": 2.6,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 2.6,
+      "wait_pct": 3.2,
+      "foreign_server_cpu_pct": -4.7,
+      "foreign_driver_cpu_pct": 6.1,
+      "attempts": 1,
+      "quiet_waited_s": 28.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 51.09701305627823,
+     "p25_us": 53.28981205821037,
+     "p50_us": 56.045129895210266,
+     "p90_us": 70.42591460049152,
+     "p99_us": 94.86288763582706,
+     "mean_us": 63.243688217497564,
+     "server_cpu_us": 31.760135135135137,
+     "driver_cpu_us": 29.588610110110107,
+     "block_server_us": [
+      27.42,
+      27.71,
+      27.24,
+      40.99,
+      40.4,
+      26.8
+     ],
+     "host": {
+      "loadavg": "8.32 6.22 6.07 1/460 2321941",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.1,
+       "1": 2.6,
+       "2": 57.9,
+       "3": 28.2,
+       "4": 44.1,
+       "5": 5.0,
+       "6": 2.6,
+       "7": 2.6
+      },
+      "sibling_busy_pct": 16.6,
+      "wait_pct": 16.28,
+      "foreign_server_cpu_pct": 9.3,
+      "foreign_driver_cpu_pct": -1.7,
+      "attempts": 1,
+      "quiet_waited_s": 4.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 51.45790055394173,
+     "p25_us": 53.19993942975998,
+     "p50_us": 54.34197373688221,
+     "p90_us": 67.74184294044971,
+     "p99_us": 354.11491990089417,
+     "mean_us": 69.18883539859328,
+     "server_cpu_us": 29.257164664664664,
+     "driver_cpu_us": 29.809492492492492,
+     "block_server_us": [
+      27.96,
+      27.81,
+      27.44,
+      34.76,
+      30.0,
+      27.57
+     ],
+     "host": {
+      "loadavg": "8.32 6.22 6.07 1/460 2321941",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.1,
+       "1": 2.6,
+       "2": 57.9,
+       "3": 28.2,
+       "4": 44.1,
+       "5": 5.0,
+       "6": 2.6,
+       "7": 2.6
+      },
+      "sibling_busy_pct": 16.6,
+      "wait_pct": 16.28,
+      "foreign_server_cpu_pct": 9.3,
+      "foreign_driver_cpu_pct": -1.7,
+      "attempts": 1,
+      "quiet_waited_s": 4.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "select-pk",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 1998,
+     "bad": 0,
+     "p0_us": 51.34684033691883,
+     "p25_us": 53.661176934838295,
+     "p50_us": 56.81486800312996,
+     "p90_us": 69.4140326231718,
+     "p99_us": 87.44210936129093,
+     "mean_us": 60.9541310694766,
+     "server_cpu_us": 31.415410410410413,
+     "driver_cpu_us": 29.586993493493495,
+     "block_server_us": [
+      28.68,
+      27.47,
+      27.52,
+      38.48,
+      38.95,
+      27.39
+     ],
+     "host": {
+      "loadavg": "8.32 6.22 6.07 1/460 2321941",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 5.1,
+       "1": 2.6,
+       "2": 57.9,
+       "3": 28.2,
+       "4": 44.1,
+       "5": 5.0,
+       "6": 2.6,
+       "7": 2.6
+      },
+      "sibling_busy_pct": 16.6,
+      "wait_pct": 16.28,
+      "foreign_server_cpu_pct": 9.3,
+      "foreign_driver_cpu_pct": -1.7,
+      "attempts": 1,
+      "quiet_waited_s": 4.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "A2",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 694.1379979252815,
+     "p25_us": 724.7040048241615,
+     "p50_us": 737.4128326773643,
+     "p90_us": 817.4239192157984,
+     "p99_us": 894.3101856857538,
+     "mean_us": 754.7922277202208,
+     "server_cpu_us": 717.4788416666667,
+     "driver_cpu_us": 41.5409,
+     "block_server_us": [
+      716.36,
+      706.18,
+      710.74,
+      710.4,
+      738.38,
+      722.8
+     ],
+     "host": {
+      "loadavg": "8.32 6.22 6.07 1/461 2321951",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 1.3,
+       "2": 37.7,
+       "3": 1.3,
+       "4": 1.3,
+       "5": 1.3,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.3,
+      "wait_pct": 11.81,
+      "foreign_server_cpu_pct": 1.6,
+      "foreign_driver_cpu_pct": -0.7,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "B",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 730.4530590772629,
+     "p25_us": 763.7531962245703,
+     "p50_us": 775.4310499876738,
+     "p90_us": 856.833066791296,
+     "p99_us": 1001.6018059104681,
+     "mean_us": 1546.8167994792261,
+     "server_cpu_us": 754.190425,
+     "driver_cpu_us": 44.418074999999995,
+     "block_server_us": [
+      768.43,
+      749.33,
+      737.58,
+      762.34,
+      757.16,
+      750.3
+     ],
+     "host": {
+      "loadavg": "8.32 6.22 6.07 1/461 2321951",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 1.3,
+       "2": 37.7,
+       "3": 1.3,
+       "4": 1.3,
+       "5": 1.3,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.3,
+      "wait_pct": 11.81,
+      "foreign_server_cpu_pct": 1.6,
+      "foreign_driver_cpu_pct": -0.7,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "literal",
+     "bin": "A",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 693.5968995094299,
+     "p25_us": 723.1121417135,
+     "p50_us": 736.2409960478544,
+     "p90_us": 841.5509946644306,
+     "p99_us": 1066.138967871666,
+     "mean_us": 3991.857592094069,
+     "server_cpu_us": 726.0725749999999,
+     "driver_cpu_us": 41.915258333333334,
+     "block_server_us": [
+      718.14,
+      720.86,
+      708.6,
+      717.34,
+      783.78,
+      707.72
+     ],
+     "host": {
+      "loadavg": "8.32 6.22 6.07 1/461 2321951",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 0.0,
+       "1": 1.3,
+       "2": 37.7,
+       "3": 1.3,
+       "4": 1.3,
+       "5": 1.3,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 1.3,
+      "wait_pct": 11.81,
+      "foreign_server_cpu_pct": 1.6,
+      "foreign_driver_cpu_pct": -0.7,
+      "attempts": 1,
+      "quiet_waited_s": 2.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "A2",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 691.9950246810913,
+     "p25_us": 734.8190993070602,
+     "p50_us": 755.7310163974762,
+     "p90_us": 864.6149653941393,
+     "p99_us": 1028.9140045642853,
+     "mean_us": 956.0263172412912,
+     "server_cpu_us": 745.2829250000001,
+     "driver_cpu_us": 37.911458333333336,
+     "block_server_us": [
+      728.12,
+      725.07,
+      741.98,
+      755.73,
+      774.13,
+      746.67
+     ],
+     "host": {
+      "loadavg": "7.04 6.27 6.09 3/457 2323300",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 3.0,
+       "1": 100.0,
+       "2": 84.8,
+       "3": 0.0,
+       "4": 6.1,
+       "5": 6.1,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 3.0,
+      "wait_pct": 10.71,
+      "foreign_server_cpu_pct": 0.6,
+      "foreign_driver_cpu_pct": 1.7,
+      "attempts": 2,
+      "quiet_waited_s": 52.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "B",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 728.6299951374531,
+     "p25_us": 767.4689404666424,
+     "p50_us": 786.7079693824053,
+     "p90_us": 881.8309288471937,
+     "p99_us": 1027.2199288010597,
+     "mean_us": 849.8071479455878,
+     "server_cpu_us": 774.5166583333333,
+     "driver_cpu_us": 42.087408333333336,
+     "block_server_us": [
+      757.39,
+      764.45,
+      777.46,
+      781.5,
+      777.02,
+      789.28
+     ],
+     "host": {
+      "loadavg": "7.04 6.27 6.09 3/457 2323300",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 3.0,
+       "1": 100.0,
+       "2": 84.8,
+       "3": 0.0,
+       "4": 6.1,
+       "5": 6.1,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 3.0,
+      "wait_pct": 10.71,
+      "foreign_server_cpu_pct": 0.6,
+      "foreign_driver_cpu_pct": 1.7,
+      "attempts": 2,
+      "quiet_waited_s": 52.0,
+      "clean": true
+     }
+    },
+    {
+     "shape": "update-range",
+     "path": "prepared",
+     "bin": "A",
+     "ops": 120,
+     "bad": 0,
+     "p0_us": 693.7570869922638,
+     "p25_us": 734.5590274780989,
+     "p50_us": 752.4259854108095,
+     "p90_us": 858.1650909036398,
+     "p99_us": 1190.426992252469,
+     "mean_us": 895.808507145072,
+     "server_cpu_us": 741.791575,
+     "driver_cpu_us": 38.122800000000005,
+     "block_server_us": [
+      732.38,
+      726.73,
+      747.29,
+      755.12,
+      743.68,
+      745.55
+     ],
+     "host": {
+      "loadavg": "7.04 6.27 6.09 3/457 2323300",
+      "competing": [
+       "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+       "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+      ],
+      "cpu_busy_pct": {
+       "0": 3.0,
+       "1": 100.0,
+       "2": 84.8,
+       "3": 0.0,
+       "4": 6.1,
+       "5": 6.1,
+       "6": 0.0,
+       "7": 0.0
+      },
+      "sibling_busy_pct": 3.0,
+      "wait_pct": 10.71,
+      "foreign_server_cpu_pct": 0.6,
+      "foreign_driver_cpu_pct": 1.7,
+      "attempts": 2,
+      "quiet_waited_s": 52.0,
+      "clean": true
+     }
+    }
+   ],
+   "idle_cpu_us_per_s": {
+    "A2": 4117.747,
+    "B": 5646.262,
+    "A": 5151.669
+   },
+   "quiet_gate": {
+    "waited_s": 30.0,
+    "load": 6.96
+   },
+   "end_state": {
+    "A2": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    },
+    "B": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    },
+    "A": {
+     "range_v_ok": true,
+     "spill_txt_ok": true
+    }
+   },
+   "pages-unspilled": {
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "pages-spilled": {
+    "A2": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "B": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    },
+    "A": {
+     "updates": 1000,
+     "pages_allocated_delta": 0
+    }
+   },
+   "host_after": {
+    "loadavg": "7.04 6.27 6.09 2/445 2323308",
+    "competing": [
+     "2317142 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sed -n 1,20p scripts/test.sh | grep -n '\"'\"'LE\\|label'\"'\"' ; ctest --test-dir build -j6 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt 2>&1; tail -15 /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite.txt' < /dev/null && pwd -P >| /tmp/claude-6839-cwd",
+     "2317146 ctest --test-dir build -j6 -LE heap-suspended"
+    ]
+   }
+  }
+ ]
+}

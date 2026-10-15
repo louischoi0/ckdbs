@@ -50,7 +50,7 @@ StatusOr<Resolved> Resolve(catalog::Catalog& catalog, const parser::CabinStmt& s
     if (!found.ok()) return found.status();
     if (found.value() != nullptr) {
         Resolved out = relation.value();
-        out.col_pos = static_cast<std::uint16_t>(found.value() - schema.columns.data());
+        out.col_pos = static_cast<std::uint16_t>(found.value()->pos);
         return out;
     }
     return Status::NotFound("relation '" + stmt.table_name + "' has no column '" +
@@ -191,7 +191,11 @@ StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, storage::PageSto
     out.cabin_id = cabin_id.value();
     out.rel_oid = resolved.value().rel_oid;
     out.col_pos = resolved.value().col_pos;
-    out.key = stmt.column_name;
+    // The column's declared name, not the spelling the statement used: a
+    // name matches ignoring case, and the reply names the Cabin as `SHOW
+    // CABINS` will.
+    out.key = std::string(
+        catalog::NameView(resolved.value().access->schema.columns[out.col_pos].name));
 
     // Warnings are collected *after* the write, because none of them is a
     // reason not to write - and computing them first would make a statement's

@@ -1,0 +1,72 @@
+u1 select-pk literal A 32.0 A2 31.9 B 33.8 | A 28.8 A2 28.4 B 28.4 | A 32.9 A2 32.5 B 31.8
+u1 select-pk prepared A 27.0 A2 27.1 B 27.6 | A 31.2 A2 30.9 B 30.4 | A 27.7 A2 27.8 B 26.4
+u1 insert literal A 22.4 A2 22.6 B 23.4 | A 23.2 A2 23.5 B 23.6 | A 23.0 A2 22.6 B 22.8
+u1 insert prepared A 21.8 A2 21.8 B 22.5 | A 21.9 A2 22.2 B 22.3 | A 22.3 A2 22.0 B 22.0
+u1 update-range literal A 724.8 A2 720.1 B 754.2 | A 809.0 A2 779.5 B 856.5 | A 720.1 A2 719.0 B 758.6
+u1 update-range prepared A 797.8 A2 816.3 B 827.2 | A 725.6 A2 722.4 B 768.9 | A 779.7 A2 788.7 B 829.9
+u2 select-pk literal A 31.7 A2 31.6 B 32.6 | A 27.4 A2 28.1 B 28.4 | A 31.6 A2 32.4 B 32.7
+u2 select-pk prepared A 27.2 A2 26.9 B 28.0 | A 30.0 A2 30.5 B 31.0 | A 27.1 A2 27.4 B 27.5
+u2 insert literal A 22.8 A2 23.1 B 23.1 | A 22.5 A2 23.6 B 22.9 | A 23.6 A2 23.4 B 23.0
+u2 insert prepared A 23.1 A2 22.4 B 23.4 | A 21.6 A2 22.8 B 22.5 | A 23.4 A2 23.1 B 22.6
+u2 update-range literal A 735.4 A2 721.3 B 750.3 | A 802.7 A2 808.8 B 832.4 | A 752.5 A2 737.9 B 756.8
+u2 update-range prepared A 815.8 A2 798.4 B 817.2 | A 725.1 A2 715.8 B 741.7 | A 825.6 A2 836.9 B 823.7
+u3 select-pk literal A 64.2 A2 64.5 B 65.6 | A 29.1 A2 29.2 B 29.6 | A 28.7 A2 27.9 B 28.3 | A 28.6 A2 29.2 B 29.8 | A 32.8 A2 33.6 B 32.9
+u3 select-pk prepared A 27.4 A2 26.6 B 27.7 | A 31.1 A2 31.0 B 31.5 | A 28.4 A2 27.6 B 27.7 | A 27.9 A2 27.9 B 28.0 | A 31.4 A2 31.8 B 29.3
+u3 update-range literal A 771.8 A2 728.9 B 793.1 | A 758.5 A2 747.9 B 754.0 | A 734.9 A2 737.1 B 760.6 | A 936.5 A2 907.0 B 992.8 | A 726.1 A2 717.5 B 754.2
+u3 update-range prepared A 754.8 A2 752.2 B 778.5 | A 739.0 A2 735.1 B 756.7 | A 799.5 A2 731.7 B 754.4 | A 751.5 A2 735.9 B 765.3 | A 741.8 A2 745.3 B 774.5
+c1 plain-insert literal A 23.6 A2 22.9 B 22.9 | A 23.6 A2 22.8 B 22.8 | A 23.8 A2 24.0 B 23.6
+c1 plain-insert prepared A 22.9 A2 22.2 B 22.3 | A 23.1 A2 22.3 B 22.1 | A 23.0 A2 23.4 B 23.2
+c1 cab-insert literal A 24.2 A2 23.3 B 23.4 | A 24.5 A2 23.5 B 23.3 | A 24.3 A2 24.5 B 24.2
+c1 cab-insert prepared A 23.7 A2 23.0 B 22.9 | A 23.8 A2 22.8 B 22.9 | A 23.5 A2 24.1 B 23.8
+c1 plain-select literal A 62.4 A2 61.9 B 64.5 | A 61.7 A2 63.4 B 64.8 | A 62.7 A2 62.8 B 63.7
+c1 plain-select prepared A 61.1 A2 61.1 B 63.8 | A 60.9 A2 60.2 B 63.6 | A 61.8 A2 63.8 B 63.0
+c1 cab-select literal A 31.5 A2 30.5 B 32.5 | A 30.8 A2 30.6 B 31.0 | A 31.6 A2 31.7 B 31.9
+c1 cab-select prepared A 31.9 A2 30.8 B 32.8 | A 29.7 A2 29.4 B 30.2 | A 30.8 A2 31.1 B 31.0
+c2 plain-insert literal A 23.9 A2 23.8 B 23.4 | A 23.3 A2 23.7 B 23.2 | A 23.1 A2 23.6 B 23.0
+c2 plain-insert prepared A 23.9 A2 23.6 B 23.5 | A 22.9 A2 23.1 B 22.7 | A 22.7 A2 23.4 B 22.6
+c2 cab-insert literal A 25.4 A2 24.9 B 24.8 | A 24.1 A2 24.1 B 23.9 | A 24.0 A2 24.3 B 23.7
+c2 cab-insert prepared A 24.5 A2 24.3 B 24.2 | A 23.6 A2 23.7 B 23.5 | A 23.4 A2 24.2 B 23.3
+c2 plain-select literal A 64.6 A2 63.7 B 64.8 | A 64.3 A2 62.7 B 63.2 | A 61.4 A2 62.3 B 64.0
+c2 plain-select prepared A 62.2 A2 61.6 B 62.7 | A 62.0 A2 61.8 B 62.3 | A 60.2 A2 61.6 B 62.4
+c2 cab-select literal A 32.1 A2 30.7 B 31.5 | A 31.3 A2 31.3 B 31.2 | A 30.2 A2 31.1 B 32.1
+c2 cab-select prepared A 32.0 A2 30.5 B 31.3 | A 30.9 A2 30.8 B 30.3 | A 29.3 A2 30.2 B 31.2
+x plain-insert literal B 22.4 B2 22.4 | B 23.7 B2 23.3 | B 23.4 B2 22.6 | B 22.8 B2 22.4
+x plain-insert prepared B 22.4 B2 22.1 | B 22.9 B2 22.5 | B 22.2 B2 21.8 | B 22.3 B2 21.6
+x cab-insert literal B 23.0 B2 23.2 | B 24.0 B2 24.1 | B 23.9 B2 23.0 | B 23.9 B2 23.0
+x cab-insert prepared B 22.5 B2 23.8 | B 22.7 B2 22.6 | B 23.7 B2 23.1 | B 23.0 B2 22.4
+x x-insert-plain literal B 22.9 B2 22.9 | B 23.8 B2 23.3 | B 24.2 B2 23.4 | B 23.3 B2 22.6
+x x-insert-plain prepared B 22.7 B2 23.0 | B 23.9 B2 22.9 | B 27.3 B2 23.2 | B 22.9 B2 22.2
+x x-insert literal B 23.6 B2 23.7 | B 24.6 B2 24.5 | B 24.6 B2 23.2 | B 24.2 B2 23.2
+x x-insert prepared B 23.3 B2 24.1 | B 25.0 B2 24.7 | B 25.3 B2 23.7 | B 23.7 B2 23.2
+x x-walk literal B 115.4 B2 116.2 | B 119.4 B2 115.2 | B 115.5 B2 114.1 | B 117.3 B2 117.4
+x x-walk prepared B 118.2 B2 119.0 | B 119.3 B2 116.6 | B 116.9 B2 114.8 | B 115.5 B2 115.0
+x x-select literal B 41.1 B2 41.3 | B 40.2 B2 39.8 | B 39.4 B2 39.2 | B 39.9 B2 39.3
+x x-select prepared B 40.0 B2 40.9 | B 40.3 B2 40.4 | B 39.3 B2 38.9 | B 40.3 B2 39.5
+r200 select-pk literal A 28.9 A2 28.8 B 29.2 | A 45.5 A2 44.9 B 48.7 | A 28.7 A2 27.5 B 28.8
+r200 select-pk prepared A 26.0 A2 26.7 B 27.3 | A 47.5 A2 48.3 B 47.7 | A 27.8 A2 26.3 B 27.1
+r200 insert literal A 24.5 A2 23.9 B 23.0 | A 37.3 A2 42.5 B 40.3 | A 23.9 A2 24.4 B 23.9
+r200 insert prepared A 22.1 A2 22.1 B 22.0 | A 42.8 A2 44.8 B 46.2 | A 22.7 A2 23.7 B 22.4
+r200 update-range literal A 185.4 A2 187.9 B 196.8 | A 171.3 A2 169.5 B 171.1 | A 170.9 A2 170.2 B 174.9
+r200 update-range prepared A 174.9 A2 180.4 B 184.3 | A 173.8 A2 168.6 B 172.6 | A 169.5 A2 169.5 B 174.9
+r10k select-pk literal A 29.9 A2 31.0 B 31.0 | A 27.7 A2 27.9 B 28.6 | A 35.0 A2 34.1 B 35.5
+r10k select-pk prepared A 27.1 A2 27.0 B 27.1 | A 26.9 A2 27.3 B 28.3 | A 30.1 A2 30.4 B 31.2
+r10k insert literal A 23.0 A2 22.7 B 23.6 | A 23.4 A2 24.5 B 24.1 | A 23.6 A2 22.7 B 24.0
+r10k insert prepared A 22.4 A2 21.5 B 23.0 | A 21.7 A2 22.7 B 22.8 | A 22.9 A2 22.4 B 22.8
+r10k update-range literal A 7210.2 A2 6962.8 B 7434.7 | A 7204.0 A2 7315.5 B 7475.6 | A 7429.7 A2 7702.3 B 7713.4
+r10k update-range prepared A 7319.6 A2 7259.6 B 7589.1 | A 6965.1 A2 6958.6 B 7049.5 | A 7257.9 A2 7427.4 B 7371.1
+c200 plain-insert literal A 24.0 A2 24.0 B 24.0 | A 23.1 A2 22.5 B 23.1 | A 24.1 A2 22.9 B 22.8
+c200 plain-insert prepared A 23.9 A2 24.0 B 24.5 | A 22.2 A2 22.4 B 22.5 | A 22.3 A2 22.5 B 22.4
+c200 cab-insert literal A 25.3 A2 25.5 B 25.5 | A 23.5 A2 23.5 B 24.3 | A 23.7 A2 23.6 B 23.5
+c200 cab-insert prepared A 23.8 A2 23.9 B 24.2 | A 24.5 A2 23.5 B 23.9 | A 22.9 A2 24.2 B 23.1
+c200 plain-select literal A 34.3 A2 33.9 B 34.4 | A 34.9 A2 34.1 B 35.1 | A 34.1 A2 33.9 B 34.6
+c200 plain-select prepared A 33.5 A2 33.3 B 34.4 | A 33.5 A2 33.5 B 33.9 | A 34.4 A2 33.9 B 34.8
+c200 cab-select literal A 28.1 A2 27.8 B 28.8 | A 28.9 A2 28.2 B 28.6 | A 28.5 A2 28.9 B 28.7
+c200 cab-select prepared A 27.4 A2 27.2 B 28.1 | A 27.6 A2 27.6 B 27.8 | A 27.9 A2 29.0 B 28.1
+c10k plain-insert literal A 22.8 A2 23.7 B 24.0 | A 23.4 A2 24.6 B 23.4 | A 23.3 A2 23.7 B 23.4
+c10k plain-insert prepared A 22.4 A2 23.4 B 23.5 | A 22.5 A2 23.2 B 22.5 | A 22.5 A2 22.9 B 23.0
+c10k cab-insert literal A 23.5 A2 24.4 B 25.0 | A 24.6 A2 26.2 B 24.5 | A 23.8 A2 24.2 B 24.3
+c10k cab-insert prepared A 23.0 A2 24.0 B 23.9 | A 23.2 A2 23.8 B 23.3 | A 22.9 A2 23.9 B 23.9
+c10k plain-select literal A 365.1 A2 368.8 B 373.4 | A 365.6 A2 364.8 B 371.2 | A 372.2 A2 367.1 B 383.6
+c10k plain-select prepared A 366.9 A2 386.8 B 381.5 | A 366.4 A2 363.8 B 370.4 | A 374.8 A2 379.5 B 374.8
+c10k cab-select literal A 53.6 A2 53.4 B 55.0 | A 54.2 A2 53.8 B 53.9 | A 57.8 A2 55.9 B 56.4
+c10k cab-select prepared A 52.6 A2 52.5 B 54.0 | A 53.6 A2 53.6 B 55.1 | A 55.5 A2 56.9 B 57.0
