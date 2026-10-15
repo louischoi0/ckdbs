@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -53,6 +54,10 @@
 // "no match" instead of an error.
 
 namespace kds::exec {
+
+// An expression Cabin's compiled key function (cabin_expr.hpp), held by
+// `CabinProbe::f`.
+struct CompiledCabinExpr;
 
 // A resolved reference to one column of one relation.
 //
@@ -202,7 +207,15 @@ struct CabinProbe {
 
     // The cabined column's schema position, for the access statistics and
     // for re-deriving the probe value from a decoded row on the write path.
+    // An expression Cabin's first input (`f` below).
     std::uint16_t col_pos = 0;
+
+    // An **expression** Cabin's key function (AQ-R5): set, the step probes
+    // `F(row) = value` and the recording walk compares `F` on each row; null,
+    // it is a column Cabin and compares `col_pos`. The function conjunct the
+    // probe was derived from stays in `Step::fn_residual` and re-checks every
+    // served row - the residual's role for a column Cabin.
+    std::shared_ptr<const CompiledCabinExpr> f;
 
     // The value being probed for, when the equality binds a literal.
     // Unused when `key_from` below is set.

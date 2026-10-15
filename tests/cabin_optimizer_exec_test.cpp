@@ -475,5 +475,36 @@ TEST(CabinOptimizerExecTest, ADeclaredCabinIsNeverMarkedAsManaged) {
         << "a user-declared Cabin wore the optimizer's tag: " << analyzed;
 }
 
+// AQ-R7: a filter scan's candidate is the lowest non-tuple-key column of an
+// **equality in its residual**, never a function's argument. `ts` is the
+// lower column and is filtered too - as `DATE(ts)`'s argument - so the
+// filtered-column mask the pick read before AQ named it, and the controller
+// would price a column Cabin on `ts` that no statement of this shape probes.
+TEST(CabinOptimizerExecTest, AFunctionsArgumentIsNeverTheCandidate) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE f (id int64, ts timestamp, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO f VALUES ('2026-10-01 00:00:00', 3)").substr(0, 8), "INSERTED");
+    const std::string sql = "SELECT * FROM f WHERE DATE(ts) = '2026-10-01' AND v = 3";
+    ASSERT_NE(db.Run("ANALYZE " + sql).find("FilterScan"), std::string::npos);
+    db.Run(sql);
+
+    const auto oid = db.catalog().FindTableOidByName("f");
+    ASSERT_TRUE(oid.ok());
+    bool seen = false;
+    for (const stats::SnapshotFingerprint& fp : db.signals().Snapshot().fingerprints) {
+        if (fp.candidate.rel_oid != oid.value()) continue;
+        seen = true;
+        EXPECT_EQ(fp.candidate.col_pos, 2u) << "the candidate is v, not DATE's argument ts";
+    }
+    EXPECT_TRUE(seen) << "the shape arrived with no candidate";
+
+    // A function conjunct alone names no column at all.
+    const std::string only = "SELECT * FROM f WHERE DATE(ts) = '2026-10-02'";
+    db.Run(only);
+    for (const stats::SnapshotFingerprint& fp : db.signals().Snapshot().fingerprints) {
+        if (fp.candidate.rel_oid == oid.value()) EXPECT_NE(fp.candidate.col_pos, 1u);
+    }
+}
+
 }  // namespace
 }  // namespace kds::server

@@ -11,6 +11,9 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/txn/manager.hpp"
+#include "kds/txn/trx_id.hpp"
+#include "kds/txn/undo_log.hpp"
 #include "view_text.hpp"
 
 // AQ-S1: the expression and predicate Cabin's catalog and grammar
@@ -40,6 +43,9 @@ protected:
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
         cabins_.emplace();
+        ids_.emplace(boot_->superblock);
+        undo_.emplace(store_, /*wal=*/nullptr);
+        mgr_.emplace(*ids_, *undo_, store_, /*wal=*/nullptr);
         Reopen(boot_->catalog);
         Ok("CREATE TABLE t (id int64, state varchar, amount int64, ts timestamp NULL, "
            "quiet timestamp NULL NO CABIN, sym varchar)");
@@ -50,7 +56,7 @@ protected:
         dispatcher_.emplace(boot_->superblock, catalog, store_, /*log=*/nullptr,
                             /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
                             exec::Budget(), /*recorder=*/nullptr, /*replay=*/false,
-                            /*access_statistics=*/true, &*cabins_);
+                            /*access_statistics=*/true, &*cabins_, &*mgr_);
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
@@ -74,6 +80,9 @@ protected:
     storage::InMemoryPageStore store_{kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<stats::CabinStore> cabins_;
+    std::optional<txn::TrxIdSequence> ids_;
+    std::optional<txn::UndoLog> undo_;
+    std::optional<txn::TransactionManager> mgr_;
     std::optional<CommandDispatcher> dispatcher_;
 };
 
@@ -353,6 +362,170 @@ TEST_F(CabinExprTest, DroppingTheRelationTakesTheText) {
     Ok("DROP TABLE t");
     EXPECT_TRUE(StoredTexts(boot_->catalog).empty());
     EXPECT_TRUE(Cabins().rows.empty());
+}
+
+}  // namespace
+}  // namespace kds::server
+
+// ---- AQ-S2: the expression Cabin's witness, serve and record ---------------
+//
+// Every served read is compared with the walk that answers the same rows
+// with no Cabin in reach: the half-open `ts` range of the day, a plain filter
+// conjunct no Cabin serves.
+
+namespace kds::server {
+namespace {
+
+class CabinExprServeTest : public CabinExprTest {
+protected:
+    void SetUp() override {
+        CabinExprTest::SetUp();
+        Ok("INSERT INTO t VALUES ('a', 1, '2026-10-01 00:00:00', NULL, 'x')");
+        Ok("INSERT INTO t VALUES ('b', 2, '2026-10-01 23:59:59.999999', NULL, 'y')");
+        Ok("INSERT INTO t VALUES ('c', 3, '2026-10-02 00:00:00', NULL, 'z')");
+        Ok("INSERT INTO t VALUES ('d', 4, NULL, NULL, 'w')");
+    }
+
+    static constexpr const char* kOct1 =
+        "SELECT id, amount, ts FROM t WHERE DATE(ts) = '2026-10-01'";
+    std::string Walked() {
+        return Run("SELECT id, amount, ts FROM t WHERE ts >= '2026-10-01 00:00:00' AND "
+                   "ts < '2026-10-02 00:00:00'");
+    }
+    // The reply and whether a Cabin served it.
+    std::pair<std::string, bool> Served(const std::string& sql) {
+        const std::string reply = Run(sql);
+        const std::string analyzed = Run("ANALYZE " + sql);
+        return {reply, analyzed.find("cabin_hits=1") != std::string::npos};
+    }
+    std::string Entries() {
+        const auto view = Cabins();
+        return view.rows.empty() ? "" : view.rows[0][view.Col("entries")];
+    }
+    // Declares the Cabin and observes 2026-10-01: a declared Cabin records on
+    // its first probe (`cabin.md` §8.1, n=1).
+    void Observe() {
+        Ok("CREATE CABIN ON t (DATE(ts))");
+        ASSERT_EQ(Run(kOct1), Walked());
+    }
+};
+
+TEST_F(CabinExprServeTest, AnObservedDayIsServedAndAnswersAsTheWalkDoes) {
+    // Before the declaration the conjunct walks: the step is no Cabin probe.
+    const std::string before = Run(std::string("ANALYZE ") + kOct1);
+    EXPECT_EQ(before.find("CabinProbe"), std::string::npos) << before;
+    const std::string walked = Run(kOct1);
+    ASSERT_EQ(walked, Walked());
+
+    Observe();
+    const auto [reply, served] = Served(kOct1);
+    EXPECT_TRUE(served) << Run(std::string("ANALYZE ") + kOct1);
+    EXPECT_EQ(reply, walked);
+    EXPECT_EQ(Entries(), "2");
+}
+
+TEST_F(CabinExprServeTest, AnInsertIntoAnObservedDayIsWitnessed) {
+    Observe();
+    Ok("INSERT INTO t VALUES ('e', 5, '2026-10-01 12:00:00', NULL, 'v')");
+    const auto [reply, served] = Served(kOct1);
+    EXPECT_TRUE(served);
+    EXPECT_EQ(reply, Walked());
+    EXPECT_NE(reply.find("12:00:00"), std::string::npos) << reply;
+}
+
+// The two other INSERT shapes reach the same witness: a multi-row VALUES,
+// and a column list that leaves a nullable input out (NULL: no key).
+TEST_F(CabinExprServeTest, MultiRowAndColumnListInsertsAreWitnessed) {
+    Observe();
+    Ok("INSERT INTO t VALUES ('e', 5, '2026-10-01 10:00:00', NULL, 'v'), "
+       "('f', 6, '2026-10-03 10:00:00', NULL, 'u'), ('g', 7, '2026-10-01 11:00:00', NULL, 't')");
+    Ok("INSERT INTO t (sym, ts, state, amount) VALUES ('s', '2026-10-01 13:00:00', 'h', 8)");
+    Ok("INSERT INTO t (sym, state, amount) VALUES ('r', 'i', 9)");
+    const auto [reply, served] = Served(kOct1);
+    EXPECT_TRUE(served);
+    EXPECT_EQ(reply, Walked());
+    EXPECT_EQ(Entries(), "5");
+}
+
+TEST_F(CabinExprServeTest, AnUpdateMovingTheInputIntoAnObservedDayIsWitnessed) {
+    Observe();
+    Ok("UPDATE t SET ts = '2026-10-01 08:00:00' WHERE id = 3");
+    Ok("UPDATE t SET ts = '2026-10-01 09:00:00' WHERE id = 4");  // from NULL
+    const auto [reply, served] = Served(kOct1);
+    EXPECT_TRUE(served);
+    EXPECT_EQ(reply, Walked());
+    EXPECT_EQ(Entries(), "4");
+}
+
+TEST_F(CabinExprServeTest, AnUpdateMovingTheInputOutIsSubtractedAtTheServe) {
+    Observe();
+    Ok("UPDATE t SET ts = '2026-10-05 00:00:00' WHERE id = 1");
+    const auto [reply, served] = Served(kOct1);
+    EXPECT_TRUE(served);
+    EXPECT_EQ(reply, Walked());
+    EXPECT_EQ(reply.find("2026-10-05"), std::string::npos) << reply;
+}
+
+TEST_F(CabinExprServeTest, AnUpdateOfAColumnFNeverReadsAppendsNothing) {
+    Observe();
+    Ok("UPDATE t SET amount = 99 WHERE id = 1");
+    Ok("UPDATE t SET ts = '2026-10-01 00:00:00' WHERE id = 1");  // to the value it holds
+    EXPECT_EQ(Entries(), "2");
+    const auto [reply, served] = Served(kOct1);
+    EXPECT_TRUE(served);
+    EXPECT_EQ(reply, Walked());
+}
+
+// A surplus entry - a row of another day filed under 2026-10-01 - is what the
+// function conjunct, left in `fn_residual`, subtracts: moved out of it when
+// served, the reply would carry 2026-10-02's row.
+TEST_F(CabinExprServeTest, ASurplusEntryIsReCheckedByTheConjunct) {
+    Observe();
+    const auto oid = boot_->catalog.FindTableOidByName("t");
+    ASSERT_TRUE(oid.ok());
+    auto access = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    ASSERT_EQ(access.value()->expr_cabins.size(), 1u);
+    parser::AstValue day;
+    day.type = parser::ValueType::kInt;
+    day.int_val = 20727;  // 2026-10-01 in epoch days
+    auto key = stats::MakeCabinKey(access.value()->expr_cabins[0].id, day);
+    ASSERT_TRUE(key.has_value());
+    stats::CabinEntry surplus;
+    surplus.tuple_key = 3;  // ts 2026-10-02
+    cabins_->NoteWrite(*key, surplus);
+    EXPECT_EQ(Entries(), "3");
+
+    const auto [reply, served] = Served(kOct1);
+    EXPECT_TRUE(served);
+    EXPECT_EQ(reply, Walked());
+}
+
+// AQ-R2 at the probe: `DATE(b)` is not `DATE(a)`'s key, though both call one
+// function - a probe matched by function alone would serve one column's day
+// for the other's.
+TEST_F(CabinExprServeTest, AnotherColumnsCallIsNotThisCabinsKey) {
+    Ok("CREATE TABLE two (id int64, a timestamp, b timestamp)");
+    Ok("INSERT INTO two VALUES ('2026-10-01 01:00:00', '2026-10-09 01:00:00')");
+    Ok("INSERT INTO two VALUES ('2026-10-09 01:00:00', '2026-10-01 01:00:00')");
+    Ok("CREATE CABIN ON two (DATE(a))");
+    ASSERT_EQ(Run("SELECT id FROM two WHERE DATE(a) = '2026-10-01'"), "id\\n1");
+    const auto [by_b, served] = Served("SELECT id FROM two WHERE DATE(b) = '2026-10-01'");
+    EXPECT_FALSE(served);
+    EXPECT_EQ(by_b, "id\\n2");
+    EXPECT_TRUE(Served("SELECT id FROM two WHERE DATE(a) = '2026-10-01'").second);
+}
+
+// The column shape and the expression shape on one relation: each is served
+// for its own conjunct.
+TEST_F(CabinExprServeTest, AColumnCabinBesideItIsUnchanged) {
+    Ok("CREATE CABIN ON t(sym)");
+    Observe();
+    ASSERT_EQ(Run("SELECT id FROM t WHERE sym = 'y'"), "id\\n2");
+    const auto [reply, served] = Served("SELECT id FROM t WHERE sym = 'y'");
+    EXPECT_TRUE(served);
+    EXPECT_EQ(reply, "id\\n2");
+    EXPECT_TRUE(Served(kOct1).second);
 }
 
 }  // namespace

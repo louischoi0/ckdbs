@@ -13,6 +13,7 @@
 // value a predicate compares and the value a write keys on are identical by
 // construction.
 #include "kds/storage/keystone.hpp"  // kIdSpaceEnd - a bind's whole-relation declaration
+#include "kds/exec/cabin_expr.hpp"
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_vm.hpp"  // PositionSink - the declaration sink AT-R1 threads
@@ -1173,6 +1174,51 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
     return std::nullopt;
 }
 
+// The expression Cabin probe (AQ-R5), or nullopt: a function conjunct
+// `F(cols) = literal` over this step's own columns whose `F` is an
+// expression Cabin's - **confirmed by its canonical text** (AQ-R2), the
+// identity `CREATE CABIN` refused a duplicate of, never by a hash. Reached
+// after the column Cabin's arm, at its rank. The conjunct stays in
+// `fn_residual`: the probe is a hint on top of it, as every probe is on top
+// of its residual, so a served row is re-checked and a step downgraded to a
+// walk answers the same.
+//
+// Never a key, a bound, an index or join key, or a `BuildKey`: this arm
+// reads `fn_residual` and writes nothing but `Step::cabin`. The correlated
+// form (§4a) is not extended to `F`.
+std::optional<CabinProbe> ExprCabinProbeOf(const catalog::TableAccess& access, const Step& step,
+                                           std::uint16_t slot) {
+    if (access.expr_cabins.empty()) return std::nullopt;
+    for (const FunctionPredicate& pred : step.fn_residual) {
+        if (pred.op != parser::CompareOp::kEq || !pred.lhs.call.has_value()) continue;
+        if (pred.rhs.call.has_value() || pred.rhs.plain.kind != OperandKind::kLiteral) continue;
+        CabinTerm term;
+        term.fn = pred.lhs.call->fn;
+        bool own = true;
+        for (const ColumnRef& arg : pred.lhs.call->args) {
+            own = own && IsOwnColumn(arg, slot);
+            term.args.push_back(arg.col_pos);
+        }
+        if (!own) continue;
+        const std::string text = CabinTermText(term);
+        for (const catalog::TableAccess::ExprCabinRef& ref : access.expr_cabins) {
+            if (ref.shape != catalog::kCabinShapeExpression || ref.f == nullptr ||
+                ref.f->text != text) {
+                continue;
+            }
+            CabinProbe probe;
+            probe.cabin_id = ref.id;
+            probe.col_pos = ref.f->inputs.front();
+            probe.value = pred.rhs.plain.literal;
+            probe.f = ref.f;
+            probe.declared = ref.origin == catalog::kCabinOriginUser;
+            probe.managed = ref.origin == catalog::kCabinOriginAuto;
+            return probe;
+        }
+    }
+    return std::nullopt;
+}
+
 // The correlated cabin probe (docs/spec/cabin.md §4a), or nullopt: a
 // cabined column bound by equality to an earlier step's or an enclosing
 // chain's column - the join shape, IX17's selection one trust class over.
@@ -1293,8 +1339,13 @@ std::vector<std::uint16_t> AccessColumnsOf(const Step& step, std::uint16_t slot)
             // access was assigned *for* that one, and the rest are residual
             // whatever the kind. Reporting them all would merge this shape
             // with the filter scan below and lose the distinction the
-            // statistics exist to draw.
-            if (step.cabin.has_value()) out.push_back(step.cabin->col_pos);
+            // statistics exist to draw. **An expression Cabin's probe reports
+            // none** (AQ-Q14): the statistics are keyed by column, `F` is not
+            // one, and filing `DATE(ts) = d` under `ts` would merge it with a
+            // column Cabin on `ts`.
+            if (step.cabin.has_value() && step.cabin->f == nullptr) {
+                out.push_back(step.cabin->col_pos);
+            }
             return out;
         case AccessKind::kFilterScan:
             for (const StepPredicate& pred : step.residual) {
@@ -1476,8 +1527,16 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
     // time the walk decodes `filter_columns` per row, plus the tuple key for a
     // row whose key matches (step_vm.cpp), and naming both here keeps the
     // survivors' remaining-columns decode honest about what was already read.
-    if (step.cabin.has_value() && step.cabin->col_pos < 64) {
-        mask |= std::uint64_t{1} << step.cabin->col_pos;
+    // An expression Cabin's walk reads every input of `F` (AQ-R5).
+    if (step.cabin.has_value()) {
+        const auto note = [&mask](std::uint16_t pos) {
+            if (pos < 64) mask |= std::uint64_t{1} << pos;
+        };
+        if (step.cabin->f != nullptr) {
+            for (const std::uint16_t pos : step.cabin->f->inputs) note(pos);
+        } else {
+            note(step.cabin->col_pos);
+        }
         mask |= 1;
     }
 
@@ -2076,6 +2135,13 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // names, and the Cabin is the reason it need not be one.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(probe);
+            } else if (auto ep = ExprCabinProbeOf(*scope.relations[i].access, step,
+                                                   static_cast<std::uint16_t>(i));
+                       ep.has_value()) {
+                // An expression Cabin at the column Cabin's rank (AQ-R5):
+                // a compile-time key, before the correlated form.
+                step.kind = AccessKind::kCabinProbe;
+                step.cabin = std::move(ep);
             } else if (auto cp = CorrelatedCabinProbeOf(scope, *scope.relations[i].access, step,
                                                          static_cast<std::uint16_t>(i));
                        cp.has_value()) {

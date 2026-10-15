@@ -4,6 +4,7 @@
 
 #include <sstream>
 
+#include "kds/exec/cabin_expr.hpp"
 #include "kds/exec/row_codec.hpp"
 
 namespace kds::exec {
@@ -174,7 +175,12 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
         os << " range=[" << step.range->low << ", " << step.range->high << ']';
     }
     if (step.cabin.has_value()) {
-        os << " cabin=" << step.cabin->cabin_id << " on=col" << step.cabin->col_pos;
+        os << " cabin=" << step.cabin->cabin_id;
+        if (step.cabin->f != nullptr) {
+            os << " on=" << step.cabin->f->text;
+        } else {
+            os << " on=col" << step.cabin->col_pos;
+        }
         // A correlated probe (cabin.md §4a) is keyed per outer row;
         // printing the default-constructed `value` for it would show a
         // key the probe never uses.

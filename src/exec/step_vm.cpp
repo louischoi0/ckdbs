@@ -1,5 +1,6 @@
 #include "kds/storage/page_header.hpp"
 #include "kds/exec/step_vm.hpp"
+#include "kds/exec/cabin_expr.hpp"
 
 #include "kds/sched/coro.hpp"
 
@@ -888,11 +889,18 @@ private:
         // authoritative while missing qualifying tuple keys, the C1 break.
         // Declining to record is always legal (§1's corollary): this walk
         // still answers, and the value simply stays unobserved.
-        if (step.filter_columns != Step::kAllColumns &&
-            (step.cabin->col_pos >= 64 ||
-             ((step.filter_columns >> step.cabin->col_pos) & 1) == 0)) {
-            co_return co_await RunWalkStep(steps, index, step, access);
-        }
+        // An expression Cabin reads every input of `F`, each of which is an
+        // argument of the function conjunct the probe came from, and so in
+        // `filter_columns` by the same derivation (AQ-R5).
+        const auto decoded = [&](std::uint16_t pos) {
+            return step.filter_columns == Step::kAllColumns ||
+                   (pos < 64 && ((step.filter_columns >> pos) & 1) != 0);
+        };
+        const bool keyed = step.cabin->f != nullptr
+                               ? std::all_of(step.cabin->f->inputs.begin(),
+                                             step.cabin->f->inputs.end(), decoded)
+                               : decoded(step.cabin->col_pos);
+        if (!keyed) co_return co_await RunWalkStep(steps, index, step, access);
 
         // **A set may only be banked from a view nothing can later
         // contradict** (cabin.md §6a, which carries the argument and the
@@ -974,6 +982,7 @@ private:
         Recording recording;
         recording.step_id = step.step_id;
         recording.col_pos = step.cabin->col_pos;
+        recording.f = step.cabin->f.get();
         recording.value = &ProbeValue(step);
         recording.key = &key;
         // **Saved and restored, never cleared.** The walk below descends into
@@ -2413,9 +2422,7 @@ private:
             // directly rather than through a per-row frame resolution. One
             // comparison per walked row is the recording's whole per-row
             // cost.
-            if (recording_->col_pos < slots.size() &&
-                CompareValues(/*type_val=*/0, slots[recording_->col_pos], *recording_->value,
-                              parser::CompareOp::kEq)) {
+            if (RecordsRow(*recording_, slots)) {
                 auto entry = EntryForRow(page_id, slot, observed_epoch);
                 if (!entry.ok()) return entry.status();
                 recording_->entries.push_back(entry.value());
@@ -2755,6 +2762,9 @@ private:
     struct Recording {
         std::uint32_t step_id = 0;
         std::uint16_t col_pos = 0;
+        // An expression Cabin's `F` (AQ-R5), or null for a column Cabin.
+        // Points into the step's `CabinProbe`, which outlives the walk.
+        const CompiledCabinExpr* f = nullptr;
         const parser::AstValue* value = nullptr;
         // The set's key, for the entry-cap lapse to mark it sticky in the
         // store. Points at WalkAndRecord's parameter, which outlives the
@@ -2763,6 +2773,22 @@ private:
         std::vector<stats::CabinEntry> entries;
     };
     Recording* recording_ = nullptr;
+
+    // Whether the row in `slots` belongs to the set being recorded: its key
+    // column equals the probed value, or - for an expression Cabin - `F` of
+    // it does, the same evaluation the write hook keys the set by, so a
+    // recorded set and a witnessed one are one function (AQ-R5).
+    static bool RecordsRow(const Recording& recording, std::span<const parser::AstValue> slots) {
+        if (recording.f != nullptr) {
+            if (recording.f->inputs.back() >= slots.size()) return false;
+            const std::optional<parser::AstValue> key = CabinKeyOf(*recording.f, slots);
+            return key.has_value() &&
+                   CompareValues(/*type_val=*/0, *key, *recording.value, parser::CompareOp::kEq);
+        }
+        return recording.col_pos < slots.size() &&
+               CompareValues(/*type_val=*/0, slots[recording.col_pos], *recording.value,
+                             parser::CompareOp::kEq);
+    }
 
     // The completion license for the walk whose recording `recording_` is,
     // saved and restored in lockstep with it. True only while
