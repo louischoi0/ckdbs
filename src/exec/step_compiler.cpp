@@ -1391,10 +1391,20 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
 //  - The tuple key skip is defensive: a tuple key correlated equality became kProbe in
 //    the kind pass, so this arm never sees one unless the ladder is ever
 //    reordered.
+//  - **Any other conjunct reading a column not this step's own** (an
+//    earlier step's, or an enclosing chain's row): the map buckets the rows
+//    passing every conjunct but the keyed one, once, against the first
+//    outer row, so such a conjunct would be judged for that row alone and
+//    every later probe would miss the rows it admits for theirs. A
+//    mixed-descriptor correlated equality, which cannot key the map, is one.
 // The kFilterScan, CompileWhere and scalar-sub-chain declines are the call
 // site's - they gate whether this arm runs at all.
 std::optional<BuildKey> BuildKeyOf(const Scope& scope, const catalog::TableAccess& access,
                                    const Step& step, std::uint16_t slot) {
+    const auto own_only = [slot](const StepPredicate& pred) {
+        return IsOwnColumn(pred.lhs, slot) &&
+               (pred.rhs.kind != OperandKind::kColumn || IsOwnColumn(pred.rhs.column, slot));
+    };
     std::optional<BuildKey> out;
     bool correlated_seen = false;
     for (std::size_t i = 0; i < step.residual.size(); ++i) {
@@ -1420,6 +1430,10 @@ std::optional<BuildKey> BuildKeyOf(const Scope& scope, const catalog::TableAcces
         key.key_from = eq->other;
         key.residual_pos = static_cast<std::uint16_t>(i);
         out = key;
+    }
+    if (!out.has_value()) return std::nullopt;
+    for (std::size_t i = 0; i < step.residual.size(); ++i) {
+        if (i != out->residual_pos && !own_only(step.residual[i])) return std::nullopt;
     }
     return out;
 }

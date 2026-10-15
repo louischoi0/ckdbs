@@ -196,6 +196,13 @@ Out of scope, by decision: multi-column join keys (the Cabin's scope
 rule, `cabin.md` §2); non-equality joins; spill-to-disk; building for a
 `kFilterScan` whose literal already bounds it (it still walks per outer
 row, so the same win is forgone — a decision, not an impossibility);
+**a step with any conjunct besides the keyed equality that reads a column
+not its own** — an earlier step's or an enclosing row's, against a literal
+or in any comparison — because the map buckets the rows passing every
+other conjunct once, against the first outer row, and such a conjunct's
+verdict changes with the outer row (a correlated `EXISTS` filtering on
+`outer.state = 'closed'` beside its join answered only for the first outer
+row's state; `BuildKeyOf`, `step_compiler.cpp`);
 **any sub-chain compiled through `CompileWhere`** — the build is a SELECT
 feature, because a DML statement's own writes between outer rows
 invalidate a map its first outer row built (§4's no-write argument is a

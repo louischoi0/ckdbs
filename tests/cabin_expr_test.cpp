@@ -709,10 +709,9 @@ TEST_F(CabinPredicateTest, SpellingsOfOneLiteralAndNullTestsMatch) {
 // it names the same positions: served from `p`'s set, the inner step would
 // answer as though its own row passed `p`. Matched only on own columns, the
 // step is no Cabin probe and the Cabin changes no answer. (The answer itself
-// is wrong with or without a Cabin - an inner build buckets the outer row's
-// conjuncts once: `docs/inflight/bugs/an-inner-build-buckets-outer-only-
-// conjuncts-for-the-first-outer-row.md` - so this cell compares with the
-// Cabin dropped, not with the right answer.)
+// is the inner build's to get right - such a step takes no build since
+// `join-inner-build.md` §8 excluded it - and its contract suite pins that
+// against hand-computed rows.)
 TEST_F(CabinPredicateTest, AnEnclosingRowsConjunctIsNotTheStepsOwn) {
     ASSERT_FALSE(ServedAsWalked(kExact));
     const std::string sql =
