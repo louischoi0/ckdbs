@@ -1,0 +1,187 @@
+{
+ "engine": "pg",
+ "shape": "point",
+ "durability": "off",
+ "cores": null,
+ "sessions": 16,
+ "placement": "kernel",
+ "reconnects": 0,
+ "run": 2,
+ "seconds": 4.0,
+ "warmup": 1.0,
+ "server_cpus": "0,2,4,6",
+ "client_cpus": "4,5,6,7",
+ "wait_s": 15.0,
+ "host_before": {
+  "loadavg": "5.80 4.21 4.80 1/470 2608389",
+  "competing": []
+ },
+ "host_after": {
+  "loadavg": "7.22 4.55 4.91 1/468 2608464",
+  "competing": []
+ },
+ "statements": 310432,
+ "span_s": 4.0094,
+ "statements_per_s": 77426.7,
+ "p25_us": 121.8,
+ "p50_us": 155.6,
+ "p95_us": 435.4,
+ "p99_us": 565.1,
+ "p0_us": 43.9,
+ "max_us": 9677.6,
+ "by_kind": {
+  "read": {
+   "statements": 310432,
+   "p0_us": 43.9,
+   "p25_us": 121.8,
+   "p50_us": 155.6,
+   "p95_us": 435.4,
+   "p99_us": 565.1
+  }
+ },
+ "by_client": [
+  {
+   "core": null,
+   "statements": 11014,
+   "p50_us": 358.1,
+   "p99_us": 618.5
+  },
+  {
+   "core": null,
+   "statements": 27913,
+   "p50_us": 133.0,
+   "p99_us": 287.3
+  },
+  {
+   "core": null,
+   "statements": 11087,
+   "p50_us": 357.1,
+   "p99_us": 617.2
+  },
+  {
+   "core": null,
+   "statements": 28512,
+   "p50_us": 130.9,
+   "p99_us": 278.5
+  },
+  {
+   "core": null,
+   "statements": 11148,
+   "p50_us": 356.5,
+   "p99_us": 617.7
+  },
+  {
+   "core": null,
+   "statements": 27321,
+   "p50_us": 136.0,
+   "p99_us": 292.7
+  },
+  {
+   "core": null,
+   "statements": 11068,
+   "p50_us": 357.3,
+   "p99_us": 620.4
+  },
+  {
+   "core": null,
+   "statements": 28024,
+   "p50_us": 132.3,
+   "p99_us": 296.3
+  },
+  {
+   "core": null,
+   "statements": 11053,
+   "p50_us": 358.0,
+   "p99_us": 618.3
+  },
+  {
+   "core": null,
+   "statements": 27235,
+   "p50_us": 136.2,
+   "p99_us": 299.2
+  },
+  {
+   "core": null,
+   "statements": 11064,
+   "p50_us": 357.3,
+   "p99_us": 616.3
+  },
+  {
+   "core": null,
+   "statements": 27623,
+   "p50_us": 134.9,
+   "p99_us": 289.0
+  },
+  {
+   "core": null,
+   "statements": 11051,
+   "p50_us": 358.4,
+   "p99_us": 623.8
+  },
+  {
+   "core": null,
+   "statements": 27870,
+   "p50_us": 133.5,
+   "p99_us": 283.1
+  },
+  {
+   "core": null,
+   "statements": 10949,
+   "p50_us": 359.1,
+   "p99_us": 616.2
+  },
+  {
+   "core": null,
+   "statements": 27500,
+   "p50_us": 134.9,
+   "p99_us": 302.2
+  }
+ ],
+ "refusals": 0,
+ "errors": 0,
+ "first_error": null,
+ "client_cpu_share": [
+  0.08,
+  0.22,
+  0.08,
+  0.23,
+  0.08,
+  0.22,
+  0.08,
+  0.23,
+  0.08,
+  0.22,
+  0.08,
+  0.22,
+  0.09,
+  0.23,
+  0.08,
+  0.22
+ ],
+ "client_bound": false,
+ "session_cores": [
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null
+ ],
+ "meta_delta": {},
+ "meta_gauges_mid": {},
+ "meta_longest": {},
+ "meta_session_core": null,
+ "bin_sha256": null,
+ "data_device": "/dev/root ext4",
+ "setup_meta": {}
+}
