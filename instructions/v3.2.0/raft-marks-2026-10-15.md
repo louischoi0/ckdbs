@@ -31,3 +31,12 @@
 | **Mark** | **BX-Q1 (a)**: `CREATE UNIQUE INDEX` is the one surface; `UNIQUE` in `CREATE TABLE` and `ALTER TABLE ... ADD CONSTRAINT` stay refused, so BX-S4 is cut - **the operator's choice, against CLA's proposal (b)**. **BX-Q2 (a)**: the key unit is released once the row's entry is appended. **BX-Q3 (a)**: a busy verdict uses the waits that exist; row 2 onward of a multi-row `INSERT`, and a KWP load row past its chunk's first, is refused `TxnConflict`. **BX-Q4 (a)**: checked per row, immediately. **BX-Q5 (a)**: a nullable key column stays refused. Q2..Q5 are as CLA proposed. *"go ahead"* opens BX at BX-S1 |
 | **Does not settle** | INSERT resume (BX-Q3 (b)); NULLs in a unique key; a foreign key referencing a unique column; no tag, no version |
 | **Recorded at** | this file; `workorder-bx-unique-index.md` (header W1, §4, §5, §6); `index.md`'s row for it |
+
+## 4. BX-Q6 marked (b), BX-S6 opened
+
+| | |
+|---|---|
+| **Word** | *"Q6 $!b, go ahead"* (after CLA's account of the pages a refused `CREATE UNIQUE INDEX` leaves) |
+| **Mark** | **BX-Q6 (b)**: a failed `CREATE INDEX` build frees its partial tree. Freeing pages never logged and named by nothing is ruled within BF's precondition (`page.md` §5: no record that names the page can be replayed again, no reader can reach it), so `FreePage` gains a second caller beside a dropped relation's reclaim. Built as BX-S6 |
+| **Does not settle** | Pages a failed divide left unlinked; a build that fails after its tree is logged; a crash before the free map is written |
+| **Recorded at** | this file; `workorder-bx-unique-index.md` (W2, BX-Q6, BX-S6); `index.md` §12; `known-gaps.md` |

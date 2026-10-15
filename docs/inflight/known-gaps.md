@@ -681,7 +681,10 @@ pages and the cases it does not reach.
   roots reach, so these stay allocated for the life of the volume:
   - a page left unlinked by a failed heap growth, btree split or var-heap
     growth;
-  - a failed `CREATE INDEX`'s tree, which no anchor slot names;
+  - a failed `CREATE INDEX`'s page that its freeing does not reach (BX-Q6
+    (b), `index.md` §12): one a failed divide left unlinked, one whose
+    frame a writeback held, every page of a tree the guarded walk refused,
+    and every page after a crash before the map was written;
   - a failed or rolled-back `CREATE TABLE`'s pages, which no tombstone
     names;
   - a refused catalog report's page (WAL, above);
@@ -1166,11 +1169,6 @@ Verified on `worktree-aq-expression-cabins` at AQ-S1
 Verified on `worktree-bx-unique-index` at BX-S2
 (`instructions/v3.2.0/workorder-bx-unique-index.md`).
 
-- **A refused `CREATE UNIQUE INDEX` leaks its partial tree, on every
-  attempt.** The build fills its tree before it finds the duplicate, and a
-  failed build's tree is named by nothing (`index.md` §12); a client
-  repeating the statement over duplicates leaks up to the relation's
-  index size each time. Owner: BX-Q6.
 - **A unique build over string keys sharing their 32-byte prefix costs
   O(n²) entry visits**: each row's check walks the whole run (BX-R7 as
   built).

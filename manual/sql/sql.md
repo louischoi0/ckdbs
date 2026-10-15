@@ -428,8 +428,8 @@ DROP INDEX ix_owner;
     consecutive keys is refused on the first row whose new value another
     row still holds, although standard SQL would accept it.
   - Building one over existing duplicates is refused, naming both rows'
-    tuple keys; the attempt leaves pages allocated that nothing reuses
-    (`docs/inflight/known-gaps.md`).
+    tuple keys; the pages the attempt filled are given back, so retrying
+    does not grow the file.
   - Reads are unchanged: a unique index answers queries exactly as an
     ordinary one does. `SHOW INDEXES` has a `unique` column (1 or 0).
   - A row whose covered column is updated about 600 times starts refusing

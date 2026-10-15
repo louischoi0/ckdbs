@@ -1,6 +1,7 @@
 #include "kds/exec/index_ddl.hpp"
 
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "kds/catalog/schema.hpp"
@@ -13,6 +14,7 @@
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/index/index_page.hpp"
 #include "kds/storage/log_page_image.hpp"
+#include "kds/storage/page_header.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 #include "kds/storage/index/index_tree.hpp"
@@ -86,38 +88,85 @@ Status CheckBuiltKeyUnique(storage::PageStore& store, const catalog::TableAccess
                                  std::to_string(row.tuple_key));
 }
 
-// RV3's record of the whole built tree: one full page image per page,
-// depth-first from the root. Order among the images is irrelevant - each
-// describes a whole page and redo's FPI arm creates the page it names -
-// and every image is stamped so the WAL-before-data gate holds the pages
-// until the images are durable. A null `wal` no-ops (tests, bootstrap).
-Status LogBuiltTree(wal::WalManager* wal, storage::PageStore& store, std::uint64_t trx_id,
-                    PageId page_id) {
-    if (wal == nullptr) return Status::OK();
-
-    // The children first, collected under a scope that drops this page's
-    // pin before recursing - depth bounds the pin count either way, but a
-    // copied id list keeps the shape obviously safe.
-    std::vector<PageId> children;
-    {
-        auto bytes = store.GetForRead(page_id);
+// The pages of a built or half-built tree, pre-order from `root`: every
+// ancestor before its descendants.
+//
+// **Guarded, because a failed build frees what this returns.** Every page of
+// the tree carries the index's oid from birth (`PrepareIndexDef` pre-issues
+// it, page.md §2a) and is an index page; one that is not, or one reached
+// twice, is not this tree's, and the walk refuses `Corruption` rather than
+// hand another relation's page - or one freed and reissued in between - to
+// `FreePage`. The visited set also bounds a cycle.
+StatusOr<std::vector<PageId>> CollectTreePages(storage::PageStore& store, PageId root,
+                                               catalog::Oid owner) {
+    std::vector<PageId> pages;
+    std::unordered_set<PageId> seen;
+    std::vector<PageId> pending{root};
+    while (!pending.empty()) {
+        const PageId id = pending.back();
+        pending.pop_back();
+        if (!seen.insert(id).second) {
+            return Status::Corruption("index oid " + std::to_string(owner) + ": page " +
+                                      std::to_string(id) + " is reached twice");
+        }
+        auto bytes = store.GetForRead(id);
         if (!bytes.ok()) return bytes.status();
-        if (storage::RawPageType(bytes.value().bytes()) ==
-            static_cast<std::uint8_t>(PageType::kIndexInternal)) {
-            index::IndexInternalView node(bytes.value().bytes());
-            children.push_back(node.leftmost_child());
-            for (std::uint16_t i = 0; i < node.entry_count(); ++i) {
-                auto child = node.Child(i);
-                if (!child.ok()) return child.status();
-                children.push_back(child.value());
-            }
+        const std::uint8_t type = storage::RawPageType(bytes.value().bytes());
+        const bool internal = type == static_cast<std::uint8_t>(PageType::kIndexInternal);
+        if ((!internal && type != static_cast<std::uint8_t>(PageType::kIndexLeaf)) ||
+            storage::GetOwnerOid(bytes.value().bytes()) != owner) {
+            return Status::Corruption("index oid " + std::to_string(owner) + ": page " +
+                                      std::to_string(id) + " is not one of its pages");
+        }
+        pages.push_back(id);
+        if (!internal) continue;
+        index::IndexInternalView node(bytes.value().bytes());
+        pending.push_back(node.leftmost_child());
+        for (std::uint16_t i = 0; i < node.entry_count(); ++i) {
+            auto child = node.Child(i);
+            if (!child.ok()) return child.status();
+            pending.push_back(child.value());
         }
     }
-    for (const PageId child : children) {
-        if (Status s = LogBuiltTree(wal, store, trx_id, child); !s.ok()) return s;
-    }
+    return pages;
+}
 
-    return storage::LogFullPageImage(wal, store, trx_id, page_id);
+// RV3's record of the whole built tree: one full page image per page,
+// descendants first. Order among the images is irrelevant - each describes
+// a whole page and redo's FPI arm creates the page it names - and every
+// image is stamped so the WAL-before-data gate holds the pages until the
+// images are durable. A null `wal` no-ops (tests, bootstrap).
+Status LogBuiltTree(wal::WalManager* wal, storage::PageStore& store, std::uint64_t trx_id,
+                    PageId root, catalog::Oid owner) {
+    if (wal == nullptr) return Status::OK();
+    auto pages = CollectTreePages(store, root, owner);
+    if (!pages.ok()) return pages.status();
+    for (auto page = pages.value().rbegin(); page != pages.value().rend(); ++page) {
+        if (Status s = storage::LogFullPageImage(wal, store, trx_id, *page); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
+// Gives back the pages of a tree a failed build filled (BX-Q6 (b),
+// `instructions/v3.2.0/workorder-bx-unique-index.md`). `FreePage`'s
+// precondition holds by the build's order: the tree is logged only after the
+// backfill succeeds (`LogBuiltTree`), and named only after that (the
+// `sys.indexes` row, its anchor slot), so no record that names a page can
+// be replayed and no reader can reach one.
+//
+// **Best-effort, and a leak where it falls short** - as every failed build
+// leaked before: a tree the guarded walk refuses frees nothing; a page a
+// failed divide left unlinked is not reached; a frame a writeback holds
+// (`kDeferred`) keeps its page; and a store that cannot free frees none. No
+// map sync follows: a crash before the map is next written leaves the bits
+// set, which is the leak there was.
+void FreeUnbuiltTree(storage::PageStore& store, PageId root, catalog::Oid owner) {
+    auto pages = CollectTreePages(store, root, owner);
+    if (!pages.ok()) return;
+    for (const PageId id : pages.value()) {
+        auto freed = store.FreePage(id);
+        if (!freed.ok() && freed.status().code() == StatusCode::kNotImplemented) return;
+    }
 }
 
 // Appends one version's entry, decoding the key columns out of `payload`,
@@ -162,8 +211,12 @@ StatusOr<std::vector<parser::AstValue>> AppendVersion(storage::PageStore& store,
 // A **delete-marked** row is walked like any other: it is gone for newer
 // readers and still there for older ones, which is exactly the case the undo
 // chain exists for.
+//
+// `ix` is the caller's, so its `root_page_id` names the root the tree has
+// grown to even when the backfill fails - which is what a failed build frees
+// from (BX-Q6 (b)).
 StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess& access,
-                          catalog::TableAccess::IndexRef ix) {
+                          catalog::TableAccess::IndexRef& ix) {
     // Reads only, so a locally-built log is correct: Read/Walk resolve a
     // pointer against pages and carry no allocation state. And safe under
     // the undo purge for two reasons that must both stay true: this walk
@@ -218,15 +271,21 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
             auto latest = AppendVersion(store, access, ix, row.tuple_key, row.payload);
             if (!latest.ok()) return latest.status();
 
+            // A failed append stops the walk and fails the build: a version
+            // with no entry is a row an older snapshot misses (spec §10a).
+            Status appended = Status::OK();
             Status walked = undo.Walk(
                 row.undo_ptr, [&](const txn::UndoVersion& version) -> bool {
                     // A delete-mark's image is empty because a mark changes
                     // no tuple bytes - the version it supersedes is the one
                     // already appended, so there is nothing new here.
                     if (version.image.empty()) return true;
-                    return AppendVersion(store, access, ix, row.tuple_key, version.image).ok();
+                    auto older = AppendVersion(store, access, ix, row.tuple_key, version.image);
+                    if (!older.ok()) appended = older.status();
+                    return older.ok();
                 });
             if (!walked.ok()) return walked;
+            if (!appended.ok()) return appended;
             if (ix.unique) {
                 if (Status s = CheckBuiltKeyUnique(store, access, ix, row, latest.value());
                     !s.ok()) {
@@ -381,7 +440,12 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
     }
 
     auto final_root = Backfill(store, access, building);
-    if (!final_root.ok()) return final_root.status();
+    if (!final_root.ok()) {
+        // Nothing has logged the tree yet and nothing names it, so its pages
+        // go back now rather than leaking for the volume's life (BX-Q6 (b)).
+        FreeUnbuiltTree(store, building.root_page_id, def.index_oid);
+        return final_root.status();
+    }
 
     // RV3: the built tree travels as full page images, **before** the
     // sys.indexes row that publishes it - a crash after the commit must
@@ -389,7 +453,8 @@ StatusOr<PageId> BuildIndexTree(storage::PageStore& store, const catalog::TableA
     // logged nothing per entry. An FPI both creates and fills a page at
     // redo, so no PAGE_INIT is needed; the cost is tree bytes per CREATE
     // INDEX, on a statement that is already O(relation).
-    if (Status s = LogBuiltTree(wal, store, trx_id, final_root.value()); !s.ok()) {
+    if (Status s = LogBuiltTree(wal, store, trx_id, final_root.value(), def.index_oid);
+        !s.ok()) {
         return s.WithContext("logging the built tree");
     }
     return final_root.value();

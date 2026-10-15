@@ -317,6 +317,37 @@ TEST(UniqueIndexRigTest, AWriterPausedBetweenPlacementAndAppendHoldsItsKeyAgains
     EXPECT_TRUE(HeldReply(r.b.outs[0].response)) << r.b.outs[0].response;
 }
 
+TEST(UniqueIndexRigTest, ARefusedUniqueBuildGivesItsPartialTreeBackEveryTime) {
+    // BX-Q6 (b): the duplicate is the relation's last row, so the build has
+    // grown a tree of several levels when it is refused. Its pages were never
+    // logged and nothing names them, so they go back - and a client repeating
+    // the statement does not grow the file.
+    UniqueRig r;
+    ASSERT_NE(r.rig, nullptr);
+    std::vector<std::string> seed = {kSeed[0]};
+    for (int i = 0; i < 10; ++i) {
+        std::string rows = "INSERT INTO t VALUES ";
+        for (int j = 0; j < 200; ++j) {
+            rows += (j == 0 ? "(" : ", (") + std::to_string(i * 200 + j) + ", 0)";
+        }
+        seed.push_back(rows);
+    }
+    seed.push_back("INSERT INTO t VALUES (0, 1)");
+    ASSERT_TRUE(r.Seed(seed));
+
+    CommandDispatcher& d0 = r.rig->core(0).dispatcher();
+    const std::uint32_t before = r.rig->store().allocated_pages();
+    const std::uint64_t freed_before = r.rig->store().pages_freed();
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const std::string out = d0.Dispatch(kSeed[1]).response;
+        ASSERT_NE(out.find("is held by both tuple key"), std::string::npos) << out;
+        EXPECT_EQ(r.rig->store().allocated_pages(), before)
+            << "attempt " << attempt << " left its partial tree allocated";
+    }
+    EXPECT_GT(r.rig->store().pages_freed() - freed_before, 3u)
+        << "a tree of one page would pass the count without the walk";
+}
+
 TEST(UniqueIndexRigTest, TwoWritersEachWaitingOnTheOthersKeyAreADeadlockAndOneIsRefused) {
     UniqueRig r;
     ASSERT_NE(r.rig, nullptr);

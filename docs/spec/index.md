@@ -620,7 +620,7 @@ key column stays refused (BX-Q5 (a)).
 version, once its entries are in, under an everything-visible view - the
 build holds the relation `X`, so every version on a page is committed or
 its own transaction's. A duplicate refuses the create naming both tuple
-keys, and the tree it filled is left as every failed build's is (§12).
+keys, and the tree it filled is freed as every failed build's is (§12).
 Recovery checks nothing (BX-R9): it replays committed state, which was
 unique when it committed. The read path does not move (§8, BX-R10).
 
@@ -695,7 +695,14 @@ root and something above it writes one down.
 has no snapshot to filter a mark against) and **frees no page at its own
 commit** (BF-Q8 (b) declined): the anchor slot still names the tree, which is
 reclaimed with its relation when that relation is dropped (`drop-table.md`
-DT1). A failed `CREATE INDEX`'s tree, which no slot names, stays leaked.
+DT1). **A failed `CREATE INDEX`'s tree is freed since BX-Q6 (b)**: a failed
+backfill walks the tree from the root it grew to - refusing a page that is
+not an index page carrying the index's oid, or one reached twice - and gives
+each page back through `FreePage` (`page.md` §5): nothing has logged the
+tree yet and nothing names it. Best-effort: a page a failed divide left
+unlinked, a frame a writeback holds, or every page of a tree the walk
+refuses is left allocated, and a failure after the tree is logged leaves
+the tree too.
 
 `TableAccess` carries `index_mask` plus a `std::vector<IndexRef>`, built at
 `InitTableAccess()` on the same pattern as `cabin_mask` / `cabin_ids` — the
@@ -852,7 +859,6 @@ off is a catalog act: `DROP INDEX`.
 The decisions this spec leaves unsettled — `kIndexStringKeyBytes`, the leaf
 split point and fill factor, the column caps, reclamation of superseded
 entries, an index-only scan, NULLs in a unique key (a nullable key column
-stays refused, BX-Q5 (a)), a refused unique
-build's pages (BX-Q6), descending/partial/expression
+stays refused, BX-Q5 (a)), descending/partial/expression
 indexes, and index cost as a `CABIN AUTO` input — are unrecorded here; the refusals that stand
 in their place are §11's.

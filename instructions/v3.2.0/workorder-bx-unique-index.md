@@ -4,6 +4,8 @@ Written 2026-10-15 on `worktree-bx-unique-index` from `87d2893c`
 (`v3.2.0-58-g87d2893c`), on the operator's word, recorded in English:
 
 - **W0**: "Compose the milestone for the UNIQUE constraint and index."
+- **W2** (2026-10-15): *"Q6 $!b, go ahead"* - BX-Q6 marked (b), BX-S6
+  opened (`raft-marks-2026-10-15.md` §4).
 - **W1** (2026-10-15): *"BX-Q1..Q5 $!a, go ahead"* - every question
   marked (a) by the operator, and BX opened. **BX-Q1 (a) is the operator's
   choice against CLA's proposal (b)**: `CREATE UNIQUE INDEX` is the one
@@ -184,9 +186,8 @@ whose string keys share their 32-byte prefix (IX6); the single key-order
 walk this ruling first proposed would cost one pass, and was set aside for
 the reuse. A duplicate refuses the create `AlreadyExists` naming both tuple
 keys, the tree unreachable and no `sys.indexes` row written - IX10a's
-"complete or absent" covers it with no new rule. **The unreachable tree's
-pages leak** (`index.md` §12 states it of every failed build), and a
-refused unique build is the one a client can repeat at will (BX-Q6).
+"complete or absent" covers it with no new rule. The unreachable tree's
+pages are freed since BX-S6 (BX-Q6 (b)).
 
 **BX-R8 — the format moves.** The flag is written, so a binary that
 ignores it would admit duplicates into a volume that promises none
@@ -294,7 +295,8 @@ new value another row still holds. The spec and the manual say so.
 **CLA proposes (a)**. (b) is a change to the index's key encoding (§5's
 discriminator byte) and to the null spec, and is its own decision.
 
-**BX-Q6 — a refused unique build's pages** (raised at BX-S2's review, open).
+**BX-Q6 — a refused unique build's pages** (raised at BX-S2's review;
+**marked (b) by the operator on 2026-10-15**, W2).
 A failed `CREATE INDEX` leaves its partial tree allocated and named by
 nothing (`index.md` §12); before BX only a device or structural failure got
 there, and a refused `CREATE UNIQUE INDEX` over duplicates now does on every
@@ -308,8 +310,8 @@ attempt.
   allocating nothing on a refusal, at the cost of memory proportional to
   the relation.
 
-**CLA proposes (b)**, after the operator's ruling that freeing never-logged
-pages is within BF; (a) stands until then.
+**CLA proposed (b)**, after the operator's ruling that freeing never-logged
+pages is within BF. **Marked (b) (W2)**: built in BX-S6.
 
 ---
 
@@ -358,6 +360,15 @@ rather than test BX - and a KWP load chunk carrying one key twice.
 
 **BX-S4 — cut** (BX-Q1 (a), W1). `UNIQUE` in `CREATE TABLE` keeps its
 refusal.
+
+**BX-S6 — a failed build's tree freed** (BX-Q6 (b), W2). On a failed
+backfill - before `LogBuiltTree`, so no record names a page and no row
+names the tree - `FreeUnbuiltTree` walks the partial tree from the root the
+backfill grew it to, through the walk `LogBuiltTree` shares (only index
+pages carrying the index's oid, none twice), and frees each page through
+`FreePage`. Best-effort, and a leak where it falls short. Cell: a refused unique build over 2,000 rows, three times, leaves
+the allocated page count where it was; a mutant without the free fails
+it.
 
 **BX-S5 — the close.** `docs/spec/index.md` IX11 rewritten as the rule BX
 built, §8's "there is no unique index" sentence and §13's list updated;
@@ -471,4 +482,27 @@ cell inside the A-A' control's spread); a unique index adds +5.0 to
 column (+23 to 27 %), flat from 200 to 10,000 rows, and nothing measurable
 to an `UPDATE` of another column. Cut, as the file states: multi-row
 `INSERT`, `strict`/`group` durability, two cores, the build, covering and
-composite keys, a sampler split, the PostgreSQL floor. BX-Q6 stays open.
+composite keys, a sampler split, the PostgreSQL floor. BX-Q6 stayed open,
+and was then marked (b) (BX-S6).
+
+**BX-S6 - landed 2026-10-15** on `worktree-bx-unique-index`, after the
+merge of `origin/main` at `e1a5133e`. A failed backfill frees its partial
+tree (`FreeUnbuiltTree`); `CollectTreePages` is the one walk it and
+`LogBuiltTree` share. Cell
+`ARefusedUniqueBuildGivesItsPartialTreeBackEveryTime`: three refused
+builds over 2,001 rows leave `allocated_pages` unchanged; a mutant without
+the free fails all three. `critics-developer`: the precondition holds
+(nothing logs or names a tree page before `LogBuiltTree`; a failed divide
+never marks a root). Accepted - the walk refuses a page that is not an
+index page carrying the index's oid, or one reached twice, so `FreePage`
+is never handed another relation's page or an id reissued in between; one
+walk for logging and freeing; no retry loop on `kDeferred` (a deferral is
+the documented leak). **And an older bug the review found in the backfill,
+fixed here**: a failed append of an undo-chain version stopped the walk
+with `OK`, so the build succeeded with no entry for that version - a row an
+older snapshot would miss `[quiet-wrong]`; the failure now fails the
+build. No cell forces it: an append fails only on a full pool, the
+equal-sort-keys refusal or a failed divide. The softened claim - `FormatRoot`
+failing would leak the root - is moot: `CheckIndexLayout` refuses that
+layout first. Overhead not measured: the change runs only on a failed
+build.
