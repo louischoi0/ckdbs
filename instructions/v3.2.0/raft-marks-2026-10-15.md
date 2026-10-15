@@ -22,3 +22,12 @@
 | **Does not settle** | Relation names (untouched); a relation created before uniqueness-ignoring-case holding a case pair, whose two columns no statement can name (stated in the manual and `catalog.md` CT7); BW-Q11's positional-`INSERT` gap; cleaning (D-e); no tag, no version |
 | **Recorded at** | this file; `index.md`'s row for it; `workorder-bw-instant-add-drop-column.md` §6 |
 
+## 3. BU continued; BU-S8's decisions marked
+
+| | |
+|---|---|
+| **Word** | *"Continue the BU milestone."* Then, on CLA's four questions at BU-S7's close, each answered with CLA's recommended option: an `UPDATE ... FROM` target matching several `FROM` rows - *"Refuse the multi-match"*; `RETURNING` - *"Build: rows then tag"*; `ON CONFLICT DO NOTHING` - *"Tuple key only"*; what next - *"Proceed with S8"* |
+| **Mark** | BU-S4 through S7 run in this session on `worktree-bu-basic-query-surface-s4` under the word to continue, their decisions (BU-Q14, BU-Q15) CLA's proposals adopted under it. **BU-Q16 (a)** `[quiet-wrong]`: an `UPDATE ... FROM` whose target row matches two or more `FROM` rows is refused `CardinalityViolation` and writes nothing; `DELETE ... USING` deletes a row once however many rows it matches. **BU-Q17 (a)**: `RETURNING` on `INSERT`, `UPDATE` and `DELETE` describes and emits its rows as a `SELECT` does, then the command tag; the after-image (the before-image for `DELETE`). **BU-Q18 (a)**: `ON CONFLICT DO NOTHING` skips a row whose tuple key is placed, live or delete-marked (BD-R5's `AlreadyExists`), an undecided insert of the key waited for as BD-Q9 waits; a conflict target other than the tuple key, and `DO UPDATE`, refused `NotImplemented`. BU-S8 then runs, BU-S9 after it |
+| **Does not settle** | A merge to `main`, a push, a tag or a version |
+| **Recorded at** | `instructions/v3.0.0/workorder-bu-basic-query-surface.md` §4 (BU-Q16..Q18) and §6; this file's index row |
+
