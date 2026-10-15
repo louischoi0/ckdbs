@@ -234,7 +234,7 @@ step:
 | Group-bound assertion | `AssertionViolation` | this note |
 | Foreign key (`FkViolation`) | child write refused, parent delete refused | admitted; a dangling reference counted per would-be refusal — which is also CN-2's *loose FK* in another spelling, and the two notes should be read together before either opens |
 | Transition constraint (CN-4) | an undeclared `old => new` refused | admitted and counted; the count is the list of edges the declaration is missing |
-| Unique index (IX11, not built) | would be a refusal | admitted, duplicates counted |
+| Unique index (IX11, built since BX) | a refusal | admitted, duplicates counted |
 
 The README's "Invariants live in the engine" table gets one sentence:
 *guaranteed* means `ENFORCE`. A row in `OBSERVE` is measured, not

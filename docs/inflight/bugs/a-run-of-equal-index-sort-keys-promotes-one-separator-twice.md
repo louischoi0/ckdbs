@@ -85,6 +85,11 @@ here - comparing the leaf's divide point with its separator in the held
 parent before anything is written - would not settle IX4a and is not
 applied, because this entry's fix is the operator's.
 
+**A unique index inherits it** (BX-R11, on `worktree-bx-unique-index` at
+`9bf559e2`, by reading): a row whose covered column is updated about 600 times builds the
+same run in a unique index, and the refusal stays fail-closed - it refuses
+the row's writes and never admits a duplicate key.
+
 ## The fix
 
 Needs a decision, not recorded anywhere: a split point that never cuts

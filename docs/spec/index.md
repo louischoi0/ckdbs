@@ -1,8 +1,9 @@
 # Secondary indexes: multi-column and covering
 
 Status: **built** — the storage layer, the catalog, the grammar, the write
-hook, its WAL records, the backfill, the compiler, the read path and the
-`indexes` switch. A statement on an indexed column **descends the index**,
+hook, its WAL records, the backfill, the compiler, the read path, the
+`indexes` switch and **unique indexes** (§10.2, BX). A statement on an
+indexed column **descends the index**,
 and `tests/index_contract_test.cpp` is the suite that keeps it honest.
 Documented in `CLAUDE.md`, `docs/spec/client-manual.md` and
 `docs/spec/heap-and-tuple.md` §7. §13 names what this spec does **not**
@@ -102,7 +103,8 @@ other statement failure does (`docs/spec/txn.md`: failure atomicity is per
 transaction, not per statement).
 
 This is the one place an index is more expensive to be correct about than a
-Cabin, and it is why the index is not also a constraint (IX11).
+Cabin. An ordinary index refuses no write for a reason of its own; a
+**unique** one does, and IX11 says how.
 
 ---
 
@@ -230,7 +232,7 @@ covered column appends one — and that is information, so it is kept. A
 **byte-identical** entry is not, and `IndexInsert` reports it rather than
 storing it twice: nothing reclaims an index entry, and a probe that resolved
 one tuple key twice would emit its row twice. Deduplicating *by tuple key* remains the read
-path's job (IX11).
+path's job - and a unique index's check's (IX11).
 
 ---
 
@@ -385,8 +387,9 @@ since a trail was recorded is wrong in a way no per-tuple validation can
 detect, because absence has no witness *in the trail*. That is exactly why
 `kCabinProbe` is search-class despite the Cabin being authoritative, and the
 index inherits the reasoning unchanged. A trail may prefetch for an index
-step; it may never replace one. There is no unique index (IX11), so no
-index step is lookup-class.
+step; it may never replace one. **A unique index does not change this**
+(IX11, BX-R10): its run still holds surplus entries, so an equality on
+every key column still returns a set, and no index step is lookup-class.
 
 ### 8a. The correlated probe
 
@@ -486,7 +489,9 @@ DROP INDEX <name>
 SHOW INDEXES
 ```
 
-`UNIQUE` parses and is refused with an exact byte (IX11).
+`CREATE UNIQUE INDEX` declares a unique one (IX11); it is the one spelling
+of a unique key, and `UNIQUE` before anything but `INDEX` is refused
+`InvalidArgument` at the next token's byte. `sys.indexes` (and so `SHOW INDEXES`) prints `unique`.
 
 > **IX10 — nothing is reserved.** `index` and `covering` follow the rule the
 > aggregate function names settled: a keyword hashes exactly as the
@@ -558,19 +563,60 @@ build.
 
 ---
 
+## 10.2 Unique indexes
+
+> **IX11 — a unique index refuses a write that would give two live rows one
+> key value** (BX, `instructions/v3.2.0/workorder-bx-unique-index.md`).
+> `CREATE UNIQUE INDEX` writes `kIndexFlagUnique` (superblock 27).
+
+It makes the index a **constraint**, and the four questions that made it one
+are answered by machinery the engine already had, plus one lock unit:
+
+- **Which rows hold a key: latest state** (BX-R1), `foreign-keys.md` §4's
+  rule under a view minted at check time with the writer's own id. A row
+  whose page version is live, visible and carries the key holds it - the
+  write is refused `AlreadyExists`, naming the index, its columns and
+  values, the holder's tuple key and the written value's byte. A
+  delete-marked, rolled-back, purged or moved-off row holds nothing. A row
+  whose latest writer is undecided is **busy**, whatever its pending version
+  carries: the committed one under it may hold the key, and latest state
+  does not walk undo. The writer's own pending rows count.
+- **The superset** (BX-R2). The check walks the key's whole run, which IX1
+  and IX2 leave holding surplus entries and IX6's prefix leaves holding
+  other strings, deduplicates by tuple key, resolves each and compares
+  **full values** - never the encoded key alone.
+- **Two writers of one key** (BX-R3). `LockUnit::kIndexKey`, named under the
+  relation's oid with a 63-bit hash of the index oid and the encoded key,
+  overlapping no fence and no tuple, taken `X` before the check and given
+  back once the row's entry is appended (BX-Q2 (a)): after that a second
+  writer finds the row and is busy. A hash collision costs a wait.
+- **Where the check runs** (BX-R4, BX-R5). Holding no page - it descends the
+  clustered tree, and two user relation pages are unordered (`page.md` §6) -
+  and before the row is placed, so a refused write wrote nothing. An INSERT
+  checks before its admission; an UPDATE stops its walk or its tuple-key
+  probe at a row that moves a unique key, checks with the span released and
+  resumes at the row. Only a write that moves a key column is checked; a
+  covered column moving appends an entry and is not.
+
+A busy verdict uses the waits that exist (BX-Q3 (a)): a statement that has
+written nothing waits for the holder's decide and runs again; an UPDATE
+that has written rows parks mid-walk; row 2 onward of a multi-row `INSERT`,
+and a KWP load row past its chunk's first, is refused `TxnConflict`. The
+check runs **per row, immediately** (BX-Q4 (a)), so `UPDATE t SET k = k + 1`
+over consecutive keys is refused where the standard admits it. A nullable
+key column stays refused (BX-Q5 (a)).
+
+`CREATE UNIQUE INDEX` checks while it builds (BX-R7): each row's latest
+version, once its entries are in, under an everything-visible view - the
+build holds the relation `X`, so every version on a page is committed or
+its own transaction's. A duplicate refuses the create naming both tuple
+keys, and the tree it filled is left as every failed build's is (§12).
+Recovery checks nothing (BX-R9): it replays committed state, which was
+unique when it committed. The read path does not move (§8, BX-R10).
+
 ## 11. What is refused, each with an exact byte
 
-> **IX11 — `UNIQUE` is refused.**
-
-Enforcing uniqueness would make the index a **constraint**, which needs the
-visibility question `foreign-keys.md` §4 settled — latest state, never
-walks undo, an in-flight writer of the same key is *busy* rather than a
-violation — and a second write-conflict path on the insert hook. The index
-is a read accelerator that cannot fail a write for a reason of its own.
-`kIndexFlagUnique` is defined and never written, exactly as
-`UndoRecordType::kInsert` is.
-
-Also refused, each naming the reason:
+Refused, each naming the reason:
 
 - **A heap-clustered relation** (IX3, `InvalidArgument`).
 - **A nullable key column** (`NotImplemented`, `docs/spec/null.md`).
@@ -604,8 +650,8 @@ Also refused, each naming the reason:
 ## 12. Catalog, format and WAL
 
 > **IX12 — `SysIndexRow` is 116 bytes.** It arrived with superblock 12; the
-> superblock now refuses every version but 23, so every mountable volume
-> carries it.
+> superblock now refuses every version but 27, so every mountable volume
+> carries it. Its `flags` byte carries `kIndexFlagUnique` since 27 (IX11).
 
 The row (`include/kds/catalog/rows.hpp`):
 
@@ -795,6 +841,8 @@ off is a catalog act: `DROP INDEX`.
 
 The decisions this spec leaves unsettled — `kIndexStringKeyBytes`, the leaf
 split point and fill factor, the column caps, reclamation of superseded
-entries, an index-only scan, `UNIQUE`, descending/partial/expression
+entries, an index-only scan, NULLs in a unique key (a nullable key column
+stays refused, BX-Q5 (a)), a refused unique
+build's pages (BX-Q6), descending/partial/expression
 indexes, and index cost as a `CABIN AUTO` input — are unrecorded here; the refusals that stand
 in their place are §11's.

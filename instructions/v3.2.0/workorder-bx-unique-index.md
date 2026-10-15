@@ -452,3 +452,23 @@ stopped; the sign is now "started and not ended in 150 ms" and a guard
 releases the hook on every exit. Rejected - a KWP busy-row cell (the same
 `ExecuteInsert` path the multi-row cell pins). Suite 3980/3980. Overhead
 not measured; measured at the milestone's close.
+
+**BX-S5 - the close, 2026-10-15** on `worktree-bx-unique-index`. Docs:
+`index.md` §10.2 (IX11 as built) and its §8/§10/§11/§12/§13 lines;
+`txn.md` §5 (the fifth unit); the SQL manual; `client-manual.md`,
+`protocol.md`, `assertion.md` and CN-8 no longer call unique indexes
+unbuilt; the equal-sort-keys bug entry; `CLAUDE.md`'s row.
+`critics-developer` on the docs: accepted - `SHOW INDEXES` has a `unique`
+column, not `unique=1`; the refusal is at the next token's byte; the bug
+line names its commit; four stale "no unique index" statements; §13's
+NULL line; the manual's 600-update defect; padding cut and the `CLAUDE.md`
+row trimmed to a link. Left - CN-3's quotation, a dated concept note.
+**Overhead** (`bench/v3.2.0/results-bx-close-v3.2.0-62-g9bf559e2.md`,
+`v3.2.0-58-g87d2893c` against `v3.2.0-62-g9bf559e2`, `relaxed`, one core):
+an ordinary index costs about +0.3 µs per statement (about 1 %, every
+cell inside the A-A' control's spread); a unique index adds +5.0 to
++5.5 µs per `INSERT` (+19 to 22 %) and +6.6 to +7.6 µs per `UPDATE` of its
+column (+23 to 27 %), flat from 200 to 10,000 rows, and nothing measurable
+to an `UPDATE` of another column. Cut, as the file states: multi-row
+`INSERT`, `strict`/`group` durability, two cores, the build, covering and
+composite keys, a sampler split, the PostgreSQL floor. BX-Q6 stays open.

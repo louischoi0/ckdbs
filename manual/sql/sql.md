@@ -410,9 +410,31 @@ DROP INDEX ix_owner;
   `kMaxIndexCoveredColumns` (8) covered columns. The caps refuse, never
   truncate, and the parser names the byte of the offending column.
 - Only a `BTREE` relation may carry an index (an entry's payload is the tuple key).
-- `CREATE UNIQUE INDEX` is refused (`NOT_IMPLEMENTED`): enforcing uniqueness
-  would make the index a constraint that can fail a write, and v1 is a read
-  accelerator that cannot fail a write for a reason of its own (IX11).
+- **`CREATE UNIQUE INDEX`** (BX) refuses any write that would give two live
+  rows the same key value, with `ERR unique index '<name>' on (<columns>):
+  (<values>) is already held by tuple key <n> (byte <n>)`. It is the one
+  way to declare a unique key: `UNIQUE` in `CREATE TABLE` and `ALTER TABLE
+  ... ADD CONSTRAINT` are not accepted.
+  - **What counts is the latest committed state**, not your snapshot: a row
+    deleted, rolled back or moved off the key frees it; your own
+    transaction's uncommitted rows count, so `DELETE` then `INSERT` of one
+    key inside one transaction works.
+  - **An undecided writer of the key is waited for.** The statement waits
+    for its `COMMIT` (then refused) or `ROLLBACK` (then admitted). Two
+    exceptions answer `TXN_CONFLICT retryable=1` instead of waiting: the
+    second or later row of a multi-row `INSERT`, and a KWP load row past its
+    chunk's first, because those statements have already written rows.
+  - **Checked per row, immediately.** `UPDATE t SET k = k + 1` over
+    consecutive keys is refused on the first row whose new value another
+    row still holds, although standard SQL would accept it.
+  - Building one over existing duplicates is refused, naming both rows'
+    tuple keys; the attempt leaves pages allocated that nothing reuses
+    (`docs/inflight/known-gaps.md`).
+  - Reads are unchanged: a unique index answers queries exactly as an
+    ordinary one does. `SHOW INDEXES` has a `unique` column (1 or 0).
+  - A row whose covered column is updated about 600 times starts refusing
+    its writes - a known defect every index shares
+    (`docs/inflight/bugs/`); it never admits a duplicate key.
 - Maintenance is append-only; DELETE does not touch an index; there is no
   index-only scan (no visibility witness exists outside the tuple), so
   `COVERING` buys avoided base descents, nothing more.
@@ -1262,7 +1284,7 @@ worth anything:
 - **`ERR NOT_IMPLEMENTED retryable=0 …`** — the design admits this form and
   this release has not built it. Feature-detect and try again against a later
   server. Most of this section is this one: CTEs, derived tables, outer
-  joins, `HAVING`, `UNIQUE` indexes, `ALTER TABLE`'s row-rewriting forms (a type change, an `ADD` with no free slot), a
+  joins, `HAVING`, `ALTER TABLE`'s row-rewriting forms (a type change, an `ADD` with no free slot), a
   value wider than one var-heap page.
 - **`ERR UNSUPPORTED retryable=0 …`** — this engine's architecture cannot
   admit the form, so no later server answers it and the statement must be
@@ -1335,8 +1357,8 @@ they were before the split.
   must fingerprint identically forever.
 - **No `CREATE INDEX`-by-another-name.** There is exactly one index DDL and
   it is honest about its class: an index is "a Cabin that observed
-  everything", append-only, verified at read. `UNIQUE` is refused because it
-  would turn a read accelerator into a constraint that can fail writes.
+  everything", append-only, verified at read. `CREATE UNIQUE INDEX` adds
+  a write check to the same index.
 - **No file shrinking, and no data-moving `ALTER`.** A dropped relation's
   pages are reclaimed and reused (DT1), but the file never shrinks and no
   `VACUUM` moves live rows. `ALTER TABLE` renames and adds or drops a
