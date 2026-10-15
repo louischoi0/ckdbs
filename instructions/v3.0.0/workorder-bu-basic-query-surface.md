@@ -1,5 +1,12 @@
 # Work order BU — the basic query surface: `OR`, `NOT`, value lists, select-list expressions, `HAVING`, outer joins, set operations
 
+**Built to its close on 2026-10-15** (BU-S9, §6) on
+`worktree-bu-basic-query-surface-s4`: every stage landed with its review and
+a green suite, and anti-kdbs F004 answers every case as PostgreSQL does but
+P07, which BU-Q13 refuses. **The overhead is not measured**: the close's
+A/B was stopped by the operator before it ran (`instructions/v3.2.0/raft-marks-2026-10-15.md`
+§4). Not merged to `main`, not tagged.
+
 Written 2026-10-13 on `worktree-bu-basic-query-surface` from `eeb88f47`
 (`v2.7.0-992-geeb88f47`). It follows the operator's words of 2026-10-13,
 recorded in English:
@@ -708,3 +715,29 @@ build at `a13ceb49`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
 P07 refused by BU-Q13, phase 3 8/8, phase 4 12/12, phase 5 9/9, **phase 6
 7/7**, wrong=0 in every phase - S8's gate is met, and every F004 case but
 the one BU-Q13 refuses answers as PostgreSQL does.
+
+### BU-S9 - the close (2026-10-15)
+
+On `worktree-bu-basic-query-surface-s4`, `origin/main` merged at `bba74a4a`
+(the write-subquery and inner-build fixes); the suite there 4,003/4,006, the
+three failures crash cells that ran out of disk under the parallel run
+(`No space left on device` copying a WAL under `/tmp`) and passed alone.
+
+- **Specs and manual** were written stage by stage: `parser-v2.md` I10, I11,
+  I19 (§7a, the query layer) and I20 (§7b, the DML forms), J2 and the join
+  surface; `aggregate.md` §2 and §8; `protocol.md` §7; the manual's select
+  list, WHERE, ordering, aggregates, joins, the query layer and the DML
+  forms; the `CLAUDE.md` row.
+- **Known gaps**: `docs/inflight/known-gaps.md` "The query layer and the DML
+  forms (BU)", verified at `a13ceb49` - every refusal and cost the stages'
+  reviews recorded and did not change.
+- **The overhead is not measured.** `ck-tester`'s A/B (A `eeb88f47`, the
+  binary BT's close built and hashed; B `8a2e44c2`; the scan row, the point
+  `SELECT`, the every-row `UPDATE`, `INSERT` and the listed `INSERT`) was
+  stopped by the operator after B's build, before any cell ran; its plan and
+  scripts stay in `/home/cdkbs/bench-runs/bu-close/scripts`. BU-R5's
+  prediction - no change for the AND-only statements - therefore stands
+  unmeasured, and so do the layer's costs `known-gaps.md` names.
+- **Left for a later order:** folding `fn_residual` into `bool_residual`
+  (BU-S1's review's largest cut), which rewrites AP-S4's plan text and cells
+  and changes no answer.

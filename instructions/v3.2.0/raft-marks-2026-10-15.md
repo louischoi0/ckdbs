@@ -31,3 +31,12 @@
 | **Does not settle** | A merge to `main`, a push, a tag or a version |
 | **Recorded at** | `instructions/v3.0.0/workorder-bu-basic-query-surface.md` §4 (BU-Q16..Q18) and §6; this file's index row |
 
+## 4. BU's close measurement stopped
+
+| | |
+|---|---|
+| **Word** | The operator stopped the `ck-tester` run of BU's close A/B after its B build and before any cell ran, then wrote *"go ahead"* |
+| **Mark** | Read by CLA as: close BU-S9 without the measurement, saying so. BU stands built to its close with **its overhead not measured** (`workorder-bu-basic-query-surface.md` §6, BU-S9) - BU-R5's prediction of no change for the AND-only statements unverified |
+| **Does not settle** | A merge to `main`, a push, a tag or a version; whether the measurement runs later |
+| **Recorded at** | `workorder-bu-basic-query-surface.md` header and §6; `index.md`'s BU row |
+
