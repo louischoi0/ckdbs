@@ -210,11 +210,11 @@ struct CabinProbe {
     // An expression Cabin's first input (`f` below).
     std::uint16_t col_pos = 0;
 
-    // An **expression** Cabin's key function (AQ-R5): set, the step probes
-    // `F(row) = value` and the recording walk compares `F` on each row; null,
-    // it is a column Cabin and compares `col_pos`. The function conjunct the
-    // probe was derived from stays in `Step::fn_residual` and re-checks every
-    // served row - the residual's role for a column Cabin.
+    // An **expression or predicate** Cabin's key function (AQ-R5, R6): set,
+    // the step probes `F(row) = value` and the recording walk compares `F` on
+    // each row; null, it is a column Cabin and compares `col_pos`. The
+    // conjuncts the probe was derived from stay in `Step::residual` and
+    // `Step::fn_residual` and re-check every served row.
     std::shared_ptr<const CompiledCabinExpr> f;
 
     // The value being probed for, when the equality binds a literal.

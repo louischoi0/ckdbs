@@ -530,3 +530,187 @@ TEST_F(CabinExprServeTest, AColumnCabinBesideItIsUnchanged) {
 
 }  // namespace
 }  // namespace kds::server
+
+// ---- AQ-S3: the predicate shape --------------------------------------------
+//
+// `p = (state = 'closed' AND amount > 1000)` on `t`; `twin` holds the same
+// rows and every write, and no Cabin. Every reply on `t` is compared with the
+// same statement on `twin` - the walk - and a served one must equal it.
+
+namespace kds::server {
+namespace {
+
+class CabinPredicateTest : public CabinExprTest {
+protected:
+    void SetUp() override {
+        CabinExprTest::SetUp();
+        Ok("CREATE TABLE twin (id int64, state varchar, amount int64, ts timestamp NULL, "
+           "quiet timestamp NULL NO CABIN, sym varchar)");
+        Both("INSERT INTO t VALUES ('closed', 500, NULL, NULL, 'a')");
+        Both("INSERT INTO t VALUES ('closed', 1500, NULL, NULL, 'b')");
+        Both("INSERT INTO t VALUES ('open', 2000, NULL, NULL, 'c')");
+        Both("INSERT INTO t VALUES ('closed', 1001, NULL, NULL, 'd')");
+        Both("INSERT INTO t VALUES ('closed', 1000, NULL, NULL, 'e')");
+        Ok("CREATE CABIN ON t (state = 'closed' AND amount > 1000)");
+    }
+
+    // `sql` on `t`, then on `twin`.
+    void Both(const std::string& sql) {
+        Ok(sql);
+        Ok(OnTwin(sql));
+    }
+    static std::string OnTwin(std::string sql) {
+        const std::string original = sql;
+        for (auto at = sql.find(" t "); at != std::string::npos; at = sql.find(" t ", at + 1)) {
+            sql.replace(at, 3, " twin ");
+        }
+        // A statement the rewrite missed would compare `t` with itself.
+        EXPECT_NE(sql, original) << "no ' t ' to rewrite in: " << original;
+        return sql;
+    }
+    // Whether `sql` was served - read off one execution's ANALYZE - and,
+    // run once more, that it answers as the walk does.
+    bool ServedAsWalked(const std::string& sql) {
+        const bool served = Run("ANALYZE " + sql).find("cabin_hits=1") != std::string::npos;
+        EXPECT_EQ(Run(sql), Run(OnTwin(sql))) << sql;
+        return served;
+    }
+    std::string Entries() {
+        const auto view = Cabins();
+        return view.rows.empty() ? "" : view.rows[0][view.Col("entries")];
+    }
+};
+
+constexpr const char* kExact = "SELECT * FROM t WHERE state = 'closed' AND amount > 1000";
+
+TEST_F(CabinPredicateTest, ServedWhenTheWhereCarriesEveryConjunctExactly) {
+    EXPECT_FALSE(ServedAsWalked(kExact));  // declared: the first probe records
+    EXPECT_TRUE(ServedAsWalked(kExact));
+    EXPECT_EQ(Entries(), "2");
+    // Either order, and beside other conjuncts.
+    EXPECT_TRUE(ServedAsWalked("SELECT * FROM t WHERE amount > 1000 AND state = 'closed'"));
+    EXPECT_TRUE(ServedAsWalked(
+        "SELECT id FROM t WHERE sym < 'x' AND amount > 1000 AND state = 'closed' AND id > 1"));
+}
+
+TEST_F(CabinPredicateTest, NotServedWithoutAnExactMatchOfEveryConjunct) {
+    ASSERT_FALSE(ServedAsWalked(kExact));
+    const char* const kNot[] = {
+        "SELECT * FROM t WHERE state = 'closed'",                         // one missing
+        "SELECT * FROM t WHERE amount > 1000",                            // the other
+        "SELECT * FROM t WHERE state = 'closed' AND amount > 999",        // another literal
+        "SELECT * FROM t WHERE state = 'closed' AND amount >= 1000",      // >= for >
+        "SELECT * FROM t WHERE state = 'closed' AND amount >= 1001",      // equivalent, not equal
+        "SELECT * FROM t WHERE state = 'closed' AND amount BETWEEN 1000 AND 5000",
+        "SELECT * FROM t WHERE state = 'closed' AND (amount > 1000 OR sym = 'a')",
+        "SELECT * FROM t WHERE state = 'open' AND amount > 1000",
+    };
+    for (const char* sql : kNot) EXPECT_FALSE(ServedAsWalked(sql)) << sql;
+}
+
+TEST_F(CabinPredicateTest, EveryWriteIsWitnessed) {
+    ASSERT_FALSE(ServedAsWalked(kExact));
+    const char* const kWrites[] = {
+        "INSERT INTO t VALUES ('closed', 3000, NULL, NULL, 'f')",          // into p
+        "INSERT INTO t VALUES ('open', 3000, NULL, NULL, 'g')",            // not into p
+        "UPDATE t SET state = 'closed' WHERE id = 3",                       // into p
+        "UPDATE t SET amount = 1001 WHERE id = 5",                          // into p
+        "UPDATE t SET amount = 10 WHERE id = 2",                            // out of p
+        "UPDATE t SET sym = 'zz' WHERE id = 4",                             // no input moved
+        "DELETE FROM t WHERE id = 4",
+        "INSERT INTO t VALUES ('closed', 4000, NULL, NULL, 'j'), ('open', 1, NULL, NULL, 'k')",
+        "INSERT INTO t (sym, amount, state) VALUES ('l', 5000, 'closed')",
+    };
+    for (const char* write : kWrites) {
+        Both(write);
+        EXPECT_TRUE(ServedAsWalked(kExact)) << "after " << write;
+    }
+}
+
+TEST_F(CabinPredicateTest, AnUpdateOfAColumnPNeverReadsAppendsNothing) {
+    ASSERT_FALSE(ServedAsWalked(kExact));
+    Both("UPDATE t SET sym = 'q' WHERE id = 2");
+    Both("UPDATE t SET amount = 1500 WHERE id = 2");  // to the value it holds
+    EXPECT_EQ(Entries(), "2");
+    EXPECT_TRUE(ServedAsWalked(kExact));
+}
+
+// Two predicates differing only in a literal share an `expr_id` (literals
+// fold out of it, AR1 §6): each statement is served from its own Cabin's set,
+// never from the other's - the serve-time half of AQ-R2.
+TEST_F(CabinPredicateTest, TwoKeysSharingAnExprIdServeTheirOwnSets) {
+    Ok("CREATE CABIN ON t (state = 'open' AND amount > 1000)");
+    auto rows = boot_->catalog.ListCabins();
+    ASSERT_TRUE(rows.ok());
+    ASSERT_EQ(rows.value().size(), 2u);
+    ASSERT_EQ(rows.value()[0].expr_id, rows.value()[1].expr_id);
+
+    const std::string open = "SELECT * FROM t WHERE state = 'open' AND amount > 1000";
+    for (int round = 0; round < 3; ++round) {
+        ServedAsWalked(kExact);
+        ServedAsWalked(open);
+    }
+    EXPECT_TRUE(ServedAsWalked(kExact));
+    EXPECT_TRUE(ServedAsWalked(open));
+    Both("INSERT INTO t VALUES ('open', 1200, NULL, NULL, 'h')");
+    EXPECT_TRUE(ServedAsWalked(open));
+    EXPECT_TRUE(ServedAsWalked(kExact));
+}
+
+// A function conjunct is a conjunct of `p` like any other.
+TEST_F(CabinPredicateTest, AnImmutableCallsComparisonIsAConjunct) {
+    Both("UPDATE t SET ts = '2026-10-01 05:00:00' WHERE id = 2");
+    Both("UPDATE t SET ts = '2026-10-02 05:00:00' WHERE id = 4");
+    Ok("CREATE CABIN ON t (DATE(ts) = '2026-10-01' AND state = 'closed')");
+    const std::string sql = "SELECT id FROM t WHERE state = 'closed' AND DATE(ts) = '2026-10-01'";
+    EXPECT_FALSE(ServedAsWalked(sql));
+    EXPECT_TRUE(ServedAsWalked(sql));
+    Both("UPDATE t SET ts = '2026-10-01 07:00:00' WHERE id = 4");
+    EXPECT_TRUE(ServedAsWalked(sql));
+    EXPECT_FALSE(ServedAsWalked(
+        "SELECT id FROM t WHERE state = 'closed' AND DATE(ts) = '2026-10-02'"));
+}
+
+// A statement's BETWEEN lowers to its two bounds exactly, so it carries the
+// conjuncts a Cabin declared as those bounds (AQ-Q15) - and is served.
+TEST_F(CabinPredicateTest, ABetweensTwoBoundsAreItsConjuncts) {
+    Ok("CREATE CABIN ON t (amount >= 1000 AND amount <= 1500)");
+    const std::string sql = "SELECT id FROM t WHERE amount BETWEEN 1000 AND 1500";
+    EXPECT_FALSE(ServedAsWalked(sql));
+    EXPECT_TRUE(ServedAsWalked(sql));
+    EXPECT_FALSE(ServedAsWalked("SELECT id FROM t WHERE amount BETWEEN 1000 AND 1501"));
+}
+
+// Leading zeros are one value, and IS [NOT] NULL is a conjunct like any other.
+TEST_F(CabinPredicateTest, SpellingsOfOneLiteralAndNullTestsMatch) {
+    EXPECT_FALSE(ServedAsWalked("SELECT id FROM t WHERE state = 'closed' AND amount > 01000"));
+    EXPECT_TRUE(ServedAsWalked(kExact));
+    Ok("CREATE CABIN ON t (ts IS NULL AND state = 'open')");
+    const std::string sql = "SELECT id FROM t WHERE state = 'open' AND ts IS NULL";
+    EXPECT_FALSE(ServedAsWalked(sql));
+    EXPECT_TRUE(ServedAsWalked(sql));
+    EXPECT_FALSE(ServedAsWalked("SELECT id FROM t WHERE state = 'open' AND ts IS NOT NULL"));
+}
+
+// A conjunct on an **enclosing** row's columns is not the step's own, though
+// it names the same positions: served from `p`'s set, the inner step would
+// answer as though its own row passed `p`. Matched only on own columns, the
+// step is no Cabin probe and the Cabin changes no answer. (The answer itself
+// is wrong with or without a Cabin - an inner build buckets the outer row's
+// conjuncts once: `docs/inflight/bugs/an-inner-build-buckets-outer-only-
+// conjuncts-for-the-first-outer-row.md` - so this cell compares with the
+// Cabin dropped, not with the right answer.)
+TEST_F(CabinPredicateTest, AnEnclosingRowsConjunctIsNotTheStepsOwn) {
+    ASSERT_FALSE(ServedAsWalked(kExact));
+    const std::string sql =
+        "SELECT id FROM twin WHERE EXISTS (SELECT id FROM t WHERE twin.state = 'closed' AND "
+        "twin.amount > 1000 AND t.sym = twin.sym)";
+    const std::string analyzed = Run("ANALYZE " + sql);
+    EXPECT_EQ(analyzed.find("CabinProbe"), std::string::npos) << analyzed;
+    const std::string reply = Run(sql);
+    Ok("DROP CABIN ON t (state = 'closed' AND amount > 1000)");
+    EXPECT_EQ(reply, Run(sql)) << "the Cabin changed the answer";
+}
+
+}  // namespace
+}  // namespace kds::server

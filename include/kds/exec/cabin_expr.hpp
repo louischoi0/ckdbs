@@ -85,6 +85,9 @@ struct CompiledCabinExpr {
 // The one key a predicate Cabin's set is filed under.
 parser::AstValue PredicateKey();
 
+// Whether a comparison under `op` has a literal: every one but IS [NOT] NULL.
+bool TakesLiteral(parser::CompareOp op);
+
 // The canonical text of one term or conjunct - what `F`'s text is made of,
 // and what the serve path builds from a statement's lowered conjuncts to
 // match against a Cabin's (AQ-R5, R6).

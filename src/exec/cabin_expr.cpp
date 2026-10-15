@@ -43,10 +43,6 @@ std::string_view OpText(parser::CompareOp op) {
     return "?";
 }
 
-bool TakesLiteral(parser::CompareOp op) {
-    return op != parser::CompareOp::kIsNull && op != parser::CompareOp::kIsNotNull;
-}
-
 // A uint64 literal's digits, without leading zeros: the text is compared,
 // and `01000` and `1000` are one value.
 std::string CanonicalDigits(const std::string& raw) {
@@ -62,7 +58,10 @@ void AppendLiteral(std::string& out, const parser::AstValue& v, bool masked) {
             out += 'i';
             if (masked) return;
             out += std::to_string(v.int_val);
-            if (!v.raw_int_text.empty()) out += "/" + CanonicalDigits(v.raw_int_text);
+            // The digits only where they are the value - a literal past int64,
+            // which coercion admits on a uint64 column alone - so a literal as
+            // a statement wrote it and as a Cabin stored it write one text.
+            if (parser::IntLiteralWrapped(v)) out += "/" + CanonicalDigits(v.raw_int_text);
             return;
         case parser::ValueType::kStr:
             out += 's';
@@ -430,6 +429,10 @@ std::string RenderTerm(const CabinTerm& term, const catalog::Schema& schema) {
 }
 
 }  // namespace
+
+bool TakesLiteral(parser::CompareOp op) {
+    return op != parser::CompareOp::kIsNull && op != parser::CompareOp::kIsNotNull;
+}
 
 parser::AstValue PredicateKey() {
     parser::AstValue v;

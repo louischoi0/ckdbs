@@ -1174,6 +1174,34 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
     return std::nullopt;
 }
 
+// A function conjunct's call as a Cabin term, when every argument is this
+// step's own column - never a correlated or another relation's.
+std::optional<CabinTerm> OwnCallTerm(const FunctionTerm& call, std::uint16_t slot) {
+    CabinTerm term;
+    term.fn = call.fn;
+    for (const ColumnRef& arg : call.args) {
+        if (!IsOwnColumn(arg, slot)) return std::nullopt;
+        term.args.push_back(arg.col_pos);
+    }
+    return term;
+}
+
+CabinProbe ProbeFor(const catalog::TableAccess::ExprCabinRef& ref, parser::AstValue value) {
+    CabinProbe probe;
+    probe.cabin_id = ref.id;
+    probe.col_pos = ref.f->inputs.front();
+    probe.value = std::move(value);
+    probe.f = ref.f;
+    probe.declared = ref.origin == catalog::kCabinOriginUser;
+    probe.managed = ref.origin == catalog::kCabinOriginAuto;
+    return probe;
+}
+
+bool AnyShaped(const catalog::TableAccess& access, std::uint8_t shape) {
+    return std::any_of(access.expr_cabins.begin(), access.expr_cabins.end(),
+                       [shape](const auto& ref) { return ref.shape == shape && ref.f != nullptr; });
+}
+
 // The expression Cabin probe (AQ-R5), or nullopt: a function conjunct
 // `F(cols) = literal` over this step's own columns whose `F` is an
 // expression Cabin's - **confirmed by its canonical text** (AQ-R2), the
@@ -1188,33 +1216,70 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
 // form (§4a) is not extended to `F`.
 std::optional<CabinProbe> ExprCabinProbeOf(const catalog::TableAccess& access, const Step& step,
                                            std::uint16_t slot) {
-    if (access.expr_cabins.empty()) return std::nullopt;
+    if (!AnyShaped(access, catalog::kCabinShapeExpression)) return std::nullopt;
     for (const FunctionPredicate& pred : step.fn_residual) {
         if (pred.op != parser::CompareOp::kEq || !pred.lhs.call.has_value()) continue;
         if (pred.rhs.call.has_value() || pred.rhs.plain.kind != OperandKind::kLiteral) continue;
-        CabinTerm term;
-        term.fn = pred.lhs.call->fn;
-        bool own = true;
-        for (const ColumnRef& arg : pred.lhs.call->args) {
-            own = own && IsOwnColumn(arg, slot);
-            term.args.push_back(arg.col_pos);
-        }
-        if (!own) continue;
-        const std::string text = CabinTermText(term);
+        const std::optional<CabinTerm> term = OwnCallTerm(*pred.lhs.call, slot);
+        if (!term.has_value()) continue;
+        const std::string text = CabinTermText(*term);
         for (const catalog::TableAccess::ExprCabinRef& ref : access.expr_cabins) {
-            if (ref.shape != catalog::kCabinShapeExpression || ref.f == nullptr ||
-                ref.f->text != text) {
-                continue;
+            if (ref.shape == catalog::kCabinShapeExpression && ref.f != nullptr &&
+                ref.f->text == text) {
+                return ProbeFor(ref, pred.rhs.plain.literal);
             }
-            CabinProbe probe;
-            probe.cabin_id = ref.id;
-            probe.col_pos = ref.f->inputs.front();
-            probe.value = pred.rhs.plain.literal;
-            probe.f = ref.f;
-            probe.declared = ref.origin == catalog::kCabinOriginUser;
-            probe.managed = ref.origin == catalog::kCabinOriginAuto;
-            return probe;
         }
+    }
+    return std::nullopt;
+}
+
+// The predicate Cabin probe (AQ-R6, `[quiet-wrong]`), or nullopt: a Cabin
+// `p = (c1 AND c2 ...)` serves a step when **every** `ci` equals one of the
+// step's own **lowered** conjuncts - a plain comparison with a literal or an
+// `IS [NOT] NULL` in `residual`, an immutable call's in `fn_residual` - by
+// canonical text: same column positions, same operator, same coerced
+// literal. Nothing is normalised beyond the lowering every conjunct already
+// gets (no `<` against `>`, no `>= 1001` against `> 1000`); a statement's
+// `BETWEEN` lowers exactly to its two bounds, which are therefore its
+// conjuncts (AQ-Q15). So the match errs toward the walk: a wrong match
+// serves `E(true)` to a statement whose WHERE does not imply `p` and loses
+// every row passing it and failing `p`. Every conjunct, `p`'s included,
+// stays where it is and re-checks the served rows. After the expression
+// arm, at the column Cabin's rank.
+std::optional<CabinProbe> PredicateCabinProbeOf(const catalog::TableAccess& access,
+                                                const Step& step, std::uint16_t slot) {
+    if (!AnyShaped(access, catalog::kCabinShapePredicate)) return std::nullopt;
+    std::vector<std::string> own;
+    for (const StepPredicate& pred : step.residual) {
+        if (!IsOwnColumn(pred.lhs, slot)) continue;
+        if (TakesLiteral(pred.op) && pred.rhs.kind != OperandKind::kLiteral) continue;
+        CabinConjunct c;
+        c.term.args.push_back(pred.lhs.col_pos);
+        c.op = pred.op;
+        c.literal = pred.rhs.literal;
+        own.push_back(CabinConjunctText(c));
+    }
+    for (const FunctionPredicate& pred : step.fn_residual) {
+        if (!pred.lhs.call.has_value() || pred.rhs.call.has_value()) continue;
+        if (TakesLiteral(pred.op) && pred.rhs.plain.kind != OperandKind::kLiteral) continue;
+        std::optional<CabinTerm> term = OwnCallTerm(*pred.lhs.call, slot);
+        if (!term.has_value()) continue;
+        CabinConjunct c;
+        c.term = std::move(*term);
+        c.op = pred.op;
+        c.literal = pred.rhs.plain.literal;
+        own.push_back(CabinConjunctText(c));
+    }
+    if (own.empty()) return std::nullopt;
+    std::sort(own.begin(), own.end());
+
+    for (const catalog::TableAccess::ExprCabinRef& ref : access.expr_cabins) {
+        if (ref.shape != catalog::kCabinShapePredicate || ref.f == nullptr) continue;
+        const bool implied = std::all_of(
+            ref.f->conjuncts.begin(), ref.f->conjuncts.end(), [&](const CabinConjunct& c) {
+                return std::binary_search(own.begin(), own.end(), CabinConjunctText(c));
+            });
+        if (implied) return ProbeFor(ref, PredicateKey());
     }
     return std::nullopt;
 }
@@ -2142,6 +2207,12 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // a compile-time key, before the correlated form.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(ep);
+            } else if (auto pp = PredicateCabinProbeOf(*scope.relations[i].access, step,
+                                                        static_cast<std::uint16_t>(i));
+                       pp.has_value()) {
+                // A predicate Cabin, after the expression arm: AQ-R6.
+                step.kind = AccessKind::kCabinProbe;
+                step.cabin = std::move(pp);
             } else if (auto cp = CorrelatedCabinProbeOf(scope, *scope.relations[i].access, step,
                                                          static_cast<std::uint16_t>(i));
                        cp.has_value()) {

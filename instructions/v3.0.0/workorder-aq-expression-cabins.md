@@ -16,7 +16,7 @@ its own letter.
 §13: that word is every stage's own. **AQ-R1's read-by-length mechanism is
 superseded** by the operator's standing order of 2026-10-07 (no superblock
 backward compatibility), which postdates AQ-Q1's mark: superblock 26 refuses
-every older volume, and no 28-byte row is read. AQ-Q7..Q13 (§4) are CLA's
+every older volume, and no 28-byte row is read. AQ-Q7..Q15 (§4) are CLA's
 proposals adopted on the standing go-ahead, not the operator's marks.
 
 ## 0. What AQ is
@@ -328,6 +328,8 @@ Each stage waits for the operator's word.
 
 | AQ-Q14 | **What an expression probe reports to the access statistics** (AQ-S2's review, B3) | spec | **no column**: the statistics are keyed by column (`SHOW ACCESS`, the controller's candidate), `F` is not one, and filing `DATE(ts) = d` under `ts` would merge it with a column Cabin on `ts`. The probe's shape is still recorded, as a `kCabinProbe` with an empty column set |
 
+| AQ-Q15 | **A statement's `BETWEEN` against AQ-R6's "no `BETWEEN` against two bounds"** (AQ-S3's review) | spec, **quiet-wrong** | the match is on **lowered** conjuncts (AQ-R6's own wording), and a statement's `BETWEEN a AND b` lowers exactly to `>= a` and `<= b` (`LowerComparison`), so a Cabin declared as those two bounds is served by it - sound, since the lowering is the statement's meaning. AQ-R6's sentence is read as: no normalisation beyond that lowering, and no `BETWEEN` in a declaration (refused at `CREATE`). The S3 exit's "not served ... as a `BETWEEN`" holds for a Cabin whose bounds a `BETWEEN` cannot spell (`amount > 1000`), which is the cell's case |
+
 Three surfaces in this order are `[quiet-wrong]`: AQ-R2's identity, AQ-R4's
 witness and AQ-R6's match. AQ-R2 and AQ-R4 are rulings here, and their
 cells are the stages' exits. AQ-R6's form is AQ-Q3's.
@@ -466,3 +468,50 @@ On `worktree-aq-expression-cabins` from `f3e6d1fd`.
   a cell touching no Cabin that memory records timing out under `-j8` load,
   which then passed 5/5 alone. Overhead not measured; measured at the
   milestone's close.
+
+### AQ-S3 - the predicate shape, landed 2026-10-15
+
+On `worktree-aq-expression-cabins` from `1099ad88`.
+
+- **Built.** `PredicateCabinProbeOf` serves a step from a predicate Cabin
+  when every conjunct of `p` equals, by canonical text, one of the step's
+  own lowered conjuncts in `residual` (a comparison with a literal, `IS
+  [NOT] NULL`) or `fn_residual` (an immutable call's), with no
+  normalisation beyond the lowering (AQ-R6, AQ-Q15); the key is `true`;
+  every conjunct stays and re-checks. The witness and the recording are
+  S2's, which already evaluate `p` whole. The literal text writes a uint64's
+  digits only where they are its value, so a statement's `1000` and a
+  stored one are one text. The two expression arms share `OwnCallTerm`,
+  `ProbeFor` and an early return when the relation has no Cabin of the
+  arm's shape.
+- **The exit, cell by cell** (`CabinPredicateTest`): served with every
+  conjunct, in either order and beside others; not served with one missing,
+  another literal, `>=` for `>`, an equivalent but unequal bound, a
+  `BETWEEN` that cannot spell `>`, an `OR` group, or another state - each
+  reply compared with the walk on a twin relation; every write witnessed
+  (INSERT single, multi-row and column-listed, UPDATE into and out of `p`,
+  DELETE), re-read after each; no append for a non-input column; **two
+  keys sharing an `expr_id` serve their own sets** (the serve half of
+  AQ-R2's collision); a `BETWEEN`'s bounds served (AQ-Q15); leading zeros
+  and `IS [NOT] NULL` conjuncts; a function conjunct inside `p`; an
+  enclosing row's conjunct is not the step's own.
+- **Mutation**: the match loosened to any one conjunct - killed (15
+  failures).
+- **Review** (`critics-developer`): no correctness bug - the sources of
+  `Step::residual` (WHERE, inner-join equalities, propagation; outer joins
+  refused; `bool_residual` unread), canonical-text collisions and the
+  witness traced. The `BETWEEN` conflict ruled as AQ-Q15. Applied: the
+  shared helpers, `TakesLiteral` exported, the early return, stale comments,
+  `OnTwin` asserting it rewrote, and the cells it named (multi-row and
+  column-list witness, IS NULL, leading zeros, the enclosing row). Rejected:
+  moving the statement-side conjunct-to-text conversion into
+  `cabin_expr.cpp` - it reads the compiler's slot and `IsOwnColumn`, and the
+  text grammar already has one home in `CabinConjunctText`. The predicate
+  shape's two-core witness is not a cell of its own: the arm it runs
+  through is S2's, whose rig cell covers it.
+- **Found, not caused by AQ**: an inner build buckets a conjunct on the
+  enclosing row by the first outer row alone `[quiet-wrong]`
+  (`docs/inflight/bugs/an-inner-build-buckets-outer-only-conjuncts-for-the-first-outer-row.md`),
+  reproduced with no Cabin; not fixed here (`join-inner-build.md`'s).
+- **Suite**: 3911/3911. Overhead not measured; measured at the milestone's
+  close.

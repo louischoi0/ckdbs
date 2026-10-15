@@ -889,9 +889,9 @@ private:
         // authoritative while missing qualifying tuple keys, the C1 break.
         // Declining to record is always legal (§1's corollary): this walk
         // still answers, and the value simply stays unobserved.
-        // An expression Cabin reads every input of `F`, each of which is an
-        // argument of the function conjunct the probe came from, and so in
-        // `filter_columns` by the same derivation (AQ-R5).
+        // An expression or predicate Cabin reads every input of `F`, each of
+        // which is read by a conjunct the probe was matched against, and so in
+        // `filter_columns` by the same derivation (AQ-R5, R6).
         const auto decoded = [&](std::uint16_t pos) {
             return step.filter_columns == Step::kAllColumns ||
                    (pos < 64 && ((step.filter_columns >> pos) & 1) != 0);
@@ -2775,7 +2775,7 @@ private:
     Recording* recording_ = nullptr;
 
     // Whether the row in `slots` belongs to the set being recorded: its key
-    // column equals the probed value, or - for an expression Cabin - `F` of
+    // column equals the probed value, or - for an expression or predicate Cabin - `F` of
     // it does, the same evaluation the write hook keys the set by, so a
     // recorded set and a witnessed one are one function (AQ-R5).
     static bool RecordsRow(const Recording& recording, std::span<const parser::AstValue> slots) {
