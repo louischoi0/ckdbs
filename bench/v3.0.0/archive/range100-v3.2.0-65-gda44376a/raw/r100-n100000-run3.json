@@ -1,0 +1,618 @@
+{
+ "rows": 100000,
+ "run": 3,
+ "args": {
+  "arm": [
+   "A=/tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/bin/kds_A",
+   "Ap=/tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/bin/kds_A",
+   "B=/tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/bin/kds_B"
+  ],
+  "pg_port": 15434,
+  "rows": 100000,
+  "workdir": "/home/cdkbs/r100-work",
+  "ops": 400,
+  "blocks": 20,
+  "run": 3,
+  "base_port": 16100,
+  "pin_server": "2",
+  "pin_driver": "4",
+  "pin_backend": "2",
+  "progress": "/tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/progress",
+  "out": "/home/cdkbs/ckdbs/.claude/worktrees/bench-range100-pg/bench/v3.0.0/archive/range100-v3.2.0-65-gda44376a/raw/r100-n100000-run3.json",
+  "cores": 1,
+  "durability": "relaxed"
+ },
+ "plans": {
+  "range100:A": [
+   "analyze rows=100 class=JoinSelect steps=1 examined=100000 pages=603 opens=1 groups=1 pattern_id=0xb6f2c78dfe3d9c5e fetch_id=0x13cb15f84e1cb7d7",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 Scan be_r",
+   "  filter 0:0.0 >= 5",
+   "  filter 0:0.0 < 105",
+   "aggregate keys=(global) items=count(*)=*, min(id)=0:0.0, max(id)=0:0.0",
+   "step 0 Scan be_r opens=1 examined=100000 matched=100 sel=0% pages=603"
+  ],
+  "range100:Ap": [
+   "analyze rows=100 class=JoinSelect steps=1 examined=100000 pages=603 opens=1 groups=1 pattern_id=0xb6f2c78dfe3d9c5e fetch_id=0x13cb15f84e1cb7d7",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 Scan be_r",
+   "  filter 0:0.0 >= 5",
+   "  filter 0:0.0 < 105",
+   "aggregate keys=(global) items=count(*)=*, min(id)=0:0.0, max(id)=0:0.0",
+   "step 0 Scan be_r opens=1 examined=100000 matched=100 sel=0% pages=603"
+  ],
+  "range100:B": [
+   "analyze rows=100 class=RangeSelect steps=1 examined=166 pages=2 opens=1 groups=1 pattern_id=0xb6f2c78dfe3d9c5e fetch_id=0x13cb15f84e1cb7d7",
+   "class=RangeSelect steps=1 hoisted=0",
+   "step 0 Range be_r range=[5, 104]",
+   "  filter 0:0.0 >= 5",
+   "  filter 0:0.0 < 105",
+   "aggregate keys=(global) items=count(*)=*, min(id)=0:0.0, max(id)=0:0.0",
+   "step 0 Range be_r opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1"
+  ],
+  "range100:PG": [
+   "Aggregate  (cost=6.99..7.00 rows=1 width=24)",
+   "  ->  Index Only Scan using be_r_pkey on be_r  (cost=0.29..6.25 rows=98 width=8)",
+   "        Index Cond: ((id >= 5) AND (id < 105))"
+  ],
+  "win100-rows:A": [
+   "analyze rows=100 class=JoinSelect steps=1 examined=100000 pages=603 opens=1 pattern_id=0x62416dbd7d1b7e82 fetch_id=0x13cb15f84e1cb7d7",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 Scan be_r",
+   "  filter 0:0.0 >= 5",
+   "  filter 0:0.0 < 105",
+   "project * (3 column(s) of step 0)",
+   "step 0 Scan be_r opens=1 examined=100000 matched=100 sel=0% pages=603"
+  ],
+  "win100-rows:Ap": [
+   "analyze rows=100 class=JoinSelect steps=1 examined=100000 pages=603 opens=1 pattern_id=0x62416dbd7d1b7e82 fetch_id=0x13cb15f84e1cb7d7",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 Scan be_r",
+   "  filter 0:0.0 >= 5",
+   "  filter 0:0.0 < 105",
+   "project * (3 column(s) of step 0)",
+   "step 0 Scan be_r opens=1 examined=100000 matched=100 sel=0% pages=603"
+  ],
+  "win100-rows:B": [
+   "analyze rows=100 class=RangeSelect steps=1 examined=166 pages=2 opens=1 pattern_id=0x62416dbd7d1b7e82 fetch_id=0x13cb15f84e1cb7d7",
+   "class=RangeSelect steps=1 hoisted=0",
+   "step 0 Range be_r range=[5, 104]",
+   "  filter 0:0.0 >= 5",
+   "  filter 0:0.0 < 105",
+   "project * (3 column(s) of step 0)",
+   "step 0 Range be_r opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1"
+  ],
+  "win100-rows:PG": [
+   "Index Scan using be_r_pkey on be_r  (cost=0.29..10.25 rows=98 width=24)",
+   "  Index Cond: ((id >= 5) AND (id < 105))"
+  ],
+  "between100:A": [
+   "analyze rows=100 class=RangeSelect steps=1 examined=166 pages=2 opens=1 groups=1 pattern_id=0xbf6bcbe1928fc9cf fetch_id=0x5cf33ee25810a64c",
+   "class=RangeSelect steps=1 hoisted=0",
+   "step 0 Range be_r range=[5, 104]",
+   "  filter 0:0.0 >= 5",
+   "  filter 0:0.0 <= 104",
+   "aggregate keys=(global) items=count(*)=*, min(id)=0:0.0, max(id)=0:0.0",
+   "step 0 Range be_r opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1"
+  ],
+  "between100:Ap": [
+   "analyze rows=100 class=RangeSelect steps=1 examined=166 pages=2 opens=1 groups=1 pattern_id=0xbf6bcbe1928fc9cf fetch_id=0x5cf33ee25810a64c",
+   "class=RangeSelect steps=1 hoisted=0",
+   "step 0 Range be_r range=[5, 104]",
+   "  filter 0:0.0 >= 5",
+   "  filter 0:0.0 <= 104",
+   "aggregate keys=(global) items=count(*)=*, min(id)=0:0.0, max(id)=0:0.0",
+   "step 0 Range be_r opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1"
+  ],
+  "between100:B": [
+   "analyze rows=100 class=RangeSelect steps=1 examined=166 pages=2 opens=1 groups=1 pattern_id=0xbf6bcbe1928fc9cf fetch_id=0x5cf33ee25810a64c",
+   "class=RangeSelect steps=1 hoisted=0",
+   "step 0 Range be_r range=[5, 104]",
+   "  filter 0:0.0 >= 5",
+   "  filter 0:0.0 <= 104",
+   "aggregate keys=(global) items=count(*)=*, min(id)=0:0.0, max(id)=0:0.0",
+   "step 0 Range be_r opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1"
+  ],
+  "between100:PG": [
+   "Aggregate  (cost=6.99..7.00 rows=1 width=24)",
+   "  ->  Index Only Scan using be_r_pkey on be_r  (cost=0.29..6.25 rows=98 width=8)",
+   "        Index Cond: ((id >= 5) AND (id <= 104))"
+  ]
+ },
+ "verify": {
+  "statements": 72,
+  "mismatches": 0
+ },
+ "cells": [
+  {
+   "shape": "range100",
+   "rows": 100000,
+   "host_before": {
+    "loadavg": "5.97 6.45 4.34 5/480 2680402",
+    "competing": [
+     "2669704 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 2>&1 | grep -E '\"'\"' error'\"'\"' -A3 | head; df -h / | tail -1; ctest --test-dir build -j4 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite14.txt 2>&1; grep -E '\"'\"'tests passed|\\(Failed\\)|\\(Timeout\\)'\"'\"' /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite14.txt' < /dev/null && pwd -P >| /tmp/claude-19a0-cwd",
+     "2673083 ctest --test-dir build -j4 -LE heap-suspended",
+     "2674046 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792049658972-bfg05a.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'F=/home/cdkbs/ckdbs/.claude/worktrees/bench-range100-pg/bench/v3.0.0/archive/range100-v3.2.0-65-gda44376a/raw/status.txt; for i in $(seq 1 50); do grep -q ALLDONE $F && break; sleep 10; done; tail -3 $F; uptime; pgrep -c ctest; cat /tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/progress' < /dev/null && pwd -P >| /tmp/claude-1a48-cwd"
+    ]
+   },
+   "host_after": {
+    "loadavg": "5.57 6.36 4.32 1/460 2680478",
+    "competing": [
+     "2674046 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792049658972-bfg05a.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'F=/home/cdkbs/ckdbs/.claude/worktrees/bench-range100-pg/bench/v3.0.0/archive/range100-v3.2.0-65-gda44376a/raw/status.txt; for i in $(seq 1 50); do grep -q ALLDONE $F && break; sleep 10; done; tail -3 $F; uptime; pgrep -c ctest; cat /tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/progress' < /dev/null && pwd -P >| /tmp/claude-1a48-cwd"
+    ]
+   },
+   "cpu_busy_pct": {
+    "0": 10.7,
+    "1": 16.2,
+    "2": 96.1,
+    "3": 11.5,
+    "4": 11.6,
+    "5": 13.4,
+    "6": 18.4,
+    "7": 7.1
+   },
+   "arms": {
+    "A": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 2582.7300269156694,
+     "p25_us": 2767.909085378051,
+     "p50_us": 2903.7739150226116,
+     "p95_us": 4246.821161359549,
+     "p99_us": 5582.448095083237,
+     "server_cpu_us": 2930.2901625,
+     "block_server_us": [
+      3568.86,
+      3100.99,
+      4221.7,
+      2884.03,
+      2776.56,
+      2824.27,
+      2922.82,
+      2786.16,
+      2875.16,
+      2797.63,
+      2806.98,
+      2748.89,
+      2798.03,
+      2783.29,
+      2770.14,
+      2788.99,
+      2762.72,
+      2825.36,
+      2790.45,
+      2772.76
+     ]
+    },
+    "Ap": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 2610.481111332774,
+     "p25_us": 2758.2040056586266,
+     "p50_us": 2877.8649866580963,
+     "p95_us": 4139.8899629712105,
+     "p99_us": 4684.302024543285,
+     "server_cpu_us": 2889.667305,
+     "block_server_us": [
+      3232.24,
+      3018.88,
+      3584.05,
+      2850.02,
+      3100.43,
+      2885.86,
+      2731.45,
+      2918.5,
+      2839.4,
+      2767.6,
+      2781.02,
+      2759.67,
+      2816.11,
+      2780.79,
+      2786.1,
+      2804.19,
+      2778.4,
+      2819.69,
+      2745.63,
+      2793.33
+     ]
+    },
+    "B": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 73.55096749961376,
+     "p25_us": 80.65183646976948,
+     "p50_us": 85.81997826695442,
+     "p95_us": 191.3879532366991,
+     "p99_us": 680.5069278925657,
+     "server_cpu_us": 62.9568125,
+     "block_server_us": [
+      86.44,
+      60.86,
+      88.88,
+      79.33,
+      71.64,
+      58.86,
+      55.64,
+      58.38,
+      59.68,
+      58.63,
+      57.17,
+      58.59,
+      58.13,
+      60.59,
+      57.72,
+      58.37,
+      59.53,
+      57.44,
+      55.45,
+      57.82
+     ]
+    },
+    "PG": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 79.49001155793667,
+     "p25_us": 95.44403292238712,
+     "p50_us": 104.57797907292843,
+     "p95_us": 253.6328975111246,
+     "p99_us": 395.0069658458233,
+     "server_cpu_us": 96.0418275,
+     "block_server_us": [
+      107.36,
+      94.86,
+      120.95,
+      113.78,
+      89.81,
+      93.88,
+      88.91,
+      89.25,
+      111.84,
+      93.46,
+      95.81,
+      88.65,
+      91.22,
+      98.58,
+      90.03,
+      90.93,
+      90.11,
+      92.64,
+      89.02,
+      89.75
+     ]
+    }
+   }
+  },
+  {
+   "shape": "win100-rows",
+   "rows": 100000,
+   "host_before": {
+    "loadavg": "5.57 6.36 4.32 1/460 2680479",
+    "competing": [
+     "2674046 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792049658972-bfg05a.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'F=/home/cdkbs/ckdbs/.claude/worktrees/bench-range100-pg/bench/v3.0.0/archive/range100-v3.2.0-65-gda44376a/raw/status.txt; for i in $(seq 1 50); do grep -q ALLDONE $F && break; sleep 10; done; tail -3 $F; uptime; pgrep -c ctest; cat /tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/progress' < /dev/null && pwd -P >| /tmp/claude-1a48-cwd"
+    ]
+   },
+   "host_after": {
+    "loadavg": "5.57 6.36 4.32 1/467 2680514",
+    "competing": [
+     "2674046 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792049658972-bfg05a.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'F=/home/cdkbs/ckdbs/.claude/worktrees/bench-range100-pg/bench/v3.0.0/archive/range100-v3.2.0-65-gda44376a/raw/status.txt; for i in $(seq 1 50); do grep -q ALLDONE $F && break; sleep 10; done; tail -3 $F; uptime; pgrep -c ctest; cat /tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/progress' < /dev/null && pwd -P >| /tmp/claude-1a48-cwd"
+    ]
+   },
+   "cpu_busy_pct": {
+    "0": 6.5,
+    "1": 5.0,
+    "2": 88.8,
+    "3": 1.1,
+    "4": 13.0,
+    "5": 2.3,
+    "6": 8.1,
+    "7": 1.2
+   },
+   "arms": {
+    "A": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 2747.648861259222,
+     "p25_us": 2886.5181375294924,
+     "p50_us": 2994.0500389784575,
+     "p95_us": 3310.177940875292,
+     "p99_us": 3487.2239921242,
+     "server_cpu_us": 2803.4990575,
+     "block_server_us": [
+      2823.96,
+      2785.41,
+      2800.25,
+      2782.32,
+      2763.59,
+      2821.09,
+      2765.7,
+      2779.17,
+      2796.52,
+      2764.66,
+      3026.22,
+      2799.05,
+      2813.66,
+      2796.71,
+      2779.59,
+      2780.44,
+      2792.92,
+      2825.74,
+      2776.64,
+      2796.37
+     ]
+    },
+    "Ap": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 2747.659105807543,
+     "p25_us": 2884.6149798482656,
+     "p50_us": 2988.973166793585,
+     "p95_us": 3240.6619284301996,
+     "p99_us": 3509.0181045234203,
+     "server_cpu_us": 2796.9113525000002,
+     "block_server_us": [
+      2823.34,
+      2782.76,
+      2779.45,
+      2806.22,
+      2761.48,
+      2822.78,
+      2759.81,
+      2788.08,
+      2826.9,
+      2794.18,
+      2828.41,
+      2783.75,
+      2810.84,
+      2792.37,
+      2765.43,
+      2813.61,
+      2772.18,
+      2809.07,
+      2819.62,
+      2797.93
+     ]
+    },
+    "B": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 209.5559611916542,
+     "p25_us": 218.00887770950794,
+     "p50_us": 224.22801703214645,
+     "p95_us": 326.463021337986,
+     "p99_us": 357.79993049800396,
+     "server_cpu_us": 68.5093575,
+     "block_server_us": [
+      69.79,
+      67.15,
+      67.24,
+      68.22,
+      68.12,
+      68.04,
+      67.56,
+      65.93,
+      68.74,
+      67.14,
+      67.89,
+      68.12,
+      68.57,
+      79.74,
+      67.96,
+      69.06,
+      68.13,
+      68.17,
+      67.86,
+      66.75
+     ]
+    },
+    "PG": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 180.552015081048,
+     "p25_us": 187.46312707662582,
+     "p50_us": 194.08296793699265,
+     "p95_us": 286.05200350284576,
+     "p99_us": 386.3240126520395,
+     "server_cpu_us": 86.97519,
+     "block_server_us": [
+      83.38,
+      89.11,
+      86.69,
+      87.81,
+      87.0,
+      86.74,
+      86.58,
+      85.45,
+      90.0,
+      88.23,
+      86.66,
+      86.87,
+      86.06,
+      88.3,
+      88.76,
+      84.67,
+      86.97,
+      87.41,
+      86.57,
+      86.25
+     ]
+    }
+   }
+  },
+  {
+   "shape": "between100",
+   "rows": 100000,
+   "host_before": {
+    "loadavg": "5.57 6.36 4.32 1/467 2680515",
+    "competing": [
+     "2674046 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792049658972-bfg05a.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'F=/home/cdkbs/ckdbs/.claude/worktrees/bench-range100-pg/bench/v3.0.0/archive/range100-v3.2.0-65-gda44376a/raw/status.txt; for i in $(seq 1 50); do grep -q ALLDONE $F && break; sleep 10; done; tail -3 $F; uptime; pgrep -c ctest; cat /tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/progress' < /dev/null && pwd -P >| /tmp/claude-1a48-cwd"
+    ]
+   },
+   "host_after": {
+    "loadavg": "5.57 6.36 4.32 1/467 2680516",
+    "competing": [
+     "2674046 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792049658972-bfg05a.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'F=/home/cdkbs/ckdbs/.claude/worktrees/bench-range100-pg/bench/v3.0.0/archive/range100-v3.2.0-65-gda44376a/raw/status.txt; for i in $(seq 1 50); do grep -q ALLDONE $F && break; sleep 10; done; tail -3 $F; uptime; pgrep -c ctest; cat /tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/progress' < /dev/null && pwd -P >| /tmp/claude-1a48-cwd"
+    ]
+   },
+   "cpu_busy_pct": {
+    "0": 0.0,
+    "1": 0.0,
+    "2": 61.1,
+    "3": 11.8,
+    "4": 37.5,
+    "5": 0.0,
+    "6": 0.0,
+    "7": 0.0
+   },
+   "arms": {
+    "A": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 72.4489800632,
+     "p25_us": 78.15798744559288,
+     "p50_us": 81.49305358529091,
+     "p95_us": 127.08199210464954,
+     "p99_us": 141.26300811767578,
+     "server_cpu_us": 54.726605000000006,
+     "block_server_us": [
+      54.91,
+      52.74,
+      81.0,
+      54.5,
+      51.97,
+      51.58,
+      52.61,
+      53.24,
+      53.46,
+      51.87,
+      64.14,
+      52.81,
+      51.93,
+      52.84,
+      52.82,
+      52.44,
+      51.7,
+      52.47,
+      53.5,
+      52.02
+     ]
+    },
+    "Ap": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 71.80892862379551,
+     "p25_us": 77.99803279340267,
+     "p50_us": 81.1130739748478,
+     "p95_us": 121.7029057443142,
+     "p99_us": 136.2550538033247,
+     "server_cpu_us": 55.332525000000004,
+     "block_server_us": [
+      52.13,
+      82.71,
+      84.38,
+      52.54,
+      52.48,
+      52.32,
+      53.3,
+      52.2,
+      52.19,
+      51.61,
+      52.57,
+      52.84,
+      51.2,
+      52.16,
+      53.02,
+      51.76,
+      51.13,
+      50.56,
+      53.14,
+      52.39
+     ]
+    },
+    "B": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 71.13697938621044,
+     "p25_us": 77.65693590044975,
+     "p50_us": 81.71284571290016,
+     "p95_us": 124.59815479815006,
+     "p99_us": 147.8530466556549,
+     "server_cpu_us": 56.693059999999996,
+     "block_server_us": [
+      53.3,
+      82.22,
+      83.59,
+      81.67,
+      51.51,
+      52.26,
+      51.65,
+      50.66,
+      51.78,
+      52.87,
+      51.78,
+      52.88,
+      52.46,
+      54.16,
+      53.19,
+      52.1,
+      51.34,
+      51.15,
+      52.2,
+      51.08
+     ]
+    },
+    "PG": {
+     "ops": 400,
+     "bad": 0,
+     "p0_us": 83.99691432714462,
+     "p25_us": 94.50200013816357,
+     "p50_us": 101.56305506825447,
+     "p95_us": 150.64701437950134,
+     "p99_us": 174.69306476414204,
+     "server_cpu_us": 88.21016499999999,
+     "block_server_us": [
+      83.7,
+      115.86,
+      117.67,
+      113.67,
+      81.93,
+      85.44,
+      82.16,
+      83.1,
+      84.02,
+      85.39,
+      81.31,
+      83.5,
+      82.93,
+      85.41,
+      82.9,
+      82.07,
+      82.76,
+      85.75,
+      82.75,
+      81.87
+     ]
+    }
+   }
+  }
+ ],
+ "host_before": {
+  "loadavg": "5.97 6.45 4.34 5/480 2680272",
+  "competing": [
+   "2669704 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792025888954-848fg8.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'cmake --build build -j8 2>&1 | grep -E '\"'\"' error'\"'\"' -A3 | head; df -h / | tail -1; ctest --test-dir build -j4 -LE heap-suspended > /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite14.txt 2>&1; grep -E '\"'\"'tests passed|\\(Failed\\)|\\(Timeout\\)'\"'\"' /tmp/claude-1000/-home-cdkbs-ckdbs/07655cb0-2408-474a-ac47-88c00d034fa6/scratchpad/suite14.txt' < /dev/null && pwd -P >| /tmp/claude-19a0-cwd",
+   "2673083 ctest --test-dir build -j4 -LE heap-suspended",
+   "2674046 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792049658972-bfg05a.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'F=/home/cdkbs/ckdbs/.claude/worktrees/bench-range100-pg/bench/v3.0.0/archive/range100-v3.2.0-65-gda44376a/raw/status.txt; for i in $(seq 1 50); do grep -q ALLDONE $F && break; sleep 10; done; tail -3 $F; uptime; pgrep -c ctest; cat /tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/progress' < /dev/null && pwd -P >| /tmp/claude-1a48-cwd"
+  ]
+ },
+ "pids": {
+  "A": 2679534,
+  "Ap": 2679642,
+  "B": 2679746
+ },
+ "pg_pid": 2679851,
+ "host_after": {
+  "loadavg": "5.57 6.36 4.32 1/467 2680517",
+  "competing": [
+   "2674046 /bin/bash -c source /home/cdkbs/.claude/shell-snapshots/snapshot-bash-1792049658972-bfg05a.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'F=/home/cdkbs/ckdbs/.claude/worktrees/bench-range100-pg/bench/v3.0.0/archive/range100-v3.2.0-65-gda44376a/raw/status.txt; for i in $(seq 1 50); do grep -q ALLDONE $F && break; sleep 10; done; tail -3 $F; uptime; pgrep -c ctest; cat /tmp/claude-1000/-home-cdkbs-ckdbs/0221b531-38a9-4c26-b0d4-39c18d514efa/scratchpad/r100/progress' < /dev/null && pwd -P >| /tmp/claude-1a48-cwd"
+  ]
+ }
+}
