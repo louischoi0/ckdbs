@@ -173,6 +173,40 @@ TEST_F(QueryLayerTest, ThreeValuedLogicInTheSelectList) {
                {"id,tier > 1", "1,0", "2,1", "3,NULL", "4,1", "5,NULL", "6,1"});
 }
 
+TEST_F(QueryLayerTest, InOverAnEmptySubqueryIsFalseEvenForANullOperand) {
+    // `NULL IN (no rows)` is false, so `NULL NOT IN (no rows)` keeps the row
+    // (BU-R4); carol and erin have a NULL tier.
+    ExpectRows("SELECT id + 0 FROM cust WHERE tier NOT IN (SELECT tier FROM cust WHERE id > 100)",
+               {"id + 0", "1", "2", "3", "4", "5", "6"});
+    ExpectRows("SELECT id + 0 FROM cust WHERE tier IN (SELECT tier FROM cust WHERE id > 100)",
+               {"id + 0"});
+    // Over a non-empty set a NULL operand stays unknown.
+    ExpectRows("SELECT id + 0 FROM cust WHERE tier NOT IN (SELECT tier FROM cust WHERE id = 1)",
+               {"id + 0", "2", "4", "6"});
+}
+
+TEST_F(QueryLayerTest, OrderByANameTwoItemsReadAsOneColumnIsNotAmbiguous) {
+    ExpectRows("SELECT *, name FROM cust ORDER BY name LIMIT 2",
+               {"id,name,region,tier,name", "1,alice,EU,1,alice", "2,bob,US,2,bob"},
+               /*ordered=*/true);
+    ExpectRefused("SELECT name, region AS name FROM cust ORDER BY name", "is ambiguous");
+}
+
+TEST_F(QueryLayerTest, ARelationWalkIsBoundedBySortMaxRowsAsItRuns) {
+    dispatcher_->set_sort_max_rows(5);
+    ExpectRefused("SELECT id + 0 FROM ord", "sort_max_rows (5)");
+    ExpectRows("SELECT id + 0 FROM ord WHERE id < 13", {"id + 0", "10", "11", "12"});
+}
+
+// A grouped layer statement is a BU-S5 form (`exec::FormsLanded`); BU-S5
+// enables this cell with the arm it deletes.
+TEST_F(QueryLayerTest, DISABLED_AggregateMaxGroupsOfZeroRefusesAsTheNativeFoldDoes) {
+    exec::AggregateLimits limits;
+    limits.max_groups = 0;
+    dispatcher_->set_aggregate_limits(limits);
+    ExpectRefused("SELECT region, count(*) + 0 FROM cust GROUP BY region", "aggregate_max_groups");
+}
+
 // ---- Refusals: typed at compile, positioned ---------------------------------
 
 TEST_F(QueryLayerTest, AMistypedExpressionIsRefusedWhetherOrNotARowMatches) {
@@ -207,6 +241,31 @@ TEST_F(QueryLayerTest, ANativeStatementAnswersAsBefore) {
     ExpectRows("SELECT id FROM ord WHERE status = 'open' AND amount > 60", {"id", "10", "16"});
     ExpectRows("SELECT o.id, c.name FROM ord AS o JOIN cust AS c ON o.cust_id = c.id WHERE o.id = 12",
                {"o.id,c.name", "12,bob"});
+}
+
+// A qualifier and a `rel.*` match their binding ignoring case, as the
+// native path does, and as a column name does since 2026-10-15.
+TEST_F(QueryLayerTest, AQualifierMatchesItsBindingIgnoringCase) {
+    ExpectRows("SELECT C.id + 0 FROM cust AS c WHERE id < 3", {"C.id + 0", "1", "2"});
+    ExpectRows("SELECT C.* FROM cust AS c WHERE id = 1", {"id,name,region,tier", "1,alice,EU,1"});
+    ExpectRefused("SELECT 1 FROM cust AS x JOIN ord AS X ON x.id = X.cust_id", "bound twice");
+}
+
+// What a later stage builds keeps the native reply until that stage lands
+// (`exec::FormsLanded`): the layer reads these and does not answer them.
+TEST_F(QueryLayerTest, ALaterStagesFormKeepsTheNativeRefusal) {
+    for (const char* sql : {
+             "SELECT region, COUNT(*) FROM cust GROUP BY region HAVING COUNT(*) > 1",  // S5
+             "SELECT region, COUNT(*) + 0 FROM cust GROUP BY region",                // S5
+             "SELECT c.id FROM cust AS c LEFT JOIN ord AS o ON c.id = o.cust_id",      // S6
+             "SELECT c.id FROM cust AS c, ord AS o WHERE c.id = o.cust_id",            // S6
+             "SELECT id FROM cust UNION SELECT id FROM ord",                           // S7
+             "SELECT d.id FROM (SELECT id FROM cust) AS d",                            // S7
+             "SELECT id, (SELECT 1) FROM cust",                                        // S7
+         }) {
+        const std::string reply = Run(sql);
+        EXPECT_EQ(reply.rfind("ERR", 0), 0u) << sql << " -> " << reply;
+    }
 }
 
 }  // namespace

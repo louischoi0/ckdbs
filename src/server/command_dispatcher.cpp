@@ -7968,9 +7968,11 @@ namespace {
 
 // A layer walk's rows, captured as values. The row's text is the index of
 // its values, `ScalarSubquerySink`'s device, so what `Emit` keeps is the row
-// that was encoded for it.
+// that was encoded for it. Bounded as the layer's own row sets are (BU-Q10):
+// the walk is refused at the row past `max_rows`, not held whole first.
 class LayerWalkSink final : public ResultSink {
 public:
+    explicit LayerWalkSink(std::size_t max_rows) : max_rows_(max_rows) {}
     Status Describe(std::vector<wire::FieldDescription>) override { return Status::OK(); }
     Status EncodeProjectedRow(std::span<const exec::ColumnRef> projection,
                               std::span<const std::uint32_t>, const exec::ChainFrame& frame,
@@ -7989,12 +7991,20 @@ public:
         return Status::OK();
     }
     Status Emit(std::string_view row) override {
+        if (rows_.size() >= max_rows_) {
+            return Status::ResourceExhausted(
+                "this statement's relation walk would hold more than sort_max_rows (" +
+                std::to_string(max_rows_) +
+                ") rows; the query layer answers from rows it holds (BU-Q10) - raise "
+                "sort_max_rows, or narrow the statement");
+        }
         rows_.push_back(std::move(rendered_[static_cast<std::size_t>(std::stoull(std::string(row)))]));
         return Status::OK();
     }
     std::vector<std::vector<parser::AstValue>> TakeRows() { return std::move(rows_); }
 
 private:
+    std::size_t max_rows_;
     std::vector<std::vector<parser::AstValue>> rendered_;
     std::vector<std::vector<parser::AstValue>> rows_;
 };
@@ -8007,7 +8017,11 @@ class CommandDispatcher::LayerHostImpl final : public exec::LayerHost {
 public:
     LayerHostImpl(CommandDispatcher& d, Session& session, const txn::Snapshot& snap,
                   const exec::StatementContext& context)
-        : d_(d), session_(session), snap_(snap), context_(context) {}
+        : d_(d),
+          session_(session),
+          snap_(snap),
+          context_(context),
+          borrow_(d.locks_, d.NextReadHolder(), &d.read_borrows_) {}
 
     StatusOr<std::vector<exec::LayerColumn>> DescribeRelation(
         const parser::RelationRef& rel) override {
@@ -8018,8 +8032,12 @@ public:
         }
         parser::SelectStmt probe;
         probe.from = rel;
-        const std::optional<txn::ReadView> view = d_.ViewFor(session_);
-        auto chain = exec::Compile(d_.catalog_, probe, view.has_value() ? &*view : nullptr);
+        // Resolved as the native path resolves a name, and declared into the
+        // statement's one borrow, held until the statement ends (AT-S1): a
+        // `DROP TABLE` waits for the layer's walks, as for a native read's.
+        auto chain = d_.ResolveNames(session_, [&](const txn::ReadView* v) {
+            return exec::Compile(d_.catalog_, probe, v, &borrow_);
+        });
         if (!chain.ok()) return chain.status();
         auto access = d_.catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
         if (!access.ok()) return access.status();
@@ -8057,12 +8075,13 @@ private:
     Session& session_;
     const txn::Snapshot& snap_;
     const exec::StatementContext& context_;
+    ReadBorrow borrow_;
 };
 
 StatusOr<std::vector<std::vector<parser::AstValue>>> CommandDispatcher::WalkForLayer(
     parser::SelectStmt stmt, Session& session, const txn::Snapshot& snap,
     const exec::StatementContext& context) {
-    LayerWalkSink sink;
+    LayerWalkSink sink(sort_max_rows_);
     ResultSink* const previous = session.result_sink();
     session.set_result_sink(&sink);
     struct Restore {
@@ -8089,7 +8108,7 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
     const exec::StatementContext* context) {
     parser::Parser parser(line);
     auto query = parser.ParseQuery();
-    if (!query.ok()) return std::nullopt;
+    if (!query.ok() || !exec::FormsLanded(query.value())) return std::nullopt;
 
     const exec::StatementContext now =
         context != nullptr ? *context : exec::StatementContextNow();
@@ -8101,8 +8120,7 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
     if (!result.ok()) return DispatchOutcome{ErrorReply(result.status()), false, 0, result.status()};
 
     TextResultSink text_sink;
-    ResultSink& sink = session.result_sink() != nullptr ? *session.result_sink()
-                                                        : static_cast<ResultSink&>(text_sink);
+    ResultSink& sink = SinkFor(session, text_sink);
     const exec::RowSet& rs = result.value();
     std::vector<wire::FieldDescription> fields;
     std::vector<std::uint32_t> wire_types;
@@ -8114,7 +8132,7 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
             c.keystone ? wire::WireValueType(c.type.type_val, 0) : c.type.type_val;
         f.type_len = wire::WireTypeLen(wire_type);
         f.type_mod = catalog::TypeModOf(c.type.type_val, c.type.len);
-        if (c.keystone) f.flags |= wire::kFieldFlagKeystone;
+        if (c.driving_keystone) f.flags |= wire::kFieldFlagKeystone;
         fields.push_back(std::move(f));
         wire_types.push_back(wire_type);
     }

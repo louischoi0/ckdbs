@@ -873,7 +873,7 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
 - Explicit lists: `SELECT x, a.y FROM ...` — columns, qualified or bare.
 - **Value expressions** (since BU-S4): `SELECT id, amount * 2, name || '@'
   || region AS addr, CASE WHEN amount >= 250 THEN 'big' ELSE 'small' END,
-  COALESCE(tier, 0), CAST(amount AS varchar(16)), UPPER(name) FROM ...` -
+  COALESCE(tier, 0), CAST(amount AS varchar), UPPER(name) FROM ...` -
   the value expressions of an `UPDATE ... SET` (arithmetic, `||`, the
   comparisons and `AND`/`OR`/`NOT`/`IS NULL` as bool values, `CASE`,
   `COALESCE`/`NULLIF`/`GREATEST`/`LEAST`, `CAST` and `::`, the scalar
@@ -882,8 +882,10 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
   conversion** (`name + 1` is refused whether or not a row matches); a
   literal with nothing to type it takes its natural type - an integer
   `int64`, a string `varchar`, `1.50` `decimal(3,2)`, a lone `NULL`
-  `varchar`. A column without an alias is headed by its name, a function by
-  its name, anything else `?column?`.
+  `varchar`. `CAST(x AS varchar(N))` is refused: `N` is a column's cell
+  width, not a length (types.md §3.2b). A column without an alias is
+  headed as written (`o.id`), anything else by its text as written
+  (`amount * 2`).
 - `SELECT DISTINCT <list>` keeps one row per distinct value of the list;
   NULLs are one value.
 - `SELECT 1 + 1` - a select list with no `FROM` - is one row.
@@ -1012,6 +1014,12 @@ select list with no `FROM` - is answered by the query layer
   output, a sort - is bounded by `sort_max_rows`, and a statement that
   would pass it fails with `RESOURCE_EXHAUSTED` naming the setting, never a
   partial answer.
+- **What it answers grows stage by stage.** `HAVING`, an aggregate over an
+  expression or in a subquery, outer, cross, comma and `USING` joins, an
+  `ON` beyond one column equality, set operations, derived tables and a
+  subquery in the select list are read by the layer's grammar but answered
+  only once their stage of BU lands; until then each keeps the refusal it
+  has always had.
 - No Waystone trail is recorded or replayed for a layer statement, and
   `ANALYZE` does not describe one: `ANALYZE` of a layer statement answers
   the native refusal.

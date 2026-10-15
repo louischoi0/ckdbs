@@ -19,6 +19,7 @@
 // No locks or atomics: one statement's state, on its own thread.
 
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <memory>
 #include <optional>
@@ -431,7 +432,7 @@ StatusOr<std::optional<ResolvedColumn>> ResolveIn(const Scope& s, const Expr& e)
         for (std::size_t i = 0; i < s.columns->size(); ++i) {
             const LayerColumn& c = (*s.columns)[i];
             if (catalog::ColumnNamesCollide(c.name, e.column) &&
-                (e.qualifier.empty() || c.qualifier == e.qualifier)) {
+                (e.qualifier.empty() || IEq(c.qualifier, e.qualifier))) {
                 hits.push_back(i);
             }
         }
@@ -584,6 +585,7 @@ StatusOr<std::unique_ptr<CompiledQuery>> Runner::Compile(const Query& q, const S
         LayerColumn c = l[i];
         c.qualifier.clear();
         c.keystone = l[i].keystone && r[i].keystone;
+        c.driving_keystone = l[i].driving_keystone && r[i].driving_keystone;
         const SetType& a = l[i].type;
         const SetType& b = r[i].type;
         const bool same = a.type_val == b.type_val && (IsText(a.type_val) || a.len == b.len);
@@ -656,12 +658,15 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
             columns = std::move(described.value());
         }
         const std::string binding = item->rel.binding();
-        if (!bindings.insert(binding).second) {
+        if (!bindings.insert(FoldName(binding)).second) {
             return Status::InvalidArgument("the name '" + binding +
                                            "' is bound twice in FROM; give one an alias with AS" +
                                            At(item->byte_offset));
         }
-        for (LayerColumn& c : columns) c.qualifier = binding;
+        for (LayerColumn& c : columns) {
+            c.qualifier = binding;
+            c.driving_keystone = c.keystone && cb.sources.empty();
+        }
         s.columns = std::move(columns);
         s.offset = cb.wide.size();
         cb.wide.insert(cb.wide.end(), s.columns.begin(), s.columns.end());
@@ -1064,7 +1069,7 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
             }
             bool any = false;
             for (std::size_t c = 0; c < cb.wide.size(); ++c) {
-                if (!item.star_qualifier.empty() && cb.wide[c].qualifier != item.star_qualifier) {
+                if (!item.star_qualifier.empty() && !IEq(cb.wide[c].qualifier, item.star_qualifier)) {
                     continue;
                 }
                 any = true;
@@ -1094,6 +1099,7 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
         if (!cb.grouped && item.expr->kind == Expr::Kind::kColumn &&
             typed.value()->column_no < cb.wide.size()) {
             out.keystone = cb.wide[typed.value()->column_no].keystone;
+            out.driving_keystone = cb.wide[typed.value()->column_no].driving_keystone;
         }
         q.columns.push_back(out);
         cb.item_types.push_back(typed.value()->type);
@@ -1120,6 +1126,12 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
                 // same column the input name reads; only two different
                 // output columns of one name are ambiguous.
                 if (index.has_value()) {
+                    const TypedSetExpr& a = *cb.items[*index];
+                    const TypedSetExpr& c = *cb.items[i];
+                    if (a.kind == Expr::Kind::kColumn && c.kind == Expr::Kind::kColumn &&
+                        a.column_no == c.column_no) {
+                        continue;
+                    }
                     return Status::InvalidArgument("ORDER BY '" + e.column + "' is ambiguous" +
                                                    At(e.byte_offset));
                 }
@@ -1175,6 +1187,12 @@ StatusOr<AstValue> Runner::AnswerSubquery(CompiledBlock& b, const TypedSetExpr& 
             }
             return rs.rows.empty() ? AstValue{} : rs.rows.front().front();
         case ExprOp::kInSubquery: {
+            out.type = ValueType::kInt;
+            out.int_val = 0;
+            // Over no rows `IN` is false whatever its operand, so
+            // `NULL NOT IN (empty)` is true; only then does a NULL operand
+            // make the answer unknown.
+            if (rs.rows.empty()) return out;
             if (IsNull(*operand)) return AstValue{};
             bool unknown = false;
             auto want = OrderKeyOf(node.lhs->type.type_val, *operand);
@@ -1187,14 +1205,11 @@ StatusOr<AstValue> Runner::AnswerSubquery(CompiledBlock& b, const TypedSetExpr& 
                 auto got = OrderKeyOf(rs.columns.front().type.type_val, r.front());
                 if (!got.ok()) return got.status();
                 if (want.value().Compare(got.value()) == 0) {
-                    out.type = ValueType::kInt;
                     out.int_val = 1;
                     return out;
                 }
             }
             if (unknown) return AstValue{};
-            out.type = ValueType::kInt;
-            out.int_val = 0;
             return out;
         }
         default: return Status::Corruption("a subquery node of an unknown form");
@@ -1234,6 +1249,16 @@ StatusOr<std::vector<Row>> Runner::SourceRows(Source& s) {
     auto walked = host_.WalkRelation(s.rel, s.pushed);
     if (!walked.ok()) return walked.status();
     if (Status c = Cap(walked.value().rows.size(), "relation walk"); !c.ok()) return c;
+    // Every expression was typed against the description; a row of another
+    // width - a relation changed under the statement - would be read out of
+    // bounds, so it is refused instead.
+    for (const Row& r : walked.value().rows) {
+        if (r.size() != s.columns.size()) {
+            return Status::TxnConflict("relation '" + s.rel.table_name +
+                                       "' changed while the statement read it" +
+                                       At(s.rel.byte_offset) + "; run it again");
+        }
+    }
     return walks_.emplace(key, std::move(walked.value().rows)).first->second;
 }
 
@@ -1323,7 +1348,9 @@ StatusOr<std::vector<Row>> Runner::GroupRows(CompiledBlock& b, const std::vector
     std::vector<Group> groups;
     std::unordered_map<std::string, std::size_t> by_key;
     const auto new_group = [&](Row keys) -> StatusOr<std::size_t> {
-        if (limits_.max_groups != 0 && groups.size() >= limits_.max_groups) {
+        // 0 founds no group, as the native fold reads the setting
+        // (`expeditor.cpp`): every aggregated statement is refused.
+        if (groups.size() >= limits_.max_groups) {
             return Status::ResourceExhausted(
                 "this statement would hold more than aggregate_max_groups (" +
                 std::to_string(limits_.max_groups) + ") groups (BU-Q10)");
@@ -1624,6 +1651,54 @@ StatusOr<RowSet> Runner::Execute(CompiledQuery& q, const Row& outer) {
 }
 
 }  // namespace
+
+namespace {
+
+bool QueryLanded(const parser::Query& q);
+
+// `in_condition`: the node sits under a WHERE, where a subquery is S4's.
+bool ExprLanded(const Expr& e, bool in_condition) {
+    switch (e.kind) {
+        case Expr::Kind::kAggregate: return false;  // S5
+        case Expr::Kind::kSubquery:
+            if (!in_condition) return false;  // S7: a subquery as a value
+            if (e.query != nullptr && !QueryLanded(*e.query)) return false;
+            break;
+        default: break;
+    }
+    if (e.lhs != nullptr && !ExprLanded(*e.lhs, in_condition)) return false;
+    if (e.rhs != nullptr && !ExprLanded(*e.rhs, in_condition)) return false;
+    return std::all_of(e.args.begin(), e.args.end(),
+                       [&](const auto& a) { return a == nullptr || ExprLanded(*a, in_condition); });
+}
+
+// The one join the native grammar reads: inner, `ON` one column equality.
+bool JoinLanded(const parser::FromJoin& j) {
+    if (j.kind != JoinKind::kInner || j.on == nullptr || j.item.derived != nullptr) return false;
+    const Expr& on = *j.on;
+    return on.kind == Expr::Kind::kBinary && on.op == parser::ExprOp::kEq && on.lhs != nullptr &&
+           on.rhs != nullptr && on.lhs->kind == Expr::Kind::kColumn &&
+           on.rhs->kind == Expr::Kind::kColumn;
+}
+
+bool QueryLanded(const parser::Query& q) {
+    if (q.op != parser::Query::Op::kBlock || q.block == nullptr) return false;  // S7
+    const parser::QueryBlock& b = *q.block;
+    if (!b.group_by.empty() || b.having != nullptr) return false;  // S5
+    if (b.from.derived != nullptr) return false;                    // S7
+    if (!std::all_of(b.joins.begin(), b.joins.end(), JoinLanded)) return false;  // S6
+    for (const parser::OutputItem& item : b.items) {
+        if (item.expr != nullptr && !ExprLanded(*item.expr, false)) return false;
+    }
+    for (const parser::OrderItem& o : q.order_by) {
+        if (o.expr != nullptr && !ExprLanded(*o.expr, false)) return false;
+    }
+    return b.where == nullptr || ExprLanded(*b.where, true);
+}
+
+}  // namespace
+
+bool FormsLanded(const parser::Query& query) { return QueryLanded(query); }
 
 StatusOr<RowSet> RunQuery(const parser::Query& query, std::string_view sql, LayerHost& host,
                           const StatementContext& context, const LayerLimits& limits) {

@@ -369,3 +369,68 @@ through `OR`: a write's subquery over its own relation sees the statement's
 own writes. It is recorded in
 `docs/inflight/bugs/a-write-walks-subquery-sees-its-own-statements-writes.md`
 with a `DISABLED_` cell, and its fix waits for the operator's ruling.
+
+### BU-S4 - the query layer: select-list expressions, `DISTINCT`, `ORDER BY` an expression, expressions in WHERE (built 2026-10-15)
+
+Begun 2026-10-13 on `worktree-bu-basic-query-surface-s4` from `4aaf526f` by
+a session that ended with the stage uncommitted and no handoff; resumed
+2026-10-15, committed as found (`86765796`) and merged with `origin/main`
+at `256b86e9` (BO, BV, BW and the 2026-10-15 case ruling). BU-Q8..Q13 are
+the stage's rulings (§4).
+
+- **Shape (BU-Q8 (a)).** `Parser::ParseQuery` reads the query grammar
+  (`parser::Query`); `exec::RunQuery` (`src/exec/query_layer.cpp`) types
+  every expression with BJ's typer (`TypeQueryExpression`, an `ExprScope`
+  over the layer's columns), walks each relation as a native single-relation
+  chain through `LayerHost` carrying the top-level WHERE terms the native
+  grammar reads for it alone (`Walkable`: no subquery, no function the
+  native catalog lacks, never a nullable side), and evaluates the rest over
+  the rows in hand. The dispatcher tries it only after a native parse
+  failure or a native compile `NotImplemented`, never under `ANALYZE`
+  (BU-Q9), and only when `exec::FormsLanded` holds: the grammar already
+  reads the forms of S5-S7, and each of those stages deletes its arm when it
+  lands with its spec, cells and review.
+- **Merged onto `main`'s changes.** Column names, output names and `USING`
+  columns match ignoring case (`catalog::ColumnNamesCollide`, the
+  operator's ruling of 2026-10-15), qualifiers and `rel.*` too, as the native
+  path matches them; a dropped column (BW) is no column of the layer's.
+- **Docs.** `parser-v2.md` §7a (I19), I10 and I11; the manual's select
+  list, WHERE notes, `ORDER BY` and "The query layer"; the `CLAUDE.md` row.
+- **Tests.** `tests/query_layer_test.cpp`, 20 cells and one disabled for
+  S5; `FunctionConjunctTest.WhatTheQueryLayerAnswers` takes the calls the
+  native path declines, and `WhatIsRefusedAndWhere` keeps the refusals that
+  stand.
+- **F004** against a release build at `256b86e9`, before the review: built
+  5/5, 1a 7/7, 1b 6/6, 1c 6/6 (W24 and W25 answer), phase 2 14 ok and P07
+  unbuilt by BU-Q13, wrong=0 in every phase. Phases 3-5 answered too at
+  that commit; the gate added since withholds them.
+
+Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S4 - the `critics-developer` review, applied
+
+Fixed by the reviewer: `x IN (empty subquery)` was unknown for a NULL `x`
+where it is false, so `NOT IN` dropped NULL rows `[quiet-wrong]`; a layer
+walk was bounded only after it had read the whole relation (BU-Q10), now
+refused at the first row past `sort_max_rows`; a layer statement held no
+borrow across its walks (AT-S1), so a concurrent `DROP`/`CREATE` could
+hand back rows of another width - one `ReadBorrow` now spans the
+statement, the description resolves through `ResolveNames`, and a row of
+the wrong width is refused `TxnConflict`; `aggregate_max_groups = 0`
+meant unlimited in the layer where the native fold refuses (an S5 path,
+its cell disabled until S5); `ORDER BY` a name two items read as one
+column was refused as ambiguous; `ResolveCall`'s refusal no longer says
+the layer answers where no layer runs; `TryQueryLayer` calls `SinkFor`.
+Applied by CLA on the review's questions: the later stages' forms gated
+(`FormsLanded`), which the three aggregate and ORDER BY cells the suite
+failed on asked for; qualifiers matched ignoring case; the wire's tuple-key
+flag set on the driving relation's column 0 only, as `DescribeFields`
+sets it (every relation's column 0 still travels as a u64).
+**Deferred, with reasons:** cuts (1)-(4) - the parallel type vectors, the
+two subquery-typing lambdas, the twice-written `ORDER BY` lookup, the
+`SUM`/`AVG` result type - live in the grouped, set-operation and join
+paths that S5-S7 open and test; each is taken at the stage that owns its
+path. Re-walking without a pushed term the native compile refuses: no
+case reaches it now that `Walkable` excludes the one found; recorded here
+rather than built. The per-row `Concat` copy, the by-value cache returns
+and the linear `IN (subquery)` probe are costs, measured at BU-S9.

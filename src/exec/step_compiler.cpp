@@ -236,9 +236,11 @@ StatusOr<FunctionTerm> ResolveCall(const Scope& scope, const parser::FunctionCal
     const FunctionEntry* fn = FindFunction(call.name);
     if (fn == nullptr && IsScalarFunctionName(call.name)) {
         // A value function the native catalog does not hold is the query
-        // layer's (BU-S4, BU-Q9): declined here so the layer is asked.
+        // layer's (BU-S4, BU-Q9): declined here so the layer is asked. The
+        // message is the reply only where no layer answers - an UPDATE's or
+        // a DELETE's WHERE, or a SELECT the query grammar refuses too.
         return Status::NotImplemented("function '" + call.name +
-                                      "' in a WHERE comparison is answered by the query layer" +
+                                      "' is not supported in this WHERE comparison" +
                                       Position(call.byte_offset));
     }
     if (fn == nullptr) {
