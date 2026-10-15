@@ -699,3 +699,12 @@ and resume of `UPDATE` and `DELETE`; one shared assignability rule with
 `set_expr.cpp` - the two answer different questions (an expression for a
 column, a typed column for a column); one shared give-back with
 `InsertOneRow` - two three-line lambdas over different locals.
+
+### BU-S8 - the suite and F004, stated
+
+Full suite (Debug, `-LE heap-suspended`) at `0176135a`: 3,998/3,998; at
+`a13ceb49`, with the review applied: 4,002/4,002. F004 against a release
+build at `a13ceb49`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
+P07 refused by BU-Q13, phase 3 8/8, phase 4 12/12, phase 5 9/9, **phase 6
+7/7**, wrong=0 in every phase - S8's gate is met, and every F004 case but
+the one BU-Q13 refuses answers as PostgreSQL does.
