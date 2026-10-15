@@ -33,6 +33,14 @@ parser::AstValue EvaluateDate(std::span<const parser::AstValue* const> args,
     return IntValue(FloorEpochDay(args[0]->int_val));
 }
 
+// DATE's cover: the days an interval of instants touches. `FloorEpochDay` is
+// monotone, so the interval's two floors bound every day in it; an open
+// bound's own day is kept, a superset the statement's residual trims.
+void CoverDate(std::int64_t low, std::int64_t high, std::int64_t& first, std::int64_t& last) {
+    first = FloorEpochDay(low);
+    last = FloorEpochDay(high);
+}
+
 // NOW(): the statement's instant, the same for every call in it.
 parser::AstValue EvaluateNow(std::span<const parser::AstValue* const>,
                              const StatementContext& context) {
@@ -41,7 +49,7 @@ parser::AstValue EvaluateNow(std::span<const parser::AstValue* const>,
 
 constexpr std::array<FunctionEntry, 2> kBuiltins = {{
     {"date", 1, Purity::kImmutable, catalog::kTypeValTimestamp, catalog::kTypeValDate,
-     &EvaluateDate},
+     &EvaluateDate, &CoverDate},
     {"now", 0, Purity::kStable, 0, catalog::kTypeValTimestamp, &EvaluateNow},
 }};
 

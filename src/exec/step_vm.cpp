@@ -815,8 +815,60 @@ private:
                                                 : step.cabin->value;
     }
 
+    // One observed value's set and its key, as `ServeFromCabin` takes it.
+    struct ServedSet {
+        const stats::CabinKey* key;
+        const stats::CabinSet* set;
+    };
+
+    // A cover step (AQ-R8): served from the union of every covered key's set
+    // when **every** one is observed, and walked otherwise - all or nothing,
+    // since one unobserved key's rows are in no set. A cover wider than the
+    // Cabin's value cap (`cabin_max_values`) could never be all observed and
+    // is walked without asking. Nothing is recorded: a cover names no one
+    // value a walk could bank.
+    sched::Coro RunCoverStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                        const catalog::TableAccess& access) {
+        const auto [first, last] = *step.cabin->cover;
+        const std::uint64_t width =
+            static_cast<std::uint64_t>(last) - static_cast<std::uint64_t>(first) + 1;
+        if (cabins_ == nullptr || width > cabins_->max_values()) {
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
+        // Keys and handles held here, for the serve that points into them.
+        std::vector<stats::CabinKey> keys;
+        std::vector<stats::CabinSet> handles;
+        keys.reserve(static_cast<std::size_t>(width));
+        handles.reserve(static_cast<std::size_t>(width));
+        for (std::int64_t day = first;; ++day) {
+            parser::AstValue value;
+            value.type = parser::ValueType::kInt;
+            value.int_val = day;
+            auto key = stats::MakeCabinKey(step.cabin->cabin_id, value);
+            if (!key.has_value()) co_return co_await RunWalkStep(steps, index, step, access);
+            stats::CabinSet set = cabins_->Find(*key);
+            if (!set.valid()) {
+                cabins_->NoteMiss(step.cabin->cabin_id);
+                ++stats_.For(step.step_id).cabin_misses;
+                co_return co_await RunWalkStep(steps, index, step, access);
+            }
+            keys.push_back(std::move(*key));
+            handles.push_back(std::move(set));
+            if (day == last) break;
+        }
+        std::vector<ServedSet> sets;
+        sets.reserve(keys.size());
+        for (std::size_t i = 0; i < keys.size(); ++i) sets.push_back({&keys[i], &handles[i]});
+        cabins_->NoteHit(step.cabin->cabin_id);
+        ++stats_.For(step.step_id).cabin_hits;
+        co_return co_await ServeFromCabin(steps, index, step, access, sets);
+    }
+
     sched::Coro RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
+        if (step.cabin.has_value() && step.cabin->cover.has_value()) {
+            co_return co_await RunCoverStep(steps, index, step, access);
+        }
         // **No span rule** (`cabin.md` §4b): every walk here covers the
         // whole relation, so a set is neither banked from nor served to a
         // walk narrower than the relation.
@@ -839,7 +891,8 @@ private:
         if (const stats::CabinSet set = cabins_->Find(*key); set.valid()) {
             cabins_->NoteHit(step.cabin->cabin_id);
             ++stats_.For(step.step_id).cabin_hits;
-            co_return co_await ServeFromCabin(steps, index, step, access, *key, set);
+            const ServedSet one[] = {{&*key, &set}};
+            co_return co_await ServeFromCabin(steps, index, step, access, one);
         }
 
         cabins_->NoteMiss(step.cabin->cabin_id);
@@ -1633,83 +1686,98 @@ private:
     // only do that if it has not already emitted rows the walk would emit
     // again. Resolving first means the abandon decision is always taken
     // before the first row goes out.
+    //
+    // **One set, or a cover's several** (AQ-R8): phase 1 resolves them all
+    // into one list, deduped across sets, and phase 2 sorts and emits it, so
+    // a cover's union is served in the walk's order like any one set.
     sched::Coro ServeFromCabin(const std::vector<Step>& steps, std::size_t index, const Step& step,
-                          const catalog::TableAccess& access, const stats::CabinKey& key,
-                          const stats::CabinSet& entries) {
+                          const catalog::TableAccess& access, std::span<const ServedSet> sets) {
         const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
         StepStats& step_stats = stats_.For(step.step_id);
 
         serve_scratch_.clear();
         seen_tuple_keys_.clear();
 
-        for (std::size_t i = 0; i < entries.size(); ++i) {
-            // By value, under the partition's latch (AT-S7): the set is
-            // the instance's since one store serves every core, and another
-            // core may be healing this entry while this loop reads it.
-            const stats::CabinEntry entry = entries.At(i);
+        for (const ServedSet& served : sets) {
+            const stats::CabinKey& key = *served.key;
+            const stats::CabinSet& entries = *served.set;
+            for (std::size_t i = 0; i < entries.size(); ++i) {
+                // By value, under the partition's latch (AT-S7): the set is
+                // the instance's since one store serves every core, and another
+                // core may be healing this entry while this loop reads it.
+                const stats::CabinEntry entry = entries.At(i);
 
-            // **Duplicates are expected, not damage.** A value round trip
-            // (v→v′→v) appends the same tuple key twice under append-only
-            // maintenance (§5), so the set is deduped as it is served and
-            // the duplicate is left for pruning to collapse.
-            if (!seen_tuple_keys_.insert(entry.tuple_key).second) continue;
+                // **Duplicates are expected, not damage.** A value round trip
+                // (v→v′→v) appends the same tuple key twice under append-only
+                // maintenance (§5), so the set is deduped as it is served and
+                // the duplicate is left for pruning to collapse.
+                if (!seen_tuple_keys_.insert(entry.tuple_key).second) continue;
 
-            if (entry.hint_valid()) {
+                if (entry.hint_valid()) {
+                    NoteFetch();
+                    ++step_stats.pages_fetched;
+                    VerifiedTuple verified = VerifyTupleAt(store_, entry.page_id, entry.slot, entry.tuple_key,
+                                                           entry.page_epoch, access.oid);
+                    if (verified.ok()) {
+                        ++step_stats.cabin_hint_hits;
+                        cabins_->NoteHint(key.cabin_id, /*ok=*/true);
+                        serve_scratch_.push_back(
+                            Located{entry.tuple_key, entry.page_id, entry.slot, entry.page_epoch});
+                        continue;
+                    }
+                    ++step_stats.cabin_hint_misses;
+                    cabins_->NoteHint(key.cabin_id, /*ok=*/false);
+                }
+
+                if (!is_btree) {
+                    // No descent to resolve the tuple key with. Abandon the Cabin for
+                    // this step and take the authoritative path, re-recording
+                    // the value's set from it - one bulk heal rather than a
+                    // chain scan per entry. Nothing has been emitted yet, so
+                    // this cannot duplicate a row. **A cover records nothing**,
+                    // whatever its width: its step has no one probed value, and a
+                    // re-record would bank the day against an empty value - an
+                    // empty set served as authoritative. The failing key is
+                    // un-observed and the step walks.
+                    if (!step.cabin->cover.has_value()) {
+                        co_return co_await FallBackAndReRecord(steps, index, step, access, key);
+                    }
+                    cabins_->Unobserve(key);
+                    co_return co_await RunWalkStep(steps, index, step, access);
+                }
+
                 NoteFetch();
                 ++step_stats.pages_fetched;
-                VerifiedTuple verified = VerifyTupleAt(store_, entry.page_id, entry.slot, entry.tuple_key,
-                                                       entry.page_epoch, access.oid);
-                if (verified.ok()) {
-                    ++step_stats.cabin_hint_hits;
-                    cabins_->NoteHint(key.cabin_id, /*ok=*/true);
-                    serve_scratch_.push_back(
-                        Located{entry.tuple_key, entry.page_id, entry.slot, entry.page_epoch});
-                    continue;
+                auto found = btree::BtreeLookup(store_, access.desc_page_id, entry.tuple_key);
+                if (!found.ok()) {
+                    if (found.status().code() == StatusCode::kNotFound) {
+                        // Dangling: the tuple key names no row now - a **skip**, never
+                        // an error (§5). A committed key names another row only
+                        // after a `PURGE` freed it (K1); a rolled-back or purged
+                        // one may be named again (W12, BD-R4, BH), and a row
+                        // later found under it is re-checked against the key
+                        // column like any other.
+                        continue;
+                    }
+                    co_return found.status();
                 }
-                ++step_stats.cabin_hint_misses;
-                cabins_->NoteHint(key.cabin_id, /*ok=*/false);
-            }
 
-            if (!is_btree) {
-                // No descent to resolve the tuple key with. Abandon the Cabin for
-                // this step and take the authoritative path, re-recording
-                // the value's set from it - one bulk heal rather than a
-                // chain scan per entry. Nothing has been emitted yet, so
-                // this cannot duplicate a row.
-                co_return co_await FallBackAndReRecord(steps, index, step, access, key);
+                // Healed in place. The hint was wrong and the tuple key was right,
+                // which is C6's whole shape: authority in the tuple key, speed in the
+                // location, and the location repaired from the authority. The
+                // epoch stamped with it is read off the leaf the lookup holds,
+                // so it is the epoch the slot is valid under - a re-fetch after
+                // the hold could read a divide's epoch beside a pre-divide slot.
+                // **The heal, by index** (AT-S7): the store writes it under
+                // the partition's latch, so the descent above never ran under
+                // one.
+                const PageId healed_page = found.value().page_id;
+                const std::uint16_t healed_slot = found.value().slot;
+                const std::uint32_t healed_epoch =
+                    CurrentRelayoutEpoch(heap::PageView(found.value().leaf.bytes()));
+                entries.Heal(i, healed_page, healed_slot, healed_epoch);
+                serve_scratch_.push_back(Located{entry.tuple_key, healed_page, healed_slot, healed_epoch});
             }
-
-            NoteFetch();
-            ++step_stats.pages_fetched;
-            auto found = btree::BtreeLookup(store_, access.desc_page_id, entry.tuple_key);
-            if (!found.ok()) {
-                if (found.status().code() == StatusCode::kNotFound) {
-                    // Dangling: the tuple key names no row now - a **skip**, never
-                    // an error (§5). A committed key names another row only
-                    // after a `PURGE` freed it (K1); a rolled-back or purged
-                    // one may be named again (W12, BD-R4, BH), and a row
-                    // later found under it is re-checked against the key
-                    // column like any other.
-                    continue;
-                }
-                co_return found.status();
-            }
-
-            // Healed in place. The hint was wrong and the tuple key was right,
-            // which is C6's whole shape: authority in the tuple key, speed in the
-            // location, and the location repaired from the authority. The
-            // epoch stamped with it is read off the leaf the lookup holds,
-            // so it is the epoch the slot is valid under - a re-fetch after
-            // the hold could read a divide's epoch beside a pre-divide slot.
-            // **The heal, by index** (AT-S7): the store writes it under
-            // the partition's latch, so the descent above never ran under
-            // one.
-            const PageId healed_page = found.value().page_id;
-            const std::uint16_t healed_slot = found.value().slot;
-            const std::uint32_t healed_epoch =
-                CurrentRelayoutEpoch(heap::PageView(found.value().leaf.bytes()));
-            entries.Heal(i, healed_page, healed_slot, healed_epoch);
-            serve_scratch_.push_back(Located{entry.tuple_key, healed_page, healed_slot, healed_epoch});
         }
 
         // Moved out of the member for phase 2, for the reason spelled out in

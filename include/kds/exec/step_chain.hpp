@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "kds/base/status.hpp"
@@ -216,6 +217,13 @@ struct CabinProbe {
     // conjuncts the probe was derived from stay in `Step::residual` and
     // `Step::fn_residual` and re-check every served row.
     std::shared_ptr<const CompiledCabinExpr> f;
+
+    // **Cover** (AQ-R8): the closed interval of `F`'s keys a range of its
+    // argument maps to - a `DATE(ts)` Cabin's days for `ts` bounded on both
+    // sides. Set, the step is served from the union of those keys' sets, all
+    // observed or none (a walk); `value` is unused. The bounds stay in
+    // `Step::residual` and re-check every served row.
+    std::optional<std::pair<std::int64_t, std::int64_t>> cover;
 
     // The value being probed for, when the equality binds a literal.
     // Unused when `key_from` below is set.

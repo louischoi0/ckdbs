@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <map>
 #include <optional>
 #include <string>
 
@@ -710,6 +711,162 @@ TEST_F(CabinPredicateTest, AnEnclosingRowsConjunctIsNotTheStepsOwn) {
     const std::string reply = Run(sql);
     Ok("DROP CABIN ON t (state = 'closed' AND amount > 1000)");
     EXPECT_EQ(reply, Run(sql)) << "the Cabin changed the answer";
+}
+
+}  // namespace
+}  // namespace kds::server
+
+// ---- AQ-S4: cover serving for DATE ------------------------------------------
+//
+// `ts` bounded on both sides is served from `DATE(ts)`'s sets for every day
+// the bounds touch, when all are observed (AQ-R8). Every reply is compared
+// with the answer the relation gave before any Cabin was declared.
+
+namespace kds::server {
+namespace {
+
+class CabinCoverTest : public CabinExprTest {
+protected:
+    void SetUp() override {
+        CabinExprTest::SetUp();
+        Ok("INSERT INTO t VALUES ('a', 1, '2026-10-01 00:00:00', NULL, 'x')");
+        Ok("INSERT INTO t VALUES ('b', 2, '2026-10-01 23:59:59.999999', NULL, 'y')");
+        Ok("INSERT INTO t VALUES ('c', 3, '2026-10-02 00:00:00', NULL, 'z')");
+        Ok("INSERT INTO t VALUES ('d', 4, NULL, NULL, 'w')");
+        Ok("INSERT INTO t VALUES ('e', 5, '1969-12-31 23:00:00', NULL, 'v')");
+        Ok("INSERT INTO t VALUES ('f', 6, '2026-10-03 12:00:00', NULL, 'u')");
+    }
+
+    // Records every statement's answer with no Cabin, then declares one.
+    void Declare(const std::vector<std::string>& statements) {
+        for (const std::string& sql : statements) walked_[sql] = Run(sql);
+        Ok("CREATE CABIN ON t (DATE(ts))");
+    }
+    void ObserveDay(const std::string& day) {
+        Ok("SELECT id FROM t WHERE DATE(ts) = '" + day + "'");
+    }
+    // Whether `sql` was served, after checking it answers as before.
+    bool Served(const std::string& sql) {
+        const bool served = Run("ANALYZE " + sql).find("cabin_hits=1") != std::string::npos;
+        EXPECT_EQ(Run(sql), walked_.at(sql)) << sql;
+        return served;
+    }
+
+    std::map<std::string, std::string> walked_;
+};
+
+const std::string kOneDay =
+    "SELECT id, ts FROM t WHERE ts BETWEEN '2026-10-01 00:00:00' AND '2026-10-01 23:59:59.999999'";
+const std::string kTwoDays =
+    "SELECT id, ts FROM t WHERE ts >= '2026-10-01 12:00:00' AND ts <= '2026-10-02 00:00:00'";
+const std::string kManyDays =
+    "SELECT id, ts FROM t WHERE ts > '2026-10-01 00:00:00' AND ts < '2026-10-03 23:00:00'";
+const std::string kPastObserved =
+    "SELECT id, ts FROM t WHERE ts BETWEEN '2026-10-01 00:00:00' AND '2026-10-04 00:00:00'";
+
+TEST_F(CabinCoverTest, OneTwoAndManyObservedDaysAreServed) {
+    Declare({kOneDay, kTwoDays, kManyDays});
+    for (const char* day : {"2026-10-01", "2026-10-02", "2026-10-03"}) ObserveDay(day);
+    EXPECT_TRUE(Served(kOneDay));
+    EXPECT_TRUE(Served(kTwoDays));
+    EXPECT_TRUE(Served(kManyDays));
+    const std::string plan = Run("ANALYZE " + kManyDays);
+    EXPECT_NE(plan.find("cover=20727..20729"), std::string::npos) << plan;
+}
+
+TEST_F(CabinCoverTest, OneUnobservedDaySendsTheStatementToTheWalk) {
+    Declare({kPastObserved, kTwoDays});
+    for (const char* day : {"2026-10-01", "2026-10-02", "2026-10-03"}) ObserveDay(day);
+    EXPECT_FALSE(Served(kPastObserved));  // 2026-10-04 was never observed
+    ObserveDay("2026-10-04");
+    EXPECT_TRUE(Served(kPastObserved));
+    // A write after observation is in its day's set, and so in the cover:
+    // compared with the walk's answer written out, not with another cover.
+    Ok("INSERT INTO t VALUES ('g', 7, '2026-10-01 18:00:00', NULL, 't')");
+    walked_[kTwoDays] =
+        "id,ts\\n2,2026-10-01 23:59:59.999999\\n3,2026-10-02 00:00:00\\n7,2026-10-01 18:00:00";
+    EXPECT_TRUE(Served(kTwoDays));
+}
+
+// The boundary: an open bound at midnight keeps its own day in the cover - a
+// superset the bound itself trims - and a closed one at midnight is that day.
+TEST_F(CabinCoverTest, OpenAndClosedBoundsAtMidnight) {
+    const std::string open =
+        "SELECT id FROM t WHERE ts > '2026-10-01 23:59:59.999999' AND ts < '2026-10-03 00:00:00'";
+    const std::string closed =
+        "SELECT id FROM t WHERE ts >= '2026-10-02 00:00:00' AND ts <= '2026-10-02 00:00:00'";
+    const std::string last_instant =
+        "SELECT id FROM t WHERE ts >= '2026-10-01 23:59:59.999999' AND "
+        "ts <= '2026-10-01 23:59:59.999999'";
+    Declare({open, closed, last_instant});
+    for (const char* day : {"2026-10-01", "2026-10-02", "2026-10-03"}) ObserveDay(day);
+    EXPECT_TRUE(Served(open));
+    EXPECT_TRUE(Served(closed));
+    EXPECT_TRUE(Served(last_instant));
+    EXPECT_EQ(walked_.at(open), "id\\n3");
+    EXPECT_EQ(walked_.at(last_instant), "id\\n2");
+}
+
+TEST_F(CabinCoverTest, ADayBeforeTheEpochIsCovered) {
+    const std::string sql =
+        "SELECT id, ts FROM t WHERE ts BETWEEN '1969-12-31 00:00:00' AND '1969-12-31 23:59:59'";
+    Declare({sql});
+    ObserveDay("1969-12-31");
+    EXPECT_TRUE(Served(sql));
+    EXPECT_NE(walked_.at(sql).find("1969-12-31 23:00:00"), std::string::npos) << walked_.at(sql);
+}
+
+// A cover wider than `cabin_max_values` could never be all observed, so it
+// walks without asking (AQ-R8's cap reuses the setting, adding no name).
+TEST_F(CabinCoverTest, ACoverWiderThanTheValueCapWalks) {
+    stats::CabinLimits limits;
+    limits.max_values = 2;
+    cabins_.emplace(limits);
+    Reopen(boot_->catalog);
+    Declare({kOneDay, kTwoDays, kManyDays});
+    ObserveDay("2026-10-01");
+    ObserveDay("2026-10-02");
+    EXPECT_TRUE(Served(kTwoDays));
+    EXPECT_FALSE(Served(kManyDays));  // three days against a cap of two
+}
+
+// What the cover arm takes and what it leaves: one bound is no cover, an
+// inverted pair holds no row, an equality is a one-day cover, and an index on
+// the argument outranks the Cabin (`step_compiler.cpp`'s ladder).
+TEST_F(CabinCoverTest, OnlyATwoSidedRangeIsCoveredAndAnIndexWins) {
+    const std::string one_sided = "SELECT id FROM t WHERE ts >= '2026-10-01 00:00:00'";
+    const std::string inverted =
+        "SELECT id FROM t WHERE ts >= '2026-10-02 00:00:00' AND ts <= '2026-10-01 00:00:00'";
+    const std::string equality = "SELECT id FROM t WHERE ts = '2026-10-02 00:00:00'";
+    Declare({one_sided, inverted, equality});
+    for (const char* day : {"2026-10-01", "2026-10-02", "2026-10-03"}) ObserveDay(day);
+    EXPECT_FALSE(Served(one_sided));
+    EXPECT_FALSE(Served(inverted));
+    EXPECT_EQ(walked_.at(inverted), "id");
+    EXPECT_TRUE(Served(equality));
+    EXPECT_NE(Run("ANALYZE " + equality).find("cover=20728..20728"), std::string::npos);
+
+    // An index on the argument outranks the Cabin. A nullable column takes
+    // no index (null.md D2), so this is a NOT NULL one beside its own Cabin.
+    Ok("CREATE TABLE ix (id int64, at timestamp)");
+    Ok("INSERT INTO ix VALUES ('2026-10-01 05:00:00')");
+    Ok("CREATE CABIN ON ix (DATE(at))");
+    Ok("SELECT id FROM ix WHERE DATE(at) = '2026-10-01'");
+    const std::string ranged =
+        "SELECT id FROM ix WHERE at BETWEEN '2026-10-01 00:00:00' AND '2026-10-01 23:59:59'";
+    ASSERT_NE(Run("ANALYZE " + ranged).find("cover="), std::string::npos);
+    Ok("CREATE INDEX ix_by_at ON ix (at)");
+    const std::string analyzed = Run("ANALYZE " + ranged);
+    EXPECT_EQ(analyzed.find("CabinProbe"), std::string::npos) << analyzed;
+    EXPECT_EQ(Run(ranged), "id\\n1");
+}
+
+TEST_F(CabinCoverTest, AnUnobservedDayCountsAMiss) {
+    Declare({kTwoDays});
+    ObserveDay("2026-10-01");
+    const std::string analyzed = Run("ANALYZE " + kTwoDays);
+    EXPECT_NE(analyzed.find("cabin_misses=1"), std::string::npos) << analyzed;
+    EXPECT_EQ(Run(kTwoDays), walked_.at(kTwoDays));
 }
 
 }  // namespace

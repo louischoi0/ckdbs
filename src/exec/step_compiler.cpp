@@ -1284,6 +1284,50 @@ std::optional<CabinProbe> PredicateCabinProbeOf(const catalog::TableAccess& acce
     return std::nullopt;
 }
 
+// The cover probe (AQ-R8), or nullopt: a step whose residual bounds a column
+// `x` on both sides - `>=`/`>` and `<=`/`<` against literals, a `BETWEEN`'s two
+// halves, or an equality, which is both - where `x` is the one argument of an
+// expression Cabin whose function declares a cover. The tightest bound on each
+// side is taken; any pair would do, since every bound is a conjunct and the
+// cover of any pair is a superset of the rows passing them all. The bounds
+// stay in the residual and trim the cover's surplus.
+std::optional<CabinProbe> CoverCabinProbeOf(const catalog::TableAccess& access, const Step& step,
+                                            std::uint16_t slot) {
+    if (!AnyShaped(access, catalog::kCabinShapeExpression)) return std::nullopt;
+    for (const catalog::TableAccess::ExprCabinRef& ref : access.expr_cabins) {
+        if (ref.shape != catalog::kCabinShapeExpression || ref.f == nullptr) continue;
+        const CabinTerm& term = ref.f->expr;
+        if (term.fn->cover == nullptr || term.args.size() != 1) continue;
+        std::optional<std::int64_t> low;
+        std::optional<std::int64_t> high;
+        for (const StepPredicate& pred : step.residual) {
+            if (!IsOwnColumn(pred.lhs, slot) || pred.lhs.col_pos != term.args.front()) continue;
+            if (pred.rhs.kind != OperandKind::kLiteral ||
+                pred.rhs.literal.type != parser::ValueType::kInt) {
+                continue;
+            }
+            const std::int64_t v = pred.rhs.literal.int_val;
+            const bool lower = pred.op == parser::CompareOp::kGte ||
+                               pred.op == parser::CompareOp::kGt ||
+                               pred.op == parser::CompareOp::kEq;
+            const bool upper = pred.op == parser::CompareOp::kLte ||
+                               pred.op == parser::CompareOp::kLt ||
+                               pred.op == parser::CompareOp::kEq;
+            if (lower) low = low.has_value() ? std::max(*low, v) : v;
+            if (upper) high = high.has_value() ? std::min(*high, v) : v;
+        }
+        if (!low.has_value() || !high.has_value() || *low > *high) continue;
+        std::int64_t first = 0;
+        std::int64_t last = 0;
+        term.fn->cover(*low, *high, first, last);
+        if (first > last) continue;
+        CabinProbe probe = ProbeFor(ref, parser::AstValue{});
+        probe.cover = std::make_pair(first, last);
+        return probe;
+    }
+    return std::nullopt;
+}
+
 // The correlated cabin probe (docs/spec/cabin.md §4a), or nullopt: a
 // cabined column bound by equality to an earlier step's or an enclosing
 // chain's column - the join shape, IX17's selection one trust class over.
@@ -2226,6 +2270,15 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // serve beats any per-statement rebuild (spec §5).
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cp);
+            } else if (auto cv = CoverCabinProbeOf(*scope.relations[i].access, step,
+                                                    static_cast<std::uint16_t>(i));
+                       cv.has_value()) {
+                // An expression Cabin's cover of a two-sided range (AQ-R8),
+                // after the correlated arm (AQ-Q16): a join's inner step keyed
+                // per outer row by a Cabin is served one set at a time, where
+                // a cover would re-serve its whole union for every outer row.
+                step.kind = AccessKind::kCabinProbe;
+                step.cabin = std::move(cv);
             } else if (HasUnindexedEqualityFilter(*scope.relations[i].access, step,
                                                    static_cast<std::uint16_t>(i))) {
                 // Ahead of the build annotation by decision, not

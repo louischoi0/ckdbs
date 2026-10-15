@@ -184,7 +184,9 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
         // A correlated probe (cabin.md §4a) is keyed per outer row;
         // printing the default-constructed `value` for it would show a
         // key the probe never uses.
-        if (step.cabin->key_from.has_value()) {
+        if (step.cabin->cover.has_value()) {
+            os << " cover=" << step.cabin->cover->first << ".." << step.cabin->cover->second;
+        } else if (step.cabin->key_from.has_value()) {
             os << " key=" << FormatColumnRef(*step.cabin->key_from);
         } else {
             os << " value=" << FormatValue(/*type_val=*/0, step.cabin->value);

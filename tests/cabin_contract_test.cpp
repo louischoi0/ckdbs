@@ -1160,5 +1160,45 @@ TEST(CabinContractTest, ExpressionCabinsChangeNoReplyServingOrWitnessing) {
     }
 }
 
+// A cover on a **heap** relation whose hint fails walks and records nothing -
+// for a one-day cover too. Re-recorded, its day would be banked against the
+// cover's empty probe value: an empty set, served as authoritative for every
+// later `DATE(ts) = d`.
+TEST(CabinContractTest, AHeapCoversFailedHintBanksNothing) {
+    Instance db(/*cabins=*/true);
+    Instance ref(/*cabins=*/false);
+    LoadDated(db);
+    LoadDated(ref);
+    ASSERT_EQ(db.Run("CREATE CABIN ON eh (DATE(ts))").substr(0, 7), "CREATED");
+    const std::string day = "SELECT * FROM eh WHERE DATE(ts) = '2026-10-01'";
+    const std::string cover =
+        "SELECT * FROM eh WHERE ts BETWEEN '2026-10-01 00:00:00' AND '2026-10-01 23:59:59'";
+    ASSERT_EQ(db.Run(day), ref.Run(day));  // observes the day
+
+    auto oid = db.catalog().FindTableOidByName("eh");
+    ASSERT_TRUE(oid.ok());
+    auto access = db.catalog().InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    ASSERT_EQ(access.value()->expr_cabins.size(), 1u);
+    parser::AstValue value;
+    value.type = parser::ValueType::kInt;
+    value.int_val = 20727;  // 2026-10-01
+    auto key = stats::MakeCabinKey(access.value()->expr_cabins[0].id, value);
+    ASSERT_TRUE(key.has_value());
+    const stats::CabinSet entries = db.cabins().Find(*key);
+    ASSERT_TRUE(entries.valid());
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const stats::CabinEntry entry = entries.At(i);
+        entries.Heal(i, entry.page_id, static_cast<std::uint16_t>((entry.slot + 3) % 6),
+                     entry.page_epoch);
+    }
+
+    EXPECT_EQ(db.Run(cover), ref.Run(cover));
+    for (int round = 0; round < 3; ++round) {
+        EXPECT_EQ(db.Run(day), ref.Run(day)) << "round " << round;
+        EXPECT_EQ(db.Run(cover), ref.Run(cover)) << "round " << round;
+    }
+}
+
 }  // namespace
 }  // namespace kds::server

@@ -419,6 +419,7 @@ public:
     void NoteEntryCapRefusal(const CabinKey& key);
 
     // The per-value entry cap, for the recording path's mid-walk bound.
+    std::size_t max_values() const noexcept { return limits_.max_values; }
     std::size_t max_entries_per_value() const noexcept {
         return limits_.max_entries_per_value;
     }

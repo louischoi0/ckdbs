@@ -22,11 +22,12 @@
 // `NOW() -> timestamp`, `kStable`. Both are evaluated where a WHERE conjunct
 // is: as a **function conjunct** of their own residual kind
 // (step_chain.hpp's `FunctionPredicate`), which no key, bound, index, join,
-// build or Cabin reader walks. A function's predicate is filtered on a row
-// the step already located; nothing locates a row by one. Serving a function
-// predicate from a structure - AR1 §9.2's cover and monotone methods - is
-// AQ's, so neither field is declared here: a field with no reader is a
-// promise nothing checks.
+// build reader walks. A function's predicate is filtered on a row the step
+// already located, and the one structure that locates rows by one is a
+// Cabin: an expression Cabin's probe serves `f(x) = v` (AQ-R5), and its
+// **cover** serves a range of `x` from the keys `f` maps it to (AQ-R8,
+// `cover` below). AR1 §9.2's monotone method is not built and declares no
+// field: a field with no reader is a promise nothing checks.
 //
 // ---- Purity, and the default (AR1 D2, `[quiet-wrong]`, ratified) --------
 //
@@ -105,6 +106,14 @@ struct FunctionEntry {
     // filtered row, and a copy would copy each value's strings.
     parser::AstValue (*evaluate)(std::span<const parser::AstValue* const> args,
                                  const StatementContext& context) = nullptr;
+
+    // **Cover** (AR1 §9.2, AQ-R8): for a one-argument entry, the keys `f`
+    // maps the closed argument interval `[low, high]` to, as the closed
+    // interval `[first, last]` of its integer results - every `x` in the
+    // interval has `f(x)` in it. Null for an entry that has none. Both bounds
+    // are integer-valued (a timestamp's microseconds, a date's days).
+    void (*cover)(std::int64_t low, std::int64_t high, std::int64_t& first,
+                  std::int64_t& last) = nullptr;
 };
 
 // The entry `name` names, or nullptr. Looked up case-insensitively, the way

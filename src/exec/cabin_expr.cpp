@@ -31,7 +31,7 @@ std::string At(std::uint32_t byte_offset) {
 std::string_view OpText(parser::CompareOp op) {
     switch (op) {
         case parser::CompareOp::kEq: return "=";
-        case parser::CompareOp::kNeq: return "<>";
+        case parser::CompareOp::kNeq: return "!=";
         case parser::CompareOp::kLt: return "<";
         case parser::CompareOp::kLte: return "<=";
         case parser::CompareOp::kGt: return ">";

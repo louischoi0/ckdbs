@@ -16,7 +16,7 @@ its own letter.
 §13: that word is every stage's own. **AQ-R1's read-by-length mechanism is
 superseded** by the operator's standing order of 2026-10-07 (no superblock
 backward compatibility), which postdates AQ-Q1's mark: superblock 26 refuses
-every older volume, and no 28-byte row is read. AQ-Q7..Q15 (§4) are CLA's
+every older volume, and no 28-byte row is read. AQ-Q7..Q16 (§4) are CLA's
 proposals adopted on the standing go-ahead, not the operator's marks.
 
 ## 0. What AQ is
@@ -330,6 +330,8 @@ Each stage waits for the operator's word.
 
 | AQ-Q15 | **A statement's `BETWEEN` against AQ-R6's "no `BETWEEN` against two bounds"** (AQ-S3's review) | spec, **quiet-wrong** | the match is on **lowered** conjuncts (AQ-R6's own wording), and a statement's `BETWEEN a AND b` lowers exactly to `>= a` and `<= b` (`LowerComparison`), so a Cabin declared as those two bounds is served by it - sound, since the lowering is the statement's meaning. AQ-R6's sentence is read as: no normalisation beyond that lowering, and no `BETWEEN` in a declaration (refused at `CREATE`). The S3 exit's "not served ... as a `BETWEEN`" holds for a Cabin whose bounds a `BETWEEN` cannot spell (`amount > 1000`), which is the cell's case |
 
+| AQ-Q16 | **The cover arm's rank in the ladder** (AQ-S4's review; AQ-R8 is silent) | cost | **after the correlated Cabin arm**, before the build annotation: on a join's inner step a Cabin keyed per outer row serves one set at a time, where a cover would re-serve and re-sort its whole union for every outer row. Every index arm and the literal Cabin arms stay ahead of it. Speed only; no answer depends on the rank |
+
 Three surfaces in this order are `[quiet-wrong]`: AQ-R2's identity, AQ-R4's
 witness and AQ-R6's match. AQ-R2 and AQ-R4 are rulings here, and their
 cells are the stages' exits. AQ-R6's form is AQ-Q3's.
@@ -514,4 +516,46 @@ On `worktree-aq-expression-cabins` from `1099ad88`.
   (`docs/inflight/bugs/an-inner-build-buckets-outer-only-conjuncts-for-the-first-outer-row.md`),
   reproduced with no Cabin; not fixed here (`join-inner-build.md`'s).
 - **Suite**: 3911/3911. Overhead not measured; measured at the milestone's
+  close.
+
+### AQ-S4 - cover serving for `DATE`, landed 2026-10-15
+
+On `worktree-aq-expression-cabins` from `fce79b85`.
+
+- **Built.** `FunctionEntry::cover` (DATE: `[floor(low), floor(high)]` in
+  days); `CoverCabinProbeOf` makes a step whose residual bounds an expression
+  Cabin's single argument on both sides (`>=`/`>`, `<=`/`<`, an equality;
+  the tightest of each) a `kCabinProbe` with `CabinProbe::cover`, ranked
+  after the correlated Cabin arm (AQ-Q16); `RunCoverStep` serves the union of
+  every covered day's set when every one is observed, and walks - counting a
+  miss - when one is not, or without asking when the width passes
+  `cabin_max_values` (AQ-R8; no new setting). `ServeFromCabin` takes several
+  sets, deduped across them and sorted into the walk's order. A cover
+  records nothing, and a heap hint failure under one un-observes the
+  failing day and walks.
+- **The exit, cell by cell** (`CabinCoverTest`, and the contract suite's
+  heap cell): one, two and many days served; one unobserved day walks, then
+  serves once observed, and a write after observation is in its day's set;
+  open and closed bounds at midnight and the last microsecond of a day; a
+  day before the epoch; the value cap; a one-sided range and an inverted one
+  walk, an equality is a one-day cover, an index on the argument outranks
+  the Cabin; a miss is counted.
+- **Mutations, each killed**: the cover's last day dropped (2 failures);
+  the heap fallback's single-set branch (the review's bug) put back (6
+  failures in `AHeapCoversFailedHintBanksNothing`).
+- **Review** (`critics-developer`): **one `[quiet-wrong]` bug, fixed** - a
+  one-day cover on a heap whose hint failed took the single-set path,
+  `FallBackAndReRecord`, and re-recorded its day against the cover's empty
+  probe value: an empty set banked and served as authoritative. The
+  fallback now branches on whether the step is a cover, with the heap cell
+  above. Applied: `ServedSet` by pointer (no key copy per column-Cabin hit),
+  a `first > last` guard, the key check written once, the self-comparing
+  oracle and a redundant line in the cells, and the compile-side cells it
+  named. The ladder rank ruled as AQ-Q16. Not applied: sharing a bounds
+  helper with `TupleKeyRangeOf` (the two differ in sign handling and in
+  which bounds count; the review called it optional). **No cell covers a
+  cover on a join's inner step** - a rank question with no answer at stake.
+- **Also**: the canonical text writes `!=` for an inequality, the spelling
+  the grammar takes, so `SHOW CABINS` prints a key an operator can write.
+- **Suite**: 3919/3919. Overhead not measured; measured at the milestone's
   close.
