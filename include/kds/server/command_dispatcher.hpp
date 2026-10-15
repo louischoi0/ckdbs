@@ -1991,9 +1991,9 @@ private:
     // before the walk, through the SELECT path under the session's view, and
     // answered as a single typed value (NULL for no row). More than one row or
     // column is refused, and so is a correlated one - a per-row sub-chain under
-    // the write walk's exclusive leaf is the open page-latch cycle
-    // (`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`),
-    // and the view would show it this statement's own earlier rows.
+    // the write walk's exclusive leaf would be the page-latch cycle
+    // `rules.md` §3's page latch row forbids, and the view would show it this
+    // statement's own earlier rows.
     StatusOr<exec::SubqueryResult> RunScalarSubquery(const parser::Expr& node,
                                                      const parser::UpdateStmt& stmt,
                                                      WriteScope& scope,
@@ -2169,8 +2169,10 @@ private:
     //            produces the same answer. Every heap relation lands here,
     //            having no tuple key index to descend.
     //   kAt      look at this (page, slot) - a btree descent, which is
-    //            authoritative - through `at.leaf`, held **exclusive**:
-    //            every caller writes the slot (btree.hpp `Location`).
+    //            authoritative - through `at.leaf`, held **exclusive** by
+    //            default: a writing caller writes the slot (btree.hpp
+    //            `Location`). `kRead` holds it shared, for a write's
+    //            collection of its target before it writes.
     //   kAbsent  **no such row**, on authority. Only a btree descent can
     //            say this, so a heap relation never produces it.
     struct TupleKeyLookup {
@@ -2178,7 +2180,8 @@ private:
         Kind kind = Kind::kScan;
         btree::Location at;
     };
-    TupleKeyLookup LocateByTupleKey(const catalog::TableAccess& access, std::uint64_t tuple_key);
+    TupleKeyLookup LocateByTupleKey(const catalog::TableAccess& access, std::uint64_t tuple_key,
+                                    storage::PageAccess mode = storage::PageAccess::kWrite);
 
     // The row-relocation callback a rollback needs when a leaf division has
     // moved rows this transaction wrote (txn/manager.hpp's RowLocator).

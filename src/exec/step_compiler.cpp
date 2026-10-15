@@ -1846,9 +1846,9 @@ Status CompileAssignments(const catalog::TableAccess& access,
             if (fk != nullptr) {
                 if (!IsConstantSetExpression(*entry.expr)) {
                     // BJ-Q10: the parent is a per-row value, and resolving it
-                    // per row under the walk's exclusive leaf is the open
-                    // page-latch cycle (a-write-walks-subquery-reads-pages-
-                    // under-its-exclusive-leaf-hold.md). Refused rather than
+                    // per row under the walk's exclusive leaf would be the
+                    // page-latch cycle `rules.md` §3's page latch row
+                    // forbids. Refused rather than
                     // checked against a key the row never gets.
                     if (!deferred.has_value()) {
                         deferred = Status::NotImplemented(

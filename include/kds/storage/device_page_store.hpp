@@ -200,10 +200,10 @@
 //     before its right neighbour. A descent holds one at a time. Since the
 //     owner-core invariant retired (AT-S5, AT-S7; history at cf889b63) any
 //     core may take any pair, so an ABBA is possible against a path that
-//     breaks the order - a write walk's `WHERE` sub-chain reads leaves on
-//     either side under the walk's exclusive hold
-//     (`docs/inflight/bugs/a-write-walks-subquery-reads-pages-under-its-exclusive-leaf-hold.md`,
-//     BB-S1's census). Starvation is not ruled out: shared is granted
+//     breaks the order. A write's `WHERE` subquery, which reads leaves on
+//     either side, was one (BB-S1's census) and runs under no exclusive
+//     hold since: the write collects its targets first (`parser-v2.md`
+//     R2). Starvation is not ruled out: shared is granted
 //     whenever X is clear, so a hot page's readers can starve an exclusive
 //     request.
 //   - **A user relation page, then a `sys.tables` chain page** (BB-R4),
