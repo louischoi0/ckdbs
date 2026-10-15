@@ -1,5 +1,6 @@
 #include "kds/catalog/schema.hpp"
 
+#include <algorithm>
 #include <string>
 
 #include "kds/catalog/well_known.hpp"
@@ -7,13 +8,75 @@
 
 namespace kds::catalog {
 
-const SysColumnRow* Schema::FindColumn(std::string_view name) const noexcept {
-    for (const auto& col : columns) {
-        if (!col.dropped() && NameView(col.name) == name) {
-            return &col;
+namespace {
+
+// The refusal of a written name that resolves to more than one live column
+// (`matches`: positions, two or more), naming each match with its position.
+Status AmbiguousColumnName(const Schema& schema, std::string_view written,
+                           const std::vector<std::uint16_t>& matches, std::uint32_t byte_offset) {
+    std::string listed;
+    for (std::size_t i = 0; i < matches.size(); ++i) {
+        if (i > 0) listed += i + 1 == matches.size() ? " and " : ", ";
+        listed += "'" + std::string(NameView(schema.columns[matches[i]].name)) + "' (position " +
+                  std::to_string(matches[i]) + ")";
+    }
+    return Status::InvalidArgument("column name '" + std::string(written) +
+                                   "' is ambiguous: it matches " + listed +
+                                   " ignoring case (byte " + std::to_string(byte_offset) + ")");
+}
+
+// Every live column of `schema` whose name equals `name` ignoring case, in
+// `pos` order.
+std::vector<std::uint16_t> MatchColumns(const Schema& schema, std::string_view name) {
+    std::vector<std::uint16_t> out;
+    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
+        if (!schema.columns[i].dropped() &&
+            ColumnNamesCollide(NameView(schema.columns[i].name), name)) {
+            out.push_back(static_cast<std::uint16_t>(i));
         }
     }
-    return nullptr;
+    return out;
+}
+
+}  // namespace
+
+StatusOr<const SysColumnRow*> Schema::FindColumn(std::string_view name,
+                                                std::uint32_t byte_offset) const {
+    const std::vector<std::uint16_t> matches = MatchColumns(*this, name);
+    if (matches.empty()) return static_cast<const SysColumnRow*>(nullptr);
+    if (matches.size() > 1) return AmbiguousColumnName(*this, name, matches, byte_offset);
+    return &columns[matches.front()];
+}
+
+// ASCII only, and not `std::tolower`, whose answer is the locale's: whether
+// two names are one must not move with the process's locale. No other
+// identifier byte reaches a resolver only because the lexer's `std::isalpha`
+// runs in the C locale - nothing calls `setlocale` - so a non-ASCII letter
+// is never an identifier byte.
+bool ColumnNamesCollide(std::string_view a, std::string_view b) noexcept {
+    const auto fold = [](char c) {
+        return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+    };
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [&](char x, char y) {
+               return fold(x) == fold(y);
+           });
+}
+
+Status CheckColumnNamesUnique(const Schema& schema) {
+    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
+        if (schema.columns[i].dropped()) continue;
+        const std::string_view later = NameView(schema.columns[i].name);
+        for (std::size_t j = 0; j < i; ++j) {
+            if (schema.columns[j].dropped()) continue;
+            const std::string_view earlier = NameView(schema.columns[j].name);
+            if (ColumnNamesCollide(earlier, later)) {
+                return Status::InvalidArgument("column '" + std::string(later) +
+                                               "' repeats column '" + std::string(earlier) +
+                                               "' (names are unique ignoring case)");
+            }
+        }
+    }
+    return Status::OK();
 }
 
 bool IsIntegerTypeVal(std::uint32_t type_val) noexcept {

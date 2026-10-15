@@ -1119,9 +1119,6 @@ Verified on `worktree-bw-instant-add-drop-column` over `bc42a011`
   value's byte. Found by BW-S6's review on
   `worktree-bw-instant-add-drop-column` at `e1e17abc`; not fixed there, as
   the codec has no `AstValue` and threading the byte is outside BW.
-- **A `SELECT` reads the first column whose name matches ignoring case**
-  `[quiet-wrong]`, while every write matches exactly:
-  `bugs/select-reads-the-first-column-whose-name-matches-ignoring-case.md`.
 
 - **A dropped column's slot and bytes are never reclaimed.** A drop flags the
   column's `sys.columns` row and leaves its bytes in every row, a dropped

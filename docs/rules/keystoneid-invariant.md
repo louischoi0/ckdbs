@@ -298,10 +298,14 @@ list names the tuple key:
   which nothing compares and the fingerprint does not fold).
 - **The parser does not refuse it**: which column is the tuple key is catalog
   knowledge, so the parser-level test is a negative one.
-- **Case sensitivity is a known finding**: `Schema::FindColumn` matches a
-  SET target exactly while WHERE resolves through `IEquals`, so `SET ID =
-  99` against a tuple key named `id` is refused as an *unknown column*. K2 holds
-  either way; changing it is the identifier rule's owner's call.
+- **K2 is asked of the resolved column, never the written bytes**: a SET
+  target resolves ignoring case, as every column name does
+  (`Schema::FindColumn`; `instructions/v3.2.0/raft-marks-2026-10-15.md` §1),
+  so `SET ID = 99` against a tuple key named `id` is the tuple key and is
+  refused `Unsupported` by K2. Column names are unique ignoring case
+  (`catalog.md` CT7), so `ID` can name no other column of a relation
+  created since that rule; on an older relation holding a twin it is
+  refused as ambiguous.
 
 **K-M4 — Budget observability.**
 **`SHOW BUDGET`** lists every relation under a summary line carrying

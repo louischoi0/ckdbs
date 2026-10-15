@@ -574,16 +574,21 @@ public:
 
     // `ALTER TABLE ... DROP COLUMN` (BW-R6, BW-R7 of
     // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
-    // live column `name` gets `kColumnDropped` on its `sys.columns` row and
+    // live column at `pos` gets `kColumnDropped` on its `sys.columns` row and
     // nothing else moves - its `pos`, its bytes in every tuple, its bit. The
     // overwrite is `trx_id`'s, its prior image handed to the DDL undo hook
     // and to `changed` (when non-null) so a rollback restores it, as
     // `DropTable`'s retype is. The lookup and the write are one hold of
-    // `sys.columns`' root page (CT7). The tuple key is refused `InvalidArgument`;
-    // an absent or already-dropped name is `NotFound`. What depends on the
-    // column is the caller's to refuse first, under the relation `X`.
-    Status DropColumn(Oid table_oid, std::string_view name, std::uint64_t trx_id,
-                      std::vector<CatalogRowChange>* changed);
+    // `sys.columns`' root page (CT7). `pos` is the column the caller
+    // resolved `name` to (`Schema::FindColumn`) and asked its RESTRICT of;
+    // the door never resolves the name again, so a RENAME COLUMN racing
+    // the drop cannot move the drop onto another column - a position no
+    // longer carrying `name` (ignoring case) is `TxnConflict`. The tuple key
+    // is refused `InvalidArgument`; an absent or already-dropped position is
+    // `NotFound`. What depends on the column is the caller's to refuse
+    // first, under the relation `X`.
+    Status DropColumn(Oid table_oid, std::uint16_t pos, std::string_view name,
+                      std::uint64_t trx_id, std::vector<CatalogRowChange>* changed);
 
     // `ALTER TABLE ... ADD COLUMN` (BW-R4, BW-R5): `column` - its name, type,
     // `len` and nothing else read - becomes a nullable column at the next

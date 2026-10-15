@@ -249,8 +249,10 @@ Each of BW-R1..R13 is CLA's proposal; its standing is §4's.
   - **Grammar.** `INSERT INTO <t> [ ( <col> [, <col>]* ) ] VALUES ( ... )
     [, ( ... )]*`. The list is optional, and an `INSERT` without one is
     positional as before (BW-Q9).
-  - **Names.** Each name resolves exactly, byte for byte, to a live column,
-    as `UPDATE ... SET` resolves. An unknown or dropped name is refused,
+  - **Names.** Each name resolves ignoring case to a live column, as every
+    column name resolves (BW-Q12.3 as overridden on 2026-10-15,
+    `raft-marks-2026-10-15.md` §1; it resolved exactly, byte for byte,
+    before). An unknown or dropped name is refused,
     and so is a name listed twice. An empty list is refused.
   - **Rows.** Each row has one value per listed column, in list order.
   - **The tuple key.** Left out of the list, it is issued. Listed, the
@@ -405,7 +407,12 @@ before its adoption, and it holds.
     exactly the class `UPDATE ... SET` is (BJ-R2), so it takes that rule.
     SELECT's case-insensitive pick is a separate matter that BW-S6 does
     not change. **Adopted as proposed on the standing go-ahead of
-    2026-10-14 (W3).**
+    2026-10-14 (W3).** **Overridden by the operator on 2026-10-15: every
+    column name matches ignoring case** (`raft-marks-2026-10-15.md` §1, the
+    operator's word "Don't distinguish case for either reads or writes.").
+    The premise of (a) is gone: names are unique ignoring case since
+    `2cc15aca`, and an older relation's twin is refused as ambiguous rather
+    than picked.
   - **BW-Q12.4 — an unknown, dropped or repeated name.** An unknown name
     is refused `InvalidArgument` "unknown column 'x' at byte N", at the
     name's byte, the same text `UPDATE ... SET` uses. A dropped column's
@@ -518,10 +525,9 @@ before its adoption, and it holds.
       `fetch_id` reaches only the memory-resident `sys.statement_stats`.
       So the shape choice affects statistics only and never a Waystone
       replay (invariant 8).
-    - One accepted consequence: identifiers fold case in the shape, so `(a)`
-      and `(A)` share a `fetch_id` though BW-Q12.3 resolves them to two
-      columns. It is a statistics key, and the two statements' rows are
-      still written correctly.
+    - Identifiers fold case in the shape, so `(a)` and `(A)` share a
+      `fetch_id` - and since 2026-10-15 (`raft-marks-2026-10-15.md` §1)
+      they also resolve to one column, so the key and the resolution agree.
 
     **Adopted as proposed on the standing go-ahead of 2026-10-14 (W3).**
   - **BW-Q12.11 — KWP.** The load path (`kwp_load_server.cpp:499-520`)
@@ -648,8 +654,9 @@ Every stage runs the full suite and gets a `critics-developer` review
         column, with nothing written;
       - an omitted Transition column is refused the same way.
     - Bad names are refused at the name's byte: an unknown name, a dropped
-      column's name, the second occurrence of a repeated name, and `A`
-      where only `a` exists (exact case).
+      column's name, and the second occurrence of a repeated name (`A`
+      where only `a` exists was refused under exact case; since 2026-10-15
+      it is `a`).
     - Parse refusals at their byte: `()`, `(1)`, `(?)`, a missing `)`,
       and a missing `VALUES`.
     - A row wider or narrower than the list is refused at its first value,
@@ -676,6 +683,11 @@ Every stage runs the full suite and gets a `critics-developer` review
 ---
 
 ## 6. Where to start
+
+**BW-Q12.3 overridden after the close** (2026-10-15, `raft-marks-2026-10-15.md`
+§1-§2): every column name matches ignoring case, an `INSERT` column list
+included, and names are unique ignoring case; landed at `12170d1d`, BW
+still closed.
 
 **BW is closed again, with BW-S6** - on the operator's word of 2026-10-14
 (W8, `raft-marks-2026-10-14.md` §12), at the merge `3b5daa80`. BW-S6 (the
@@ -723,7 +735,9 @@ S1-S5 stand as closed. **BW was closed** - on the operator's word of 2026-10-14 
   `[quiet-wrong]`, reproduced by the review, needs the operator's ruling
   between refusing case-only duplicate names and exact-match reads
   (`docs/inflight/bugs/select-reads-the-first-column-whose-name-matches-ignoring-case.md`,
-  `known-gaps.md`, a caveat in the manual); the codec's type refusal
+  `known-gaps.md`, a caveat in the manual - fixed and deleted at `2cc15aca`
+  on the operator's option (a), `raft-marks-2026-10-14.md` §13; the entry
+  resolves against `f544d161`); the codec's type refusal
   carrying no byte (`known-gaps.md`). **Rejected**: one byte-suffix format
   for every `INSERT` refusal - the listed refusals' "at byte N" is the
   parser's form for the same list (BW-Q12.2), and rewriting the positional

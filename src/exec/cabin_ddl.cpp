@@ -12,9 +12,8 @@ namespace {
 
 // The relation and the column position `stmt` names.
 //
-// Resolution is exact-match, like `Schema::FindColumn` everywhere else: the
-// catalog stores a column's name as it was declared, and case folding here
-// alone would make `CREATE CABIN` accept a spelling no other statement does.
+// Resolution is `Schema::FindColumn`'s, every column name's: ignoring case,
+// two or more matches refused as ambiguous (docs/spec/parser-v2.md).
 struct Resolved {
     catalog::Oid rel_oid = 0;
     const catalog::TableAccess* access = nullptr;
@@ -46,14 +45,12 @@ StatusOr<Resolved> ResolveRelation(catalog::Catalog& catalog, const parser::Cabi
 StatusOr<Resolved> Resolve(catalog::Catalog& catalog, const parser::CabinStmt& stmt) {
     auto relation = ResolveRelation(catalog, stmt);
     if (!relation.ok()) return relation.status();
-    const catalog::TableAccess* access = relation.value().access;
-    for (std::size_t i = 0; i < access->schema.columns.size(); ++i) {
-        if (access->schema.columns[i].dropped() ||
-            catalog::NameView(access->schema.columns[i].name) != stmt.column_name) {
-            continue;
-        }
+    const catalog::Schema& schema = relation.value().access->schema;
+    auto found = schema.FindColumn(stmt.column_name, stmt.column_byte_offset);
+    if (!found.ok()) return found.status();
+    if (found.value() != nullptr) {
         Resolved out = relation.value();
-        out.col_pos = static_cast<std::uint16_t>(i);
+        out.col_pos = static_cast<std::uint16_t>(found.value() - schema.columns.data());
         return out;
     }
     return Status::NotFound("relation '" + stmt.table_name + "' has no column '" +

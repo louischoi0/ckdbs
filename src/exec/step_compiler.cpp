@@ -66,18 +66,22 @@ std::string Position(std::uint32_t byte_offset) {
     return " at byte " + std::to_string(byte_offset);
 }
 
-// Finds `name` among a relation's columns. Returns the schema position,
+// Finds `name` among a relation's live columns, ignoring case
+// (`catalog::Schema::FindColumn`). Sets `out` to the schema position,
 // which is exactly what ColumnRef::col_pos is - BuildSchemaFromColumns()
-// returns columns sorted by `pos`, so the vector index is the position.
-bool FindColumnPos(const catalog::Schema& schema, std::string_view name, std::uint16_t& out) {
-    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
-        // A dropped column has no name a statement can reach (BW-R6).
-        if (!schema.columns[i].dropped() && IEquals(catalog::NameView(schema.columns[i].name), name)) {
-            out = static_cast<std::uint16_t>(i);
-            return true;
-        }
-    }
-    return false;
+// returns columns sorted by `pos`, so the vector index is the position -
+// and answers whether it matched. Two or more matches is refused rather
+// than resolved to the first: column names are unique ignoring case since
+// CREATE TABLE, ADD COLUMN and RENAME COLUMN refuse a twin, but a relation
+// created before that can still hold `id` beside `ID`, and taking the
+// first would answer `SELECT ID` with `id`'s values.
+StatusOr<bool> FindColumnPos(const catalog::Schema& schema, const parser::ColumnName& name,
+                             std::uint16_t& out) {
+    auto found = schema.FindColumn(name.name, name.byte_offset);
+    if (!found.ok()) return found.status();
+    if (found.value() == nullptr) return false;
+    out = static_cast<std::uint16_t>(found.value()->pos);  // the vector index (BW-R6)
+    return true;
 }
 
 // Resolves one written column name to a compiled reference.
@@ -659,7 +663,9 @@ StatusOr<ColumnRef> ResolveColumn(const Scope& scope, const parser::ColumnName& 
                 if (!IEquals(s->relations[i].binding, name.qualifier)) continue;
 
                 std::uint16_t col_pos = 0;
-                if (!FindColumnPos(s->relations[i].access->schema, name.name, col_pos)) {
+                auto matched = FindColumnPos(s->relations[i].access->schema, name, col_pos);
+                if (!matched.ok()) return matched.status();
+                if (!matched.value()) {
                     return Status::InvalidArgument("relation '" + name.qualifier +
                                                     "' has no column '" + name.name + "'" +
                                                     Position(name.byte_offset));
@@ -673,7 +679,9 @@ StatusOr<ColumnRef> ResolveColumn(const Scope& scope, const parser::ColumnName& 
         std::optional<ColumnRef> found;
         for (std::size_t i = 0; i < s->relations.size(); ++i) {
             std::uint16_t col_pos = 0;
-            if (!FindColumnPos(s->relations[i].access->schema, name.name, col_pos)) continue;
+            auto matched = FindColumnPos(s->relations[i].access->schema, name, col_pos);
+            if (!matched.ok()) return matched.status();
+            if (!matched.value()) continue;
             if (found.has_value()) {
                 return Status::InvalidArgument(
                     "column '" + name.name + "' is ambiguous" + Position(name.byte_offset) +
@@ -1789,7 +1797,9 @@ Status CompileAssignments(const catalog::TableAccess& access,
         compiled->reserve(assignments.size());
     }
     for (const parser::Assignment& a : assignments) {
-        const auto* column = access.schema.FindColumn(a.col_name);
+        auto found = access.schema.FindColumn(a.col_name, a.byte_offset);
+        if (!found.ok()) return found.status();
+        const catalog::SysColumnRow* column = found.value();
         if (column == nullptr) {
             return Status::InvalidArgument("unknown column '" + a.col_name + "' at byte " +
                                            std::to_string(a.byte_offset));
@@ -1806,8 +1816,9 @@ Status CompileAssignments(const catalog::TableAccess& access,
         // `InvalidArgument`: the statement is understood and declined. The
         // column exists and the value would encode; what cannot happen is
         // the write, because the id names the tuple everywhere else in the
-        // engine.
-        if (a.col_name == tuple_key_name) {
+        // engine. Asked of the resolved column, never the written bytes: a
+        // name resolves ignoring case, so `SET ID` is the tuple key `id`.
+        if (column == &access.schema.columns.front()) {
             return Status::Unsupported("tuple key column '" + std::string(tuple_key_name) +
                                        "' cannot be updated at byte " +
                                        std::to_string(a.byte_offset) +

@@ -149,7 +149,14 @@ names are load-bearing for bootstrap and are nobody's to change).
   rewrite are one hold of `sys.objects`' root page, which is what makes
   them one act across cores (`catalog.md` CT7, AT-S17).
 - New column name: same checks against the relation's own columns, under
-  one hold of `sys.columns`' root page (CT7).
+  one hold of `sys.columns`' root page (CT7), **compared ignoring case**:
+  a name equal ignoring case to another live column's - or to one whose
+  drop is undecided - is refused `AlreadyExists` at the new name's byte,
+  naming that column as declared. The column being renamed collides only
+  with itself, so `RENAME COLUMN a TO A` lands; `RENAME COLUMN a TO a` is
+  `AlreadyExists`. Each refusal carries its token's byte: a missing old
+  column the old name's, a collision or a name longer than 63 bytes the
+  new name's.
 - **The tuple key column may be renamed.** Identity is the Keystone word and
   position 0 (invariant 11), not the spelling; `CheckKeystoneColumn` is
   positional and does not re-run.
@@ -203,6 +210,10 @@ position, in the lowest free slot, its `sys.columns` row flagged
 - `REFERENCES` and a cabin clause are `NotImplemented` (CREATE TABLE's).
 - No free slot - none reserved, or all held - is `NotImplemented`. A
   dropped column keeps its slot.
+- A name equal ignoring case to a live column's is `AlreadyExists`, naming
+  that column as declared (`catalog.md` CT7's column rule); a dropped
+  column's name is free in any case. A name longer than 63 bytes is
+  `InvalidArgument` at its byte, never stored truncated.
 
 **`DROP [COLUMN] <name>`** sets `kColumnDropped` on the column's row. The
 column keeps its position, so every stored position (an index's columns, a
@@ -236,7 +247,8 @@ shape to check, so a positional statement written before a change is the
 writer's to re-read. **A column list closes it** (BW-S6, BW-R13 of
 `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): `INSERT
 INTO t (c1, c2, ...) VALUES (...)` names its columns, so no column change
-can shift its values. Names match exactly, as `UPDATE SET`'s do; an unknown
+can shift its values. Names match ignoring case, as every column name does
+(`parser-v2.md`; `instructions/v3.2.0/raft-marks-2026-10-15.md` §1); an unknown
 or dropped name and a repeated one are refused at their byte; a nullable
 column the list leaves out is NULL - every added column is nullable, so a
 list written before an `ADD` stays valid after it - and a NOT NULL one left

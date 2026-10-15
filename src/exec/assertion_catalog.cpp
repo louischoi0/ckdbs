@@ -100,19 +100,19 @@ Status DeleteAssertion(catalog::Catalog& catalog, storage::PageStore& store,
 
 namespace {
 
-// Exact-match resolution, like `Schema::FindColumn` everywhere else: the
-// catalog stores a column's name as it was declared, and case folding here
-// alone would make `CREATE ASSERTION` accept a spelling no other statement
-// does. (The *assertion's own* name is matched case-insensitively, which is a
+// Resolution is `Schema::FindColumn`'s, every column name's: ignoring case,
+// two or more matches refused as ambiguous (docs/spec/parser-v2.md) - at
+// CREATE and DROP ASSERTION and when mount re-parses a stored canon, so a
+// canon written while this matched exactly still resolves. (The
+// *assertion's own* name is matched case-insensitively too, which is a
 // different question - that is an object name, like a pattern's.)
 StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
                                        const parser::IndexColumnRef& col,
                                        const std::string& table_name) {
-    for (std::size_t i = 0; i < access.schema.columns.size(); ++i) {
-        if (!access.schema.columns[i].dropped() &&
-            catalog::NameView(access.schema.columns[i].name) == col.name) {
-            return static_cast<std::uint16_t>(i);
-        }
+    auto found = access.schema.FindColumn(col.name, col.byte_offset);
+    if (!found.ok()) return found.status();
+    if (found.value() != nullptr) {
+        return static_cast<std::uint16_t>(found.value() - access.schema.columns.data());
     }
     return Status::NotFound("relation '" + table_name + "' has no column '" + col.name +
                             "' (byte " + std::to_string(col.byte_offset) + ")");

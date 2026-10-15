@@ -13,7 +13,7 @@ its own letter.
 **Taken up on 2026-10-14 on the operator's standing go-ahead
 (go-ahead-achieving-milestone)**, on `worktree-aq-expression-cabins` from
 `7c234766` (`v3.2.0-44-g7c234766`), `instructions/v3.2.0/raft-marks-2026-10-14.md`
-§13: that word is every stage's own. **AQ-R1's read-by-length mechanism is
+§14: that word is every stage's own. **AQ-R1's read-by-length mechanism is
 superseded** by the operator's standing order of 2026-10-07 (no superblock
 backward compatibility), which postdates AQ-Q1's mark: superblock 26 refuses
 every older volume, and no 28-byte row is read. AQ-Q7..Q16 (§4) are CLA's
@@ -372,7 +372,7 @@ No stage has started.
 ### AQ-S1 - the catalog and the grammar, landed 2026-10-14
 
 On `worktree-aq-expression-cabins` from `7c234766`, on the standing
-go-ahead (`instructions/v3.2.0/raft-marks-2026-10-14.md` §13).
+go-ahead (`instructions/v3.2.0/raft-marks-2026-10-14.md` §14).
 
 - **Built.** `SysCabinRow` is 37 B with `expr_id` and `shape`
   (superblock 26, AQ-Q7, AQ-Q8); `sys.cabin_exprs` is the third declaration

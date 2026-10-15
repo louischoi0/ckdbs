@@ -103,6 +103,19 @@ bool IEquals(std::string_view a, std::string_view b) {
            });
 }
 
+// True when a written column name resolves to the tuple key column (position
+// 0) and to nothing else, under the compiler's rule
+// (`catalog::Schema::FindColumn`). A name that also matches another live
+// column ignoring case - possible only on a relation created before names
+// were unique ignoring case - is not the tuple key's: the fast paths decline
+// it and the compiler - or, for PURGE, which has none, `PurgeConjunctRefusal`
+// - refuses it as ambiguous, rather than probing the key
+// for a name the statement may have meant as another column.
+bool NamesTupleKey(const catalog::Schema& schema, std::string_view name) {
+    auto found = schema.FindColumn(name, 0);
+    return found.ok() && found.value() != nullptr && found.value()->pos == 0;
+}
+
 // Splits `line` into the first whitespace-delimited token and "the rest"
 // (trimmed), so multi-word commands like "SHOW META"/"FIND TABLE x" can
 // be matched one token at a time without pulling in a real tokenizer.
@@ -2415,7 +2428,37 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
 
     const Status renamed =
         rename_column
-            ? catalog_.RenameColumn(oid.value(), stmt.old_column, stmt.new_name)
+            ? [&] {
+                  // A collision or an unstorable name is the new name's
+                  // fault, so it carries that name's byte; a missing old
+                  // column carries the old name's, and so does an old name
+                  // matching two live columns ignoring case - resolved here
+                  // first (`Schema::FindColumn`), the catalog door asking
+                  // again under its hold. The door's own ambiguity refusal
+                  // would take the new name's byte below; it is unreachable,
+                  // since no twin can be created after this check.
+                  auto access = catalog_.InitTableAccess(oid.value());
+                  if (!access.ok()) return access.status();
+                  if (auto old = access.value()->schema.FindColumn(
+                          stmt.old_column, stmt.old_column_byte_offset);
+                      !old.ok()) {
+                      return old.status();
+                  }
+                  const Status r =
+                      catalog_.RenameColumn(oid.value(), stmt.old_column, stmt.new_name);
+                  const auto at = [&](std::uint32_t byte) {
+                      return r.WithMessage(r.message() + " (byte " + std::to_string(byte) + ")");
+                  };
+                  switch (r.code()) {
+                      case StatusCode::kAlreadyExists:
+                      case StatusCode::kInvalidArgument:
+                          return at(stmt.new_name_byte_offset);
+                      case StatusCode::kNotFound:
+                          return at(stmt.old_column_byte_offset);
+                      default:
+                          return r;
+                  }
+              }()
             : catalog_.RenameTable(oid.value(), stmt.new_name,
                                    session.in_explicit_txn() && session.transaction() != nullptr
                                        ? session.transaction()->id()
@@ -2616,8 +2659,10 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
         // restrict and the write.
         auto access = catalog_.InitTableAccess(oid.value());
         if (!access.ok()) return {ErrorReply(access.status()), false, 0, access.status()};
-        const catalog::SysColumnRow* column =
-            access.value()->schema.FindColumn(stmt.old_column);
+        auto found =
+            access.value()->schema.FindColumn(stmt.old_column, stmt.old_column_byte_offset);
+        if (!found.ok()) return {ErrorReply(found.status()), false, 0, found.status()};
+        const catalog::SysColumnRow* column = found.value();
         const auto at = " (byte " + std::to_string(stmt.old_column_byte_offset) + ")";
         if (column == nullptr) {
             const Status s = Status::NotFound("relation '" + stmt.table_name +
@@ -2643,10 +2688,15 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
                     false};
         }
 
+        if (before_drop_column_write_for_test_) before_drop_column_write_for_test_();
         DdlScope ddl = DdlScopeFor(scope);
         std::vector<catalog::CatalogRowChange> changed;
+        // By the position the RESTRICT was asked of: a RENAME COLUMN takes
+        // no relation lock, so a second resolution by name could reach
+        // another column (the door refuses a renamed one).
         const Status dropped =
-            catalog_.DropColumn(oid.value(), stmt.old_column, ddl.trx_id, &changed);
+            catalog_.DropColumn(oid.value(), static_cast<std::uint16_t>(column->pos),
+                                stmt.old_column, ddl.trx_id, &changed);
         NoteCatalogRowChanges(ddl, changed);
         if (!dropped.ok()) {
             const Status s = dropped.WithContext("byte " + std::to_string(stmt.old_column_byte_offset));
@@ -3226,7 +3276,8 @@ parser::InsertStmt InsertShellOf(const parser::InsertStmt& written) {
 //
 // Refused in BW-Q12.12's order, each `InvalidArgument` at a real byte: a
 // name the relation has no live column for (a dropped column's included,
-// BW-R6), matched exactly as `UPDATE SET` matches (BW-Q12.3); a name listed
+// BW-R6), matched ignoring case as every column name is (`Schema::FindColumn`;
+// raft-marks-2026-10-15.md section 1 overrode BW-Q12.3); a name listed
 // twice, at its second occurrence; a NOT NULL column the list leaves out,
 // once, at the list's `(` - before any row, and never left to the codec,
 // whose placeholder would carry byte 0; and a row whose length is not the
@@ -3238,7 +3289,9 @@ StatusOr<parser::InsertStmt> NormalizeListedInsertRows(const catalog::TableAcces
     std::vector<std::optional<std::size_t>> source(columns.size());
     for (std::size_t j = 0; j < written.columns.size(); ++j) {
         const parser::IndexColumnRef& named = written.columns[j];
-        const catalog::SysColumnRow* col = ta.schema.FindColumn(named.name);
+        auto found = ta.schema.FindColumn(named.name, named.byte_offset);
+        if (!found.ok()) return found.status();
+        const catalog::SysColumnRow* col = found.value();
         if (col == nullptr) {
             return Status::InvalidArgument("unknown column '" + named.name + "' at byte " +
                                            std::to_string(named.byte_offset));
@@ -3797,6 +3850,18 @@ std::string CommandDispatcher::RelationNameOf(catalog::Oid oid) {
 std::optional<DispatchOutcome> CommandDispatcher::ColumnRowOf(const parser::ColumnDef& col,
                                                             std::uint32_t pos,
                                                             catalog::SysColumnRow& row) {
+    // A name the catalog's fixed-width field cannot hold is refused, never
+    // truncated: `SetName` keeps at most `kCatalogNameMax - 1` bytes, and a
+    // truncated name is not the one that was declared - a read of it would
+    // miss, and two names sharing their first 63 bytes would be one name.
+    // RENAME COLUMN's own bound (`CheckRenameName`).
+    if (col.name.size() >= catalog::kCatalogNameMax) {
+        const Status s = Status::InvalidArgument(
+            "column name '" + col.name + "' is longer than " +
+            std::to_string(catalog::kCatalogNameMax - 1) + " bytes (byte " +
+            std::to_string(col.name_byte_offset) + ")");
+        return DispatchOutcome{ErrorReply(s), false, 0, s};
+    }
     auto type_row = catalog_.ResolveTypeByName(col.type_name);
     if (!type_row.ok()) {
         return DispatchOutcome{ErrorReply(type_row.status()), false, 0, type_row.status()};
@@ -3994,6 +4059,23 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         for (const auto& col : stmt.columns) {
             catalog::SysColumnRow row{};
             if (auto refused = ColumnRowOf(col, pos++, row); refused.has_value()) return *refused;
+            // Column names are unique ignoring case
+            // (`catalog::ColumnNamesCollide`); the later name is the one
+            // refused, at its byte. `Catalog::CreateTable` asks again. Stored
+            // name against stored name - the comparison the catalog makes -
+            // though `ColumnRowOf` refusing an unstorable length makes each
+            // the name as written.
+            for (const catalog::SysColumnRow& earlier : schema.columns) {
+                if (catalog::ColumnNamesCollide(catalog::NameView(earlier.name),
+                                                catalog::NameView(row.name))) {
+                    const Status s = Status::InvalidArgument(
+                        "column '" + col.name + "' repeats column '" +
+                        std::string(catalog::NameView(earlier.name)) +
+                        "' (names are unique ignoring case) (byte " +
+                        std::to_string(col.name_byte_offset) + ")");
+                    return {ErrorReply(s), false, 0, s};
+                }
+            }
             schema.columns.push_back(row);
         }
 
@@ -6174,9 +6256,7 @@ std::optional<std::uint64_t> CommandDispatcher::TupleKeyLiteral(const catalog::T
     // so a negative literal is a guaranteed miss - and casting it to
     // uint64 would probe an enormous tuple key instead.
     if (cond.val.int_val < 0) return std::nullopt;
-    if (!IEquals(cond.col.name, catalog::NameView(access.schema.columns.front().name))) {
-        return std::nullopt;
-    }
+    if (!NamesTupleKey(access.schema, cond.col.name)) return std::nullopt;
     return static_cast<std::uint64_t>(cond.val.int_val);
 }
 
@@ -9373,8 +9453,7 @@ CommandDispatcher::TupleKeyWindow CommandDispatcher::FoldTupleKeyWindow(
                 cond.val_high.type != parser::ValueType::kInt || cond.val.int_val < 0 ||
                 cond.val_high.int_val < 0 || parser::IntLiteralWrapped(cond.val) ||
                 parser::IntLiteralWrapped(cond.val_high) ||
-                !IEquals(cond.col.name,
-                         catalog::NameView(access.schema.columns.front().name))) {
+                !NamesTupleKey(access.schema, cond.col.name)) {
                 unread(cond);
                 continue;
             }
@@ -9793,8 +9872,15 @@ namespace {
 // with no position of its own (a bare subquery), the `WHERE` token.
 Status PurgeConjunctRefusal(const catalog::TableAccess& access, const parser::Condition& cond,
                             std::uint32_t where_byte) {
-    const bool on_tuple_key = !access.schema.columns.empty() &&
-                       IEquals(cond.col.name, catalog::NameView(access.schema.columns.front().name));
+    // A name matching two live columns ignoring case is why the fold could
+    // not read it (`NamesTupleKey`), and PURGE has no compiler behind it to
+    // say so: the refusal is the ambiguity, not a form nobody built.
+    bool on_tuple_key = false;
+    if (!cond.col.name.empty()) {
+        auto found = access.schema.FindColumn(cond.col.name, cond.col.byte_offset);
+        if (!found.ok()) return found.status();
+        on_tuple_key = found.value() != nullptr && found.value()->pos == 0;
+    }
     const bool literal = cond.rhs_kind == parser::RhsKind::kLiteral &&
                          (cond.kind == parser::PredicateKind::kCompareValue ||
                           cond.kind == parser::PredicateKind::kBetween);

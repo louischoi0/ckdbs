@@ -306,6 +306,7 @@ struct BoolExpr {
 
 struct ColumnDef {
     std::string name;
+    std::uint32_t name_byte_offset = 0;  // the name's first byte - a repeated name's refusal
     std::string type_name;  // unresolved - see file comment
 
     // `DECIMAL(p, s)`'s two arguments, as written (docs/spec/types.md TY2).

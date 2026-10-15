@@ -151,24 +151,23 @@ void Finish(CompiledCabinExpr& f) {
 
 StatusOr<std::uint16_t> ResolveColumn(const catalog::Schema& schema,
                                       const parser::ColumnName& name) {
-    // Exact match and live columns only, as `CREATE CABIN`'s column form has
-    // always resolved (cabin_ddl.cpp): a dropped column has no name (BW-R6).
+    // `Schema::FindColumn`, every column name's resolver: ignoring case, a
+    // dropped column unreachable (BW-R6), two matches refused as ambiguous.
     if (!name.qualifier.empty()) {
         return Status::InvalidArgument("a cabin's columns are its relation's; '" +
                                        name.qualifier + "." + name.name + "' is qualified" +
                                        At(name.byte_offset));
     }
-    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
-        if (schema.columns[i].dropped() || catalog::NameView(schema.columns[i].name) != name.name) {
-            continue;
-        }
-        if (!catalog::CabinPolicyPermitsCreation(schema.columns[i].cabin_policy)) {
-            return Status::InvalidArgument("column '" + name.name +
-                                           "' was declared NO CABIN" + At(name.byte_offset));
-        }
-        return static_cast<std::uint16_t>(i);
+    auto found = schema.FindColumn(name.name, name.byte_offset);
+    if (!found.ok()) return found.status();
+    if (found.value() == nullptr) {
+        return Status::NotFound("no column '" + name.name + "'" + At(name.byte_offset));
     }
-    return Status::NotFound("no column '" + name.name + "'" + At(name.byte_offset));
+    if (!catalog::CabinPolicyPermitsCreation(found.value()->cabin_policy)) {
+        return Status::InvalidArgument("column '" + name.name + "' was declared NO CABIN" +
+                                       At(name.byte_offset));
+    }
+    return static_cast<std::uint16_t>(found.value() - schema.columns.data());
 }
 
 StatusOr<CabinTerm> CompileCall(const parser::FunctionCall& call, const catalog::Schema& schema) {
