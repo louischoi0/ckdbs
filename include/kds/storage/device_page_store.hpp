@@ -203,7 +203,11 @@
 //     breaks the order. A write's `WHERE` subquery, which reads leaves on
 //     either side, was one (BB-S1's census) and runs under no exclusive
 //     hold since: the write collects its targets first (`parser-v2.md`
-//     R2). Starvation is not ruled out: shared is granted
+//     R2). One cross-relation pair stays: a parent `DELETE`'s reverse
+//     foreign-key walk reads the child's leaves under the parent leaf's
+//     `X`, sound because the key graph is acyclic and no child-side hold
+//     asks the parent (`rules.md` §3's page latch row). Starvation is not
+//     ruled out: shared is granted
 //     whenever X is clear, so a hot page's readers can starve an exclusive
 //     request.
 //   - **A user relation page, then a `sys.tables` chain page** (BB-R4),

@@ -257,6 +257,8 @@ public:
     void PinFrame(PageId page_id, storage::PinMode mode) noexcept override {
         pins_[page_id].push_back(mode);
     }
+    // An unpin names no mode, so a page's pins are taken as released last
+    // first - true of every hold these statements take on one page.
     void UnpinFrame(PageId page_id) noexcept override {
         auto it = pins_.find(page_id);
         if (it == pins_.end() || it->second.empty()) return;
@@ -264,7 +266,8 @@ public:
         if (it->second.empty()) pins_.erase(it);
     }
 
-    // Every page fetched from now on is the watched relation's.
+    // Every user page fetched from now on is the watched relation's; the
+    // catalog's fixed pages sit below `kFirstUserPageId`.
     void Record(bool on) { recording_ = on; }
     // Fetches of a watched page while another page is pinned exclusive.
     int violations() const noexcept { return violations_; }
@@ -272,7 +275,7 @@ public:
 private:
     void Watch(PageId page_id) {
         if (recording_) {
-            watched_.insert(page_id);
+            if (page_id >= kFirstUserPageId) watched_.insert(page_id);
             return;
         }
         if (!watched_.contains(page_id)) return;
@@ -329,24 +332,21 @@ TEST_F(WriteSubqueryHoldTest, AWalkedUpdateReadsItsSubqueryUnderNoExclusiveHold)
     EXPECT_EQ(store_.violations(), 0);
 }
 
-TEST_F(WriteSubqueryHoldTest, APointUpdateReadsItsSubqueryUnderNoExclusiveHold) {
-    EXPECT_EQ(Run("UPDATE a SET v = 1 WHERE id = 2 AND " + kInB), "UPDATED 1");
-    EXPECT_EQ(Run("UPDATE a SET v = 1 WHERE id = 3 AND " + kInB), "UPDATED 0");
-    EXPECT_EQ(Run("UPDATE a SET v = 1 WHERE id = 9 AND " + kInB), "UPDATED 0");
-    EXPECT_EQ(Run("SELECT id FROM a WHERE v = 1"), "id\\n2");
-    EXPECT_EQ(store_.violations(), 0);
-}
-
 TEST_F(WriteSubqueryHoldTest, AWalkedDeleteReadsItsSubqueryUnderNoExclusiveHold) {
     EXPECT_EQ(Run("DELETE FROM a WHERE NOT " + kInB), "DELETED 2");
     EXPECT_EQ(Run("SELECT id FROM a"), "id\\n2\\n4");
     EXPECT_EQ(store_.violations(), 0);
 }
 
-TEST_F(WriteSubqueryHoldTest, APointDeleteReadsItsSubqueryUnderNoExclusiveHold) {
+// A tuple key beside a subquery is two conjuncts, so no point arm takes it:
+// it is collected like any other, and a key that matches nothing - or names
+// no row - writes nothing.
+TEST_F(WriteSubqueryHoldTest, AKeyBesideASubqueryIsCollectedNotProbed) {
+    EXPECT_EQ(Run("UPDATE a SET v = 1 WHERE id = 2 AND " + kInB), "UPDATED 1");
+    EXPECT_EQ(Run("UPDATE a SET v = 1 WHERE id = 3 AND " + kInB), "UPDATED 0");
     EXPECT_EQ(Run("DELETE FROM a WHERE id = 4 AND " + kInB), "DELETED 1");
-    EXPECT_EQ(Run("DELETE FROM a WHERE id = 1 AND " + kInB), "DELETED 0");
-    EXPECT_EQ(Run("SELECT id FROM a"), "id\\n1\\n2\\n3");
+    EXPECT_EQ(Run("DELETE FROM a WHERE id = 9 AND " + kInB), "DELETED 0");
+    EXPECT_EQ(Run("SELECT id, v FROM a"), "id,v\\n1,0\\n2,1\\n3,0");
     EXPECT_EQ(store_.violations(), 0);
 }
 

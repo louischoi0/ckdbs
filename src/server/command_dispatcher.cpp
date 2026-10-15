@@ -6596,8 +6596,7 @@ txn::TransactionManager::RowLocator CommandDispatcher::RowLocatorForRollback() {
 }
 
 CommandDispatcher::TupleKeyLookup CommandDispatcher::LocateByTupleKey(const catalog::TableAccess& access,
-                                                          std::uint64_t tuple_key,
-                                                          storage::PageAccess mode) {
+                                                          std::uint64_t tuple_key) {
     if (access.clustered_type == catalog::ClusteredType::kBtree) {
         // The tree *is* the relation's storage, so its answer is
         // authoritative in both directions: a hit is where the row lives,
@@ -6605,9 +6604,9 @@ CommandDispatcher::TupleKeyLookup CommandDispatcher::LocateByTupleKey(const cata
         // visit the same leaf and find the same nothing. This is the one
         // place a point lookup may skip the scan on a miss, and it is
         // allowed precisely because it is not a hint.
-        // Exclusive unless asked otherwise, because a writer writes the
-        // slot it is handed.
-        auto found = btree::BtreeLookup(page_store_, access.desc_page_id, tuple_key, mode);
+        // Exclusive, because every caller writes the slot it is handed.
+        auto found = btree::BtreeLookup(page_store_, access.desc_page_id, tuple_key,
+                                        storage::PageAccess::kWrite);
         if (found.ok()) {
             return TupleKeyLookup{TupleKeyLookup::Kind::kAt, std::move(found.value())};
         }
@@ -8740,32 +8739,10 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // is the other statement shape whose cost is otherwise linear in the
     // relation. Any reason to decline falls through to the scan, which
     // produces the identical result - the locator picks the slot to look
-    // at, never which rows match.
-    //
-    // **A WHERE with a subquery is evaluated on a shared descent first**
-    // (the collection pass's reason, below): the subquery reads pages, and
-    // under the exclusive leaf it would be a wait edge from a held `X`.
-    // The row it collects, or none, is the target the exclusive descent
-    // writes. A descent that cannot answer leaves the statement to the
-    // scan, whose collection pass covers it.
-    const bool has_subquery = !predicates.value().sub_chains.empty();
-    std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where);
-    if (tuple_key.has_value() && targets == nullptr && has_subquery) {
-        TupleKeyLookup seen = LocateByTupleKey(ta, *tuple_key, storage::PageAccess::kRead);
-        if (seen.kind == TupleKeyLookup::Kind::kAbsent) return {"UPDATED 0", false, 0};
-        if (seen.kind == TupleKeyLookup::Kind::kAt) {
-            auto collected = std::make_shared<std::unordered_set<std::uint64_t>>();
-            collecting = collected.get();
-            heap::PageView page(seen.at.leaf.bytes());
-            const Status s = apply(seen.at.page_id, page, seen.at.slot);
-            collecting = nullptr;
-            if (!s.ok()) return {ErrorReply(s), false, 0, s};
-            targets = std::move(collected);
-        } else {
-            tuple_key.reset();
-        }
-    }
-    if (tuple_key.has_value()) {
+    // at, never which rows match. Its target is the WHERE's only conjunct,
+    // so a point write carries no subquery to evaluate under the exclusive
+    // leaf (the collection pass's reason, below).
+    if (std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where); tuple_key.has_value()) {
         TupleKeyLookup found = LocateByTupleKey(ta, *tuple_key);
         if (found.kind == TupleKeyLookup::Kind::kAbsent) {
             return {"UPDATED 0", false, 0};  // no such row, on the tree's authority
@@ -8804,8 +8781,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // under the write walk's exclusive leaf: a held `X` asking an `S`, which
     // two statements on two cores close into a cycle no latch wait breaks
     // (`rules.md` §3's page latch row). A resume carries its targets and
-    // does not collect again.
-    if (targets == nullptr && has_subquery) {
+    // does not collect again, and one that collects nothing writes nothing.
+    if (targets == nullptr && !predicates.value().sub_chains.empty()) {
         auto collected = std::make_shared<std::unordered_set<std::uint64_t>>();
         collecting = collected.get();
         Status pass = VisitRelation(
@@ -8818,6 +8795,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             /*cursor=*/nullptr);
         collecting = nullptr;
         if (!pass.ok()) return {ErrorReply(pass), false, 0, pass};
+        if (collected->empty()) return {"UPDATED " + std::to_string(updated), false, updated};
         targets = std::move(collected);
     }
 
@@ -10443,25 +10421,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // The same point-lookup fast path SELECT and UPDATE take, and the same
     // contract: the locator picks the slot to look at, never which rows
     // match, so falling through to the scan produces the identical answer.
-    // A WHERE with a subquery is evaluated on a shared descent first, and
-    // `UpdateInner`'s point arm states the argument.
-    const bool has_subquery = !predicates.value().sub_chains.empty();
-    std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where);
-    if (tuple_key.has_value() && targets == nullptr && has_subquery) {
-        TupleKeyLookup seen = LocateByTupleKey(ta, *tuple_key, storage::PageAccess::kRead);
-        if (seen.kind == TupleKeyLookup::Kind::kAbsent) return {"DELETED 0", false, 0};
-        if (seen.kind == TupleKeyLookup::Kind::kAt) {
-            heap::PageView page(seen.at.leaf.bytes());
-            auto qualified = qualifies(page, seen.at.slot, nullptr, nullptr);
-            if (!qualified.ok()) return {ErrorReply(qualified.status()), false, 0, qualified.status()};
-            auto collected = std::make_shared<std::unordered_set<std::uint64_t>>();
-            if (qualified.value().has_value()) collected->insert(*qualified.value());
-            targets = std::move(collected);
-        } else {
-            tuple_key.reset();
-        }
-    }
-    if (tuple_key.has_value()) {
+    // Its target is the WHERE's only conjunct, so it carries no subquery.
+    if (std::optional<std::uint64_t> tuple_key = TupleKeyEqualityTarget(ta, stmt.where); tuple_key.has_value()) {
         TupleKeyLookup found = LocateByTupleKey(ta, *tuple_key);
         if (found.kind == TupleKeyLookup::Kind::kAbsent) {
             return {"DELETED 0", false, 0};
@@ -10484,7 +10445,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     }
 
     // The collection pass, and `UpdateInner`'s site states the argument.
-    if (targets == nullptr && has_subquery) {
+    if (targets == nullptr && !predicates.value().sub_chains.empty()) {
         auto collected = std::make_shared<std::unordered_set<std::uint64_t>>();
         Status pass = VisitRelation(
             ta, storage::PageAccess::kRead,
@@ -10497,6 +10458,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             },
             /*cursor=*/nullptr);
         if (!pass.ok()) return {ErrorReply(pass), false, 0, pass};
+        if (collected->empty()) return {"DELETED " + std::to_string(deleted), false, deleted};
         targets = std::move(collected);
     }
 
