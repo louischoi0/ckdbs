@@ -1063,7 +1063,11 @@ is one of (verified — the `PredicateKind` enum):
   `col = NULL` matches nothing, ever (the standard's trap, kept on
   purpose); `IS NULL` is the spelling that finds them.
 - A tuple key equality (`WHERE id = 42`) executes as a keyed descent; a tuple key
-  `BETWEEN` as a range walk with tail pruning; a non-tuple-key equality is served
+  window bounded at both ends (`BETWEEN`, `>=`/`<=`) as a range walk that stops
+  past its high bound and, on a btree, seeks to its low one. A window with a strict end
+  (`id >= a AND id < b`) is the same walk, but only when no other access path
+  (an index, a Cabin, a filter scan, a join build) applies; one bounded at a single
+  end is a walk from the head. A non-tuple-key equality is served
   by a secondary index, then a Cabin, then a filter scan, in that fixed
   preference order — selection is a function of shape and catalog, never of
   data statistics.
@@ -1224,7 +1228,10 @@ across steps, tuple key order within one — so `LIMIT n OFFSET m` means rows
   about relations, not about `sys.*`.
 - `OFFSET` costs what it skips — qualifying rows are examined and
   discarded, O(offset), since no head seek exists. For deep pagination
-  prefer keyset form: `WHERE id > <last seen> LIMIT n`.
+  prefer keyset form: `WHERE id > <last seen> LIMIT n`. It walks from the
+  head of the relation until it passes `<last seen>`; bounding the window
+  above too (`WHERE id > <last seen> AND id <= <last seen + span>`) seeks to it
+  when nothing else serves the statement (see the access-path note under WHERE).
 - Nothing is reserved: columns and tables may still be named `limit`,
   `offset`, `order`, `asc`, `desc`.
 
