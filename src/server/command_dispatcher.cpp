@@ -3266,6 +3266,64 @@ parser::InsertStmt InsertShellOf(const parser::InsertStmt& written) {
     return out;
 }
 
+// **The values written as expressions, typed and evaluated** (BU-S8): each
+// for the column its position reaches - the listed column, or the live
+// column at its position, one later when the row leaves its tuple key out -
+// by the SET value's typer (BJ-R3, no implicit conversion), then folded
+// once, before any row is placed. A VALUES row has no row to read, so an
+// expression naming a column is refused; a row whose length reaches no
+// column is left to the arity refusal below.
+// The column each value of a `width`-long row is for: the listed column,
+// or the live column at its position, one later when the row leaves its
+// tuple key out. Empty when the length reaches no column - the arity
+// refusal of the normalization below answers that row.
+StatusOr<std::vector<const catalog::SysColumnRow*>> InsertTargetColumns(
+    const catalog::TableAccess& ta, const parser::InsertStmt& written, std::size_t width) {
+    std::vector<const catalog::SysColumnRow*> out;
+    if (!written.columns.empty()) {
+        if (width != written.columns.size()) return out;
+        for (const parser::IndexColumnRef& named : written.columns) {
+            auto found = ta.schema.FindColumn(named.name, named.byte_offset);
+            if (!found.ok()) return found.status();
+            if (found.value() == nullptr) return std::vector<const catalog::SysColumnRow*>();
+            out.push_back(found.value());
+        }
+        return out;
+    }
+    std::vector<const catalog::SysColumnRow*> live;
+    for (const catalog::SysColumnRow& c : ta.schema.columns) {
+        if (!c.dropped()) live.push_back(&c);
+    }
+    if (width == live.size()) return live;
+    if (width + 1 == live.size()) return std::vector<const catalog::SysColumnRow*>(live.begin() + 1, live.end());
+    return out;
+}
+
+StatusOr<parser::InsertStmt> EvaluateInsertExpressions(const catalog::TableAccess& ta,
+                                                       const parser::InsertStmt& written) {
+    const exec::StatementContext context = exec::StatementContextNow();
+    parser::InsertStmt out = written;
+    out.value_exprs.clear();
+    for (const parser::InsertStmt::ValueExpr& v : written.value_exprs) {
+        auto targets = InsertTargetColumns(ta, written, written.rows[v.row].size());
+        if (!targets.ok()) return targets.status();
+        if (targets.value().empty()) continue;
+        const catalog::SysColumnRow* target = targets.value()[v.col];
+        auto typed = exec::TypeSetExpression(ta, *v.expr, *target);
+        if (!typed.ok()) return typed.status();
+        if (!exec::IsConstantSetExpression(*typed.value())) {
+            return Status::InvalidArgument("a VALUES expression reads no column (byte " +
+                                           std::to_string(v.expr->byte_offset) +
+                                           "); a VALUES row has no row to read");
+        }
+        auto value = exec::EvaluateSetExpression(*typed.value(), {}, context);
+        if (!value.ok()) return value.status();
+        value.value().byte_offset = v.expr->byte_offset;
+        out.rows[v.row][v.col] = std::move(value.value());
+    }
+    return out;
+}
+
 // **A column-listed statement's rows in the physical shape** (BW-S6, BW-Q12
 // of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): each
 // value goes to the column its list position names, so no column change can
@@ -5053,6 +5111,61 @@ DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
     return out;
 }
 
+// **`INSERT ... SELECT`'s rows** (BU-S8): the source run by the query
+// layer at the statement's snapshot - taken after `BeginWrite`, as an
+// UPDATE takes its own - and read whole before any row is placed, so the
+// statement never reads a row it wrote. Each column is assignable to its
+// target as a SET value is (BJ-R3): one type, two text types meeting, a
+// decimal at the target's scale.
+StatusOr<parser::InsertStmt> CommandDispatcher::InsertSelectRows(const catalog::TableAccess& ta,
+                                                                 const parser::InsertStmt& written,
+                                                                 WriteScope& scope) {
+    if (scope.session == nullptr) {
+        return Status::NotImplemented("INSERT ... SELECT needs a session (byte " +
+                                      std::to_string(written.select_byte_offset) + ")");
+    }
+    auto snapshot = SnapshotFor(*scope.session);
+    if (!snapshot.ok()) return snapshot.status();
+    auto rs = RunLayerQuery(*written.select, written.select_text, *scope.session,
+                            snapshot.value().snap, exec::StatementContextNow());
+    if (!rs.ok()) return rs.status();
+    const std::vector<exec::LayerColumn>& from = rs.value().columns;
+    auto targets = InsertTargetColumns(ta, written, from.size());
+    if (!targets.ok()) return targets.status();
+    if (targets.value().empty()) {
+        return Status::InvalidArgument(
+            "the SELECT returns " + std::to_string(from.size()) + " column(s), which name no " +
+            (written.columns.empty() ? "row of the relation" : "row of the column list") +
+            " (byte " + std::to_string(written.select_byte_offset) + ")");
+    }
+    for (std::size_t i = 0; i < from.size(); ++i) {
+        const exec::SetType& got = from[i].type;
+        const catalog::SysColumnRow& want = *targets.value()[i];
+        const bool text = exec::TypeFamilyOf(got.type_val) == exec::TypeFamily::kText &&
+                          exec::TypeFamilyOf(want.type_val) == exec::TypeFamily::kText;
+        const bool decimal = got.type_val == want.type_val &&
+                             (want.type_val == catalog::kTypeValDecimal ||
+                              want.type_val == catalog::kTypeValDecimalWide) &&
+                             catalog::DecimalScaleOf(got.len) == catalog::DecimalScaleOf(want.len);
+        const bool same = got.type_val == want.type_val &&
+                          (got.len == want.len || got.type_val == catalog::kTypeValBool);
+        if (!text && !decimal && !same) {
+            return Status::InvalidArgument(
+                "the SELECT's column " + std::to_string(i + 1) + " is " + exec::SetTypeName(got) +
+                " but column '" + std::string(catalog::NameView(want.name)) + "' is " +
+                exec::SetTypeName(exec::SetType{exec::SetType::Kind::kConcrete, want.type_val,
+                                                want.len}) +
+                " (byte " + std::to_string(written.select_byte_offset) +
+                "); there is no implicit conversion (BJ-R3), CAST it");
+        }
+    }
+    parser::InsertStmt out = InsertShellOf(written);
+    out.columns = written.columns;
+    out.columns_byte_offset = written.columns_byte_offset;
+    out.rows = std::move(rs.value().rows);
+    return out;
+}
+
 DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& written,
                                                 WriteScope& scope) {
     // BI3: the row cap, at the first config-aware layer (the parser is a
@@ -5151,10 +5264,30 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
             "columns were changed by ALTER TABLE since; begin a new load");
         return {ErrorReply(s), false, 0, s};
     }
-    auto normalized = NormalizeInsertRows(*ta, written);
+    std::optional<parser::InsertStmt> evaluated;
+    if (!written.value_exprs.empty()) {
+        auto e = EvaluateInsertExpressions(*ta, written);
+        if (!e.ok()) return {ErrorReply(e.status()), false, 0, e.status()};
+        evaluated.emplace(std::move(e.value()));
+    }
+    if (written.select != nullptr) {
+        auto e = InsertSelectRows(*ta, written, scope);
+        if (!e.ok()) return {ErrorReply(e.status()), false, 0, e.status()};
+        evaluated.emplace(std::move(e.value()));
+        if (evaluated->rows.size() > max_insert_rows_) {
+            return {"ERR INSERT of " + std::to_string(evaluated->rows.size()) +
+                        " rows exceeds max_insert_rows (" + std::to_string(max_insert_rows_) + ")",
+                    false};
+        }
+        if (evaluated->rows.empty()) {
+            return {"INSERTED oid=" + std::to_string(oid.value()) + " rows=0", false, 0};
+        }
+    }
+    const parser::InsertStmt& valued = evaluated.has_value() ? *evaluated : written;
+    auto normalized = NormalizeInsertRows(*ta, valued);
     if (!normalized.ok()) return {ErrorReply(normalized.status()), false, 0, normalized.status()};
     const parser::InsertStmt& stmt =
-        normalized.value().has_value() ? *normalized.value() : written;
+        normalized.value().has_value() ? *normalized.value() : valued;
 
     // Whether every row omits its tuple key, the question T3's sorted fill further
     // down asks.
@@ -8227,6 +8360,18 @@ StatusOr<std::vector<std::vector<parser::AstValue>>> CommandDispatcher::WalkForL
     return sink.TakeRows();
 }
 
+StatusOr<exec::RowSet> CommandDispatcher::RunLayerQuery(const parser::Query& query,
+                                                        std::string_view text, Session& session,
+                                                        const txn::Snapshot& snap,
+                                                        const exec::StatementContext& context) {
+    LayerHostImpl host(*this, session, snap, context);
+    exec::LayerLimits limits;
+    limits.max_rows = sort_max_rows_;
+    limits.max_groups = aggregate_limits_.max_groups;
+    limits.max_distinct = aggregate_limits_.max_distinct;
+    return exec::RunQuery(query, text, host, context, limits);
+}
+
 std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
     std::string_view line, Session& session, const txn::Snapshot& snap,
     const exec::StatementContext* context) {
@@ -8236,12 +8381,7 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
 
     const exec::StatementContext now =
         context != nullptr ? *context : exec::StatementContextNow();
-    LayerHostImpl host(*this, session, snap, now);
-    exec::LayerLimits limits;
-    limits.max_rows = sort_max_rows_;
-    limits.max_groups = aggregate_limits_.max_groups;
-    limits.max_distinct = aggregate_limits_.max_distinct;
-    auto result = exec::RunQuery(query.value(), line, host, now, limits);
+    auto result = RunLayerQuery(query.value(), line, session, snap, now);
     if (!result.ok()) return DispatchOutcome{ErrorReply(result.status()), false, 0, result.status()};
 
     TextResultSink text_sink;

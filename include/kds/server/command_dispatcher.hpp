@@ -18,6 +18,7 @@
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/aggregate.hpp"
+#include "kds/exec/query_layer.hpp"
 #include "kds/exec/sort.hpp"
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/transition.hpp"
@@ -1580,6 +1581,15 @@ private:
     std::optional<DispatchOutcome> TryQueryLayer(std::string_view line, Session& session,
                                                  const txn::Snapshot& snap,
                                                  const exec::StatementContext* context);
+    // Runs a query-layer query whose text is `text` at `snap`, under this
+    // dispatcher's row and group caps (BU-Q10): TryQueryLayer's and
+    // INSERT ... SELECT's one way in.
+    StatusOr<parser::InsertStmt> InsertSelectRows(const catalog::TableAccess& ta,
+                                                  const parser::InsertStmt& written,
+                                                  WriteScope& scope);
+    StatusOr<exec::RowSet> RunLayerQuery(const parser::Query& query, std::string_view text,
+                                         Session& session, const txn::Snapshot& snap,
+                                         const exec::StatementContext& context);
 
     // One relation's walk for the query layer: `stmt` - a single-relation
     // `SELECT *` with native conjuncts - run through `SelectBody` at `snap`,

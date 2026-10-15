@@ -520,6 +520,9 @@ struct DescribedShape {
 // row cap is **not** enforced here: the parser is a pure syntax layer with
 // no config access, so the first config-aware layer (the dispatcher)
 // refuses an over-cap statement naming the cap and the count.
+struct Expr;   // a VALUES expression - see InsertStmt::ValueExpr
+struct Query;  // INSERT ... SELECT's source - see InsertStmt::select
+
 struct InsertStmt {
     std::string table_name;
     std::string schema;  // see the namespace-qualifier rule above
@@ -531,6 +534,23 @@ struct InsertStmt {
     std::vector<IndexColumnRef> columns;
     std::uint32_t columns_byte_offset = 0;
     std::vector<std::vector<AstValue>> rows;
+    // A value written as an expression (BU-S8): `rows[row][col]` holds a NULL
+    // placeholder carrying the expression's byte until the dispatcher types
+    // it for its column and evaluates it, once, before any row is placed. A
+    // bare literal is never here - it keeps the shape it always had.
+    struct ValueExpr {
+        std::size_t row = 0;
+        std::size_t col = 0;
+        std::shared_ptr<const Expr> expr;
+    };
+    std::vector<ValueExpr> value_exprs;
+    // `INSERT ... SELECT` (BU-S8): the source in the query grammar, run by
+    // the query layer at the statement's snapshot and read whole before any
+    // row is placed; `rows` is then empty. `select_text` is the statement's
+    // text, which the query's spans index.
+    std::shared_ptr<const Query> select;
+    std::string select_text;
+    std::uint32_t select_byte_offset = 0;
     DescribedShape described;
 };
 

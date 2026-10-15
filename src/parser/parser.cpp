@@ -2551,6 +2551,21 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
         }
     }
 
+    // `INSERT ... SELECT` (BU-S8): the source is a query of the query
+    // grammar, run by the query layer.
+    if (IsWord(lexer_.Peek(), "SELECT")) {
+        stmt.select_byte_offset = lexer_.Peek().byte_offset;
+        const bool was = query_mode_;
+        query_mode_ = true;
+        auto source = ParseQueryExpr();
+        query_mode_ = was;
+        if (!source.ok()) return source.status();
+        stmt.select = std::move(source.value());
+        stmt.select_text = std::string(sql_);
+        ConsumeOptionalSemicolon();
+        return stmt;
+    }
+
     if (Status s = ExpectKeyword("VALUES"); !s.ok()) return s;
 
     // One or more parenthesised rows, comma-separated (bulkinsert.md
@@ -2562,9 +2577,19 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
 
         std::vector<AstValue> row;
         for (;;) {
-            auto val = ParseValue();
-            if (!val.ok()) return val.status();
-            row.push_back(std::move(val.value()));
+            // A value is a SET value's grammar (BU-S8): a bare literal reads
+            // as it always did, anything longer as an expression.
+            Assignment value;
+            if (Status s = ParseSetValue(value); !s.ok()) return s;
+            if (value.expr != nullptr) {
+                AstValue placeholder;
+                placeholder.type = ValueType::kNull;
+                placeholder.byte_offset = value.expr->byte_offset;
+                stmt.value_exprs.push_back({stmt.rows.size(), row.size(), std::move(value.expr)});
+                row.push_back(std::move(placeholder));
+            } else {
+                row.push_back(std::move(value.val));
+            }
 
             if (lexer_.Peek().type == TokenType::kComma) {
                 lexer_.Next();
