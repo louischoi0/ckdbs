@@ -143,7 +143,7 @@ Three consequences of the entry format:
 `storage/btree/btree.hpp` cannot host this, and not by accident: an index
 page is a different *kind* of page. The clustered tree's leaf is a heap page
 holding tuples addressed by one Keystone id; an index page holds entries
-keyed by `key || tuple key`, with no Keystone word, no MVCC header and no
+ordered by their own bytes (§4.2), with no Keystone word, no MVCC header and no
 `PageView`. Teaching the clustered module to also store entries would be the
 merge that costs both, and **a secondary key is not monotonic** —
 arbitrary-order arrival is the defining property of the thing, so its
@@ -163,9 +163,11 @@ pages split — and that decision is made here, scoped to this page class:
 
 > **IX4a — an index leaf splits at its entry midpoint**; the new right
 > sibling takes the upper half, and the separator copied into the parent is
-> the **first key of the right sibling**. `[PROPOSED]: the midpoint.` The
+> the **first entry of the right sibling**. `[PROPOSED]: the midpoint.` The
 > fill target is a parameter of the split function, never a constant a caller
-> may assume.
+> may assume. Any divide point is sound, because no two entries share a sort
+> key (IX4b): the copied separator is above every entry left behind and below
+> the parent's next separator, so a parent never holds it twice.
 
 Same separator convention as `btree_page.hpp`: a separator is the **low key
 of the subtree it points at**, so a separator and a page's own first key can
@@ -188,7 +190,10 @@ different name.
 
 Internal nodes are `btree_page.hpp`'s shape with the key widened from
 `uint64` to the **sort key** of §4.2 — separator array, `leftmost_child`,
-`level`, binary-searched, no right-link.
+`level`, binary-searched, no right-link. A separator is a whole entry wide,
+which `key_width` alone does not give, so the internal header stores that
+`sort_key_width` beside it, checked against the index's layout like a leaf's
+`entry_width`.
 
 ### 4.2 Entry layout
 
@@ -203,13 +208,17 @@ Internal nodes are `btree_page.hpp`'s shape with the key widened from
 `RowLayout::row_size` has to a relation. An entry whose length disagrees is
 `Corruption`, never interpreted, exactly as invariant 13 requires of a tuple.
 
-Duplicate keys are ordinary: entries sort by `(key, tuple key)`, so the tuple key breaks
-the tie and the total order is strict. That also makes an entry's position
-deterministic, which a split's arithmetic wants.
+Duplicate keys are ordinary: entries sort by **the whole entry** - key, then
+tuple key, then covered bytes - so the tuple key breaks a tie on the key, the
+covered bytes a tie on both, and the order is strict over every entry the
+tree stores. That also makes an entry's position deterministic, which a
+split's arithmetic and redo's slot check want.
 
-> **IX4b — the tree routes on the whole `(key, tuple key)` sort key, and a probe
+> **IX4b — the tree routes on the whole entry as its sort key, and a probe
 > that knows less is zero-padded rather than compared short.** A
-> correctness rule, not a convenience.
+> correctness rule, not a convenience. (Superblock 27, 2026-10-15: before
+> it the sort key was `(key, tuple key)`, and a version-26 volume is
+> refused.)
 
 A secondary key is not unique, so a run of duplicates can span leaves. If a
 separator carried only the key, a probe for a duplicated key would compare
@@ -218,7 +227,8 @@ that same key with a lower tuple key. Half the duplicates would be unreachable b
 descent while still being reachable by walk, which is the shape of bug a walk
 test cannot see.
 
-So separators are full sort keys, and a probe for key `K` seeks `(K, 0)`.
+So separators are full sort keys, and a probe for key `K` seeks `(K, 0, 0...)`
+and bounds its walk with `(K, FF..., FF...)`.
 Padding is the correct floor for free: §5's discriminator byte is `1` for
 every value that exists, so a zero byte in that position sorts below all of
 them — which makes a partial composite-key probe (`WHERE a = 3` on an index
@@ -226,11 +236,23 @@ over `(a, b)`) encode `a`, leave the rest zero, and land on the first entry
 that can match.
 
 Two entries may also share a `(key, tuple key)` pair — an UPDATE that changes a
-covered column appends one — and that is information, so it is kept. A
+covered column appends one, as does a rolled-back or purged key named again
+with another covered value — and that is information, so it is kept. A
 **byte-identical** entry is not, and `IndexInsert` reports it rather than
 storing it twice: nothing reclaims an index entry, and a probe that resolved
-one tuple key twice would emit its row twice. Deduplicating *by tuple key* remains the read
-path's job (IX11).
+one tuple key twice would emit its row twice. The check is complete, because
+an entry is its own sort key and lives in the one leaf that covers it.
+Deduplicating *by tuple key* remains the read path's job (IX11).
+
+**Why the covered bytes are in the order.** With `(key, tuple key)` alone, one
+row whose covered column moved a few hundred times built a run of equal sort
+keys longer than a leaf; a divide inside the run copied up a separator its
+parent already held, the parent refused it after the leaf was divided and
+linked, and every later write of that pair was refused for good. With every
+entry distinct, no divide can promote a duplicate separator. The cost is
+fanout: a separator is as wide as a leaf entry, so a wide `COVERING` clause
+gives internal nodes as few children as its leaves hold entries, and the tree
+is deeper for it.
 
 ---
 
@@ -334,8 +356,8 @@ exactly the write cost it added.
 **An entry judges itself, never its row** (AT-S22). Maintenance is
 append-only, so a row can own several entries, and a stale one can be walked
 first: its key moved with a covered column, or an update of a covered column
-alone appended an entry with the same `(key, tuple key)`, which sorts to the front of
-its run. So the probe claims a tuple key for its dedup only once one of its entries
+alone appended an entry with the same `(key, tuple key)`, which sorts before the
+older one whenever its covered bytes do. So the probe claims a tuple key for its dedup only once one of its entries
 passes the filter, and keeps the row when **any** entry does. That is still a
 superset - every version that wrote a key or covered value has an entry
 carrying it, the version a snapshot sees among them, and the base read's

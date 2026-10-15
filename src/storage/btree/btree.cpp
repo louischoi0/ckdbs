@@ -748,7 +748,7 @@ StatusOr<std::optional<storage::InsertPlacement>> CompactLeafAndInsert(
 // leaf's `relayout_epoch` is bumped: every Waystone trail entry and Cabin
 // hint pointing into it becomes untrusted at once (section 3.1a's pairing
 // rule). Secondary indexes need nothing - an index entry's sort key is
-// `key || tuple key` (index_page.hpp), never a location - and the undo chain is
+// `key || tuple key || covered` (index_page.hpp), never a location - and the undo chain is
 // likewise addressed by `undo_ptr`, not by where the version sits.
 //
 // The delete mark travels with the tuple. A delete-marked version carries

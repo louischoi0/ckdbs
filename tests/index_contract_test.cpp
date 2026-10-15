@@ -458,22 +458,23 @@ TEST(IndexContractTest, ARowWhoseKeyAndCoveredColumnMovedTogetherSurvivesItsStal
 
 TEST(IndexContractTest, AnOldSnapshotKeepsItsRowWhenOnlyTheCoveredColumnMoved) {
     // The entry's second case: an update of `c` alone appends an entry with
-    // the same (key, tuple key), which sorts to the front of its run - so an older
-    // snapshot, whose version carries the old `c`, meets the new entry
-    // first, and the new `c` fails its predicate.
+    // the same (key, tuple key), placed in its run by its covered bytes - the
+    // cell's own, little-endian, so `c = 10` sorts before `c = 20`. An older
+    // snapshot, whose version carries the old `c = 20`, therefore meets the
+    // new entry first, and the new `c` fails its predicate.
     Instance db(/*indexes=*/true);
     Instance plain(/*indexes=*/true);
     for (Instance* i : {&db, &plain}) {
         i->Ok("CREATE TABLE t (id int64, a int64, c int64) BTREE");
     }
     db.Ok("CREATE INDEX ix ON t (a) COVERING (c)");
-    const std::string sql = "SELECT id FROM t WHERE a = 2 AND c = 10";
+    const std::string sql = "SELECT id FROM t WHERE a = 2 AND c = 20";
     for (Instance* i : {&db, &plain}) {
-        i->Ok("INSERT INTO t VALUES (2, 10)");
+        i->Ok("INSERT INTO t VALUES (2, 20)");
         Session reader;
         ASSERT_EQ(i->Run(reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
         ASSERT_EQ(i->Run(reader, sql), "id\\n1");
-        i->Ok("UPDATE t SET c = 20 WHERE id = 1");
+        i->Ok("UPDATE t SET c = 10 WHERE id = 1");
         EXPECT_EQ(i->Run(reader, sql), "id\\n1")
             << (i == &db ? "the indexed" : "the plain") << " reader lost its version's row";
         ASSERT_EQ(i->Run(reader, "COMMIT").substr(0, 6), "COMMIT");

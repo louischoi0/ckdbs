@@ -8,10 +8,10 @@ open since AT-S16's review (finding F1).
 
 An index-tree split holds the leaf, the `k` parents it secured and the one
 node each level creates: `2 + k` pins, or `3 + k` when the root grows and
-its anchor is pinned (`src/storage/index/index_tree.cpp:492-499`). Unlike
-the clustered tree, `k` has no constant bound. An index node holds as few
-separators as its key width allows (eight at a 1,000-byte key), so with
-wide keys `k` can exceed the five pins that
+its anchor is pinned (`src/storage/index/index_tree.cpp`, "Peak pins").
+Unlike the clustered tree, `k` has no constant bound. An index node holds as
+few separators as its entry width allows (eight at a 1,000-byte entry), so
+with wide entries `k` can exceed the five pins that
 `DevicePageStore::kPinCeiling = 8` leaves room for
 (`include/kds/storage/device_page_store.hpp:804`).
 
@@ -19,9 +19,18 @@ In a debug build the pin check (`src/storage/device_page_store.cpp:2460`)
 aborts the process when `live_pins_ > pin_ceiling_`. A release build does
 not check.
 
+**Widened 2026-10-15** on `fix-index-equal-sort-key-run`, off `9b7d53d7`:
+a separator is now a whole leaf entry, covered bytes included
+(`docs/spec/index.md` IX4b), so a wide `COVERING` clause shrinks internal
+fanout as a wide key did before. At covered 1,000 a node holds eight
+separators, and about a million entries can put six full parents on one
+path. The same fanout makes `kMaxBtreeDepth` (16) reachable by covered width:
+at the widest legal entry (4,068 bytes) a node holds three.
+
 ## Smallest reproduction (not yet run)
 
-`cores = 1`, Debug build: an index on a wide `varchar(1000)` column, with
+`cores = 1`, Debug build: an index on a wide `varchar(1000)` column (or a
+narrow key `COVERING` 1,000 bytes of columns), with
 enough inserts in key order to grow the index tree past six levels, so one
 split secures more than five parents.
 

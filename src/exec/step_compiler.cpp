@@ -17,7 +17,6 @@
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_vm.hpp"  // PositionSink - the declaration sink AT-R1 threads
-#include "kds/storage/index/index_page.hpp"  // kIndexTupleKeyWidth - the sort-key suffix
 
 namespace kds::exec {
 
@@ -964,10 +963,10 @@ IndexProbe ProbeOverIndex(const catalog::TableAccess::IndexRef& ix) {
     probe.entry_width = ix.entry_width;
     probe.key_cols.assign(ix.keys().begin(), ix.keys().end());
     probe.covered_cols.assign(ix.covered().begin(), ix.covered().end());
-    const std::size_t sort_key_width =
-        static_cast<std::size_t>(ix.key_width) + index::kIndexTupleKeyWidth;
-    probe.low.assign(sort_key_width, std::byte{0x00});
-    probe.high.assign(sort_key_width, std::byte{0xFF});
+    // A bound is a whole sort key: the entry, covered bytes included
+    // (index_page.hpp).
+    probe.low.assign(ix.entry_width, std::byte{0x00});
+    probe.high.assign(ix.entry_width, std::byte{0xFF});
     return probe;
 }
 

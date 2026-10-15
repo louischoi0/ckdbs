@@ -56,9 +56,10 @@ mounts has **one WAL stream for the instance**, whatever `cores` says, and
 `SHOW META`'s `wal_topology` field says so. A volume whose superblock
 records more than one stream **does not mount**: there is no migration,
 and the refusal names it. Recreate the database. The same holds
-for every volume older than superblock version 22 (2026-10-11): 20 keeps a
+for every volume older than superblock version 27 (2026-10-15): 20 keeps a
 B+ tree leaf in key order by placement, 21 records a dropped relation's
-roots in its tombstone, and 22 carries the 48-bit Keystone id.
+roots in its tombstone, 22 carries the 48-bit Keystone id, and 27 orders a
+secondary index by its whole entry.
 
 The listener is **loopback only** (`127.0.0.1`), plain TCP, no TLS, no
 authentication — a development/inspection surface, not a production API.

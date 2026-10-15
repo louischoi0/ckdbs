@@ -294,8 +294,8 @@ struct IndexProbe {
     std::uint8_t eq_prefix = 0;
     bool ranged = false;
 
-    // The inclusive sort-key bounds the walk runs between, both a full
-    // `key_width + 8` bytes.
+    // The inclusive sort-key bounds the walk runs between, both a whole
+    // entry's `entry_width` bytes.
     //
     // **Encoded here, at compile time.** Coercion is a compile-time act
     // (docs/spec/types.md §3.1) and so is the encoding that follows it, so

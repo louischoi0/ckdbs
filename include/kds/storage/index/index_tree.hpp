@@ -52,11 +52,11 @@
 // A **byte-identical** entry is not information, and `IndexInsert` reports
 // it rather than storing it twice (`already_present`). Nothing reclaims an
 // index entry, so a duplicate is permanent; and a probe that resolved one
-// tuple key twice would emit its row twice. The check is complete for a duplicate
-// in the leaf the descent lands on, which misses one only when a run of
-// equal sort keys straddles a leaf boundary (index_tree.cpp's
-// `FindExactDuplicate`). Deduplicating *by tuple key* is the read path's job, not
-// this file's.
+// tuple key twice would emit its row twice. The check is complete: an entry
+// is its own sort key (index_page.hpp), so the leaf the descent lands on is
+// the one place it can be - and since no two entries are equal, no two share
+// a sort key, which is what keeps every separator distinct. Deduplicating
+// *by tuple key* is the read path's job, not this file's.
 //
 // ---- Concurrency ---------------------------------------------------------
 //
