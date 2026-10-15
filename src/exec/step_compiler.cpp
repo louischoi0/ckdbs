@@ -851,27 +851,65 @@ std::optional<std::uint64_t> TupleKeyBound(const Operand& operand) {
 // deliberate: it means a hand-written `id >= 1 AND id <= 5` gets the same
 // range as `id BETWEEN 1 AND 5`, because they are the same statement once
 // the parser is done with them. A range from one spelling and not the other
-// would be an optimizer that rewards phrasing.
-std::optional<RangeBounds> TupleKeyRangeOf(const Step& step, std::uint16_t slot) {
+// would be an optimizer that rewards phrasing. The strict forms are the
+// same range with an inclusive end: `id > a` is `id >= a + 1` and `id < b`
+// is `id <= b - 1`, so `id >= a AND id < b` walks its window rather than
+// the relation. `id < 0` holds for no key and leaves the step a scan.
+//
+// Both ends, never one: a one-sided range promises nothing about how much
+// of the relation it walks.
+//
+// `strict` says a `>` or `<` set one of the two ends. Such a range ranks
+// last, not where an inclusive one does (operator's ruling (a),
+// 2026-10-15): it replaces only a step every other arm declined, so it
+// never displaces an index, a Cabin or a build. Where a range belongs
+// against those arms is undecided; until it is, the spellings rank apart.
+struct TupleKeyRange {
+    RangeBounds bounds;
+    bool strict = false;
+};
+
+std::optional<TupleKeyRange> TupleKeyRangeOf(const Step& step, std::uint16_t slot) {
     std::optional<std::uint64_t> low;
     std::optional<std::uint64_t> high;
+    bool low_strict = false;
+    bool high_strict = false;
     for (const StepPredicate& pred : step.residual) {
         if (!IsOwnColumn(pred.lhs, slot) || !IsTupleKey(pred.lhs)) continue;
         auto bound = TupleKeyBound(pred.rhs);
         if (!bound.has_value()) continue;
-        // Only the inclusive forms, which is what BETWEEN lowers to. A
-        // strict `>` would need low+1 and an underflow check for nothing:
-        // the grammar has no way to write one against a tuple key that BETWEEN
-        // does not already cover.
-        if (pred.op == parser::CompareOp::kGte && (!low || *bound > *low)) low = bound;
-        if (pred.op == parser::CompareOp::kLte && (!high || *bound < *high)) high = bound;
+        std::optional<std::uint64_t> inclusive_low;
+        std::optional<std::uint64_t> inclusive_high;
+        switch (pred.op) {
+            case parser::CompareOp::kGte: inclusive_low = *bound; break;
+            // A literal is at most INT64_MAX, so `+ 1` cannot wrap.
+            case parser::CompareOp::kGt: inclusive_low = *bound + 1; break;
+            case parser::CompareOp::kLte: inclusive_high = *bound; break;
+            case parser::CompareOp::kLt:
+                if (*bound == 0) return std::nullopt;
+                inclusive_high = *bound - 1;
+                break;
+            default: break;
+        }
+        // An end is strict only if no conjunct reaching the same bound wrote
+        // it inclusively, so the rank does not hang on conjunct order.
+        if (inclusive_low && (!low || *inclusive_low >= *low)) {
+            const bool strict = pred.op == parser::CompareOp::kGt;
+            low_strict = (low && *inclusive_low == *low) ? low_strict && strict : strict;
+            low = inclusive_low;
+        }
+        if (inclusive_high && (!high || *inclusive_high <= *high)) {
+            const bool strict = pred.op == parser::CompareOp::kLt;
+            high_strict = (high && *inclusive_high == *high) ? high_strict && strict : strict;
+            high = inclusive_high;
+        }
     }
     if (!low.has_value() || !high.has_value()) return std::nullopt;
     // An inverted range is legal to write and matches nothing. Left as a
     // plain scan: the residual returns the correct empty answer, and a
     // range walk would have to special-case it anyway.
     if (*low > *high) return std::nullopt;
-    return RangeBounds{*low, *high};
+    return TupleKeyRange{RangeBounds{*low, *high}, low_strict || high_strict};
 }
 
 // Whether this step has at least one equality against a literal on a
@@ -2225,10 +2263,10 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // relation with a tuple key equality is already served better than either
         // of these could serve it.
         if (step.kind == AccessKind::kScan) {
-            if (auto bounds = TupleKeyRangeOf(step, static_cast<std::uint16_t>(i));
-                bounds.has_value()) {
+            const auto key_range = TupleKeyRangeOf(step, static_cast<std::uint16_t>(i));
+            if (key_range.has_value() && !key_range->strict) {
                 step.kind = AccessKind::kRange;
-                step.range = bounds;
+                step.range = key_range->bounds;
             } else if (auto ix = IndexProbeOf(*scope.relations[i].access, step,
                                                static_cast<std::uint16_t>(i));
                        ix.has_value()) {
@@ -2314,6 +2352,13 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // contract.
                 step.build = BuildKeyOf(scope, *scope.relations[i].access, step,
                                         static_cast<std::uint16_t>(i));
+            }
+            // A strict tuple key range, last (ruling (a), at
+            // TupleKeyRangeOf): only a step still a bare walk takes it.
+            if (step.kind == AccessKind::kScan && !step.build.has_value() &&
+                key_range.has_value()) {
+                step.kind = AccessKind::kRange;
+                step.range = key_range->bounds;
             }
         }
 

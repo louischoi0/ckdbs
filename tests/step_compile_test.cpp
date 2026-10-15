@@ -154,6 +154,47 @@ TEST_F(StepCompileTest, BetweenOnTheTupleKeyCompilesToARangeWithItsBoundsKept) {
     EXPECT_EQ(spelled.steps[0].range->high, 20u);
 }
 
+TEST_F(StepCompileTest, StrictBoundsOnTheTupleKeyCompileToTheInclusiveRange) {
+    // `id >= a AND id < b` is the half-open window a client writes most;
+    // it walked the whole relation while only `>=` and `<=` were read.
+    const StepChain half_open = MustCompile("SELECT * FROM acct WHERE id >= 10 AND id < 20");
+    ASSERT_EQ(half_open.steps[0].kind, AccessKind::kRange);
+    EXPECT_EQ(half_open.steps[0].range->low, 10u);
+    EXPECT_EQ(half_open.steps[0].range->high, 19u);
+    EXPECT_EQ(half_open.steps[0].residual.size(), 2u) << "the bounds stay conjuncts";
+
+    const StepChain open = MustCompile("SELECT * FROM acct WHERE id > 10 AND id < 20");
+    ASSERT_EQ(open.steps[0].kind, AccessKind::kRange);
+    EXPECT_EQ(open.steps[0].range->low, 11u);
+    EXPECT_EQ(open.steps[0].range->high, 19u);
+
+    // A literal on the left is mirrored by the parser, and the tightest
+    // bound of each end wins whichever form wrote it.
+    const StepChain mixed =
+        MustCompile("SELECT * FROM acct WHERE 10 < id AND id >= 12 AND id <= 30 AND id < 25");
+    ASSERT_EQ(mixed.steps[0].kind, AccessKind::kRange);
+    EXPECT_EQ(mixed.steps[0].range->low, 12u);
+    EXPECT_EQ(mixed.steps[0].range->high, 24u);
+
+    // Ruling (a): a strict range takes only a bare walk, so a filter scan
+    // stays one and keeps its access columns.
+    const StepChain filtered =
+        MustCompile("SELECT * FROM acct WHERE id >= 10 AND id < 20 AND name = 'x'");
+    EXPECT_EQ(filtered.steps[0].kind, AccessKind::kFilterScan);
+    EXPECT_FALSE(filtered.steps[0].range.has_value());
+}
+
+TEST_F(StepCompileTest, AStrictBoundThatAdmitsNoKeyOrOneEndAloneIsNotARange) {
+    // `id < 0` holds for no key, and `> 10 AND < 11` inverts once made
+    // inclusive: both stay scans whose residual answers empty.
+    EXPECT_FALSE(MustCompile("SELECT * FROM acct WHERE id >= 0 AND id < 0").steps[0].range);
+    EXPECT_FALSE(MustCompile("SELECT * FROM acct WHERE id > 10 AND id < 11").steps[0].range);
+    // One end alone is not a range: it promises nothing about how much of
+    // the relation it walks.
+    EXPECT_FALSE(MustCompile("SELECT * FROM acct WHERE id > 10").steps[0].range);
+    EXPECT_FALSE(MustCompile("SELECT * FROM acct WHERE id < 10").steps[0].range);
+}
+
 TEST_F(StepCompileTest, BetweenOnANonTupleKeyColumnIsNotARange) {
     // There is no structure to exploit: the relation is ordered by tuple key, so
     // a range over any other column is a search that has to look at every
