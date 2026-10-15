@@ -1,0 +1,21 @@
+n=200 run=0 rc=0
+n=1000 run=0 rc=0
+n=10000 run=0 rc=0
+n=100000 run=0 rc=0
+n=200 run=1 rc=0
+n=1000 run=1 rc=0
+n=10000 run=1 rc=0
+n=100000 run=1 rc=0
+n=200 run=2 rc=0
+n=1000 run=2 rc=0
+n=10000 run=2 rc=0
+n=100000 run=2 rc=0
+n=200 run=3 rc=0
+n=1000 run=3 rc=0
+n=10000 run=3 rc=0
+n=100000 run=3 rc=0
+n=200 run=4 rc=0
+n=1000 run=4 rc=0
+n=10000 run=4 rc=0
+n=100000 run=4 rc=0
+ALLDONE
