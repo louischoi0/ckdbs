@@ -409,9 +409,19 @@ struct Scope {
     const std::set<std::size_t>* hidden = nullptr;
     // A grouped context: a subquery may not reach into it for a column.
     bool grouped = false;
+    // A derived table's edge: it holds no columns, and a name found beyond
+    // it is refused - a derived table is never correlated (I19).
+    bool barrier = false;
 };
 
 StatusOr<std::optional<ResolvedColumn>> ResolveIn(const Scope& s, const Expr& e) {
+    if (s.barrier) {
+        auto beyond = ResolveIn(*s.parent, e);
+        if (!beyond.ok() || !beyond.value().has_value()) return beyond;
+        return Status::NotImplemented("a derived table that reads column '" + e.column +
+                                      "' of an enclosing query is not supported" +
+                                      At(e.byte_offset));
+    }
     std::vector<std::size_t> hits;
     if (s.columns != nullptr) {
         for (std::size_t i = 0; i < s.columns->size(); ++i) {
@@ -589,14 +599,17 @@ StatusOr<std::unique_ptr<CompiledQuery>> Runner::Compile(const Query& q, const S
                 " on the other; there is no implicit conversion (BJ-R3), CAST one" +
                 At(q.rhs->byte_offset));
         }
-        if (text && a.type_val != b.type_val) c.type = Concrete(catalog::kTypeValVarchar, 0);
+        if (text && a.type_val != b.type_val) {
+            c.type = Concrete(catalog::kTypeValVarchar, 0);
+        } else if (text) {
+            c.type.len = std::max(a.len, b.len);
+        }
         cq->columns.push_back(std::move(c));
     }
     if (Status s = CompileSetOrder(q, *cq); !s.ok()) return s;
     return cq;
 }
 
-// ORDER BY over a set operation names an output column, by name or position.
 // An ORDER BY key that names an output column: a position, or a bare name
 // matching one of the first `visible` columns. Two hits are ambiguous unless
 // `same(a, b)` says they read one column.
@@ -653,7 +666,10 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
         s.rel = item->rel;
         std::vector<LayerColumn> columns;
         if (item->derived != nullptr) {
-            auto sub = Compile(*item->derived, nullptr);
+            Scope barrier;  // see ResolveIn
+            barrier.parent = parent;
+            barrier.barrier = true;
+            auto sub = Compile(*item->derived, parent != nullptr ? &barrier : nullptr);
             if (!sub.ok()) return sub.status();
             s.derived = std::move(sub.value());
             columns = s.derived->columns;
@@ -668,9 +684,13 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
                                            "' is bound twice in FROM; give one an alias with AS" +
                                            At(item->byte_offset));
         }
+        // A derived table's column is the tuple key only if its own output
+        // flagged it: `keystone` alone holds for a column 0 read off an outer
+        // join's nullable side or a later relation, which may be NULL.
         for (LayerColumn& c : columns) {
             c.qualifier = binding;
-            c.driving_keystone = c.keystone && cb.sources.empty();
+            c.driving_keystone =
+                (item->derived != nullptr ? c.driving_keystone : c.keystone) && cb.sources.empty();
         }
         s.columns = std::move(columns);
         s.offset = cb.wide.size();
@@ -1116,7 +1136,16 @@ Status Runner::CompileBlock(const QueryBlock& b, const std::vector<parser::Order
         auto typed = type_in_context(*item.expr, "here");
         if (!typed.ok()) return typed.status();
         LayerColumn out;
-        out.name = item.alias.empty() ? HeadingOf(*item.expr, item.text) : item.alias;
+        if (!item.alias.empty()) {
+            out.name = item.alias;
+        } else {
+            const std::string heading = HeadingOf(*item.expr, item.text);
+            const Expr& x = *item.expr;
+            out.name = x.kind == Expr::Kind::kColumn      ? x.column
+                       : x.kind == Expr::Kind::kAggregate ? std::string(parser::AggFuncText(x.agg_func))
+                                                          : heading;
+            if (heading != out.name) out.heading = heading;
+        }
         out.type = typed.value()->type;
         if (!cb.grouped && item.expr->kind == Expr::Kind::kColumn &&
             typed.value()->column_no < cb.wide.size()) {
@@ -1638,16 +1667,8 @@ StatusOr<RowSet> Runner::Execute(CompiledQuery& q, const Row& outer) {
                 const bool present = it != right.end() && it->second > 0;
                 const bool keep = q.op == Query::Op::kIntersect ? present : !present;
                 if (q.all) {
-                    if (q.op == Query::Op::kIntersect && present) {
-                        --it->second;
-                        rows.push_back(std::move(row));
-                    } else if (q.op == Query::Op::kExcept) {
-                        if (present) {
-                            --it->second;
-                        } else {
-                            rows.push_back(std::move(row));
-                        }
-                    }
+                    if (present) --it->second;  // each right row answers one left row
+                    if (keep) rows.push_back(std::move(row));
                 } else if (keep && emitted.insert(k.value()).second) {
                     rows.push_back(std::move(row));
                 }

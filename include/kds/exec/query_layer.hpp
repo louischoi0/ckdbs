@@ -45,7 +45,12 @@ namespace kds::exec {
 // A column of a row set the layer holds or returns.
 struct LayerColumn {
     std::string qualifier;  // the binding a relation's column is reached by; empty for output
+    // The name a query reads the column by: a relation's column name, an
+    // output column's alias, column name (`o.id` is `id`) or aggregate.
     std::string name;
+    // What the reply heads the column with, when it differs from `name`
+    // (`o.id`, `amount * 2`); empty when it is `name`.
+    std::string heading;
     SetType type;           // concrete
     bool keystone = false;  // a relation's column 0, which travels as a u64
     // The FROM's first relation's column 0: the one the wire flags as the

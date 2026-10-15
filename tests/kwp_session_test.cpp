@@ -295,6 +295,23 @@ TEST_F(KwpSessionTest, ANullableDrivingRelationsKeyIsNotFlaggedTheTupleKey) {
     EXPECT_NE(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
 }
 
+TEST_F(KwpSessionTest, ADerivedTableKeepsItsOwnOutputsTupleKeyFlag) {
+    // A derived table's column 0 is flagged only if its own output flagged
+    // it (BU-S7): a LEFT join's right key is NULL where nothing matched.
+    Handshake();
+    auto frames = RunStatement(
+        "SELECT x.k FROM (SELECT w.id AS k FROM t AS u LEFT JOIN t AS w ON w.id = u.id + 100) AS x");
+    ASSERT_GE(frames.size(), 3u);
+    auto desc = wire::DecodeRowDescription(frames[0].payload);
+    ASSERT_TRUE(desc.ok()) << desc.status().message();
+    EXPECT_EQ(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
+    frames = RunStatement("SELECT x.id FROM (SELECT id FROM t) AS x");
+    ASSERT_GE(frames.size(), 3u);
+    desc = wire::DecodeRowDescription(frames[0].payload);
+    ASSERT_TRUE(desc.ok()) << desc.status().message();
+    EXPECT_NE(desc.value()[0].flags & wire::kFieldFlagKeystone, 0);
+}
+
 TEST_F(KwpSessionTest, ANarrowTupleKeyPastItsDeclaredWidthReachesTheClientWhole) {
     // protocol.md §6: a relation's column 0 is its Keystone id, u64 on the
     // wire whatever integer width it declares - in any projected position

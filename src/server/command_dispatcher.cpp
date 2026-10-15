@@ -8251,7 +8251,7 @@ std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
     std::vector<std::uint32_t> wire_types;
     for (const exec::LayerColumn& c : rs.columns) {
         wire::FieldDescription f;
-        f.name = c.name;
+        f.name = c.heading.empty() ? c.name : c.heading;
         f.type_oid = c.type.type_val;
         const std::uint32_t wire_type =
             c.keystone ? wire::WireValueType(c.type.type_val, 0) : c.type.type_val;

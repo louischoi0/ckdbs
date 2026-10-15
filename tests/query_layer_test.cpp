@@ -533,5 +533,22 @@ TEST_F(QueryLayerTest, ASubqueryAsAValueOutsideACondition) {
     ExpectRefused("SELECT id, (SELECT id, amount FROM ord) AS x FROM cust", "one column");
 }
 
+// A column is read by its SQL name - `o.id` is `id`, `SUM(x)` is `sum` -
+// and headed as written.
+TEST_F(QueryLayerTest, ADerivedTablesColumnsAreReadByTheirNames) {
+    ExpectRows("SELECT x.id, x.sum FROM (SELECT o.id, SUM(o.amount) FROM ord AS o "
+               "WHERE o.id < 12 GROUP BY o.id) AS x",
+               {"x.id,x.sum", "10,100", "11,250"});
+    ExpectRows("SELECT o.id FROM ord AS o WHERE o.id > 15 UNION SELECT id FROM cust "
+               "WHERE id > 5 ORDER BY id",
+               {"o.id", "6", "16", "17"}, /*ordered=*/true);
+}
+
+TEST_F(QueryLayerTest, ADerivedTableReadsNothingOutsideIt) {
+    ExpectRefused("SELECT c.id FROM cust AS c WHERE EXISTS "
+                  "(SELECT 1 FROM (SELECT id FROM ord AS o WHERE o.cust_id = c.id) AS x)",
+                  "NOT_IMPLEMENTED");
+}
+
 }  // namespace
 }  // namespace kds::server

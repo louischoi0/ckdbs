@@ -567,3 +567,51 @@ Full suite (Debug, `-LE heap-suspended`) at `9d2fcc40`: 3,973/3,973; at
 build at `eccb9d31`: built 5/5, 1a 7/7, 1b 6/6, 1c 6/6, phase 2 14 ok and
 P07 refused by BU-Q13, phase 3 8/8, **phase 4 12/12**, phases 5-6 unbuilt
 behind the gate, wrong=0 in every phase - S6's gate is met.
+
+### BU-S7 - set operations, derived tables, subqueries as values (built 2026-10-15)
+
+On `worktree-bu-basic-query-surface-s4` from `9964a705`; the stage is
+`14f4579b` and its review.
+
+- **The gate deleted.** S7 is its last stage, so `exec::FormsLanded` goes
+  whole: every form the query grammar reads is the layer's (BU-Q9 unchanged).
+- **Set operations.** `UNION`, `INTERSECT`, `EXCEPT`, each `[ALL]`;
+  `INTERSECT` binds tighter, each left-associative; NULLs one value; `ALL`
+  by multiplicity; sides paired by position, one type each (two text types
+  meeting as `varchar`, one family keeping the wider length); the tail over
+  the whole.
+- **Derived tables** - filtered, grouped, joined, over a set operation -
+  never correlated: one that reads an enclosing query's column is refused
+  `NotImplemented`.
+- **Subqueries as values** in the select list, `ORDER BY` and any
+  expression: one column, at most one row (`CardinalityViolation` past it),
+  correlated or not.
+- **Cuts from S4's review**: one `OutputColumn` lookup for blocks and set
+  operations; `item_types` and `sort_types` read off the typed nodes.
+- **Docs.** `parser-v2.md` I19 and J2, the manual, the `CLAUDE.md` row.
+
+Overhead not measured; measured at the milestone's close (§5).
+
+### BU-S7 - the `critics-developer` review, applied
+
+No wrong row found. Fixed by the reviewer, with a cell shown failing
+without it: a derived table's column 0 was flagged the tuple key on the
+wire whatever its own output decided, so a null-extended or later
+relation's key gained the flag. Applied by CLA on the review's flags: a
+column has a SQL name apart from its heading (`LayerColumn::heading`), so
+`(SELECT o.id ...) AS x` is read as `x.id` and `SUM(...)` as `sum`, and a
+set operation's `ORDER BY id` finds a left side written `o.id`, as in
+PostgreSQL; a derived table reading an enclosing query's column is refused
+`NotImplemented` instead of "unknown column"; `char(3) UNION char(5)` is
+`char(5)`; I19's code for a second row corrected to `CardinalityViolation`;
+the `INTERSECT`/`EXCEPT ALL` branch shortened and a stale comment removed.
+**Recorded, not changed:** an aggregate reading an enclosing query's
+column inside a subquery is refused "an aggregate is not allowed here"
+where PostgreSQL answers the mixed form - a refusal, never a wrong answer;
+a statement opening with `(` is routed by the dispatcher as an unknown
+command and never reaches either grammar; the query grammar's refusals by
+name reach no client under BU-Q9 (S6's row); `SELECT NULL UNION SELECT 1`
+is refused, BU-Q11's lone `NULL` being `varchar`. **Measured at BU-S9, not
+cut:** `Execute` returns a cached result by value, copied per outer row for
+an uncorrelated subquery. **Declined:** one key helper for the set
+operation and `DISTINCT` - the two loops differ in where their types live.
