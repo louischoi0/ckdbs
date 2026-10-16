@@ -384,9 +384,9 @@ void KwpLoadServer::HandleLoadBegin(Connection& conn, std::span<const std::byte>
     auto& catalog = dispatcher_->catalog();
     // `ns.t` or `t`, a bare name in the load session's namespace - `public`,
     // a load having no `USE` (namespace.md NS5) - as every chunk's insert
-    // resolves it.
+    // resolves it, and under the session's view.
     const auto [qualifier, bare] = SplitQualifiedArg(begin.value().relation);
-    auto oid = catalog.ResolveRelation(qualifier, bare, conn.session.default_namespace());
+    auto oid = dispatcher_->ResolveRelationName(conn.session, qualifier, bare);
     if (!oid.ok()) {
         SendError(conn, oid.status());
         return;

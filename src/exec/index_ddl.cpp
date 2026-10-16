@@ -511,8 +511,9 @@ std::vector<std::string> IndexCreationWarnings(catalog::Catalog& catalog,
 }
 
 StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
-                                  std::uint64_t trx_id, catalog::CatalogRowChange* change) {
-    auto row = catalog.FindIndexByName(stmt.index_name);
+                                  std::uint64_t trx_id, catalog::CatalogRowChange* change,
+                                  const txn::ReadView* view) {
+    auto row = catalog.FindIndexByName(stmt.index_name, view);
     if (!row.ok()) {
         return Status::NotFound("no index named '" + stmt.index_name + "' (byte " +
                                 std::to_string(stmt.byte_offset) + ")");

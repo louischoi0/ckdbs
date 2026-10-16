@@ -1045,11 +1045,16 @@ TEST_F(TxnSessionTest, ASecondDropOfAnIndexAlreadyBeingDroppedIsRefusedInTheUser
     ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
     ASSERT_EQ(Run(a, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
 
-    for (Session* s : {&b, &a}) {  // another session, and the dropper itself
+    // Another session still finds the row and is told why it cannot act on
+    // it; the dropper resolves under its own view, where its drop already
+    // took the index, and is told there is none - as a second `DROP TABLE`
+    // in one transaction is.
+    for (auto [s, why] : {std::pair<Session*, std::string_view>{&b, "has not committed"},
+                          std::pair<Session*, std::string_view>{&a, "no index named"}}) {
         const std::string refused = Run(*s, "DROP INDEX by_owner");
         EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
         EXPECT_NE(refused.find("by_owner"), std::string::npos) << refused;
-        EXPECT_NE(refused.find("has not committed"), std::string::npos) << refused;
+        EXPECT_NE(refused.find(why), std::string::npos) << refused;
         EXPECT_NE(refused.find("byte "), std::string::npos) << refused;
         EXPECT_EQ(refused.find("sys.indexes"), std::string::npos)
             << "the refusal names a system row instead of the user's index: " << refused;
