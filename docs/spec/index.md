@@ -248,8 +248,10 @@ Deduplicating *by tuple key* remains the read path's job - and a unique
 index's check's (IX11).
 
 **Why the covered bytes are in the order.** With `(key, tuple key)` alone, one
-row whose covered column moved a few hundred times built a run of equal sort
-keys longer than a leaf; a divide inside the run copied up a separator its
+row whose covered column moved often enough - 169 times on a three-`int64`
+covering, 20 on a 4 x `varchar(128)` one, measured at `0479cb29`
+(`bench/v3.2.0/results-ix4b-whole-entry-sort-key-v3.2.0-110-g4d10a613.md`) -
+built a run of equal sort keys longer than a leaf; a divide inside the run copied up a separator its
 parent already held, the parent refused it after the leaf was divided and
 linked, and every later write of that pair was refused for good. With every
 entry distinct, no divide can promote a duplicate separator. The cost is
