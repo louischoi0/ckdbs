@@ -1503,6 +1503,34 @@ TEST_F(CommandDispatcherTest, EveryViewNamingARelationNamesItsNamespace) {
     const auto stats = testing_view::ReadViewText(
         d.Dispatch("SELECT namespace, name FROM sys.relation_stats WHERE name = 't'").response);
     EXPECT_EQ(stats.Column("namespace"), (std::vector<std::string>{"public", "ledger"}));
+    const auto budget = testing_view::ReadViewText(d.Dispatch("SHOW BUDGET").response);
+    // The catalog's relations first, then the two `t`s in creation order.
+    const std::vector<std::string> budget_ns = budget.Column("namespace");
+    ASSERT_GE(budget_ns.size(), 2u);
+    EXPECT_EQ(budget_ns[budget_ns.size() - 2], "public");
+    EXPECT_EQ(budget_ns.back(), "ledger");
+
+    // A foreign key's parent, beside the column that references it.
+    EXPECT_EQ(columns.Find("name", "p", "references_namespace"), "public");
+    EXPECT_EQ(columns.Find("name", "p", "references"), "t");
+
+    // A bare key takes its namespace from a `namespace` conjunct, not the
+    // session's: with `public.t` present this read `ledger.t`'s columns.
+    const auto keyed = testing_view::ReadViewText(
+        d.Dispatch("SELECT * FROM sys.columns WHERE namespace = 'ledger' AND rel_name = 't'")
+            .response);
+    EXPECT_EQ(keyed.Column("name"), (std::vector<std::string>{"id", "p"}));
+
+    // The views built row by row carry it in place too.
+    ASSERT_EQ(d.Dispatch("CREATE CABIN ON ledger.t(p)").response.substr(0, 7), "CREATED");
+    const auto cabins = testing_view::ReadViewText(d.Dispatch("SELECT * FROM sys.cabins").response);
+    EXPECT_EQ(cabins.Column("namespace"), (std::vector<std::string>{"ledger"}));
+    EXPECT_EQ(cabins.Column("rel_name"), (std::vector<std::string>{"t"}));
+    EXPECT_EQ(cabins.Column("column"), (std::vector<std::string>{"p"}));
+    ASSERT_EQ(d.Dispatch("SELECT * FROM ledger.t WHERE p = 1").response.substr(0, 4), "id,p");
+    const auto access =
+        testing_view::ReadViewText(d.Dispatch("SELECT * FROM sys.access_stats").response);
+    EXPECT_EQ(access.Find("rel_name", "t", "namespace"), "ledger");
 }
 
 TEST_F(CommandDispatcherTest, UseRefusesWhatCannotBeASessionsNamespace) {

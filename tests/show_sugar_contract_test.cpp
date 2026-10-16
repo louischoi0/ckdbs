@@ -263,7 +263,8 @@ constexpr Spelling kSpellings[] = {
     {"SHOW PATTERNS", "SELECT * FROM sys.patterns"},
     {"SHOW ACCESS", "SELECT * FROM sys.access_stats"},
     {"SHOW BUDGET",
-     "SELECT oid, name, next_id, ids_issued, ids_remaining, budget_used_ppm, budget_warning, "
+     "SELECT oid, namespace, name, next_id, ids_issued, ids_remaining, budget_used_ppm, "
+     "budget_warning, "
      "budget_exhausted FROM sys.relation_stats"},
     {"SHOW CABINS", "SELECT * FROM sys.cabins"},
     {"SHOW INDEXES", "SELECT * FROM sys.indexes"},

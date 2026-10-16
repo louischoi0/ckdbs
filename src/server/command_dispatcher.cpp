@@ -6941,7 +6941,7 @@ DispatchOutcome CommandDispatcher::HandleShow(std::string_view line, std::string
         return DispatchOutcome{ErrorReply(s), false, 0, s};
     };
     static constexpr std::string_view kBudget[] = {
-        "oid", "name", "next_id", "ids_issued", "ids_remaining", "budget_used_ppm",
+        "oid", "namespace", "name", "next_id", "ids_issued", "ids_remaining", "budget_used_ppm",
         "budget_warning", "budget_exhausted"};
     static constexpr std::string_view kPage[] = {
         "page_id", "page_type", "page_lsn", "level", "min_key", "nr_slots", "lower", "upper",
@@ -7093,6 +7093,23 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             key = std::move(literal);
             key_at = i;
             break;
+        }
+        // A relation-name key written bare takes its namespace from a
+        // `namespace = '<literal>'` conjunct when there is one, rather than
+        // from the session (NS5): `WHERE namespace = 'ledger' AND rel_name =
+        // 't'` names `ledger.t`. That conjunct still filters the rows, which
+        // all carry the namespace the key resolved in.
+        if (key.has_value() && spec->key_type == catalog::kTypeValVarchar &&
+            key->str_val.find('.') == std::string::npos) {
+            for (const parser::Condition& cond : stmt.where) {
+                if (cond.kind == parser::PredicateKind::kCompareValue &&
+                    cond.op == parser::CompareOp::kEq && cond.rhs_kind == parser::RhsKind::kLiteral &&
+                    IEquals(cond.col.name, "namespace") &&
+                    cond.val.type == parser::ValueType::kStr) {
+                    key->str_val = cond.val.str_val + "." + key->str_val;
+                    break;
+                }
+            }
         }
         if (!key.has_value() && spec->key_mode == ViewKeyMode::kRequired) {
             const Status s = Status::InvalidArgument(
