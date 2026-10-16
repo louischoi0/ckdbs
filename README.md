@@ -1,8 +1,17 @@
-# KDS
+<p align="center">
+  <a href="https://kdbs.dev">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/brand/kdbs-logo-dark.svg">
+      <img src="assets/brand/kdbs-logo-light.svg" alt="KDBS" width="240">
+    </picture>
+  </a>
+</p>
 
-**An OLTP database engine that keeps the invariants so the application does not have to.**
+<p align="center"><strong>An OLTP database engine that keeps the invariants so the application does not have to.</strong></p>
 
-[Homepage](https://kdbs.dev) · [Manual](manual/README.md) · [SQL reference](manual/sql/sql.md) · [Design docs](docs/README.md) · [Known gaps](docs/inflight/known-gaps.md)
+<p align="center">
+  <a href="https://kdbs.dev">Homepage</a> · <a href="manual/README.md">Manual</a> · <a href="manual/sql/sql.md">SQL reference</a> · <a href="docs/README.md">Design docs</a> · <a href="docs/inflight/known-gaps.md">Known gaps</a>
+</p>
 
 KDS is a userspace storage engine written in C++20 for online transaction processing: keyed reads and writes, short transactions, joins along key chains and durability the caller chooses. It narrows its feature surface to that workload and spends what it saves on two things most engines leave to the application — **the rules the data must obey** and **the physical shape the data should have**.
 
