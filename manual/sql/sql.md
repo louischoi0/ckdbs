@@ -457,11 +457,10 @@ Builds the index again from the relation's current contents: the same key
 and covered columns, the same `UNIQUE`, the same name, under a new
 `index_oid` (`replaced=` names the old one). Because index maintenance is
 append-only, an index keeps entries for rows that no longer exist - rolled
-back inserts, rows removed by `PURGE` - and a rebuild leaves them out. A
-rebuild indexes every version a row's history still holds, whether or not
-a transaction can still read it: a deleted row not yet purged, and the
-earlier values an `UPDATE` moved an indexed or covered column away from,
-keep their entries.
+back inserts, rows removed by `PURGE` - and for every earlier value an
+`UPDATE` moved an indexed or covered column away from; a rebuild leaves
+out each of them that no running transaction can still read. A deleted row
+not yet purged keeps its entry.
 
 - **Autocommit only.** Inside `BEGIN` it is refused `NOT_IMPLEMENTED`, and
   the transaction goes on.

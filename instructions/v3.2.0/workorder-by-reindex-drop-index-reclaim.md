@@ -46,13 +46,13 @@ Two features, the second built on the first:
    and its anchor slot is removed.
 2. **`REINDEX INDEX <name>`** builds the index again from the relation under
    a new oid and the same name, and the old tree is reclaimed through (1).
-   The new tree holds an entry for every version the relation still holds -
-   each row's current one and every one its undo chain still carries
-   (IX10a's backfill) - so the surplus entries of rows that left the
-   relation (rolled back, purged) are gone from it. **A version still on an
-   undo chain keeps its entry**, needed or not by a live snapshot: what a
-   rebuild reclaims grows as the undo purge advances (corrected at BY-S3,
-   where the first wording, "every surplus entry", was found to overclaim).
+   The new tree holds an entry for each row's current version and every
+   older one a reader can still reach (IX10a's backfill, which since BY-S4's
+   merge of the backfill fix stops where the oldest reader would) - so the
+   surplus entries of rows that left the relation (rolled back, purged) and
+   of versions no reader reaches are gone from it. (Corrected twice: the
+   first wording, "every surplus entry", overclaimed against a backfill that
+   walked every chain to its end; that walk read recycled undo and is fixed.)
 
 Neither is a purge of a live tree: BY removes no entry from a tree anyone
 reads, so IX14's premise ("no index entry is removed") stands untouched.
@@ -425,3 +425,40 @@ two catalog reads on one reactor), and a `REINDEX` whose backfill fails
 (`known-gaps.md`, Page reclamation). Suite: 4085/4086 before the reviews
 (the own-drop cell), 4089/4089 after the first review's fixes, 4089/4089
 after the second's. Overhead not measured; measured at the milestone's close.
+
+**BY-S4 - the close, with the backfill fix merged, 2026-10-16.** The docs
+(`index.md` §10.1/§12/§13, `drop-table.md` DT1, `ddl-transactional.md`,
+`wal.md`, the SQL manual's `REINDEX` section, `known-gaps.md`, the
+`CLAUDE.md` rows) under a `critics-developer` docs review: accepted - seven
+corrections it made (`DropIndex` delete-marks under the implicit transaction;
+§13 and the manual overclaiming what a rebuild sheds; the known-gaps commit
+ids; the server manual's superblock 29; "queued", not "reclaimed", at the
+decide; the `CLAUDE.md` wording), the backfill-failure overclaim, §10.1's
+duplicate of §12, the manual's "past the next checkpoint", and the manual's
+lock fault net (11 s, which is 1 s). Rejected - cutting the slot-cap limit
+to one copy (the spec, the gap list and the manual have three readers).
+**The review found the backfill walking every undo chain to its end**, into
+undo the purge had recycled - refused `undo record at N has type 0` after
+two `UPDATE` rounds, on `5f610082` and `9da66f0e` alike, which the close
+measurement reproduced independently. On the operator's word ("merge into
+BY"), `worktree-fix-backfill-walk-horizon` (`796ecf49`, unpushed since
+2026-10-13) was merged: the walk stops where the oldest reader would
+(`ResolvedForEveryReader`). Resolved by hand against BY and BX: every row
+still unique-checked (the fix's early `continue` would have skipped BX's
+check), an append failure kept apart from a read failure (the fix's excuse
+would have swallowed one), the tree by reference for BX-S6's free,
+`tuple_key` naming, `txns` threaded through `BuildAndWriteIndex` to both
+`CREATE INDEX` and `REINDEX`. A `REINDEX` now sheds an `UPDATE`'s superseded
+entries too: cell `ABuildOverRecycledUndoStopsWhereNoReaderReachesAndARebuildShedsUpdates`
+(5,000 updates then a build of 1 entry; 100 more, 101 entries, rebuilt to
+1) - its mutant (`unreachable_below` false) refused `has type 0`, 1 in 1.
+`critics-developer` on the merge: no must-fix; accepted - the contract cell
+whose refusal branch IX4b made unreachable, rewritten as a 1,500-version
+chain under an open snapshot indexed whole; the in-visitor excuse folded
+into the post-walk one; `CreateIndex`'s dead defaults; a duplicated comment;
+`undo_log.hpp`'s "every version"; the spec's "never indexed", softened and a
+known gap filed (a recycled record of another relation's same tuple key -
+a refusal or a surplus entry, never a wrong answer). Suite: 4095/4095 on the
+merge before the review's edits and after. Close measurement:
+`bench/v3.2.0/results-by-close-v3.2.0-119-g9da66f0e.md`, on `9da66f0e`,
+before the merge; the merge changes no `INSERT`/`UPDATE` path.

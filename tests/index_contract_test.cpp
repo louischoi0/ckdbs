@@ -227,8 +227,8 @@ const std::vector<std::string>& Queries() {
 // ---- §1: the four configurations agree, byte for byte -------------------
 
 // 5: maintained, then every index rebuilt (BY-R6): the new trees hold an
-// entry for each row's current version and every version its undo chain
-// still carries (IX10a), and answer as the old ones did.
+// entry for each row's current version and every older one a reader can
+// still reach (IX10a), and answer as the old ones did.
 void LoadRebuilt(Instance& db) {
     LoadMaintained(db);
     for (const char* name : {"by_owner", "by_owner_qty", "by_sym", "by_code"}) {
@@ -513,6 +513,104 @@ TEST(IndexContractTest, AnOldSnapshotKeepsItsRowWhenOnlyTheCoveredColumnMoved) {
     // The indexed instance probed, or the cell tested nothing.
     EXPECT_NE(db.Run("ANALYZE " + sql).find("IndexProbe"), std::string::npos)
         << db.Run("ANALYZE " + sql);
+}
+
+// ---- A long chain an open snapshot holds is walked whole -------------------
+//
+// `CREATE INDEX`'s backfill appends one entry per version a reader can reach -
+// the current one, then each older one down the undo chain - and an append
+// that fails inside that walk refuses the CREATE INDEX. Published without
+// that version's entry, an old snapshot whose version it was would reach its
+// row through no entry, the quiet wrong answer index.md §1 forbids. A row
+// whose covered column moved 1,500 times under an open snapshot is a chain of
+// one run of (key, tuple key) entries, which divides cleanly since IX4b.
+
+TEST(IndexContractTest, ALongChainAnOpenSnapshotHoldsIsIndexedWhole) {
+    Instance db(/*indexes=*/true);
+    db.Ok("CREATE TABLE t (id int64, a int64, c int64) BTREE");
+    db.Ok("INSERT INTO t VALUES (2, 0)");
+    const std::string sql = "SELECT id FROM t WHERE a = 2 AND c = 0";
+    Session reader;
+    ASSERT_EQ(db.Run(reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+    // The snapshot sees c = 0 and holds it; one row then moves c 1,500 times.
+    ASSERT_EQ(db.Run(reader, sql), "id\\n1");
+    for (int c = 1; c <= 1500; ++c) {
+        db.Ok("UPDATE t SET c = " + std::to_string(c) + " WHERE id = 1");
+    }
+
+    const std::string created = db.Run("CREATE INDEX ix ON t (a) COVERING (c)");
+    ASSERT_EQ(created.rfind("CREATED", 0), 0u) << created;
+    EXPECT_NE(db.Run("ANALYZE " + sql).find("IndexProbe"), std::string::npos);
+    EXPECT_EQ(db.Run(reader, sql), "id\\n1")
+        << "the backfill published an index missing the old snapshot's version";
+    EXPECT_EQ(db.Run("SELECT id FROM t WHERE a = 2 AND c = 1500"), "id\\n1");
+    ASSERT_EQ(db.Run(reader, "COMMIT").substr(0, 6), "COMMIT");
+}
+
+// ---- The backfill walks as deep as a reader can, and no deeper -------------
+//
+// A version superseded by a writer every reader sees is reachable by none:
+// readers stop above it, and the undo purge may recycle its record. The
+// backfill stops where the oldest live snapshot would - deep enough for that
+// snapshot's version, and no further, so a chain nobody can reach neither
+// refuses the index nor is followed into recycled undo.
+
+TEST(IndexContractTest, ABackfillReachesTheVersionAnOpenSnapshotSees) {
+    Instance db(/*indexes=*/true);
+    db.Ok("CREATE TABLE t (id int64, a int64, c int64) BTREE");
+    db.Ok("INSERT INTO t VALUES (2, 0)");
+    const std::string old_sql = "SELECT id FROM t WHERE a = 2 AND c = 0";
+    Session reader;
+    ASSERT_EQ(db.Run(reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+    ASSERT_EQ(db.Run(reader, old_sql), "id\\n1");
+    for (int c = 1; c <= 20; ++c) {
+        db.Ok("UPDATE t SET c = " + std::to_string(c) + " WHERE id = 1");
+    }
+
+    ASSERT_EQ(db.Run("CREATE INDEX ix ON t (a) COVERING (c)").substr(0, 7), "CREATED");
+    EXPECT_NE(db.Run("ANALYZE " + old_sql).find("IndexProbe"), std::string::npos);
+    EXPECT_EQ(db.Run(reader, old_sql), "id\\n1")
+        << "the backfill stopped above the version the open snapshot sees";
+    EXPECT_EQ(db.Run("SELECT id FROM t WHERE a = 2 AND c = 20"), "id\\n1");
+    ASSERT_EQ(db.Run(reader, "COMMIT").substr(0, 6), "COMMIT");
+}
+
+TEST(IndexContractTest, ABackfillReachesADeletedRowsVersionAnOpenSnapshotSees) {
+    // A delete-mark changes no tuple bytes: the walk steps over its empty
+    // image and on to the version the snapshot holds.
+    Instance db(/*indexes=*/true);
+    db.Ok("CREATE TABLE t (id int64, a int64, c int64) BTREE");
+    db.Ok("INSERT INTO t VALUES (2, 0)");
+    const std::string old_sql = "SELECT id FROM t WHERE a = 2 AND c = 0";
+    Session reader;
+    ASSERT_EQ(db.Run(reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+    ASSERT_EQ(db.Run(reader, old_sql), "id\\n1");
+    db.Ok("UPDATE t SET c = 1 WHERE id = 1");
+    db.Ok("DELETE FROM t WHERE id = 1");
+
+    ASSERT_EQ(db.Run("CREATE INDEX ix ON t (a) COVERING (c)").substr(0, 7), "CREATED");
+    EXPECT_NE(db.Run("ANALYZE " + old_sql).find("IndexProbe"), std::string::npos);
+    EXPECT_EQ(db.Run(reader, old_sql), "id\\n1");
+    EXPECT_EQ(db.Run(old_sql), "id");
+    ASSERT_EQ(db.Run(reader, "COMMIT").substr(0, 6), "COMMIT");
+}
+
+TEST(IndexContractTest, ABackfillPastEveryReaderIndexesOnlyWhatAReaderCanReach) {
+    // The chain above with no snapshot left to reach it: the index is built
+    // from the current version alone.
+    Instance db(/*indexes=*/true);
+    db.Ok("CREATE TABLE t (id int64, a int64, c int64) BTREE");
+    db.Ok("INSERT INTO t VALUES (2, 0)");
+    for (int c = 1; c <= 1500; ++c) {
+        db.Ok("UPDATE t SET c = " + std::to_string(c) + " WHERE id = 1");
+    }
+
+    const std::string created = db.Run("CREATE INDEX ix ON t (a) COVERING (c)");
+    ASSERT_EQ(created.substr(0, 7), "CREATED") << created;
+    const std::string sql = "SELECT id FROM t WHERE a = 2 AND c = 1500";
+    EXPECT_NE(db.Run("ANALYZE " + sql).find("IndexProbe"), std::string::npos);
+    EXPECT_EQ(db.Run(sql), "id\\n1");
+    EXPECT_EQ(db.Run("SELECT id FROM t WHERE a = 2 AND c = 0"), "id");
 }
 
 // ---- Damage: a corrupted index page must fail, not mis-answer ------------

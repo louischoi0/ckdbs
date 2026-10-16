@@ -2249,7 +2249,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             auto result = exec::ReindexIndex(
                 catalog_, page_store_, stmt, relation, ddl.trx_id,
                 ddl.txn != nullptr ? &change : nullptr,
-                ddl.txn != nullptr ? &created_row : nullptr, wal_);
+                ddl.txn != nullptr ? &created_row : nullptr, wal_, txn_);
             NoteIndexRowDropped(ddl, change);
             NoteIndexRowWritten(ddl, created_row);
             if (!result.ok()) return {ErrorReply(result.status()), false, 0, result.status()};
@@ -2320,7 +2320,8 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         const std::optional<txn::ReadView> build_view = ViewFor(session);
         auto result = exec::CreateIndex(catalog_, page_store_, stmt, create_ddl.trx_id,
                                         create_ddl.txn != nullptr ? &created_row : nullptr,
-                                        build_view.has_value() ? &*build_view : nullptr, wal_);
+                                        build_view.has_value() ? &*build_view : nullptr, wal_,
+                                        txn_);
         // Before the status is read: a create that failed after the catalog
         // row went down still left it there.
         NoteIndexRowWritten(create_ddl, created_row);

@@ -70,8 +70,8 @@ protected:
 TEST_F(ReindexTest, ARebuildDropsTheEntriesOfRowsThatLeftTheRelationUnderANewOidAndName) {
     // What a rebuild reclaims: the entries of versions no longer in the
     // relation - a rolled-back insert's, a purged row's - which IX2 keeps for
-    // good. A version still on an undo chain keeps its entry (IX10a), so
-    // this cell rolls back and purges rather than churning.
+    // good. An `UPDATE`'s superseded value is shed too once no reader
+    // reaches it (`ABuildOverRecycledUndo...` below).
     Ok("CREATE TABLE t (id int64, owner int64, note int64) BTREE");
     Ok("CREATE INDEX by_owner ON t (owner) COVERING (note)");
     for (int i = 1; i <= 20; ++i) Ok("INSERT INTO t VALUES (" + std::to_string(i) + ", 0)");
@@ -194,6 +194,38 @@ TEST_F(ReindexTest, AtTheSlotCapARebuildIsRefusedAndTheOldIndexStands) {
     EXPECT_EQ(IndexField("x", "entries"), "2");
     EXPECT_EQ(store_.page_count(), pages) << "a refused rebuild built a tree";
     EXPECT_EQ(Run("SELECT id FROM t WHERE a = 8"), "id\\n2");
+}
+
+TEST_F(ReindexTest, ABuildOverRecycledUndoStopsWhereNoReaderReachesAndARebuildShedsUpdates) {
+    // The backfill once followed every undo chain to its end, where a reader
+    // stops at the first version it can see - and the purge recycles a
+    // record once its writer is resolved for every reader (`undo_log.hpp`),
+    // so a long-settled chain points into pages since reused: the build was
+    // refused `Corruption` or indexed another row's history. 5,000
+    // autocommit updates of one row grow the undo log past several pages,
+    // every writer settled. The build stops at the current version; and an
+    // index maintained through further updates - one entry per value, IX2 -
+    // sheds them all on `REINDEX`.
+    //
+    // **Mutation**: `unreachable_below` answering false - the build is
+    // refused (`has type 0`) or counts 5,001 entries.
+    Ok("CREATE TABLE t (id int64, a int64) BTREE");
+    Ok("INSERT INTO t VALUES (0)");
+    for (int i = 1; i <= 5000; ++i) Ok("UPDATE t SET a = " + std::to_string(i) + " WHERE id = 1");
+    const server::DispatchOutcome built = Do("CREATE INDEX by_a ON t (a)");
+    ASSERT_TRUE(built.status.ok()) << built.response;
+    EXPECT_EQ(IndexField("by_a", "entries"), "1") << "no reader reaches an older version";
+    EXPECT_EQ(Run("SELECT id FROM t WHERE a = 5000"), "id\\n1");
+
+    for (int i = 5001; i <= 5100; ++i) {
+        Ok("UPDATE t SET a = " + std::to_string(i) + " WHERE id = 1");
+    }
+    ASSERT_EQ(IndexField("by_a", "entries"), "101");
+    const server::DispatchOutcome rebuilt = Do("REINDEX INDEX by_a");
+    ASSERT_TRUE(rebuilt.status.ok()) << rebuilt.response;
+    EXPECT_EQ(IndexField("by_a", "entries"), "1");
+    EXPECT_EQ(Run("SELECT id FROM t WHERE a = 5100"), "id\\n1");
+    EXPECT_EQ(Run("SELECT id FROM t WHERE a = 5050"), "id");
 }
 
 }  // namespace

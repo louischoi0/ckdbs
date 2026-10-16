@@ -576,6 +576,25 @@ calls invisible without a baseline. A **delete-marked** row is walked like
 any other: gone for newer readers, still there for older ones, which is
 exactly the case the undo chain exists for.
 
+**The walk stops where the oldest reader would.** A version whose superseding
+writer is resolved for every live and future reader
+(`TransactionManager::ResolvedForEveryReader`) is reachable by none, and the
+undo purge may already have recycled its record, so the pointer to it is
+stale. The walk appends the version that writer wrote and does not read the
+pointer below it; a row whose current writer is resolved contributes its
+current version alone. A record whose tuple key is not the row's is
+refused `Corruption` - unless its superseder was resolved between the check
+and the read (another core's purge recycled it), when the walk ends there.
+That window has one rarer case: a recycled record holding **another
+relation's** row of the same tuple key passes the check, and its append is
+then refused or leaves a surplus entry (IX2) - a refusal or an extra entry,
+never a wrong answer (`known-gaps.md`). With no transaction manager the walk runs to the
+chain's end.
+
+**A failed append refuses the `CREATE INDEX`**, naming the row: the walk's
+visitor fails by its `Status` (`UndoLog::Walk`), so no version a reader can
+reach is dropped from a published index.
+
 *Distinct* needs no bookkeeping: a version that did not move the key produces
 a byte-identical entry, and `IndexInsert` already reports one rather than
 storing it twice (IX4b).
@@ -750,10 +769,10 @@ statement under the relation `X`; inside `BEGIN` it is refused
 `NotImplemented`. A transaction's own delete-mark frees an index name for
 it (BY-R8), so the new row takes the old one's - and so may
 `DROP INDEX x; CREATE INDEX x` in one transaction. The new tree holds an
-entry for every version the relation still holds - each row's current one
-and every one its undo chain carries (§10.1) - so a rebuild drops the
-entries of rows that left the relation (rolled back, purged); a version
-still on an undo chain keeps its entry. The rebuilt definition is the old
+entry for each row's current version and every older one a reader can
+still reach (§10.1, IX10a) - so a rebuild drops the entries of rows that
+left the relation (rolled back, purged) and of versions no reader reaches,
+an `UPDATE`'s superseded values among them. The rebuilt definition is the old
 row's own column positions, widths and unique flag, never names re-resolved
 (a `RENAME COLUMN` takes no `X`), and an index the name no longer finds on
 the relation the `X` was taken for is `TxnConflict`. Through

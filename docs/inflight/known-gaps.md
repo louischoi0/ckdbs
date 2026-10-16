@@ -749,6 +749,15 @@ pages and the cases it does not reach.
   pool or the device. Verified on
   `reindex-drop-index-reclaim` at `9da66f0e`.
 
+- **A backfill can be refused, or index a stranger, through a recycled
+  undo record.** Between `ResolvedForEveryReader`'s check and the read,
+  another core's purge can recycle the record, and a new record holding
+  another relation's row with the same tuple key passes the backfill's
+  identity check: its append is refused `Corruption` or leaves a surplus
+  entry readers re-check (IX2). Never a wrong answer; no cell forces the
+  window (`index.md` §10.1). Verified on `reindex-drop-index-reclaim` at
+  `83204ebc` with the backfill fix merged.
+
 ## Statement scheduling
 
 Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and

@@ -50,6 +50,9 @@ protected:
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+    std::string Run(server::Session& s, const std::string& sql) {
+        return dispatcher_->Dispatch(sql, &s).response;
+    }
 
     void Ok(const std::string& sql) {
         const std::string out = Run(sql);
@@ -238,15 +241,28 @@ TEST_F(IndexMaintainTest, TheBackfillIndexesEveryVersionAndNotJustTheCurrentOne)
     Ok("INSERT INTO t VALUES (7)");
     Ok("INSERT INTO t VALUES (8)");
 
-    // Three versions of row 1: owner 7 -> 9 -> 10. A reader on an older
-    // snapshot is entitled to match through any of them, and DDL is not
-    // transactional, so the index becomes visible to all of them at once.
+    // Three versions of row 1: owner 7 -> 9 -> 10, each reachable by an open
+    // snapshot. A reader on an older snapshot is entitled to match through
+    // any of them, and the index becomes visible to all of them at once.
+    server::Session first;
+    server::Session second;
+    ASSERT_EQ(Run(first, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(first, "SELECT id FROM t WHERE id = 1"), "id\\n1");
     Ok("UPDATE t SET owner = 9 WHERE id = 1");
+    ASSERT_EQ(Run(second, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(second, "SELECT id FROM t WHERE id = 1"), "id\\n1");
     Ok("UPDATE t SET owner = 10 WHERE id = 1");
 
     Ok("CREATE INDEX by_owner ON t (owner)");
     // Two rows, four distinct (key, tuple key) pairs: (7,1) (9,1) (10,1) (8,2).
     EXPECT_EQ(Entries("by_owner"), 4);
+    ASSERT_EQ(Run(first, "COMMIT").substr(0, 6), "COMMIT");
+    ASSERT_EQ(Run(second, "COMMIT").substr(0, 6), "COMMIT");
+
+    // With no snapshot left, the older versions are reachable by none and a
+    // fresh build indexes the current ones alone.
+    Ok("CREATE INDEX by_owner_again ON t (owner)");
+    EXPECT_EQ(Entries("by_owner_again"), 2);
 }
 
 TEST_F(IndexMaintainTest, ABackfilledIndexIsIndistinguishableFromAMaintainedOne) {
@@ -303,6 +319,9 @@ TEST_F(IndexMaintainTest, ABackfillOverTypedAndSpillingColumnsWorks) {
     Ok("CREATE TABLE t (id int64, d date, amt decimal(10,2), name varchar) BTREE");
     Ok("INSERT INTO t VALUES ('2026-08-07', '12.34', '" + std::string(200, 'x') + "')");
     Ok("INSERT INTO t VALUES ('2026-08-08', '99.99', 'short')");
+    server::Session reader;  // keeps row 1's first amount reachable
+    ASSERT_EQ(Run(reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(reader, "SELECT id FROM t WHERE id = 1"), "id\\n1");
     Ok("UPDATE t SET amt = '1.00' WHERE id = 1");
 
     Ok("CREATE INDEX by_d ON t (d)");
@@ -313,6 +332,7 @@ TEST_F(IndexMaintainTest, ABackfillOverTypedAndSpillingColumnsWorks) {
     // Two versions of row 1's amount, plus row 2's.
     EXPECT_EQ(Entries("by_amt"), 3);
     EXPECT_EQ(Entries("by_name"), 2);
+    ASSERT_EQ(Run(reader, "COMMIT").substr(0, 6), "COMMIT");
 }
 
 TEST_F(IndexMaintainTest, ADroppedIndexStopsBeingMaintained) {
